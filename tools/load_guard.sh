@@ -54,9 +54,10 @@ prio_edit() {  # prio_edit add|del|first: first prints ok when no live waiter pr
   # drop waiters whose process is gone
   while read -r t st pid q; do kill -0 "$pid" 2>/dev/null && echo "$t $st $pid $q"; done < "$prio" > "$prio.new"
   case $1 in
-    add) echo "$tier $(date +%s.%N) $$ $start1" >> "$prio.new" ;;
+    add) my_start=$(date +%s.%N); echo "$tier $my_start $$ $start1" >> "$prio.new" ;;
     del) grep -v " $$ " "$prio.new" > "$prio.tmp"; mv "$prio.tmp" "$prio.new" ;;
-    first) out=$(awk -v now="$(date +%s)" -v step="${LG_AGE_STEP:-1200}" '{e=$1-int((now-$2)/step); f=($1>=4)?3:(($1==3)?2:$1); if (e<f) e=f; printf "%d %s %s %s\n", e, $2, $3, $4}' "$prio.new" | sort -k1,1n -k2,2n | awk -v me="$$" -v l1="$2" '{q=($4==""?25:$4)} q+0>l1+0{print ($3==me)?"ok":"no"; exit}') ;;  # aged: -1 tier per 20 min, floors 3 (tier 4) and 2 (tier 3)
+    first) awk -v me="$$" '$3==me{f=1} END{exit !f}' "$prio.new" || echo "$tier $my_start $$ $start1" >> "$prio.new"  # an old copy's prune erases 4-field lines: re-add, same start
+           out=$(awk -v now="$(date +%s)" -v step="${LG_AGE_STEP:-1200}" '{e=$1-int((now-$2)/step); f=($1>=4)?3:(($1==3)?2:$1); if (e<f) e=f; printf "%d %s %s %s\n", e, $2, $3, $4}' "$prio.new" | sort -k1,1n -k2,2n | awk -v me="$$" -v l1="$2" '{q=($4==""?25:$4)} q+0>l1+0{print ($3==me)?"ok":"no"; exit}') ;;  # aged: -1 tier per 20 min, floors 3 (tier 4) and 2 (tier 3)
   esac
   mv "$prio.new" "$prio"; exec {fd}>&-
   [ "$1" != first ] || [ "$out" = ok ]
