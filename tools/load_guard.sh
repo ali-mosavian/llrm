@@ -10,7 +10,7 @@
 #   order:     a job declares LG_TIER=n (1 miscompile builds, 2 pass PRs, 3 shared-pass A/Bs, 4 benches/matrix; default 4). Waiters are listed in LG_PRIO_FILE;
 #              (LG_NO_WAIT jobs skip the order) a waiter takes no free slot while a waiter of a lower tier, or of its tier that started waiting earlier, is alive.
 #              The settle period is LG_SETTLE_FAST (15) while 1m < LG_FAST_1M (22) and a slot is free: the load rises past 15 with every admission, so a lower bound left the queue draining at one per LG_SETTLE.
-#              Slots reach LG_SLOTS_MAX (7) while 1m < LG_WIDE_1M (18) and MemAvailable (LG_MEMINFO, /proc/meminfo) >= LG_MEM_MIN_GB (40); otherwise the 3/5 count above.
+#              Slots reach LG_SLOTS_MAX (7) while 1m < LG_WIDE_1M (22) and MemAvailable (LG_MEMINFO, /proc/meminfo) >= LG_MEM_MIN_GB (40); otherwise the 3/5 count above.
 # Env: LG_LOAD_FILE (/proc/loadavg), LG_POLL seconds (5), LG_SLOT_DIR (/tmp/buildslots/load_guard).
 [ $# -gt 0 ] || { echo "usage: load_guard.sh CMD..." >&2; exit 2; }
 file=${LG_LOAD_FILE:-/proc/loadavg}; poll=${LG_POLL:-5}
@@ -41,7 +41,7 @@ slot_count() {  # slot_count L1: prints the count
   if above "$widen1" "$1"; then now=$high; elif ! above "$narrow1" "$1"; then now=$base; fi
   echo "$now" > "$slot_dir/slots_now"  # the hysteresis state is the 3/5 count; the wide count is derived each time
   if awk -v kb="$(awk '/^MemAvailable:/{print $2}' "${LG_MEMINFO:-/proc/meminfo}")" -v gb="${LG_MEM_MIN_GB:-40}" 'BEGIN{exit !(kb>=gb*1024*1024)}'; then
-    if above "$widest1" "$1"; then now=$widest; elif above "${LG_WIDE_1M:-18}" "$1"; then now=$wide; fi
+    if above "$widest1" "$1"; then now=$widest; elif above "${LG_WIDE_1M:-22}" "$1"; then now=$wide; fi
   fi
   echo "$now" > "$slot_dir/slots_wide"
   echo "$now"
