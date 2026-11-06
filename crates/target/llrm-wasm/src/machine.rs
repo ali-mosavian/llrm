@@ -71,6 +71,10 @@ impl Machine for WasmMachine {
         Some(Rc::new(Wasm))
     }
 
+    fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
+        Some(Rc::new(crate::ir_lowering::WasmIrLowering))
+    }
+
     fn spaces(&self) -> Spaces {
         Spaces::FLAT
     }
