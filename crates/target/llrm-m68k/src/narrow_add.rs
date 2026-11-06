@@ -94,8 +94,10 @@ fn step(
         return;
     }
     let new = match (inst.kind, &inst.operands[..]) {
-        (Kind::Op("MOVQ"), [Operand::Def(_), Operand::Imm(k)]) if *k >= 0 => Some(*k as u32),
-        (Kind::Op("MOV32ri"), [Operand::Def(_), Operand::Imm(k)]) if (0..=i64::from(u32::MAX)).contains(k) => {
+        // `MOVI32ri` is the constant load selection emits; `MOVQ` and `MOV32ri` are its other forms
+        (Kind::Op("MOVQ" | "MOV32ri" | "MOVI32ri"), [Operand::Def(_), Operand::Imm(k)])
+            if (0..=i64::from(u32::MAX)).contains(k) =>
+        {
             Some(*k as u32)
         }
         (Kind::Op("AND32di"), [Operand::Def(_), Operand::Use(s), Operand::Imm(k)]) => {
@@ -112,7 +114,7 @@ fn step(
         (Kind::Copy, [Operand::Def(d), Operand::Use(s)]) if long(classes, d) && long(classes, s) => {
             Some(bound_of(state, assignment, s))
         }
-        (Kind::Op("ADD32di"), [Operand::Def(_), Operand::Use(s), Operand::Imm(k)]) if *k > 0 => {
+        (Kind::Op("ADD32di" | "ADDQ32di"), [Operand::Def(_), Operand::Use(s), Operand::Imm(k)]) if *k > 0 => {
             bound_of(state, assignment, s).checked_add(*k as u32)
         }
         _ => None,

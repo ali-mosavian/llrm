@@ -4,6 +4,8 @@
 //! register is zero before and after, and the codes it sets are the long
 //! form's or unread.
 
+use llrm_m68k::dagisel::generated::instrinfo;
+use llrm_m68k::dagisel::generated::m68k_m68000::MACHINE_OPCODES;
 use llrm_m68k::dagisel::local;
 use llrm_m68k::mfunc::{Class, MFunction, op_inst};
 use llrm_m68k::narrow_add::{Site, sites};
@@ -20,12 +22,22 @@ fn imm_row(
     op_inst(name, desc, vec![Operand::Def(Reg::Virt(register)), Operand::Use(Reg::Virt(register)), Operand::Imm(value)])
 }
 
+/// A constant load by the pin's row `name` (not a local one).
+fn constant(
+    name: &'static str,
+    register: u32,
+    value: i64,
+) -> Inst {
+    let code = MACHINE_OPCODES.iter().find(|(_, one)| *one == name).map(|(code, _)| *code).expect(name);
+    let desc = instrinfo::desc(code).expect("described");
+    op_inst(name, desc, vec![Operand::Def(Reg::Virt(register)), Operand::Imm(value)])
+}
+
 fn moveq(
     register: u32,
     value: i64,
 ) -> Inst {
-    let desc = local::code_of("MOVQ").and_then(local::desc).expect("MOVQ");
-    op_inst("MOVQ", desc, vec![Operand::Def(Reg::Virt(register)), Operand::Imm(value)])
+    constant("MOVQ", register, value)
 }
 
 fn branch_if_not_equal() -> Inst {
@@ -96,4 +108,18 @@ fn the_bound_crosses_a_block_with_one_predecessor_only() {
     function.blocks.push(Block { id: 2, insts: vec![op_inst("Bne8", jump, vec![Operand::Block(1)])], phis: vec![] });
     function.blocks[0].insts.push(op_inst("Bne8", jump, vec![Operand::Block(1)]));
     assert_eq!(sites(&function, &assignment), vec![]);
+}
+
+/// hex printed `add.l #87` for a byte: its 15 came from `MOVI32ri`, the row selection
+/// emits for a constant, which the count did not know, so the chain
+/// `move.l #15; and.l; add.l #87` was not a site (0 of hex's 1) while 113 others were.
+#[test]
+fn a_constant_loaded_by_the_selection_row_starts_a_bound() {
+    let and = op_inst(
+        "AND32dd",
+        local::code_of("AND32dd").and_then(local::desc).expect("AND32dd"),
+        vec![Operand::Def(Reg::Virt(0)), Operand::Use(Reg::Virt(0)), Operand::Use(Reg::Virt(0))],
+    );
+    let sites = found(vec![constant("MOVI32ri", 0, 15), and, imm_row("ADD32di", 0, 87)]);
+    assert_eq!(sites.len(), 1, "{sites:?}");
 }
