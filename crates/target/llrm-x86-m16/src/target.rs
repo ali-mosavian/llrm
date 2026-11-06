@@ -297,7 +297,7 @@ impl Machine for Dos {
             // the pin's ColorSlot shares any two slots whose ranges do not
             // overlap. Here a word shares no slot a double word holds through a
             // loop: stft_fixed -O2 -523266 clk and -3 B, jpeg_fixed -Os -2 B;
-            // accepted worse: jpeg_single C -Os +1 B (-217 clk), jpeg_fixed and
+            // open rows (oversight rules): jpeg_single C -Os +1 B (-217 clk), jpeg_fixed and
             // jpeg_single nib -O2 +1 B each (-1 clk).
             slots_loop_width_rule: true,
             // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
