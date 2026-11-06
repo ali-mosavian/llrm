@@ -1501,6 +1501,35 @@ mod mul_lohi {
         assert!(multiply(isd::SMUL_LOHI).contains(&x86::IMUL32r));
     }
 
+    /// p2 `(long long)a * 32758 >> 15`: the early-out swap put the 15-bit
+    /// constant in `EAX` and copied `a` out (4 instructions, the pin's 3), so
+    /// the 486 read `a` (up to 32 bits) as the multiplier. A constant no wider
+    /// than the variable stays the r/m operand; a 32-bit magic still moves.
+    #[test]
+    fn a_narrow_constant_stays_the_rm_operand_and_a_wide_one_goes_to_eax() {
+        let copied_to_eax = |constant: i64| {
+            let mut dag = TestDag::new();
+            let a = dag.input(1, mvt::i32);
+            let c = dag.make_constant(constant, mvt::i32);
+            let node = dag.node(isd::UMUL_LOHI, &[mvt::i32, mvt::i32], &[a, c]);
+            dag.node(isd::ADD, &[mvt::i32], &[SDValue::new(node, 0), SDValue::new(node, 1)]);
+            let mut hooks = X86Hooks::new(Options {
+                cpu: Cpu::I486,
+                opt_none: false,
+                opt_for_size: false,
+                min_size: false,
+                has_frame_pointer: true,
+                multiply_early_out: true,
+                address_mode: crate::x86_addr::AddrMode::Flat32,
+            });
+            assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+            let copy = dag.nodes.iter().find(|n| n.opcode == isd::CopyToReg).unwrap().ops[2];
+            (copy == a, copy == c)
+        };
+        assert_eq!(copied_to_eax(32758), (true, false), "15 bits against 32: the pin's order");
+        assert_eq!(copied_to_eax(0x82f6_3b7f), (false, true), "a 32-bit magic goes to EAX");
+    }
+
     /// `a * b` where `b` arrives in `EAX` (virtual register 2, live-in `EAX`)
     /// and `a` in `EDX`: the pin swaps so `b` is the implicit operand. Without
     /// the swap the selector copied `b` out of `EAX` into `EDX` and `a` into
