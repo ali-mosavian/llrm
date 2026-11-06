@@ -109,7 +109,7 @@ impl Model {
         model
     }
 
-    fn weight(
+    pub(crate) fn weight(
         &self,
         value: u32,
     ) -> Option<(u32, &[usize])> {
