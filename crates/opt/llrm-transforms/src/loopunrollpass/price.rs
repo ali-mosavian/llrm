@@ -114,6 +114,7 @@ pub(super) fn full_unroll_pays(
         }
     }
     let added = (added - i64::from(trips) * promoted * bytes.load).max(0);
+    let added = (added - merged_store_credit(run, se, analyzed, lp, trips)).max(0);
     let (saved_units, constant_clocks) = match analysis {
         Some(cost) => (i64::from(cost.rolled_dynamic_cost.saturating_sub(cost.unrolled_cost)), 0),
         None => (i64::from(trips) * i64::from(up.be_insns), i64::from(trips) * nested_uses * clocks.r#move),
@@ -304,6 +305,69 @@ fn promoted_accesses(
         }
     }
     (found, runs, ints.len(), floats.len())
+}
+
+/// The bytes the copies of a full unroll save by storing one constant at
+/// consecutive addresses: the stores of `trips` trips are adjacent, and the
+/// backend merges them into wider stores and `stp` pairs (`MergeConsecutiveStores`;
+/// lru -O3: the model said +28 B, the code shrank 12). A stream of `trips`
+/// stores of `w` bytes becomes `ceil(trips * w / 16)` instructions of four
+/// bytes; a constant that is neither zero nor all ones costs one more to build.
+fn merged_store_credit(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    trips: u32,
+) -> i64 {
+    if trips < 2 {
+        return 0;
+    }
+    let function = &*run.function;
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let mut credit = 0;
+    for &block in lp.get_blocks() {
+        if analyzed.loops.get_loop_depth(block) != lp.get_loop_depth() {
+            continue;
+        }
+        for inst in function.iter_block(block) {
+            let one = function.instruction(inst);
+            let Opcode::Store { volatile: false, .. } = one.opcode else { continue };
+            let Operand::Constant(value) = one.operands[0] else { continue };
+            let Some(llrm_mir::tti::Ty::Int(bits)) = function
+                .operand_type(run.context, one.operands[0])
+                .and_then(|ty| llrm_mir::tti::Ty::of(&run.context.types, ty))
+            else {
+                continue;
+            };
+            if !matches!(bits, 8 | 16 | 32 | 64) || !se.is_value_scevable(&cx, one.operands[1]) {
+                continue;
+            }
+            let width = i128::from(bits / 8);
+            let address = se.get_scev(&cx, one.operands[1]);
+            if se.addrec_header(address) != Some(lp.get_header()) || !se.is_affine(address) {
+                continue;
+            }
+            let step = se.get_step_recurrence(&cx, address);
+            if se.as_constant(step).map(|step| step.sext_value()) != Some(width) {
+                continue;
+            }
+            let merged = (i64::from(trips) * i64::from(bits / 8) + 15) / 16;
+            let mask = (1u128 << bits) - 1;
+            let plain = matches!(run.context.get(value).kind, ConstantKind::Int(number) if number & mask == 0 || number & mask == mask);
+            credit += (i64::from(trips) - merged) * 4 - if plain { 0 } else { 4 };
+        }
+    }
+    credit.max(0)
 }
 
 /// What an address at the counters is an element of.

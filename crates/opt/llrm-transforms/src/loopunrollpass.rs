@@ -135,6 +135,9 @@ pub struct Run<'a> {
     /// The headers of the loops this run made: those that were no loop's header
     /// when it began (`LPMUpdater::addSiblingLoops`, for the passes after it).
     pub created: Vec<BlockId>,
+    /// The headers of the loops the run began with: a loop not among them is a
+    /// copy an unroll made.
+    pub first: IdSet<BlockId>,
     /// The expressions of the passes before (`Scevs`), current while the
     /// function is as they left it: dropped at the first change.
     pub scev: ScalarEvolution,
@@ -2058,6 +2061,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     let closed = crate::lcssa::closed(run.context, run.layout, run.function).unwrap_or(false);
     let mut analyzed = Analyzed::of(run);
     let at_first: IdSet<BlockId> = analyzed.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
+    run.first = at_first.clone();
     // The worklist is popped from the back (`appendReversedLoopsToWorklist`):
     // the loops are visited in the reverse of
     // `getLoopsInReverseSiblingPreorder`, each loop after the loops it
@@ -2297,6 +2301,7 @@ impl FunctionPass for LoopFullUnroll {
             peeled: Default::default(),
             finished: IdSet::new(),
             created: Vec::new(),
+            first: Default::default(),
             scev: held.take(),
             options: Options {
                 opt_level: self.opt_level,
@@ -2358,6 +2363,7 @@ pub fn unroll_function(
         peeled: Default::default(),
         finished: IdSet::new(),
         created: Vec::new(),
+        first: Default::default(),
         scev: ScalarEvolution::new(),
     };
     let unrolled = unroll_loops(&mut run);
