@@ -20,7 +20,7 @@ pc=$(per 1 nulx $W/ctl.o); awk -v v=$pc 'BEGIN{exit !(v>=8)}' || { echo "FAIL: a
 [ "$(cnt 1 $N nul1 $W/nul.o)" -gt 1000 ] || { echo "FAIL: the driver executed no ops (link or trace broken)"; exit 1; }
 for spec in div:1:f64/div:__divdf3:divdf3 mul:1:f64/mul:__muldf3:muldf3 add:1:f64/add_sub:__adddf3:adddf3 sidf:2:f64/float_si:__floatsidf:floatsidf didf:3:f64/float_di:__floatdidf:floatdidf; do
   IFS=: read op kind src sym cfile <<< "$spec"
-  $C $F -include stdint.h -include $RT/config/wasm/config.h -DSF_CONV_SPLIT ${EXTRA:-} -I$RT/include -c $RT/lib/$(echo fp/$src).c -o $W/o.o 2> /dev/null || { echo "$op: ours build FAIL"; continue; }
+  $C $F -include stdint.h -include $RT/config/wasm/config.h -DSF_CONV_SPLIT -I$RT/include -c $RT/lib/$(echo fp/$src).c -o $W/o.o 2> /dev/null || { echo "$op: ours build FAIL"; continue; }
   $C $F -include stdint.h -include $RT/config/wasm/config.h -DSF_CONV_SPLIT -I$RT/include -c $RT/lib/fp/f64/pack.c -o $W/p.o
   $C $F -D__SOFTFP__ -I$CRT -c $CRT/$cfile.c -o $W/c.o 2> /dev/null || { echo "$op: crt build FAIL"; continue; }
   echo "wasm32 -O2 $op: ours $(per $kind $sym $W/o.o $W/p.o) crt $(per $kind $sym $W/c.o $W/stub.o) ops/call"
