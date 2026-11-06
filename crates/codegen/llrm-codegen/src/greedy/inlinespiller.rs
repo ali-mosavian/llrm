@@ -431,7 +431,7 @@ impl<'a> InlineSpiller<'a> {
             // (`canFoldAsLoad`, `foldMemoryOperand` with the load as LoadMI),
             // which asks for no register.
             if let ([key], [Loc::Mem(cell)]) = (members.as_slice(), what.sources.as_slice())
-                && self.tii.is_plain_move(&what)
+                && self.tii.can_fold_as_load(&what)
                 && let Some(mut folded) = self.tii.fold_memory_operand(&Arc::clone(lis.instr(*key)), reg, cell)
             {
                 let reads = Arc::make_mut(&mut folded);

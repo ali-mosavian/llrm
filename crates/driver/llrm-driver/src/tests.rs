@@ -254,6 +254,32 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// A constant-pool double read by several divisions across calls was made
+/// again in a register for each (`movsd xmm1, [K]`, `divsd xmm0, xmm1`); the
+/// pin's `reMaterializeFor` folds the load into the division
+/// (`divsd xmm0, [K]`, `canFoldAsLoad`). double_to_uint64 m64 -O2 paid one
+/// instruction per use.
+#[test]
+fn a_constant_pool_load_made_again_is_folded_into_the_division_at_m64() {
+    let mut text = "target datalayout = \"@m64-datalayout@\"\n\
+                    target triple = \"x86_64-unknown-linux-gnu\"\n\
+                    @v = external global [4 x double]\n\
+                    declare void @g(double)\n\
+                    define void @f() {\n"
+        .to_string();
+    for at in 0..4 {
+        text += &format!(
+            "  %p{at} = getelementptr double, ptr @v, i64 {at}\n  %a{at} = load volatile double, ptr %p{at}\n  \
+             %x{at} = fdiv double %a{at}, 1.5\n  call void @g(double %x{at})\n"
+        );
+    }
+    text += "  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let folded = listing.lines().filter(|line| line.contains("divsd") && line.contains("qword ptr $K")).count();
+    assert!(folded >= 3, "{listing}");
+}
+
 /// A symbol's address passed to a call, read by a loop and passed to a call
 /// again is made once for the first call and the loop, and again for the last
 /// call, as the pin has it (`lea` into a callee-saved register, then a `lea`
