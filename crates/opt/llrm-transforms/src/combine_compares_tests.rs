@@ -756,6 +756,26 @@ b0:
     assert!(after.contains("icmp sgt i64 %x, 32") && !after.contains("getelementptr"), "{after}");
 }
 
+/// `foldGEPICmp` takes `GEPOperator`s, so a constant-expression GEP is a GEP:
+/// `p + %z` against `@cells + 3` compares `%z` with 3 Ours saw instruction
+/// GEPs only and kept the pointer compare (`frame_address_stack_args` -Os);
+/// the pin gives `icmp eq i32 %x, 3`.
+#[test]
+fn test_a_constant_expression_gep_compares_its_offset() {
+    let after = combined(
+        "@cells = global [16 x i8] zeroinitializer
+define i1 @f(i32 %x) {
+b0:
+  %z = zext nneg i32 %x to i64
+  %p = getelementptr inbounds nuw i8, ptr @cells, i64 %z
+  %c = icmp eq ptr %p, getelementptr inbounds nuw (i8, ptr @cells, i64 3)
+  ret i1 %c
+}
+",
+    );
+    assert!(after.contains("icmp eq i32 %x, 3") && !after.contains("icmp eq ptr"), "{after}");
+}
+
 /// Two GEPs of one base that differ in one index compare that index.
 #[test]
 fn test_two_geps_that_differ_in_one_index_compare_it() {
