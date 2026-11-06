@@ -407,14 +407,14 @@ impl Tti for Z80Tti {
         false
     }
 
-    // The runtime has no routine that leaves both quotient and remainder: a
-    // pair is two calls.
+    // The long routines `__udivremsi4` and `__divremsi4` give both: a pair is
+    // one call. The byte and word routines do not.
     fn has_div_rem_op(
         &self,
-        _bits: u32,
+        bits: u32,
         _signed: bool,
     ) -> bool {
-        false
+        bits == 32
     }
 
     fn cast_cost(

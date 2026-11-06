@@ -186,4 +186,26 @@ class DriverLink(unittest.TestCase):
         i64 = sorted(m for m in members if m.startswith("lib_int_"))
         self.assertEqual(i64, ["lib_int_ashldi3.o", "lib_int_ashrdi3.o", "lib_int_lshrdi3.o"], members)
 
+@unittest.skipUnless(os.path.exists(CC) and os.path.exists(RT), "needs a llrm-cc and a runtime (OURS_TEST_CC, OURS_TEST_RT)")
+class RtLib(unittest.TestCase):
+    """OURS_RTLIB makes ours_cr link the shipped archive, so the byte column is the product's. idiv_loop_os calls udivmod16, whose branch to
+    udivmod16c is a jmp across objects there: +3 B against the harness's pasted text (574 against 571, 2026-11-06). The harness figure
+    was reported as the product's until then."""
+    def size(self, rtlib):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "o.tsv")
+            env = {**os.environ, "OURS_RT": RT, "OURS_PADS": "0"}
+            env.pop("OURS_RTLIB", None)
+            if rtlib:
+                env["OURS_RTLIB"] = rtlib
+            r = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "Os", out, "idiv_loop_os"], capture_output=True, text=True, env=env, timeout=900)
+            self.assertEqual(r.returncode, 0, r.stderr[-300:])
+            return int(open(out).read().split("\t")[2])
+
+    def test_the_archive_link_is_the_product_figure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = os.path.join(tmp, "rt.lib")
+            subprocess.run([sys.executable, os.path.join(HERE, "mkrt.py"), CC, lib, os.path.join(tmp, "w")], check=True, capture_output=True, timeout=1200)
+            self.assertEqual(self.size(lib) - self.size(None), 3)
+
 if __name__ == "__main__": unittest.main()
