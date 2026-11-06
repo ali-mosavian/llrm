@@ -353,16 +353,6 @@ __mulsi3:
 ; the result is de (low) and hl (high). The divisor is aligned under the dividend and each step takes it off where
 ; it fits: one step per quotient bit, in the shadow registers, over a frame addressed through ix, which is kept.
 ; Mode bits in the frame: 0 remainder wanted, 1 signed, 2 quotient negative, 3 remainder negative.
-; Quotient and remainder in one call (`__udivremsi4`, `__divremsi4`): the arguments of the others and the address of a long
-; for the remainder on the stack above the divisor's high word; the quotient is returned. Mode bit 4.
-	.globl __udivremsi4
-__udivremsi4:
-	ld	a,#16
-	jr	__udivmodsi4
-	.globl __divremsi4
-__divremsi4:
-	ld	a,#18
-	jr	__udivmodsi4
 	.globl __udivsi3
 __udivsi3:
 	xor	a
@@ -524,8 +514,6 @@ udm_out:	ld	-12(ix),l
 	ld	-6(ix),c
 	ld	-5(ix),b
 udm_done:
-	bit	4,-1(ix)
-	call	nz,udm_p
 	bit	0,-1(ix)
 	jr	nz,4$
 	bit	2,-1(ix)
@@ -568,35 +556,6 @@ udm_done:
 6$:	ld	sp,ix
 	pop	ix
 	ret
-; the remainder (negated if it is negative) through the address above the divisor's high word
-udm_p:	bit	3,-1(ix)
-	jr	z,1$
-	xor	a
-	sub	a,-12(ix)
-	ld	-12(ix),a
-	ld	a,#0
-	sbc	a,-11(ix)
-	ld	-11(ix),a
-	ld	a,#0
-	sbc	a,-10(ix)
-	ld	-10(ix),a
-	ld	a,#0
-	sbc	a,-9(ix)
-	ld	-9(ix),a
-1$:	ld	l,6(ix)
-	ld	h,7(ix)
-	ld	a,-12(ix)
-	ld	(hl),a
-	inc	hl
-	ld	a,-11(ix)
-	ld	(hl),a
-	inc	hl
-	ld	a,-10(ix)
-	ld	(hl),a
-	inc	hl
-	ld	a,-9(ix)
-	ld	(hl),a
-	ret
 
 ; ---- long divide and remainder, the size family (`__s_`, chosen for a function tuned for size) --------------------
 ; The same arguments and results as `__udivsi3` and the others. The restoring division, one step per dividend bit
@@ -620,39 +579,9 @@ __s_umodsi3:
 	exx
 	pop	hl
 	ret
-; quotient and remainder in one call, as `__udivremsi4`: the remainder is stored through the address above the divisor's
-; high word, the quotient returned
-	.globl __s_udivremsi4
-__s_udivremsi4:
-	call	sdu
-	push	de
-	push	hl
-	ld	hl,#8
-	add	hl,sp
-	ld	c,(hl)
-	inc	hl
-	ld	b,(hl)
-	pop	de
-	ld	a,e
-	ld	(bc),a
-	inc	bc
-	ld	a,d
-	ld	(bc),a
-	inc	bc
-	exx
-	push	hl
-	push	de
-	exx
-	pop	hl
-	pop	de
-	ld	a,e
-	ld	(bc),a
-	inc	bc
-	ld	a,d
-	ld	(bc),a
-	pop	de
-	ret
 ; the divisor's high word is on the stack above the two return addresses
+	.globl __s_dvcore
+__s_dvcore:
 sdu:	exx
 	ld	hl,#4
 	add	hl,sp
@@ -699,6 +628,138 @@ sdm_q:	inc	e
 sdm_n:	dec	a
 	jr	nz,sdm_lp
 	ret
+; ---- long quotient and remainder in one call --------------------------------------------------------------------------
+; The arguments of the others and the address of a long for the remainder on the stack above the divisor's high word
+; (that is the stack above the return address, then the divisor's high word, then the address); the quotient is
+; returned (de low, hl high), the remainder stored through the address. Over the same register-only core as the size
+; family: a program that pairs a divide and a remainder pays for this one routine and the core, no frame routine.
+	.globl __udivremsi4
+__udivremsi4:
+	call	sdu
+	push	de
+	push	hl
+	ld	hl,#8
+	add	hl,sp
+	ld	c,(hl)
+	inc	hl
+	ld	b,(hl)
+	pop	de
+	ld	a,e
+	ld	(bc),a
+	inc	bc
+	ld	a,d
+	ld	(bc),a
+	inc	bc
+	exx
+	push	hl
+	push	de
+	exx
+	pop	hl
+	pop	de
+	ld	a,e
+	ld	(bc),a
+	inc	bc
+	ld	a,d
+	ld	(bc),a
+	pop	de
+	ret
+; signed: the magnitudes divided, the quotient negated if the signs differ, the remainder if the dividend is negative.
+; -1(ix): bit 0 the quotient is negative, bit 1 the remainder is.
+	.globl __divremsi4
+__divremsi4:
+	push	ix
+	ld	ix,#0
+	add	ix,sp
+	xor	a
+	push	af
+	bit	7,d
+	jr	z,1$
+	xor	a
+	sub	a,l
+	ld	l,a
+	ld	a,#0
+	sbc	a,h
+	ld	h,a
+	ld	a,#0
+	sbc	a,e
+	ld	e,a
+	ld	a,#0
+	sbc	a,d
+	ld	d,a
+	ld	a,#3
+	ld	-1(ix),a
+1$:	bit	7,5(ix)
+	jr	z,2$
+	xor	a
+	sub	a,c
+	ld	c,a
+	ld	a,#0
+	sbc	a,b
+	ld	b,a
+	ld	a,#0
+	sbc	a,4(ix)
+	ld	4(ix),a
+	ld	a,#0
+	sbc	a,5(ix)
+	ld	5(ix),a
+	ld	a,-1(ix)
+	xor	a,#1
+	ld	-1(ix),a
+2$:	exx
+	ld	c,4(ix)
+	ld	b,5(ix)
+	exx
+	call	sdm
+	bit	1,-1(ix)
+	jr	z,3$
+	ld	c,l
+	ld	b,h
+	ld	hl,#0
+	or	a,a
+	sbc	hl,bc
+	exx
+	ld	c,l
+	ld	b,h
+	ld	hl,#0
+	sbc	hl,bc
+	exx
+3$:	ld	c,6(ix)
+	ld	b,7(ix)
+	ld	a,l
+	ld	(bc),a
+	inc	bc
+	ld	a,h
+	ld	(bc),a
+	exx
+	ld	c,6(ix)
+	ld	b,7(ix)
+	inc	bc
+	inc	bc
+	ld	a,l
+	ld	(bc),a
+	inc	bc
+	ld	a,h
+	ld	(bc),a
+	push	de
+	exx
+	pop	hl
+	bit	0,-1(ix)
+	jr	z,4$
+	xor	a
+	sub	a,e
+	ld	e,a
+	ld	a,#0
+	sbc	a,d
+	ld	d,a
+	ld	a,#0
+	sbc	a,l
+	ld	l,a
+	ld	a,#0
+	sbc	a,h
+	ld	h,a
+4$:	ld	sp,ix
+	pop	ix
+	ret
 ; a signed divide takes the magnitudes, divides, and gives the result the sign C gives it. -1(ix): bit 0 the
 ; remainder is wanted, bit 1 the result is negative.
 	.globl __s_divsi3
@@ -708,11 +769,6 @@ __s_divsi3:
 	.globl __s_modsi3
 __s_modsi3:
 	ld	a,#1
-	jr	sds
-; quotient and remainder in one call (mode bit 2); bit 3 the remainder is negative
-	.globl __s_divremsi4
-__s_divremsi4:
-	ld	a,#4
 sds:	push	ix
 	ld	ix,#0
 	add	ix,sp
@@ -732,7 +788,7 @@ sds:	push	ix
 	sbc	a,d
 	ld	d,a
 	ld	a,-1(ix)
-	xor	a,#10
+	xor	a,#2
 	ld	-1(ix),a
 1$:	bit	7,5(ix)
 	jr	z,2$
@@ -758,8 +814,6 @@ sds:	push	ix
 	ld	b,5(ix)
 	exx
 	call	sdm
-	bit	2,-1(ix)
-	call	nz,sdp
 	bit	0,-1(ix)
 	jr	nz,3$
 	exx
@@ -788,39 +842,6 @@ sds:	push	ix
 	ld	h,a
 5$:	ld	sp,ix
 	pop	ix
-	ret
-; the remainder (hl, hl'), negated if bit 3, through the address above the divisor's high word; de and de' are kept
-sdp:	bit	3,-1(ix)
-	jr	z,1$
-	ld	c,l
-	ld	b,h
-	ld	hl,#0
-	or	a,a
-	sbc	hl,bc
-	exx
-	ld	c,l
-	ld	b,h
-	ld	hl,#0
-	sbc	hl,bc
-	exx
-1$:	ld	c,6(ix)
-	ld	b,7(ix)
-	ld	a,l
-	ld	(bc),a
-	inc	bc
-	ld	a,h
-	ld	(bc),a
-	exx
-	ld	c,6(ix)
-	ld	b,7(ix)
-	inc	bc
-	inc	bc
-	ld	a,l
-	ld	(bc),a
-	inc	bc
-	ld	a,h
-	ld	(bc),a
-	exx
 	ret
 
 ; ---- 64-bit divide, remainder and shifts ----------------------------------------------------------

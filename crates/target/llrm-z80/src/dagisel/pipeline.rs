@@ -191,7 +191,7 @@ pub fn select_block(
     if long_multiply {
         tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
     }
-    let mut lowering = Z80Lowering { sized };
+    let mut lowering = Z80Lowering;
     let arch = Z80;
     if optimize {
         live_out::assert_live_out_copies(dag, info);

@@ -1685,16 +1685,15 @@ fn a_long_divide_and_remainder_of_the_same_operands_are_one_call() {
             ops[0], ops[1]
         )
     };
-    for (ops, fast, small, others) in [
-        (["udiv", "urem"], "call __udivremsi4", "call __s_udivremsi4", ["__udivsi3", "__umodsi3"]),
-        (["sdiv", "srem"], "call __divremsi4", "call __s_divremsi4", ["__divsi3", "__modsi3"]),
+    for (ops, call, others) in [
+        (["udiv", "urem"], "call __udivremsi4", ["__udivsi3", "__umodsi3"]),
+        (["sdiv", "srem"], "call __divremsi4", ["__divsi3", "__modsi3"]),
     ] {
-        let out = compiled(&body("", ops), "f");
-        assert_eq!(out.matches("call").count(), 1, "{ops:?}: {out}");
-        assert!(out.contains(fast), "{ops:?}: {out}");
-        let out = compiled(&body("optsize", ops), "f");
-        assert_eq!(out.matches("call").count(), 1, "{ops:?} optsize: {out}");
-        assert!(out.contains(small), "{ops:?} optsize: {out}");
+        for attr in ["", "optsize"] {
+            let out = compiled(&body(attr, ops), "f");
+            assert_eq!(out.matches("call").count(), 1, "{ops:?} {attr}: {out}");
+            assert!(out.contains(call), "{ops:?} {attr}: {out}");
+        }
         let alone = compiled(
             &format!("define i32 @f(i32 %a, i32 %b) {{\n  %q = {} i32 %a, %b\n  ret i32 %q\n}}", ops[0]),
             "f",

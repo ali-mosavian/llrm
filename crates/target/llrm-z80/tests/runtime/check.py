@@ -228,12 +228,10 @@ def main():
     allok &= check("__s_umodsi3", "LL>L", lambda a, b: a, [(a, 0) for a in edge])
     # quotient and remainder in one call: the quotient returned, the remainder stored through the pointer argument
     # (low word of the answer the quotient, the high word the remainder)
-    for nm, f in (("__udivremsi4", lambda a, b: a // b | (a % b) << 32), ("__s_udivremsi4", lambda a, b: a // b | (a % b) << 32),
-                  ("__divremsi4", lambda a, b: (tdiv32(s32c(a), s32c(b)) & 0xFFFFFFFF) | ((s32c(a) - tdiv32(s32c(a), s32c(b)) * s32c(b)) & 0xFFFFFFFF) << 32),
-                  ("__s_divremsi4", lambda a, b: (tdiv32(s32c(a), s32c(b)) & 0xFFFFFFFF) | ((s32c(a) - tdiv32(s32c(a), s32c(b)) * s32c(b)) & 0xFFFFFFFF) << 32)):
+    for nm, f in (("__udivremsi4", lambda a, b: a // b | (a % b) << 32),
+                  ("__divremsi4", lambda a, b: (tdiv32(s32c(a), s32c(b)) & 0xFFFFFFFF) | ((s32c(a) - tdiv32(s32c(a), s32c(b)) * s32c(b)) & 0xFFFFFFFF) << 32)):
         allok &= check(nm, "LL>QR", f, lp + ep)
-    for nm in ("__udivremsi4", "__s_udivremsi4"):
-        allok &= check(nm, "LL>QR", lambda a, b: 0xFFFFFFFF | a << 32, [(a, 0) for a in edge])
+    allok &= check("__udivremsi4", "LL>QR", lambda a, b: 0xFFFFFFFF | a << 32, [(a, 0) for a in edge])
     q64 = [0, 1, 255, 256, 65535, 65536, 0xFFFFFFFF, 1 << 32, (1 << 63) - 1, 1 << 63, (1 << 64) - 1, 0x0123456789ABCDEF, 10, 1000000007]
     q64 += [rnd.getrandbits(64) for _ in range(12)] + [rnd.getrandbits(rnd.choice([5, 17, 33, 49])) for _ in range(8)]
     s64 = lambda x: x - (1 << 64) if x >> 63 else x
