@@ -460,7 +460,9 @@ pub fn allocate(
 ) -> Result<Allocation, String> {
     let mut lir = view(function);
     crate::licm::hoist(&mut lir);
-    crate::cse::share(&mut lir);
+    if !llrm_support::env_flag!("LLRM_A64_NO_MCSE") {
+        crate::cse::share(&mut lir);
+    }
     let (assignment, slots) = allocate_greedy::<Arm64>(&mut lir, Regs(&crate::REGISTER_INFO), size)?;
     rebuild(function, &lir, &assignment, &slots);
     Ok(written_callee_saved(function))
