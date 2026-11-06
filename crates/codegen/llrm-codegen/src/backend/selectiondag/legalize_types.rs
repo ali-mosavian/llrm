@@ -2780,6 +2780,24 @@ impl<'a> TypeLegalizer<'a> {
         let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         let ((dividend_lo, dividend_hi), (divisor_lo, divisor_hi)) =
             (self.expanded_integer(lhs), self.expanded_integer(rhs));
+        // DEVIATE DIV64-LIBCALL (owner x86-m32, exit 2026-11-20): where the
+        // platform's runtime lists the routine (libgcc's `__divdi3` family:
+        // the driver names it for hosted objects), the pin's call, not the
+        // inline routine; its bytes are the library's.
+        if let Some(name) = self.tli.libcall_name(op, vt).filter(|name| self.tli.libcall_convention(name).is_some()) {
+            let env = super::libcall::CallEnv { arch, pointer: self.dag.config().pointer };
+            let parts = super::libcall::c_lib_call_parts(
+                self.dag,
+                &env,
+                &self.tli.libcall_symbol(name),
+                self.tli.libcall_convention(name),
+                &[dividend_lo, dividend_hi, divisor_lo, divisor_hi],
+                vt,
+            );
+            if let Some([low, high]) = parts.as_deref() {
+                return Ok((*low, *high));
+            }
+        }
         let wide = self.dag.constant(divisor_hi) != Some(0);
         let used =
             if wants_quotient { llrm_target::routines::Used::Quotient } else { llrm_target::routines::Used::Remainder };

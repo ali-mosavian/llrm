@@ -659,6 +659,15 @@ fn options_for(
             _ if format == "elf" => Some(llrm_mir::libfunc::HOSTED_COMPARE.to_vec()),
             _ => None,
         };
+        // DEVIATE DIV64-LIBCALL (owner x86-m32, exit 2026-11-20): a hosted
+        // 32-bit object calls libgcc's i64 divide routines, as the pin does;
+        // the inline routine stays where the runtime lists none (DOS).
+        if format == "elf" && bound.target.layout().mode == 32 {
+            options.libcalls.extend(
+                ["__divdi3", "__udivdi3", "__moddi3", "__umoddi3"]
+                    .map(|name| (name.to_owned(), number, pattern.replace('*', name))),
+            );
+        }
         if let Some(names) = stated {
             options.pipeline.library =
                 llrm_mir::libfunc::Routine::stated(names, |name| pattern.replace('*', name), number);
