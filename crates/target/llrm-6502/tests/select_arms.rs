@@ -53,3 +53,37 @@ fn a_case_fold_makes_its_subtraction_on_the_taken_path() {
     let bytes = estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
     assert!(bytes <= 90, "{bytes} B\n{body}");
 }
+
+/// k_itoa's digit loop: `u % r`, a `d > 9` fix-up whose arm is sunk, and `u / r`.
+/// The pair is one runtime call in a block; the sunk arm split it into two
+/// (k_itoa -O2: 2747 -> 4720 clocks, 374 -> 415 B).
+const DIGITS: &str = "define i16 @k_digits(i16 %u0, ptr %buf, i16 %r) {
+  br label %loop
+loop:
+  %u = phi i16 [ %u0, %0 ], [ %q, %loop ]
+  %n = phi i8 [ 0, %0 ], [ %n1, %loop ]
+  %m = urem i16 %u, %r
+  %t = trunc i16 %m to i8
+  %a = add i8 %t, 48
+  %c = icmp ugt i8 %a, 57
+  %b = add i8 %t, 55
+  %s = select i1 %c, i8 %b, i8 %a
+  %n1 = add i8 %n, 1
+  %z = zext i8 %n to i16
+  %g = getelementptr inbounds nuw i8, ptr %buf, i16 %z
+  store i8 %s, ptr %g, align 1
+  %q = udiv i16 %u, %r
+  %e = icmp ugt i16 %r, %u
+  br i1 %e, label %done, label %loop
+done:
+  ret i16 %q
+}
+";
+
+#[test]
+fn a_sunk_arm_does_not_part_a_quotient_from_its_remainder() {
+    let ir = format!("target datalayout = \"{}\"\n{DIGITS}", datalayout());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let calls = text.lines().filter(|l| l.trim_start().starts_with("jsr __u")).count();
+    assert_eq!(calls, 1, "{text}");
+}
