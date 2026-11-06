@@ -777,6 +777,11 @@ pub trait Tti {
         false
     }
 
+    /// Tuning `constant_hoisting`.
+    fn constant_hoisting(&self) -> bool {
+        false
+    }
+
     /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
     /// 50.
     fn unswitch_threshold_override(&self) -> Option<i64> {

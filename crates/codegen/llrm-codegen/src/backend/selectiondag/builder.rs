@@ -637,6 +637,7 @@ impl<'a> Builder<'a> {
             variadic_count: true,
             win64_va: false,
             variadic_shadows: Vec::new(),
+            call_clobbers: Vec::new(),
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
             call_result_assert: None,
@@ -691,6 +692,8 @@ struct Builder<'a> {
     /// argument of a variadic call is copied as well
     /// (`LowerCall`'s "XMM reg to the corresponding shadow reg").
     variadic_shadows: Vec<RegId>,
+    /// The pin numbers of the registers the call being lowered clobbers (its `RegisterMask`).
+    call_clobbers: Vec<u16>,
     /// The call being lowered has an argument whose attribute moves it
     /// (`relocating_attribute`).
     call_attrs_move_arguments: bool,
@@ -791,7 +794,7 @@ impl Builder<'_> {
                 llrm_mir::types::FloatKind::Float => MVT::F32,
                 llrm_mir::types::FloatKind::Double => MVT::F64,
                 llrm_mir::types::FloatKind::X86Fp80 => MVT::F80,
-                llrm_mir::types::FloatKind::F128 => return Err(Refused("fp128: no legalization yet")),
+                llrm_mir::types::FloatKind::F128 => MVT::F128,
             })),
             _ => Err(Refused("aggregate or vector value")),
         }
@@ -860,7 +863,7 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Option<EVT> {
-        (self.soft_float() && vt.is_floating_point()).then(|| EVT::integer(vt.size_in_bits()))
+        self.softens(vt).then(|| EVT::integer(vt.size_in_bits()))
     }
 
     /// `getNumRegistersForCallingConv`: an integer a convention returns in
@@ -1027,7 +1030,7 @@ impl Builder<'_> {
         for (at, &arg) in self.function.parameters().to_vec().iter().enumerate() {
             let declared = self.type_of(self.function.value(arg).ty)?;
             // No FPU: a float in registers arrives as the integer of its width.
-            let soft = self.soft_float()
+            let soft = self.softens(declared)
                 && declared.is_floating_point()
                 && matches!(
                     self.convention.parameters.get(at),
@@ -1935,6 +1938,10 @@ impl Builder<'_> {
             .filter(|found| variadic && found.positional)
             .map(|found| found.argument_registers.iter().map(|name| self.arch.register_named(name)).collect())
             .unwrap_or_default();
+        self.call_clobbers = match self.full_arch() {
+            Ok(arch) => super::dagisel_adapter::clobbered_by(arch, found),
+            Err(_) => super::dagisel_adapter::call_clobbered_flags(),
+        };
         self.call_result_assert = extension_assert(&info.return_attrs);
         self.call_result_range_bits = llrm_mir::valuetracking::pattern::call_range(
             &llrm_mir::valuetracking::Query::new(self.module, self.function, self.layout),
@@ -2606,7 +2613,8 @@ impl Builder<'_> {
         for (reg, value) in &copies {
             ops.push(self.dag.get_phys_register(self.dag.value_type(*value), *reg));
         }
-        ops.push(self.dag.get_register_mask_clobbering(&super::dagisel_adapter::call_clobbered_flags()));
+        let clobbers = std::mem::take(&mut self.call_clobbers);
+        ops.push(self.dag.get_register_mask_clobbering(&clobbers));
         ops.extend(glue);
         if sibling {
             // `X86ISD::TC_RETURN`: the callee, the stack adjustment (none: the
@@ -2682,7 +2690,7 @@ impl Builder<'_> {
             return Ok(Some(self.dag.get_node(super::x86isd::LLRM_CALL_FLAGS, vt, &[flags])));
         }
         // No FPU: a float comes back as the integer of its width.
-        let soft = self.soft_float() && vt.is_floating_point();
+        let soft = self.softens(vt);
         if vt.is_floating_point() && !soft {
             return Ok(Some(self.float_call_result(vt, plan.float_result, chain, glue)));
         }
@@ -2837,6 +2845,12 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// A float carried as the integer of its width: any float without an FPU,
+    /// and `f128` everywhere (no target has a quad register; `SoftenFloat`).
+    fn softens(&self, vt: EVT) -> bool {
+        vt == MVT::F128.into() || (self.soft_float() && vt.is_floating_point())
+    }
+
     /// `useSoftFloat()` of the function being built.
     fn soft_float(&self) -> bool {
         self.target.soft_float || crate::backend::isel::soft_float(&self.function.attrs)
@@ -2904,7 +2918,7 @@ impl Builder<'_> {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
             // No FPU: a float leaves as the integer of its width.
-            let (value, vt) = if self.soft_float() && vt.is_floating_point() {
+            let (value, vt) = if self.softens(vt) {
                 let int = EVT::integer(vt.size_in_bits());
                 (self.dag.get_node(ISD::BitCast, int, &[value]), int)
             } else {
@@ -3018,6 +3032,7 @@ impl Builder<'_> {
                 Ok(self.dag.get_constant_fp(f80_from_double_bits(*bits), vt))
             }
             ConstantKind::Float80(bits) => Ok(self.dag.get_constant_fp(*bits, vt)),
+            ConstantKind::Float128(bits) => Ok(self.dag.get_constant_fp(*bits, vt)),
             ConstantKind::Float(bits) => Ok(self.dag.get_constant_fp(u128::from(*bits), vt)),
             ConstantKind::Null | ConstantKind::Zero if vt.is_floating_point() => Ok(self.dag.get_constant_fp(0, vt)),
             ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, vt)),

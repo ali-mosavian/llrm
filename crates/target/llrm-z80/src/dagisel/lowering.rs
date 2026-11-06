@@ -96,7 +96,8 @@ pub fn target_lowering() -> TargetLowering {
     // loop is half the word's.
     set(&[Mul, SDiv, UDiv, SRem, URem], &[MVT::I8, MVT::I16], Action::LibCall);
     set(&[ShlParts, SrlParts, SraParts], &[MVT::I8, MVT::I16], Action::Expand);
-    set(&[MulHS, MulHU, UMulLoHi, SMulLoHi, SDivRem, UDivRem], &[MVT::I8, MVT::I16], Action::Expand);
+    set(&[MulHS, MulHU, UMulLoHi, SMulLoHi], &[MVT::I8, MVT::I16], Action::Expand);
+    set(&[SDivRem, UDivRem], &[MVT::I8], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], &[MVT::I8, MVT::I16], Action::Expand);
     // the action is by the type extended from (`LegalizeDAG`): a word from a
     // byte is the byte sign-extended (`lower_sign_extend_inreg`)
@@ -142,6 +143,12 @@ pub fn target_lowering() -> TargetLowering {
         [SDiv, UDiv, SRem, URem].into_iter().zip(["__s_divsi3", "__s_udivsi3", "__s_modsi3", "__s_umodsi3"])
     {
         tl.set_size_libcall_name(op, MVT::I32, name);
+    }
+    // a word divide and remainder of the same operands are one call too
+    // (`lower_divrem_word`)
+    for (op, name) in [(SDivRem, "__divremhi4"), (UDivRem, "__udivhi3")] {
+        tl.set_operation_action(op, MVT::I16, Action::Custom);
+        tl.set_libcall_name(op, MVT::I16, name);
     }
     // a divide and a remainder of the same long operands are one call, the
     // remainder stored through an address (`ExpandDivRemLibCall`; the pin's
@@ -206,6 +213,42 @@ impl Z80Lowering {
         };
         self.make_lib_call(dag, name, &[value, amount], vt, dag.opcode(node) == ISD::Sra)
     }
+}
+
+/// `ExpandDivRemLibCall` for a word: the routine returns the quotient in `de`
+/// and the remainder in `hl`, the registers of a long result; the divide
+/// routine `__udivhi3` leaves both there already, the signed one is
+/// `__divremhi4`.
+fn lower_divrem_word(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    use super::call::{Ext, In, Out, lower_call};
+    let signed = dag.opcode(node) == ISD::SDivRem;
+    let name = if signed { "__divremhi4" } else { "__udivhi3" };
+    let ext = if signed { Ext::Sign } else { Ext::Zero };
+    let outs: Vec<Out> = (0..2)
+        .map(|at| Out {
+            value: dag.operand(node, at),
+            ext,
+            pointer: false,
+            arg_vt: EVT::I16,
+            split: false,
+            variadic: false,
+            sret: false,
+            byval: None,
+        })
+        .collect();
+    let ins =
+        vec![
+            In { vt: EVT::I16, pointer: false, arg_vt: EVT::I32, split: true, sret: false, ext: Ext::Any, byval: None };
+            2
+        ];
+    let callee = dag.get_target_external_symbol(EVT::I16, name);
+    let root = dag.entry_node();
+    let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
+    let [quotient, remainder] = values[..] else { return None };
+    Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I16, EVT::I16], &[quotient, remainder]))
 }
 
 impl Z80Lowering {
@@ -302,6 +345,7 @@ impl Hooks for Z80Lowering {
             ISD::Shl | ISD::Srl | ISD::Sra => self.lower_shift(dag, node),
             ISD::Sub => Some(lower_sub(dag, node)),
             ISD::SDivRem | ISD::UDivRem if dag.value_type(node) == EVT::I32 => self.lower_divrem(dag, node),
+            ISD::SDivRem | ISD::UDivRem if dag.value_type(node) == EVT::I16 => lower_divrem_word(dag, node),
             ISD::SetCC => lower_setcc(dag, node),
             ISD::SetCCCarry => lower_setcc_carry(dag, node),
             ISD::Select => Some(lower_select(dag, node)),

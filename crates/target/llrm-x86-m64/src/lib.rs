@@ -411,6 +411,9 @@ impl llrm_target::Target for M64 {
                             // count (particle -O3: count 3 of 100 left a nest copy,
                             // +433 B, +8.6% clk).
                             unroll_jam_exact_count: true,
+                            // CH-STAGED (owner m64, exit 2026-11-20): the pin hoists
+                            // constants after LSR on every target; m64 first.
+                            constant_hoisting: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

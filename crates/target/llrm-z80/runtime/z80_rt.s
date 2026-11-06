@@ -66,7 +66,7 @@ __umodqi3:
 	ret
 
 ; hl / de -> de (__udivhi3), hl % de -> de (__umodhi3). The division leaves the quotient in de and the remainder in
-; hl; the remainder entry swaps them. Restoring division in two shapes. A divisor under 128
+; hl (a caller that wants both takes them there: the pair, `lower_divrem`); the remainder entry swaps them. Restoring division in two shapes. A divisor under 128
 ; keeps the remainder in a: 16 steps, the quotient shifting into hl as the dividend shifts out. A larger divisor
 ; leaves a quotient of at most 9 bits, so the 7 high bits of the dividend are the first remainder and 9 steps follow
 ; (the remainder is then at most 16 bits, never more), the dividend's low byte in a shifting out as the quotient
@@ -170,6 +170,30 @@ negde:	xor	a
 	sbc	a,a
 	sub	a,d
 	ld	d,a
+	ret
+
+; hl / de, signed, quotient and remainder in one call: the quotient in de, the remainder in hl. The quotient is negative
+; when the signs differ, the remainder takes the dividend's.
+	.globl __divremhi4
+__divremhi4:
+	ld	a,h
+	or	a,a
+	push	af
+	xor	a,d
+	push	af
+	call	abshlde
+	call	__udivhi3
+	pop	af
+	jp	p,1$
+	call	negde
+1$:	pop	af
+	ret	p
+	xor	a
+	sub	a,l
+	ld	l,a
+	sbc	a,a
+	sub	a,h
+	ld	h,a
 	ret
 
 	.globl __modhi3
