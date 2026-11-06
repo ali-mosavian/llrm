@@ -31,6 +31,7 @@ pub mod frame;
 pub mod isa;
 pub mod kernels;
 pub mod mac;
+pub mod loopinc;
 pub mod machine;
 pub mod mc;
 pub mod mfunc;
