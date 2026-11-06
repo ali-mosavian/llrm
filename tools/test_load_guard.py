@@ -419,8 +419,12 @@ class Drain(Env, unittest.TestCase):
     def test_ten_slots_at_one_minute_13_with_80_gb_available(self):
         self.assertEqual(self.admitted(13.0, 80, wanted=12), 10)
 
-    def test_seven_slots_at_one_minute_15_with_80_gb_available(self):
-        self.assertEqual(self.admitted(15.0, 80, wanted=12), 7)
+    def test_ten_slots_at_one_minute_16_with_80_gb_available(self):
+        """Seven slots at 1m 16 left 38 waiters queued with load 16 and the start limit 25."""
+        self.assertEqual(self.admitted(16.0, 80, wanted=12), 10)
+
+    def test_seven_slots_at_one_minute_18_with_80_gb_available(self):
+        self.assertEqual(self.admitted(18.0, 80, wanted=12), 7)
 
     def test_five_slots_at_one_minute_13_with_30_gb_available(self):
         self.assertEqual(self.admitted(13.0, 30, wanted=12), 5)
