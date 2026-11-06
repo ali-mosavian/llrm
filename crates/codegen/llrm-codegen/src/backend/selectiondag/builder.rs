@@ -637,6 +637,7 @@ impl<'a> Builder<'a> {
             variadic_count: true,
             win64_va: false,
             variadic_shadows: Vec::new(),
+            call_clobbers: Vec::new(),
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
             call_result_assert: None,
@@ -691,6 +692,8 @@ struct Builder<'a> {
     /// argument of a variadic call is copied as well
     /// (`LowerCall`'s "XMM reg to the corresponding shadow reg").
     variadic_shadows: Vec<RegId>,
+    /// The pin numbers of the registers the call being lowered clobbers (its `RegisterMask`).
+    call_clobbers: Vec<u16>,
     /// The call being lowered has an argument whose attribute moves it
     /// (`relocating_attribute`).
     call_attrs_move_arguments: bool,
@@ -1358,6 +1361,24 @@ impl Builder<'_> {
     /// `va_start` names. The vector registers' half of the area (48..176)
     /// is left unwritten until floating point is selected at m64 (DEVIATE
     /// SD238: a `double` passed to such a function is not read back).
+    /// `X86TargetLowering::LowerCall`'s `RegisterMask`: what the call's convention does not preserve, in the pin's numbers (the
+    /// flags are always in it). A register the pin has no number for cannot be a live physical definition, so it is left out.
+    fn clobbered_by(
+        &self,
+        found: Option<&llrm_target::calling::Convention>,
+    ) -> Vec<u16> {
+        let mut out = super::dagisel_adapter::call_clobbered_flags();
+        for name in found.map(|found| found.clobbered.as_slice()).unwrap_or_default() {
+            if name == "flags" || name.starts_with("st") {
+                continue;
+            }
+            out.extend(super::dagisel_adapter::pin_register(self.arch.registers().root(self.arch.register_named(name))));
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     fn save_variadic_registers(
         &mut self,
         fixed: i32,
@@ -1935,6 +1956,7 @@ impl Builder<'_> {
             .filter(|found| variadic && found.positional)
             .map(|found| found.argument_registers.iter().map(|name| self.arch.register_named(name)).collect())
             .unwrap_or_default();
+        self.call_clobbers = self.clobbered_by(found);
         self.call_result_assert = extension_assert(&info.return_attrs);
         self.call_result_range_bits = llrm_mir::valuetracking::pattern::call_range(
             &llrm_mir::valuetracking::Query::new(self.module, self.function, self.layout),
@@ -2606,7 +2628,8 @@ impl Builder<'_> {
         for (reg, value) in &copies {
             ops.push(self.dag.get_phys_register(self.dag.value_type(*value), *reg));
         }
-        ops.push(self.dag.get_register_mask_clobbering(&super::dagisel_adapter::call_clobbered_flags()));
+        let clobbers = std::mem::take(&mut self.call_clobbers);
+        ops.push(self.dag.get_register_mask_clobbering(&clobbers));
         ops.extend(glue);
         if sibling {
             // `X86ISD::TC_RETURN`: the callee, the stack adjustment (none: the

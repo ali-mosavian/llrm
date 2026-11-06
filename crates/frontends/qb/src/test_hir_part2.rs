@@ -925,15 +925,22 @@ fn test_resume_next_retains_runtime_statement_entries() {
             || (!labels.is_empty() && before.trim_start().starts_with("jmp ")),
         "{body}"
     );
-    // ERL of ERROR 11 is its line number, 100.
-    assert!(between(&listing, "$QB$ERL$__main label byte", "\n\n").contains("064h,000h"), "{listing}");
+    // ERL of ERROR 11 is its line number, 100: read as emitted, since the
+    // optimizer folds `erl` to the one raise's 100 and the table goes (the
+    // executed case, conformance qb45 resume, prints PASS).
+    let emitted = emitted_mir(&source);
+    let table = emitted.lines().find(|line| line.starts_with("@$QB$ERL$__main")).expect("the ERL table");
+    assert!(table.matches("i16 100").count() == table.matches("i16 ").count() && table.contains("i16 100"), "{table}");
 
     let records = records(&source, "Q45R35.BAS");
     let code = code(&records);
     let header_fixup =
         omf::fixups(&records).into_iter().find(|one| one.seg == Some(1) && one.offset == 10).expect("the header fixup");
     let statement_at = (i64::from(u16::from_le_bytes([code[10], code[11]])) + header_fixup.disp) as usize;
-    assert_eq!(code[statement_at - 3..statement_at], hex("55 8b ec"));
+    // The statement table follows the prologue `push bp; mov bp, sp`, which
+    // the selector encodes as `89 e5` (it was `8b ec`): the same instruction.
+    let prologue = &code[statement_at - 3..statement_at];
+    assert!(prologue == hex("55 8b ec") || prologue == hex("55 89 e5"), "{prologue:02x?}");
 }
 
 /// Q45ER52 optimization made RESUME entries use values defined only from main.
