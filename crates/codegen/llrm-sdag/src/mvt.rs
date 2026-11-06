@@ -1,7 +1,8 @@
 //! Value types of the DAG: [`MVT`] (the simple ones) and [`EVT`] (also an
 //! integer of any width, as `i24` before promotion).
 
-/// A simple value type, the pin's `MVT` without vectors (DEVIATE SD13).
+/// A simple value type, the pin's `MVT`: the scalars, and the 128-bit vectors
+/// named so far (DEVIATE SD13, lifted a type at a time for VECTORS-1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MVT {
     I1,
@@ -13,6 +14,10 @@ pub enum MVT {
     F32,
     F64,
     F80,
+    /// `MVT::v4i32`.
+    V4I32,
+    /// `MVT::v2i64`.
+    V2I64,
     /// IEEE binary128: never legal, softened to an `i128` (DEVIATE: the pin keeps it with the other floats).
     F128,
     /// A far pointer, a selector and an offset (DEVIATE SD2): m16 only, the
@@ -74,8 +79,44 @@ impl EVT {
             EVT::Int(_) => true,
             EVT::Simple(vt) => matches!(
                 vt,
-                MVT::I1 | MVT::I8 | MVT::I16 | MVT::I32 | MVT::I64 | MVT::I128
+                MVT::I1 | MVT::I8 | MVT::I16 | MVT::I32 | MVT::I64 | MVT::I128 | MVT::V4I32 | MVT::V2I64
             ),
+        }
+    }
+
+    /// `EVT::isVector`.
+    pub fn is_vector(self) -> bool {
+        matches!(self, EVT::Simple(MVT::V4I32 | MVT::V2I64))
+    }
+
+    /// `EVT::getVectorElementType`.
+    pub fn vector_element(self) -> EVT {
+        match self {
+            EVT::Simple(MVT::V4I32) => EVT::I32,
+            EVT::Simple(MVT::V2I64) => EVT::I64,
+            _ => panic!("{self:?} is not a vector"),
+        }
+    }
+
+    /// `EVT::getVectorNumElements`.
+    pub fn vector_len(self) -> u32 {
+        match self {
+            EVT::Simple(MVT::V4I32) => 4,
+            EVT::Simple(MVT::V2I64) => 2,
+            _ => panic!("{self:?} is not a vector"),
+        }
+    }
+
+    /// `MVT::getVectorVT`: the simple vector of `len` lanes of `element`, if
+    /// one is named.
+    pub fn vector(
+        element: EVT,
+        len: u32,
+    ) -> Option<EVT> {
+        match (element, len) {
+            (EVT::Simple(MVT::I32), 4) => Some(EVT::Simple(MVT::V4I32)),
+            (EVT::Simple(MVT::I64), 2) => Some(EVT::Simple(MVT::V2I64)),
+            _ => None,
         }
     }
 
@@ -94,7 +135,7 @@ impl EVT {
                 MVT::I32 | MVT::F32 | MVT::Far => 32,
                 MVT::I64 | MVT::F64 => 64,
                 MVT::F80 => 80,
-                MVT::I128 | MVT::F128 => 128,
+                MVT::I128 | MVT::F128 | MVT::V4I32 | MVT::V2I64 => 128,
                 MVT::Other | MVT::Glue => panic!("{vt:?} has no size"),
             },
         }

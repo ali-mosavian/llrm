@@ -812,7 +812,12 @@ impl Builder<'_> {
                 llrm_mir::types::FloatKind::X86Fp80 => MVT::F80,
                 llrm_mir::types::FloatKind::F128 => MVT::F128,
             })),
-            _ => Err(Refused("aggregate or vector value")),
+            // Only the vectors the DAG names (llrm_sdag::mvt, VECTORS-1); the rest stay refused.
+            Type::Vector { element, count } => {
+                let element = self.type_of(*element)?;
+                EVT::vector(element, *count).ok_or(Refused("a vector type the DAG does not name"))
+            }
+            _ => Err(Refused("aggregate value")),
         }
     }
 
