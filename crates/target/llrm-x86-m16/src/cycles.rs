@@ -100,7 +100,8 @@ pub fn classify(
         return "x87_load_i";
     }
     if mnem == "fld" {
-        return "x87_load";
+        // `fld st(i)` copies a stack register; a 486 takes 4 clocks for it, 3 for `fld m64`.
+        return if mem(dst) { "x87_load" } else { "x87_copy" };
     }
     if matches!(mnem, "fiadd" | "fisub" | "fisubr") {
         return "x87_add_i";
