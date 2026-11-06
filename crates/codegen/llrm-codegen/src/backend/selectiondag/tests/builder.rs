@@ -205,15 +205,17 @@ fn a_call_register_mask_names_eflags() {
     let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a datalayout")).expect("a datalayout");
     let target = BuilderTarget::m32().with_libcalls(&["memcpy", "memmove", "memset"]);
-    let eflags = super::super::dagisel_adapter::pin_register(super::super::dagisel_adapter::EFLAGS_ID).expect("a pin number");
+    let eflags =
+        super::super::dagisel_adapter::pin_register(super::super::dagisel_adapter::EFLAGS_ID).expect("a pin number");
     let mut masks = 0;
     for (id, _, function) in module.functions() {
         let convention =
             crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
         let mut info = FunctionLoweringInfo::new(function);
         for &block in function.layout() {
-            let done = build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block)
-                .unwrap_or_else(|why| panic!("{}", why.0));
+            let done =
+                build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block)
+                    .unwrap_or_else(|why| panic!("{}", why.0));
             for node in done.dag.nodes().iter().filter(|node| node.opcode == ISD::RegisterMask) {
                 let NodeData::RegMask(at) = node.data else { panic!("a mask without its registers") };
                 assert!(done.dag.register_masks[at as usize].contains(&eflags), "{:?}", done.dag.register_masks);
@@ -224,12 +226,14 @@ fn a_call_register_mask_names_eflags() {
     assert!(masks > 0, "no call in the golden IR");
 }
 
-/// The pin lists the whole caller-saved set of the call's convention in a call's `RegisterMask`, not the flags alone (DEVIATE SCM1).
+/// The pin lists the whole caller-saved set of the call's convention in a
+/// call's `RegisterMask`, not the flags alone (DEVIATE SCM1).
 #[test]
 fn a_call_register_mask_names_the_conventions_caller_saved_registers() {
+    use llrm_lir::registers::RegId;
+
     use super::super::dag::NodeData;
     use super::super::isd::ISD;
-    use llrm_lir::registers::RegId;
     let text: String = include_str!("../golden/calls.ll")
         .lines()
         .filter(|line| !line.starts_with("target triple"))
@@ -238,7 +242,8 @@ fn a_call_register_mask_names_the_conventions_caller_saved_registers() {
     let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a datalayout")).expect("a datalayout");
     let target = BuilderTarget::m32().with_libcalls(&["memcpy", "memmove", "memset"]);
-    // the pin numbers `phys_reg` knows: ECX has none, so it cannot be a live physical definition either
+    // the pin numbers `phys_reg` knows: ECX has none, so it cannot be a live
+    // physical definition either
     let wanted: Vec<u16> = [RegId::EAX, RegId::EDX]
         .into_iter()
         .map(|reg| super::super::dagisel_adapter::pin_register(reg).expect("a pin number"))
@@ -249,8 +254,9 @@ fn a_call_register_mask_names_the_conventions_caller_saved_registers() {
             crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
         let mut info = FunctionLoweringInfo::new(function);
         for &block in function.layout() {
-            let done = build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block)
-                .unwrap_or_else(|why| panic!("{}", why.0));
+            let done =
+                build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block)
+                    .unwrap_or_else(|why| panic!("{}", why.0));
             for node in done.dag.nodes().iter().filter(|node| node.opcode == ISD::RegisterMask) {
                 let NodeData::RegMask(at) = node.data else { panic!("a mask without its registers") };
                 let mask = &done.dag.register_masks[at as usize];
@@ -459,4 +465,31 @@ fn a_target_with_no_full_description_refuses_a_call_instead_of_panicking() {
     .err()
     .expect("a call needs the x86-style description");
     assert!(refused.0.contains("no x86-style description"), "{}", refused.0);
+}
+
+/// `sqrt` that only reads memory (PartiallyInlineLibCalls marks its fast path
+/// `memory(none)`) stayed a call in the DAG: m32 -O2 `sqrt_norm` doubled its
+/// calls and gained no instruction (897 -> 1516 bytes). The pin's `visitCall`
+/// makes it `fsqrt`; a call that may set `errno` stays a call.
+#[test]
+fn a_sqrt_call_that_sets_no_errno_is_the_node() {
+    let dump = |attrs: &str| {
+        let ll = format!(
+            "declare double @sqrt(double){attrs}
+define double @f(double %x) {{
+  %a = call double @sqrt(double %x)
+  ret double %a
+}}
+"
+        );
+        let (blocks, refused) = our_blocks(&ll);
+        assert_eq!(refused, Vec::<String>::new());
+        blocks.into_values().collect::<Vec<_>>().join("\n")
+    };
+    for attrs in [" memory(none)", " memory(read)"] {
+        let text = dump(attrs);
+        assert!(text.contains("fsqrt") && !text.contains("callseq_start"), "{attrs}: {text}");
+    }
+    let errno = dump("");
+    assert!(errno.contains("callseq_start") && !errno.contains("fsqrt"), "{errno}");
 }

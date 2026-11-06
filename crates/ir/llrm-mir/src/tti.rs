@@ -465,10 +465,14 @@ pub trait Tti {
     /// those or return a policy of its own.
     fn inline_policy(&self) -> InlinePolicy {
         InlinePolicy {
-            by_size: self.opt_size_inline_by_code_size().then(|| SizeRule {
-                min_sites: self.opt_size_inline_guard_min_sites(),
-                yields_to_negative_cost: self.opt_size_inline_guard_yields_to_negative_cost(),
-            }),
+            by_size: self
+                .opt_size_inline_by_code_size()
+                .then(
+                    || SizeRule {
+                        min_sites: self.opt_size_inline_guard_min_sites(),
+                        yields_to_negative_cost: self.opt_size_inline_guard_yields_to_negative_cost(),
+                    },
+                ),
             by_rate: self.speed_inline_milliclocks_per_byte(),
         }
     }
@@ -732,8 +736,8 @@ pub trait Tti {
         None
     }
 
-    /// DEVIATE REC-2: whether, at (-O2, -O3), a tree recursion's tail calls are eliminated
-    /// before its copies of itself are made.
+    /// DEVIATE REC-2: whether, at (-O2, -O3), a tree recursion's tail calls are
+    /// eliminated before its copies of itself are made.
     fn recursive_tre_first(&self) -> (bool, bool) {
         (false, false)
     }

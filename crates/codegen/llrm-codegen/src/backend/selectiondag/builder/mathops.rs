@@ -3,9 +3,11 @@
 //! and `lrint`, each one node on its operands. The legalizer turns what the
 //! target lacks into library calls.
 
+use llrm_mir::context::GlobalId;
 use llrm_mir::intrinsics::{BitCount, FloatFunction, Intrinsic};
-use llrm_mir::module::{Instruction, Operand};
-use llrm_mir::opcode::BinaryOp;
+use llrm_mir::libfunc::{Generic, LibFunc, TargetLibraryInfo};
+use llrm_mir::module::{GlobalKind, Instruction, Linkage, Operand};
+use llrm_mir::opcode::{Attribute, BinaryOp};
 
 use super::super::dag::SDValue;
 use super::super::isd::ISD;
@@ -193,5 +195,96 @@ impl Builder<'_> {
             self.module.context.get(id).kind,
             llrm_mir::context::ConstantKind::Int(0)
         )
+    }
+}
+
+thread_local! {
+    /// The library table of a pointer width: built once, not per call.
+    static LIBRARY: std::cell::RefCell<Vec<(u32, std::rc::Rc<TargetLibraryInfo>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn library_for(pointer_bits: u32) -> std::rc::Rc<TargetLibraryInfo> {
+    LIBRARY.with(|held| {
+        let mut held = held.borrow_mut();
+        if let Some((_, info)) = held.iter().find(|(bits, _)| *bits == pointer_bits) {
+            return std::rc::Rc::clone(info);
+        }
+        let info = std::rc::Rc::new(TargetLibraryInfo::new(&Generic::for_pointer(pointer_bits)));
+        held.push((pointer_bits, std::rc::Rc::clone(&info)));
+        info
+    })
+}
+
+/// The node a float library function is, and whether it takes one operand or
+/// two (`SelectionDAGBuilder::visitCall`'s `LibFunc_*` cases,
+/// [SelectionDAGBuilder.cpp#L9770-L9890](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L9770)).
+///
+/// DEVIATE FL1: `tan`, `asin`, `acos`, `atan2`, `sinh`, `cosh`, `tanh`,
+/// `exp10` and `ldexp` have no node in `ISD` yet, so they stay calls.
+fn float_libcall(func: LibFunc) -> Option<(ISD, bool)> {
+    use LibFunc::*;
+    Some(match func {
+        Copysign | Copysignf | Copysignl => (ISD::FCopySign, true),
+        Sin | Sinf | Sinl => (ISD::FSin, false),
+        Cos | Cosf | Cosl => (ISD::FCos, false),
+        Atan | Atanf | Atanl => (ISD::FAtan, false),
+        Sqrt | Sqrtf | Sqrtl | SqrtFinite | SqrtfFinite | SqrtlFinite => (ISD::FSqrt, false),
+        Log2 | Log2f | Log2l => (ISD::FLog2, false),
+        Exp2 | Exp2f | Exp2l => (ISD::FExp2, false),
+        _ => return None,
+    })
+}
+
+impl Builder<'_> {
+    /// `visitCall`'s library-function cases for the float functions, with
+    /// `visitUnaryFloatCall` and `visitBinaryFloatCall`
+    /// ([L9709](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L9709),
+    /// [L9733](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L9733)):
+    /// a call that only reads memory (it sets no `errno`) is the node on its
+    /// operands. Whether one did.
+    ///
+    /// DEVIATE FL2: the library table is the pin's defaults for the pointer's
+    /// width, not the target's `Library` (`hasOptimizedCodeGen`'s
+    /// `Unavailable` test reads it).
+    pub(super) fn visit_float_libcall(
+        &mut self,
+        instruction: &Instruction,
+        info: &llrm_mir::opcode::CallInfo,
+        callee: GlobalId,
+    ) -> Result<bool, Refused> {
+        let global = self.module.global(callee);
+        let callee_attrs: &[Attribute] = match &global.kind {
+            GlobalKind::Function(function) => &function.attrs,
+            _ => &[],
+        };
+        let has = |name: &str| {
+            let flag =
+                |attrs: &[Attribute]| attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == name));
+            flag(&info.attrs) || flag(callee_attrs)
+        };
+        // `!I.isNoBuiltin() && !F->hasLocalLinkage()`.
+        if (has("nobuiltin") && !has("builtin")) || matches!(global.linkage, Linkage::Internal | Linkage::Private) {
+            return Ok(false);
+        }
+        let library = library_for(self.layout.pointer(0).index_bits);
+        let Some(func) = library.get_lib_func_of(&self.module.context.types, global) else { return Ok(false) };
+        let Some((code, binary)) = float_libcall(func).filter(|_| library.has(func)) else { return Ok(false) };
+        // "verify it doesn't modify errno", and no strict floating point.
+        let reads_only =
+            !llrm_mir::memory::stated(&info.attrs).writes || !llrm_mir::memory::stated(callee_attrs).writes;
+        if !reads_only || has("strictfp") {
+            return Ok(false);
+        }
+        let first = self.get_value(instruction.operands[0])?;
+        let vt = self.dag.value_type(first);
+        let node = if binary {
+            // `copysign` takes no fast-math flags.
+            let second = self.get_value(instruction.operands[1])?;
+            self.dag.get_node(code, vt, &[first, second])
+        } else {
+            self.dag.get_node_flags(code, vt, &[first], flags_of(instruction.flags))
+        };
+        self.set_value(instruction.result.ok_or(Refused("a float library call without a result"))?, node);
+        Ok(true)
     }
 }

@@ -143,8 +143,8 @@ use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
     fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
-    loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
-    switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
+    loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, rotate, sccp, simpleloopunswitch,
+    simplifycfg, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -188,9 +188,9 @@ pub struct Options {
     /// switch, with its `unreachable` default, as the pin's passes leave it).
     pub lower_switches: bool,
     /// `loopidioms::Merge` also makes adjacent stores wider ones (LLVM's
-    /// `DAGCombiner::mergeConsecutiveStores`, DEVIATE `parity.rs`, owner wasm, exit 2026-11-20); off for a
-    /// target whose backend merges them, so the inliner and the passes after
-    /// it price the stores the pin's IR has.
+    /// `DAGCombiner::mergeConsecutiveStores`, DEVIATE `parity.rs`, owner wasm,
+    /// exit 2026-11-20); off for a target whose backend merges them, so the
+    /// inliner and the passes after it price the stores the pin's IR has.
     pub merge_stores: bool,
     /// After `PromoteMemToReg` the write-through `Promote` forwards a global's
     /// store to the loads after it, across blocks with phis, where there is no
@@ -202,7 +202,8 @@ pub struct Options {
     pub sink: bool,
     /// `Spares`: a fixed-cell load rematerialized past the writes alias proves
     /// disjoint. llrm only (the pin rematerializes invariant loads alone); off
-    /// by default, `-fllrm-spares`. DEVIATE (no number; owner w2, exit 2026-11-20: delete or justify with numbers), 8.0 M Ir at d_faces.
+    /// by default, `-fllrm-spares`. DEVIATE (no number; owner w2, exit
+    /// 2026-11-20: delete or justify with numbers), 8.0 M Ir at d_faces.
     pub spare_loads: bool,
     /// A CFG simplification ahead of loop strength reduction, to tidy the
     /// compare-and-branch that follows a `cmpxchg`: the pin's
@@ -212,7 +213,8 @@ pub struct Options {
     pub atomic_cfg_tidy: bool,
     /// `Homes`: a phi that also sits in a stored cell is spilled to that cell
     /// (gcc `REG_EQUIV`). llrm only; off by default, `-fllrm-homes`. DEVIATE
-    /// (no number; owner w2, exit 2026-11-20: delete or justify with numbers), 8.4 M Ir at d_faces.
+    /// (no number; owner w2, exit 2026-11-20: delete or justify with numbers),
+    /// 8.4 M Ir at d_faces.
     pub stored_homes: bool,
     /// The spiller makes a load of a cell nothing writes again where it is read
     /// (D-I). llrm only; off by default, `-fllrm-stable-loads`. Read by the
@@ -230,7 +232,9 @@ pub struct Options {
     /// has it (`isLoadExtLegal`); off for a target that has not, where the
     /// wider compare costs more than the extension saved.
     pub extload: bool,
-    /// `zeromerge`: zeroed locals that follow each other in the entry block share one fill. llrm only (DEVIATE D1 of `zeromerge.rs`, owner m16, exit 2026-11-20); runs where a pointer is 16 bits. `-fllrm-zero-merge`.
+    /// `zeromerge`: zeroed locals that follow each other in the entry block
+    /// share one fill. llrm only (DEVIATE D1 of `zeromerge.rs`, owner m16, exit
+    /// 2026-11-20); runs where a pointer is 16 bits. `-fllrm-zero-merge`.
     pub zero_merge: bool,
     /// `TypePromotion`, which the pin runs before CodeGenPrepare where the
     /// target asks (`-fllrm-typepromotion`).
@@ -258,9 +262,9 @@ pub struct Options {
     /// default pipelines (`enable-loopinterchange`) at every level but -O0.
     pub interchange: bool,
     /// `-floop-unroll-and-jam`: LLVM's `LoopUnrollAndJamPass`, in the Late
-    /// stage (L1474). DEVIATE (owner m64, exit 2026-11-30): the pin's default pipelines have it off
-    /// (`enable-unroll-and-jam`); it is on at -O3 and -Omax, where the
-    /// particle row gains from it.
+    /// stage (L1474). DEVIATE (owner m64, exit 2026-11-30): the pin's default
+    /// pipelines have it off (`enable-unroll-and-jam`); it is on at -O3 and
+    /// -Omax, where the particle row gains from it.
     pub unroll_and_jam: bool,
     /// LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
@@ -759,8 +763,8 @@ pub(crate) fn llvm_order(
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
     let translated = applied.options.sroa;
-    // DEVIATE (owner wasm, exit 2026-11-20), -O1 and -Og only (no GVN `pre`), and where `write_through` is
-    // on: the write-through `Promote`
+    // DEVIATE (owner wasm, exit 2026-11-20), -O1 and -Og only (no GVN `pre`),
+    // and where `write_through` is on: the write-through `Promote`
     // after PromoteMemToReg forwards a store of a global to the load after it,
     // which LLVM's InstCombine does in `visitLoadInst`
     // (FindAvailableLoadedValue, not translated); GVN does it at the other
@@ -1362,8 +1366,9 @@ pub fn recorded(
         manager.add(stage);
     }
     // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
-    // d1106deb71cc). DEVIATE (owner w9, exit 2026-11-20): made even where not held, as GlobalDCE, which
-    // LLVM runs after this point, abandoned it here.
+    // d1106deb71cc). DEVIATE (owner w9, exit 2026-11-20): made even where not
+    // held, as GlobalDCE, which LLVM runs after this point, abandoned it
+    // here.
     manager.recompute::<GlobalsAA>();
     manager.recompute::<GlobalsModRefAnalysis>();
     // The summaries are made. The passes below move and rewrite what a function
@@ -1427,7 +1432,8 @@ pub fn recorded(
     if applied.options.wanted("extload") {
         manager.add(extload::ExtLoad);
     }
-    // DEVIATE D1 of `zeromerge` (owner m16, exit 2026-11-20): after SROA and loop idioms made the fills.
+    // DEVIATE D1 of `zeromerge` (owner m16, exit 2026-11-20): after SROA and
+    // loop idioms made the fills.
     if applied.options.wanted("zeromerge") {
         manager.add(zeromerge::ZeroMerge);
     }

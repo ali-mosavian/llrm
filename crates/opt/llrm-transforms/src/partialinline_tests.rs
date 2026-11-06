@@ -1,6 +1,7 @@
+use llrm_analysis::testing::DOS;
+
 use super::PartiallyInlineLibCalls;
 use crate::testing::{Tuned, managed_on, parsed};
-use llrm_analysis::testing::DOS;
 
 fn run(
     text: &str,
@@ -125,7 +126,8 @@ fn an_optsize_function_keeps_its_sqrt_call_where_the_tuning_says_so() {
     }
 }
 
-/// The tuning is for functions tuned for size alone: a plain function is still split.
+/// The tuning is for functions tuned for size alone: a plain function is still
+/// split.
 #[test]
 fn the_size_tuning_leaves_a_speed_function_split() {
     let text = run(SQRT, Tuned { skip_partial_at_size: true, ..fast() });

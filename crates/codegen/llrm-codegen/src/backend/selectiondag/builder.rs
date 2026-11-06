@@ -692,7 +692,8 @@ struct Builder<'a> {
     /// argument of a variadic call is copied as well
     /// (`LowerCall`'s "XMM reg to the corresponding shadow reg").
     variadic_shadows: Vec<RegId>,
-    /// The pin numbers of the registers the call being lowered clobbers (its `RegisterMask`).
+    /// The pin numbers of the registers the call being lowered clobbers (its
+    /// `RegisterMask`).
     call_clobbers: Vec<u16>,
     /// The call being lowered has an argument whose attribute moves it
     /// (`relocating_attribute`).
@@ -1361,8 +1362,10 @@ impl Builder<'_> {
     /// `va_start` names. The vector registers' half of the area (48..176)
     /// is left unwritten until floating point is selected at m64 (DEVIATE
     /// SD238: a `double` passed to such a function is not read back).
-    /// `X86TargetLowering::LowerCall`'s `RegisterMask`: what the call's convention does not preserve, in the pin's numbers (the
-    /// flags are always in it). A register the pin has no number for cannot be a live physical definition, so it is left out.
+    /// `X86TargetLowering::LowerCall`'s `RegisterMask`: what the call's
+    /// convention does not preserve, in the pin's numbers (the
+    /// flags are always in it). A register the pin has no number for cannot be
+    /// a live physical definition, so it is left out.
     fn clobbered_by(
         &self,
         found: Option<&llrm_target::calling::Convention>,
@@ -1372,7 +1375,9 @@ impl Builder<'_> {
             if name == "flags" || name.starts_with("st") {
                 continue;
             }
-            out.extend(super::dagisel_adapter::pin_register(self.arch.registers().root(self.arch.register_named(name))));
+            out.extend(super::dagisel_adapter::pin_register(
+                self.arch.registers().root(self.arch.register_named(name)),
+            ));
         }
         out.sort_unstable();
         out.dedup();
@@ -1770,6 +1775,11 @@ impl Builder<'_> {
         {
             return self.visit_target_intrinsic(instruction, info, found);
         }
+        if let Some(global) = direct
+            && self.visit_float_libcall(instruction, info, global)?
+        {
+            return Ok(());
+        }
         if let Some(calling) = self.calling()
             && !calling.supports_convention(info.calling_convention)
         {
@@ -1964,7 +1974,10 @@ impl Builder<'_> {
         )
         .map(|range| range.get_min_signed_bits());
         self.fixed_args = owner.iter().filter(|argument| **argument < named).count();
-        self.call_sret = owner.iter().map(|argument| info.argument_attrs.get(*argument).is_some_and(|attrs| has_sret(attrs))).collect();
+        self.call_sret = owner
+            .iter()
+            .map(|argument| info.argument_attrs.get(*argument).is_some_and(|attrs| has_sret(attrs)))
+            .collect();
         self.call_attrs_move_arguments = match self.calling() {
             Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
             None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),

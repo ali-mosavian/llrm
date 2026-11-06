@@ -342,17 +342,23 @@ impl llrm_mir::target::Machine for Tuned {
     }
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        (self.exit_ne || self.no_global_base || self.cheap_ctlz || self.fast_sqrt || self.ord_dear || self.skip_partial_at_size).then(|| {
-            std::rc::Rc::new(Flagged {
-                exit_ne: self.exit_ne,
-                no_cmov: false,
-                no_global_base: self.no_global_base,
-                cheap_ctlz: self.cheap_ctlz,
-                fast_sqrt: self.fast_sqrt,
-                ord_dear: self.ord_dear,
-                skip_partial_at_size: self.skip_partial_at_size,
-            }) as _
-        })
+        (self.exit_ne
+            || self.no_global_base
+            || self.cheap_ctlz
+            || self.fast_sqrt
+            || self.ord_dear
+            || self.skip_partial_at_size)
+            .then(|| {
+                std::rc::Rc::new(Flagged {
+                    exit_ne: self.exit_ne,
+                    no_cmov: false,
+                    no_global_base: self.no_global_base,
+                    cheap_ctlz: self.cheap_ctlz,
+                    fast_sqrt: self.fast_sqrt,
+                    ord_dear: self.ord_dear,
+                    skip_partial_at_size: self.skip_partial_at_size,
+                }) as _
+            })
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {

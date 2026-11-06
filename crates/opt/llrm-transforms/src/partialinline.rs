@@ -45,7 +45,7 @@ use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::libfunc::LibFunc;
 use llrm_mir::module::{BlockId, InstId, Operand};
-use llrm_mir::opcode::{Attribute, FloatPredicate, Flags, Opcode, Tail};
+use llrm_mir::opcode::{Attribute, Flags, FloatPredicate, Opcode, Tail};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::tti::Ty;
 use llrm_mir::types::{FloatKind, Type};
@@ -79,8 +79,14 @@ impl FunctionPass for PartiallyInlineLibCalls {
             .function
             .attrs
             .iter()
-            .any(|one| matches!(one, Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"));
-        // `LLRM_PIL_SKIP_AT_SIZE` runs the per-target -Os A/B before a description turns the field on.
+            .any(
+                |one| matches!(
+                    one,
+                    Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+                ),
+            );
+        // `LLRM_PIL_SKIP_AT_SIZE` runs the per-target -Os A/B before a
+        // description turns the field on.
         if for_size && (tti.partial_libcalls_skip_at_size() || llrm_support::env_flag!("LLRM_PIL_SKIP_AT_SIZE")) {
             return PreservedAnalyses::all();
         }
@@ -104,12 +110,16 @@ impl FunctionPass for PartiallyInlineLibCalls {
                     llrm_mir::module::GlobalKind::Function(function) => &function.attrs,
                     _ => &[],
                 };
-                // `isNoBuiltin` and `isStrictFP` read the call site and the callee.
+                // `isNoBuiltin` and `isStrictFP` read the call site and the
+                // callee.
                 let either = |name: &str| has_flag(&call_info.attrs, name) || has_flag(callee_attrs, name);
                 if (either("nobuiltin") && !either("builtin")) || either("strictfp") {
                     continue;
                 }
-                if matches!(global.linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private) {
+                if matches!(
+                    global.linkage,
+                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                ) {
                     continue;
                 }
                 let Some(func) = info.get_lib_func_of(&unit.context.types, global) else { continue };
@@ -127,8 +137,8 @@ impl FunctionPass for PartiallyInlineLibCalls {
                 }
                 // The back end emits the instruction for a call that touches
                 // no memory already.
-                let reads_only =
-                    !llrm_mir::memory::stated(&call_info.attrs).writes || !llrm_mir::memory::stated(callee_attrs).writes;
+                let reads_only = !llrm_mir::memory::stated(&call_info.attrs).writes
+                    || !llrm_mir::memory::stated(callee_attrs).writes;
                 if reads_only {
                     continue;
                 }
@@ -175,11 +185,15 @@ fn optimize_sqrt(
     let libcall = unit.function.clone_instruction(call);
     let end = unit.function.terminator(libcall_bb).expect("a branch");
     unit.function.insert(libcall, Position::Before(end)).expect("a placed call");
-    // This call no longer touches memory, so the back end may use the instruction.
+    // This call no longer touches memory, so the back end may use the
+    // instruction.
     if let Opcode::Call(info) = unit.function.instruction(call).opcode.clone() {
         let mut info = *info;
         info.attrs.retain(|one| !matches!(one, Attribute::Memory(_)));
-        info.attrs.retain(|one| !matches!(one, Attribute::Flag(flag) if matches!(flag.as_str(), "readnone" | "readonly" | "writeonly" | "argmemonly" | "inaccessiblememonly")));
+        info.attrs.retain(|one| !matches!(
+            one,
+            Attribute::Flag(flag) if matches!(flag.as_str(), "readnone" | "readonly" | "writeonly" | "argmemonly" | "inaccessiblememonly")
+        ));
         info.attrs.push(Attribute::Memory(vec![(None, "none".to_owned())]));
         unit.function.set_opcode(call, Opcode::Call(Box::new(info)));
     }
