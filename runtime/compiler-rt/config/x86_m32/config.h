@@ -13,8 +13,8 @@ unsigned long long llrm_udiv64by32(unsigned hi, unsigned lo, unsigned d) __asm__
 #define SF_DIV64_UDIV 1
 #define SF_SPECIALS_ONCE 1 /* -O2 llrm mul 79912 -> 76737 clk, div 144865 -> 143041, same bytes; at -Os it costs 29 B */
 #endif
+#define SF_CONV_DIRECT32 1 /* f64 sidf/unsidf call the exact 32-bit path, not pack: llrm-cc -Os alone m32 516 -> 104 B, 468 -> 89; all four linked +23 B; -O2 float.c 668 -> 345 B */
 #ifdef __OPTIMIZE_SIZE__
-#define SF_CONV_DIRECT32 1 /* f64 sidf/unsidf call the exact 32-bit path, not pack: llrm-cc -Os alone m32 516 -> 104 B, 468 -> 89; all four linked +23 B */
 #define SF_UNPACK_OUTLINE 1 /* -Os add reach 471 -> 450 B */
 #endif
 #define SF_NORM_SUB_FIRST 1 /* the shift count lives in cl: m32 mul -Os 102727 -> 101059 clk, -55 B in the -Os image */
