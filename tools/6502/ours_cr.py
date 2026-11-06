@@ -136,26 +136,26 @@ def split_output(stdout):
     m = re.search(rb"\n(\d+) cycles\n$", stdout)
     return (stdout[:m.start()], int(m.group(1))) if m else (None, None)
 
-CRLIB = Path(os.environ.get("CRLIB", os.path.expanduser("~/scratch/sfcard/6502/crlib")))
-_EXP = {}
-for _p in sorted(CRLIB.glob("*.s")):
-    for _m in re.finditer(r"^\.export (\w+)", _p.read_text(), re.M):
-        _EXP.setdefault(_m.group(1), _p)
-def resolve(w, asm_text):  # asm_text(mods) = the program, plus the runtime routines the program and the modules name
-    """Add compiler-rt modules (CRLIB/*.s) for every symbol the link leaves unresolved, until it links."""
-    objs = []; have = set(); mods = ""
+sys.path.insert(0, str(HERE))
+import crlib
+RTDIR = Path(os.environ.get("RT_DIR", HERE.parents[1] / "runtime" / "compiler-rt"))
+def resolve(w, asm_text, cc, flags):  # asm_text(mods) = the program, plus the runtime routines the program and the modules name
+    """Add the compiler-rt member of every symbol the link leaves unresolved, until it links."""
+    objs = []; have = set(); mods = ""; index = crlib.index(RTDIR)
     for _ in range(12):
         (w / "f.s").write_text(".autoimport +\n" + asm_text(mods))
         k = sh(["cl65", "-t", "sim6502", "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
         if k.returncode == 0: return objs, None
         und = sorted(set(re.findall(r"Unresolved external '(\w+)'", k.stderr)))
-        new = {_EXP[u] for u in und if u in _EXP} - have
+        new = {index[u] for u in und if u in index} - have
         if not new: return objs, " ".join(und) or k.stderr[-100:]
-        for p in sorted(new):  # set order follows PYTHONHASHSEED and moves code across pages
-            have.add(p); (w / p.name).write_text(".autoimport +\n" + p.read_text()); mods += p.read_text()
-            a = sh(["ca65", "-t", "sim6502", "-o", p.stem + ".o", p.name], w)
-            if a.returncode: return objs, "ca65 " + p.name + ": " + a.stderr[-150:]
-            objs.append(p.stem + ".o")
+        for file in sorted(new):  # set order follows PYTHONHASHSEED and moves code across pages
+            stem = file.replace("/", "_")[:-2]
+            text = crlib.member(RTDIR, cc, file, flags)
+            have.add(file); (w / (stem + ".s")).write_text(".autoimport +\n" + text); mods += text
+            a = sh(["ca65", "-t", "sim6502", "-o", stem + ".o", stem + ".s"], w)
+            if a.returncode: return objs, "ca65 " + stem + ": " + a.stderr[-150:]
+            objs.append(stem + ".o")
     return objs, "no fixpoint"
 def one(job):
     path, level, lib = job
@@ -173,7 +173,7 @@ def one(job):
     asm = (w / "o.s").read_text()
     modtext = ""
     (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PAD}\n' if PAD else "") + asm + reachable_runtime(asm))
-    objs, why = resolve(w, lambda mods: (f'.segment "CODE"\n.res {PAD}\n' if PAD else '') + asm + reachable_runtime(asm + mods))
+    objs, why = resolve(w, lambda mods: (f'.segment "CODE"\n.res {PAD}\n' if PAD else '') + asm + reachable_runtime(asm + mods), OURS, [flag])
     if why: return name, "LINK", why[:140]
     modtext = "".join((w / o.replace('.o', '.s')).read_text() for o in objs)
     out = []
