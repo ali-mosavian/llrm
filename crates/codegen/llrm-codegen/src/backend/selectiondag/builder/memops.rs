@@ -1203,6 +1203,24 @@ impl Builder<'_> {
                     {
                         self.rep_stos(root, dst, other, bytes, alignment)?
                     }
+                    // DEVIATE MEMSET-OPT (owner m64, exit 2026-11-27; the pin
+                    // returns to the libcall at `Size > getMaxInlineSizeThreshold`,
+                    // X86SelectionDAGInfo.cpp L205): for size, a constant fill
+                    // of whole aligned blocks past that threshold is `rep stos`
+                    // where its setup is fewer bytes than the call's (histo -Os:
+                    // gcc's `rep stos` 170 B, the call and the registers it
+                    // saves 178 B).
+                    (None, Some(bytes))
+                        if strings_exist
+                            && opt_size
+                            && self.rep_stos_is_smaller_than_call(
+                                bytes,
+                                alignment,
+                                self.dag.constant(other).map(|byte| byte & 0xff),
+                            ) =>
+                    {
+                        self.rep_stos(root, dst, other, bytes, alignment)?
+                    }
                     // no `memset` to call: dwords, as the old selector fills;
                     // x86 takes them unaligned. Only a size of whole dwords (a
                     // tail costs the bytes the dwords save, and a far one
@@ -1892,6 +1910,35 @@ impl Builder<'_> {
 
     fn pointer_bytes(&self) -> u64 {
         u64::from(self.target.dag.pointer.size_in_bits() / 8)
+    }
+
+    /// DEVIATE MEMSET-OPT: the encoded bytes of `rep stos` against those of the
+    /// `memset` call for a constant fill past the pin's inline threshold, the
+    /// destination in `rdi` either way: `mov ecx, count` 5, the value in `eax`
+    /// (`xor` 2, `mov imm32` 5), `rep stos` 2 (3 with REX.W), against `mov edx,
+    /// size` 5, the value in `esi` the same, `call` 5. Not 16-bit pointers (their
+    /// own pricing), not an unaligned or part-block fill (`rep stosb` runs a
+    /// clock a byte), not a variable value. The saves the call forces on the
+    /// caller are not counted: they are unknown here and only widen the gap.
+    fn rep_stos_is_smaller_than_call(
+        &self,
+        bytes: u64,
+        alignment: u64,
+        fill: Option<u128>,
+    ) -> bool {
+        let pointer = self.pointer_bytes();
+        let Some(fill) = fill else { return false };
+        if pointer < 4 || alignment < 4 || bytes <= MAX_INLINE_SIZE {
+            return false;
+        }
+        let block = alignment.min(pointer);
+        if bytes % block != 0 {
+            return false;
+        }
+        let value = if fill == 0 { 2 } else { 5 };
+        let rep = 5 + value + 2 + u64::from(block == 8);
+        let call = 5 + value + 5;
+        rep < call
     }
 
     /// `emitConstantSizeRepstos`.
