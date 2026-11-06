@@ -225,7 +225,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             (bits, d, signed, rem, zeros),
         );
         let rate = b.milliclocks_per_byte;
-        (clocks.0 + clocks.0 * p.margin / 100) * 1000 + bytes.0 * rate < clocks.1 * 1000 + bytes.1 * rate
+        // The clocks recur with the block, the bytes are paid once.
+        let times = ((b.frequency * 1000.0).round() as i64).max(1);
+        (clocks.0 + clocks.0 * p.margin / 100) * times + bytes.0 * rate < clocks.1 * times + bytes.1 * rate
     }
 
     /// The divide's price and the multiply-high sequence's, in `set`'s unit:
