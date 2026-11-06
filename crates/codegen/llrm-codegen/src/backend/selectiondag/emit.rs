@@ -4141,7 +4141,10 @@ impl Emitter<'_, '_> {
             // DEVIATE SD234: the pin loads `LD_F1` once for all its readers; a
             // call or block end is the only place the stack cannot hold it
             let at = (self.stack_breaks, self.blocks.len());
-            let constant = cell.is_none();
+            // A pool constant with one reader is loaded there, for the memory
+            // operand it folds into; with several it is one load, as the pin
+            // keeps it (`IsProfitableToFold` needs `hasOneUse`).
+            let constant = cell.is_none() || !self.dag.has_one_use(value.node);
             if constant {
                 if let Some(&(held, breaks, blocks)) = self.loaded.get(&value) {
                     if (breaks, blocks) == at {
