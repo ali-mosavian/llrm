@@ -780,9 +780,10 @@ impl super::emit::ConstantCells for PoolCells<'_> {
 /// pin's rule.
 fn div_prices(
     cpu: &crate::backend::cpu::Profile,
+    machine: &dyn llrm_mir::target::Machine,
     bitness: u32,
 ) -> Option<super::dag::DivPrices> {
-    let costs = cpu.target().costs();
+    let costs = machine.costs();
     if costs.divide <= costs.multiply {
         return None;
     }
@@ -815,12 +816,12 @@ fn div_prices(
 
 /// The clock prices a size-only pick weighs against bytes (m16: the fill it
 /// prices is real mode's).
-fn size_trade(cpu: &crate::backend::cpu::Profile) -> Option<SizeTrade> {
-    let rate = cpu.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte());
+fn size_trade(machine: &dyn llrm_mir::target::Machine) -> Option<SizeTrade> {
+    let rate = machine.tti().map_or(0, |tti| tti.speed_milliclocks_per_byte());
     if rate == 0 {
         return None;
     }
-    let costs = cpu.target().costs();
+    let costs = machine.costs();
     Some(SizeTrade {
         milliclocks_per_byte: rate,
         fill: costs.fill,
@@ -840,6 +841,8 @@ fn selected_in(
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let bitness = arch.object().bitness;
+    // One cost model for the function: `Profile::target` builds one (and clones the price tables) per call.
+    let machine = cpu.target();
     let m16 = match bitness {
         16 => true,
         32 | 64 => false,
@@ -874,7 +877,7 @@ fn selected_in(
     } else {
         // The machine fact is the cost model's: the same `has_cmov` SimplifyCFG
         // reads.
-        let cmov = cpu.target().tti().is_some_and(|tti| tti.has_cmov());
+        let cmov = machine.tti().is_some_and(|tti| tti.has_cmov());
         let features = Features { cmov, ..Features::default() };
         lowering_for(32, features, || TargetLowering::x86_32(features, MVT::I32))
     };
@@ -911,7 +914,7 @@ fn selected_in(
     builder_target.dag.dso_local_symbols = true;
     builder_target.dag.absolute_symbols = !module.position_independent();
     let builder_target = builder_target
-        .with_tuning(cpu.target().tuning())
+        .with_tuning(machine.tuning())
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
         // DEVIATE DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin: minsize
@@ -925,9 +928,9 @@ fn selected_in(
         // +763 B over 309 programs (2026-10-27). Cost: an idiv is ~40 clocks
         // on a 486 where the multiply is ~13.
         .with_int_div_cheap(cpu.size || cpu.min_size)
-        .with_div_prices(div_prices(&cpu, bitness))
+        .with_div_prices(div_prices(cpu, &*machine, bitness))
         .with_jump_tables(
-            cpu.target().costs().jump_table != 0
+            machine.costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
                     matches!(
                         attr,
@@ -937,9 +940,9 @@ fn selected_in(
         )
         .with_opt_size(cpu.size || cpu.min_size)
         .with_min_size(cpu.min_size)
-        .with_size_trade(size_trade(cpu))
+        .with_size_trade(size_trade(&*machine))
         .with_tail_calls(tail_calls_on())
-        .with_tti(cpu.target().tti())
+        .with_tti(machine.tti())
         .with_runtime_call_verdicts(
             contracts
                 .filter(|contracts| contracts.runtime)
@@ -1164,8 +1167,8 @@ fn selected_in(
     // before selection).
     let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks { 0 } else { cpu.speed_milliclocks_per_byte() };
     let speed_goal = !(cpu.size || cpu.min_size || bytes_beat_clocks);
-    let mul_by_clocks = speed_goal && cpu.target().tti().is_some_and(|tti| tti.multiply_by_clocks());
-    let price_pin = speed_goal && cpu.target().tti().is_some_and(|tti| tti.price_pin_multiplies());
+    let mul_by_clocks = speed_goal && machine.tti().is_some_and(|tti| tti.multiply_by_clocks());
+    let price_pin = speed_goal && machine.tti().is_some_and(|tti| tti.price_pin_multiplies());
     // The function's one `BranchProbabilityInfo`: the builder's edge
     // probabilities read the same one (the pin has it as an analysis).
     let frequencies = ((mul_rate > 0 || price_pin) && !mul_by_clocks).then(|| {

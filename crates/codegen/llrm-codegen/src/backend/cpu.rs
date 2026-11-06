@@ -278,6 +278,7 @@ impl Profile {
 
     /// The MIR target this profile prices: its target's cost model on its CPU.
     pub fn target(&self) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::MachineModels);
         (self.model)(&self.cpu_prices())
     }
 

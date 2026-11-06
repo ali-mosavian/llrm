@@ -1698,6 +1698,21 @@ hi:
     assert_eq!(made, 1, "{made} branch probability calculations for one function");
 }
 
+/// `selected_in` asked `Profile::target` for a cost model seven times a
+/// function, each one cloning the price tables (41 M Ir, 2.5% of a tiny600
+/// -O0 compile, 3005 calls for 601 functions).
+#[test]
+fn test_a_selection_builds_one_cost_model() {
+    let layout = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
+    let text = format!("{layout}define i32 @f(i32 %a, i32 %b) {{\nentry:\n  %m = mul i32 %a, %b\n  ret i32 %m\n}}\n");
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::MachineModels);
+    let module = crate::testing::module(&text).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    let built = llrm_mir::counts::get(llrm_mir::counts::Event::MachineModels) - before;
+    assert!(built <= 3, "{built} cost models built for one function");
+}
+
 /// A volatile `double` constant store at m32 was split into two `i32` stores
 /// once `store_fp_constant_as_i64` was on (float_conversions_loop +4 B over the
 /// pin's `fld; fstp`): the pin splits only a simple store (`ST->isSimple()`).
