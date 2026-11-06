@@ -121,6 +121,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         convention.parameters.iter().filter_map(|p| if let Parameter::Cell(disp) = p { Some(*disp) } else { None });
     let frame = Frame(cells.collect());
     let ctx = EmitContext {
+        x87_prices: None,
         tables: &[],
         caller_saved: &Default::default(),
         conventions: &super::emit::NoConventions,
@@ -149,6 +150,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
             &mut built.dag,
             &tli,
             &mut X86Lowering {
+                share_products: false,
                 cmov: false,
                 sse2: false,
                 min_size: false,
@@ -194,6 +196,20 @@ fn a_sum_of_two_arguments_goes_through() {
     assert!(blocks[0][1].contains("Mem"), "the second load folds into the add: {blocks:#?}");
 }
 
+/// A hoisted constant is `bitcast iN C` (an opaque constant); `add %hoisted, d`
+/// stays an add of a register and `d`. SimplifyDemandedBits folded it to the
+/// constant (every bit known), undoing ConstantHoisting: the pin skips the fold
+/// when an operand is an opaque constant. sfm16 -O1 kept one merged compare
+/// of two `mov imm`s where the pin has two `cmp`/`jae` on one hoisted base.
+#[test]
+fn an_add_of_an_opaque_constant_is_not_folded_to_a_constant() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\ndefine i1 @f(i32 %x) {\nentry:\n  %c = bitcast i32 -2147483648 to i32\n  %m = add i32 %c, 2130706433\n  %r = icmp ult i32 %x, %m\n  ret i1 %r\n}\n";
+    let blocks = through(text).unwrap_or_else(|e| panic!("refused: {e}"));
+    let names: Vec<&str> =
+        blocks[0].iter().map(|line| line.split(" := ").nth(1).unwrap().split(' ').next().unwrap()).collect();
+    assert!(names.contains(&"lea") || names.iter().filter(|name| **name == "mov").count() >= 2, "{blocks:#?}");
+}
+
 /// `x * 5` reaches selection with no `MUL` node: the combiner ran between
 /// the legalizers. Without the `Combine` calls the multiply by a constant
 /// is selected as `IMUL32rmi`, which the pin turns into a `lea`.
@@ -217,6 +233,7 @@ fn the_combiner_runs_between_the_legalizers() {
         &mut built.dag,
         &tli,
         &mut X86Lowering {
+            share_products: false,
             cmov: false,
             sse2: false,
             min_size: false,
@@ -341,6 +358,7 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
         .expect("builds");
         let (mut lowering, mut hooks) = (
             X86Lowering {
+                share_products: false,
                 cmov: false,
                 sse2: false,
                 min_size: false,

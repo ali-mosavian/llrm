@@ -54,11 +54,26 @@ pub(super) fn full_unroll_pays(
     // copies and this loop's own analysis cannot see it (tests/run
     // int64_division: 7 x 6 divisions fold to constants; vetoed, 14 -> 198
     // instructions). The pin's threshold decides it.
+    // A loop an unroll of this run made is part of a nest whose outer loop was
+    // decided: the copies of the inner loops follow it (nbody -O2: the 4-trip
+    // outer loop unrolls, its 3-, 2- and 1-trip inner copies were each priced
+    // alone and kept rolled, +38,016).
+    if !run.first.contains(&lp.get_header()) {
+        return true;
+    }
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count) {
         return true;
     }
+    // The same for a loop around loops that all run few trips: the pin unrolls
+    // the nest at its early pass, whole, and what that frees (the inner loops,
+    // the arrays they index) is cleaned after it (nbody -O2 triangular nest:
+    // +8 B for -23,816 instructions, priced +267 B). The bound is the pin's own
+    // for what it analyzes, `-unroll-max-iteration-count-to-analyze`.
+    if bounds_few_trips(run, se, analyzed, lp, up.max_iterations_count_to_analyze) {
+        return true;
+    }
     let clocks = crate::profit::costs(run.outer);
-    let bytes = run.outer.target().size_costs();
+    let bytes = run.outer.target().byte_costs();
     let blocks = lp.get_blocks();
     let body_bytes = trip_cost(run.context, run.layout, run.function, run.callees, blocks.iter(), &bytes, true);
     let body_clocks = trip_clocks(run.context, run.layout, run.function, run.callees, blocks.iter(), &clocks);
@@ -93,7 +108,7 @@ pub(super) fn full_unroll_pays(
     // The accesses of a local array the copies make constant-indexed: the
     // array is promoted to registers, so they cost no clocks and no bytes
     // (frameless: `local[i]` filled and read by two 12-trip loops).
-    let (mut promoted, mut promoted_runs, ints, floats) = promoted_accesses(run, analyzed, lp, &known);
+    let (mut promoted, mut promoted_runs, ints, floats, rmw) = promoted_accesses(run, analyzed, lp, &known);
     // DEVIATE UP1-REG (owner m64, exit 2026-11-20): the promoted elements are
     // registers only while they fit: more than the file holds, and they are
     // stack slots again (fpbench -O2 m64: four 6-element float arrays, 24
@@ -107,6 +122,7 @@ pub(super) fn full_unroll_pays(
         }
     }
     let added = (added - i64::from(trips) * promoted * bytes.load).max(0);
+    let added = (added - merged_store_credit(run, se, analyzed, lp, trips)).max(0);
     let (saved_units, constant_clocks) = match analysis {
         Some(cost) => (i64::from(cost.rolled_dynamic_cost.saturating_sub(cost.unrolled_cost)), 0),
         None => (i64::from(trips) * i64::from(up.be_insns), i64::from(trips) * nested_uses * clocks.r#move),
@@ -127,9 +143,61 @@ pub(super) fn full_unroll_pays(
     why(
         run,
         lp,
-        &format!("priced unroll: {trips} trips, saves {saved} clk, adds {added} B (body {body_bytes} B; units {unrolled_units} of {rolled_units}, promoted {promoted}), rate {rate}"),
+        &Priced {
+            trips,
+            saved,
+            added,
+            body_bytes,
+            units: unrolled_units,
+            rolled: rolled_units,
+            promoted,
+            ints,
+            floats,
+            rmw,
+            float_file: run.outer.target().float_registers(),
+            rate,
+        }
+        .line(),
     );
     unroll_pays(saved, added, rate)
+}
+
+/// What a priced unroll weighed, the line of `LLRM_DEBUG=unroll`: `floats` and
+/// `ints` are the local arrays whose elements the copies make registers, and
+/// `float_file` the target's stated float register file (0 where unstated).
+pub(super) struct Priced {
+    pub trips: u32,
+    pub saved: i64,
+    pub added: i64,
+    pub body_bytes: i64,
+    pub units: i64,
+    pub rolled: i64,
+    pub promoted: i64,
+    pub ints: usize,
+    pub floats: usize,
+    pub rmw: usize,
+    pub float_file: i64,
+    pub rate: i64,
+}
+
+impl Priced {
+    pub(super) fn line(&self) -> String {
+        format!(
+            "priced unroll: {} trips, saves {} clk, adds {} B (body {} B; units {} of {}, promoted {}, ints {}, floats {}, rmw {}), float file {}, rate {}",
+            self.trips,
+            self.saved,
+            self.added,
+            self.body_bytes,
+            self.units,
+            self.rolled,
+            self.promoted,
+            self.ints,
+            self.floats,
+            self.rmw,
+            self.float_file,
+            self.rate
+        )
+    }
 }
 
 /// The operands of the loops inside `lp` that each copy of its body makes a
@@ -247,10 +315,14 @@ fn promoted_accesses(
     analyzed: &Analyzed,
     lp: Loop,
     known: &IdSet<ValueId>,
-) -> (i64, i64, usize, usize) {
+) -> (i64, i64, usize, usize, usize) {
     let function = &*run.function;
     let (mut found, mut runs) = (0, 0);
     let (mut ints, mut floats): (IdSet<ValueId>, IdSet<ValueId>) = (IdSet::new(), IdSet::new());
+    // Float arrays the loop both reads and writes: after a full unroll their elements
+    // are forwarded from one trip of the loops around to the next, one live value each.
+    let (mut loaded, mut written, mut rmw): (IdSet<ValueId>, IdSet<ValueId>, IdSet<ValueId>) =
+        (IdSet::new(), IdSet::new(), IdSet::new());
     for &block in lp.get_blocks() {
         let nested = analyzed.loops.get_loop_depth(block).saturating_sub(lp.get_loop_depth());
         for inst in function.iter_block(block) {
@@ -291,12 +363,167 @@ fn promoted_accesses(
                     let float = stored
                         .and_then(|ty| llrm_mir::tti::Ty::of(&run.context.types, ty))
                         .is_some_and(|ty| ty.is_float());
-                    if float { floats.insert(root) } else { ints.insert(root) };
+                    if float {
+                        floats.insert(root);
+                        if matches!(one.opcode, Opcode::Store { .. }) { written.insert(root) } else { loaded.insert(root) };
+                        if loaded.contains(&root) && written.contains(&root) {
+                            rmw.insert(root);
+                        }
+                    } else {
+                        ints.insert(root);
+                    }
                 }
             }
         }
     }
-    (found, runs, ints.len(), floats.len())
+    (found, runs, ints.len(), floats.len(), rmw.len())
+}
+
+/// The float values a full unroll of `lp` by `trips` keeps live across its
+/// copies: each float array the loop both reads and writes (a local one or a
+/// global, at an address of the loop's counters) is one value a trip, forwarded
+/// from copy to copy; one both read and written at a fixed address, one value.
+pub(super) fn forwarded_floats(
+    run: &Run,
+    analyzed: &Analyzed,
+    lp: Loop,
+    trips: u32,
+) -> usize {
+    let (_, known) = constant_operand_uses(run, analyzed, lp);
+    let function = &*run.function;
+    // (loaded, stored) per root: an alloca, or a global's id.
+    let mut roots: std::collections::BTreeMap<(bool, u32), (bool, bool, bool)> = Default::default();
+    for &block in lp.get_blocks() {
+        for inst in function.iter_block(block) {
+            let one = function.instruction(inst);
+            let (pointer, stored) = match one.opcode {
+                Opcode::Load { volatile: false, .. } => (one.operands[0], false),
+                Opcode::Store { volatile: false, .. } => (one.operands[1], true),
+                _ => continue,
+            };
+            let ty = if stored {
+                function.operand_type(run.context, one.operands[0])
+            } else {
+                one.result.map(|result| function.value(result).ty)
+            };
+            if !ty.and_then(|ty| llrm_mir::tti::Ty::of(&run.context.types, ty)).is_some_and(|ty| ty.is_float()) {
+                continue;
+            }
+            let Some((root, varying)) = array_root(run, pointer, &known) else { continue };
+            let entry = roots.entry(root).or_default();
+            if stored { entry.1 = true } else { entry.0 = true }
+            entry.2 |= varying;
+        }
+    }
+    roots
+        .values()
+        .filter(|(loaded, stored, _)| *loaded && *stored)
+        .map(|(_, _, varying)| if *varying { trips as usize } else { 1 })
+        .sum()
+}
+
+/// The alloca, or mutable global, `pointer` addresses through geps whose
+/// indices are constants or in `known`, and whether an index varies.
+fn array_root(
+    run: &Run,
+    mut pointer: Operand,
+    known: &IdSet<ValueId>,
+) -> Option<((bool, u32), bool)> {
+    let function = &*run.function;
+    let mut varying = false;
+    loop {
+        match pointer {
+            Operand::Constant(id) => {
+                let ConstantKind::Global(global) = run.context.get(id).kind else { return None };
+                return match &run.globals[global.0 as usize].kind {
+                    GlobalKind::Variable(variable) if !variable.constant => Some(((true, global.0), varying)),
+                    _ => None,
+                };
+            }
+            Operand::Value(value) => {
+                let ValueDef::Instruction(def) = function.value(value).def else { return None };
+                let one = function.instruction(def);
+                match one.opcode {
+                    Opcode::Alloca { .. } => return Some(((false, value.0), varying)),
+                    Opcode::GetElementPtr { .. } => {
+                        for index in &one.operands[1..] {
+                            match index {
+                                Operand::Value(index) if known.contains(index) => varying = true,
+                                Operand::Constant(_) => {}
+                                _ => return None,
+                            }
+                        }
+                        pointer = one.operands[0];
+                    }
+                    _ => return None,
+                }
+            }
+            Operand::Block(_) => return None,
+        }
+    }
+}
+
+/// The bytes the copies of a full unroll save by storing one constant at
+/// consecutive addresses: the stores of `trips` trips are adjacent, and the
+/// backend merges them into wider stores and `stp` pairs (`MergeConsecutiveStores`;
+/// lru -O3: the model said +28 B, the code shrank 12). A stream of `trips`
+/// stores of `w` bytes becomes `ceil(trips * w / 16)` instructions of four
+/// bytes; a constant that is neither zero nor all ones costs one more to build.
+fn merged_store_credit(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    trips: u32,
+) -> i64 {
+    if trips < 2 {
+        return 0;
+    }
+    let function = &*run.function;
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let mut credit = 0;
+    for &block in lp.get_blocks() {
+        if analyzed.loops.get_loop_depth(block) != lp.get_loop_depth() {
+            continue;
+        }
+        for inst in function.iter_block(block) {
+            let one = function.instruction(inst);
+            let Opcode::Store { volatile: false, .. } = one.opcode else { continue };
+            let Operand::Constant(value) = one.operands[0] else { continue };
+            let Some(llrm_mir::tti::Ty::Int(bits)) = function
+                .operand_type(run.context, one.operands[0])
+                .and_then(|ty| llrm_mir::tti::Ty::of(&run.context.types, ty))
+            else {
+                continue;
+            };
+            if !matches!(bits, 8 | 16 | 32 | 64) || !se.is_value_scevable(&cx, one.operands[1]) {
+                continue;
+            }
+            let width = i128::from(bits / 8);
+            let address = se.get_scev(&cx, one.operands[1]);
+            if se.addrec_header(address) != Some(lp.get_header()) || !se.is_affine(address) {
+                continue;
+            }
+            let step = se.get_step_recurrence(&cx, address);
+            if se.as_constant(step).map(|step| step.sext_value()) != Some(width) {
+                continue;
+            }
+            let merged = (i64::from(trips) * i64::from(bits / 8) + 15) / 16;
+            let mask = (1u128 << bits) - 1;
+            let plain = matches!(run.context.get(value).kind, ConstantKind::Int(number) if number & mask == 0 || number & mask == mask);
+            credit += (i64::from(trips) - merged) * 4 - if plain { 0 } else { 4 };
+        }
+    }
+    credit.max(0)
 }
 
 /// What an address at the counters is an element of.
@@ -382,4 +609,41 @@ fn encloses_known_trips(
         around = parent.get_parent_loop();
     }
     true
+}
+
+/// Whether `lp` holds a loop whose trip count follows a counter of `lp` (a
+/// constant maximum, no constant count: a triangular nest's inner loop) and
+/// every loop inside it runs at most `most` trips. A loop inside that runs a
+/// constant number of trips whatever `lp` does is priced on its own.
+fn bounds_few_trips(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    most: u32,
+) -> bool {
+    if lp.is_innermost() {
+        return false;
+    }
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let mut follows = false;
+    let mut inside: Vec<Loop> = lp.get_sub_loops().collect();
+    while let Some(one) = inside.pop() {
+        let trips = se.get_small_constant_max_trip_count(&cx, one.get_header());
+        if trips == 0 || trips > most {
+            return false;
+        }
+        follows |= se.get_small_constant_trip_count(&cx, one.get_header()) == 0;
+        inside.extend(one.get_sub_loops());
+    }
+    follows
 }

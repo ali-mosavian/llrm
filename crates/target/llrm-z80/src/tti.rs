@@ -39,6 +39,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::tti::*;
 use llrm_target::Target as _;
 
+use crate::driver::Level;
 use crate::target::Z80;
 use crate::timing::cost;
 
@@ -406,14 +407,15 @@ impl Tti for Z80Tti {
         false
     }
 
-    // The runtime has no routine that leaves both quotient and remainder: a
-    // pair is two calls.
+    // The long routines `__udivremsi4` and `__divremsi4` and the word ones
+    // (`__udivhi3` leaves the remainder in `hl`, `__divremhi4`) give both: a
+    // pair is one call. The byte routines do not.
     fn has_div_rem_op(
         &self,
-        _bits: u32,
+        bits: u32,
         _signed: bool,
     ) -> bool {
-        false
+        matches!(bits, 16 | 32)
     }
 
     fn cast_cost(

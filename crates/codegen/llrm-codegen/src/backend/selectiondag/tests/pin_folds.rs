@@ -316,7 +316,7 @@ fn a_target_that_does_not_ask_keeps_the_or_of_the_and() {
     assert_eq!(dag.opcode(dag.get_root()), ISD::Or);
 }
 
-fn masked_frozen_extload(dag: &mut SelectionDAG) {
+pub(super) fn masked_frozen_extload(dag: &mut SelectionDAG) {
     // a pointer that may be poison, so the freeze is not dropped
     let (base, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
     let one = dag.get_constant(1, EVT::I32);
@@ -963,4 +963,50 @@ fn an_and_of_a_select_of_zero_and_all_ones_takes_the_operand_into_the_select() {
     assert_eq!(dag.opcode(root), ISD::Select);
     assert_eq!(dag.constant(dag.operand(root, 1)), Some(0));
     assert_eq!(dag.operand(root, 2), x);
+}
+
+/// Declines the fold of a shift of a shared shift.
+struct KeepsSharedShift;
+
+impl CombineHooks for KeepsSharedShift {
+    fn fold_shift_of_shared_shift(
+        &self,
+        _vt: EVT,
+        _inner: u32,
+    ) -> bool {
+        false
+    }
+}
+
+/// `(x >> 3) >> 8` where `x >> 3` has another reader: a word shift that is
+/// one instruction for both halves was shifted a second time, as `x >> 11`.
+fn shift_of_shift_with_a_second_reader(dag: &mut SelectionDAG) -> SDValue {
+    let x = dag.get_register(EVT::I16, 5);
+    let (three, eight) = (dag.get_constant(3, EVT::I8), dag.get_constant(8, EVT::I8));
+    let inner = dag.get_node(ISD::Srl, EVT::I16, &[x, three]);
+    let outer = dag.get_node(ISD::Srl, EVT::I16, &[inner, eight]);
+    let low = dag.get_node(ISD::Truncate, EVT::I8, &[inner]);
+    let high = dag.get_node(ISD::Truncate, EVT::I8, &[outer]);
+    let root = dag.get_node(ISD::BuildPair, EVT::I16, &[low, high]);
+    dag.set_root(root);
+    inner
+}
+
+#[test]
+fn a_target_that_declines_keeps_the_shift_of_a_shared_shift() {
+    let mut dag = dag();
+    let inner = shift_of_shift_with_a_second_reader(&mut dag);
+    DagCombiner::new(&mut dag, &mut KeepsSharedShift, CombineLevel::BeforeLegalizeTypes).run();
+    let high = dag.operand(dag.get_root(), 1);
+    let outer = dag.operand(high, 0);
+    assert_eq!(dag.operand(outer, 0), inner, "the high half reads the shift the low half has");
+}
+
+#[test]
+fn a_default_target_folds_the_shift_of_a_shared_shift() {
+    let mut dag = dag();
+    let inner = shift_of_shift_with_a_second_reader(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let high = dag.operand(dag.get_root(), 1);
+    assert_ne!(dag.operand(dag.operand(high, 0), 0), inner);
 }

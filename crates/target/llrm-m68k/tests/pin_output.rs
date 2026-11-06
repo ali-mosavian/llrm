@@ -54,6 +54,7 @@ fn not_and_swap_encode_as_binutils_does() {
 /// reaches; the ILP list scheduler (the default) keeps them together and
 /// retests.
 const SOURCE_ORDER: Options = Options {
+    code_model: llrm_m68k::compile::CodeModel::Small,
     mid_end: true,
     size: false,
     source_order: true,
@@ -61,6 +62,8 @@ const SOURCE_ORDER: Options = Options {
     push_frame: false,
     push_arguments: false,
     short: false,
+    hoist_flag_setters: false,
+    reuse_shift_flags: false,
     debug: false,
 };
 

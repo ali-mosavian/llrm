@@ -30,9 +30,50 @@ pub enum Item {
     Loc(crate::expand::Row),
 }
 
+/// The pin's code model (`-mcmodel`), which decides how a global is reached
+/// (`M68kSubtarget::classifyGlobalReference`, without PIC): small, PC-relative
+/// with a 16-bit displacement; medium, absolute on the 68000 and 68010 and
+/// PC-relative from the 68020; large, absolute. The assembler relaxes only
+/// branches, so data farther than 32 KiB from the code needs medium on the
+/// 68000 or large.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CodeModel {
+    #[default]
+    Small,
+    Medium,
+    Large,
+}
+
+impl CodeModel {
+    /// `-mcmodel=NAME`: `small`, `medium` or `large`.
+    pub fn parse(name: &str) -> Result<CodeModel, String> {
+        match name {
+            "small" => Ok(CodeModel::Small),
+            "medium" => Ok(CodeModel::Medium),
+            "large" => Ok(CodeModel::Large),
+            other => Err(format!("`{other}` is not a code model (small, medium, large)")),
+        }
+    }
+
+    /// Whether a global's address is an absolute one on `cpu`.
+    pub fn absolute_data(
+        self,
+        cpu: Cpu,
+    ) -> bool {
+        match self {
+            CodeModel::Small => false,
+            CodeModel::Medium => !cpu.at_least(Cpu::M68020),
+            CodeModel::Large => true,
+        }
+    }
+}
+
 /// What the compiler may do beyond the pin's output.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
+    /// The pin's code model: how a global's address is formed
+    /// ([`CodeModel::absolute_data`]).
+    pub code_model: CodeModel,
     /// Run the shared IR mid-end (`-O2`) first, as `llc -O2` is given
     /// optimized IR by `opt`.
     pub mid_end: bool,
@@ -53,6 +94,13 @@ pub struct Options {
     /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
     /// instruction for.
     pub short: bool,
+    /// A `tst` is dropped past instructions that set the codes between it and
+    /// the definition of its register, which move above the definition
+    /// ([`crate::cmpelim`]).
+    pub hoist_flag_setters: bool,
+    /// `cmpi.l #(2^s-1)` after the `lsr.l #s` of the same value is dropped
+    /// ([`crate::cmpshift`]).
+    pub reuse_shift_flags: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -61,6 +109,7 @@ impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
     pub const PINNED: Options = Options {
+        code_model: CodeModel::Small,
         mid_end: false,
         size: false,
         source_order: false,
@@ -68,6 +117,8 @@ impl Options {
         push_frame: false,
         push_arguments: false,
         short: false,
+        hoist_flag_setters: false,
+        reuse_shift_flags: false,
         debug: false,
     };
 }
@@ -75,6 +126,7 @@ impl Options {
 impl Default for Options {
     fn default() -> Options {
         Options {
+            code_model: CodeModel::Small,
             mid_end: true,
             size: false,
             source_order: false,
@@ -82,6 +134,8 @@ impl Default for Options {
             push_frame: true,
             push_arguments: true,
             short: true,
+            hoist_flag_setters: true,
+            reuse_shift_flags: true,
             debug: false,
         }
     }
@@ -116,12 +170,23 @@ pub fn items_with(
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
-    let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed, options.short)?;
+    let blocks = select_function_with(
+        module,
+        name,
+        cpu,
+        options.source_order,
+        options.indexed,
+        options.short,
+        options.code_model.absolute_data(cpu),
+    )?;
     let mut function = emit(name, &blocks)?;
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
-        crate::cmpelim::eliminate_tests(&mut function);
+        crate::cmpelim::eliminate_tests(&mut function, options.hoist_flag_setters);
+        if options.reuse_shift_flags {
+            crate::cmpshift::reuse_shift_flags(&mut function);
+        }
         crate::shiftadd::shifts_to_adds(&mut function);
         crate::negadd::negative_adds_to_subq(&mut function);
         crate::addrarith::address_adds(&mut function, cpu, wants_size);
@@ -162,6 +227,8 @@ pub fn items_with(
         crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
         crate::constreg::constant_into_destination(&mut function, &assignment);
         crate::constreg::immediate_from_free_register(&mut function, &assignment);
+        crate::narrow_add::narrow_adds(&mut function, &assignment);
+        crate::narrow_add::narrow_compares(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);

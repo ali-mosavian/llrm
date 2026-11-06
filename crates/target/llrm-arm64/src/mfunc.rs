@@ -344,6 +344,9 @@ pub struct MFunc {
     pub slots: Vec<Slot>,
     /// The next virtual register number, of either class.
     pub next_register: u32,
+    /// Float registers the selector knows hold 128 bits (`f128` values), for
+    /// the allocator to spill and copy whole.
+    pub wide: Vec<Reg>,
     /// The most bytes of outgoing arguments any call passes on the stack.
     pub outgoing: u64,
     /// Whether the function calls another (it saves the link register).

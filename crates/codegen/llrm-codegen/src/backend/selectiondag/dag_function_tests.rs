@@ -1697,3 +1697,76 @@ hi:
     let made = llrm_mir::counts::get(llrm_mir::counts::Event::BranchProbabilities) - before;
     assert_eq!(made, 1, "{made} branch probability calculations for one function");
 }
+
+/// A volatile `double` constant store at m32 was split into two `i32` stores
+/// once `store_fp_constant_as_i64` was on (float_conversions_loop +4 B over the
+/// pin's `fld; fstp`): the pin splits only a simple store (`ST->isSimple()`).
+#[test]
+fn a_volatile_double_constant_store_is_not_split_at_m32() {
+    let got = names(
+        "target datalayout = \"e-p:32:32-f64:32-n8:16:32\"
+define void @f(ptr %p) {
+entry:
+  store volatile double 10.0, ptr %p
+  ret void
+}
+",
+    )
+    .expect("selected");
+    // the one `mov` loads the pointer argument
+    let movs = got.iter().filter(|n| *n == "mov").count();
+    assert!(got.iter().any(|n| n == "fld") && movs == 1, "an x87 store, not two imm stores: {got:?}");
+}
+
+/// The simple store of the same constant is two `i32` stores, as the pin's.
+#[test]
+fn a_double_constant_store_is_two_integer_stores_at_m32() {
+    let got = names(
+        "target datalayout = \"e-p:32:32-f64:32-n8:16:32\"
+define void @f(ptr %p) {
+entry:
+  store double 10.0, ptr %p
+  ret void
+}
+",
+    )
+    .expect("selected");
+    // the pointer argument's load and two imm32 stores
+    let movs = got.iter().filter(|n| *n == "mov").count();
+    assert!(!got.iter().any(|n| n == "fld") && movs == 3, "two imm32 stores: {got:?}");
+}
+
+/// `(or (and x, y), x)` stayed an `and` and an `or` (x86 did not run the pin's
+/// `visitORCommutative` absorption): it is `x`.
+#[test]
+fn an_or_of_an_and_with_its_operand_is_that_operand() {
+    let got = names(
+        "target datalayout = \"e-p:32:32-f64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %y) {
+entry:
+  %a = and i32 %x, %y
+  %o = or i32 %a, %x
+  ret i32 %o
+}
+",
+    )
+    .expect("selected");
+    assert!(!got.iter().any(|n| n == "and" || n == "or"), "x is returned: {got:?}");
+}
+
+/// The same shape with a third operand is not absorbed (control).
+#[test]
+fn an_or_of_an_and_with_another_operand_is_kept() {
+    let got = names(
+        "target datalayout = \"e-p:32:32-f64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %y, i32 %z) {
+entry:
+  %a = and i32 %x, %y
+  %o = or i32 %a, %z
+  ret i32 %o
+}
+",
+    )
+    .expect("selected");
+    assert!(got.iter().any(|n| n == "and") && got.iter().any(|n| n == "or"), "{got:?}");
+}
