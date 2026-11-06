@@ -914,13 +914,16 @@ fn selected_in(
         .with_tuning(cpu.target().tuning())
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
-        // DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin: minsize
-        // only). Flipping it at --isel=dag grows m32 -Os +467 B over 126
-        // programs and m16 -Os +763 B over 309; matmul gains 20/3 B. Exit:
-        // keep the divide unless the expansion forces spills (matmul's `urem
-        // i16 %x,3` costs +59 B in 4 spill slots). Cost: an idiv is ~40 clocks
-        // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
-        // 5095 B against the pin's 5463 (2026-10-27).
+        // DEVIATE DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin: minsize
+        // only). Measured 2026-11-06, m32 -Os, 71 programs, pin-exact flip:
+        // 14 programs change, +203 B in all, matmul only -4 B, and four cells
+        // pass -> fail on bytes against the best of gcc/clang (recmany +36,
+        // recsum +18, x_binsearch +18, x_switch_dense +13). Isolated divides
+        // are smaller kept than in gcc or clang. Decision: keep the divide at
+        // -Os, the pin's `int_div_cheap(min_size)` is not taken. Owner x86-m32;
+        // open, exit 2026-11-20 (kept by measurement 2026-11-06). m16 -Os was
+        // +763 B over 309 programs (2026-10-27). Cost: an idiv is ~40 clocks
+        // on a 486 where the multiply is ~13.
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_div_prices(div_prices(&cpu, bitness))
         .with_jump_tables(

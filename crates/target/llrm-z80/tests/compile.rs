@@ -1647,6 +1647,31 @@ fn a_function_tuned_for_size_calls_the_small_long_long_divide() {
     assert!(out.contains("call __udivdi3") && !out.contains("_s\n"), "{out}");
 }
 
+/// A function tuned for size called the long divide made for speed: 391 B to
+/// link where the register-only routine is 76 (div_constants_ulong, -Os: +278 B
+/// against SDCC). It calls the size routine, for the signed and the unsigned
+/// divide and remainder; any other function the speed one.
+#[test]
+fn a_function_tuned_for_size_calls_the_small_long_divide() {
+    let body = |attr: &str, ops: [&str; 2]| {
+        format!(
+            "define i32 @f(i32 %a, i32 %b) {attr} {{\n  %q = {} i32 %a, %b\n  %r = {} i32 %b, %a\n  %s = add i32 %q, %r\n  ret i32 %s\n}}",
+            ops[0], ops[1]
+        )
+    };
+    for (ops, small, fast) in [
+        (["udiv", "urem"], ["call __s_udivsi3", "call __s_umodsi3"], ["call __udivsi3", "call __umodsi3"]),
+        (["sdiv", "srem"], ["call __s_divsi3", "call __s_modsi3"], ["call __divsi3", "call __modsi3"]),
+    ] {
+        for attr in ["optsize", "minsize"] {
+            let out = compiled(&body(attr, ops), "f");
+            assert!(small.iter().all(|call| out.contains(call)), "{attr} {ops:?}: {out}");
+        }
+        let out = compiled(&body("", ops), "f");
+        assert!(fast.iter().all(|call| out.contains(call)) && !out.contains("__s_"), "{ops:?}: {out}");
+    }
+}
+
 /// A long multiplied by a constant was split into its halves, each half
 /// shifted and subtracted, in a function tuned for size: `x * 31` was 99 B and
 /// `x * 1000` 185 B, where a call is 14 (div_constants_short, mul_constants,

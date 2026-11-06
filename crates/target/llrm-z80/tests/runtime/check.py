@@ -211,6 +211,16 @@ def main():
     allok &= check("__umodsi3", "LL>L", lambda a, b: a % b, lp)
     allok &= check("__divsi3", "LL>L", lambda a, b: tdiv32(s32c(a), s32c(b)) & 0xFFFFFFFF, lp)
     allok &= check("__modsi3", "LL>L", lambda a, b: (s32c(a) - tdiv32(s32c(a), s32c(b)) * s32c(b)) & 0xFFFFFFFF, lp)
+    # the size family: the same answers, over the edges (0, 1, 2^k, 2^k - 1, all ones, divisor above dividend), a divisor of
+    # zero giving all ones and the dividend
+    edge = sorted({0, 1, 2, 3, 0xFFFFFFFF, 0x80000000, 0x80000001, 0x7FFFFFFF} | {1 << k for k in range(32)} | {(1 << k) - 1 for k in range(1, 32)})
+    ep = [(a, b) for a in edge for b in edge if b]
+    for nm, f in (("__s_udivsi3", lambda a, b: a // b), ("__s_umodsi3", lambda a, b: a % b),
+                  ("__s_divsi3", lambda a, b: tdiv32(s32c(a), s32c(b)) & 0xFFFFFFFF),
+                  ("__s_modsi3", lambda a, b: (s32c(a) - tdiv32(s32c(a), s32c(b)) * s32c(b)) & 0xFFFFFFFF)):
+        allok &= check(nm, "LL>L", f, lp + ep)
+    allok &= check("__s_udivsi3", "LL>L", lambda a, b: 0xFFFFFFFF, [(a, 0) for a in edge])
+    allok &= check("__s_umodsi3", "LL>L", lambda a, b: a, [(a, 0) for a in edge])
     q64 = [0, 1, 255, 256, 65535, 65536, 0xFFFFFFFF, 1 << 32, (1 << 63) - 1, 1 << 63, (1 << 64) - 1, 0x0123456789ABCDEF, 10, 1000000007]
     q64 += [rnd.getrandbits(64) for _ in range(12)] + [rnd.getrandbits(rnd.choice([5, 17, 33, 49])) for _ in range(8)]
     s64 = lambda x: x - (1 << 64) if x >> 63 else x

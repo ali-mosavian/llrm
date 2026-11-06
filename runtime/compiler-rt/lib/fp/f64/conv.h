@@ -4,7 +4,7 @@
 #ifndef SF_CONV64_H
 #define SF_CONV64_H
 /* A 32-bit magnitude always fits the 53-bit significand: no rounding, and every shift stays in 32-bit halves. */
-#ifdef SF_CONV_NOINLINE /* wasm -O2 inlines both helpers: f64 float.c 287 -> 655 B */
+#if defined(SF_CONV_NOINLINE) || (defined(SF_CONV_DIRECT32) && !defined(SF_CLZ64)) /* wasm -O2 inlines both helpers: f64 float.c 287 -> 655 B */
 #define SF_CONV_FN __attribute__((noinline)) static
 #else
 #define SF_CONV_FN static
@@ -31,7 +31,7 @@ static inline sf64 round_mag(uint64_t sign, uint64_t u, int n)
 SF_CONV_FN sf64 from_mag32(uint64_t sign, uint32_t x)
 {
     if (!x) return 0;
-#ifdef SF_CLZ64 /* 64-bit registers: one shift puts the top bit at 52 (compiler-rt's form); the implicit bit adds the last exponent step */
+#if defined(SF_CLZ64) || defined(SF_CONV_WIDE32) /* 64-bit registers: one shift puts the top bit at 52 (compiler-rt's form); the implicit bit adds the last exponent step */
     int c = sf_clz32(x);
     return sign + (((uint64_t)x << (c + 21)) + ((uint64_t)(1053 - c) << 52));
 #else
@@ -53,7 +53,7 @@ SF_CONV_FN sf64 from_mag(uint64_t sign, uint64_t u)
     return SF_PACK(sign, n + 1023, m);
 #endif
 }
-#else /* SF_NO_EXACT32: one 64-bit path, no second normaliser (x86 m32 -Os: the second path costs +25 B) */
+#else /* SF_NO_EXACT32: one 64-bit path, no second normaliser (m68k: the second path costs +12..20 B) */
 static inline sf64 from_mag(uint64_t sign, uint64_t u)
 {
     if (!u) return 0;
