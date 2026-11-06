@@ -54,7 +54,8 @@ fn o0_fast_allocation_computes_the_same_answer() {
     let built = cc("x86_64-linux", "-O0", &["-o", "a.out"], scratch.path());
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
     let ran = Command::new(scratch.path().join("a.out")).output().unwrap();
-    // f(2,3,4): x=5, y=16, s = sum(16*i+5) for i<4 = 16*6+20 = 116; f(5,7,0) = 37+12 = 49.
+    // f(2,3,4): x=5, y=16, s = sum(16*i+5) for i<4 = 16*6+20 = 116; f(5,7,0) =
+    // 37+12 = 49.
     assert_eq!(String::from_utf8_lossy(&ran.stdout), "116 49\n");
 }
 

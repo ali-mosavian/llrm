@@ -148,11 +148,8 @@ fn run(
     }
     let index: HashMap<RegId, usize> = roots.iter().enumerate().map(|(at, root)| (*root, at)).collect();
     let number: HashMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
-    let successors: Vec<Vec<usize>> = body
-        .blocks
-        .iter()
-        .map(|block| block.succ.iter().filter_map(|to| number.get(to).copied()).collect())
-        .collect();
+    let successors: Vec<Vec<usize>> =
+        body.blocks.iter().map(|block| block.succ.iter().filter_map(|to| number.get(to).copied()).collect()).collect();
     let mut fast = Fast {
         classes,
         segments,
@@ -191,7 +188,12 @@ fn run(
             max_skip: block.max_skip,
         }));
     }
-    Ok(LirBody { origin: body.origin.clone(), pins: body.pins.clone(), ordered: body.ordered, ..body.with_blocks(blocks) })
+    Ok(LirBody {
+        origin: body.origin.clone(),
+        pins: body.pins.clone(),
+        ordered: body.ordered,
+        ..body.with_blocks(blocks)
+    })
 }
 
 impl Fast<'_> {
@@ -200,9 +202,16 @@ impl Fast<'_> {
         one: &Insn,
         value: u32,
     ) -> Option<RegId> {
-        self.pins.get(&value).copied().or_else(|| {
-            one.requires.iter().chain(&one.delivers).find(|(held, _)| held.value == value).map(|(_, register)| *register)
-        })
+        self.pins
+            .get(&value)
+            .copied()
+            .or_else(
+                || one.requires
+                    .iter()
+                    .chain(&one.delivers)
+                    .find(|(held, _)| held.value == value)
+                    .map(|(_, register)| *register),
+            )
     }
 
     fn is_pinned(
@@ -223,7 +232,10 @@ impl Fast<'_> {
             let mut groups: IndexMap<i64, Vec<(Vec<u32>, Vec<u32>)>> = IndexMap::default();
             for (position, one) in block.insns.iter().enumerate() {
                 let Some(what) = &one.what else { return fail("an instruction without semantics") };
-                let pseudo = matches!(what.name.as_deref(), Some("call_frame_setup" | "call_frame_destroy"));
+                let pseudo = matches!(
+                    what.name.as_deref(),
+                    Some("call_frame_setup" | "call_frame_destroy")
+                );
                 if what.op == ir::Operation::Barrier && !pseudo {
                     return fail("a barrier");
                 }
