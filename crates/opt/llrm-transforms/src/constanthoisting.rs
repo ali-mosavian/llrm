@@ -86,6 +86,9 @@ struct Candidate {
     bits: u128,
     uses: Vec<User>,
     cumulative_cost: u32,
+    /// Every use is a constant the target prices at one instruction where the
+    /// pin prices two (x86 ZIMM: a zero-extended 32-bit `mov r32, imm32`).
+    cheap_for_target: bool,
 }
 
 impl Candidate {
@@ -406,6 +409,23 @@ impl Hoister<'_> {
         )
     }
 
+    /// `cost`, or the pin's price of the constant when the target's differs.
+    fn pin_cost_of(
+        &self,
+        function: &Function,
+        inst: InstId,
+        index: usize,
+        width: u32,
+        value: i128,
+        cost: Cost,
+    ) -> Cost {
+        let instruction = function.instruction(inst);
+        if self.opt_for_size || matches!(instruction.opcode, Opcode::Call(_)) {
+            return cost;
+        }
+        self.tti().int_imm_cost_inst_pin(imm_user(&instruction.opcode), index as u32, value, width)
+    }
+
     /// `collectConstantCandidates(.., Inst, Idx, ConstInt)`
     /// ([L362](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstantHoisting.cpp#L362)).
     fn collect_int(
@@ -418,14 +438,23 @@ impl Hoister<'_> {
     ) {
         let (ty, width, bits) = constant;
         let cost = self.cost_of(function, inst, index, width, signed(bits, width));
-        // Ignore cheap integer constants.
-        if cost.value > Cost::BASIC.value {
+        let pin_cost = self.pin_cost_of(function, inst, index, width, signed(bits, width), cost);
+        // Ignore cheap integer constants, as the pin prices them.
+        if pin_cost.value > Cost::BASIC.value {
             let at = *map.entry((width, bits)).or_insert_with(|| {
-                self.candidates.push(Candidate { ty, width, bits, uses: Vec::new(), cumulative_cost: 0 });
+                self.candidates.push(Candidate {
+                    ty,
+                    width,
+                    bits,
+                    uses: Vec::new(),
+                    cumulative_cost: 0,
+                    cheap_for_target: true,
+                });
                 self.candidates.len() - 1
             });
             let candidate = &mut self.candidates[at];
-            candidate.cumulative_cost = candidate.cumulative_cost.wrapping_add(cost.value as u32);
+            candidate.cumulative_cost = candidate.cumulative_cost.wrapping_add(pin_cost.value as u32);
+            candidate.cheap_for_target &= cost.value <= Cost::BASIC.value;
             candidate.uses.push(User { inst, index });
         }
     }
@@ -575,6 +604,12 @@ impl Hoister<'_> {
         let (uses, best) = self.maximize_constants_in_range(function, range.clone());
         // Don't hoist constants that have only one use.
         if uses <= 1 {
+            return;
+        }
+        // DEVIATE ZIMM (M64-ZIMM-DCL, owner m64, exit 2026-11-20): a lone
+        // constant the target materializes in one instruction stays where it is;
+        // beside a neighbour it is hoisted as the pin does, a base and an offset.
+        if range.len() == 1 && self.candidates[range.start].cheap_for_target {
             return;
         }
         let (ty, width, base_bits) =

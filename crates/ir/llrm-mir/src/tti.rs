@@ -903,6 +903,19 @@ pub trait Tti {
         self.int_imm_cost_inst(op, index, imm, bits)
     }
 
+    /// `int_imm_cost_inst` as the pin prices it, before any DEVIATE of the
+    /// target's own (x86 ZIMM): what `ConstantHoisting` asks to keep a
+    /// constant a candidate.
+    fn int_imm_cost_inst_pin(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        self.int_imm_cost_inst(op, index, imm, bits)
+    }
+
     /// `isTruncateFree`.
     fn is_truncate_free(
         &self,
@@ -1723,6 +1736,16 @@ mod access_tests {
                 for_size: bool,
             ) -> Cost {
                 self.0.int_imm_cost_inst_for_size(op, index, imm, bits, for_size)
+            }
+
+            fn int_imm_cost_inst_pin(
+                &self,
+                op: ImmUser,
+                index: u32,
+                imm: i128,
+                bits: u32,
+            ) -> Cost {
+                self.0.int_imm_cost_inst_pin(op, index, imm, bits)
             }
 
             fn is_truncate_free(

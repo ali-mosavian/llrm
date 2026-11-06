@@ -1037,6 +1037,16 @@ impl Tti for X86 {
         self.imm_cost_inst(op, index, imm, bits, self.tuning.zext_imm_is_basic)
     }
 
+    fn int_imm_cost_inst_pin(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        self.imm_cost_inst(op, index, imm, bits, false)
+    }
+
     /// ZIMM does not apply to a function built for size: a hoisted constant
     /// costs a 2-3 byte register copy per use where `mov r32, imm32` is 5.
     fn int_imm_cost_inst_for_size(

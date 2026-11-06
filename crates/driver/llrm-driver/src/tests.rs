@@ -4031,3 +4031,38 @@ fn a_zero_extended_constant_used_many_times_in_a_size_build_is_materialized_once
     let loads = listing.lines().filter(|line| line.contains("0x9e3779b9") || line.contains("2654435769")).count();
     assert_eq!(loads, 1, "{listing}");
 }
+
+/// ZIMM priced `0xFF000000` and `0x80000000` at one instruction each, so
+/// ConstantHoisting never made them candidates and lost the pin's base and
+/// offset (`div_constants_long` -O3 +16 B, `constant_hoisting_shares_a_wide_
+/// compare_constant64.c` +4 B).
+#[test]
+fn two_neighbouring_zero_extended_constants_share_a_base_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i1 @f(i64 %a, i64 %b) {\n\
+                \x20 %x = shl i64 %a, 1\n  %c1 = icmp ugt i64 %x, 4278190080\n\
+                \x20 %y = shl i64 %b, 1\n  %c2 = icmp ugt i64 %y, 4278190080\n\
+                \x20 %p = sub i64 2147483648, %a\n  %q = sub i64 2147483648, %b\n\
+                \x20 %c3 = icmp ult i64 %p, %q\n  %r1 = or i1 %c1, %c2\n  %r = xor i1 %r1, %c3\n  ret i1 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("2130706432"), "{listing}");
+}
+
+/// A lone zero-extended constant read in both arms of a branch stays two
+/// `mov r32, imm32`: one in the entry would be a register held across the
+/// branch (a same-block pair is merged by ISel whatever the pass does).
+#[test]
+fn a_lone_zero_extended_constant_in_two_blocks_is_not_hoisted_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @h1(i1)\n declare void @h2(i1)\n\
+                define void @f(i64 %a, i64 %b, i1 %c) {\n\
+                \x20 br i1 %c, label %t, label %e\n\
+                t:\n  %x = shl i64 %a, 1\n  %r1 = icmp ugt i64 %x, 4278190080\n  call void @h1(i1 %r1)\n  ret void\n\
+                e:\n  %y = shl i64 %b, 1\n  %r2 = icmp ugt i64 %y, 4278190080\n  call void @h2(i1 %r2)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert_eq!(listing.matches("4278190080").count(), 2, "{listing}");
+}
