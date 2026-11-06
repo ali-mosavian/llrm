@@ -42,3 +42,10 @@ def test_the_pin_directory_is_named_by_the_caller_not_a_path_of_one_machine(tmp_
     env = {k: v for k, v in os.environ.items() if k != "LLRM_PIN_BIN"}
     done = subprocess.run([sys.executable, d.__file__, "--llc", "x", "y.c"], capture_output=True, text=True, env=env)
     assert done.returncode == 2 and "LLRM_PIN_BIN" in done.stderr, (done.returncode, done.stderr)
+
+
+def test_an_arm64_listing_loses_its_slash_comments_and_x86_is_the_default():
+    """llvm-objdump writes `// ...` after an arm64 operand; kept, it made equal code differ on a relocation note."""
+    arm = "0000000000000000 <f>:\n       0:\tadrp    x0, 0x0 // reloc\n"
+    assert d.code_of(arm) == {"f": ["0 adrp    x0, 0x0"]}
+    assert d.ARCHES["arm64"][0].startswith("aarch64") and d.ARCHES["x86_64"][1] == "objdump"
