@@ -1,5 +1,6 @@
 #!/bin/sh
 # usage: [CLANG=clang with aarch64, riscv64] tests/f64_div_insns_test.sh -> executed instructions per f64 divide, -O2, qemu-user TB trace (deterministic), driver cost subtracted.
+# Also size: the three Newton steps unrolled made div.c 544 / 736 B (aarch64 float_conversions_loop 1188 B against compiler-rt's 1156); a loop is 496 / 676. Bound 520 / 700.
 # Before: aarch64/riscv64 divided one quotient bit per step: 643 / 693 instructions per call against compiler-rt's 98 / 127 (Newton reciprocal, wide multiply). Bound 200.
 cd "$(dirname "$0")/.." || exit 2; T=$(mktemp -d); trap 'rm -r "${T:?}"' EXIT; C=${CLANG:-/usr/bin/clang}; bad=0; H=tests/icount
 for t in qemu-aarch64 qemu-riscv64 ld.lld $C; do command -v $t > /dev/null || { echo "FAIL: $t not found"; exit 1; }; done
@@ -12,6 +13,8 @@ for spec in "aarch64-linux-gnu|-mabi=aapcs-soft -mgeneral-regs-only -ffp-contrac
 $spec
 EOF
   for f in div pack; do $C --target=$tc $fl -O2 -w -ffreestanding -include stdint.h -include config/$cf/config.h -Iinclude -c lib/fp/f64/$f.c -o $T/o_$f.o || exit 2; done
+  sz=$(size -A $T/o_div.o | awk '$1==".text"{print $2}'); lim=520; [ $cf = riscv64 ] && lim=700
+  [ "$sz" -le $lim ] || { echo "FAIL: $tc f64 div.c is $sz B (bound $lim)"; bad=1; }
   $C --target=$tc $fl -O2 -w -ffreestanding -c $H/nul.c -o $T/nul.o
   LF=nul1;     b0=$(run $tc "$fl" $q $cf 0 $T/nul.o) && bn=$(run $tc "$fl" $q $cf 200 $T/nul.o) || { echo "FAIL: $tc null run"; bad=1; continue; }
   LF=__divdf3; o0=$(run $tc "$fl" $q $cf 0 $T/o_div.o $T/o_pack.o) && on=$(run $tc "$fl" $q $cf 200 $T/o_div.o $T/o_pack.o) || { echo "FAIL: $tc div run"; bad=1; continue; }
