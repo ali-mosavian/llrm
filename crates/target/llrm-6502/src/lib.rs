@@ -11,6 +11,7 @@ pub mod frame;
 pub mod hotdivision;
 pub mod opcosts;
 pub mod peephole;
+pub mod peephole_cells;
 pub mod platform;
 pub mod prepare;
 pub mod relax;

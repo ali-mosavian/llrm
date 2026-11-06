@@ -18,6 +18,7 @@ ulimit -v "${LLRM_MEMORY_LIMIT_KB:-8000000}"  # a runaway compile dies at 8 GB i
 # Prints a count of each outcome and the programs that are not SAME; exit 1 if any DIFF or STATUS.
 export LLRM_VERIFY=${LLRM_VERIFY:-1}  # the gate checks each pass and phase
 set -u
+export AB_ALLOW_ENV="${AB_ALLOW_ENV:-} LLRM_VERIFY"  # set above, for both sides
 . "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
 kind=${1:?kind: nib, c or qcport}; base=${2:?base compiler}; new=${3:?new compiler}; shift 3
 python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; print(llrmbin.assert_distinct(sys.argv[1], sys.argv[2], bool(sys.argv[3])))" "$base" "$new" "${IDENTITY_SAME_SOURCE:-}" || exit 2

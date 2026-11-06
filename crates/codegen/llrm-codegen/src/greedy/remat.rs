@@ -86,8 +86,16 @@ pub fn is_trivially_re_materializable(
                         || matches!(addr.space, Space::Segment | Space::External) && through == RegId::None
                 })
         }
-        // A load from a cell: `mayLoad` and invariant.
-        (Operation::Move, Some("mov"), [Loc::Mem(cell)]) => {
+        // A load from a cell: `mayLoad` and invariant. The pin's switch takes
+        // the scalar and packed SSE loads with the integer ones: `MOVSSrm`,
+        // `MOVSDrm`, `MOVAPSrm`, `MOVUPSrm`, `MOVAPDrm`, `MOVUPDrm`, `MOVDQArm`,
+        // `MOVDQUrm`.
+        // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L830-L860>
+        (
+            Operation::Move,
+            Some("mov" | "movss" | "movsd" | "movaps" | "movups" | "movapd" | "movupd" | "movdqa" | "movdqu"),
+            [Loc::Mem(cell)],
+        ) => {
             invariant
                 && into.width == cell.width
                 && cell.addr.is_some()
@@ -456,6 +464,32 @@ mod tests {
         };
         let taken = one_block(vec![move_of(0, word(1), argument(6), vec![1]), lea]);
         assert!(argument_loads(&taken).is_empty(), "an address taken: any call may write");
+    }
+
+    /// An invariant `movss` load of a pool constant was not rematerialisable
+    /// (only `mov` was): once LICM hoisted it, the allocator spilled it with a
+    /// store and a frame 16 B larger (jpeg_single -O2 m64: +128 B, every slot
+    /// past 127 a 4-byte displacement).
+    #[test]
+    fn test_an_invariant_sse_load_is_rematerialisable() {
+        let cell = || Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(Space::Segment, 0)), 4));
+        let float = |name: &str| {
+            let mut one = (*move_of(0, Loc::Held(Held { value: 1, width: 4, offset: 0 }), cell(), vec![1])).clone();
+            let mut what = one.what.clone().unwrap();
+            what.name = Some(name.into());
+            one.what = Some(what);
+            one
+        };
+        for name in ["movss", "movsd"] {
+            let one = float(name);
+            let width = if name == "movsd" { 8 } else { 4 };
+            let mut what = one.what.clone().unwrap();
+            what.dests = vec![Loc::Held(Held { value: 1, width, offset: 0 })];
+            what.sources = vec![Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(Space::Segment, 0)), width))];
+            let one = Insn { what: Some(what), ..one };
+            assert!(is_trivially_re_materializable(&one, true), "{name} of an invariant cell");
+            assert!(!is_trivially_re_materializable(&one, false), "{name} of a cell that may change");
+        }
     }
 
     /// A load the instruction calls invariant is rematerialised and the same

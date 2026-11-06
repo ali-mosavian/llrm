@@ -777,6 +777,11 @@ pub trait Tti {
         false
     }
 
+    /// Tuning `constant_hoisting`.
+    fn constant_hoisting(&self) -> bool {
+        false
+    }
+
     /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
     /// 50.
     fn unswitch_threshold_override(&self) -> Option<i64> {
@@ -883,6 +888,20 @@ pub trait Tti {
         imm: i128,
         bits: u32,
     ) -> Cost;
+
+    /// `int_imm_cost_inst` for a pass that also knows whether the function is
+    /// built for size (`ConstantHoisting`'s `OptForSize`). The pin's cost
+    /// does not depend on it; a target's DEVIATE may (x86 ZIMM).
+    fn int_imm_cost_inst_for_size(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+        _for_size: bool,
+    ) -> Cost {
+        self.int_imm_cost_inst(op, index, imm, bits)
+    }
 
     /// `isTruncateFree`.
     fn is_truncate_free(
@@ -1693,6 +1712,17 @@ mod access_tests {
                 bits: u32,
             ) -> Cost {
                 self.0.int_imm_cost_inst(op, index, imm, bits)
+            }
+
+            fn int_imm_cost_inst_for_size(
+                &self,
+                op: ImmUser,
+                index: u32,
+                imm: i128,
+                bits: u32,
+                for_size: bool,
+            ) -> Cost {
+                self.0.int_imm_cost_inst_for_size(op, index, imm, bits, for_size)
             }
 
             fn is_truncate_free(

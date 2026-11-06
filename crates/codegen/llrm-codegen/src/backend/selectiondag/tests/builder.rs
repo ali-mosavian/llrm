@@ -224,6 +224,45 @@ fn a_call_register_mask_names_eflags() {
     assert!(masks > 0, "no call in the golden IR");
 }
 
+/// The pin lists the whole caller-saved set of the call's convention in a call's `RegisterMask`, not the flags alone (DEVIATE SCM1).
+#[test]
+fn a_call_register_mask_names_the_conventions_caller_saved_registers() {
+    use super::super::dag::NodeData;
+    use super::super::isd::ISD;
+    use llrm_lir::registers::RegId;
+    let text: String = include_str!("../golden/calls.ll")
+        .lines()
+        .filter(|line| !line.starts_with("target triple"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+    let layout = DataLayout::parse(module.datalayout.as_deref().expect("a datalayout")).expect("a datalayout");
+    let target = BuilderTarget::m32().with_libcalls(&["memcpy", "memmove", "memset"]);
+    let wanted: Vec<u16> = [RegId::EAX, RegId::ECX, RegId::EDX]
+        .into_iter()
+        .map(|reg| super::super::dagisel_adapter::pin_register(reg).expect("a pin number"))
+        .collect();
+    let mut checked = 0;
+    for (id, _, function) in module.functions() {
+        let convention =
+            crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+        let mut info = FunctionLoweringInfo::new(function);
+        for &block in function.layout() {
+            let done = build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block)
+                .unwrap_or_else(|why| panic!("{}", why.0));
+            for node in done.dag.nodes().iter().filter(|node| node.opcode == ISD::RegisterMask) {
+                let NodeData::RegMask(at) = node.data else { panic!("a mask without its registers") };
+                let mask = &done.dag.register_masks[at as usize];
+                for reg in &wanted {
+                    assert!(mask.contains(reg), "{mask:?} lacks {reg}");
+                }
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0, "no call in the golden IR has a mask beyond the flags");
+}
+
 /// A `watcallcc` call passes its first four word arguments in AX, DX, BX,
 /// CX: the call's register copies are `CopyToReg` of those, in that order,
 /// glued, each read back as an operand of `X86ISD::CALL`. A call that
