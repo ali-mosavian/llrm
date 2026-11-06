@@ -2803,7 +2803,7 @@ impl<'a> TypeLegalizer<'a> {
         let callee = self.dag.get_target_external_symbol(pointer, routine.name);
         let root = self.dag.entry_node();
         let env = CallEnv { arch, pointer };
-        let (_chain, results) = lib_call(self.dag, &env, root, callee, &args, 0, 0, &returns);
+        let (_chain, results) = lib_call(self.dag, &env, root, callee, &args, 0, 0, &returns, &super::dagisel_adapter::call_clobbered_flags());
         Ok(if wants_quotient { (results[0], results[1]) } else { (results[2], results[3]) })
     }
 

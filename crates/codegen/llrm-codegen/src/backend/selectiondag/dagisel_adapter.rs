@@ -264,9 +264,27 @@ pub const EFLAGS_ID: llrm_lir::registers::RegId = llrm_lir::registers::RegId::fr
 
 /// The flags every x86 call clobbers, the one register a `RegisterMask` always names. A call lowered with a convention adds that
 /// convention's clobbered registers (`SelectionDAGBuilder::clobbered_by`), as the pin's `RegisterMask` lists its caller-saved set.
-/// A libcall (`libcall.rs`) has no convention here and keeps the flags alone (DEVIATE SCM1; exit: the libcall's convention).
+/// A call to a runtime routine, whose contract names what it disturbs, keeps the flags alone.
 pub fn call_clobbered_flags() -> Vec<u16> {
     pin_register(EFLAGS_ID).into_iter().collect()
+}
+
+/// `X86TargetLowering::LowerCall`'s `RegisterMask`: what the call's convention does not preserve, in the pin's numbers (the flags
+/// are always in it). A register the pin has no number for cannot be a live physical definition, so it is left out.
+pub fn clobbered_by(
+    arch: &dyn llrm_target::Target,
+    found: Option<&llrm_target::calling::Convention>,
+) -> Vec<u16> {
+    let mut out = call_clobbered_flags();
+    for name in found.map(|found| found.clobbered.as_slice()).unwrap_or_default() {
+        if name == "flags" || name.starts_with("st") {
+            continue;
+        }
+        out.extend(pin_register(arch.registers().root(arch.register_named(name))));
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// The register of the pin's register number `register` that the builder names

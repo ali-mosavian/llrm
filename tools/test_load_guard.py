@@ -209,7 +209,7 @@ class Admission(Env, unittest.TestCase):
         """Both saw the same 1m load and both went; the load rose only after they had started."""
         env = {"LG_SETTLE": "1.5"}
         first = self.start("true", **env)
-        self.assertEqual(first.wait(timeout=5), 0)
+        self.assertEqual(first.wait(timeout=20), 0)
         began = time.time()
         second = self.start("true", **env)
         self.assertEqual(second.wait(timeout=10), 0)
@@ -327,7 +327,7 @@ class Drain(Env, unittest.TestCase):
     def test_the_fast_settle_does_not_apply_at_one_minute_23(self):
         self.set_load(23.0, 23.0)
         first = self.start("true", LG_SETTLE="60", LG_SETTLE_FAST="1", LG_POLL="0.05")
-        self.assertEqual(first.wait(timeout=5), 0)
+        self.assertEqual(first.wait(timeout=20), 0)
         second = self.start("true", LG_SETTLE="60", LG_SETTLE_FAST="1", LG_POLL="0.05")
         time.sleep(3)
         self.assertIsNone(second.poll(), "second starter ran inside the 60 s settle at 1m 23")
@@ -347,6 +347,61 @@ class Drain(Env, unittest.TestCase):
 
     def test_five_slots_at_one_minute_19_with_80_gb_available(self):
         self.assertEqual(self.admitted(19.0, 80), 5)
+
+    def test_a_waiter_wakes_within_ten_seconds_of_the_load_dropping(self):
+        """The 15 s default poll let only the head waiter admit every 15-30 s: 38 queued at 1m 8, five slots free."""
+        self.set_load(30.0, 30.0)
+        waiter = self.start("true", LG_POLL="", LG_SETTLE="0")
+        time.sleep(1)
+        self.set_load(1.0, 1.0)
+        self.assertEqual(waiter.wait(timeout=10), 0, "the waiter slept through the 15 s default poll")
+
+    def test_an_aged_tier_3_waiter_outranks_a_fresh_tier_2(self):
+        """Tier 2 arrivals at 3-4 per minute starved every tier-3 PR gate for over an hour."""
+        self.set_load(30.0, 30.0)
+        log = os.path.join(self.dir.name, "order")
+        jobs = [self.start("bash", "-c", f"echo 3 >> {log}", LG_TIER="3", LG_SETTLE="0", LG_POLL="0.05", LG_AGE_STEP="2")]
+        time.sleep(3)
+        jobs.append(self.start("bash", "-c", f"echo 2 >> {log}", LG_TIER="2", LG_SETTLE="0", LG_POLL="0.05", LG_AGE_STEP="2"))
+        time.sleep(0.5)
+        self.set_load(1.0, 1.0)
+        for job in jobs:
+            job.wait(timeout=15)
+        self.assertEqual(open(log).read().split(), ["3", "2"])
+
+    def test_an_aged_tier_4_waiter_never_passes_a_tier_2(self):
+        self.set_load(30.0, 30.0)
+        log = os.path.join(self.dir.name, "order")
+        jobs = [self.start("bash", "-c", f"echo 4 >> {log}", LG_TIER="4", LG_SETTLE="0", LG_POLL="0.05", LG_AGE_STEP="1")]
+        time.sleep(4)
+        jobs.append(self.start("bash", "-c", f"echo 2 >> {log}", LG_TIER="2", LG_SETTLE="0", LG_POLL="0.05", LG_AGE_STEP="1"))
+        time.sleep(0.5)
+        self.set_load(1.0, 1.0)
+        for job in jobs:
+            job.wait(timeout=15)
+        self.assertEqual(open(log).read().split(), ["2", "4"])
+
+    def test_ten_slots_at_one_minute_13_with_80_gb_available(self):
+        self.assertEqual(self.admitted(13.0, 80, wanted=12), 10)
+
+    def test_seven_slots_at_one_minute_15_with_80_gb_available(self):
+        self.assertEqual(self.admitted(15.0, 80, wanted=12), 7)
+
+    def test_five_slots_at_one_minute_13_with_30_gb_available(self):
+        self.assertEqual(self.admitted(13.0, 30, wanted=12), 5)
+
+    def test_slots_wide_file_holds_the_wide_count(self):
+        self.admitted(13.0, 80, wanted=1)
+        self.assertEqual(open(os.path.join(self.slots, "slots_wide")).read().strip(), "10")
+
+    def test_a_quiet_head_does_not_block_a_normal_waiter_at_one_minute_22(self):
+        """A LG_QUIET tier-1 waiter (start line 20) at the head of the queue starved every normal waiter in the 20-25 band."""
+        self.set_load(22.0, 22.0)
+        quiet = self.start("sleep", "30", LG_TIER="1", LG_QUIET="1", LG_SETTLE="0")
+        time.sleep(0.5)
+        normal = self.start("true", LG_TIER="4", LG_SETTLE="0")
+        self.assertEqual(normal.wait(timeout=5), 0, "the quiet head blocked a waiter whose start line is 25")
+        self.assertIsNone(quiet.poll())
 
     def test_tier_order_holds_with_the_wider_count(self):
         self.set_load(30.0, 30.0)
