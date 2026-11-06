@@ -66,22 +66,51 @@ fn straight(op: Op) -> bool {
 }
 
 /// Whether the cell is written before it is read, or reaches an `rts` that does
-/// not return it, along the straight-line code from `lines[from]`. A label, a
-/// branch, a call or an instruction not listed is not known to leave it dead.
+/// not return it, along every path from `lines[from]`: a branch is followed
+/// both ways, a `jmp` to its label, and a path that comes back to a line seen
+/// reads nothing new. A call, a raw line or an instruction not listed is not
+/// known to leave it dead.
+///
+/// The pin's analogue is the liveness of a physical register at a return
+/// (`DeadMachineInstructionElim.cpp`, `LivePhysRegs`): a def with no use on any
+/// path out is dead.
 fn cell_dead_from(
     lines: &[Line],
     from: usize,
     cell: &str,
     results: &BTreeSet<String>,
+    seen: &mut BTreeSet<usize>,
 ) -> bool {
     let Some(n) = cell_number(cell) else { return false };
     if !caller_saved(n) {
         return false;
     }
-    for line in &lines[from..] {
-        let Line::Inst(inst) = line else { return false };
+    let mut at = from;
+    while let Some(line) = lines.get(at) {
+        if !seen.insert(at) {
+            return true;
+        }
+        at += 1;
+        let inst = match line {
+            Line::Label(_) => continue,
+            Line::Raw(_) => return false,
+            Line::Inst(inst) => inst,
+        };
         if inst.op == Op::Rts {
             return !results.contains(cell);
+        }
+        let label = |inst: &Inst| {
+            let name = inst.target()?;
+            lines.iter().position(|l| *l == Line::Label(name.to_owned()))
+        };
+        if inst.op == Op::Jmp || inst.op == Op::Bra {
+            return label(inst).is_some_and(|to| cell_dead_from(lines, to, cell, results, seen));
+        }
+        if inst.op.opposite().is_some() {
+            if !label(inst).is_some_and(|to| cell_dead_from(lines, to, cell, results, seen)) {
+                return false;
+            }
+            continue;
         }
         if !straight(inst.op) {
             return false;
@@ -105,7 +134,7 @@ pub fn drop_dead_stores(asm: &mut Asm) {
     let mut at = 0;
     while at < asm.lines.len() {
         if let Line::Inst(Inst { op: Op::Sta | Op::Stx | Op::Sty, operand: Operand::Direct(cell), .. }) = &asm.lines[at]
-            && cell_dead_from(&asm.lines, at + 1, cell, &asm.result_cells)
+            && cell_dead_from(&asm.lines, at + 1, cell, &asm.result_cells, &mut BTreeSet::new())
         {
             asm.lines.remove(at);
             continue;
@@ -154,7 +183,7 @@ fn store_then_index_once(asm: &mut Asm) -> bool {
                 }
             }
             let Some(t) = found else { continue };
-            if cell_dead_from(lines, t + 1, m, &asm.result_cells) && flags_unread(lines, t + 1) {
+            if cell_dead_from(lines, t + 1, m, &asm.result_cells, &mut BTreeSet::new()) && flags_unread(lines, t + 1) {
                 asm.lines[s] = Line::Inst(Inst { op: transfer, operand: Operand::None, place: 0 });
                 asm.lines.remove(t);
                 return true;
@@ -198,7 +227,7 @@ fn chain_once(asm: &mut Asm) -> bool {
         if x != &m && x != &n {
             continue;
         }
-        if !cell_dead_from(lines, end + 1, x, &asm.result_cells) || !flags_unread(lines, end + 1) {
+        if !cell_dead_from(lines, end + 1, x, &asm.result_cells, &mut BTreeSet::new()) || !flags_unread(lines, end + 1) {
             continue;
         }
         let in_a = |op: Op, cell: &String| {
