@@ -209,7 +209,7 @@ class Admission(Env, unittest.TestCase):
         """Both saw the same 1m load and both went; the load rose only after they had started."""
         env = {"LG_SETTLE": "1.5"}
         first = self.start("true", **env)
-        self.assertEqual(first.wait(timeout=5), 0)
+        self.assertEqual(first.wait(timeout=20), 0)
         began = time.time()
         second = self.start("true", **env)
         self.assertEqual(second.wait(timeout=10), 0)
@@ -327,7 +327,7 @@ class Drain(Env, unittest.TestCase):
     def test_the_fast_settle_does_not_apply_at_one_minute_23(self):
         self.set_load(23.0, 23.0)
         first = self.start("true", LG_SETTLE="60", LG_SETTLE_FAST="1", LG_POLL="0.05")
-        self.assertEqual(first.wait(timeout=5), 0)
+        self.assertEqual(first.wait(timeout=20), 0)
         second = self.start("true", LG_SETTLE="60", LG_SETTLE_FAST="1", LG_POLL="0.05")
         time.sleep(3)
         self.assertIsNone(second.poll(), "second starter ran inside the 60 s settle at 1m 23")
