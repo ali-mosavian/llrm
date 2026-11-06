@@ -811,6 +811,9 @@ impl FunctionPass for ConstantHoisting {
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
         let Some(tti) = outer.target().tti() else { return PreservedAnalyses::all() };
+        if !tti.constant_hoisting() {
+            return PreservedAnalyses::all();
+        }
         let Some(entry) = unit.function.entry() else { return PreservedAnalyses::all() };
         let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
         let freqs = analyses.get::<BlockFrequencies>(unit.context, unit.layout, unit.function);
