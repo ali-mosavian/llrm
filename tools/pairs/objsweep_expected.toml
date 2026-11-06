@@ -1,23 +1,18 @@
 # Objects a leg of objsweep_gate.py may change against the merge-base, with the reason. Empty once the base has the change.
-# Base origin/release/next has the 32-bit and 64-bit ELF writer changes; this PR changes no x86 object.
+# COFF-AUXNUM-1: the aux Number of every COFF section symbol is the section's own number (the pin's), so every COFF object changes by those bytes and no size.
 
-# A version 5 line table repeats the primary file at entry 0 (GNU objdump -dl rejected the one-entry table), so every -g object changes.
+[leg."m32"]
+changed = 142
+why = "COFF section symbols carry their section number in the aux record"
+
 [leg."m32 debug"]
 changed = 284
-why = "DWARF 5 line table: the primary file repeated at entry 0"
+why = "COFF section symbols carry their section number in the aux record"
 
-[leg."m16 debug"]
-changed = 142
-why = "DWARF 5 line table: the primary file repeated at entry 0"
+[leg."m64"]
+changed = 140
+why = "COFF section symbols carry their section number in the aux record"
 
 [leg."m64 debug"]
-changed = 140
-why = "DWARF 5 line table: the primary file repeated at entry 0"
-
-[leg."a64 debug"]
-changed = 140
-why = "DWARF 5 line table: the primary file repeated at entry 0"
-
-[leg."wasm debug"]
-changed = 140
-why = "DWARF 5 line table: the primary file repeated at entry 0"
+changed = 125
+why = "COFF section symbols carry their section number in the aux record"
