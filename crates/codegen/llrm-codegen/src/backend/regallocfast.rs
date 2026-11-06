@@ -137,6 +137,7 @@ fn run(
     if !crate::backend::floatassign::_floating_values(body).is_empty() {
         return fail("an x87 value");
     }
+    let span = llrm_support::debug::span("fast classes");
     let confined = crate::backend::regclass::classes(body, &Default::default(), segments, classes);
     let mut roots: Vec<RegId> = classes.available.clone();
     roots.extend(classes.xmm.iter().copied());
@@ -173,7 +174,11 @@ fn run(
         here: IndexMap::default(),
         clobbers: Vec::new(),
     };
+    drop(span);
+    let span = llrm_support::debug::span("fast scan");
     fast.scan(body)?;
+    drop(span);
+    let _span = llrm_support::debug::span("fast blocks");
     let entry = body.blocks.iter().position(|block| block.at == body.entry).unwrap_or(0);
     let mut blocks = Vec::with_capacity(body.blocks.len());
     for (number, block) in body.blocks.iter().enumerate() {
@@ -722,16 +727,26 @@ impl Fast<'_> {
         &mut self,
         one: &Arc<Insn>,
     ) -> Result<Arc<Insn>, Fallback> {
-        self.clobbers = one.clobbers.iter().chain(&one.clobbers_high).filter_map(|r| self.root_at(*r)).collect();
-        let mut defs: Vec<u32> = one.defines.clone();
-        defs.extend(one.delivers.iter().map(|(held, _)| held.value));
-        defs.dedup();
-        let mut uses: Vec<u32> = one.uses.clone();
-        uses.extend(one.requires.iter().map(|(held, _)| held.value));
-        let mut seen = HashSet::default();
-        uses.retain(|value| seen.insert(*value));
-        let mut seen = HashSet::default();
-        defs.retain(|value| seen.insert(*value));
+        self.clobbers.clear();
+        for register in one.clobbers.iter().chain(&one.clobbers_high) {
+            if let Some(at) = self.index.get(&ir::root(*register)).copied() {
+                self.clobbers.push(at);
+            }
+        }
+        // Most instructions name a handful of values: a linear scan beats a
+        // set.
+        let mut defs: Vec<u32> = Vec::with_capacity(one.defines.len() + one.delivers.len());
+        for value in one.defines.iter().copied().chain(one.delivers.iter().map(|(held, _)| held.value)) {
+            if !defs.contains(&value) {
+                defs.push(value);
+            }
+        }
+        let mut uses: Vec<u32> = Vec::with_capacity(one.uses.len() + one.requires.len());
+        for value in one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)) {
+            if !uses.contains(&value) {
+                uses.push(value);
+            }
+        }
         let mut physical: IndexMap<u32, RegId> = IndexMap::default();
         // Physical defs: the pinned values this defines.
         let mut defined: Vec<usize> = Vec::new();
@@ -810,6 +825,9 @@ impl Fast<'_> {
                 continue;
             }
             self.use_value(one, *value)?;
+        }
+        if self.here.is_empty() && physical.is_empty() && one.undefs.is_empty() {
+            return Ok(Arc::clone(one));
         }
         let mut held: IndexMap<u32, RegId> = self.here.clone();
         held.extend(physical.iter().map(|(value, register)| (*value, *register)));
