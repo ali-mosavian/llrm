@@ -6,6 +6,11 @@
 //! `cycles` does. Prints the competitor-matrix rows: `target prog level
 //! compiler code_bytes clocks instrs note`, tab separated. An empty field means
 //! the instrument has no number; `note` says why.
+//!
+//! `clang` is the pin's result for the program: its own front end and mid-end
+//! to IR, then its `llc`, so its LSR runs once on its own IR. `ours-ir` and
+//! the `llc` columns of `examples/bench` take the committed `bench/*.ll`, which
+//! is not that IR: those compare backends on one IR only.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
