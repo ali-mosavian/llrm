@@ -242,3 +242,13 @@ def test_two_dists_with_one_llrm_wasm_llc_are_refused_though_their_llrm_llc_diff
     llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=names)
     with pytest.raises(SystemExit, match="missing llrm-wasm-llc"):
         llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=names, required=True)
+class CleanEnvTests(unittest.TestCase):
+    def test_a_pipeline_switch_is_refused_and_a_tool_location_is_printed(self):
+        """LLRM_WASM_BACKEND_ONLY on one side skipped the mid-end; a false second cause cost 40 minutes."""
+        with self.assertRaises(SystemExit) as caught:
+            llrmbin.assert_clean_env({"LLRM_WASM_BACKEND_ONLY": "1"})
+        self.assertIn("LLRM_WASM_BACKEND_ONLY", str(caught.exception))
+        self.assertEqual(llrmbin.assert_clean_env({"LLRM_OW": "/ow", "PATH": "/bin"}), ["LLRM_OW=/ow"])
+        self.assertEqual(llrmbin.assert_clean_env({"LLRM_NO_STACKS": "1", "AB_ALLOW_ENV": "LLRM_NO_STACKS"}), ["LLRM_NO_STACKS=1"])
+
+

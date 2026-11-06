@@ -6,22 +6,26 @@
 //! loop's exit block. Later loop passes can then change the loop's body, copy
 //! it or move its exits without rewriting readers outside it.
 //!
-//! Loops are taken innermost first, so an inner exit phi is an ordinary
-//! definition of the enclosing loop. For one loop:
+//! This is `LCSSA.cpp`. Loops are taken innermost first
+//! (`formLCSSARecursively`), so an inner exit phi is an ordinary definition of
+//! the enclosing loop. For one loop (`formLCSSA`):
 //!
-//! - With a single exit block whose predecessors are exactly the exiting
-//!   blocks, a value is closed when every block that reads it is dominated by
-//!   the exit and its definition dominates every exiting block. Each such value
-//!   gets a phi in the exit with one input per exiting block, and every outside
-//!   reader the exit dominates is rewritten to read it. A phi that reads the
-//!   value on an edge counts at that edge's source block. If the exit has other
-//!   predecessors, the loop is left for `loopsimplify`.
-//! - With several exit blocks, [`crate::lcssamerges`] makes a phi at each and
-//!   merges them where the exits' paths join.
+//! - The blocks that dominate an exit and sit directly in the loop are found by
+//!   walking immediate dominators up from the exits.
+//! - Each value they define, with a use but not a lone one in its own block, is
+//!   a candidate.
+//! - A candidate's uses outside the loop (a phi's counting at its incoming
+//!   block) are rewritten. A use in an unreachable block becomes poison.
+//! - Each exit block its definition dominates gets a phi, named after the value
+//!   with `.lcssa`, placed after the block's phis (L4), with one input per
+//!   predecessor. An input from a block outside the loop is itself rewritten.
+//! - A use in an exit block reads that block's phi, a lone new phi is read
+//!   directly, and any other use goes through `SsaUpdater`, which places a phi
+//!   where the exits' paths join.
+//! - A phi that nothing reads is erased again.
 //!
 //! Phis are only added, as `formLCSSA` does: a phi whose inputs are all one
-//! value stays for CodeGenPrepare's phi fold. The new phi is named after its
-//! value with `.lcssa`. The pass is idempotent.
+//! value stays for CodeGenPrepare's phi fold. The pass is idempotent.
 //!
 //! The helpers `arms`, `from_arms`, `operations`, `definitions`, `exit_phi` and
 //! `place_phi` read and build phis for many other loop passes.
@@ -73,20 +77,39 @@
 //! Dominators and loops stay valid; all other analyses are invalidated when
 //! something changed.
 //!
+//! # Deviations
+//! - L1 Lifetime markers are ordinary users (2026-11-04, w2, exit 2026-11-12):
+//!   the pin drops them when one crosses the loop boundary, but a pass has no
+//!   callee table to know them by. A marker names an alloca, which sits in the
+//!   entry block, never in a loop.
+//! - L2 No `ScalarEvolution` and no debug records: the pin caches the SCEV of a
+//!   new phi and moves `dbg.value`s; neither is kept here (S1 of `ssaupdater`).
+//! - L3 A phi's inputs come in predecessor id order, not use-list order.
+//! - L4 An exit phi goes after the block's phis, in value-id order (2026-11-05,
+//!   w2, exit 2026-11-12, row QR-1): the pin puts it first. The register
+//!   allocator adds spills for some orders of an exit block's phis where the
+//!   pin's code size is constant; the old order is the one that does not (x86
+//!   jpeg Os, 6502 grep Os).
+//!
 //! # See also
-//! LLVM's LCSSA (LCSSA.cpp, `formLCSSA`).
+//! LLVM's
+//! [`LCSSA.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LCSSA.cpp).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
 
 use llrm_analysis::cfg;
-use llrm_analysis::cfg::Around;
-use llrm_analysis::graph::loops::Loop;
+use llrm_analysis::ssaupdater::SsaUpdater;
+use llrm_mir::context::{Constant, ConstantKind, Context};
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdMap;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
+use llrm_mir::loopinfo::{Loop, LoopId, LoopInfo};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, Use, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
-
-use crate::lcssamerges;
+use llrm_mir::types::Type;
 
 pub struct LoopClosedSSA;
 
@@ -99,13 +122,17 @@ impl FunctionPass for LoopClosedSSA {
         "lcssa"
     }
 
+    /// `LCSSAPass::run`.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LCSSA.cpp#L557>
     fn run(
         &mut self,
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
-        match closed_in(unit.function, &shape) {
+        let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
+        let info = analyses.get::<Loops>(unit.context, unit.layout, unit.function);
+        match form_on_all_loops(unit.context, unit.layout, unit.function, &tree, &info) {
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("lcssa: {error}"),
@@ -113,46 +140,324 @@ impl FunctionPass for LoopClosedSSA {
     }
 }
 
-/// `function` with every supported natural loop in closed SSA form; whether
-/// anything changed.
-pub fn closed(function: &mut Function) -> Result<bool, String> {
-    let shape = cfg::Shape::of(function);
-    closed_in(function, &shape)
-}
-
-/// [`closed`] over the `shape` the caller holds: the loops are found once.
-pub fn closed_in(
+/// `function` with every natural loop in closed SSA form; whether anything
+/// changed.
+pub fn closed(
+    context: &Context,
+    layout: &DataLayout,
     function: &mut Function,
-    shape: &cfg::Shape,
 ) -> Result<bool, String> {
-    // The edges leaving each loop, found once: closing adds phis, never edges.
-    let exits = shape.loops.iter().map(|loop_| loop_.exits(function)).collect::<Vec<_>>();
-    formed_with(function, shape, &exits)
+    let tree = DomTree::of(function);
+    let info = LoopInfo::analyze(&*function, || DomTree::of(function));
+    form_on_all_loops(context, layout, function, &tree, &info)
 }
 
-/// `formLCSSA` of every loop: the exit phis a loop lacks are added, and none
-/// is taken away, as `closed` does first for the phis no loop closes at.
-pub fn formed(function: &mut Function) -> Result<bool, String> {
-    let shape = cfg::Shape::of(function);
-    let exits = shape.loops.iter().map(|loop_| loop_.exits(function)).collect::<Vec<_>>();
-    formed_with(function, &shape, &exits)
-}
-
-fn formed_with(
+/// `formLCSSAOnAllLoops`.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LCSSA.cpp#L477>
+fn form_on_all_loops(
+    context: &Context,
+    layout: &DataLayout,
     function: &mut Function,
-    shape: &cfg::Shape,
-    exits: &[Vec<(i64, i64)>],
+    tree: &DomTree,
+    info: &LoopInfo,
 ) -> Result<bool, String> {
+    let mut form = Form { context, layout, function, tree, info, exit_blocks: HashMap::new(), placed: IdMap::new() };
     let mut changed = false;
-    // Loops come inner first. Closing an inner loop first makes its exit
-    // value an ordinary definition in an enclosing loop.
-    // The dominators and the graph, found once: closing adds phis, no block or
-    // edge.
-    let mut flow = lcssamerges::Flow::with_dominance(shape.dominance.clone());
-    for (loop_, exiting) in shape.loops.iter().zip(exits) {
-        changed |= _closed_loop(function, loop_, exiting, &mut flow)?;
+    for top in info.top_level_loops() {
+        changed |= form.recursively(top)?;
     }
+    form.in_value_order()?;
     Ok(changed)
+}
+
+/// `LoopExitBlocksTy` and the analyses one run reads.
+struct Form<'a> {
+    context: &'a Context,
+    layout: &'a DataLayout,
+    function: &'a mut Function,
+    tree: &'a DomTree,
+    info: &'a LoopInfo,
+    /// The loops' exit blocks, found once each: closing adds phis, no edge.
+    exit_blocks: HashMap<LoopId, Rc<[BlockId]>>,
+    /// The phis this run added, with the value each closes (L4).
+    placed: IdMap<InstId, ValueId>,
+}
+
+impl Form<'_> {
+    /// `formLCSSARecursivelyImpl`.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LCSSA.cpp#L455>
+    fn recursively(
+        &mut self,
+        loop_: Loop,
+    ) -> Result<bool, String> {
+        let mut changed = false;
+        for sub in loop_.get_sub_loops() {
+            changed |= self.recursively(sub)?;
+        }
+        Ok(changed | self.form_loop(loop_)?)
+    }
+
+    /// The exit blocks of `loop_`, from the cache.
+    fn exits_of(
+        &mut self,
+        loop_: Loop,
+    ) -> Rc<[BlockId]> {
+        let function = &*self.function;
+        Rc::clone(self.exit_blocks.entry(loop_.id()).or_insert_with(|| loop_.get_exit_blocks(function).into()))
+    }
+
+    /// `formLCSSAImpl`.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LCSSA.cpp#L382>
+    fn form_loop(
+        &mut self,
+        loop_: Loop,
+    ) -> Result<bool, String> {
+        let exits = self.exits_of(loop_);
+        if exits.is_empty() {
+            return Ok(false);
+        }
+        let dominating = self.blocks_dominating_exits(loop_, &exits);
+        let mut worklist = Vec::new();
+        for block in dominating {
+            if self.info.get_loop_for(block) != Some(loop_) {
+                continue;
+            }
+            for inst in self.function.iter_block(block) {
+                let Some(value) = self.function.instruction(inst).result else { continue };
+                let mut users = self.function.users(value).iter();
+                let Some(first) = users.next() else { continue };
+                if users.next().is_none()
+                    && self.function.parent(first.user) == Some(block)
+                    && self.function.instruction(first.user).opcode != Opcode::Phi
+                {
+                    continue;
+                }
+                if matches!(
+                    self.context.types.get(self.function.value(value).ty),
+                    Type::Token
+                ) {
+                    continue;
+                }
+                worklist.push(inst);
+            }
+        }
+        self.for_instructions(worklist)
+    }
+
+    /// `computeBlocksDominatingExits`, in the order the pin's set holds them.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LCSSA.cpp#L340>
+    fn blocks_dominating_exits(
+        &self,
+        loop_: Loop,
+        exits: &[BlockId],
+    ) -> Vec<BlockId> {
+        let mut found = Vec::new();
+        let mut seen = HashSet::new();
+        let mut worklist = exits.to_vec();
+        while let Some(block) = worklist.pop() {
+            if loop_.get_header() == block {
+                continue;
+            }
+            let Some(idom) = self.tree.immediate_dominator(block) else { continue };
+            if !loop_.contains(idom) {
+                continue;
+            }
+            if seen.insert(idom) {
+                found.push(idom);
+                worklist.push(idom);
+            }
+        }
+        found
+    }
+
+    /// `formLCSSAForInstructionsImpl`: for each instruction of `worklist`, from
+    /// the back, phis in the exits and its outside uses rewritten to read them.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LCSSA.cpp#L82>
+    fn for_instructions(
+        &mut self,
+        mut worklist: Vec<InstId>,
+    ) -> Result<bool, String> {
+        let info = self.info;
+        let mut changed = false;
+        let mut local_to_remove: Vec<InstId> = Vec::new();
+        // `PredIteratorCache`.
+        let mut pred_cache: HashMap<BlockId, Rc<[BlockId]>> = HashMap::new();
+        while let Some(inst) = worklist.pop() {
+            let value = self.function.instruction(inst).result.expect("a worklist instruction has a value");
+            let inst_block = self.function.parent(inst).expect("a placed instruction");
+            let loop_ = info.get_loop_for(inst_block).expect("an instruction of a block in a loop");
+            let exits = self.exits_of(loop_);
+            if exits.is_empty() {
+                continue;
+            }
+            let ty = self.function.value(value).ty;
+
+            let mut to_rewrite: Vec<Use> = Vec::new();
+            for one in self.function.users(value).iter().copied().collect::<Vec<_>>() {
+                let mut user_block = self.function.parent(one.user).expect("a placed user");
+                // Skip uses in unreachable blocks.
+                if !self.tree.is_reachable_from_entry(user_block) {
+                    let poison = Operand::Constant(self.context.constant(Constant { ty, kind: ConstantKind::Poison }));
+                    self.function.set_operand(one.user, one.index as usize, poison);
+                    continue;
+                }
+                // A use in a phi occurs in the respective predecessor block.
+                if self.function.instruction(one.user).opcode == Opcode::Phi {
+                    user_block = self.incoming_block(one);
+                }
+                if inst_block != user_block && !loop_.contains(user_block) {
+                    to_rewrite.push(one);
+                }
+            }
+            if to_rewrite.is_empty() {
+                continue;
+            }
+
+            // An invoke's result is not available along its unwind edge.
+            let dom_block = match self.function.instruction(inst).opcode {
+                Opcode::Invoke(_) => {
+                    let operands = &self.function.instruction(inst).operands;
+                    let Operand::Block(normal) = operands[operands.len() - 3] else { unreachable!("a normal dest") };
+                    normal
+                }
+                _ => inst_block,
+            };
+
+            let mut added: Vec<InstId> = Vec::new();
+            let mut post_process: Vec<InstId> = Vec::new();
+            let name = self.function.value(value).name.clone();
+            let mut updater = SsaUpdater::new(ty, name.as_deref());
+
+            // Phis in all of the exit blocks the value dominates.
+            for &exit in exits.iter() {
+                if !self.tree.dominates(dom_block, exit) {
+                    continue;
+                }
+                if updater.has_value_for_block(exit) {
+                    continue;
+                }
+                let preds =
+                    Rc::clone(pred_cache.entry(exit).or_insert_with(|| self.function.edge_predecessors(exit).into()));
+                let phi = exit_phi(self.function, value);
+                let incoming = preds.iter().map(|&pred| (Operand::Value(value), pred)).collect::<Vec<_>>();
+                self.function.set_operands(phi, from_arms(&incoming));
+                place_phi(self.function, exit, phi)?;
+                self.placed.insert(phi, value);
+                // An exit with a predecessor outside the loop: that input is
+                // rewritten in terms of a different phi.
+                for (at, &pred) in preds.iter().enumerate() {
+                    if !loop_.contains(pred) {
+                        to_rewrite.push(Use { user: phi, index: 2 * at as u32 });
+                    }
+                }
+                added.push(phi);
+                let made = Operand::Value(self.function.instruction(phi).result.expect("a phi's value"));
+                updater.add_available_value(exit, made);
+                // An exit that is the header of a disjoint loop: its phi may
+                // need closing for that loop.
+                if let Some(other) = info.get_loop_for(exit)
+                    && !loop_.contains_loop(Some(other))
+                {
+                    post_process.push(phi);
+                }
+            }
+
+            for one in to_rewrite {
+                let mut user_block = self.function.parent(one.user).expect("a placed user");
+                if self.function.instruction(one.user).opcode == Opcode::Phi {
+                    user_block = self.incoming_block(one);
+                }
+                // A use in an exit block reads the phi placed there.
+                let front = added.iter().copied().find(|&one| self.function.parent(one) == Some(user_block));
+                if let Some(front) = front
+                    && exits.contains(&user_block)
+                {
+                    let phi = self.function.instruction(front).result.expect("a phi's value");
+                    self.function.set_operand(one.user, one.index as usize, Operand::Value(phi));
+                    continue;
+                }
+                // A lone phi dominates every use.
+                if let [only] = added[..] {
+                    let phi = self.function.instruction(only).result.expect("a phi's value");
+                    self.function.set_operand(one.user, one.index as usize, Operand::Value(phi));
+                    continue;
+                }
+                updater.rewrite_use(self.context, self.layout, self.function, one);
+            }
+
+            for &joined in updater.inserted_phis() {
+                self.placed.insert(joined, value);
+            }
+            // SSAUpdater may have placed phis inside other loops.
+            for &placed in updater.inserted_phis() {
+                let block = self.function.parent(placed).expect("a placed phi");
+                if let Some(other) = info.get_loop_for(block)
+                    && !loop_.contains_loop(Some(other))
+                {
+                    post_process.push(placed);
+                }
+            }
+            for phi in post_process {
+                let used = self.function.instruction(phi).result.is_some_and(|v| !self.function.users(v).is_empty());
+                if used {
+                    worklist.push(phi);
+                }
+            }
+            // Phis nothing was rewritten to read.
+            for phi in added {
+                let value = self.function.instruction(phi).result.expect("a phi's value");
+                if self.function.users(value).is_empty() && !local_to_remove.contains(&phi) {
+                    local_to_remove.push(phi);
+                }
+            }
+            changed = true;
+        }
+        // The use check again: a later phi may read one.
+        for phi in local_to_remove {
+            let value = self.function.instruction(phi).result.expect("a phi's value");
+            if self.function.users(value).is_empty() {
+                self.function.erase(phi)?;
+            }
+        }
+        Ok(changed)
+    }
+
+    /// DEVIATE L4: the phis this run added (exit and join phis) follow a
+    /// block's own phis, by the value they close; the pin leaves each first in
+    /// its block, the last made first.
+    fn in_value_order(&mut self) -> Result<(), String> {
+        let mut by_block: HashMap<BlockId, Vec<(ValueId, InstId)>> = HashMap::new();
+        for (phi, &value) in self.placed.iter() {
+            if let Some(block) = self.function.parent(phi) {
+                by_block.entry(block).or_default().push((value, phi));
+            }
+        }
+        for (block, mut phis) in by_block {
+            phis.sort_unstable();
+            for (_, phi) in phis {
+                let first =
+                    self.function.iter_block(block).find(|&inst| self.function.instruction(inst).opcode != Opcode::Phi);
+                self.function.move_to(phi, first.map_or(Position::End(block), Position::Before))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `PHINode::getIncomingBlock(Use)`.
+    fn incoming_block(
+        &self,
+        one: Use,
+    ) -> BlockId {
+        let Operand::Block(from) = self.function.instruction(one.user).operands[one.index as usize + 1] else {
+            unreachable!("a phi's block operand")
+        };
+        from
+    }
 }
 
 /// `block`'s instructions other than its phis, in order.
@@ -182,50 +487,6 @@ pub(crate) fn definitions(
     defined
 }
 
-/// A read of a loop's value from outside it: the block of the reader, and for
-/// a phi the block its input comes from.
-pub(crate) struct Read {
-    pub home: i64,
-    pub from: Option<i64>,
-}
-
-/// The values defined in `body` that a reader outside it reads, each with its
-/// block and the reads, by value. Found from the uses of what the loop defines
-/// (LLVM's formLCSSA), not by reading every instruction outside for each loop.
-pub(crate) fn outside_reads(
-    function: &Function,
-    body: &llrm_mir::forest::Body,
-) -> Vec<(ValueId, i64, Vec<Read>)> {
-    let mut found = Vec::new();
-    for &at in body {
-        let block = cfg::block(at);
-        for inst in function.iter_block(block) {
-            let Some(value) = function.instruction(inst).result else { continue };
-            let mut reads = Vec::new();
-            for one in function.users(value) {
-                let Some(home) = function.parent(one.user).map(cfg::id) else { continue };
-                if body.contains(&home) {
-                    continue;
-                }
-                let user = function.instruction(one.user);
-                let from = if user.opcode == Opcode::Phi {
-                    let Operand::Block(from) = user.operands[one.index as usize + 1] else { continue };
-                    Some(cfg::id(from))
-                } else {
-                    None
-                };
-                reads.push(Read { home, from });
-            }
-            if !reads.is_empty() {
-                found.push((value, cfg::id(block), reads));
-            }
-        }
-    }
-    // By value, as a map of them was walked: the phis are made in this order.
-    found.sort_unstable_by_key(|(value, ..)| *value);
-    found
-}
-
 /// A new, unplaced phi of `value`'s type and name, without inputs yet.
 pub(crate) fn exit_phi(
     function: &mut Function,
@@ -246,104 +507,10 @@ pub(crate) fn place_phi(
     function.insert(phi, first.map_or(Position::End(block), Position::Before))
 }
 
-pub fn _closed_loop(
-    function: &mut Function,
-    loop_: &Loop,
-    exiting: &[(i64, i64)],
-    flow: &mut lcssamerges::Flow,
-) -> Result<bool, String> {
-    let exits = exiting.iter().map(|&(_, target)| target).collect::<BTreeSet<_>>();
-    if exits.len() > 1 {
-        return lcssamerges::closed(function, loop_, exiting, flow);
-    }
-    let dominance = &mut flow.dominance;
-    let Some(&exit_at) = exits.first() else {
-        return Ok(false);
-    };
-    let sources = exiting.iter().map(|&(source, _)| source).collect::<BTreeSet<_>>();
-    if cfg::predecessors_of(function, exit_at) != sources {
-        return Ok(false);
-    }
-
-    // Phi inputs are used on their incoming edge.  A phi in the dedicated
-    // exit is already the LCSSA boundary, so only downstream phis count here.
-    // Found from the uses of what the loop defines (LLVM's formLCSSA), keeping
-    // only the values something outside reads, not every value the loop makes.
-    let mut escaping: Vec<(ValueId, i64, BTreeSet<i64>)> = Vec::new();
-    for (value, home, reads) in outside_reads(function, &loop_.body) {
-        let sites = reads
-            .iter()
-            .filter_map(|read| match read.from {
-                Some(_) if read.home == exit_at => None,
-                Some(from) => Some(from),
-                None => Some(read.home),
-            })
-            .collect::<BTreeSet<_>>();
-        if !sites.is_empty() {
-            escaping.push((value, home, sites));
-        }
-    }
-    if escaping.is_empty() {
-        return Ok(false);
-    }
-
-    let dominance = &*dominance.get_or_insert_with(|| cfg::Dominance::of(function));
-    let crossing = escaping
-        .iter()
-        .filter(|(_, home, sites)| {
-            sites.iter().all(|&site| dominance.dominates(function, exit_at, site))
-                && sources.iter().all(|&source| dominance.dominates(function, *home, source))
-        })
-        .map(|(value, ..)| *value)
-        .collect::<Vec<_>>();
-    if crossing.is_empty() {
-        return Ok(false);
-    }
-
-    let edges_in = function.edge_predecessors(cfg::block(exit_at));
-    let mut swap: BTreeMap<ValueId, Operand> = BTreeMap::new();
-    let mut phis = Vec::new();
-    for &value in &crossing {
-        let phi = exit_phi(function, value);
-        let incoming = edges_in.iter().map(|&source| (Operand::Value(value), source)).collect::<Vec<_>>();
-        function.set_operands(phi, from_arms(&incoming));
-        swap.insert(value, Operand::Value(function.instruction(phi).result.expect("a phi's value")));
-        phis.push(phi);
-    }
-
-    // Every use of a crossing value outside the loop that the exit dominates
-    // reads its phi.
-    let mut rewrites = Vec::new();
-    for (&value, &replacement) in &swap {
-        for one in function.users(value) {
-            let Some(home) = function.parent(one.user).map(cfg::id) else { continue };
-            if loop_.body.contains(&home) {
-                continue;
-            }
-            let user = function.instruction(one.user);
-            let reads_it = if user.opcode == Opcode::Phi {
-                home != exit_at
-                    && matches!(
-                        user.operands[one.index as usize + 1],
-                        Operand::Block(from) if dominance.dominates(function, exit_at, cfg::id(from))
-                    )
-            } else {
-                dominance.dominates(function, exit_at, home)
-            };
-            if reads_it {
-                rewrites.push((one.user, one.index as usize, replacement));
-            }
-        }
-    }
-    for (user, index, operand) in rewrites {
-        function.set_operand(user, index, operand);
-    }
-    for phi in phis {
-        place_phi(function, cfg::block(exit_at), phi)?;
-    }
-    Ok(true)
-}
-
 #[cfg(test)]
 #[path = "lcssa_tests.rs"]
 pub mod tests;
+
+#[cfg(test)]
+#[path = "lcssa_multi_exit_tests.rs"]
+mod multi_exit_tests;

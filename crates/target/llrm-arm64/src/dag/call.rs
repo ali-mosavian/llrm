@@ -37,6 +37,12 @@ use llrm_sdag::actions::LoadExt;
 
 use crate::reg;
 
+/// The registers a call clobbers that the scheduler's live-register check reads
+/// (`CheckForLiveRegDefMasked`): the condition flags. The AAPCS caller-saved
+/// registers are not listed: nothing but a glued argument copy holds one across a
+/// call. DEVIATE: the pin's mask lists them; owner arm64, exit 2026-11-30.
+const CALL_CLOBBERS: [u16; 1] = [llrm_dagisel::generated::aarch64::ids::reg::NZCV];
+
 /// `AArch64ISD::RET_GLUE`, the pin's number.
 pub const RET_GLUE: u16 = llrm_dagisel::generated::aarch64::ids::isd::RET_GLUE;
 
@@ -429,7 +435,7 @@ impl TargetCalling for Aarch64Calling {
         for &(register, value) in &registers {
             operands.push(dag.get_phys_register(dag.value_type(value), register));
         }
-        operands.push(dag.get_register_mask());
+        operands.push(dag.get_register_mask_clobbering(&CALL_CLOBBERS));
         operands.extend(glue);
         Some(dag.get_node_multi(ISD::Target(TC_RETURN), &[EVT::OTHER, EVT::GLUE], &operands))
     }
@@ -514,7 +520,7 @@ impl TargetCalling for Aarch64Calling {
         for &(register, value) in &registers {
             operands.push(dag.get_phys_register(dag.value_type(value), register));
         }
-        operands.push(dag.get_register_mask());
+        operands.push(dag.get_register_mask_clobbering(&CALL_CLOBBERS));
         operands.extend(glue);
         let call = dag.get_node_multi(ISD::Target(CALL), &[EVT::OTHER, EVT::GLUE], &operands);
         let end =

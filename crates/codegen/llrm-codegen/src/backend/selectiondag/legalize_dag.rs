@@ -196,7 +196,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         node: SDValue,
     ) -> EVT {
         match self.dag.opcode(node) {
-            ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT => EVT::OTHER,
+            ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT | ISD::VAArg => EVT::OTHER,
             ISD::SIntToFp | ISD::UIntToFp | ISD::LRint | ISD::LLRint => self.dag.value_type(self.dag.operand(node, 0)),
             ISD::SignExtendInReg => match self.dag.node(self.dag.operand(node, 1)).data {
                 NodeData::ValueType(inner) => inner,
@@ -281,10 +281,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             };
             let part = self.dag.get_ext_load(super::actions::LoadExt::ZExtLoad, vt, chain, piece_ptr, piece_info);
             chains.push(SDValue { node: part.node, res: 1 });
-            let part = if at == 0 {
+            // the pieces lie widest first in memory: the low bits first on a
+            // little-endian target, the high bits first on a big-endian one
+            let shift =
+                if self.dag.config().big_endian { info.mem_vt.size_in_bits() - at - piece.size_in_bits() } else { at };
+            let part = if shift == 0 {
                 part
             } else {
-                let by = self.dag.get_constant(u128::from(at), EVT::I8);
+                let by = self.dag.get_constant(u128::from(shift), EVT::I8);
                 self.dag.get_node(ISD::Shl, vt, &[part, by])
             };
             joined = Some(match joined {
@@ -812,6 +816,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             ISD::FShl | ISD::FShr => Some(vec![super::expand_funnel::expand_funnel_shift(self.dag, self.tli, node)]),
             ISD::SShlSat | ISD::UShlSat => Some(vec![super::expand_fixed::expand_shl_sat(self.dag, self.tli, node)]),
+            ISD::SCmp | ISD::UCmp => Some(vec![super::expand_fixed::expand_cmp(self.dag, self.tli, node)]),
             ISD::Abs | ISD::AbsMinPoison => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::CtLz | ISD::CtLzZeroPoison => self.expand_ctlz(node).map(|result| vec![result]),
@@ -862,6 +867,53 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let (chain, value) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
                 let register = self.dag.get_phys_register(self.dag.value_type(value), sp);
                 Some(vec![self.dag.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, register, value])])
+            }
+            // `expandVAArg`: load the list pointer, round it up to the
+            // type's ABI alignment when that exceeds the minimum stack
+            // argument alignment (1: no target here sets one), step it by the
+            // type's allocation size, store it back and load the value.
+            ISD::VAArg => {
+                let vt = self.dag.value_type(node);
+                let (chain, list) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let align = self.dag.constant(self.dag.operand(node, 3)).unwrap_or(1) as u32;
+                let pointer = self.dag.config().pointer;
+                let info = |mem_vt: EVT, align: u32| MemInfo {
+                    mem_vt,
+                    align,
+                    volatile: false,
+                    base: MemBase::Unknown,
+                    ext: None,
+                    space: 0,
+                    ordering: None,
+                };
+                let list_load = self.dag.get_load(pointer, chain, list, info(pointer, pointer.size_in_bits() / 8));
+                let mut at = SDValue { node: list_load.node, res: 0 };
+                if align > 1 {
+                    let add = self.dag.get_constant(u128::from(align - 1), pointer);
+                    at = self.dag.get_node(ISD::Add, pointer, &[at, add]);
+                    let mask = self.dag.get_constant((-i128::from(align)) as u128, pointer);
+                    at = self.dag.get_node(ISD::And, pointer, &[at, mask]);
+                }
+                // `getTypeAllocSize(VT)`: the legalizer holds no layout, and a
+                // power-of-two scalar's allocation size is its store size
+                // (no layout here aligns one beyond its size). The operand
+                // align is the whole type's, so rounding to it would step a
+                // half of an expanded `double` by 8, not 4.
+                let bytes = vt.size_in_bits().div_ceil(8);
+                let size =
+                    if vt.size_in_bits().is_power_of_two() { bytes } else { bytes.next_multiple_of(align.max(1)) };
+                let step = self.dag.get_constant(u128::from(size), pointer);
+                let next = self.dag.get_node(ISD::Add, pointer, &[at, step]);
+                let stored = self
+                    .dag
+                    .get_store(
+                        SDValue { node: list_load.node, res: 1 },
+                        next,
+                        list,
+                        info(pointer, pointer.size_in_bits() / 8),
+                    );
+                let value = self.dag.get_load(vt, stored, at, info(vt, align.max(1)));
+                Some(vec![SDValue { node: value.node, res: 0 }, SDValue { node: value.node, res: 1 }])
             }
             ISD::VACopy => {
                 let (chain, dest, src) =

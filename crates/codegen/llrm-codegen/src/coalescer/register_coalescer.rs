@@ -226,6 +226,11 @@ pub fn join_copy(
     if cp.is_partial() && (cp.lane_offset() != 0 || has_lane_defs(lis, cp.dst_reg())) {
         return join_lane(lis, env, state, current_erased, &cp, copy, block);
     }
+    // DEVIATE C14: `JoinVals` has no lane masks, so a join of whole values
+    // that have lane defs renames and recomputes (series step 4).
+    if !cp.is_partial() && (has_lane_defs(lis, cp.src_reg()) || has_lane_defs(lis, cp.dst_reg())) {
+        return join_whole_with_lanes(lis, env, state, current_erased, &cp, copy, block);
+    }
     let result = join_virt_regs(lis, state, &cp);
     if result != JoinResult::Joined {
         // Coalescing failed. Try rematerializing the definition of the source
@@ -275,7 +280,7 @@ pub fn join_copy(
         current_erased.insert(copy);
     }
     // Rewrite all SrcReg operands to DstReg.
-    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), cp.is_partial().then_some(cp.lane_offset()), None);
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), cp.is_partial().then_some(cp.lane_offset()), None, false);
     // SrcReg is guaranteed to be the register whose live interval that is
     // being merged.
     lis.remove_interval(cp.src_reg());
@@ -288,6 +293,42 @@ fn has_lane_defs(
     value: u32,
 ) -> bool {
     lis.operands(value).iter().any(|operand| operand.is_def && operand.lanes != Operand::ALL)
+}
+
+/// The join of a whole-value copy where a side has lane defs. DEVIATE C14: the
+/// pin's `JoinVals` carries lane masks; here the join is refused where the two
+/// ranges are live together anywhere but from the copy (the destination's
+/// value is the source's there), and made by renaming `src` to `dst` and
+/// computing the interval afresh. Exit: `JoinVals` with lane masks (series
+/// step 4, 2026-11-24).
+fn join_whole_with_lanes(
+    lis: &mut LiveIntervals,
+    env: &dyn CoalescerEnv,
+    state: &mut State,
+    current_erased: &mut HashSet<InstrKey>,
+    cp: &CoalescerPair,
+    copy: InstrKey,
+    block: usize,
+) -> JoinResult {
+    // A pinned value's interval is not computed afresh from its defs.
+    if env.keeps(cp.src_reg()) || env.keeps(cp.dst_reg()) {
+        return JoinResult::Rejected;
+    }
+    let copy_at = lis.indexes.get_instruction_index(copy);
+    let src = lis.interval(cp.src_reg()).range.clone();
+    let dst = lis.interval(cp.dst_reg()).range.clone();
+    if lanes_overlap(&dst, &src, &copy_at) {
+        return JoinResult::Rejected;
+    }
+    env.narrow(cp.dst_reg(), cp.src_reg());
+    let _ = current_erased;
+    state.erased.insert(copy);
+    lis.remove_instr(block, copy);
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), None, None, false);
+    lis.remove_interval(cp.src_reg());
+    lis.remove_interval(cp.dst_reg());
+    keep_joined_lanes_through_undef_defs(lis, cp.dst_reg());
+    JoinResult::Joined
 }
 
 /// The join of a lane copy: `src` is the bytes `cp.lanes()` of `dst`. DEVIATE
@@ -320,12 +361,60 @@ fn join_lane(
     }
     env.narrow_lane(cp.dst_reg(), cp.src_reg(), cp.lane_offset());
     let _ = current_erased;
+    // The copy kept the other lanes of `dst`: so does the def that replaces it,
+    // whether or not `dst`'s interval is live there yet (the lane joins that
+    // would make it so may come later).
+    let keeps_rest = lis.instr(copy).partial_defs.contains(&cp.dst_reg());
     state.erased.insert(copy);
     lis.remove_instr(block, copy);
-    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), Some(cp.lane_offset()), Some(cp.lanes()));
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), Some(cp.lane_offset()), Some(cp.lanes()), keeps_rest);
     lis.remove_interval(cp.src_reg());
     lis.remove_interval(cp.dst_reg());
+    keep_joined_lanes_through_undef_defs(lis, cp.dst_reg());
     JoinResult::Joined
+}
+
+/// A lane def flagged to start the value (`undef_super`) that now stands after
+/// a joined def of another lane keeps that lane: the pin's `Reads` is `dst`
+/// live at the def. Left flagged, the earlier lane's def was dead (nothing
+/// read it past the later one) and went with it (lz4c -Oz lost the high byte
+/// of a pair).
+fn keep_joined_lanes_through_undef_defs(
+    lis: &mut LiveIntervals,
+    dst: u32,
+) {
+    let mut keys: Vec<InstrKey> = lis
+        .operands(dst)
+        .iter()
+        .filter(|operand| operand.is_def && !operand.reads_reg && operand.lanes != Operand::ALL && lis.has_instr(operand.instr))
+        .map(|operand| operand.instr)
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    let mut changed = false;
+    for key in keys {
+        let at = lis.indexes.get_instruction_index(key);
+        let old = Arc::clone(lis.instr(key));
+        let mine = old.def_lanes.iter().filter(|(value, _)| *value == dst).fold(None, |all: Option<ValueLanes>, (_, lanes)| {
+            Some(all.map_or(*lanes, |a| a.union(*lanes)))
+        });
+        let Some(mine) = mine else { continue };
+        let live_other = lis.interval(dst).sub_ranges().iter().any(|sub| !sub.lanes.overlaps(mine) && sub.range.live_at(&at));
+        if live_other {
+            let block = lis.indexes.get_mbb_from_index(&at);
+            let mut made = (*old).clone();
+            made.undef_super = false;
+            if !made.partial_defs.contains(&dst) {
+                made.partial_defs.push(dst);
+            }
+            // A pending lane copy keeps its identity: the work list names it.
+            lis.rewrite_instr(block, key, Arc::new(made.standing_for(&old)));
+            changed = true;
+        }
+    }
+    if changed {
+        lis.remove_interval(dst);
+    }
 }
 
 /// Whether two ranges are live together anywhere but where one starts at
@@ -399,8 +488,8 @@ fn join_virt_regs(
 /// `updateRegDefsUses`: every instruction that names `src` names `dst`. For a
 /// partial pair (`src` is a sub-register of `dst`) a def of `src` becomes a
 /// def that reads `dst` where the instruction reads `src` or `dst` is live
-/// into it, and a def that starts the value where not
-/// (`MO.setIsUndef(!Reads)`).
+/// into it or `keeps_rest` (the lane copy it replaces read the rest), and a def
+/// that starts the value where not (`MO.setIsUndef(!Reads)`).
 fn update_reg_defs_uses(
     lis: &mut LiveIntervals,
     state: &mut State,
@@ -408,6 +497,7 @@ fn update_reg_defs_uses(
     dst: u32,
     partial: Option<u32>,
     lanes: Option<ValueLanes>,
+    keeps_rest: bool,
 ) {
     lis.rename_input(src, dst);
     state.renames.push((src, dst));
@@ -424,7 +514,9 @@ fn update_reg_defs_uses(
         let mut renamed = at_lane.renamed(&|value| if value == src { dst } else { value });
         if partial.is_some() && old.defines.contains(&src) {
             let at = lis.indexes.get_instruction_index(key);
-            let reads = old.uses.contains(&src) || lis.interval(dst).live_at(&at);
+            // the lanes a copy keeps are not read when this instruction
+            // defines them itself: another lane of `dst` was joined here first
+            let reads = (keeps_rest && !old.defines.contains(&dst)) || old.uses.contains(&src) || lis.interval(dst).live_at(&at);
             if reads && !renamed.partial_defs.contains(&dst) {
                 let mut made = (*renamed).clone();
                 made.partial_defs.push(dst);
@@ -433,12 +525,18 @@ fn update_reg_defs_uses(
         }
         if let Some(lanes) = lanes.filter(|_| old.defines.contains(&src)) {
             let mut made = (*renamed).clone();
-            made.def_lanes.push((dst, lanes));
+            // one entry per def of `dst`, in the order of the defs: this def
+            // stands after the defs of `dst` that come before it
+            let at = old.defines.iter().position(|v| *v == src).unwrap_or(0);
+            let before = old.defines[..at].iter().filter(|v| **v == dst).count();
+            let place = made.def_lanes.iter().enumerate().filter(|(_, (v, _))| *v == dst).nth(before).map_or(made.def_lanes.len(), |(i, _)| i);
+            made.def_lanes.insert(place, (dst, lanes));
             renamed = Arc::new(made);
         }
-        let new = renamed.id();
-        lis.rewrite_instr(block, key, renamed);
-        state.moved.insert(key, new);
+        // `setReg` rewrites the operand where it stands: the instruction keeps
+        // its identity.
+        renamed.stand_for(&old);
+        lis.rename_value_in_instr(block, key, src, dst, renamed);
     }
 }
 
@@ -1030,4 +1128,47 @@ fn eliminate_undef_copy(
     state.erased.insert(copy);
     lis.remove_instr(block, copy);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use indexmap::IndexMap;
+
+    use super::*;
+    use crate::model::lir::{Insn, LirBlock, LirBody};
+
+    fn insn(
+        defines: &[u32],
+        uses: &[u32],
+    ) -> Arc<Insn> {
+        Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()))
+    }
+
+    /// `updateRegDefsUses` took every operand of an instruction out of its
+    /// lists and put them back to rename one value: the operands of the other
+    /// values moved to the ends of their lists (4.5 k Ir an instruction in
+    /// jpeg_fixed m64, the pin's `setReg` is 1 k). Only the renamed values'
+    /// lists are edited.
+    #[test]
+    fn test_renaming_a_value_leaves_the_operand_lists_of_the_others_in_place() {
+        let (first, both, last) = (insn(&[5], &[]), insn(&[], &[5, 7]), insn(&[], &[5]));
+        let block = LirBlock {
+            at: 0,
+            insns: vec![Arc::clone(&first), Arc::clone(&both), Arc::clone(&last)].into(),
+            succ: vec![].into(),
+            phis: vec![].into(),
+            cold: false,
+            align: 0,
+            max_skip: 0,
+        };
+        let body = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+        let mut lis = LiveIntervals::new(&body);
+        update_reg_defs_uses(&mut lis, &mut State::new(), 7, 9, None, None, false);
+        let order = |value| lis.operands(value).iter().map(|operand| operand.instr).collect::<Vec<_>>();
+        assert_eq!(order(5), [first.id(), both.id(), last.id()], "the others' operands stayed in place");
+        assert_eq!(order(9), [both.id()]);
+        assert!(order(7).is_empty());
+    }
 }

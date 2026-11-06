@@ -380,6 +380,7 @@ fn _sparing_the_frame(body: LirBody) -> LirBody {
         effects: llrm_mir::memory::Effects { reads: false, writes: true },
         private: vec![crate::model::lir::WHOLE_FRAME],
         disturbs: Default::default(),
+        block: false,
     });
     let blocks = body
         .blocks
@@ -993,9 +994,12 @@ fn test_a_plain_move_of_a_float_to_and_from_a_cell_is_stored_and_loaded() {
     to_cell.op = Operation::Move;
     let from_cell = sem(Operation::Move, "mov", vec![fl(2)], vec![m(&spill)]);
     let body = _body(vec![_load(1, &source), to_cell, from_cell, _store(&source, 2)]);
-    let result =
-        crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
-            .expect("converts");
+    let result = crate::backend::fpstack::converted(
+        &body,
+        &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16),
+        None,
+    )
+    .expect("converts");
     let insns = result.insns();
     let names: Vec<&str> = insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect();
     assert!(!names.contains(&"mov"), "{names:?}");
@@ -1022,7 +1026,7 @@ fn test_a_block_ahead_is_scanned_once_however_many_blocks_ask_for_it() {
     blocks.push(block(16 * n, vec![moved(16 * n)], vec![]).into());
     body.blocks = blocks;
     let before = crate::backend::fpstack::RENAME_SCANS.with(std::cell::Cell::get);
-    crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
+    crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16), None)
         .expect("a chain of blocks carrying a float");
     let scans = crate::backend::fpstack::RENAME_SCANS.with(std::cell::Cell::get) - before;
     assert!(scans <= n as usize + 1, "{scans} scans for {} blocks", n + 1);
@@ -1049,9 +1053,12 @@ fn test_a_reload_before_the_pseudo_that_takes_a_calls_result_leaves_the_result_b
         _arithmetic("fadd", 4, fl(2), fl(3)),
         _store(out, 4),
     ]);
-    let converted =
-        crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
-            .expect("the result arrives under the reload");
+    let converted = crate::backend::fpstack::converted(
+        &body,
+        &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16),
+        None,
+    )
+    .expect("the result arrives under the reload");
     let insns = converted.insns();
     let names: Vec<&str> = insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect();
     assert!(names.contains(&"faddp"), "{names:?}");
@@ -1082,9 +1089,12 @@ fn test_a_split_edge_asks_no_second_liveness() {
     ];
     let before = body.blocks.len();
     crate::backend::liverows::SETS_BUILT.with(|one| one.set(0));
-    let converted =
-        crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
-            .expect("a fork whose join reads fewer values than the fork holds");
+    let converted = crate::backend::fpstack::converted(
+        &body,
+        &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16),
+        None,
+    )
+    .expect("a fork whose join reads fewer values than the fork holds");
     let built = crate::backend::liverows::SETS_BUILT.with(|one| one.get());
     assert!(converted.blocks.len() > before, "an edge was split");
     assert_eq!(built, 2, "sets built: one liveness pass");

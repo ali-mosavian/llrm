@@ -824,3 +824,16 @@ fn an_arm64_row_on_the_line_before_it_is_not_a_statement() {
     assert!(!expected.is_empty(), "premise: a line with more than one row");
     assert_eq!(info.not_stmt, expected);
 }
+
+/// `getGEPCost` asks about the type the last index selects when no load or
+/// store is given: `gep [2 x i8], %p, %i` is a legal scaled address, so free.
+/// It was costed 1, which made the 40-trip loop of `tile` 162 against the
+/// -O2 bar of 150 and left it rolled (4207 instructions, clang's 2155).
+#[test]
+fn a_scaled_index_gep_feeding_another_gep_is_free_so_a_small_loop_unrolls_fully() {
+    let text = include_str!("data/tile_unroll.ll");
+    let asm = driver::assembly(text, Platform::Linux, true).expect("the function lowers");
+    let kernel = asm.split("bench_tile:").nth(1).expect("the kernel").split("main:").next().unwrap();
+    let loads = kernel.lines().filter(|line| line.trim_start().starts_with("ldrsh")).count();
+    assert!(loads >= 40, "{loads} loads: the inner loop of 40 trips is not unrolled\n{kernel}");
+}

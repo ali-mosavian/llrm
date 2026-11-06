@@ -568,6 +568,10 @@ impl RegAlloc {
         self.pinned.retain(|value, register| !(regs.is_segment(*register) && confined.get(value) == Some(&selectors)));
         let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
         body = constrain::hoisted(&constrained_body, &fixed);
+        // A copy of an undefined value the constraints made is undefined too.
+        if body.insns().iter().any(|one| crate::processimpdefs::implicit_def_of(one).is_some()) {
+            body = crate::processimpdefs::processed_before_allocation(&body);
+        }
         let clash: BTreeSet<u32> = fixed
             .keys()
             .copied()
@@ -617,7 +621,11 @@ impl RegAlloc {
         drop(base);
         llrm_support::debug!("regalloc", "{}: {} insns, {} spilled", body.name, out.insns().len(), spilled.len());
         let colored = llrm_support::debug::timed("spill slots shared", || {
-            crate::backend::slots::slots_colored(&out, &mut frame.borrow_mut())
+            crate::backend::slots::slots_colored(
+                &out,
+                &mut frame.borrow_mut(),
+                cpu.target().tuning().slots_loop_width_rule,
+            )
         });
         let _apply = llrm_support::debug::span("regalloc apply");
         crate::backend::rewriter::rewrite(&colored, &got, &self.classes)

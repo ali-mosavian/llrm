@@ -25,3 +25,19 @@ fn the_loop_stores_what_the_intrinsic_stores() {
         assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
     }
 }
+
+/// The stepping loop writes the same elements and has no index: it steps a
+/// pointer to an end pointer.
+#[test]
+fn the_stepping_loop_stores_what_the_intrinsic_stores() {
+    let before = llrm_mir::parse::module(TEXT).expect("parses");
+    let mut after = before.clone();
+    crate::memsetpattern::expanded_stepping(&mut after).expect("expands");
+    assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
+    let text = llrm_mir::print::module(&after);
+    assert!(!text.contains("call void @llvm.experimental"), "the call is gone");
+    assert!(text.contains("icmp ne ptr"), "the loop ends at an end pointer:\n{text}");
+    for n in [0, 3, 4, 8] {
+        assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
+    }
+}

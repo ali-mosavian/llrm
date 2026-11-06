@@ -43,6 +43,8 @@
 //! only 0 then has a product of 0. Without it a byte-stepped loop kept a second
 //! counter beside the byte index (examples/dot m16: `dec cx` and a spill).
 //! Exit: none, a proof; if LLVM's SCEV proves the same, delete the check.
+//! Not at size: the doubled limit costs an `add` and a `cmp` over the `dec`
+//! (m16 -Os corpus: idioms +51 B, idiom_edges +15, none smaller).
 
 use std::collections::BTreeMap;
 
@@ -309,7 +311,7 @@ impl Collection<'_, '_> {
         base: Formula,
         depth: u32,
     ) {
-        assert!(base.is_canonical(se, self.l), "Input must be in the canonical form");
+        debug_assert!(base.is_canonical(se, self.l), "Input must be in the canonical form");
         // Capped, to protect compile time.
         if depth >= 3 {
             return;
@@ -597,7 +599,7 @@ impl Collection<'_, '_> {
             // model prices below `dec; je` (x_adler -O2: 47972 -> 50976
             // clocks).
             let counter_alone = base.scaled_reg.is_none() && base.base_regs.len() == 1;
-            let odd = (factor & 1 == 1 && counter_alone) || self.factor_keeps_zero(se, cx, &base, factor, bits);
+            let odd = (factor & 1 == 1 && counter_alone) || (!self.size && self.factor_keeps_zero(se, cx, &base, factor, bits));
             // No base register may overflow when multiplied.
             for i in 0..f.base_regs.len() {
                 f.base_regs[i] = se
@@ -1000,6 +1002,7 @@ impl Collection<'_, '_> {
         &mut self,
         se: &mut ScalarEvolution,
     ) {
+        GENERATED.with(|n| n.set(n.get() + 1));
         for lu_idx in 0..self.uses.len() {
             for i in 0..self.uses[lu_idx].formulae.len() {
                 let f = self.uses[lu_idx].formulae[i].clone();
@@ -1035,7 +1038,6 @@ impl Collection<'_, '_> {
             }
         }
         self.generate_cross_use_constant_offsets(se);
-        self.generate_end_biased(se);
     }
 
     /// `GenerateEndBiased` (DEVIATE LG3, gcc's `ubase - ratio * cbase`,
@@ -1057,6 +1059,13 @@ impl Collection<'_, '_> {
             return;
         }
         let cx = self.cx;
+        // The saving is one compare a trip; the biased bases cost setup
+        // instructions once. A loop that runs few trips (an unroll's
+        // remainder) never pays them back.
+        let trips = se.get_small_constant_max_trip_count(cx, self.l);
+        if trips != 0 && trips <= END_BIAS_SETUP_INSNS {
+            return;
+        }
         // The registers that end at zero, in the exit test's formulae.
         let mut zero_ending: Vec<Scev> = Vec::new();
         for lu in &self.uses {
@@ -1225,6 +1234,7 @@ impl Collection<'_, '_> {
             hardware_loop_profitable: self.hardware_loop_profitable,
             as_written: false,
             other_register_units: self.pressure_units(),
+            size: self.size,
         };
         cost.rate_formula(&mut rating, f, regs, visited, &self.uses[lu_idx], losers);
     }
@@ -1243,6 +1253,20 @@ impl Collection<'_, '_> {
             _ => None,
         }
     }
+}
+
+/// Instructions the biased bases of an end-biased formula cost in the
+/// preheader: the start scaled and negated, and the sum.
+const END_BIAS_SETUP_INSNS: u32 = 3;
+
+thread_local! {
+    static GENERATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread generated a loop's reuse formulae, for a test
+/// that a loop's space is generated once however many solutions are rated.
+pub fn reuse_formulae_generated() -> usize {
+    GENERATED.with(std::cell::Cell::get)
 }
 
 /// Whether `x * factor == 0` (mod 2^bits) iff `x == 0` for every `x` with

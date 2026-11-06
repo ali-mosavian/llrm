@@ -13,7 +13,6 @@
 //! checks selection and emission, not allocation. Exit: the shared allocator
 //! takes the 6502 (post-parity).
 
-use llrm_support::hash::HashMap;
 use std::fmt::Write;
 
 use llrm_codegen::backend::frameobjects::Object;
@@ -24,6 +23,7 @@ use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue};
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{BlockId, Module};
+use llrm_support::hash::HashMap;
 
 use crate::REGISTER_INFO;
 use crate::alloc;
@@ -131,8 +131,12 @@ pub fn function_text(
             },
         );
     let (items, _, places) = function_items_with_places(module, name, selection)?;
-    let (function, labels) =
+    let (mut function, labels) =
         alloc::build_with_places(name, &items, places).map_err(|why| format!("{name}: {}", why.0))?;
+    function.returns_twice = module
+        .named(name)
+        .and_then(|id| module.global(id).function())
+        .is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     let (code, slots) = alloc::emit(
         function,
         &labels,
@@ -173,6 +177,19 @@ pub fn module_text(
     if !users.is_empty() && gain <= alloc::SAVE_HELPERS_BYTES {
         for (at, _) in users {
             texts[at] = alloc::with_shared_saves(false, || function_text(module, parts[at].0, parts[at].1))?;
+        }
+    }
+    // the wide speed division is linked once and costs 141 bytes:
+    // a module whose divisions are cold calls the speed routines with the
+    // small wide path
+    let wide = |text: &str| {
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3"].iter().any(|name| text.contains(&format!(" {name}_fast\n")))
+    };
+    if texts.iter().any(|text| wide(text)) && !crate::hotdivision::hot(module) {
+        for at in 0..texts.len() {
+            if wide(&texts[at]) {
+                texts[at] = alloc::with_fast_division(false, || function_text(module, parts[at].0, parts[at].1))?;
+            }
         }
     }
     Ok(texts)
@@ -273,6 +290,19 @@ pub fn function_items_with_places(
                     body.push(Item::Inst(inst));
                 }
             }
+        }
+        // An IR `unreachable` emits nothing in the pin (the machine block has
+        // no successors); here a block with no terminator falls into the next
+        // one, so the end is stated.
+        let ends_unreachable = module.named(name).and_then(|id| module.global(id).function()).is_some_and(|function| {
+            // a block a lowering made out of an IR block has no number there
+            (one.block.0 as usize) < function.block_capacity()
+                && function
+                    .terminator(one.block)
+                    .is_some_and(|last| function.instruction(last).opcode == llrm_mir::opcode::Opcode::Unreachable)
+        });
+        if ends_unreachable {
+            body.push(Item::Inst(MInst::new(crate::emit::spill::UNREACHABLE, Vec::new())));
         }
         if split {
             // The edge taken by falling into the next block copies in line; the
@@ -618,7 +648,14 @@ fn lower(
                         }
                         let at = location(module, name, one, input, values, cells)?;
                         match &at {
-                            Operand::Reg(text) if cells.saved.contains_key(text) => {
+                            // a carry read as a value (a compare of two bits)
+                            // is the saved byte, 0 or 1; only a carry operand
+                            // is loaded back into C
+                            Operand::Reg(text)
+                                if cells.saved.contains_key(text)
+                                    && !(cells.saved[text]
+                                        && desc.operands.get(operands.len()).is_some_and(|o| o.reg_class != CARRY)) =>
+                            {
                                 let carry = cells.saved[text];
                                 before.push(MInst::new(
                                     if carry { spill::LOAD_CARRY } else { spill::LOAD_FLAGS },
@@ -637,6 +674,30 @@ fn lower(
                         ));
                     }
                     let mut all = before;
+                    // A frame object in the pointer of a memory access is `rs0`
+                    // plus its distance, where one `(zp),Y` offset reaches;
+                    // past 255 the address is built (`eliminateFrameIndex`).
+                    let at = if code == op::STZP { 0 } else { operands.len().wrapping_sub(2) };
+                    let framed = matches!(code, op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::STZP)
+                        && n.ops
+                            .iter()
+                            .any(|input| one.dag.nodes()[input.node as usize].opcode == ISD::TargetFrameIndex);
+                    if framed {
+                        if let (Some(Operand::Imm(base)), Some(Operand::Imm(extra))) =
+                            (operands.get(at).cloned(), operands.get(at + 1).cloned())
+                        {
+                            let distance = base + extra;
+                            if (0..=255).contains(&distance) {
+                                operands[at] = Operand::reg("rs0");
+                                operands[at + 1] = Operand::Imm(distance);
+                            } else {
+                                let pointer = cells.word();
+                                all.push(MInst::new(op::LEASP16, vec![pointer.clone(), Operand::Imm(distance)]));
+                                operands[at] = pointer;
+                                operands[at + 1] = Operand::Imm(0);
+                            }
+                        }
+                    }
                     all.push(MInst::new(code, operands));
                     all.extend(after);
                     Ok(all)

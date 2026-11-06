@@ -17,7 +17,7 @@ fn expanded(
     length: &str,
 ) -> String {
     let mut module: Module = llrm_mir::parse::module(&text(align, length)).expect("parses");
-    super::memcpycall::expanded(&mut module, 0, "memcpy").expect("expands");
+    super::memcpycall::expanded(&mut module, 0, "memcpy", false).expect("expands");
     assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{}", llrm_mir::print::module(&module));
     llrm_mir::print::module(&module)
 }
@@ -62,7 +62,7 @@ fn test_a_length_of_another_width_is_made_the_calls_i32() {
                 call void @llvm.memcpy.p0.p0.i16(ptr align 4 %d, ptr align 4 %s, i16 %n, i1 false)\n\
                 ret void\n}\n";
     let mut module: Module = llrm_mir::parse::module(text).expect("parses");
-    super::memcpycall::expanded(&mut module, 0, "memcpy").expect("expands");
+    super::memcpycall::expanded(&mut module, 0, "memcpy", false).expect("expands");
     let after = llrm_mir::print::module(&module);
     assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{after}");
     assert!(after.contains("zext i16 %n to i32"), "{after}");
@@ -77,4 +77,25 @@ fn test_a_short_constant_copy_of_unaligned_pointers_stays_for_the_selector() {
     assert!(!expanded(1, "12").contains("call ptr @memcpy("), "{}", expanded(1, "12"));
     assert!(!expanded(1, "32").contains("call ptr @memcpy("), "eight 4-byte moves");
     assert!(expanded(1, "36").contains("call ptr @memcpy("), "nine moves");
+}
+
+/// x_mergesort -O3 at m32: the variable-length copies were `call _memcpy`
+/// (72146 clk against 54487 with the loops kept). With the tuning bit a length
+/// known only at run time stays for the selector's `rep movs` at speed; a
+/// function tuned for size, and a long constant copy, still call.
+#[test]
+fn test_a_variable_copy_stays_inline_at_speed_where_the_tuning_says_so() {
+    let source = text(4, "%n");
+    let run = |source: &str, inline: bool| {
+        let mut module: Module = llrm_mir::parse::module(source).expect("parses");
+        super::memcpycall::expanded(&mut module, 0, "memcpy", inline).expect("expands");
+        llrm_mir::print::module(&module)
+    };
+    assert!(run(&source, false).contains("call ptr @memcpy"), "premise: the pin's call");
+    let kept = run(&source, true);
+    assert!(kept.contains("call void @llvm.memcpy") && !kept.contains("@memcpy("), "{kept}");
+    let sized =
+        source.replace("define void @f(ptr %d, ptr %s, i32 %n) {", "define void @f(ptr %d, ptr %s, i32 %n) optsize {");
+    assert!(run(&sized, true).contains("call ptr @memcpy"), "-Os keeps the call");
+    assert!(run(&text(4, "4096"), true).contains("call ptr @memcpy"), "a constant length is untouched");
 }

@@ -1,7 +1,7 @@
 //! `MemorySSA::buildMemorySSA` and what it calls, from
 //! [`MemorySSA.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, BinaryHeap};
 
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{BlockId, Function, InstId};
@@ -226,23 +226,54 @@ impl Mssa {
 
     /// `ForwardIDFCalculator::calculate`: the blocks of the iterated dominance
     /// frontier of `defining_blocks`, in the function's block order.
+    ///
+    /// [`IDFCalculatorBase::calculate`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericIteratedDominanceFrontier.h#L131):
+    /// the DJ-graph walk over the dominator tree, so no frontier of every block
+    /// is made (the map was a third of a build). The order it finds them in is
+    /// LLVM's DFS number tie-break; the set is the same, put in block order as
+    /// before.
     pub(crate) fn iterated_dominance_frontier(
         &self,
         function: &Function,
         defining_blocks: &BTreeSet<i64>,
     ) -> Vec<BlockId> {
-        let frontiers = self.dominance.frontiers(function);
-        let mut placed: BTreeSet<i64> = BTreeSet::new();
-        let mut work: Vec<i64> = defining_blocks.iter().copied().collect();
-        let mut queued: BTreeSet<i64> = defining_blocks.clone();
-        while let Some(at) = work.pop() {
-            for &frontier in &frontiers[&at] {
-                if placed.insert(frontier) && queued.insert(frontier) {
-                    work.push(frontier);
+        let tree = self.dominance.tree(function);
+        // Handled from the bottom of the dominator tree upwards.
+        let mut queue: BinaryHeap<(u32, i64)> = BinaryHeap::new();
+        let (mut visited_pq, mut visited_worklist) = (IdSet::<BlockId>::default(), IdSet::<BlockId>::default());
+        for &at in defining_blocks {
+            let block = cfg::block(at);
+            if let Some(level) = tree.level(block) {
+                queue.push((level, at));
+                visited_worklist.insert(block);
+            }
+        }
+        let mut placed = IdSet::<BlockId>::default();
+        let mut worklist: Vec<BlockId> = Vec::new();
+        while let Some((root_level, root)) = queue.pop() {
+            // Walk all dominator tree children of Root, inspecting their CFG
+            // edges with targets elsewhere on the dominator tree. Only targets
+            // whose level is at most Root's level are in the IDF.
+            worklist.push(cfg::block(root));
+            while let Some(node) = worklist.pop() {
+                for succ in function.successors(node) {
+                    let Some(level) = tree.level(succ) else { continue };
+                    if level > root_level || !visited_pq.insert(succ) {
+                        continue;
+                    }
+                    placed.insert(succ);
+                    if !defining_blocks.contains(&cfg::id(succ)) {
+                        queue.push((level, cfg::id(succ)));
+                    }
+                }
+                for child in tree.children(Some(node)) {
+                    if visited_worklist.insert(child) {
+                        worklist.push(child);
+                    }
                 }
             }
         }
-        function.layout().iter().copied().filter(|block| placed.contains(&cfg::id(*block))).collect()
+        function.layout().iter().copied().filter(|block| placed.contains(block)).collect()
     }
 
     /// [`MemorySSA::placePHINodes`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L1508):
@@ -325,15 +356,10 @@ impl Mssa {
         skip_visited: bool,
         rename_all_uses: bool,
     ) {
-        let mut children: IdMap<BlockId, Vec<BlockId>> = IdMap::new();
-        for &block in function.layout() {
-            if let Some(idom) = self.dominance.immediate(function, cfg::id(block)) {
-                children.get_or_insert_with(cfg::block(idom), Vec::new).push(block);
-            }
-        }
-        struct RenamePassData {
-            node: BlockId,
-            child: usize,
+        let dominance = self.dominance.clone();
+        let tree = dominance.tree(function);
+        struct RenamePassData<'a> {
+            kids: llrm_mir::domtree::ChildBlocks<'a, false>,
             incoming: Option<AccessId>,
         }
         let mut work: Vec<RenamePassData> = Vec::new();
@@ -344,15 +370,12 @@ impl Mssa {
         }
         let incoming = self.rename_block(root, incoming, rename_all_uses);
         self.rename_successor_phis(function, root, incoming.expect("an incoming value"), rename_all_uses);
-        work.push(RenamePassData { node: root, child: 0, incoming });
+        work.push(RenamePassData { kids: tree.child_blocks(root), incoming });
         while let Some(top) = work.last_mut() {
-            let kids = children.get(&top.node).map_or(&[][..], Vec::as_slice);
-            if top.child == kids.len() {
+            let Some(block) = top.kids.next() else {
                 work.pop();
                 continue;
-            }
-            let block = kids[top.child];
-            top.child += 1;
+            };
             let mut value = top.incoming;
             let already_visited = !visited.insert(block);
             if skip_visited && already_visited {
@@ -366,7 +389,7 @@ impl Mssa {
                 value = self.rename_block(block, value, rename_all_uses);
             }
             self.rename_successor_phis(function, block, value.expect("an incoming value"), rename_all_uses);
-            work.push(RenamePassData { node: block, child: 0, incoming: value });
+            work.push(RenamePassData { kids: tree.child_blocks(block), incoming: value });
         }
     }
 

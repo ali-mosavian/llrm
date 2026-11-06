@@ -383,6 +383,8 @@ fn m68060_movem_lea_pea() {
     assert_eq!(m68060("movem.l %d2-%d4, -(%sp)"), 3);
     assert_eq!(m68060("lea (4,%a0), %a1"), 1);
     assert_eq!(m68060("pea (4,%a0)"), 2);
+    // (xxx).WL is one column: `pea 22:w` was "not in the M68060 tables"
+    assert_eq!(m68060("pea 22:w"), 1);
 }
 
 /// Tables 10-21 to 10-24 (pp. 10-22 to 10-24): ADDX Dy,Dx 1, -(Ay),-(Ax) 2;
@@ -608,5 +610,28 @@ fn m68040_move_long_into_an_address_register_is_movea() {
             clocks(Cpu::M68040, &format!("movea.l {source}, %a2")),
             "{source}"
         );
+    }
+}
+
+/// `extb.l` is priced where `ext.l` is: the 68020 and 68030 manuals' `EXT` row
+/// is `EXT, EXTB`. It was an error on both ("unknown instruction"), so a
+/// program with the 68020 `extb.l` could not be priced.
+#[test]
+fn extb_is_priced_as_ext_from_the_68020() {
+    assert_eq!(m68020("extb.l %d0"), m68020("ext.l %d0"));
+    assert_eq!(m68030("extb.l %d0"), m68030("ext.l %d0"));
+    assert!(m68040("extb.l %d0") > 0);
+    assert!(m68060("extb.l %d0") > 0);
+}
+
+/// objdump prints `extb.l` as `extbl`; `BASES` lacked `extb`, so a 68020+ build
+/// with a byte sign-extension was "not in the tables" and its clocks marked
+/// unpriced.
+#[test]
+fn gnu_extbl_is_priced_from_the_68020() {
+    for cpu in [Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060] {
+        let text = llrm_m68k::timing::from_gnu("extbl %d0").expect("extbl maps to extb.l");
+        assert_eq!(text, "extb.l %d0", "{cpu:?}");
+        assert!(cost_on(cpu, &text, 2, true).is_ok(), "{cpu:?} prices {text}");
     }
 }

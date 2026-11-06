@@ -48,12 +48,16 @@ impl Combiner<'_> {
         &mut self,
         call: InstId,
     ) -> Visit {
+        if self.canonicalize_constant_arg0(call) {
+            return Visit::Changed;
+        }
         let visited = match self.intrinsic_of(call) {
             Some(Intrinsic::MemCpy | Intrinsic::MemMove) => self.simplify_any_mem_transfer(call),
             Some(Intrinsic::MemSet) => self.raise_alignments(call, 1),
             Some(Intrinsic::MinMax { signed, max }) => self.narrow_min_max(call, signed, max),
             Some(Intrinsic::Compare { signed }) => self.visit_compare(call, signed),
             Some(Intrinsic::Assume) => self.visit_assume(call),
+            Some(Intrinsic::Abs) => self.visit_abs(call),
             Some(Intrinsic::FMulAdd) => crate::combine_fp::visit_fmuladd(self, call),
             None => return self.transform_const_expr_cast_call(call),
             _ => Visit::None,
@@ -62,6 +66,38 @@ impl Combiner<'_> {
             return visited;
         }
         self.fold_intrinsic_into_select_or_phi(call)
+    }
+
+    /// `canonicalizeConstantArg0ToArg1`
+    /// ([pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCalls.cpp#L920)),
+    /// for the commutative intrinsics here: `min`/`max`, the `add` and `mul`
+    /// overflow forms and `uadd.sat`/`sadd.sat`. DEVIATE: `matchSymmetricPair`
+    /// (the assume-bundle pair) is not made. Exit: with the rest of
+    /// `visitCallInst`'s commutative step, 2026-11-20.
+    fn canonicalize_constant_arg0(
+        &mut self,
+        call: InstId,
+    ) -> bool {
+        use llrm_mir::opcode::BinaryOp;
+        let commutative = match self.intrinsic_of(call) {
+            Some(Intrinsic::MinMax { .. }) => true,
+            Some(Intrinsic::WithOverflow { op, .. } | Intrinsic::Saturating { op, .. }) => {
+                matches!(op, BinaryOp::Add | BinaryOp::Mul)
+            }
+            _ => false,
+        };
+        if !commutative {
+            return false;
+        }
+        let mut operands = self.function.instruction(call).operands.clone();
+        let constant =
+            |this: &Self, v: Operand| matches!(v, Operand::Constant(_)) || query(this, None).int_constant(v).is_some();
+        if operands.len() < 2 || !constant(self, operands[0]) || constant(self, operands[1]) {
+            return false;
+        }
+        operands.swap(0, 1);
+        self.function.set_operands(call, operands);
+        true
     }
 
     /// The tail of `visitCallInst` (InstCombineCalls.cpp:4561): a speculatable

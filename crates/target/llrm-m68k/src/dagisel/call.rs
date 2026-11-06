@@ -9,7 +9,12 @@
 //! The values arrive already split into legal `i8`/`i16`/`i32` parts, as
 //! LLVM's `Outs` and `Ins` are.
 //!
-//! DEVIATE: not translated are `inreg` (`d0`, `d1`), `nest` (`a1`), `byval`,
+//! A `byval` argument is `CCPassByVal<4, 4>`: its bytes (at least 4, rounded
+//! to 4) in the argument area at the larger of its alignment and 4, copied
+//! there by loads and stores (`CreateCopyOfByValArgument`, always inline); the
+//! callee's parameter is the address of that area.
+//!
+//! DEVIATE: not translated are `inreg` (`d0`, `d1`), `nest` (`a1`),
 //! varargs, tail calls, the Fast convention and callee-pop. Reason:
 //! the slice does not reach them. Exit: M3d.
 //!
@@ -26,7 +31,7 @@
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 pub use llrm_codegen::backend::selectiondag::target_calling::{Ext, FixedObject, In, Out};
-use llrm_codegen::backend::selectiondag::target_calling::{LiveIn, TargetCalling};
+use llrm_codegen::backend::selectiondag::target_calling::{ByVal, LiveIn, TargetCalling};
 use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_target::calling::{Convention, Kind, Place};
 
@@ -78,6 +83,87 @@ impl M68kCalling {
         (offsets, placement.stack_bytes)
     }
 
+    /// [`Self::place`] for arguments of which some are `byval`
+    /// (`CCState::HandleByVal`): a `byval` one takes its size, at least 4 and
+    /// rounded to 4, at the larger of its alignment and 4; the rest a word.
+    fn place_parts(
+        &self,
+        parts: &[Option<ByVal>],
+    ) -> (Vec<i64>, i64) {
+        if parts.iter().all(Option::is_none) {
+            return self.place(parts.len());
+        }
+        let align_up = |value: i64, align: i64| (value + align - 1) / align * align;
+        let (mut stack, mut widest) = (0_i64, 4_i64);
+        let mut offsets = Vec::with_capacity(parts.len());
+        for part in parts {
+            let (size, align) = match part {
+                Some(byval) => (align_up(i64::from(byval.size).max(4), 4), i64::from(byval.align).max(4)),
+                None => (4, 4),
+            };
+            widest = widest.max(align);
+            stack = align_up(stack, align);
+            offsets.push(stack);
+            stack += size;
+        }
+        (offsets, align_up(stack, widest))
+    }
+
+    /// `CreateCopyOfByValArgument`: the `size` bytes at `src` stored from
+    /// `offset` of the outgoing area, by the widest loads and stores its
+    /// alignment allows, the loads first. The stores are returned.
+    fn copy_bytes(
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        stack_pointer: SDValue,
+        offset: i64,
+        src: SDValue,
+        byval: ByVal,
+    ) -> Vec<SDValue> {
+        let mut loads = Vec::new();
+        let mut at = 0_i64;
+        let size = i64::from(byval.size);
+        while at < size {
+            let (vt, step) = match (i64::from(byval.align), size - at) {
+                (align, left) if align >= 4 && left >= 4 => (EVT::I32, 4),
+                (align, left) if align >= 2 && left >= 2 => (EVT::I16, 2),
+                _ => (EVT::I8, 1),
+            };
+            let from = dag.get_constant(at as u128, EVT::I32);
+            let from = dag.get_node(ISD::Add, EVT::I32, &[src, from]);
+            let info = MemInfo {
+                mem_vt: vt,
+                align: step as u32,
+                volatile: false,
+                base: MemBase::Unknown,
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
+            loads.push((dag.get_load(vt, chain, from, info), vt, at, step));
+            at += step;
+        }
+        let chains: Vec<SDValue> = loads.iter().map(|(load, ..)| SDValue { node: load.node, res: 1 }).collect();
+        let after = if chains.len() > 1 { dag.get_token_factor(&chains) } else { chains.first().copied().unwrap_or(chain) };
+        loads
+            .into_iter()
+            .map(|(load, vt, at, step)| {
+                let slot = dag.get_constant((offset + at) as u128, EVT::I32);
+                let to = dag.get_node(ISD::Add, EVT::I32, &[stack_pointer, slot]);
+                let info = MemInfo {
+                    mem_vt: vt,
+                    align: step as u32,
+                    volatile: false,
+                    base: MemBase::CallArgument((offset + at) as i32),
+                    ext: None,
+                    space: 0,
+                    ordering: None,
+                };
+                dag.get_store(after, load, to, info)
+            })
+            .collect()
+    }
+
     /// The register `RetCC_M68k_C` puts a result of `vt` in.
     fn result_register(
         &self,
@@ -119,11 +205,18 @@ impl M68kCalling {
         outs: &[Out],
         ins: &[In],
     ) -> (SDValue, Vec<SDValue>) {
-        let (offsets, bytes) = self.place(outs.len());
+        let parts: Vec<Option<ByVal>> = outs.iter().map(|out| out.byval).collect();
+        let (offsets, bytes) = self.place_parts(&parts);
         let mut chain = dag.get_callseq_start(chain, bytes as u64);
         let mut stack_pointer = None;
         let mut stores = Vec::new();
         for (out, offset) in outs.iter().zip(offsets) {
+            if let Some(byval) = out.byval {
+                let sp =
+                    *stack_pointer.get_or_insert_with(|| dag.get_copy_from_phys_reg_plain(chain, reg::SP, EVT::I32));
+                stores.extend(Self::copy_bytes(dag, chain, sp, offset, out.value, byval));
+                continue;
+            }
             // `CCPromoteToType<i32>`
             let mut arg = out.value;
             if dag.value_type(arg) != EVT::I32 {
@@ -196,11 +289,17 @@ impl M68kCalling {
         ins: &[In],
         fixed: FixedObject,
     ) -> Vec<SDValue> {
-        let (offsets, _) = self.place(ins.len());
+        let parts: Vec<Option<ByVal>> = ins.iter().map(|arg| arg.byval).collect();
+        let (offsets, _) = self.place_parts(&parts);
         ins.iter()
             .zip(offsets)
             .map(|(arg, offset)| {
-                // `LowerMemArgument`
+                // `LowerMemArgument`: a `byval` parameter is the address of its
+                // bytes in the caller's area
+                if let Some(byval) = arg.byval {
+                    let index = fixed(byval.size.max(1), offset, false);
+                    return dag.get_frame_index(EVT::I32, index);
+                }
                 let offset = slot_offset(arg.vt, offset);
                 let index = fixed(arg.vt.size_in_bits() / 8, offset, true);
                 let address = dag.get_frame_index(EVT::I32, index);
@@ -258,7 +357,11 @@ impl TargetCalling for M68kCalling {
         &self,
         attribute: &str,
     ) -> bool {
-        attribute == "sret"
+        attribute == "sret" || attribute == "byval"
+    }
+
+    fn byval_in_area(&self) -> bool {
+        true
     }
 
     /// `ABI require that for returning structs by value we copy the sret
@@ -288,6 +391,17 @@ impl TargetCalling for M68kCalling {
         _live_in: LiveIn,
     ) -> Vec<SDValue> {
         M68kCalling::lower_formal_arguments(self, dag, chain, ins, fixed)
+    }
+
+    /// The variadic arguments start where the named ones' stack words end.
+    fn variadic_frame_offset(
+        &self,
+        fixed: &[In],
+    ) -> Option<i64> {
+        let parts: Vec<Option<ByVal>> = fixed.iter().map(|arg| arg.byval).collect();
+        let (offsets, _) = self.place_parts(&parts);
+        let size = |byval: Option<ByVal>| byval.map_or(4, |one| (i64::from(one.size).max(4) + 3) / 4 * 4);
+        Some(offsets.last().zip(parts.last()).map_or(0, |(last, byval)| last + size(*byval)))
     }
 
     fn lower_return(
@@ -339,17 +453,19 @@ impl TargetCalling for M68kCalling {
     }
 }
 
-/// `LowerGlobalAddress`: `WrapperPC (TargetGlobalAddress)`, the offset folded
-/// into the symbol. A global the PIC model reaches through the GOT is not
-/// translated (see the DEVIATE above): `lower_operation` assumes the small
-/// code model without PIC, where every reference is direct.
+/// `LowerGlobalAddress`: `WrapperPC (TargetGlobalAddress)`, or `Wrapper` where
+/// the code model makes the address absolute (`classifyGlobalReference`), the
+/// offset folded into the symbol. A global the PIC model reaches through the
+/// GOT is not translated (see the DEVIATE above): `lower_operation` assumes
+/// no PIC, where every reference is direct.
 pub fn lower_global_address(
     dag: &mut SelectionDAG,
     node: SDValue,
+    absolute: bool,
 ) -> SDValue {
     let NodeData::Global { symbol, offset } = dag.node(node).data else {
         unreachable!("GlobalAddress has a global payload")
     };
     let address = dag.get_target_global_address(EVT::I32, symbol, offset);
-    dag.get_node(m68kisd::WRAPPER_PC, EVT::I32, &[address])
+    dag.get_node(if absolute { m68kisd::WRAPPER } else { m68kisd::WRAPPER_PC }, EVT::I32, &[address])
 }

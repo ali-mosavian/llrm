@@ -976,7 +976,14 @@ impl Splitter<'_, '_> {
     fn calc_spill_cost(
         &self,
         virt: &Rc<LiveInterval>,
+        remat_defs_free: bool,
     ) -> BlockFrequency {
+        // DEVIATE CSR4 (exit 2026-11-20, with CSR3 `csr_spill_first`, ours not the
+        // pin's; the pin's caller is `tryAssignCSRFirstTime`): a rematerializable range is not stored, and
+        // its definition goes when every use recomputes the value, so the
+        // writes cost nothing. Only for `csr_spill_first` targets; LLVM
+        // charges them (its callee-saved cost is too small to matter).
+        let writes_free = remat_defs_free && self.ss.env.is_rematerializable(virt.reg());
         let mut cost = 0u64;
         let mut seen: Vec<(InstrKey, bool, bool)> = Vec::new();
         for operand in self.lis.operands(virt.reg()) {
@@ -992,7 +999,7 @@ impl Splitter<'_, '_> {
         for (key, reads, writes) in seen {
             let at = self.lis.indexes.get_instruction_index(key);
             let block = self.lis.indexes.get_mbb_from_index(&at) as u32;
-            cost += (u64::from(reads) + u64::from(writes)) * self.block_freq(block).get_frequency();
+            cost += (u64::from(reads) + u64::from(writes && !writes_free)) * self.block_freq(block).get_frequency();
         }
         BlockFrequency(cost)
     }
@@ -1004,9 +1011,10 @@ impl Splitter<'_, '_> {
         &mut self,
         virt: &Rc<LiveInterval>,
         csr_cost: BlockFrequency,
+        remat_defs_free: bool,
     ) -> bool {
         self.analyze(virt);
-        self.calc_spill_cost(virt) >= csr_cost
+        self.calc_spill_cost(virt, remat_defs_free) >= csr_cost
     }
 
     /// The `RS_New`/`RS_Assign` half of `tryAssignCSRFirstTime`

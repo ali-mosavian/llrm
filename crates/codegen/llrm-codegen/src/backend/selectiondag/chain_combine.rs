@@ -13,8 +13,9 @@
 //! DEVIATE CC2: `mayAlias` has no `MachineMemOperand` offset or base
 //! alignment: the relatively-aligned-offsets test is not run. The alias
 //! analysis (`useAA`) runs only where the builder records the IR pointer
-//! ([`MemBase::Value`], wasm), on whole accesses; and there are no atomics or
-//! lifetime nodes. A pair the address analysis cannot decide is a may-alias.
+//! ([`MemBase::Value`], wasm), on whole accesses; there are no atomics; and a lifetime marker is the whole
+//! frame object of unknown size (it aliases an access of that object, none of
+//! another). A pair the address analysis cannot decide is a may-alias.
 //! Exit: `MemInfo` carrying the pointer info. Owner: w12.
 //!
 //! DEVIATE CC1: the pin skips all of this when optimising nothing
@@ -66,6 +67,21 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         op0: SDValue,
         op1: SDValue,
     ) -> bool {
+        // A lifetime marker is the whole frame object, its size not known here
+        // (`getCharacteristics`' `MFI.getObjectSize`): it aliases an access of
+        // the same object, and none of another.
+        let lifetime = |op: SDValue| matches!(self.dag.opcode(op), ISD::LifetimeStart | ISD::LifetimeEnd);
+        if lifetime(op0) || lifetime(op1) {
+            let pointer = |op: SDValue| match self.dag.opcode(op) {
+                ISD::LifetimeStart | ISD::LifetimeEnd => Some(self.dag.operand(op, 1)),
+                _ => self.access(op).map(|(ptr, ..)| ptr),
+            };
+            let (Some(ptr0), Some(ptr1)) = (pointer(op0), pointer(op1)) else { return true };
+            if ptr0 == ptr1 {
+                return true;
+            }
+            return compute_aliasing(self.dag, op0, None, op1, None).unwrap_or(true);
+        }
         let (Some((ptr0, size0, info0)), Some((ptr1, size1, info1))) = (self.access(op0), self.access(op1)) else {
             return true;
         };
@@ -142,6 +158,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 }
                 // Always forward past a CopyFromReg.
                 ISD::CopyFromReg => Some(Some(self.dag.operand(chain, 0))),
+                // Forward past a lifetime marker proven not to alias the access.
+                ISD::LifetimeStart | ISD::LifetimeEnd => {
+                    (!self.may_alias(node, chain)).then(|| Some(self.dag.operand(chain, 0)))
+                }
                 _ => None,
             };
             match improved {
@@ -201,7 +221,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         self.add_to_worklist(token.node);
         // `CombineTo` removes the load at once.
         self.dag.delete_replaced(node.node);
-        self.requeue_survivors();
+        self.queue_survivors();
         Some(node)
     }
 
@@ -328,7 +348,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let replacement = self.dag.get_store(better, value, ptr, info);
         let token = self.dag.get_token_factor(&[chain, replacement]);
         self.add_to_worklist(token.node);
-        Some(token)
+        // `CombineTo(ST, Token, false)`: the users of the store are not put on
+        // the worklist, and `visitSTORE` returns the store itself, so `Run`
+        // adds nothing either.
+        let operands: Vec<u32> = self.dag.node(store).ops.iter().map(|op| op.node).collect();
+        let _ = self.dag.replace_all_uses_with(store, token);
+        self.dag.delete_replaced(store.node);
+        for operand in operands {
+            self.add_to_worklist(operand);
+        }
+        Some(store)
     }
 }
 

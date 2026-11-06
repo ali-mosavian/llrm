@@ -11,7 +11,7 @@ fn canonicalized(text: &str) -> (bool, String) {
     let before = module.clone();
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    crate::lcssa::closed(function).expect("closes");
+    crate::lcssa::closed(context, &crate::testing::layout(), function).expect("closes");
     let changed = super::canonicalized(context, &layout, function, &outer);
     let after = printed(&module);
     let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[100]];

@@ -89,7 +89,7 @@ impl FunctionPass for Combine {
         }
         llrm_support::debug::counted("combine skipped", false);
         let outer = std::rc::Rc::clone(analyses.outer());
-        let changed = combine::combine(
+        let changed = combine::combine_on_target(
             unit.context,
             &outer.globals,
             outer.callees(),
@@ -97,6 +97,7 @@ impl FunctionPass for Combine {
             unit.layout,
             unit.function,
             unit.declared,
+            outer.target().tti().is_some_and(|tti| tti.variable_shift_count_in_fixed_register()),
         );
         last.instcombine.set(true);
         if changed {

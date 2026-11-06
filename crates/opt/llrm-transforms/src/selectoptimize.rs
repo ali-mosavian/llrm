@@ -51,7 +51,7 @@ use llrm_mir::context::{ConstantKind, Context, mask};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
-use llrm_mir::hash::{HashMap, HashSet};
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::instructioncost::instruction_cost;
 use llrm_mir::loopinfo::{Loop, LoopInfo};
 use llrm_mir::memory::Callees;
@@ -206,7 +206,7 @@ struct SelectGroup {
 /// makes (`setBlockFreq`).
 struct Frequencies {
     base: BlockFrequencies,
-    set: HashMap<BlockId, BlockFrequency>,
+    set: IdMap<BlockId, BlockFrequency>,
 }
 
 impl Frequencies {
@@ -357,7 +357,7 @@ struct Info {
 /// `collectSelectGroups`' `SelectInfo` and `SeenCmp`.
 #[derive(Default)]
 struct Collector {
-    info: HashMap<InstId, (Operand, bool, bool, usize)>,
+    info: IdMap<InstId, (Operand, bool, bool, usize)>,
     seen_cmp: Vec<InstId>,
 }
 
@@ -688,7 +688,7 @@ impl Analysis<'_> {
         groups: Vec<SelectGroup>,
         profitable: &mut Vec<SelectGroup>,
     ) {
-        let mut costs: HashMap<InstId, CostInfo> = HashMap::default();
+        let mut costs: IdMap<InstId, CostInfo> = IdMap::new();
         let mut loop_cost = [zero_cost(), zero_cost()];
         if !self.compute_loop_costs(one, &groups, &mut costs, &mut loop_cost) || !check_loop_heuristics(&loop_cost) {
             return;
@@ -712,14 +712,16 @@ impl Analysis<'_> {
         &self,
         one: &Loop<'_>,
         groups: &[SelectGroup],
-        costs: &mut HashMap<InstId, CostInfo>,
+        costs: &mut IdMap<InstId, CostInfo>,
         loop_cost: &mut [CostInfo; 2],
     ) -> bool {
         let function = self.function;
-        let mut selects: HashMap<InstId, (SelectLike, &SelectGroup)> = HashMap::default();
+        let mut selects: IdMap<InstId, (SelectLike, &SelectGroup)> = IdMap::new();
         for group in groups {
             for select in &group.selects {
-                selects.entry(select.inst).or_insert((*select, group));
+                if !selects.contains_key(&select.inst) {
+                    selects.insert(select.inst, (*select, group));
+                }
             }
         }
         for max_cost in loop_cost.iter_mut() {
@@ -765,7 +767,7 @@ impl Analysis<'_> {
         &self,
         select: &SelectLike,
         is_true: bool,
-        costs: &HashMap<InstId, CostInfo>,
+        costs: &IdMap<InstId, CostInfo>,
     ) -> Scaled64 {
         let function = self.function;
         let value = if is_true { select.true_value(function, true) } else { select.false_value(function, true) };
@@ -892,7 +894,7 @@ fn exclusive_backwards_slice(
     for_sinking: bool,
 ) -> Vec<InstId> {
     let mut slice = Vec::new();
-    let mut visited: HashSet<InstId> = HashSet::default();
+    let mut visited: IdSet<InstId> = IdSet::new();
     let mut worklist = VecDeque::from([source]);
     let source_frequency = frequencies.get(function.parent(source).expect("a placed instruction"));
     while let Some(inst) = worklist.pop_front() {
@@ -930,7 +932,7 @@ fn true_or_false_value(
     function: &mut Function,
     select: &SelectLike,
     is_true: bool,
-    optimized: &HashMap<InstId, (Operand, Operand)>,
+    optimized: &IdMap<InstId, (Operand, Operand)>,
     block: BlockId,
 ) -> Operand {
     let mapped = |function: &Function, value: Operand| -> Operand {
@@ -1027,7 +1029,7 @@ fn convert_profitable_groups(
         function.erase(jump).expect("nothing reads a branch");
 
         // What stood between the selects moves to the end block.
-        let members: HashSet<InstId> = group.selects.iter().map(|one| one.inst).collect();
+        let members: IdSet<InstId> = group.selects.iter().map(|one| one.inst).collect();
         let between: Vec<InstId> =
             function.iter_range(first.inst, last.inst).filter(|inst| !members.contains(inst)).collect();
         let anchor = function.iter_block(end).next().expect("a non-empty end block");
@@ -1093,7 +1095,7 @@ fn convert_profitable_groups(
         // A later select may read an earlier one: the values pass through the
         // phi made for it.
         let anchor = function.iter_block(end).next().expect("a non-empty end block");
-        let mut optimized: HashMap<InstId, (Operand, Operand)> = HashMap::default();
+        let mut optimized: IdMap<InstId, (Operand, Operand)> = IdMap::new();
         for select in &group.selects {
             let old = function.instruction(select.inst).result.expect("a select's value");
             let ty = function.instruction(select.inst).ty;
@@ -1181,7 +1183,7 @@ pub fn select_optimize(
             },
             function,
         );
-        let frequencies = Frequencies { base: BlockFrequencies::of_bpi(function, &bpi), set: HashMap::default() };
+        let frequencies = Frequencies { base: BlockFrequencies::of_bpi(function, &bpi), set: IdMap::new() };
         let analysis =
             Analysis { env, target, function, declared: declared.nodes(), loops: &loops, frequencies: &frequencies };
         (analysis.profitable_groups(), frequencies)

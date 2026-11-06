@@ -131,13 +131,15 @@ fn shifter_imm(
     i64::from((shift_type << 6) | amount)
 }
 
-/// `isWorthFoldingALU(V, LSL)` on a CPU with neither `ALULSLFast` nor a size
-/// goal: `V` has one use.
+/// `isWorthFoldingALU(V, LSL)` on a CPU without `ALULSLFast`: code size is the
+/// goal (`shouldOptForSize`) or `V` has one use.
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelDAGToDAG.cpp#L1065
 fn worth_folding_alu<D: AddrDag>(
     dag: &D,
+    opt_for_size: bool,
     v: SDValue,
 ) -> bool {
-    dag.has_one_use(v)
+    opt_for_size || dag.has_one_use(v)
 }
 
 /// `SelectShiftedRegisterFromAnd`: `and (shl|srl|sra x, c), mask` for a shifted
@@ -200,6 +202,7 @@ fn shifted_register_from_and<D: AddrDag>(
 /// `SelectShiftedRegister`.
 pub fn shifted_register<D: AddrDag>(
     dag: &mut D,
+    opt_for_size: bool,
     n: SDValue,
     allow_ror: bool,
 ) -> Option<[SDValue; 2]> {
@@ -218,7 +221,7 @@ pub fn shifted_register<D: AddrDag>(
     let width = bits(dag.value_type(n));
     let reg = dag.operand(n.node, 0);
     let shift = dag.target_constant(shifter_imm(shift_type, (amount & u64::from(width - 1)) as u32), mvt::i32);
-    worth_folding_alu(dag, n).then_some([reg, shift])
+    worth_folding_alu(dag, opt_for_size, n).then_some([reg, shift])
 }
 
 /// `isBaseWithConstantOffset`: an `ADD` (or an `OR` of disjoint bits) of a
@@ -344,13 +347,14 @@ fn worth_folding_shl<D: AddrDag>(
         )
 }
 
-/// `isWorthFoldingAddr(V, Size)` for a CPU with no `AddrLSLSlow14` and no size
-/// goal.
+/// `isWorthFoldingAddr(V, Size)` for a CPU with no `AddrLSLSlow14`.
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelDAGToDAG.cpp#L882
 fn worth_folding_addr<D: AddrDag>(
     dag: &D,
+    opt_for_size: bool,
     v: SDValue,
 ) -> bool {
-    if dag.has_one_use(v) {
+    if opt_for_size || dag.has_one_use(v) {
         return true;
     }
     if dag.opcode(v.node) == isd::SHL && worth_folding_shl(dag, v) {
@@ -367,6 +371,7 @@ fn worth_folding_addr<D: AddrDag>(
 /// mode.
 fn extended_shl<D: AddrDag>(
     dag: &mut D,
+    opt_for_size: bool,
     n: SDValue,
     size: u32,
 ) -> Option<SDValue> {
@@ -374,13 +379,14 @@ fn extended_shl<D: AddrDag>(
     if amount & 7 != amount || (amount != 0 && amount != u64::from(log2(size))) {
         return None;
     }
-    worth_folding_addr(dag, n).then(|| dag.operand(n.node, 0))
+    worth_folding_addr(dag, opt_for_size, n).then(|| dag.operand(n.node, 0))
 }
 
 /// `SelectAddrModeXRO`: base, index register, sign-extend flag (0) and shift
 /// flag.
 pub fn addr_mode_xro<D: AddrDag>(
     dag: &mut D,
+    opt_for_size: bool,
     n: SDValue,
     size: u32,
 ) -> Option<[SDValue; 4]> {
@@ -396,11 +402,11 @@ pub fn addr_mode_xro<D: AddrDag>(
     if dag.constant(rhs).is_some() {
         return None;
     }
-    let worth = worth_folding_addr(dag, n);
+    let worth = worth_folding_addr(dag, opt_for_size, n);
     let flag = |dag: &mut D, on: i64| dag.target_constant(on, mvt::i32);
     for (shl, base) in [(rhs, lhs), (lhs, rhs)] {
         if worth && dag.opcode(shl.node) == isd::SHL {
-            if let Some(offset) = extended_shl(dag, shl, size) {
+            if let Some(offset) = extended_shl(dag, opt_for_size, shl, size) {
                 let (sign, shift) = (flag(dag, 0), flag(dag, 1));
                 return Some([base, offset, sign, shift]);
             }
@@ -473,6 +479,7 @@ fn index_extend_type<D: AddrDag>(
 /// `SelectExtendedSHL` with `WantExtend` true: `(shl (extend x), c)`.
 fn extended_shl_of_extend<D: AddrDag>(
     dag: &mut D,
+    opt_for_size: bool,
     n: SDValue,
     size: u32,
 ) -> Option<[SDValue; 2]> {
@@ -487,13 +494,14 @@ fn extended_shl_of_extend<D: AddrDag>(
     if amount != 0 && amount != u64::from(log2(size)) {
         return None;
     }
-    worth_folding_addr(dag, n).then_some([offset, sign])
+    worth_folding_addr(dag, opt_for_size, n).then_some([offset, sign])
 }
 
 /// `SelectAddrModeWRO`: base, a 32-bit index register, sign-extend flag and
 /// shift flag.
 pub fn addr_mode_wro<D: AddrDag>(
     dag: &mut D,
+    opt_for_size: bool,
     n: SDValue,
     size: u32,
 ) -> Option<[SDValue; 4]> {
@@ -507,11 +515,11 @@ pub fn addr_mode_wro<D: AddrDag>(
     if dag.users(n).into_iter().any(|(user, _)| !is_mem_op_or_prefetch(dag, user)) {
         return None;
     }
-    let worth = worth_folding_addr(dag, n);
+    let worth = worth_folding_addr(dag, opt_for_size, n);
     let flag = |dag: &mut D, on: i64| dag.target_constant(on, mvt::i32);
     for (shl, base) in [(rhs, lhs), (lhs, rhs)] {
         if worth && dag.opcode(shl.node) == isd::SHL {
-            if let Some([offset, sign]) = extended_shl_of_extend(dag, shl, size) {
+            if let Some([offset, sign]) = extended_shl_of_extend(dag, opt_for_size, shl, size) {
                 return Some([base, offset, sign, flag(dag, 1)]);
             }
         }
@@ -523,7 +531,7 @@ pub fn addr_mode_wro<D: AddrDag>(
         if let Some(ext) = index_extend_type(dag, extend) {
             let offset = narrow_if_needed(dag, dag.operand(extend.node, 0));
             let sign = flag(dag, i64::from(ext == SXTW));
-            if worth_folding_addr(dag, extend) {
+            if worth_folding_addr(dag, opt_for_size, extend) {
                 return Some([base, offset, sign, flag(dag, 0)]);
             }
         }
@@ -539,6 +547,7 @@ pub fn addr_mode_wro<D: AddrDag>(
 /// fixed-length vector). Exit: vectors.
 pub fn arith_extended_register<D: AddrDag>(
     dag: &mut D,
+    opt_for_size: bool,
     n: SDValue,
 ) -> Option<[SDValue; 2]> {
     let (ext, shift, reg) = if dag.opcode(n.node) == isd::SHL {
@@ -570,13 +579,14 @@ pub fn arith_extended_register<D: AddrDag>(
     };
     let reg = narrow_if_needed(dag, reg);
     let imm = dag.target_constant((i64::from(ext) << 3) | shift as i64, mvt::i32);
-    worth_folding_alu(dag, n).then_some([reg, imm])
+    worth_folding_alu(dag, opt_for_size, n).then_some([reg, imm])
 }
 
 /// `SelectArithUXTXRegister`: `(shl x, c)` for `c <= 4` as `uxtx #c`, the form
 /// an operand next to `sp` needs.
 pub fn arith_uxtx_register<D: AddrDag>(
     dag: &mut D,
+    opt_for_size: bool,
     n: SDValue,
 ) -> Option<[SDValue; 2]> {
     if dag.opcode(n.node) != isd::SHL {
@@ -584,7 +594,7 @@ pub fn arith_uxtx_register<D: AddrDag>(
     }
     let shift = zext(dag, dag.operand(n.node, 1)).filter(|&s| s <= 4)?;
     let imm = dag.target_constant((i64::from(UXTX) << 3) | shift as i64, mvt::i32);
-    worth_folding_alu(dag, n).then(|| [dag.operand(n.node, 0), imm])
+    worth_folding_alu(dag, opt_for_size, n).then(|| [dag.operand(n.node, 0), imm])
 }
 
 /// `SelectAddrModeIndexedBitWidth` (signed, 7 bits): the `ldp`/`stp` offset,

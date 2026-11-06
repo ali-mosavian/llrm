@@ -184,10 +184,6 @@ impl CombineHooks for Aarch64Lowering {
         vt.is_integer() && ok(vt.size_in_bits()) && ok(kept_bits)
     }
 
-    fn simplify_demanded_add_sub_mul(&self) -> bool {
-        true
-    }
-
     /// `AArch64TargetLowering::isTruncateFree(EVT, EVT)` (an integer narrowing)
     /// and `isZExtFree(EVT, EVT)` (32 to 64 bits only, as a `w` write clears
     /// the upper half):
@@ -198,6 +194,16 @@ impl CombineHooks for Aarch64Lowering {
         narrow: EVT,
     ) -> bool {
         narrow.is_integer() && wide.is_integer() && narrow.size_in_bits() == 32 && wide.size_in_bits() == 64
+    }
+
+    /// `AArch64TargetLowering::isNarrowingProfitable`: `isTypeLegal(DestVT) &&
+    /// DestVT.isVector()`. Vectors are deferred, so no scalar narrows.
+    fn narrowing_profitable(
+        &self,
+        _wide: EVT,
+        _narrow: EVT,
+    ) -> bool {
+        false
     }
 
     fn reassociate_compare_pairs(&self) -> bool {
@@ -254,7 +260,7 @@ impl CombineHooks for Aarch64Lowering {
     ) -> bool {
         matches!(
             op,
-            ISD::Mul | ISD::Sub | ISD::And | ISD::Or | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr
+            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::SetCC | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr
         )
     }
 
@@ -277,7 +283,9 @@ impl CombineHooks for Aarch64Lowering {
         match dag.opcode(node) {
             ISD::Mul => super::combine::combine_mul(dag, node, level),
             ISD::GlobalAddress => self.global_address_combine(dag, node),
+            ISD::Add => super::combine::add_combine_for_shifted_operands(dag, node),
             ISD::Sub => super::combine::conditional_sub(dag, node),
+            ISD::SetCC => super::combine::or_xor_chain(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr if level == CombineLevel::AfterLegalizeDag => {
                 super::combine::shift_amount_mod(dag, node)
             }
@@ -313,6 +321,9 @@ impl LegalizeHooks for Aarch64Lowering {
                 super::lowering::lower_xalu(dag, node)
             }
             ISD::Abs | ISD::AbsMinPoison => super::lowering::lower_abs(dag, node),
+            ISD::VAArg => super::lowering::lower_vaarg(dag, node),
+            // Declined: the legalizer expands it, as the pin's `SDValue()`.
+            ISD::FShl | ISD::FShr => return super::lowering::lower_funnel_shift(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => super::lowering::lower_int_to_fp(dag, node),
@@ -426,6 +437,14 @@ impl SchedInfo for Aarch64Sched {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(u32::from(aarch64_ids::ADJCALLSTACKDOWN))
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(u32::from(aarch64_ids::ADJCALLSTACKUP))
+    }
+
     fn source_order(&self) -> bool {
         true
     }
@@ -465,10 +484,11 @@ pub fn select_block(
     // `ComputeLiveOutVRegInfo`: after the legalizer, before the assertions go.
     llrm_codegen::backend::selectiondag::live_out::compute_live_out_vreg_info(dag, info);
     let selector = Selector::new(table::TABLE);
-    let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone());
+    let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone(), opt_for_size);
     do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {
         select_frame_index(adapter, node)
             .or_else(|| select_indexed_load(adapter, node))
+            .or_else(|| super::bitfield::select_bitfield_extract(adapter, node))
             .or_else(|| super::bitfield::select_bitfield_insert_in_zero(adapter, node))
             .or_else(|| super::bitfield::select_bitfield_insert(adapter, node))
             .or_else(|| select_zero(adapter, node))

@@ -60,9 +60,6 @@ use llrm_mir::passes::{Declared, Outer};
 use llrm_mir::types::{Type as MirType, TypeId};
 use llrm_support::hash::HashSet;
 
-/// `SCEVCheapExpansionBudget`: its `cl::opt` default.
-const CHEAP_EXPANSION_BUDGET: u32 = 4;
-
 /// What one run reads and edits.
 struct Lftr<'a> {
     context: &'a mut Context,
@@ -74,6 +71,8 @@ struct Lftr<'a> {
     env: Env<'a>,
     rewriter: &'a mut Expander,
     tti: &'a dyn ExpansionTti,
+    /// `SCEVCheapExpansionBudget`, the target's for this function.
+    budget: u32,
 }
 
 /// `LLRM_NO_SCEV_LFTR`, read once; set, the step is skipped.
@@ -105,16 +104,21 @@ pub fn replaced_in(
 ) -> bool {
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let headers: Vec<BlockId> = {
-        let mut headers: Vec<BlockId> = env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
+        let mut headers: Vec<BlockId> =
+            env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
         crate::loopfilter::retain(&mut headers);
         headers
     };
     let minimum_size = function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "minsize"));
+    let optsize =
+        minimum_size || function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "optsize"));
     let tti = MachineCosts { tti: outer.target().tti(), minimum_size };
+    let budget = outer.target().tti().map_or(4, |tti| tti.lftr_expansion_budget(optsize));
     // `Rewriter.disableCanonicalMode()`.
     let mut rewriter = Expander::new("indvars");
     rewriter.set_canonical_mode(false);
-    let mut run = Lftr { context, layout, function, declared, outer, se, env, rewriter: &mut rewriter, tti: &tti };
+    let mut run =
+        Lftr { context, layout, function, declared, outer, se, env, rewriter: &mut rewriter, tti: &tti, budget };
     let mut changed = false;
     for header in headers {
         // `IndVarSimplify::run`: stay out of trouble without LoopSimplify
@@ -326,7 +330,7 @@ impl Lftr<'_> {
             // that costs one operation at most; a unit stride keeps the pin's
             // budget (shellsort's `at / gap` trips took four more per entry).
             let ind_value = Operand::Value(self.function.instruction(ind_var).result.expect("a phi value"));
-            let budget = if self.has_unit_step(ind_value) { CHEAP_EXPANSION_BUDGET } else { 1 };
+            let budget = if self.has_unit_step(ind_value) { self.budget } else { 1 };
             let (high_cost, safe) = {
                 let cx = self.env.cx(&*self.context, &*self.function);
                 (

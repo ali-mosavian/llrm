@@ -1120,3 +1120,55 @@ fn a_divide_by_four_drops_the_dividend_bits_it_does_not_read() {
 fn a_remainder_of_shifted_out_bits_is_zero() {
     check("i32", "i32 %x", "  %a = shl i32 %x, 8\n  %r = urem i32 %a, 256\n  ret i32 %r\n", "  ret i32 0\n");
 }
+
+/// `@f` after the visitors alone on a target whose variable shift count must
+/// sit in one register.
+fn combined_fixed_count(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        true,
+    );
+    printed(&module)
+}
+
+const SELECT_SCALE: &str = "  %s = select i1 %c, i32 8, i32 2\n  %r = mul i32 %x, %s\n  ret i32 %r\n";
+
+/// DEVIATE SD546. pack_ref -Os (x86): `w * (c ? 8 : 2)` became `shl w, (c ?
+/// 3 : 1)`, a count in cl; the multiply was 18 B smaller at m32.
+#[test]
+fn a_size_build_keeps_a_multiply_by_a_select_where_the_count_must_sit_in_a_register() {
+    let text = format!("define i32 @f(i32 %x, i1 %c) optsize {{\nb0:\n{SELECT_SCALE}}}\n");
+    assert_eq!(combined_fixed_count(&text), text);
+}
+
+/// The same function built for speed, or on a target without that cost, takes
+/// the pin's shift (`opt` agrees).
+#[test]
+fn a_speed_build_or_another_target_turns_a_multiply_by_a_select_into_a_shift() {
+    let fast = format!("define i32 @f(i32 %x, i1 %c) {{\nb0:\n{SELECT_SCALE}}}\n");
+    let shifted = "define i32 @f(i32 %x, i1 %c) {\nb0:\n  %0 = select i1 %c, i32 3, i32 1\n  %1 = shl i32 %x, %0\n  ret i32 %1\n}\n";
+    assert_eq!(combined_fixed_count(&fast), shifted);
+    let sized = format!("define i32 @f(i32 %x, i1 %c) optsize {{\nb0:\n{SELECT_SCALE}}}\n");
+    assert_eq!(combined(&sized), shifted.replace("@f(i32 %x, i1 %c)", "@f(i32 %x, i1 %c) optsize"));
+}
+
+/// A constant power of two is still a shift at size: `mul X, 8` is `shl X, 3`.
+#[test]
+fn a_size_build_still_turns_a_multiply_by_a_constant_into_a_shift() {
+    let text = "define i32 @f(i32 %x) optsize {\nb0:\n  %r = mul i32 %x, 8\n  ret i32 %r\n}\n";
+    let want = "define i32 @f(i32 %x) optsize {\nb0:\n  %0 = shl i32 %x, 3\n  ret i32 %0\n}\n";
+    assert_eq!(combined_fixed_count(text), want);
+}

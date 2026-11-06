@@ -112,8 +112,12 @@ pub struct Profile {
     pub ports: llrm_target::PortTable,
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
+    /// `Target::bsf_rep_prefix`.
+    pub bsf_rep_prefix: bool,
     /// `getPrefLoopAlignment` as a power of two; 0: loops are not aligned.
     pub loop_alignment: u8,
+    /// `Target::loop_alignment_max_skip`.
+    pub loop_max_skip: u8,
     pub call_register_capacity: i64,
     /// The floating values it holds in registers at once.
     pub float_register_capacity: i64,
@@ -151,6 +155,8 @@ pub struct Profile {
     /// target states a smaller bound than the pin's (`timings.times`);
     /// none: the pin's.
     pub tail_dup_threshold: Option<usize>,
+    /// Clocks a mispredicted branch costs, where the target states it.
+    pub mispredict_penalty: Option<i64>,
     /// `-fexcess-precision=standard` (`-ffloat-store`): a float conversion
     /// rounds to its type, where otherwise x87 keeps the wider value in its
     /// register, as gcc's `-fexcess-precision=fast` does.
@@ -275,6 +281,22 @@ impl Profile {
         (self.model)(&self.cpu_prices())
     }
 
+    /// `target`, with the private convention the ABI `family` states: Win64's
+    /// is every function's, so `private` does not move one to System V's.
+    pub fn target_under(
+        &self,
+        arch: &dyn Target,
+        family: Option<&str>,
+    ) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
+        let mut prices = self.cpu_prices();
+        let family = family.unwrap_or(&arch.calling().default);
+        if arch.calling().abi_private.contains_key(family) {
+            prices.private =
+                private_convention_under(arch, Some(family), llrm_support::env_flag!("LLRM_PRIVATE_WATCALL"));
+        }
+        (self.model)(&prices)
+    }
+
     /// The form that indexes by a dword register: where a target has one, a
     /// 16-bit target's behind the address-size prefix (`secondary`), a flat
     /// one's native.
@@ -291,6 +313,19 @@ impl Profile {
             None => ThreeAddress::Off,
             Some(form) if form.secondary => ThreeAddress::AddSubWords,
             Some(_) => ThreeAddress::All,
+        }
+    }
+
+    /// `three_address`, for a size build: a flat 32-bit target without the byte
+    /// and word `lea` (TA-10).
+    pub fn three_address_for(
+        &self,
+        size: bool,
+    ) -> crate::twoaddress::ThreeAddress {
+        use crate::twoaddress::ThreeAddress;
+        match self.three_address() {
+            ThreeAddress::All if size => ThreeAddress::Dwords,
+            mode => mode,
         }
     }
 
@@ -318,7 +353,9 @@ impl Profile {
             foreign: arch.flat_foreign(),
             ports: arch.flat_ports(),
             operand_bytes: arch.operand_bytes(),
+            bsf_rep_prefix: arch.bsf_rep_prefix(),
             loop_alignment: arch.pref_loop_alignment(),
+            loop_max_skip: arch.loop_alignment_max_skip(),
             call_register_capacity: arch.callee_saved().len() as i64,
             float_register_capacity: arch.float_stack() as i64,
             address_scales: BTreeSet::from([1]),
@@ -335,6 +372,7 @@ impl Profile {
             optimized: true,
             aggressive: false,
             tail_dup_threshold: None,
+            mispredict_penalty: None,
             float_store: false,
             rounds_float_spills: false,
             stable_loads: true,
@@ -522,6 +560,7 @@ fn _profile(
         _latencies: table.latency.clone(),
         address_prefix_stall: table.lcp_stall,
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
+        mispredict_penalty: table.mispredict_penalty,
         ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
     })
 }
@@ -692,6 +731,22 @@ mod tests {
         assert_eq!(with(Vec::new()), ThreeAddress::Off);
         assert_eq!(with(vec![AddressForm { secondary: false, ..dword.clone() }]), ThreeAddress::All);
         assert_eq!(with(vec![AddressForm { index_width: 8, ..dword }]), ThreeAddress::Wide);
+    }
+
+    /// A size build keeps the dword `lea` and drops the byte and word ones
+    /// (TA-10): 11 m32 -Os cells grew when they were made there. Wide and
+    /// the 16-bit modes are the same at either.
+    #[test]
+    fn test_a_size_build_drops_the_byte_and_word_lea_on_flat_targets() {
+        use crate::twoaddress::ThreeAddress;
+        let m16 = profile("486").unwrap();
+        let dword = m16.dword_address_form().expect("a dword form").clone();
+        let with = |forms: Vec<_>, size| Profile { address_forms: forms.into(), ..m16.clone() }.three_address_for(size);
+        let flat = AddressForm { secondary: false, ..dword.clone() };
+        assert_eq!(with(vec![flat.clone()], false), ThreeAddress::All);
+        assert_eq!(with(vec![flat], true), ThreeAddress::Dwords);
+        assert_eq!(with(vec![AddressForm { index_width: 8, ..dword }], true), ThreeAddress::Wide);
+        assert_eq!(m16.three_address_for(true), ThreeAddress::AddSubWords);
     }
 
     #[test]
@@ -900,8 +955,18 @@ fn private_convention(
     arch: &dyn Target,
     instrument: bool,
 ) -> Option<llrm_mir::target::PrivateConvention> {
+    private_convention_under(arch, None, instrument)
+}
+
+/// `private_convention` under the ABI family `family` (the default's without
+/// one): the family may state its own.
+pub fn private_convention_under(
+    arch: &dyn Target,
+    family: Option<&str>,
+    instrument: bool,
+) -> Option<llrm_mir::target::PrivateConvention> {
     let calling = arch.calling();
-    let private = calling.private()?;
+    let private = calling.private_under(family)?;
     let private = calling.private_instrument().filter(|_| instrument).unwrap_or(private);
     let to = llrm_target::calling::Calling::number_of(private.cc.as_deref())?;
     let mut from: Vec<u32> = calling

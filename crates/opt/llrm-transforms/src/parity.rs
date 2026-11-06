@@ -163,7 +163,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("reassociate@696", Simplify, "reassociate", Translated, ""),
     entry("constraint-elimination@699", Simplify, "constraint-elimination", Translated, ""),
     entry("loopsimplify@764", Simplify, "loop-simplify", Old, "loopsimplify-port"),
-    entry("lcssa@764", Simplify, "lcssa", Old, "lcssa-port"),
+    entry("lcssa@764", Simplify, "lcssa", Translated, ""),
     entry("loop-instsimplify@715", Simplify, "loop-instsimplify", Translated, ""),
     entry("loop-simplifycfg@716", Simplify, "loop-simplifycfg", Translated, ""),
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
@@ -183,7 +183,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
     entry("loopsimplify@772", Simplify, "loop-simplify", Old, "loopsimplify-port"),
-    entry("lcssa@772", Simplify, "lcssa", Old, "lcssa-port"),
+    entry("lcssa@772", Simplify, "lcssa", Translated, ""),
     entry("loopidiom@737", Simplify, "loop-idiom", Translated, ""),
     entry("loopidioms@737", Simplify, "loop-idiom", Old, "loop-idiom-port (the pricing, noncountable half)"),
     partial(
@@ -237,7 +237,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: DSE stage 1 (deadstore.rs) removes what opt -passes=dse does on near pointers (tools/llvmport/dsecompare.py, 9000 cases); exit: stages 2-3 (free as a terminator, calloc folding, dominating conditions)",
     ),
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
-    entry("lcssa@823", Simplify, "lcssa", Old, "lcssa-port"),
+    entry("lcssa@823", Simplify, "lcssa", Translated, ""),
     entry("licm@823", Simplify, "licm<allowspeculation>", Translated, ""),
     partial(
         "combine@1403",
@@ -274,6 +274,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
     // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default
     // pipeline, and llrm has neither a profile nor a vectorizer.
+    entry("rotate@1621", Late, "loop-rotate<header-duplication;check-exit-count>", Translated, ""),
     entry(
         "loop-interchange@1631",
         Late,
@@ -347,6 +348,10 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // Runs in the strength slot,
     // before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
     entry("canonfreeze", Module, "canon-freeze", Translated, ""),
+    // Runs in the strength slot, after `lsr`: `hardwareloops::HardwareLoops`.
+    entry("hardwareloops", Module, "hardware-loops", Translated, ""),
+    // Runs in the strength slot, after `hardwareloops`: `constanthoisting::ConstantHoisting`.
+    entry("constanthoisting", Module, "consthoist (ConstantHoisting.cpp)", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     partial(
         "indvars@753",
@@ -384,6 +389,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: a SUB nothing reads is a CMP before allocation (optimizeCompareInstr, first switch), x_heapsort cmp/sub as the pin's; exit: the rest of optimizeCompareInstr (flags of an earlier instruction reused, NewCC, InstsToUpdate) and the other PeepholeOptimizer rewrites",
     ),
     entry("combiner@4", Backend, "machine-combiner (MachineCombiner.cpp)", Translated, ""),
+    entry("cmovconversion@4", Backend, "x86-cmov-conversion (X86CmovConversion.cpp)", Translated, ""),
     entry("liverangeshrink@4", Backend, "lrshrink (LiveRangeShrink.cpp)", Translated, ""),
     entry("phielim@4", Backend, "phi-node-elimination", Old, "lir-cleanup-poc"),
     partial(

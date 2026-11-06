@@ -269,6 +269,23 @@ pub fn folded(
     if !chain_root {
         return false;
     }
+    // DEVIATE SD547 (owner anyisa, exit 2026-11-20): a size build keeps a
+    // branch on a chain whose value has other users. The value is computed
+    // anyway; the switch tests `x` again at each branch (pack_ref -Os: a
+    // reload and two compares per iteration; m32 -31 B, m64 -20 B). gcc's
+    // `maybe_optimize_range_tests` takes a test only if `has_single_use`
+    // (tree-ssa-reassoc.cc:4896-4930).
+    if let Operand::Value(v) = cond
+        && !function.users(v).has_n_uses(1)
+        && function.attrs.iter().any(|attr| {
+            matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            )
+        })
+    {
+        return false;
+    }
     #[cfg(test)]
     GATHERED.with(|one| one.set(one.get() + 1));
     let (gathered, extra_is_safe, ty, width) = {

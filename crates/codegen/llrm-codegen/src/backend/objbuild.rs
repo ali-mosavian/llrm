@@ -116,6 +116,8 @@ fn data_role(
         "_DATA" => Role::Data,
         "_BSS" | "BSSB" => Role::Bss,
         "CONST" => Role::ROData,
+        // The pin's mergeable constant sections (`.rodata.cst4`...).
+        _ if name.starts_with(".rodata.cst") => Role::ROData,
         crate::backend::globals::INIT_SEGMENT => Role::InitFunctions,
         _ if far_bss => Role::Bss,
         _ => Role::Data,
@@ -639,9 +641,9 @@ pub fn built_in(
 /// does for LLVM. Only a target whose description names the probe's scratch
 /// register has the probe.
 fn stack_probed(
-    mut module: masm::Module,
+    module: &mut masm::Module,
     format: Format,
-) -> masm::Module {
+) {
     if format == Format::Coff {
         for procedure in module.procedures.iter_mut().filter(|one| one.registers.slot_scratch.is_some()) {
             procedure.probe_stack = Some("__chkstk".to_owned());
@@ -651,22 +653,20 @@ fn stack_probed(
             procedure.registers.red_zone = 0;
         }
     }
-    module
 }
 
 /// The pin states no frame address at an exit on Darwin or Windows
 /// (`X86FrameLowering::emitEpilogue`: `NeedsDwarfCFI` is off for them); the
 /// format decides, as the triple does.
 fn exits_unstated(
-    mut module: masm::Module,
+    module: &mut masm::Module,
     format: Format,
-) -> masm::Module {
+) {
     if matches!(format, Format::MachO | Format::Coff) {
         for procedure in &mut module.procedures {
             procedure.registers.exit_cfi = false;
         }
     }
-    module
 }
 
 /// [`built`] for the writer of `format`: what that format's object holds.
@@ -680,6 +680,18 @@ pub fn built_for(
     built_inner(module, source, layout, format, objects)
 }
 
+/// Whether `format` drops the data no code reaches: an OMF object does; the
+/// jump tables of the others are read by the procedure that has them.
+fn drops_unreached_data(format: Format) -> bool {
+    format == Format::Omf
+}
+
+/// Whether `format` rewrites the procedures before they are encoded
+/// (`stack_probed`, `exits_unstated`).
+fn changes_procedures(format: Format) -> bool {
+    matches!(format, Format::Coff | Format::MachO)
+}
+
 fn built_inner(
     module: &masm::Module,
     source: &str,
@@ -687,7 +699,18 @@ fn built_inner(
     format: Format,
     objects: &dyn DebugObjectTarget,
 ) -> Result<Described, Error> {
-    let module = &exits_unstated(stack_probed(live(module)?, format), format);
+    // Only an OMF object drops data no code reaches (a jump table is always
+    // read by the procedure that has it), and only COFF and Mach-O change the
+    // procedures: the module is copied for those alone.
+    let mut adjusted = std::borrow::Cow::Borrowed(module);
+    if drops_unreached_data(format) {
+        adjusted = std::borrow::Cow::Owned(live(module)?);
+    }
+    if changes_procedures(format) {
+        stack_probed(adjusted.to_mut(), format);
+        exits_unstated(adjusted.to_mut(), format);
+    }
+    let module = &*adjusted;
     // A procedure the program put in a segment of its own naming (`code_seg`)
     // is in that one, the rest in `code`.
     let segment_of = |procedure: usize| -> &str {
@@ -1053,6 +1076,7 @@ pub fn _encoded(
     };
     let mut code = made.code.clone();
     let mut fixups: IndexMap<usize, Fixup> = IndexMap::default();
+    let beside_memory = what.dests.iter().chain(&what.sources).any(|one| matches!(one, Loc::Mem(_)));
     for one in what.dests.iter().chain(&what.sources) {
         let (at, loc, addend, addr) = match one {
             Loc::Mem(ir::Mem { addr: Some(addr), through, index_through, .. })
@@ -1071,6 +1095,15 @@ pub fn _encoded(
             }
             // Long mode loads a symbol's address with `lea` from the
             // instruction pointer.
+            // Static code loads it with `mov r32, imm32`: an absolute field.
+            Loc::Imm(ir::Imm { address: Some(addr), value, width: 4, .. }) if model == CodeModel::Flat64 => {
+                (made.immediate_at, near, addr.disp + value, addr)
+            }
+            // Beside a memory operand the displacement is the memory's: the
+            // symbol is the sign-extended imm32 (`mov qword ptr [m], offset a`).
+            Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if model == CodeModel::Flat64 && beside_memory => {
+                (made.immediate_at, near, addr.disp + value, addr)
+            }
             Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if model == CodeModel::Flat64 => {
                 (made.displacement_at, near, addr.disp + value, addr)
             }
@@ -1092,7 +1125,9 @@ pub fn _encoded(
         // Long mode reaches a symbol from the instruction pointer: the field is
         // relative to the instruction's end, and an address loaded for
         // a symbol defined elsewhere is its table entry's.
-        let loc = if model == CodeModel::Flat64 && based {
+        let loc = if model == CodeModel::Flat64 && matches!(one, Loc::Imm(ir::Imm { width: 4, .. })) {
+            loc
+        } else if model == CodeModel::Flat64 && (based || (beside_memory && matches!(one, Loc::Imm(_)))) {
             llrm_x86::mc::fixup::abs_signed_4()
         } else if model == CodeModel::Flat64 {
             let from = code.len() - at;
@@ -1475,15 +1510,15 @@ fn declared_frames(
     for (section, segment) in segments.iter().enumerate() {
         for (symbol, &(home, start)) in symbols {
             let Some(&length) = sizes.get(symbol).filter(|_| home == section) else { continue };
-            let within = |at: &usize| (start..start + length).contains(at);
-            if !segment.declared.iter().any(within) {
+            let range = start..start + length;
+            if within(&segment.declared, |at| *at, &range).is_empty() {
                 continue;
             }
             let entry = llrm_x86::mc::unwind::entry_row(bits);
             let mut state = entry.clone();
             let mut rows: Vec<FrameRow> = Vec::new();
             let mut ops = Vec::new();
-            for &(cfi, at) in segment.cfi.iter().filter(|(_, at)| within(at)) {
+            for &(cfi, at) in within(&segment.cfi, |one| one.1, &range) {
                 ops.push(cfi);
                 match cfi {
                     Cfi::DefCfa { register, offset } => {
@@ -1512,11 +1547,19 @@ fn declared_frames(
                     kept.push(row);
                 }
             }
-            let seh = segment.seh.iter().filter(|(_, at)| within(at)).map(|&(seh, at)| (at - start, seh)).collect();
+            let seh = within(&segment.seh, |one| one.1, &range).iter().map(|&(seh, at)| (at - start, seh)).collect();
             frames.push(llrm_object::Frame { section, offset: start, length, rows: kept, cfi: ops, seh });
         }
     }
     frames
+}
+
+/// The items whose offset lies in `range`. Items are pushed at the image's
+/// length, so they are sorted by offset: a search per function, not a scan.
+fn within<'a, T>(items: &'a [T], at: impl Fn(&T) -> usize, range: &std::ops::Range<usize>) -> &'a [T] {
+    let from = items.partition_point(|item| at(item) < range.start);
+    let to = items.partition_point(|item| at(item) < range.end);
+    &items[from..to]
 }
 
 pub fn _target(name: &str) -> &str {
@@ -2091,7 +2134,7 @@ mod tests {
                  425353084641525f44415441074641525f534547044441544106534841524544064447524f555033980700482a0003\
                  0201e9980700a80d00050401a298070048050007060106980700681500090801d29807004802000b0a01019a08000c\
                  ff02ff03ff054b8c0500025f6200ac9009000001025f660500009a900d000102065f7461626c65000000f3a02e0001\
-                 0000568bf05ec3558bec83ec048b460683f803740ba30200bb0400e8e4ffebed90900200000068000007c9cb009c18\
+                 00005689c65ec35589e583ec048b460683f803740ba30200bb0400e8e4ffebed90900200000068000007c9cb359c18\
                  00c414140102c417140102c420140102c8225404c8255501eba0110002000001020300070707020000000000309c0a\
                  00c407140102cc0956014ca0190004000078797a78797a78797a78797a78797a78797a78797a56a006000500000100\
                  549c0500c4005404438a02000074")
@@ -2125,6 +2168,30 @@ mod tests {
             (fixup.kind, fixup.at + 4, field(&piece.code, fixup.at, fixup.kind)),
             (OFFSET32, piece.code.len(), 1280)
         );
+    }
+
+    /// `store ptr @a, ptr @sink` at -O2 -fno-pic encoded `mov [rip+disp], imm`
+    /// with one fixup: the immediate's symbol took the displacement's field, so
+    /// the store wrote 0 over the function `a` (sfm16 c64 -O2 segfaulted).
+    #[test]
+    fn test_a_store_of_a_symbol_to_a_symbol_has_a_fixup_for_each() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let cell = ir::Mem {
+            addr: Some(Addr { index: 3, ..Addr::new(Space::External, 0) }),
+            ..ir::Mem::new(None, 8)
+        };
+        let value = ir::Imm { value: 0, width: 8, address: Some(Addr { index: 4, ..Addr::new(Space::External, 0) }) };
+        let what = semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![Loc::Imm(value)]);
+        let names = IndexMap::from_iter([((Space::External, 3), "sink".to_owned()), ((Space::External, 4), "a".to_owned())]);
+
+        let piece = _encoded(regs, &what, &names, CodeModel::Flat64).unwrap();
+
+        let mut named: Vec<_> = piece.fixups.iter().map(|one| (one.name.as_str(), one.at)).collect();
+        named.sort_unstable();
+        assert_eq!(named.len(), 2, "{named:?}");
+        assert_eq!(named[0].0, "a");
+        assert_eq!(named[1].0, "sink");
+        assert_ne!(named[0].1, named[1].1, "both fixups on one field: {named:?}");
     }
 
     /// Code was never aligned: every function began where the last ended.
@@ -2235,5 +2302,52 @@ mod tests {
             frames.iter().map(|frame| (frame.offset, frame.seh.clone())).collect::<Vec<_>>(),
             vec![(8, vec![(1, llrm_object::Seh::PushReg(6)), (5, llrm_object::Seh::StackAlloc(32))])]
         );
+    }
+
+    /// `declared_frames` scanned every declared mark, CFI and SEH entry of a
+    /// segment for each function: four times the functions cost sixteen
+    /// times the work (object write 1.08/1.16 per doubling at 600/2400).
+    #[test]
+    fn the_frames_of_a_segment_are_linear_in_its_functions() {
+        let frames_of = |functions: usize| {
+            let mut segment = Segment::new("A_TEXT", Role::Text, true);
+            let mut symbols = IndexMap::default();
+            let mut sizes = IndexMap::default();
+            for at in 0..functions {
+                let name = format!("f{at}");
+                segment.declared.push(16 * at);
+                segment.cfi.push((llrm_object::assembler::Cfi::DefCfaOffset { offset: 16 }, 16 * at + 1));
+                symbols.insert(name.clone(), (0, 16 * at));
+                sizes.insert(name, 16);
+            }
+            let segments = [segment];
+            let best = (0..3)
+                .map(|_| {
+                    let started = std::time::Instant::now();
+                    let frames = declared_frames(64, &segments, &symbols, &sizes);
+                    assert_eq!(frames.len(), functions);
+                    started.elapsed()
+                })
+                .min()
+                .unwrap();
+            best
+        };
+        let (small, large) = (frames_of(4_000), frames_of(16_000));
+        assert!(large < small * 8, "4x the functions cost {:?} against {:?}", large, small);
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    /// An ELF x86-64 object ran `live`, which encoded every procedure and
+    /// cloned the module, to find no table dead: 13 M of jpeg_fixed's 27 M
+    /// instructions in `object write`. Only OMF reads a module that way.
+    #[test]
+    fn test_only_an_omf_object_looks_for_unreached_data_and_only_two_formats_change_procedures() {
+        let formats = [Format::Omf, Format::Coff, Format::MachO, Format::Elf];
+        assert_eq!(formats.map(drops_unreached_data), [true, false, false, false]);
+        assert_eq!(formats.map(changes_procedures), [false, true, true, false]);
     }
 }

@@ -62,6 +62,7 @@ use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 
 struct Info {
     source_order: bool,
+    m64: bool,
 }
 
 impl SchedInfo for Info {
@@ -95,6 +96,16 @@ impl SchedInfo for Info {
         reg: u16,
     ) -> bool {
         Some(reg) == super::dagisel_adapter::pin_register(super::dagisel_adapter::EFLAGS_ID)
+    }
+
+    // `ADJCALLSTACKDOWN32`/`64` and `ADJCALLSTACKUP32`/`64`, numbered alike in
+    // every x86 table.
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(if self.m64 { 768 } else { 767 })
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(if self.m64 { 770 } else { 769 })
     }
 }
 
@@ -386,6 +397,17 @@ impl CallConventions<'_> {
 }
 
 impl super::emit::Conventions for CallConventions<'_> {
+    fn effects(
+        &self,
+        callee: Option<&Callee>,
+    ) -> llrm_mir::memory::Effects {
+        let Some(Callee::Global(id)) = callee else { return llrm_mir::memory::Effects::ANY };
+        let callees = self.contracts.and_then(|contracts| contracts.facts).and_then(|facts| facts.callees());
+        callees
+            .and_then(|callees| callees.get(&llrm_mir::context::GlobalId(*id)).map(|summary| summary.effects))
+            .unwrap_or(llrm_mir::memory::Effects::ANY)
+    }
+
     fn written(
         &self,
         callee: Option<&Callee>,
@@ -681,6 +703,42 @@ pub fn selected(
     selected_in_pool(module, name, arch, cpu, libcalls, None, &mut Pool::new(module.globals.len() as i64))
 }
 
+/// The table for a target `bits` wide with `features`, built once per thread
+/// and copied for each function: the constructors fill thousands of entries
+/// (65.7 M instructions of tiny600's 4 724 M, 600 functions).
+fn lowering_for(
+    bits: u32,
+    features: Features,
+    build: impl FnOnce() -> TargetLowering,
+) -> TargetLowering {
+    type Key = (u32, [bool; 8]);
+    thread_local! {
+        static TABLES: std::cell::RefCell<Vec<(Key, TargetLowering)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let key: Key = (
+        bits,
+        [
+            features.cmov,
+            features.bmi,
+            features.lzcnt,
+            features.popcnt,
+            features.movbe,
+            features.shld_slow,
+            features.sse2,
+            features.soft_float,
+        ],
+    );
+    TABLES.with(|tables| {
+        let mut tables = tables.borrow_mut();
+        if let Some((_, found)) = tables.iter().find(|(known, _)| *known == key) {
+            return found.clone();
+        }
+        let made = build();
+        tables.push((key, made.clone()));
+        made
+    })
+}
+
 pub fn selected_in_pool(
     module: &Module,
     name: &str,
@@ -808,14 +866,17 @@ fn selected_in(
     let mut tli = if m16 {
         // `useSoftFloat()`, or no x87 among the function's target features.
         let soft_float = crate::backend::isel::soft_float(&function.attrs);
-        TargetLowering::x86_16(Features { soft_float, ..Features::default() }, MVT::I16)
+        let features = Features { soft_float, ..Features::default() };
+        lowering_for(16, features, || TargetLowering::x86_16(features, MVT::I16))
     } else if m64 {
-        TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() }, MVT::I64)
+        let features = Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() };
+        lowering_for(64, features, || TargetLowering::x86_64(features, MVT::I64))
     } else {
         // The machine fact is the cost model's: the same `has_cmov` SimplifyCFG
         // reads.
         let cmov = cpu.target().tti().is_some_and(|tti| tti.has_cmov());
-        TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32)
+        let features = Features { cmov, ..Features::default() };
+        lowering_for(32, features, || TargetLowering::x86_32(features, MVT::I32))
     };
     // The soft-float routines are spelled as the C compiler spelled their
     // definitions.
@@ -853,13 +914,16 @@ fn selected_in(
         .with_tuning(cpu.target().tuning())
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
-        // DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin: minsize
-        // only). Flipping it at --isel=dag grows m32 -Os +467 B over 126
-        // programs and m16 -Os +763 B over 309; matmul gains 20/3 B. Exit:
-        // keep the divide unless the expansion forces spills (matmul's `urem
-        // i16 %x,3` costs +59 B in 4 spill slots). Cost: an idiv is ~40 clocks
-        // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
-        // 5095 B against the pin's 5463 (2026-10-27).
+        // DEVIATE DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin: minsize
+        // only). Measured 2026-11-06, m32 -Os, 71 programs, pin-exact flip:
+        // 14 programs change, +203 B in all, matmul only -4 B, and four cells
+        // pass -> fail on bytes against the best of gcc/clang (recmany +36,
+        // recsum +18, x_binsearch +18, x_switch_dense +13). Isolated divides
+        // are smaller kept than in gcc or clang. Decision: keep the divide at
+        // -Os, the pin's `int_div_cheap(min_size)` is not taken. Owner x86-m32;
+        // open, exit 2026-11-20 (kept by measurement 2026-11-06). m16 -Os was
+        // +763 B over 309 programs (2026-10-27). Cost: an idiv is ~40 clocks
+        // on a 486 where the multiply is ~13.
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_div_prices(div_prices(&cpu, bitness))
         .with_jump_tables(
@@ -892,8 +956,19 @@ fn selected_in(
     // `LowerFormalArguments`: the first variadic argument is the next fixed
     // object, where the convention puts the first stack argument it does not
     // name.
+    // Under Win64 the unnamed register arguments are homed in the caller's
+    // shadow space, one cell each, contiguous with the stack ones.
+    let positional = arch.calling().by_number(function.calling_convention).filter(|found| found.positional);
     if module.signature(function.ty).2 {
-        cells.push(convention.stack_arguments);
+        match &positional {
+            Some(found) if convention.parameters.len() < found.argument_registers.len() => {
+                cells.extend(
+                    (convention.parameters.len()..found.argument_registers.len())
+                        .map(|at| arch.first_argument_offset(false) + at as i64 * 8),
+                );
+            }
+            _ => cells.push(convention.stack_arguments),
+        }
     }
     let frame = Frame::new(cells, contracts.map_or(0, |one| one.hole));
     // The function's static allocas are frame objects 0, 1, ... in the order
@@ -948,7 +1023,7 @@ fn selected_in(
     }
     // `LowerFormalArguments`' register save area: 6 * 8 bytes of integer
     // registers and 8 * 16 of vector ones.
-    if m64 && module.signature(function.ty).2 {
+    if m64 && module.signature(function.ty).2 && positional.is_none() {
         info.variadic_save = Some(Temporaries(&frame).create_stack_temporary(176, 16));
     }
     let mut hooks = X86Hooks::new(Options {
@@ -1044,6 +1119,11 @@ fn selected_in(
         frame: &frame,
         address_mode,
         opt_size: cpu.size || cpu.min_size,
+        reserved_calls: module
+            .named(name)
+            .and_then(|id| module.global(id).function())
+            .and_then(|function| arch.calling().by_number(function.calling_convention))
+            .is_some_and(|convention| convention.reserve_call_frame),
         call_alignment: if arch.aligned_calls() { (arch.stack_alignment() as i64).max(1) } else { 1 },
         map: &tables.map,
         names: &tables.names,
@@ -1074,17 +1154,23 @@ fn selected_in(
     let speed_goal = !(cpu.size || cpu.min_size || bytes_beat_clocks);
     let mul_by_clocks = speed_goal && cpu.target().tti().is_some_and(|tti| tti.multiply_by_clocks());
     let price_pin = speed_goal && cpu.target().tti().is_some_and(|tti| tti.price_pin_multiplies());
+    // The function's one `BranchProbabilityInfo`: the builder's edge
+    // probabilities read the same one (the pin has it as an analysis).
     let frequencies = ((mul_rate > 0 || price_pin) && !mul_by_clocks).then(|| {
-        let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
-            llrm_analysis::bpi::Module {
-                context: &module.context,
-                declarations: &module.globals,
-                metadata: &module.metadata,
-                layout: &layout,
-            },
-            function,
-        );
-        llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, &bpi)
+        let bpi = info
+            .bpi
+            .get_or_insert_with(
+                || llrm_analysis::bpi::BranchProbabilityInfo::of(
+                    llrm_analysis::bpi::Module {
+                        context: &module.context,
+                        declarations: &module.globals,
+                        metadata: &module.metadata,
+                        layout: &layout,
+                    },
+                    function,
+                ),
+            );
+        llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
     });
     for (block, parent, mut built) in work {
         if !built.live_ins.is_empty() && block != function.layout()[0] {
@@ -1092,12 +1178,20 @@ fn selected_in(
         }
         let arrived = arrival_widths(&built.dag, &built.live_ins);
         let done = select_block(
+            &mut info,
             &mut built.dag,
             &tli,
             &mut X86Lowering {
                 cmov: tli.can_use_cmov(),
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
+                three_address_adds: !(cpu.size || cpu.min_size)
+                    && !matches!(
+                        cpu.three_address(),
+                        crate::twoaddress::ThreeAddress::Off
+                            | crate::twoaddress::ThreeAddress::AddSub
+                            | crate::twoaddress::ThreeAddress::AddSubWords
+                    ),
                 i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
                 sext_load: true,
                 zext_free: m64,
@@ -1127,7 +1221,7 @@ fn selected_in(
             },
             &selector,
             &mut hooks,
-            &Info { source_order: true },
+            &Info { source_order: true, m64 },
             &ctx,
             &mut state,
             block_at[&block.0],
@@ -1376,6 +1470,13 @@ fn selected_in(
         let table =
             state.float_bytes.iter().map(|(number, bytes)| (*number, if cpu.spills_extended { 10 } else { *bytes }));
         body.float_bytes = std::sync::Arc::new(table.collect());
+    } else {
+        // Nib keeps the qword (D-RFP1), but not for what is exactly an f32:
+        // a dword holds it whole (`fld dword` and back), and is what the
+        // value's own type spills as.
+        let exact = |number: &u32, bytes: &u32| *bytes == 4 && state.float_exact.get(number) == Some(&true);
+        let table = state.float_bytes.iter().map(|(number, bytes)| (*number, if exact(number, bytes) { 4 } else { 8 }));
+        body.float_bytes = std::sync::Arc::new(table.collect());
     }
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     body.min_size = cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize");
@@ -1444,14 +1545,18 @@ fn selected_in(
     // The loops whose trips `induction` proves, as the old route states them:
     // the executed-work estimate (the route choice's, `LLRM_DEBUG=cost`) reads
     // 31 in 32 for a loop without them.
-    {
-        let shape = llrm_analysis::cfg::Shape::of(function);
+    // A function without a loop has none to prove, and the facts below are a
+    // fixed point over the whole body.
+    let shape = llrm_analysis::cfg::Shape::of(function);
+    if !shape.loops.is_empty() {
         let unit = llrm_analysis::memory::Unit::of(module, &layout, function)
             .with_spaces(arch.layout().spaces.roles)
             .with_shape(&shape);
         let exposed = llrm_analysis::memory::exposed_frames(&unit);
         let unit = unit.with_exposed(&exposed);
-        let registers = llrm_analysis::consts::known(&unit);
+        // The mid-end's `Registers` is empty by design (constants are folded
+        // into the body), so the trips are proven from the body alone.
+        let registers = IndexMap::default();
         let unit = unit.with_registers(&registers);
         body.loop_trip_counts =
             crate::backend::isel::proven_trips(&unit, &shape, &registers, |block| block_at.get(&block.0).copied());
@@ -1638,7 +1743,7 @@ impl Values {
 /// (`addSuccessorWithProb`: a conditional branch's two, a merged condition's
 /// cases), on the blocks whose machine edges they are. An edge nobody stated
 /// has none.
-fn set_odds(
+pub(super) fn set_odds(
     body: &mut LirBody,
     edges: &[(llrm_mir::module::BlockId, llrm_mir::module::BlockId, u32)],
     block_at: &HashMap<u32, i64>,
@@ -1657,20 +1762,25 @@ fn set_odds(
             piece_of.insert(one.at, current);
         }
     }
+    // The blocks that end in a branch, by the piece they belong to: an edge
+    // looks in its piece, not in every block of the body.
+    let mut branching: HashMap<i64, Vec<(i64, &[i64])>> = HashMap::default();
+    for one in body.blocks.iter().filter(|one| one.succ.len() >= 2) {
+        if let Some(&piece) = piece_of.get(&one.at) {
+            branching.entry(piece).or_default().push((one.at, one.succ.as_slice()));
+        }
+    }
     for &(from, to, probability) in edges {
         let (Some(&first), Some(&to_at)) = (block_at.get(&from.0), block_at.get(&to.0)) else { continue };
         // A select made into branches splits the block, and the branch ends
         // the last piece (`transferSuccessorsAndUpdatePHIs`): the edges are
         // that piece's.
-        let Some(lir) = body
-            .blocks
-            .iter()
-            .filter(|one| piece_of.get(&one.at) == Some(&first) && one.succ.len() >= 2 && one.succ.contains(&to_at))
-            .last()
-        else {
+        let candidates = branching.get(&first).map_or(&[][..], Vec::as_slice);
+        body.facts.0.bump_by("odds-examined", candidates.len());
+        let Some(&(at, _)) = candidates.iter().rfind(|(_, succ)| succ.contains(&to_at)) else {
             continue;
         };
-        *stated.entry((lir.at, to_at)).or_insert(0) += u64::from(probability);
+        *stated.entry((at, to_at)).or_insert(0) += u64::from(probability);
     }
     // `normalizeSuccProbs`: the edges of a block share one.
     let mut total: IndexMap<i64, u64> = IndexMap::default();
@@ -1789,4 +1899,31 @@ pub(super) fn read_before_defined(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod lowering_cache_tests {
+    use super::*;
+
+    /// Every function built its target's action tables again: 109 K
+    /// instructions each, 65.7 M of tiny600's 4 724 M. One build per kind of
+    /// target and feature set, however many functions ask.
+    #[test]
+    fn test_the_action_tables_of_a_target_are_built_once_for_all_its_functions() {
+        let features = Features { sse2: true, cmov: true, ..Features::default() };
+        let built = std::cell::Cell::new(0);
+        for _ in 0..50 {
+            lowering_for(64, features, || {
+                built.set(built.get() + 1);
+                TargetLowering::x86_64(features, MVT::I64)
+            });
+        }
+        assert_eq!(built.get(), 1);
+        let other = Features { sse2: false, ..features };
+        lowering_for(64, other, || {
+            built.set(built.get() + 1);
+            TargetLowering::x86_64(other, MVT::I64)
+        });
+        assert_eq!(built.get(), 2, "another feature set is another table");
+    }
 }

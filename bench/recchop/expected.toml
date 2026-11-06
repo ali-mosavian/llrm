@@ -1,2 +1,59 @@
-reason = "ch default (user decision 2026-10-12): the rotated loops expose m16 allocator register choice (#1557)"
-blessed = "2026-10-12"
+reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
+blessed = "2026-11-05"
+corpus = "57bb48927f7b2c00fa50b010239814e9"
+
+[ow.O2]
+instructions = 8413
+memory_operands = 1975
+code_bytes = 187
+data_bytes = 0
+bss_bytes = 128
+
+[ow.Os]
+instructions = 8228
+memory_operands = 2165
+code_bytes = 179
+data_bytes = 0
+bss_bytes = 128
+
+[bcc.O2]
+instructions = 7897
+memory_operands = 1850
+code_bytes = 227
+data_bytes = 0
+bss_bytes = 128
+
+[bcc.Os]
+instructions = 8217
+memory_operands = 1340
+code_bytes = 195
+data_bytes = 0
+bss_bytes = 128
+
+[tc.O2]
+instructions = 8485
+memory_operands = 2613
+code_bytes = 193
+data_bytes = 0
+bss_bytes = 128
+
+[tc.Os]
+instructions = 8355
+memory_operands = 2676
+code_bytes = 182
+data_bytes = 0
+bss_bytes = 128
+
+[tcpp.O2]
+instructions = 9054
+memory_operands = 2613
+code_bytes = 212
+data_bytes = 0
+bss_bytes = 128
+
+[tcpp.Os]
+instructions = 8860
+memory_operands = 3765
+code_bytes = 205
+data_bytes = 0
+bss_bytes = 128

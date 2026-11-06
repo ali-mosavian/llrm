@@ -27,6 +27,11 @@ pub struct Tuning {
     /// What a byte is worth in thousandths of a clock at speed; 0: bytes and
     /// clocks are not traded.
     pub speed_milliclocks_per_byte: i64,
+    /// A fill is weighed against its loop on the target's prices at every
+    /// level (`loopidioms::fills_pay`): strictly where the rate is 0 (neither
+    /// clocks nor bytes may grow), by the rate where it is not. false: the
+    /// pin's, which forms the memset whenever the stores allow.
+    pub price_fills: bool,
     /// A multiply by a constant at speed is the chain of fewest clocks the
     /// CPU's table gives, with no byte term (gcc's `synth_mult` at
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
@@ -45,10 +50,32 @@ pub struct Tuning {
     /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
     /// the pass's own, 150.
     pub unroll_partial_threshold: Option<u32>,
+    /// The `PartialThreshold` the unroll-and-jam (D1) counts the outer loop
+    /// against; none: `unroll_partial_threshold`'s. The outer loop holds the
+    /// inner one, which stays rolled, so a loop-buffer sized threshold
+    /// refuses every nest.
+    pub unroll_jam_partial_threshold: Option<u32>,
+    /// The unroll-and-jam (D1) takes, of a known outer trip count, the
+    /// largest count that divides it (2 or more) rather than one that leaves
+    /// a remainder: the remainder is a copy of the whole nest.
+    pub unroll_jam_exact_count: bool,
+    /// `ConstantHoisting` runs after LSR, as the pin's `addIRPasses` does for
+    /// every target (CH-STAGED: enabled target by target, each with its A/B).
+    pub constant_hoisting: bool,
+    /// DEVIATE ZIMM (owner m64, exit 2026-11-27): a 64-bit constant of 32
+    /// leading zeros costs one instruction to materialize (`mov r32, imm32`
+    /// zero-extends), not the pin's two (`getIntImmCost(int64_t)` takes
+    /// `isInt<32>` only). false: the pin's.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L6882>
+    pub zext_imm_is_basic: bool,
     /// How many values the x87 register stack holds (8) where floats live
     /// there (a target without SSE2 floating point); none: floats are not
     /// held on a stack. The loop unroll caps its copies by it.
     pub x87_stack_slots: Option<u32>,
+    /// A stack slot a loop holds in a register is shared only by what is as
+    /// wide (`slots::width_rule_allows`); false: the pin's `ColorSlot`,
+    /// which shares any two slots whose ranges do not overlap.
+    pub slots_loop_width_rule: bool,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
@@ -64,6 +91,23 @@ pub struct Tuning {
     /// code, summed over its sites. false: the pin's `OptSizeThreshold` 50
     /// alone decides, which allows the growth.
     pub inline_size_guard_at_size: bool,
+    /// With `inline_size_guard_at_size`, the bound holds a callee with one
+    /// site too (otherwise only two or more: the pin's single-site inline
+    /// stands). A callee that stays and is copied once only grows the code.
+    pub inline_size_guard_single_site: bool,
+    /// A full unroll's discount for a local array it makes constant-indexed
+    /// (promoted to registers) holds only while the promoted elements fit the
+    /// register file (UP1). false: every such access is free.
+    pub unroll_promotion_fits_registers: bool,
+    /// A size build rotates a loop only when the header's exit test folds in
+    /// the preheader (RS1): an unfolded copy is a compare and a branch, more
+    /// than the loop-closing jump it removes. false: the pass's header limit
+    /// alone.
+    pub rotation_guard_must_fold_at_size: bool,
+    /// A size build rotates a loop only when the copied header is no bigger than
+    /// the branches the rotation removes (the loop-closing jump and the exit
+    /// test), in `CodeSize` (arm64's w15 rule). false: the header limit alone.
+    pub rotation_header_priced_at_size: bool,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
@@ -73,11 +117,45 @@ pub struct Tuning {
     /// `max-inline-insns-recursive` (`Tti::recursive_inlining`); none: the
     /// pin's inliner.
     pub recursive_inlining: Option<(u32, i64)>,
-    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30): the most a copy
-    /// of the recursive callee may grow its caller
-    /// (`want_inline_small_function_p`) for `recursive_inlining` to run on
-    /// it; none: no such bar.
+    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30 of its size
+    /// units) as the most `gcc_insns` a recursive callee may have for
+    /// `recursive_inlining` to run on it, calibrated per target; none: no
+    /// such bar.
     pub recursive_edge_growth: Option<(i64, i64)>,
+    /// DEVIATE REC-2: what the copies of a recursive function in itself may add
+    /// at (-O2, -O3), in `gcc_insns` (gcc's `max-inline-insns-recursive`, 450);
+    /// none: `inline::MAX_INLINE_INSNS_RECURSIVE`.
+    pub recursive_inlining_growth: Option<(i64, i64)>,
+    /// DEVIATE REC-2: at (-O2, -O3) a tree recursion's tail calls are eliminated before it is
+    /// copied into itself (gcc: `pass_tail_recursion` runs early, `passes.def` before `pass_ipa_inline`),
+    /// not after (D10).
+    pub recursive_tre_first: (bool, bool),
+    /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
+    /// its entry constants fold enough of the body to pay the copy at the
+    /// speed rate (`Tti::peels_folded_entry`). false: the pin's
+    /// `computePeelCount`.
+    pub peel_folded_entry: bool,
+    /// DEVIATE UP1: a full unroll the pin's threshold allows is made only
+    /// where the clocks it saves repay the bytes it adds at this rate in
+    /// thousandths of a clock a byte (`Tti::unroll_milliclocks_per_byte`) at
+    /// -O2/-O3. 0: the pin's threshold alone.
+    pub unroll_milliclocks_per_byte: i64,
+    /// DEVIATE CS2: where there is no conditional move, a select's arm only
+    /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
+    /// pin's, both operands before the branch.
+    pub sink_select_arms: bool,
+    /// DEVIATE MEM-1: an `llvm.memcpy` of a length known only at run time, in
+    /// a function not tuned for size, is `rep movsd` and `rep movsb` inline,
+    /// not a call of `memcpy` (gcc's `rep_prefix_4_byte` stringop strategy for
+    /// the 486 and P5). false: the pin's `EmitTargetCodeForMemcpy`, a libcall.
+    /// Linux x86-64 stays false: glibc's `memcpy` of 0-32 bytes is 6.4 TSC
+    /// ticks a call, `rep movsb` 8.2 (Ryzen 9 9950X3D, fsrm; 2026-11-05).
+    pub inline_variable_memcpy: bool,
+    /// DEVIATE REC5-1 (owner w2, exit 2026-11-20): IPSCCP widens a range that
+    /// keeps growing to its half-line, keeping the sign, not to overdefined
+    /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
+    /// all the way into the callee.
+    pub ipsccp_widen_keeps_sign: bool,
 }
 
 impl Tuning {
@@ -91,20 +169,51 @@ impl Tuning {
         max_stores_per_memmove_opt_size: 4,
         size_milliclocks_per_byte: 0,
         speed_milliclocks_per_byte: 0,
+        price_fills: false,
         multiply_by_clocks: false,
         price_pin_multiplies: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
+        unroll_jam_partial_threshold: None,
+        unroll_jam_exact_count: false,
+        constant_hoisting: false,
+        zext_imm_is_basic: false,
         x87_stack_slots: None,
+        slots_loop_width_rule: false,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
+        inline_size_guard_single_site: false,
+        unroll_promotion_fits_registers: false,
+        rotation_guard_must_fold_at_size: false,
+        rotation_header_priced_at_size: false,
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
+        recursive_inlining_growth: None,
+        recursive_tre_first: (false, false),
+        peel_folded_entry: false,
+        unroll_milliclocks_per_byte: 0,
+        sink_select_arms: false,
+        inline_variable_memcpy: false,
+        ipsccp_widen_keeps_sign: false,
     };
+}
+
+/// What a target says of `GlobalMerge`
+/// ([GlobalMerge.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/GlobalMerge.cpp));
+/// a target that merges nothing answers none.
+#[derive(Clone, Copy, Debug)]
+pub struct GlobalMerge {
+    /// The reach of a base register's immediate: `MaxOffset`.
+    pub max_offset: u64,
+    /// `OnlyOptimizeForSize`: only uses in `minsize` functions count.
+    pub size_only: bool,
+    /// The object format is Mach-O: the merged struct is `internal`, not
+    /// `private`.
+    pub mach_o: bool,
 }
 
 /// Where the target keeps no program data, as linear addresses: old
@@ -167,6 +276,13 @@ pub trait Machine {
         Tuning::PIN
     }
 
+    /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
+    /// (DEVIATE SD443, exit 2026-11-07: interprocedural.rs). The pin runs it
+    /// once; a target that matches the pin's output turns it off.
+    fn second_ipsccp(&self) -> bool {
+        true
+    }
+
     /// Clocks a byte of code is worth, in thousandths, where a decision is
     /// made for size: the smaller form is kept while the clocks it costs are
     /// under this per byte saved. None: bytes alone decide.
@@ -178,6 +294,15 @@ pub trait Machine {
     /// size; by default the same prices.
     fn size_costs(&self) -> OperationCosts {
         self.costs()
+    }
+
+    /// What each operation costs in real code bytes, for the decisions that
+    /// weigh bytes against clocks at a rate (`Tti::*_milliclocks_per_byte`):
+    /// unit prices there are bytes of a fixed-width target only if this says
+    /// so. Not the pin's thresholds, which read instruction units. By default
+    /// `size_costs`.
+    fn byte_costs(&self) -> OperationCosts {
+        self.size_costs()
     }
 
     /// Whether a division by a constant stays a divide instruction on
@@ -294,6 +419,15 @@ pub trait Machine {
     /// The indexed addresses a memory access may use, native form first.
     fn address_forms(&self) -> Vec<AddressForm>;
 
+    /// How `GlobalMerge` runs at `-O3` (`aggressive`) or below; none where
+    /// the target does not run it.
+    fn global_merge(
+        &self,
+        _aggressive: bool,
+    ) -> Option<GlobalMerge> {
+        None
+    }
+
     /// Whether a `width`-byte load at an address a multiple of `align` may
     /// trap wherever it points. By default any may: only one known
     /// dereferenceable runs where the program would not have run it.
@@ -353,6 +487,13 @@ pub const fn step_cost(add: i64) -> i64 {
 /// Machine-neutral costs a MIR profitability decision may compare.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct OperationCosts {
+    /// The target's native integer width in bits where an operation on a wider
+    /// integer is several of the native one (an 8-bit machine adds an `i32` in
+    /// four byte adds): the prices of `add`, `load`, `store`, `move` and
+    /// `shift` are per native word and `profit::operation` multiplies them by
+    /// [`OperationCosts::words`]. 0: a price is for the operation as the type
+    /// has it, as on every target but the 6502.
+    pub native_bits: i64,
     pub add: i64,
     pub multiply: i64,
     pub divide: i64,
@@ -373,6 +514,15 @@ pub struct OperationCosts {
     pub multiply_high: i64,
     pub shift: i64,
     pub address: i64,
+    /// What a `lea` of dwords costs where a prefix widens it (real mode: the
+    /// operand-size and address-size prefixes, `66 67 8D ModRM` and a SIB byte
+    /// or a displacement); 0 where the target states none, and the price is
+    /// then `address` plus the prefixes' prices.
+    pub address_dword: i64,
+    /// What a third part of that address (a base, an index and a
+    /// displacement: the SIB byte and the displacement both) adds to
+    /// `address_dword`; 0 where the target states none.
+    pub address_third: i64,
     /// An address advanced in a space whose displacement carries into its
     /// selector (a huge pointer's): the offset's sum, its carry, and the
     /// selector stepped by it.
@@ -381,6 +531,9 @@ pub struct OperationCosts {
     pub carry_step: i64,
     pub load: i64,
     pub store: i64,
+    /// A constant stored to memory: the register store, plus the immediate
+    /// in code bytes.
+    pub store_immediate: i64,
     pub memory_update: i64,
     pub branch: i64,
     pub prefix: i64,
@@ -429,6 +582,13 @@ pub struct OperationCosts {
     pub set: i64,
     pub fill: i64,
     pub fill_cell: i64,
+    /// What of `fill` is the save and restore of a segment register around the
+    /// string instruction; 0 where the fill needs none.
+    pub fill_segment: i64,
+    /// `Tuning::max_stores_per_memset` for these prices: a constant memset of
+    /// at most that many stores is stores, not a fill; 0: the table does not
+    /// say.
+    pub memset_stores: i64,
     /// The code bytes of the routine a fill through a huge pointer is laid
     /// down as, in a table priced by bytes; 0 where there is none.
     pub huge_fill: i64,
@@ -456,9 +616,20 @@ pub struct OperationCosts {
     pub pieces_clear: i64,
     pub pieces_set_size: i64,
     pub pieces_clear_size: i64,
+    /// Bytes of the widest store a constant memset expands to; 0: the
+    /// target's pointer width, a dword at least.
+    pub memset_store: i64,
     /// The fewest case values for which a switch is a jump table (gcc's
     /// `case_values_threshold`); 0: the target has no table jump.
     pub jump_table: i64,
+    /// The bytes every function has beyond its operations (a callee-saved
+    /// register saved and restored): added once to a function's size
+    /// estimate; 0 where the table states none.
+    pub function: i64,
+    /// Percent a function's estimate (operations plus `function`) is scaled
+    /// by for what the lowering adds that no operation names (spills, branch
+    /// relaxation), measured against objects; 100: none.
+    pub function_scale: i64,
     /// Bytes of one line of the CPU's data cache (its first level); 0: the
     /// target states none (no cache, or not known).
     pub cache_line: i64,
@@ -480,6 +651,15 @@ impl OperationCosts {
             (false, true) => self.pieces_clear,
             (false, false) => self.pieces_set,
         }
+    }
+
+    /// How many native words an integer of `bits` bits is: one where the
+    /// target states no native width.
+    pub fn words(
+        &self,
+        bits: u32,
+    ) -> i64 {
+        if self.native_bits > 0 { (i64::from(bits) + self.native_bits - 1) / self.native_bits } else { 1 }.max(1)
     }
 
     /// What a caller pays to take `words` words of arguments off the stack.
@@ -509,6 +689,27 @@ impl OperationCosts {
 /// index, unscaled, no prefix); any other takes a form that scales, which
 /// costs its address-size prefix, and runs under the operand-size prefix a
 /// dword does.
+pub fn three_operand_of(
+    costs: &OperationCosts,
+    forms: &[AddressForm],
+    width: i64,
+    operand: i64,
+    scale: i64,
+    word: bool,
+    parts: usize,
+) -> Option<i64> {
+    if word {
+        return forms.iter().any(|form| !form.secondary && form.index_width == 2).then_some(costs.address);
+    }
+    let form = forms.iter().find(|form| form.index_width == 4 && form.scales.contains(&scale))?;
+    if costs.address_dword > 0 && width != operand {
+        return Some(costs.address_dword + costs.address_third * parts.saturating_sub(2) as i64 + form.use_cost - costs.prefix);
+    }
+    Some(costs.sized(costs.address, width, operand) + form.use_cost)
+}
+
+/// [`three_operand_of`] for an address of two parts (a base and an index, or a
+/// base and a displacement).
 pub fn three_operand(
     costs: &OperationCosts,
     forms: &[AddressForm],
@@ -517,16 +718,13 @@ pub fn three_operand(
     scale: i64,
     word: bool,
 ) -> Option<i64> {
-    if word {
-        return forms.iter().any(|form| !form.secondary && form.index_width == 2).then_some(costs.address);
-    }
-    let form = forms.iter().find(|form| form.index_width == 4 && form.scales.contains(&scale))?;
-    Some(costs.sized(costs.address, width, operand) + form.use_cost)
+    three_operand_of(costs, forms, width, operand, scale, word, 2)
 }
 
 impl Default for OperationCosts {
     fn default() -> Self {
         Self {
+            native_bits: 0,
             add: 1,
             multiply: 1,
             divide: 1,
@@ -536,10 +734,13 @@ impl Default for OperationCosts {
             multiply_high: 1,
             shift: 1,
             address: 1,
+            address_dword: 0,
+            address_third: 0,
             carry: 1,
             carry_step: 1,
             load: 1,
             store: 1,
+            store_immediate: 1,
             memory_update: 1,
             branch: 1,
             prefix: 0,
@@ -564,6 +765,8 @@ impl Default for OperationCosts {
             set: 1,
             fill: 1,
             fill_cell: 1,
+            fill_segment: 0,
+            memset_stores: 0,
             huge_fill: 0,
             huge_copy: 0,
             copy: 1,
@@ -575,7 +778,10 @@ impl Default for OperationCosts {
             pieces_clear: 0,
             pieces_set_size: 0,
             pieces_clear_size: 0,
+            memset_store: 0,
             jump_table: 0,
+            function: 0,
+            function_scale: 100,
             cache_line: 0,
             line_fill_clocks: 0,
         }
@@ -755,6 +961,22 @@ mod operand_size_tests {
         assert_eq!(three_operand(&costs, &real, 4, 2, 2, false), Some(2 + 1 + 1));
         assert_eq!(three_operand(&costs, &real, 2, 2, 1, true), Some(2));
     }
+
+    /// Real mode's `lea`: 3 bytes in words (`8D 40 07`), 5 as dwords behind the
+    /// two prefixes (`67 66 8D 40 07`), 6 with a base, an index and a
+    /// displacement (`67 66 8D 44 01 07`); all three read as one price
+    /// (`address` plus the prefixes) before `address_dword`, so a fold that
+    /// replaced `inc` and `add` (5 bytes) by the six-byte form looked free.
+    #[test]
+    fn a_dword_lea_is_priced_by_its_parts_and_a_word_one_is_not() {
+        let costs = OperationCosts { address: 6, prefix: 1, address_dword: 10, address_third: 2, ..OperationCosts::default() };
+        let real = [form(2, false, 0), form(4, true, 1)];
+        assert_eq!(three_operand_of(&costs, &real, 2, 2, 1, true, 3), Some(6));
+        assert_eq!(three_operand(&costs, &real, 4, 2, 1, false), Some(10));
+        assert_eq!(three_operand_of(&costs, &real, 4, 2, 1, false, 3), Some(12));
+        let unstated = OperationCosts { address: 6, prefix: 1, ..OperationCosts::default() };
+        assert_eq!(three_operand_of(&unstated, &real, 4, 2, 1, false, 3), Some(8));
+    }
 }
 
 #[cfg(test)]
@@ -775,6 +997,7 @@ mod tests {
             (None, None, None)
         );
         assert_eq!(pin.x87_stack_slots, None);
+        assert!(!pin.slots_loop_width_rule);
         assert_eq!(pin.inline_threshold, None);
     }
 }

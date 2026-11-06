@@ -106,7 +106,8 @@ pub fn program(
             apply_pass_flag(&mut options, flag);
         }
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
-        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
+        program.modules.iter_mut().for_each(crate::prepare::mark_long_multiplies);
     }
     Ok(program)
 }
@@ -157,6 +158,11 @@ pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
     Rc::new(Z80Machine)
 }
 
+/// `opcosts.txt`.
+pub static DESCRIPTION: std::sync::LazyLock<llrm_target::opcosts::Description> = std::sync::LazyLock::new(|| {
+    llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses")
+});
+
 struct Z80Machine;
 
 impl llrm_mir::target::Machine for Z80Machine {
@@ -175,6 +181,11 @@ impl llrm_mir::target::Machine for Z80Machine {
 
     fn costs(&self) -> llrm_mir::target::OperationCosts {
         llrm_mir::target::Neutral.costs()
+    }
+
+    /// Real code bytes for the decisions weighed at a rate (`opcosts.txt`).
+    fn byte_costs(&self) -> llrm_mir::target::OperationCosts {
+        DESCRIPTION.size_costs()
     }
 
     fn registers(&self) -> i64 {

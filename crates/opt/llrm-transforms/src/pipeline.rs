@@ -144,7 +144,7 @@ use crate::{
     fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
-    switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window,
+    switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -157,7 +157,7 @@ pub struct Options {
     /// calls them). DEVIATE D11: llrm-c states `strlen` for `-m32` under the
     /// System V convention only, llrm-qb and llrm-nib none, so no other
     /// compile forms a call of a library routine. Exit: a `Target::library`
-    /// of each target that states its routines. Owner w-6, review 2026-11-30.
+    /// of each target that states its routines. Owner w-6, exit 2026-11-30.
     pub library: Vec<llrm_mir::libfunc::Routine>,
     /// Off at -O0: no pass runs.
     pub optimize: bool,
@@ -187,12 +187,22 @@ pub struct Options {
     /// builder lowers them as `SelectionDAGBuilder::visitSwitch` (it needs the
     /// switch, with its `unreachable` default, as the pin's passes leave it).
     pub lower_switches: bool,
+    /// `loopidioms::Merge` also makes adjacent stores wider ones (LLVM's
+    /// `DAGCombiner::mergeConsecutiveStores`, DEVIATE `parity.rs`, owner wasm, exit 2026-11-20); off for a
+    /// target whose backend merges them, so the inliner and the passes after
+    /// it price the stores the pin's IR has.
+    pub merge_stores: bool,
+    /// After `PromoteMemToReg` the write-through `Promote` forwards a global's
+    /// store to the loads after it, across blocks with phis, where there is no
+    /// GVN `pre` (-O1, -Og). The pin's -O1 has no GVN and does not; off for a
+    /// target compared with it (wasm: jpeg_fixed -O1 was 259 B over).
+    pub write_through: bool,
     pub drop_stores: bool,
     /// Work read below a branch moves below it: gcc's `-ftree-sink`.
     pub sink: bool,
     /// `Spares`: a fixed-cell load rematerialized past the writes alias proves
     /// disjoint. llrm only (the pin rematerializes invariant loads alone); off
-    /// by default, `-fllrm-spares`. DEVIATE (no number), 8.0 M Ir at d_faces.
+    /// by default, `-fllrm-spares`. DEVIATE (no number; owner w2, exit 2026-11-20: delete or justify with numbers), 8.0 M Ir at d_faces.
     pub spare_loads: bool,
     /// A CFG simplification ahead of loop strength reduction, to tidy the
     /// compare-and-branch that follows a `cmpxchg`: the pin's
@@ -202,7 +212,7 @@ pub struct Options {
     pub atomic_cfg_tidy: bool,
     /// `Homes`: a phi that also sits in a stored cell is spilled to that cell
     /// (gcc `REG_EQUIV`). llrm only; off by default, `-fllrm-homes`. DEVIATE
-    /// (no number), 8.4 M Ir at d_faces.
+    /// (no number; owner w2, exit 2026-11-20: delete or justify with numbers), 8.4 M Ir at d_faces.
     pub stored_homes: bool,
     /// The spiller makes a load of a cell nothing writes again where it is read
     /// (D-I). llrm only; off by default, `-fllrm-stable-loads`. Read by the
@@ -220,6 +230,8 @@ pub struct Options {
     /// has it (`isLoadExtLegal`); off for a target that has not, where the
     /// wider compare costs more than the extension saved.
     pub extload: bool,
+    /// `zeromerge`: zeroed locals that follow each other in the entry block share one fill. llrm only (DEVIATE D1 of `zeromerge.rs`, owner m16, exit 2026-11-20); runs where a pointer is 16 bits. `-fllrm-zero-merge`.
+    pub zero_merge: bool,
     /// `TypePromotion`, which the pin runs before CodeGenPrepare where the
     /// target asks (`-fllrm-typepromotion`).
     pub typepromotion: bool,
@@ -227,6 +239,11 @@ pub struct Options {
     /// off); `strength` turns it off with the other address passes.
     pub lsr: bool,
     pub unroll: bool,
+    /// A second CGSCC walk after the dead globals and loops are gone: the first
+    /// walk prices a callee before the folds that empty it (a static callee
+    /// whose last caller folds away). llrm only; off by default, the 6502 turns
+    /// it on. DEVIATE 6502-SZ1, owner 6502, exit 2026-11-20.
+    pub second_inline: bool,
     /// clang's `PTO.LoopUnrolling` (`UnrollLoops`, on above -O1,
     /// [CompilerInvocation.cpp#L1936](https://github.com/llvm/llvm-project/blob/d1106deb71cc/clang/lib/Frontend/CompilerInvocation.cpp#L1936)):
     /// off, the full unroll of the LLVM order only takes a loop that asks
@@ -241,7 +258,7 @@ pub struct Options {
     /// default pipelines (`enable-loopinterchange`) at every level but -O0.
     pub interchange: bool,
     /// `-floop-unroll-and-jam`: LLVM's `LoopUnrollAndJamPass`, in the Late
-    /// stage (L1474). DEVIATE: the pin's default pipelines have it off
+    /// stage (L1474). DEVIATE (owner m64, exit 2026-11-30): the pin's default pipelines have it off
     /// (`enable-unroll-and-jam`); it is on at -O3 and -Omax, where the
     /// particle row gains from it.
     pub unroll_and_jam: bool,
@@ -317,9 +334,11 @@ impl Default for Options {
             strength: true,
             cgpaddr: true,
             extload: true,
+            zero_merge: true,
             typepromotion: true,
             lsr: true,
             unroll: true,
+            second_inline: false,
             loop_unrolling: true,
             peel: true,
             loopidioms: true,
@@ -339,6 +358,8 @@ impl Default for Options {
             switch_conversion: true,
             jump_tables: true,
             lower_switches: true,
+            merge_stores: true,
+            write_through: true,
             search: false,
             exhaustive: false,
         }
@@ -489,10 +510,11 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" | "canonfreeze" | "maskscale" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" | "maskscale" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" => self.strength,
-            "cgpaddr" => self.strength && self.cgpaddr,
+            "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
+            "zeromerge" => self.zero_merge,
             "typepromotion" => self.strength && self.typepromotion,
             "unroll" => self.unroll,
             "peel" => self.peel,
@@ -567,7 +589,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size(), llvm: false }),
         Box::new(dead::Dead),
         Box::new(loopidioms::LoopIdioms { size: applied.options.prefers_size() }),
-        Box::new(loopidioms::Merge { size: applied.options.prefers_size() }),
+        Box::new(loopidioms::Merge { size: applied.options.prefers_size(), widen: applied.options.merge_stores }),
         Box::new(memcpyopt::MemCpyOpt),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
@@ -631,7 +653,16 @@ impl FunctionPass for Slot {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        self.inner.run(unit, analyses)
+        let count = |unit: &Unit| -> i64 {
+            unit.function.layout().iter().map(|&b| unit.function.iter_block(b).count() as i64).sum()
+        };
+        if std::env::var_os("W2_SLOT_COUNT").is_none() {
+            return self.inner.run(unit, analyses);
+        }
+        let before = count(unit);
+        let result = self.inner.run(unit, analyses);
+        eprintln!("W2SLOT {} {} {}", self.name, before, count(unit) - before);
+        result
     }
 }
 
@@ -728,18 +759,26 @@ pub(crate) fn llvm_order(
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
     let translated = applied.options.sroa;
-    // DEVIATE, -O1 and -Og only (no GVN `pre`): the write-through `Promote`
+    // DEVIATE (owner wasm, exit 2026-11-20), -O1 and -Og only (no GVN `pre`), and where `write_through` is
+    // on: the write-through `Promote`
     // after PromoteMemToReg forwards a store of a global to the load after it,
     // which LLVM's InstCombine does in `visitLoadInst`
     // (FindAvailableLoadedValue, not translated); GVN does it at the other
     // levels. Exit: that translation.
     let write_through = || -> Vec<Box<dyn FunctionPass>> {
-        if applied.options.pre { Vec::new() } else { vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)] }
+        if applied.options.pre || !applied.options.write_through {
+            Vec::new()
+        } else {
+            vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)]
+        }
     };
+    // `SROAPass(ModifyCFG)` everywhere but the late slot, which the pin builds
+    // with `PreserveCFG` (PassBuilderPipelines.cpp L1393, L1494).
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
         let parts: Vec<Box<dyn FunctionPass>> = if translated {
-            let mut parts: Vec<Box<dyn FunctionPass>> =
-                vec![Box::new(crate::sroa::Sroa), Box::new(crate::mem2reg::Mem2Reg)];
+            let pass: Box<dyn FunctionPass> =
+                if name == "sroa@1494" { Box::new(crate::sroa::Sroa) } else { Box::new(crate::sroa::SroaModifyCfg) };
+            let mut parts: Vec<Box<dyn FunctionPass>> = vec![pass, Box::new(crate::mem2reg::Mem2Reg)];
             parts.extend(write_through());
             parts
         } else {
@@ -789,7 +828,7 @@ pub(crate) fn llvm_order(
         Phase::Cleanup => vec![
             Box::new(Together {
                 name: "promote@1241",
-                // DEVIATE as in the SROA slot.
+                // DEVIATE as in the SROA slot (owner w2, exit 2026-11-20).
                 parts: if applied.options.mem2reg {
                     let mut parts: Vec<Box<dyn FunctionPass>> = vec![Box::new(mem2reg::Mem2Reg)];
                     parts.extend(write_through());
@@ -819,6 +858,18 @@ pub(crate) fn llvm_order(
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             // `LowerConstantIntrinsicsPass` (l.1597), right after Float2Int.
             slot("lower-constant-intrinsics@1597", Box::new(crate::lowerconstantintrinsics::LowerConstantIntrinsics)),
+            // LoopRotatePass (l.1621): the loop pass manager that holds
+            // LoopInterchange runs before `addVectorPasses` and its unroll
+            // (l.1476), so a loop the unroll leaves with its exit in the
+            // middle is not rotated after it.
+            slot(
+                "rotate@1621",
+                Box::new(looprotate::LoopRotate {
+                    duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
+                    size: applied.options.prefers_size(),
+                    check_exit_count: true,
+                }),
+            ),
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
@@ -938,6 +989,7 @@ pub(crate) fn llvm_order(
                     Box::new(looprotate::LoopRotate {
                         duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
                         size: applied.options.prefers_size(),
+                        check_exit_count: false,
                     }),
                 ));
             }
@@ -968,7 +1020,16 @@ pub(crate) fn llvm_order(
                 ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size })),
-                slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
+                slot(
+                    "loopdeletion@749",
+                    Box::new(crate::loopidiom::pass::AfterDeletion {
+                        deletion: loopdeletion::LoopDeletion,
+                        idiom: crate::loopidiom::pass::LoopIdiom {
+                            for_size: size,
+                            ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
+                        },
+                    }),
+                ),
                 slot(
                     "unroll@753",
                     Box::new(loopunrollpass::LoopFullUnroll {
@@ -1009,7 +1070,7 @@ pub(crate) fn llvm_order(
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("adce@815", Box::new(adce::Adce)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt)),
-                slot("merge@818", Box::new(loopidioms::Merge { size })),
+                slot("merge@818", Box::new(loopidioms::Merge { size, widen: applied.options.merge_stores })),
                 slot("dse@820", Box::new(deadstore::DeadStoreElimination)),
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
@@ -1092,8 +1153,8 @@ pub(crate) fn function_stages(applied: &Applied) -> Vec<Fixed> {
         Fixed::linear(applied, Phase::Early),
         Fixed::linear(applied, Phase::Cleanup),
         Fixed::linear(applied, Phase::Simplify),
-        // DEVIATE: LLVM runs it after the interprocedural passes; here it
-        // closes the function stages.
+        // Placed after the interprocedural passes, as LLVM runs it
+        // (`recorded`).
         Fixed::linear(applied, Phase::Late),
     ]
 }
@@ -1157,9 +1218,13 @@ pub fn recorded(
     }
     manager.add_program(crate::interprocedural::Stamp);
     let walked = |dump: &str| Applied { dump: applied.dump.as_ref().map(|one| one.join(dump)), ..applied.clone() };
+    let mut late_stage = None;
     for (at, stage) in function_stages(applied).into_iter().enumerate() {
-        // The walk simplifies each body: not a module-wide stage.
-        if at != 2 {
+        // The walk simplifies each body: not a module-wide stage. The late
+        // list follows the interprocedural passes.
+        if at == 3 {
+            late_stage = Some(stage);
+        } else if at != 2 {
             manager.add(stage);
         }
         // LLVM's CGSCC walk: each body inlined into, then simplified, callees
@@ -1173,6 +1238,12 @@ pub fn recorded(
             manager.add_program(crate::walk::Walk {
                 inline: applied.options.inline,
                 speed_rate: applied.options.prices_bytes(),
+                rerun_unchanged: true,
+                promote_rate: Some(if applied.options.prefers_size() {
+                    0
+                } else {
+                    applied.options.limits.milliclocks_per_byte
+                }),
                 simplify: Box::new(move |module, analyses, id, stage| {
                     TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
                     rerun(module, analyses, id, &mut simplify, true)
@@ -1197,7 +1268,8 @@ pub fn recorded(
     // PassBuilderPipelines.cpp#L1241) and runs the function simplification
     // pipeline once per body, in the CGSCC walk: these stages leave a body to
     // the walk's run, not a second full one (GVN ran five times on `main` of
-    // memory_expansion, the pin's twice).
+    // memory_expansion, the pin's twice). `promote.` keeps the full list: the
+    // minimal one left the far sort arguments of Nib quicksort unfolded.
     let mut cleaned = Fixed::linear(&again_applied, Phase::Cleanup);
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
@@ -1227,7 +1299,7 @@ pub fn recorded(
                     module,
                     analyses,
                     id,
-                    if matches!(stage, "promote." | "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
+                    if matches!(stage, "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
                     stage == "globalsra.",
                 )
                 .unwrap_or_else(|error| panic!("pipeline: {error}"));
@@ -1256,6 +1328,26 @@ pub fn recorded(
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
     manager.add_program(availableexternally::EliminateAvailableExternally);
+    if applied.options.second_inline && applied.options.inline.limit != 0 {
+        manager.compute::<GlobalsAA>();
+        manager.compute::<GlobalsModRefAnalysis>();
+        let mut simplify = Fixed::linear(&walked("walk2"), Phase::Simplify);
+        manager.add_program(crate::walk::Walk {
+            inline: applied.options.inline,
+            speed_rate: applied.options.prices_bytes(),
+            rerun_unchanged: false,
+            promote_rate: Some(if applied.options.prefers_size() {
+                0
+            } else {
+                applied.options.limits.milliclocks_per_byte
+            }),
+            simplify: Box::new(move |module, analyses, id, stage| {
+                TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
+                rerun(module, analyses, id, &mut simplify, true).unwrap_or_else(|error| panic!("pipeline: {error}"));
+                TRIGGER.with(|trigger| trigger.borrow_mut().clear());
+            }),
+        });
+    }
     // `ReversePostOrderFunctionAttrsPass` (PassBuilderPipelines.cpp:1542).
     manager.add_module(crate::rpoattrs::ReversePostOrderFunctionAttrs);
     // Once the callers that remain are the ones that stay: an internal function
@@ -1263,8 +1355,14 @@ pub fn recorded(
     if applied.options.wanted("calleepop") {
         manager.add_module(calleepop::CalleePop { size: applied.options.prefers_size() });
     }
+    // The end of `buildModuleOptimizationPipeline`'s function list (l.1662),
+    // after the interprocedural passes: a body that took the late unroll is
+    // not run through the simplification pipeline again.
+    if let Some(stage) = late_stage {
+        manager.add(stage);
+    }
     // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
-    // d1106deb71cc). DEVIATE: made even where not held, as GlobalDCE, which
+    // d1106deb71cc). DEVIATE (owner w9, exit 2026-11-20): made even where not held, as GlobalDCE, which
     // LLVM runs after this point, abandoned it here.
     manager.recompute::<GlobalsAA>();
     manager.recompute::<GlobalsModRefAnalysis>();
@@ -1314,11 +1412,19 @@ pub fn recorded(
     if applied.options.wanted("cgpaddr") {
         manager.add(cgpaddr::CgpAddr);
     }
+    // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
+    if applied.options.prices_bytes() && applied.options.wanted("cgpselectarms") {
+        manager.add(crate::cgpselect::SelectArms);
+    }
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
     if applied.options.wanted("extload") {
         manager.add(extload::ExtLoad);
+    }
+    // DEVIATE D1 of `zeromerge` (owner m16, exit 2026-11-20): after SROA and loop idioms made the fills.
+    if applied.options.wanted("zeromerge") {
+        manager.add(zeromerge::ZeroMerge);
     }
     // Last of the passes that reshape the body, as gcc's `pass_lower_switch`
     // follows its optimizations.
@@ -1404,6 +1510,17 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // The remainder LSR wrote out as a quotient and a product, back to one
         // where the divide stays.
         passes.push(Box::new(crate::remidiom::RemainderIdiom { size: applied.options.prefers_size() }));
+        // The pin's llc runs it in the pre-ISel passes, after LSR; it does
+        // nothing for a target that counts no loop in hardware.
+        if applied.options.wanted("hardwareloops") {
+            passes.push(Box::new(crate::hardwareloops::HardwareLoops));
+        }
+        // `TargetPassConfig::addIRPasses` (pin l.874): ConstantHoisting
+        // follows LSR; it hoists nothing for a target whose constants all
+        // cost the basic one.
+        if applied.options.wanted("constanthoisting") {
+            passes.push(Box::new(crate::constanthoisting::ConstantHoisting));
+        }
     }
     passes
 }
@@ -1431,6 +1548,7 @@ fn rerun(
     if fixed.wants_sizes() {
         declared.count_referenced(module);
     }
+    llrm_mir::passes::snapshot_for_audit(module);
     let Module { context, globals, metadata, .. } = &mut *module;
     llrm_mir::passes::set_running_function(globals[id.0 as usize].name.as_deref().unwrap_or_default());
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {

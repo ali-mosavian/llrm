@@ -144,7 +144,7 @@ fn test_cases_that_pick_constants_are_a_table() {
         (0..12).map(|at| (at, [3, 14, 15, 92, 65, 35, 89, 79, 32, 38, 46, 26][at as usize])).collect();
     let after = lowered(&joined("i32", &cases, 1), -3..20, true);
     assert!(!after.contains("switch i32") && after.contains("load i8"), "{after}");
-    assert!(after.contains("@switch.table.0 = private constant [12 x i8]"), "{after}");
+    assert!(after.contains("@switch.table.0 = private unnamed_addr constant [12 x i8]"), "{after}");
 }
 
 /// Without switch conversion (-O1) the same switch is a tree.

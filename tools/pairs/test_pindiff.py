@@ -411,3 +411,29 @@ def test_the_m16_row_datalayout_is_the_machines_string_not_its_template():
     (`{datalayout:x86` in the datalayout), so no m16 figure existed on 2026-10-29."""
     pindiff = load("pindiff")
     assert "{" not in pindiff.cc_entry("m16")["datalayout"]
+
+
+def test_a_pin_llc_that_exits_zero_without_output_is_refused_not_read_from_the_last_run(tmp_path, monkeypatch):
+    """The pin's asm/obj live in a persistent work dir; a silent rc-0 compile left the previous run's file and the row was figured from it."""
+    import subprocess
+
+    pindiff = load("pindiff")
+    ir = "define void @f() {\n  ret void\n}\n"
+
+    def run(command, *args, **kwargs):
+        if "-o" in command and str(command[command.index("-o") + 1]).endswith(".raw.ll"):
+            Path(command[command.index("-o") + 1]).write_text(ir)
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return subprocess.CompletedProcess(command, 1, "", "ours: not reached\n")
+
+    monkeypatch.setattr(pindiff.subprocess, "run", run)
+    monkeypatch.setattr(pindiff.pin, "opt", lambda *a, **k: subprocess.CompletedProcess([], 0, ir, ""))
+    monkeypatch.setattr(pindiff.pin, "llc", lambda *a, **k: subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(pindiff.irguard, "check", lambda *a, **k: None)
+    monkeypatch.setattr(pindiff, "clang_flags", lambda machine: ("clang", []))
+    (tmp_path / "f.pin.s").write_text("stale\n")
+    (tmp_path / "f.pin.o").write_bytes(b"stale")
+    src = tmp_path / "f.c"
+    src.write_text("void f(void){}\n")
+    result = pindiff.one(src, "m32", "O2", "llc", tmp_path, False)
+    assert isinstance(result, str) and result.startswith("pin llc:"), result

@@ -42,12 +42,12 @@
 //!   poison-only form with no dominator tree: MIR has no `undef`.
 //! - SU6 ScalarEvolution is made for the one query, not kept and forgotten.
 //! - SU7, SU8, SU10, SU11 are the non-trivial form's: see `nontrivial.rs`.
-//! - SU9 No partially invariant conditions (`hasPartialIVCondition` and
-//!   `buildPartialInvariantUnswitchConditionalBranch`: a loop-header test of
-//!   loads MemorySSA shows unchanged on a path), no injected invariant
-//!   conditions, no guards (MIR has none). Costs 2 of the 21 corpus functions
-//!   `opt` unswitches (4 of 20 rotated), which the oracle classifies. Exit: the
-//!   MemorySSA migration lands (mssa-green-2127, 2026-10-29).
+//! - SU9 No injected invariant conditions: the pin injects only into a branch
+//!   with `!prof` weights that make it taken at least 15 in 16 times
+//!   (`shouldTryInjectBasingOnMetadata`,
+//!   [`SimpleLoopUnswitch.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimpleLoopUnswitch.cpp#L3043)),
+//!   and no IR here has profile data. No guards (MIR has none). Exit: program
+//!   PGO exists. Partially invariant conditions are `partial.rs` (SU12).
 //!
 //! # Example
 //! Before:
@@ -98,6 +98,7 @@ use crate::lcssa::{arms, from_arms};
 
 mod candidates;
 mod nontrivial;
+mod partial;
 
 /// What the pass reads and changes.
 pub struct Run<'a> {
@@ -108,8 +109,12 @@ pub struct Run<'a> {
     pub callees: &'a Callees,
     pub tti: &'a dyn Tti,
     pub function: &'a mut Function,
-    /// `Outer::assume_declared`: held, not scanned for each loop.
-    pub assume_declared: bool,
+    /// The module's analyses, for the alias query of a partially invariant
+    /// condition.
+    pub outer: &'a llrm_mir::passes::Outer,
+    /// The headers of the loops a partially invariant condition was unswitched
+    /// out of: `llvm.loop.unswitch.partial.disable`, kept for this run.
+    pub partial_done: IdSet<BlockId>,
 }
 
 struct Analyzed {
@@ -122,7 +127,7 @@ impl Analyzed {
     fn of(run: &Run) -> Self {
         let tree = DomTree::of(run.function);
         let loops = LoopInfo::analyze(run.function, || &tree);
-        let assumptions = AssumptionCache::of_declared(run.context, run.globals, run.metadata, run.function, run.assume_declared);
+        let assumptions = AssumptionCache::of(run.context, run.globals, run.metadata, run.function);
         Self { tree, loops, assumptions }
     }
 }
@@ -405,7 +410,7 @@ fn hoist_loop_to_new_parent(
         return false;
     }
     crate::loopsimplify::simplified(run.function);
-    let _ = crate::lcssa::closed(run.function);
+    let _ = crate::lcssa::closed(run.context, run.layout, run.function);
     true
 }
 
@@ -1016,6 +1021,10 @@ fn unswitch_best_condition(
         insert_freeze = nontrivial::should_insert_freeze(run, analyzed, lp, cond, best.terminator);
     }
     llrm_support::debug!("simpleloopunswitch", "unswitching non-trivial terminator in b{}", header.0);
+    if best.partial.is_some() {
+        // `postUnswitch`: the loop is marked, not looked at again.
+        run.partial_done.insert(header);
+    }
     Some(nontrivial::unswitch_nontrivial_invariants(run, analyzed, header, &best, insert_freeze).cloned_headers)
 }
 
@@ -1130,7 +1139,8 @@ impl FunctionPass for SimpleLoopUnswitch {
             callees: outer.callees(),
             tti: &*tti,
             function: unit.function,
-            assume_declared: outer.assume_declared(),
+            outer: &outer,
+            partial_done: IdSet::new(),
         };
         if unswitch_loops(&mut run, self.non_trivial) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }

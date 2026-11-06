@@ -58,15 +58,8 @@ fn reduced_flat(
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = crate::lsr_pass::reduced_with(
-        context,
-        &layout,
-        function,
-        &mut declared,
-        &outer,
-        &llrm_mir::tti::Basic,
-        false,
-    );
+    let changed =
+        crate::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &llrm_mir::tti::Basic, false);
     let after = printed(&module);
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     (changed, after)
@@ -213,8 +206,9 @@ exit:
 ";
 
 /// Two conversions of one counter got two floating counters off the x87
-/// stack: the pin's `OptimizeShadowIV` makes one per loop and breaks. wasm x_matmul_f -O2 grew 29 B (1584 -> 1613) once both
-/// conversions were `uitofp nneg` and GVN had no pass left to merge them.
+/// stack: the pin's `OptimizeShadowIV` makes one per loop and breaks. wasm
+/// x_matmul_f -O2 grew 29 B (1584 -> 1613) once both conversions were `uitofp
+/// nneg` and GVN had no pass left to merge them.
 #[test]
 fn a_loop_gets_one_floating_counter_for_two_conversions_off_the_x87_stack() {
     let (changed, after) = reduced_flat(TWO_CONVERSIONS, &[&[1], &[5], &[17]]);
@@ -1278,6 +1272,40 @@ b6:
 }
 ";
 
+/// At size the rule is off: the doubled limit made `copy` -Os m16 3 B bigger
+/// (`add ax,ax` and `cmp` for `dec`), idioms.c +51 B over the m16 corpus.
+#[test]
+fn at_size_a_word_copy_keeps_the_counter_and_does_not_double_the_limit() {
+    let mut module = parsed(&format!("{DOS}{COPY}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(!after.contains("shl i16"), "{after}");
+}
+
+const COPY: &str = "
+@a = global [100 x i16] zeroinitializer
+@b = global [100 x i16] zeroinitializer
+define void @copy(i16 %0) {
+  %2 = icmp sgt i16 %0, 0
+  br i1 %2, label %3, label %11
+3:
+  br label %4
+4:
+  %5 = phi i16 [ %9, %4 ], [ 0, %3 ]
+  %6 = getelementptr inbounds nuw [2 x i8], ptr @b, i16 %5
+  %7 = load i16, ptr %6, align 2
+  %8 = getelementptr inbounds nuw [2 x i8], ptr @a, i16 %5
+  store i16 %7, ptr %8, align 2
+  %9 = add nuw nsw i16 %5, 1
+  %10 = icmp eq i16 %9, %0
+  br i1 %10, label %11, label %4
+11:
+  ret void
+}
+";
+
 const DOT: &str = "
 define i32 @dot(ptr %0, ptr %1, i16 %2) {
   %4 = icmp sgt i16 %2, 0
@@ -1376,6 +1404,21 @@ fn a_cut_nothing_fits_keeps_the_pointer_over_the_table() {
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(after.contains("phi ptr"), "{after}");
+}
+
+/// bench/stft_fixed -Os m16: the same loop inside `main`, beside the outer
+/// loop's values. The solution that fits the three address registers cost one
+/// more instruction than the pointer over `_rev`, and the function came out
+/// 18 B larger (7302 against 7284): at size a reload folds into a memory
+/// operand while the extra instruction is paid in full.
+#[test]
+fn at_size_a_fitting_solution_does_not_cost_an_instruction_more() {
+    let mut module = parsed(include_str!("lsr_stft_rev.ll"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("phi ptr [ %") && after.contains("@$var_rev, i16 128"), "{after}");
 }
 
 const BLOCK_LOOP: &str = "
@@ -1576,4 +1619,183 @@ exit:
     assert!(changed, "{after}");
     assert!(after.contains("phi i8"), "{after}");
     assert!(!after.contains(" to i8"), "{after}");
+}
+
+fn three_address_registers() -> llrm_x86::tti::X86 {
+    let real = RealMode {
+        scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: None,
+        address_registers: Some(3),
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+        unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
+    };
+    X86::of_cpu("i486").unwrap().in_real_mode(real)
+}
+
+/// qb-metadata hir_part3 `sum_three` at m16: three far rows summed by one
+/// counter. The cheapest formula by the general-register count scales the
+/// counter and holds three bases, more address registers (bx, si, di) than the
+/// target has: the loop reloaded two of them every trip (8 insns, 5 memory
+/// operands against 6 and 3).
+#[test]
+fn three_rows_summed_by_one_counter_do_not_need_more_address_registers_than_the_target_has() {
+    let text = "define i16 @f(ptr addrspace(1) %a, ptr addrspace(1) %b, ptr addrspace(1) %c, i16 %lo, i16 %end) {
+entry:
+  br label %loop
+loop:
+  %t = phi i16 [ 0, %entry ], [ %t3, %loop ]
+  %i = phi i16 [ %lo, %entry ], [ %next, %loop ]
+  %o = shl i16 %i, 1
+  %pa = getelementptr i8, ptr addrspace(1) %a, i16 %o
+  %va = load i16, ptr addrspace(1) %pa
+  %t1 = add i16 %va, %t
+  %pb = getelementptr i8, ptr addrspace(1) %b, i16 %o
+  %vb = load i16, ptr addrspace(1) %pb
+  %t2 = add i16 %t1, %vb
+  %pc = getelementptr i8, ptr addrspace(1) %c, i16 %o
+  %vc = load i16, ptr addrspace(1) %pc
+  %t3 = add i16 %t2, %vc
+  %next = add i16 %i, 1
+  %done = icmp eq i16 %next, %end
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i16 %t3
+}
+";
+    let after = reduced_real(text, &three_address_registers());
+    let in_loop = &after[after.find("loop:").expect("the loop")..];
+    assert!(!in_loop.contains("shl i16"), "{after}");
+}
+
+/// bench/queens at m16 -O2: the inner `safe` loop reads `q[r]` and compares
+/// with `row - r` and `r - row`. The pin's formulae include a pointer walked
+/// by two bytes; DEVIATE LG3's end-biased formulae brought a register of their
+/// own, the solver's reuse rule then cut the pointer solution out of the
+/// search, and the solution left cost an instruction more than the loop as it
+/// stood, so LSR was dropped: 236848 clocks against 170823 at -Os, which
+/// finds the pointer. LG3 now joins after the pin's narrowing and is kept
+/// only where it costs less.
+const QUEENS_INNER: &str = "declare i16 @g(ptr, i16, i16)
+
+define i16 @f(ptr %q, i16 %row, i16 %n) {
+b0:
+  %e = icmp eq i16 %row, %n
+  br i1 %e, label %ret, label %b5
+b5:
+  %pos = icmp sgt i16 %n, 0
+  br i1 %pos, label %b7, label %ret
+b7:
+  %rp = icmp sgt i16 %row, 0
+  %slot = getelementptr inbounds [2 x i8], ptr %q, i16 %row
+  %row1 = add nsw i16 %row, 1
+  br label %b11
+b11:
+  %found = phi i16 [ 0, %b7 ], [ %found2, %b32 ]
+  %col = phi i16 [ 0, %b7 ], [ %col2, %b32 ]
+  br i1 %rp, label %b14, label %b28
+b14:
+  br label %b17
+b15:
+  %r2 = add nuw nsw i16 %r, 1
+  %exit = icmp eq i16 %r2, %row
+  br i1 %exit, label %b27, label %b17
+b17:
+  %r = phi i16 [ %r2, %b15 ], [ 0, %b14 ]
+  %p = getelementptr inbounds nuw [2 x i8], ptr %q, i16 %r
+  %v = load i16, ptr %p, align 2
+  %d = sub nsw i16 %v, %col
+  %z = icmp eq i16 %v, %col
+  %a = sub nuw nsw i16 %row, %r
+  %c1 = icmp eq i16 %d, %a
+  %o1 = select i1 %z, i1 true, i1 %c1
+  %b = sub nsw i16 %r, %row
+  %c2 = icmp eq i16 %d, %b
+  %o2 = select i1 %o1, i1 true, i1 %c2
+  br i1 %o2, label %b31, label %b15
+b27:
+  br label %b28
+b28:
+  store i16 %col, ptr %slot, align 2
+  %x = call i16 @g(ptr %q, i16 %row1, i16 %n)
+  %f1 = add nsw i16 %x, %found
+  br label %b32
+b31:
+  br label %b32
+b32:
+  %found2 = phi i16 [ %f1, %b28 ], [ %found, %b31 ]
+  %col2 = add nuw nsw i16 %col, 1
+  %exit2 = icmp eq i16 %col2, %n
+  br i1 %exit2, label %b35, label %b11
+b35:
+  br label %ret
+ret:
+  %res = phi i16 [ 1, %b0 ], [ 0, %b5 ], [ %found2, %b35 ]
+  ret i16 %res
+}
+";
+
+/// The pin's space is solved beside the end-biased one, and each build counted
+/// the loop's register units again (21% of LSR on jpeg_fixed): once is enough.
+#[test]
+fn a_loop_solved_twice_has_its_register_units_counted_once() {
+    let before = crate::lsr_collect::register_units_computed();
+    let after = reduced_real(QUEENS_INNER, &six_registers());
+    let counted = crate::lsr_collect::register_units_computed() - before;
+    assert_eq!(counted, 1, "{after}");
+}
+
+/// The pin's space was generated again beside the end-biased one: every loop
+/// the end-biased formulae touch generated twice (LSR calls x2.0 the pin's on
+/// memory_expansion). It is taken from the first generation.
+#[test]
+fn a_loop_solved_twice_has_its_formulae_generated_once() {
+    let before = crate::lsr_generate::reuse_formulae_generated();
+    let after = reduced_real(QUEENS_INNER, &six_registers());
+    let generated = crate::lsr_generate::reuse_formulae_generated() - before;
+    assert_eq!(generated, 1, "{after}");
+}
+
+#[test]
+fn a_loop_the_pin_makes_a_pointer_of_stays_one_when_end_biased_formulae_exist_in_real_mode() {
+    let after = reduced_real(QUEENS_INNER, &six_registers());
+    assert!(after.contains("phi ptr"), "{after}");
+}
+
+/// An unroll's remainder loop (`n & 3` trips at most three) stored through
+/// `@g`: counting from `-4*trips` up to zero saves a compare a trip and costs
+/// a shift, a negate and an add before the loop. In `recchop` that was +14 B
+/// and +4% cycles against the pin's count-up with a compare.
+#[test]
+fn a_remainder_loop_of_few_trips_keeps_its_count_up_compare() {
+    let (changed, after) = reduced_on(
+        FLAT,
+        "@g = global [64 x i32] zeroinitializer
+define void @f(i32 %n, i32 %init) {
+entry:
+  %t = and i32 %n, 3
+  %go = icmp ne i32 %t, 0
+  br i1 %go, label %loop, label %exit
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %k = add nuw nsw i32 %init, %i
+  %a = getelementptr i32, ptr @g, i32 %k
+  %v = load i32, ptr %a
+  store i32 %v, ptr %a
+  %next = add nuw nsw i32 %i, 1
+  %c = icmp eq i32 %next, %t
+  br i1 %c, label %exit, label %loop
+exit:
+  ret void
+}
+",
+        "core2",
+        &[&[1, 0], &[2, 3], &[3, 5]],
+    );
+    let _ = changed;
+    assert!(!after.contains("-4"), "{after}");
 }

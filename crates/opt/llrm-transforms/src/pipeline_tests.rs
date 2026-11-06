@@ -1392,6 +1392,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "drop-unnecessary-assumes@1577",
             "float2int@1594",
             "lower-constant-intrinsics@1597",
+            "rotate@1621",
             "loop-interchange@1631",
             "drop-unnecessary-assumes@1360",
             "infer-alignment@1362",
@@ -2221,6 +2222,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "drop-unnecessary-assumes@1577",
             "float2int@1594",
             "lower-constant-intrinsics@1597",
+            "rotate@1621",
             "loop-interchange@1631",
             "drop-unnecessary-assumes@1360",
             "infer-alignment@1362",
@@ -2303,6 +2305,31 @@ fn test_the_write_through_promote_runs_after_sroa_only_where_gvn_has_no_pre() {
     let o1 = Applied { options: pipeline::Options { pre: false, ..Default::default() }, ..Applied::default() };
     for (slot, parts) in &parts(&o1) {
         assert!(parts.contains(&"promote"), "{slot} {parts:?}");
+    }
+}
+
+/// `write_through: false` leaves the write-through `Promote` out at -O1 too:
+/// wasm32 jpeg_fixed -O1 forwarded 29 `@inpos` loads across blocks, which the
+/// pin's -O1 (no GVN) does not, and was 259 B over.
+#[test]
+fn test_the_write_through_promote_is_left_out_at_o1_when_the_option_is_off() {
+    let parts = |applied: &Applied| {
+        let mut slots = Vec::new();
+        for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
+            for one in pipeline::llvm_order(applied, phase) {
+                if matches!(one.name(), "sroa@1179" | "promote@1241" | "sroa@646" | "sroa@776") {
+                    slots.push((one.name(), one.parts()));
+                }
+            }
+        }
+        slots
+    };
+    let options = |write_through| pipeline::Options { pre: false, write_through, ..Default::default() };
+    let on = Applied { options: options(true), ..Applied::default() };
+    let off = Applied { options: options(false), ..Applied::default() };
+    assert!(parts(&on).iter().all(|(_, parts)| parts.contains(&"promote")));
+    for (slot, parts) in &parts(&off) {
+        assert!(!parts.contains(&"promote") && !parts.contains(&"deadslots"), "{slot} {parts:?}");
     }
 }
 

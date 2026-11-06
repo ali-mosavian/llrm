@@ -48,3 +48,18 @@ fn the_multiply_high_sequence_stays_at_the_default() {
     let text = assembly("", "%r = srem i32 %a, 11");
     assert!(text.contains("smaddl") && !text.contains("sdiv"), "{text}");
 }
+
+/// A signed divide by a power of two was `sbfm`, `add .. lsr`, `sbfm` at
+/// `optsize` while every other constant divide stayed a divide: nbody_fixed -Os
+/// ran 959160 instructions in 396 B against gcc's 867163 in 428 B.
+#[test]
+fn a_signed_divide_by_a_power_of_two_is_sdiv_at_optsize() {
+    let text = assembly("optsize", "%r = sdiv i32 %a, 512");
+    assert!(text.contains("sdiv") && !text.contains("sbfm"), "{text}");
+}
+
+#[test]
+fn a_signed_divide_by_a_power_of_two_is_shifts_at_the_default() {
+    let text = assembly("", "%r = sdiv i32 %a, 512");
+    assert!(text.contains("sbfm") && !text.contains("sdiv"), "{text}");
+}

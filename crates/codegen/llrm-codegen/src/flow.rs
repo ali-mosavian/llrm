@@ -70,6 +70,7 @@ const UNOPTIMIZED: &[&str] = &[
     "OptimizePHIs",
     "LateCleanup",
     "MachineCombiner",
+    "CmovConversion",
     "PushFold",
     "LoadFold",
     "FixupSetCC",
@@ -79,6 +80,7 @@ const UNOPTIMIZED: &[&str] = &[
     "MachineLICM",
     "IvShare",
     "IvZero",
+    "MaskByAnd",
     "FixupBW",
     "FixupLEAs",
     "CmpAsSub",
@@ -99,14 +101,17 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineLICM", "machinelicm@4"),
     ("IvShare", "machinelicm@4"),
     ("IvZero", "machinelicm@4"),
+    ("MaskByAnd", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
     ("PeepholeOptimizer", "peepholeopt@4"),
     ("MachineCombiner", "combiner@4"),
+    ("CmovConversion", "cmovconversion@4"),
     ("LiveRangeShrink", "liverangeshrink@4"),
     ("MachineScheduler", "machinesched@5"),
     ("FixupSetCC", "fixupsetcc@5"),
     ("CallFrameOpt", "callframe@5"),
+    ("VectorSaves", "callframe@5"),
     ("ReserveCallFrame", "callframe@5"),
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
@@ -181,6 +186,9 @@ pub fn machine_with<'a>(
         // addILPOpts): a chain of one integer operation rebuilt so its late
         // operand joins last.
         Box::new(crate::backend::combiner::MachineCombiner),
+        // On SSA, right after it (the pin's addILPOpts): a conditional move of
+        // a load, or one that waits on its condition in a loop, is a branch.
+        Box::new(crate::backend::cmovconversion::CmovConversion { cpu: target }),
         // On SSA, a loop-invariant computation in the preheader (the pin:
         // EarlyMachineLICM, ahead of MachineCSE).
         Box::new(crate::backend::machinelicm::MachineLicm {
@@ -192,6 +200,11 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::ivshare::IvShare { classes: Rc::clone(classes) }),
         // A counted loop's index ends at zero (DEVIATE LSR3).
         Box::new(crate::backend::ivzero::IvZero { classes: Rc::clone(classes) }),
+        // Where the block runs often enough, `and d,s,mask` for `movzx d,s.low` (DEVIATE MA1).
+        Box::new(crate::backend::maskbyand::MaskByAnd {
+            clocks_saved: target.cost("movzx")? - target.cost("alu_ri")?,
+            milliclocks_per_byte: target.speed_milliclocks_per_byte(),
+        }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
@@ -248,8 +261,8 @@ pub fn machine_with<'a>(
             basic_semantics,
             status_word: classes.status_word(),
         }),
-        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
-        Box::new(twoaddr::TwoAddress { lea: target.three_address() }),
+        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target) }),
+        Box::new(twoaddr::TwoAddress { lea: target.three_address_for(target.size || target.min_size) }),
         Box::new(Coalescer { size: target.size, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
@@ -269,6 +282,13 @@ pub fn machine_with<'a>(
             prices: parcopy::CyclePrices::of(target),
             available: classes.available.clone(),
             saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+        }),
+        // The callee-saved vector registers the body writes get their frame
+        // cells before the call frame is reserved below them.
+        Box::new(crate::backend::vectorsaves::VectorSaves {
+            frame: frame.clone(),
+            saved: registers.vector_saved.iter().map(|(whole, _)| *whole).collect(),
+            bias: registers.slot,
         }),
         // The pin's PEI: the call frame is reserved, or each call adjusts.
         Box::new(crate::backend::callframe::ReserveCallFrame {
@@ -293,10 +313,12 @@ pub fn machine_with<'a>(
             size: target.size,
             widens_byte: target.widens_load(1)?,
             widens_word: target.widens_load(2)?,
+            strict_bytes: target.size || target.min_size || !target.speed_rate,
         }),
         Box::new(crate::backend::fixupleas::FixupLeas {
             slow_3ops: target.slow_3ops_lea(),
             size: target.size,
+            shrink_in_place: target.three_address() == crate::twoaddress::ThreeAddress::AddSubWords,
             ..Default::default()
         }),
         // Once spill traffic is final: which slots a loop still reaches.

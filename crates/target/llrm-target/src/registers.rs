@@ -78,6 +78,20 @@ pub fn parsed() -> usize {
     PARSED.with(std::cell::Cell::get)
 }
 
+/// The depth of the `x87` stack and whether the file has `xmm` roots, of the
+/// register file `text`: parsed once per distinct text, not per question (two
+/// parses per function, 10% of a 600-function module's compile).
+pub fn float_facts(text: &str) -> (usize, bool) {
+    static FACTS: std::sync::Mutex<std::collections::BTreeMap<String, (usize, bool)>> =
+        std::sync::Mutex::new(std::collections::BTreeMap::new());
+    if let Some(&found) = FACTS.lock().expect("the facts lock").get(text) {
+        return found;
+    }
+    let facts = parse(text).map_or((0, false), |all| (of_class(&all, "x87").len(), !of_class(&all, "xmm").is_empty()));
+    FACTS.lock().expect("the facts lock").insert(text.to_owned(), facts);
+    facts
+}
+
 pub fn parse(text: &str) -> Result<Vec<Register>, String> {
     PARSED.with(|parsed| parsed.set(parsed.get() + 1));
     let mut registers = Vec::new();

@@ -708,8 +708,8 @@ pub(crate) fn unroll_remainder_loop(
     }
     let tree = DomTree::of(run.function);
     let loops = LoopInfo::analyze(run.function, || &tree);
-    // `globals` gained the `llvm.assume` declaration the epilog guard needs, which
-    // the module's memoized `Outer::assume_declared` does not know.
+    // `globals` gained the `llvm.assume` declaration the epilog guard needs,
+    // which the module's memoized `Outer::assume_declared` does not know.
     let assumptions = AssumptionCache::of(run.context, &globals, run.metadata, run.function);
     let Some(lp) = loops.get_loop_for(epilog_header) else { return };
     let mut se = ScalarEvolution::new();
@@ -742,12 +742,18 @@ pub(crate) fn unroll_remainder_loop(
     let latches = lp.get_loop_latches(cx.function);
     let capacity = run.function.block_capacity();
     let options = crate::loopunroll::Options { count, max_trip_count: count, max_or_zero, exits };
-    if let Err(error) =
-        crate::loopunroll::unroll_loop_blocks(run.function, epilog_header, &body, &latches, &options, &mut run.emptied)
-    {
+    if let Err(error) = crate::loopunroll::unroll_loop_blocks(
+        run.function,
+        epilog_header,
+        &body,
+        &latches,
+        &options,
+        &mut run.emptied,
+        &mut |_, _, _| {},
+    ) {
         panic!("remainder unroll: {error}");
     }
-    let _ = crate::lcssa::closed(run.function);
+    let _ = crate::lcssa::closed(run.context, run.layout, run.function);
     let analyzed = Analyzed::of(run);
     let after = crate::loopunrollpass::unrolled_blocks(run, capacity, &body);
     simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
@@ -786,7 +792,7 @@ pub(crate) fn unroll_and_jam_loop(
             tti: expansion,
         };
         let done =
-            crate::loopunrollruntime::unroll_runtime_loop_remainder(&mut env, &mut session, header, count, false);
+            crate::loopunrollruntime::unroll_runtime_loop_remainder(&mut env, &mut session, header, count, false, true);
         if done.is_none() {
             llrm_support::debug!("unroll-jam", "the remainder loop could not be generated");
             return Jammed::Unmodified;
@@ -1066,25 +1072,14 @@ pub(crate) fn unroll_and_jam_loop(
     let analyzed = Analyzed::of(run);
     let sub_blocks_now: Blocks =
         analyzed.loops.get_loop_for(sub_header_now).map(|one| one.get_blocks().to_vec()).unwrap_or_default();
-    let did = crate::simplifyindvar::simplified_loop_ivs(
-        run.context,
-        run.layout,
-        run.function,
-        run.declared,
-        run.outer,
-        sub_header_now,
-    );
+    let did = simplified_ivs_of(run, &analyzed, sub_header_now);
     llrm_support::debug!("unroll-jam", "simplified the IVs of the inner loop: {did}");
     simplify_loop_after_unroll(run, Some(&analyzed.loops), &sub_blocks_now);
     if !completely_unroll && count > 1 {
-        let did = crate::simplifyindvar::simplified_loop_ivs(
-            run.context,
-            run.layout,
-            run.function,
-            run.declared,
-            run.outer,
-            header,
-        );
+        // `simplify_loop_after_unroll` may have changed the blocks: the
+        // analyses are made again.
+        let fresh = Analyzed::of(run);
+        let did = simplified_ivs_of(run, &fresh, header);
         llrm_support::debug!("unroll-jam", "simplified the IVs of the outer loop: {did}");
     }
     let analyzed = Analyzed::of(run);
@@ -1350,6 +1345,12 @@ fn compute_unroll_and_jam_count(
         llrm_support::debug!("unroll-jam", "no loop invariant loads");
         return (0, false);
     }
+    // UJ3: a divisor of a known trip count leaves no remainder copy of the nest.
+    if options.on && run.tti.unroll_jam_exact_count() && info.outer_trip_count > 1 && count > 1 {
+        if let Some(exact) = (2..=count).rev().find(|d| info.outer_trip_count % d == 0) {
+            count = exact;
+        }
+    }
     (count, false)
 }
 
@@ -1378,6 +1379,10 @@ impl LoopUnrollAndJam {
             up.unroll_and_jam = true;
             up.partial = true;
             up.runtime = true;
+            // The target's own `PartialThreshold` for the outer loop (UJ2).
+            if let Some(threshold) = run.tti.unroll_jam_partial_threshold_override() {
+                up.partial_threshold = threshold;
+            }
         }
         if let Some(runtime) = self.options.runtime {
             up.runtime = runtime;
@@ -1425,6 +1430,7 @@ impl LoopUnrollAndJam {
             let memory_unit = llrm_analysis::memory::Unit::within(&*run.context, run.layout, &*run.function, run.outer);
             let mut aa = AggregateAA::new();
             aa.add_aa_result(BasicAA::new(&memory_unit));
+            aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(&memory_unit));
             aa.add_aa_result(TypeBasedAA::new(&memory_unit));
             let mut di = DependenceInfo::new(&mut aa, &memory_unit, &cx, self.options.da);
             is_safe_to_unroll_and_jam(&cx, se, &mut di, l)
@@ -1545,7 +1551,7 @@ impl FunctionPass for LoopUnrollAndJam {
         // only if a loop is unrolled and jammed (as in `loopinterchange`).
         let saved = unit.function.clone();
         crate::loopsimplify::simplified(unit.function);
-        let _ = crate::lcssa::closed(unit.function);
+        let _ = crate::lcssa::closed(unit.context, unit.layout, unit.function);
         let mut run = Run {
             context: unit.context,
             layout: unit.layout,
@@ -1561,6 +1567,7 @@ impl FunctionPass for LoopUnrollAndJam {
             peeled: Default::default(),
             finished: Default::default(),
             created: Vec::new(),
+            first: Default::default(),
             scev: llrm_analysis::scev::ScalarEvolution::new(),
             options: UnrollOptions {
                 opt_level: self.opt_level,
@@ -1612,6 +1619,34 @@ impl FunctionPass for LoopUnrollAndJam {
         }
         PreservedAnalyses::none()
     }
+}
+
+/// `simplifyLoopIVs` of the loop headed by `header` over `analyzed`, which
+/// describes the function as it stands, with expressions of its own.
+fn simplified_ivs_of(
+    run: &mut Run,
+    analyzed: &Analyzed,
+    header: BlockId,
+) -> bool {
+    let env = llrm_analysis::scev::expander::Env {
+        globals: run.globals,
+        metadata: run.metadata,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let mut se = ScalarEvolution::new();
+    crate::simplifyindvar::simplified_loop_ivs(
+        run.context,
+        run.layout,
+        run.function,
+        run.declared,
+        run.outer,
+        &mut se,
+        env,
+        header,
+    )
 }
 
 #[cfg(test)]

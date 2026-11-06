@@ -58,6 +58,14 @@ def test_a_divide_gcc_sends_to_libgcc_is_counted_in_its_code(built):
     assert harness.code_bytes("x_ll_div", "gccO2") > object_text + 500, object_text
 
 
+def test_the_per_mnemonic_clocks_add_up_to_the_clocks_of_the_run(built):
+    """--hist prints which instruction kinds the clocks go to (f64 div: 800 IMULs at 31 clocks were the whole gap to libgcc); a table that
+    drops or double-counts an instruction would point at the wrong one, so its sum must be the run's clocks and its counts the instructions."""
+    r = harness.run("fib", "gccO2")
+    assert sum(clk for _, clk in r["by_op"].values()) + r["misaligned"] * harness.MISALIGNED == r["clocks"]
+    assert sum(count for count, _ in r["by_op"].values()) == r["ins"]
+
+
 def test_kernel_inlined_into_main_is_not_counted_as_zero(built):
     """gcc inlined bench_fib into main: the region was never entered and fib read 0 instructions for gcc."""
     assert harness.run("fib", "gccO2")["ins"] > 0
@@ -282,3 +290,20 @@ def test_a_build_whose_long_double_is_not_the_reference_s_is_refused(tmp_path, b
     work, done = build_ld(tmp_path, 80, built, VSGCC_LLRM_LD="-mlong-double-64")
     assert done.returncode != 0 and "FAIL long double: llrm is 8 bytes, the reference 12 (80 bit)" in done.stdout, (done.stdout, done.stderr)
     assert build_ld(tmp_path, 70, built)[1].returncode == 2
+
+
+def test_novec_build_turns_gccs_vectorizer_off(built, tmp_path):
+    """gcc 13 vectorizes at -O3 even for i486 (nbody_fixed O3 1,514 B/4.60M clocks vs 1,960 B/4.63M scalar): the table had no scalar column.
+    VSGCC_NOVEC=1 builds gcc with -fno-tree-vectorize -fno-tree-slp-vectorize: its -O3 object changes, clang's does not."""
+    import subprocess
+    work = tmp_path / "novec"
+    (work / "o").mkdir(parents=True)
+    (work / "b").mkdir()
+    for name in ("stub.o", "stub.elf", "stub.elf.src"):
+        (work / name).write_bytes((built / name).read_bytes())
+    done = subprocess.run([str(HERE / "build.sh"), "nbody"], capture_output=True, text=True,
+                          env={**os.environ, "VSGCC_WORK": str(work), "VSGCC_NOVEC": "1"})
+    assert done.returncode == 0 and "FAIL" not in done.stdout, (done.stdout, done.stderr)
+    obj = lambda w, c: (w / "b" / f"nbody.{c}O3.o").read_bytes()
+    assert obj(work, "gcc") != obj(built, "gcc")
+    assert obj(work, "clang") == obj(built, "clang")

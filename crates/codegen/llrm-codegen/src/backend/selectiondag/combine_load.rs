@@ -190,9 +190,18 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let value = self.dag.operand(store, 1);
         let st_type = self.dag.value_type(value);
         // An x87 value lives on a stack that one stored value read twice cannot
-        // share: only integers are forwarded.
+        // share: floats are forwarded only where they are in registers, and
+        // then only as the same type (the pin's bitcast cases are not
+        // modelled).
         if ![ld_type, ld_mem, st_type, st_mem].iter().all(|vt| vt.is_integer()) {
-            return None;
+            let plain_float = ld_type.is_floating_point()
+                && ld_type == st_type
+                && ld_mem == st_mem
+                && ld_type == ld_mem
+                && ld.ext.is_none();
+            if self.dag.config().fp_stack || !plain_float {
+                return None;
+            }
         }
         // Normalize for endianness: offset 0 is then the stored value's least
         // significant byte.
@@ -212,7 +221,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         self.replace_value(SDValue { node: node.node, res: 1 }, chain);
         // `CombineTo` removes the load at once.
         self.dag.delete_replaced(node.node);
-        self.requeue_survivors();
+        self.queue_survivors();
         Some(node)
     }
 

@@ -308,3 +308,17 @@ fn test_a_declaration_holds_room_for_its_parameters_only() {
     let declaration = crate::build::function_declaration(&module.context, "f", ty).expect("a function type");
     assert_eq!(declaration.parameter_attrs.capacity(), 5);
 }
+
+/// A global renamed or pushed after the first lookup is still found, and one
+/// renamed away is not.
+#[test]
+fn a_global_named_after_the_first_lookup_is_found() {
+    let mut module = parse::module("declare void @a()\ndeclare void @b()\n").unwrap();
+    assert_eq!(module.named("b").map(|id| id.0), Some(1));
+    module.globals[1].name = "c".to_owned().into();
+    assert_eq!(module.named("b"), None);
+    assert_eq!(module.named("c").map(|id| id.0), Some(1));
+    let copy = module.globals[0].clone();
+    module.globals.push(crate::module::GlobalValue { name: "d".to_owned().into(), ..copy });
+    assert_eq!(module.named("d").map(|id| id.0), Some(2));
+}

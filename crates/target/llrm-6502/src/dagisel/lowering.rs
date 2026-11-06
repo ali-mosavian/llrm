@@ -57,7 +57,9 @@ pub mod cond {
 
 pub fn target_lowering() -> TargetLowering {
     use ISD::*;
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float());
+    let mut tl = TargetLowering::empty(
+        TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_int_size(16),
+    );
     tl.init_actions();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
@@ -72,11 +74,17 @@ pub fn target_lowering() -> TargetLowering {
     {
         tl.set_load_ext_action(LoadExt::SExtLoad, vt, mem, Action::Expand);
     }
-    // and a zero- or any-extending one to a type that is not a register is not
-    // formed, to be split again
-    for (vt, mem) in
-        [(MVT::I32, MVT::I8), (MVT::I32, MVT::I16), (MVT::I64, MVT::I8), (MVT::I64, MVT::I16), (MVT::I64, MVT::I32)]
-    {
+    // and a zero- or any-extending one is not selected from a global's address
+    // (a pointer pair and `lda (zp),y` where `lda abs` is one instruction),
+    // or at all to a type that is not a register: split again
+    for (vt, mem) in [
+        (MVT::I16, MVT::I8),
+        (MVT::I32, MVT::I8),
+        (MVT::I32, MVT::I16),
+        (MVT::I64, MVT::I8),
+        (MVT::I64, MVT::I16),
+        (MVT::I64, MVT::I32),
+    ] {
         for ext in [LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, mem, Action::Expand);
         }
@@ -99,10 +107,7 @@ pub fn target_lowering() -> TargetLowering {
     // variable ones expand to runtime calls where they are emitted.
     set(&[Mul, SDiv, SRem, Shl, Srl, Sra], Action::Legal);
     set(&[SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
-    // An unsigned word multiply with overflow stays refused ("convert node to
-    // libcall"): expanded wide, its flag's extension is not lowered
-    // (CannotSelect ZeroExtend). Exit: 2026-11-12.
-    set(&[UMulO], Action::LibCall);
+    set(&[UMulO], Action::Expand);
     // an unsigned divide and remainder are the one runtime call that makes
     // both: the legalizer expands each to the `UDIVREM` node, and the pair
     // of one dividend and divisor is one node
@@ -213,12 +218,13 @@ impl Hooks for MosLowering {
                 split,
                 variadic: false,
                 sret: false,
+                byval: None,
             }));
         }
         let count = if ret.size_in_bits() > 16 { ret.size_in_bits() / 16 } else { 1 };
         let part_vt = if count > 1 { EVT::I16 } else { ret };
         let ins = vec![
-            In { vt: part_vt, pointer: false, arg_vt: ret, split: count > 1, sret: false, ext: Ext::Any };
+            In { vt: part_vt, pointer: false, arg_vt: ret, split: count > 1, sret: false, ext: Ext::Any, byval: None };
             count as usize
         ];
         let callee = dag.get_target_external_symbol(EVT::I16, name);
@@ -364,10 +370,21 @@ fn lower_extend(
     // the flag of an overflow op is not a condition yet: its expansion makes
     // one, and the extension is lowered when that is done (`condition_byte` has
     // no byte for it and would widen the flag with this very node)
-    if matches!(dag.opcode(condition), ISD::SAddO | ISD::SSubO | ISD::SMulO) {
+    if matches!(dag.opcode(condition), ISD::SAddO | ISD::SSubO | ISD::SMulO | ISD::UMulO) {
         return node;
     }
     let vt = dag.value_type(node);
+    // the carry an add or subtract leaves is `0 + 0 + C`, not a select on it
+    if dag.opcode(node) != ISD::SignExtend
+        && condition.res == 1
+        && matches!(
+            dag.opcode(condition),
+            ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry
+        )
+    {
+        let byte = condition_byte(dag, condition);
+        return if vt == EVT::I8 { byte } else { dag.get_node(ISD::ZeroExtend, vt, &[byte]) };
+    }
     // a logic op over compares is a byte of 0 or 1 already (`condition_byte`):
     // widened, it is that byte, not a select that tests the byte it was
     // just made into
@@ -607,15 +624,7 @@ fn condition_byte(
             }
             // the carry an add or subtract leaves in C: `0 + 0 + C`, and for
             // a borrow `0 - 0 - C` (all ones) masked to the bit
-            op @ (ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry) if value.res == 1 => {
-                let zero = dag.get_constant(0, EVT::I8);
-                let adds = matches!(op, ISD::UAddO | ISD::UAddOCarry);
-                let widen = if adds { ISD::UAddOCarry } else { ISD::USubOCarry };
-                let pair = dag.get_node_multi(widen, &[EVT::I8, EVT::I1], &[zero, zero, value]);
-                let byte = SDValue { node: pair.node, res: 0 };
-                let one = dag.get_constant(1, EVT::I8);
-                if adds { byte } else { dag.get_node(ISD::And, EVT::I8, &[byte, one]) }
-            }
+            ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry if value.res == 1 => carry_byte(dag, value),
             ISD::Select => {
                 let (test, a, b) = (dag.operand(value, 0), dag.operand(value, 1), dag.operand(value, 2));
                 let (a, b) = (condition_byte(dag, a), condition_byte(dag, b));
@@ -628,8 +637,28 @@ fn condition_byte(
             }
             _ => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
         },
+        // the boolean of a saturating subtract's expansion is a byte
+        // (`getSetCCResultType`): the same borrow, which read as C is inverted
+        EVT::I8 if value.res == 1 && matches!(dag.opcode(value), ISD::USubO | ISD::USubOCarry) => {
+            carry_byte(dag, value)
+        }
         _ => value,
     }
+}
+
+/// The carry an add or subtract leaves in C as a byte of 0 or 1: `0 + 0 + C`,
+/// and for a borrow `0 - 0 - C` (all ones) masked to the bit.
+fn carry_byte(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+) -> SDValue {
+    let zero = dag.get_constant(0, EVT::I8);
+    let adds = matches!(dag.opcode(value), ISD::UAddO | ISD::UAddOCarry);
+    let widen = if adds { ISD::UAddOCarry } else { ISD::USubOCarry };
+    let pair = dag.get_node_multi(widen, &[EVT::I8, EVT::I1], &[zero, zero, value]);
+    let byte = SDValue { node: pair.node, res: 0 };
+    let one = dag.get_constant(1, EVT::I8);
+    if adds { byte } else { dag.get_node(ISD::And, EVT::I8, &[byte, one]) }
 }
 
 /// `LowerSELECT`: `CMOV false, true, cc, flags`.

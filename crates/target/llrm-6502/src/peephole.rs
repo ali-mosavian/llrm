@@ -2,14 +2,19 @@
 //! instructions.
 //!
 //! # How it works
-//! Five passes walk the lines of an [`Asm`] once each. What an instruction does
-//! to `a` and to the zero and sign flags comes from [`crate::asm::Op::flags`],
-//! so a pass asks "does this instruction set the flags" and does not list
-//! mnemonics:
+//! Seven passes walk the lines of an [`Asm`] once each. What an instruction
+//! does to `a` and to the zero and sign flags comes from
+//! [`crate::asm::Op::flags`], so a pass asks "does this instruction set the
+//! flags" and does not list mnemonics:
 //!
 //! - [`drop_reloads`]: `sta m; lda m` (likewise `x`, `y`) of a zero-page or
 //!   spill cell, when the load's flags are unread. A carry flag op or a store
 //!   to another cell in between leaves the register and the cell as they were.
+//! - [`fold_known_cells`]: `lda rc8` (likewise the other loads and `cmp`,
+//!   `adc`, `sbc`, `and`, `ora`, `eor`) of a cell the function stored an
+//!   immediate into becomes `lda #n`: the value is known, and the passes after
+//!   it can drop the load or the compare. A call keeps `rc8`..`rc15`
+//!   (callee-saved); a label forgets everything.
 //! - [`drop_known_loads`]: `ldx #n` of what the register already holds, tracked
 //!   through immediates and transfers, forgotten at a label, a call or an
 //!   instruction not listed.
@@ -17,11 +22,22 @@
 //!   on zero or sign, after an instruction that set those flags from that
 //!   register. Labels between the two do not matter: a path that jumps to one
 //!   brings its own flags.
+//! - [`load_straight_into_a`]: `ldx m; ...; txa` (likewise `ldy` and `tya`)
+//!   with only loads and stores of other bytes between, and `x` dead after the
+//!   transfer: `lda m`.
+//! - [`store_before_transfer`]: `tax; ...; stx m` (likewise `tay` and `sty`)
+//!   with only work on `a` between, `m` untouched and the index register dead
+//!   after: `sta m` where the transfer was.
 //! - [`drop_cancelling_transfers`]: `tya; tay` and its three twins: the second
 //!   moves what the first just moved.
 //! - [`branch_on_shift_carry`]: `ldx m; bpl` after `asl|rol c` where `c` held
 //!   what `m` holds: the shift's carry is `m`'s top bit, so `bcc` replaces
 //!   both.
+//! - [`step_in_place`]: `lda #1; clc; adc m; sta m` (also `lda m; clc; adc #1;
+//!   sta m`, `lda m; sec; sbc #1; sta m` and the 65C02's `lda m; inc a; sta m`,
+//!   each a step of 1) of a byte in memory, with `a` and the carry dead after:
+//!   `inc m` (`dec m`), which sets the sign and zero flags as the store left
+//!   them.
 //! - [`jump_to_return`]: `jmp l` where `l:` is a lone `rts` becomes `rts`.
 //!
 //! DEVIATE: LLVM's `PeepholeOptimizer` and `MachineCSE` work on allocated
@@ -46,12 +62,17 @@ use crate::asm::{Asm, Flags, Index, Inst, Line, Op, Operand, Registers};
 
 /// Whether the zero and sign flags are set again before anything reads them,
 /// from `lines[from]` on.
-fn flags_unread_after(
+pub(crate) fn flags_unread_after(
     lines: &[Line],
     from: usize,
 ) -> bool {
     for line in &lines[from..] {
         let Line::Inst(inst) = line else { return false };
+        // a jump leaves the block: no block reads the flags its predecessor
+        // left
+        if inst.op == Op::Jmp {
+            return true;
+        }
         match inst.flags() {
             Flags::Keeps => {}
             Flags::Of(_) | Flags::Sets => return true,
@@ -78,10 +99,18 @@ fn sets_nz_of(
 
 /// The passes, in the order they feed each other.
 pub fn run(asm: &mut Asm) {
+    fold_known_cells(asm);
     drop_reloads(asm);
     drop_known_loads(asm);
     drop_zero_compares(asm);
+    step_in_place(asm);
+    load_straight_into_a(asm);
+    store_before_transfer(asm);
     drop_cancelling_transfers(asm);
+    crate::peephole_cells::arithmetic_chain_in_a(asm);
+    crate::peephole_cells::chain_ends_in_a(asm);
+    crate::peephole_cells::drop_dead_stores(asm);
+    crate::peephole_cells::store_then_index_load(asm);
     branch_on_shift_carry(asm);
     jump_to_return(asm);
 }
@@ -143,6 +172,104 @@ fn retain(
     asm.lines.retain(|_| *keep.next().unwrap());
 }
 
+/// Whether a call keeps the cell `name`: `rc8`..`rc15` are callee-saved.
+fn kept_by_calls(name: &str) -> bool {
+    name.strip_prefix("rc").and_then(|n| n.parse::<u8>().ok()).is_some_and(|n| (8..=15).contains(&n))
+}
+
+/// A load or an ALU operation of a cell that holds a known immediate reads the
+/// immediate instead. The values known are the immediates loaded into a
+/// register and stored from it (`sta`, `stx`, `sty`, `stz`) to a zero-page or
+/// spill cell, forgotten when the cell is written another way, at a label, at
+/// an instruction not listed, and at a call for every cell but `rc8`..`rc15`.
+/// A store through a pointer or an index may write any cell.
+pub fn fold_known_cells(asm: &mut Asm) {
+    let mut registers: [Option<String>; 3] = [None, None, None];
+    let mut cells: std::collections::HashMap<String, String> = Default::default();
+    let register_of = |op: Op| match op {
+        Op::Lda | Op::Sta | Op::Cmp => 0,
+        Op::Ldx | Op::Stx | Op::Cpx => 1,
+        _ => 2,
+    };
+    for line in &mut asm.lines {
+        let Line::Inst(inst) = line else {
+            registers = Default::default();
+            cells.clear();
+            continue;
+        };
+        let cell = match &inst.operand {
+            Operand::Direct(name) if inst.operand.is_cell() => Some(name.clone()),
+            _ => None,
+        };
+        let known = cell.as_ref().and_then(|name| cells.get(name)).cloned();
+        match inst.op {
+            Op::Lda | Op::Ldx | Op::Ldy => {
+                if let Some(value) = known {
+                    inst.operand = Operand::Imm(value);
+                }
+                registers[register_of(inst.op)] = match &inst.operand {
+                    Operand::Imm(value) => Some(value.clone()),
+                    _ => None,
+                };
+            }
+            Op::Cmp | Op::Cpx | Op::Cpy => {
+                if let Some(value) = known {
+                    inst.operand = Operand::Imm(value);
+                }
+            }
+            Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor => {
+                if let Some(value) = known {
+                    inst.operand = Operand::Imm(value);
+                }
+                registers[0] = None;
+            }
+            Op::Sta | Op::Stx | Op::Sty => match (&inst.operand, cell) {
+                (_, Some(name)) => match &registers[register_of(inst.op)] {
+                    Some(value) => drop(cells.insert(name, value.clone())),
+                    None => drop(cells.remove(&name)),
+                },
+                // a global named directly is not a cell
+                (Operand::Direct(_), None) => {}
+                _ => cells.clear(),
+            },
+            Op::Stz => match (&inst.operand, cell) {
+                (_, Some(name)) => drop(cells.insert(name, "0".to_owned())),
+                (Operand::Direct(_), None) => {}
+                _ => cells.clear(),
+            },
+            Op::Inc | Op::Dec | Op::Asl | Op::Lsr | Op::Rol | Op::Ror => match (&inst.operand, cell) {
+                (Operand::Acc | Operand::None, _) => registers[0] = None,
+                (_, Some(name)) => drop(cells.remove(&name)),
+                (Operand::Direct(_), None) => {}
+                _ => cells.clear(),
+            },
+            Op::Inx | Op::Dex => registers[1] = None,
+            Op::Iny | Op::Dey => registers[2] = None,
+            Op::Pla => registers[0] = None,
+            Op::Txa => registers[0] = registers[1].clone(),
+            Op::Tya => registers[0] = registers[2].clone(),
+            Op::Tax => registers[1] = registers[0].clone(),
+            Op::Tay => registers[2] = registers[0].clone(),
+            Op::Clc | Op::Sec | Op::Pha | Op::Nop | Op::Bit => {}
+            Op::Jsr => {
+                registers = Default::default();
+                match &inst.operand {
+                    Operand::Direct(callee) if !callee.starts_with("__csave") && !callee.starts_with("__crest") => {
+                        cells.retain(|name, _| kept_by_calls(name));
+                    }
+                    _ => cells.clear(),
+                }
+            }
+            // a branch not taken falls through with all that is known here
+            op if op.opposite().is_some() => {}
+            _ => {
+                registers = Default::default();
+                cells.clear();
+            }
+        }
+    }
+}
+
 /// `ldx #n` (likewise `lda` and `ldy`) of what the register already holds: it
 /// goes, unless a branch reads the flags it sets. The values known are the
 /// immediates loaded and the transfers between registers, forgotten at a
@@ -150,11 +277,30 @@ fn retain(
 pub fn drop_known_loads(asm: &mut Asm) {
     let mut known: [Option<&str>; 3] = [None; 3];
     let mut keep = vec![true; asm.lines.len()];
+    let mut stores: Vec<(usize, Inst)> = Vec::new();
+    let mut skip = 0;
     for (at, line) in asm.lines.iter().enumerate() {
+        if at < skip {
+            continue;
+        }
         let Line::Inst(Inst { op, operand, .. }) = line else {
             known = [None; 3];
             continue;
         };
+        // `pha; lda #n; sta m; pla` (a literal made into a cell while `a` is
+        // live) is one store when `x` or `y` already holds `n`
+        if *op == Op::Pha
+            && let [Some(Line::Inst(load)), Some(Line::Inst(store)), Some(Line::Inst(pull))] =
+                [1, 2, 3].map(|n| asm.lines.get(at + n))
+            && (load.op, store.op, pull.op) == (Op::Lda, Op::Sta, Op::Pla)
+            && let (Operand::Imm(value), Operand::Direct(_)) = (&load.operand, &store.operand)
+            && flags_unread_after(&asm.lines, at + 4)
+            && let Some(by) = [(1, Op::Stx), (2, Op::Sty)].into_iter().find(|(r, _)| known[*r] == Some(value.as_str()))
+        {
+            stores.push((at, Inst { op: by.1, operand: store.operand.clone(), place: store.place }));
+            skip = at + 4;
+            continue;
+        }
         let register = match op {
             Op::Lda => Some(0),
             Op::Ldx => Some(1),
@@ -188,6 +334,10 @@ pub fn drop_known_loads(asm: &mut Asm) {
             _ => known = [None; 3],
         }
     }
+    for (at, store) in stores {
+        asm.lines[at] = Line::Inst(store);
+        keep[at + 1..at + 4].fill(false);
+    }
     retain(asm, &keep);
 }
 
@@ -200,15 +350,23 @@ fn leaves_cell_and_registers(
     let Line::Inst(Inst { op, operand, .. }) = line else { return false };
     match op {
         Op::Clc | Op::Sec | Op::Nop => true,
-        Op::Sta | Op::Stx | Op::Sty => operand.is_cell() && operand != load,
+        // a store changes no register, and no cell but its own: a global named
+        // directly or indexed is not a cell, a zero-page indexed store or one
+        // through a pointer may be
+        Op::Sta | Op::Stx | Op::Sty | Op::Stz => match operand {
+            Operand::Direct(_) => operand != load,
+            Operand::Indexed(name, _) => !(name.starts_with("rc") || name.starts_with("s_")),
+            _ => false,
+        },
         _ => false,
     }
 }
 
-/// `sta m` then `lda m` (likewise `x` and `y`) of a zero-page or spill cell:
-/// the register still holds it, so the load goes. It also set the zero and sign
-/// flags, so it stays when a branch reads them before anything sets them again.
-/// A carry flag op or a store to another cell between the two changes neither.
+/// `sta m` or `lda m` then `lda m` (likewise `x` and `y`) of a zero-page or
+/// spill cell: the register still holds it, so the load goes. It also set the
+/// zero and sign flags, so it stays when a branch reads them before anything
+/// sets them again. A carry flag op or a store to anything but `m` between the
+/// two changes neither.
 pub fn drop_reloads(asm: &mut Asm) {
     let lines = &asm.lines;
     let keep: Vec<bool> = (0..lines.len())
@@ -226,12 +384,168 @@ pub fn drop_reloads(asm: &mut Asm) {
                     .rev()
                     .find(|before| !leaves_cell_and_registers(before, operand))
                     .and_then(Line::inst)
-                    .is_some_and(|before| before.op == store && before.operand == *operand)
+                    .is_some_and(|before| (before.op == store || before.op == *load) && before.operand == *operand)
                 && flags_unread_after(lines, at + 1);
             !reload
         })
         .collect();
     retain(asm, &keep);
+}
+
+/// `ldx m; ...; txa` (likewise `ldy m` and `tya`): `lda m`, where between the
+/// two only `a` and the flags are worked on, nothing writes `m` or touches the
+/// index register, every branch goes where the register is dead, and it is dead
+/// after the transfer. The flags are those of `m` either way. (A word compare
+/// that read a pointer's high half through `y` was `ldy rc7; lda rc6; cmp rc2;
+/// bne; tya; cmp rc3`.)
+pub fn load_straight_into_a(asm: &mut Asm) {
+    // one load each round: the transfer of the first may stand between the
+    // second and its own
+    while load_straight_once(asm) {}
+}
+
+fn load_straight_once(asm: &mut Asm) -> bool {
+    let lines = &asm.lines;
+    let exits = Exits::of(asm);
+    let label_at = |name: &str| lines.iter().position(|line| matches!(line, Line::Label(l) if l == name));
+    let mut drops: Vec<(usize, usize)> = Vec::new();
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Inst(Inst { op: load @ (Op::Ldx | Op::Ldy), operand: from @ Operand::Direct(_), .. }) = line else {
+            continue;
+        };
+        let (transfer, register) = if *load == Op::Ldx { (Op::Txa, Registers::X) } else { (Op::Tya, Registers::Y) };
+        let mut to = None;
+        for (next, line) in lines.iter().enumerate().skip(at + 1) {
+            let Line::Inst(Inst { op, operand, .. }) = line else { break };
+            if *op == transfer {
+                to = Some(next);
+                break;
+            }
+            let index = if register == Registers::X { Index::X } else { Index::Y };
+            let touches_index = matches!(operand, Operand::Indexed(_, i) if *i == index)
+                || matches!(
+                    (operand, register),
+                    (Operand::IndirectX(_), Registers::X) | (Operand::IndirectY(_), Registers::Y)
+                );
+            let quiet = !touches_index
+                && match op {
+                    Op::Clc
+                    | Op::Sec
+                    | Op::Nop
+                    | Op::Lda
+                    | Op::Cmp
+                    | Op::Adc
+                    | Op::Sbc
+                    | Op::And
+                    | Op::Ora
+                    | Op::Eor => true,
+                    Op::Sta => matches!(operand, Operand::Direct(_)) && operand != from,
+                    Op::Beq | Op::Bne | Op::Bcc | Op::Bcs | Op::Bmi | Op::Bpl => match operand {
+                        Operand::Direct(target) => label_at(target)
+                            .is_some_and(|label| dead_from(lines, label, register, &mut HashSet::default(), exits)),
+                        _ => false,
+                    },
+                    // the other index register: a load or store of another byte
+                    Op::Ldx | Op::Stx if register == Registers::Y => {
+                        matches!(operand, Operand::Direct(_) | Operand::Imm(_)) && (*op == Op::Ldx || operand != from)
+                    }
+                    Op::Ldy | Op::Sty if register == Registers::X => {
+                        matches!(operand, Operand::Direct(_) | Operand::Imm(_)) && (*op == Op::Ldy || operand != from)
+                    }
+                    _ => false,
+                };
+            if !quiet {
+                break;
+            }
+        }
+        if let Some(to) = to
+            && dead_from(lines, to + 1, register, &mut HashSet::default(), exits)
+        {
+            drops.push((at, to));
+        }
+    }
+    let changed = !drops.is_empty();
+    let mut keep = vec![true; asm.lines.len()];
+    for (at, to) in drops {
+        let Line::Inst(Inst { operand, .. }) = &asm.lines[at] else { continue };
+        let operand = operand.clone();
+        if let Line::Inst(inst) = &mut asm.lines[to] {
+            inst.op = Op::Lda;
+            inst.operand = operand;
+        }
+        keep[at] = false;
+    }
+    retain(asm, &keep);
+    changed
+}
+
+/// `tax; ...; stx m` (likewise `tay` and `sty`): the byte is in `a` at the
+/// transfer, so `sta m` there, when between the two only `a` is worked on, `m`
+/// is not touched, nothing reads or writes the index register, and the register
+/// is dead after the store. The flags the transfer set are set again before a
+/// read. (A pointer plus a constant went `adc #3; tax; lda rc1; adc #0; tay;
+/// stx rc6; sty rc7` where `adc #3; sta rc6; lda rc1; adc #0; sta rc7` does.)
+pub fn store_before_transfer(asm: &mut Asm) {
+    while store_before_once(asm) {}
+}
+
+fn store_before_once(asm: &mut Asm) -> bool {
+    let lines = &asm.lines;
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Inst(Inst { op: transfer @ (Op::Tax | Op::Tay), .. }) = line else { continue };
+        let (store, register, other_transfer, other_load, other_store) = if *transfer == Op::Tax {
+            (Op::Stx, Registers::X, Op::Tay, Op::Ldy, Op::Sty)
+        } else {
+            (Op::Sty, Registers::Y, Op::Tax, Op::Ldx, Op::Stx)
+        };
+        let index = if register == Registers::X { Index::X } else { Index::Y };
+        let mut found = None;
+        let mut target: Option<&Operand> = None;
+        for (next, line) in lines.iter().enumerate().skip(at + 1) {
+            let Line::Inst(Inst { op, operand, .. }) = line else { break };
+            if *op == store {
+                if matches!(operand, Operand::Direct(_)) {
+                    found = Some(next);
+                    target = Some(operand);
+                }
+                break;
+            }
+            let touches_index = matches!(operand, Operand::Indexed(_, i) if *i == index)
+                || matches!(
+                    (operand, register),
+                    (Operand::IndirectX(_), Registers::X) | (Operand::IndirectY(_), Registers::Y)
+                );
+            let quiet = !touches_index
+                && match op {
+                    Op::Clc | Op::Sec | Op::Nop => true,
+                    Op::Lda | Op::Cmp | Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor => {
+                        matches!(operand, Operand::Direct(_) | Operand::Imm(_))
+                    }
+                    Op::Sta => matches!(operand, Operand::Direct(_)),
+                    o if *o == other_transfer || *o == other_load => {
+                        matches!(operand, Operand::Direct(_) | Operand::Imm(_) | Operand::None)
+                    }
+                    o if *o == other_store => matches!(operand, Operand::Direct(_)),
+                    _ => false,
+                };
+            if !quiet {
+                break;
+            }
+        }
+        let (Some(to), Some(cell)) = (found, target) else { continue };
+        // `m` is neither read nor written between the two
+        let untouched = lines[at + 1..to].iter().all(|line| line.inst().is_none_or(|i| i.operand != *cell));
+        if untouched
+            && flags_unread_after(lines, at + 1)
+            && dead_from(lines, to + 1, register, &mut HashSet::default(), Exits::default())
+        {
+            let cell = cell.clone();
+            asm.lines[at] = Line::Inst(Inst { op: Op::Sta, operand: cell, place: 0 });
+            asm.lines.remove(to);
+            return true;
+        }
+    }
+    false
 }
 
 /// `tya; tay`, `tay; tya`, `txa; tax` and `tax; txa`: the second transfer
@@ -297,14 +611,49 @@ fn writes_cell(
         && inst.operand == *cell
 }
 
+/// What the function lets `dead_from` assume about the instructions that leave
+/// it or call out. The default assumes nothing: a return reads the register and
+/// so does a call.
+#[derive(Clone, Copy, Default)]
+struct Exits<'a> {
+    /// A return does not read `a`: the function leaves nothing there.
+    no_a_result: bool,
+    /// The routines called with an argument in `a`; a call to any other one
+    /// writes `a` without reading it. `None`: every call reads it.
+    a_callees: Option<&'a std::collections::BTreeSet<String>>,
+    /// A return does not read `x`: the function leaves nothing there.
+    no_x_result: bool,
+    /// The routines called with an argument in `x`; a call to any other that is
+    /// not a runtime routine (`__`) writes `x` without reading it. `None`:
+    /// every call reads it.
+    x_callees: Option<&'a std::collections::BTreeSet<String>>,
+    /// The same for `y`.
+    no_y_result: bool,
+    y_callees: Option<&'a std::collections::BTreeSet<String>>,
+}
+
+impl<'a> Exits<'a> {
+    fn of(asm: &'a Asm) -> Exits<'a> {
+        Exits {
+            no_a_result: asm.no_a_result,
+            a_callees: Some(&asm.a_callees),
+            no_x_result: asm.no_x_result,
+            x_callees: Some(&asm.x_callees),
+            no_y_result: asm.no_y_result,
+            y_callees: Some(&asm.y_callees),
+        }
+    }
+}
+
 /// Whether register `bit` (A, X or Y) is written before it is read, along every
-/// path from `lines[from]`. A call, a return or an instruction not listed
-/// counts as a read.
+/// path from `lines[from]`. An instruction not listed counts as a read; a call
+/// and a return do as `exits` says.
 fn dead_from(
     lines: &[Line],
     from: usize,
     bit: Registers,
     seen: &mut HashSet<usize>,
+    exits: Exits,
 ) -> bool {
     let mut at = from;
     while let Some(line) = lines.get(at) {
@@ -372,6 +721,36 @@ fn dead_from(
                 _,
             ) => (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false),
             (Op::Lda | Op::Ldx | Op::Ldy, _) => (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false),
+            (Op::Rts, _) => {
+                return bit == Registers::A && exits.no_a_result
+                    || bit == Registers::X && exits.no_x_result
+                    || bit == Registers::Y && exits.no_y_result;
+            }
+            (Op::Jsr, _) if bit == Registers::X || bit == Registers::Y => {
+                // the callee writes `x` (a result) or `y` (scratch) unless it
+                // was an argument; a runtime routine may take
+                // one that no instruction lists
+                let callee = match &inst.operand {
+                    Operand::Direct(name) if !name.starts_with("__") => name,
+                    _ => return false,
+                };
+                let callees = if bit == Registers::X { exits.x_callees } else { exits.y_callees };
+                match callees {
+                    Some(set) if !set.contains(callee) => return true,
+                    _ => return false,
+                }
+            }
+            (Op::Jsr, _) if bit == Registers::A => {
+                // the callee clobbers `a`: it is dead unless it was an argument
+                let callee = match &inst.operand {
+                    Operand::Direct(name) => name,
+                    _ => return false,
+                };
+                match exits.a_callees {
+                    Some(set) if !set.contains(callee) => return true,
+                    _ => return false,
+                }
+            }
             (Op::Jmp, _) => {
                 return inst
                     .target()
@@ -379,13 +758,13 @@ fn dead_from(
                         |label| lines
                             .iter()
                             .position(|l| *l == Line::Label(label.to_owned()))
-                            .is_some_and(|to| dead_from(lines, to, bit, seen)),
+                            .is_some_and(|to| dead_from(lines, to, bit, seen, exits)),
                     );
             }
             (op, _) if op.opposite().is_some() || op == Op::Bra => {
                 let target =
                     inst.target().and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())));
-                let taken = target.is_some_and(|to| dead_from(lines, to, bit, seen));
+                let taken = target.is_some_and(|to| dead_from(lines, to, bit, seen, exits));
                 if op == Op::Bra {
                     return taken;
                 }
@@ -573,5 +952,147 @@ fn carry_branch(
             return None;
         }
     };
-    (copied && dead_from(&asm.lines, at + 1, tested, &mut HashSet::default())).then_some((carry, from))
+    (copied && dead_from(&asm.lines, at + 1, tested, &mut HashSet::default(), Exits::default()))
+        .then_some((carry, from))
+}
+
+/// The memory byte a step of one was added to and stored back, and the step
+/// (`true`: up), when `lines[at..at + 4]` (or three, for `inc a`) is one:
+/// the length of the match too.
+fn step_of(
+    lines: &[Line],
+    at: usize,
+) -> Option<(Operand, bool, usize)> {
+    let inst = |n: usize| lines.get(at + n).and_then(Line::inst);
+    let memory = |operand: &Operand| {
+        matches!(operand, Operand::Direct(_) | Operand::Indexed(_, Index::X)).then(|| operand.clone())
+    };
+    let first = inst(0)?;
+    let imm = |inst: &Inst, value: &str| inst.operand == Operand::Imm(value.to_owned());
+    // `lda #1; clc; adc m; sta m`
+    if first.op == Op::Lda && (imm(first, "1") || imm(first, "255")) {
+        let (carry, add, store) = (inst(1)?, inst(2)?, inst(3)?);
+        let up = imm(first, "1");
+        let m = memory(&add.operand)?;
+        if carry.op == Op::Clc && add.op == Op::Adc && store.op == Op::Sta && store.operand == m {
+            return Some((m, up, 4));
+        }
+        return None;
+    }
+    let m = memory(&first.operand).filter(|_| first.op == Op::Lda)?;
+    let (step, store) = (inst(1)?, inst(2)?);
+    // `lda m; inc a; sta m`
+    if matches!(step.op, Op::Inc | Op::Dec) && matches!(step.operand, Operand::Acc | Operand::None) {
+        if store.op == Op::Sta && store.operand == m {
+            return Some((m, step.op == Op::Inc, 3));
+        }
+        return None;
+    }
+    // `lda m; clc; adc #1; sta m` and `lda m; sec; sbc #1; sta m`
+    let (add, store) = (inst(2)?, inst(3)?);
+    if store.op != Op::Sta || store.operand != m || !imm(add, "1") {
+        return None;
+    }
+    match (step.op, add.op) {
+        (Op::Clc, Op::Adc) => Some((m, true, 4)),
+        (Op::Sec, Op::Sbc) => Some((m, false, 4)),
+        _ => None,
+    }
+}
+
+/// Whether the carry is written before it is read, along every path from
+/// `lines[from]`. A call or a return counts as a write: no routine takes the
+/// carry in, and none leaves it for a caller to read.
+fn carry_dead_from(
+    lines: &[Line],
+    from: usize,
+    seen: &mut HashSet<usize>,
+) -> bool {
+    let mut at = from;
+    while let Some(line) = lines.get(at) {
+        if !seen.insert(at) {
+            return true;
+        }
+        at += 1;
+        let inst = match line {
+            Line::Inst(inst) => inst,
+            Line::Label(_) => continue,
+            Line::Raw(_) => return false,
+        };
+        match inst.op {
+            Op::Clc | Op::Sec | Op::Cmp | Op::Cpx | Op::Cpy | Op::Jsr | Op::Rts => return true,
+            Op::Asl | Op::Lsr if matches!(inst.operand, Operand::Acc | Operand::None) => return true,
+            Op::Lda
+            | Op::Ldx
+            | Op::Ldy
+            | Op::Sta
+            | Op::Stx
+            | Op::Sty
+            | Op::Stz
+            | Op::Tax
+            | Op::Tay
+            | Op::Txa
+            | Op::Tya
+            | Op::Tsx
+            | Op::Txs
+            | Op::And
+            | Op::Ora
+            | Op::Eor
+            | Op::Inc
+            | Op::Dec
+            | Op::Inx
+            | Op::Iny
+            | Op::Dex
+            | Op::Dey
+            | Op::Bit
+            | Op::Pha
+            | Op::Pla
+            | Op::Phx
+            | Op::Phy
+            | Op::Plx
+            | Op::Ply
+            | Op::Nop => {}
+            Op::Jmp => {
+                return inst
+                    .target()
+                    .is_some_and(
+                        |label| lines
+                            .iter()
+                            .position(|l| *l == Line::Label(label.to_owned()))
+                            .is_some_and(|to| carry_dead_from(lines, to, seen)),
+                    );
+            }
+            Op::Beq | Op::Bne | Op::Bmi | Op::Bpl | Op::Bra => {
+                let taken = inst
+                    .target()
+                    .and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())))
+                    .is_some_and(|to| carry_dead_from(lines, to, seen));
+                if inst.op == Op::Bra || !taken {
+                    return taken;
+                }
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// A step of one of a byte in memory as `inc m` or `dec m`.
+pub fn step_in_place(asm: &mut Asm) {
+    let mut at = 0;
+    while at < asm.lines.len() {
+        let Some((cell, up, length)) = step_of(&asm.lines, at) else {
+            at += 1;
+            continue;
+        };
+        let after = at + length;
+        if dead_from(&asm.lines, after, Registers::A, &mut HashSet::default(), Exits::of(asm))
+            && carry_dead_from(&asm.lines, after, &mut HashSet::default())
+        {
+            let place = asm.lines[at].inst().map_or(0, |i| i.place);
+            let op = if up { Op::Inc } else { Op::Dec };
+            asm.lines.splice(at..after, [Line::Inst(Inst { op, operand: cell, place })]);
+        }
+        at += 1;
+    }
 }

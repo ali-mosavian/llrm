@@ -22,6 +22,9 @@ pub enum Class {
     Acc,
     Gr16,
     Hlr,
+    /// `de` and `bc` alone: the fixed operands of `ldir`.
+    Der,
+    Bcr,
     Iy,
     /// Unconstrained: any allocatable register.
     Any,
@@ -77,6 +80,8 @@ impl Target for Z80Registers {
             (Class::Any, one) | (one, Class::Any) => Some(one),
             (Class::Gr8, Class::Acc) | (Class::Acc, Class::Gr8) => Some(Class::Acc),
             (Class::Gr16, Class::Hlr) | (Class::Hlr, Class::Gr16) => Some(Class::Hlr),
+            (Class::Gr16, Class::Der) | (Class::Der, Class::Gr16) => Some(Class::Der),
+            (Class::Gr16, Class::Bcr) | (Class::Bcr, Class::Gr16) => Some(Class::Bcr),
             _ => None,
         }
     }
@@ -91,6 +96,8 @@ impl Target for Z80Registers {
             Class::Acc => vec![reg::A],
             Class::Gr16 => PAIRS.to_vec(),
             Class::Hlr => vec![reg::HL],
+            Class::Der => vec![reg::DE],
+            Class::Bcr => vec![reg::BC],
             Class::Iy => vec![reg::IY],
             Class::Any => BYTES.iter().chain(&PAIRS).chain(&[reg::IY]).copied().collect(),
         }
@@ -121,6 +128,25 @@ impl Target for Z80Registers {
 
     fn lane_moves(inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
         matches!(inst.kind, Kind::Op("PACK")).then(|| (0, vec![(1, 0, 1), (2, 1, 1)]))
+    }
+
+    // DEVIATE 3b-1 (owner greedy-subreg, exit 2026-11-12): both off until the
+    // split editor copies by lane. Lowering alone: +505 lines at -O2; with
+    // joins `mul_constants` -O2 summed a stale byte.
+    fn lowers_lanes() -> bool {
+        false
+    }
+
+    fn read_lanes(inst: &Inst) -> Option<(usize, u32, u32)> {
+        match inst.kind {
+            Kind::Op("BIT7_16" | "HI") => Some((1, 1, 1)),
+            Kind::Op("LO") => Some((1, 0, 1)),
+            _ => None,
+        }
+    }
+
+    fn joins_lanes() -> bool {
+        false
     }
 
     fn read_part(
@@ -198,6 +224,27 @@ impl Target for Z80Registers {
     ) -> Option<Inst> {
         let name = if class.is_byte() { "SPILL8" } else { "SPILL16" };
         Some(Inst { may_store: true, ..Inst::new(Kind::Op(name), vec![Operand::Frame(slot), Operand::Use(register)]) })
+    }
+
+    fn spills_lanes() -> bool {
+        true
+    }
+
+    fn spill_store_lane(
+        class: Class,
+        register: Reg,
+        slot: i32,
+        offset: u32,
+    ) -> Option<Inst> {
+        // a lane is a byte whatever class the value of the pair stands in
+        let _ = class;
+        Some(Inst {
+            may_store: true,
+            ..Inst::new(
+                Kind::Op("SPILL8L"),
+                vec![Operand::Frame(slot), Operand::Use(register), Operand::Imm(i64::from(offset))],
+            )
+        })
     }
 
     fn spill_load(
