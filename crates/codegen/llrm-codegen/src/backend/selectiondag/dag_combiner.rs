@@ -1795,7 +1795,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let load = self.dag.operand(node, 0);
-        if self.level >= CombineLevel::AfterLegalizeVectorOps || self.dag.opcode(load) != ISD::Load {
+        if self.level >= CombineLevel::AfterLegalizeVectorOps {
+            return None;
+        }
+        if self.dag.opcode(load) == ISD::Freeze {
+            return self.visit_extend_of_frozen_load(node);
+        }
+        if self.dag.opcode(load) != ISD::Load {
             return None;
         }
         let NodeData::Mem(info) = self.dag.node(load).data else { return None };
@@ -1844,6 +1850,62 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             self.replace_value(load, truncated);
         }
         Some(extended)
+    }
+
+    /// `tryToFoldExtOfLoad`'s `Frozen` path
+    /// ([DAGCombiner.cpp#L15719][pin]): `(zext (freeze (load x)))` is
+    /// `(assertzext (freeze (zextload x)))`, and a sign extension the
+    /// `assertsext` of a `sextload`. The extension is the load's own, so no
+    /// mask is left to make again once the narrow type is promoted.
+    ///
+    /// DEVIATE SD548: the freeze and the load are each read once (the pin's
+    /// other arm truncates the extended value back for the other readers),
+    /// and `any_extend` is left alone. Exit: that arm, wasm, 2026-11-20.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15719
+    fn visit_extend_of_frozen_load(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let freeze = self.dag.operand(node, 0);
+        let load = self.dag.operand(freeze, 0);
+        let kind = match self.dag.opcode(node) {
+            ISD::ZeroExtend => (LoadExt::ZExtLoad, ISD::AssertZext),
+            ISD::SignExtend => (LoadExt::SExtLoad, ISD::AssertSext),
+            _ => return None,
+        };
+        if self.dag.opcode(load) != ISD::Load || !self.dag.has_one_use(freeze.node) {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(load).data else { return None };
+        if info.volatile || info.ext.is_some() {
+            return None;
+        }
+        // `Load->hasNUsesOfValue(1, 0)`: the freeze is the only reader of the
+        // value.
+        let readers: usize = self
+            .dag
+            .users(load)
+            .map(|user| {
+                let value = SDValue { node: user, res: 0 };
+                (0..self.dag.node(value).ops.len()).filter(|&at| self.dag.operand(value, at) == load).count()
+            })
+            .sum();
+        if readers != 1 {
+            return None;
+        }
+        let (ext, assert) = kind;
+        let wide = self.dag.value_type(node);
+        let narrow = self.dag.value_type(load);
+        let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
+        let info = super::dag::MemInfo { ext: None, ..info };
+        let extended = self.dag.get_ext_load(ext, wide, chain, ptr, info);
+        let frozen = self.dag.get_node(ISD::Freeze, wide, &[extended]);
+        let narrow_vt = self.dag.get_value_type_node(narrow);
+        let asserted = self.dag.get_node(assert, wide, &[frozen, narrow_vt]);
+        self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: extended.node, res: 1 });
+        Some(asserted)
     }
 
     /// `ExtendUsesToFormExtLoad`: whether the other users of `load` can live
