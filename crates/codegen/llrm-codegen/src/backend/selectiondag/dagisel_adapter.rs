@@ -190,6 +190,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,
         Trap => pin::TRAP,
+        DebugTrap => pin::DEBUGTRAP,
         IntrinsicWoChain => pin::INTRINSIC_WO_CHAIN,
         IntrinsicWChain => pin::INTRINSIC_W_CHAIN,
         IntrinsicVoid => pin::INTRINSIC_VOID,
