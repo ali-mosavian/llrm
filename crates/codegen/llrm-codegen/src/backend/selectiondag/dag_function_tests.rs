@@ -1735,3 +1735,38 @@ entry:
     let movs = got.iter().filter(|n| *n == "mov").count();
     assert!(!got.iter().any(|n| n == "fld") && movs == 3, "two imm32 stores: {got:?}");
 }
+
+/// `(or (and x, y), x)` stayed an `and` and an `or` (x86 did not run the pin's
+/// `visitORCommutative` absorption): it is `x`.
+#[test]
+fn an_or_of_an_and_with_its_operand_is_that_operand() {
+    let got = names(
+        "target datalayout = \"e-p:32:32-f64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %y) {
+entry:
+  %a = and i32 %x, %y
+  %o = or i32 %a, %x
+  ret i32 %o
+}
+",
+    )
+    .expect("selected");
+    assert!(!got.iter().any(|n| n == "and" || n == "or"), "x is returned: {got:?}");
+}
+
+/// The same shape with a third operand is not absorbed (control).
+#[test]
+fn an_or_of_an_and_with_another_operand_is_kept() {
+    let got = names(
+        "target datalayout = \"e-p:32:32-f64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %y, i32 %z) {
+entry:
+  %a = and i32 %x, %y
+  %o = or i32 %a, %z
+  ret i32 %o
+}
+",
+    )
+    .expect("selected");
+    assert!(got.iter().any(|n| n == "and") && got.iter().any(|n| n == "or"), "{got:?}");
+}

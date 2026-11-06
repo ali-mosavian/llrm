@@ -205,6 +205,18 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `visitORCommutative`'s `(or (and x, y), x)` is `x`: the pin runs it on
+    /// x86. No corpus cell reaches it (the mid-end absorbs first).
+    fn fold_or_absorption(&self) -> bool {
+        true
+    }
+
+    /// `reduceLoadWidth` through a `freeze` between the mask and the load: the
+    /// pin runs it on x86. No corpus cell reaches it.
+    fn reduce_load_width_through_freeze(&self) -> bool {
+        true
+    }
+
     /// `visitBRCOND`'s `rebuildSetCC`: `!bad` on an `i1` global is `cmp byte [bad], 1; jne`,
     /// not `mov al; not al; test al, 1; jne` (jpeg_fixed `-Os` m64, 2 sites, 8 B). The
     /// m16 judging cost a byte, so only the 64-bit lowering asks.
@@ -235,6 +247,20 @@ impl CombineHooks for X86Lowering<'_> {
     /// the widened divide's `shr 32; sar k` is one `sar 32 + k`.
     fn fold_sra_of_trunc_of_shift(&self) -> bool {
         true
+    }
+
+    /// `X86TargetLowering::shouldTransformSignedTruncationCheck`: a scalar
+    /// check whose type and kept width are both a size `movsx` takes (8, 16,
+    /// 32, 64). `(add x, 1<<(k-1)) u< 1<<k` then is `sext_inreg x, k == x`: no
+    /// 64-bit constant, one `movslq; cmp` for the add, the constant and the
+    /// compare.
+    fn should_transform_signed_truncation_check(
+        &self,
+        vt: EVT,
+        kept_bits: u32,
+    ) -> bool {
+        let movsx = |bits: u32| matches!(bits, 8 | 16 | 32 | 64);
+        vt.is_integer() && movsx(vt.size_in_bits()) && movsx(kept_bits)
     }
 
     fn canonicalize_ge_le(&self) -> bool {
@@ -1581,12 +1607,15 @@ fn combine_sub(
         .or_else(|| lea_adds.then(|| combine_masked_xor_difference(dag, node)).flatten())
 }
 
-/// DEVIATE SD448 (exit 2026-11-14, when the pin's `convertToThreeAddressWithLEA`
-/// takes 8-bit adds on 32-bit targets, TA-10): `sub C, (xor X, M)` is `add X,
-/// C - M` when `M` is a low-bit mask and `X` has no bits above it, so the
-/// `xor` is `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`:
-/// one `lea` where the `sub` took `mov cl, 26; sub cl, bl`. Where the target
-/// has no three-address add (m16) the `add` needs a copy and is a byte longer,
+/// DEVIATE SD448 (owner x86-m32; recheck 2026-11-20 and at every pin bump,
+/// dropped where the pin has the fold): `sub C, (xor X, M)` is `add X, C - M`
+/// when `M` is a low-bit mask and `X` has no bits above it, so the `xor` is
+/// `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`: one
+/// `lea` where the `sub` took `mov cl, 26; sub cl, bl`. The pin has no such
+/// fold, and its `convertToThreeAddressWithLEA` takes no 8-bit add on 32-bit
+/// targets (TA-10). 0 larger cells over 18 row-levels; m32 -O2 2 smaller,
+/// -O3 9 smaller (to -32 B); m64 and arm64 identical. Where the target has
+/// no three-address add (m16) the `add` needs a copy and is a byte longer,
 /// so it is not made there.
 fn combine_masked_xor_difference(
     dag: &mut SelectionDAG,
