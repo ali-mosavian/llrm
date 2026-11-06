@@ -2049,6 +2049,35 @@ fn a_comdat_function_and_global_are_comdat_sections() {
     assert_eq!(flagged, 2);
 }
 
+/// A COMDAT function's `.pdata` row and `.xdata` were in the object's one
+/// `.pdata` and `.xdata`: where the linker kept another object's copy of the
+/// function and dropped this one's code, the row stayed and pointed into
+/// the dropped section. The pin writes both as sections associative with the
+/// function's code (selection 5, number of the code section).
+#[test]
+fn a_comdat_functions_unwind_data_is_associative_with_its_code() {
+    let object = windows_object(
+        "$f = comdat any\n\
+         define linkonce_odr dso_local i32 @f(i32 %a) comdat {\n  ret i32 %a\n}\n\
+         define dso_local i32 @h(i32 %a) {\n  ret i32 %a\n}\n",
+    );
+    let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
+    let code = |name: &str| match object.symbols.iter().find(|one| one.name == name).unwrap().definition {
+        llrm_object::Definition::Defined { section, .. } => section,
+        llrm_object::Definition::Undefined => unreachable!(),
+    };
+    let follows: Vec<(&str, usize)> = object
+        .comdats
+        .iter()
+        .filter(|one| one.selection == llrm_object::Selection::Associative)
+        .map(|one| (object.sections[one.section].name.as_str(), one.associated.unwrap()))
+        .collect();
+    assert_eq!(follows, [(".xdata", code("f")), (".pdata", code("f"))], "{:?}", object.comdats);
+    // control: h is not in a comdat, so its data stays in the shared pair
+    let shared = |name: &str| object.sections.iter().enumerate().filter(|(_, one)| one.name == name).count();
+    assert_eq!((shared(".xdata"), shared(".pdata")), (2, 2));
+}
+
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
 /// layout: the frames the compiler declared (`.seh_*`) against the bytes read
 /// back from the same code agree.
