@@ -263,18 +263,8 @@ pub(crate) fn _stacked_colors(frame: &Frame) -> Option<Vec<(i64, u32, Vec<Interv
 /// reaches it. Every cell moves with its home. The frame and the body are
 /// returned changed; a body with no two homes that can share is returned as it
 /// is.
+/// `width_rule` (`Tuning::slots_loop_width_rule`): see `width_rule_allows`.
 pub(crate) fn slots_colored(
-    body: &LirBody,
-    frame: &mut Frame,
-) -> LirBody {
-    // DEVIATE SLOTS-LOOPWIDTH (owner greedy-subreg, exit 2026-11-14): the pin
-    // shares any two slots whose ranges do not overlap;
-    // `LLRM_SLOTS_NO_WIDTH_RULE=1` drops the rule below to price it.
-    slots_colored_with(body, frame, !llrm_support::env_flag!("LLRM_SLOTS_NO_WIDTH_RULE"))
-}
-
-/// `slots_colored` with the width rule (`width_rule_allows`) on or off.
-fn slots_colored_with(
     body: &LirBody,
     frame: &mut Frame,
     width_rule: bool,
@@ -1593,7 +1583,7 @@ mod tests {
             Default::default(),
             Default::default(),
         );
-        let out = slots_colored(&body, &mut frame);
+        let out = slots_colored(&body, &mut frame, true);
         assert_eq!(out.insns().len(), 2, "fistp converts, it is no store back");
     }
 
@@ -1642,10 +1632,10 @@ mod tests {
         };
         let homes = |frame: &Frame| frame.slots.values().copied().collect::<std::collections::BTreeSet<i64>>().len();
         let (body, mut frame) = build();
-        super::slots_colored_with(&body, &mut frame, true);
+        super::slots_colored(&body, &mut frame, true);
         assert_eq!(homes(&frame), 2, "the rule keeps a word out of a loop-held wider slot");
         let (body, mut frame) = build();
-        super::slots_colored_with(&body, &mut frame, false);
+        super::slots_colored(&body, &mut frame, false);
         assert_eq!(homes(&frame), 1, "ColorSlot shares the two, nothing live together");
     }
 
@@ -1681,7 +1671,7 @@ mod tests {
             Default::default(),
             Default::default(),
         );
-        let out = slots_colored(&body, &mut frame);
+        let out = slots_colored(&body, &mut frame, true);
         assert_eq!(out.insns().len(), 0, "a reload stored straight back is a no-op");
     }
 }

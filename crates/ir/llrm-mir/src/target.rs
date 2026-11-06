@@ -63,6 +63,10 @@ pub struct Tuning {
     /// there (a target without SSE2 floating point); none: floats are not
     /// held on a stack. The loop unroll caps its copies by it.
     pub x87_stack_slots: Option<u32>,
+    /// A stack slot a loop holds in a register is shared only by what is as
+    /// wide (`slots::width_rule_allows`); false: the pin's `ColorSlot`,
+    /// which shares any two slots whose ranges do not overlap.
+    pub slots_loop_width_rule: bool,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
@@ -165,6 +169,7 @@ impl Tuning {
         unroll_jam_partial_threshold: None,
         unroll_jam_exact_count: false,
         x87_stack_slots: None,
+        slots_loop_width_rule: false,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
@@ -937,6 +942,7 @@ mod tests {
             (None, None, None)
         );
         assert_eq!(pin.x87_stack_slots, None);
+        assert!(!pin.slots_loop_width_rule);
         assert_eq!(pin.inline_threshold, None);
     }
 }
