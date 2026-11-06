@@ -69,9 +69,11 @@
 //!
 //! DEVIATE M6 (no number): an instruction that reads or writes any physical
 //! register stays, where `FindSuccToSinkTo` lets a physical def marked dead
-//! through (and a use of a constant register). Effect: none seen, 0 sinks
-//! missed over d_faces and the 820-object corpus at -O2 (counted: no
-//! instruction that passes `safe_to_move` has a physical write and no read).
+//! through (and a use of a constant register). The frame register of a frame
+//! cell, local or argument, is not one: the pin's frame index carries none
+//! (os_execute m64 -Os kept eight `mov r8,[rsp+k]` the pin sinks and folds,
+//! +35 B). The earlier count (0 sinks missed over d_faces and the 820-object
+//! corpus at -O2) saw physical writes only, not reads.
 //! The flags are the pin's rule in full: a def moves only if dead (read by no
 //! later instruction of its block and no successor), and not into a block that
 //! reads them (`SinkInstruction`'s zombie check).
@@ -360,6 +362,8 @@ struct Sinker {
     /// `GetAllSortedSuccessors` of each block, made once: it asks nothing of
     /// the instruction.
     sorted: Vec<Vec<usize>>,
+    /// The successor each branch block lists first (`addSuccessor` order).
+    first: HashMap<usize, usize>,
     merged: HashMap<(u32, usize), usize>,
     /// `HasStoreCache`.
     has_store_cache: HashMap<(usize, usize), bool>,
@@ -472,6 +476,12 @@ impl Sinker {
                 hard[header] = !cycles.is_reducible(found);
             }
         }
+        let first: HashMap<usize, usize> = body
+            .odds
+            .first
+            .iter()
+            .filter_map(|(at, to)| Some((*position.get(at)?, *position.get(to)?)))
+            .collect();
         let depths = crate::analysis::intervals::depths_shared(body);
         let mut sinker = Self {
             size,
@@ -495,6 +505,7 @@ impl Sinker {
             cycle,
             considered: HashSet::default(),
             sorted: Vec::new(),
+            first,
             merged: HashMap::default(),
             to_split: Vec::new(),
             has_store_cache: HashMap::default(),
@@ -591,7 +602,21 @@ impl Sinker {
         // An incoming argument's cell is a fixed stack object in the pin, a
         // frame index with no register: the frame register the address is
         // spelled through is not a read of one.
-        let fixed_stack = one.defines.first().is_some_and(|value| self.arguments.contains(value));
+        // A local object's cell is a frame index in the pin too: `%stack.N`
+        // carries no register until frame lowering, so its load sinks.
+        let frame_cell = one.what.as_ref().is_some_and(|what| {
+            let mut cells = what.sources.iter().chain(&what.dests).filter_map(|place| match place {
+                Loc::Mem(mem) => Some(mem),
+                _ => None,
+            });
+            cells.clone().next().is_some()
+                && cells.all(|mem| {
+                    mem.base.is_none()
+                        && mem.index.is_none()
+                        && mem.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame)
+                })
+        });
+        let fixed_stack = frame_cell || one.defines.first().is_some_and(|value| self.arguments.contains(value));
         let reads = effect.all_reads();
         // DEVIATE (segment-reads): an access through the default data segment
         // names no register in the pin (`MOV32rm` carries `$noreg`), so its
@@ -622,6 +647,7 @@ impl Sinker {
             .any(
                 |&(register, _)| register != llrm_lir::registers::RegId::None
                     && !(fixed_stack && (self.regs.is_frame(register) || self.regs.is_stack_segment(register)))
+                    && !(frame_cell && self.regs.is_stack(register))
                     && !(default_segment && self.regs.is_data_segment(register)),
             );
         if physical_reads || physical(&effect.writes) || flags(&reads) {
@@ -712,6 +738,10 @@ impl Sinker {
         let sorted = (0..n)
             .map(|block| {
                 let mut all = self.cfg.succs[block].clone();
+                if let Some(at) = self.first.get(&block).and_then(|first| all.iter().position(|one| one == first)) {
+                    let first = all.remove(at);
+                    all.insert(0, first);
+                }
                 for &child in &children[block] {
                     if !all.contains(&child) {
                         all.push(child);
@@ -1997,5 +2027,105 @@ mod tests {
         // against the latch's pressure: room for it, and none.
         assert_eq!(names(&sunk_within(&bubble(12), false, 7, None), 3), ["add", "cmp", "jne"], "room");
         assert_eq!(names(&sunk_within(&bubble(12), false, 3, None), 1), ["mov", "add", "cmp", "jle"], "full");
+    }
+
+    /// A byte load of a local buffer, compared in only one arm, stayed in the
+    /// block above the branch: its cell is addressed through the frame
+    /// register, and a physical read kept it (DEVIATE M6; os_execute m64 -Os
+    /// +35 B over the pin, eight `mov r8,[rsp+k]` the pin sinks and folds into
+    /// `cmp [slot], imm`). The pin's local is a frame index with no register.
+    #[test]
+    fn test_a_load_of_a_local_cell_sinks_into_the_arm_that_reads_it() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem { through: llrm_lir::registers::RegId::BP, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 4) };
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let mut body = LirBody::new(
+            "local",
+            0,
+            vec![
+                block(
+                    0,
+                    vec![1, 2],
+                    vec![
+                        insn(10, Operation::Move, "mov", vec![held(3)], vec![Loc::Mem(cell)], vec![3], vec![]),
+                        jump(11),
+                    ],
+                )
+                .into(),
+                block(
+                    1,
+                    vec![],
+                    vec![
+                        insn(12, Operation::Move, "mov", vec![held(5)], vec![held(3)], vec![5], vec![3]),
+                        insn(13, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+                    ],
+                )
+                .into(),
+                block(2, vec![], vec![insn(14, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let sunk = sunk(&body, false);
+        let loads = |at: usize| sunk.blocks[at].insns.iter().any(|one| one.defines.contains(&3));
+        assert!(loads(1) && !loads(0), "the load moved into the arm that reads it");
+    }
+
+    /// The false edge of an inverted branch is listed first in `succ`, the
+    /// loop header it jumps back to (the same depth as the next test): the sink tried it before the next test of a
+    /// compare chain, every use was dominated by it, and the load stayed
+    /// (os_execute m64 -Os, +23 B). The pin tries the edge `addSuccessor` listed
+    /// first, the true one.
+    #[test]
+    fn test_a_load_sinks_into_the_edge_listed_first_not_the_loop_header() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem { through: llrm_lir::registers::RegId::BP, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 4) };
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+        let make = || {
+            let mut body = LirBody::new(
+                "chain",
+                4,
+                vec![
+                    block(4, vec![1], vec![insn(20, Operation::Jump, "jmp", vec![], vec![], vec![], vec![])]).into(),
+                    block(1, vec![0, 3], vec![branch(21)]).into(),
+                    block(
+                        0,
+                        vec![1, 2],
+                        vec![
+                            insn(10, Operation::Move, "mov", vec![held(3)], vec![Loc::Mem(cell.clone())], vec![3], vec![]),
+                            branch(11),
+                        ],
+                    )
+                    .into(),
+                    block(
+                        2,
+                        vec![1],
+                        vec![
+                            insn(12, Operation::Move, "mov", vec![held(5)], vec![held(3)], vec![5], vec![3]),
+                            insn(13, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]),
+                        ],
+                    )
+                    .into(),
+                    block(3, vec![], vec![ret(14)]).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            body
+        };
+        let loads = |body: &LirBody, at: usize| body.blocks[at].insns.iter().any(|one| one.defines.contains(&3));
+        let kept = sunk(&make(), true);
+        assert!(loads(&kept, 2), "-Os, no order stated: the header is tried first (same depth) and the load stays");
+        let mut body = make();
+        body.odds.first.insert(0, 2);
+        let moved = sunk(&body, true);
+        assert!(loads(&moved, 3) && !loads(&moved, 2), "the edge listed first is tried first");
     }
 }
