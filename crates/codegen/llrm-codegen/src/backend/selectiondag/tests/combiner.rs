@@ -48,7 +48,7 @@ fn x86(
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false, rebuild_brcond: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
         level,
@@ -158,7 +158,7 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
         dag.set_root(product);
         let mut lowering =
-            X86Lowering { cmov: false, sse2: false, min_size, three_address_adds: false, i16_mul_chains: chains, sext_load: false, zext_free: false, rebuild_brcond: false, profile: None };
+            X86Lowering { cmov: false, sse2: false, min_size, three_address_adds: false, i16_mul_chains: chains, sext_load: false, zext_free: false, profile: None };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
         dag.opcode(dag.get_root())
     };
@@ -176,7 +176,7 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: true,
-            sext_load: false, zext_free: false, rebuild_brcond: false,
+            sext_load: false, zext_free: false,
             profile: None,
         };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
@@ -223,7 +223,7 @@ fn a_constant_the_pin_leaves_an_imul_is_the_chain_where_the_block_is_hot() {
             min_size,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false, rebuild_brcond: false,
+            sext_load: false, zext_free: false,
             profile: priced.then_some(pricing),
         };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
@@ -258,7 +258,7 @@ fn the_i16_chain_is_built_exactly_where_i16_is_not_promoted() {
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: !promotes_i16(&tli),
-            sext_load: false, zext_free: false, rebuild_brcond: false,
+            sext_load: false, zext_free: false,
             profile: None,
         };
         assert_eq!(promotes_i16(&tli), promotes);
@@ -397,7 +397,7 @@ fn a_not_of_a_float_compare_does_not_make_a_code_the_target_expands() {
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false, rebuild_brcond: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
         CombineLevel::AfterLegalizeDag,
