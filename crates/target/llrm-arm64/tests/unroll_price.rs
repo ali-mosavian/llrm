@@ -24,3 +24,13 @@ fn a_nest_whose_inner_count_follows_the_outer_counter_is_the_pins_decision() {
 fn init_loops_whose_stores_merge_when_unrolled_are_unrolled() {
     assert_eq!(labels(include_str!("data/bench_lru.ll")), 11);
 }
+
+/// crc -O2: the 8-trip bit loop inside the 9-trip byte loop was unrolled
+/// through the nest bypass (152 B, 262 instructions) where the rolled loop is
+/// 88 B and 494 instructions; 250 clocks a byte prices the 64 B at 16,000.
+/// Nothing in the bit loop depends on the byte counter, so there is nothing
+/// for unrolling the nest to fold. Unrolled it has 4 labels, rolled 6.
+#[test]
+fn a_nest_loop_that_uses_no_outer_counter_is_priced_not_bypassed() {
+    assert_eq!(labels(include_str!("data/bench_crc.ll")), 6);
+}

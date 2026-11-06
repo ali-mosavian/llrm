@@ -61,7 +61,11 @@ pub(super) fn full_unroll_pays(
     if !run.first.contains(&lp.get_header()) {
         return true;
     }
-    if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count) {
+    // Unless nothing in this loop depends on a counter of the loops around it:
+    // then the nest's unroll folds nothing here and the loop is priced as any
+    // other (crc -O2: the bit loop reads the running value and constants only,
+    // 64 B added for 232 instructions saved).
+    if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count) && reads_outer_counter(run, analyzed, lp) {
         return true;
     }
     // The same for a loop around loops that all run few trips: the pin unrolls
@@ -609,6 +613,75 @@ fn encloses_known_trips(
         around = parent.get_parent_loop();
     }
     true
+}
+
+/// Whether an instruction of `lp` reads a value computed from the counters of
+/// the loops around it alone: what unrolling the whole nest turns into a
+/// constant (tests/run int64_division: the divisors are the outer counters).
+fn reads_outer_counter(
+    run: &Run,
+    analyzed: &Analyzed,
+    lp: Loop,
+) -> bool {
+    let function = &*run.function;
+    let Some(outermost) = std::iter::successors(lp.get_parent_loop(), |parent| parent.get_parent_loop()).last() else {
+        return false;
+    };
+    let inside = lp.get_blocks();
+    // The counters: the phis of every enclosing loop header that start at a
+    // constant; then whatever pure arithmetic of them (and constants) the
+    // enclosing loops compute outside `lp`.
+    let mut known: IdSet<ValueId> = IdSet::new();
+    let mut around = lp.get_parent_loop();
+    while let Some(parent) = around {
+        let preheader = parent.get_loop_preheader(function);
+        known.extend(
+            function
+                .iter_block(parent.get_header())
+                .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+                .filter(|&inst| {
+                    // a counter starts at a constant (the running value of a
+                    // loop, like crc, does not)
+                    function
+                        .instruction(inst)
+                        .operands
+                        .chunks(2)
+                        .any(|pair| Some(pair[1]) == preheader.map(Operand::Block) && matches!(pair[0], Operand::Constant(_)))
+                })
+                .filter_map(|inst| function.instruction(inst).result),
+        );
+        around = parent.get_parent_loop();
+    }
+    let constant = |operand: Operand, known: &IdSet<ValueId>| match operand {
+        Operand::Constant(_) => true,
+        Operand::Value(value) => known.contains(&value),
+        Operand::Block(_) => false,
+    };
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for &block in outermost.get_blocks().iter().filter(|block| !inside.contains(block)) {
+            for inst in function.iter_block(block) {
+                let one = function.instruction(inst);
+                let pure = matches!(one.opcode, Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::Select);
+                let Some(result) = one.result else { continue };
+                if pure
+                    && !known.contains(&result)
+                    && one.operands.iter().all(|&operand| constant(operand, &known))
+                    && one.operands.iter().any(|&operand| matches!(operand, Operand::Value(_)))
+                {
+                    known.insert(result);
+                    grew = true;
+                }
+            }
+        }
+    }
+    let _ = analyzed;
+    inside.iter().any(|&block| {
+        function.iter_block(block).any(|inst| {
+            function.instruction(inst).operands.iter().any(|&operand| matches!(operand, Operand::Value(value) if known.contains(&value)))
+        })
+    })
 }
 
 /// Whether `lp` holds a loop whose trip count follows a counter of `lp` (a
