@@ -521,3 +521,39 @@ b0:
     assert!(!result.is_non_address_taken(module.named("g").unwrap()), "premise: a join is followed");
     assert_eq!(built() - before, 1, "the module was scanned for sites more than once");
 }
+
+/// A DMA port's `out` keeps `@g` in memory: `@g` is internal and never has its
+/// address taken, so the pin's rule (an intrinsic names no global) let LICM
+/// keep it in a register across the port, and the 8237's mode register wrote
+/// over it. A port narrowed to `inaccessiblemem` (the VGA DAC) still leaves it.
+#[test]
+fn a_port_that_may_reach_memory_may_modify_a_tracked_global() {
+    use crate::aa::{AAQueryInfo, AAResults, MemoryLocation};
+    let module = parsed(
+        "@g = internal global i16 0
+
+declare void @llrm.ia16.out.i8(i16, i8)
+
+define i16 @f() {
+b0:
+  %a = load i16, ptr @g
+  call void @llrm.ia16.out.i8(i16 968, i8 1) memory(inaccessiblemem: readwrite)
+  call void @llrm.ia16.out.i8(i16 11, i8 1)
+  ret i16 %a
+}
+",
+    );
+    let info = compute(&module);
+    let layout = crate::testing::layout(&module);
+    let f = crate::testing::function(&module, "f");
+    let unit = crate::memory::Unit::of(&module, &layout, f).with_globals_mr(&info);
+    let calls: Vec<_> =
+        f.walk().map(|(_, inst)| inst).filter(|&inst| matches!(f.instruction(inst).opcode, Opcode::Call(_))).collect();
+    let value = crate::testing::value(f, "a");
+    let load = f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(value)).unwrap();
+    let at = MemoryLocation::get(&unit, load).expect("a load");
+    let mut aa = GlobalsAAResult::new(&unit, &info);
+    let mut aaqi = AAQueryInfo::default();
+    assert_eq!(aa.get_mod_ref_info(calls[0], Some(&at), &mut aaqi), ModRefInfo::NoModRef, "VGA DAC");
+    assert_ne!(aa.get_mod_ref_info(calls[1], Some(&at), &mut aaqi), ModRefInfo::NoModRef, "DMA mode register");
+}
