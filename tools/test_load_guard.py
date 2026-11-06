@@ -143,17 +143,17 @@ class Pipeline(Env, unittest.TestCase):
 
 class Admission(Env, unittest.TestCase):
     def test_with_one_free_slot_only_one_of_two_concurrent_starters_runs(self):
-        env = {"LG_SLOTS": "1", "LG_NO_WAIT": "1", "LG_SETTLE": "0"}
+        env = {"LG_SLOTS": "1", "LG_SLOTS_HIGH": "1", "LG_NO_WAIT": "1", "LG_SETTLE": "0"}
         first = self.start("sleep", "3", **env)
         second = self.start("sleep", "3", **env)
         codes = sorted([first.wait(timeout=10), second.wait(timeout=10)])
         self.assertEqual(codes, [0, 75], "both starters ran, or neither")
 
     def test_a_waiting_starter_runs_when_the_slot_is_released(self):
-        first = self.start("sleep", "30", LG_SLOTS="1", LG_SETTLE="0")
+        first = self.start("sleep", "30", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SETTLE="0")
         self.assertTrue(until(lambda: os.path.isdir(self.slots) and any(descendants(first.pid))))
         marker = os.path.join(self.dir.name, "ran")
-        second = self.start("touch", marker, LG_SLOTS="1", LG_SETTLE="0")
+        second = self.start("touch", marker, LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SETTLE="0")
         time.sleep(0.5)
         self.assertFalse(os.path.exists(marker), "it ran without a slot")
         first.terminate()
@@ -179,12 +179,12 @@ class Admission(Env, unittest.TestCase):
         err = guard.communicate()[1]
         waits = re.findall(r"load_guard: \d\d:\d\dZ waiting for load \(1m 30.0, 5m 30.0, slots 0/3 busy\)", err)
         self.assertGreaterEqual(len(waits), 2, err)
-        self.assertRegex(err, r"load_guard: \d\d:\d\dZ admit slot \d \(1m 1.0\)")
+        self.assertRegex(err, r"load_guard: \d\d:\d\dZ admit slot \d \(1m 1.0, slots 5\)")
 
     def test_a_starter_without_a_slot_says_it_waits_for_a_slot(self):
-        first = self.start("sleep", "30", LG_SLOTS="1", LG_SETTLE="0")
+        first = self.start("sleep", "30", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SETTLE="0")
         self.assertTrue(until(lambda: os.path.isdir(self.slots) and any(descendants(first.pid))))
-        second = self.start("true", LG_SLOTS="1", LG_WAIT_LOG="0.3", LG_SETTLE="0")
+        second = self.start("true", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_WAIT_LOG="0.3", LG_SETTLE="0")
         time.sleep(1.0)
         first.terminate()
         first.wait(timeout=5)
@@ -192,12 +192,11 @@ class Admission(Env, unittest.TestCase):
         self.assertRegex(second.communicate()[1], r"waiting for slot \(1m [\d.]+, 5m [\d.]+, slots 1/1 busy\)")
 
 
-    def test_the_start_threshold_is_27_on_the_one_minute_load(self):
-        """Baseline load is ~25: a threshold of 25 starved every starter."""
-        self.set_load(26.9, 1.0)
+    def test_the_start_threshold_is_25_on_the_one_minute_load(self):
+        self.set_load(24.9, 1.0)
         admitted = self.start("true", LG_NO_WAIT="1", LG_SETTLE="0")
         self.assertEqual(admitted.wait(timeout=5), 0)
-        self.set_load(27.0, 1.0)
+        self.set_load(25.0, 1.0)
         refused = self.start("true", LG_NO_WAIT="1", LG_SETTLE="0")
         self.assertEqual(refused.wait(timeout=5), 75)
 
@@ -210,6 +209,69 @@ class Admission(Env, unittest.TestCase):
         second = self.start("true", **env)
         self.assertEqual(second.wait(timeout=10), 0)
         self.assertGreaterEqual(time.time() - began, 1.0, "the second starter did not wait for the first to settle")
+
+
+class SlotCount(Env, unittest.TestCase):
+    """Three slots were held by long jobs while the load sat at 12 and m68k starved; the count now follows the load."""
+
+    def admitted(self, load, wanted):
+        """How many of `wanted` long jobs the guard admits at 1m `load`."""
+        self.set_load(load, load)
+        jobs = [self.start("sleep", "30", LG_NO_WAIT="1", LG_SETTLE="0") for _ in range(wanted)]
+        time.sleep(1.5)
+        return sum(1 for job in jobs if job.poll() is None)
+
+    def test_five_slots_while_the_one_minute_load_is_under_20(self):
+        self.assertEqual(self.admitted(15.0, 7), 5)
+
+    def test_three_slots_at_a_load_of_26_and_no_admission_at_all(self):
+        self.assertEqual(self.admitted(23.0, 7), 3)  # 22..25: base count, admitting
+        self.assertEqual(self.admitted(26.0, 1), 0, "a job was admitted at 1m 26")
+
+    def test_between_20_and_22_the_count_stays_what_it_was(self):
+        self.assertEqual(self.admitted(15.0, 1), 1)  # widens to 5
+        self.set_load(21.0, 21.0)
+        late = [self.start("sleep", "30", LG_NO_WAIT="1", LG_SETTLE="0") for _ in range(5)]
+        time.sleep(1.5)
+        self.assertEqual(sum(1 for job in late if job.poll() is None), 4, "21 must keep 5 slots (1 already running)")
+
+    def test_a_fresh_start_at_21_has_three_slots(self):
+        self.assertEqual(self.admitted(21.0, 5), 3)
+
+    def test_quiet_jobs_are_admitted_only_under_a_load_of_20(self):
+        self.set_load(21.0, 21.0)
+        self.assertEqual(self.start("true", LG_QUIET="1", LG_NO_WAIT="1", LG_SETTLE="0").wait(timeout=5), 75)
+        self.set_load(19.0, 19.0)
+        self.assertEqual(self.start("true", LG_QUIET="1", LG_NO_WAIT="1", LG_SETTLE="0").wait(timeout=5), 0)
+
+    def test_running_jobs_are_not_stopped_when_the_count_falls(self):
+        self.assertEqual(self.admitted(15.0, 5), 5)
+        self.set_load(24.0, 24.0)
+        time.sleep(1.0)
+        self.assertTrue(all(job.poll() is None for job in self.guards))
+
+
+class Resume(Env, unittest.TestCase):
+    """cargo, m68k and ct-rc-base sat stopped ~6 min at 1m 12-15 because the 5m average was still high."""
+
+    def stopped_group(self):
+        guard = self.start(*self.counter())
+        self.assertTrue(until(lambda: os.path.exists(self.count)))
+        pgid = int(subprocess.run(["pgrep", "-P", str(guard.pid), "-f", "while :"], capture_output=True, text=True).stdout.split()[0])
+        self.set_load(30.0, 30.0)
+        self.assertTrue(until(lambda: state(pgid) == "T"))
+        return pgid
+
+    def test_a_group_resumes_at_one_minute_12_though_five_minute_is_34(self):
+        pgid = self.stopped_group()
+        self.set_load(12.0, 34.0)
+        self.assertTrue(until(lambda: state(pgid) != "T"), "stayed stopped at 1m 12 / 5m 34")
+
+    def test_a_group_stays_stopped_at_one_minute_22_and_five_minute_34(self):
+        pgid = self.stopped_group()
+        self.set_load(22.0, 34.0)
+        time.sleep(1.0)
+        self.assertEqual(state(pgid), "T")
 
 
 if __name__ == "__main__":
