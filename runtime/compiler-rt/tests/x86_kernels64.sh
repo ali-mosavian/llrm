@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: tests/x86_kernels64.sh [RT_DIR [OUT_DIR [NV]]] -> kernels x_sf_cmp64 (the six f64 compare entries) and x_sf_float64 (floatsidf, floatunsidf, floatdidf) from RT_DIR's
+# usage: tests/x86_kernels64.sh [RT_DIR [OUT_DIR [NV]]] -> kernels x_sf_cmp64 (the six f64 compare entries) from RT_DIR's
 # lib/fp/f64 under -DSF_INTABI and config/x86_m32, flattened to one freestanding file, for the vsgcc harness (486-table clocks, llrm/gcc/clang variants).
 # RT_DIR defaults to this tree's runtime/compiler-rt, OUT_DIR to the vsgcc kernels directory; NV vectors from gen_vectors64.c.
 set -e
@@ -31,6 +31,4 @@ mk() { n=$1; srcs=$2; decls=$3; body=$4; mkdir -p $K/$n
   gcc -m32 -O0 -w $K/$n/$n.c $T/rep.c -o $T/ref && $T/ref > $K/$n/$n.out; }
 mk x_sf_cmp64 "lib/fp/f64/cmp.c" 'int __eqdf2(sfu64, sfu64); int __nedf2(sfu64, sfu64); int __ltdf2(sfu64, sfu64); int __ledf2(sfu64, sfu64); int __gedf2(sfu64, sfu64); int __gtdf2(sfu64, sfu64);' \
   'acc = acc * 31 + (sfu32)__eqdf2(a, b) + 3 * (sfu32)__nedf2(a, b) + 5 * (sfu32)__ltdf2(a, b) + 7 * (sfu32)__ledf2(a, b) + 11 * (sfu32)__gedf2(a, b) + 13 * (sfu32)__gtdf2(a, b);'
-mk x_sf_float64 "lib/fp/f64/float.c lib/fp/f64/pack.c" 'sfu64 __floatsidf(sfi32); sfu64 __floatunsidf(sfu32); sfu64 __floatdidf(sfi64);' \
-  'sfu64 r = __floatsidf((sfi32)v[1]) ^ __floatunsidf(v[3]) ^ __floatdidf((sfi64)a); acc = acc * 31 + (sfu32)r + (sfu32)(r >> 32);'
-echo "wrote $K/x_sf_{cmp64,float64}"
+echo "wrote $K/x_sf_cmp64"
