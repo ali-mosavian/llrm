@@ -465,10 +465,14 @@ pub trait Tti {
     /// those or return a policy of its own.
     fn inline_policy(&self) -> InlinePolicy {
         InlinePolicy {
-            by_size: self.opt_size_inline_by_code_size().then(|| SizeRule {
-                min_sites: self.opt_size_inline_guard_min_sites(),
-                yields_to_negative_cost: self.opt_size_inline_guard_yields_to_negative_cost(),
-            }),
+            by_size: self
+                .opt_size_inline_by_code_size()
+                .then(
+                    || SizeRule {
+                        min_sites: self.opt_size_inline_guard_min_sites(),
+                        yields_to_negative_cost: self.opt_size_inline_guard_yields_to_negative_cost(),
+                    },
+                ),
             by_rate: self.speed_inline_milliclocks_per_byte(),
         }
     }
@@ -732,8 +736,8 @@ pub trait Tti {
         None
     }
 
-    /// DEVIATE REC-2: whether, at (-O2, -O3), a tree recursion's tail calls are eliminated
-    /// before its copies of itself are made.
+    /// DEVIATE REC-2: whether, at (-O2, -O3), a tree recursion's tail calls are
+    /// eliminated before its copies of itself are made.
     fn recursive_tre_first(&self) -> (bool, bool) {
         (false, false)
     }
@@ -760,6 +764,12 @@ pub trait Tti {
         None
     }
 
+    /// Whether a product by a constant and one by its negation are made once
+    /// on the x87 stack (`Tuning::x87_share_negated_products`).
+    fn x87_share_negated_products(&self) -> bool {
+        false
+    }
+
     /// The target's `PartialThreshold` (its tuning table); none: the pass's
     /// own.
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
@@ -774,6 +784,11 @@ pub trait Tti {
 
     /// Tuning `unroll_jam_exact_count`.
     fn unroll_jam_exact_count(&self) -> bool {
+        false
+    }
+
+    /// Tuning `constant_hoisting`.
+    fn constant_hoisting(&self) -> bool {
         false
     }
 
@@ -883,6 +898,20 @@ pub trait Tti {
         imm: i128,
         bits: u32,
     ) -> Cost;
+
+    /// `int_imm_cost_inst` for a pass that also knows whether the function is
+    /// built for size (`ConstantHoisting`'s `OptForSize`). The pin's cost
+    /// does not depend on it; a target's DEVIATE may (x86 ZIMM).
+    fn int_imm_cost_inst_for_size(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+        _for_size: bool,
+    ) -> Cost {
+        self.int_imm_cost_inst(op, index, imm, bits)
+    }
 
     /// `isTruncateFree`.
     fn is_truncate_free(
@@ -1693,6 +1722,17 @@ mod access_tests {
                 bits: u32,
             ) -> Cost {
                 self.0.int_imm_cost_inst(op, index, imm, bits)
+            }
+
+            fn int_imm_cost_inst_for_size(
+                &self,
+                op: ImmUser,
+                index: u32,
+                imm: i128,
+                bits: u32,
+                for_size: bool,
+            ) -> Cost {
+                self.0.int_imm_cost_inst_for_size(op, index, imm, bits, for_size)
             }
 
             fn is_truncate_free(

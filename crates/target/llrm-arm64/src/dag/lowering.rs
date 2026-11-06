@@ -199,7 +199,7 @@ fn legal_arith_immed(immed: u64) -> bool {
 }
 
 /// `AArch64_AM::isLegalCmpImmed`: also as the `ADDS` of its negation.
-fn legal_cmp_immed(value: i128) -> bool {
+pub(super) fn legal_cmp_immed(value: i128) -> bool {
     legal_arith_immed(value.unsigned_abs().try_into().unwrap_or(u64::MAX))
 }
 
@@ -981,6 +981,37 @@ pub fn lower_vaarg(
         ));
     }
     Some(dag.get_load(vt, stored, at, info(vt, align.max(1) as u32)))
+}
+
+/// `LowerFunnelShift`: a constant amount is taken mod the width and made an
+/// `FSHR` (`EXTR`); `FSHL` by 0 is its first operand, `FSHR` by 0 its second.
+/// A variable amount is `None`: the legalizer expands it.
+pub fn lower_funnel_shift(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let amount_node = dag.operand(node, 2);
+    let amount = dag.constant(amount_node)?;
+    let vt = dag.value_type(node);
+    let bits = u128::from(vt.size_in_bits());
+    let (x, y) = (dag.operand(node, 0), dag.operand(node, 1));
+    let mut wrapped = amount % bits;
+    if dag.opcode(node) == ISD::FShl {
+        if wrapped == 0 {
+            return Some(x);
+        }
+        wrapped = bits - wrapped;
+    } else {
+        if wrapped == 0 {
+            return Some(y);
+        }
+        if wrapped == amount {
+            return Some(node);
+        }
+    }
+    let shift_vt = dag.value_type(amount_node);
+    let by = dag.get_constant(wrapped, shift_vt);
+    Some(dag.get_node(ISD::FShr, vt, &[x, y, by]))
 }
 
 /// `LowerABS`: `x` or `0 - x` selected by the sign of `SUBS x, 0`.

@@ -68,6 +68,7 @@ pub fn lib_call(
     stack_bytes: u64,
     popped: u64,
     returns: &[Returned],
+    clobbers: &[u16],
 ) -> (SDValue, Vec<SDValue>) {
     let start = dag.get_callseq_start(root, stack_bytes);
     let mut chain = SDValue { node: start.node, res: 0 };
@@ -112,7 +113,7 @@ pub fn lib_call(
         let vt = dag.value_type(*value);
         ops.push(dag.get_phys_register(vt, *reg));
     }
-    ops.push(dag.get_register_mask());
+    ops.push(dag.get_register_mask_clobbering(clobbers));
     ops.extend(glue);
     let call = dag.get_node_multi(x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &ops);
     let end = dag.get_callseq_end(
@@ -194,7 +195,8 @@ pub fn c_lib_call(
     let callee = dag.get_target_external_symbol(env.pointer, name);
     let root = dag.entry_node();
     let stack = placement.stack_bytes as u64;
-    let (_chain, values) = lib_call(dag, env, root, callee, &places, stack, 0, &returns);
+    let clobbers = super::dagisel_adapter::clobbered_by(env.arch, Some(native));
+    let (_chain, values) = lib_call(dag, env, root, callee, &places, stack, 0, &returns, &clobbers);
     Some(match values[..] {
         [one] => one,
         [low, high] => dag.get_node(ISD::BuildPair, ret, &[low, high]),

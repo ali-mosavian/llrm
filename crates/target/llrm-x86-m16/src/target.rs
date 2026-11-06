@@ -265,7 +265,8 @@ impl Machine for Dos {
             return llrm_mir::target::Tuning::PIN;
         }
         llrm_mir::target::Tuning {
-            // Trial: arm64's -Os unrotate rule (header priced against the branches removed).
+            // Trial: arm64's -Os unrotate rule (header priced against the
+            // branches removed).
             rotation_header_priced_at_size: true,
             max_stores_per_memset: 4,
             max_stores_per_memcpy: 2,
@@ -293,6 +294,14 @@ impl Machine for Dos {
             unroll_threshold: Some(0),
             unroll_max_percent_threshold_boost: Some(100),
             x87_stack_slots: Some(8),
+            x87_share_negated_products: true,
+            // DEVIATE SLOTS-LOOPWIDTH (owner greedy-subreg, exit 2026-11-20):
+            // the pin's ColorSlot shares any two slots whose ranges do not
+            // overlap. Here a word shares no slot a double word holds through a
+            // loop: stft_fixed -O2 -523266 clk and -3 B, jpeg_fixed -Os -2 B;
+            // open rows (oversight rules): jpeg_single C -Os +1 B (-217 clk),
+            // jpeg_fixed and jpeg_single nib -O2 +1 B each (-1 clk).
+            slots_loop_width_rule: true,
             // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
             // (partial and runtime on) copied matmul's outer body, 455 code
             // bytes against 297, past Borland C's 298.
@@ -495,9 +504,10 @@ mod tests {
 
     use super::Dos;
 
-    /// The x87 byte rows were a flat 6: a register `faddp` (2 B encoded) priced at 3x,
-    /// and the memory operand of `fadd m` at 0 (`x87_add_m` = `x87_add`), so folding
-    /// a load looked free at -Os. A register form is the integer register row.
+    /// The x87 byte rows were a flat 6: a register `faddp` (2 B encoded) priced
+    /// at 3x, and the memory operand of `fadd m` at 0 (`x87_add_m` =
+    /// `x87_add`), so folding a load looked free at -Os. A register form is
+    /// the integer register row.
     #[test]
     fn m16_x87_byte_rows_split_register_and_memory_forms() {
         let sizes = super::DESCRIPTION.size_costs();
@@ -638,6 +648,21 @@ mod encoding_tests {
         );
         let clocks = dos.costs();
         assert_eq!(clocks.argument, clocks.load + clocks.store);
+    }
+
+    /// `lea` in real mode is 3 bytes in words (`8D 40 07`), 5 as dwords behind
+    /// both prefixes (`67 66 8D 40 07`) and 6 with a base, an index and a
+    /// displacement (`67 66 8D 44 01 07`; jwasm). The table priced every dword
+    /// form at the word form plus the prefixes, 8 of its unit (twice the
+    /// bytes): inc + add (5 bytes) lost to the six-byte `lea`.
+    #[test]
+    fn a_lea_is_priced_at_its_encoding_by_width_and_parts() {
+        use llrm_mir::target::{Machine, three_operand, three_operand_of};
+        let sized = super::Dos::default().size_costs();
+        let forms = super::address_forms(&sized, 0);
+        let price = |width, word| three_operand(&sized, &forms, width, 2, 1, word).expect("a form");
+        let three = three_operand_of(&sized, &forms, 4, 2, 1, false, 3).expect("a form");
+        assert_eq!((price(2, true), price(4, false), three), (2 * 3, 2 * 5, 2 * 6));
     }
 
     /// A fill's bytes are the instructions it becomes as encoded: `rep stos`

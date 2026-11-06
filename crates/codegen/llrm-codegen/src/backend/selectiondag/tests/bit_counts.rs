@@ -45,12 +45,14 @@ fn legalized_by(
         &mut dag,
         tli,
         &mut X86Lowering {
+            share_products: false,
             cmov: true,
             sse2: false,
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false,
+            sext_load: false,
+            zext_free: false,
             profile: None,
         },
     )
@@ -137,12 +139,14 @@ fn abs_without_cmov_is_xor_with_the_sign_then_subtract_it() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            share_products: false,
             cmov: false,
             sse2: false,
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false,
+            sext_load: false,
+            zext_free: false,
             profile: None,
         },
     )
@@ -157,7 +161,8 @@ fn abs_without_cmov_is_xor_with_the_sign_then_subtract_it() {
 }
 
 /// At m16 a word `cttz` stays a word (DEVIATE SD542): promoted to `i32`, as the
-/// pin does, it was a dword scan and spill in stft_single -O2 (+166,586 clocks).
+/// pin does, it was a dword scan and spill in stft_single -O2 (+166,586
+/// clocks).
 #[test]
 fn cttz_of_a_word_at_m16_stays_a_word() {
     let tli = TargetLowering::x86_16(Features::default(), MVT::I16);

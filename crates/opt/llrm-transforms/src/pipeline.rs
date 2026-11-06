@@ -510,7 +510,7 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" | "canonfreeze" | "maskscale" | "hardwareloops" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" | "maskscale" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
@@ -1515,6 +1515,12 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         if applied.options.wanted("hardwareloops") {
             passes.push(Box::new(crate::hardwareloops::HardwareLoops));
         }
+        // `TargetPassConfig::addIRPasses` (pin l.874): ConstantHoisting
+        // follows LSR; it hoists nothing for a target whose constants all
+        // cost the basic one.
+        if applied.options.wanted("constanthoisting") {
+            passes.push(Box::new(crate::constanthoisting::ConstantHoisting));
+        }
     }
     passes
 }
@@ -1542,6 +1548,7 @@ fn rerun(
     if fixed.wants_sizes() {
         declared.count_referenced(module);
     }
+    llrm_mir::passes::snapshot_for_audit(module);
     let Module { context, globals, metadata, .. } = &mut *module;
     llrm_mir::passes::set_running_function(globals[id.0 as usize].name.as_deref().unwrap_or_default());
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {

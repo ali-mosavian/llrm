@@ -318,6 +318,7 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::fixupleas::FixupLeas {
             slow_3ops: target.slow_3ops_lea(),
             size: target.size,
+            shrink_in_place: target.three_address() == crate::twoaddress::ThreeAddress::AddSubWords,
             ..Default::default()
         }),
         // Once spill traffic is final: which slots a loop still reaches.
