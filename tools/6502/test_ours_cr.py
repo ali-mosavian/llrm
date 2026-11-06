@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""tools/6502: the 6502 clock harness (needs OURS_RT, sim65, ca65/cl65; see the env defaults at the top of ours_cr.py).
+A link order that followed set iteration (PYTHONHASHSEED) moved code across pages: float_in_place_update at -Os, same compiler,
+same runtime, 201888 clocks under seed 0 and 201946 under seed 3 (2026-11-06), a +58 clock floor on every "worse cell" claim.
+ours_cr.py without OURS_RT used a stale default runtime (/tmp/nv/w6/mos_rt_28a5.s): 8 programs failed to link at -O1..-O3
+(the folded sweep, 2026-11-05) and an A/B could have compared one side against the wrong runtime. It must refuse and say why."""
+import os, subprocess, sys, unittest
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+def run(env_rt, script="ours_cr.py"):
+    env = {k: v for k, v in os.environ.items() if k != "OURS_RT"}
+    if env_rt is not None: env["OURS_RT"] = env_rt
+    return subprocess.run([sys.executable, os.path.join(HERE, script), "/nonexistent/llrm-cc", "O2", "/dev/null", "__empty__"],
+                          capture_output=True, text=True, env=env, timeout=120)
+
+class OursCr(unittest.TestCase):
+    def test_refuses_without_ours_rt(self):
+        r = run(None)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("OURS_RT", r.stderr, r.stderr[-300:])
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_refuses_a_missing_runtime_file(self):
+        r = run("/nonexistent/mos_rt.s")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("OURS_RT", r.stderr, r.stderr[-300:])
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_the_sibling_harnesses_refuse_too(self):
+        for script in ("ours.py", "ours_keep.py", "ours.multi.py"):
+            r = run(None, script)
+            self.assertNotEqual(r.returncode, 0, script)
+            self.assertIn("OURS_RT is not set", r.stderr, f"{script}: {r.stderr[-200:]}")
+
+CC = os.environ.get("OURS_TEST_CC", os.path.expanduser("~/scratch/s4/frozen-setcc/lchead/llrm-cc"))
+RT = os.environ.get("OURS_TEST_RT", os.path.expanduser("~/scratch/s4/fa/lanecopy/rt_head.s"))
+
+@unittest.skipUnless(os.path.exists(CC) and os.path.exists(RT), "needs a llrm-cc and a runtime (OURS_TEST_CC, OURS_TEST_RT)")
+class Deterministic(unittest.TestCase):
+    def test_clocks_do_not_depend_on_the_hash_seed(self):
+        import tempfile
+        got = []
+        for seed in ("0", "3"):
+            out = tempfile.mktemp(suffix=".tsv")
+            env = dict(os.environ, PYTHONHASHSEED=seed, OURS_RT=RT, OURS_PADS="0", OURS_FLAGS="honor")
+            r = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "Os", out, "float_in_place_update"],
+                               capture_output=True, text=True, env=env, timeout=300)
+            self.assertEqual(r.returncode, 0, r.stderr[-300:])
+            got.append(open(out).read())
+        self.assertEqual(got[0], got[1], "the link order followed the hash seed")
+
+if __name__ == "__main__": unittest.main()
