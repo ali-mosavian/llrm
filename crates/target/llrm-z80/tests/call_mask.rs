@@ -1,10 +1,10 @@
 //! A call's `RegisterMask` names the flags register.
 
 use llrm_codegen::backend::isel;
+use llrm_codegen::backend::selectiondag::NodeData;
 use llrm_codegen::backend::selectiondag::builder::build_block;
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::isd::ISD;
-use llrm_codegen::backend::selectiondag::NodeData;
 use llrm_mir::datalayout::DataLayout;
 use llrm_z80::dagisel::function::builder_target;
 use llrm_z80::dagisel::generated::ids::reg as pin;
