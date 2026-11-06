@@ -433,6 +433,16 @@ impl llrm_target::Target for M64 {
 
 #[cfg(test)]
 mod tests {
+    /// The m64 sheet had a cache line and no line fill, so no byte rate was
+    /// derivable at m64 and the borrowed 312 had no number to be compared with.
+    /// Zen 5 fills a 64 B line from L2 in 10 clk: 156 mclk/B.
+    #[test]
+    fn test_the_sheet_states_the_measured_line_fill_and_derives_its_byte_rate() {
+        let cpu = super::TIMINGS.cpu("x86-64").expect("the default CPU");
+        assert_eq!((cpu.cache_line, cpu.line_fill_clocks), (Some(64), Some(10)));
+        assert_eq!(cpu.byte_rate(), Some(156));
+    }
+
     /// x86-64 described no x87 registers, so an x87 value (a QB `fatan`, a
     /// `long double`) had no register class and the DAG path refused it.
     #[test]
