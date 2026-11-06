@@ -1438,6 +1438,16 @@ pub trait Tti {
         false
     }
 
+    /// `isFCmpOrdCheaperThanFCmpZero`
+    /// ([TargetTransformInfoImpl.h:581](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h#L581)):
+    /// whether `fcmp ord v, v` is cheaper than `fcmp oge v, 0.0` (X86: no).
+    fn is_fcmp_ord_cheaper_than_fcmp_zero(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        true
+    }
+
     /// `shouldBuildLookupTables`: whether the target jumps through a table
     /// (X86 and AArch64: `BRIND` is legal).
     fn should_build_lookup_tables(&self) -> bool {

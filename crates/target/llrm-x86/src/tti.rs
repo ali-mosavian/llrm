@@ -774,6 +774,15 @@ impl Tti for X86 {
         matches!(ty, Ty::Float | Ty::Double | Ty::X87)
     }
 
+    /// `X86TTIImpl::isFCmpOrdCheaperThanFCmpZero`
+    /// ([X86TargetTransformInfo.cpp#L7435](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7435)).
+    fn is_fcmp_ord_cheaper_than_fcmp_zero(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
     fn is_type_legal(
         &self,
         ty: Ty,

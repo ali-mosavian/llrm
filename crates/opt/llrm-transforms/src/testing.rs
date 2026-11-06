@@ -167,6 +167,8 @@ pub struct Tuned {
     pub cheap_ctlz: bool,
     /// `FSQRT` is legal on `double`.
     pub fast_sqrt: bool,
+    /// `Tti::is_fcmp_ord_cheaper_than_fcmp_zero` is false, as X86's.
+    pub ord_dear: bool,
     /// `Tuning::price_fills`.
     pub price_fills: bool,
     /// No constant memset is stored inline: every fill is a `rep stos`.
@@ -183,6 +185,7 @@ pub struct Flagged {
     /// instruction.
     pub cheap_ctlz: bool,
     pub fast_sqrt: bool,
+    pub ord_dear: bool,
     pub no_cmov: bool,
     pub no_global_base: bool,
 }
@@ -192,7 +195,14 @@ impl llrm_mir::tti::Tti for Flagged {
         &self,
         ty: tti::Ty,
     ) -> bool {
-        self.fast_sqrt && ty == tti::Ty::Double
+        self.fast_sqrt && matches!(ty, tti::Ty::Double | tti::Ty::Float)
+    }
+
+    fn is_fcmp_ord_cheaper_than_fcmp_zero(
+        &self,
+        _ty: tti::Ty,
+    ) -> bool {
+        !self.ord_dear
     }
 
     fn prefers_exit_ne(&self) -> bool {
@@ -325,13 +335,14 @@ impl llrm_mir::target::Machine for Tuned {
     }
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        (self.exit_ne || self.no_global_base || self.cheap_ctlz || self.fast_sqrt).then(|| {
+        (self.exit_ne || self.no_global_base || self.cheap_ctlz || self.fast_sqrt || self.ord_dear).then(|| {
             std::rc::Rc::new(Flagged {
                 exit_ne: self.exit_ne,
                 no_cmov: false,
                 no_global_base: self.no_global_base,
                 cheap_ctlz: self.cheap_ctlz,
                 fast_sqrt: self.fast_sqrt,
+                ord_dear: self.ord_dear,
             }) as _
         })
     }
