@@ -450,6 +450,15 @@ impl Printer<'_> {
                 }
             }
             "SHL16" | "SRL16" | "SRA16" => {
+                if op == "SHL16"
+                    && let Some(lines) =
+                        word_double_through_hl(&name_of(self, 0)?, shift_count(inst)?, self.dead_after(reg::HL, rest))
+                {
+                    for line in lines {
+                        self.push(line);
+                    }
+                    return Ok(());
+                }
                 let (lo, hi) = lanes(self.register(inst, 0)?)?;
                 let (lo, hi) = (name(lo), name(hi));
                 for _ in 0..shift_count(inst)? {
@@ -1420,6 +1429,50 @@ fn flags_first(insts: &[Inst]) -> Option<bool> {
     }
     None
 }
+
+/// A word in `de` or `bc` shifted left by `bits`: `sla r; rl r'` is 4 B / 16 T a
+/// bit, `add hl, hl` 1 B / 11 T. `de` swaps with `hl` round the doublings
+/// (`ex de, hl` x2 keeps `hl`); `bc` goes through `hl` when nothing reads it.
+/// None where the bit by bit form is no longer or no slower, priced by the
+/// timing table.
+fn word_double_through_hl(
+    pair: &str,
+    bits: i64,
+    hl_dead: bool,
+) -> Option<Vec<String>> {
+    let bits = usize::try_from(bits).ok().filter(|bits| *bits >= 2)?;
+    let (head, tail, setup, teardown): (Vec<&str>, Vec<&str>, Vec<&str>, Vec<&str>) = match pair {
+        "de" => (vec!["ex de, hl"], vec!["ex de, hl"], vec!["ex de;hl"], vec!["ex de;hl"]),
+        "bc" if hl_dead => (
+            vec!["ld h, b", "ld l, c"],
+            vec!["ld b, h", "ld c, l"],
+            vec!["ld b;c", "ld b;c"],
+            vec!["ld b;c", "ld b;c"],
+        ),
+        _ => return None,
+    };
+    let price = |forms: &[&str]| {
+        forms.iter().fold(
+            (0u32, 0u32),
+            |(bytes, clocks), form| {
+                let one = crate::timing::cost(form).unwrap_or_else(|| panic!("timing/z80.csv has no form `{form}`"));
+                (bytes + one.bytes, clocks + one.taken)
+            },
+        )
+    };
+    let mut new = [setup, teardown].concat();
+    new.extend(std::iter::repeat_n("add hl;bc", bits));
+    let old: Vec<&str> = std::iter::repeat_n(["sla b", "rl b"], bits).flatten().collect();
+    let (new_price, old_price) = (price(&new), price(&old));
+    if !(new_price.0 < old_price.0 && new_price.1 <= old_price.1) {
+        return None;
+    }
+    let mut lines: Vec<String> = head.iter().map(|line| (*line).to_owned()).collect();
+    lines.extend(std::iter::repeat_n("add hl, hl".to_owned(), bits));
+    lines.extend(tail.iter().map(|line| (*line).to_owned()));
+    Some(lines)
+}
+
 
 fn shift_count(inst: &Inst) -> Result<i64, String> {
     match inst.operands.last() {
