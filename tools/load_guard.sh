@@ -7,6 +7,9 @@
 #              exactly the recorded list is SIGCONTed at 5m < LG_RESUME_5M (26) or 1m < LG_RESUME_1M (20): the 5m average lags a load that has already fallen. The EXIT trap CONTs the list; INT/TERM also pass TERM to the group; a watchdog
 #              in its own session CONTs the list if this wrapper is SIGKILLed (a guard left a build stopped for 67 min; a stopper that signalled one group left
 #              the wrapper subshell and the `| tail -1` pipe stopped). Only recorded pids/pgids are signalled, never a pattern. Lines carry `date -u`.
+#   order:     a job declares LG_TIER=n (1 miscompile builds, 2 pass PRs, 3 shared-pass A/Bs, 4 benches/matrix; default 4). Waiters are listed in LG_PRIO_FILE;
+#              (LG_NO_WAIT jobs skip the order) a waiter takes no free slot while a waiter of a lower tier, or of its tier that started waiting earlier, is alive.
+#              The settle period is LG_SETTLE_FAST (15) while 1m < LG_FAST_1M (15): a started build barely moves a load that low.
 # Env: LG_LOAD_FILE (/proc/loadavg), LG_POLL seconds (15), LG_SLOT_DIR (/tmp/buildslots/load_guard).
 [ $# -gt 0 ] || { echo "usage: load_guard.sh CMD..." >&2; exit 2; }
 file=${LG_LOAD_FILE:-/proc/loadavg}; poll=${LG_POLL:-15}
@@ -14,15 +17,17 @@ stop5=${LG_STOP_5M:-28}; stop1=${LG_STOP_1M:-38}; resume5=${LG_RESUME_5M:-26}; r
 [ "${LG_QUIET:-}" = 1 ] && start1=${LG_QUIET_1M:-20}
 base=${LG_SLOTS:-3}; high=${LG_SLOTS_HIGH:-5}; widen1=${LG_WIDEN_1M:-20}; narrow1=${LG_NARROW_1M:-22}
 slot_dir=${LG_SLOT_DIR:-/tmp/buildslots/load_guard}
+prio=${LG_PRIO_FILE:-$slot_dir/prio}; tier=${LG_TIER:-4}
 log() { echo "load_guard: $(date -u +%H:%MZ) $*" >&2; }
 above() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a>b)}'; }
 
 # ---- admission -------------------------------------------------------------
 # One admission per LG_SETTLE seconds, decided under a lock: two starters seeing the same 1m load must not both go.
-settled() {
-  local ok=1
+settled() {  # settled L1
+  local ok=1 every=${LG_SETTLE:-60}
+  awk -v a="$1" -v b="${LG_FAST_1M:-15}" 'BEGIN{exit !(a<b)}' && every=$(awk -v a="$every" -v b="${LG_SETTLE_FAST:-15}" 'BEGIN{print (b<a)?b:a}')
   exec {lock_fd}>"$slot_dir/admit.lock"; flock "$lock_fd"
-  if awk -v now="$(date +%s)" -v last="$(stat -c %Y "$slot_dir/last_admit" 2>/dev/null || echo 0)" -v every="${LG_SETTLE:-60}" 'BEGIN{exit !(now-last>=every)}'; then
+  if awk -v now="$(date +%s)" -v last="$(stat -c %Y "$slot_dir/last_admit" 2>/dev/null || echo 0)" -v every="$every" 'BEGIN{exit !(now-last>=every)}'; then
     touch "$slot_dir/last_admit"; ok=0
   fi
   exec {lock_fd}>&-
@@ -36,8 +41,24 @@ slot_count() {  # slot_count L1: prints the count
   echo "$now" > "$slot_dir/slots_now"; echo "$now"
 }
 
+# ---- order: one line "tier start pid" per waiter in $prio, edited under the same lock discipline ----
+prio_edit() {  # prio_edit add|del|first: first prints ok when no live waiter precedes this one
+  local fd out=""; exec {fd}>"$slot_dir/prio.lock"; flock "$fd"
+  touch "$prio"
+  # drop waiters whose process is gone
+  while read -r t st pid; do kill -0 "$pid" 2>/dev/null && echo "$t $st $pid"; done < "$prio" > "$prio.new"
+  case $1 in
+    add) echo "$tier $(date +%s.%N) $$" >> "$prio.new" ;;
+    del) grep -v " $$\$" "$prio.new" > "$prio.tmp"; mv "$prio.tmp" "$prio.new" ;;
+    first) out=$(sort -k1,1n -k2,2n "$prio.new" | head -1 | awk -v me="$$" '{print ($3==me)?"ok":"no"}') ;;
+  esac
+  mv "$prio.new" "$prio"; exec {fd}>&-
+  [ "$1" != first ] || [ "$out" = ok ]
+}
+
 admit() {
   mkdir -p "$slot_dir" || return 1
+  [ "${LG_NO_WAIT:-}" = 1 ] || { prio_edit add; trap 'prio_edit del' EXIT; }
   local next_note=0 busy l1 l5 why slots
   while :; do
     read -r l1 _ < "$file"
@@ -46,7 +67,7 @@ admit() {
     for i in $(seq 1 "$high"); do  # slots beyond the current count stay held by running jobs
       exec {slot_fd}>"$slot_dir/slot.$i"
       if flock -n "$slot_fd"; then
-        if [ "$busy" -lt "$slots" ] && above "$start1" "$l1" && settled; then log "admit slot $i (1m $l1, slots $slots)"; return 0; fi
+        if [ "$busy" -lt "$slots" ] && above "$start1" "$l1" && { [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit first; } && settled "$l1"; then [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit del; trap - EXIT; log "admit slot $i (1m $l1, slots $slots) tier $tier"; return 0; fi
         flock -u "$slot_fd"
       else
         busy=$((busy + 1))

@@ -276,3 +276,33 @@ class Resume(Env, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Order(Env, unittest.TestCase):
+    """27 waiters drained at one per minute in no order: a miscompile build waited behind benches."""
+
+    def admit_order(self, tiers, **env):
+        self.set_load(30.0, 30.0)  # nobody starts until all are queued
+        log = os.path.join(self.dir.name, "order")
+        jobs = []
+        for tier in tiers:
+            jobs.append(self.start("bash", "-c", f"echo {tier} >> {log}", LG_TIER=str(tier), LG_SETTLE="0", LG_POLL="0.05", **env))
+            time.sleep(0.3)
+        self.set_load(1.0, 1.0)
+        for job in jobs:
+            job.wait(timeout=15)
+        return open(log).read().split()
+
+    def test_waiters_are_admitted_by_tier_not_by_arrival(self):
+        self.assertEqual(self.admit_order([3, 1, 2]), ["1", "2", "3"])
+
+    def test_inside_a_tier_the_earlier_waiter_goes_first(self):
+        self.assertEqual(self.admit_order([2, 2, 2]), ["2", "2", "2"])
+
+    def test_four_jobs_at_a_low_load_start_within_the_fast_settle(self):
+        self.set_load(5.0, 5.0)
+        began = time.time()
+        jobs = [self.start("true", LG_SETTLE="60", LG_SETTLE_FAST="1", LG_SLOTS="5", LG_POLL="0.05") for _ in range(4)]
+        for job in jobs:
+            self.assertEqual(job.wait(timeout=15), 0)
+        self.assertLess(time.time() - began, 8, "the 60 s settle applied at 1m load 5")
