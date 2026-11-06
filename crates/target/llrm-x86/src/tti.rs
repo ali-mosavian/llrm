@@ -696,6 +696,10 @@ impl Tti for X86 {
         self.tuning.x87_stack_slots.filter(|_| !self.sse2)
     }
 
+    fn x87_share_negated_products(&self) -> bool {
+        self.tuning.x87_share_negated_products && !self.sse2
+    }
+
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         self.tuning.unroll_partial_threshold
     }
@@ -768,7 +772,9 @@ impl Tti for X86 {
     }
 
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
-        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_single_site {
+        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+            || self.tuning.inline_size_guard_single_site
+        {
             1
         } else {
             2

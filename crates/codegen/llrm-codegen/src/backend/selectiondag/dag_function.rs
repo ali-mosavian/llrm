@@ -1201,6 +1201,7 @@ fn selected_in(
             &tli,
             &mut X86Lowering {
                 cmov: tli.can_use_cmov(),
+                share_products: cpu.target().tti().is_some_and(|tti| tti.x87_share_negated_products()),
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
                 three_address_adds: !(cpu.size || cpu.min_size)
