@@ -8,10 +8,10 @@
 //! the underlying objects, identified objects, arguments against function-local
 //! objects, an escape source against a non-captured local object, an access
 //! larger than the whole object), `DecomposeGEPExpression` (constant offsets,
-//! variable indices by value and scale), `subtractDecomposedGEPs` and
-//! `aliasGEP` as far as it needs no value ranges: the inbounds and
-//! constant-difference rules, nuw, and the GCD test. Not yet (deviations in the
-//! plan page): `GetLinearExpression` through casts, `analyzeVariableOffsets`'
+//! variable indices by value and scale, through `GetLinearExpression`),
+//! `subtractDecomposedGEPs` and `aliasGEP` as far as it needs no value ranges:
+//! the inbounds and constant-difference rules, nuw, and the GCD test. Not yet
+//! (deviations in the plan page): `analyzeVariableOffsets`'
 //! ranges, `aliasPHI`, `aliasSelect`, and the mod/ref queries
 //! other than `getModRefInfoMask` and `getModRefInfo(Call, Loc)` (they answer
 //! the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo`
@@ -32,7 +32,7 @@
 
 use llrm_mir::context::{ConstantExpr, ConstantKind};
 use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
-use llrm_mir::opcode::{CastOp, Flags, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 
 use crate::aa::{AAQueryInfo, AAResults, AliasResult, LocationSize, MemoryEffects, MemoryLocation, ModRefInfo};
 use crate::capturetracking::CaptureComponents;
@@ -62,10 +62,8 @@ pub(crate) struct Decomposed {
     nuw: bool,
 }
 
-/// `VariableGEPIndex`: an index value times a scale, never zero. The casts of
-/// `CastedValue` are the sign extension or truncation to the index width; the
-/// linear expression `GetLinearExpression` finds through them is not
-/// translated, so a value is its own, times 1, plus 0.
+/// `VariableGEPIndex`: an index value, cast as `CastedValue` says, times a
+/// scale, never zero.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VarIndex {
     value: Operand,
@@ -75,8 +73,13 @@ pub(crate) struct VarIndex {
     /// `IsNSW`: the GEP is `nusw`.
     nsw: bool,
     negated: bool,
+    zext_bits: u32,
     sext_bits: u32,
     trunc_bits: u32,
+    /// `IsNonNegative`: the truncated value is non-negative.
+    nneg: bool,
+    /// The width of `value`'s type (`V->getType()`).
+    bits: u32,
 }
 
 impl VarIndex {
@@ -85,7 +88,11 @@ impl VarIndex {
         &self,
         other: &VarIndex,
     ) -> bool {
-        self.sext_bits == other.sext_bits && self.trunc_bits == other.trunc_bits
+        casts_match(self.bits, self.casts(), other.bits, other.casts())
+    }
+
+    fn casts(&self) -> Casts {
+        Casts { zext_bits: self.zext_bits, sext_bits: self.sext_bits, trunc_bits: self.trunc_bits, nneg: self.nneg }
     }
 
     /// `VariableGEPIndex::hasNegatedScaleOf`.
@@ -94,6 +101,93 @@ impl VarIndex {
         other: &VarIndex,
     ) -> bool {
         if self.negated == other.negated { self.scale == -other.scale } else { self.scale == other.scale }
+    }
+}
+
+/// The casts of `CastedValue`: zext(sext(trunc(V))).
+#[derive(Clone, Copy, Debug, Default)]
+struct Casts {
+    zext_bits: u32,
+    sext_bits: u32,
+    trunc_bits: u32,
+    /// Whether trunc(V) is non-negative.
+    nneg: bool,
+}
+
+/// `CastedValue::hasSameCastsAs` of two values of types `bits` and `other_bits`
+/// wide.
+fn casts_match(
+    bits: u32,
+    casts: Casts,
+    other_bits: u32,
+    other: Casts,
+) -> bool {
+    if bits != other_bits {
+        return false;
+    }
+    if casts.zext_bits == other.zext_bits && casts.sext_bits == other.sext_bits && casts.trunc_bits == other.trunc_bits
+    {
+        return true;
+    }
+    // A non-negative value takes its sign or zero extension alike.
+    if casts.nneg || other.nneg {
+        return casts.zext_bits + casts.sext_bits == other.zext_bits + other.sext_bits
+            && casts.trunc_bits == other.trunc_bits;
+    }
+    false
+}
+
+/// `CastedValue`: `value` cast as `casts` say.
+#[derive(Clone, Copy, Debug)]
+struct Casted {
+    value: Operand,
+    casts: Casts,
+}
+
+/// `LinearExpression`: zext(sext(trunc(V))) * scale + offset, the scale and
+/// offset signed in the index width.
+#[derive(Clone, Copy, Debug)]
+struct Linear {
+    val: Casted,
+    scale: i128,
+    offset: i128,
+    /// All operations are NUW.
+    nuw: bool,
+    /// All operations are NSW.
+    nsw: bool,
+}
+
+/// `x` as a signed `bits`-wide integer.
+fn wrap_signed(
+    x: i128,
+    bits: u32,
+) -> i128 {
+    if bits >= 128 {
+        return x;
+    }
+    let low = (x as u128) & llrm_mir::context::mask(bits);
+    if low >> (bits - 1) & 1 == 0 { low as i128 } else { (low | (!0u128 << bits)) as i128 }
+}
+
+impl Linear {
+    fn of(val: Casted) -> Linear {
+        Linear { val, scale: 1, offset: 0, nuw: true, nsw: true }
+    }
+
+    /// `LinearExpression::mul`.
+    fn mul(
+        mut self,
+        other: i128,
+        mul_nuw: bool,
+        mul_nsw: bool,
+        bits: u32,
+    ) -> Linear {
+        // (X +nsw Y) *nsw Z does not imply (X *nsw Z) +nsw (Y *nsw Z).
+        self.nsw = self.nsw && (other == 1 || (mul_nsw && self.offset == 0));
+        self.nuw = self.nuw && (other == 1 || mul_nuw);
+        self.scale = wrap_signed(self.scale.wrapping_mul(other), bits);
+        self.offset = wrap_signed(self.offset.wrapping_mul(other), bits);
+        self
     }
 }
 
@@ -371,6 +465,148 @@ impl<'a> BasicAA<'a> {
         found
     }
 
+    /// `CastedValue::evaluateWith(APInt)`: the constant `bits` of `val`'s
+    /// value, cast, as a signed `index_bits` integer.
+    fn evaluate(
+        &self,
+        val: &Casted,
+        bits: u128,
+        index_bits: u32,
+    ) -> i128 {
+        let original = self.unit.int_bits(val.value).unwrap_or(index_bits);
+        let mut width = original;
+        let mut value = bits & llrm_mir::context::mask(width);
+        if val.casts.trunc_bits != 0 {
+            width = width.saturating_sub(val.casts.trunc_bits);
+            value &= llrm_mir::context::mask(width);
+        }
+        if val.casts.sext_bits != 0 {
+            let extended = wrap_signed(value as i128, width) as u128;
+            width += val.casts.sext_bits;
+            value = extended & llrm_mir::context::mask(width);
+        }
+        width += val.casts.zext_bits;
+        wrap_signed(value as i128, width)
+    }
+
+    /// `GetLinearExpression`
+    /// ([BasicAliasAnalysis.cpp:434](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L434)):
+    /// `val` as `A * V + B` for constants `A` and `B`.
+    fn linear(
+        &self,
+        val: Casted,
+        depth: u32,
+        index_bits: u32,
+    ) -> Linear {
+        // Limit our recursion depth.
+        if depth == 6 {
+            return Linear::of(val);
+        }
+        if let Some(bits) = self.unit.int_constant(val.value) {
+            return Linear { val, scale: 0, offset: self.evaluate(&val, bits, index_bits), nuw: true, nsw: true };
+        }
+        let Some(one) = self.defining(val.value) else { return Linear::of(val) };
+        let type_bits = |operand: Operand| self.unit.int_bits(operand).unwrap_or(index_bits);
+        match &one.opcode {
+            Opcode::Binary(op) => {
+                let Some(rhs_bits) = one.operands.get(1).and_then(|&rhs| self.unit.int_constant(rhs)) else {
+                    return Linear::of(val);
+                };
+                let rhs = self.evaluate(&val, rhs_bits, index_bits);
+                // The only non-overflowing operator is a disjoint or.
+                let (mut nuw, mut nsw) = (true, true);
+                if matches!(
+                    op,
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl
+                ) {
+                    nuw &= one.flags.contains(Flags::NUW);
+                    nsw &= one.flags.contains(Flags::NSW);
+                }
+                // zext(x op<nuw> y) == zext(x) op<nuw> zext(y), sext likewise
+                // with nsw.
+                if !((val.casts.zext_bits == 0 || nuw) && (val.casts.sext_bits == 0 || nsw)) {
+                    return Linear::of(val);
+                }
+                // The no-wrap flags are not kept through a trunc.
+                if val.casts.trunc_bits != 0 {
+                    nuw = false;
+                    nsw = false;
+                }
+                let inner = |preserve: bool| Casted {
+                    value: one.operands[0],
+                    casts: Casts { nneg: val.casts.nneg && preserve, ..val.casts },
+                };
+                let mut e;
+                match op {
+                    BinaryOp::Or | BinaryOp::Add => {
+                        // X|C == X+C if it is disjoint.
+                        if matches!(op, BinaryOp::Or) && !one.flags.contains(Flags::DISJOINT) {
+                            return Linear::of(val);
+                        }
+                        e = self.linear(inner(false), depth + 1, index_bits);
+                        e.offset = wrap_signed(e.offset.wrapping_add(rhs), index_bits);
+                        e.nuw &= nuw;
+                        e.nsw &= nsw;
+                    }
+                    BinaryOp::Sub => {
+                        e = self.linear(inner(false), depth + 1, index_bits);
+                        e.offset = wrap_signed(e.offset.wrapping_sub(rhs), index_bits);
+                        // sub nuw x, y is not add nuw x, -y.
+                        e.nuw = false;
+                        e.nsw &= nsw;
+                    }
+                    BinaryOp::Mul => {
+                        e = self.linear(inner(false), depth + 1, index_bits).mul(rhs, nuw, nsw, index_bits);
+                    }
+                    BinaryOp::Shl => {
+                        // A shift count over the width makes poison.
+                        let count = (rhs as u128) & llrm_mir::context::mask(index_bits);
+                        if count > u128::from(index_bits) {
+                            return Linear::of(val);
+                        }
+                        e = self.linear(inner(nsw), depth + 1, index_bits);
+                        e.offset = wrap_signed(e.offset << count, index_bits);
+                        e.scale = wrap_signed(e.scale << count, index_bits);
+                        e.nuw &= nuw;
+                        e.nsw &= nsw;
+                    }
+                    _ => return Linear::of(val),
+                }
+                e
+            }
+            Opcode::Cast(CastOp::ZExt) => {
+                // `withZExtOfValue`.
+                let new = one.operands[0];
+                let mut extend_by = type_bits(val.value).saturating_sub(type_bits(new));
+                let casts = if extend_by <= val.casts.trunc_bits {
+                    Casts { trunc_bits: val.casts.trunc_bits - extend_by, ..val.casts }
+                } else {
+                    extend_by -= val.casts.trunc_bits;
+                    Casts {
+                        zext_bits: val.casts.zext_bits + val.casts.sext_bits + extend_by,
+                        sext_bits: 0,
+                        trunc_bits: 0,
+                        nneg: one.flags.contains(Flags::NNEG),
+                    }
+                };
+                self.linear(Casted { value: new, casts }, depth + 1, index_bits)
+            }
+            Opcode::Cast(CastOp::SExt) => {
+                // `withSExtOfValue`.
+                let new = one.operands[0];
+                let mut extend_by = type_bits(val.value).saturating_sub(type_bits(new));
+                let casts = if extend_by <= val.casts.trunc_bits {
+                    Casts { trunc_bits: val.casts.trunc_bits - extend_by, ..val.casts }
+                } else {
+                    extend_by -= val.casts.trunc_bits;
+                    Casts { sext_bits: val.casts.sext_bits + extend_by, trunc_bits: 0, ..val.casts }
+                };
+                self.linear(Casted { value: new, casts }, depth + 1, index_bits)
+            }
+            _ => Linear::of(val),
+        }
+    }
+
     fn decomposed(
         &self,
         mut operand: Operand,
@@ -425,31 +661,53 @@ impl<'a> BasicAA<'a> {
                     let (constant, variable) =
                         self.unit.layout.collect_offset(&self.unit.context.types, *source, &indices);
                     found.offset += constant;
-                    let nsw = one.flags.contains(Flags::NUSW) || one.flags.contains(Flags::INBOUNDS);
+                    let nusw = one.flags.contains(Flags::NUSW) || one.flags.contains(Flags::INBOUNDS);
+                    let nuw = one.flags.contains(Flags::NUW);
                     let index_bits = self.unit.layout.pointer(0).index_bits;
-                    for (at, scale) in variable {
-                        let (index, mut scale) = (one.operands[1 + at], scale as i128);
+                    for (at, element) in variable {
+                        let index = one.operands[1 + at];
+                        // An index narrower than the index width is sign
+                        // extended, a wider one truncated.
                         let bits = self.unit.int_bits(index).unwrap_or(index_bits);
-                        let (sext_bits, trunc_bits) =
-                            (index_bits.saturating_sub(bits), bits.saturating_sub(index_bits));
+                        let casts = Casts {
+                            zext_bits: 0,
+                            sext_bits: index_bits.saturating_sub(bits),
+                            trunc_bits: bits.saturating_sub(index_bits),
+                            nneg: nusw && nuw,
+                        };
+                        let mut le = self.linear(Casted { value: index, casts }, 0, index_bits);
+                        // Scale by the type size.
+                        le = le.mul(element as i128, nuw, nusw, index_bits);
+                        found.offset += le.offset;
+                        if !le.nuw {
+                            found.nuw = false;
+                        }
+                        let mut scale = le.scale;
+                        let value_bits = self.unit.int_bits(le.val.value).unwrap_or(index_bits);
                         // The same value and casts add their scales.
                         if let Some(have) = found.vars.iter().position(|had| {
-                            had.value == index && had.sext_bits == sext_bits && had.trunc_bits == trunc_bits
+                            had.value == le.val.value && casts_match(had.bits, had.casts(), value_bits, le.val.casts)
                         }) {
                             scale += found.vars.remove(have).scale;
+                            // No-wrap cannot be guaranteed for the merge.
+                            le.nsw = false;
+                            le.nuw = false;
                         }
                         if scale != 0 {
                             found
                                 .vars
                                 .push(
                                     VarIndex {
-                                        value: index,
+                                        value: le.val.value,
                                         scale,
                                         cxt: Some(inst_id),
-                                        nsw,
+                                        nsw: le.nsw,
                                         negated: false,
-                                        sext_bits,
-                                        trunc_bits,
+                                        zext_bits: le.val.casts.zext_bits,
+                                        sext_bits: le.val.casts.sext_bits,
+                                        trunc_bits: le.val.casts.trunc_bits,
+                                        nneg: le.val.casts.nneg,
+                                        bits: value_bits,
                                     },
                                 );
                         }
@@ -1436,6 +1694,7 @@ impl BasicAA<'_> {
                     let bits = self.unit.int_bits(var.value)?;
                     let value = llrm_mir::valuetracking::known::compute_known_bits(&query(var.cxt), var.value, 0);
                     let wide = if var.sext_bits > 0 { value.sext(bits + var.sext_bits) } else { value };
+                    let wide = if var.zext_bits > 0 { wide.zext(wide.width + var.zext_bits) } else { wide };
                     let constant = KnownBits::constant(wide.width, (c as u128) & llrm_mir::context::mask(wide.width));
                     Some(KnownBits::mul(&wide, &constant, false))
                 };
