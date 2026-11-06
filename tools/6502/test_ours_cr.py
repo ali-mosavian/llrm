@@ -4,7 +4,8 @@ A link order that followed set iteration (PYTHONHASHSEED) moved code across page
 same runtime, 201888 clocks under seed 0 and 201946 under seed 3 (2026-11-06), a +58 clock floor on every "worse cell" claim.
 ours_cr.py without OURS_RT used a stale default runtime (/tmp/nv/w6/mos_rt_28a5.s): 8 programs failed to link at -O1..-O3
 (the folded sweep, 2026-11-05) and an A/B could have compared one side against the wrong runtime. It must refuse and say why."""
-import os, subprocess, sys, unittest
+import os, subprocess, sys, tempfile, unittest
+from pathlib import Path
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 def run(env_rt, script="ours_cr.py"):
@@ -68,47 +69,27 @@ class Deterministic(unittest.TestCase):
             got.append(open(out).read())
         self.assertEqual(got[0], got[1], "the link order followed the hash seed")
 
-MODULE = """rc2 = $82
-.export __a
-__a:
-  jsr helper
-  sta s___a_1
-  rts
-.segment "BSS"
-s___a_1: .res 1
-.segment "CODE"
-.export __b
-__b:
-  jsr helper
-  rts
-.segment "BSS"
-.segment "CODE"
-helper:
-  lda rc2
-  rts
-"""
+@unittest.skipUnless(os.path.exists(CC) and os.path.exists(RT), "needs a llrm-cc and a runtime (OURS_TEST_CC, OURS_TEST_RT)")
+class Members(unittest.TestCase):
+    """The harness linked whole library modules: shift_int64_variable pulled 9676 B of i64 mul/div/mod for 1529 B of shifts (11300 B against
+    gcc's 6393, 2026-11-06). A program that uses shifts links the shift members, and each member defines its own routine only."""
+    def test_a_shift_program_links_only_shifts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "o.tsv")
+            r = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "Os", out, "shift_int64_variable"],
+                               capture_output=True, text=True, env={**os.environ, "OURS_RT": RT, "OURS_PADS": "0"}, timeout=600)
+            self.assertEqual(r.returncode, 0, r.stderr[-300:])
+            size = int(open(out).read().split("\t")[2])
+        self.assertLess(size, 4000, f"{size} B: the link carried routines the program does not call")
 
-class SplitCrlib(unittest.TestCase):
-    """int_int64.s is one object: shift_int64_variable linked 9676 B of it for 1529 B of shifts (11300 B against gcc's 6393; 2026-11-06).
-    The routines call a helper (`sf_clz32`) the module keeps after the last one: splitting by export alone left it inside `__ashrdi3`
-    and `__udivdi3` could not link."""
-    def setUp(self):
+    def test_a_member_defines_one_routine(self):
         sys.path.insert(0, HERE)
-        from split_crlib import split
-        self.units = split(MODULE)
-
-    def test_one_object_per_routine(self):
-        self.assertEqual(sorted(self.units), ["__a", "__b", "helper"])
-
-    def test_the_helper_is_exported_once_and_defined_once(self):
-        self.assertIn(".export helper", self.units["helper"])
-        for name in ("__a", "__b"):
-            self.assertNotIn("helper:", self.units[name])
-        self.assertIn("s___a_1: .res 1", self.units["__a"])
-        self.assertNotIn("s___a_1", self.units["__b"])
-
-    def test_a_module_of_one_routine_is_not_split(self):
-        from split_crlib import split
-        self.assertIsNone(split(".export __a\n__a:\n  rts\n"))
+        import crlib
+        rt = Path(HERE).resolve().parents[1] / "runtime" / "compiler-rt"
+        self.assertEqual(crlib.index(rt)["__ashldi3"], "lib/int/ashldi3.c")
+        text = crlib.member(rt, CC, "lib/int/ashldi3.c", ["-Os"])
+        self.assertIn("__ashldi3:", text)
+        for other in ("__udivdi3", "__muldi3", "__lshrdi3"):
+            self.assertNotIn(other + ":", text)
 
 if __name__ == "__main__": unittest.main()
