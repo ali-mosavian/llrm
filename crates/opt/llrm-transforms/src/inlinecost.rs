@@ -1021,7 +1021,13 @@ impl<'a> Analyzer<'a> {
             Opcode::Switch => self.visit_switch(inst),
             Opcode::Resume => false,
             Opcode::Unreachable => true,
-            Opcode::LandingPad { .. } | Opcode::Freeze | Opcode::VaArg => self.visit_default(inst),
+            // CallAnalyzer has no visitor for the lane operations: `visitInstruction`.
+            Opcode::LandingPad { .. }
+            | Opcode::Freeze
+            | Opcode::VaArg
+            | Opcode::ExtractElement
+            | Opcode::InsertElement
+            | Opcode::ShuffleVector(_) => self.visit_default(inst),
         }
     }
 
