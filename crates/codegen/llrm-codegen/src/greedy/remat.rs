@@ -121,6 +121,13 @@ pub fn flagged_loads(body: &LirBody) -> BTreeSet<u32> {
         .iter()
         .flat_map(|block| block.insns.iter())
         .filter(|one| one.invariant())
+        // a plain load: an instruction that folded one also reads registers
+        .filter(|one| {
+            one.what.as_ref().is_some_and(|what| {
+                matches!(what.op, crate::model::ir::Operation::Move | crate::model::ir::Operation::FloatLoad)
+                    && matches!(what.sources.as_slice(), [crate::model::ir::Loc::Mem(_)])
+            })
+        })
         .filter_map(|one| match one.defines.as_slice() {
             [value] if definitions.get(value) == Some(&1) => Some(*value),
             _ => None,
