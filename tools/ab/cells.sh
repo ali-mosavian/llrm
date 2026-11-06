@@ -4,6 +4,7 @@
 # the same binary (a sweep of a build against itself reads "no change" everywhere).
 # Env: CELLS_FLAGS (extra cc flags), CELLS_INC (include flags).
 set -u
+. "$(dirname "$0")/../ab_env.sh"; ab_env_check || exit 2
 D=$1; L=$2
 for b in llrm-cc llrm-llc; do
   [ -f "$D/base/$b" ] && [ -f "$D/new/$b" ] || { echo "cells: missing $b in base or new" >&2; exit 2; }
