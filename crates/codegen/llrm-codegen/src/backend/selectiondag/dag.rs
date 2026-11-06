@@ -1969,6 +1969,17 @@ impl SelectionDAG {
         }
     }
 
+    /// The filed one-result node `(opcode, vt, ops)`, none if there is no such
+    /// node (`FindNodeOrInsertPos` without the insert).
+    pub fn find_node(
+        &self,
+        opcode: ISD,
+        vt: EVT,
+        ops: &[SDValue],
+    ) -> Option<SDValue> {
+        self.cse_find(opcode, &[vt], ops, &NodeData::None).map(|node| SDValue { node, res: 0 })
+    }
+
     /// `getNode(Opcode, VTList, Ops)` for nodes with several results; no folds.
     pub fn get_node_multi(
         &mut self,

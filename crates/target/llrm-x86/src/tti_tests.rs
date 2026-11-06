@@ -357,7 +357,7 @@ fn the_tti_states_a_divide_remainder_op_on_every_register_type() {
     for bits in [8, 16, 32] {
         assert!(tti.has_div_rem_op(bits, true) && tti.has_div_rem_op(bits, false), "i{bits}");
     }
-    assert!(!tti.has_div_rem_op(64, true), "no i64 register on a 32-bit target");
+    assert!(tti.has_div_rem_op(64, true), "DR1: the inline i64 routine returns both");
     assert!(!tti.has_div_rem_op(24, false));
 }
 
