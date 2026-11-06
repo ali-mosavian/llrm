@@ -42,7 +42,7 @@ use super::context::{
 use super::guarantee::{is_guaranteed_not_to_be_poison, is_guaranteed_not_to_be_undef};
 use super::nonzero::is_known_non_zero;
 use super::pattern::nested::{
-    any, bind, bind_apint, cast, exactly, match_any_binary, match_binary, match_icmp, neg, not, specific, specific_int,
+    any, bind, bind_apint, cast, exactly, match_binary, match_icmp, neg, not, specific, specific_int,
 };
 use super::pattern::{
     IntrinsicId, all_ones, apint, argument_range, call_arguments, call_intrinsic as intrinsic_id, call_range,
@@ -565,7 +565,7 @@ fn low_bit_partner(
             if i.opcode != Opcode::Binary(want) {
                 continue;
             }
-            let x = ops[1 - k];
+            let x = ops[k];
             let (p, r) = (i.operands[0], i.operands[1]);
             if x_first {
                 if p == x {
@@ -598,7 +598,6 @@ fn get_known_bits_from_and_xor_or(
     let mut is_and = false;
     let has_known_one = known_lhs.one != 0 || known_rhs.one != 0;
     let x: Cell<Option<Operand>> = Cell::new(None);
-    let y: Cell<Option<Operand>> = Cell::new(None);
 
     let mut known_out;
     match instruction.opcode {
