@@ -9,6 +9,7 @@
 #define SF_SHIFT_LOOP 1 /* shift by a per-bit loop: fix_si keeps the two-direction shift (single larger count: 6502 -Os +15% cycles) */
 #ifndef __OPTIMIZE_SIZE__
 #define SF_SHIFT_STEPS 1
+#define SF_DIV64_NARROW 1 /* i64 divide: one-word operands and divisors skip the 64-bit pair loop (-Os keeps the smaller one: strict bytes) */
 #endif
 /* mul and div come from config/6502/sf32_6502.c (add stays generic: its tight form is 415 B larger). */
 #define SF_EXT_MULDIV 1
