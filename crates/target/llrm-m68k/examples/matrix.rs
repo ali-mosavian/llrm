@@ -55,6 +55,16 @@ fn leaf_text(
     objdump: &Path,
     object: &Path,
 ) -> Result<Vec<u8>, String> {
+    text_bytes(objdump, object, false)
+}
+
+/// The text of `object`; with `calls` a relocation to a runtime routine is
+/// allowed (the bytes alone are compared, nothing runs).
+fn text_bytes(
+    objdump: &Path,
+    object: &Path,
+    calls: bool,
+) -> Result<Vec<u8>, String> {
     let headers = Command::new(objdump).arg("-h").arg(object).output().map_err(|e| e.to_string())?;
     if let Some(section) = data_sections(&String::from_utf8_lossy(&headers.stdout)).first() {
         return Err(format!("loads data from {section}: bytes of .text alone would undercount"));
@@ -62,7 +72,7 @@ fn leaf_text(
     let relocations = Command::new(objdump).arg("-r").arg(object).output().map_err(|e| e.to_string())?;
     let listing = String::from_utf8_lossy(&relocations.stdout).to_string();
     let in_text = listing.split("RELOCATION RECORDS FOR").find(|part| part.trim_start().starts_with("[.text]"));
-    if in_text.is_some_and(|part| part.contains("R_68K")) {
+    if !calls && in_text.is_some_and(|part| part.contains("R_68K")) {
         return Err("calls a runtime routine (relocation in .text)".to_owned());
     }
     let out = Command::new(objdump).args(["-s", "-j", ".text"]).arg(object).output().map_err(|e| e.to_string())?;
@@ -299,10 +309,6 @@ fn main() {
                 }
 
                 for compiler in ["ours", "gcc", "clang"] {
-                    if !leaf {
-                        row(compiler, None, None, None, "n/a: calls the runtime, not linked (ours-ir: bytes only)");
-                        continue;
-                    }
                     let source = kernel_dir.join(format!("{name}.c"));
                     let object = dir.join(format!("{name}_{cpu_name}_{level}_{compiler}.o"));
                     let built = if compiler == "ours" {
@@ -312,6 +318,14 @@ fn main() {
                     } else {
                         clang_object(&clang, &llc, cpu_name, level_flag(level), &source, &object)
                     };
+                    if !leaf {
+                        // the runtime is not linked into these objects: bytes only, from every column
+                        match built.and_then(|()| text_bytes(&objdump, &object, true)) {
+                            Ok(bytes) => row(compiler, Some(bytes.len()), None, None, "calls the runtime: bytes only"),
+                            Err(error) => row(compiler, None, None, None, &format!("n/a: {error}")),
+                        }
+                        continue;
+                    }
                     match built.and_then(|()| leaf_text(&objdump, &object)) {
                         Ok(bytes) => {
                             let size = bytes.len();
