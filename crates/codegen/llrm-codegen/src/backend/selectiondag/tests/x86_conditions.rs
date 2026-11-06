@@ -150,6 +150,32 @@ fn x86_runs_the_pin_combines_the_corpus_judged_better() {
     assert!(m64.rebuild_brcond_condition() && m64.fold_and_of_extload());
 }
 
+/// At m16 `(x + c1) * c2` distributed to `x * c2 + c1*c2` took the constant out of
+/// a 3-part `lea` into a trailing `add`: regparm3_matrix_4 and _22 -40..-62 B but
+/// +62..+84 executed instructions, +38 and +32 clk-eq worse at -O1..-O3 (1 clk =
+/// 2 B). The pin does the same; m16 keeps the multiply of the sum for speed,
+/// and distributes it at -Os (strict bytes) and on m32 and m64.
+#[test]
+fn m16_distributes_a_multiply_of_a_sum_only_for_size() {
+    use super::super::dag_combiner::{CombineLevel, DagCombiner};
+    let flat = X86Lowering { cmov: true, sse2: false, min_size: false, three_address_adds: false, i16_mul_chains: false, sext_load: false, zext_free: false, profile: None };
+    let m16 = X86Lowering { i16_mul_chains: true, ..flat };
+    let m16_size = X86Lowering { min_size: true, ..m16 };
+    let root_of = |mut hooks: X86Lowering| {
+        let mut dag = dag();
+        let x = dag.get_register(EVT::I16, 5);
+        let (three, five) = (dag.get_constant(3, EVT::I16), dag.get_constant(5, EVT::I16));
+        let sum = dag.get_node(ISD::Add, EVT::I16, &[x, three]);
+        let product = dag.get_node(ISD::Mul, EVT::I16, &[sum, five]);
+        dag.set_root(product);
+        DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).run();
+        dag.opcode(dag.get_root())
+    };
+    assert_eq!(root_of(m16), ISD::Mul, "m16 -O2 keeps the multiply of the sum");
+    assert_eq!(root_of(m16_size), ISD::Add, "m16 -Os distributes");
+    assert_eq!(root_of(flat), ISD::Add, "m32 and m64 distribute");
+}
+
 /// `and (freeze (extload i8)), 255` kept the load wide and the mask: x86 did
 /// not ask for the pin's `ReduceLoadWidth` through a freeze (the hook is
 /// default-off; the IR-level lowering drops this freeze, so the DAG is built
