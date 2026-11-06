@@ -1700,6 +1700,25 @@ fn a_long_divide_and_remainder_of_the_same_operands_are_one_call() {
     }
 }
 
+/// A word divided and taken the remainder of by the same operands was a divide,
+/// a multiply and a subtract (`x % d` as `x - (x / d) * d`: `__udivhi3`,
+/// `__mulhi3`, 14 B a site more than the remainder call). They are one call;
+/// the routine leaves the quotient in `de` and the remainder in `hl`.
+#[test]
+fn a_word_divide_and_remainder_of_the_same_operands_are_one_call() {
+    for (ops, call) in [(["udiv", "urem"], "call __udivhi3"), (["sdiv", "srem"], "call __divremhi4")] {
+        for attr in ["", "optsize"] {
+            let ir = format!(
+                "define i16 @f(i16 %a, i16 %b) {attr} {{\n  %q = {} i16 %a, %b\n  %r = {} i16 %a, %b\n  %s = add i16 %q, %r\n  ret i16 %s\n}}",
+                ops[0], ops[1]
+            );
+            let out = compiled(&ir, "f");
+            assert_eq!(out.matches("call").count(), 1, "{ops:?} {attr}: {out}");
+            assert!(out.contains(call) && !out.contains("__mulhi3"), "{ops:?} {attr}: {out}");
+        }
+    }
+}
+
 /// A long multiplied by a constant was split into its halves, each half
 /// shifted and subtracted, in a function tuned for size: `x * 31` was 99 B and
 /// `x * 1000` 185 B, where a call is 14 (div_constants_short, mul_constants,
