@@ -29,10 +29,9 @@ fn combined_with(
     let load = dag.get_load(EVT::I32, chain, ptr, info);
     let root = build(&mut dag, load);
     dag.set_root(root);
-    let mut hooks =
-        X86Lowering { imul_if_smaller: false, cmov: true, sse2: false, min_size: false, three_address_adds: false, i16_mul_chains: false, sext_load, zext_free: false, profile: None };
     let mut hooks = X86Lowering {
         share_products: false,
+        imul_if_smaller: false,
         cmov: true,
         sse2: false,
         min_size: false,

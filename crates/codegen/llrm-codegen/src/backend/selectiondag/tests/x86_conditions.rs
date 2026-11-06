@@ -30,9 +30,9 @@ fn lowered(
     DagLegalizer::new(
         dag,
         &tli,
-        &mut X86Lowering { imul_if_smaller: false, cmov, sse2: false, min_size: false, three_address_adds: false, i16_mul_chains: false, sext_load: false, zext_free: false, profile: None },
         &mut X86Lowering {
             share_products: false,
+            imul_if_smaller: false,
             cmov,
             sse2: false,
             min_size: false,
@@ -155,9 +155,9 @@ fn narrow_selects_widen_by_cpu() {
 #[test]
 fn x86_runs_the_pin_combines_the_corpus_judged_better() {
     use super::super::dag_combiner::CombineHooks;
-    let hooks = X86Lowering { imul_if_smaller: false, cmov: true, sse2: false, min_size: false, three_address_adds: false, i16_mul_chains: false, sext_load: false, zext_free: false, profile: None };
     let hooks = X86Lowering {
         share_products: false,
+        imul_if_smaller: false,
         cmov: true,
         sse2: false,
         min_size: false,
@@ -181,11 +181,9 @@ fn x86_runs_the_pin_combines_the_corpus_judged_better() {
 #[test]
 fn m16_distributes_a_multiply_of_a_sum_only_for_size() {
     use super::super::dag_combiner::{CombineLevel, DagCombiner};
-    let flat = X86Lowering { imul_if_smaller: false, cmov: true, sse2: false, min_size: false, three_address_adds: false, i16_mul_chains: false, sext_load: false, zext_free: false, profile: None };
-    let m16 = X86Lowering { i16_mul_chains: true, ..flat };
-    let m16_size = X86Lowering { min_size: true, ..m16 };
     let flat = X86Lowering {
         share_products: false,
+        imul_if_smaller: false,
         cmov: true,
         sse2: false,
         min_size: false,

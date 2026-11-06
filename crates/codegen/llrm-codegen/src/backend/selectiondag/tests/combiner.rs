@@ -160,10 +160,9 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         let k = dag.get_constant(c, EVT::I16);
         let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
         dag.set_root(product);
-        let mut lowering =
-            X86Lowering { imul_if_smaller: false, cmov: false, sse2: false, min_size, three_address_adds: false, i16_mul_chains: chains, sext_load: false, zext_free: false, profile: None };
         let mut lowering = X86Lowering {
             share_products: false,
+            imul_if_smaller: false,
             cmov: false,
             sse2: false,
             min_size,
