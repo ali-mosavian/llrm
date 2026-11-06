@@ -2,7 +2,9 @@
 # Soft-float library bytes per operation, ours (llrm-cc, runtime/compiler-rt/lib/fp) vs compiler-rt (pin builtins, clang) vs libgcc soft-fp (host gcc, m32 only; gcc has no wasm).
 # Ours is built with its target config (config/x86_m32 or config/wasm, as the library tests do); compiler-rt and libgcc as shipped.
 # Bytes = code + read-only data of one object per routine, no helpers, no unwind tables.
-# usage: rows_bytes.sh m32|wasm32 -> table per -Os and -O2 for f32 and f64.   Env: LLRM_CC_DIR (llrm-cc), CRT (builtins dir), LIBGCC (gcc libgcc dir), CLANG_WASM.
+# m32: compiler-rt (clang) returns float/double in st0 (add+sub mul div neg float): its bytes carry the x87 return (neg is `flds; fchs`, 7 B, against the integer-register
+# convention ours uses), so those cells print with a `*` and are not a rank; libgcc is built -msoft-float (integer-register return, as ours).
+# usage: rows_bytes.sh m32|wasm32 -> table per -Os and -O2 for f32 and f64.   Env: ROWS_ONLY (one op name), LLRM_CC_DIR (llrm-cc), CRT (builtins dir), LIBGCC (gcc libgcc dir), CLANG_WASM.
 set -u
 tgt=${1:?m32 or wasm32}; root=$(cd "$(dirname "$0")/../.." && pwd); rt=$root/runtime/compiler-rt
 cc=${LLRM_CC_DIR:?dir with llrm-cc}/llrm-cc; CRT=${CRT:-$HOME/scratch/llvm-src/compiler-rt/lib/builtins}; S=${LIBGCC:-$HOME/scratch/sf-libgcc-src/libgcc}
@@ -19,6 +21,7 @@ ops="add+sub:add_sub:adddf3,subdf3:addsf3,subsf3 mul:mul:muldf3:mulsf3 div:div:d
 for O in Os O2; do
   echo "== $tgt -$O (bytes)"; printf "%-9s %7s %7s %7s | %7s %7s %7s\n" op ours64 crt64 gcc64 ours32 crt32 gcc32
   for spec in $ops; do IFS=: read name file c64 c32 <<<"$spec"
+    [ -z "${ROWS_ONLY:-}" ] || [ "$name" = "$ROWS_ONLY" ] || continue
     row=()
     for w in 64 32; do
       d=f$w; sfx=$([ $w = 64 ] && echo df || echo sf); of=$file
@@ -30,9 +33,10 @@ for O in Os O2; do
       for r in ${list//,/ }; do
         if $cl $extra -$O -w -I$CRT -c $CRT/$r.c -o $T/c.o 2>/dev/null; then c=$((c + $(bytes $T/c.o))); else c=ERR; break; fi
         if [ $tgt = m32 ]; then
-          if gcc -m32 -march=i486 -$O -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables -w -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$r.c -o $T/g.o 2>/dev/null; then [ $g != ERR ] && g=$((g + $(bytes $T/g.o))); else g=ERR; fi
+          if gcc -m32 -march=i486 -$O -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables -msoft-float -w -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$r.c -o $T/g.o 2>/dev/null; then [ $g != ERR ] && g=$((g + $(bytes $T/g.o))); else g=ERR; fi
         else g=-; fi
       done
+      case $name in add+sub|mul|div|neg|float) [ $tgt = m32 ] && [ "$c" != ERR ] && c="$c*";; esac
       row+=("$o" "$c" "$g")
     done
     printf "%-9s %7s %7s %7s | %7s %7s %7s\n" "$name" "${row[@]}"
