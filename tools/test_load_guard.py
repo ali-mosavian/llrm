@@ -348,6 +348,39 @@ class Drain(Env, unittest.TestCase):
     def test_five_slots_at_one_minute_19_with_80_gb_available(self):
         self.assertEqual(self.admitted(19.0, 80), 5)
 
+    def test_a_waiter_wakes_within_ten_seconds_of_the_load_dropping(self):
+        """The 15 s default poll let only the head waiter admit every 15-30 s: 38 queued at 1m 8, five slots free."""
+        self.set_load(30.0, 30.0)
+        waiter = self.start("true", LG_POLL="", LG_SETTLE="0")
+        time.sleep(1)
+        self.set_load(1.0, 1.0)
+        self.assertEqual(waiter.wait(timeout=10), 0, "the waiter slept through the 15 s default poll")
+
+    def test_an_aged_tier_3_waiter_outranks_a_fresh_tier_2(self):
+        """Tier 2 arrivals at 3-4 per minute starved every tier-3 PR gate for over an hour."""
+        self.set_load(30.0, 30.0)
+        log = os.path.join(self.dir.name, "order")
+        jobs = [self.start("bash", "-c", f"echo 3 >> {log}", LG_TIER="3", LG_SETTLE="0", LG_POLL="0.05", LG_AGE_STEP="2")]
+        time.sleep(3)
+        jobs.append(self.start("bash", "-c", f"echo 2 >> {log}", LG_TIER="2", LG_SETTLE="0", LG_POLL="0.05", LG_AGE_STEP="2"))
+        time.sleep(0.5)
+        self.set_load(1.0, 1.0)
+        for job in jobs:
+            job.wait(timeout=15)
+        self.assertEqual(open(log).read().split(), ["3", "2"])
+
+    def test_an_aged_tier_4_waiter_never_passes_a_tier_2(self):
+        self.set_load(30.0, 30.0)
+        log = os.path.join(self.dir.name, "order")
+        jobs = [self.start("bash", "-c", f"echo 4 >> {log}", LG_TIER="4", LG_SETTLE="0", LG_POLL="0.05", LG_AGE_STEP="1")]
+        time.sleep(4)
+        jobs.append(self.start("bash", "-c", f"echo 2 >> {log}", LG_TIER="2", LG_SETTLE="0", LG_POLL="0.05", LG_AGE_STEP="1"))
+        time.sleep(0.5)
+        self.set_load(1.0, 1.0)
+        for job in jobs:
+            job.wait(timeout=15)
+        self.assertEqual(open(log).read().split(), ["2", "4"])
+
     def test_ten_slots_at_one_minute_13_with_80_gb_available(self):
         self.assertEqual(self.admitted(13.0, 80, wanted=12), 10)
 
