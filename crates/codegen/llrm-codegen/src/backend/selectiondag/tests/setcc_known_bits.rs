@@ -49,7 +49,8 @@ fn a_masked_byte_below_a_constant_is_compared_as_a_byte() {
 
 #[test]
 fn a_constant_too_big_for_a_byte_is_compared_as_a_word() {
-    assert_eq!(compared_in(true, false, 511, CondCode::SetULt, 300), EVT::I16);
+    // the byte is known zero above bit 7, but 300 does not fit in one
+    assert_eq!(compared_in(true, false, 255, CondCode::SetULt, 300), EVT::I16);
 }
 
 #[test]
