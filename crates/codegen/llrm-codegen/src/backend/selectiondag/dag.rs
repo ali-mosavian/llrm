@@ -103,6 +103,8 @@ pub enum NodeData {
     JumpTable(u32),
     /// `SrcValueSDNode`: which IR value, by a key the builder makes.
     Src(u32),
+    /// `RegisterMaskSDNode`: an index into [`SelectionDAG::register_masks`].
+    RegMask(u32),
 }
 
 /// What identifies a memory access beyond its operands: the pin's
@@ -419,6 +421,9 @@ pub struct SelectionDAG {
     /// The constants spilled to the pool: bits and type
     /// (`MachineConstantPool`).
     pub constant_pool: Vec<(u128, EVT)>,
+    /// The registers each `RegisterMask` node says its call clobbers, as the
+    /// pin's register numbers (`getNodeRegMask`); entry 0 is the empty list.
+    pub register_masks: Vec<Vec<u16>>,
     /// The frame index the first stack temporary gets: the driver sets it past
     /// the builder's frame objects.
     pub first_temporary: i32,
@@ -514,6 +519,7 @@ impl SelectionDAG {
             synthetic_fill: String::new(),
             symbol_names: Vec::new(),
             constant_pool: Vec::new(),
+            register_masks: vec![Vec::new()],
             first_temporary: 0,
             frame_alignments: Vec::new(),
             mem_locations: Vec::new(),
@@ -1711,8 +1717,6 @@ impl SelectionDAG {
         self.get_node_multi(ISD::CopyToReg, &[EVT::OTHER, EVT::GLUE], &ops)
     }
 
-    /// A call's `RegisterMask` operand: the registers the callee preserves
-    /// are the allocator's to know, so the node carries none.
     fn symbol_id(
         &mut self,
         name: &str,
@@ -1784,7 +1788,24 @@ impl SelectionDAG {
     }
 
     pub fn get_register_mask(&mut self) -> SDValue {
-        self.intern(ISD::RegisterMask, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::None)
+        self.get_register_mask_clobbering(&[])
+    }
+
+    /// A call's `RegisterMask` operand naming the registers the callee
+    /// clobbers (pin numbers), which the scheduler's live-register check
+    /// reads (`CheckForLiveRegDefMasked`).
+    pub fn get_register_mask_clobbering(
+        &mut self,
+        regs: &[u16],
+    ) -> SDValue {
+        let index = match self.register_masks.iter().position(|one| one == regs) {
+            Some(at) => at,
+            None => {
+                self.register_masks.push(regs.to_vec());
+                self.register_masks.len() - 1
+            }
+        };
+        self.intern(ISD::RegisterMask, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::RegMask(index as u32))
     }
 
     pub fn get_target_global_address(

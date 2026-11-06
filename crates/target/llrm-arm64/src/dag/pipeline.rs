@@ -435,12 +435,6 @@ impl SchedInfo for Aarch64Sched {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
-    /// A call preserves no flags: the pin's `RegisterMask` of the call lists
-    /// `NZCV` as clobbered.
-    fn call_clobbered(&self) -> &[u16] {
-        &[llrm_dagisel::generated::aarch64::ids::reg::NZCV]
-    }
-
     fn call_frame_setup(&self) -> Option<u32> {
         Some(u32::from(aarch64_ids::ADJCALLSTACKDOWN))
     }
