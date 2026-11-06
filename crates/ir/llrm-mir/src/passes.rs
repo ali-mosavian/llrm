@@ -1774,9 +1774,22 @@ fn why_printed() -> bool {
     *ON.get_or_init(|| llrm_env::set("LLRM_WHY"))
 }
 
+thread_local! {
+    static CHECKING_MODULES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `body` with `LLRM_CHECK_MODULES` on for this thread, for a test of a pass that must tell the analyses what it changed
+/// (the variable is read once per process, so a test cannot set it).
+pub fn with_module_check<R>(body: impl FnOnce() -> R) -> R {
+    let before = CHECKING_MODULES.with(|on| on.replace(true));
+    let done = body();
+    CHECKING_MODULES.with(|on| on.set(before));
+    done
+}
+
 fn check_modules() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
+    CHECKING_MODULES.with(std::cell::Cell::get) || *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
 }
 
 pub(crate) fn check_captures() -> bool {
@@ -2850,11 +2863,13 @@ impl ModuleAnalyses {
         counted(kind.name, false);
         let fresh = (kind.run)(module, self);
         if check_modules() {
-            assert!(
-                self.agrees_afresh(kind, module, &*fresh),
-                "{}: brought up to date, it is not what working it out afresh gives",
-                kind.name
-            );
+            if let Err(detail) = self.agrees_afresh(kind, module, &*fresh) {
+                panic!(
+                    "{}: brought up to date, it is not what working it out afresh gives (running @{}){detail}",
+                    kind.name,
+                    running_function()
+                );
+            }
         }
         if why() {
             let class = match self.dropped.get(&kind.id) {
@@ -2876,17 +2891,25 @@ impl ModuleAnalyses {
         result
     }
 
-    /// Whether `result` is what `kind` gives worked out afresh.
+    /// Whether `result` is what `kind` gives worked out afresh; else what differs, where the analysis can say.
     fn agrees_afresh(
         &mut self,
         kind: Kind,
         module: &Module,
         result: &dyn Any,
-    ) -> bool {
+    ) -> Result<(), String> {
         self.scratch = true;
         let again = (kind.run)(module, self);
         self.scratch = false;
-        (kind.agree)(result, &*again)
+        if (kind.agree)(result, &*again) {
+            return Ok(());
+        }
+        let (Some(kept), Some(afresh)) = (result.downcast_ref::<Vec<GlobalValue>>(), again.downcast_ref::<Vec<GlobalValue>>()) else {
+            return Err(String::new());
+        };
+        let Some(at) = kept.iter().zip(afresh).position(|(a, b)| a != b) else { return Err(String::new()) };
+        let name = module.global(GlobalId(at as u32)).name.as_deref().unwrap_or("?");
+        Err(format!("; @{name} (id {at}) kept {:.300?} afresh {:.300?}", kept[at], afresh[at]))
     }
 
     /// `agrees_afresh` for a test: `M` run twice as `LLRM_CHECK_MODULES` runs it.
@@ -2897,7 +2920,7 @@ impl ModuleAnalyses {
     ) -> bool {
         let kind = Kind::of::<M>();
         let first = (kind.run)(module, self);
-        self.agrees_afresh(kind, module, &*first)
+        self.agrees_afresh(kind, module, &*first).is_ok()
     }
 
     /// Drops what `preserved` does not keep.
