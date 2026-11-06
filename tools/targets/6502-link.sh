@@ -18,4 +18,7 @@ work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 python3 -I "$root/tools/6502/mkrt.py" --startup > "$work/start.s"
 map=()
 [ -z "${LLRM_6502_MAP:-}" ] || map=(-m "$LLRM_6502_MAP")
-exec cl65 -t sim6502 "${map[@]}" -o "$out" "$work/start.s" "$@" "$lib"
+# llrm-cc hands over the ca65 text as the "objects"
+objs=("$work/start.s"); n=0
+for text in "$@"; do n=$((n + 1)); cp "$text" "$work/p$n.s"; objs+=("$work/p$n.s"); done
+cl65 -t sim6502 "${map[@]}" -o "$out" "${objs[@]}" "$lib"
