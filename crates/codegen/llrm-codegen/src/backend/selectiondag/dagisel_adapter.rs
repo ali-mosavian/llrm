@@ -263,9 +263,8 @@ fn our_vt(vt: Vt) -> EVT {
 pub const EFLAGS_ID: llrm_lir::registers::RegId = llrm_lir::registers::RegId::from_raw(255);
 
 /// The flags every x86 call clobbers, the one register a `RegisterMask` always names. A call lowered with a convention adds that
-/// convention's clobbered registers (`SelectionDAGBuilder::clobbered_by`) as far as `phys_reg` numbers them (DEVIATE SCM1: the
-/// pin's whole caller-saved set; ECX, ESI ... have no number here, so no node can define them live across a call). A libcall
-/// (`libcall.rs`) has no convention and keeps the flags alone. Exit: the complete X86 register numbering.
+/// convention's clobbered registers (`SelectionDAGBuilder::clobbered_by`), as the pin's `RegisterMask` lists its caller-saved set.
+/// A libcall (`libcall.rs`) has no convention here and keeps the flags alone (DEVIATE SCM1; exit: the libcall's convention).
 pub fn call_clobbered_flags() -> Vec<u16> {
     pin_register(EFLAGS_ID).into_iter().collect()
 }
@@ -277,8 +276,8 @@ pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
     use llrm_dagisel::generated::ids::x86;
     use llrm_lir::registers::RegId;
     // The pin's register numbers, in its X86 enum order (alphabetical: AH 1,
-    // AL 2, AX 3, ... EDX 27, ES 31); the ids
-    // module only names the ones some pattern mentions.
+    // AL 2, AX 3, ... EDX 27, ES 31); the ids module names the ones
+    // tools/dagisel/extra_symbols.txt asks for.
     const AL: u16 = 2;
     Some(match register {
         AL => RegId::AL,
@@ -298,6 +297,44 @@ pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
         x86::FS => RegId::FS,
         x86::GS => RegId::GS,
         x86::SS => RegId::SS,
+        x86::BH => RegId::BH,
+        x86::BL => RegId::BL,
+        x86::BP => RegId::BP,
+        x86::BX => RegId::BX,
+        x86::CH => RegId::CH,
+        x86::DH => RegId::DH,
+        x86::DI => RegId::DI,
+        x86::DL => RegId::DL,
+        x86::EBP => RegId::EBP,
+        x86::EBX => RegId::EBX,
+        x86::ECX => RegId::ECX,
+        x86::EDI => RegId::EDI,
+        x86::ESI => RegId::ESI,
+        x86::ESP => RegId::ESP,
+        x86::RBP => RegId::RBP,
+        x86::RBX => RegId::RBX,
+        x86::RCX => RegId::RCX,
+        x86::RDI => RegId::RDI,
+        x86::RSI => RegId::RSI,
+        x86::RSP => RegId::RSP,
+        x86::SI => RegId::SI,
+        x86::SP => RegId::SP,
+        x86::R8 => RegId::R8,
+        x86::R9 => RegId::R9,
+        x86::R10 => RegId::R10,
+        x86::R11 => RegId::R11,
+        x86::R12 => RegId::R12,
+        x86::R13 => RegId::R13,
+        x86::R14 => RegId::R14,
+        x86::R15 => RegId::R15,
+        x86::R8D => RegId::R8D,
+        x86::R9D => RegId::R9D,
+        x86::R10D => RegId::R10D,
+        x86::R11D => RegId::R11D,
+        x86::R12D => RegId::R12D,
+        x86::R13D => RegId::R13D,
+        x86::R14D => RegId::R14D,
+        x86::R15D => RegId::R15D,
         x86::EFLAGS => EFLAGS_ID,
         _ => return None,
     })
