@@ -9,11 +9,19 @@ int SF_NAME(cmpdf2)(sf_double a, sf_double b);
 #ifdef __OPTIMIZE_SIZE__
 #define SF_CMP_REV(a, b) -SF_NAME(cmpdf2)(b, a)
 #else
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un_64(d2b(a), d2b(b), -1)
+#else
 #define SF_CMP_REV(a, b) -sf_cmp_bits_64(d2b(b), d2b(a))
+#endif
 #endif
 #else
 #define SF_CMP_FWD(a, b) sf_cmp_bits_64(d2b(a), d2b(b))
+#ifdef SF_CMP_BRANCHY /* the forward core with -1 for unordered is ge's contract: no negated reversed call */
+#define SF_CMP_REV(a, b) sf_cmp_un_64(d2b(a), d2b(b), -1)
+#else
 #define SF_CMP_REV(a, b) -sf_cmp_bits_64(d2b(b), d2b(a))
+#endif
 #endif
 #if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP)
 int SF_NAME(cmpdf2)(sf_double a, sf_double b) { return sf_cmp_bits_64(d2b(a), d2b(b)); }
