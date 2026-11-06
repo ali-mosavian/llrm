@@ -30,7 +30,7 @@ impl Builder<'_> {
     /// frame. `plan` is the callee's convention, `variadic` its type's.
     ///
     /// DEVIATE: a caller that returns through a hidden pointer (`sret`) is
-    /// refused where the pin asks `mayBeSRetTailCallCompatible`; Win64, PIC
+    /// refused where the pin asks `mayBeSRetTailCallCompatible`; PIC
     /// and LFI do not exist here. Owner sdag-a (w9).
     pub(super) fn eligible_for_sibling_call(
         &self,
@@ -86,6 +86,12 @@ impl Builder<'_> {
         // varargs only through registers
         let stack_parameter = |one: &Parameter| !matches!(one, Parameter::Registers(_));
         if variadic && plan.parameters.iter().any(stack_parameter) {
+            return false;
+        }
+        // `isEligibleForSiblingCallOpt` (X86ISelLoweringCall.cpp#L3054-L3060):
+        // no variadic sibling call when either side is Win64
+        let win64 = |number: u32| full.calling().by_number(number).is_some_and(|one| one.positional);
+        if variadic && (win64(info.calling_convention) || win64(self.function.calling_convention)) {
             return false;
         }
         // results leave the same way

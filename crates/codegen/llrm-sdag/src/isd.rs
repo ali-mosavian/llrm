@@ -203,6 +203,7 @@ pub enum ISD {
     CallSeqEnd,
     DynamicStackAlloc,
     Trap,
+    DebugTrap,
     /// `INTRINSIC_WO_CHAIN`: `(id, args...)`; `INTRINSIC_W_CHAIN`:
     /// `(chain, id, args...)` to the result and a chain; `INTRINSIC_VOID`:
     /// `(chain, id, args...)` to a chain. `id` is a target constant the
@@ -388,6 +389,7 @@ impl ISD {
             CallSeqEnd => "callseq_end",
             DynamicStackAlloc => "dynamic_stackalloc",
             Trap => "trap",
+            DebugTrap => "debugtrap",
             IntrinsicWoChain => "intrinsic_wo_chain",
             IntrinsicWChain => "intrinsic_w_chain",
             IntrinsicVoid => "intrinsic_void",

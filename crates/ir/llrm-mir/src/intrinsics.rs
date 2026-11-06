@@ -129,6 +129,14 @@ pub enum Intrinsic {
     /// `llvm.prefetch`: a hint to bring an address into the cache; no code is
     /// needed where the target has no prefetch instruction.
     Prefetch,
+    /// `llvm.trap`: the program stops here (`ud2` on x86); control does not
+    /// continue.
+    Trap,
+    /// `llvm.debugtrap`: a breakpoint (`int3` on x86).
+    DebugTrap,
+    /// `llvm.ubsantrap`: stops with the sanitizer's check kind (`ud1 kind(%eax), %eax`
+    /// on x86, `X86MCInstLower.cpp` `UBSAN_UD1`); not translated.
+    UbsanTrap,
     /// `llvm.fake.use`: keeps its operands live for a debugger at `-Og`; no
     /// code runs it.
     FakeUse,
@@ -556,7 +564,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 82] = [
+const TABLE: [Spec; 85] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -745,6 +753,30 @@ const TABLE: [Spec; 82] = [
         overloads: &[],
         returns: Slot::Void,
         parameters: &[Slot::Int(1)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.trap",
+        intrinsic: Intrinsic::Trap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.debugtrap",
+        intrinsic: Intrinsic::DebugTrap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.ubsantrap",
+        intrinsic: Intrinsic::UbsanTrap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[Slot::Int(8)],
         own: None,
     },
     Spec {

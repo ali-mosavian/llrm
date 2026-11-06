@@ -4,7 +4,7 @@
 # (upstream: $AB_UPSTREAM, default origin/release/next), the binaries differ, every counts file is non-empty,
 # and $AB_BASE_ARGV / $AB_HEAD_ARGV (the command lines the two sides run) each carry an explicit -O level:
 # llrm-wasm-llc once defaulted to -O0 against the pin's -O2 and a phantom gap was chased. Both lines are printed.
-# Any LLRM_* variable outside ENV_OK (tool locations) is refused unless $AB_ALLOW_ENV names it: LLRM_WASM_BACKEND_ONLY
+# Any LLRM_* variable outside AB_ENV_OK (ab_env.sh, tool locations) is refused unless $AB_ALLOW_ENV names it: LLRM_WASM_BACKEND_ONLY
 # skipped the mid-end on one side and a second cause was chased for 40 minutes. The LLRM_* environment is printed.
 repo=$1 base=$2 head=$3 bbin=$4 hbin=$5; shift 5
 no() { echo "ab_guard: $*" >&2; exit 2; }
@@ -22,9 +22,5 @@ for side in BASE HEAD; do
 done
 echo "ab_guard: base argv: $AB_BASE_ARGV"
 echo "ab_guard: head argv: $AB_HEAD_ARGV"
-ENV_OK=" LLRM_OW LLRM_PIN_CLANG LLRM_CLANG_WASM LLRM_ARM64_SYSROOT LLRM_CC_TARGET "
-while IFS='=' read -r name value; do
-  [[ "$name" == LLRM_* ]] || continue
-  [[ "$ENV_OK" == *" $name "* || " ${AB_ALLOW_ENV:-} " == *" $name "* ]] || no "$name=$value changes the pipeline; unset it, or name it in AB_ALLOW_ENV if both sides are meant to run it"
-  echo "ab_guard: env: $name=$value"
-done < <(env | sort)
+. "$(dirname "$0")/ab_env.sh"
+ab_env_check || exit 2
