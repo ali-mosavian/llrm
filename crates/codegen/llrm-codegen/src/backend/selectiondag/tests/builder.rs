@@ -253,13 +253,10 @@ fn a_call_register_mask_names_the_conventions_caller_saved_registers() {
             for node in done.dag.nodes().iter().filter(|node| node.opcode == ISD::RegisterMask) {
                 let NodeData::RegMask(at) = node.data else { panic!("a mask without its registers") };
                 let mask = &done.dag.register_masks[at as usize];
-                // a call lowered through `llrm_libcall` keeps the flags alone
-                if mask.len() > 1 {
-                    for reg in &wanted {
-                        assert!(mask.contains(reg), "{mask:?} lacks {reg}");
-                    }
-                    checked += 1;
+                for reg in &wanted {
+                    assert!(mask.contains(reg), "{mask:?} lacks {reg}");
                 }
+                checked += 1;
             }
         }
     }
