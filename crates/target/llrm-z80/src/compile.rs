@@ -104,7 +104,10 @@ fn cached_selections(
         std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
     environment.sort();
     TEXT_COMPARES.with(|one| one.set(one.get() + 1));
-    let key = (format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8)), environment);
+    let key = (
+        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts)),
+        environment,
+    );
     let held = SELECTED.with(|held| {
         held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(_, _, one)| one.clone())
     });
@@ -205,6 +208,7 @@ fn allocated_with(
     request: &Request,
     duplicate: bool,
 ) -> Result<Allocated, String> {
+    SLOT_BY_CONFLICTS.with(|one| one.set(request.slot_by_conflicts));
     let mut function = machine_function_with(selected, name, duplicate)?;
     eliminate_phis_with(&mut function, false);
     let mut hoisted = function.clone();
@@ -384,6 +388,8 @@ fn improved(
 thread_local! {
     /// Full allocations run since the last [`take_allocations`].
     static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The request's `slot_by_conflicts`, for the allocation on this thread.
+    static SLOT_BY_CONFLICTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 thread_local! {
@@ -887,6 +893,18 @@ pub fn stack_slot_report(
     assignment: &Assignment,
     peek: bool,
 ) -> StackReport {
+    stack_slot_report_by(function, assignment, peek, SLOT_BY_CONFLICTS.with(std::cell::Cell::get))
+}
+
+/// [`stack_slot_report`] with the choice of the slot sent back to the frame:
+/// `by_conflicts` false drops the slot a load found under others (the first
+/// violation); true drops the slot in the most such conflicts.
+pub fn stack_slot_report_by(
+    function: &mut MFunction,
+    assignment: &Assignment,
+    peek: bool,
+    by_conflicts: bool,
+) -> StackReport {
     use llrm_spike_mf::livephys::PhysLiveness;
     let register = |reg: Reg| match reg {
         Reg::Virt(v) => assignment.0[v as usize],
@@ -993,11 +1011,16 @@ pub fn stack_slot_report(
             })
             .collect()
     };
+    // DEVIATE Z80-SLOT-CONFLICT: on a load with other slots on top the pin has
+    // no counterpart (StackSlotColoring.cpp only shares frame slots, by weight,
+    // first fit); here the slot in the most such conflicts goes back to the
+    // frame, not the slot loaded. Owner z80, exit 2026-11-20.
     let violation = |function: &MFunction,
                      chosen: &std::collections::BTreeSet<i32>,
                      peeks: &mut std::collections::BTreeSet<(usize, usize)>|
      -> Option<(i32, StackRefusal)> {
         peeks.clear();
+        let mut conflicts: std::collections::BTreeMap<i32, usize> = std::collections::BTreeMap::new();
         let again = read_again(function, chosen);
         let mut entry: Vec<Option<Vec<i32>>> = vec![None; function.blocks.len()];
         entry[0] = Some(Vec::new());
@@ -1014,7 +1037,20 @@ pub fn stack_slot_report(
                     }
                     Some((false, slot, _)) if chosen.contains(&slot) => {
                         if stack.last() != Some(&slot) {
-                            return Some((slot, StackRefusal::LoadNotOnTop));
+                            if !by_conflicts {
+                                return Some((slot, StackRefusal::LoadNotOnTop));
+                            }
+                            // count the slots in the way, and go on as if the
+                            // load had found its slot on top
+                            *conflicts.entry(slot).or_default() += 1;
+                            match stack.iter().rposition(|held| *held == slot) {
+                                Some(below) => {
+                                    for blocker in stack.drain(below + 1..) {
+                                        *conflicts.entry(blocker).or_default() += 1;
+                                    }
+                                }
+                                None => continue,
+                            }
                         }
                         // read again later: `pop` then `push` leaves it on top
                         if peek && again[b][at] {
@@ -1043,6 +1079,9 @@ pub fn stack_slot_report(
                     }
                 }
             }
+        }
+        if let Some((&slot, _)) = conflicts.iter().max_by_key(|(slot, count)| (**count, std::cmp::Reverse(**slot))) {
+            return Some((slot, StackRefusal::LoadNotOnTop));
         }
         // the other half of a pair a byte slot saves is dead once the pair is
         // restored

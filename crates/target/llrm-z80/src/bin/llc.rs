@@ -50,7 +50,9 @@ fn run() -> i32 {
             return 1;
         }
     };
-    let request = Request { debug, ..Request::new(level) };
+    // A/B only: removed before the field ships
+    let slot_by_conflicts = std::env::var_os("LLRM_Z80_SLOT_CONFLICT").is_some();
+    let request = Request { debug, slot_by_conflicts, ..Request::new(level) };
     let prepared = match prepare(&ir, &request) {
         Ok(prepared) => prepared,
         Err(why) => {

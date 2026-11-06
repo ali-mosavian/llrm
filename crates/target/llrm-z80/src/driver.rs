@@ -57,11 +57,17 @@ pub struct Request {
     pub passes: Vec<String>,
     /// `-g`: SDCC's `C$file$line$..` labels ahead of the instructions.
     pub debug: bool,
+    /// DEVIATE Z80-SLOT-CONFLICT (owner z80, exit 2026-11-20): the spill slot
+    /// sent back to the frame, where the others cannot all be pushes and pops,
+    /// is the one in the most load conflicts, not the one loaded. The pin has
+    /// no such walk (StackSlotColoring.cpp only shares frame slots). Default
+    /// off: the first violation, as before.
+    pub slot_by_conflicts: bool,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false }
+        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false, slot_by_conflicts: false }
     }
 }
 
