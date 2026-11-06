@@ -22,6 +22,7 @@ set -u
 kind=${1:?kind: nib, c or qcport}; base=${2:?base compiler}; new=${3:?new compiler}; shift 3
 python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; print(llrmbin.assert_distinct(sys.argv[1], sys.argv[2], bool(sys.argv[3])))" "$base" "$new" "${IDENTITY_SAME_SOURCE:-}" || exit 2
 case $kind in c|qcport) python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; llrmbin.assert_distinct_llc(sys.argv[1], sys.argv[2], bool(sys.argv[3]))" "$base" "$new" "${IDENTITY_SAME_LLC:-}" || exit 2 ;; esac
+. "$(dirname "$0")/fresh_compile.sh"
 target=()
 case "${1:-}" in -m[0-9]*) target=("$1") ;; esac
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -35,14 +36,14 @@ case $kind in c|qcport) export compile_flags="-c"; export target_flags=""; expor
 one() {
     source=$1; shift
     key=$(echo "$source $*" | tr '/ ' '__')
-    "$base" "$source" "$@" $target_flags $compile_flags -o "$out/a_$key.obj" >/dev/null 2>&1; first=$?
-    "$new" "$source" "$@" $target_flags $compile_flags -o "$out/b_$key.obj" >/dev/null 2>&1; second=$?
+    fresh_compile "$out/a_$key.obj" "$base" "$source" "$@" $target_flags $compile_flags -o "$out/a_$key.obj" >/dev/null 2>&1; first=$?
+    fresh_compile "$out/b_$key.obj" "$new" "$source" "$@" $target_flags $compile_flags -o "$out/b_$key.obj" >/dev/null 2>&1; second=$?
     if [ $first != $second ]; then echo "STATUS $source $* ($first, $second)"
     elif [ $first != 0 ]; then echo "REFUSED $source $*"
     elif cmp -s "$out/a_$key.obj" "$out/b_$key.obj"; then echo "SAME $source $*"
     else echo "DIFF $source $*"; fi
 }
-export -f one
+export -f fresh_compile one
 
 cd "$root" || exit 2
 case $kind in

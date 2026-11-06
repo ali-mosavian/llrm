@@ -200,6 +200,16 @@ def pinned(binary: Path) -> Path:
     return link
 
 
+def fresh(path) -> None:
+    """Remove the file a compile is about to write: a compile that fails or writes nothing must not leave the previous one to be read as its output."""
+    Path(path).unlink(missing_ok=True)
+
+
+def produced(done, path) -> bool:
+    """The compile `done` succeeded and wrote a non-empty `path` (call `fresh(path)` first)."""
+    return done.returncode == 0 and Path(path).is_file() and Path(path).stat().st_size > 0
+
+
 def md5(path) -> str:
     return hashlib.md5(Path(path).read_bytes()).hexdigest()
 
