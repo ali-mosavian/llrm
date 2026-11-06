@@ -105,8 +105,7 @@ pub fn folded(body: &LirBody) -> LirBody {
                 if !matches!(what.sources.first(), Some(Loc::Imm(imm)) if imm.address.is_none()) {
                     continue;
                 }
-                let last = real(pred).last().and_then(|one| one.what.as_ref());
-                let reached = last.is_some_and(|last| {
+                let reached = real(pred).iter().filter_map(|one| one.what.as_ref()).any(|last| {
                     matches!(last.op, Operation::Jump | Operation::Branch) && last.target == Some(from)
                 });
                 // One fold per branching block; none where it already reaches
