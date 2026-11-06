@@ -231,3 +231,13 @@ def test_cargo_under_a_slot_keeps_no_cap_and_no_timeout_of_its_own(tmp_path):
     (fake / "cargo").chmod(0o755)
     done = _slot(tmp_path, ["cargo"], PATH=f"{fake}:{os.environ['PATH']}", TEST_MEM_CAP_GB="1", BUILDSLOT_TIMEOUT="1")
     assert done.stdout.strip() == "unlimited", (done.stdout, done.stderr[-200:])
+
+
+def test_the_landing_cap_applies_when_the_runner_exports_bypass(monkeypatch):
+    """queue-runner.sh and land.sh export BUILDSLOT_BYPASS=1, which was read first: every landing cargo ran at nice 0 on cores 0-31 (1m load 33.8 on batch 7515)."""
+    monkeypatch.setenv("BUILDSLOT_BYPASS", "1")
+    monkeypatch.delenv("CARGO_BUILD_JOBS", raising=False)
+    cap = ["taskset", "-c", "0-15", "nice", "-n", "5", "env", "CARGO_BUILD_JOBS=8"]
+    assert bs.slotted(["cargo", "build"]) == ["cargo", "build"]  # outside the landing the bypass still leaves it alone
+    with bs.landing():
+        assert bs.slotted(["cargo", "build"]) == [*cap, "cargo", "build"]

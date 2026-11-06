@@ -446,6 +446,15 @@ fn build(
     }
     let width = |suffix: &str| if suffix.starts_with('W') { Width::W } else { Width::X };
     // `SMADDLrrr`, `UMULHrr`: a 64-bit result, no width letter.
+    // `EXTRWrri`: the stem has an `X` in it.
+    if let Some(rest) = name.strip_prefix("EXTR") {
+        return match operands {
+            [Operand::Reg(rn), Operand::Reg(rm), Operand::Imm(lsb)] if matches!(rest, "Wrri" | "Xrri") => {
+                Ok(Inst::Extract { width: width(rest), rd, rn: *rn, rm: *rm, lsb: *lsb as u8 })
+            }
+            _ => Err(format!("{name}: operands are not those of its form")),
+        };
+    }
     let long = ["SMADDL", "SMSUBL", "UMADDL", "UMSUBL"]
         .iter()
         .find_map(|stem| name.strip_prefix(stem).map(|rest| (*stem, rest)));
