@@ -142,7 +142,7 @@ impl Policy<Wrapped> for Arm64 {
 
 /// The blocks a block can go to: its branch targets and, unless it ends in a
 /// jump nothing falls out of, the next block.
-fn successors<C>(
+pub(crate) fn successors<C>(
     function: &MFunction<C>,
     at: usize,
 ) -> Vec<i64> {

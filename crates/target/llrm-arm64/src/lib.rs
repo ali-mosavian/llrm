@@ -18,6 +18,7 @@ pub mod isel;
 pub mod jumptable;
 pub mod layout;
 pub mod ldst_update;
+pub mod cse;
 pub mod licm;
 pub mod lir_view;
 pub mod machine;
