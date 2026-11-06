@@ -254,7 +254,15 @@ pub fn select_function(
     let mut selected = Vec::new();
     let mut machine_layout = Vec::new();
     let mut visited = llrm_support::hash::HashSet::default();
-    for &block in function.layout() {
+    // `SelectAllBasicBlocks`: reverse post-order, so a block is built after
+    // the blocks that dominate it and reads what their phis know. A block no
+    // path reaches follows, in layout order.
+    let at: std::collections::HashMap<_, _> =
+        function.layout().iter().enumerate().map(|(at, &block)| (block, at)).collect();
+    let mut order = llrm_mir::blockorder::reverse_post_order_traversal(function);
+    let reached: llrm_support::hash::HashSet<_> = order.iter().copied().collect();
+    order.extend(function.layout().iter().copied().filter(|block| !reached.contains(block)));
+    for block in order {
         if optimize {
             // `SelectAllBasicBlocks`: a phi knows what its incoming values
             // do once all its predecessors are selected.
@@ -299,7 +307,7 @@ pub fn select_function(
             let Scheduled { units, mem_refs, accesses } =
                 select_block(&mut one.dag, cpu, features, &mut info, &alias, optimize)
                     .map_err(|why| format!("{why:?}"))?;
-            machine_layout.push(id.0);
+            machine_layout.push((at[&block], id.0));
             // `addSuccessorWithProb`: the edges the builder made of a switch
             // are the machine blocks' own; the IR's apply to a block it left
             // alone.
@@ -334,6 +342,11 @@ pub fn select_function(
             });
         }
     }
+    // Selected in reverse post-order, emitted in layout order; the sort is
+    // stable, so the blocks a switch was split into follow their block.
+    machine_layout.sort_by_key(|&(at, _)| at);
+    selected.sort_by_key(|block| at[&llrm_mir::module::BlockId(block.origin)]);
+    let machine_layout: Vec<u32> = machine_layout.into_iter().map(|(_, id)| id).collect();
     let mut frame = statics;
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));
     let declared: Vec<(u32, i32)> = function
