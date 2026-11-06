@@ -16,7 +16,7 @@
 file=${LG_LOAD_FILE:-/proc/loadavg}; poll=${LG_POLL:-5}
 stop5=${LG_STOP_5M:-28}; stop1=${LG_STOP_1M:-38}; resume5=${LG_RESUME_5M:-26}; resume1=${LG_RESUME_1M:-20}; start1=${LG_START_1M:-25}
 [ "${LG_QUIET:-}" = 1 ] && start1=${LG_QUIET_1M:-20}
-base=${LG_SLOTS:-3}; high=${LG_SLOTS_HIGH:-5}; wide=${LG_SLOTS_MAX:-7}; widest=${LG_SLOTS_WIDEST:-10}; widest1=${LG_WIDEST_1M:-14}; widen1=${LG_WIDEN_1M:-20}; narrow1=${LG_NARROW_1M:-22}
+base=${LG_SLOTS:-3}; high=${LG_SLOTS_HIGH:-5}; wide=${LG_SLOTS_MAX:-7}; widest=${LG_SLOTS_WIDEST:-10}; widest1=${LG_WIDEST_1M:-17}; widen1=${LG_WIDEN_1M:-20}; narrow1=${LG_NARROW_1M:-22}
 slot_dir=${LG_SLOT_DIR:-/tmp/buildslots/load_guard}
 prio=${LG_PRIO_FILE:-$slot_dir/prio}; tier=${LG_TIER:-4}
 log() { echo "load_guard: $(date -u +%H:%MZ) $*" >&2; }
