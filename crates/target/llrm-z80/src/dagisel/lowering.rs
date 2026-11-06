@@ -239,10 +239,11 @@ fn lower_divrem_word(
             byval: None,
         })
         .collect();
-    let ins = vec![
-        In { vt: EVT::I16, pointer: false, arg_vt: EVT::I32, split: true, sret: false, ext: Ext::Any, byval: None };
-        2
-    ];
+    let ins =
+        vec![
+            In { vt: EVT::I16, pointer: false, arg_vt: EVT::I32, split: true, sret: false, ext: Ext::Any, byval: None };
+            2
+        ];
     let callee = dag.get_target_external_symbol(EVT::I16, name);
     let root = dag.entry_node();
     let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
