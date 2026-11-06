@@ -209,6 +209,22 @@ pub trait CombineHooks {
         false
     }
 
+    /// `visitSRL`'s `shift (shift x, c1), c2` as one shift by the sum, and
+    /// `SimplifyDemandedBits`' `srl (shl x, c1), c2` (and the reverse) as the
+    /// one shift by the difference, where the inner shift has other users (the
+    /// pin has no use test). DEVIATE: a
+    /// target whose word shift is one instruction for both halves says no, so
+    /// that the other half is read from the shift it already has, not made by a
+    /// second one. Exit: none; the pin's word shifts are pieces by then and
+    /// node CSE shares them. Default true, the pin's.
+    fn fold_shift_of_shared_shift(
+        &self,
+        _vt: EVT,
+        _inner: u32,
+    ) -> bool {
+        true
+    }
+
     /// `visitORCommutative`'s absorption folds, `(or (and x, y), x)` is `x`.
     /// Default false until x86 is judged.
     fn fold_or_absorption(&self) -> bool {
@@ -2301,6 +2317,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let (c2, inner) = (self.dag.constant(n1)?, self.dag.constant(self.dag.operand(n0, 1))?);
+        if !self.dag.has_one_use(n0.node) && !self.hooks.fold_shift_of_shared_shift(vt, inner as u32) {
+            return None;
+        }
         let (x, sum) = (self.dag.operand(n0, 0), c2 + inner);
         if sum < width {
             let amount = self.dag.get_constant(sum, self.dag.value_type(n1));

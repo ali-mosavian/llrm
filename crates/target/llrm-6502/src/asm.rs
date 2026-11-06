@@ -383,6 +383,9 @@ pub struct Asm {
     pub x_callees: std::collections::BTreeSet<String>,
     /// The function returns nothing in `y`: a `rts` does not read it.
     pub no_y_result: bool,
+    /// The cells a `rts` returns (`rc2`, `rc3` for a long): every other
+    /// caller-saved cell is dead there.
+    pub result_cells: std::collections::BTreeSet<String>,
     /// The routines this function calls with an argument in `y` (see
     /// [`Self::x_callees`]).
     pub y_callees: std::collections::BTreeSet<String>,

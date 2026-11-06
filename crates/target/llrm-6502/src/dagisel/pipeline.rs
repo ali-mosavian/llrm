@@ -7,7 +7,7 @@
 //! does not reach them. Exit: M7.
 
 use llrm_codegen::backend::registerinfo::RegId;
-use llrm_codegen::backend::selectiondag::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
+use llrm_codegen::backend::selectiondag::dag_combiner::{CombineLevel, DagCombiner};
 use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_with;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
@@ -16,7 +16,7 @@ use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 use llrm_dagisel::interp::Selector;
 
-use super::combine::MosCombines;
+use super::combine::{MosCombines, MosLateCombines};
 use super::generated::ids::reg as pin;
 use super::generated::instrinfo::{self, flag};
 use super::generated::{mos_mos6502, mos_w65c02};
@@ -133,9 +133,9 @@ pub fn select_block(
         .with_hooks(&mut lowering)
         .run()
         .map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut MosLateCombines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut MosLateCombines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
 
     let selector = Selector::new(match cpu {
         Cpu::Mos6502 => mos_mos6502::TABLE,
