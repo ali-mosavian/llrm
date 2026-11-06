@@ -1,0 +1,83 @@
+//! -O0 can select with FastISel (`backend::selectiondag::fastisel`), off unless
+//! `LLRM_FAST_ISEL=1`.
+
+use std::process::Command;
+
+const SOURCE: &str = "extern int printf(const char *, ...);\n\
+    int five(void) { return 5; }\n\
+    int main(void)\n{\n    printf(\"%d\\n\", five());\n    return 0;\n}\n";
+
+/// `SOURCE` compiled for `target` at `level`: (object bytes, ISEL report).
+fn built(
+    target: &str,
+    level: &str,
+    fast: bool,
+) -> (Vec<u8>, String, std::process::Output) {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
+    command
+        .env("LLRM_CC_TARGET", target)
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args([level, "-c", "a.c", "-o", "a.o"]);
+    if fast {
+        command.env("LLRM_FAST_ISEL", "1");
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let object = std::fs::read(scratch.path().join("a.o")).unwrap();
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap_or_default();
+    (object, report, output)
+}
+
+/// FastISel that takes nothing must leave the object the DAG path makes: a
+/// side effect of trying (a frame object, a pool cell) would move bytes.
+#[test]
+fn fast_isel_on_main_alone_leaves_the_dag_object() {
+    for target in ["x86_64-linux", "x86_32-linux"] {
+        let (dag, _, _) = built(target, "-O0", false);
+        let (fast, report, _) = built(target, "-O0", true);
+        let main_fast = report.lines().any(|line| line.starts_with("main fast") || line.starts_with("_main fast"));
+        assert!(!main_fast, "{target}: main has a call, FastISel must not take it: {report}");
+        assert_eq!(dag, fast, "{target}: fallback changed the object");
+    }
+}
+
+/// `five` is `ret i32 5`: at -O0 with the flag it is selected by FastISel
+/// (the report says `fast`); at -O1 the flag does nothing and the DAG path
+/// selects it. Off by default.
+#[test]
+fn fast_isel_takes_a_constant_return_at_o0_and_not_at_o1() {
+    for target in ["x86_64-linux", "x86_32-linux"] {
+        let named = |report: &str, how: &str| {
+            report.lines().any(|line| line == format!("five {how}") || line == format!("_five {how}"))
+        };
+        let (_, report, _) = built(target, "-O0", true);
+        assert!(named(&report, "fast"), "{target}: -O0 with the flag: {report}");
+        let (_, report, _) = built(target, "-O1", true);
+        assert!(named(&report, "dag") && !report.contains(" fast"), "{target}: -O1 took FastISel: {report}");
+        let (_, report, _) = built(target, "-O0", false);
+        assert!(!report.contains(" fast"), "{target}: FastISel on by default: {report}");
+    }
+}
+
+/// The FastISel `five` computes 5: the program prints it.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn fast_isel_constant_return_computes_the_same_answer() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
+    let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "a.c", "-o", "a.out"])
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    assert!(std::fs::read_to_string(scratch.path().join("report")).unwrap().contains("five fast"), "premise: fast");
+    let ran = Command::new(scratch.path().join("a.out")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "5\n");
+}

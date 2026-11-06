@@ -132,6 +132,16 @@ pub(super) fn recorded_to(
     record_to(path, name, by);
 }
 
+/// [`record`] for a function FastISel selected: `NAME fast`.
+pub fn record_fast(name: &str) {
+    if let Some(path) = llrm_support::env_var("LLRM_ISEL_REPORT") {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(std::path::Path::new(&path)) {
+            let _ = file.write_all(format!("{name} fast\n").as_bytes());
+        }
+    }
+}
+
 /// The `isel` channel's row for `body`, finished by `selector`.
 pub fn row(
     body: &LirBody,

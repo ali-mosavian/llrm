@@ -41,7 +41,7 @@ use super::isd::ISD;
 use super::legalize_dag;
 use super::legalize_dag::DagLegalizer;
 use super::legalize_types::TypeLegalizer;
-use super::schedule::SchedInfo;
+use super::schedule::{SchedInfo, schedule};
 use super::x86_lowering::X86Lowering;
 use super::{SDValue, SelectionDAG};
 
@@ -155,6 +155,19 @@ pub fn select_block(
         info,
         temporaries,
     )?;
+    crate::support::debug::timed("dag emit", || emit_in(dag, &units, ctx, state, first_at)).map_err(Refusal::Emit)
+}
+
+/// [`select_block`] for a DAG FastISel already selected: scheduled and emitted.
+pub fn select_block_fast(
+    dag: &mut SelectionDAG,
+    info: &dyn SchedInfo,
+    ctx: &EmitContext<'_>,
+    state: &mut EmitState,
+    first_at: i64,
+) -> Result<Emitted, Refusal> {
+    let root = dag.get_root();
+    let units = crate::support::debug::timed("dag schedule", || schedule(dag, root, info));
     crate::support::debug::timed("dag emit", || emit_in(dag, &units, ctx, state, first_at)).map_err(Refusal::Emit)
 }
 

@@ -1061,9 +1061,21 @@ fn selected_in(
     // after the block that made it and its LIR blocks belong to that block's
     // range, where the phis of its successors look for their edges.
     let mut work: Vec<(BlockId, BlockId, crate::backend::selectiondag::builder::BlockDag)> = Vec::new();
+    let mut fast_blocks = (!cpu.optimized && super::fastisel::enabled())
+        .then(|| {
+            super::fastisel::build_all(module, function, &builder_target, &|wanted: &str| tables.names.iter().find(|(_, name)| name.split('|').next() == Some(wanted)).map(|(op, _)| *op), &convention, arch, &mut info)
+        })
+        .flatten()
+        .unwrap_or_default();
+    let fast = !fast_blocks.is_empty();
+    super::fastisel::note(fast);
     for &block in function.layout() {
-        let mut built = build_block(module, function, &layout, &builder_target, &arch, &convention, &mut info, block)
-            .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?;
+        let mut built = if fast {
+            fast_blocks.remove(0).1
+        } else {
+            build_block(module, function, &layout, &builder_target, &arch, &convention, &mut info, block)
+                .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?
+        };
         let extras = std::mem::take(&mut built.extra);
         work.push((block, block, built));
         for (id, extra) in extras {
@@ -1177,58 +1189,69 @@ fn selected_in(
             return refuse("register arguments outside the entry block");
         }
         let arrived = arrival_widths(&built.dag, &built.live_ins);
-        let done = select_block(
-            &mut info,
-            &mut built.dag,
-            &tli,
-            &mut X86Lowering {
-                cmov: tli.can_use_cmov(),
-                sse2,
-                min_size: cpu.min_size || bytes_beat_clocks,
-                three_address_adds: !(cpu.size || cpu.min_size)
-                    && !matches!(
-                        cpu.three_address(),
-                        crate::twoaddress::ThreeAddress::Off
-                            | crate::twoaddress::ThreeAddress::AddSub
-                            | crate::twoaddress::ThreeAddress::AddSubWords
-                    ),
-                i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
-                sext_load: true,
-                zext_free: m64,
-                profile: if mul_by_clocks {
-                    Some(super::x86_lowering::MulPricing {
-                        cpu,
-                        arch,
-                        freq: 1.0,
-                        milliclocks_per_byte: mul_rate,
-                        by_clocks: true,
-                        price_pin: false,
-                    })
-                } else {
-                    frequencies
-                        .as_ref()
-                        .map(
-                            |frequencies| super::x86_lowering::MulPricing {
-                                cpu,
-                                arch,
-                                freq: frequencies.relative_to_entry(parent),
-                                milliclocks_per_byte: mul_rate,
-                                by_clocks: false,
-                                price_pin,
-                            },
-                        )
+        let done = if fast {
+            super::dag_select::select_block_fast(
+                &mut built.dag,
+                &Info { source_order: true, m64 },
+                &ctx,
+                &mut state,
+                block_at[&block.0],
+            )
+            .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?
+        } else {
+            select_block(
+                &mut info,
+                &mut built.dag,
+                &tli,
+                &mut X86Lowering {
+                    cmov: tli.can_use_cmov(),
+                    sse2,
+                    min_size: cpu.min_size || bytes_beat_clocks,
+                    three_address_adds: !(cpu.size || cpu.min_size)
+                        && !matches!(
+                            cpu.three_address(),
+                            crate::twoaddress::ThreeAddress::Off
+                                | crate::twoaddress::ThreeAddress::AddSub
+                                | crate::twoaddress::ThreeAddress::AddSubWords
+                        ),
+                    i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
+                    sext_load: true,
+                    zext_free: m64,
+                    profile: if mul_by_clocks {
+                        Some(super::x86_lowering::MulPricing {
+                            cpu,
+                            arch,
+                            freq: 1.0,
+                            milliclocks_per_byte: mul_rate,
+                            by_clocks: true,
+                            price_pin: false,
+                        })
+                    } else {
+                        frequencies
+                            .as_ref()
+                            .map(
+                                |frequencies| super::x86_lowering::MulPricing {
+                                    cpu,
+                                    arch,
+                                    freq: frequencies.relative_to_entry(parent),
+                                    milliclocks_per_byte: mul_rate,
+                                    by_clocks: false,
+                                    price_pin,
+                                },
+                            )
+                    },
                 },
-            },
-            &selector,
-            &mut hooks,
-            &Info { source_order: true, m64 },
-            &ctx,
-            &mut state,
-            block_at[&block.0],
-            arch,
-            &mut Temporaries(&frame),
-        )
-        .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?;
+                &selector,
+                &mut hooks,
+                &Info { source_order: true, m64 },
+                &ctx,
+                &mut state,
+                block_at[&block.0],
+                arch,
+                &mut Temporaries(&frame),
+            )
+            .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?
+        };
         let mut done = done;
         if !built.live_ins.is_empty() {
             // The entry says which registers the arguments arrive in; it is no
