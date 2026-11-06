@@ -335,6 +335,7 @@ pub mod bodyfacts;
 pub mod regclass;
 pub mod registerinfo;
 pub mod repbsf;
+pub mod regallocfast;
 pub mod rewriter;
 pub mod sharedstores;
 pub mod spillplacement;
