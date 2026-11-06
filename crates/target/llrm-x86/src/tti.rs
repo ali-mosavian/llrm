@@ -669,6 +669,10 @@ impl Tti for X86 {
         self.tuning.price_pin_multiplies
     }
 
+    fn imul_at_size(&self) -> bool {
+        self.tuning.imul_at_size
+    }
+
     fn has_cmov(&self) -> bool {
         self.cmov
     }
