@@ -143,17 +143,17 @@ class Pipeline(Env, unittest.TestCase):
 
 class Admission(Env, unittest.TestCase):
     def test_with_one_free_slot_only_one_of_two_concurrent_starters_runs(self):
-        env = {"LG_SLOTS": "1", "LG_NO_WAIT": "1"}
+        env = {"LG_SLOTS": "1", "LG_NO_WAIT": "1", "LG_SETTLE": "0"}
         first = self.start("sleep", "3", **env)
         second = self.start("sleep", "3", **env)
         codes = sorted([first.wait(timeout=10), second.wait(timeout=10)])
         self.assertEqual(codes, [0, 75], "both starters ran, or neither")
 
     def test_a_waiting_starter_runs_when_the_slot_is_released(self):
-        first = self.start("sleep", "30", LG_SLOTS="1")
+        first = self.start("sleep", "30", LG_SLOTS="1", LG_SETTLE="0")
         self.assertTrue(until(lambda: os.path.isdir(self.slots) and any(descendants(first.pid))))
         marker = os.path.join(self.dir.name, "ran")
-        second = self.start("touch", marker, LG_SLOTS="1")
+        second = self.start("touch", marker, LG_SLOTS="1", LG_SETTLE="0")
         time.sleep(0.5)
         self.assertFalse(os.path.exists(marker), "it ran without a slot")
         first.terminate()
@@ -171,7 +171,7 @@ class Admission(Env, unittest.TestCase):
     def test_a_queued_starter_says_so_at_once_and_when_admitted(self):
         """A starter waiting for load logged nothing: a session could not tell 'queued' from 'hung'."""
         self.set_load(30.0, 30.0)
-        guard = self.start("true", LG_WAIT_LOG="0.3")
+        guard = self.start("true", LG_WAIT_LOG="0.3", LG_SETTLE="0")
         time.sleep(1.0)
         self.assertIsNone(guard.poll(), "it started under load")
         self.set_load(1.0, 1.0)
@@ -182,14 +182,34 @@ class Admission(Env, unittest.TestCase):
         self.assertRegex(err, r"load_guard: \d\d:\d\dZ admit slot \d \(1m 1.0\)")
 
     def test_a_starter_without_a_slot_says_it_waits_for_a_slot(self):
-        first = self.start("sleep", "30", LG_SLOTS="1")
+        first = self.start("sleep", "30", LG_SLOTS="1", LG_SETTLE="0")
         self.assertTrue(until(lambda: os.path.isdir(self.slots) and any(descendants(first.pid))))
-        second = self.start("true", LG_SLOTS="1", LG_WAIT_LOG="0.3")
+        second = self.start("true", LG_SLOTS="1", LG_WAIT_LOG="0.3", LG_SETTLE="0")
         time.sleep(1.0)
         first.terminate()
         first.wait(timeout=5)
         self.assertEqual(second.wait(timeout=5), 0)
         self.assertRegex(second.communicate()[1], r"waiting for slot \(1m [\d.]+, 5m [\d.]+, slots 1/1 busy\)")
+
+
+    def test_the_start_threshold_is_27_on_the_one_minute_load(self):
+        """Baseline load is ~25: a threshold of 25 starved every starter."""
+        self.set_load(26.9, 1.0)
+        admitted = self.start("true", LG_NO_WAIT="1", LG_SETTLE="0")
+        self.assertEqual(admitted.wait(timeout=5), 0)
+        self.set_load(27.0, 1.0)
+        refused = self.start("true", LG_NO_WAIT="1", LG_SETTLE="0")
+        self.assertEqual(refused.wait(timeout=5), 75)
+
+    def test_two_starters_are_admitted_at_least_a_settle_period_apart(self):
+        """Both saw the same 1m load and both went; the load rose only after they had started."""
+        env = {"LG_SETTLE": "1.5"}
+        first = self.start("true", **env)
+        self.assertEqual(first.wait(timeout=5), 0)
+        began = time.time()
+        second = self.start("true", **env)
+        self.assertEqual(second.wait(timeout=10), 0)
+        self.assertGreaterEqual(time.time() - began, 1.0, "the second starter did not wait for the first to settle")
 
 
 if __name__ == "__main__":

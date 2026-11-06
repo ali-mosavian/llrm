@@ -1,6 +1,6 @@
 #!/bin/bash
 # load_guard.sh CMD...: admission, then CMD under a load guard.
-#   admission: take one of LG_SLOTS (3) flock slots in LG_SLOT_DIR and wait for 1m load < LG_START_1M (25); LG_NO_WAIT=1 exits 75 at once when no slot is free.
+#   admission: take one of LG_SLOTS (3) flock slots in LG_SLOT_DIR and wait for 1m load < LG_START_1M (27), one admission per LG_SETTLE seconds (60: a started build moves the load only after a while); LG_NO_WAIT=1 exits 75 at once when no slot is free.
 #   guard:     CMD runs in its own session; every process group of its descendants is SIGSTOPped at 5m load > LG_STOP_5M (28) or 1m > LG_STOP_1M (38) and
 #              exactly the recorded list is SIGCONTed at 5m < LG_RESUME_5M (26). The EXIT trap CONTs the list; INT/TERM also pass TERM to the group; a watchdog
 #              in its own session CONTs the list if this wrapper is SIGKILLed (a guard left a build stopped for 67 min; a stopper that signalled one group left
@@ -8,12 +8,23 @@
 # Env: LG_LOAD_FILE (/proc/loadavg), LG_POLL seconds (15), LG_SLOT_DIR (/tmp/buildslots/load_guard).
 [ $# -gt 0 ] || { echo "usage: load_guard.sh CMD..." >&2; exit 2; }
 file=${LG_LOAD_FILE:-/proc/loadavg}; poll=${LG_POLL:-15}
-stop5=${LG_STOP_5M:-28}; stop1=${LG_STOP_1M:-38}; resume5=${LG_RESUME_5M:-26}; start1=${LG_START_1M:-25}
+stop5=${LG_STOP_5M:-28}; stop1=${LG_STOP_1M:-38}; resume5=${LG_RESUME_5M:-26}; start1=${LG_START_1M:-27}  # baseline load is ~25: a start threshold of 25 starves
 slots=${LG_SLOTS:-3}; slot_dir=${LG_SLOT_DIR:-/tmp/buildslots/load_guard}
 log() { echo "load_guard: $(date -u +%H:%MZ) $*" >&2; }
 above() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a>b)}'; }
 
 # ---- admission -------------------------------------------------------------
+# One admission per LG_SETTLE seconds, decided under a lock: two starters seeing the same 1m load must not both go.
+settled() {
+  local ok=1
+  exec {lock_fd}>"$slot_dir/admit.lock"; flock "$lock_fd"
+  if awk -v now="$(date +%s)" -v last="$(stat -c %Y "$slot_dir/last_admit" 2>/dev/null || echo 0)" -v every="${LG_SETTLE:-60}" 'BEGIN{exit !(now-last>=every)}'; then
+    touch "$slot_dir/last_admit"; ok=0
+  fi
+  exec {lock_fd}>&-
+  return $ok
+}
+
 admit() {
   mkdir -p "$slot_dir" || return 1
   local next_note=0 busy l1 l5 why
@@ -23,7 +34,7 @@ admit() {
       exec {slot_fd}>"$slot_dir/slot.$i"
       if flock -n "$slot_fd"; then
         read -r l1 _ < "$file"
-        if above "$start1" "$l1"; then log "admit slot $i (1m $l1)"; return 0; fi
+        if above "$start1" "$l1" && settled; then log "admit slot $i (1m $l1)"; return 0; fi
         flock -u "$slot_fd"
       else
         busy=$((busy + 1))
