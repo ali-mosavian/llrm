@@ -18,7 +18,7 @@ use std::process::Command;
 use llrm_m68k::compile::{Item, Options, items, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::isa::Cpu as Model;
-use llrm_m68k::kernels::{Arg, data, library_data, library_table, program_with_data, source_in, table};
+use llrm_m68k::kernels::{Arg, data, extra_runs, library_data, library_table, program_with_data, source_in, table};
 use llrm_m68k::object::{assemble, executable, write_executable};
 
 #[allow(dead_code)]
@@ -266,27 +266,42 @@ fn main() {
                     let mut code = code;
                     code.extend(helper.clone().unwrap_or_default());
                     code.extend(runtime.clone());
-                    let exe = dir.join(format!("{name}_{cpu_name}_{level}_{id}.elf"));
-                    write_executable(&exe, &executable(&program_with_data(args, code, &block)).unwrap()).unwrap();
-                    let status = Command::new("timeout")
-                        .args(["10", "qemu-m68k", "-cpu", &format!("m{cpu_name}")])
-                        .arg(&exe)
-                        .status()
-                        .ok()
-                        .and_then(|s| s.code());
-                    if status != Some(*expected) {
-                        return (None, None, format!("wrong result: {status:?}, want {expected}"));
+                    // the first input, then the others that make the branches go the other way
+                    let mut runs: Vec<(&[Arg], i32)> = vec![(args.as_slice(), *expected)];
+                    let more = extra_runs(name);
+                    runs.extend(more.iter().map(|(args, expected)| (args.as_slice(), *expected)));
+                    let (mut clocks, mut insns, mut notes) = (0u64, 0usize, String::new());
+                    for (at, (args, expected)) in runs.iter().enumerate() {
+                        let exe = dir.join(format!("{name}_{cpu_name}_{level}_{id}_{at}.elf"));
+                        write_executable(&exe, &executable(&program_with_data(args, code.clone(), &block)).unwrap())
+                            .unwrap();
+                        let status = Command::new("timeout")
+                            .args(["10", "qemu-m68k", "-cpu", &format!("m{cpu_name}")])
+                            .arg(&exe)
+                            .status()
+                            .ok()
+                            .and_then(|s| s.code());
+                        if status != Some(*expected) {
+                            return (None, None, format!("wrong result: {status:?}, want {expected}"));
+                        }
+                        let total = cycles::price(&gcc_root, &exe, &[model], false);
+                        if total.insns == 0 {
+                            return (None, None, "priced no instruction".to_owned());
+                        }
+                        if total.unknown > 0 {
+                            notes = format!("{} executed instructions unpriced", total.unknown);
+                        } else if total.partial && notes.is_empty() {
+                            notes = "data-dependent term at its bound".to_owned();
+                        }
+                        clocks += total.clocks[0];
+                        insns += total.insns;
                     }
-                    let total = cycles::price(&gcc_root, &exe, &[model], false);
-                    if total.insns == 0 {
-                        return (None, None, "priced no instruction".to_owned());
-                    }
-                    let note = match (total.partial, total.unknown) {
-                        (_, unknown) if unknown > 0 => format!("{unknown} executed instructions unpriced"),
-                        (true, _) => "data-dependent term at its bound".to_owned(),
-                        _ => String::new(),
-                    };
-                    (Some(total.clocks[0]), Some(total.insns), note)
+                    // the mean of the runs, rounded
+                    let n = runs.len() as u64;
+                    let mean = |sum: u64| (sum + n / 2) / n;
+                    let inputs = if n > 1 { format!("inputs {n}") } else { String::new() };
+                    let note = [notes, inputs].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("; ");
+                    (Some(mean(clocks)), Some(mean(insns as u64) as usize), note)
                 };
 
                 let options = Options { size: level == "Os", ..Options::default() };
