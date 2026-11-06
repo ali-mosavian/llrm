@@ -17,7 +17,8 @@ fn run() -> i32 {
     let mut assembly = false;
     let mut object = false;
     let mut triple = "wasm32".to_owned();
-    let mut options = Options::default();
+    // The pin's `llc` defaults to -O2; the library default (-O0) is for the tests that pin it.
+    let mut options = Options { level: driver::Level::O2, ..Options::default() };
     let mut handling = false;
     let mut debug = false;
     let mut output = None;

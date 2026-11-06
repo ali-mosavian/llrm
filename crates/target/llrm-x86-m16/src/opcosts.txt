@@ -91,11 +91,13 @@ ret_far = 1
 pop_r = 1
 alu_ri = 3
 ret_pop = 3
-x87_add = 6
-x87_add_m = 6
-x87_mul = 6
-x87_div = 6
-x87_load = 6
+# x87 by operand form, twice the encoded bytes. Measured mean, 16 float bench programs
+# at -Os, m16 2.80 B/insn: reg 2.00, fld m 3.28, fstp m 2.92, arith m 3.69.
+x87_add = 4
+x87_add_m = 7
+x87_mul = 4
+x87_div = 4
+x87_load = 7
 x87_store = 6
 x87_release = 2
 rep_stos = 2
