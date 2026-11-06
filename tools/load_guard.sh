@@ -1,5 +1,5 @@
 #!/bin/bash
-# load_guard.sh CMD...: admission, then CMD under a load guard.
+# load_guard.sh CMD...: admission, then CMD under a load guard.   Usage: tools/load_guard.sh cargo build --release --bin llrm-cc
 #   admission: take one of LG_SLOTS (3) flock slots in LG_SLOT_DIR and wait for 1m load < LG_START_1M (25); LG_NO_WAIT=1 exits 75 at once when no slot is free.
 #   guard:     CMD runs in its own session; every process group of its descendants is SIGSTOPped at 5m load > LG_STOP_5M (28) or 1m > LG_STOP_1M (38) and
 #              exactly the recorded list is SIGCONTed at 5m < LG_RESUME_5M (26). The EXIT trap CONTs the list; INT/TERM also pass TERM to the group; a watchdog
