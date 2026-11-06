@@ -674,6 +674,8 @@ fn reverse_post_order(
 
 struct X86<'a> {
     pressure: Pressure,
+    /// The values the loop names (`Target::hoist_by_pressure` false).
+    named: usize,
     body: &'a LirBody,
     classes: &'a RegisterClasses,
     regs: llrm_lir::registers::Regs,
@@ -702,6 +704,7 @@ impl licm::Policy<Wrapped> for X86<'_> {
         facts: &licm::Facts<'_, Wrapped>,
     ) {
         self.pressure.begin();
+        self.named = facts.named.iter().filter(|value| !self.floating.contains(value)).count();
         self.floats_named = facts.named.iter().filter(|value| self.floating.contains(value)).count();
         // An x87 value cannot be live across a call (`floatassign` does not
         // spill across one), and the stack holds `float_stack` values.
@@ -777,7 +780,11 @@ impl licm::Policy<Wrapped> for X86<'_> {
         let loads_here = self.loads && (facts.every_trip)(at);
         let mut movable = candidate(one, self.classes, loads_here)
             && value.is_some_and(|value| !self.floating.contains(&value))
-            && !self.pressure.high(facts, at, one);
+            && if self.classes.hoist_by_pressure {
+                !self.pressure.high(facts, at, one)
+            } else {
+                self.named < self.classes.available.len()
+            };
         // `IsProfitableToHoist`: "Trivially rematerializable instructions
         // should always be hoisted providing the register allocator can just
         // pull them down again", unless a copy in the loop takes the value.
@@ -886,6 +893,7 @@ pub fn hoisted_sized(
         crate::backend::machinesched::pressure_model(body, classes, segments, &|value| !floating.contains(&value));
     let mut policy = X86 {
         pressure: Pressure::new(body, model),
+        named: 0,
         body,
         classes,
         regs,
@@ -986,7 +994,7 @@ mod tests {
         let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
         let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
         let narrow = |value: u32| Loc::Held(Held { value, width: 2, offset: 0 });
-        let run = |held_in_header: u32| {
+        let run = |held_in_header: u32, by_pressure: bool| {
             let live: Vec<u32> = (0..held_in_header).map(|at| 20 + at).collect();
             let mut header: Vec<Arc<Insn>> = live
                 .iter()
@@ -1038,11 +1046,23 @@ mod tests {
             );
             body.inputs = [1, 2, 3].into_iter().collect();
             body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-            let done = hoisted(&body, &RegisterClasses::m16());
+            let mut classes = (*RegisterClasses::m16()).clone();
+            classes.hoist_by_pressure = by_pressure;
+            let done = hoisted(&body, &classes);
             done.blocks[0].insns.iter().any(|one| one.defines.contains(&50))
         };
-        assert!(run(1), "a header that holds one value leaves room");
-        assert!(!run(4), "four values of weight 2 and the sum reach the limit 10 of the set");
+        assert!(run(1, true), "a header that holds one value leaves room");
+        assert!(!run(4, true), "four values of weight 2 and the sum reach the limit 10 of the set");
+        assert!(run(4, false), "the count rule (m16) names 3 values, under the registers: the sum is hoisted");
+    }
+
+    /// m16 keeps the count rule (`Target::hoist_by_pressure` false): the pin's
+    /// gate left a loop-invariant `lea` and load in bintree's and quicksort's
+    /// loops, +6,579 and +2,838 clk. The same loop that refuses the sum under
+    /// the pressure gate hoists it.
+    #[test]
+    fn test_m16_keeps_the_count_rule_for_hoists() {
+        assert!(!crate::backend::classes::RegisterClasses::m16().hoist_by_pressure);
     }
 
     /// `EliminateCSE` renamed the readers of one duplicate at a time, each

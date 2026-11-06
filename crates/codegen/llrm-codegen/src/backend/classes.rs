@@ -85,6 +85,8 @@ pub struct RegisterClasses {
     frame_after: Option<RegId>,
     /// The pressure sets and limits of the target, where it has them.
     pub pressure: Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)>,
+    /// `Target::hoist_by_pressure`.
+    pub hoist_by_pressure: bool,
 }
 
 impl RegisterClasses {
@@ -169,6 +171,7 @@ impl RegisterClasses {
             registers: llrm_lir::registers::Regs(arch.registers()),
             frame_after: file.iter().find(|one| one.is("frame_follows")).map(|one| named(&one.name)),
             pressure: arch.pressure(),
+            hoist_by_pressure: arch.hoist_by_pressure(),
         };
         classes.status_word = classes.found_status_word();
         classes
