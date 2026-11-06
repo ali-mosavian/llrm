@@ -444,6 +444,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Binary(BinaryOp::Or) => &[visit_or],
         Opcode::Binary(BinaryOp::Xor) => &[visit_xor],
         Opcode::Binary(BinaryOp::Sub) => &[visit_sub],
+        Opcode::FNeg => &[crate::combine_fneg::visit_fneg],
         Opcode::Binary(BinaryOp::FDiv) => &[crate::combine_fp::visit_fdiv],
         Opcode::Binary(BinaryOp::FSub) => &[crate::combine_fp::visit_fsub],
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FMul) => &[crate::combine_fp::visit_fadd_or_fmul],
