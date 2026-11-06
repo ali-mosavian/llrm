@@ -1542,6 +1542,7 @@ fn rerun(
     if fixed.wants_sizes() {
         declared.count_referenced(module);
     }
+    llrm_mir::passes::snapshot_for_audit(module);
     let Module { context, globals, metadata, .. } = &mut *module;
     llrm_mir::passes::set_running_function(globals[id.0 as usize].name.as_deref().unwrap_or_default());
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {

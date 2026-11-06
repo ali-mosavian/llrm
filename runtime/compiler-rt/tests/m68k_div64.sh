@@ -31,6 +31,9 @@ if [ "$1" = size ]; then # bytes.sh's instrument: link only this entry (+ null p
     o=$(link $T/p.c $T/$c/ours.a); line="$c __$e: ours $((o - n)) B"
     if [ -f $T/$c/gcc.a ]; then g=$(link $T/p.c $T/$c/gcc.a); gn=$(link $T/null.c $T/$c/gcc.a); line="$line libgcc $((g - gn)) B"; fi
     echo "$line"
+    # pinned (68020, null subtracted): a growth fails; SF-M68K-DIVSIGNED-BYTES accepts the signed pair above libgcc's 224/228
+    case $e in udivdi3) max=${MAX_UDIV:-162};; umoddi3) max=${MAX_UMOD:-176};; divdi3) max=${MAX_DIV:-238};; moddi3) max=${MAX_MOD:-236};; esac
+    [ "$c" != 68020 ] || [ $((o - n)) -le $max ] || { echo "FAIL: __$e is $((o - n)) B, bound $max"; exit 1; }
   done
   exit 0
 fi
