@@ -43,6 +43,7 @@ for tgt in aarch64-linux-gnu:"-mabi=aapcs-soft -mgeneral-regs-only -ffp-contract
   [ -n "$KEEP" ] && { mkdir -p $KEEP; cp $T/b.elf $KEEP/$tc.$p$opt.base; cp $T/h.elf $KEEP/$tc.$p$opt.head; }
   same=same; cmp -s $T/b.out $T/h.out || { same=DIFFERENT; bad=1; }; [ $rb = $rh ] || { same=DIFFERENT; bad=1; }
   ref=; cmp -s $T/h.out $RUN/$p.out || ref=" (differs from .out)"
-  echo "$tc $p $opt: exec $same rc $rb/$rh md5 $mb/$mh text $sb/$sh_$ref"
+  extra=; if [ -n "$ICOUNT" ]; then ib=$(python3 tests/icount/count.py $q $T/b.elf); ih=$(python3 tests/icount/count.py $q $T/h.elf); extra=" insns $ib/$ih"; fi
+  echo "$tc $p $opt: exec $same rc $rb/$rh md5 $mb/$mh text $sb/$sh_$extra$ref"
  done; done; done
 exit $bad

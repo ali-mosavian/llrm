@@ -1,5 +1,6 @@
 /* __floatsidf, __floatunsidf, __floatdidf, __floatundidf. */
 #include "conv.h"
+#ifndef SF_CONV_SPLIT /* else one file per entry: float_si float_usi float_di float_udi */
 
 #if defined(SF_CLZ64) || defined(SF_CONV_DIRECT32) /* the 32-bit conversions are exact and call neither pack nor the 64-bit path */
 sf_double SF_NAME(floatsidf)(int32_t x) /* one body: a branch on the sign duplicated it */
@@ -14,5 +15,6 @@ sf_double SF_NAME(floatunsidf)(uint32_t x) { return b2d(from_mag(0, x)); }
 #endif
 sf_double SF_NAME(floatdidf)(int64_t x) { return b2d(x < 0 ? from_mag(SF_SIGN, 0ull - (uint64_t)x) : from_mag(0, (uint64_t)x)); }
 sf_double SF_NAME(floatundidf)(uint64_t x) { return b2d(from_mag(0, x)); }
+#endif
 
 #include "../core_end.inc"
