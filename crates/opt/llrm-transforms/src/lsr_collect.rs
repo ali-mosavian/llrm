@@ -1115,7 +1115,10 @@ pub fn loop_register_units(
     // DEVIATE LU7: the pin has no register-unit count here; this one follows
     // only the loop's own values (and the phis that take them), so it costs the
     // loop and not the function. Cells that need the count: shellsort -Os,
-    // stft, matmul.
+    // stft, matmul. A target without spills (`lsr_counts_live_registers`
+    // false: wasm) has none, as the pin. Owner w12; exit 2026-11-20: whether
+    // m16/m32 still need it once LU3b's pressure model is the pin's
+    // MachineLICM/RegisterPressure terms.
     let made = llrm_analysis::liveness::pressure_weighted_made_in(cx.function, &blocks, &|one| {
         weights.get(&one).copied().unwrap_or(0)
     }) as u32;
