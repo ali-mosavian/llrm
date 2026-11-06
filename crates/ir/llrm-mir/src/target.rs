@@ -66,6 +66,10 @@ pub struct Tuning {
     /// there (a target without SSE2 floating point); none: floats are not
     /// held on a stack. The loop unroll caps its copies by it.
     pub x87_stack_slots: Option<u32>,
+    /// A float product of a value by a constant, where the same value times
+    /// the negated constant is made too, is made once: `a + v*(-C)` is
+    /// `a - v*C`, exact in IEEE (DEVIATE X87-SHARE, x87 targets only).
+    pub x87_share_negated_products: bool,
     /// A stack slot a loop holds in a register is shared only by what is as
     /// wide (`slots::width_rule_allows`); false: the pin's `ColorSlot`,
     /// which shares any two slots whose ranges do not overlap.
@@ -98,9 +102,10 @@ pub struct Tuning {
     /// than the loop-closing jump it removes. false: the pass's header limit
     /// alone.
     pub rotation_guard_must_fold_at_size: bool,
-    /// A size build rotates a loop only when the copied header is no bigger than
-    /// the branches the rotation removes (the loop-closing jump and the exit
-    /// test), in `CodeSize` (arm64's w15 rule). false: the header limit alone.
+    /// A size build rotates a loop only when the copied header is no bigger
+    /// than the branches the rotation removes (the loop-closing jump and
+    /// the exit test), in `CodeSize` (arm64's w15 rule). false: the header
+    /// limit alone.
     pub rotation_header_priced_at_size: bool,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
@@ -120,9 +125,10 @@ pub struct Tuning {
     /// at (-O2, -O3), in `gcc_insns` (gcc's `max-inline-insns-recursive`, 450);
     /// none: `inline::MAX_INLINE_INSNS_RECURSIVE`.
     pub recursive_inlining_growth: Option<(i64, i64)>,
-    /// DEVIATE REC-2: at (-O2, -O3) a tree recursion's tail calls are eliminated before it is
-    /// copied into itself (gcc: `pass_tail_recursion` runs early, `passes.def` before `pass_ipa_inline`),
-    /// not after (D10).
+    /// DEVIATE REC-2: at (-O2, -O3) a tree recursion's tail calls are
+    /// eliminated before it is copied into itself (gcc:
+    /// `pass_tail_recursion` runs early, `passes.def` before
+    /// `pass_ipa_inline`), not after (D10).
     pub recursive_tre_first: (bool, bool),
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
@@ -173,6 +179,7 @@ impl Tuning {
         unroll_jam_exact_count: false,
         constant_hoisting: false,
         x87_stack_slots: None,
+        x87_share_negated_products: false,
         slots_loop_width_rule: false,
         unswitch_threshold: None,
         inline_threshold: None,
@@ -696,7 +703,9 @@ pub fn three_operand_of(
     }
     let form = forms.iter().find(|form| form.index_width == 4 && form.scales.contains(&scale))?;
     if costs.address_dword > 0 && width != operand {
-        return Some(costs.address_dword + costs.address_third * parts.saturating_sub(2) as i64 + form.use_cost - costs.prefix);
+        return Some(
+            costs.address_dword + costs.address_third * parts.saturating_sub(2) as i64 + form.use_cost - costs.prefix,
+        );
     }
     Some(costs.sized(costs.address, width, operand) + form.use_cost)
 }
@@ -962,7 +971,8 @@ mod operand_size_tests {
     /// replaced `inc` and `add` (5 bytes) by the six-byte form looked free.
     #[test]
     fn a_dword_lea_is_priced_by_its_parts_and_a_word_one_is_not() {
-        let costs = OperationCosts { address: 6, prefix: 1, address_dword: 10, address_third: 2, ..OperationCosts::default() };
+        let costs =
+            OperationCosts { address: 6, prefix: 1, address_dword: 10, address_third: 2, ..OperationCosts::default() };
         let real = [form(2, false, 0), form(4, true, 1)];
         assert_eq!(three_operand_of(&costs, &real, 2, 2, 1, true, 3), Some(6));
         assert_eq!(three_operand(&costs, &real, 4, 2, 1, false), Some(10));
@@ -990,6 +1000,7 @@ mod tests {
             (None, None, None)
         );
         assert_eq!(pin.x87_stack_slots, None);
+        assert!(!pin.x87_share_negated_products);
         assert!(!pin.slots_loop_width_rule);
         assert_eq!(pin.inline_threshold, None);
     }
