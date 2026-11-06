@@ -622,6 +622,7 @@ mod tuning_tests {
         assert_eq!((table.unroll_threshold, table.unroll_max_percent_threshold_boost), (Some(0), Some(100)));
         assert_eq!(table.unroll_partial_threshold, Some(0));
         assert_eq!(table.x87_stack_slots, Some(8));
+        assert!(table.slots_loop_width_rule, "m16 keeps a word out of a loop-held wider stack slot (SLOTS-LOOPWIDTH)");
         assert_eq!(table.unswitch_threshold, Some(0));
         assert_eq!(
             Tuning {
@@ -640,6 +641,8 @@ mod tuning_tests {
                 unroll_max_percent_threshold_boost: None,
                 unroll_partial_threshold: None,
                 x87_stack_slots: None,
+                slots_loop_width_rule: false,
+                rotation_header_priced_at_size: false,
                 unswitch_threshold: None,
                 inline_threshold: None,
                 split_merged_conditions: false,

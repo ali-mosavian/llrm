@@ -8,6 +8,7 @@ import subprocess
 import pytest
 import types
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -22,6 +23,21 @@ def scratch_dir():
     where = bench.llrmbin.target_dir()
     where.mkdir(parents=True, exist_ok=True)
     return where
+
+
+class GuardTests(unittest.TestCase):
+    """A bench run started 32 pool workers beside the other jobs and starved them (the 02:33Z storm)."""
+
+    def test_the_pool_size_is_the_guards_slot_count(self):
+        for slots, size in (("3", 3), ("5", 5), ("", 3)):
+            with unittest.mock.patch.dict(os.environ, {"LG_SLOTS": slots}):
+                self.assertEqual(bench.workers(), size, slots)
+
+    def test_unguarded_it_re_runs_itself_under_load_guard(self):
+        with unittest.mock.patch.dict(os.environ, {"LG_GUARDED": ""}):
+            self.assertEqual(Path(bench.guarded_argv()[0]).name, "load_guard.sh")
+        with unittest.mock.patch.dict(os.environ, {"LG_GUARDED": "1"}):
+            self.assertIsNone(bench.guarded_argv())
 
 
 class GateTests(unittest.TestCase):
