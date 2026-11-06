@@ -41,7 +41,7 @@ def split_rt(text, zp=0x80, cells=26):
     rename = {name: f"__rt_{name}" for name, _, _ in blocks if name not in exported}
     def tokens(s):
         return re.sub(r"[A-Za-z_]\w*", lambda m: rename.get(m.group(0), m.group(0)), s)
-    # a branch reaches no further than its own object, and a block that does not end in rts/jmp falls into the next: such blocks are one member
+    # a block that does not end in rts/jmp falls into the next: such blocks are one member
     index = {name: i for i, (name, _, _) in enumerate(blocks)}
     parent = list(range(len(blocks)))
     def find(i):
@@ -49,12 +49,20 @@ def split_rt(text, zp=0x80, cells=26):
             parent[i] = parent[parent[i]]
             i = parent[i]
         return i
+    INVERSE = {"bcc": "bcs", "bcs": "bcc", "beq": "bne", "bne": "beq", "bmi": "bpl", "bpl": "bmi", "bvc": "bvs", "bvs": "bvc"}
+    skips = 0
     for i, (name, _, body) in enumerate(blocks):
+        # a branch to another block cannot cross objects: it becomes the opposite branch over a jmp
+        for at, line in enumerate(body):
+            c = re.sub(r";.*", "", line).split()
+            if len(c) > 1 and c[0].lower() in INVERSE | {"bra": ""} and c[1] in index and index[c[1]] != i:
+                skips += 1
+                if c[0].lower() == "bra":
+                    body[at] = f"  jmp {c[1]}"
+                else:
+                    body[at] = f"  {INVERSE[c[0].lower()]} @rt_skip{skips}\n  jmp {c[1]}\n@rt_skip{skips}:"
         code = [re.sub(r";.*", "", l).split() for l in body[1:]]
         code = [c for c in code if c and not c[0].startswith((".", "@")) and not c[0].endswith(":")]
-        for c in code:
-            if c[0].lower() in {"bcc", "bcs", "beq", "bne", "bmi", "bpl", "bvc", "bvs", "bra"} and len(c) > 1 and c[1] in index and index[c[1]] != i:
-                parent[find(index[c[1]])] = find(i)
         if i + 1 < len(blocks) and (not code or code[-1][0].lower() not in {"rts", "jmp", "rti", "bra"}):
             parent[find(i + 1)] = find(i)
     groups = {}

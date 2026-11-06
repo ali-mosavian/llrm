@@ -4,7 +4,7 @@ A link order that followed set iteration (PYTHONHASHSEED) moved code across page
 same runtime, 201888 clocks under seed 0 and 201946 under seed 3 (2026-11-06), a +58 clock floor on every "worse cell" claim.
 ours_cr.py without OURS_RT used a stale default runtime (/tmp/nv/w6/mos_rt_28a5.s): 8 programs failed to link at -O1..-O3
 (the folded sweep, 2026-11-05) and an A/B could have compared one side against the wrong runtime. It must refuse and say why."""
-import os, subprocess, sys, tempfile, unittest
+import os, re, subprocess, sys, tempfile, unittest
 from pathlib import Path
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -124,6 +124,30 @@ class Archive(unittest.TestCase):
         for divide in ("udivdi3", "divdi3", "muldi3"):
             self.assertNotIn(divide, names)
         self.assertLess(sum(got.values()), 4000, got)
+
+    def test_the_text_level_runtime_reaches_what_the_archive_pulls(self):
+        """Rust tests (and ours_cr) still paste `reachable_runtime`'s text where they price the assembly; it must stay the same set of
+        routines as the link pulls. Comments are stripped first: `__ashrsi3_fast` reached memset, memcpy and memmove through the comment
+        that introduces them (+ their bytes in every program that shifts a long by a variable)."""
+        sys.path.insert(0, HERE)
+        os.environ["OURS_RT"] = RT
+        os.environ["OURS_PADS"] = "0"
+        import mkrt, ours_cr
+        text = mkrt.MOS_RT.read_text()
+        ours_cr.RT = re.sub(r";.*", "", text)
+        labels = {n: [x.strip() for x in re.search(r"^\.export (.*)$", t, re.M).group(1).split(",")] for n, t in mkrt.split_rt(text).items()}
+        cells = {"__sa", "__ra", "__sb", "__st", "__sr", "__sg"}
+        Path(self.tmp, "start.s").write_text(mkrt.startup())
+        for routine in re.findall(r"^\.export (__\w+)", text, re.M):
+            wanted = set(re.findall(r"^([A-Za-z_]\w*):", ours_cr.reachable_runtime(f"  jsr {routine}\n"), re.M)) - cells
+            Path(self.tmp, "q.s").write_text(f".autoimport +\n.export _main\n_main:\n  jsr {routine}\n  rts\n")
+            r = subprocess.run(["cl65", "-t", "sim6502", "-m", "q.map", "-o", "q.bin", "start.s", "q.s", "rt.lib"], cwd=self.tmp, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr[-300:])
+            got = set()
+            for member in mkrt.pulled(Path(self.tmp, "q.map").read_text()):
+                if member.startswith("mos_") and member != "mos___rt_cells.o":
+                    got |= {x.removeprefix("__rt_") if x.startswith("__rt_") else x for x in labels[member[4:-2]]}
+            self.assertEqual(wanted, got - cells, routine)
 
     def test_a_helper_two_routines_share_is_one_member(self):
         got = self.link("recdeep")
