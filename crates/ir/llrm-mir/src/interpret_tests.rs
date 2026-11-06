@@ -657,7 +657,7 @@ fn the_verifier_rejects_a_shuffle_lane_past_both_inputs_and_mismatched_inputs() 
     let bad_lane = format!("define <4 x i32> @f() {{\n  %s = shufflevector {V4}, {V4}, <4 x i32> <i32 8, i32 0, i32 0, i32 0>\n  ret <4 x i32> %s\n}}\n");
     assert!(!verify(&bad_lane).is_empty());
     let mixed = format!("define <4 x i32> @f() {{\n  %s = shufflevector {V4}, <2 x i32> <i32 1, i32 2>, <4 x i32> zeroinitializer\n  ret <4 x i32> %s\n}}\n");
-    assert!(!verify(&mixed).is_empty());
+    assert!(parse::module(&mixed).is_err(), "the parser already refuses inputs of two types");
     let fine = format!("define <4 x i32> @f() {{\n  %s = shufflevector {V4}, {V4}, <4 x i32> <i32 7, i32 0, i32 poison, i32 0>\n  ret <4 x i32> %s\n}}\n");
     assert_eq!(verify(&fine), Vec::<String>::new());
 }
