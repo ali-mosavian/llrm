@@ -361,6 +361,30 @@ fn the_tti_states_a_divide_remainder_op_on_every_register_type() {
     assert!(!tti.has_div_rem_op(24, false));
 }
 
+/// DIVREM-HELPER is the flat 32-bit mode's alone: 16-bit code states no `i64`
+/// divide-remainder op (the pin's x86 has none), so `DivRemPairs` writes its
+/// remainders as `x - x / y * y` as before; long mode already had one (a
+/// register type).
+#[test]
+fn only_flat_32_bit_code_has_an_i64_divide_remainder_op() {
+    let flat = X86::of_cpu("i486").unwrap();
+    let real = crate::tti::RealMode {
+        scale_costs: vec![(1, 0)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: None,
+        address_registers: None,
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+        unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
+    };
+    assert!(flat.has_div_rem_op(64, false) && flat.has_div_rem_op(64, true));
+    assert!(!flat.in_real_mode(real).has_div_rem_op(64, false), "16-bit code");
+    assert!(X86::of_cpu("x86-64").unwrap().has_div_rem_op(64, false), "long mode: i64 is a register type, as before");
+}
+
 /// The loop unroll counts float values against the x87 stack only where the
 /// subtarget keeps floats there: `-march=i486` has the 8 slots the tuning
 /// states, `core2` (SSE2 floating point) none.
