@@ -9,4 +9,5 @@
 #endif
 #define SF_WIDE_ABS_MASK 1 /* f64 compare: masks, not 64-bit shifts */
 #define SF_NO_EXACT32 1 /* f64 int conversions: the 32-bit exact path costs +12..20 B here */
+#define SF_CONV_SPLIT 1 /* f64 int-to-float one object per entry: __floatsidf alone linked all four (1076 B Os, libgcc 920-986) */
 #endif
