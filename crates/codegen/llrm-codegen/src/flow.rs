@@ -59,6 +59,7 @@ pub fn machine<'a>(
 
 /// The phases -O0 leaves out: each only makes code better.
 const UNOPTIMIZED: &[&str] = &[
+    "EarlyTailDuplicate",
     "Peephole",
     "LoopSlots",
     "Scheduler",

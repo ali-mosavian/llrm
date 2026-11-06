@@ -81,3 +81,24 @@ fn o0_tied_value_in_the_register_a_shift_count_needs_is_moved() {
     let want = "19088743\n16187254512\n68719476704\n19088743\n6\n26418820992\n4294966272\n-4398046511104\n";
     assert_eq!(String::from_utf8_lossy(&ran.stdout), want);
 }
+
+/// EarlyTailDuplicate ran at -O0 (102M instructions:u of the card corpus); the
+/// pin adds it only when optimizing. It must run at -O1 and not at -O0.
+#[test]
+fn early_tail_duplication_runs_at_o1_and_not_at_o0() {
+    for (level, ran) in [("-O0", false), ("-O1", true)] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), CROSSING).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", "x86_64-linux")
+            .env("LLRM_DEBUG", "time")
+            .env("LLRM_TIME_TOP", "100000")
+            .current_dir(scratch.path())
+            .args([level, "-S", "-o", "a.s", "a.c"])
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{level}: {said}");
+        assert_eq!(said.contains("lir earlytaildup"), ran, "{level}: {said}");
+    }
+}
