@@ -1056,13 +1056,11 @@ mod tests {
         assert!(run(4, false), "the count rule (m16) names 3 values, under the registers: the sum is hoisted");
     }
 
-    /// m16 keeps the count rule (`Target::hoist_by_pressure` false): the pin's
-    /// gate left a loop-invariant `lea` and load in bintree's and quicksort's
-    /// loops, +6,579 and +2,838 clk. The same loop that refuses the sum under
-    /// the pressure gate hoists it.
+    /// m16 gates hoists by pressure again: its address registers are their
+    /// own class (ADDR16), so the pin's per-set limit answers.
     #[test]
-    fn test_m16_keeps_the_count_rule_for_hoists() {
-        assert!(!crate::backend::classes::RegisterClasses::m16().hoist_by_pressure);
+    fn test_m16_gates_hoists_by_pressure() {
+        assert!(crate::backend::classes::RegisterClasses::m16().hoist_by_pressure);
     }
 
     /// `EliminateCSE` renamed the readers of one duplicate at a time, each

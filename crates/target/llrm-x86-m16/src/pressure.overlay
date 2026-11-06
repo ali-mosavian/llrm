@@ -1,0 +1,5 @@
+# DEVIATE ADDR16 (owner m16, exit 2026-11-27): the pin has no class for real-mode 16-bit addressing,
+# where a base or index is one of bx, si, di, bp. bp is the frame (reserved): limit 8 - 2 = 6 = three
+# registers of weight 2, the GR32 weight.
+set 36 ADDR16 8 ADDR16
+class ADDR16 2 4 35,36 ebx,esi,edi,ebp
