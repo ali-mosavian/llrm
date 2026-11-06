@@ -698,7 +698,7 @@ pub fn optimized_with<E: From<String>>(
     // refuses this descriptor) merges and this call goes; if #6140 cannot
     // land by 2026-11-05 the alternative exit is reported on the 5th.
     // tests/nearcalls.rs holds the folded shape and, ignored, the pin's.
-    let walk_promoted = crate::walk::take_walk_promotions(program);
+    let walk_promoted = crate::walk::take_walk_promotions(program, modules);
     if (promoted_any || walk_promoted) && program.target.second_ipsccp() {
         // Every body is told changed before the first runs again: the solver has
         // already restated the attributes of all of them, and a pipeline that
