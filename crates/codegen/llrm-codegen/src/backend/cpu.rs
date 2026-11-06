@@ -160,6 +160,8 @@ pub struct Profile {
     pub commute_loop_carried: bool,
     /// Clocks a mispredicted branch costs, where the target states it.
     pub mispredict_penalty: Option<i64>,
+    /// `mispredict_penalty` at -O1, -Os and -Oz, where the target states one.
+    pub mispredict_penalty_size: Option<i64>,
     /// `-fexcess-precision=standard` (`-ffloat-store`): a float conversion
     /// rounds to its type, where otherwise x87 keeps the wider value in its
     /// register, as gcc's `-fexcess-precision=fast` does.
@@ -378,6 +380,7 @@ impl Profile {
             tail_dup_threshold: None,
             commute_loop_carried: false,
             mispredict_penalty: None,
+            mispredict_penalty_size: None,
             float_store: false,
             rounds_float_spills: false,
             stable_loads: true,
@@ -411,6 +414,16 @@ impl Profile {
             return 0;
         }
         self.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+    }
+
+    /// Clocks a mispredicted branch costs in this function: the size row at
+    /// -O1, -Os and -Oz (no byte price at speed) where stated.
+    pub fn mispredict_penalty_here(&self) -> Option<i64> {
+        if self.size || self.min_size || !self.speed_rate {
+            self.mispredict_penalty_size.or(self.mispredict_penalty)
+        } else {
+            self.mispredict_penalty
+        }
     }
 
     /// DEVIATE TA-LC applies here: the table says so, at -O1 to -O3 only (at
@@ -573,6 +586,7 @@ fn _profile(
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
         commute_loop_carried: table.commute_loop_carried,
         mispredict_penalty: table.mispredict_penalty,
+        mispredict_penalty_size: table.mispredict_penalty_size,
         ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
     })
 }
