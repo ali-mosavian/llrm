@@ -307,7 +307,7 @@ fn coalesce(function: &mut MFunc) {
 /// copied whole, and a call preserves only the low 64 bits of `d8`-`d15`, so it
 /// never takes one.
 pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
-    let mut wide: HashSet<Reg> = HashSet::default();
+    let mut wide: HashSet<Reg> = function.wide.iter().copied().collect();
     let mut copies: Vec<(Reg, Reg)> = Vec::new();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         match op {
