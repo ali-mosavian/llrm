@@ -175,6 +175,10 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         self.short
     }
 
+    fn narrow_setcc_by_known_bits(&self) -> bool {
+        self.short
+    }
+
     fn is_indexed_legal(
         &self,
         _is_load: bool,

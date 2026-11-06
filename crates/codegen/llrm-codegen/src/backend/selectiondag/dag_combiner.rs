@@ -370,6 +370,17 @@ pub trait CombineHooks {
         false
     }
 
+    /// `(setcc x, c, eq|ne|unsigned cc)` compares in `i8` or `i16` when the
+    /// bits of `x` above are known zero and `c` fits: `cmpi.b` is 4 B, `cmpi.l`
+    /// 6 B (68000: 8 clk against 14), and gcc narrows. The pin narrows a compare
+    /// only from an explicit `ZERO_EXTEND` or an eq/ne mask (`SimplifySetCC`,
+    /// TargetLowering.cpp L4975-5000, L5109-5160), and x86's `combineCMP`
+    /// goes the other way on purpose (partial registers).
+    /// DEVIATE: not in the pin. Exit: review 2026-11-20.
+    fn narrow_setcc_by_known_bits(&self) -> bool {
+        false
+    }
+
     /// The type `BuildUDIV` widens `vt` to for an uncooperative divisor
     /// ([L7031]: `i32` to `i64`), or `None` where the target does not.
     fn widened_unsigned_divide_type(
@@ -1053,6 +1064,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_setcc(vt, n0, rhs, new_cond));
             }
         }
+        if let Some(folded) = self.narrow_by_known_bits(vt, n0, c1, cond) {
+            return Some(folded);
+        }
         if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
             || self.level != CombineLevel::BeforeLegalizeTypes
             || !self.dag.has_one_use(n0.node)
@@ -1095,6 +1109,52 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             (self.dag.get_constant(c1, min_vt), cond)
         };
         Some(self.dag.get_setcc(vt, trunc, rhs, cond))
+    }
+
+    /// The hook `narrow_setcc_by_known_bits`: the compare of a value whose
+    /// bits above `i8` (or `i16`) are known zero against a constant that fits,
+    /// for eq/ne and the unsigned conditions (exact there; a signed one would
+    /// need both operands non-negative at the narrow width, which the pin's
+    /// own rules leave alone too). The pin's rule for an extension or a low
+    /// `and` mask under eq/ne takes those first.
+    fn narrow_by_known_bits(
+        &mut self,
+        vt: EVT,
+        n0: SDValue,
+        c1: u128,
+        cond: CondCode,
+    ) -> Option<SDValue> {
+        if !self.hooks.narrow_setcc_by_known_bits()
+            || self.level != CombineLevel::BeforeLegalizeTypes
+            || !matches!(
+                cond,
+                CondCode::SetEq | CondCode::SetNe | CondCode::SetULt | CondCode::SetULe | CondCode::SetUGt | CondCode::SetUGe
+            )
+        {
+            return None;
+        }
+        let pins = matches!(self.dag.opcode(n0), ISD::ZeroExtend | ISD::SignExtend | ISD::And);
+        if pins && matches!(cond, CondCode::SetEq | CondCode::SetNe) {
+            return None;
+        }
+        let width = self.dag.value_type(n0).size_in_bits();
+        for bits in [8u32, 16] {
+            if bits >= width {
+                break;
+            }
+            let high = super::fold::mask(width) & !super::fold::mask(bits);
+            if c1 & high != 0 || !super::known_bits::masked_value_is_zero(self.dag, n0, high) {
+                continue;
+            }
+            let narrow = EVT::integer(bits);
+            if self.tli.is_some_and(|tli| !tli.types.is_type_legal(narrow)) {
+                continue;
+            }
+            let trunc = self.dag.get_node(ISD::Truncate, narrow, &[n0]);
+            let rhs = self.dag.get_constant(c1, narrow);
+            return Some(self.dag.get_setcc(vt, trunc, rhs, cond));
+        }
+        None
     }
 
     /// `optimizeSetCCOfSignedTruncationCheck`: `(add x, 1<<(k-1)) u< 1<<k`, or
