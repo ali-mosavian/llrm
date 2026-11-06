@@ -2058,8 +2058,8 @@ fn a_comdat_function_and_global_are_comdat_sections() {
 fn a_comdat_functions_unwind_data_is_associative_with_its_code() {
     let object = windows_object(
         "$f = comdat any\n\
-         define linkonce_odr dso_local i32 @f(i32 %a) comdat {\n  ret i32 %a\n}\n\
-         define dso_local i32 @h(i32 %a) {\n  ret i32 %a\n}\n",
+         define linkonce_odr dso_local i32 @f(i32 %a) comdat {\n  %p = alloca [16 x i32]\n  store volatile i32 %a, ptr %p\n  %v = load volatile i32, ptr %p\n  ret i32 %v\n}\n\
+         define dso_local i32 @h(i32 %a) {\n  %p = alloca [16 x i32]\n  store volatile i32 %a, ptr %p\n  %v = load volatile i32, ptr %p\n  ret i32 %v\n}\n",
     );
     let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
     let code = |name: &str| match object.symbols.iter().find(|one| one.name == name).unwrap().definition {
@@ -2076,6 +2076,34 @@ fn a_comdat_functions_unwind_data_is_associative_with_its_code() {
     // control: h is not in a comdat, so its data stays in the shared pair
     let shared = |name: &str| object.sections.iter().enumerate().filter(|(_, one)| one.name == name).count();
     assert_eq!((shared(".xdata"), shared(".pdata")), (2, 2));
+}
+
+/// Every function got an `.xdata` block and a `.pdata` row, a frameless leaf
+/// too (12 bytes of `.pdata` each); the pin (llc d1106deb71) writes both only
+/// for a function with a `.seh_*` prologue, so a leaf cost 20 bytes the pin's
+/// object does not carry.
+#[test]
+fn a_frameless_leaf_gets_no_unwind_data_as_the_pin_writes_none() {
+    let object = windows_object(
+        "define dso_local i32 @leaf(i32 %a) uwtable {\n  ret i32 %a\n}\n\
+         define dso_local i32 @framed(i32 %a) uwtable {\n  %p = alloca [16 x i32]\n  store volatile i32 %a, ptr %p\n  %v = load volatile i32, ptr %p\n  ret i32 %v\n}\n",
+    );
+    let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
+    let size = |name: &str| object.sections.iter().find(|one| one.name == name).map_or(0, |one| one.image.len());
+    // one row for `framed`; control: that row is there, so the leaf's absence is not an empty table
+    assert_eq!(size(".pdata"), 12, "{:?}", object.sections.iter().map(|one| &one.name).collect::<Vec<_>>());
+    assert!(size(".xdata") >= 4);
+    let rows = object.sections.iter().find(|one| one.name == ".pdata").unwrap().relocs.len();
+    assert_eq!(rows, 3);
+}
+
+/// An object with only frameless leaves has no unwind sections at all, as the
+/// pin's has none.
+#[test]
+fn an_object_of_leaves_has_no_unwind_sections() {
+    let object = windows_object("define dso_local i32 @leaf(i32 %a) uwtable {\n  ret i32 %a\n}\n");
+    let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
+    assert!(object.sections.iter().all(|one| one.name != ".xdata" && one.name != ".pdata"));
 }
 
 /// The listing of `tail call @g(...)` then `ret`, built with `abi` at -O2.
