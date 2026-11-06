@@ -33,6 +33,7 @@ fn a_one_bit_sign_extension_legalizes_to_a_negated_mask() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             share_products: false,
             cmov: false,
             sse2: false,

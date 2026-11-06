@@ -635,3 +635,13 @@ fn gnu_extbl_is_priced_from_the_68020() {
         assert!(cost_on(cpu, &text, 2, true).is_ok(), "{cpu:?} prices {text}");
     }
 }
+
+/// `lea 0, %a0` (an absolute address, gcc's NULL into an address register) was
+/// "not in the tables" at 68040 and 68060: the matrix left 12 executed
+/// instructions unpriced. MC68040UM 10.6 (p. 10-21) LEA `(xxx).W, (xxx).L`
+/// 1, 1; MC68060UM 10-20 (p. 10-22) LEA `(xxx).WL` 1(0/0).
+#[test]
+fn an_absolute_address_lea_is_priced_at_040_and_060() {
+    assert_eq!(m68040("lea 0, %a0"), 1);
+    assert_eq!(m68060("lea 0, %a0"), 1);
+}
