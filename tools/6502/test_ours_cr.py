@@ -68,4 +68,47 @@ class Deterministic(unittest.TestCase):
             got.append(open(out).read())
         self.assertEqual(got[0], got[1], "the link order followed the hash seed")
 
+MODULE = """rc2 = $82
+.export __a
+__a:
+  jsr helper
+  sta s___a_1
+  rts
+.segment "BSS"
+s___a_1: .res 1
+.segment "CODE"
+.export __b
+__b:
+  jsr helper
+  rts
+.segment "BSS"
+.segment "CODE"
+helper:
+  lda rc2
+  rts
+"""
+
+class SplitCrlib(unittest.TestCase):
+    """int_int64.s is one object: shift_int64_variable linked 9676 B of it for 1529 B of shifts (11300 B against gcc's 6393; 2026-11-06).
+    The routines call a helper (`sf_clz32`) the module keeps after the last one: splitting by export alone left it inside `__ashrdi3`
+    and `__udivdi3` could not link."""
+    def setUp(self):
+        sys.path.insert(0, HERE)
+        from split_crlib import split
+        self.units = split(MODULE)
+
+    def test_one_object_per_routine(self):
+        self.assertEqual(sorted(self.units), ["__a", "__b", "helper"])
+
+    def test_the_helper_is_exported_once_and_defined_once(self):
+        self.assertIn(".export helper", self.units["helper"])
+        for name in ("__a", "__b"):
+            self.assertNotIn("helper:", self.units[name])
+        self.assertIn("s___a_1: .res 1", self.units["__a"])
+        self.assertNotIn("s___a_1", self.units["__b"])
+
+    def test_a_module_of_one_routine_is_not_split(self):
+        from split_crlib import split
+        self.assertIsNone(split(".export __a\n__a:\n  rts\n"))
+
 if __name__ == "__main__": unittest.main()

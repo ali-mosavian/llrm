@@ -136,7 +136,11 @@ def split_output(stdout):
     m = re.search(rb"\n(\d+) cycles\n$", stdout)
     return (stdout[:m.start()], int(m.group(1))) if m else (None, None)
 
-CRLIB = Path(os.environ.get("CRLIB", os.path.expanduser("~/scratch/sfcard/6502/crlib")))
+sys.path.insert(0, str(HERE))
+from split_crlib import materialise
+# a module of several routines links whole (shift_int64_variable: 9.7 KB of i64 mul/div/mod for three shifts); a linker with function
+# sections links the routines the program calls, so the modules are split one object per routine
+CRLIB = materialise(Path(os.environ.get("CRLIB", os.path.expanduser("~/scratch/sfcard/6502/crlib"))), Path(tempfile.mkdtemp(prefix="crlib-")))
 _EXP = {}
 for _p in sorted(CRLIB.glob("*.s")):
     for _m in re.finditer(r"^\.export (\w+)", _p.read_text(), re.M):
