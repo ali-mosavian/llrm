@@ -2013,11 +2013,26 @@ fn counted_trips(
     let counter = if closing.starts_with("djnz ") {
         "b".to_owned()
     } else if closing.starts_with("jr nz, ") {
-        let Line::Inst(before) = lines[..end].iter().rev().find(|line| !matches!(line, Line::Loc(_)))? else {
-            return None;
-        };
-        let register = before.strip_prefix("dec ")?;
-        matches!(register, "a" | "b" | "c" | "d" | "e" | "h" | "l").then(|| register.to_owned())?
+        // the `dec r` that set the flag, past what leaves the flags alone
+        let mut found = None;
+        for line in lines[..end].iter().rev() {
+            match line {
+                Line::Loc(_) => continue,
+                Line::Inst(text) => {
+                    if let Some(register) = text.strip_prefix("dec ") {
+                        if matches!(register, "a" | "b" | "c" | "d" | "e" | "h" | "l") {
+                            found = Some(register.to_owned());
+                            break;
+                        }
+                    }
+                    if !leaves_flags(text) {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        found?
     } else {
         return None;
     };
@@ -2027,27 +2042,41 @@ fn counted_trips(
         "h" | "l" => "hl",
         _ => "af",
     };
+    let inside: Vec<&str> = lines[head..=end]
+        .iter()
+        .filter_map(|line| if let Line::Label(name) = line { Some(name.as_str()) } else { None })
+        .collect();
     for line in lines[..head].iter().rev() {
-        let text = match line {
-            Line::Loc(_) => continue,
-            Line::Inst(text) => text,
-            _ => return None,
-        };
+        let Line::Inst(text) = line else { continue };
         if let Some(count) = text.strip_prefix(&format!("ld {counter}, #")) {
             let count: u64 = count.parse().ok()?;
             return Some(if count == 0 { 256 } else { count });
         }
         let (mnemonic, operands) = text.split_once(' ').unwrap_or((text, ""));
+        // the jump that enters a rotated loop at its test
+        if matches!(mnemonic, "jr" | "jp") && inside.contains(&operands) {
+            continue;
+        }
         let target = operands.split(", ").next().unwrap_or("");
-        if matches!(mnemonic, "call" | "ret" | "jp" | "jr" | "djnz")
+        if matches!(mnemonic, "call" | "ret" | "jp" | "jr" | "djnz" | "ldir" | "lddr" | "cpir" | "cpdr")
             || target == counter
             || target == pair
-            || matches!(mnemonic, "ldir" | "lddr" | "cpir" | "cpdr")
         {
             return None;
         }
     }
     None
+}
+
+/// Whether `text` leaves the flags as they are: a load, a 16-bit `inc`/`dec`,
+/// a push or an exchange.
+fn leaves_flags(text: &str) -> bool {
+    let (mnemonic, operands) = text.split_once(' ').unwrap_or((text, ""));
+    match mnemonic {
+        "ld" | "push" | "ex" => true,
+        "inc" | "dec" => matches!(operands, "bc" | "de" | "hl" | "sp" | "ix" | "iy"),
+        _ => false,
+    }
 }
 
 /// [`price_in_loops`] of the lines as emitted: after branch relaxation, which

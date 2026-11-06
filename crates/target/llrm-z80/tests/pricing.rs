@@ -78,3 +78,21 @@ fn a_counted_loop_is_priced_by_its_trips() {
     let (few, many) = (loop_of("10"), loop_of("40"));
     assert!(many.1 > 3 * few.1, "10 trips {few:?}, 40 trips {many:?}");
 }
+
+/// The same 20 trips written another way weigh the same: loads between the
+/// `dec a` and the `jr nz` (wide_frame -O1) and a jump into the loop at its
+/// test with the counter kept in the frame (memcpy_libcall -O1) read as
+/// uncounted, eight trips, and priced 2x to 25x too low.
+#[test]
+fn a_counted_loop_weighs_the_same_in_any_shape() {
+    let plain = price_in_loops(&lines_of(&["ld a, #20", "L0_1:", "inc hl", "dec a", "jr nz, L0_1"]));
+    let loads_between =
+        price_in_loops(&lines_of(&["ld a, #20", "L0_1:", "inc hl", "dec a", "ld c, l", "ld b, h", "jr nz, L0_1"]));
+    let entered_at_the_test = price_in_loops(&lines_of(&[
+        "ld a, #20", "ld -1(ix), a", "jr L0_2", "L0_1:", "inc hl", "L0_2:", "dec a", "jr nz, L0_1",
+    ]));
+    // counted: 22 or 30 T a trip for 20 trips; read as uncounted, 8 trips, they stay under 270
+    assert!(plain.1 > 400, "plain {plain:?}");
+    assert!(loads_between.1 > 400, "loads {loads_between:?}");
+    assert!(entered_at_the_test.1 > 400, "entered {entered_at_the_test:?}");
+}
