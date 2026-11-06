@@ -1,6 +1,6 @@
-//! Counts the `add.l #imm, %dN` rows that a word add would do: the sites of
-//! the byte-width add gcc emits (`addi.b #48, %d1` for 6 bytes and 16 clocks of
-//! `add.l`). Counting only: nothing is rewritten.
+//! `add.l #imm, %dN` becomes `add.w #imm, %dN` where the register's upper half
+//! is provably zero before and after: gcc's narrowed add (`addi.b #48, %d1` for
+//! hex), 4 bytes and 8 clocks instead of 6 and 16 on the 68000.
 //!
 //! # How it works
 //! [`sites`] walks each block with the upper bound of every data register's
@@ -15,8 +15,9 @@
 //! needs no reader of the codes after it ([`flags_read_after`], inside the
 //! block, as `narrow.rs` asks).
 //!
-//! DEVIATE (when it rewrites): the pin keeps the 32-bit add; gcc's `addhi3`
-//! narrowing prints the byte form. Reason: best of gcc and clang is the goal.
+//! DEVIATE: the pin keeps the 32-bit add; gcc narrows it. Reason: best of gcc
+//! and clang is the goal. [`sites`] lists the candidates; [`narrow_adds`]
+//! rewrites the sound ones.
 
 use std::collections::HashMap;
 
@@ -26,7 +27,8 @@ use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
 use crate::REGISTER_INFO;
 use crate::cmpelim::flags_read_after;
-use crate::mfunc::{Class, MFunction};
+use crate::dagisel::local;
+use crate::mfunc::{Class, MFunction, op_inst};
 use crate::regalloc::Assignment;
 
 /// Predecessor blocks the walk looks back through.
@@ -150,6 +152,10 @@ fn start_state(
     block: usize,
     depth: usize,
 ) -> State {
+    // the entry has a predecessor the blocks do not list: the caller
+    if block == 0 {
+        return State::new();
+    }
     match predecessors[block][..] {
         [only] if depth > 0 && only != block => end_state(function, assignment, predecessors, only, depth - 1),
         _ => State::new(),
@@ -196,4 +202,20 @@ pub fn sites(
         }
     }
     out
+}
+
+/// Rewrites each sound [`sites`] row to `add.w`.
+pub fn narrow_adds(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let Some(desc) = local::code_of("ADD16di").and_then(local::desc) else { return };
+    for site in sites(function, assignment).into_iter().filter(Site::sound) {
+        let [Operand::Def(def), Operand::Use(base), Operand::Imm(k)] = function.blocks[site.block].insts[site.at].operands[..]
+        else {
+            continue;
+        };
+        function.blocks[site.block].insts[site.at] =
+            op_inst("ADD16di", desc, vec![Operand::Def(def), Operand::Use(base), Operand::Imm(k)]);
+    }
 }

@@ -213,22 +213,7 @@ pub fn items_with(
         crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
         crate::constreg::constant_into_destination(&mut function, &assignment);
         crate::constreg::immediate_from_free_register(&mut function, &assignment);
-        // counting only: the sites a word add could take, to stderr
-        if std::env::var_os("LLRM_M68K_NARROW_COUNT").is_some() {
-            for site in crate::narrow_add::sites(&function, &assignment) {
-                eprintln!(
-                    "NARROWADD {} block {} at {} bound {} imm {} codes_equal {} codes_read {:?} sound {}",
-                    function.name,
-                    site.block,
-                    site.at,
-                    site.bound,
-                    site.immediate,
-                    site.codes_equal,
-                    site.codes_read,
-                    site.sound()
-                );
-            }
-        }
+        crate::narrow_add::narrow_adds(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
