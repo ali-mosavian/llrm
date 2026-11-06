@@ -1449,10 +1449,6 @@ pub struct LirBody {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BlockOdds {
     pub taken: IndexMap<(i64, i64), u32>,
-    /// The successor `addSuccessor` listed first, by block: the true edge of a
-    /// branch, whichever way the jump was inverted to fall through. `succ`
-    /// lists the jump's target first; the sink reads this order.
-    pub first: IndexMap<i64, i64>,
 }
 
 // Probabilities read, for a test that a dispatch of N cases reads O(N).

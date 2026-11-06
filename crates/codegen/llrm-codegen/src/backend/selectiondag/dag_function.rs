@@ -1792,10 +1792,6 @@ pub(super) fn set_odds(
         let scaled = u128::from(probability) * (1u128 << 31) / u128::from(sum);
         body.odds.taken.insert((at, to_at), scaled.min(1 << 31) as u32);
     }
-    // `addSuccessor` order: the true edge is listed first.
-    for &(at, to_at) in stated.keys() {
-        body.odds.first.entry(at).or_insert(to_at);
-    }
 }
 
 /// A value read where some path to it defines nothing: (value, instruction).

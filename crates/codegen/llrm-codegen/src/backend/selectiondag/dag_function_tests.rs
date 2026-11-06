@@ -1637,29 +1637,6 @@ fn the_odds_of_a_branch_are_found_in_its_piece_not_in_every_block() {
     assert!(examined <= 2 * edges, "{examined} blocks examined for {edges} edges");
 }
 
-/// A branch inverted to fall through lists its false edge first in `succ`; the
-/// sink needs the order `addSuccessor` gave, true then false (os_execute m64
-/// -Os: the loop header was tried before the next test of a compare chain).
-/// `succ` keeps the jump's order: reordering it moved block layout and
-/// allocation in 41 cells (switch_switch -Os +13/+9/+7 B).
-#[test]
-fn test_the_true_edge_of_a_branch_is_recorded_first_and_succ_is_left_alone() {
-    use crate::model::lir::{LirBlock, LirBody};
-    use llrm_mir::module::BlockId;
-    // Block 0 jumps to 2 (its false edge, inverted) and falls through to 1.
-    let blocks = vec![
-        LirBlock { succ: vec![2, 1].into(), ..LirBlock::new(0, vec![]) },
-        LirBlock::new(1, vec![]),
-        LirBlock::new(2, vec![]),
-    ];
-    let mut body = LirBody::new("order", 0, crate::model::lir::shared(blocks), Default::default(), Default::default());
-    let edges = [(BlockId(0), BlockId(1), 1u32), (BlockId(0), BlockId(2), 1u32)];
-    let block_at: llrm_support::hash::HashMap<u32, i64> = (0..3).map(|at| (at as u32, at)).collect();
-    super::dag_function::set_odds(&mut body, &edges, &block_at);
-    assert_eq!(body.odds.first.get(&0), Some(&1), "true edge first");
-    assert_eq!(&body.blocks[0].succ[..], &[2, 1], "succ keeps the jump's order");
-}
-
 /// Every function ran `consts::known` and `exposed_frames` over its whole body
 /// to find loop trip counts, loops or none (67 M Ir of 6.9 G on
 /// memory_expansion -O2 m64). A function without a loop derives nothing and

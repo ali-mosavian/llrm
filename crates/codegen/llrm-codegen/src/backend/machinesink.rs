@@ -362,8 +362,6 @@ struct Sinker {
     /// `GetAllSortedSuccessors` of each block, made once: it asks nothing of
     /// the instruction.
     sorted: Vec<Vec<usize>>,
-    /// The successor each branch block lists first (`addSuccessor` order).
-    first: HashMap<usize, usize>,
     merged: HashMap<(u32, usize), usize>,
     /// `HasStoreCache`.
     has_store_cache: HashMap<(usize, usize), bool>,
@@ -476,12 +474,6 @@ impl Sinker {
                 hard[header] = !cycles.is_reducible(found);
             }
         }
-        let first: HashMap<usize, usize> = body
-            .odds
-            .first
-            .iter()
-            .filter_map(|(at, to)| Some((*position.get(at)?, *position.get(to)?)))
-            .collect();
         let depths = crate::analysis::intervals::depths_shared(body);
         let mut sinker = Self {
             size,
@@ -505,7 +497,6 @@ impl Sinker {
             cycle,
             considered: HashSet::default(),
             sorted: Vec::new(),
-            first,
             merged: HashMap::default(),
             to_split: Vec::new(),
             has_store_cache: HashMap::default(),
@@ -738,10 +729,6 @@ impl Sinker {
         let sorted = (0..n)
             .map(|block| {
                 let mut all = self.cfg.succs[block].clone();
-                if let Some(at) = self.first.get(&block).and_then(|first| all.iter().position(|one| one == first)) {
-                    let first = all.remove(at);
-                    all.insert(0, first);
-                }
                 for &child in &children[block] {
                     if !all.contains(&child) {
                         all.push(child);
@@ -2072,60 +2059,5 @@ mod tests {
         let sunk = sunk(&body, false);
         let loads = |at: usize| sunk.blocks[at].insns.iter().any(|one| one.defines.contains(&3));
         assert!(loads(1) && !loads(0), "the load moved into the arm that reads it");
-    }
-
-    /// The false edge of an inverted branch is listed first in `succ`, the
-    /// loop header it jumps back to (the same depth as the next test): the sink tried it before the next test of a
-    /// compare chain, every use was dominated by it, and the load stayed
-    /// (os_execute m64 -Os, +23 B). The pin tries the edge `addSuccessor` listed
-    /// first, the true one.
-    #[test]
-    fn test_a_load_sinks_into_the_edge_listed_first_not_the_loop_header() {
-        use crate::model::ir::{Addr, Mem, Space};
-        let cell = Mem { through: llrm_lir::registers::RegId::BP, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 4) };
-        let block =
-            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
-        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
-        let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
-        let make = || {
-            let mut body = LirBody::new(
-                "chain",
-                4,
-                vec![
-                    block(4, vec![1], vec![insn(20, Operation::Jump, "jmp", vec![], vec![], vec![], vec![])]).into(),
-                    block(1, vec![0, 3], vec![branch(21)]).into(),
-                    block(
-                        0,
-                        vec![1, 2],
-                        vec![
-                            insn(10, Operation::Move, "mov", vec![held(3)], vec![Loc::Mem(cell.clone())], vec![3], vec![]),
-                            branch(11),
-                        ],
-                    )
-                    .into(),
-                    block(
-                        2,
-                        vec![1],
-                        vec![
-                            insn(12, Operation::Move, "mov", vec![held(5)], vec![held(3)], vec![5], vec![3]),
-                            insn(13, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]),
-                        ],
-                    )
-                    .into(),
-                    block(3, vec![], vec![ret(14)]).into(),
-                ],
-                IndexMap::default(),
-                IndexMap::default(),
-            );
-            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-            body
-        };
-        let loads = |body: &LirBody, at: usize| body.blocks[at].insns.iter().any(|one| one.defines.contains(&3));
-        let kept = sunk(&make(), true);
-        assert!(loads(&kept, 2), "-Os, no order stated: the header is tried first (same depth) and the load stays");
-        let mut body = make();
-        body.odds.first.insert(0, 2);
-        let moved = sunk(&body, true);
-        assert!(loads(&moved, 3) && !loads(&moved, 2), "the edge listed first is tried first");
     }
 }
