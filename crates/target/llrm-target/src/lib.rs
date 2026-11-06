@@ -505,6 +505,12 @@ pub trait Target {
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 
+    /// A copy into a callee-saved register is sunk out of a branching block
+    /// when one successor alone needs it (REC-5B).
+    fn sink_csr_copies(&self) -> bool {
+        false
+    }
+
     /// The pressure sets of the register classes and each set's limit, for a
     /// target that has them (the pre-RA scheduler tracks pressure per set).
     fn pressure(&self) -> Option<(&'static pressure::PressureSets, Vec<u32>)> {

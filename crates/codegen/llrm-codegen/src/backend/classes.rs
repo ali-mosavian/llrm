@@ -85,6 +85,8 @@ pub struct RegisterClasses {
     frame_after: Option<RegId>,
     /// The pressure sets and limits of the target, where it has them.
     pub pressure: Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)>,
+    /// `Target::sink_csr_copies`.
+    pub sink_csr_copies: bool,
 }
 
 impl RegisterClasses {
@@ -169,6 +171,7 @@ impl RegisterClasses {
             registers: llrm_lir::registers::Regs(arch.registers()),
             frame_after: file.iter().find(|one| one.is("frame_follows")).map(|one| named(&one.name)),
             pressure: arch.pressure(),
+            sink_csr_copies: arch.sink_csr_copies(),
         };
         classes.status_word = classes.found_status_word();
         classes

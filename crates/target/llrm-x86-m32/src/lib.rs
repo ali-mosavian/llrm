@@ -172,6 +172,13 @@ impl llrm_target::Target for M32 {
         "x86-m32"
     }
 
+    // DEVIATE REC-5B (owner m32, exit 2026-11-20): the pin keeps a copy into a
+    // callee-saved register in the entry, which pins the save there; gcc's
+    // `prepare_shrink_wrap` moves it (idea only). See `sinkcsr`.
+    fn sink_csr_copies(&self) -> bool {
+        true
+    }
+
     fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
         Some((
             M32::pressure_sets(),

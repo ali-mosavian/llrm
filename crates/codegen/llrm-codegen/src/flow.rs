@@ -125,6 +125,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("Coalescer", "coalesce@10"),
     ("RegAlloc", "allocate@11"),
     ("ParallelCopy", "parcopy@12"),
+    ("SinkCsrCopies", "prologue@13"),
     ("Prologue", "prologue@13"),
     ("LateCleanup", "latecleanup@13"),
     ("Peephole", "peephole@14"),
@@ -295,6 +296,12 @@ pub fn machine_with<'a>(
             stack: registers.stack,
             width: registers.slot as u32,
             frame: frame.clone(),
+        }),
+        // Before the frame is placed: a copy into a callee-saved register
+        // that one arm alone needs leaves the branching block (REC-5B).
+        Box::new(crate::backend::sinkcsr::SinkCsrCopies {
+            enabled: classes.sink_csr_copies,
+            saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
         }),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
         // After frame finalization, as the pin: a constant loaded again where

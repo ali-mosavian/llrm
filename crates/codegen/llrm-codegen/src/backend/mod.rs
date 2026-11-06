@@ -214,6 +214,7 @@ pub mod ivzero;
 pub mod jumps;
 pub mod lanes;
 pub mod latecleanup;
+pub mod sinkcsr;
 pub mod layout;
 pub mod leaopt;
 pub mod legalize;
