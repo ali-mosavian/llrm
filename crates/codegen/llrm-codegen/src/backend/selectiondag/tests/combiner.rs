@@ -43,6 +43,7 @@ fn x86(
     DagCombiner::new(
         dag,
         &mut X86Lowering {
+            imul_if_smaller: false,
             share_products: false,
             cmov: false,
             sse2: false,
@@ -161,6 +162,7 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         dag.set_root(product);
         let mut lowering = X86Lowering {
             share_products: false,
+            imul_if_smaller: false,
             cmov: false,
             sse2: false,
             min_size,
@@ -182,6 +184,7 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
         dag.set_root(product);
         let mut lowering = X86Lowering {
+            imul_if_smaller: false,
             share_products: false,
             cmov: false,
             sse2: false,
@@ -237,6 +240,7 @@ fn a_constant_the_pin_leaves_an_imul_is_the_chain_where_the_block_is_hot() {
             price_pin: false,
         };
         let mut lowering = X86Lowering {
+            imul_if_smaller: false,
             share_products: false,
             cmov: false,
             sse2: false,
@@ -274,6 +278,7 @@ fn the_i16_chain_is_built_exactly_where_i16_is_not_promoted() {
         let y = dag.get_register(EVT::I16, 3);
         let sum = dag.get_node(ISD::Add, EVT::I16, &[x, y]);
         let lowering = X86Lowering {
+            imul_if_smaller: false,
             share_products: false,
             cmov: false,
             sse2: false,
@@ -415,6 +420,7 @@ fn a_not_of_a_float_compare_does_not_make_a_code_the_target_expands() {
     DagCombiner::new(
         &mut dag,
         &mut X86Lowering {
+            imul_if_smaller: false,
             share_products: false,
             cmov: false,
             sse2: false,
