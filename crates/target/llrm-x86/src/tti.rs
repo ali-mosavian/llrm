@@ -649,6 +649,10 @@ impl Tti for X86 {
         self.tuning.recursive_inlining_growth
     }
 
+    fn recursive_tre_first(&self) -> (bool, bool) {
+        self.tuning.recursive_tre_first
+    }
+
     fn peels_folded_entry(&self) -> bool {
         self.tuning.peel_folded_entry
     }

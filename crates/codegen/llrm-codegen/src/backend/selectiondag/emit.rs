@@ -1748,6 +1748,11 @@ impl Emitter<'_, '_> {
         let op = Operation::named(&form.operation)
             .ok_or_else(|| EmitError::Unsupported(format!("{name}: operation {}", form.operation)))?;
         self.push(op, &form.name, dests, sources);
+        if name.split('|').next().is_some_and(|pin| pin.ends_with("_DB"))
+            && let Some(last) = self.blocks.last_mut().and_then(|block| block.insns.last_mut())
+        {
+            *last = Arc::new(Insn { disjoint: true, ..(**last).clone() });
+        }
         Ok(())
     }
 
@@ -3014,6 +3019,15 @@ impl Emitter<'_, '_> {
             "FNSTSW16r" => {
                 let held = self.fresh(2);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                return Ok(Some(()));
+            }
+            // `llvm.trap`: the `TRAP` node the intrinsic made.
+            "INT3" => {
+                self.push(Operation::Nothing, "int3", Vec::new(), Vec::new());
+                return Ok(Some(()));
+            }
+            "TRAP" => {
+                self.push(Operation::Nothing, "ud2", Vec::new(), Vec::new());
                 return Ok(Some(()));
             }
             "SAHF" => {

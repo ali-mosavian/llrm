@@ -36,6 +36,7 @@ pub mod mfunc;
 pub mod narrow;
 pub mod negadd;
 pub mod object;
+pub mod opcosts;
 pub mod regalloc;
 pub mod scaledindex;
 pub mod shiftadd;

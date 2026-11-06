@@ -102,6 +102,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::ssaupdater::SsaUpdater;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdMap;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::loopinfo::{Loop, LoopId, LoopInfo};
@@ -161,7 +162,7 @@ fn form_on_all_loops(
     tree: &DomTree,
     info: &LoopInfo,
 ) -> Result<bool, String> {
-    let mut form = Form { context, layout, function, tree, info, exit_blocks: HashMap::new(), placed: HashMap::new() };
+    let mut form = Form { context, layout, function, tree, info, exit_blocks: HashMap::new(), placed: IdMap::new() };
     let mut changed = false;
     for top in info.top_level_loops() {
         changed |= form.recursively(top)?;
@@ -180,7 +181,7 @@ struct Form<'a> {
     /// The loops' exit blocks, found once each: closing adds phis, no edge.
     exit_blocks: HashMap<LoopId, Rc<[BlockId]>>,
     /// The phis this run added, with the value each closes (L4).
-    placed: HashMap<InstId, ValueId>,
+    placed: IdMap<InstId, ValueId>,
 }
 
 impl Form<'_> {
@@ -431,7 +432,7 @@ impl Form<'_> {
     /// its block, the last made first.
     fn in_value_order(&mut self) -> Result<(), String> {
         let mut by_block: HashMap<BlockId, Vec<(ValueId, InstId)>> = HashMap::new();
-        for (&phi, &value) in &self.placed {
+        for (phi, &value) in self.placed.iter() {
             if let Some(block) = self.function.parent(phi) {
                 by_block.entry(block).or_default().push((value, phi));
             }

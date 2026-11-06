@@ -1230,6 +1230,13 @@ impl<'a> Graph<'a> {
             for &reg in self.info.implicit_defs(op) {
                 self.check_for_live_reg_def(su, reg, &mut live);
             }
+            for &mask in self.ops(node) {
+                if let NodeData::RegMask(at) = self.dag.node(mask).data {
+                    for &reg in &self.dag.register_masks[at as usize] {
+                        self.check_for_live_reg_def(su, reg, &mut live);
+                    }
+                }
+            }
             for i in 0..self.info.num_defs(op).min(self.values(node).len()) {
                 if let Some(reg) = self.info.fixed_register_def(op, i) {
                     self.check_for_live_reg_def(su, reg, &mut live);

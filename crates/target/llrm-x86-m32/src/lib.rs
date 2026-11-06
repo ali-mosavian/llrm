@@ -100,6 +100,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // x_fib, frames), 150 at -O3 (rectwo, bintree, recchop are worse with 450; their
         // O3 card is open). Owner x86-m32, exit 2026-11-20.
         recursive_inlining_growth: Some((450, 150)),
+        // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion (passes.def:97, then
+        // pass_ipa_inline :164). At -O3 the copies of the loop beat the tree's (rectwo 1230664 -> 466986
+        // clk, recchop, x_hanoi2, bintree; no -O3 cell worse); at -O2 the tree's copies let GVN merge the
+        // pure same-argument calls (fib 99618 clk against 228901), so -O2 keeps today's order. Owner
+        // x86-m32, exit 2026-11-20.
+        recursive_tre_first: (false, true),
         peel_folded_entry: true,
         // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
         // gcc's unroll estimate priced in clocks and bytes replaces it): a
@@ -746,6 +752,28 @@ mod tests {
         let sizes = model.size_costs();
         assert_eq!((sizes.load, sizes.float_release, sizes.call, sizes.r#move), (6, 2, 5, 4));
         assert_eq!(model.costs().load, 1, "the clock prices are the CPU's");
+    }
+
+    /// The x87 byte rows were a flat 6: a register `faddp` (2 B encoded) priced at 3x,
+    /// and the memory operand of `fadd m` at 0 (`x87_add_m` = `x87_add`), so folding
+    /// a load looked free at -Os. A register form is the integer register row.
+    #[test]
+    fn m32_x87_byte_rows_split_register_and_memory_forms() {
+        let sizes = OPCOSTS.size_costs();
+        // Mean encoded bytes of 71 float programs at -O2/-Os, per form, with the band of
+        // estimate/measured the integer rows hold: 1.4-1.5 for memory, 2 for register.
+        for (form, estimate, measured, band) in [
+            ("register add", sizes.float_add, 2.00, 1.9..=2.1),
+            ("fld m", sizes.float_load, 5.56, 1.3..=1.6),
+            ("fstp m", sizes.float_store, 4.12, 1.3..=1.6),
+            ("add m", sizes.float_add + sizes.float_load_folded, 5.87, 1.3..=1.6),
+            ("fstp st", sizes.float_release, 2.00, 0.9..=1.1),
+        ] {
+            let ratio = estimate as f64 / measured;
+            assert!(band.contains(&ratio), "{form}: {estimate} B estimated, {measured} B encoded");
+        }
+        assert_eq!(sizes.float_add, sizes.add, "a register x87 add is the integer register row");
+        assert!(sizes.float_load_folded > 0, "a memory operand costs bytes over the register form");
     }
 
     /// A condition held as a value had no price: `phiopt` priced it as the

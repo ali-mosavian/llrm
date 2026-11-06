@@ -473,14 +473,15 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let k = self.sdb(op0, in_demanded, depth + 1, false, tlo)?;
                 // `shl` to the lower half (TargetLowering.cpp#L1964): only
                 // where the upper half is demanded and the source's upper half
-                // is zero, i.e. the narrow shift is `nuw`.
+                // is zero, i.e. the narrow shift is `nuw`: the *result's* upper
+                // half is known zero, not the source's.
                 if is_shl && width % 2 == 0 && amount < width / 2 {
                     let half = EVT::integer(width / 2);
                     let top_demanded = demanded & !mask(width / 2) == all & !mask(width / 2);
                     if top_demanded
                         && self.hooks.narrowing_profitable(vt, half)
                         && self.hooks.free_narrowing(vt, half)
-                        && k.zero & (all & !mask(width / 2)) == all & !mask(width / 2)
+                        && ((k.zero << amount) | mask(amount)) & (all & !mask(width / 2)) == all & !mask(width / 2)
                     {
                         let x = self.dag.get_node(ISD::Truncate, half, &[op0]);
                         let by = self.dag.get_constant(u128::from(amount), self.hooks.shift_amount_type(half));

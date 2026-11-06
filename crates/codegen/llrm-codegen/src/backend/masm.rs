@@ -1135,7 +1135,7 @@ pub(crate) fn wrap_of(
     frame: bool,
     stack_addressed: bool,
 ) -> Option<crate::backend::shrinkwrap::Wrap> {
-    if moves_stack(body) || realign_of(body) != 0 {
+    if body.unwrapped || moves_stack(body) || realign_of(body) != 0 {
         return None;
     }
     let lows = saved_of(procedure);
@@ -1314,7 +1314,8 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // stack alignment below the locals (`calculateFrameObjectOffsets`, the
     // final `alignTo(Offset, StackAlign)`), so its lowest local sits at
     // `[rsp+pad]`, a disp8 more than ours. Where the frame register is
-    // omitted the pad goes above the locals instead, as the base layout had it.
+    // omitted the pad goes above the locals instead, as the base layout had it,
+    // unless that moves them off the widest object's alignment (below).
     let pad = if procedure.body.bits == 64 && dropped && procedure.reserve != 0 && aligns_for_calls(&procedure) {
         let call = procedure.registers.align;
         let rounded = (procedure.reserve + slot - 1) / slot * slot;
@@ -1322,8 +1323,13 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     } else {
         0
     };
+    // A pad above the locals moves their base off the widest object's
+    // alignment (a 16-aligned array at `[rsp+8]`: movaps faulted); one that is
+    // not a multiple of it goes below them.
+    let above_locals = if pad % align == 0 { pad } else { 0 };
+    let shifted = gap + above_locals;
     let gap = gap + pad;
-    match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap - above) {
+    match crate::backend::relayout::pushed_down(&procedure.body, pushed + shifted - above) {
         Some(body) => Procedure {
             body: lir::LirBody { saved_first: true, slot_dropped: dropped, ..body },
             reserve: procedure.reserve + gap,

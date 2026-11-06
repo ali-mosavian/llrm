@@ -2419,6 +2419,44 @@ fn a_long_multiply_links_the_compact_routine_at_every_level() {
     }
 }
 
+/// LSR left every 16- and 32-bit induction variable of the 6502 alone (its
+/// datalayout is `n8`, so the pin's `IVUsers` found none): `x[i] = n * i` called
+/// `__mulsi3` on every trip, 56k of shrink_wrapped_frame's 64k clocks. At speed
+/// the 32-bit product is a running sum.
+#[test]
+fn a_32_bit_product_of_the_counter_is_a_running_sum_at_speed() {
+    let ir = module(
+        "define i32 @f(i32 %n) {
+entry:
+  %a = alloca [16 x i32], align 1
+  br label %fill
+fill:
+  %i = phi i32 [ 0, %entry ], [ %next, %fill ]
+  %product = mul nuw nsw i32 %i, %n
+  %index = trunc i32 %i to i16
+  %slot = getelementptr inbounds [4 x i8], ptr %a, i16 %index
+  store i32 %product, ptr %slot, align 1
+  %next = add nuw nsw i32 %i, 1
+  %filled = icmp eq i32 %next, 16
+  br i1 %filled, label %sum, label %fill
+sum:
+  %j = phi i32 [ 0, %fill ], [ %jn, %sum ]
+  %total = phi i32 [ 0, %fill ], [ %t, %sum ]
+  %jx = trunc i32 %j to i16
+  %cell = getelementptr inbounds [4 x i8], ptr %a, i16 %jx
+  %v = load i32, ptr %cell, align 1
+  %t = add i32 %total, %v
+  %jn = add nuw nsw i32 %j, 1
+  %done = icmp eq i32 %jn, 16
+  br i1 %done, label %exit, label %sum
+exit:
+  ret i32 %t
+}",
+    );
+    let fast = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!fast.contains("__mulsi3"), "{fast}");
+}
+
 /// A `byval` argument of 40 bytes is copied by a call of `memcpy` the builder
 /// names itself; the 6502 left its callee an `ExternalSymbol` and refused
 /// (`CannotSelect("ExternalSymbol")`: byval_struct, byval_inline and
@@ -2533,5 +2571,117 @@ define i8 @high_byte_of_the_amount() {
     for level in [Level::O0, Level::O2, Level::Os] {
         let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{level:?}: {e}"));
         assert_eq!(exit_code_of(&text, "high_byte_of_the_amount"), 0, "{level:?}\n{text}");
+    }
+}
+
+/// Stack arguments (the long arguments past `rc2..rc7`) were reached through a
+/// frame pointer built per access: `clc; lda rc0; adc #n; sta rcA; lda rc1;
+/// adc #0; sta rcB; ldy #0; lda (rcA),y` (13 B, or an 8 B copy of `rc0`; x16
+/// tail_calls -Os +463 B vs gcc). The frame index belongs in the address as
+/// `rc0` plus a `ldy` offset: `ldy #n; lda (rc0),y`.
+#[test]
+fn a_stack_argument_is_read_through_rc0_without_a_frame_pointer() {
+    let ir = module(
+        "@x = global [3 x i32] zeroinitializer\n\
+         define i8 @sum(i32 %a, i32 %b, i32 %c) noinline {\n  %s = add i32 %a, %b\n  %t = add i32 %s, %c\n  \
+         %m = lshr i32 %t, 8\n  %u = lshr i32 %t, 24\n  %p = trunc i32 %m to i8\n  %q = trunc i32 %u to i8\n  \
+         %r = add i8 %p, %q\n  ret i8 %r\n}\n\
+         define i8 @t() {\n  %a = load volatile i32, ptr @x\n  %pb = getelementptr i32, ptr @x, i16 1\n  \
+         %b = load volatile i32, ptr %pb\n  %pc = getelementptr i32, ptr @x, i16 2\n  %c = load volatile i32, ptr %pc\n  \
+         %r = call i8 @sum(i32 %a, i32 %b, i32 %c)\n  ret i8 %r\n}",
+    )
+    .replace(
+        "@x = global [3 x i32] zeroinitializer",
+        "@x = global [3 x i32] [i32 16909060, i32 270544960, i32 65538]",
+    );
+    for level in [Level::Os, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        let body = &text[text.find("sum:").expect("sum")..];
+        let body = &body[..body.find("rts").expect("rts of sum")];
+        let builds = body.matches("lda rc0\n  adc").count() + body.matches("lda rc0\n  sta").count();
+        assert_eq!(builds, 0, "{builds} frame-pointer builds in sum at {level:?}:\n{body}");
+        assert_eq!(exit_code_of(&text, "t"), 68, "{text}");
+    }
+}
+
+/// A frame object past the 255 bytes one `(zp),Y` offset reaches still takes a
+/// built address; folding frame objects into `rc0` plus `ldy` must not turn
+/// such a frame into a refusal ("past the 255") or a wrapped offset.
+#[test]
+fn a_local_past_255_bytes_from_rc0_is_still_reached() {
+    let ir = module(
+        "define i8 @t() {\n  %a = alloca [300 x i8]\n  %p = getelementptr inbounds i8, ptr %a, i16 3\n  \
+         %q = getelementptr inbounds i8, ptr %a, i16 290\n  store volatile i8 5, ptr %p\n  \
+         store volatile i8 9, ptr %q\n  %x = load volatile i8, ptr %p\n  %y = load volatile i8, ptr %q\n  \
+         %r = add i8 %x, %y\n  ret i8 %r\n}",
+    );
+    for level in [Level::Os, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert_eq!(exit_code_of(&text, "t"), 14, "{text}");
+    }
+}
+
+/// A long division called the speed routine with the pin-structure wide path
+/// at any site: its 141 bytes (423 clocks at 3 a byte) came into programs that
+/// divide once, cold (`compound_assignment_types`: +139 B for -9 clocks). A
+/// module links it only where its division sites run 3 times (`hotdivision`): in a loop,
+/// or in a function called from one. Elsewhere the routine with the small wide
+/// path (the compact one is 3195 clocks slower on one call); -Os never has a
+/// speed one.
+#[test]
+fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
+    let cold = module("define i32 @f(i32 %a, i32 %b) {\n  %r = srem i32 %a, %b\n  ret i32 %r\n}");
+    let looped = module(
+        "define i32 @f(i32 %a, i32 %b, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%j, %l]\n  \
+         %s = phi i32 [%a, %entry], [%r, %l]\n  %r = srem i32 %s, %b\n  %j = add i32 %i, 1\n  \
+         %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
+    );
+    let from_a_loop = module(
+        "define i32 @d(i32 %a, i32 %b) noinline {\n  %r = srem i32 %a, %b\n  ret i32 %r\n}\n\
+         define i32 @f(i32 %a, i32 %b, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%j, %l]\n  \
+         %s = phi i32 [%a, %entry], [%r, %l]\n  %r = call i32 @d(i32 %s, i32 %b)\n  %j = add i32 %i, 1\n  \
+         %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
+    );
+    let text = assembly(&cold, &Request::new(Level::O2)).unwrap();
+    assert!(
+        text.contains("jsr __modsi3_fast_small\n") && !text.contains("jsr __modsi3_fast\n"),
+        "a cold site:\n{text}"
+    );
+    for (ir, what) in [(&looped, "a loop"), (&from_a_loop, "a function called from a loop")] {
+        let text = assembly(ir, &Request::new(Level::O2)).unwrap();
+        assert!(text.contains("jsr __modsi3_fast\n") && !text.contains("_small"), "{what}:\n{text}");
+        let small = assembly(ir, &Request::new(Level::Os)).unwrap();
+        assert!(small.contains("__modsi3") && !small.contains("_fast"), "{what} at -Os:\n{small}");
+    }
+}
+
+/// A long division whose divisor is known to be a byte (a constant, or a
+/// zero-extended byte) called the general routine and linked the 141 B wide
+/// path with it: `a % 5` cost +141 B for nothing. At speed it calls the byte
+/// entry; a divisor of any width, and -Os, keep their routines.
+#[test]
+fn a_long_division_by_a_known_byte_calls_the_byte_entry_at_speed() {
+    for (opcode, routine) in [("udiv", "__udivsi3"), ("sdiv", "__divsi3"), ("urem", "__umodsi3"), ("srem", "__modsi3")]
+    {
+        let by_constant = module(&format!("define i32 @f(i32 %a) {{\n  %r = {opcode} i32 %a, 5\n  ret i32 %r\n}}"));
+        let by_byte = module(&format!(
+            "define i32 @f(i32 %a, i8 %b) {{\n  %d = zext i8 %b to i32\n  %r = {opcode} i32 %a, %d\n  ret i32 %r\n}}"
+        ));
+        let by_word = module(&format!(
+            "define i32 @f(i32 %a, i32 %b, i32 %n) {{\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%j, %l]\n  \
+             %s = phi i32 [%a, %entry], [%r, %l]\n  %r = {opcode} i32 %s, %b\n  %j = add i32 %i, 1\n  \
+             %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}}"
+        ));
+        for (ir, what) in [(&by_constant, "a constant"), (&by_byte, "a zero-extended byte")] {
+            let text = assembly(ir, &Request::new(Level::O2)).unwrap();
+            assert!(text.contains(&format!("{routine}_fast_byte")), "{opcode} by {what}:\n{text}");
+            let small = assembly(ir, &Request::new(Level::Os)).unwrap();
+            assert!(!small.contains("_byte") && !small.contains("_fast"), "{opcode} by {what} at -Os:\n{small}");
+        }
+        let text = assembly(&by_word, &Request::new(Level::O2)).unwrap();
+        assert!(
+            text.contains(&format!("{routine}_fast")) && !text.contains("_byte"),
+            "{opcode} by a word in a loop:\n{text}"
+        );
     }
 }

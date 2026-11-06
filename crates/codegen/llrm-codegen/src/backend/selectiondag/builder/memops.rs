@@ -83,6 +83,23 @@ impl Builder<'_> {
                 }
                 Ok(())
             }
+            // `case Intrinsic::trap`: a `TRAP` node on the chain (selected as `ud2`).
+            Intrinsic::Trap => {
+                let root = self.root();
+                let trap = self.dag.get_node(ISD::Trap, EVT::OTHER, &[root]);
+                self.dag.set_root(trap);
+                Ok(())
+            }
+            // `case Intrinsic::debugtrap`: a `DEBUGTRAP` node (selected as `int3`).
+            Intrinsic::DebugTrap => {
+                let root = self.root();
+                let trap = self.dag.get_node(ISD::DebugTrap, EVT::OTHER, &[root]);
+                self.dag.set_root(trap);
+                Ok(())
+            }
+            // `case Intrinsic::ubsantrap`: `UBSAN_UD1` (a `ud1` with the kind as its
+            // displacement) is not translated: a named refusal, not a panic.
+            Intrinsic::UbsanTrap => Err(Refused("llvm.ubsantrap: M16-UBSANTRAP, not translated")),
             // `case Intrinsic::experimental_noalias_scope_decl: return;`
             Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse | Intrinsic::NoAliasScopeDecl => Ok(()),
             // `SelectionDAGBuilder.cpp#L7680`: the region information is
@@ -540,7 +557,9 @@ impl Builder<'_> {
                 let mut value = 0u128;
                 for at in 0..width {
                     let byte = bytes.as_ref().and_then(|bytes| bytes.get((base + src_off + at) as usize)).copied();
-                    value |= u128::from(byte.unwrap_or(0)) << (8 * at);
+                    // the first byte is the low bits on a little-endian target
+                    let place = if self.dag.config().big_endian { width - at - 1 } else { at };
+                    value |= u128::from(byte.unwrap_or(0)) << (8 * place);
                 }
                 let value = self.dag.get_constant(value, vt);
                 let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
@@ -857,6 +876,19 @@ impl Builder<'_> {
         Some((Some(bytes), from))
     }
 
+    /// The low `count` bytes of `bits` as the target lays them in memory.
+    fn memory_bytes(
+        &self,
+        bits: u128,
+        count: usize,
+    ) -> Vec<u8> {
+        if self.dag.config().big_endian {
+            bits.to_be_bytes()[16 - count..].to_vec()
+        } else {
+            bits.to_le_bytes()[..count].to_vec()
+        }
+    }
+
     /// `ReadDataFromGlobal`: the constant's bytes at `at`, where the layout
     /// puts them; `None` for anything but integers, floats and aggregates of
     /// them.
@@ -874,12 +906,12 @@ impl Builder<'_> {
                 let width = types.int_bits(constant.ty)?;
                 (width % 8 == 0).then_some(())?;
                 let count = (width / 8) as usize;
-                bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+                bytes.get_mut(at..at + count)?.copy_from_slice(&self.memory_bytes(*bits, count));
             }
             ConstantKind::Float(bits) => match types.get(constant.ty) {
                 Type::Float(kind @ (FloatKind::Float | FloatKind::Double)) => {
                     let count = kind.value_bytes() as usize;
-                    bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+                    bytes.get_mut(at..at + count)?.copy_from_slice(&self.memory_bytes(u128::from(*bits), count));
                 }
                 _ => return None,
             },

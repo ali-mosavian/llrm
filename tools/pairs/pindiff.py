@@ -32,6 +32,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 import elfsize  # noqa: E402
 import irguard  # noqa: E402
+import llrmbin  # noqa: E402
 import omfcode  # noqa: E402
 import pin  # noqa: E402
 
@@ -283,8 +284,9 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
     level_flag = "-O2" if level in ("O2", "Os") else f"-{level}"
     pin_asm, pin_obj = work / f"{stem}.pin.s", work / f"{stem}.pin.o"
     for args, out in ((["-x86-asm-syntax=intel", "-filetype=asm"], pin_asm), (["-filetype=obj"], pin_obj)):
+        llrmbin.fresh(out)
         run = pin.llc([level_flag, "-frame-pointer=none", *args, "-o", str(out)], text, target)
-        if run.returncode or not out.exists():
+        if not llrmbin.produced(run, out):
             return "pin llc: " + (run.stderr.strip().splitlines() or ["failed"])[0]
     if forced_frame(pin_asm.read_text(), text):
         return "pin asm keeps a frame pointer the source did not force"
@@ -293,15 +295,16 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
         return subprocess.run([llc, f"-m{cfg['bits']}", f"-{level}", f"-march={cfg['march']}", f"--isel={isel}", *abi_flags(cfg, ours_text), *extra, str(ours_in)], capture_output=True, text=True)
 
     asm = work / f"{stem}.ours.s"
+    llrmbin.fresh(asm)
     made = ours("dag", "-S", "-o", str(asm))
-    if made.returncode:
+    if not llrmbin.produced(made, asm):
         return "ours: " + (made.stderr.strip().splitlines() or ["failed"])[0]
 
     def bytes_of(isel: str) -> tuple[int, int] | None:
         """Code bytes of the object, and the same without its nops."""
         obj = Path(tempfile.mktemp(suffix=".obj", dir=work))
         ran = ours(isel, "-o", str(obj))
-        if ran.returncode or not obj.exists():
+        if not llrmbin.produced(ran, obj):
             return None
         data = obj.read_bytes()
         return omfcode.code_bytes_of(data)[0], padding_free(omfcode.code_blob_of(data), int(cfg["bits"]))

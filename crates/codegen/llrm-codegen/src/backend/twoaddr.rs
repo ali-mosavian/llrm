@@ -185,7 +185,7 @@ pub fn tied(
                 && crate::twoaddress::flags_dead_after(&work, place, body.regs(), body.bits, flags_dead_out)
             {
                 if let Some(what) = one.what.as_ref()
-                    && what.name.as_deref() == Some("add")
+                    && crate::twoaddress::adds_as(&one) == Some("add")
                     && matches!(what.sources.get(1), Some(Loc::Held(_)))
                     && let Some(Loc::Held(into)) = what.dests.first()
                 {
@@ -1399,6 +1399,21 @@ mod tests {
         let insns = vec![imm_def(0, 1), imm_def(1, 2), sum_into(2, 3, 1, 2), read(3, 1), read(4, 3)];
         let got = tied(&of(insns), All);
         assert!(names_of(&got).contains(&"add".to_owned()) || names_of(&got).contains(&"lea".to_owned()));
+    }
+
+    /// pack_ref's `__divsf3` (m64 -O1): `or disjoint x, 0x800000` with `x`
+    /// still live was `mov t, x; or t, 0x800000`; the pin selects the
+    /// `ADD64ri32_DB` pseudo and makes it `lea t, [x + 0x800000]`. The
+    /// `ADDnn_DB` pseudos were lowered straight to `or`, so the
+    /// conversion never saw an add.
+    #[test]
+    fn test_an_or_of_disjoint_bits_of_a_live_source_is_a_lea_and_another_or_is_not() {
+        let mut insns = live_source_add(0x80_0000, "or");
+        let plain = names_of(&tied(&of(insns.clone()), All));
+        assert!(!plain.contains(&"lea".to_owned()), "{plain:?}");
+        insns[1] = Arc::new(Insn { disjoint: true, ..(*insns[1]).clone() });
+        let marked = names_of(&tied(&of(insns), All));
+        assert!(marked.contains(&"lea".to_owned()) && !marked.contains(&"or".to_owned()), "{marked:?}");
     }
 
     /// A target that reads addresses through a prefix (m16) converts adds and

@@ -565,6 +565,8 @@ impl TargetLowering {
                     UMulFixSat,
                     SShlSat,
                     UShlSat,
+                    SCmp,
+                    UCmp,
                 ],
                 &[vt],
                 Action::Expand,
@@ -577,6 +579,7 @@ impl TargetLowering {
             self.set_ops(&[BuildPair], &[vt], Action::Expand);
         }
         self.set_operation_action(Trap, MVT::Other, Action::Expand);
+        self.set_operation_action(DebugTrap, MVT::Other, Action::Expand);
         self.set_ops(&[ConstantFP], &FLOATS, Action::Expand);
     }
 
@@ -862,6 +865,7 @@ impl TargetLowering {
             t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol, JumpTable], words, Custom);
         }
         t.set_operation_action(Trap, MVT::Other, Legal);
+        t.set_operation_action(DebugTrap, MVT::Other, Legal);
         t.set_operation_action(DynamicStackAlloc, ptr, Custom);
         // The pin expands these to a stack pointer copy; the same, as Custom.
         t.set_operation_action(StackSave, ptr, Custom);

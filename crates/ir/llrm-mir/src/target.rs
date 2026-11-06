@@ -116,6 +116,10 @@ pub struct Tuning {
     /// at (-O2, -O3), in `gcc_insns` (gcc's `max-inline-insns-recursive`, 450);
     /// none: `inline::MAX_INLINE_INSNS_RECURSIVE`.
     pub recursive_inlining_growth: Option<(i64, i64)>,
+    /// DEVIATE REC-2: at (-O2, -O3) a tree recursion's tail calls are eliminated before it is
+    /// copied into itself (gcc: `pass_tail_recursion` runs early, `passes.def` before `pass_ipa_inline`),
+    /// not after (D10).
+    pub recursive_tre_first: (bool, bool),
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
@@ -177,6 +181,7 @@ impl Tuning {
         recursive_inlining: None,
         recursive_edge_growth: None,
         recursive_inlining_growth: None,
+        recursive_tre_first: (false, false),
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,
@@ -277,6 +282,15 @@ pub trait Machine {
     /// size; by default the same prices.
     fn size_costs(&self) -> OperationCosts {
         self.costs()
+    }
+
+    /// What each operation costs in real code bytes, for the decisions that
+    /// weigh bytes against clocks at a rate (`Tti::*_milliclocks_per_byte`):
+    /// unit prices there are bytes of a fixed-width target only if this says
+    /// so. Not the pin's thresholds, which read instruction units. By default
+    /// `size_costs`.
+    fn byte_costs(&self) -> OperationCosts {
+        self.size_costs()
     }
 
     /// Whether a division by a constant stays a divide instruction on
@@ -461,6 +475,13 @@ pub const fn step_cost(add: i64) -> i64 {
 /// Machine-neutral costs a MIR profitability decision may compare.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct OperationCosts {
+    /// The target's native integer width in bits where an operation on a wider
+    /// integer is several of the native one (an 8-bit machine adds an `i32` in
+    /// four byte adds): the prices of `add`, `load`, `store`, `move` and
+    /// `shift` are per native word and `profit::operation` multiplies them by
+    /// [`OperationCosts::words`]. 0: a price is for the operation as the type
+    /// has it, as on every target but the 6502.
+    pub native_bits: i64,
     pub add: i64,
     pub multiply: i64,
     pub divide: i64,
@@ -481,6 +502,15 @@ pub struct OperationCosts {
     pub multiply_high: i64,
     pub shift: i64,
     pub address: i64,
+    /// What a `lea` of dwords costs where a prefix widens it (real mode: the
+    /// operand-size and address-size prefixes, `66 67 8D ModRM` and a SIB byte
+    /// or a displacement); 0 where the target states none, and the price is
+    /// then `address` plus the prefixes' prices.
+    pub address_dword: i64,
+    /// What a third part of that address (a base, an index and a
+    /// displacement: the SIB byte and the displacement both) adds to
+    /// `address_dword`; 0 where the target states none.
+    pub address_third: i64,
     /// An address advanced in a space whose displacement carries into its
     /// selector (a huge pointer's): the offset's sum, its carry, and the
     /// selector stepped by it.
@@ -580,6 +610,14 @@ pub struct OperationCosts {
     /// The fewest case values for which a switch is a jump table (gcc's
     /// `case_values_threshold`); 0: the target has no table jump.
     pub jump_table: i64,
+    /// The bytes every function has beyond its operations (a callee-saved
+    /// register saved and restored): added once to a function's size
+    /// estimate; 0 where the table states none.
+    pub function: i64,
+    /// Percent a function's estimate (operations plus `function`) is scaled
+    /// by for what the lowering adds that no operation names (spills, branch
+    /// relaxation), measured against objects; 100: none.
+    pub function_scale: i64,
     /// Bytes of one line of the CPU's data cache (its first level); 0: the
     /// target states none (no cache, or not known).
     pub cache_line: i64,
@@ -601,6 +639,15 @@ impl OperationCosts {
             (false, true) => self.pieces_clear,
             (false, false) => self.pieces_set,
         }
+    }
+
+    /// How many native words an integer of `bits` bits is: one where the
+    /// target states no native width.
+    pub fn words(
+        &self,
+        bits: u32,
+    ) -> i64 {
+        if self.native_bits > 0 { (i64::from(bits) + self.native_bits - 1) / self.native_bits } else { 1 }.max(1)
     }
 
     /// What a caller pays to take `words` words of arguments off the stack.
@@ -630,6 +677,27 @@ impl OperationCosts {
 /// index, unscaled, no prefix); any other takes a form that scales, which
 /// costs its address-size prefix, and runs under the operand-size prefix a
 /// dword does.
+pub fn three_operand_of(
+    costs: &OperationCosts,
+    forms: &[AddressForm],
+    width: i64,
+    operand: i64,
+    scale: i64,
+    word: bool,
+    parts: usize,
+) -> Option<i64> {
+    if word {
+        return forms.iter().any(|form| !form.secondary && form.index_width == 2).then_some(costs.address);
+    }
+    let form = forms.iter().find(|form| form.index_width == 4 && form.scales.contains(&scale))?;
+    if costs.address_dword > 0 && width != operand {
+        return Some(costs.address_dword + costs.address_third * parts.saturating_sub(2) as i64 + form.use_cost - costs.prefix);
+    }
+    Some(costs.sized(costs.address, width, operand) + form.use_cost)
+}
+
+/// [`three_operand_of`] for an address of two parts (a base and an index, or a
+/// base and a displacement).
 pub fn three_operand(
     costs: &OperationCosts,
     forms: &[AddressForm],
@@ -638,16 +706,13 @@ pub fn three_operand(
     scale: i64,
     word: bool,
 ) -> Option<i64> {
-    if word {
-        return forms.iter().any(|form| !form.secondary && form.index_width == 2).then_some(costs.address);
-    }
-    let form = forms.iter().find(|form| form.index_width == 4 && form.scales.contains(&scale))?;
-    Some(costs.sized(costs.address, width, operand) + form.use_cost)
+    three_operand_of(costs, forms, width, operand, scale, word, 2)
 }
 
 impl Default for OperationCosts {
     fn default() -> Self {
         Self {
+            native_bits: 0,
             add: 1,
             multiply: 1,
             divide: 1,
@@ -657,6 +722,8 @@ impl Default for OperationCosts {
             multiply_high: 1,
             shift: 1,
             address: 1,
+            address_dword: 0,
+            address_third: 0,
             carry: 1,
             carry_step: 1,
             load: 1,
@@ -701,6 +768,8 @@ impl Default for OperationCosts {
             pieces_clear_size: 0,
             memset_store: 0,
             jump_table: 0,
+            function: 0,
+            function_scale: 100,
             cache_line: 0,
             line_fill_clocks: 0,
         }
@@ -879,6 +948,22 @@ mod operand_size_tests {
         let real = [form(2, false, 0), form(4, true, 1)];
         assert_eq!(three_operand(&costs, &real, 4, 2, 2, false), Some(2 + 1 + 1));
         assert_eq!(three_operand(&costs, &real, 2, 2, 1, true), Some(2));
+    }
+
+    /// Real mode's `lea`: 3 bytes in words (`8D 40 07`), 5 as dwords behind the
+    /// two prefixes (`67 66 8D 40 07`), 6 with a base, an index and a
+    /// displacement (`67 66 8D 44 01 07`); all three read as one price
+    /// (`address` plus the prefixes) before `address_dword`, so a fold that
+    /// replaced `inc` and `add` (5 bytes) by the six-byte form looked free.
+    #[test]
+    fn a_dword_lea_is_priced_by_its_parts_and_a_word_one_is_not() {
+        let costs = OperationCosts { address: 6, prefix: 1, address_dword: 10, address_third: 2, ..OperationCosts::default() };
+        let real = [form(2, false, 0), form(4, true, 1)];
+        assert_eq!(three_operand_of(&costs, &real, 2, 2, 1, true, 3), Some(6));
+        assert_eq!(three_operand(&costs, &real, 4, 2, 1, false), Some(10));
+        assert_eq!(three_operand_of(&costs, &real, 4, 2, 1, false, 3), Some(12));
+        let unstated = OperationCosts { address: 6, prefix: 1, ..OperationCosts::default() };
+        assert_eq!(three_operand_of(&unstated, &real, 4, 2, 1, false, 3), Some(8));
     }
 }
 

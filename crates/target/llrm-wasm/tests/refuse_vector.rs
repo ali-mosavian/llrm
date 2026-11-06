@@ -18,7 +18,7 @@ fn a_vector_value_is_refused_not_a_panic() {
     )
     .unwrap();
     let done = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
-        .args(["-S", "-o", dir.join("g.s").to_str().unwrap(), source.to_str().unwrap()])
+        .args(["-S", "-O0", "-o", dir.join("g.s").to_str().unwrap(), source.to_str().unwrap()])
         .output()
         .expect("the driver runs");
     let stderr = String::from_utf8_lossy(&done.stderr);

@@ -732,6 +732,12 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-2: whether, at (-O2, -O3), a tree recursion's tail calls are eliminated
+    /// before its copies of itself are made.
+    fn recursive_tre_first(&self) -> (bool, bool) {
+        (false, false)
+    }
+
     /// DEVIATE REC-1: the ceilings (depth, callee size in `gcc_insns`) within
     /// which a tree-recursive function's copies of itself are chosen by
     /// price: each level of copies is made while the clocks it saves, at
@@ -1250,6 +1256,16 @@ pub trait Tti {
     /// the pin promotes without a cap.
     fn licm_register_limit(&self) -> Option<u32> {
         Some(self.number_of_gpr_registers())
+    }
+
+    /// DEVIATE LSR-N: integer widths LSR takes as native induction variables
+    /// besides the datalayout's `n`. The pin's `IVUsers` skips every type
+    /// `isLegalInteger` refuses, so on a datalayout of `n8` no 16- or 32-bit
+    /// counter, product or pointer is reduced. None: the datalayout's.
+    /// Owner llrm-target-6502; exit: 16-bit widths and `-Os` with a byte-aware
+    /// LSR cost, 2026-11-20.
+    fn lsr_native_integer_widths(&self) -> &'static [u32] {
+        &[]
     }
 
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
