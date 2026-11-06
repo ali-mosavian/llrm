@@ -8,3 +8,4 @@
 /* f64 div in two digits, each one i64.div_u (SF_DIV64_UDIV): -O2 ops per call 1313 -> 268 (compiler-rt 256), +180 B; -Os keeps the one-bit loop. */
 #define SF_DIV64_UDIV 1
 #endif
+#define SF_CMP_OUTLINE 1 /* compare entries call one core: f64 cmp.c -O2 784 -> see tests/cmp_outline_size_test.sh */

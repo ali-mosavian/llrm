@@ -32,5 +32,8 @@ static inline int SF_N(sf_cmp_un)(SF_T a, SF_T b, int un) /* un: the result for 
     return 1;
 #endif
 }
+#ifdef SF_CMP_OUTLINE /* a target that links whole objects and has no alias: one core, the entries tail-jump (m32 f64 -O2: seven inlined copies were 1026 B) */
+__attribute__((noinline))
+#endif
 static int SF_N(sf_cmp_bits)(SF_T a, SF_T b) { return SF_N(sf_cmp_un)(a, b, 1); }
 #endif
