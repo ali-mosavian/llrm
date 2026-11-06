@@ -42,6 +42,9 @@ pub struct Tuning {
     /// pin's own decompositions included (a tie keeps the `imul`); false:
     /// the pin's `combineMul` decomposes unconditionally.
     pub price_pin_multiplies: bool,
+    /// At -Os a multiply by a constant stays an `imul` (the pin's `hasMinSize`
+    /// rule, which the pin applies at -Oz only): the chain is no smaller.
+    pub imul_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
@@ -163,6 +166,7 @@ impl Tuning {
         price_fills: false,
         multiply_by_clocks: false,
         price_pin_multiplies: false,
+        imul_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,

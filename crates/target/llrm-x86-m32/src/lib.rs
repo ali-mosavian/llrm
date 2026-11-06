@@ -82,6 +82,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
+        // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
+        // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
+        imul_at_size: true,
         x87_stack_slots: Some(8),
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a callee whose copies grow the code stays a call (called_once_os: gcc -Os does; the pin inlines it).

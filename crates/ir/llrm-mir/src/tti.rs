@@ -658,6 +658,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::imul_at_size`.
+    fn imul_at_size(&self) -> bool {
+        false
+    }
+
     /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
     fn has_cmov(&self) -> bool {
         true
