@@ -92,13 +92,6 @@ pub trait SchedInfo {
     ) -> Option<u16> {
         super::dagisel_adapter::pin_register(id)
     }
-    /// The registers a call clobbers that its descriptions do not list: the pin
-    /// keeps them in the call's `RegisterMask` operand, which `DelayForLiveRegsBottomUp`
-    /// reads (`getNodeRegMask`). Here the mask node carries nothing, so the
-    /// target names them (AArch64: `NZCV`).
-    fn call_clobbered(&self) -> &[u16] {
-        &[]
-    }
     /// `MCInstrDesc::getNumDefs`.
     fn num_defs(
         &self,
@@ -1242,11 +1235,6 @@ impl<'a> Graph<'a> {
                     for &reg in &self.dag.register_masks[at as usize] {
                         self.check_for_live_reg_def(su, reg, &mut live);
                     }
-                }
-            }
-            if self.info.is_call(op) {
-                for &reg in self.info.call_clobbered() {
-                    self.check_for_live_reg_def(su, reg, &mut live);
                 }
             }
             for i in 0..self.info.num_defs(op).min(self.values(node).len()) {
