@@ -397,7 +397,13 @@ impl Hoister<'_> {
         {
             return self.tti().int_imm_cost_intrin(name, index as u32, value, width);
         }
-        self.tti().int_imm_cost_inst(imm_user(&instruction.opcode), index as u32, value, width)
+        self.tti().int_imm_cost_inst_for_size(
+            imm_user(&instruction.opcode),
+            index as u32,
+            value,
+            width,
+            self.opt_for_size,
+        )
     }
 
     /// `collectConstantCandidates(.., Inst, Idx, ConstInt)`
@@ -536,7 +542,16 @@ impl Hoister<'_> {
             uses += candidate.uses.len();
             for user in &candidate.uses {
                 let op = imm_user(&function.instruction(user.inst).opcode);
-                cost += self.tti().int_imm_cost_inst(op, user.index as u32, candidate.value(), candidate.width).value;
+                cost += self
+                    .tti()
+                    .int_imm_cost_inst_for_size(
+                        op,
+                        user.index as u32,
+                        candidate.value(),
+                        candidate.width,
+                        self.opt_for_size,
+                    )
+                    .value;
                 for other in &self.candidates[range.clone()] {
                     let diff = signed(other.bits.wrapping_sub(candidate.bits) & mask(candidate.width), candidate.width);
                     cost -= self.tti().int_imm_code_size_cost(op, user.index as u32, diff, candidate.width).value;
