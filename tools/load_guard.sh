@@ -11,9 +11,9 @@
 #              (LG_NO_WAIT jobs skip the order) a waiter takes no free slot while a waiter of a lower tier, or of its tier that started waiting earlier, is alive.
 #              The settle period is LG_SETTLE_FAST (15) while 1m < LG_FAST_1M (22) and a slot is free: the load rises past 15 with every admission, so a lower bound left the queue draining at one per LG_SETTLE.
 #              Slots reach LG_SLOTS_MAX (7) while 1m < LG_WIDE_1M (18) and MemAvailable (LG_MEMINFO, /proc/meminfo) >= LG_MEM_MIN_GB (40); otherwise the 3/5 count above.
-# Env: LG_LOAD_FILE (/proc/loadavg), LG_POLL seconds (15), LG_SLOT_DIR (/tmp/buildslots/load_guard).
+# Env: LG_LOAD_FILE (/proc/loadavg), LG_POLL seconds (5), LG_SLOT_DIR (/tmp/buildslots/load_guard).
 [ $# -gt 0 ] || { echo "usage: load_guard.sh CMD..." >&2; exit 2; }
-file=${LG_LOAD_FILE:-/proc/loadavg}; poll=${LG_POLL:-15}
+file=${LG_LOAD_FILE:-/proc/loadavg}; poll=${LG_POLL:-5}
 stop5=${LG_STOP_5M:-28}; stop1=${LG_STOP_1M:-38}; resume5=${LG_RESUME_5M:-26}; resume1=${LG_RESUME_1M:-20}; start1=${LG_START_1M:-25}
 [ "${LG_QUIET:-}" = 1 ] && start1=${LG_QUIET_1M:-20}
 base=${LG_SLOTS:-3}; high=${LG_SLOTS_HIGH:-5}; wide=${LG_SLOTS_MAX:-7}; widest=${LG_SLOTS_WIDEST:-10}; widest1=${LG_WIDEST_1M:-14}; widen1=${LG_WIDEN_1M:-20}; narrow1=${LG_NARROW_1M:-22}
@@ -56,7 +56,7 @@ prio_edit() {  # prio_edit add|del|first: first prints ok when no live waiter pr
   case $1 in
     add) echo "$tier $(date +%s.%N) $$ $start1" >> "$prio.new" ;;
     del) grep -v " $$ " "$prio.new" > "$prio.tmp"; mv "$prio.tmp" "$prio.new" ;;
-    first) out=$(sort -k1,1n -k2,2n "$prio.new" | awk -v me="$$" -v l1="$2" '{q=($4==""?25:$4)} q+0>l1+0{print ($3==me)?"ok":"no"; exit}') ;;
+    first) out=$(awk -v now="$(date +%s)" -v step="${LG_AGE_STEP:-1200}" '{e=$1-int((now-$2)/step); f=($1>=4)?3:(($1==3)?2:$1); if (e<f) e=f; printf "%d %s %s %s\n", e, $2, $3, $4}' "$prio.new" | sort -k1,1n -k2,2n | awk -v me="$$" -v l1="$2" '{q=($4==""?25:$4)} q+0>l1+0{print ($3==me)?"ok":"no"; exit}') ;;  # aged: -1 tier per 20 min, floors 3 (tier 4) and 2 (tier 3)
   esac
   mv "$prio.new" "$prio"; exec {fd}>&-
   [ "$1" != first ] || [ "$out" = ok ]
