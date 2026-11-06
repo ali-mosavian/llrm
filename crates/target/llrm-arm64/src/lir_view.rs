@@ -185,7 +185,8 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             let zero = is_zero_copy(op);
             let (kind, terminator, barrier, call) = match op {
                 // A copy of the zero register is a move of 0: made again where
-                // it is read (`reMaterializeTrivialDef`), not copied from one value.
+                // it is read (`reMaterializeTrivialDef`), not copied from one
+                // value.
                 Op::Copy { .. } if zero => (Kind::Op(ZERO), false, false, false),
                 Op::I(inst) => (
                     Kind::Op(name_of(inst)),
@@ -326,6 +327,9 @@ pub fn rebuild(
     // The place of each operation, by the number `view` gave it.
     let places: Vec<_> =
         function.blocks.iter().flat_map(|block| (0..block.ops.len()).map(|at| block.ops.loc(at))).collect();
+    // Registers the selector made 128 bits wide, physical ones (an `f128`
+    // argument or result, copied between `v0`..`v7`) included.
+    let wide = crate::regalloc::wide_registers(function);
     let mut slots: HashMap<i32, u32> = HashMap::default();
     for (slot, class) in spill_slots {
         let (size, align) = if *class == Class::Quad { (16, 16) } else { (8, 8) };
@@ -361,7 +365,18 @@ pub fn rebuild(
                 Kind::Copy => {
                     let (dst, src) = (reg_at(0), reg_at(1));
                     if dst != src {
-                        ops.push(Op::Copy { dst, src });
+                        // A copy of 128 bits moves all of them.
+                        match (dst, src) {
+                            (Reg::Fpr(rd), Reg::Fpr(rn))
+                                if registers[0].1 == Class::Quad
+                                    || registers[1].1 == Class::Quad
+                                    || wide.contains(&dst)
+                                    || wide.contains(&src) =>
+                            {
+                                ops.push(Op::I(Inst::VectorMov { rd, rn }));
+                            }
+                            _ => ops.push(Op::Copy { dst, src }),
+                        }
                     }
                 }
                 Kind::Op(name @ ("SpillStore" | "SpillLoad")) => {

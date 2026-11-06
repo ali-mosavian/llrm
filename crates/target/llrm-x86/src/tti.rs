@@ -122,6 +122,88 @@ impl RealMode {
 }
 
 impl X86 {
+    /// `getIntImmCost(const APInt &, Type *)`; `zext_basic` is ZIMM.
+    fn imm_cost(
+        &self,
+        imm: i128,
+        bits: u32,
+        zext_basic: bool,
+    ) -> Cost {
+        if bits == 0 {
+            return Cost::of(i64::from(u32::MAX));
+        }
+        if bits > 128 || imm == 0 {
+            return Cost::FREE;
+        }
+        // Sign-extended to a multiple of 64 bits, costed 64 bits at a time.
+        let extended = if bits >= 128 { imm } else { (imm << (128 - bits)) >> (128 - bits) };
+        let mut total = 0;
+        let mut shift = 0;
+        while shift < bits {
+            let chunk = (extended >> shift) as i64;
+            total += if zext_basic && bits == 64 && chunk > 0 && chunk <= i64::from(u32::MAX) {
+                1
+            } else {
+                int_imm_chunk(chunk)
+            };
+            shift += 64;
+        }
+        Cost::of(total.max(1))
+    }
+
+    /// `getIntImmCostInst`; `zext_basic` is ZIMM.
+    fn imm_cost_inst(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+        zext_basic: bool,
+    ) -> Cost {
+        if bits == 0 {
+            return Cost::FREE;
+        }
+        let zext = if bits >= 128 { imm as u128 } else { (imm as u128) & ((1u128 << bits) - 1) };
+        let immediate = match op {
+            ImmUser::Unknown => return Cost::FREE,
+            ImmUser::GetElementPtr => return if index == 0 { Cost::of(2) } else { Cost::FREE },
+            ImmUser::Store => Some(0),
+            ImmUser::ICmp => {
+                if index == 1 && bits == 64 && (zext == 0x1_0000_0000 || zext == 0xffff_ffff) {
+                    return Cost::FREE;
+                }
+                Some(1)
+            }
+            ImmUser::And => {
+                if index == 1 && bits == 64 && zext <= u128::from(u32::MAX) {
+                    return Cost::FREE;
+                }
+                Some(1)
+            }
+            ImmUser::Add | ImmUser::Sub => {
+                if index == 1 && bits == 64 && zext == 0x8000_0000 {
+                    return Cost::FREE;
+                }
+                Some(1)
+            }
+            ImmUser::Divide => return Cost::FREE,
+            ImmUser::Mul | ImmUser::Or | ImmUser::Xor => Some(1),
+            ImmUser::Shift => {
+                if index == 1 {
+                    return Cost::FREE;
+                }
+                None
+            }
+            ImmUser::Other => None,
+        };
+        let cost = self.imm_cost(imm, bits, zext_basic);
+        if immediate == Some(index) {
+            let constants = i64::from(bits.div_ceil(64));
+            return if cost.value <= constants { Cost::FREE } else { cost };
+        }
+        cost
+    }
+
     /// The bits of the integer registers.
     pub fn native(&self) -> u32 {
         if self.quad { 64 } else { 32 }
@@ -614,6 +696,10 @@ impl Tti for X86 {
         self.tuning.x87_stack_slots.filter(|_| !self.sse2)
     }
 
+    fn x87_share_negated_products(&self) -> bool {
+        self.tuning.x87_share_negated_products && !self.sse2
+    }
+
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         self.tuning.unroll_partial_threshold
     }
@@ -686,7 +772,9 @@ impl Tti for X86 {
     }
 
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
-        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_single_site {
+        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+            || self.tuning.inline_size_guard_single_site
+        {
             1
         } else {
             2
@@ -940,21 +1028,7 @@ impl Tti for X86 {
         imm: i128,
         bits: u32,
     ) -> Cost {
-        if bits == 0 {
-            return Cost::of(i64::from(u32::MAX));
-        }
-        if bits > 128 || imm == 0 {
-            return Cost::FREE;
-        }
-        // Sign-extended to a multiple of 64 bits, costed 64 bits at a time.
-        let extended = if bits >= 128 { imm } else { (imm << (128 - bits)) >> (128 - bits) };
-        let mut total = 0;
-        let mut shift = 0;
-        while shift < bits {
-            total += int_imm_chunk((extended >> shift) as i64);
-            shift += 64;
-        }
-        Cost::of(total.max(1))
+        self.imm_cost(imm, bits, self.tuning.zext_imm_is_basic)
     }
 
     /// `X86TTIImpl::getIntImmCostInst`:
@@ -966,48 +1040,20 @@ impl Tti for X86 {
         imm: i128,
         bits: u32,
     ) -> Cost {
-        if bits == 0 {
-            return Cost::FREE;
-        }
-        let zext = if bits >= 128 { imm as u128 } else { (imm as u128) & ((1u128 << bits) - 1) };
-        let immediate = match op {
-            ImmUser::Unknown => return Cost::FREE,
-            ImmUser::GetElementPtr => return if index == 0 { Cost::of(2) } else { Cost::FREE },
-            ImmUser::Store => Some(0),
-            ImmUser::ICmp => {
-                if index == 1 && bits == 64 && (zext == 0x1_0000_0000 || zext == 0xffff_ffff) {
-                    return Cost::FREE;
-                }
-                Some(1)
-            }
-            ImmUser::And => {
-                if index == 1 && bits == 64 && zext <= u128::from(u32::MAX) {
-                    return Cost::FREE;
-                }
-                Some(1)
-            }
-            ImmUser::Add | ImmUser::Sub => {
-                if index == 1 && bits == 64 && zext == 0x8000_0000 {
-                    return Cost::FREE;
-                }
-                Some(1)
-            }
-            ImmUser::Divide => return Cost::FREE,
-            ImmUser::Mul | ImmUser::Or | ImmUser::Xor => Some(1),
-            ImmUser::Shift => {
-                if index == 1 {
-                    return Cost::FREE;
-                }
-                None
-            }
-            ImmUser::Other => None,
-        };
-        let cost = self.int_imm_cost(imm, bits);
-        if immediate == Some(index) {
-            let constants = i64::from(bits.div_ceil(64));
-            return if cost.value <= constants { Cost::FREE } else { cost };
-        }
-        cost
+        self.imm_cost_inst(op, index, imm, bits, self.tuning.zext_imm_is_basic)
+    }
+
+    /// ZIMM does not apply to a function built for size: a hoisted constant
+    /// costs a 2-3 byte register copy per use where `mov r32, imm32` is 5.
+    fn int_imm_cost_inst_for_size(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+        for_size: bool,
+    ) -> Cost {
+        self.imm_cost_inst(op, index, imm, bits, self.tuning.zext_imm_is_basic && !for_size)
     }
 
     /// `X86TTIImpl::getIntImmCostIntrin`:
