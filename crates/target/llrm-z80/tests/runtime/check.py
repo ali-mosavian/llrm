@@ -68,6 +68,8 @@ SIGS = {
     load="\tld\tl,8(ix)\n\tld\th,#0\n\tpush\thl\n\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,4(ix)\n\tld\th,5(ix)\n\tpush\thl\n\tld\te,0(ix)\n\tld\td,1(ix)\n\tld\tc,2(ix)\n\tld\tb,3(ix)\n\tld\thl,#0x8020\n",
     pre="\tpop\taf\n" * 3,
     store="\tld\thl,#0x8020\n\tld\tde,(0x8000)\n\tld\tbc,#8\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
+  # a word pair: the quotient in de, the remainder in hl (answer: quotient, then remainder, a word each)
+  "HL,DE>DEHL": dict(isz=4, osz=4, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n", pre="\tld\t(0x8010),hl\n", store="\tld\t(hl),e\n\tinc\thl\n\tld\t(hl),d\n\tinc\thl\n\tld\tbc,(0x8010)\n\tld\t(hl),c\n\tinc\thl\n\tld\t(hl),b\n"),
   "HL,A>DE": dict(isz=3, osz=2, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\ta,2(ix)\n", store="\tld\t(hl),e\n\tinc\thl\n\tld\t(hl),d\n"),
 }
 
@@ -128,7 +130,7 @@ def enc(sig, v):
     if sig == "QQ>Q": return tuple((v[0] >> (8 * k)) & 255 for k in range(8)) + tuple((v[1] >> (8 * k)) & 255 for k in range(8))
     if sig == "QA>Q": return tuple((v[0] >> (8 * k)) & 255 for k in range(8)) + (v[1],)
     if sig == "A,L>A": return v
-    if sig == "HL,DE>DE": return (v[0] & 255, v[0] >> 8, v[1] & 255, v[1] >> 8)
+    if sig in ("HL,DE>DE", "HL,DE>DEHL"): return (v[0] & 255, v[0] >> 8, v[1] & 255, v[1] >> 8)
     return (v[0] & 255, v[0] >> 8, v[1])
 
 def decode(sig, v):
@@ -200,6 +202,11 @@ def main():
     sp = [p for p in pairs if p[1]]
     allok &= check("__divqi3", "A,L>A", lambda a, b: tdiv(s8(a), s8(b)) & 255, sp)
     allok &= check("__modqi3", "A,L>A", lambda a, b: (s8(a) - tdiv(s8(a), s8(b)) * s8(b)) & 255, sp)
+    # a word divide and remainder in one call: the quotient in de, the remainder in hl
+    pair = lambda a, b: a // b | (a % b) << 16
+    spair = lambda a, b: (tdiv(s16(a), s16(b)) & 0xFFFF) | ((s16(a) - tdiv(s16(a), s16(b)) * s16(b)) & 0xFFFF) << 16
+    allok &= check("__udivhi3", "HL,DE>DEHL", pair, wd)
+    allok &= check("__divremhi4", "HL,DE>DEHL", spair, wd)
     allok &= check("__divhi3", "HL,DE>DE", lambda a, b: tdiv(s16(a), s16(b)) & 0xFFFF, wd)
     allok &= check("__modhi3", "HL,DE>DE", lambda a, b: (s16(a) - tdiv(s16(a), s16(b)) * s16(b)) & 0xFFFF, wd)
     l32 = [0, 1, 255, 256, 65535, 65536, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF, 0x12345678] + [rnd.getrandbits(32) for _ in range(60)]

@@ -407,14 +407,15 @@ impl Tti for Z80Tti {
         false
     }
 
-    // The long routines `__udivremsi4` and `__divremsi4` give both: a pair is
-    // one call. The byte and word routines do not.
+    // The long routines `__udivremsi4` and `__divremsi4` and the word ones
+    // (`__udivhi3` leaves the remainder in `hl`, `__divremhi4`) give both: a
+    // pair is one call. The byte routines do not.
     fn has_div_rem_op(
         &self,
         bits: u32,
         _signed: bool,
     ) -> bool {
-        bits == 32
+        matches!(bits, 16 | 32)
     }
 
     fn cast_cost(

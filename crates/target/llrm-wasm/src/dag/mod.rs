@@ -9,7 +9,7 @@ pub mod function;
 pub mod pipeline;
 
 use llrm_mir::module::Module;
-use llrm_mir::types::Type;
+use llrm_mir::types::{FloatKind, Type};
 
 use crate::Width;
 use crate::argument_move::argument_move;
@@ -34,7 +34,6 @@ pub(crate) fn value_type(
     ty: llrm_mir::types::TypeId,
     width: Width,
 ) -> Result<ValType, String> {
-    use llrm_mir::types::FloatKind;
     match module.context.types.get(ty) {
         Type::Int(bits) if *bits <= 32 => Ok(ValType::I32),
         Type::Int(64) => Ok(ValType::I64),
@@ -43,6 +42,11 @@ pub(crate) fn value_type(
         Type::Float(FloatKind::Double) => Ok(ValType::F64),
         other => Err(format!("a wasm signature with {other:?}")),
     }
+}
+
+/// An `i128` or an `f128` (softened to the `i128` of its bits): two `i64` parts.
+pub(crate) fn is_wide(ty: &Type) -> bool {
+    matches!(ty, Type::Int(128) | Type::Float(FloatKind::F128))
 }
 
 /// `computeSignatureVTs` for the slice: the parameters and the results (none
@@ -60,11 +64,11 @@ pub fn signature(
     let pointer = if width == Width::W32 { ValType::I32 } else { ValType::I64 };
     // `canLowerReturn` is false for an `i128` (two parts, no multivalue ABI):
     // the result goes through a pointer, the first parameter.
-    let returns_i128 = matches!(module.context.types.get(*returns), Type::Int(128));
+    let returns_i128 = is_wide(module.context.types.get(*returns));
     let mut params: Vec<ValType> = if returns_i128 { vec![pointer] } else { Vec::new() };
     for &ty in parameters {
         // An `i128` argument is two `i64`, low part first.
-        if matches!(module.context.types.get(ty), Type::Int(128)) {
+        if is_wide(module.context.types.get(ty)) {
             params.extend([ValType::I64, ValType::I64]);
         } else {
             params.push(value_type(module, ty, width)?);

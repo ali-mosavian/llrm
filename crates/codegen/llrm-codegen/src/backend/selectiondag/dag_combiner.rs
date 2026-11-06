@@ -2735,7 +2735,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// a dead overflow is an `add`, a constant goes right, `x + 0` has no
     /// carry, and a sum that cannot overflow is an `add`. DEVIATE UADDO1: the
     /// `(uaddo (xor a, -1), 1)` and `visitUADDOLike` carry folds are not
-    /// translated. Exit: 2026-11-14.
+    /// translated. Measured 2026-11-06 12:34Z (C corpus m16/m32/m64 -O2, QB, Nib): their
+    /// preconditions hold in one program (tests/run/c/overflow_builtins.c, `uaddo X,
+    /// (uaddo_carry Y, 0, c)`), no bench cell. Port when a cell needs it.
     fn visit_uaddo(
         &mut self,
         node: SDValue,
