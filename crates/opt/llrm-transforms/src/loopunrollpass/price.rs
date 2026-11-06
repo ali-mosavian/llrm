@@ -363,6 +363,90 @@ fn promoted_accesses(
     (found, runs, ints.len(), floats.len(), rmw.len())
 }
 
+/// The float values a full unroll of `lp` by `trips` keeps live across its
+/// copies: each float array the loop both reads and writes (a local one or a
+/// global, at an address of the loop's counters) is one value a trip, forwarded
+/// from copy to copy; one both read and written at a fixed address, one value.
+pub(super) fn forwarded_floats(
+    run: &Run,
+    analyzed: &Analyzed,
+    lp: Loop,
+    trips: u32,
+) -> usize {
+    let (_, known) = constant_operand_uses(run, analyzed, lp);
+    let function = &*run.function;
+    // (loaded, stored) per root: an alloca, or a global's id.
+    let mut roots: std::collections::BTreeMap<(bool, u32), (bool, bool, bool)> = Default::default();
+    for &block in lp.get_blocks() {
+        for inst in function.iter_block(block) {
+            let one = function.instruction(inst);
+            let (pointer, stored) = match one.opcode {
+                Opcode::Load { volatile: false, .. } => (one.operands[0], false),
+                Opcode::Store { volatile: false, .. } => (one.operands[1], true),
+                _ => continue,
+            };
+            let ty = if stored {
+                function.operand_type(run.context, one.operands[0])
+            } else {
+                one.result.map(|result| function.value(result).ty)
+            };
+            if !ty.and_then(|ty| llrm_mir::tti::Ty::of(&run.context.types, ty)).is_some_and(|ty| ty.is_float()) {
+                continue;
+            }
+            let Some((root, varying)) = array_root(run, pointer, &known) else { continue };
+            let entry = roots.entry(root).or_default();
+            if stored { entry.1 = true } else { entry.0 = true }
+            entry.2 |= varying;
+        }
+    }
+    roots
+        .values()
+        .filter(|(loaded, stored, _)| *loaded && *stored)
+        .map(|(_, _, varying)| if *varying { trips as usize } else { 1 })
+        .sum()
+}
+
+/// The alloca, or mutable global, `pointer` addresses through geps whose
+/// indices are constants or in `known`, and whether an index varies.
+fn array_root(
+    run: &Run,
+    mut pointer: Operand,
+    known: &IdSet<ValueId>,
+) -> Option<((bool, u32), bool)> {
+    let function = &*run.function;
+    let mut varying = false;
+    loop {
+        match pointer {
+            Operand::Constant(id) => {
+                let ConstantKind::Global(global) = run.context.get(id).kind else { return None };
+                return match &run.globals[global.0 as usize].kind {
+                    GlobalKind::Variable(variable) if !variable.constant => Some(((true, global.0), varying)),
+                    _ => None,
+                };
+            }
+            Operand::Value(value) => {
+                let ValueDef::Instruction(def) = function.value(value).def else { return None };
+                let one = function.instruction(def);
+                match one.opcode {
+                    Opcode::Alloca { .. } => return Some(((false, value.0), varying)),
+                    Opcode::GetElementPtr { .. } => {
+                        for index in &one.operands[1..] {
+                            match index {
+                                Operand::Value(index) if known.contains(index) => varying = true,
+                                Operand::Constant(_) => {}
+                                _ => return None,
+                            }
+                        }
+                        pointer = one.operands[0];
+                    }
+                    _ => return None,
+                }
+            }
+            Operand::Block(_) => return None,
+        }
+    }
+}
+
 /// What an address at the counters is an element of.
 enum Base {
     Local(ValueId),
