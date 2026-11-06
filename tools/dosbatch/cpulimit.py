@@ -60,3 +60,9 @@ def run(command: list, seconds: int, memory_kb: int | None = None, **kwargs) -> 
     if done.returncode and any(mark in text for mark in OUT_OF_MEMORY):
         raise MemoryLimit(f"memory limit ({limit // 1024} MB): {' '.join(map(str, command[:3]))}")
     return done
+
+
+def pool_workers() -> int:
+    """Workers for a pool inside one guard slot: the guard's base slot count (`LG_SLOTS`, default 3), so a run takes no more cores than one
+    admitted job. A pool left at its default size is cpu_count wide (32): one admitted bench loaded the host like six slots."""
+    return max(1, int(os.environ.get("LG_SLOTS") or 3))

@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from m68k_worse_cells import count, skipped  # noqa: E402
+from m68k_worse_cells import count, missing, skipped  # noqa: E402
 
 HEADER = "# m68k matrix; (CpuTable::byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved)\n"
 COLS = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
@@ -58,6 +58,18 @@ class WorseCells(unittest.TestCase):
         """`ours-ir` is the backend on the bench IR, which is not what llrm-cc ships: a cell is judged on `ours`."""
         rows = cell("m68k-68000", "z", "Os", (22, 1), (20, 1), (24, 1)) + [("m68k-68000", "z", "Os", "ours-ir", 18, 1, 1, "")]
         self.assertEqual(count(tsv(*rows)), (1, 1))  # ours 22 > gcc 20 although ours-ir 18 < 20
+
+    def test_a_bytes_only_cell_is_judged_on_bytes(self):
+        """muldiv and structcopy call the runtime: all four columns were n/a, 16 cells never judged."""
+        rows = [("m68k-68000", "muldiv", "O2", n, b, "", "", "calls the runtime: bytes only") for n, b in (("ours", 80), ("gcc", 66), ("clang", 90))]
+        self.assertEqual(count(tsv(*rows)), (1, 1))
+        self.assertEqual(skipped(tsv(*rows)), [])
+
+    def test_a_cell_with_no_ours_number_is_reported_missing(self):
+        """A matrix with an absent column passed as 'fewer worse cells'; it must fail instead."""
+        rows = [("m68k-68000", "muldiv", "Os", n, b, "", "", "") for n, b in (("ours", ""), ("gcc", 66))]
+        self.assertEqual(missing(tsv(*rows)), [("m68k-68000", "muldiv", "Os")])
+
 
 if __name__ == "__main__":
     unittest.main()
