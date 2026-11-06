@@ -375,10 +375,34 @@ pub(crate) struct Analyzed {
     pub(crate) tree: DomTree,
     pub(crate) loops: LoopInfo,
     pub(crate) assumptions: AssumptionCache,
+    /// The function's edit counters when these were made: the tree and the
+    /// loops read the CFG, the assumptions the calls.
+    epochs: llrm_mir::touched::Epochs,
+}
+
+// How many times `Analyzed::of` ran, for a test of how often a pass makes them
+// again.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl Analyzed {
+    /// These analyses if no edit since touched what they read, else made again
+    /// (the pin's preserved-analyses claim: an unchanged CFG leaves the
+    /// dominator tree and loop info valid).
+    pub(crate) fn current(
+        self,
+        run: &Run,
+    ) -> Self {
+        let now = run.function.epochs();
+        if now.cfg == self.epochs.cfg && now.calls == self.epochs.calls { self } else { Self::of(run) }
+    }
+
     pub(crate) fn of(run: &Run) -> Self {
+        #[cfg(test)]
+        MADE.with(|made| made.set(made.get() + 1));
+        let epochs = run.function.epochs();
         let tree = DomTree::of(run.function);
         let loops = LoopInfo::analyze(run.function, || &tree);
         let assumptions = AssumptionCache::of_declared(
@@ -388,7 +412,7 @@ impl Analyzed {
             run.function,
             run.outer.assume_declared(),
         );
-        Self { tree, loops, assumptions }
+        Self { tree, loops, assumptions, epochs }
     }
 }
 
@@ -2135,7 +2159,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             // are dedicated again (here for the whole function, U6).
             crate::loopsimplify::simplified(run.function);
             let _ = crate::lcssa::closed(run.context, run.layout, run.function);
-            analyzed = Analyzed::of(run);
+            analyzed = analyzed.current(run);
             // `simplifyLoopAfterUnroll(L, SimplifyIVs = true)`: the IVs first
             // (PL5).
             let env = llrm_analysis::scev::expander::Env {
@@ -2158,7 +2182,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             );
             let after = unrolled_blocks(run, capacity, &body);
             simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
-            analyzed = Analyzed::of(run);
+            analyzed = analyzed.current(run);
             // `LoopFullUnrollPass` does not revisit the loop it peeled (only
             // `LoopUnrollPass` does); the loops the peeled copy holds are
             // new siblings, visited next.
@@ -2187,7 +2211,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         // `UnrollLoop` closes the outer loop's SSA form
         // (`formLCSSARecursively`).
         let _ = crate::lcssa::closed(run.context, run.layout, run.function);
-        analyzed = Analyzed::of(run);
+        analyzed = analyzed.current(run);
         // The blocks `UnrollLoop` hands `simplifyLoopAfterUnroll`: the loop's
         // own that remain and the ones it made.
         let after = unrolled_blocks(run, capacity, &body);
@@ -2195,14 +2219,14 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             simplify_ivs_and_load_cse(run, &analyzed, header);
         }
         simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
-        analyzed = Analyzed::of(run);
+        analyzed = analyzed.current(run);
         // `UnrollLoop` puts the loops it cloned back in loop-simplify form
         // (`simplifyLoop` of the outer loop); here the whole function is, when
         // the unrolled loop had an outer loop or held loops (U6).
         if parent_header.is_some() || siblings_of(&analyzed.loops).iter().any(|one| !old.contains(one)) {
             crate::loopsimplify::simplified(run.function);
             let _ = crate::lcssa::closed(run.context, run.layout, run.function);
-            analyzed = Analyzed::of(run);
+            analyzed = analyzed.current(run);
         }
         let mut fresh: Vec<BlockId> =
             siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
@@ -2215,7 +2239,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     let emptied = std::mem::take(&mut run.emptied);
     run.function.erase_blocks(&emptied).expect("blocks merged away are empty and unnamed");
     if changed {
-        analyzed = Analyzed::of(run);
+        analyzed = analyzed.current(run);
     }
     let mut created: Vec<BlockId> = analyzed
         .loops

@@ -755,3 +755,37 @@ fn test_a_float_body_that_forwards_a_global_array_across_its_trips_stays_a_loop_
     let mut module = parsed(&sixteen_floats(true, true));
     assert!(!unrolled_at(&mut module, 3, Some(8)), "{}", printed(&module));
 }
+
+/// `n` nests in sequence, each an outer loop of 3 trips holding an inner loop of
+/// 2, both fully unrolled.
+fn nests(n: usize) -> String {
+    let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  br label %o0\n\n");
+    for k in 0..n {
+        let next = if k + 1 == n { "end".to_owned() } else { format!("o{}", k + 1) };
+        let (pre, init) = if k == 0 { ("b0".to_owned(), "x".to_owned()) } else { (format!("e{}", k - 1), format!("r{}", k - 1)) };
+        text += &format!(
+            "o{k}:\n  %i{k} = phi i16 [ 0, %{pre} ], [ %ni{k}, %e{k}x ]\n  %a{k} = phi i16 [ %{init}, %{pre} ], [ %r{k}, %e{k}x ]\n  br label %n{k}\n\n\
+             n{k}:\n  %j{k} = phi i16 [ 0, %o{k} ], [ %nj{k}, %n{k} ]\n  %b{k} = phi i16 [ %a{k}, %o{k} ], [ %t{k}, %n{k} ]\n  %t{k} = add i16 %b{k}, %j{k}\n  %nj{k} = add i16 %j{k}, 1\n  %gj{k} = icmp slt i16 %nj{k}, 2\n  br i1 %gj{k}, label %n{k}, label %e{k}x\n\n\
+             e{k}x:\n  %r{k} = phi i16 [ %t{k}, %n{k} ]\n  %ni{k} = add i16 %i{k}, 1\n  %gi{k} = icmp slt i16 %ni{k}, 3\n  br i1 %gi{k}, label %o{k}, label %e{k}\n\n\
+             e{k}:\n  br label %{next}\n\n",
+        );
+    }
+    text += &format!("end:\n  ret i16 %r{}\n}}\n", n - 1);
+    text
+}
+
+/// Each unrolled nest made the loop analyses again after every step, edit or
+/// not (three to five times per loop on a growing function: 556 M of
+/// memory_expansion's 8,855 M Ir); the pin builds them once and keeps them
+/// while the CFG is as it was. A count, not seconds.
+#[test]
+fn test_unrolling_nests_makes_the_analyses_again_only_after_a_cfg_edit() {
+    let made = |n: usize| {
+        let mut module = parsed(&nests(n));
+        super::MADE.with(|made| made.set(0));
+        assert!(unrolled(&mut module));
+        super::MADE.with(|made| made.get())
+    };
+    let (small, large) = (made(4), made(8));
+    assert!(large <= 3 * 8 + 2, "4 nests: {small} builds, 8 nests: {large}");
+}
