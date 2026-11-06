@@ -639,3 +639,20 @@ fn a_priced_unroll_line_names_the_arrays_trips_and_float_file() {
         assert!(line.contains(want), "{want} missing from: {line}");
     }
 }
+
+/// An unnamed loop header printed as `unroll: %:` in `LLRM_DEBUG=unroll`, so
+/// the six eight-trip decisions of x_jpeg_single -O3 could not be told apart
+/// or found in the IR dumps.
+#[test]
+fn test_a_debug_line_names_an_unnamed_loop_header_by_its_printed_label() {
+    let text = concat!(
+        "define i16 @f(i16 %x) {\n  br label %1\n1:\n",
+        "  %i = phi i16 [ 0, %0 ], [ %n, %1 ]\n  %n = add i16 %i, 1\n",
+        "  %c = icmp slt i16 %n, 4\n  br i1 %c, label %1, label %2\n",
+        "2:\n  ret i16 %n\n}\n",
+    );
+    let mut module = parsed(text);
+    let function = &*module.function_mut("f").expect("@f").1;
+    let header = function.layout()[1];
+    assert_eq!(super::loop_label(function, header, "f"), "@f %1");
+}

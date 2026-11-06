@@ -1425,9 +1425,20 @@ fn why(
     reason: &str,
 ) {
     if llrm_support::debug::enabled("unroll") {
-        let name = run.function.block(lp.get_header()).name.clone().unwrap_or_default();
-        eprintln!("unroll: %{name}: {reason}");
+        let owner = run.this.and_then(|id| (*run.globals[id.0 as usize].name).clone()).unwrap_or_default();
+        eprintln!("unroll: {}: {reason}", loop_label(run.function, lp.get_header(), &owner));
     }
+}
+
+/// `@function %label` of a loop's header: the label the IR dumps print, so a
+/// debug line finds its loop there (an unnamed block prints as its slot).
+fn loop_label(
+    function: &Function,
+    header: BlockId,
+    owner: &str,
+) -> String {
+    let labels = llrm_mir::print::block_labels(function);
+    format!("@{owner} %{}", labels[&header])
 }
 
 /// `tryToUnrollLoop`, for the full unroll pass.
