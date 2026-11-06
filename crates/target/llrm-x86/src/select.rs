@@ -121,12 +121,41 @@ fn create_mem(
     Instruction::with1(code, memory).map_err(|error| error.to_string())
 }
 
+/// The form the pin writes for a register-to-register `op r, r`: the one whose
+/// ModRM `r/m` field is the destination (`MOV32rr` is `89 /r`, `ADD32rr` `01 /r`,
+/// X86InstrMisc.td and X86InstrArithmetic.td), not iced's `op r, r/m` (`8B`,
+/// `03`), the pin's `_REV` twin that only a disassembler reads. Same length,
+/// same operands, other bytes.
+fn pin_form(code: Code) -> Code {
+    static TWINS: LazyLock<std::collections::HashMap<Code, Code>> = LazyLock::new(|| {
+        let named: std::collections::HashMap<String, Code> =
+            Code::values().map(|one| (format!("{one:?}"), one)).collect();
+        let mut twins = std::collections::HashMap::new();
+        for one in Code::values() {
+            let name = format!("{one:?}");
+            let Some((mnemonic, forms)) = name.split_once('_') else { continue };
+            if !matches!(mnemonic, "Mov" | "Add" | "Or" | "Adc" | "Sbb" | "And" | "Sub" | "Xor" | "Cmp") {
+                continue;
+            }
+            let Some((register, memory)) = forms.split_once('_') else { continue };
+            let (Some(width), Some(other)) = (register.strip_prefix('r'), memory.strip_prefix("rm")) else { continue };
+            if width == other && matches!(width, "8" | "16" | "32" | "64") {
+                if let Some(twin) = named.get(&format!("{mnemonic}_rm{width}_r{width}")) {
+                    twins.insert(one, *twin);
+                }
+            }
+        }
+        twins
+    });
+    TWINS.get(&code).copied().unwrap_or(code)
+}
+
 fn create_reg_reg(
     code: Code,
     one: RegId,
     other: RegId,
 ) -> Result<Instruction, String> {
-    Instruction::with2(code, one.iced(), other.iced()).map_err(|error| error.to_string())
+    Instruction::with2(pin_form(code), one.iced(), other.iced()).map_err(|error| error.to_string())
 }
 
 fn create_reg_i32(
