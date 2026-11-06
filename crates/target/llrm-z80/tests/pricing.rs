@@ -1,6 +1,8 @@
 //! What a variant costs: the bytes and T-states of the printed lines.
 
-use llrm_z80::expand::{Line, price_in_loops};
+use llrm_z80::compile::text;
+use llrm_z80::driver::{Level, Request};
+use llrm_z80::expand::{Line, price_emitted, price_in_loops};
 
 fn price(text: &str) -> (u32, u64) {
     price_in_loops(&[Line::Inst(text.to_owned())])
@@ -26,4 +28,53 @@ fn every_form_the_printer_writes_is_in_the_table() {
     ] {
         assert_eq!(price(text), (bytes, clocks), "{text}");
     }
+}
+
+fn counted_loop(counter: &str) -> Vec<Line> {
+    ["L0_1:", "inc hl", &format!("dec {counter}"), "jp nz, L0_1"]
+        .iter()
+        .map(|text| match text.strip_suffix(':') {
+            Some(label) => Line::Label(label.to_owned()),
+            None => Line::Inst((*text).to_owned()),
+        })
+        .collect()
+}
+
+/// A counter in `b` ends as `djnz` (2 B, 13 T), one in `c` as `dec c; jr nz`
+/// (3 B, 16 T): the two were priced alike, before the jumps are relaxed.
+#[test]
+fn a_counter_in_b_prices_below_one_in_c() {
+    let (b, c) = (price_emitted(&counted_loop("b"), true), price_emitted(&counted_loop("c"), true));
+    assert!(b.0 < c.0 && b.1 < c.1, "b {b:?} c {c:?}");
+}
+
+/// byval_struct -O1 took the allocation with the 41-trip counter in `c`
+/// (`dec c; jr nz`, 339 B and 11925 T) over the one with `djnz` (340 B and
+/// 11842 T): +83 T for -1 B, priced as a gain.
+#[test]
+fn a_counted_loop_keeps_its_djnz_at_o1() {
+    let out = text(include_str!("kernels/ir/byval_struct.ll"), "main", 0, &Request::new(Level::O1)).expect("compiles");
+    assert!(out.contains("djnz"), "{out}");
+}
+
+fn lines_of(text: &[&str]) -> Vec<Line> {
+    text.iter()
+        .map(|text| match text.strip_suffix(':') {
+            Some(label) => Line::Label(label.to_owned()),
+            None => Line::Inst((*text).to_owned()),
+        })
+        .collect()
+}
+
+/// A loop that counts 41 trips costs 41 trips of its body, not eight: the
+/// 10-trip loop `a` saved 4 T in and the 41-trip loop that lost 3 T a trip
+/// weighed alike (byval_struct -O1, +83 T for -1 B).
+#[test]
+fn a_counted_loop_is_priced_by_its_trips() {
+    let loop_of = |trips: &str| {
+        let init = format!("ld a, #{trips}");
+        price_in_loops(&lines_of(&[&init, "L0_1:", "inc hl", "dec a", "jr nz, L0_1"]))
+    };
+    let (few, many) = (loop_of("10"), loop_of("40"));
+    assert!(many.1 > 3 * few.1, "10 trips {few:?}, 40 trips {many:?}");
 }

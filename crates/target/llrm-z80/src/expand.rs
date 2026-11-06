@@ -1996,9 +1996,76 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
     (bytes, clocks)
 }
 
-/// [`price`] with the clocks of an instruction counted eight times for each
-/// loop it is in, a loop being the lines from a label to a jump back to it:
-/// what two allocations of a loop are compared by.
+/// The trips of the loop between `head` and its jump back at `end` when the
+/// lines count it: `djnz` or `dec r; jr nz` closing it, and `ld r, #n` for that
+/// register ahead of the head with nothing between that writes it or starts a
+/// block (`#0` is 256).
+///
+/// DEVIATE Z80-TRIP-WEIGHT: the pin weighs a loop by block frequency (32 trips
+/// when it cannot tell); this stage has none, and a counted loop shows its
+/// own. Owner z80, exit 2026-11-30: block frequencies at this stage.
+fn counted_trips(
+    lines: &[Line],
+    head: usize,
+    end: usize,
+) -> Option<u64> {
+    let Line::Inst(closing) = &lines[end] else { return None };
+    let counter = if closing.starts_with("djnz ") {
+        "b".to_owned()
+    } else if closing.starts_with("jr nz, ") {
+        let Line::Inst(before) = lines[..end].iter().rev().find(|line| !matches!(line, Line::Loc(_)))? else {
+            return None;
+        };
+        let register = before.strip_prefix("dec ")?;
+        matches!(register, "a" | "b" | "c" | "d" | "e" | "h" | "l").then(|| register.to_owned())?
+    } else {
+        return None;
+    };
+    let pair = match counter.as_str() {
+        "b" | "c" => "bc",
+        "d" | "e" => "de",
+        "h" | "l" => "hl",
+        _ => "af",
+    };
+    for line in lines[..head].iter().rev() {
+        let text = match line {
+            Line::Loc(_) => continue,
+            Line::Inst(text) => text,
+            _ => return None,
+        };
+        if let Some(count) = text.strip_prefix(&format!("ld {counter}, #")) {
+            let count: u64 = count.parse().ok()?;
+            return Some(if count == 0 { 256 } else { count });
+        }
+        let (mnemonic, operands) = text.split_once(' ').unwrap_or((text, ""));
+        let target = operands.split(", ").next().unwrap_or("");
+        if matches!(mnemonic, "call" | "ret" | "jp" | "jr" | "djnz")
+            || target == counter
+            || target == pair
+            || matches!(mnemonic, "ldir" | "lddr" | "cpir" | "cpdr")
+        {
+            return None;
+        }
+    }
+    None
+}
+
+/// [`price_in_loops`] of the lines as emitted: after branch relaxation, which
+/// fuses `dec b; jr nz` into `djnz` (2 B, 13 T for 3 B, 16 T) only with the
+/// counter in `b`. Priced before it, a counter in `c` cost the same as one in
+/// `b`, and the pick took the allocation 3 T a trip slower (byval_struct -O1:
+/// +83 T for -1 B).
+pub fn price_emitted(
+    lines: &[Line],
+    speed: bool,
+) -> (u32, u64) {
+    price_in_loops(&relax(lines.to_vec(), speed))
+}
+
+/// [`price`] with the clocks of an instruction counted once for each trip of
+/// each loop it is in (eight where the lines do not count them), a loop being
+/// the lines from a label to a jump back to it: what two allocations of a loop
+/// are compared by.
 pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
     let labels: llrm_support::hash::HashMap<&str, usize> = lines
         .iter()
@@ -2022,10 +2089,17 @@ pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
             *end = (*end).max(at);
         }
     }
-    let mut depth = vec![0u32; lines.len()];
+    // a loop runs its counted trips where the lines show them, else eight; the
+    // weights of up to three enclosing loops multiply
+    let mut weight = vec![1u64; lines.len()];
+    let mut levels = vec![0u32; lines.len()];
     for (head, end) in reach {
-        for one in &mut depth[head..=end] {
-            *one += 1;
+        let trips = counted_trips(lines, head, end).unwrap_or(8);
+        for at in head..=end {
+            if levels[at] < 3 {
+                weight[at] *= trips;
+                levels[at] += 1;
+            }
         }
     }
     let (mut bytes, mut clocks) = (0, 0u64);
@@ -2033,7 +2107,7 @@ pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
         let Line::Inst(text) = line else { continue };
         let cost = table_cost(&form(text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
         bytes += cost.0;
-        clocks += u64::from(cost.1) * 8u64.pow(depth[at].min(3));
+        clocks += u64::from(cost.1) * weight[at];
     }
     (bytes, clocks)
 }

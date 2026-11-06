@@ -243,7 +243,7 @@ fn priced_in_loops(
     expand::PRICING.with(|one| one.set(priced_before_peepholes(level)));
     let lines = finish(function, assignment, 0, slots, reads.clone());
     expand::PRICING.with(|one| one.set(false));
-    lines.ok().map(|lines| expand::price_in_loops(&lines))
+    lines.ok().map(|lines| expand::price_emitted(&lines, !matches!(level, Level::Os | Level::Oz)))
 }
 
 /// Whether a variant is priced before the printer's peepholes. At the speed
@@ -1896,7 +1896,7 @@ fn lines_in(
     crate::dagisel::pipeline::ILP.with(|one| one.set(false));
     match (source, ilp) {
         (Ok(source), Ok(ilp)) => {
-            let price = |lines: &[Line]| expand::price_in_loops(lines);
+            let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
             Ok(if cheaper(request.level, price(&ilp), price(&source)) { ilp } else { source })
         }
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
