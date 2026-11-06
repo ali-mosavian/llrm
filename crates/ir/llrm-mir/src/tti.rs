@@ -772,13 +772,13 @@ pub trait Tti {
         None
     }
 
-    /// Tuning `unroll_at_o1`.
-    fn unroll_at_o1(&self) -> bool {
+    /// Tuning `unroll_jam_exact_count`.
+    fn unroll_jam_exact_count(&self) -> bool {
         false
     }
 
-    /// Tuning `unroll_jam_exact_count`.
-    fn unroll_jam_exact_count(&self) -> bool {
+    /// Tuning `constant_hoisting`.
+    fn constant_hoisting(&self) -> bool {
         false
     }
 

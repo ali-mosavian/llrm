@@ -755,32 +755,3 @@ fn test_a_float_body_that_forwards_a_global_array_across_its_trips_stays_a_loop_
     let mut module = parsed(&sixteen_floats(true, true));
     assert!(!unrolled_at(&mut module, 3, Some(8)), "{}", printed(&module));
 }
-
-/// `-O1` takes only forced loops (clang's `UnrollLoops` is off there); gcc
-/// unrolls a small constant-trip loop at -O1, so x_life O1 ran its 3-trip
-/// neighbour loops as loops (64k taken `jne`, +150k clk). A target with
-/// `unroll_at_o1` unrolls it at -O1; the pin's x86 does not.
-#[test]
-fn at_o1_a_small_constant_trip_loop_unrolls_only_where_the_target_asks() {
-    let run = |ask: bool| {
-        let mut module = parsed(&counted(3));
-        let function = module.function_mut("f").expect("@f").1;
-        crate::loopsimplify::simplified(function);
-        crate::testing::closed(&mut module).expect("closes");
-        let tti = X86::of_cpu("i486").expect("a cpu").with_tuning(llrm_mir::target::Tuning {
-            unroll_at_o1: ask,
-            ..llrm_mir::target::Tuning::PIN
-        });
-        let options = Options {
-            opt_level: 1,
-            opt_size: false,
-            min_size: false,
-            only_when_forced: true,
-            prepare_for_lto: false,
-            target_unrolling: false,
-        };
-        unroll_function(&mut module, "f", &tti, options).expect("unrolls")
-    };
-    assert!(run(true), "the target asks: the 3-trip loop is copied out");
-    assert!(!run(false), "the pin's -O1 leaves it");
-}

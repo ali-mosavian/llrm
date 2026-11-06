@@ -618,12 +618,12 @@ impl Tti for X86 {
         self.tuning.unroll_partial_threshold
     }
 
-    fn unroll_at_o1(&self) -> bool {
-        self.tuning.unroll_at_o1
-    }
-
     fn unroll_jam_exact_count(&self) -> bool {
         self.tuning.unroll_jam_exact_count
+    }
+
+    fn constant_hoisting(&self) -> bool {
+        self.tuning.constant_hoisting
     }
 
     fn unroll_jam_partial_threshold_override(&self) -> Option<u32> {
