@@ -4,6 +4,7 @@
 # recipe (DOS) runs its build under it and is checked against the host build of the same file; DOS programs print with
 # `report(long)` set LLRM_CC_DIR to a directory of freestanding programs.
 set -u
+. "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
 root=$(cd "$(dirname "$0")/.." && pwd)
 # The segmented DOS/Watcom/Borland rows read `#pragma aux` link names only in the pinned fork clang (toolchain/clang/pin, line 2).
 # Without it libm names stay unmangled and every program fails to link (`_atan` undefined): stop here with one line instead.

@@ -5,6 +5,7 @@
 #   WASM_CPU         -mcpu for both sides (mvp: the secondary column; default: the pin's generic)
 # The stub is the same bytes on both sides: `run` calls main and answers a hash of what main reported.
 set -u
+. "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
 ulimit -v 16777216 # one runaway compile must not take the box
 root=$(cd "$(dirname "$0")/.." && pwd)
 clang=${LLRM_CLANG_WASM:-$HOME/scratch/llvm-build-clang-wasm/bin/clang}
