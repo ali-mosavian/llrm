@@ -32,6 +32,25 @@ class OursCr(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0, script)
             self.assertIn("OURS_RT is not set", r.stderr, f"{script}: {r.stderr[-200:]}")
 
+ROOT = os.path.join(HERE, "..", "..")
+CORPUS = os.environ.get("OURS_CORPUS", os.path.join(ROOT, "tests", "run", "c"))
+OVERLAY = os.path.join(HERE, "overlay")
+
+class Corpus(unittest.TestCase):
+    """The 82-program table is measured on tests/run/c; a second copy drifted from it in 4 files (2026-11-06) and a number on it is
+    not a number on the repo corpus. Only what must differ lives in overlay/."""
+    def test_every_program_is_in_the_corpus_or_the_overlay(self):
+        for name in open(os.path.join(HERE, "pass82.txt")).read().split():
+            home = OVERLAY if os.path.exists(os.path.join(OVERLAY, name + ".c")) else CORPUS
+            for ext in ("c", "out"):
+                self.assertTrue(os.path.exists(os.path.join(home, f"{name}.{ext}")), f"{name}.{ext} is in neither {CORPUS} nor the overlay")
+
+    def test_an_overlay_file_differs_from_its_corpus_twin(self):
+        for f in sorted(os.listdir(OVERLAY)):
+            twin = os.path.join(CORPUS, f)
+            if os.path.exists(twin):
+                self.assertNotEqual(open(os.path.join(OVERLAY, f), "rb").read(), open(twin, "rb").read(), f"overlay/{f} copies its tests/run/c twin: drift trap")
+
 CC = os.environ.get("OURS_TEST_CC", os.path.expanduser("~/scratch/s4/frozen-setcc/lchead/llrm-cc"))
 RT = os.environ.get("OURS_TEST_RT", os.path.expanduser("~/scratch/s4/fa/lanecopy/rt_head.s"))
 

@@ -5,9 +5,12 @@ members the link pulls (map file), not the driver or cc65's startup."""
 import sys, re, os, json, tempfile, shutil, subprocess
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-HERE = Path(__file__).parent
+HERE = Path(__file__).resolve().parent
 GC = os.environ.get("GCC_COLUMNS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gcc-columns"))
-SRC = HERE / "src"
+OVERLAY = HERE / "overlay"  # what must differ from the repo corpus (the empty program the floor is read from)
+CORPUS = Path(os.environ.get("OURS_CORPUS", HERE.parents[1] / "tests" / "run" / "c"))
+def src_of(name):
+    return OVERLAY / f"{name}.c" if (OVERLAY / f"{name}.c").exists() else CORPUS / f"{name}.c"
 ZP = 26
 LOG = 0xF000
 EXTRA = os.environ.get("G6_EXTRA", "").split()
@@ -116,17 +119,6 @@ def sh(cmd, cwd, timeout=300, text=True):
 def expected(p):
     t = p.read_text().split()
     return [int(x) for x in t] if all(re.fullmatch(r"-?\d+", x) for x in t) else None
-def rt_library(work):
-    lib = Path(work); objs = []
-    for p in sorted(Path(GC, "rt-6502").glob("*.s")):
-        a = sh(["ca65", "-t", "sim6502", "-o", f"{p.stem}.o", str(p)], work); assert a.returncode == 0, a.stderr
-        objs.append(f"{p.stem}.o")
-    for c in sorted((HERE / "rtc").glob("*.c")) + sorted((HERE / "rtc6").glob("*.c")):
-        r = sh([CC1, "-quiet", "-Os", "-fno-tree-loop-distribute-patterns", "-w", "-I", str(c.parent), str(c), "-o", f"{c.stem}.s"], work)
-        if r.returncode: print("rtc fail", c.name, r.stderr[-150:]); continue
-        a = sh(["ca65", "-t", "sim6502", "-o", f"{c.stem}.o", f"{c.stem}.s"], work); assert a.returncode == 0, (c, a.stderr)
-        objs.append(f"{c.stem}.o")
-    sh(["rm", "-f", "rt.lib"], work); r = sh(["ar65", "a", "rt.lib"] + objs, work); assert r.returncode == 0, r.stderr
 def bytes_of(mapfile):
     tot = 0; cur = None
     for l in open(mapfile).read().split("Segment list:")[0].splitlines():
@@ -200,7 +192,7 @@ if __name__ == "__main__":
     OURS, level, out = sys.argv[1:4]; names = sys.argv[4:]
     WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None; BASE = base_members(WORK)
     pass82 = [x.strip() for x in open(HERE / "pass82.txt")]
-    srcs = [SRC / f"{n}.c" for n in (names or pass82)]
+    srcs = [src_of(n) for n in (names or pass82)]
     with ThreadPoolExecutor(4) as pool: res = list(pool.map(one, [(s, level, lib) for s in srcs]))
     json.dump(res, open(out + ".json", "w"), indent=1)
     open(out, "w").write("".join(f"{n}\tours\t{d['bytes']}\t{d['clks']}\n" for n, v, d in res if v == "PASS"))
