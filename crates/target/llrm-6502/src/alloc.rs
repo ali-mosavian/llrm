@@ -67,8 +67,10 @@ pub struct Tuning {
 }
 
 impl Tuning {
-    /// Speed: a byte saved is not worth a clock.
-    pub const SPEED: Tuning = Tuning { clocks_per_byte: 1 };
+    /// Speed: a byte saved is worth up to three clocks (the 6502 rate, user
+    /// 11-04: a byte of growth must buy 3 clocks at -O2/-O3; the same as
+    /// `unroll_milliclocks_per_byte`).
+    pub const SPEED: Tuning = Tuning { clocks_per_byte: 3 };
     /// Size: a byte saved is worth up to twelve clocks (a shift loop of 3 bits
     /// is 3 bytes and 16 clocks; three shared callee-saved cells are 9
     /// bytes and 99 clocks).
@@ -3455,7 +3457,7 @@ fn emit_with<const STACK: bool>(
                         Some(base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3")) => (base, true),
                         _ => (callee.as_str(), false),
                     };
-                    let speed = TUNING.with(|t| t.get()).clocks_per_byte <= 1;
+                    let speed = TUNING.with(|t| t.get()) != Tuning::SIZE;
                     let division = matches!(callee, "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3");
                     let entry = if !speed {
                         ""
@@ -3518,7 +3520,7 @@ fn emit_with<const STACK: bool>(
                     // clocks a step where memory is 10 (`asl a; rol hi` against
                     // `asl lo; rol hi`), for the two bytes of the load and
                     // the store; a byte longer under three steps
-                    let in_a = run >= if TUNING.with(|t| t.get()).clocks_per_byte > 1 { 5 } else { 3 };
+                    let in_a = run >= if TUNING.with(|t| t.get()) == Tuning::SIZE { 5 } else { 3 };
                     match spare {
                         Some(index) if pays => {
                             made += 1;

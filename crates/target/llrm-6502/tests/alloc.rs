@@ -1718,9 +1718,11 @@ done:
 /// A word shifted by n bits is n `asl`/`rol` pairs (4 bytes each, 20 for the
 /// shift by 5 in hash16) or, with an index register free, a counted loop of 9
 /// bytes that takes 5 more clocks a bit. The level decides: at size (12 clocks
-/// a byte) every shift of 3 to 7 bits is the loop; at speed (1 clock a
-/// byte) none is. Both bytes of each result are checked, the shifted word added
-/// to the word so that the shift stays in cells.
+/// a byte) every shift of 3 to 7 bits is the loop; at speed (3 clocks a byte,
+/// the 6502 rate) the loop is taken from 4 bits (7 bytes saved for 21 clocks)
+/// and 3 stay unrolled (3 bytes for 16). Both bytes of each result are
+/// checked, the shifted word added to the word so that the shift stays in
+/// cells.
 #[test]
 fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
     for (op, k) in [("shl", 3u32), ("shl", 4), ("shl", 5), ("shl", 7), ("lshr", 3), ("lshr", 6)] {
@@ -1730,7 +1732,8 @@ fn a_word_shift_is_a_counted_loop_at_the_size_level_and_unrolled_at_speed() {
         let looped = compile_at(&ir, &name, 16, Tuning::SIZE);
         let unrolled = compile_at(&ir, &name, 16, Tuning::SPEED);
         assert!(looped.contains("dex") || looped.contains("dey"), "{op} {k} at size:\n{looped}");
-        assert!(!unrolled.contains("dex") && !unrolled.contains("dey"), "{op} {k} at speed:\n{unrolled}");
+        let loop_at_speed = unrolled.contains("dex") || unrolled.contains("dey");
+        assert_eq!(loop_at_speed, k >= 4, "{op} {k} at speed:\n{unrolled}");
         for text in [&looped, &unrolled] {
             for x in [0u16, 1, 0x00FF, 0x0100, 0x1234, 0xABCD, 0xFFFF] {
                 let shifted = if op == "shl" { x << k } else { x >> k };
@@ -2864,7 +2867,8 @@ done:
 fn a_hot_count_takes_x_from_a_count_held_for_later() {
     let text = compile(TWO_COPIES, "two");
     let first = text.split("two_b2:").nth(1).and_then(|rest| rest.split("two_b1:").next()).expect("loop");
-    // the count's high byte steps in x (`dex` on a borrow, once `adc #255; tax`)
+    // the count's high byte steps in x (`dex` on a borrow, once `adc #255;
+    // tax`)
     assert!(first.contains("  dex\n"), "the first loop's count is not in x:\n{text}");
 }
 
@@ -2972,14 +2976,12 @@ fn every_block_has_a_label_whatever_order_the_folding_laid_its_new_ones() {
 }
 
 /// `lda #0; sta rc5; lda rc5; sta rc6; jmp` (x16basic-c mathlib): the reload
-/// stayed because the scan for who reads its flags stopped at the jump's target.
+/// stayed because the scan for who reads its flags stopped at the jump's
+/// target.
 #[test]
 fn a_reload_before_a_jump_goes() {
     use llrm_6502::peephole::drop_reloads;
-    assert_eq!(
-        pass(drop_reloads, "  sta rc5\n  lda rc5\n  sta rc6\n  jmp L\n"),
-        "  sta rc5\n  sta rc6\n  jmp L\n"
-    );
+    assert_eq!(pass(drop_reloads, "  sta rc5\n  lda rc5\n  sta rc6\n  jmp L\n"), "  sta rc5\n  sta rc6\n  jmp L\n");
 }
 
 /// x16basic-c `fp_fin`: a zero word live across a call took `rc8`/`rc9`, for a
@@ -3040,7 +3042,8 @@ fn a_literal_made_into_a_cell_is_stored_from_the_index_register_that_holds_it() 
     assert_eq!(pass(drop_known_loads, read), read, "the branch reads the flags pla set");
 }
 
-/// A pointer's halves read for a word compare: `ldy rc7; lda rc6; cmp rc2; bne l; tya; cmp rc3`.
+/// A pointer's halves read for a word compare: `ldy rc7; lda rc6; cmp rc2; bne
+/// l; tya; cmp rc3`.
 #[test]
 fn a_high_half_loaded_into_y_and_moved_to_a_is_loaded_into_a() {
     use llrm_6502::peephole::load_straight_into_a;
