@@ -1107,6 +1107,14 @@ impl Tti for X86 {
         div_rem_by_constant && !min_size
     }
 
+    fn keeps_select_mask_attached(
+        &self,
+        bits: u128,
+        width: u32,
+    ) -> bool {
+        self.tuning.zext_imm_is_basic && width == 64 && bits <= u128::from(u32::MAX)
+    }
+
     /// `X86TargetLowering::isTruncateFree`:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36743
     fn is_truncate_free(

@@ -1082,6 +1082,19 @@ pub trait Tti {
         div_rem_by_constant
     }
 
+    /// DEVIATE ZIMM (M64-ZIMM-CRC): a zero-extended 32-bit constant that is
+    /// one arm of a `select` beside zero. The target turns it into a mask
+    /// `and` with the constant as an immediate, so hoisting it only holds a
+    /// register. The pin's `preferToKeepConstantsAttached` has no such case.
+    fn keeps_select_mask_attached(
+        &self,
+        bits: u128,
+        width: u32,
+    ) -> bool {
+        let _ = (bits, width);
+        false
+    }
+
     /// `TargetTransformInfoImplBase::isLegalAddImmediate`: none.
     fn is_legal_add_immediate(
         &self,

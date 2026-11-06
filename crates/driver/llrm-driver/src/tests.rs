@@ -4066,3 +4066,25 @@ fn a_lone_zero_extended_constant_in_two_blocks_is_not_hoisted_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert_eq!(listing.matches("4278190080").count(), 2, "{listing}");
 }
+
+/// The mask of a `select c, 0, K` was hoisted beside `0xFFFFFFFF` as a `lea`
+/// held in a register through the loop, pushing the loop's temporaries to
+/// `r8`/`r9` (`crc` -O1 147 -> 162 B). Kept attached it is `and eax, imm32`.
+#[test]
+fn a_zero_extended_select_mask_stays_an_immediate_in_the_loop_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i64 %x, i64 %n) {\n\
+                entry:\n  %a = xor i64 %x, 4294967295\n  br label %loop\n\
+                loop:\n  %i = phi i64 [ 0, %entry ], [ %i2, %loop ]\n\
+                \x20 %v = phi i64 [ %a, %entry ], [ %nv, %loop ]\n\
+                \x20 %b = and i64 %v, 1\n  %c = icmp eq i64 %b, 0\n\
+                \x20 %m = select i1 %c, i64 0, i64 3988292384\n  %s = lshr i64 %v, 1\n\
+                \x20 %nv = xor i64 %s, %m\n  %i2 = add i64 %i, 1\n  %e = icmp eq i64 %i2, %n\n\
+                \x20 br i1 %e, label %exit, label %loop\n\
+                exit:\n  %r = xor i64 %nv, 4294967295\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("306674911"), "{listing}");
+}
+

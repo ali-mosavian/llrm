@@ -521,7 +521,27 @@ impl Hoister<'_> {
             instruction.opcode,
             Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem)
         ) && matches!(instruction.operands[1], Operand::Constant(id) if matches!(self.context.get(id).kind, ConstantKind::Int(_)));
-        self.tti().prefer_to_keep_constants_attached(by_constant, self.min_size)
+        self.tti().prefer_to_keep_constants_attached(by_constant, self.min_size) || self.select_mask_kept(function, inst)
+    }
+
+    /// DEVIATE ZIMM (M64-ZIMM-CRC, owner m64, exit 2026-11-20): `select c, 0, K`
+    /// or `select c, K, 0` with `K` an immediate the target's mask `and` takes.
+    fn select_mask_kept(
+        &self,
+        function: &Function,
+        inst: InstId,
+    ) -> bool {
+        let instruction = function.instruction(inst);
+        if instruction.opcode != Opcode::Select || self.opt_for_size {
+            return false;
+        }
+        let int = |operand: Operand| self.int_constant(operand).map(|(_, _, width, bits)| (bits, width));
+        match (int(instruction.operands[1]), int(instruction.operands[2])) {
+            (Some((0, _)), Some((bits, width))) | (Some((bits, width)), Some((0, _))) => {
+                self.tti().keeps_select_mask_attached(bits, width)
+            }
+            _ => false,
+        }
     }
 
     /// `collectConstantCandidates(Function &)`
