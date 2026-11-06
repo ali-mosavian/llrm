@@ -109,3 +109,14 @@ b0:
     assert_eq!(text.matches("call.sqrt").count() >= 2, true, "{text}");
     assert_eq!(text.matches("phi double").count(), 2, "{text}");
 }
+
+/// DEVIATE PIL-OS: the pin splits at -Os too, which grows the code; a function
+/// with `optsize` (or `minsize`) keeps its call, and -Os stays at base bytes.
+#[test]
+fn an_optsize_function_keeps_its_sqrt_call() {
+    for attr in ["optsize", "minsize"] {
+        let text = run(&SQRT.replace("double %x) {", &format!("double %x) {attr} {{")), fast());
+        assert!(!text.contains("call.sqrt"), "{attr}\n{text}");
+        assert_eq!(text.matches("call double @sqrt").count(), 1, "{attr}\n{text}");
+    }
+}
