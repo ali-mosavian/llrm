@@ -117,6 +117,7 @@ fn data_role(
         "_BSS" | "BSSB" => Role::Bss,
         "CONST" => Role::ROData,
         _ if name.starts_with(".rdata$") => Role::ROData,
+        _ if name.starts_with(".bss$") => Role::Bss,
         // The pin's mergeable constant sections (`.rodata.cst4`...).
         _ if name.starts_with(".rodata.cst") => Role::ROData,
         crate::backend::globals::INIT_SEGMENT => Role::InitFunctions,
@@ -129,6 +130,7 @@ fn data_role(
 fn comdat_segment(comdat: &masm::Comdat) -> String {
     let base = match (&comdat.extent, comdat.constant) {
         (None, _) => ".text",
+        (Some((segment, _)), _) if segment == "_BSS" => ".bss",
         (Some(_), true) => ".rdata",
         (Some(_), false) => ".data",
     };
