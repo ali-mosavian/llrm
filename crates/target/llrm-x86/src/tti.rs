@@ -685,6 +685,10 @@ impl Tti for X86 {
         self.tuning.inline_o1_milliclocks_per_byte
     }
 
+    fn promote_va_list(&self) -> bool {
+        self.tuning.promote_va_list
+    }
+
     fn sink_spares_ranges(&self) -> bool {
         self.tuning.sink_spares_ranges
     }

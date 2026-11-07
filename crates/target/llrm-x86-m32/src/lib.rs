@@ -105,6 +105,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         lsr_size_order: true,
         narrow_divide_live_limit: 4,
         sink_spares_ranges: true,
+        promote_va_list: true,
         inline_never_grows_without_rate: true,
         inline_o1_milliclocks_per_byte: per_byte / 2,
         x87_zero_fill_at_size: true,

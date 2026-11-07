@@ -55,6 +55,12 @@ pub struct Tuning {
     /// result by more operands that die at it, across a later instruction that
     /// clobbers registers (more values spilled). false: the pin's sink.
     pub sink_spares_ranges: bool,
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27): the target's
+    /// `va_list` is one pointer, so `llvm.va_start` of it is a store of the
+    /// first variadic argument's address (`llrm.vararg.address`) the mid-end
+    /// can keep in a register. false: the pin's `va_start`, which leaves the
+    /// list in memory.
+    pub promote_va_list: bool,
     /// At -O1 (`OptLevel` 1) a full unroll is made only where its cost after
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
@@ -274,6 +280,7 @@ impl Tuning {
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
         sink_spares_ranges: false,
+        promote_va_list: false,
         unroll_never_grows_at_o1: false,
         inline_never_grows_without_rate: false,
         inline_o1_milliclocks_per_byte: 0,
