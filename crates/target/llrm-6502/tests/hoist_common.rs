@@ -32,3 +32,36 @@ fn a_target_another_branch_reaches_keeps_its_code() {
     let code = "  cmp #10\n  bcs b20\nb23:\n  sta rc8\n  jmp b3\nb20:\n  sta rc8\n  inc rc8\n  bne b20\nb3:\n  rts\n";
     assert_eq!(run(code), code);
 }
+
+/// `lz4`'s literal copy: `ldy #0` at the top of the loop, run every byte, and
+/// `dec rc4; lda rc4; bne`: 2 + 2 bytes and 2 + 3 clocks a byte.
+#[test]
+fn a_constant_the_loop_never_changes_is_loaded_before_it() {
+    use llrm_6502::peephole::hoist_loop_constant;
+    let mut asm = Asm::parse("  lda rc8\nl:\n  ldy #0\n  lda (rc2),y\n  sta (rc20),y\n  dex\n  bne l\n  rts\n");
+    hoist_loop_constant(&mut asm);
+    assert_eq!(asm.text(), "  lda rc8\n  ldy #0\nl:\n  lda (rc2),y\n  sta (rc20),y\n  dex\n  bne l\n  rts\n");
+    let mut asm = Asm::parse("  sty rc4\nentry:\nl:\n  ldy #0\n  lda (rc2),y\n  dex\n  bne l\n  rts\n");
+    hoist_loop_constant(&mut asm);
+    assert_eq!(asm.text(), "  sty rc4\n  ldy #0\nentry:\nl:\n  lda (rc2),y\n  dex\n  bne l\n  rts\n", "a label nothing names is stepped over");
+    let writes = "  lda rc8\nl:\n  ldy #0\n  lda (rc2),y\n  iny\n  bne l\n  rts\n";
+    let mut asm = Asm::parse(writes);
+    hoist_loop_constant(&mut asm);
+    assert_eq!(asm.text(), writes, "the loop steps y");
+    let other_entry = "  jmp l\n  lda rc8\nl:\n  ldy #0\n  lda (rc2),y\n  dex\n  bne l\n  rts\n";
+    let mut asm = Asm::parse(other_entry);
+    hoist_loop_constant(&mut asm);
+    assert_eq!(asm.text(), other_entry, "another path enters the loop");
+}
+
+#[test]
+fn a_reload_after_a_step_of_the_same_cell_is_dropped_when_a_is_dead() {
+    use llrm_6502::peephole::drop_flag_reload;
+    let mut asm = Asm::parse("l:\n  dec rc4\n  lda rc4\n  bne l\n  lda #0\n  rts\n");
+    drop_flag_reload(&mut asm);
+    assert_eq!(asm.text(), "l:\n  dec rc4\n  bne l\n  lda #0\n  rts\n");
+    let live = "l:\n  dec rc4\n  lda rc4\n  bne l\n  sta rc5\n  rts\n";
+    let mut asm = Asm::parse(live);
+    drop_flag_reload(&mut asm);
+    assert_eq!(asm.text(), live, "a is read after");
+}
