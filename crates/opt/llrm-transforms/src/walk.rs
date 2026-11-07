@@ -1249,7 +1249,7 @@ pub fn function_bytes(
 
 /// SZ2: whether a trial's copies are kept. Priced (speed, a byte rate): the callee must go with them and the growth
 /// must be worth the clocks saved. At size the instruction count decides (`tried <= best + credit`), but a callee that
-/// goes with its last calls must also leave the bytes no larger: the count priced a float compare as an add, and
+/// goes with its last calls, accepted only by the credit for the callee (the copies alone count more), must also leave the bytes no larger: the count priced a float compare as an add, and
 /// `canon` (a libcall per site on m68k) was inlined five times for +28 B at -Os.
 #[allow(clippy::too_many_arguments)]
 fn trial_accepted(
@@ -1265,7 +1265,7 @@ fn trial_accepted(
     if priced {
         return credit > 0 && growth * rate <= saved * 1000;
     }
-    (tried <= best + credit && (credit == 0 || growth <= 0))
+    (tried <= best || (tried <= best + credit && growth <= 0))
         || (saved > 0 && growth * rate <= saved * 1000)
         || (rate == 0 && credit == 0 && -growth * 8 >= kept_bytes)
 }

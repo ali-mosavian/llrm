@@ -3003,5 +3003,5 @@ b1:
 fn test_an_os_trial_that_grows_the_bytes_is_refused_though_the_count_accepts_it() {
     assert!(!super::trial_accepted(false, 60, 57, 4, 0, 28, 0, 756));
     assert!(super::trial_accepted(false, 60, 57, 4, 0, -4, 0, 756), "a copy that shrinks the code stays");
-    assert!(super::trial_accepted(false, 57, 57, 0, 0, 12, 0, 756), "a callee that stays is decided by the count alone");
+    assert!(super::trial_accepted(false, 57, 57, 4, 0, 12, 0, 756), "copies no larger than the caller are decided by the count");
 }
