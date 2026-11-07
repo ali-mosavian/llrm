@@ -119,7 +119,7 @@ fn with_frame_pointer(
         {
             continue;
         }
-        function.attrs.push(Attribute::Str("frame-pointer".to_owned(), Some(policy.to_owned())));
+        function.attrs.push(Attribute::Str("frame-pointer".into(), Some(policy.to_owned())));
     }
 }
 
@@ -564,7 +564,7 @@ fn allow_near_calls(module: &mut llrm_mir::module::Module) {
         }
         let GlobalKind::Function(function) = &mut global.kind else { continue };
         if !function.is_declaration() {
-            function.attrs.push(llrm_mir::opcode::Attribute::Flag(llrm_mir::callgraph::NEAR_CODE.to_owned()));
+            function.attrs.push(llrm_mir::opcode::Attribute::Flag(llrm_mir::callgraph::NEAR_CODE.into()));
         }
     }
 }

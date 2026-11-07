@@ -528,6 +528,9 @@ pub fn emit_in(
             if dag.invariant_loads.contains(&node) {
                 emitter.mark_invariant_loads(before);
             }
+            if dag.got_loads.contains(&node) {
+                emitter.make_got_loads(before);
+            }
             if dag.volatile_accesses.contains(&node)
                 || matches!(
                     dag.node(SDValue { node, res: 0 }).data,
@@ -1177,6 +1180,35 @@ impl Emitter<'_, '_> {
             && let Some(last) = block.insns.last_mut()
         {
             *last = Arc::new(Insn { pair: Some(kind), ..(**last).clone() });
+        }
+    }
+
+    /// A load of a GOT entry reads `[rip + sym]`; the encoder relocates an
+    /// External symbol's immediate as the entry's offset, so the load is that
+    /// immediate (`mov r, offset sym`, as `isel.rs` makes the legacy GOT load).
+    fn make_got_loads(
+        &mut self,
+        before: usize,
+    ) {
+        let Some(block) = self.blocks.last_mut() else { return };
+        for one in block.insns.iter_mut().skip(before) {
+            let Some(what) = one.what.as_ref() else { continue };
+            let ([Loc::Held(dest)], [Loc::Mem(mem)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+                continue;
+            };
+            let Some(address) = mem.addr else { continue };
+            if what.op != Operation::Move
+                || mem.base.is_some()
+                || mem.index.is_some()
+                || address.space != crate::model::ir::Space::External
+            {
+                continue;
+            }
+            let mut moved = (**one).clone();
+            if let Some(what) = moved.what.as_mut() {
+                what.sources = vec![Loc::Imm(Imm { value: 0, width: dest.width, address: Some(address) })];
+            }
+            *one = Arc::new(moved);
         }
     }
 

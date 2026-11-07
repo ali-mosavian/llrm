@@ -400,8 +400,10 @@ pub fn finish_with(
     let mut lines = Vec::new();
     // Where each place starts in `out`: only when it changes.
     let mut marks: Vec<(usize, Row)> = Vec::new();
-    // The frame is made by the opening ops: the next row ends the prologue.
-    let mut frame_made = !opening.is_empty();
+    // The first row with a line ends the prologue, whether or not the opening
+    // ops made a frame (the pin flags a frameless function's too; #7199 made
+    // this one frameless).
+    let mut frame_made = true;
     let mut last_origin = 0u32;
     let mut block_top = false;
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack

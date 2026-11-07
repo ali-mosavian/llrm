@@ -11,9 +11,11 @@ case $CPU in
   for f in udivdi3 umoddi3 divdi3 moddi3 muldi3; do "$AS" -m$CPU --defsym M68020=1 -I "$R/config/m68k/div64" -o "$OUT/$f.o" "$R/config/m68k/div64/$f.s"; done;;
 68000|68060)
   CC=${LLRM_CC:?path of llrm-cc}
-  for f in udivdi3 umoddi3 divdi3 moddi3 udivmod_w muldi3; do
+  for f in udivdi3 umoddi3 divdi3 moddi3 udivmod_w; do
     LLRM_CC_TARGET=m68k-$CPU "$CC" -Os -S -DSF_INTABI -include "$R/config/m68k/config.h" -I"$R/include" "lib/int/$f.c" -o "$OUT/$f.s"
     "$AS" -m$CPU -o "$OUT/$f.o" "$OUT/$f.s"
-  done;;
+  done
+  if [ $CPU = 68000 ]; then "$AS" -m$CPU -I "$R/config/m68k/div64" -o "$OUT/muldi3.o" "$R/config/m68k/div64/muldi3.s" # mulu.w asm
+  else LLRM_CC_TARGET=m68k-$CPU "$CC" -Os -S -DSF_INTABI -include "$R/config/m68k/config.h" -I"$R/include" lib/int/muldi3.c -o "$OUT/muldi3.s"; "$AS" -m$CPU -o "$OUT/muldi3.o" "$OUT/muldi3.s"; fi;;
 *) echo "cpu $CPU?" >&2; exit 1;;
 esac

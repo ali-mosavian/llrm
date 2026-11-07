@@ -350,6 +350,13 @@ def MOSshl32 : SDNode<"MOSISD::SHL32", SDTMOSLongShift>;
 def MOSsrl32 : SDNode<"MOSISD::SRL32", SDTMOSLongShift>;
 def MOSsra32 : SDNode<"MOSISD::SRA32", SDTMOSLongShift>;
 
+// A word shifted by one bit with the bit that leaves the other word coming in: `(a << 1) | (b >> 15)` and
+// `(b >> 1) | (a << 15)`. Each is the carry of one `asl|lsr` and a `rol|ror` pair, where the two shifts and the
+// `or` of a wide shift were a bit made into a byte and merged through A.
+def SDTMOSFunnel1 : SDTypeProfile<1, 2, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i16>]>;
+def MOSfshl1 : SDNode<"MOSISD::FSHL1", SDTMOSFunnel1>;
+def MOSfshr1 : SDNode<"MOSISD::FSHR1", SDTMOSFunnel1>;
+
 // No `Defs = [P]`: an implicit result would be a third result type, which the generator rejects.
 let isCodeGenOnly = 0 in {
   // Unsigned divide and remainder: the quotient in the result registers, the remainder left in rc6:rc7 by
@@ -372,6 +379,10 @@ let isCodeGenOnly = 0 in {
       [(set i16:$dl, i16:$dh, (MOSshl32 i16:$al, i16:$ah, i8:$b))]>;
   def SRL32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag8:$b), "srl32",
       [(set i16:$dl, i16:$dh, (MOSsrl32 i16:$al, i16:$ah, i8:$b))]>;
+  def FSHL1 : MOSInst<(outs Imag16:$d), (ins Imag16:$a, Imag16:$b), "fshl1 $d, $a, $b",
+      [(set i16:$d, (MOSfshl1 i16:$a, i16:$b))]>;
+  def FSHR1 : MOSInst<(outs Imag16:$d), (ins Imag16:$a, Imag16:$b), "fshr1 $d, $a, $b",
+      [(set i16:$d, (MOSfshr1 i16:$a, i16:$b))]>;
   def SRA32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag8:$b), "sra32",
       [(set i16:$dl, i16:$dh, (MOSsra32 i16:$al, i16:$ah, i8:$b))]>;
 }
