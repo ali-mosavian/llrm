@@ -454,6 +454,18 @@ pub trait CombineHooks {
         legal
     }
 
+    /// `SimplifySetCC`'s `(zext x) == C --> x == (trunc C)` and its masked
+    /// forms without the pin's `N0->hasOneUse()`
+    /// ([TargetLowering.cpp#L4948](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L4948)).
+    /// Also an `AssertZext` operand, which is what a mask made in another block
+    /// is to a compare (the live-out copies). DEVIATE: off by default (the
+    /// pin). The narrowed compare reads `x`, so the extension stays for its
+    /// other users and nothing is duplicated. Owner z80,
+    /// exit 2026-11-27: a lane rule at the byte expansion of the compare.
+    fn narrow_setcc_with_other_uses(&self) -> bool {
+        false
+    }
+
     fn has_target_combine(
         &self,
         _op: ISD,
@@ -1125,7 +1137,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
             || self.level != CombineLevel::BeforeLegalizeTypes
-            || !self.dag.has_one_use(n0.node)
+            || !(self.dag.has_one_use(n0.node) || self.hooks.narrow_setcc_with_other_uses())
         {
             return None;
         }
@@ -1139,6 +1151,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                     return None;
                 }
                 (mask.trailing_ones(), self.dag.operand(n0, 0), false)
+            }
+            // A value another block made (`assert_live_out_copies`): its
+            // upper bits are known zero, so it is its own zero extension.
+            ISD::AssertZext if self.hooks.narrow_setcc_with_other_uses() => {
+                let NodeData::ValueType(known) = self.dag.node(self.dag.operand(n0, 1)).data else { return None };
+                (known.size_in_bits(), self.dag.operand(n0, 0), false)
             }
             _ => return None,
         };

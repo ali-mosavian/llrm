@@ -189,6 +189,13 @@ impl CombineHooks for Z80Combines {
         true
     }
 
+    /// A selector masked to three bits and compared with 0..7 in a chain is
+    /// one `and` and a byte `cp` each, not a word compare with `sub a, #0` for
+    /// the zeroed high byte (div_constants_short, 36 sites).
+    fn narrow_setcc_with_other_uses(&self) -> bool {
+        true
+    }
+
     /// A word compare against a constant is two byte compares and a branch
     /// between them; the compare of the loaded byte is one `cp`.
     ///
