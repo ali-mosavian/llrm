@@ -38,3 +38,20 @@ fn a_size_function_in_a_module_of_long_multiplies_calls_the_routine_for_x_times_
     let asm = llrm_z80::compile::text(ir, "m", 0, &llrm_z80::driver::Request::new(llrm_z80::driver::Level::Os)).expect("compiles");
     assert_eq!(asm.matches("call __mulsi3").count(), 2, "{asm}");
 }
+
+/// #7940 decomposed `x * 3` for a zero-extended byte too: 21 instructions where the byte-lane multiply of
+/// a value whose three high bytes are zero is 15 (byte_multiply -O2 +36 B, +38,149 T). A zero-extended
+/// word keeps the decomposition (23 against 44).
+#[test]
+fn a_long_times_three_of_a_zero_extended_byte_keeps_the_byte_lane_multiply() {
+    let count = |width: u32| {
+        let ir = format!(
+            "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+             define i32 @f(i{width} %a) {{\n %x = zext i{width} %a to i32\n %r = mul i32 %x, 3\n ret i32 %r\n}}"
+        );
+        let asm = llrm_z80::compile::text(&ir, "f", 0, &llrm_z80::driver::Request::new(llrm_z80::driver::Level::O2)).expect("compiles");
+        asm.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count()
+    };
+    assert!(count(8) <= 16, "byte: {} instructions", count(8));
+    assert!(count(16) <= 30, "word: {} instructions", count(16));
+}

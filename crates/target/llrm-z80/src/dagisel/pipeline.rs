@@ -191,6 +191,21 @@ impl CombineHooks for Z80Combines {
         }
     }
 
+    /// The byte-lane multiply of a long whose three high bytes are zero is 15
+    /// instructions for `x * 3` where the shifts and the add are 21 (a
+    /// zero-extended byte, byte_multiply -O2 +36 B and +38,149 T); a
+    /// zero-extended word keeps the decomposition (23 against 44).
+    fn decompose_mul_by_constant_of(
+        &self,
+        dag: &SelectionDAG,
+        x: SDValue,
+        vt: EVT,
+        c: u128,
+    ) -> bool {
+        self.decompose_mul_by_constant(vt, c)
+            && !(vt == EVT::I32 && llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero(dag, x, 0xFFFF_FF00))
+    }
+
     /// The pin's default: a compare of a masked or zero-extended value against
     /// a constant is made in the narrower type (`(and x, 7) == 3` is a byte
     /// `cp`), legal or not; the type legalizer promotes it to a byte. Without
