@@ -1035,7 +1035,7 @@ mod tests {
     fn effects_of_flags_scan_no_attribute_list() {
         use llrm_mir::counts::{Event, get};
         use llrm_mir::opcode::Attribute;
-        let flag = |name: &str| Attribute::Flag(name.to_owned());
+        let flag = |name: &str| Attribute::Flag(name.into());
         let attrs: Vec<Attribute> =
             ["nounwind", "mustprogress", "nofree", "readonly", "willreturn"].into_iter().map(flag).collect();
         let before = get(Event::AttributeScans);
