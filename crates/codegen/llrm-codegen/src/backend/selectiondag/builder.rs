@@ -821,6 +821,16 @@ impl Builder<'_> {
                 llrm_mir::types::FloatKind::X86Fp80 => MVT::F80,
                 llrm_mir::types::FloatKind::F128 => MVT::F128,
             })),
+            Type::Vector { element, count } if self.target.dag.vectors => {
+                // `v16i8`, `v8i16`, `v4i32`, `v2i64`: the vectors VR128 holds.
+                match self.module.context.types.get(*element) {
+                    Type::Int(bits) => MVT::integer(*bits)
+                        .and_then(|lane| MVT::vector(lane, *count))
+                        .map(EVT::Simple)
+                        .ok_or(Refused("vector with no register class")),
+                    _ => Err(Refused("vector with no register class")),
+                }
+            }
             _ => Err(Refused("aggregate or vector value")),
         }
     }
@@ -831,7 +841,7 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<EVT, Refused> {
-        if vt.is_floating_point() || vt == MVT::Far.into() {
+        if vt.is_floating_point() || vt == MVT::Far.into() || vt.is_vector() {
             return Ok(vt);
         }
         let bits = vt.size_in_bits();

@@ -263,6 +263,9 @@ pub struct DagConfig {
     /// A symbol defined in this module is `dso_local` (clang -fPIE marks definitions, not
     /// declarations) although `dso_local_symbols` is off. Set for the 64-bit PIE only.
     pub defined_dso_local: bool,
+    /// The 128-bit integer vector types have a register class (m64 with SSE2): the builder
+    /// lowers a vector IR type only then; elsewhere it is refused as before.
+    pub vectors: bool,
     /// Static code (the pin's `PICStyle::None`): a symbol keeps a base and an
     /// index in its address at 64 bits, as an absolute `disp32`, where
     /// position-independent code reaches it from `%rip` alone.
@@ -331,6 +334,7 @@ impl Default for DagConfig {
             global_addresses_constant: false,
             dso_local_symbols: false,
             defined_dso_local: false,
+            vectors: false,
             absolute_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,

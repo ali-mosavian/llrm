@@ -616,7 +616,8 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
-        Self::x86(TargetLoweringInfo::x86_64(), features, ptr, true)
+        let info = if features.sse2 { TargetLoweringInfo::x86_64_sse2() } else { TargetLoweringInfo::x86_64() };
+        Self::x86(info, features, ptr, true)
     }
 
     /// m16: the same constructor calls over the 386 register file, with `i16`

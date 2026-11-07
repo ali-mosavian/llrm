@@ -962,6 +962,8 @@ fn selected_in(
     // (X86Subtarget::classifyGlobalReference).
     builder_target.dag.dso_local_symbols = bitness != 64 || !module.position_independent();
     builder_target.dag.defined_dso_local = !builder_target.dag.dso_local_symbols;
+    // The integer vectors have a register class where the SSE2 tables list them (m64).
+    builder_target.dag.vectors = bitness == 64 && arch.scalar_sse();
     builder_target.dag.absolute_symbols = !module.position_independent();
     let builder_target = builder_target
         .with_tuning(machine.tuning())
