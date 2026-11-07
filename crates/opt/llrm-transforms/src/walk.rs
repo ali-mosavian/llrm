@@ -547,6 +547,54 @@ impl ProgramPass for Walk {
                                 modules[at].changed(id);
                                 modules[at]
                                     .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                // POC chain: the sites the trial's splice brought, priced by the
+                                // ordinary rules, are inlined into the trial too (the pin inlines
+                                // callee-first, so `foo` into `main` and `bar` into that copy meet
+                                // the constants together); one round, so O(n).
+                                if size != crate::inlinecost::CallerSize::Speed && tti.opt_size_inline_chain_trial() {
+                                    let mut seen = Vec::new();
+                                    let second = crate::inlinecost::sites_with_trials(
+                                        module,
+                                        &program.layout,
+                                        id,
+                                        live.references(),
+                                        &addressed,
+                                        &recursive,
+                                        params,
+                                        size,
+                                        self.inline.limit == 0,
+                                        Some(tti),
+                                        Some(&mut seen),
+                                        None,
+                                    );
+                                    if remarks {
+                                        for (call, callee, cost) in &seen {
+                                            let name = |g: GlobalId| module.global(g).name.as_deref().unwrap_or("?");
+                                            eprintln!("chain: {}", crate::inlinecost::remark(name(id), name(*callee), cost, false));
+                                            let _ = call;
+                                        }
+                                    }
+                                    if !second.is_empty() {
+                                        let mut declared = crate::interprocedural::declared(&mut modules[at], module);
+                                        let (context, function, metadata) =
+                                            crate::interprocedural::function_and_metadata_mut(module, id);
+                                        crate::inline::expanded_all(
+                                            context,
+                                            function,
+                                            &by,
+                                            &peeled,
+                                            Some(&second),
+                                            &mut declared,
+                                            metadata,
+                                        )?;
+                                        if declared.place(module)? > 0 {
+                                            modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                        }
+                                        modules[at].changed(id);
+                                        modules[at]
+                                            .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                                                            }
+                                }
                                 (self.simplify)(module, &mut modules[at], id, "walk.trial.");
                                 let tried = body_size(module, &program.layout, tti, id);
                                 // At speed a target that prices bytes in clocks
