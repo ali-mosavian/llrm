@@ -1603,6 +1603,7 @@ impl Emitter<'_, '_> {
         let Some(compare) = self.flag_insns.get(&producer).cloned() else {
             return Err(EmitError::Unsupported("flags overwritten between their producer and a consumer".to_owned()));
         };
+        let compare = self.unfold_memory_read(producer, compare);
         let at = self.next_address();
         let mut again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
         // A `sub` whose value nothing reads, made again for its flags, writes a
@@ -1619,6 +1620,73 @@ impl Emitter<'_, '_> {
         self.blocks.last_mut().expect("a block").insns.push(Arc::new(again));
         self.flags_now = Some(producer);
         Ok(())
+    }
+
+    /// The pin's scheduler unfolds the load a unit folded before it clones the
+    /// unit (`CopyAndMoveSuccessors`, `unfoldMemoryOperand`): the cell is read
+    /// once however many times the flags are made again. A volatile cell made
+    /// again in each compare was read once per compare (`cmp r, [b]` three
+    /// times for one `vv[j]`). The producer in the block becomes the load and
+    /// the register form, and `compare` its register form.
+    fn unfold_memory_read(
+        &mut self,
+        producer: u32,
+        compare: Arc<Insn>,
+    ) -> Arc<Insn> {
+        let Some(what) = compare.what.as_ref() else { return compare };
+        let Some(index) = what.sources.iter().position(|source| matches!(source, Loc::Mem(_))) else { return compare };
+        let Loc::Mem(cell) = &what.sources[index] else { return compare };
+        let width = cell.width;
+        let found = self.blocks.iter().enumerate().find_map(|(block, one)| {
+            one.insns
+                .iter()
+                .position(|insn| {
+                    insn.at == compare.at
+                        && insn.what.as_ref().is_some_and(|w| w.sources.iter().any(|s| matches!(s, Loc::Mem(_))))
+                })
+                .map(|place| (block, place))
+        });
+        let Some((block, place)) = found else { return compare };
+        let original = Arc::clone(&self.blocks[block].insns[place]);
+        let held = self.fresh(width);
+        let mut address = Vec::new();
+        for value in llrm_lir::values(&what.sources[index]).into_iter() {
+            if !address.contains(&value.value) {
+                address.push(value.value);
+            }
+        }
+        let at = self.next_address();
+        let read = Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Held(held)],
+            sources: vec![what.sources[index].clone()],
+            ..Semantics::new(Operation::Move)
+        };
+        let mut load = Insn::new(at, Some((at, at)), Some(read), vec![held.value], address);
+        load.volatile = original.volatile;
+        load.invariant = original.invariant;
+        let register_form = |insn: &Insn| -> Insn {
+            let mut what = insn.what.clone().expect("a compare");
+            if let Some(source) = what.sources.iter_mut().find(|source| matches!(source, Loc::Mem(_))) {
+                *source = Loc::Held(held);
+            }
+            let mut named = Vec::new();
+            for place in what.dests.iter().chain(&what.sources) {
+                named.extend(llrm_lir::values(place).into_iter().map(|h| h.value));
+            }
+            let mut uses: Vec<u32> = insn.uses.iter().copied().filter(|value| named.contains(value)).collect();
+            if !uses.contains(&held.value) {
+                uses.push(held.value);
+            }
+            Insn { what: Some(what), uses, volatile: false, invariant: false, ..insn.clone() }
+        };
+        let folded = Arc::new(register_form(&original));
+        let compare = Arc::new(register_form(&compare));
+        let insns = &mut self.blocks[block].insns;
+        insns[place] = folded;
+        insns.insert(place, Arc::new(load));
+        self.flag_insns.insert(producer, Arc::clone(&compare));
+        compare
     }
 
     /// The segment word `SEGMENT_OF` names, as a relocatable immediate. The
