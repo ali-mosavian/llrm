@@ -306,6 +306,20 @@ impl Tti for AArch64 {
         250_000
     }
 
+    /// 250 clocks a byte (the bar's price, as UP1 and the speed inline rate).
+    fn speed_milliclocks_per_byte(&self) -> i64 {
+        250_000
+    }
+
+    /// DEVIATE REC-1 (arm64, owner w15, exit 2026-11-30): a tree-recursive
+    /// function is copied into itself to depth 3 (bodies up to 150 `gcc_insns`)
+    /// while the clocks a level saves repay its bytes at the rate above, as the
+    /// m16 table does. gcc's recursion inlining runs rectwo -O2 at 266k
+    /// instructions against 778k. Pin: none.
+    fn priced_self_inlining(&self) -> Option<(u32, i64)> {
+        Some((3, 150))
+    }
+
     /// DEVIATE UP1 (arm64): a full unroll at -O2/-O3 must save 250 clocks for
     /// each byte it adds, the bar's price (score = instructions + 250 per
     /// byte). Without it matmul -O2 is 1560 B against gcc's 304 for 3x fewer
