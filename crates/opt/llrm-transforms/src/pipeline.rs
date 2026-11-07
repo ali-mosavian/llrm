@@ -656,7 +656,7 @@ impl FunctionPass for Slot {
         let count = |unit: &Unit| -> i64 {
             unit.function.layout().iter().map(|&b| unit.function.iter_block(b).count() as i64).sum()
         };
-        if std::env::var_os("W2_SLOT_COUNT").is_none() {
+        if !llrm_support::env_flag!("W2_SLOT_COUNT") {
             return self.inner.run(unit, analyses);
         }
         let before = count(unit);
@@ -1413,8 +1413,8 @@ pub fn recorded(
         manager.add(cgpaddr::CgpAddr);
     }
     // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
-    if applied.options.prices_bytes() && applied.options.wanted("cgpselectarms") {
-        manager.add(crate::cgpselect::SelectArms);
+    if (applied.options.prices_bytes() || applied.options.for_size) && applied.options.wanted("cgpselectarms") {
+        manager.add(crate::cgpselect::SelectArms { size: applied.options.for_size });
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its

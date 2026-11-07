@@ -216,6 +216,29 @@ struct CallConventions<'a> {
     general: &'a [llrm_lir::registers::RegId],
 }
 
+/// The huge-pointer routine a call of `name` is, if any. Only a name with the
+/// routines' prefix is looked up: building a routine assembles its code, which
+/// a call of any other function (`memcpy`) must not pay for.
+fn huge_routine(
+    arch: &dyn Target,
+    name: &str,
+) -> Option<llrm_target::routines::HugeString> {
+    huge_routine_with(name, |cell| arch.huge_fill_routine(cell).ok(), |backward| arch.huge_copy_routine(backward).ok())
+}
+
+pub(super) fn huge_routine_with(
+    name: &str,
+    fill: impl Fn(u32) -> Option<llrm_target::routines::HugeString>,
+    copy: impl Fn(bool) -> Option<llrm_target::routines::HugeString>,
+) -> Option<llrm_target::routines::HugeString> {
+    if !name.starts_with(llrm_target::routines::HUGE_PREFIX) {
+        return None;
+    }
+    let fills = [1u32, 2, 4].into_iter().filter_map(fill);
+    let copies = [false, true].into_iter().filter_map(copy);
+    fills.chain(copies).find(|routine| routine.name == name)
+}
+
 /// What the program's ABI says about its runtime routines: a QB routine's
 /// contract names the registers it destroys and how it returns, which its
 /// declared convention does not.
@@ -473,13 +496,11 @@ impl super::emit::Conventions for CallConventions<'_> {
             );
         }
         // a huge-pointer routine changes what it states and no more
-        if let Some(Callee::Named(name)) = callee {
+        if let Some(Callee::Named(name)) = callee
+            && let Some(routine) = huge_routine(self.arch, name)
+        {
             let regs = llrm_lir::registers::Regs(self.arch.registers());
-            let fills = [1u32, 2, 4].into_iter().filter_map(|cell| self.arch.huge_fill_routine(cell).ok());
-            let copies = [false, true].into_iter().filter_map(|backward| self.arch.huge_copy_routine(backward).ok());
-            if let Some(routine) = fills.chain(copies).find(|routine| routine.name == name.as_str()) {
-                return Some(routine.clobbers.iter().map(|reg| regs.root(*reg)).collect());
-            }
+            return Some(routine.clobbers.iter().map(|reg| regs.root(*reg)).collect());
         }
         // BASIC's convention (and any other with no row in calling.toml) is
         // the ABI's contract of the routine, as the old selector reads it.
@@ -841,7 +862,8 @@ fn selected_in(
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let bitness = arch.object().bitness;
-    // One cost model for the function: `Profile::target` builds one (and clones the price tables) per call.
+    // One cost model for the function: `Profile::target` builds one (and clones
+    // the price tables) per call.
     let machine = cpu.target();
     let m16 = match bitness {
         16 => true,
@@ -1026,7 +1048,7 @@ fn selected_in(
     for (index, (size, align)) in objects.into_iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
         debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
-        if align > kept {
+        if arch.can_realign_stack() && align > kept {
             over_aligned.push((frame.locals.borrow()[index].0, align));
         }
     }
@@ -1072,7 +1094,18 @@ fn selected_in(
     let mut work: Vec<(BlockId, BlockId, crate::backend::selectiondag::builder::BlockDag)> = Vec::new();
     let mut fast_blocks = (!cpu.optimized && super::fastisel::enabled())
         .then(|| {
-            super::fastisel::build_all(module, function, &builder_target, &|wanted: &str| tables.names.iter().find(|(_, name)| name.split('|').next() == Some(wanted)).map(|(op, _)| *op), &layout, &convention, arch, &mut info)
+            super::fastisel::build_all(
+                module,
+                function,
+                &builder_target,
+                &|wanted: &str| {
+                    tables.names.iter().find(|(_, name)| name.split('|').next() == Some(wanted)).map(|(op, _)| *op)
+                },
+                &layout,
+                &convention,
+                arch,
+                &mut info,
+            )
         })
         .flatten()
         .unwrap_or_default();
@@ -1210,7 +1243,34 @@ fn selected_in(
             );
         llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
     });
+    let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
+        if cpu.optimized && !fast && block == parent {
+            // `SelectAllBasicBlocks`: a phi knows what its incoming values do
+            // once all its predecessors are selected.
+            let ready = function.predecessors(block).iter().all(|pred| selected_blocks.contains(pred));
+            let phis: Vec<_> = function
+                .iter_block(block)
+                .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                .collect();
+            for phi in phis {
+                if ready {
+                    let bits = |bits: u32| match bits {
+                        1..=8 => Some(8),
+                        9..=16 => Some(16),
+                        17..=32 => Some(32),
+                        33..=64 if m64 => Some(64),
+                        _ => None,
+                    };
+                    super::live_out::compute_phi_live_out_reg_info(module, function, phi, &bits, &mut info);
+                } else if let Some(reg) = function.instruction(phi).result.and_then(|r| info.value_regs.get(&r)) {
+                    info.live_out.remove(reg);
+                }
+            }
+        }
+        if block == parent {
+            selected_blocks.insert(block);
+        }
         if !built.live_ins.is_empty() && block != function.layout()[0] {
             return refuse("register arguments outside the entry block");
         }
@@ -1650,10 +1710,8 @@ fn selected_in(
     }
     // The huge-pointer routines the calls name (`huge_memory`): their bytes
     // are laid down at the call as well.
-    for (at, name) in calls.iter().filter(|(_, name)| name.starts_with(llrm_target::routines::HUGE_PREFIX)) {
-        let fills = [1u32, 2, 4].into_iter().filter_map(|cell| arch.huge_fill_routine(cell).ok());
-        let copies = [false, true].into_iter().filter_map(|backward| arch.huge_copy_routine(backward).ok());
-        if let Some(routine) = fills.chain(copies).find(|routine| routine.name == name.as_str()) {
+    for (at, name) in &calls {
+        if let Some(routine) = huge_routine(arch, name) {
             inline.insert(*at, routine.code);
         }
     }

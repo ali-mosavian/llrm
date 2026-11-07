@@ -18,6 +18,7 @@ div_constants_short
 div_constants_ulong
 double_against_int
 double_to_int64
+double_to_uint64
 extension_chain_fused
 fill_nest
 float_bits
@@ -78,6 +79,7 @@ uint64_to_float
 value_of_valueless
 volatile_bitfield
 wide_frame
+word_compare_branches
 word_compares
 write_through_parameter
 zz_f

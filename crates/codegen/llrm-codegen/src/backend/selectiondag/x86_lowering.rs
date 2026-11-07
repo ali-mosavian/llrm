@@ -238,17 +238,18 @@ impl CombineHooks for X86Lowering<'_> {
 
     /// `visitBRCOND`'s `rebuildSetCC`: `!bad` on an `i1` global is `cmp byte
     /// [bad], 1; jne`, not `mov al; not al; test al, 1; jne` (jpeg_fixed
-    /// `-Os` m64, 2 sites, 8 B). The m16 judging cost a byte, so only the
-    /// 64-bit lowering asks. DEVIATE: off at m16 and m32. Exit 2026-12-01.
+    /// `-Os` m64, 2 sites, 8 B). The m16 judging cost a byte, so m16 stays off;
+    /// m32 asks too (x_hash `-Os`: `not dl; test dl, 1; je`, +5 B on the pin).
+    /// DEVIATE: off at m16. Exit 2026-12-01.
     fn rebuild_brcond_condition(&self) -> bool {
-        self.zext_free
+        self.zext_free || !self.i16_mul_chains
     }
 
     /// `visitAND`'s `(and (extload i1), 1)` is a `zextload`, so the branch
-    /// above compares the loaded byte without `and al, 1`. DEVIATE: m64
-    /// only, with it.
+    /// above compares the loaded byte without `and al, 1`. DEVIATE: off
+    /// at m16, with it.
     fn fold_and_of_extload(&self) -> bool {
-        self.zext_free
+        self.zext_free || !self.i16_mul_chains
     }
 
     fn fold_xor_of_and_with_mask(&self) -> bool {
@@ -294,6 +295,10 @@ impl CombineHooks for X86Lowering<'_> {
     }
 
     fn pack_word_pairs(&self) -> bool {
+        true
+    }
+
+    fn push_freeze_through_operands(&self) -> bool {
         true
     }
 
@@ -421,9 +426,11 @@ impl CombineHooks for X86Lowering<'_> {
                     } else {
                         6
                     };
-                    // A trailing `shl 1..3` whose users are all adds folds into the
-                    // address's scale (`t[3 * i]` as `[t + r*4]`): no bytes of its own.
-                    let scale = |shift: SDValue| dag.constant(dag.operand(shift, 1)).is_some_and(|by| (1..=3).contains(&by));
+                    // A trailing `shl 1..3` whose users are all adds folds into
+                    // the address's scale (`t[3 * i]` as
+                    // `[t + r*4]`): no bytes of its own.
+                    let scale =
+                        |shift: SDValue| dag.constant(dag.operand(shift, 1)).is_some_and(|by| (1..=3).contains(&by));
                     let folds = dag.opcode(*chain) == ISD::Shl
                         && scale(*chain)
                         && dag.users(node).all(|user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::Add);

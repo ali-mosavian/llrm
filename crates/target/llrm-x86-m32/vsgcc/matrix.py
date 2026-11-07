@@ -1,4 +1,4 @@
-"""matrix.py RESULTS.jsonl...: scoreboard TSV rows (target prog level compiler code_bytes clocks instrs note), later files overriding earlier. code_bytes = .text plus .data/.rodata, as table.py's gate."""
+"""matrix.py RESULTS.jsonl...: scoreboard TSV rows (target prog level compiler code_bytes clocks instrs note eh_frame; eh_frame is reported, never added to code_bytes), later files overriding earlier. code_bytes = .text plus .data/.rodata, as table.py's gate."""
 import json
 import sys
 
@@ -18,7 +18,7 @@ def rows(results):
     out = {}
     for x in results:
         level, compiler = split(x['variant'])
-        out[(x['prog'], level, compiler)] = ['x86-m32', x['prog'], level, compiler, str(x['code'] + x.get('data', 0)), str(x['clocks']), str(x['ins']), '']
+        out[(x['prog'], level, compiler)] = ['x86-m32', x['prog'], level, compiler, str(x['code'] + x.get('data', 0)), str(x['clocks']), str(x['ins']), '', '' if x.get('eh_frame') is None else str(x['eh_frame'])]
     return [out[k] for k in sorted(out, key=lambda k: (k[0], ORDER[k[1]], k[2]))]
 
 
