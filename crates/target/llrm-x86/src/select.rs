@@ -1606,7 +1606,7 @@ pub fn bit_test_immediate(
     at: At,
 ) -> Option<Emitted> {
     let width = width_of(register)?;
-    if ![2, 4].contains(&width) {
+    if ![2, 4, 8].contains(&width) {
         return None;
     }
     let code = code_of!("BT_RM", width * 8, "_IMM8")?;
@@ -1620,7 +1620,7 @@ pub fn bit_test_memory(
     bit: i64,
     at: At,
 ) -> Option<Emitted> {
-    if ![2, 4].contains(&cell.width) {
+    if ![2, 4, 8].contains(&cell.width) {
         return None;
     }
     let (r#where, relocated) = operand_of(cell, at.bits)?;

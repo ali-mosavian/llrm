@@ -432,7 +432,19 @@ impl Profile {
         if !self.has_speed_goal() || !self.speed_rate {
             return 0;
         }
-        self.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+        self.speed_milliclocks_per_byte_on(&*self.target())
+    }
+
+    /// [`Self::speed_milliclocks_per_byte`] on a cost model the caller already
+    /// has: `target` builds one (and clones the price tables) per call.
+    pub fn speed_milliclocks_per_byte_on(
+        &self,
+        machine: &dyn llrm_mir::target::Machine,
+    ) -> i64 {
+        if !self.has_speed_goal() || !self.speed_rate {
+            return 0;
+        }
+        machine.tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
     }
 
     /// Clocks a mispredicted branch costs in this function: the size row at

@@ -554,7 +554,7 @@ pub fn fresh_dag(
         .tables
         .get_or_insert_with(|| {
             let (global_names, local_symbols) = module_tables
-                .unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols));
+                .unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols, target.dag.defined_dso_local));
             super::function_lowering::Tables {
                 global_names,
                 local_symbols,
@@ -855,9 +855,12 @@ impl Builder<'_> {
             Err(_) => {
                 let widest = EVT::integer(*self.target.legal_ints.last().expect("a legal integer"));
                 // `getNumRegisters`: an integer wider than a register is
-                // that many registers when the width is a power of two of them
-                let count = vt.size_in_bits() / widest.size_in_bits();
-                if vt.is_integer() && vt.size_in_bits() % widest.size_in_bits() == 0 && count.is_power_of_two() {
+                // that many registers when the width is a power of two of them;
+                // an odd width is first promoted to the next power of two
+                // (`getTypeConversion`: `i63` is `i64`, as many registers as that).
+                let bits = vt.size_in_bits().next_power_of_two();
+                let count = bits / widest.size_in_bits();
+                if vt.is_integer() && bits % widest.size_in_bits() == 0 && count.is_power_of_two() {
                     Ok((widest, count as usize))
                 } else {
                     Err(Refused("integer wider than a power-of-two count of registers"))
@@ -930,6 +933,14 @@ impl Builder<'_> {
         part: EVT,
         count: usize,
     ) -> Vec<SDValue> {
+        // `getCopyToParts`: a value narrower than its parts together (`i63` in
+        // eight bytes) is extended to their width first.
+        let total = part.size_in_bits() * count as u32;
+        let value = if self.dag.value_type(value).size_in_bits() < total {
+            self.dag.get_node(ISD::AnyExtend, EVT::integer(total), &[value])
+        } else {
+            value
+        };
         if count == 2 {
             return self.split_value(value, part).to_vec();
         }
@@ -948,6 +959,14 @@ impl Builder<'_> {
         pieces: &[SDValue],
         pointer: bool,
     ) -> SDValue {
+        // `getCopyFromParts`: parts wider together than the value (eight bytes
+        // for an `i63`) are joined at their width and truncated.
+        let total = pieces.iter().map(|piece| self.dag.value_type(*piece).size_in_bits()).sum::<u32>();
+        if vt.is_integer() && total > vt.size_in_bits() {
+            let wide = EVT::integer(total);
+            let joined = self.join_parts(wide, pieces, false);
+            return self.dag.get_node(ISD::Truncate, vt, &[joined]);
+        }
         if pieces.len() == 2 {
             return self.dag.get_node_flags(ISD::BuildPair, vt, pieces, pair_kind(vt, pointer));
         }

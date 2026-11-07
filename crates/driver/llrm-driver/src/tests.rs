@@ -766,6 +766,20 @@ fn a_select_of_a_loaded_value_is_a_cmov_from_memory() {
     assert!(listing.lines().any(|line| line.trim().starts_with("cmovge") && line.contains('[')), "{listing}");
 }
 
+/// `c ? 48 : 32` (a difference of 16) was two `mov`s and a `cmov`: the pin's
+/// `combineSelectOfTwoConstants` is `zext(c) * 16 + 32`, a `setl`, a `shl` and
+/// an `or` (word_compare_branches -Os m64: +37 B against the pin).
+#[test]
+fn a_select_of_two_constants_a_power_of_two_apart_is_a_shifted_setcc() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %x, i32 %y) {\n  %c = icmp slt i32 %x, %y\n  %r = select i1 %c, i32 48, i32 32\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("shl")), "{listing}");
+    assert!(!listing.lines().any(|line| line.trim().starts_with("cmov")), "{listing}");
+}
+
 /// Setting a bit of an `i64` by a variable index stopped the emitter
 /// (`Unmapped("BTS64rr")`): the x86-64 file had `bt` and `btc` but not `bts`,
 /// which the table selects from `or` with a shifted bit.
