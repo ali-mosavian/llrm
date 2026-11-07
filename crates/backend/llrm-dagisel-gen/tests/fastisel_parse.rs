@@ -33,7 +33,43 @@ fn an_immediate_predicate_is_part_of_the_key() {
 #[test]
 fn dispatchers_are_skipped_and_the_count_adds_up() {
     let table = fastisel::parse(EXCERPT).unwrap();
-    assert_eq!(table.parsed(), 4);
-    assert_eq!(table.dispatchers(), 1);
-    assert_eq!(table.unread(), 0);
+    // ADD i32 rr/ri, ADD i64 ri predicated, ABS v16i8, SIGN_EXTEND i8 to i32 and to i64.
+    assert_eq!(table.parsed(), 6);
+    // ADD rr, and SIGN_EXTEND i8 whose body switches on `RetVT`.
+    assert_eq!(table.dispatchers(), 2);
+    // MUL i8 rr copies into AL first: a form kept for step 2, counted here.
+    assert_eq!(table.unread(), 1);
+}
+
+/// `SIGN_EXTEND i8 -> i32` and `-> i64` are two functions named with both types;
+/// the first reader found neither (487 such functions unread on the pin file),
+/// so a sign-extend had no row.
+#[test]
+fn a_function_named_with_a_source_and_a_result_type_has_its_own_row() {
+    let table = fastisel::parse(EXCERPT).unwrap();
+    let to32 = table.rows_to("ISD", "SIGN_EXTEND", "i8", "i32", Shape::R);
+    let to64 = table.rows_to("ISD", "SIGN_EXTEND", "i8", "i64", Shape::R);
+    assert_eq!(to32.arms.len(), 1);
+    assert_eq!((to32.arms[0].opcode.as_str(), to32.arms[0].class.as_str()), ("MOVSX32rr8", "GR32"));
+    assert_eq!((to64.arms[0].opcode.as_str(), to64.arms[0].class.as_str()), ("MOVSX64rr8", "GR64"));
+}
+
+/// Over the whole pin file nothing is lost: every `fastEmit_` head is a row, a
+/// dispatcher or counted unread, and the integer rows the m32 core needs exist.
+/// Runs when `LLRM_FASTISEL_INC` names the pin's `X86GenFastISel.inc`.
+#[test]
+fn the_whole_pin_file_is_accounted_for() {
+    let Ok(path) = std::env::var("LLRM_FASTISEL_INC") else { return };
+    let text = std::fs::read_to_string(&path).unwrap();
+    let heads = text.lines().filter(|l| l.starts_with("Register fastEmit_")).count();
+    let table = fastisel::parse(&text).unwrap();
+    eprintln!("heads {heads}: parsed {}, dispatchers {}, unread {}", table.parsed(), table.dispatchers(), table.unread());
+    assert_eq!(table.parsed() + table.dispatchers() + table.unread(), heads, "a function was dropped");
+    // The 12 left are the two forms steps 2-3 write by hand: six i8 multiplies, shifts and
+    // rotates that copy into AL/CL first, and six TRUNCATEs that extract a subregister.
+    assert_eq!(table.unread(), 12, "the unread set changed");
+    assert_eq!((table.parsed(), table.dispatchers()), (1659, 474));
+    for (op, shape) in [("ADD", Shape::Rr), ("SUB", Shape::Rr), ("AND", Shape::Rr), ("OR", Shape::Rr), ("XOR", Shape::Rr), ("MUL", Shape::Rr), ("ADD", Shape::Ri)] {
+        assert!(!table.rows("ISD", op, "i32", shape).arms.is_empty(), "no i32 {op} {shape:?} row");
+    }
 }

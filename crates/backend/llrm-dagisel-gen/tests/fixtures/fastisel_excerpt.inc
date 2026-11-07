@@ -73,3 +73,25 @@ Register fastEmit_ISD_ADD_rr(MVT VT, MVT RetVT, Register Op0, Register Op1) {
   }
 }
 
+Register fastEmit_ISD_SIGN_EXTEND_MVT_i8_MVT_i32_r(Register Op0) {
+  return fastEmitInst_r(X86::MOVSX32rr8, &X86::GR32RegClass, Op0);
+}
+
+Register fastEmit_ISD_SIGN_EXTEND_MVT_i8_MVT_i64_r(Register Op0) {
+  return fastEmitInst_r(X86::MOVSX64rr8, &X86::GR64RegClass, Op0);
+}
+
+Register fastEmit_ISD_SIGN_EXTEND_MVT_i8_r(MVT RetVT, Register Op0) {
+switch (RetVT.SimpleTy) {
+  case MVT::i32: return fastEmit_ISD_SIGN_EXTEND_MVT_i8_MVT_i32_r(Op0);
+  case MVT::i64: return fastEmit_ISD_SIGN_EXTEND_MVT_i8_MVT_i64_r(Op0);
+  default: return Register();
+}
+
+Register fastEmit_ISD_MUL_MVT_i8_rr(MVT RetVT, Register Op0, Register Op1) {
+  if (RetVT.SimpleTy != MVT::i8)
+    return Register();
+  BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, MIMD, TII.get(TargetOpcode::COPY), X86::AL).addReg(Op0);
+  return fastEmitInst_r(X86::MUL8r, &X86::GR8RegClass, Op1);
+}
+

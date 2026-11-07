@@ -39,7 +39,8 @@ pub struct Rows {
     pub arms: Vec<Arm>,
 }
 
-type Key = (String, String, String, Shape);
+/// Namespace, operation, source type, result type (empty when the body tests `RetVT`), shape.
+type Key = (String, String, String, String, Shape);
 
 #[derive(Default)]
 pub struct Table {
@@ -57,7 +58,21 @@ impl Table {
         vt: &str,
         shape: Shape,
     ) -> Rows {
-        let key = (namespace.to_owned(), op.to_owned(), vt.to_owned(), shape);
+        let key = (namespace.to_owned(), op.to_owned(), vt.to_owned(), String::new(), shape);
+        self.rows.get(&key).cloned().unwrap_or_default()
+    }
+
+    /// Like [`Table::rows`] for a function named with its result type too
+    /// (`fastEmit_ISD_SIGN_EXTEND_MVT_i8_MVT_i32_r`).
+    pub fn rows_to(
+        &self,
+        namespace: &str,
+        op: &str,
+        vt: &str,
+        ret: &str,
+        shape: Shape,
+    ) -> Rows {
+        let key = (namespace.to_owned(), op.to_owned(), vt.to_owned(), ret.to_owned(), shape);
         self.rows.get(&key).cloned().unwrap_or_default()
     }
 
@@ -83,9 +98,18 @@ fn split_name(name: &str) -> Option<(Key, Option<String>)> {
         return None;
     }
     let (op, rest) = rest.split_once("_MVT_")?;
-    if rest.contains("_MVT_") {
-        return None;
-    }
+    let (rest, ret) = match rest.split_once("_MVT_") {
+        Some((vt, tail)) => {
+            if tail.contains("_MVT_") {
+                return None;
+            }
+            // `i8_MVT_i32_r`: the source type, then the result type and shape.
+            let (ret, shape) = tail.rsplit_once('_')?;
+            (format!("{vt}_{shape}"), ret.to_owned())
+        }
+        None => (rest.to_owned(), String::new()),
+    };
+    let rest = rest.as_str();
     let (rest, predicate) = match rest.split_once("_Predicate_") {
         Some((head, p)) => (head, Some(p.to_owned())),
         None => (rest, None),
@@ -99,7 +123,7 @@ fn split_name(name: &str) -> Option<(Key, Option<String>)> {
         ("i", false) => Shape::I,
         _ => return None,
     };
-    Some(((namespace.to_owned(), op.to_owned(), vt.to_owned(), shape), predicate))
+    Some(((namespace.to_owned(), op.to_owned(), vt.to_owned(), ret, shape), predicate))
 }
 
 /// `text` without parentheses that enclose all of it.
@@ -183,12 +207,15 @@ pub fn parse(text: &str) -> Result<Table, String> {
             return Err(format!("{name}: no closing brace"));
         }
         at = end + 1;
-        if head.contains("override") || head.contains("(MVT VT,") {
+        // A body that switches on `RetVT` only picks among functions of their own.
+        let switches = lines[start..end].iter().any(|l| l.contains("switch (RetVT"));
+        if head.contains("override") || head.contains("(MVT VT,") || switches {
             table.dispatchers += 1;
             continue;
         }
         let read = split_name(&name).and_then(|(key, predicate)| {
-            let (ret, arms) = body(&lines[start..end])?;
+            let (tested, arms) = body(&lines[start..end])?;
+            let ret = if key.3.is_empty() { tested } else { Some(key.3.clone()) };
             Some((key, Rows { ret, imm_predicate: predicate, arms }))
         });
         match read {
