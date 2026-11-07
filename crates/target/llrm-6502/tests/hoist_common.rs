@@ -90,3 +90,18 @@ fn a_select_of_what_a_compare_left_in_a_overwrites_it_in_place() {
     let bytes = llrm_6502::timing::estimate(Cpu::Mos6502, body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
     assert!(bytes <= 56, "{bytes} B\n{body}");
 }
+
+/// `strnlen`'s `lda #0; sta rc6; lda #0; sta rc7` ahead of a loop label: the
+/// scan for a reader of the flags stopped at the label, so the second load
+/// stayed (2 bytes, 2 clocks).
+#[test]
+fn a_load_before_a_label_is_dropped_when_the_flags_are_set_again_after_it() {
+    use llrm_6502::peephole::drop_known_loads;
+    let mut asm = Asm::parse("f:\n  lda #0\n  sta rc6\n  lda #0\n  sta rc7\nl:\n  clc\n  lda rc2\n  bne l\n  rts\n");
+    drop_known_loads(&mut asm);
+    assert_eq!(asm.text(), "f:\n  lda #0\n  sta rc6\n  sta rc7\nl:\n  clc\n  lda rc2\n  bne l\n  rts\n");
+    let read = "f:\n  lda #0\n  sta rc6\n  lda #0\n  sta rc7\nl:\n  bne l\n  rts\n";
+    let mut asm = Asm::parse(read);
+    drop_known_loads(&mut asm);
+    assert_eq!(asm.text(), read, "a branch after the label reads the flags the load set");
+}

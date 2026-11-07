@@ -67,6 +67,11 @@ pub(crate) fn flags_unread_after(
     from: usize,
 ) -> bool {
     for line in &lines[from..] {
+        // control falling through a label carries these flags on; the other ways
+        // in bring their own
+        if matches!(line, Line::Label(_)) {
+            continue;
+        }
         let Line::Inst(inst) = line else { return false };
         // a jump leaves the block: no block reads the flags its predecessor
         // left
