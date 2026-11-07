@@ -33,6 +33,7 @@ use std::collections::{HashMap, HashSet};
 use crate::dagisel::hooks::Cpu;
 use crate::mfunc::{Inst, Kind, Operand, Reg};
 use crate::regalloc::Assignment;
+use crate::timing::Price;
 use crate::{REGISTER_INFO, mc, reg};
 
 /// Which instructions of a function are rewritten.
@@ -390,14 +391,14 @@ fn add(
     (a.0 + b.0, a.1 + b.1)
 }
 
-/// Whether `a` is the cheaper: bytes then clocks at the size level, clocks
-/// then bytes otherwise.
+/// Whether `a` is the cheaper at `price`.
 fn cheaper(
     a: (usize, u32),
     b: (usize, u32),
-    size: bool,
+    price: Price,
+    cpu: Cpu,
 ) -> bool {
-    if size { a < b } else { (a.1, a.0) < (b.1, b.0) }
+    price.beats(cpu, a, b)
 }
 
 /// The sequences of `insts` whose stores can be pushes, with their prices.
@@ -406,9 +407,10 @@ fn sequences(
     blocks: &[usize],
     assignment: &Assignment,
     cpu: Cpu,
-    size: bool,
+    price: Price,
     short: bool,
 ) -> Result<(Vec<Sequence>, Vec<i64>), String> {
+    let size = price == Price::Size;
     let mut found = Vec::new();
     // the call areas of the sequences that cannot be pushed
     let mut others = Vec::new();
@@ -516,7 +518,7 @@ fn sequences(
                     Some((load, read, load_price))
                 });
                 match memory {
-                    Some((load, read, load_price)) if cheaper(read, add(load_price, pushed), size) => {
+                    Some((load, read, load_price)) if cheaper(read, add(load_price, pushed), price, cpu) => {
                         folds.push((store, load));
                         kept = add(kept, load_price);
                         pushed = read;
@@ -555,11 +557,11 @@ pub fn plan(
     blocks: &[usize],
     assignment: &Assignment,
     cpu: Cpu,
-    size: bool,
+    price: Price,
     short: bool,
     frame_price: impl Fn(i64) -> Result<(usize, u32), String>,
 ) -> Result<Plan, String> {
-    let (found, others) = sequences(insts, blocks, assignment, cpu, size, short)?;
+    let (found, others) = sequences(insts, blocks, assignment, cpu, price, short)?;
     if found.is_empty() {
         return Ok(Plan::default());
     }
@@ -582,12 +584,12 @@ pub fn plan(
     };
     let none = vec![false; found.len()];
     let all = vec![true; found.len()];
-    let alone: Vec<bool> = found.iter().map(|one| cheaper(one.pushed, one.kept, size)).collect();
+    let alone: Vec<bool> = found.iter().map(|one| cheaper(one.pushed, one.kept, price, cpu)).collect();
     let mut best = (none.clone(), total(&none)?);
     for choice in [all, alone] {
-        let price = total(&choice)?;
-        if cheaper(price, best.1, size) {
-            best = (choice, price);
+        let sum = total(&choice)?;
+        if cheaper(sum, best.1, price, cpu) {
+            best = (choice, sum);
         }
     }
     let mut plan = Plan::default();

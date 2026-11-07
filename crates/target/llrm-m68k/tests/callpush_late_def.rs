@@ -12,6 +12,7 @@ use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::mfunc::{Inst, Kind, Operand, Reg};
 use llrm_m68k::reg;
 use llrm_m68k::regalloc::Assignment;
+use llrm_m68k::timing::Price;
 
 fn phys(register: llrm_lir::registers::RegId) -> Reg {
     Reg::Phys(register)
@@ -34,7 +35,7 @@ fn pushes_wait_for_the_last_store_not_the_call() {
     ];
     let refs: Vec<&Inst> = insts.iter().collect();
     let blocks = vec![0; insts.len()];
-    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, false, false, |area| {
+    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, |area| {
         Ok(if area > 0 { (8, 16) } else { (0, 0) })
     })
     .expect("plans");
@@ -59,9 +60,36 @@ fn a_register_stored_last_is_pushed_before_the_call() {
     ];
     let refs: Vec<&Inst> = insts.iter().collect();
     let blocks = vec![0; insts.len()];
-    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, false, false, |area| {
+    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, |area| {
         Ok(if area > 0 { (8, 16) } else { (0, 0) })
     })
     .expect("plans");
     assert!(found.flushes(3), "the pushes are not made before the call");
+}
+
+/// `g(x, y, 0)` stored in the order 4, 0, 8: pushing is faster and larger than
+/// the stores. The rate price may take that trade; `-O1` takes a candidate only
+/// when it is no larger and no slower (4 seed cells grew 2..4 B at 68000 -O1).
+#[test]
+fn a_strict_price_does_not_trade_bytes_for_clocks() {
+    let sp = || Operand::Use(phys(reg::SP));
+    let mut call = Inst::new(Kind::Op("JSR32"), vec![]);
+    call.call = true;
+    let insts = [
+        Inst::new(Kind::Op("ADJCALLSTACKDOWN"), vec![Operand::Imm(12)]),
+        Inst::new(Kind::Op("MOV32pr"), vec![Operand::Imm(4), sp(), Operand::Use(phys(reg::D2))]),
+        Inst::new(Kind::Op("MOV32jr"), vec![sp(), Operand::Use(phys(reg::D0))]),
+        Inst::new(Kind::Op("CLR32p"), vec![Operand::Imm(8), sp()]),
+        call,
+        Inst::new(Kind::Op("ADJCALLSTACKUP"), vec![Operand::Imm(12), Operand::Imm(0)]),
+    ];
+    let refs: Vec<&Inst> = insts.iter().collect();
+    let blocks = vec![0; insts.len()];
+    let pushed = |price| {
+        let found =
+            plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, price, true, |_| Ok((0, 0))).expect("plans");
+        found.flushes(4)
+    };
+    assert!(pushed(Price::Rate), "the rate price takes the faster pushes");
+    assert!(!pushed(Price::Strict), "-O1 took pushes that are larger");
 }
