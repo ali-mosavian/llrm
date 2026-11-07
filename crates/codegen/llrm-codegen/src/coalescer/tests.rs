@@ -721,7 +721,7 @@ fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
         should_join: None,
         freq: Vec::new(),
         remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
-        remat_wins: Some(Box::new(|_, _, _, _| false)),
+        remat_wins: Some(Box::new(|_, _, _, _, _| false)),
         joins_global_copies: false,
         joins_pinned_copies: true,
         joins_sub_registers: true,
@@ -750,44 +750,32 @@ fn test_a_copy_of_a_load_that_cannot_be_joined_is_not_made_again() {
     assert_eq!(names(&lis).len(), 5);
 }
 
-/// For size the copy of a constant that is read elsewhere is made again, as the
-/// pin's `reMaterializeDef` does: m64 `recgcd` -Os kept `mov rsi, rcx` (3 B,
-/// REX) where the pin has `xor esi, esi` (2 B), +2 B. The constant stays read
-/// after the copy (`read(1)`), which is what the size check refused.
+struct ForSize;
+
+impl CoalescerEnv for ForSize {
+    fn can_share(
+        &self,
+        _a: u32,
+        _b: u32,
+    ) -> bool {
+        true
+    }
+
+    fn tuned_for_size(&self) -> bool {
+        true
+    }
+}
+
+/// For size the copy of a constant that stays read elsewhere is left a copy:
+/// it was a 5-byte move for a 2-byte copy (`regparm3_matrix_22` +18 bytes).
 #[test]
-fn test_for_size_a_copy_of_a_constant_that_stays_read_is_made_again() {
-    use std::collections::BTreeSet;
-
-    use llrm_lir::registers::RegId;
-
-    use super::env::TargetEnv;
-    let (a, c) = (constant_named(1, "CONST_I32"), copy(2, 1));
-    let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
-    let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
-    let env = TargetEnv {
-        palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
-        pins: IndexMap::default(),
-        size: true,
-        keep_pinned: false,
-        aliases: Default::default(),
-        should_join: None,
-        freq: Vec::new(),
-        remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
-        remat_wins: None,
-        joins_global_copies: false,
-        joins_pinned_copies: true,
-        joins_sub_registers: true,
-        joins_lanes: false,
-        regs: None,
-        kind_of: None,
-        kinds: Default::default(),
-        check_kinds: false,
-    };
+fn test_for_size_a_copy_of_a_constant_that_stays_read_is_not_made_again() {
+    let (a, c, b, r1, r2) = (def(1), copy(2, 1), def(1), read(1), read(2));
+    let was = body(&[(&[a, Arc::clone(&c), b, r1, r2], &[])]);
     let mut lis = LiveIntervals::new(&was);
-    let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
-    assert_eq!(result, JoinResult::Joined);
-    let kept = names(&lis);
-    assert!(!kept.contains(&(vec![2], vec![1])), "the copy is left: {kept:?}");
+    let result = join_copy(&mut lis, &ForSize, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Deferred);
+    assert_eq!(names(&lis).len(), 5);
 }
 
 /// `v2 := mov v1` for a base (BX, BP) and `v3 := mov v1` for an index (SI, DI):
@@ -1585,10 +1573,7 @@ fn test_a_lane_def_after_a_joined_lane_keeps_it() {
     let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
     assert_eq!(result, JoinResult::Joined);
     let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
-    let low = kept
-        .iter()
-        .find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1)))
-        .expect("the low copy");
+    let low = kept.iter().find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1))).expect("the low copy");
     assert!(!low.undef_super && low.partial_defs == vec![2], "{low:?}");
 }
 
@@ -1611,10 +1596,7 @@ fn test_a_plain_lane_def_keeps_a_lane_joined_after_it() {
     let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
     assert_eq!(result, JoinResult::Joined);
     let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
-    let low = kept
-        .iter()
-        .find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1)))
-        .expect("the low copy");
+    let low = kept.iter().find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1))).expect("the low copy");
     assert!(low.partial_defs == vec![2], "{low:?}");
 }
 
@@ -1622,8 +1604,7 @@ fn test_a_plain_lane_def_keeps_a_lane_joined_after_it() {
 /// join their lanes it defines the whole pair. The high lane's copy kept the
 /// low one, so the def was marked to read the pair, which nothing defined
 /// before it: the pair was live from the function entry and the split of it
-/// died on "Cannot overlap different values" (6502, write_through_parameter
-/// -O1).
+/// died on "Cannot overlap different values" (6502, write_through_parameter -O1).
 #[test]
 fn test_one_instruction_defining_both_bytes_does_not_read_the_pair() {
     let both = Arc::new(Insn::new(0, None, None, vec![1, 3], vec![]));
@@ -1785,4 +1766,77 @@ fn test_an_implicit_def_overlapping_a_live_value_is_erased_by_the_join() {
         insns.iter().filter(|one| one.defines.is_empty() && one.uses.len() == 1).map(|one| one.uses[0]).collect();
     assert_eq!(reads.len(), 2, "{last:?}");
     assert_eq!(reads[0], reads[1], "the two phi values are one register");
+}
+
+/// `v := mov value`: a constant with its value, for a size price.
+fn constant_of(
+    v: u32,
+    value: i64,
+) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![held(v)],
+        sources: vec![Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None })],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![v], vec![]))
+}
+
+/// The encoded sizes of a flat 32-bit target: a copy is two bytes, a zero is
+/// `xor` (two), any other constant five.
+fn flat_bytes() -> llrm_target::MoveBytes {
+    llrm_target::MoveBytes { copy: |_, _| 2, literal: |number, _, _, _| if number == 0 { 2 } else { 5 } }
+}
+
+/// Whether the copy of the constant `value`, which stays read after the loop,
+/// is made again in a build for size, with `price` as the target's.
+fn size_copy_of_constant_is_remade(
+    value: i64,
+    price: Option<super::env::RematWins>,
+) -> bool {
+    use std::collections::BTreeSet;
+
+    let (a, c) = (constant_of(1, value), copy(2, 1));
+    let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
+    let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+    let env = TargetEnv {
+        palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+        pins: IndexMap::default(),
+        size: true,
+        keep_pinned: false,
+        aliases: Default::default(),
+        should_join: None,
+        freq: Vec::new(),
+        remat: None,
+        remat_wins: price,
+        joins_global_copies: false,
+        joins_pinned_copies: true,
+        joins_sub_registers: true,
+        joins_lanes: false,
+        regs: None,
+        kind_of: None,
+        kinds: Default::default(),
+        check_kinds: false,
+    };
+    let mut lis = LiveIntervals::new(&was);
+    let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
+    result == JoinResult::Joined && !names(&lis).contains(&(vec![2], vec![1]))
+}
+
+/// m64 `recgcd` and `idiv_loop_os` -Os kept `mov rsi, rcx` (3 B) where the pin
+/// has `xor esi, esi` (2 B), +2 B: a size build never remade a zero that stays
+/// read, though the `xor` is no longer than the copy. The target's encodings
+/// decide: a zero is remade, a constant dearer than the copy is not.
+#[test]
+fn test_for_size_a_zero_that_stays_read_is_made_again_where_the_target_prices_it() {
+    let price = || Some(super::pass::remat_priced(flat_bytes(), 4));
+    assert!(size_copy_of_constant_is_remade(0, price()), "xor is no longer than the copy");
+    assert!(!size_copy_of_constant_is_remade(7, price()), "5 B against a 2 B copy");
+}
+
+/// A target that states no price keeps DEVIATE C10: at size no copy of a
+/// constant that stays read is remade (40 of 813 sources +1,383 bytes).
+#[test]
+fn test_for_size_without_a_price_a_constant_that_stays_read_stays_a_copy() {
+    assert!(!size_copy_of_constant_is_remade(0, None));
 }

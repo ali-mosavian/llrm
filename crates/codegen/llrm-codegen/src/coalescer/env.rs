@@ -255,7 +255,9 @@ impl TargetEnv {
 }
 
 /// See [`TargetEnv::remat_wins`].
-pub type RematWins = Box<dyn Fn(&Insn, &BTreeSet<RegId>, &BTreeSet<RegId>, bool) -> bool>;
+/// `(definition, source's registers, destination's, size build, alone)`:
+/// `alone` is that the source has no other reader, so its own definition goes.
+pub type RematWins = Box<dyn Fn(&Insn, &BTreeSet<RegId>, &BTreeSet<RegId>, bool, bool) -> bool>;
 
 /// One side of a copy about to be joined.
 pub struct JoinSide {
@@ -294,6 +296,10 @@ impl CoalescerEnv for TargetEnv {
         self.joins_sub_registers
     }
 
+    fn tuned_for_size(&self) -> bool {
+        self.size
+    }
+
     fn rematerializable(
         &self,
         insn: &Insn,
@@ -308,18 +314,23 @@ impl CoalescerEnv for TargetEnv {
         }
     }
 
+    fn prices_remat(&self) -> bool {
+        self.remat_wins.is_some()
+    }
+
     fn remat_wins(
         &self,
         def: &Insn,
         source: u32,
         destination: u32,
+        alone: bool,
     ) -> bool {
         let palettes = self.palettes.borrow();
         let (Some(wins), Some(from), Some(to)) = (&self.remat_wins, palettes.get(&source), palettes.get(&destination))
         else {
             return true;
         };
-        wins(def, from, to, self.size)
+        wins(def, from, to, self.size, alone)
     }
 
     fn keeps(

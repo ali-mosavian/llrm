@@ -164,6 +164,8 @@ impl Target for Z80Registers {
         lanes(register).map_or(register, |lanes| [lanes.0, lanes.1][half])
     }
 
+    const PRICES_LITERAL_MOVE: bool = true;
+
     /// A literal in a byte register costs `ld r, n` (7 T, 2 B) against the
     /// copy `ld r, r'` (4 T, 1 B), a word `ld rr, nn` (10 T, 3 B) against two
     /// copies (8 T, 2 B): making it again loses to the copy, except a zero in

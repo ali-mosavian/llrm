@@ -71,6 +71,7 @@ use crate::analysis::intervals as ranges;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::regclass;
 use crate::backend::target::{self, Segments};
+use crate::model::ir::{Loc, Semantics};
 use crate::model::lir::LirBody;
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
@@ -87,6 +88,10 @@ pub struct Coalescer {
     pub classes: std::rc::Rc<RegisterClasses>,
     /// A build for size.
     pub size: bool,
+    /// The target's encoded sizes of a copy and a constant load, with its
+    /// default operand size: at size a constant is remade where that is no
+    /// longer than the copy it replaces, or leaves no second copy of it.
+    pub moves: Option<(llrm_target::MoveBytes, i64)>,
 }
 
 impl Coalescer {
@@ -102,6 +107,7 @@ impl Coalescer {
             segments: segments.clone(),
             classes: std::rc::Rc::clone(classes),
             size: false,
+            moves: None,
         }
     }
 }
@@ -125,6 +131,24 @@ impl LIRTransform for Coalescer {
             None => body,
         })
     }
+}
+
+/// The target's price of making a constant again at size: its encoding against
+/// the copy's, or any, where the source's own definition goes. At speed the
+/// pin's choice stands: always.
+pub(super) fn remat_priced(
+    bytes: llrm_target::MoveBytes,
+    operand: i64,
+) -> crate::coalescer::env::RematWins {
+    Box::new(move |def, _, _, size, alone| {
+        if !size || alone {
+            return true;
+        }
+        let Some(Semantics { sources, dests, .. }) = def.what.as_ref() else { return true };
+        let ([Loc::Imm(literal)], [Loc::Held(held)]) = (sources.as_slice(), dests.as_slice()) else { return true };
+        let width = i64::from(held.width);
+        (bytes.literal)(literal.value, literal.address.is_some(), width, operand) <= (bytes.copy)(width, operand)
+    })
 }
 
 impl Coalescer {
@@ -193,7 +217,7 @@ impl Coalescer {
                 should_join: None,
                 freq: Vec::new(),
                 remat: None,
-                remat_wins: None,
+                remat_wins: self.moves.map(|(bytes, operand)| remat_priced(bytes, operand)),
                 regs: None,
                 kind_of: None,
                 kinds: Default::default(),

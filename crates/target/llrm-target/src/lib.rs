@@ -25,6 +25,17 @@ use llrm_lir::registers::RegId;
 use llrm_mir::target::{AddressForm, OperationCosts};
 use machine::Machine;
 
+/// The encoded sizes a target states of a register copy and a constant load.
+#[derive(Clone, Copy, Debug)]
+pub struct MoveBytes {
+    /// Bytes of a copy between two `width`-byte registers, `operand` the size
+    /// an instruction has without a prefix.
+    pub copy: fn(width: i64, operand: i64) -> i64,
+    /// Bytes of loading `number` into a `width`-byte register; `address`: it
+    /// is a symbol's address, whose bytes the immediate takes whole.
+    pub literal: fn(number: i64, address: bool, width: i64, operand: i64) -> i64,
+}
+
 /// The registers a segmented target's string operation names: the count, the
 /// offsets it reads and writes through, and the segment its source defaults
 /// to.
@@ -656,6 +667,12 @@ pub trait Target {
         number: i64,
         width: i64,
     ) -> i64;
+
+    /// The encoded sizes of a register copy and a constant load, where the
+    /// target states them; none: the backend asks no price of them.
+    fn move_bytes(&self) -> Option<MoveBytes> {
+        None
+    }
 
     /// The CPU a compile is priced for where none is asked.
     fn default_cpu(&self) -> &'static str;

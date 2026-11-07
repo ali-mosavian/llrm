@@ -13,6 +13,8 @@
 
 use std::fmt::Write;
 
+use llrm_codegen::model::ir::Loc;
+use llrm_codegen::model::lir::Insn;
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
@@ -198,6 +200,41 @@ impl<const STACK: bool> Target for Mos<STACK> {
 
     /// A byte class the compare class narrowed has `any` as its larger class.
     fn larger_order(order: &[RegId]) -> Option<Vec<RegId>> {
+    const PRICES_LITERAL_MOVE: bool = true;
+
+    /// `isAsCheapAsAMove` against the copy it replaces. In a register a literal
+    /// is `lda #n` (2 B, 2 clocks) against `tax`/`txa`/`tay`/`tya` (1 B, 2
+    /// clocks): the copy stays, as does a tie in clocks; there is no `xor a`.
+    /// In a cell the literal is `lda #n` + `sta rc` (4 B, 5 clocks) against
+    /// `sta rc` (2 B, 3) from a register or `lda rc` + `sta rc` (4 B, 6) from a
+    /// cell: only a cell-to-cell copy loses to it. Unpriced, `-Os` made a zero
+    /// again where `txa` was one byte (`shift_int32_variable`, +3 B).
+    fn literal_move_wins(
+        literal: &Insn,
+        source: &[RegId],
+        destination: &[RegId],
+        size: bool,
+    ) -> bool {
+        let Some(what) = literal.what.as_ref() else { return false };
+        let ([Loc::Held(_)], [Loc::Imm(_)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+            return false;
+        };
+        let price = |mnemonic: &str, operand: &str| {
+            crate::timing::instruction(Cpu::Mos6502, mnemonic, operand)
+                .map_or((u32::MAX / 4, u32::MAX / 4), |cost| (cost.bytes, cost.cycles))
+        };
+        let in_cells =
+            |registers: &[RegId]| !registers.is_empty() && registers.iter().all(|register| is_cell(*register));
+        let (copy, remat) = if in_cells(destination) {
+            let (load, store) = (price("lda", "#0"), price("sta", "rc2"));
+            let from = if in_cells(source) { price("lda", "rc2") } else { (0, 0) };
+            ((from.0 + store.0, from.1 + store.1), (load.0 + store.0, load.1 + store.1))
+        } else {
+            (price("tax", ""), price("lda", "#0"))
+        };
+        if size { remat.0 <= copy.0 } else { remat.1 < copy.1 }
+    }
+
         if !order.iter().all(|register| matches!(*register, reg::A | reg::X | reg::Y) || is_cell(*register))
             || is_pair_order(order)
         {

@@ -172,11 +172,13 @@ impl<T: Target> Converted<T> {
                 })
             })),
             Some(Box::new(is_literal_move)),
-            Some(Box::new(|literal, source, destination, size| {
-                let (source, destination): (Vec<RegId>, Vec<RegId>) =
-                    (source.iter().copied().collect(), destination.iter().copied().collect());
-                T::literal_move_wins(literal, &source, &destination, size)
-            })),
+            T::PRICES_LITERAL_MOVE.then(|| -> llrm_codegen::coalescer::env::RematWins {
+                Box::new(|literal, source, destination, size, _alone| {
+                    let (source, destination): (Vec<RegId>, Vec<RegId>) =
+                        (source.iter().copied().collect(), destination.iter().copied().collect());
+                    T::literal_move_wins(literal, &source, &destination, size)
+                })
+            }),
             Box::new(move |one, value| {
                 // which of the instruction's operand slots name the value: the
                 // same instruction shape and slots are one kind, however many

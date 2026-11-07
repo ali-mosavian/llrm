@@ -221,6 +221,11 @@ pub trait Target {
     }
 
     /// `isAsCheapAsAMove` against the copy it replaces: whether making the
+    /// Whether [`Target::literal_move_wins`] is this target's own price. Off:
+    /// the coalescer keeps the copy of a constant that stays read at -Os
+    /// (DEVIATE C10).
+    const PRICES_LITERAL_MOVE: bool = false;
+
     /// literal move `literal` again for a copy from a value that may take
     /// `source` to one that may take `destination` costs no more than the
     /// copy. The pin asks no price, so the default always remats.

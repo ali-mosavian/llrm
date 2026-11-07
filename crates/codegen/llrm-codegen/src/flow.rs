@@ -267,7 +267,11 @@ pub fn machine_with<'a>(
             lea: target.three_address_for(target.size || target.min_size),
             loop_carried: target.commutes_loop_carried(),
         }),
-        Box::new(Coalescer { size: target.size, ..Coalescer::new(None, segments, classes) }),
+        Box::new(Coalescer {
+            size: target.size,
+            moves: target.move_bytes.map(|bytes| (bytes, target.operand_bytes)),
+            ..Coalescer::new(None, segments, classes)
+        }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
         Box::new(crate::backend::machinesched::MachineScheduler {

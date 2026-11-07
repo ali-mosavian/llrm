@@ -407,6 +407,13 @@ impl llrm_target::Target for M32 {
         llrm_x86::X87_WIDTH
     }
 
+    fn move_bytes(&self) -> Option<llrm_target::MoveBytes> {
+        Some(llrm_target::MoveBytes {
+            copy: llrm_x86::encoding::register_bytes,
+            literal: llrm_x86::encoding::literal_move_bytes,
+        })
+    }
+
     fn register_op_bytes(
         &self,
         width: i64,

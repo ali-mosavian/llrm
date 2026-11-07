@@ -19,6 +19,14 @@
 //! 6. Every instruction that names the absorbed value names the surviving one
 //!    (`updateRegDefsUses`), and the absorbed interval goes.
 //!
+//! DEVIATE C10 (no number): `reMaterializeDef` in a build for size makes a copy
+//! of a constant again only where the source has no other reader, so its own
+//! move goes. Fact: elsewhere it replaced a 2-byte copy with a 3 to 5 byte
+//! move and cost 40 of 813 sources +1,383 bytes (`regparm3_matrix_*` up to
+//! +89) for -0.8% executed instructions. Applies only where the target states
+//! no price for the move (`prices_remat`); x86 does, by encoded bytes. Exit:
+//! every target prices it, or the allocator gives the constant back as a copy.
+//!
 //! DEVIATE C6 (no number): `updateRegDefsUses` sets no `undef` flags: an
 //! instruction here has none, and a read of no live value is a bug of the
 //! caller that `shrink_to_uses` skips.
@@ -596,7 +604,13 @@ fn re_materialize_def(
     }) {
         return false;
     }
-    if !env.remat_wins(&def_insn, src.value, dst.value) {
+    // DEVIATE C10: in a build for size the copy (2 bytes) becomes the move
+    // (3 to 5) and pays for itself only where the source's own move goes.
+    let alone = lis.operands(src.value).len() <= 2;
+    if env.tuned_for_size() && !env.prices_remat() && !alone {
+        return false;
+    }
+    if !env.remat_wins(&def_insn, src.value, dst.value, alone) {
         return false;
     }
     let block = lis.indexes.get_mbb_from_index(&at);
