@@ -155,6 +155,21 @@ impl BaseIndexOffset {
         Self { base: Some(base), index, offset, index_sign_ext }
     }
 
+    /// `BaseIndexOffset::contains`: `other`, `other_bits` wide, lies wholly
+    /// inside the `bits` that start at `self`
+    /// ([SelectionDAGAddressAnalysis.cpp#L177](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGAddressAnalysis.cpp#L177)).
+    #[must_use]
+    pub fn contains(
+        &self,
+        dag: &SelectionDAG,
+        bits: i64,
+        other: &Self,
+        other_bits: i64,
+    ) -> bool {
+        // An `other` that starts before `self` is not contained.
+        self.equal_base_index(other, dag).is_some_and(|offset| offset >= 0 && 8 * offset + other_bits <= bits)
+    }
+
     /// `equalBaseIndex`: the bytes from `self` to `other`, when both share a
     /// base and an index the walk can compare.
     #[must_use]

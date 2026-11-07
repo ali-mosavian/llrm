@@ -1271,6 +1271,17 @@ impl Dag for DagisAdapter<'_> {
 }
 
 impl AddrDag for DagisAdapter<'_> {
+    fn live_in_physical(
+        &self,
+        node: u32,
+    ) -> Option<u16> {
+        match self.dag.nodes()[node as usize].data {
+            NodeData::Register(number) => {
+                self.registers.pin_register(*self.dag.live_in_phys.get(&number)?)
+            }
+            _ => None,
+        }
+    }
     fn known_zero_bits(
         &self,
         value: PinValue,

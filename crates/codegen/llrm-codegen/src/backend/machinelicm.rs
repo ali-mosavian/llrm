@@ -224,10 +224,7 @@ fn reads<'a>(
     facts: &'a licm::Facts<'_, Wrapped>,
     value: u32,
 ) -> impl Iterator<Item = &'a Wrapped> {
-    facts
-        .inside_blocks()
-        .flat_map(|block| block.insns.iter())
-        .filter(move |one| one.0.uses.contains(&value))
+    facts.inside_blocks().flat_map(|block| block.insns.iter()).filter(move |one| one.0.uses.contains(&value))
 }
 
 /// Every read of `value` in the loop is an x87 arithmetic operand beside a
@@ -377,6 +374,10 @@ impl licm::Inst for Wrapped {
             && self.0.defines.len() == other.0.defines.len()
     }
 
+    fn is_plain_load(&self) -> bool {
+        loaded(&self.0).is_some() && !self.0.invariant()
+    }
+
     fn rename_use(
         &mut self,
         from: u32,
@@ -423,28 +424,38 @@ impl licm::Policy<Wrapped> for X86<'_> {
         pool_load(&one.0)
     }
 
-    /// `ExtractHoistableLoad` ([L1400][unfold]): scalar SSE arithmetic that reads
-    /// an invariant cell (a constant-pool entry) beside a register is the
-    /// load and the operation on a register (`unfoldMemoryOperand`).
+    /// `ExtractHoistableLoad` ([L1400][unfold]): scalar SSE arithmetic that
+    /// reads an invariant cell (a constant-pool entry) beside a register is
+    /// the load and the operation on a register (`unfoldMemoryOperand`).
     ///
-    /// [unfold]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLICM.cpp#L1400
+    /// [unfold]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLICM.cpp#L1400
     fn unfold(
         &mut self,
         one: &Wrapped,
     ) -> Option<(Wrapped, Wrapped)> {
         let insn = &one.0;
         let what = insn.what.as_ref()?;
-        let arithmetic = what.name.as_deref().is_some_and(|name| {
-            ["add", "sub", "mul", "div", "min", "max"]
-                .iter()
-                .any(|op| name.strip_prefix(op).is_some_and(|rest| rest == "ss" || rest == "sd"))
-        });
+        let arithmetic = what
+            .name
+            .as_deref()
+            .is_some_and(
+                |name| ["add", "sub", "mul", "div", "min", "max"]
+                    .iter()
+                    .any(|op| name.strip_prefix(op).is_some_and(|rest| rest == "ss" || rest == "sd")),
+            );
         let [Loc::Held(dest)] = what.dests.as_slice() else { return None };
         let cells = what.sources.iter().filter(|source| matches!(source, Loc::Mem(_))).count();
-        let (at, cell) = what.sources.iter().enumerate().find_map(|(at, source)| match source {
-            Loc::Mem(cell) => Some((at, cell)),
-            _ => None,
-        })?;
+        let (at, cell) = what
+            .sources
+            .iter()
+            .enumerate()
+            .find_map(
+                |(at, source)| match source {
+                    Loc::Mem(cell) => Some((at, cell)),
+                    _ => None,
+                },
+            )?;
         if !arithmetic
             || cells != 1
             || !insn.invariant()
@@ -780,7 +791,15 @@ mod tests {
         for number in 0..duplicates {
             let value = 10 + 2 * number;
             let at = i64::from(10 + 3 * number);
-            inside.push(insn(at, Operation::Binary, "add", vec![held(value)], vec![held(1), held(2)], vec![value], vec![1, 2]));
+            inside.push(insn(
+                at,
+                Operation::Binary,
+                "add",
+                vec![held(value)],
+                vec![held(1), held(2)],
+                vec![value],
+                vec![1, 2],
+            ));
             inside.push(insn(
                 at + 1,
                 Operation::Compare,
@@ -819,7 +838,11 @@ mod tests {
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         RENAMES.with(|renames| renames.set(0));
         let done = hoisted(&body, &RegisterClasses::m16());
-        let adds = done.blocks[0].insns.iter().filter(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("add")).count();
+        let adds = done.blocks[0]
+            .insns
+            .iter()
+            .filter(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("add"))
+            .count();
         assert_eq!(adds, 1, "the premise: the duplicates are made once");
         let renames = RENAMES.with(|renames| renames.get());
         assert!(renames <= 3 * duplicates as usize, "{renames}");
@@ -836,8 +859,24 @@ mod tests {
         for number in 0..5u32 {
             let value = 10 + 2 * number;
             let at = i64::from(10 + 3 * number);
-            inside.push(insn(at, Operation::Binary, "add", vec![held(value)], vec![held(1), held(2)], vec![value], vec![1, 2]));
-            inside.push(insn(at + 1, Operation::Compare, "cmp", vec![], vec![held(value), held(3)], vec![], vec![value, 3]));
+            inside.push(insn(
+                at,
+                Operation::Binary,
+                "add",
+                vec![held(value)],
+                vec![held(1), held(2)],
+                vec![value],
+                vec![1, 2],
+            ));
+            inside.push(insn(
+                at + 1,
+                Operation::Compare,
+                "cmp",
+                vec![],
+                vec![held(value), held(3)],
+                vec![],
+                vec![value, 3],
+            ));
         }
         inside.push(insn(500, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]));
         let tail = 200i64;
@@ -850,8 +889,12 @@ mod tests {
             let next = if number + 1 == tail { vec![] } else { vec![at + 1] };
             let value = 5000 + number as u32;
             blocks.push(
-                block(at, next, vec![insn(at * 10, Operation::Move, "mov", vec![held(value)], vec![held(3)], vec![value], vec![3])])
-                    .into(),
+                block(
+                    at,
+                    next,
+                    vec![insn(at * 10, Operation::Move, "mov", vec![held(value)], vec![held(3)], vec![value], vec![3])],
+                )
+                .into(),
             );
         }
         let mut body = LirBody::new("loop", 0, blocks, IndexMap::default(), IndexMap::default());
@@ -859,7 +902,11 @@ mod tests {
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         crate::backend::licm_core::SWEPT.with(|swept| swept.set(0));
         let done = hoisted(&body, &RegisterClasses::m16());
-        let adds = done.blocks[0].insns.iter().filter(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("add")).count();
+        let adds = done.blocks[0]
+            .insns
+            .iter()
+            .filter(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("add"))
+            .count();
         assert_eq!(adds, 1, "the premise: the duplicates are made once");
         let swept = crate::backend::licm_core::SWEPT.with(|swept| swept.get());
         assert!(swept <= 40, "{swept}");
@@ -878,21 +925,41 @@ mod tests {
         for number in 0..loops {
             let (pre, body) = (10 * number, 10 * number + 1);
             let value = 100 + number as u32;
-            blocks.push(block(pre, vec![body], vec![insn(pre, Operation::Jump, "jmp", vec![], vec![], vec![], vec![])]));
+            blocks.push(block(
+                pre,
+                vec![body],
+                vec![insn(pre, Operation::Jump, "jmp", vec![], vec![], vec![], vec![])],
+            ));
             let next = if number + 1 == loops { 10 * loops } else { 10 * (number + 1) };
-            blocks.push(
-                block(
-                    body,
-                    vec![body, next],
-                    vec![
-                        insn(body * 10, Operation::Binary, "add", vec![held(value)], vec![held(1), held(2)], vec![value], vec![1, 2]),
-                        insn(body * 10 + 1, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]),
-                    ],
-                ),
-            );
+            blocks.push(block(
+                body,
+                vec![body, next],
+                vec![
+                    insn(
+                        body * 10,
+                        Operation::Binary,
+                        "add",
+                        vec![held(value)],
+                        vec![held(1), held(2)],
+                        vec![value],
+                        vec![1, 2],
+                    ),
+                    insn(body * 10 + 1, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]),
+                ],
+            ));
         }
-        blocks.push(block(10 * loops, vec![], vec![insn(99999, Operation::Return, "ret", vec![], vec![], vec![], vec![])]));
-        let mut body = LirBody::new("loops", 0, blocks.into_iter().map(crate::model::lir::Block::from).collect(), IndexMap::default(), IndexMap::default());
+        blocks.push(block(
+            10 * loops,
+            vec![],
+            vec![insn(99999, Operation::Return, "ret", vec![], vec![], vec![], vec![])],
+        ));
+        let mut body = LirBody::new(
+            "loops",
+            0,
+            blocks.into_iter().map(crate::model::lir::Block::from).collect(),
+            IndexMap::default(),
+            IndexMap::default(),
+        );
         body.inputs = [1, 2, 3].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         crate::backend::licm_core::READ.with(|read| read.set(0));
@@ -1304,6 +1371,64 @@ mod tests {
         assert_eq!((done.blocks[0].insns.len(), done.blocks[1].insns.len()), (2, 1));
     }
 
+    /// m64 memory_expansion -O1 (+1125 B, 247 more `lea reg,[rip+sym]` than the
+    /// pin): the address a call takes sat in the loop's preheader and the
+    /// loop made it again; hoisting put a second value beside it, and the
+    /// copy-only first one was never shared (MachineCSE heuristic 2) while the
+    /// pin's `InitCSEMap(Preheader)` folds the hoisted one into it.
+    #[test]
+    fn test_an_address_the_preheader_already_makes_is_not_made_again_by_the_hoist() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 8, offset: 0 });
+        let address = || {
+            Loc::Imm(llrm_lir::Imm {
+                value: 0,
+                width: 8,
+                address: Some(llrm_lir::Addr::new(llrm_lir::Space::Segment, 0)),
+            })
+        };
+        let make = |at: i64, value: u32| {
+            insn(at, Operation::Move, "mov", vec![wide(value)], vec![address()], vec![value], vec![])
+        };
+        let read = |at: i64, value: u32, result: u32| {
+            insn(
+                at,
+                Operation::Binary,
+                "add",
+                vec![wide(result)],
+                vec![wide(value), wide(1)],
+                vec![result],
+                vec![value, 1],
+            )
+        };
+        let mut body = LirBody::new(
+            "preheader",
+            0,
+            vec![
+                block(0, vec![1], vec![make(0, 20), jump(1)]).into(),
+                block(1, vec![1, 2], vec![make(10, 10), read(11, 10, 11), branch(12)]).into(),
+                block(2, vec![], vec![insn(20, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64));
+        let made = done
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| one.what.as_ref().is_some_and(|what| matches!(what.sources.as_slice(), [Loc::Imm(_)])))
+            .count();
+        assert_eq!(made, 1, "{done:?}");
+        let sum = done.blocks[0].insns.iter().find(|one| one.defines == [11]).expect("the sum left the loop");
+        assert_eq!(sum.uses, [20, 1], "the sum reads the preheader's address");
+    }
+
     /// `ExtractHoistableLoad`: a `mulss` that reads a constant-pool cell
     /// (`isDereferenceableInvariantLoad`) beside a value the loop changes was
     /// left whole in the loop, its load made on every trip (nbody_single -O3
@@ -1364,7 +1489,15 @@ mod tests {
         let mut inside: Vec<Arc<Insn>> = (1..=20u32)
             .map(|n| {
                 let sum = 100 + n;
-                insn(n as i64, Operation::Binary, "add", vec![held(sum)], vec![held(sum), held(n)], vec![sum], vec![sum, n])
+                insn(
+                    n as i64,
+                    Operation::Binary,
+                    "add",
+                    vec![held(sum)],
+                    vec![held(sum), held(n)],
+                    vec![sum],
+                    vec![sum, n],
+                )
             })
             .collect();
         let mut load = insn(
@@ -1378,7 +1511,15 @@ mod tests {
         );
         Arc::make_mut(&mut load).invariant = true;
         inside.push(load);
-        inside.push(insn(51, Operation::Binary, "add", vec![held(101)], vec![held(101), held(200)], vec![101], vec![101, 200]));
+        inside.push(insn(
+            51,
+            Operation::Binary,
+            "add",
+            vec![held(101)],
+            vec![held(101), held(200)],
+            vec![101],
+            vec![101, 200],
+        ));
         inside.push(branch(52));
         let mut body = LirBody::new(
             "loop",

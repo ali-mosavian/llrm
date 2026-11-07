@@ -109,10 +109,14 @@ pub fn run_with(
     known_loads: bool,
 ) {
     fold_known_cells(asm);
+    hoist_common_successor_code(asm);
+    branch_over_jump(asm);
     drop_reloads(asm);
+    drop_flag_reload(asm);
     if known_loads {
         drop_known_loads(asm);
     }
+    hoist_loop_constant(asm);
     drop_zero_compares(asm);
     step_in_place(asm);
     load_straight_into_a(asm);
@@ -125,6 +129,210 @@ pub fn run_with(
     crate::peephole_cells::store_then_index_load(asm);
     branch_on_shift_carry(asm);
     jump_to_return(asm);
+}
+
+/// How many lines name `label`: a branch or jump to it, or a directive.
+fn references(
+    lines: &[Line],
+    label: &str,
+) -> usize {
+    lines
+        .iter()
+        .filter(|line| match line {
+            Line::Inst(Inst { operand, .. }) => operand.name() == Some(label),
+            Line::Raw(text) => text.contains(label),
+            Line::Label(_) => false,
+        })
+        .count()
+}
+
+/// The flag a conditional branch tests: `c`, `z`, `n` or `v`.
+fn tested_flag(op: Op) -> Option<char> {
+    match op {
+        Op::Bcc | Op::Bcs => Some('c'),
+        Op::Beq | Op::Bne => Some('z'),
+        Op::Bmi | Op::Bpl => Some('n'),
+        Op::Bvc | Op::Bvs => Some('v'),
+        _ => None,
+    }
+}
+
+/// Whether `inst` can run before a branch that tests `flag` instead of after
+/// it, when both paths start with it: it reads no flag and leaves that one
+/// alone (`lda`, `ldx`, `ldy`, the transfers write only `n` and `z`; the
+/// stores write none; `clc` and `sec` write `c`).
+fn hoistable(
+    inst: &Inst,
+    flag: char,
+) -> bool {
+    match inst.op {
+        Op::Sta | Op::Stx | Op::Sty | Op::Stz => true,
+        Op::Lda | Op::Ldx | Op::Ldy | Op::Tax | Op::Tay | Op::Txa | Op::Tya => flag == 'c' || flag == 'v',
+        Op::Clc | Op::Sec => flag != 'c',
+        _ => false,
+    }
+}
+
+/// The instructions both paths of a conditional branch start with run before
+/// the branch, once: `bcs b20 / b23: lda #1; sta rc8; jmp b3 / b20: lda #1; sta rc8`
+/// is `lda #1; sta rc8; bcs b20 / b23: jmp b3 / b20:`. Each path has only the
+/// branch for a predecessor. The pin's `BranchFolder::HoistCommonCode`
+/// ([BranchFolding.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L1980)),
+/// which also stops at an instruction that touches what the branch reads.
+pub fn hoist_common_successor_code(asm: &mut Asm) {
+    let mut at = 0;
+    while at < asm.lines.len() {
+        at += 1;
+        let Some((hoisted, fall, target)) = common_successor_code(&asm.lines, at - 1) else { continue };
+        let count = hoisted.len();
+        let mut lines = Vec::with_capacity(asm.lines.len());
+        for (index, line) in asm.lines.drain(..).enumerate() {
+            if index == at - 1 {
+                lines.extend(hoisted.iter().cloned().map(Line::Inst));
+            }
+            if (fall..fall + count).contains(&index) || (target..target + count).contains(&index) {
+                continue;
+            }
+            lines.push(line);
+        }
+        asm.lines = lines;
+        at += count;
+    }
+}
+
+/// The instructions to hoist above the branch at `at`, and where the two copies
+/// start (the fall-through path's first, the target's first).
+fn common_successor_code(
+    lines: &[Line],
+    at: usize,
+) -> Option<(Vec<Inst>, usize, usize)> {
+    let Line::Inst(branch) = &lines[at] else { return None };
+    let flag = tested_flag(branch.op)?;
+    let Operand::Direct(label) = &branch.operand else { return None };
+    let target_label = lines.iter().position(|line| matches!(line, Line::Label(name) if name == label))?;
+    // reached by this branch alone
+    let before = target_label.checked_sub(1).and_then(|index| lines[index].inst())?;
+    if references(lines, label) != 1 || !matches!(before.op, Op::Jmp | Op::Bra | Op::Rts) {
+        return None;
+    }
+    let mut fall = at + 1;
+    while let Some(Line::Label(name)) = lines.get(fall) {
+        if references(lines, name) != 0 {
+            return None;
+        }
+        fall += 1;
+    }
+    let target = target_label + 1;
+    let mut hoisted = Vec::new();
+    while let (Some(Line::Inst(one)), Some(Line::Inst(other))) = (lines.get(fall + hoisted.len()), lines.get(target + hoisted.len())) {
+        if one.op != other.op || one.operand != other.operand || !hoistable(one, flag) {
+            break;
+        }
+        hoisted.push(one.clone());
+    }
+    (!hoisted.is_empty()).then_some((hoisted, fall, target))
+}
+
+/// `bcs l / jmp m / l:` is `bcc m / l:` (labels nothing names between the
+/// branch and the jump go).
+pub fn branch_over_jump(asm: &mut Asm) {
+    let mut at = 0;
+    while at < asm.lines.len() {
+        at += 1;
+        let Line::Inst(branch) = &asm.lines[at - 1] else { continue };
+        if branch.op == Op::Bra || branch.op.opposite().is_none() {
+            continue;
+        }
+        let mut jump = at;
+        while matches!(&asm.lines[jump..], [Line::Label(name), ..] if references(&asm.lines, name) == 0) {
+            jump += 1;
+        }
+        let (Some(Line::Inst(jmp)), Some(Line::Label(over))) = (asm.lines.get(jump), asm.lines.get(jump + 1)) else { continue };
+        if jmp.op != Op::Jmp || branch.operand != Operand::Direct(over.clone()) {
+            continue;
+        }
+        let Operand::Direct(far) = &jmp.operand else { continue };
+        let inverted = Inst::new(branch.op.opposite().unwrap(), Operand::Direct(far.clone()));
+        asm.lines.splice(at - 1..=jump, [Line::Inst(inverted)]);
+    }
+}
+
+/// `inc m` or `dec m` then `lda m` with `a` dead after it: the load only sets
+/// the flags the step already set from the same result (a 16-bit down-counter's
+/// `dec rc4; lda rc4; bne`).
+pub fn drop_flag_reload(asm: &mut Asm) {
+    let exits = Exits::of(asm);
+    let keep: Vec<bool> = (0..asm.lines.len())
+        .map(|at| {
+            let (Some(Line::Inst(step)), Line::Inst(load)) = (at.checked_sub(1).map(|b| &asm.lines[b]), &asm.lines[at]) else {
+                return true;
+            };
+            let reload = load.op == Op::Lda
+                && matches!(step.op, Op::Inc | Op::Dec)
+                && load.operand.is_cell()
+                && step.operand == load.operand
+                && dead_from(&asm.lines, at + 1, Registers::A, &mut HashSet::default(), exits);
+            !reload
+        })
+        .collect();
+    retain(asm, &keep);
+}
+
+/// `l: ldy #k` at the top of a loop that nothing else enters and that does not
+/// write `y` again (no call, no other write): the load runs once, before the
+/// loop (`x` the same). The pin's MachineLICM hoists the constant; here the
+/// register keeps it.
+pub fn hoist_loop_constant(asm: &mut Asm) {
+    let mut at = 0;
+    while at < asm.lines.len() {
+        at += 1;
+        let Line::Label(label) = &asm.lines[at - 1] else { continue };
+        let (Some(Line::Inst(load)), Some(Line::Inst(next))) = (asm.lines.get(at), asm.lines.get(at + 1)) else { continue };
+        let writes = match load.op {
+            Op::Ldy => [Op::Ldy, Op::Tay, Op::Iny, Op::Dey],
+            Op::Ldx => [Op::Ldx, Op::Tax, Op::Inx, Op::Dex],
+            _ => continue,
+        };
+        if !matches!(load.operand, Operand::Imm(_)) || !matches!(next.op.flags(&next.operand), Flags::Of(_)) {
+            continue;
+        }
+        // the entry falls into the label, and every other reference is a branch back from the loop
+        let mut before = at - 1;
+        while before > 0 && matches!(&asm.lines[before - 1], Line::Label(name) if references(&asm.lines, name) == 0) {
+            before -= 1;
+        }
+        let Some(Line::Inst(entry)) = before.checked_sub(1).map(|index| &asm.lines[index]) else { continue };
+        if matches!(entry.op, Op::Jmp | Op::Bra | Op::Rts) {
+            continue;
+        }
+        let mut last = at;
+        let mut closed = true;
+        for (index, line) in asm.lines.iter().enumerate() {
+            match line {
+                Line::Inst(Inst { operand, .. }) if operand.name() == Some(label.as_str()) => {
+                    if index < at {
+                        closed = false;
+                    }
+                    last = last.max(index);
+                }
+                Line::Raw(text) if text.contains(label.as_str()) => closed = false,
+                _ => {}
+            }
+        }
+        if !closed || last == at {
+            continue;
+        }
+        let quiet = asm.lines[at + 1..=last].iter().all(|line| match line {
+            Line::Inst(inst) => !writes.contains(&inst.op) && inst.op != Op::Jsr,
+            Line::Label(_) => true,
+            Line::Raw(_) => false,
+        });
+        if !quiet {
+            continue;
+        }
+        let moved = asm.lines.remove(at);
+        asm.lines.insert(before, moved);
+    }
 }
 
 /// What a register-only instruction writes: a register, and which of the carry

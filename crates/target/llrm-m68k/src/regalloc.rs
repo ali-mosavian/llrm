@@ -15,13 +15,29 @@ use crate::{REGISTER_INFO, reg};
 const DATA: [RegId; 8] = [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7];
 const ADDRESS: [RegId; 6] = [reg::A0, reg::A1, reg::A2, reg::A3, reg::A4, reg::A5];
 
-/// The registers a call leaves unspecified (`CSR_STD` keeps the rest).
+/// The registers a call leaves unspecified (`CSR_STD` keeps the rest), data
+/// registers first as the pin has them.
 const CALLER_SAVED: [RegId; 4] = [reg::D0, reg::D1, reg::A0, reg::A1];
 
-/// m68k's register file for the allocator.
-pub struct M68kRegisters;
+/// The same, address registers first (see [`Registers`]).
+const CALLER_SAVED_ADDRESS_FIRST: [RegId; 4] = [reg::A1, reg::A0, reg::D0, reg::D1];
 
-impl Target for M68kRegisters {
+/// m68k's register file for the allocator.
+///
+/// DEVIATE M68K-FLEXORDER: with `ADDRESS_FIRST` a value either kind of
+/// register can hold takes `a1`, `a0` before `d0`, `d1`. The pin tries the data
+/// registers first, so a value only copied and compared sits in one and the
+/// values that need a data register (a counter, a compare's left side) are
+/// pushed to a saved one (arrmax -Os: `d2`, a push and a pop, 34 B against
+/// gcc's 26). Used with [`crate::compile::Options::indexed`]; the pin's order
+/// stays for the pinned output. Owner m68k. Exit: 2026-11-28, when the shared
+/// greedy prices a class by what its users need.
+pub struct Registers<const ADDRESS_FIRST: bool>;
+
+/// The allocator's registers in the order this compiler uses by default.
+pub type M68kRegisters = Registers<true>;
+
+impl<const ADDRESS_FIRST: bool> Target for Registers<ADDRESS_FIRST> {
     type Class = Class;
 
     fn meet(
@@ -48,7 +64,7 @@ impl Target for M68kRegisters {
             // the registers a call clobbers anyway first, then the saved ones:
             // a saved register costs a push and a pop (`RegisterClassInfo`
             // orders the callee-saved last)
-            Class::Xr32 => CALLER_SAVED
+            Class::Xr32 => (if ADDRESS_FIRST { CALLER_SAVED_ADDRESS_FIRST } else { CALLER_SAVED })
                 .iter()
                 .chain(DATA.iter().filter(|one| !CALLER_SAVED.contains(one)))
                 .chain(ADDRESS.iter().filter(|one| !CALLER_SAVED.contains(one)))
@@ -170,8 +186,14 @@ pub fn allocate_spilling_by_frequency(
 pub fn allocate_greedy(
     function: &mut MFunction,
     size: bool,
+    address_first: bool,
 ) -> Result<(Assignment, Vec<(i32, Class)>), String> {
-    llrm_spike_mf::tolir::allocate_greedy::<M68kRegisters>(function, llrm_lir::registers::Regs(&REGISTER_INFO), size)
+    let regs = llrm_lir::registers::Regs(&REGISTER_INFO);
+    if address_first {
+        llrm_spike_mf::tolir::allocate_greedy::<Registers<true>>(function, regs, size)
+    } else {
+        llrm_spike_mf::tolir::allocate_greedy::<Registers<false>>(function, regs, size)
+    }
 }
 
 /// `MachineSinking` over the m68k function.
@@ -239,7 +261,7 @@ pub fn remove_redundant_copies(
     })
 }
 
-impl Jump for M68kRegisters {
+impl<const ADDRESS_FIRST: bool> Jump for Registers<ADDRESS_FIRST> {
     fn reverse(branch: &llrm_spike_mf::Inst) -> Option<llrm_spike_mf::Inst> {
         let Kind::Op(name) = branch.kind else { return None };
         let opposite = CONDITIONAL

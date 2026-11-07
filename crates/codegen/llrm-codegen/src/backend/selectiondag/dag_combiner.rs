@@ -871,6 +871,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Select => self.visit_select(node),
             ISD::SelectCC => self.visit_select_cc(node),
             ISD::Store => self.visit_store(node).or_else(|| self.indexed(node)),
+            ISD::LifetimeEnd => self.visit_lifetime_end(node),
             ISD::Freeze => self.visit_freeze(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::BrCond => self.visit_brcond(node),
@@ -1075,6 +1076,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 let flipped = if cond == CondCode::SetEq { CondCode::SetNe } else { CondCode::SetEq };
                 return Some(self.dag.get_setcc(vt, op0, zero, flipped));
             }
+        }
+        // `SimplifySetCC`'s remainder of a division by a constant, unsigned.
+        if matches!(cond, CondCode::SetEq | CondCode::SetNe)
+            && self.dag.opcode(n0) == ISD::URem
+            && let Some(folded) = self.build_urem_eq_fold(vt, n0, c1, cond)
+        {
+            return Some(folded);
         }
         // `(x + c0) == c1` is `x == c1 - c0`, `(x ^ c0) == c1` is `x == c0 ^
         // c1` and `(c0 - x) == c1` is `x == c0 - c1`, for a single-use
@@ -2294,6 +2302,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(folded);
             }
         }
+        if op == ISD::Shl && matches!(self.dag.opcode(n0), ISD::Srl | ISD::Sra) {
+            if let Some(folded) = self.shl_of_exact_shift(node) {
+                return Some(folded);
+            }
+        }
         if op == ISD::Shl && self.dag.opcode(n0) == ISD::Srl {
             if let Some(folded) = self.shl_of_srl(node) {
                 return Some(folded);
@@ -2329,7 +2342,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             if let Some(shl1) = self.dag.fold_constant_arithmetic(ISD::Shl, vt, &[n01, n1]) {
                 let shl0 = self.dag.get_node(ISD::Shl, vt, &[self.dag.operand(n0, 0), n1]);
                 self.add_to_worklist(shl0.node);
-                let disjoint = self.dag.opcode(n0) == ISD::Or && self.dag.node(n0).flags.0 & SDNodeFlags::DISJOINT.0 != 0;
+                let disjoint =
+                    self.dag.opcode(n0) == ISD::Or && self.dag.node(n0).flags.0 & SDNodeFlags::DISJOINT.0 != 0;
                 let flags = if disjoint { SDNodeFlags::DISJOINT } else { SDNodeFlags::default() };
                 return Some(self.dag.get_node_flags(self.dag.opcode(n0), vt, &[shl0, shl1], flags));
             }
@@ -2410,6 +2424,37 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let shifted_x = self.dag.get_node(op, vt, &[x, sum]);
         let shifted_y = self.dag.get_node(op, vt, &[y, c1]);
         Some(self.dag.get_node(logic_op, vt, &[shifted_x, shifted_y]))
+    }
+
+    /// `visitSHL`'s exact fold ([L11196][pin]): `shl (sr[la] exact x, c1), c2`
+    /// is `shl x, c2 - c1` when `c1 <= c2` and `sr[la] x, c1 - c2` otherwise.
+    /// The bits shifted out are zero, so no mask is left, and the inner
+    /// shift's other uses do not matter.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11196
+    fn shl_of_exact_shift(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (inner, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if self.dag.node(inner).flags.0 & SDNodeFlags::EXACT.0 == 0 {
+            return None;
+        }
+        let (c2, c1) = (self.dag.constant(n1)?, self.dag.constant(self.dag.operand(inner, 1))?);
+        let vt = self.dag.value_type(node);
+        let width = u128::from(vt.size_in_bits());
+        if c1 >= width || c2 >= width {
+            return None;
+        }
+        let x = self.dag.operand(inner, 0);
+        let amount_vt = self.dag.value_type(n1);
+        if c1 <= c2 {
+            let by = self.dag.get_constant(c2 - c1, amount_vt);
+            return Some(self.dag.get_node(ISD::Shl, vt, &[x, by]));
+        }
+        let by = self.dag.get_constant(c1 - c2, amount_vt);
+        Some(self.dag.get_node(self.dag.opcode(inner), vt, &[x, by]))
     }
 
     /// `visitSHL`: `shl (srl x, c1), c2` is `and (srl x, c1 - c2), (-1 << c1
@@ -2767,9 +2812,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// a dead overflow is an `add`, a constant goes right, `x + 0` has no
     /// carry, and a sum that cannot overflow is an `add`. DEVIATE UADDO1: the
     /// `(uaddo (xor a, -1), 1)` and `visitUADDOLike` carry folds are not
-    /// translated. Measured 2026-11-06 12:34Z (C corpus m16/m32/m64 -O2, QB, Nib): their
-    /// preconditions hold in one program (tests/run/c/overflow_builtins.c, `uaddo X,
-    /// (uaddo_carry Y, 0, c)`), no bench cell. Port when a cell needs it.
+    /// translated. Measured 2026-11-06 12:34Z (C corpus m16/m32/m64 -O2, QB,
+    /// Nib): their preconditions hold in one program
+    /// (tests/run/c/overflow_builtins.c, `uaddo X, (uaddo_carry Y, 0, c)`),
+    /// no bench cell. Port when a cell needs it.
     fn visit_uaddo(
         &mut self,
         node: SDValue,

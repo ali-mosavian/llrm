@@ -7,11 +7,13 @@
 //! BMI2). Either operand folds from memory, the multiply being commutative; the
 //! product halves that are used are copied out of `EAX` and `EDX`.
 //!
-//! Numbered deviation: **SD303** `orderRegForMul` (swap so the operand already
-//! in `EAX` is the implicit one) is skipped: it reads the live-in physical
-//! register of a virtual `CopyFromReg`, which the DAG does not carry. At worst
-//! one extra copy. Owner sdag-c. Exit: live-in map in the adapter. Review
-//! 2026-12-10.
+//! `orderRegForMul` ([L5280][order]) swaps the operands when the second one
+//! already sits in the implicit register, so no copy is needed; the live-in
+//! physical register of a virtual `CopyFromReg` comes from
+//! [`AddrDag::live_in_physical`].
+//!
+//! [order]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L5280
 //!
 //! # Used by
 //! [`crate::x86_select::select_node`].
@@ -24,6 +26,52 @@ use crate::generated::ids::{isd, mvt, x86};
 use crate::x86_addr::AddrDag;
 use crate::x86_divrem::copy_results;
 use crate::x86_hooks::{Cpu, X86Hooks};
+
+/// Whether the constant `c` has at least as many significant bits as `other` can have
+/// (its width less its known leading zeros): the 486's multiply clocks are
+/// 10 plus the bits of the r/m operand (Intel 240440-002, Table 10.1 note 3).
+fn constant_is_wider<D: AddrDag>(
+    dag: &D,
+    c: SDValue,
+    other: SDValue,
+    signed: bool,
+) -> bool {
+    let Some(value) = dag.constant(c) else { return true };
+    let width = crate::x86_addr::vt_bits(dag.value_type(other));
+    let narrow = if width >= 64 { value } else { value & ((1i64 << width) - 1) };
+    let bits = if signed {
+        let shift = 64 - width.min(64);
+        ((narrow << shift) >> shift).unsigned_abs().checked_ilog2().map_or(0, |n| n + 1)
+    } else {
+        (narrow as u64).checked_ilog2().map_or(0, |n| n + 1)
+    };
+    let zeros = (dag.known_zero_bits(other) << (64 - width.min(64))).leading_ones();
+    // A signed multiplier of unknown sign has `width - 1` magnitude bits: the
+    // sign is not one the early-out counts (a 31-bit `x / 5` magic against an
+    // unknown `i32` was a tie it lost: the magic stayed the r/m operand, 41
+    // clocks, where the dividend is the one priced).
+    let sign = u32::from(signed && zeros == 0);
+    bits >= (width - zeros.min(width)).saturating_sub(sign)
+}
+
+/// `orderRegForMul`: swap so the operand already in `lo` is the implicit one.
+fn order_reg_for_mul<D: AddrDag>(
+    dag: &D,
+    n0: &mut SDValue,
+    n1: &mut SDValue,
+    lo: u16,
+) {
+    let phys = |v: SDValue| {
+        if dag.opcode(v.node) != isd::CopyFromReg {
+            return None;
+        }
+        let reg = dag.operand(v.node, 1).node;
+        dag.live_in_physical(reg).or_else(|| dag.register_of(reg))
+    };
+    if phys(*n1) == Some(lo) && phys(*n0) != Some(lo) {
+        std::mem::swap(n0, n1);
+    }
+}
 
 /// Selects `node`; false when its type is one the pin's case has no row for:
 /// `i32`, and `i64` at 64 bits.
@@ -55,16 +103,23 @@ pub fn select_mul_lohi<D: AddrDag>(
         }
     }
 
+    if folded.is_none() {
+        order_reg_for_mul(dag, &mut n0, &mut n1, lo);
+    }
+
     // DEVIATE SD444 (owner w2, exit 2026-11-17): where the multiply ends early
-    // on the r/m operand, a constant (a division's full-width magic) goes to
-    // `EAX`, so the other operand is the one whose length is read. The pin
-    // keeps operand 0 in `EAX`. Stays while the 486 row (`mul` 43 clocks
-    // against 19 for a short dividend; +4M clocks on 7 frames/huge rows) holds;
-    // the exit is a re-measure against the pin's order on the 486 rows.
+    // on the r/m operand (10 + the bits of that operand), a constant with more
+    // significant bits than the other operand can have (a division's
+    // full-width magic) goes to `EAX`, so the variable is the r/m operand whose
+    // length is read. A narrower constant stays the r/m operand, as in the pin.
+    // Stays while the 486 row (`mul` 43 clocks against 19 for a short dividend;
+    // +4M clocks on 7 frames/huge rows) holds; the exit is a re-measure
+    // against the pin's order on the 486 rows.
     if folded.is_none()
         && hooks.options.multiply_early_out
         && dag.opcode(n1.node) == isd::Constant
         && dag.opcode(n0.node) != isd::Constant
+        && constant_is_wider(dag, n1, n0, is_signed)
     {
         std::mem::swap(&mut n0, &mut n1);
     }
@@ -119,6 +174,10 @@ pub fn select_mul_flags<D: AddrDag>(
         if folded.is_some() {
             std::mem::swap(&mut n0, &mut n1);
         }
+    }
+
+    if folded.is_none() {
+        order_reg_for_mul(dag, &mut n0, &mut n1, lo);
     }
 
     let entry = dag.entry_node();

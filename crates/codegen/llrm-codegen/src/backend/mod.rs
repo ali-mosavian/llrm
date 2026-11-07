@@ -252,6 +252,7 @@ pub mod parcopy;
 pub mod peep;
 pub mod peephole;
 pub mod peepholeopt;
+pub mod leaffold;
 pub mod phiconst;
 pub mod phielim;
 pub mod postings;
