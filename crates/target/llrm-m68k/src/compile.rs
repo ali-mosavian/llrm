@@ -183,6 +183,7 @@ pub fn items_with(
         options.indexed,
         options.short,
         options.code_model.absolute_data(cpu),
+        wants_size,
     )?;
     let mut function = emit(name, &blocks)?;
     function.returns_twice =
