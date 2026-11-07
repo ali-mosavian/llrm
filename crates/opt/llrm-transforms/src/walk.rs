@@ -263,8 +263,12 @@ impl ProgramPass for Walk {
             last_call_to_static: self.inline.last,
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
-        // The target's tuning table.
-        if let Some(threshold) = program.target.tti().and_then(|tti| tti.inline_threshold_override()) {
+        // The target's tuning table: its bar is for bytes, which rule at -O1
+        // and for size; at speed the pin's applies (m16: the 50 left
+        // jpeg_fixed's helpers calls, +42% clocks).
+        if let Some(threshold) =
+            program.target.tti().filter(|_| !self.speed_rate).and_then(|tti| tti.inline_threshold_override())
+        {
             params.default_threshold = threshold;
         }
         let size = self.inline.caller_size();
@@ -325,8 +329,7 @@ impl ProgramPass for Walk {
                                 tti.as_deref(),
                                 decided.as_mut(),
                                 (tti.as_deref().is_some_and(|tti| {
-                                    size != crate::inlinecost::CallerSize::Speed
-                                        || tti.inline_policy().by_rate > 0
+                                    size != crate::inlinecost::CallerSize::Speed || tti.inline_policy().by_rate > 0
                                 }))
                                 .then_some(&mut trials),
                             )
@@ -370,7 +373,7 @@ impl ProgramPass for Walk {
                             function_mut(module, id)
                                 .1
                                 .attrs
-                                .push(llrm_mir::opcode::Attribute::Flag(SELF_COPIED.to_owned()));
+                                .push(llrm_mir::opcode::Attribute::Flag(SELF_COPIED.into()));
                         }
                         // DEVIATE (recursion): a tree-recursive function waits
                         // for its tail-call elimination
@@ -408,7 +411,9 @@ impl ProgramPass for Walk {
                             function_mut(module, id)
                                 .1
                                 .attrs
-                                .push(llrm_mir::opcode::Attribute::Flag(crate::tailcallelim::DEFERRED.to_owned()));
+                                .push(llrm_mir::opcode::Attribute::Flag(crate::tailcallelim::DEFERRED.into()));
+                            // The flag is part of its declaration: the analyses that list declarations patch only what is told changed.
+                            modules[at].changed(id);
                         }
                         for (call, callee, cost) in decided.iter().flatten() {
                             let name = |id: GlobalId| module.global(id).name.as_deref().unwrap_or("?");
@@ -443,7 +448,9 @@ impl ProgramPass for Walk {
                         // each callee spliced here are the brought ones.
                         let brought: Vec<GlobalId> = constant
                             .iter()
-                            .filter(|(call, _)| module.global(id).function().is_some_and(|one| one.parent(**call).is_none()))
+                            .filter(|(call, _)| {
+                                module.global(id).function().is_some_and(|one| one.parent(**call).is_none())
+                            })
                             .filter_map(|(_, one)| module.global(one.callee?).function())
                             .flat_map(|body| calls_of(&module.context, body))
                             .map(|(callee, _)| callee)
@@ -545,6 +552,54 @@ impl ProgramPass for Walk {
                                 modules[at].changed(id);
                                 modules[at]
                                     .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                // POC chain: the sites the trial's splice brought, priced by the
+                                // ordinary rules, are inlined into the trial too (the pin inlines
+                                // callee-first, so `foo` into `main` and `bar` into that copy meet
+                                // the constants together); one round, so O(n).
+                                if size != crate::inlinecost::CallerSize::Speed && tti.opt_size_inline_chain_trial() {
+                                    let mut seen = Vec::new();
+                                    let second = crate::inlinecost::sites_with_trials(
+                                        module,
+                                        &program.layout,
+                                        id,
+                                        live.references(),
+                                        &addressed,
+                                        &recursive,
+                                        params,
+                                        size,
+                                        self.inline.limit == 0,
+                                        Some(tti),
+                                        Some(&mut seen),
+                                        None,
+                                    );
+                                    if remarks {
+                                        for (call, callee, cost) in &seen {
+                                            let name = |g: GlobalId| module.global(g).name.as_deref().unwrap_or("?");
+                                            eprintln!("chain: {}", crate::inlinecost::remark(name(id), name(*callee), cost, false));
+                                            let _ = call;
+                                        }
+                                    }
+                                    if !second.is_empty() {
+                                        let mut declared = crate::interprocedural::declared(&mut modules[at], module);
+                                        let (context, function, metadata) =
+                                            crate::interprocedural::function_and_metadata_mut(module, id);
+                                        crate::inline::expanded_all(
+                                            context,
+                                            function,
+                                            &by,
+                                            &peeled,
+                                            Some(&second),
+                                            &mut declared,
+                                            metadata,
+                                        )?;
+                                        if declared.place(module)? > 0 {
+                                            modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                        }
+                                        modules[at].changed(id);
+                                        modules[at]
+                                            .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                                                            }
+                                }
                                 (self.simplify)(module, &mut modules[at], id, "walk.trial.");
                                 let tried = body_size(module, &program.layout, tti, id);
                                 // At speed a target that prices bytes in clocks
@@ -607,7 +662,15 @@ impl ProgramPass for Walk {
                                     // -Os).
                                     let costs = program.target.size_costs();
                                     let now = module.global(id).function().expect("a body");
-                                    let gone: i64 = if credit > 0 {
+                                    // DEVIATE (owner softfloat, exit 2026-11-20): the callee's bytes are summed per
+                                    // site off the byte gate's targets, as the x86 model was fit with.
+                                    let gone: i64 = if credit > 0 && tti.opt_size_inline_byte_gate() {
+                                        let sites: Vec<GlobalId> =
+                                            calls.iter().filter_map(|one| trials[one].callee).collect();
+                                        dying_callees_bytes(module, &sites, |body| {
+                                            function_bytes(module, &program.layout, &costs, body)
+                                        })
+                                    } else if credit > 0 {
                                         calls
                                             .iter()
                                             .filter_map(|one| trials[one].callee)
@@ -658,21 +721,8 @@ impl ProgramPass for Walk {
                                 // pairs saved on every call, +441k
                                 // instructions).
                                 let priced = rate > 0 && size == crate::inlinecost::CallerSize::Speed;
-                                if if priced {
-                                    credit > 0 && growth * rate <= saved * 1000
-                                } else {
-                                    tried <= best + credit
-                                        || (saved > 0 && growth * rate <= saved * 1000)
-                                        || (rate == 0
-                                            && credit == 0
-                                            && -growth * 8
-                                                >= function_bytes(
-                                                    module,
-                                                    &program.layout,
-                                                    &program.target.size_costs(),
-                                                    &kept,
-                                                ))
-                                } {
+                                let kept_bytes = function_bytes(module, &program.layout, &program.target.size_costs(), &kept);
+                                if trial_accepted(tti.opt_size_inline_byte_gate(), priced, tried, best, credit, saved, growth, rate, kept_bytes) {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
@@ -736,7 +786,7 @@ impl ProgramPass for Walk {
                         function_mut(module, id)
                             .1
                             .attrs
-                            .push(llrm_mir::opcode::Attribute::Flag(PROMOTED_IN_WALK.to_owned()));
+                            .push(llrm_mir::opcode::Attribute::Flag(PROMOTED_IN_WALK.into()));
                         if visited.contains(&id) {
                             (self.simplify)(module, &mut modules[at], id, "promote.");
                         }
@@ -793,8 +843,8 @@ pub(crate) fn self_calls(
     self_calls_from(module, layout, id, for_size, 2)
 }
 
-/// `self_calls` with `fewest` distinct self calls: one for a body whose tail-call
-/// elimination has already left a single call in a loop.
+/// `self_calls` with `fewest` distinct self calls: one for a body whose
+/// tail-call elimination has already left a single call in a loop.
 pub(crate) fn self_calls_from(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
@@ -913,14 +963,29 @@ pub const SELF_COPIED: &str = "llrm-self-copied";
 const PROMOTED_IN_WALK: &str = "llrm-promoted-in-walk";
 
 /// Whether the walk promoted any body; the marks are removed.
-pub(crate) fn take_walk_promotions(program: &mut Program) -> bool {
+pub(crate) fn take_walk_promotions(
+    program: &mut Program,
+    modules: &mut [ModuleAnalyses],
+) -> bool {
     let mut found = false;
-    for module in &mut program.modules {
-        for global in &mut module.globals {
+    for (at, module) in program.modules.iter_mut().enumerate() {
+        for (index, global) in module.globals.iter_mut().enumerate() {
             if let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind {
                 let before = function.attrs.len();
-                function.attrs.retain(|attr| !matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == PROMOTED_IN_WALK));
-                found |= function.attrs.len() != before;
+                function
+                    .attrs
+                    .retain(
+                        |attr| !matches!(
+                            attr,
+                            llrm_mir::opcode::Attribute::Flag(flag) if flag == PROMOTED_IN_WALK
+                        ),
+                    );
+                if function.attrs.len() != before {
+                    found = true;
+                    // The mark is part of the declaration the analyses list;
+                    // the second IPSCCP restates only some bodies.
+                    modules[at].changed(GlobalId(index as u32));
+                }
             }
         }
     }
@@ -987,25 +1052,35 @@ impl SelfInline {
                 module.functions().filter(|(_, _, function)| waiting(function)).map(|(id, _, _)| id).collect();
             for id in marked {
                 let mut copies = 0;
-                // DEVIATE REC-2: where the target says so, the tail-call elimination comes first and
-                // the copies are made of the loop it leaves (gcc's order).
+                // DEVIATE REC-2: where the target says so, the tail-call
+                // elimination comes first and the copies are
+                // made of the loop it leaves (gcc's order).
                 let tre_first = {
                     let (o2, o3) = program.target.tti().map_or((false, false), |tti| tti.recursive_tre_first());
                     if self.o3 { o3 } else { o2 }
                 };
                 if tre_first {
-                    function_mut(module, id).1.attrs.retain(
-                        |one| !matches!(one, llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::tailcallelim::DEFERRED),
-                    );
+                    function_mut(module, id)
+                        .1
+                        .attrs
+                        .retain(
+                            |one| !matches!(
+                                one,
+                                llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::tailcallelim::DEFERRED
+                            ),
+                        );
                     modules[at].changed(id);
                     modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     (self.simplify)(module, &mut modules[at], id, "tre-first.");
                 }
-                let frequencies = self_calls_from(module, &program.layout, id, self.for_size, if tre_first { 1 } else { 2 }).filter(|_| {
-                    let bar = edge_growth_bar(program.target.tti().as_deref(), self.o3);
-                    let body = module.global(id).function().expect("a marked function");
-                    crate::inline::recursive_edge_growth(body) <= bar
-                });
+                let frequencies =
+                    self_calls_from(module, &program.layout, id, self.for_size, if tre_first { 1 } else { 2 }).filter(
+                        |_| {
+                            let bar = edge_growth_bar(program.target.tti().as_deref(), self.o3);
+                            let body = module.global(id).function().expect("a marked function");
+                            crate::inline::recursive_edge_growth(body) <= bar
+                        },
+                    );
                 if let Some(frequencies) = frequencies {
                     let tti = program.target.tti();
                     let (depth, callee) = match (
@@ -1071,7 +1146,7 @@ impl SelfInline {
                         ),
                     );
                 if copies > 0 {
-                    function_mut(module, id).1.attrs.push(llrm_mir::opcode::Attribute::Flag(SELF_COPIED.to_owned()));
+                    function_mut(module, id).1.attrs.push(llrm_mir::opcode::Attribute::Flag(SELF_COPIED.into()));
                 }
                 modules[at].changed(id);
                 modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
@@ -1182,7 +1257,10 @@ pub fn function_bytes(
                     }) + if wide { costs.prefix } else { 0 }
                 }
                 Opcode::GetElementPtr { .. } => costs.address,
-                Opcode::ICmp(_) | Opcode::FCmp(_) => costs.add + prefix,
+                // A float compare is the target's own: fcom and the status word on x87, a libcall where the FPU is
+                // software.
+                Opcode::FCmp(_) => costs.add + costs.float_compare,
+                Opcode::ICmp(_) => costs.add + prefix,
                 Opcode::Select => costs.branch + costs.r#move,
                 Opcode::Br => costs.branch,
                 Opcode::Switch => costs.branch * 2,
@@ -1199,6 +1277,30 @@ pub fn function_bytes(
         .saturating_add(costs.function)
         .saturating_mul(costs.function_scale)
         / 100
+}
+
+/// SZ2: whether a trial's copies are kept. Priced (speed, a byte rate): the callee must go with them and the growth
+/// must be worth the clocks saved. At size the instruction count decides (`tried <= best + credit`), but a callee that
+/// goes with its last calls, accepted only by the credit for the callee (the copies alone count more), must also leave the bytes no larger: the count priced a float compare as an add, and
+/// `canon` (a libcall per site on m68k) was inlined five times for +28 B at -Os.
+#[allow(clippy::too_many_arguments)]
+fn trial_accepted(
+    byte_gate: bool,
+    priced: bool,
+    tried: i64,
+    best: i64,
+    credit: i64,
+    saved: i64,
+    growth: i64,
+    rate: i64,
+    kept_bytes: i64,
+) -> bool {
+    if priced {
+        return credit > 0 && growth * rate <= saved * 1000;
+    }
+    (if byte_gate { tried <= best || (tried <= best + credit && growth <= 0) } else { tried <= best + credit })
+        || (saved > 0 && growth * rate <= saved * 1000)
+        || (rate == 0 && credit == 0 && -growth * 8 >= kept_bytes)
 }
 
 /// SZ2: the bytes the module loses when the callees of a trial's `sites` go

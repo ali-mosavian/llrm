@@ -5,6 +5,7 @@
 # pin's llc on the same IR llrm-llc gets; llrm = llrm-llc. Read llrm against pin for codegen, never against clang.
 # Needs the pin (~/scratch/llvm-build, d1106deb71cc) and target/debug/llrm-llc (buildslot cargo build --bin llrm-llc).
 set -u
+. "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
 root=$(cd "$(dirname "$0")/.." && pwd)
 clang=${LLRM_PIN_CLANG:-$HOME/scratch/llvm-build/bin/clang}
 llc=${LLRM_LLC:-$root/target/debug/llrm-llc}

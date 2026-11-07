@@ -933,7 +933,7 @@ impl<'a> TailRecursionEliminator<'a> {
         let not_volatile = Operand::Constant(self.context.int(i1_type, 0));
         let callee =
             Operand::Constant(self.context.constant(Constant { ty: pointer_type, kind: ConstantKind::Global(callee) }));
-        let aligned = vec![Attribute::Int("align".to_owned(), alignment)];
+        let aligned = vec![Attribute::Int("align".into(), alignment)];
         let info = CallInfo {
             function_type,
             calling_convention: 0,

@@ -19,7 +19,10 @@
 //!   `tryCanonicalizeStructToVector` L5460): the targets have no vector
 //!   registers, and `AggregateToVector` is off at -O2.
 //! - Calls and invokes escape a pointer whatever their attributes
-//!   (`visitCallBase` L1402 looks at read-only, nocapture operands).
+//!   (`visitCallBase` L1402 looks at read-only, nocapture operands). Owner
+//!   softfloat, kept because: 542 call escapes in tests/run/c + bench, none with a
+//!   call-site nocapture, and `strlen(b)+b[0]` forwards the same as the pin at
+//!   -Os; exit when a cell shows a missed forward, review 2026-12-10.
 //! - Address-space casts abort; pointers in a space that is a selector and an
 //!   offset are not converted to integers (`canConvertValue` L2057).
 //! - Debug records (`migrateDebugInfo` L348, the migration in `splitAlloca`
@@ -195,7 +198,10 @@ fn size_equals_store_size(
 }
 
 /// DEVIATE: whether isel selects an integer of `bytes` bytes (LLVM legalizes
-/// any width, so SROA makes i24 where a 3-byte slice is cut).
+/// any width, so SROA makes i24 where a 3-byte slice is cut). Owner softfloat,
+/// kept because: all 60 triggers in tests/run/c + bench are 10-byte x87
+/// `long double` slices, and an i80 lowering costs more than the alloca; exit
+/// when isel lowers odd widths, review 2026-12-10.
 fn supported_int_size(
     layout: &DataLayout,
     bytes: u64,
@@ -226,20 +232,6 @@ fn can_convert_value(
     // Integers of different widths are not converted.
     if int_bits(context, old).is_some() && int_bits(context, new).is_some() {
         return false;
-    }
-    // DEVIATE: a float is reinterpreted only as a native integer of its width
-    // on a target with 64-bit general registers (a register move from SSE):
-    // elsewhere isel selects no such bitcast (x87 has no register move to a
-    // general register).
-    let is_float = |ty: TypeId| matches!(context.types.get(ty), Type::Float(_));
-    if is_float(old) || is_float(new) {
-        let (float, other) = if is_float(old) { (old, new) } else { (new, old) };
-        let native = layout.largest_legal_integer() >= 64
-            && int_bits(context, other).is_some_and(|bits| layout.legal_integer(bits));
-        if !native || is_float(other) || layout.size_bits(&context.types, float) != layout.size_bits(&context.types, other) {
-            return false;
-        }
-        return true;
     }
     if layout.size_bits(&context.types, new) != layout.size_bits(&context.types, old) {
         return false;

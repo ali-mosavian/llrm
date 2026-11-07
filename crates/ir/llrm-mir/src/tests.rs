@@ -244,6 +244,22 @@ fn a_comdat_declaration_and_its_marker_are_read() {
     assert_eq!(module.comdat_of["f"], "f");
 }
 
+/// The printer dropped `$c = comdat K` and every `comdat` marker, so a module
+/// printed and read back (every mid-end stage dump, `llrm-opt` output) lost its
+/// COMDAT sections. It prints them as LLVM does and reads them back equal.
+#[test]
+fn a_comdat_declaration_and_its_marker_survive_printing() {
+    let text = "$\"??_C@_02@ab\" = comdat any\n$f = comdat largest\n\n\
+        @\"??_C@_02@ab\" = linkonce_odr constant [3 x i8] c\"ab\\00\", comdat, align 1\n\
+        @g = linkonce_odr global i32 0, comdat($f)\n@plain = global i32 1\n\n\
+        define linkonce_odr void @f() comdat {\n  ret void\n}\n";
+    let module = parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    let printed = print::module(&module);
+    assert_eq!(printed, text);
+    let again = parse::module(&printed).unwrap();
+    assert_eq!((again.comdats, again.comdat_of), (module.comdats, module.comdat_of));
+}
+
 /// The pin refuses a comdat used and never declared, and one declared twice.
 #[test]
 fn an_undeclared_or_repeated_comdat_is_refused() {
@@ -789,8 +805,8 @@ fn crate_sources() -> Vec<(String, String)> {
     sources
 }
 
-/// Every flag word a pass writes with `Attribute::Flag("word".to_owned())` or
-/// `Attribute::Flag(PATH::CONST.to_owned())` (a `const CONST: &str = "word"`
+/// Every flag word a pass writes with `Attribute::Flag("word".into())` or
+/// `Attribute::Flag(PATH::CONST.into())` (a `const CONST: &str = "word"`
 /// anywhere), with a file that writes it. A flag made from a variable is not
 /// seen.
 fn written_flag_words(sources: &[(String, String)]) -> std::collections::BTreeMap<String, String> {
@@ -859,8 +875,8 @@ fn every_flag_word_a_pass_writes_is_one_mir_reads() {
 fn the_flag_scan_reads_literals_and_constants() {
     let sources = vec![(
         "x.rs".to_owned(),
-        "const KEPT: &str = \"kept-word\";\nfn f() { a.push(Attribute::Flag(\"lit-word\".to_owned())); \
-         b.push(llrm::Attribute::Flag(crate::m::KEPT.to_owned())); c.push(Attribute::Flag(name)); \
+        "const KEPT: &str = \"kept-word\";\nfn f() { a.push(Attribute::Flag(\"lit-word\".into())); \
+         b.push(llrm::Attribute::Flag(crate::m::KEPT.into())); c.push(Attribute::Flag(name)); \
          d.push(line.contains(\"Attribute::Flag(\") || line.contains(\"has(\")); }\n"
             .to_owned(),
     )];
@@ -1604,4 +1620,61 @@ fn test_the_symbol_table_follows_a_rename_and_a_new_global() {
     assert_eq!(module.named("fresh"), Some(crate::context::GlobalId(3)));
     module.globals.swap(0, 2);
     assert_eq!(module.named("f2"), Some(crate::context::GlobalId(0)), "a moved global");
+}
+
+/// wasm `memory_expansion` lr9: an alloca captured by a later call made BasicAA
+/// answer "may alias" against a pointer parameter, so the pin's byte-copy
+/// merge never happened in ours (18 load/store ops where the pin made 9). The
+/// pin: a parameter cannot point to a slot of this activation, captured or
+/// not; a pointer loaded from memory still can, once the slot is captured.
+#[test]
+fn a_captured_slot_does_not_alias_a_pointer_parameter_but_a_loaded_pointer_may() {
+    use crate::alias::{Alias, Location, alias};
+    use crate::{datalayout::DataLayout, memory::callees, module::Operand};
+    let module = parse::module(
+        "declare void @esc(ptr)\n\
+         define void @f(ptr %p, ptr %pp) {\n  %a = alloca [8 x i8], align 1\n  call void @esc(ptr %a)\n  \
+         %q = load ptr, ptr %pp, align 4\n  ret void\n}\n",
+    )
+    .unwrap();
+    let (_, _, function) = module.functions().find(|(_, _, f)| f.parameters().len() == 2).unwrap();
+    let results: Vec<_> = function.instructions.iter().filter_map(|i| i.result).collect();
+    let (slot, loaded) = (results[0], results[1]);
+    let at = |pointer| Location { pointer, bytes: 1, tbaa: None };
+    let verdict = |one: Operand, other: Operand| {
+        alias(
+            &module.context,
+            &DataLayout::default(),
+            &callees(&module),
+            &module.metadata,
+            function,
+            at(one),
+            at(other),
+        )
+    };
+    let parameter = Operand::Value(function.parameters()[0]);
+    assert_eq!(verdict(parameter, Operand::Value(slot)), Alias::No);
+    assert_eq!(verdict(Operand::Value(slot), parameter), Alias::No);
+    assert_eq!(verdict(Operand::Value(loaded), Operand::Value(slot)), Alias::May);
+}
+
+/// A dump printed a scope declaration as `call void
+/// @llvm.experimental.noalias.scope.decl(), !noalias.scope.decl !N`, which the
+/// pin's verifier refuses ("must have a MetadataAsValue argument"): six m32/m64
+/// cells could not be compared with the pin llc (tail_calls_edges, sysv_abi,
+/// ...), and our own parser refused the pin's form, so no dump read back. The
+/// node is the argument, and `(metadata !N)` parses back to it.
+#[test]
+fn a_scope_declaration_prints_its_node_as_the_argument_and_reads_back() {
+    let text = "declare void @llvm.experimental.noalias.scope.decl(metadata)\n\
+                define void @f(ptr %p) {\n  call void @llvm.experimental.noalias.scope.decl(metadata !2)\n  \
+                store i32 1, ptr %p, align 4, !alias.scope !2\n  ret void\n}\n\
+                !0 = distinct !{!0, !\"d\"}\n!1 = distinct !{!1, !0, !\"s\"}\n!2 = !{!1}\n";
+    let module = parse::module(text).unwrap();
+    let printed = crate::print::module(&module);
+    assert!(printed.contains("scope.decl(metadata !"), "{printed}");
+    assert!(printed.contains("@llvm.experimental.noalias.scope.decl(metadata)"), "{printed}");
+    assert!(!printed.contains("!noalias.scope.decl"), "{printed}");
+    let again = parse::module(&printed).unwrap();
+    assert_eq!(crate::print::module(&again), printed);
 }

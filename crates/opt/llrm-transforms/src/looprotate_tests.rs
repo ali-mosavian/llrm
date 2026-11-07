@@ -352,16 +352,15 @@ b3:
 }
 
 /// -Os cut the header limit to 4 on every target; the byte sweep that showed it
-/// to be smaller was m16 only (a target states its own limit). m32 keeps the
-/// pin's 16 (`hasMinSize` alone lowers it), so a five-instruction header is
-/// copied there at -Os.
+/// to be smaller was m16 only (a target states its own limit). A target with
+/// none keeps the pin's 16.
 #[test]
-fn test_the_size_header_limit_is_m16_only() {
+fn test_the_size_header_limit_is_the_targets_own() {
     use llrm_mir::target::Neutral;
-    assert_eq!(super::header_limit(true, true, &Neutral), 16);
-    assert_eq!(super::header_limit(true, true, &llrm_x86_m16::Dos::default()), 4);
-    assert_eq!(super::header_limit(true, false, &llrm_x86_m16::Dos::default()), 16);
-    assert_eq!(super::header_limit(false, true, &llrm_x86_m16::Dos::default()), 0);
+    assert_eq!(super::header_limit(true, true, &Neutral, &llrm_mir::tti::Basic), 16);
+    assert_eq!(super::header_limit(true, true, &llrm_x86_m16::Dos::default(), &llrm_mir::tti::Basic), 4);
+    assert_eq!(super::header_limit(true, false, &llrm_x86_m16::Dos::default(), &llrm_mir::tti::Basic), 16);
+    assert_eq!(super::header_limit(false, true, &llrm_x86_m16::Dos::default(), &llrm_mir::tti::Basic), 0);
 }
 
 /// The -Os limit of 4 followed `segment_registers() > 0`, so any target with
@@ -370,7 +369,7 @@ fn test_the_size_header_limit_is_m16_only() {
 #[test]
 fn test_the_size_header_limit_comes_from_the_target_not_its_segments() {
     let segmented = crate::testing::Tuned { segments: 2, ..Default::default() };
-    assert_eq!(super::header_limit(true, true, &segmented), 16);
+    assert_eq!(super::header_limit(true, true, &segmented, &llrm_mir::tti::Basic), 16);
 }
 
 /// `rotated` as a size build on arm64, where a header is copied only when it
@@ -629,4 +628,14 @@ fn test_a_size_build_rotates_a_counted_loop() {
 #[test]
 fn test_a_size_build_rotates_a_loop_whose_guard_folds() {
     assert!(rotated_guard_must_fold(&COUNTED.replace("%n)", "%y)").replace("i16 %i, %n", "i16 %i, 8")));
+}
+
+/// m32 -Os copied a header of up to 16 instructions: x_hash's probe loop test
+/// was repeated before the loop (+29 B on 280). The target's tuning states 4.
+#[test]
+fn test_the_size_header_limit_of_m32_is_four() {
+    let m32 = crate::indvars::tests::m32();
+    let tti = m32.tti().unwrap();
+    assert_eq!(super::header_limit(true, true, &*m32, &*tti), 4);
+    assert_eq!(super::header_limit(true, false, &*m32, &*tti), 16);
 }

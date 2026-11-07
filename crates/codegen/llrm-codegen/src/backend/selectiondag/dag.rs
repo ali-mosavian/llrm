@@ -103,6 +103,8 @@ pub enum NodeData {
     JumpTable(u32),
     /// `SrcValueSDNode`: which IR value, by a key the builder makes.
     Src(u32),
+    /// `RegisterMaskSDNode`: an index into [`SelectionDAG::register_masks`].
+    RegMask(u32),
 }
 
 /// What identifies a memory access beyond its operands: the pin's
@@ -137,6 +139,9 @@ pub enum MemBase {
     ConstantPool(u32),
     /// A jump table entry (`MachinePointerInfo::getJumpTable`).
     JumpTable,
+    /// A GOT entry (`MachinePointerInfo::getGOT`): the address of a symbol
+    /// another object defines, which the linker fills.
+    Got,
     /// The IR pointer the access reads or writes (`MachinePointerInfo::V`):
     /// an index into [`SelectionDAG::mem_locations`] (1-based). Only a target
     /// whose `useAA` is true records it.
@@ -201,6 +206,29 @@ pub struct DivPrices {
     /// The clocks of the product `q * d` a remainder subtracts, by `d`: what
     /// the selector emits for it (`Machine::multiply_by`).
     pub product: Option<ProductPrice>,
+    /// The same parts in code bytes, and what a byte is worth at speed (DEVIATE
+    /// SD446): where the target trades bytes for clocks (`rate` > 0, -O2/-O3
+    /// on m16) the divide is chosen by clocks plus bytes at that rate.
+    pub bytes: Option<DivBytes>,
+}
+
+/// [`DivPrices`]' parts in code bytes, and the rate in thousandths of a clock
+/// per byte.
+#[derive(Clone, Debug)]
+pub struct DivBytes {
+    pub prefix: i64,
+    pub add: i64,
+    pub shift: i64,
+    pub extend: i64,
+    pub multiply: i64,
+    pub multiply_long: i64,
+    pub multiply_high: i64,
+    pub divide: i64,
+    pub divide_long: i64,
+    pub milliclocks_per_byte: i64,
+    /// The block's frequency over the entry's: the clocks recur that often,
+    /// the bytes are paid once.
+    pub frequency: f64,
 }
 
 /// A price by the constant `d`.
@@ -386,6 +414,10 @@ pub struct SelectionDAG {
     pub(super) survivors: Vec<u32>,
     /// The `IROrder` of the `SDLoc` in force: nodes made now carry it.
     pub cur_order: u32,
+    /// The physical register each virtual register arrives in
+    /// (`getLiveInPhysReg`), by virtual register number: set for the entry
+    /// block's arguments.
+    pub live_in_phys: llrm_support::hash::HashMap<u32, llrm_lir::registers::RegId>,
     /// The source line of the IR instruction at each `IROrder` (0: none), from
     /// the `!dbg` the builder read: `SDLoc`'s line.
     pub lines: Vec<Option<crate::model::lir::SrcLoc>>,
@@ -419,6 +451,9 @@ pub struct SelectionDAG {
     /// The constants spilled to the pool: bits and type
     /// (`MachineConstantPool`).
     pub constant_pool: Vec<(u128, EVT)>,
+    /// The registers each `RegisterMask` node says its call clobbers, as the
+    /// pin's register numbers (`getNodeRegMask`); entry 0 is the empty list.
+    pub register_masks: Vec<Vec<u16>>,
     /// The frame index the first stack temporary gets: the driver sets it past
     /// the builder's frame objects.
     pub first_temporary: i32,
@@ -426,6 +461,11 @@ pub struct SelectionDAG {
     /// (`MachineFrameInfo::getObjectAlign`): what the known bits of its
     /// address say. Empty where the layout may place an object lower.
     pub frame_alignments: Vec<u64>,
+    /// The bytes of each static alloca's frame object, by frame index
+    /// (`MachineFrameInfo::getObjectSize`), set where a `lifetime` marker names
+    /// it; 0 where not known. The group of allocas that share an index (stack
+    /// colouring) is as big as its largest.
+    pub frame_object_bytes: Vec<u64>,
     /// The IR pointers of the accesses ([`MemBase::Value`]).
     pub mem_locations: Vec<MemLocation>,
     /// The frame index of the first variadic argument (`VarArgsFrameIndex`),
@@ -445,6 +485,11 @@ pub struct SelectionDAG {
     /// it, so the set follows it into a machine node. A load a combine or the
     /// legalizer remakes is not in it.
     pub invariant_loads: HashSet<u32>,
+    /// The loads of a GOT entry (`MachinePointerInfo::getGOT`); like
+    /// `invariant_loads`, the number follows the node into a machine node. The
+    /// emitter makes such a load the symbol's External immediate, which the
+    /// encoder relocates as `R_X86_64_REX_GOTPCRELX`.
+    pub got_loads: HashSet<u32>,
     /// The offset from the incoming stack pointer of each fixed object (the
     /// negative frame indices the builder makes for stack arguments):
     /// `MachineFrameInfo::getObjectOffset`.
@@ -500,6 +545,7 @@ impl SelectionDAG {
             dead_work: Vec::new(),
             survivors: Vec::new(),
             cur_order: 0,
+            live_in_phys: Default::default(),
             lines: Vec::new(),
             inst_order: Vec::new(),
             expanded_integers: Default::default(),
@@ -514,14 +560,17 @@ impl SelectionDAG {
             synthetic_fill: String::new(),
             symbol_names: Vec::new(),
             constant_pool: Vec::new(),
+            register_masks: vec![Vec::new()],
             first_temporary: 0,
             frame_alignments: Vec::new(),
+            frame_object_bytes: Vec::new(),
             mem_locations: Vec::new(),
             var_args_frame_index: None,
             var_args_save: None,
             temporaries: Vec::new(),
             local_symbols: Default::default(),
             invariant_loads: HashSet::default(),
+            got_loads: HashSet::default(),
             fixed_offsets: Default::default(),
             volatile_accesses: HashSet::default(),
             direct_copies: HashSet::default(),
@@ -548,6 +597,17 @@ impl SelectionDAG {
 
     pub fn config(&self) -> &DagConfig {
         &self.config
+    }
+
+    /// The frequency of the block this DAG is of, over the entry's, for the
+    /// divide's byte weighing (DEVIATE SD446).
+    pub fn set_divide_frequency(
+        &mut self,
+        frequency: f64,
+    ) {
+        if let Some(bytes) = self.config.div_prices.as_mut().and_then(|prices| prices.bytes.as_mut()) {
+            bytes.frequency = frequency;
+        }
     }
 
     /// The jump table is position independent (`EK_LabelDifference32`, its
@@ -664,6 +724,7 @@ impl SelectionDAG {
                 self.deleted.resize(self.nodes.len(), false);
             }
             self.deleted[n as usize] = true;
+            self.drop_operand_uses(n);
             // A `SmallSetVector`: an operand already waiting is not added
             // twice.
             for i in 0..self.nodes[n as usize].ops.len() {
@@ -705,6 +766,7 @@ impl SelectionDAG {
             self.deleted.resize(self.nodes.len(), false);
         }
         self.deleted[node as usize] = true;
+        self.drop_operand_uses(node);
         let operands: Vec<u32> = self.nodes[node as usize].ops.iter().map(|op| op.node).collect();
         for op in operands {
             let results = self.nodes[op as usize].values.len() as u8;
@@ -712,6 +774,33 @@ impl SelectionDAG {
                 self.survivors.push(op);
             }
             self.delete_dead(op);
+        }
+    }
+
+    /// `SDNode::DropOperands`: a deleted node leaves the use lists of what it
+    /// read, so they hold no entry for it. Each operand slot pushed one entry;
+    /// they are looked for from the end, where a node made lately sits, and
+    /// the walk stops once the slots are accounted for (an entry an operand
+    /// rewrite left behind may remain, `users` filters it).
+    fn drop_operand_uses(
+        &mut self,
+        node: u32,
+    ) {
+        for at in 0..self.nodes[node as usize].ops.len() {
+            let operand = self.nodes[node as usize].ops[at].node;
+            if self.nodes[node as usize].ops[..at].iter().any(|op| op.node == operand) {
+                continue;
+            }
+            let mut slots = self.nodes[node as usize].ops[at..].iter().filter(|op| op.node == operand).count();
+            let list = &mut self.uses[operand as usize];
+            let mut end = list.len();
+            while slots > 0 && end > 0 {
+                end -= 1;
+                if list[end] == node {
+                    list.remove(end);
+                    slots -= 1;
+                }
+            }
         }
     }
 
@@ -1711,8 +1800,6 @@ impl SelectionDAG {
         self.get_node_multi(ISD::CopyToReg, &[EVT::OTHER, EVT::GLUE], &ops)
     }
 
-    /// A call's `RegisterMask` operand: the registers the callee preserves
-    /// are the allocator's to know, so the node carries none.
     fn symbol_id(
         &mut self,
         name: &str,
@@ -1784,7 +1871,24 @@ impl SelectionDAG {
     }
 
     pub fn get_register_mask(&mut self) -> SDValue {
-        self.intern(ISD::RegisterMask, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::None)
+        self.get_register_mask_clobbering(&[])
+    }
+
+    /// A call's `RegisterMask` operand naming the registers the callee
+    /// clobbers (pin numbers), which the scheduler's live-register check
+    /// reads (`CheckForLiveRegDefMasked`).
+    pub fn get_register_mask_clobbering(
+        &mut self,
+        regs: &[u16],
+    ) -> SDValue {
+        let index = match self.register_masks.iter().position(|one| one == regs) {
+            Some(at) => at,
+            None => {
+                self.register_masks.push(regs.to_vec());
+                self.register_masks.len() - 1
+            }
+        };
+        self.intern(ISD::RegisterMask, &[EVT::OTHER], &[], SDNodeFlags::default(), NodeData::RegMask(index as u32))
     }
 
     pub fn get_target_global_address(
@@ -1946,6 +2050,17 @@ impl SelectionDAG {
             Folded::Done(value) => value,
             Folded::Keep(ops) => self.intern(opcode, &[vt], &ops, flags, NodeData::None),
         }
+    }
+
+    /// The filed one-result node `(opcode, vt, ops)`, none if there is no such
+    /// node (`FindNodeOrInsertPos` without the insert).
+    pub fn find_node(
+        &self,
+        opcode: ISD,
+        vt: EVT,
+        ops: &[SDValue],
+    ) -> Option<SDValue> {
+        self.cse_find(opcode, &[vt], ops, &NodeData::None).map(|node| SDValue { node, res: 0 })
     }
 
     /// `getNode(Opcode, VTList, Ops)` for nodes with several results; no folds.

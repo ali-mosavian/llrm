@@ -307,7 +307,7 @@ fn coalesce(function: &mut MFunc) {
 /// copied whole, and a call preserves only the low 64 bits of `d8`-`d15`, so it
 /// never takes one.
 pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
-    let mut wide: HashSet<Reg> = HashSet::default();
+    let mut wide: HashSet<Reg> = function.wide.iter().copied().collect();
     let mut copies: Vec<(Reg, Reg)> = Vec::new();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         match op {
@@ -496,6 +496,13 @@ fn rewrite(
     for block in &mut function.blocks {
         let mut out: Vec<(Op, Option<SrcLoc>)> = Vec::with_capacity(block.ops.len());
         for (mut op, loc) in std::mem::take(&mut block.ops) {
+            // A debug value names the register the value was given; one the
+            // allocator spilled, made again at its uses or dropped has none.
+            if let Op::DbgValue { reg, .. } = &mut op {
+                *reg = reg.and_then(|virtual_reg| assigned.get(&virtual_reg).copied());
+                out.push((op, loc));
+                continue;
+            }
             // The one definition of a value made at each use.
             if op
                 .defs_and_uses()

@@ -88,6 +88,17 @@ pub trait CombineHooks {
     /// `visitXOR`'s `(xor (and x, y), y)` is `(and (not x), y)`. DEVIATE: off
     /// by default so x86's rows stay as they are until the judge has seen
     /// them. Exit: x86 judged.
+    /// `TLI.hasAndNot(Y)`: the target has an and-not instruction for a value of
+    /// this type (`constant`: a non-opaque constant). Off: the pin's x86
+    /// without BMI.
+    fn has_and_not(
+        &self,
+        _vt: EVT,
+        _constant: bool,
+    ) -> bool {
+        false
+    }
+
     fn fold_xor_of_and_with_mask(&self) -> bool {
         false
     }
@@ -207,6 +218,45 @@ pub trait CombineHooks {
         _kept_bits: u32,
     ) -> bool {
         false
+    }
+
+    /// `TLI.isDesirableToCommuteWithShift`
+    /// ([TargetLowering.h#L4763][pin]): whether the constant shift `shift`
+    /// may move through its operand (`shl (add x, c1), c2` is `add (shl x,
+    /// c2), c1 << c2`). The pin's default, which x86, m68k and wasm use: not
+    /// when the operand has other users, nor when it is a sign extension whose
+    /// source has other users. AArch64 and ARM override it; no in-tree target
+    /// here does.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L4763
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        dag: &SelectionDAG,
+        shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        let operand = dag.operand(shift, 0);
+        if !dag.has_one_use(operand.node) {
+            return false;
+        }
+        !(dag.opcode(operand) == ISD::SignExtend && !dag.has_one_use(dag.operand(operand, 0).node))
+    }
+
+    /// `visitSRL`'s `shift (shift x, c1), c2` as one shift by the sum, and
+    /// `SimplifyDemandedBits`' `srl (shl x, c1), c2` (and the reverse) as the
+    /// one shift by the difference, where the inner shift has other users (the
+    /// pin has no use test). DEVIATE: a
+    /// target whose word shift is one instruction for both halves says no, so
+    /// that the other half is read from the shift it already has, not made by a
+    /// second one. Exit: none; the pin's word shifts are pieces by then and
+    /// node CSE shares them. Default true, the pin's.
+    fn fold_shift_of_shared_shift(
+        &self,
+        _vt: EVT,
+        _inner: u32,
+    ) -> bool {
+        true
     }
 
     /// `visitORCommutative`'s absorption folds, `(or (and x, y), x)` is `x`.
@@ -398,6 +448,32 @@ pub trait CombineHooks {
     /// turns it into `cmp n - 1; ja` and moved 35 of its 424 judged rows
     /// (`switch` in every language). Exit: re-bless the x86 rows.
     fn canonicalize_ge_le(&self) -> bool {
+        false
+    }
+
+    /// `isTypeDesirableForOp(ISD::SETCC, VT)` for the narrower type
+    /// `SimplifySetCC` compares a zero-extended or masked value in
+    /// ([TargetLowering.cpp#L4950](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L4950)).
+    /// The pin's default is true; x86 returns false for an illegal type. The
+    /// default here is x86's, as every judged target's rows are, so a target
+    /// that wants the pin's default overrides it.
+    fn is_setcc_type_desirable(
+        &self,
+        _narrow: EVT,
+        legal: bool,
+    ) -> bool {
+        legal
+    }
+
+    /// `SimplifySetCC`'s `(zext x) == C --> x == (trunc C)` and its masked
+    /// forms without the pin's `N0->hasOneUse()`
+    /// ([TargetLowering.cpp#L4948](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L4948)).
+    /// Also an `AssertZext` operand, which is what a mask made in another block
+    /// is to a compare (the live-out copies). DEVIATE: off by default (the
+    /// pin). The narrowed compare reads `x`, so the extension stays for its
+    /// other users and nothing is duplicated. Owner z80,
+    /// exit 2026-11-27: a lane rule at the byte expansion of the compare.
+    fn narrow_setcc_with_other_uses(&self) -> bool {
         false
     }
 
@@ -650,6 +726,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
             let before = self.dag.node_count();
             let result = self.combine(SDValue { node: n, res: 0 });
+            self.queue_survivors();
             for (old, new) in self.dag.take_replacements() {
                 self.replace_value(old, new);
                 self.add_to_worklist_with_users(new.node);
@@ -694,7 +771,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         self.queue_survivors();
     }
 
-    fn queue_survivors(&mut self) {
+    pub(super) fn queue_survivors(&mut self) {
         for node in std::mem::take(&mut self.dag.survivors) {
             self.add_to_worklist(node);
         }
@@ -805,10 +882,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Select => self.visit_select(node),
             ISD::SelectCC => self.visit_select_cc(node),
             ISD::Store => self.visit_store(node).or_else(|| self.indexed(node)),
+            ISD::LifetimeEnd => self.visit_lifetime_end(node),
             ISD::Freeze => self.visit_freeze(node),
             ISD::SetCC => self.visit_setcc(node),
-            ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
             ISD::BrCond => self.visit_brcond(node),
+            ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
             ISD::Mul => self.visit_mul(node).or_else(|| self.simplify_demanded(node)),
             ISD::And => self
                 .visit_and(node)
@@ -916,6 +994,22 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let NodeData::CondCode(cond) = self.dag.node(self.dag.operand(node, 2)).data else { return None };
         let op_type = self.dag.value_type(n0);
+        // `SimplifySetCC` ([L5632][pin]): `setuo|seto x, C` of a constant that
+        // is no NaN is `setuo|seto x, x`, which needs no 0.0 materialized.
+        // DEVIATE: the `setcc (fneg x), C` arm after it is not ported.
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5632
+        if op_type.is_floating_point() {
+            if matches!(cond, CondCode::SetO | CondCode::SetUo)
+                && self.dag.opcode(n0) != ISD::ConstantFP
+                && self.fp_const(n1).is_some_and(|class| !class.nan)
+            {
+                let vt = self.dag.value_type(node);
+                return Some(self.dag.get_setcc(vt, n0, n0, cond));
+            }
+            return None;
+        }
         if !op_type.is_integer() {
             return None;
         }
@@ -994,6 +1088,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_setcc(vt, op0, zero, flipped));
             }
         }
+        // `SimplifySetCC`'s remainder of a division by a constant, unsigned.
+        if matches!(cond, CondCode::SetEq | CondCode::SetNe)
+            && self.dag.opcode(n0) == ISD::URem
+            && let Some(folded) = self.build_urem_eq_fold(vt, n0, c1, cond)
+        {
+            return Some(folded);
+        }
         // `(x + c0) == c1` is `x == c1 - c0`, `(x ^ c0) == c1` is `x == c0 ^
         // c1` and `(c0 - x) == c1` is `x == c0 - c1`, for a single-use
         // operand.
@@ -1055,7 +1156,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
             || self.level != CombineLevel::BeforeLegalizeTypes
-            || !self.dag.has_one_use(n0.node)
+            || !(self.dag.has_one_use(n0.node) || self.hooks.narrow_setcc_with_other_uses())
         {
             return None;
         }
@@ -1070,6 +1171,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
                 (mask.trailing_ones(), self.dag.operand(n0, 0), false)
             }
+            // A value another block made (`assert_live_out_copies`): its
+            // upper bits are known zero, so it is its own zero extension.
+            ISD::AssertZext if self.hooks.narrow_setcc_with_other_uses() => {
+                let NodeData::ValueType(known) = self.dag.node(self.dag.operand(n0, 1)).data else { return None };
+                (known.size_in_bits(), self.dag.operand(n0, 0), false)
+            }
             _ => return None,
         };
         // Bits the constant needs: `getSignificantBits` or `getActiveBits`.
@@ -1083,9 +1190,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let min_vt = EVT::integer(min_bits);
-        // `isTypeDesirableForOp`: x86 does not narrow to an illegal type.
-        if self.tli.is_some_and(|tli| !tli.types.is_type_legal(min_vt)) {
-            return None;
+        if let Some(tli) = self.tli {
+            if !self.hooks.is_setcc_type_desirable(min_vt, tli.types.is_type_legal(min_vt)) {
+                return None;
+            }
         }
         let trunc = self.dag.get_node(ISD::Truncate, min_vt, &[pre_ext]);
         let (rhs, cond) = if min_bits == 1 && c1 == 1 {
@@ -1407,73 +1515,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         None
     }
 
-    /// `visitBRCOND` ([L21245][pin]): the branch on a one-use condition goes
-    /// through `rebuildSetCC`.
-    ///
-    /// [pin]:
-    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L21245
-    fn visit_brcond(
-        &mut self,
-        node: SDValue,
-    ) -> Option<SDValue> {
-        if !self.hooks.rebuild_brcond_condition() || self.level >= CombineLevel::AfterLegalizeTypes {
-            return None;
-        }
-        let (chain, cond, dest) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
-        if !self.dag.has_one_use(cond.node) {
-            return None;
-        }
-        let rebuilt = self.rebuild_set_cc(cond)?;
-        Some(self.dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, rebuilt, dest]))
-    }
-
-    /// `rebuildSetCC` ([L21289][pin]): the `xor` of a branch condition made a
-    /// compare. The `(and x, 1<<k) >> k` shape is not ported.
-    ///
-    /// [pin]:
-    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L21289
-    fn rebuild_set_cc(
-        &mut self,
-        cond: SDValue,
-    ) -> Option<SDValue> {
-        if self.dag.opcode(cond) != ISD::Xor {
-            return None;
-        }
-        // "we may call this on a speculatively constructed SimplifiedSetCC
-        // Node, we need to simplify this node first"
-        let mut n = cond;
-        while self.dag.opcode(n) == ISD::Xor {
-            match self.visit_xor(n) {
-                Some(simpler) if simpler != n => n = simpler,
-                _ => break,
-            }
-        }
-        if self.dag.opcode(n) != ISD::Xor {
-            return Some(n);
-        }
-        let (mut op0, mut op1) = (self.dag.operand(n, 0), self.dag.operand(n, 1));
-        if self.dag.opcode(op0) == ISD::SetCC || self.dag.opcode(op1) == ISD::SetCC {
-            return None;
-        }
-        let vt = self.dag.value_type(n);
-        let mut equal = false;
-        // (brcond (xor (xor x, y), -1)) -> (brcond (setcc x, y, eq))
-        let ones = if vt.size_in_bits() >= 128 { u128::MAX } else { (1u128 << vt.size_in_bits()) - 1 };
-        if self.dag.constant(op1) == Some(ones)
-            && self.dag.has_one_use(op0.node)
-            && self.dag.opcode(op0) == ISD::Xor
-            && self.dag.value_type(op0) == EVT::I1
-        {
-            n = op0;
-            (op0, op1) = (self.dag.operand(n, 0), self.dag.operand(n, 1));
-            equal = true;
-        }
-        let setcc =
-            self.dag.get_setcc(self.dag.value_type(n), op0, op1, if equal { CondCode::SetEq } else { CondCode::SetNe });
-        self.add_to_worklist(setcc.node);
-        Some(setcc)
-    }
-
     /// `visitXOR`'s `not (setcc x, y, cc)` fold ([L10560][pin]): `xor (setcc x,
     /// y, cc), true` is `setcc x, y, !cc`, so a branch on the inverted
     /// condition tests the compare, not a materialized and flipped boolean.
@@ -1501,8 +1542,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let one_use_setcc = |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::SetCC && dag.has_one_use(v.node);
             if one_use_setcc(self.dag, a) || one_use_setcc(self.dag, b) {
                 let flipped = if self.dag.opcode(n0) == ISD::And { ISD::Or } else { ISD::And };
-                let (not_a, not_b) =
-                    (self.dag.get_node(ISD::Xor, vt, &[a, n1]), self.dag.get_node(ISD::Xor, vt, &[b, n1]));
+                // `SDLoc(N00)`, `SDLoc(N01)`: each not keeps the IR order of
+                // the compare it flips, which the source-order scheduler reads.
+                let here = self.dag.cur_order;
+                self.dag.cur_order = self.dag.node(a).order;
+                let not_a = self.dag.get_node(ISD::Xor, vt, &[a, n1]);
+                self.dag.cur_order = self.dag.node(b).order;
+                let not_b = self.dag.get_node(ISD::Xor, vt, &[b, n1]);
+                self.dag.cur_order = here;
                 self.add_to_worklist(not_a.node);
                 self.add_to_worklist(not_b.node);
                 return Some(self.dag.get_node(flipped, vt, &[not_a, not_b]));
@@ -1535,6 +1582,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let amount = self.dag.operand(n0, 1);
             let not_one = self.dag.get_constant(ones - 1, vt);
             return Some(self.dag.get_node(ISD::Rotl, vt, &[not_one, amount]));
+        }
+        if let Some(merged) = self.unfold_masked_merge(node) {
+            return Some(merged);
         }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
             return self.reassociate_ops(ISD::Xor, n0, n1, self.dag.node(node).flags);
@@ -1965,6 +2015,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(reassociated) = self.reassociate_ops(ISD::And, n0, n1, self.dag.node(node).flags) {
             return Some(reassociated);
         }
+        if let Some(folded) = self.fold_bitwise_op_with_neg(node) {
+            return Some(folded);
+        }
         if let (Some(c1), true) = (self.dag.constant(n1), !self.dag.is_opaque(n1)) {
             // `(and (or x, C), D)` is `D` when `D` is a subset of `C`.
             if self.dag.opcode(n0) == ISD::Or {
@@ -2266,6 +2319,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(folded);
             }
         }
+        if op == ISD::Shl && matches!(self.dag.opcode(n0), ISD::Srl | ISD::Sra) {
+            if let Some(folded) = self.shl_of_exact_shift(node) {
+                return Some(folded);
+            }
+        }
         if op == ISD::Shl && self.dag.opcode(n0) == ISD::Srl {
             if let Some(folded) = self.shl_of_srl(node) {
                 return Some(folded);
@@ -2286,6 +2344,59 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::And, vt, &[self.dag.operand(n0, 0), mask]));
             }
         }
+        // `shl (add x, c1), c2` is `add (shl x, c2), c1 << c2`, and the same
+        // for `or` ([L11252][pin]): `x << c2` is shared by the address uses
+        // and the constant folds into an offset. DEVIATE: scalar constants
+        // only (the pin also folds splat vectors). Exit: none planned.
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11252
+        if op == ISD::Shl
+            && matches!(self.dag.opcode(n0), ISD::Add | ISD::Or)
+            && self.hooks.is_desirable_to_commute_with_shift(self.dag, node, self.level)
+        {
+            let n01 = self.dag.operand(n0, 1);
+            if let Some(shl1) = self.dag.fold_constant_arithmetic(ISD::Shl, vt, &[n01, n1]) {
+                let shl0 = self.dag.get_node(ISD::Shl, vt, &[self.dag.operand(n0, 0), n1]);
+                self.add_to_worklist(shl0.node);
+                let disjoint =
+                    self.dag.opcode(n0) == ISD::Or && self.dag.node(n0).flags.0 & SDNodeFlags::DISJOINT.0 != 0;
+                let flags = if disjoint { SDNodeFlags::DISJOINT } else { SDNodeFlags::default() };
+                return Some(self.dag.get_node_flags(self.dag.opcode(n0), vt, &[shl0, shl1], flags));
+            }
+        }
+        // The rest of `visitShiftByConstant` ([L10870][pin]): a one-use logic
+        // op under a shift by a constant, when its operand is a shift
+        // by a constant or a register copy or select read elsewhere.
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L10870
+        if self.dag.constant(n1).is_some()
+            && self.dag.has_one_use(n0.node)
+            && self.hooks.is_desirable_to_commute_with_shift(self.dag, node, self.level)
+            && match self.dag.opcode(n0) {
+                ISD::Or | ISD::Xor | ISD::And => true,
+                ISD::Add => op == ISD::Shl,
+                _ => false,
+            }
+        {
+            let b = self.dag.operand(n0, 0);
+            let bo = self.dag.opcode(b);
+            let shift_by_const =
+                matches!(bo, ISD::Shl | ISD::Sra | ISD::Srl) && self.dag.constant(self.dag.operand(b, 1)).is_some();
+            let copy_or_select = matches!(bo, ISD::CopyFromReg | ISD::Select);
+            let n01 = self.dag.operand(n0, 1);
+            if shift_by_const || (copy_or_select && !self.dag.has_one_use(node.node)) {
+                if let Some(shl1) = self.dag.fold_constant_arithmetic(op, vt, &[n01, n1]) {
+                    let shl0 = self.dag.get_node(op, vt, &[b, n1]);
+                    self.add_to_worklist(shl0.node);
+                    let disjoint =
+                        self.dag.opcode(n0) == ISD::Or && self.dag.node(n0).flags.0 & SDNodeFlags::DISJOINT.0 != 0;
+                    let flags = if disjoint { SDNodeFlags::DISJOINT } else { SDNodeFlags::default() };
+                    return Some(self.dag.get_node_flags(self.dag.opcode(n0), vt, &[shl0, shl1], flags));
+                }
+            }
+        }
         // `srl (sra x, y), w-1` is `srl x, w-1`: the sign bit is the one `sra`
         // leaves alone ([L11886][pin]).
         //
@@ -2301,6 +2412,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let (c2, inner) = (self.dag.constant(n1)?, self.dag.constant(self.dag.operand(n0, 1))?);
+        if !self.dag.has_one_use(n0.node) && !self.hooks.fold_shift_of_shared_shift(vt, inner as u32) {
+            return None;
+        }
         let (x, sum) = (self.dag.operand(n0, 0), c2 + inner);
         if sum < width {
             let amount = self.dag.get_constant(sum, self.dag.value_type(n1));
@@ -2359,6 +2473,37 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let shifted_x = self.dag.get_node(op, vt, &[x, sum]);
         let shifted_y = self.dag.get_node(op, vt, &[y, c1]);
         Some(self.dag.get_node(logic_op, vt, &[shifted_x, shifted_y]))
+    }
+
+    /// `visitSHL`'s exact fold ([L11196][pin]): `shl (sr[la] exact x, c1), c2`
+    /// is `shl x, c2 - c1` when `c1 <= c2` and `sr[la] x, c1 - c2` otherwise.
+    /// The bits shifted out are zero, so no mask is left, and the inner
+    /// shift's other uses do not matter.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11196
+    fn shl_of_exact_shift(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (inner, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if self.dag.node(inner).flags.0 & SDNodeFlags::EXACT.0 == 0 {
+            return None;
+        }
+        let (c2, c1) = (self.dag.constant(n1)?, self.dag.constant(self.dag.operand(inner, 1))?);
+        let vt = self.dag.value_type(node);
+        let width = u128::from(vt.size_in_bits());
+        if c1 >= width || c2 >= width {
+            return None;
+        }
+        let x = self.dag.operand(inner, 0);
+        let amount_vt = self.dag.value_type(n1);
+        if c1 <= c2 {
+            let by = self.dag.get_constant(c2 - c1, amount_vt);
+            return Some(self.dag.get_node(ISD::Shl, vt, &[x, by]));
+        }
+        let by = self.dag.get_constant(c1 - c2, amount_vt);
+        Some(self.dag.get_node(self.dag.opcode(inner), vt, &[x, by]))
     }
 
     /// `visitSHL`: `shl (srl x, c1), c2` is `and (srl x, c1 - c2), (-1 << c1
@@ -2716,7 +2861,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// a dead overflow is an `add`, a constant goes right, `x + 0` has no
     /// carry, and a sum that cannot overflow is an `add`. DEVIATE UADDO1: the
     /// `(uaddo (xor a, -1), 1)` and `visitUADDOLike` carry folds are not
-    /// translated. Exit: 2026-11-14.
+    /// translated. Measured 2026-11-06 12:34Z (C corpus m16/m32/m64 -O2, QB,
+    /// Nib): their preconditions hold in one program
+    /// (tests/run/c/overflow_builtins.c, `uaddo X, (uaddo_carry Y, 0, c)`),
+    /// no bench cell. Port when a cell needs it.
     fn visit_uaddo(
         &mut self,
         node: SDValue,
@@ -2992,6 +3140,194 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         None
     }
 
+    /// `visitBRCOND`
+    /// ([L21199](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L21199)):
+    /// the branch on a frozen condition is the branch on the condition, and a
+    /// condition that is a one-use `xor` is rebuilt as a compare
+    /// ([`Self::rebuild_set_cc`]). DEVIATE: the `BR_CC` fold is left out (x86
+    /// has no `BR_CC`), and so are the `FREEZE` folds under a `SETCC`.
+    fn visit_brcond(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        if !self.hooks.rebuild_brcond_condition() {
+            return None;
+        }
+        let (chain, cond, dest) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        if self.dag.opcode(cond) == ISD::Freeze && self.dag.has_one_use(cond.node) {
+            let inner = self.dag.operand(cond, 0);
+            return Some(self.dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, inner, dest]));
+        }
+        if self.dag.has_one_use(cond.node)
+            && let Some(rebuilt) = self.rebuild_set_cc(cond)
+        {
+            return Some(self.dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, rebuilt, dest]));
+        }
+        None
+    }
+
+    /// `rebuildSetCC`
+    /// ([L21289](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L21289)):
+    /// `(and x, 2^k) >> k` is `setne (and x, 2^k), 0`; `xor x, y` is `setne x,
+    /// y` and `xor (xor x, y), -1` is `seteq x, y`, after the `xor` is
+    /// simplified as it stands (so a compare pair under it is flipped by
+    /// De Morgan, not by this).
+    fn rebuild_set_cc(
+        &mut self,
+        mut n: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(n) == ISD::Srl
+            || (self.dag.opcode(n) == ISD::Truncate
+                && self.dag.has_one_use(self.dag.operand(n, 0).node)
+                && self.dag.opcode(self.dag.operand(n, 0)) == ISD::Srl)
+        {
+            if self.dag.opcode(n) == ISD::Truncate {
+                n = self.dag.operand(n, 0);
+            }
+            let (op0, op1) = (self.dag.operand(n, 0), self.dag.operand(n, 1));
+            if self.dag.opcode(op0) == ISD::And
+                && let (Some(shift), Some(mask)) = (self.dag.constant(op1), self.dag.constant(self.dag.operand(op0, 1)))
+                && self.dag.opcode(self.dag.operand(op0, 1)) == ISD::Constant
+                && mask.is_power_of_two()
+                && u128::from(mask.trailing_zeros()) == shift as u128
+            {
+                let vt = self.dag.value_type(op0);
+                let zero = self.dag.get_constant(0, vt);
+                let result = self.set_cc_result_type(vt);
+                return Some(self.dag.get_setcc(result, op0, zero, CondCode::SetNe));
+            }
+        }
+        if self.dag.opcode(n) == ISD::Xor {
+            while self.dag.opcode(n) == ISD::Xor {
+                match self.visit_xor(n) {
+                    Some(simplified) if simplified.node != n.node => n = simplified,
+                    _ => break,
+                }
+            }
+            if self.dag.opcode(n) != ISD::Xor {
+                return Some(n);
+            }
+            let (mut op0, mut op1) = (self.dag.operand(n, 0), self.dag.operand(n, 1));
+            if self.dag.opcode(op0) != ISD::SetCC && self.dag.opcode(op1) != ISD::SetCC {
+                let mut equal = false;
+                let ones = match self.dag.value_type(n).size_in_bits() {
+                    128.. => u128::MAX,
+                    bits => (1u128 << bits) - 1,
+                };
+                if self.dag.constant(op1) == Some(ones)
+                    && self.dag.has_one_use(op0.node)
+                    && self.dag.opcode(op0) == ISD::Xor
+                    && self.dag.value_type(op0) == EVT::I1
+                {
+                    n = op0;
+                    op0 = self.dag.operand(n, 0);
+                    op1 = self.dag.operand(n, 1);
+                    equal = true;
+                }
+                let cc = if equal { CondCode::SetEq } else { CondCode::SetNe };
+                let legal = self.level < CombineLevel::AfterLegalizeVectorOps
+                    || match (self.tli, self.dag.value_type(op0)) {
+                        (Some(tli), EVT::Simple(operand)) => tli.cond_code_action(cc, operand) == Action::Legal,
+                        _ => true,
+                    };
+                if legal {
+                    let result = self.set_cc_result_type(self.dag.value_type(n));
+                    return Some(self.dag.get_setcc(result, op0, op1, cc));
+                }
+            }
+        }
+        None
+    }
+
+    /// `getSetCCResultType` once types are legal, else the type itself.
+    fn set_cc_result_type(
+        &self,
+        vt: EVT,
+    ) -> EVT {
+        match self.tli {
+            Some(tli) if self.level >= CombineLevel::AfterLegalizeTypes => tli.types.set_cc_result_type(vt),
+            _ => vt,
+        }
+    }
+
+    /// `visitSTORE`'s two checks of the store the chain ends in
+    /// ([L24849](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L24849)):
+    /// the same value to the same place again is the chain itself, and a store
+    /// nothing else is chained to, to a part of what this one writes, is
+    /// dropped.
+    fn dead_preceding_store(
+        &mut self,
+        node: SDValue,
+        chain: SDValue,
+        value: SDValue,
+        ptr: SDValue,
+        info: MemInfo,
+    ) -> Option<SDValue> {
+        if self.opt_none || info.volatile || info.ordering.is_some() {
+            return None;
+        }
+        if let Some(earlier) = self.dead_for_the_next_store(node, chain, info) {
+            return Some(earlier);
+        }
+        if self.dag.opcode(chain) != ISD::Store {
+            return None;
+        }
+        let NodeData::Mem(before) = self.dag.node(chain).data else { return None };
+        if before.volatile || before.ordering.is_some() || before.space != info.space {
+            return None;
+        }
+        if self.dag.operand(chain, 2) == ptr && self.dag.operand(chain, 1) == value && before.mem_vt == info.mem_vt {
+            return Some(chain);
+        }
+        if !self.dag.has_one_use(chain.node) || self.dag.opcode(self.dag.operand(chain, 2)) == ISD::Undef {
+            return None;
+        }
+        // `BaseIndexOffset::contains`: the earlier store starts at or after
+        // this one and ends inside it.
+        let bytes = super::address_analysis::BaseIndexOffset::matching(self.dag, node)
+            .equal_base_index(&super::address_analysis::BaseIndexOffset::matching(self.dag, chain), self.dag)?;
+        if bytes < 0 || bytes * 8 + i64::from(before.mem_vt.size_in_bits()) > i64::from(info.mem_vt.size_in_bits()) {
+            return None;
+        }
+        let earlier = self.dag.operand(chain, 0);
+        self.replace_value(chain, earlier);
+        self.dag.delete_replaced(chain.node);
+        self.queue_survivors();
+        Some(node)
+    }
+
+    /// The check above from the earlier store: its one user is a store of the
+    /// same chain position that writes all of it. Which of the two is looked at
+    /// last depends on the order the chains were improved in.
+    fn dead_for_the_next_store(
+        &mut self,
+        node: SDValue,
+        chain: SDValue,
+        info: MemInfo,
+    ) -> Option<SDValue> {
+        if !self.dag.has_one_use(node.node) {
+            return None;
+        }
+        let next = self.dag.users(node).next()?;
+        let later = SDValue { node: next, res: 0 };
+        if self.dag.opcode(later) != ISD::Store || self.dag.operand(later, 0) != node {
+            return None;
+        }
+        let NodeData::Mem(after) = self.dag.node(later).data else { return None };
+        if after.volatile || after.ordering.is_some() || after.space != info.space {
+            return None;
+        }
+        if self.dag.opcode(self.dag.operand(node, 2)) == ISD::Undef {
+            return None;
+        }
+        let bytes = super::address_analysis::BaseIndexOffset::matching(self.dag, later)
+            .equal_base_index(&super::address_analysis::BaseIndexOffset::matching(self.dag, node), self.dag)?;
+        if bytes < 0 || bytes * 8 + i64::from(info.mem_vt.size_in_bits()) > i64::from(after.mem_vt.size_in_bits()) {
+            return None;
+        }
+        Some(chain)
+    }
+
     /// `visitSTORE`, `replaceStoreOfFPConstant`: `store float 1.5, p` is
     /// `store i32 0x3fc00000, p`, and a double constant the FPU cannot load
     /// directly is two `i32` stores, so the constant is never loaded onto the
@@ -3049,6 +3385,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(done) = self.truncating_store_demanded_bits(node, chain, value, ptr, info) {
             return Some(done);
         }
+        if let Some(done) = self.dead_preceding_store(node, chain, value, ptr, info) {
+            return Some(done);
+        }
         // `replaceStoreOfFPConstant` takes a volatile store too
         // (`isNormalStore`); the hook asks for that.
         let volatile_blocks = info.volatile && !self.hooks.store_fp_constant_as_i64();
@@ -3059,7 +3398,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let tli = self.tli?;
         let int_info = |mem_vt: EVT, align: u32, base| MemInfo { mem_vt, align, base, ..info };
         match self.dag.value_type(value) {
-            EVT::Simple(MVT::F32) => {
+            // `(isTypeLegal(i32) && !LegalOperations && isSimple) ||
+            // legalOrCustom(STORE, i32)` (DAGCombiner.cpp#L24427).
+            EVT::Simple(MVT::F32)
+                if (tli.types.is_type_legal(EVT::I32) && !self.legal_operations() && !info.volatile)
+                    || tli.is_operation_legal_or_custom(ISD::Store, EVT::I32) =>
+            {
                 let constant = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
                 Some(self.dag.get_store(chain, constant, ptr, int_info(EVT::I32, info.align, info.base)))
             }
@@ -3073,11 +3417,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 let constant = self.dag.get_constant(bits & 0xFFFF_FFFF_FFFF_FFFF, EVT::I64);
                 Some(self.dag.get_store(chain, constant, ptr, int_info(EVT::I64, info.align, info.base)))
             }
-            // `ST->isSimple()`: a volatile store is not split, as the pin
-            // leaves it. (The pin also asks `isOperationLegalOrCustom(STORE,
-            // i32)`; not asked here, which would change targets whose i32
-            // store is illegal.)
-            EVT::Simple(MVT::F64) if !info.volatile && !tli.is_fp_imm_legal(MVT::F64, bits) => {
+            // `ST->isSimple() && legalOrCustom(STORE, i32) && !isFPImmLegal`
+            // (DAGCombiner.cpp#L24446): a volatile store is not split.
+            EVT::Simple(MVT::F64)
+                if !info.volatile
+                    && tli.is_operation_legal_or_custom(ISD::Store, EVT::I32)
+                    && !tli.is_fp_imm_legal(MVT::F64, bits) =>
+            {
                 let lo = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
                 let hi = self.dag.get_constant((bits >> 32) & 0xFFFF_FFFF, EVT::I32);
                 // the high word comes first on a big-endian target

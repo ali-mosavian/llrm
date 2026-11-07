@@ -1887,6 +1887,77 @@ b0:
     assert_eq!(m16.matches("call i16 @scale").count(), 0, "the calls stayed:\n{m16}");
 }
 
+/// jpeg_fixed (Nib) at m16 -O2: helpers over the byte bar of 50 stayed calls
+/// (get_bit 80, decode 122, restart 68, emit 96: 454 B of prologues and
+/// arguments), +1206 B and +42% clocks (103.4M against 72.8M) over its C twin
+/// where the pin's 225 inlines them. At speed the pin's bar applies; bytes
+/// decide at -O1 and for size.
+#[test]
+fn test_a_helper_over_the_byte_bar_called_in_a_loop_is_inlined_at_m16_o2() {
+    let text = "@g = global i16 0
+
+define i16 @h(i16 %x) {
+b0:
+  %l1 = load volatile i16, ptr @g
+  %v1 = add i16 %x, %l1
+  %l2 = load volatile i16, ptr @g
+  %v2 = add i16 %v1, %l2
+  %l3 = load volatile i16, ptr @g
+  %v3 = add i16 %v2, %l3
+  %l4 = load volatile i16, ptr @g
+  %v4 = add i16 %v3, %l4
+  %l5 = load volatile i16, ptr @g
+  %v5 = add i16 %v4, %l5
+  %l6 = load volatile i16, ptr @g
+  %v6 = add i16 %v5, %l6
+  %l7 = load volatile i16, ptr @g
+  %v7 = add i16 %v6, %l7
+  %l8 = load volatile i16, ptr @g
+  %v8 = add i16 %v7, %l8
+  %l9 = load volatile i16, ptr @g
+  %v9 = add i16 %v8, %l9
+  %l10 = load volatile i16, ptr @g
+  %v10 = add i16 %v9, %l10
+  %l11 = load volatile i16, ptr @g
+  %v11 = add i16 %v10, %l11
+  %l12 = load volatile i16, ptr @g
+  %v12 = add i16 %v11, %l12
+  %l13 = load volatile i16, ptr @g
+  %v13 = add i16 %v12, %l13
+  %l14 = load volatile i16, ptr @g
+  %v14 = add i16 %v13, %l14
+  %l15 = load volatile i16, ptr @g
+  %v15 = add i16 %v14, %l15
+  %l16 = load volatile i16, ptr @g
+  %v16 = add i16 %v15, %l16
+  %l17 = load volatile i16, ptr @g
+  %v17 = add i16 %v16, %l17
+  ret i16 %v17
+}
+
+define i16 @top(i16 %n) {
+b0:
+  br label %loop
+
+loop:
+  %i = phi i16 [ 0, %b0 ], [ %j, %loop ]
+  %s = phi i16 [ 0, %b0 ], [ %t, %loop ]
+  %a = call i16 @h(i16 %s)
+  %b = call i16 @h(i16 %i)
+  %t = add i16 %a, %b
+  store volatile i16 %t, ptr @g
+  %j = add i16 %i, 1
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %loop, label %done
+
+done:
+  ret i16 %t
+}
+";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert!(!m16.contains("call i16 @h"), "the calls stayed:\n{m16}");
+}
+
 /// qbsp/loop/branch at m16 -O2: a call in a loop that saves a few clocks and
 /// grows the code a few bytes was refused (+126 B for -298 clk against 854),
 /// for its saving was counted once where the site runs per trip. The same
@@ -2792,10 +2863,11 @@ b0:
     llrm_mir::print::module(&module).matches("call i32 @paths").count()
 }
 
-/// bench rectwo at m32 -O3 ran 1230664 clocks against gcc's 555904: the copies were made of the
-/// two-call body and kept 43 calls; gcc eliminates the tail call first and nests the loop it
-/// leaves (466986 clocks that way). The body here is the same shape. -O2 keeps the tree's copies
-/// (fib's pure calls merge across them: 99618 clocks against 228901).
+/// bench rectwo at m32 -O3 ran 1230664 clocks against gcc's 555904: the copies
+/// were made of the two-call body and kept 43 calls; gcc eliminates the tail
+/// call first and nests the loop it leaves (466986 clocks that way). The body
+/// here is the same shape. -O2 keeps the tree's copies (fib's pure calls merge
+/// across them: 99618 clocks against 228901).
 #[test]
 fn test_m32_o3_paths_is_copied_as_nested_loops_not_as_a_tree_of_calls() {
     let calls = m32_paths_calls(crate::pipeline::Options::speed());
@@ -2995,4 +3067,14 @@ b1:
     let three = super::dying_callees_bytes(&module, &[h, h, h], |body| body.walk().count() as i64);
     assert_eq!(one, 3);
     assert_eq!(three, one, "the callee goes once");
+}
+
+/// m68k sfm16_float -Os: five calls to `canon`, 60 instructions against 57 and a credit of 4, so the count accepted the
+/// copies; the byte estimate said +28 B (built +28). A callee that goes with its last calls must not grow the bytes.
+#[test]
+fn test_an_os_trial_that_grows_the_bytes_is_refused_though_the_count_accepts_it() {
+    assert!(!super::trial_accepted(true, false, 60, 57, 4, 0, 28, 0, 756));
+    assert!(super::trial_accepted(true, false, 60, 57, 4, 0, -4, 0, 756), "a copy that shrinks the code stays");
+    assert!(super::trial_accepted(false, false, 60, 57, 4, 0, 28, 0, 756), "off the gate's targets the count decides");
+    assert!(super::trial_accepted(true, false, 57, 57, 4, 0, 12, 0, 756), "copies no larger than the caller are decided by the count");
 }

@@ -466,6 +466,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Cast(CastOp::FPExt) => &[crate::combine_fpcast::visit_fpext],
         Opcode::Cast(CastOp::FPToUI | CastOp::FPToSI) => &[crate::combine_fptoint::visit_fptoi],
         Opcode::ICmp(_) => &[visit_icmp],
+        Opcode::FCmp(_) => &[crate::combine_fcmp::visit_fcmp],
         Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
         Opcode::Alloca { .. } => &[|c, inst| c.visit_alloca(inst)],
         Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],

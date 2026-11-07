@@ -427,6 +427,9 @@ pub enum FpConvert {
 pub enum FrameMark {
     PrologueEnd,
     EpilogueBegin,
+    /// From here the source variable is the value in `reg`, or in none
+    /// (`DBG_VALUE`): no code.
+    Value { variable: llrm_mir::MetadataId, reg: Option<Gpr> },
 }
 
 impl Inst {

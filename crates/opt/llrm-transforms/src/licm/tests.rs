@@ -318,12 +318,15 @@ fn test_a_global_stored_on_some_paths_and_never_loaded_is_not_promoted() {
     assert_eq!(promoted(&conditional_store_loop("  %t = icmp eq i32 %i, 3\n")), Vec::<(Vec<String>, bool)>::new());
 }
 
-/// With a load in the loop the promotion saves it: promoted, stores and all.
+/// With a load in the loop the promotion saves it: the load is promoted.
+/// Changed meaning (the thread-local deviation is gone): the stores are not
+/// sunk (the pin's `StoreSafety` stays unknown for a global whose store may not
+/// run), so the second field, `store_safe`, is false.
 #[test]
 fn test_a_global_stored_on_some_paths_and_loaded_is_promoted() {
     assert_eq!(
         promoted(&conditional_store_loop("  %x = load i32, ptr @g\n  %t = icmp eq i32 %x, 3\n")),
-        [(vec!["constant".to_owned()], true)]
+        [(vec!["constant".to_owned()], false)]
     );
 }
 
@@ -510,13 +513,42 @@ b3:
     )
 }
 
+/// As `global_loop`, rotated: the body runs at least once, so its stores are
+/// guaranteed to execute.
+fn rotated_global_loop(body: &str) -> String {
+    format!(
+        "@g = global i16 5
+@h = global i16 7
+
+define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+{body}  %i1 = add i16 %i, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b3
+
+b3:
+  %r = load i16, ptr @g
+  ret i16 %r
+}}
+"
+    )
+}
+
 /// A global read and written in the loop is one value there: loaded before it,
-/// stored once after, the loop's own loads and stores gone.
+/// stored once after, the loop's own loads and stores gone. Changed meaning
+/// (the thread-local deviation is gone): this holds for a loop whose store is
+/// guaranteed to execute, the rotated shape; the loop that may run no trip
+/// keeps its stores
+/// (`test_a_global_store_the_loop_may_skip_stays_in_the_loop`).
 #[test]
 fn test_a_global_read_and_written_in_a_loop_lives_in_a_register() {
-    let text = global_loop("  %x = load i16, ptr @g\n  %y = add i16 %x, %i\n  store i16 %y, ptr @g\n");
+    let text = rotated_global_loop("  %x = load i16, ptr @g\n  %y = add i16 %x, %i\n  store i16 %y, ptr @g\n");
     let (_, after) = applied(&text, &trips());
-    let body = block_of(&after, "b2");
+    let body = block_of(&after, "b1");
     assert!(!body.iter().any(|line| line.contains("@g")), "{after}");
     assert!(block_of(&after, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
     assert!(
@@ -556,13 +588,33 @@ b3:
     assert!(block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
 }
 
+/// A global the loop stores to, in a loop that may run no trip, is not
+/// thread-local (`isThreadLocalObject`): the stores stay in the loop and only
+/// the load leaves it. Sunk, a loop that ran no trip still stored (jpeg_fixed
+/// -O1 wasm: `emit` +28 B over the pin, four phis and identity copies).
+#[test]
+fn test_a_global_store_the_loop_may_skip_stays_in_the_loop() {
+    let text = global_loop("  %x = load i16, ptr @g\n  %y = add i16 %x, %i\n  store i16 %y, ptr @g\n");
+    let (_, after) = applied_speculating(&text, &trips(), false);
+    assert!(block_of(&after, "b2").iter().any(|line| line.starts_with("store i16")), "{after}");
+    assert!(!block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
+}
+
 /// A store made only on some trips: the value before the loop is loaded first,
-/// so a loop that never stores leaves it as it was.
+/// so a loop that never stores leaves it as it was. Changed meaning (the
+/// thread-local deviation is gone): the load leaves for the preheader and the
+/// store stays, as the global is not thread-local and the store is not
+/// guaranteed; sunk, it would run on the no-trip path.
 #[test]
 fn test_a_store_made_on_some_trips_is_preceded_by_a_load_before_the_loop() {
     let text = global_loop("  %x = load i16, ptr @g\n  store i16 %x, ptr @h\n  store i16 %i, ptr @g\n");
     let (_, after) = applied(&text, &trips());
-    assert!(!block_of(&after, "b2").iter().any(|line| line.contains("@g")), "{after}");
+    assert!(!block_of(&after, "b2").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
+    assert!(
+        block_of(&after, "b2").iter().any(|line| line.starts_with("store i16") && line.contains("ptr @g")),
+        "{after}"
+    );
     assert!(block_of(&after, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
 }
 
@@ -643,10 +695,35 @@ b5:
 /// the global holds at the exit is the counter of the trip before, not the
 /// counter the header holds then (`fill` stored 8 where the loop's last store
 /// was 7).
+///
+/// Changed meaning (the thread-local deviation is gone): the sunk store now
+/// happens for a slot that is thread-local, an alloca not captured; a global
+/// keeps the store in the loop.
 #[test]
 fn test_a_store_after_the_exit_test_leaves_the_value_of_the_last_trip() {
-    let text = global_loop("  %x = load i16, ptr @g\n  store i16 %x, ptr @h\n  store i16 %i, ptr @g\n");
-    let (_, after) = applied(&text, &trips());
+    let text = "define i16 @f(i16 %n) {
+b0:
+  %s = alloca i16
+  store i16 5, ptr %s
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %x = load i16, ptr %s
+  store i16 %i, ptr %s
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = load i16, ptr %s
+  ret i16 %r
+}
+";
+    let (_, after) = applied(text, &trips());
     assert!(block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
 }
 
@@ -1640,6 +1717,47 @@ fn test_a_promotion_past_the_target_register_count_is_refused() {
     assert_eq!(counters_promoted(I486(llrm_mir::target::Neutral)), 5);
 }
 
+/// Ten globals the loop only stores to, each a promotion candidate.
+fn ten_stored() -> String {
+    let globals: String = (1..=10).map(|k| format!("@g{k} = global i16 0\n")).collect();
+    let body: String = (1..=10).map(|k| format!("  store i16 %i, ptr @g{k}\n")).collect();
+    format!(
+        "{globals}
+define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+{body}  %i1 = add i16 %i, 1
+  %c = icmp eq i16 %i1, %n
+  br i1 %c, label %b2, label %b1
+
+b2:
+  ret i16 0
+}}
+"
+    )
+}
+
+/// A location the loop only stores to holds no register across the loop, so
+/// the cap does not count it. Charged as a load-promoted one, the pass that
+/// sinks the stores of locations the pass before it loaded found no room:
+/// jpeg_single m32 -O2 kept two stores a byte in its checksum loop.
+#[test]
+fn test_a_store_only_promotion_is_not_charged_a_register() {
+    let promoted = |machine: Box<dyn llrm_mir::target::Machine>| {
+        DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+        let mut module = parsed(&ten_stored());
+        let mut passes = llrm_mir::passes::PassManager::default();
+        passes.add(Licm { apply: false, speculate: true });
+        passes.run_module(&mut module, std::rc::Rc::from(machine)).expect("runs");
+        DECIDED.with(|all| all.borrow().promoted.len())
+    };
+    assert_eq!(promoted(Box::new(llrm_x86_m16::Dos::default())), 10);
+    assert_eq!(promoted(Box::new(I486(llrm_mir::target::Neutral))), 10);
+}
+
 /// The dot loop of a Nib zip (`i < a && i < b`, both bounds invariant) tested
 /// both bounds on every trip: the pin's LICM (`hoistMinMax`) makes one compare
 /// against `umin(a, b)`, the `umin` in the preheader.
@@ -2084,4 +2202,39 @@ fn test_the_memory_graph_licm_updated_is_the_one_the_next_pass_gets() {
     );
     assert_eq!(misses, 1, "MemorySSA was computed again after LICM updated it");
     assert!(hits >= 2, "LICM and the pass after it read the one graph: {hits} hits");
+}
+
+/// How many times `@f`'s loops were scanned for a block that may throw
+/// (`Decisions::safety_scans`).
+fn safety_scans(
+    text: &str,
+    apply: bool,
+) -> usize {
+    DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply, speculate: true });
+    passes
+        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    DECIDED.with(|all| all.borrow().safety_scans)
+}
+
+/// The sinking, the hoisting and the promotion of one loop shared two
+/// `LoopSafety` that each scanned the loop (153 loops of `jpeg_fixed` scanned
+/// twice, 2 x 153 where the pin's one `ICFLoopSafetyInfo` per `runOnLoop`
+/// scans 153 times). Decided without edits, the loop is scanned once.
+#[test]
+fn test_a_loop_decided_without_edits_is_scanned_for_a_throwing_block_once() {
+    assert_eq!(safety_scans(&slot_loop("", "", "load i16, ptr %s"), false), 1);
+}
+
+/// With the edits made, what was found of the loop stands only until the next
+/// edit: the sinking and hoisting found nothing to do and share their scan with
+/// the first promotion round; the promotion edits the loop, so the second round
+/// scans again. A scan kept across that edit would answer for a loop that is no
+/// longer there.
+#[test]
+fn test_what_was_found_of_a_loop_is_dropped_by_the_next_edit() {
+    assert_eq!(safety_scans(&slot_loop("", "", "load i16, ptr %s"), true), 2);
 }
