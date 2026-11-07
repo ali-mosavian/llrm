@@ -411,6 +411,7 @@ pub mod x86isd {
     pub const LLRM_CODE: u16 = 24582;
     pub const LLRM_COPY128: u16 = 24592;
     pub const LLRM_FARCALL: u16 = 24584;
+    pub const LLRM_MOVE128: u16 = 24594;
     pub const LLRM_PORT: u16 = 24586;
     pub const LLRM_PTRDIFF: u16 = 24583;
     pub const LLRM_TC_RETURN: u16 = 24587;
@@ -797,10 +798,14 @@ pub mod x86 {
     pub const INC16m: u16 = 1901;
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
+    pub const MOV16mr: u16 = 2561;
     pub const MOV16rm: u16 = 2568;
     pub const MOV32r0: u16 = 386;
+    pub const MOV32mr: u16 = 2580;
     pub const MOV32rm: u16 = 2588;
+    pub const MOV64mr: u16 = 2598;
     pub const MOV64rm: u16 = 2605;
+    pub const MOV8mr: u16 = 2617;
     pub const MOV8rm: u16 = 2624;
     pub const MOVAPSmr: u16 = 2633;
     pub const MOVAPSrm: u16 = 2634;
@@ -958,9 +963,13 @@ pub mod x86 {
         (1901, "INC16m"),
         (1912, "INC32m"),
         (1933, "INC8m"),
+        (2561, "MOV16mr"),
         (2568, "MOV16rm"),
+        (2580, "MOV32mr"),
         (2588, "MOV32rm"),
+        (2598, "MOV64mr"),
         (2605, "MOV64rm"),
+        (2617, "MOV8mr"),
         (2624, "MOV8rm"),
         (2633, "MOVAPSmr"),
         (2634, "MOVAPSrm"),
@@ -1281,6 +1290,7 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LLRM_CODE" => 24582,
         "LLRM_COPY128" => 24592,
         "LLRM_FARCALL" => 24584,
+        "LLRM_MOVE128" => 24594,
         "LLRM_PORT" => 24586,
         "LLRM_PTRDIFF" => 24583,
         "LLRM_TC_RETURN" => 24587,
