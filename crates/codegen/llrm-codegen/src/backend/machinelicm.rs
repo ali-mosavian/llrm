@@ -29,8 +29,9 @@
 //! - the loop does not already use as many values of its register class as the
 //!   target has registers (`CanCauseHighRegPressure`, with the values named in
 //!   the loop standing for the pressure: DEVIATE ML1, the pin tracks the live
-//!   registers of each block of the loop; a block that does not run on every trip also needs
-//!   the loop's peak of live registers below that, `AvoidSpeculation`).
+//!   registers of each block of the loop; a block that does not run on every
+//!   trip also needs the loop's peak of live registers below that,
+//!   `AvoidSpeculation`).
 //!
 //! Not ported, priced at no yield (release/next 34d21c9f34, every C, nib and
 //! BASIC program at -Os and -O2, counters in a throwaway build):
@@ -1541,7 +1542,15 @@ mod tests {
                 )
             })
             .collect();
-        body_insns.push(insn(40, Operation::Binary, "add", vec![held(200)], vec![held(1), held(2)], vec![200], vec![1, 2]));
+        body_insns.push(insn(
+            40,
+            Operation::Binary,
+            "add",
+            vec![held(200)],
+            vec![held(1), held(2)],
+            vec![200],
+            vec![1, 2],
+        ));
         body_insns.extend((0..20u32).map(|n| {
             let sum = 300 + n;
             let before = if n == 0 { 200 } else { sum - 1 };
