@@ -1390,6 +1390,25 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         cell: &Mem,
     ) -> Option<Arc<Insn>> {
         let what = one.what.as_ref()?;
+        // A straight COPY folds as a load or a store
+        // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetInstrInfo.cpp#L794>):
+        // the spilled end is the slot, the other end stays a register.
+        if one.group.is_none()
+            && one.def_lanes.is_empty()
+            && self.is_plain_move(what)
+            && let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice())
+            && dest.width == source.width
+            && dest.width as u32 == cell.width
+            && dest.value != source.value
+            && self.class_of(dest.value) == self.class_of(source.value)
+        {
+            if dest.value == reg {
+                return Some(self.store_reg_to_stack_slot(one, source.value, cell));
+            }
+            if source.value == reg {
+                return Some(self.load_reg_from_stack_slot(one, dest.value, cell));
+            }
+        }
         if one.group.is_none()
             && !what.sources.iter().any(|loc| matches!(loc, Loc::Held(_)))
             && what.name.as_deref().is_some_and(T::is_zero_def)

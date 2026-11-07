@@ -1952,3 +1952,29 @@ fn test_a_tied_instruction_reads_the_copy_for_every_use_of_its_source() {
     let add = f.blocks[0].insts.iter().find(|inst| matches!(inst.kind, Kind::Op("add"))).expect("the add");
     assert_eq!(add.operands, vec![Operand::Def(v(1)), Operand::Use(v(1)), Operand::Use(v(1))], "{:?}", add.operands);
 }
+
+/// A value copied from another and live across a call is stored from the other's
+/// register; the copy goes (`TargetInstrInfo::foldMemoryOperand`: "straight COPY
+/// may fold as load/store"). arm64 `jpeg_single` -Os kept `mov x10, x9; str x10,
+/// [sp, #88]` fifteen times where the pin stores `x9`.
+#[test]
+fn test_a_copy_whose_value_is_spilled_is_folded_into_the_store() {
+    let mut f = MFunction::<()>::new("fold");
+    f.classes = vec![(); 3];
+    let mut only = Block { id: 0, ..Block::default() };
+    only.insts.push(op("load", vec![Operand::Def(v(0))]));
+    only.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    only.insts.push(op("add", vec![Operand::Def(v(0)), Operand::Use(v(0)), Operand::Use(v(0))]));
+    only.insts.push(call());
+    only.insts.push(op("add", vec![Operand::Def(v(2)), Operand::Use(v(1)), Operand::Use(v(0))]));
+    only.insts.push(op("store", vec![Operand::Use(v(2))]));
+    only.insts.push(ret());
+    f.blocks = vec![only];
+    let f = lowered(f);
+    let back = rewritten(&f);
+    assert_allocated(&back.function, &back.assignment);
+    let insts = &back.function.blocks[0].insts;
+    let copies = insts.iter().filter(|inst| inst.kind == Kind::Copy).count();
+    assert_eq!(copies, 0, "the copy is the store: {insts:?}");
+    assert!(insts.iter().any(|inst| inst.kind == Kind::Op("st")), "{insts:?}");
+}
