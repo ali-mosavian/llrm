@@ -90,8 +90,21 @@ fn zero_extend_of(
     (what.name.as_deref() == Some("movzx") && from.value == byte && from.width == 1 && into.width == 4).then_some(*into)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Bodies `fixed` has analysed on this thread.
+    static ANALYSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `body` with its `setcc`-and-`movzx` pairs made zero-then-`setcc`.
 pub fn fixed(body: &LirBody) -> LirBody {
+    // Without a `setcc` into a byte there is no pair to find: the read counts
+    // and the effect of each instruction are not worth computing.
+    if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| set_byte(one).is_some()) {
+        return body.clone();
+    }
+    #[cfg(test)]
+    ANALYSED.with(|count| count.set(count.get() + 1));
     let regs = body.regs();
     let bits = body.bits;
     // Every reader of each value, to find a byte read once.
@@ -256,5 +269,19 @@ mod tests {
         assert_eq!(names(None), ["mov", "cmp", "setb"], "the control: nothing between");
         let inc = insn(1, Operation::Unary, "inc", vec![held(4, 4)], vec![held(5, 4)], vec![4], vec![5]);
         assert_eq!(names(Some(inc)), ["cmp", "inc", "setb", "movzx"]);
+    }
+
+    /// Compile time: `fixed` read-counted every value and asked the effect of
+    /// every instruction of every function (14.5 M Ir on memexp -O2), though
+    /// it acts on a `setcc` into a byte. A body without one is not analysed.
+    #[test]
+    fn test_a_body_without_a_byte_setcc_is_not_analysed() {
+        let plain = vec![insn(0, Operation::Compare, "cmp", vec![], vec![held(1, 4), held(2, 4)], vec![], vec![1, 2])];
+        let body = LirBody::new("f", 0, vec![LirBlock::new(0, plain).into()], IndexMap::default(), IndexMap::default());
+        ANALYSED.with(|count| count.set(0));
+        let done = fixed(&body);
+        assert_eq!((ANALYSED.with(|count| count.get()), done.blocks[0].insns.len()), (0, 1));
+        names(None);
+        assert_eq!(ANALYSED.with(|count| count.get()), 1, "a body with one is");
     }
 }
