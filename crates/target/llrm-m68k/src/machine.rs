@@ -181,20 +181,6 @@ impl Tti for M68k {
     /// costs any operation (`smax(n, 1)` for `i + 1 < n`) is not worth
     /// replacing a compare with in a function built for size; the guard and
     /// the second counter cost more bytes than the compare saved.
-    /// DEVIATE LTF2 (owner m68k, exit 2026-11-14; the pin enables `LoopTermFold`
-    /// for RISCV, AVR and Mips only): on at `-Os`, off at speed. At `-Os`
-    /// partition drops its counter (68000 102 -> 98 B, 1374 -> 1272 clk).
-    /// At `-O2` it loses (98 -> 100 B, 1264 -> 1276 clk): `llc` runs LSR again
-    /// over the folded IR, which turns the pointer compare back into a byte
-    /// counter, and that second LSR sees no `nuw` on the pointer IV, so its
-    /// own fold never fires. Exit: fix the double LSR, then enable at `-O2`.
-    fn enables_loop_term_fold(
-        &self,
-        optsize: bool,
-    ) -> bool {
-        optsize
-    }
-
     fn lftr_expansion_budget(
         &self,
         optsize: bool,
