@@ -6,8 +6,8 @@
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{Instruction, Operand};
-use llrm_mir::opcode::{Attribute, CallInfo};
+use llrm_mir::module::{Instruction, Operand, ValueDef};
+use llrm_mir::opcode::{Attribute, CallInfo, Opcode};
 
 use super::super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue};
 use super::super::isd::ISD;
@@ -83,22 +83,25 @@ impl Builder<'_> {
                 }
                 Ok(())
             }
-            // `case Intrinsic::trap`: a `TRAP` node on the chain (selected as `ud2`).
+            // `case Intrinsic::trap`: a `TRAP` node on the chain (selected
+            // as `ud2`).
             Intrinsic::Trap => {
                 let root = self.root();
                 let trap = self.dag.get_node(ISD::Trap, EVT::OTHER, &[root]);
                 self.dag.set_root(trap);
                 Ok(())
             }
-            // `case Intrinsic::debugtrap`: a `DEBUGTRAP` node (selected as `int3`).
+            // `case Intrinsic::debugtrap`: a `DEBUGTRAP` node (selected
+            // as `int3`).
             Intrinsic::DebugTrap => {
                 let root = self.root();
                 let trap = self.dag.get_node(ISD::DebugTrap, EVT::OTHER, &[root]);
                 self.dag.set_root(trap);
                 Ok(())
             }
-            // `case Intrinsic::ubsantrap`: `UBSAN_UD1` (a `ud1` with the kind as its
-            // displacement) is not translated: a named refusal, not a panic.
+            // `case Intrinsic::ubsantrap`: `UBSAN_UD1` (a `ud1` with the kind
+            // as its displacement) is not translated: a named refusal, not a
+            // panic.
             Intrinsic::UbsanTrap => Err(Refused("llvm.ubsantrap: M16-UBSANTRAP, not translated")),
             // `case Intrinsic::experimental_noalias_scope_decl: return;`
             Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse | Intrinsic::NoAliasScopeDecl => Ok(()),
@@ -371,6 +374,28 @@ impl Builder<'_> {
     ) -> Result<(), Refused> {
         let Some(Operand::Value(object)) = instruction.operands.iter().rev().nth(1).copied() else { return Ok(()) };
         let Some(index) = self.info.static_allocas.get(&object).copied() else { return Ok(()) };
+        // `MFI.getObjectSize` of the frame object, which `visitLIFETIME_END`
+        // bounds the dying stores by.
+        if let ValueDef::Instruction(def) = self.function.value(object).def
+            && let Opcode::Alloca { allocated, .. } = self.function.instruction(def).opcode
+        {
+            let count = match self.function.instruction(def).operands.first() {
+                None => Some(1),
+                Some(Operand::Constant(id)) => match self.module.context.get(*id).kind {
+                    ConstantKind::Int(bits) => u64::try_from(bits).ok(),
+                    _ => None,
+                },
+                Some(_) => None,
+            };
+            if let Some(count) = count {
+                let bytes = self.layout.alloc_size(&self.module.context.types, allocated).saturating_mul(count);
+                let at = usize::try_from(index).unwrap_or(0);
+                if self.dag.frame_object_bytes.len() <= at {
+                    self.dag.frame_object_bytes.resize(at + 1, 0);
+                }
+                self.dag.frame_object_bytes[at] = self.dag.frame_object_bytes[at].max(bytes);
+            }
+        }
         let root = self.root();
         let frame = self.dag.get_target_frame_index(self.target.dag.pointer, index);
         let node =
@@ -998,7 +1023,17 @@ impl Builder<'_> {
         let callee = self.dag.get_target_external_symbol(word, routine.name);
         let root = self.memory_root();
         let env = CallEnv { arch: self.full_arch()?, pointer: word };
-        let (chain, _) = lib_call(&mut self.dag, &env, root, callee, &args, 0, 0, &[], &super::super::dagisel_adapter::call_clobbered_flags());
+        let (chain, _) = lib_call(
+            &mut self.dag,
+            &env,
+            root,
+            callee,
+            &args,
+            0,
+            0,
+            &[],
+            &super::super::dagisel_adapter::call_clobbered_flags(),
+        );
         self.dag.set_root(chain);
         Ok(())
     }
