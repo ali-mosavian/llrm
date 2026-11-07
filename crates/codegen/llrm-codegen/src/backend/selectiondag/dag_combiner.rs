@@ -440,6 +440,20 @@ pub trait CombineHooks {
         false
     }
 
+    /// `isTypeDesirableForOp(ISD::SETCC, VT)` for the narrower type
+    /// `SimplifySetCC` compares a zero-extended or masked value in
+    /// ([TargetLowering.cpp#L4950](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L4950)).
+    /// The pin's default is true; x86 returns false for an illegal type. The
+    /// default here is x86's, as every judged target's rows are, so a target
+    /// that wants the pin's default overrides it.
+    fn is_setcc_type_desirable(
+        &self,
+        _narrow: EVT,
+        legal: bool,
+    ) -> bool {
+        legal
+    }
+
     fn has_target_combine(
         &self,
         _op: ISD,
@@ -1139,9 +1153,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let min_vt = EVT::integer(min_bits);
-        // `isTypeDesirableForOp`: x86 does not narrow to an illegal type.
-        if self.tli.is_some_and(|tli| !tli.types.is_type_legal(min_vt)) {
-            return None;
+        if let Some(tli) = self.tli {
+            if !self.hooks.is_setcc_type_desirable(min_vt, tli.types.is_type_legal(min_vt)) {
+                return None;
+            }
         }
         let trunc = self.dag.get_node(ISD::Truncate, min_vt, &[pre_ext]);
         let (rhs, cond) = if min_bits == 1 && c1 == 1 {

@@ -176,6 +176,19 @@ impl CombineHooks for Z80Combines {
         matches!(vt, EVT::I8 | EVT::I16)
     }
 
+    /// The pin's default: a compare of a masked or zero-extended value against
+    /// a constant is made in the narrower type (`(and x, 7) == 3` is a byte
+    /// `cp`), legal or not; the type legalizer promotes it to a byte. Without
+    /// it the word compare kept a `sub a, #0` for the high byte the mask had
+    /// zeroed (div_constants_short, 36 sites).
+    fn is_setcc_type_desirable(
+        &self,
+        _narrow: EVT,
+        _legal: bool,
+    ) -> bool {
+        true
+    }
+
     /// A word compare against a constant is two byte compares and a branch
     /// between them; the compare of the loaded byte is one `cp`.
     ///
