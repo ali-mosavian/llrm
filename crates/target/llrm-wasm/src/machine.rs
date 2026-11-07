@@ -174,6 +174,13 @@ impl Tti for Wasm {
         None
     }
 
+    /// DEVIATE LG3: a tie of instructions plus setup keeps the pin's solution:
+    /// the base and counter constants the end-biased form sets up are bytes the
+    /// saved compare immediate does not repay (quicksort -O2, +10 B).
+    fn lsr_pin_wins_setup_tie(&self) -> bool {
+        true
+    }
+
     /// `WebAssemblyTargetLowering::isLegalAddressingMode`: offsets add as
     /// unsigned without wrapping, so a negative one is refused; no register is
     /// scaled; every other form is legal.

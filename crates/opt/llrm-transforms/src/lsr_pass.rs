@@ -327,12 +327,15 @@ fn plan_loop(
         // loop must not outweigh the instructions it saves in it (nbody -O1:
         // four `base + 32` against one compare).
         let folds_base_and_counter = tti.is_legal_addressing_mode(false, 0, true, 1);
+        let spent = cost.c.insns + cost.c.setup_cost;
+        let saved = pin_cost.c.insns + pin_cost.c.setup_cost;
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || pin_cost.is_less(tti, &cost)
                 || (!folds_base_and_counter
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
-                        || cost.c.insns + cost.c.setup_cost > pin_cost.c.insns + pin_cost.c.setup_cost)));
+                        || spent > saved
+                        || (spent == saved && tti.lsr_pin_wins_setup_tie()))));
         llrm_support::debug!("lsr", "  pin's space solved: kept {kept}");
         if kept {
             lsr = pin;

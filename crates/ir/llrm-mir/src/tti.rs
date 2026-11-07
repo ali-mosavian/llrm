@@ -694,6 +694,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LG3: whether the pin's solution is kept where the end-biased
+    /// formulae save no instruction net of the code they add outside the loop
+    /// (a tie of instructions plus setup). By default a tie goes to them.
+    fn lsr_pin_wins_setup_tie(&self) -> bool {
+        false
+    }
+
     /// `Tuning::ipsccp_widen_keeps_sign`.
     fn ipsccp_widen_keeps_sign(&self) -> bool {
         false
