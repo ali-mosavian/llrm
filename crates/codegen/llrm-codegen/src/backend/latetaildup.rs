@@ -27,6 +27,12 @@
 //! instruction's id) and claims no source bytes of its own (placement's
 //! `copied` refuses the same).
 //!
+//! DEVIATE TL3 (owner greedy-subreg, exit 2026-11-20): the pin's return block
+//! already holds the frame's teardown, so a framed function's is longer than
+//! the bound and is never copied; here the teardown is emitted after this pass,
+//! so a tail that returns counts the callee-saved registers the body writes.
+//! Without it queens m64 -O2 was +24 B (copies the tail merge joined again).
+//!
 //! DEVIATE TL2 (no number): `Preds` is rebuilt after each tail copied, so a
 //! function with many copied tails costs one pass over its blocks each; the pin
 //! updates the CFG in place.
@@ -40,6 +46,8 @@
 //! asks for it.
 
 use std::sync::Arc;
+
+use llrm_lir::registers::RegId;
 
 use super::earlytaildup::{
     Preds, can_fall_through, can_tail_duplicate, duplicate_simple, forgotten, is_simple_in, operation, real,
@@ -56,6 +64,7 @@ const SIZE: usize = 2;
 fn copied(
     tail: &Block,
     size: bool,
+    epilogue: usize,
 ) -> Option<Vec<Arc<Insn>>> {
     if can_fall_through(tail) || tail.succ.contains(&tail.at) || !tail.phis.is_empty() {
         return None;
@@ -83,7 +92,12 @@ fn copied(
                         && !(matches!(what.op, Operation::Jump | Operation::Branch) && what.indirect),
                 ),
         );
-    (plain && work.len() <= most).then_some(work)
+    // TL3: the pin's return block holds the frame's teardown (PEI ran before
+    // this pass); here the pops are emitted later, so a tail that returns
+    // counts the registers the function saves.
+    let returns = work.last().is_some_and(|one| operation(one) == Some(Operation::Return));
+    let length = work.len() + if returns { epilogue } else { 0 };
+    (plain && length <= most).then_some(work)
 }
 
 /// `tailDuplicate` of `body.blocks[at]`: its instructions in place of the jump
@@ -93,9 +107,10 @@ fn tail_duplicate(
     body: &LirBody,
     at: usize,
     size: bool,
+    epilogue: usize,
 ) -> Option<LirBody> {
     let tail = &body.blocks[at];
-    let work = copied(tail, size)?;
+    let work = copied(tail, size, epilogue)?;
     if is_simple_in(graph, tail) {
         return duplicate_simple(body, at);
     }
@@ -178,14 +193,18 @@ fn tail_duplicate(
 pub fn duplicated(
     mut body: LirBody,
     size: bool,
+    saved: &[RegId],
+    free: bool,
+    pointer: RegId,
 ) -> LirBody {
+    let epilogue = saved_count(&body, saved, free, pointer);
     let mut place = 1;
     let mut graph = Preds::of(&body);
     while place < body.blocks.len() {
         let at = body.blocks[place].at;
         // Most blocks fail the cheap tests: no scan of the body for them.
-        if copied(&body.blocks[place], size).is_some()
-            && let Some(made) = tail_duplicate(&graph, &body, place, size)
+        if copied(&body.blocks[place], size, epilogue).is_some()
+            && let Some(made) = tail_duplicate(&graph, &body, place, size, epilogue)
         {
             body = made;
             graph = Preds::of(&body);
@@ -199,9 +218,31 @@ pub fn duplicated(
     body
 }
 
+/// How many callee-saved registers the body writes: the pops its returns will
+/// take (`masm::saved_of`, without the interrupt and runtime-entry cases). A
+fn saved_count(
+    body: &LirBody,
+    saved: &[RegId],
+    free: bool,
+    pointer: RegId,
+) -> usize {
+    if let Some(kept) = &body.frame_saved {
+        return kept.len();
+    }
+    let found = body.facts.0.get::<super::masm::BodyRoots>(body);
+    let mut roots = if free { found.of_values(body.regs(), pointer) } else { found.plain.clone() };
+    roots.extend(found.disturbed.iter());
+    saved.iter().filter(|whole| roots.contains(whole)).count()
+}
+
 /// The phase: tail duplication after allocation.
 pub struct TailDuplicate {
     pub size: bool,
+    /// The callee-saved registers (whole), whether the frame register is free,
+    /// and the frame pointer: what `masm::saved_of` reads.
+    pub saved: Vec<RegId>,
+    pub free: bool,
+    pub pointer: RegId,
 }
 
 impl crate::model::passes::LIRTransform for TailDuplicate {
@@ -217,7 +258,7 @@ impl crate::model::passes::LIRTransform for TailDuplicate {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(duplicated(body, self.size))
+        Ok(duplicated(body, self.size, &self.saved, self.free, self.pointer))
     }
 }
 
@@ -275,6 +316,14 @@ mod tests {
         ])
     }
 
+    /// `duplicated` for a function that saves nothing.
+    fn dup(
+        body: LirBody,
+        size: bool,
+    ) -> LirBody {
+        duplicated(body, size, &[], false, RegId::default())
+    }
+
     fn names(block: &Block) -> Vec<String> {
         block
             .insns
@@ -296,7 +345,7 @@ mod tests {
     /// machine's: no value is renamed) and the join is gone.
     #[test]
     fn test_a_join_is_copied_verbatim_into_each_arm_and_removed() {
-        let done = duplicated(join(vec![work(3)]), false);
+        let done = dup(join(vec![work(3)]), false);
         assert!(done.blocks.iter().all(|block| block.at != 3), "the join is gone");
         for arm in [1, 2] {
             assert_eq!(names(at(&done, arm)), ["mov", "mov", "jmp"], "arm {arm}");
@@ -313,15 +362,36 @@ mod tests {
     /// is the most).
     #[test]
     fn test_the_size_bound_is_two_instructions_and_one_at_os() {
-        assert!(!duplicated(join(vec![work(3), work(4)]), false).blocks.iter().all(|b| b.at != 3));
-        assert!(duplicated(join(vec![]), true).blocks.iter().all(|b| b.at != 3));
-        assert!(!duplicated(join(vec![work(3)]), true).blocks.iter().all(|b| b.at != 3));
+        assert!(!dup(join(vec![work(3), work(4)]), false).blocks.iter().all(|b| b.at != 3));
+        assert!(dup(join(vec![]), true).blocks.iter().all(|b| b.at != 3));
+        assert!(!dup(join(vec![work(3)]), true).blocks.iter().all(|b| b.at != 3));
+    }
+
+    /// queens `place` (m64 -O2, +24 B): a return block of a function that saves
+    /// registers has the pops in it in the pin, so it is too long to copy;
+    /// copied here, tail merging joined the copies again. A frameless
+    /// function's `ret` is copied.
+    #[test]
+    fn test_a_tail_that_returns_counts_the_pops_it_will_take() {
+        let shape = || {
+            body(vec![
+                block(0, vec![of("jne", Operation::Branch, Some(2)), jump(1)], &[1, 2]),
+                block(1, vec![work(1), jump(3)], &[3]),
+                block(2, vec![work(2), jump(3)], &[3]),
+                block(9, vec![work(8), work(9), of("ret", Operation::Return, None)], &[]),
+                block(3, vec![work(3), of("ret", Operation::Return, None)], &[]),
+            ])
+        };
+        assert!(dup(shape(), false).blocks.iter().all(|block| block.at != 3), "frameless: copied");
+        let mut framed = shape();
+        framed.frame_saved = Some(vec![RegId::default(), RegId::default()]);
+        assert!(duplicated(framed, false, &[], false, RegId::default()).blocks.iter().any(|block| block.at == 3));
     }
 
     /// A call is not copied (TL1): a copy keeps no callee.
     #[test]
     fn test_a_tail_with_a_call_is_kept() {
-        let kept = duplicated(join(vec![of("call", Operation::Call, Some(7))]), false);
+        let kept = dup(join(vec![of("call", Operation::Call, Some(7))]), false);
         assert!(kept.blocks.iter().any(|block| block.at == 3));
     }
 
@@ -336,7 +406,7 @@ mod tests {
             block(9, vec![work(8), work(9), of("ret", Operation::Return, None)], &[]),
             block(3, vec![work(3), jump(9)], &[9]),
         ]);
-        let done = duplicated(shape, false);
+        let done = dup(shape, false);
         assert_eq!(names(at(&done, 1)), ["mov", "mov", "jmp"]);
         assert!(done.blocks.iter().any(|block| block.at == 3), "block 0 still reaches the tail");
     }
