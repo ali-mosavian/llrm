@@ -250,7 +250,7 @@ fn aligned(
     body: &LirBody,
     cpu: &cpu::Profile,
 ) -> LirBody {
-    if cpu.size || cpu.loop_alignment == 0 || body.blocks.len() < 2 {
+    if cpu.size || cpu.loop_alignment == 0 || body.blocks.len() < 2 || !(cpu.speed_rate || cpu.align_loops_at_o1) {
         return body.clone();
     }
     const COLD: f64 = 0.2;

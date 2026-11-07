@@ -717,6 +717,12 @@ pub trait Target {
         0
     }
 
+    /// Whether loops are aligned at -O1. The pin's X86 aligns at every level
+    /// above -O0; gcc's `-falign-loops` starts at -O2.
+    fn align_loops_at_o1(&self) -> bool {
+        true
+    }
+
     /// The most bytes of padding a loop header's alignment may take (the
     /// `MaxBytesForAlignment` the pin's X86 never sets, gcc's `.p2align
     /// 4,,10`); 0: no limit.

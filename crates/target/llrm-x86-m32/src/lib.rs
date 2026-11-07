@@ -485,6 +485,12 @@ impl llrm_target::Target for M32 {
         4
     }
 
+    /// DEVIATE ALIGN-O1 (owner m32, exit 2026-11-27): no loop alignment at
+    /// -O1, as gcc. `mandel` -O1 ran 5,376 one-byte nops against gcc's 0.
+    fn align_loops_at_o1(&self) -> bool {
+        false
+    }
+
     /// DEVIATE SD545 (owner anyisa, exit 2026-11-20): the pin pads a loop
     /// header with up to 15 bytes; gcc's `.p2align 4,,10` pads at most 10.
     /// -O2 m32 `jpeg_single` ran 15 one-byte nops 14,457 times.
