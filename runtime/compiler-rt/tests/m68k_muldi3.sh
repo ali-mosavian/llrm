@@ -34,13 +34,16 @@ cat > $T/main.c <<'C'
 #include "vectors.h"
 /* the 68000 C member calls it; a 68000 has no 32-bit multiply */
 unsigned __mulsi3(unsigned a, unsigned b) { unsigned r = 0; for (; b; b >>= 1, a <<= 1) if (b & 1) r += a; return r; }
+/* through a pointer: gcc inlines a 64-bit multiply at -m68020 (mulu.l), and the member under test was never called */
+uint64_t __muldi3(uint64_t, uint64_t);
+static uint64_t (*volatile mul)(uint64_t, uint64_t) = __muldi3;
 #define W(h, l) (((uint64_t)(h) << 32) | (l))
 int main(void)
 {
     long bad = 0;
     for (unsigned i = 0; i < sizeof V / sizeof *V; i++) {
         volatile uint64_t a = W(V[i][0], V[i][1]), b = W(V[i][2], V[i][3]);
-        bad += (a * b) != W(V[i][4], V[i][5]);
+        bad += mul(a, b) != W(V[i][4], V[i][5]);
     }
     __asm__ volatile("move.l %0,%%d1\n\tmoveq #1,%%d0\n\ttrap #0" : : "d"(bad > 255 ? 255 : bad) : "d0", "d1");
     return 0;
@@ -54,7 +57,11 @@ for c in "$@"; do
   size=$($B-size $T/$c/muldi3.o | awk 'NR==2{print $1}')
   case $c in 68020|68030|68040)
     [ "$size" -le 40 ] || { echo "FAIL: $c __muldi3 is $size B, bound 40"; exit 1; }
-    $B-objdump -d $T/$c/exe | grep -qE 'mulul' || { echo "$c: no 64-bit mulu.l"; exit 1;};;
+    $B-objdump -d $T/$c/exe | awk '/<__muldi3>:/{f=1;next} /^$/{f=0} f' | grep -qE 'mulul' || { echo "$c: no 64-bit mulu.l"; exit 1;};;
   esac
+  # control: a member that returns 0 must fail the same run
+  printf '\t.text\n\t.globl __muldi3\n__muldi3:\n\tclr.l %%d0\n\tclr.l %%d1\n\trts\n' > $T/$c/zero.s; $B-as -m$c -o $T/$c/zero.o $T/$c/zero.s
+  $B-ld -static -e main -o $T/$c/zexe $T/main$c.o $T/$c/zero.o
+  if qemu-m68k -cpu m$c $T/$c/zexe; then echo "$c: control: a __muldi3 returning 0 passed"; exit 1; fi
   echo "$c: __muldi3 $size B"
 done
