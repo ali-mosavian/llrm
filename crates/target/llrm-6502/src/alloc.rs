@@ -66,15 +66,21 @@ const BASE_CELLS: u8 = 16;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Tuning {
     pub clocks_per_byte: u32,
+    /// What a byte of growth must buy in clocks where a change of layout may
+    /// grow the code (the user's rule: 3 clocks a byte at -O2/-O3). 0: no
+    /// growth, no slowdown (-O1, -Os).
+    pub growth_clocks_per_byte: u32,
 }
 
 impl Tuning {
     /// Speed: a byte saved is not worth a clock.
-    pub const SPEED: Tuning = Tuning { clocks_per_byte: 1 };
+    pub const SPEED: Tuning = Tuning { clocks_per_byte: 1, growth_clocks_per_byte: 0 };
+    /// Speed where a byte may be bought for 3 clocks (-O2, -O3).
+    pub const FAST: Tuning = Tuning { clocks_per_byte: 1, growth_clocks_per_byte: 3 };
     /// Size: a byte saved is worth up to twelve clocks (a shift loop of 3 bits
     /// is 3 bytes and 16 clocks; three shared callee-saved cells are 9
     /// bytes and 99 clocks).
-    pub const SIZE: Tuning = Tuning { clocks_per_byte: 12 };
+    pub const SIZE: Tuning = Tuning { clocks_per_byte: 12, growth_clocks_per_byte: 0 };
 }
 
 thread_local! {
@@ -3139,13 +3145,37 @@ fn emit_on(
         let better = |a: Result<(u32, u64), String>, b: Result<(u32, u64), String>| matches!((a, b), (Ok(a), Ok(b)) if a.0 > b.0 || a.1 > b.1);
         better(price(kept.1, kept.2), price(other.1, other.2)) && better(price(kept.0, kept.2), price(other.0, other.2))
     };
+    // A layout that grows the code is also kept where the clocks it saves,
+    // weighted by the block frequencies it was made with, buy the bytes at
+    // `growth` clocks a byte (the level's rate, 0: no growth).
+    let weights = if stack { label_weights::<true>(&function, labels) } else { label_weights::<false>(&function, labels) };
+    let by_number: std::collections::HashMap<u32, u64> = weights
+        .iter()
+        .filter_map(|(label, units)| Some((label.rsplit_once("_b")?.1.parse().ok()?, *units)))
+        .collect();
+    let price_weighted = |code: &str, slots: &[(String, usize)]| {
+        crate::timing::estimate_weighted(cpu, &without_lines(code), &[], Some(&|block| by_number.get(&block).copied().unwrap_or(WEIGHT_ONE)))
+            .map(|priced| (priced.bytes + slots.iter().map(|(_, n)| *n as u32).sum::<u32>(), priced.cycles))
+    };
+    let growth = TUNING.with(|t| t.get()).growth_clocks_per_byte;
+    let layout_loses = |kept: (&str, &str, &[(String, usize)]), other: (&str, &str, &[(String, usize)])| {
+        if growth == 0 {
+            return wins(kept, other);
+        }
+        let cost = |priced: Result<(u32, u64), String>| {
+            priced.map(|(bytes, cycles)| cycles + u64::from(growth) * WEIGHT_ONE * u64::from(bytes))
+        };
+        let worse = |a, b| matches!((cost(a), cost(b)), (Ok(a), Ok(b)) if a > b);
+        worse(price_weighted(kept.1, kept.2), price_weighted(other.1, other.2))
+            && worse(price_weighted(kept.0, kept.2), price_weighted(other.0, other.2))
+    };
     let (mut code, mut priced, mut slots, sunk, shared, moved) = run(function.clone(), true, true, false, true)?;
     // a layout that rotates a loop is kept only where it is no larger and no
     // slower than the order the blocks came in
     let mut place = true;
     if moved
         && let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), true, true, false, false)
-        && wins((&code, &priced, &slots), (&other, &other_priced, &other_slots))
+        && layout_loses((&code, &priced, &slots), (&other, &other_priced, &other_slots))
     {
         (code, priced, slots, place) = (other, other_priced, other_slots, false);
     }
@@ -3302,6 +3332,26 @@ fn reads_zero_or_sign_only(inst: &Inst) -> bool {
             .is_some_and(|code| matches!(code, 0 | 1 | 4 | 5)),
         _ => false,
     }
+}
+
+/// One run of the entry block, in the units a layout's cycles are weighted in.
+const WEIGHT_ONE: u64 = 1024;
+
+/// The weight of each block label of `function`: its frequency relative to the
+/// entry's (`BlockFrequencyInfo` over [`loop_odds`], what the layout was made
+/// by), in [`WEIGHT_ONE`]s.
+fn label_weights<const STACK: bool>(
+    function: &MFunction<Class>,
+    labels: &[Vec<String>],
+) -> std::collections::HashMap<String, u64> {
+    let odds = loop_odds(function);
+    llrm_spike_mf::placement::block_weights::<Class, Mos<STACK>>(function, &odds)
+        .into_iter()
+        .flat_map(|(id, weight)| {
+            let units = ((weight * WEIGHT_ONE as f64).round() as u64).max(1);
+            labels.get(id as usize).into_iter().flatten().map(move |name| (name.clone(), units))
+        })
+        .collect()
 }
 
 /// The odds of a branch out of a loop, as `BranchProbabilityInfo`'s loop

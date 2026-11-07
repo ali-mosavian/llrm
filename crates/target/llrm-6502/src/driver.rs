@@ -57,6 +57,7 @@ impl Level {
     pub(crate) fn tuning(self) -> Tuning {
         match self {
             Self::Os | Self::Oz => Tuning::SIZE,
+            Self::O2 | Self::O3 => Tuning::FAST,
             _ => Tuning::SPEED,
         }
     }

@@ -246,6 +246,50 @@ define i8 @f(i8 %p, i8 %q) {
     assert_eq!((calls(Level::O2), calls(Level::Os)), (0, 3));
 }
 
+/// A counted loop whose exit test is in the header: the layout that puts the
+/// test at the bottom drops a `jmp` from every trip and adds one before the
+/// loop and one on the way out of the zero-trip path, 3 bytes. It was kept
+/// only if no larger, so fib kept its `jmp` back (63 B against llvm-mos's 55,
+/// +35 clocks). At -O2 and -O3 a byte may be bought for 3 clocks; -O1 and -Os
+/// stay strict.
+#[test]
+fn speed_rotates_a_loop_for_the_clocks_it_buys_and_o1_does_not() {
+    let ir = module(
+        "define i16 @fib(i8 %n) {
+entry:
+  %z = icmp eq i8 %n, 0
+  br i1 %z, label %done, label %loop
+loop:
+  %c = phi i8 [ %c2, %loop ], [ %n, %entry ]
+  %a = phi i16 [ %b, %loop ], [ 0, %entry ]
+  %b = phi i16 [ %t, %loop ], [ 1, %entry ]
+  %c2 = add i8 %c, -1
+  %t = add i16 %a, %b
+  %e = icmp eq i8 %c2, 0
+  br i1 %e, label %done, label %loop
+done:
+  %r = phi i16 [ 0, %entry ], [ %b, %loop ]
+  ret i16 %r
+}",
+    );
+    // a `jmp` to a label above it closes the loop
+    let jumps = |level| {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        lines
+            .iter()
+            .enumerate()
+            .filter(|(at, line)| {
+                line.trim_start()
+                    .strip_prefix("jmp ")
+                    .is_some_and(|label| lines[..*at].iter().any(|one| one.strip_suffix(':') == Some(label.trim())))
+            })
+            .count()
+    };
+    assert_eq!((jumps(Level::O2), jumps(Level::O3)), (0, 0), "the loop closes with a conditional branch");
+    assert!(jumps(Level::O1) >= 1 && jumps(Level::Os) >= 1, "strict levels keep the layout that is no larger");
+}
+
 /// crc16 as the mid-end leaves it: the `if` of the bit loop is a `select`.
 const CRC16_SELECT_SHAPED: &str = "define i16 @crc16(ptr %0, i8 %1) {\n\
   %.not = icmp eq i8 %1, 0\n\

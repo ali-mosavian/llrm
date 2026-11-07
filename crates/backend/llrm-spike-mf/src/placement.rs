@@ -1227,6 +1227,18 @@ fn optimize_branches<C, J: Jump>(
     }
 }
 
+/// The frequency of each block of `function` (by its `id`) relative to the
+/// entry's, as `place_blocks` lays them out by: `BlockFrequencyInfo` over the
+/// IR's `odds`.
+pub fn block_weights<C, J: Jump>(
+    function: &MFunction<C>,
+    odds: &Odds,
+) -> HashMap<u32, f64> {
+    let graph = Graph::of::<C, J>(function, odds, false);
+    let entry = graph.freqs.first().map_or(1, |entry| entry.0).max(1) as f64;
+    function.blocks.iter().zip(&graph.freqs).map(|(block, freq)| (block.id, freq.0 as f64 / entry)).collect()
+}
+
 /// `MachineBlockPlacement::runOnMachineFunction`: lays the blocks out in
 /// [`place`]'s order and fixes the branches. True when the order changed.
 pub fn place_blocks<C, J: Jump>(
