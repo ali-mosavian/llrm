@@ -78,14 +78,19 @@ fn sunk_from(
             continue;
         }
         let Some(result) = function.instruction(inst).result else { continue };
-        let used_in_loop = function.users(result).iter().any(|one| {
-            let user = function.instruction(one.user);
-            let at = match (&user.opcode, user.operands.get(one.index as usize + 1)) {
-                (Opcode::Phi, Some(&Operand::Block(from))) => Some(from),
-                _ => function.parent(one.user),
-            };
-            at.is_some_and(|at| at == preheader || loop_.body.contains(&cfg::id(at)))
-        });
+        let used_in_loop = function
+            .users(result)
+            .iter()
+            .any(
+                |one| {
+                    let user = function.instruction(one.user);
+                    let at = match (&user.opcode, user.operands.get(one.index as usize + 1)) {
+                        (Opcode::Phi, Some(&Operand::Block(from))) => Some(from),
+                        _ => function.parent(one.user),
+                    };
+                    at.is_some_and(|at| at == preheader || loop_.body.contains(&cfg::id(at)))
+                },
+            );
         if used_in_loop {
             continue;
         }

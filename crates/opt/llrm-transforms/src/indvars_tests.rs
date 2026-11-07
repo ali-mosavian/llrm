@@ -1140,9 +1140,14 @@ const STACK: usize = 2 << 20;
 /// local.
 #[test]
 fn an_increment_only_the_latch_reads_leaves_the_inner_loops_preheader() {
-    let mut module = parsed(&crate::invariantsink::tests::nested(""));
+    // `acc * 3 + j` is no closed form: the loops stay.
+    let text = crate::invariantsink::tests::nested("")
+        .replace("%a2 = add i32 %a, %j", "%a3 = mul i32 %a, 3\n  %a2 = add i32 %a3, %j");
+    let mut module = parsed(&text);
+    let before = results(&module, &[&[1, 1], &[3, 2], &[4, 0]]);
     managed(&mut module, IndVars { lftr: true, size: false });
     let after = printed(&module);
+    assert_eq!(results(&module, &[&[1, 1], &[3, 2], &[4, 0]]), before, "{after}");
     let (preheader, rest) = after.split_once("inner:").expect("inner");
     assert!(!preheader.contains("%i.next = add"), "{after}");
     assert!(rest.contains("%i.next = add"), "{after}");

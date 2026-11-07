@@ -30,8 +30,8 @@
 //!    `!=` the strict compare of a unit-stride counter that never passes its
 //!    bound, which LFTR left.
 //! 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
-//!    `invariantsink::sunk` (`sinkUnusedInvariants`): a loop preheader's
-//!    values the loop does not read move to its exit.
+//!    `invariantsink::sunk` (`sinkUnusedInvariants`): a loop preheader's values
+//!    the loop does not read move to its exit.
 //!
 //! # Example
 //! Step 1, the widening, on `for (unsigned short i = 0; i < n; ++i) a[i] = 1`
@@ -319,8 +319,8 @@ impl FunctionPass for IndVars {
         let loops = cfg::natural(unit.function, &found);
         let sunk = crate::exitsink::sunk(unit.function, &loops);
         // `sinkUnusedInvariants`, the last step of the pin's run.
-        let sunk = crate::invariantsink::sunk(unit.context, outer.callees(), &outer.globals, unit.function, &loops)
-            || sunk;
+        let sunk =
+            crate::invariantsink::sunk(unit.context, outer.callees(), &outer.globals, unit.function, &loops) || sunk;
         // The pin deletes what an edit stopped reading as it goes; a sweep of
         // the function (0.8 M Ir on d_faces' largest body) found the same.
         let dead = (floats

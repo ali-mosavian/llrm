@@ -34,16 +34,15 @@ latch:
   br i1 %go, label %outer, label %exit
 
 exit:
-  ret i32 %acc2
+  %r = phi i32 [ %acc2, %latch ]
+  ret i32 %r
 }}
 "
     )
 }
 
 /// `function` sunk, its loops found for it.
-fn sunk(
-    module: &mut llrm_mir::module::Module,
-) -> bool {
+fn sunk(module: &mut llrm_mir::module::Module) -> bool {
     let context = module.context.clone();
     let globals = module.globals.clone();
     let function: &mut Function = f(module);
@@ -77,7 +76,8 @@ fn test_an_increment_only_the_latch_reads_moves_there() {
 /// A value the loop reads stays: `%s` feeds the inner sum.
 #[test]
 fn test_a_value_the_loop_reads_stays() {
-    let text = nested("  %s = add i32 %i, 7\n").replace("%a2 = add i32 %a, %j", "%t = add i32 %j, %s\n  %a2 = add i32 %a, %t");
+    let text =
+        nested("  %s = add i32 %i, 7\n").replace("%a2 = add i32 %a, %j", "%t = add i32 %j, %s\n  %a2 = add i32 %a, %t");
     let (after, _) = run(&text);
     assert!(after.contains("outer:\n  %i = phi i32 [ 0, %b0 ], [ %i.next, %latch ]\n  %acc = phi i32 [ 0, %b0 ], [ %acc2, %latch ]\n  %s = add i32 %i, 7\n"), "{after}");
 }
