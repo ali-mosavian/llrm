@@ -1,7 +1,8 @@
 #!/bin/bash
 # A/B guard: ab_guard.sh <repo> <base> <head> <base-bin> <head-bin> [counts-file...]
 # Refuses (exit 2, one line) unless base is the newest upstream commit head contains
-# (upstream: $AB_UPSTREAM, default origin/release/next), the binaries differ, every counts file is non-empty,
+# (upstream: $AB_UPSTREAM, default origin/release/next), the binaries differ, every counts file is non-empty and
+# has no row that compiled nothing on a side ("compiled base 0 head 0 same 162" compares nothing),
 # and $AB_BASE_ARGV / $AB_HEAD_ARGV (the command lines the two sides run) each carry an explicit -O level:
 # llrm-wasm-llc once defaulted to -O0 against the pin's -O2 and a phantom gap was chased. Both lines are printed.
 # Any LLRM_* variable outside AB_ENV_OK (ab_env.sh, tool locations) is refused unless $AB_ALLOW_ENV names it: LLRM_WASM_BACKEND_ONLY
@@ -15,6 +16,9 @@ want=$(git -C "$repo" merge-base "$h" "$up") || no "no merge-base of head and $u
 [ "$b" = "$want" ] || no "stale base: base ${b:0:10} is not the newest $up commit head contains (${want:0:10})"
 [ "$(md5sum < "$bbin")" != "$(md5sum < "$hbin")" ] || no "base and head binaries are identical"
 for c in "$@"; do [ -s "$c" ] || no "counts file $c is empty or missing"; done
+for c in "$@"; do
+  if grep -qE 'compiled base 0 | head 0 ' "$c"; then no "counts file $c has a row that compiled nothing"; fi
+done
 for side in BASE HEAD; do
   var=AB_${side}_ARGV
   [ -n "${!var:-}" ] || no "no argv given for the ${side,,} side: $var is not set; say the command line it runs"

@@ -34,12 +34,15 @@ fn a_mask_of_what_an_assert_zext_holds_is_dropped() {
     let and = dag.get_node(ISD::And, EVT::I32, &[zero, mask]);
     dag.set_root(and);
     let mut hooks = X86Lowering {
+        imul_if_smaller: false,
+        share_products: false,
         cmov: true,
         sse2: false,
         min_size: false,
         three_address_adds: false,
         i16_mul_chains: false,
-        sext_load: false, zext_free: false,
+        sext_load: false,
+        zext_free: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).run();

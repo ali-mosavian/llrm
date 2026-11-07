@@ -23,8 +23,9 @@
 //! of a constant again only where the source has no other reader, so its own
 //! move goes. Fact: elsewhere it replaced a 2-byte copy with a 3 to 5 byte
 //! move and cost 40 of 813 sources +1,383 bytes (`regparm3_matrix_*` up to
-//! +89) for -0.8% executed instructions. Exit: the allocator gives the constant
-//! back as a copy where its register is wanted.
+//! +89) for -0.8% executed instructions. Applies only where the target states
+//! no price for the move (`prices_remat`); x86 does, by encoded bytes. Exit:
+//! every target prices it, or the allocator gives the constant back as a copy.
 //!
 //! DEVIATE C6 (no number): `updateRegDefsUses` sets no `undef` flags: an
 //! instruction here has none, and a read of no live value is a bug of the
@@ -144,6 +145,22 @@ impl State {
     }
 }
 
+/// DEVIATE C13, the part left on: a target that joins no copy between widths
+/// still joins the low part of a value that lives on past the copy. The narrow
+/// range lies inside the wide one, so the join lengthens nothing and adds no
+/// interference; `v8 = COPY v32` before a byte store of `v8` while `v32` is
+/// read later.
+fn joins_inside_wide_value(
+    lis: &mut LiveIntervals,
+    cp: &CoalescerPair,
+) -> bool {
+    if cp.lane_offset() != 0 || has_lane_defs(lis, cp.dst_reg()) || has_lane_defs(lis, cp.src_reg()) {
+        return false;
+    }
+    let narrow = lis.interval(cp.src_reg()).range.clone();
+    lis.interval(cp.dst_reg()).range.covers(&narrow)
+}
+
 /// `joinCopy`.
 pub fn join_copy(
     lis: &mut LiveIntervals,
@@ -158,7 +175,7 @@ pub fn join_copy(
     };
     // DEVIATE C13: with the joins between widths off, such a copy is as it
     // was before they existed: no pair, nothing below touches it.
-    if cp.is_partial() && !env.joins_sub_registers() {
+    if cp.is_partial() && !env.joins_sub_registers() && !joins_inside_wide_value(lis, &cp) {
         return JoinResult::Rejected;
     }
     if !env.should_coalesce(lis, copy, cp.src_reg(), cp.dst_reg()) {
@@ -605,10 +622,11 @@ fn re_materialize_def(
     }
     // DEVIATE C10: in a build for size the copy (2 bytes) becomes the move
     // (3 to 5) and pays for itself only where the source's own move goes.
-    if env.tuned_for_size() && lis.operands(src.value).len() > 2 {
+    let alone = lis.operands(src.value).len() <= 2;
+    if env.tuned_for_size() && !env.prices_remat() && !alone {
         return false;
     }
-    if !env.remat_wins(&def_insn, src.value, dst.value) {
+    if !env.remat_wins(&def_insn, src.value, dst.value, alone) {
         return false;
     }
     let block = lis.indexes.get_mbb_from_index(&at);

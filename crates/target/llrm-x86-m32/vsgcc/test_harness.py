@@ -32,7 +32,7 @@ def built(tmp_path_factory):
     previous = harness.OUT
     harness.OUT = work
     harness.record_stub(work)
-    for prog in ("scroll", "fib", "x_ll_div", "nbody"):
+    for prog in ("scroll", "fib", "x_ll_div", "nbody", "run_mul_constants"):
         done = subprocess.run([str(HERE / "build.sh"), prog], capture_output=True, text=True, env=env)
         assert done.returncode == 0 and "FAIL" not in done.stdout, (prog, done.stdout, done.stderr)
     yield work
@@ -64,6 +64,15 @@ def test_the_per_mnemonic_clocks_add_up_to_the_clocks_of_the_run(built):
     r = harness.run("fib", "gccO2")
     assert sum(clk for _, clk in r["by_op"].values()) + r["misaligned"] * harness.MISALIGNED == r["clocks"]
     assert sum(count for count, _ in r["by_op"].values()) == r["ins"]
+
+
+def test_a_tests_run_c_cell_yields_clocks(built):
+    """tests/run/c cells (mul_constants, div_constants_short, ...) have only `main`, so the harness found no kernel and the table had no
+    clocks for them; `run_NAME` now counts the cell's `main`, and its reports are the cell's `.out`."""
+    for v in ("llrm", "llrmOs", "gccO2", "clangO2"):
+        r = harness.run("run_mul_constants", v)
+        assert r["clocks"] > 0 and r["ins"] > 0, r
+        assert r["reports"] == [int(x) for x in (harness.REPO / "tests/run/c/mul_constants.out").read_text().split()]
 
 
 def test_kernel_inlined_into_main_is_not_counted_as_zero(built):
@@ -241,6 +250,39 @@ def test_data_bytes_counts_the_constants_gcc_keeps_in_rodata_not_only_text(tmp_p
     assert done.returncode == 0, done.stderr
     monkeypatch.setattr(harness, "OUT", tmp_path)
     assert harness.data_bytes("p", "gccO2") == 16
+
+
+def test_executed_alignment_nops_cost_their_clocks(tmp_path, monkeypatch):
+    """The harness counted an executed alignment `nop` apart and charged it nothing: x_matmul_f -O3 ran 1,604 of them (two builds, one
+    with the loop pad and one without, both read 67,696 clocks) while gcc, which pads with `lea esi,[esi]`, paid for its pad.
+    A 3-trip loop with two `nop`s a trip costs 6 `nop` clocks more than the same loop without, and runs the same instructions."""
+    import subprocess
+    import sys
+    sys.path.insert(0, str(harness.REPO / "tools"))
+    import linkrecipe
+    (tmp_path / "o").mkdir()
+    (tmp_path / "b").mkdir()
+    done = subprocess.run(["gcc", "-m32", "-c", str(HERE / "stub.s"), "-o", str(tmp_path / "stub.o")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    done = subprocess.run(["ld", "-m", linkrecipe.ld_emulation("x86-m32"), "-static", "-e", "0", "-Ttext=0x8000", "-o", str(tmp_path / "stub.elf"), str(tmp_path / "stub.o")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    monkeypatch.setattr(harness, "OUT", tmp_path)
+    harness.record_stub(tmp_path)
+
+    def run(prog, pad):
+        (tmp_path / f"{prog}.s").write_text(
+            f".text\n.globl main, bench_{prog}\nmain:\n call bench_{prog}\n ret\nbench_{prog}:\n mov $3,%ecx\n1:\n{pad} dec %ecx\n jnz 1b\n ret\n"
+        )
+        done = subprocess.run(["gcc", "-m32", "-c", str(tmp_path / f"{prog}.s"), "-o", str(tmp_path / f"{prog}.o")], capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        done = subprocess.run(["ld", "-m", linkrecipe.ld_emulation("x86-m32"), "-static", "-e", "0", "-Ttext=0x20000", "-o", str(tmp_path / "b" / f"{prog}.gccO2.elf"), str(tmp_path / f"{prog}.o")], capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        return harness.run(prog, "gccO2")
+
+    plain, padded = run("plain", ""), run("padded", " nop\n nop\n")
+    assert (plain["nops"], padded["nops"]) == (0, 6)
+    assert padded["ins"] == plain["ins"]
+    assert padded["clocks"] - plain["clocks"] == 6 * harness.clocks.clocks("nop")
 
 
 def test_code_bytes_leaves_out_alignment_padding(tmp_path, monkeypatch):

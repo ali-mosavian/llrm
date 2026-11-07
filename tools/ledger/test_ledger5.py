@@ -15,7 +15,7 @@ def buckets(path):
 def test_clangs_own_cost_is_its_own_bucket():
     """llrm-cc runs clang for parse and sema: its symbols (`clang::`, `llvm::`, source paths under
     clang/ and llvm/) were 'unattributed' or the shared leaves, so the board showed clang's cost as
-    nothing and the front end as llrm-c's."""
+    nothing and the front end as llrm-cc's."""
     got = buckets(CLANG)
     assert got["clang (llrm-cc front end)"] > 3.0, got
     assert "front end" not in got and "unattributed" not in got, got

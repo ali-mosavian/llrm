@@ -11,6 +11,7 @@
 //! strings (they name no operands after allocation). Reason: nothing else reads
 //! them yet. Exit: the MC printer.
 
+use llrm_codegen::backend::frameobjects::{Sorting, order_frame_objects};
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::livephys::PhysLiveness;
 use llrm_spike_mf::regalloc::Assignment;
@@ -132,7 +133,19 @@ impl Printer<'_> {
         &mut self,
         text: impl Into<String>,
     ) {
-        self.out.push(Line::Inst(text.into()));
+        let text = text.into();
+        // `ld r, a` then `ld a, r`: `a` still holds what `r` was just given and
+        // neither load touches the flags (an `and`/`or` chain on one byte went
+        // `ld c, a; ld a, c` between its steps). Registers only: a memory
+        // cell may be volatile. Not while pricing: the price at the speed
+        // levels is taken before the peepholes.
+        if let Some(from) = text.strip_prefix("ld a, ").filter(|from| from.len() == 1)
+            && matches!(self.out.last(), Some(Line::Inst(last)) if *last == format!("ld {from}, a"))
+            && !PRICING.with(|one| one.get())
+        {
+            return;
+        }
+        self.out.push(Line::Inst(text));
     }
 
     fn physical(
@@ -416,6 +429,15 @@ impl Printer<'_> {
             "SRA8" if shift_count(inst)? == 7 && name_of(self, 0)? == "a" => {
                 self.push("add a, a");
                 self.push("sbc a, a");
+            }
+            // the same in another register, through `a` where nothing reads
+            // it or the flags afterwards: 4 B against 14
+            "SRA8" if shift_count(inst)? == 7 && self.dead_after(reg::A, rest) && self.flags_dead(rest) => {
+                let to = name_of(self, 0)?;
+                self.push(format!("ld a, {to}"));
+                self.push("add a, a");
+                self.push("sbc a, a");
+                self.push(format!("ld {to}, a"));
             }
             "SHL8" | "SRL8" | "SRA8" => {
                 let to = name_of(self, 0)?;
@@ -1131,6 +1153,19 @@ impl Printer<'_> {
                 self.push(format!("ld a, {}", name(ah)));
                 self.push(format!("or a, {}", name(al)));
             }
+            // a constant with a zero byte: the other byte subtracted and the
+            // zero byte's partner or-ed in, `(lo ^ c) | hi` is zero only for
+            // equality (no scratch register for two nonzero bytes)
+            (false, true) if bh == "#0" && bl.starts_with('#') => {
+                self.push(format!("ld a, {}", name(al)));
+                self.push(format!("sub a, {bl}"));
+                self.push(format!("or a, {}", name(ah)));
+            }
+            (false, true) if bl == "#0" && bh.starts_with('#') => {
+                self.push(format!("ld a, {}", name(ah)));
+                self.push(format!("sub a, {bh}"));
+                self.push(format!("or a, {}", name(al)));
+            }
             // two pairs, one of them `hl`: `sbc hl, rr` sets zero for the whole
             // word (`add hl, rr` leaves it alone and puts `hl` back)
             (false, true)
@@ -1481,6 +1516,11 @@ fn shift_count(inst: &Inst) -> Result<i64, String> {
     }
 }
 
+/// Whether `function` with spill `slots` keeps an IX frame.
+pub(crate) fn needs_frame(function: &MFunction, slots: &[(i32, usize)]) -> bool {
+    layout(function, slots).active
+}
+
 /// The frame of `function`: its static allocas, then the spill `slots`.
 fn layout(
     function: &MFunction,
@@ -1501,16 +1541,30 @@ fn layout(
             frame.offsets.insert(index, -frame.size);
         }
     } else {
-        // The smallest objects lie nearest IX: `ld -n(ix), r` reaches 128 bytes
-        // below it, and past that every access is `ld iy, #n; add iy, sp`.
-        // Spill slots and scalars came after a local array and lay beyond its
-        // 8 KB (tests/run/c/fill_nest).
+        // The densest objects (most uses per byte) lie nearest IX, as the pin's
+        // `orderFrameObjects` lays a frame addressed from the frame pointer:
+        // `ld -n(ix), r` reaches 128 bytes below it, and past that every access
+        // is `ld iy, #n; add iy, sp`. Spill slots and scalars came after a local
+        // array and lay beyond its 8 KB (tests/run/c/fill_nest); by size alone a
+        // hot array lay beyond a cold smaller one (tests/frame_density.rs).
         let mut objects: Vec<(i32, i64)> = function.locals.iter().map(|&(index, size, _)| (index, size)).collect();
         objects.extend(slots.iter().map(|&(index, size)| (index, size as i64)));
         // A frame within IX's reach keeps its locals first and its slots last,
         // the last slot lying at SP (`pop` then `push` for a reload).
         if objects.iter().map(|&(_, size)| size).sum::<i64>() > 127 {
-            objects.sort_by_key(|&(_, size)| size);
+            let mut uses: llrm_support::hash::HashMap<i32, u64> = llrm_support::hash::HashMap::default();
+            for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+                for operand in &inst.operands {
+                    if let Operand::Frame(index) = operand {
+                        *uses.entry(*index).or_default() += 1;
+                    }
+                }
+            }
+            let sorting: Vec<_> = objects
+                .iter()
+                .map(|&(index, size)| Sorting { size: size as u64, align: 1, uses: uses.get(&index).copied().unwrap_or(0) })
+                .collect();
+            objects = order_frame_objects(&sorting, true).into_iter().map(|at| objects[at]).collect();
         }
         for (index, size) in objects {
             frame.size += size;
@@ -2049,46 +2103,168 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
     (bytes, clocks)
 }
 
-/// [`price`] with the clocks of an instruction counted eight times for each
-/// loop it is in, a loop being the lines from a label to a jump back to it:
-/// what two allocations of a loop are compared by.
-pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
-    let labels: llrm_support::hash::HashMap<&str, usize> = lines
+thread_local! {
+    /// The frequency of each block of the function being compiled, relative to
+    /// its entry, by block id: the pin's `BlockFrequencyInfo` of the IR
+    /// function (`Selection::frequencies`).
+    static FREQUENCIES: std::cell::RefCell<llrm_support::hash::HashMap<u32, f64>> = std::cell::RefCell::default();
+}
+
+/// Sets the block frequencies the prices of the function being compiled weigh by.
+pub fn set_frequencies(frequencies: &[(u32, f64)]) {
+    FREQUENCIES.with(|one| *one.borrow_mut() = frequencies.iter().copied().collect());
+}
+
+/// The block a label names (`L<function>_<block>`).
+fn block_of(label: &str) -> Option<u32> {
+    label.strip_prefix('L')?.rsplit_once('_')?.1.parse().ok()
+}
+
+/// Each line with its weight: the frequency of the block it is in. A block the
+/// passes made after selection (a `select`'s halves, a block split off or
+/// merged by branch folding, an edge split) has no frequency of its own: it
+/// takes what flows into it from the blocks that jump or fall to it. The pin
+/// keeps the machine blocks' frequencies in step with each split
+/// (`MachineBlockFrequencyInfo::onEdgeSplit`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBlockFrequencyInfo.cpp#L284>;
+/// `BranchFolder::SplitMBBAt`, `BranchFolding.cpp#L513`; a merged tail,
+/// `#L1283`). DEVIATE Z80-BLOCK-FLOW: the flow is worked out here from the
+/// jumps of the printed lines; a branch with one known side gives the other
+/// what is left, otherwise the sides split evenly (the pin's unweighted
+/// branch). Without it the block took the weight of the label before it, the
+/// arm of a diamond when the block is the join (pattern_fill -O1: the loop's
+/// join, 163 T a trip, priced at the arm's 240 for 384). Owner z80, exit
+/// 2026-11-20: the per-site updates above replace this reconstruction.
+pub fn weighted(
+    lines: &[Line],
+    frequencies: &llrm_support::hash::HashMap<u32, f64>,
+) -> Vec<(Line, f64)> {
+    // blocks: the entry (before the first label) and one per `L<fn>_<id>`
+    let mut starts = vec![0usize];
+    let mut ids: Vec<Option<u32>> = vec![None];
+    for (at, line) in lines.iter().enumerate() {
+        if let Line::Label(name) = line {
+            if let Some(id) = block_of(name) {
+                starts.push(at);
+                ids.push(Some(id));
+            }
+        }
+    }
+    let count = starts.len();
+    let end = |block: usize| starts.get(block + 1).copied().unwrap_or(lines.len());
+    let index_of: llrm_support::hash::HashMap<u32, usize> =
+        ids.iter().enumerate().filter_map(|(block, id)| id.map(|id| (id, block))).collect();
+    // successors of each block: the global labels it jumps to, and the next
+    // block when it can fall through
+    let mut succs: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for block in 0..count {
+        let mut falls = true;
+        for line in &lines[starts[block]..end(block)] {
+            let Line::Inst(text) = line else { continue };
+            let (mnemonic, rest) = text.split_once(' ').unwrap_or((text.as_str(), ""));
+            let target = rest.rsplit(',').next().unwrap_or("").trim();
+            falls = true;
+            match mnemonic {
+                "jp" | "jr" | "djnz" => {
+                    let conditional = rest.contains(',') || mnemonic == "djnz";
+                    if let Some(&to) = block_of(target).and_then(|id| index_of.get(&id)) {
+                        if !succs[block].contains(&to) {
+                            succs[block].push(to);
+                        }
+                    }
+                    if !conditional {
+                        falls = false;
+                    }
+                }
+                "ret" if rest.is_empty() => falls = false,
+                "halt" => falls = false,
+                _ => {}
+            }
+        }
+        if falls && block + 1 < count && !succs[block].contains(&(block + 1)) {
+            succs[block].push(block + 1);
+        }
+    }
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (block, to) in succs.iter().enumerate() {
+        for &s in to {
+            preds[s].push(block);
+        }
+    }
+    let known: Vec<Option<f64>> = ids
         .iter()
         .enumerate()
-        .filter_map(|(at, line)| match line {
-            Line::Label(label) => Some((label.as_str(), at)),
-            _ => None,
-        })
+        .map(|(block, id)| if block == 0 { Some(1.0) } else { id.and_then(|id| frequencies.get(&id).copied()) })
         .collect();
-    // one loop per head, reaching to its farthest jump back: a loop with two
-    // jumps back to its head (a `continue`) is one loop, not two nested ones
-    let mut reach = std::collections::BTreeMap::<usize, usize>::new();
-    for (at, line) in lines.iter().enumerate() {
-        let Line::Inst(text) = line else { continue };
-        let mut words = text.split([' ', ',']).filter(|word| !word.is_empty());
-        if !matches!(words.next(), Some("jr" | "jp" | "djnz")) {
-            continue;
-        }
-        if let Some(&head) = words.last().and_then(|target| labels.get(target)).filter(|&&head| head <= at) {
-            let end = reach.entry(head).or_insert(at);
-            *end = (*end).max(at);
+    let mut freq: Vec<f64> = known.iter().map(|one| one.unwrap_or(0.0)).collect();
+    for _ in 0..4 {
+        for u in 0..count {
+            if known[u].is_some() {
+                continue;
+            }
+            let mut total = 0.0;
+            for &p in &preds[u] {
+                let sides = &succs[p];
+                total += if sides.len() == 1 {
+                    freq[p]
+                } else {
+                    // a side that is known and entered only from here takes its own
+                    // frequency; the rest of the block's is shared by the others
+                    let (mut taken, mut open) = (0.0, 0usize);
+                    for &s in sides {
+                        if known[s].is_some() && preds[s].len() == 1 {
+                            taken += freq[s];
+                        } else {
+                            open += 1;
+                        }
+                    }
+                    let share = (freq[p] - taken).max(0.0) / open.max(1) as f64;
+                    share
+                };
+            }
+            // no way in (unreachable, or only a back edge not yet worked out):
+            // the block before it
+            freq[u] = if preds[u].is_empty() { freq[u - 1] } else { total };
         }
     }
-    let mut depth = vec![0u32; lines.len()];
-    for (head, end) in reach {
-        for one in &mut depth[head..=end] {
-            *one += 1;
-        }
-    }
-    let (mut bytes, mut clocks) = (0, 0u64);
+    let mut out = Vec::with_capacity(lines.len());
+    let mut block = 0;
     for (at, line) in lines.iter().enumerate() {
+        while block + 1 < count && starts[block + 1] <= at {
+            block += 1;
+        }
+        out.push((line.clone(), freq[block]));
+    }
+    out
+}
+
+/// [`price_emitted`]'s measure: bytes, and the clocks of each instruction times
+/// the frequency of its block (the entry's is 1), what two variants of one
+/// function are compared by. DEVIATE Z80-BLOCK-WEIGHT: the pin's frequencies
+/// are of the IR; the machine blocks of this stage take them by block id.
+/// Owner z80, exit 2026-11-20: `MachineBlockFrequencyInfo` over the machine function.
+pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
+    let frequencies = FREQUENCIES.with(|one| one.borrow().clone());
+    let (mut bytes, mut clocks) = (0, 0.0);
+    for (line, weight) in weighted(lines, &frequencies) {
         let Line::Inst(text) = line else { continue };
-        let cost = table_cost(&form(text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
+        let cost = table_cost(&form(&text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
         bytes += cost.0;
-        clocks += u64::from(cost.1) * 8u64.pow(depth[at].min(3));
+        clocks += f64::from(cost.1) * weight;
     }
-    (bytes, clocks)
+    (bytes, clocks.round() as u64)
+}
+
+/// [`price_in_loops`] of the lines as emitted: after branch relaxation, which
+/// fuses `dec b; jr nz` into `djnz` (2 B, 13 T for 3 B, 16 T) only with the
+/// counter in `b`. Priced before it, a counter in `c` cost the same as one in
+/// `b`, and the pick took the allocation 3 T a trip slower (byval_struct -O1:
+/// +83 T for -1 B).
+pub fn price_emitted(
+    lines: &[Line],
+    speed: bool,
+) -> (u32, u64) {
+    price_in_loops(&relax(lines.to_vec(), speed))
 }
 
 /// The bytes of one printed line, jumps being the three-byte form.
@@ -2298,16 +2474,26 @@ fn tail_calls(function: &MFunction) -> MFunction {
     if escapes {
         return function;
     }
-    for block in &mut function.blocks {
+    // a block that ends in a call and falls into a block of only `ret` returns
+    // as the call does: the shared return stands where its own `ret` did
+    let falls_into_return: Vec<bool> = (0..function.blocks.len())
+        .map(|at| {
+            function.blocks.get(at + 1).is_some_and(|next| matches!(&next.insts[..], [one] if one.kind == Kind::Op("RET")))
+        })
+        .collect();
+    for (index, block) in function.blocks.iter_mut().enumerate() {
         let insts = &block.insts;
         let n = insts.len();
         let bare_adjust = |inst: &Inst| {
             matches!(inst.kind, Kind::Op("ADJCALLSTACKUP")) && matches!(inst.operands.first(), Some(Operand::Imm(0)))
         };
-        if n >= 2 && insts[n - 1].kind == Kind::Op("RET") {
-            let at = if bare_adjust(&insts[n - 2]) { n - 3 } else { n - 2 };
-            if n >= 2 && at < n && insts[at].call && insts[at].kind == Kind::Op("CALL") && (at == n - 2 || at == n - 3)
-            {
+        let returns = n >= 1 && insts[n - 1].kind == Kind::Op("RET");
+        // the end as it would stand with the `ret` the next block holds
+        let falls = !returns && n >= 1 && falls_into_return[index] && (bare_adjust(&insts[n - 1]) || insts[n - 1].call);
+        let end = n + usize::from(falls);
+        if end >= 2 && (returns || falls) {
+            let at = if bare_adjust(&insts[end - 2]) { end - 3 } else { end - 2 };
+            if at < n && insts[at].call && insts[at].kind == Kind::Op("CALL") && (at == end - 2 || at == end - 3) {
                 let symbol = insts[at].operands.first().cloned();
                 if let Some(symbol @ Operand::Symbol(..)) = symbol {
                     // the call's argument registers stay read: the copies that

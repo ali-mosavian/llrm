@@ -38,8 +38,8 @@ def grown(before: str, after: str) -> list[tuple[str, int, int, str]]:
 
 
 def header(shas: list[str], llcs: list[Path]) -> list[str]:
-    """What produced the numbers: the pindiff path is llrm-llc on clang's un-optimised IR, not the product's llrm-c, and a row from it is not the product's."""
-    lines = ["# instrument: llrm-llc via pindiff (clang IR, no passes; ours = llrm-llc's own pipeline, pin = its opt + llc), NOT llrm-c: a row here is not the product path's"]
+    """What produced the numbers: the pindiff path is llrm-llc on clang's un-optimised IR, not the product's llrm-cc, and a row from it is not the product's."""
+    lines = ["# instrument: llrm-llc via pindiff (clang IR, no passes; ours = llrm-llc's own pipeline, pin = its opt + llc), NOT llrm-cc: a row here is not the product path's"]
     for side, (sha, llc) in zip(("before", "after"), zip(shas, llcs)):
         lines.append(f"# {side}: {sha} llrm-llc md5 {hashlib.md5(llc.read_bytes()).hexdigest()[:12]}")
     return lines

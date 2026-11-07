@@ -57,11 +57,11 @@ pub fn select_cmp_of_and<D: AddrDag>(
     let mask = mask as u64 & (u64::MAX >> (64 - cmp_bits));
 
     let flags = SDValue::new(node, 0);
-    if cmp_vt == mvt::i64
+    if (cmp_vt == mvt::i64 || cmp_vt == mvt::i32)
         && !(-128..=127).contains(&(mask as i64))
         && is_shifted_mask_64(mask)
         && hooks.only_uses_zero_flag(dag, flags)
-        && select_shifted_mask(dag, node, n0.node, mask)
+        && select_shifted_mask(dag, node, n0.node, mask, cmp_vt)
     {
         return true;
     }
@@ -123,39 +123,55 @@ fn is_shifted_mask_64(mask: u64) -> bool {
 
 /// The `CmpVT == MVT::i64` block of the pin's `X86ISD::CMP` case: `and` is
 /// `(and x, mask)` with `mask` a shifted mask that is not an `imm8`.
+///
+/// DEVIATE TS1 (owner greedy-subreg, exit 2026-11-14): the same two arms for an
+/// `i32` compare. The pin stops at `i64` because only there does the mask need
+/// a `movabs`; at `i32` a `test r32, imm32` is 6 bytes where the `shl`/`shr`/
+/// `add` is 2 or 3, and the pin's own `SavesBytes` rule (one use of `x`) is the
+/// guard. After `foldICmpShlConstant` (#7837) `(x << k) == 0` reaches the
+/// selector as `(x & mask) == 0` and costs 3 bytes per site against the old
+/// `shl` (f32 trunc/cmp, f64 add_sub at m32/m64).
 fn select_shifted_mask<D: AddrDag>(
     dag: &mut D,
     node: u32,
     and: u32,
     mask: u64,
+    cmp_vt: crate::matcher::Vt,
 ) -> bool {
-    let (leading, trailing) = (mask.leading_zeros(), mask.trailing_zeros());
+    let wide = cmp_vt == mvt::i64;
+    let (leading, trailing) =
+        (mask.leading_zeros() - if wide { 0 } else { 32 }, mask.trailing_zeros());
     let x = dag.operand(and, 0);
-    let fits_i32 = i32::try_from(mask as i64).is_ok();
+    let fits_i32 = !wide || i32::try_from(mask as i64).is_ok();
     // Profitable if it drops a movabs or shrinks a 32-bit immediate to 8 bits
     // without an extra register move.
     let saves_bytes = !fits_i32 || dag.node_has_one_use(x.node);
     let flags = SDValue::new(node, 0);
     let shift = |dag: &mut D, opcode: u16, amount: u32| {
-        let amount = dag.target_constant(i64::from(amount), mvt::i64);
-        SDValue::new(dag.machine_node(opcode, &[mvt::i64, mvt::i32], &[x, amount]), 0)
+        let amount = dag.target_constant(i64::from(amount), cmp_vt);
+        SDValue::new(dag.machine_node(opcode, &[cmp_vt, mvt::i32], &[x, amount]), 0)
+    };
+    let (shr, shl, add, test_rr) = if wide {
+        (x86::SHR64ri, x86::SHL64ri, x86::ADD64rr, x86::TEST64rr)
+    } else {
+        (x86::SHR32ri, x86::SHL32ri, x86::ADD32rr, x86::TEST32rr)
     };
     let (shifted, test, sub) = if leading == 0 && saves_bytes {
         // The mask covers the sign bit: a SHR and the flags of the test.
-        (shift(dag, x86::SHR64ri, trailing), x86::TEST64rr, None)
+        (shift(dag, shr, trailing), test_rr, None)
     } else if trailing == 0 && saves_bytes {
         if leading == 1 {
             // Doubling is the same length as the shift, sets ZF identically
             // and the peephole folds the test into it.
-            let add = dag.machine_node(x86::ADD64rr, &[mvt::i64, mvt::i32], &[x, x]);
-            let add = SDValue::new(add, 0);
-            let test = dag.machine_node(x86::TEST64rr, &[mvt::i32], &[add, add]);
+            let sum = dag.machine_node(add, &[cmp_vt, mvt::i32], &[x, x]);
+            let sum = SDValue::new(sum, 0);
+            let test = dag.machine_node(test_rr, &[mvt::i32], &[sum, sum]);
             dag.replace_uses(flags, SDValue::new(test, 0));
             dag.remove_dead_node(node);
             return true;
         }
-        (shift(dag, x86::SHL64ri, leading), x86::TEST64rr, None)
-    } else if dag.node_has_one_use(dag.operand(and, 1).node) && !fits_i32 {
+        (shift(dag, shl, leading), test_rr, None)
+    } else if wide && dag.node_has_one_use(dag.operand(and, 1).node) && !fits_i32 {
         // The run reaches into the high half and is 8, 16 or 32 bits wide.
         match 64 - leading - trailing {
             8 => (shift(dag, x86::SHR64ri, trailing), x86::TEST8rr, Some((x86::sub_8bit, mvt::i8))),

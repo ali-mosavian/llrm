@@ -61,7 +61,7 @@ class GateTests(unittest.TestCase):
 
 class LinkTests(unittest.TestCase):
     def test_a_nib_benchmark_links_the_files_its_link_header_names_resolved(self):
-        """`link: @c-runtime` went to nib-build.sh as a file name (llrm-c: wccq failed on .../@c-runtime) for parity and scalar."""
+        """`link: @c-runtime` went to nib-build.sh as a file name (llrm-cc: wccq failed on .../@c-runtime) for parity and scalar."""
         extras = bench.nib_extras(bench.ROOT / "bench/parity/parity/parity.nib")
         self.assertEqual(extras, [str(bench.ROOT / "runtime/c/x86-m16/ext.asm")])
 
@@ -520,7 +520,7 @@ def test_reference_builds_find_bench_io_in_the_volume_root(tmp_path):
 
 
 def test_a_c_benches_os_layer_header_is_the_rows_not_a_stale_one(tmp_path):
-    """A `-I` for llrm-c's llrm_os.h shadowed llrm-cc's: jpeg and stft (the file readers) built, then printed 0 and -1 (a failed open)."""
+    """A `-I` for llrm-cc's llrm_os.h shadowed llrm-cc's: jpeg and stft (the file readers) built, then printed 0 and -1 (a failed open)."""
     if not (bench.BIN / "llrm-cc").is_file():
         pytest.skip("no llrm-cc in the dist")
     variant = next(one for one in bench.variants(bench.BENCH / "stft_fixed") if one.language == "c")
@@ -1085,7 +1085,7 @@ def test_the_parity_kernels_that_folded_to_a_constant_read_their_inputs_at_run_t
 
 
 def test_a_c_bench_row_builds_and_links(tmp_path):
-    """llrm-c built C benches that dosbatch then linked for llrm-cc's `main_` (6524193a71): all 48 `c` rows failed with `main_` undefined in start.asm."""
+    """llrm-cc built C benches that dosbatch then linked for llrm-cc's `main_` (6524193a71): all 48 `c` rows failed with `main_` undefined in start.asm."""
     if not (bench.BIN / "llrm-cc").is_file():
         pytest.skip("no llrm-cc in the dist")
     variant = next(one for one in bench.variants(bench.BENCH / "bintree") if one.language == "c")
@@ -1477,3 +1477,30 @@ def test_watcom_links_error086_when_the_library_has_no_doserror(tmp_path, monkey
     built = bench.build_watcom(variant, "O2", work, "F000")
     assert not isinstance(built, str), built
     assert str(obj) not in links[0] and str(obj) in links[1]
+
+
+def test_references_skip_levels_they_are_not_built_at(tmp_path, monkeypatch):
+    """`bench.py --opt O1 O2 O3 Os --references` raised KeyError 'O1' in build_borland after 35 minutes and lost the whole run's JSON."""
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "C0M.OBJ").write_bytes(b"")
+    asked = []
+    monkeypatch.setattr(bench, "BORLAND", {"bcc": (tmp_path, "bcc", {"O1": "-O1", "O2": "", "Os": "-O1"})})
+    monkeypatch.setattr(bench, "reference_programs", lambda selected: [])
+    monkeypatch.setattr(bench, "with_startup", lambda selected, timing: selected)
+    monkeypatch.setattr(bench, "build_borland", lambda language, variants, opt, folder: asked.append(opt) or {})
+    monkeypatch.setattr(bench, "BASIC_REFERENCES", {})
+    bench.measure_references([], ["O1", "O2", "O3", "Os"], tmp_path)
+    assert asked == ["O1", "O2", "Os"]
+
+
+def test_a_timed_out_borland_job_says_so_not_no_object(tmp_path, monkeypatch):
+    """bcc -Os read "bcc: no object" for all 31 programs: the one DOSBox job outlived run_limited's wall limit (the guard had stopped it), its "timed out" text was dropped."""
+    home = tmp_path / "home"
+    (home / "lib").mkdir(parents=True)
+    source = tmp_path / "p.c"
+    source.write_bytes(b"int main(void){return 0;}\n")
+    monkeypatch.setattr(bench, "BORLAND", {"bcc": (home, "bcc", {"Os": "-O1"})})
+    monkeypatch.setattr(bench.native, "run_limited", lambda command, **kwargs: "timed out after 1800 s: bcc.sh")
+    monkeypatch.setattr(bench.dosbatch, "c_support", lambda mode, folder: [])
+    built = bench.build_borland("bcc", [(types.SimpleNamespace(source=source), "R000")], "Os", tmp_path / "work")
+    assert built["R000"].startswith("bcc: timed out after 1800 s"), built

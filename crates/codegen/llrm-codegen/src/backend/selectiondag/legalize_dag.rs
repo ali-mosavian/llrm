@@ -466,7 +466,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::SDiv | ISD::SRem => (true, 2),
             ISD::UDiv | ISD::URem | ISD::Mul => (false, 2),
             // `ExpandFPLibCall`: every operand, none signed.
-            ISD::FRem => (false, 2),
+            ISD::FRem | ISD::FAdd | ISD::FSub | ISD::FMul | ISD::FDiv => (false, 2),
             ISD::FSin
             | ISD::FCos
             | ISD::FAtan
@@ -1267,6 +1267,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let pointer = self.dag.config().pointer;
         let index = self.dag.get_constant_pool(pointer, pool_bits, pool_vt, false);
         let align = match pool_vt {
+            EVT::Simple(MVT::F128) => 16,
             EVT::Simple(MVT::F64) => 8,
             _ => 4,
         };
@@ -1290,6 +1291,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         } else {
             self.dag.get_ext_load(super::actions::LoadExt::ExtLoad, vt, chain, index, info)
         };
+        // The pool is read-only memory (`PseudoSourceValue::isConstant`):
+        // `isDereferenceableInvariantLoad`.
+        self.dag.invariant_loads.insert(loaded.node);
         self.replace_node(node, loaded);
         Ok(())
     }

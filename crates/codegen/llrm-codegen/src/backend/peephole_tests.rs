@@ -1416,6 +1416,49 @@ fn test_stores_of_one_literal_share_a_dead_register_when_that_is_fewer_bytes() {
     }
 }
 
+/// jpeg_fixed -Os x86_64 kept three zero stores as `mov qword ptr [rsp+N],0` (9
+/// bytes each, 27) where one `xor` and three register stores take 17: the run
+/// took no qword store, +42 bytes once the coalescer stopped sharing the zero.
+#[test]
+fn test_qword_zero_stores_share_a_dead_register_in_long_mode() {
+    let size = crate::backend::cpu::tuned("486", true).unwrap();
+    let classes = crate::backend::classes::RegisterClasses::of(&llrm_x86_m64::M64);
+    let store = |at: i64, width: u32, disp: i64| {
+        let cell = Loc::Mem(Mem { through: RegId::RSP, ..Mem::new(frame(disp), width) });
+        Arc::new(insn(
+            at,
+            Some((at, at + 1)),
+            Some(sem(Operation::Move, "mov", vec![cell], vec![im(0, width)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let stores = vec![store(0, 8, 8), store(1, 4, 16), store(2, 8, 24)];
+    // everything after is live unless written first: the scratch registers are
+    // written whole
+    let after: Vec<Arc<Insn>> = [RegId::RAX, RegId::RBX, RegId::RCX, RegId::RDX]
+        .into_iter()
+        .enumerate()
+        .map(|(at, register)| {
+            let what = sem(Operation::Move, "mov", vec![rl(register, 8)], vec![im(1, 8)]);
+            Arc::new(insn(20 + at as i64, Some((20 + at as i64, 21 + at as i64)), Some(what), vec![], vec![]))
+        })
+        .collect();
+    let mut input = body("stores", 0, vec![block(0, stores.into_iter().chain(after).collect(), vec![]).into()]);
+    input.bits = 64;
+    input.registers = Some(classes.registers);
+
+    let result = sharedstores::shared(&input, size, &[], &classes);
+
+    // the flags are live at the end of the body, so the zero is a `mov`; what
+    // matters is that the stores read the register
+    let whats: Vec<&Semantics> = result.blocks[0].insns[..4].iter().map(|one| one.what.as_ref().unwrap()).collect();
+    assert!(matches!(whats[0].dests[..], [Loc::Reg(_)]), "{whats:?}");
+    for store in &whats[1..] {
+        assert!(matches!((&store.dests[..], &store.sources[..]), ([Loc::Mem(_)], [Loc::Reg(_)])), "{store:?}");
+    }
+}
+
 /// Which scratch register a run may take is the convention's fact
 /// (`Target::callee_saved`): where it preserves BX, a run takes BX only if the
 /// body already names it (so its epilogue saves it), else it would push and pop
@@ -3826,7 +3869,7 @@ fn steps(done: &LirBody) -> Vec<(String, Vec<Loc>)> {
 
 /// X86FixupLEAs `optLEAALU`: `lea ecx,[eax+edx]; add ebx,ecx` is `add ebx,eax;
 /// add ebx,edx`, and a subtract the same two steps. Without the case the
-/// six-term sums of two llrm-c listings kept the `lea`/`mov` pair and ended
+/// six-term sums of two llrm-cc listings kept the `lea`/`mov` pair and ended
 /// `mov eax, edx`.
 #[test]
 fn test_an_lea_read_once_by_an_add_or_sub_is_two_steps_on_its_destination() {
@@ -5528,9 +5571,9 @@ fn store_then_reload(between: Vec<Insn>) -> usize {
 }
 
 /// nbody -O3 at m64: `movsd [rsp-0x20], xmm13 ; movsd xmm13, [rsp-0x20]` stood
-/// in the loop four times a trip (800 of 27.6k instructions); the pin's code has
-/// no such pair, and the rule that drops it knew `mov` and nothing wider than a
-/// dword.
+/// in the loop four times a trip (800 of 27.6k instructions); the pin's code
+/// has no such pair, and the rule that drops it knew `mov` and nothing wider
+/// than a dword.
 #[test]
 fn test_a_float_reload_of_the_register_that_filled_the_cell_is_dropped_at_m64() {
     let cell = || Loc::Mem(mem(frame(-16), 8, RegId::RSP, -16, 1));

@@ -64,6 +64,14 @@ pub enum Op {
         /// The labels of the blocks the entries go to; the table's successors.
         targets: Vec<String>,
     },
+    /// `DBG_VALUE`: from here on the source variable `variable` is the value
+    /// in `reg` (`llvm.dbg.value`); none once nothing keeps the value. It is
+    /// no code and no use: liveness, allocation and every pass that looks at
+    /// neighbouring operations step over it, and the allocator renames it.
+    DbgValue {
+        variable: llrm_mir::MetadataId,
+        reg: Option<Reg>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -110,7 +118,14 @@ impl Op {
                     visit_reg(register, Role::Use, f);
                 }
             }
+            // Not a use: the allocator renames it by hand (`regalloc::rewrite`).
+            Op::DbgValue { .. } => {}
         }
+    }
+
+    /// Whether the operation is debug information only (`MachineInstr::isDebugInstr`).
+    pub fn is_debug(&self) -> bool {
+        matches!(self, Op::DbgValue { .. })
     }
 
     pub fn defs_and_uses(&self) -> (Vec<Reg>, Vec<Reg>) {
@@ -344,6 +359,9 @@ pub struct MFunc {
     pub slots: Vec<Slot>,
     /// The next virtual register number, of either class.
     pub next_register: u32,
+    /// Float registers the selector knows hold 128 bits (`f128` values), for
+    /// the allocator to spill and copy whole.
+    pub wide: Vec<Reg>,
     /// The most bytes of outgoing arguments any call passes on the stack.
     pub outgoing: u64,
     /// Whether the function calls another (it saves the link register).
@@ -368,6 +386,9 @@ pub struct MFunc {
     /// when the selector kept none.
     pub block_ids: Vec<u32>,
     pub edge_probs: Vec<(u32, u32, u32)>,
+    /// The IR's edge odds the allocator reads (`MachineBranchProbabilityInfo`);
+    /// set just before allocation.
+    pub alloc_odds: Option<llrm_spike_mf::placement::Odds>,
 }
 
 /// A constant pool entry: `bytes` at `align`, under `label`.

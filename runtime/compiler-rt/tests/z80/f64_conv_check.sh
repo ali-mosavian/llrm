@@ -8,7 +8,7 @@ DL="e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"; INC="-include $R/config/z
 cc() { $P --target=msp430 -O2 -Xclang -disable-llvm-passes -ffreestanding -I$R/include $INC -S -emit-llvm $1 -o $2.raw.ll
   sed -E "s|^target datalayout = .*|target datalayout = \"$DL\"|; /^target triple/d" $2.raw.ll > $2.ll; $LLC -S -Os -o $2.s $2.ll; sed -i 's/___/__/g' $2.s; sdasz80 -g -o $2.rel $2.s; }
 mkdir lib; for m in float fix_si fix_usi fix_di fix_udi pack; do cc $R/lib/fp/f64/$m.c lib/f64_$m; done; for m in float_si float_di fix_si fix_di pack; do cc $R/lib/fp/f32/$m.c lib/f32_$m; done; cc $R/lib/int/clzsi2.c lib/clzsi2
-cp $R/../../crates/target/llrm-z80/runtime/z80_rt.s . ; sdasz80 -g -o lib/zrt.rel z80_rt.s; sdasz80 -g -o lib/int32.rel $R/config/z80/int32.s
+cp $R/../../crates/target/llrm-z80/runtime/z80_rt.s . ; sdasz80 -g -o lib/zrt.rel z80_rt.s; sdasz80 -g -o lib/int32.rel $R/config/z80/int32.s; sdasz80 -g -o lib/umulhisi3.rel $R/config/z80/umulhisi3.s
 ls lib/*.rel | xargs -n1 basename | sed 's/\.rel$//' | sort -r > lib/sf.lib
 cc $R/tests/z80/f64_conv_drv.c drv
 printf '\t.module crt0\n\t.globl _main\n\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n\tcall _main\n\thalt\n\t.area _CODE\n\t.area _DATA\n' > crt0.s; sdasz80 -o crt0.rel crt0.s

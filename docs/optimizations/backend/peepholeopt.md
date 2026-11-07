@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/peepholeopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/peepholeopt.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/peepholeopt.rs sha256:a09eec762e61c4698170c71e3fde192f098a35f8ff98d709d1d4a24932ed268f -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/peepholeopt.rs sha256:7eb3ece430f246fd3ad2c6f0a724997da70ab30ba7d7f2f0ca36833b64c82f2b -->
 
 # peepholeopt
 
@@ -43,8 +43,10 @@ never CF. The flags must not live out of the block.
 Not translated: a compare redundant with another compare or subtract
 (`isRedundantFlagInstr`, `IsSwapped`, `ImmDelta`), `isUseDefConvertible`
 (`popcnt`), `adc`/`sbb`/`shld`/`shrd`/`lzcnt`/`tzcnt` and the BMI group as
-the flag source, the backward scan into a single predecessor, `MOV32r0`
-motion and the NF variants (APX).
+the flag source, the backward scan into a single predecessor and the NF
+variants (APX). A zero (`MOV32r0`) between the source and the compare moves
+above the source ([L5640](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L5640)),
+so it can be an `xor`.
 
 ## Example
 A subtract whose result nothing reads, ahead of a branch on the flags:

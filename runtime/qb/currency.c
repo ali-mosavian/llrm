@@ -112,6 +112,6 @@ long long *B_FCVC(SD *sd)
     if (sd->len < 8)
         qb_error(BE_ILLFUN);
     copy_bytes((char *)&value, sd->ptr, 8);
-    str_tmp_free(sd);
+    str_free_if_tmp(sd);
     return &value;
 }

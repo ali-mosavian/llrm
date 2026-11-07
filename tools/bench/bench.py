@@ -58,7 +58,7 @@ from dosbatch import BIN, ROOT, Job  # noqa: E402
 os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
 
 def physical_defines() -> list[str]:
-    """`-DPHYSICAL_<NAME>=0x..UL` for each physical address the platform description names, as llrm-c passes them: the
+    """`-DPHYSICAL_<NAME>=0x..UL` for each physical address the platform description names, as llrm-cc passes them: the
     reference compilers build the same program, which reads them (bench/textfill)."""
     text = (ROOT / "crates/target/llrm-x86/platform.toml").read_text()
     return [f"-DPHYSICAL_{name.upper()}=0x{address:X}UL" for name, address in tomllib.loads(text)["physical"].items()]
@@ -99,11 +99,12 @@ BCC = Path(os.environ.get("TOOLCHAINS", Path.home() / "work/other/d32x/toolchain
 TURBO = Path(os.environ.get("TURBO", Path.home() / "scratch/toolchains"))
 # Borland-family references: language -> (toolchain folder, compiler, switches per level). All medium model, 8087,
 # linked with the toolchain's own C0M, CM, FP87 and MATHM. BCC's switches (-3 -Ox, -O1) are added by bcc.sh.
+REFERENCE_OPTS = ("O1", "O2", "Os")  # the levels the reference compilers are built at (BORLAND's level maps, build_watcom's flags); O1 is their size level, the nearest to a light -O1: none has a separate one
 BORLAND = {
-    "bcc": (BCC, "bcc", {"O2": "", "Os": "-O1"}),
+    "bcc": (BCC, "bcc", {"O1": "-O1", "O2": "", "Os": "-O1"}),
     # TC 2.01: -G speed, -O jumps, -Z registers; `huge` is its spelling of __huge
-    "tc": (TURBO / "tc201", "tcc", {"O2": "-G -O -Z -r -1 -D__huge=huge", "Os": "-O -Z -r -1 -D__huge=huge"}),
-    "tcpp": (TURBO / "tcpp30", "tcc", {"O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
+    "tc": (TURBO / "tc201", "tcc", {"O1": "-O -Z -r -1 -D__huge=huge", "O2": "-G -O -Z -r -1 -D__huge=huge", "Os": "-O -Z -r -1 -D__huge=huge"}),
+    "tcpp": (TURBO / "tcpp30", "tcc", {"O1": "-2 -O -Z -r", "O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
 }
 STARTUP = Path(__file__).with_name("startup")  # an empty kernel per language: what a toolchain's start-up costs
 REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos"), "bq16": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
@@ -376,11 +377,11 @@ def references_available() -> bool:
 
 
 def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path] | str:
-    """Open Watcom, medium model, cdecl as llrm-c calls, no stack checks, inline 8087: tools/loops' reference build.
+    """Open Watcom, medium model, cdecl as llrm-cc calls, no stack checks, inline 8087: tools/loops' reference build.
     Linked with Watcom's own start-up, CLIBM and MATH87M (NOEMU87: no emulator, as BCC's FP87). Only `report` comes
     from the corpus's ext.asm."""
     obj, exe, listing = work / f"{stem}.obj", work / f"{stem}.exe", work / f"{stem}.map"
-    flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-c compiles it
+    flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-cc compiles it
     done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True, timeout=native.COMPILE_SECONDS)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
@@ -462,15 +463,15 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
             header = folder / "bench_io.h"
             if header.exists():
                 header.write_bytes(header.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
-    native.run_limited([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
-                   env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, seconds=1800)
+    ran = native.run_limited([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
+                   env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, seconds=int(os.environ.get("LLRM_BORLAND_SECONDS", "1800")))
     support = [word for one in dosbatch.c_support(dosbatch.REAL_MODE, folder) for word in ("file", str(one))]
     out: dict[str, tuple[Path, Path] | str] = {}
     for _, stem in variants_:
         obj, exe, listing = folder / f"{stem}.OBJ", folder / f"{stem}.exe", folder / f"{stem}.map"
         if not obj.exists():
             message = folder / f"{stem}.MSG"
-            out[stem] = f"{compiler}: " + (message.read_text(errors="replace").strip()[-200:] if message.exists() else "no object")
+            out[stem] = f"{compiler}: " + (message.read_text(errors="replace").strip()[-200:] if message.exists() else ran if isinstance(ran, str) else "no object")  # a timed-out job said "no object" for all 31 programs of bcc -Os
             continue
         lib = home / "lib"
         try:
@@ -503,6 +504,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
     """The reference compilers on the same programs: Open Watcom and BCC 3.1 for C (languages `ow`, `bcc`, at each level)
     and QuickBASIC 4.5's BC for BASIC (language `bc`, one level: /O). With --time each also gets its kernel time."""
     out: dict[tuple[str, str, str], dict] = {}
+    opts = [opt for opt in opts if opt in REFERENCE_OPTS]  # a reference has no O3: `--opt O1 O3` raised KeyError after 35 minutes and dropped the run's JSON
     folder = work / "reference"
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
@@ -623,7 +625,7 @@ START = time.monotonic()
 
 def workers() -> int:
     """Pool size: the guard's base slot count, so a bench run takes no more cores than one admitted job (a storm of 32 workers starved the others)."""
-    return max(1, int(os.environ.get("LG_SLOTS") or 3))
+    return cpulimit.pool_workers()
 
 
 def guarded_argv() -> list[str] | None:

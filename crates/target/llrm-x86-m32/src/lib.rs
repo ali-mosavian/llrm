@@ -82,12 +82,62 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // DEVIATE SZ4 (owner x86-m32, exit 2026-11-27): -Os copies a loop header of
+        // at most 4 instructions, not the pin's 16 (the copy is a compare and a
+        // branch, more than the jump rotation removes). m32 -Os kernels (73): x_hash -29 B,
+        // x_rle -8 B, none larger; limits 1..3 grow x_insertion/x_jpeg_single, 1 grows 60 cells.
+        size_rotation_header_limit: Some(4),
+        // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27, with `unroll_at_o1`): at -O1
+        // a full unroll is made only where its simulated cost does not exceed the rolled loop's
+        // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.
+        unroll_never_grows_at_o1: true,
+        // DEVIATE UNROLL-O1A (owner w9, exit 2026-11-27, with UNROLL-O1): the -O1 rule analyses the
+        // folds of up to 16 trips, gcc's `max-completely-peel-times`, not the pin's 10 (a 16-trip loop
+        // over a constant table folds to nothing and stayed rolled: 64 -> 158 B).
+        unroll_o1_analyzed_trips: Some(16),
+        // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
+        // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
+        // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
+        imul_at_size: true,
         x87_stack_slots: Some(8),
+        x87_share_negated_products: true,
+        unroll_promotion_fits_x87_stack: true,
+        lsr_size_order: true,
+        narrow_divide_live_limit: 4,
+        sink_spares_ranges: true,
+        inline_never_grows_without_rate: true,
+        inline_o1_milliclocks_per_byte: per_byte / 2,
+        x87_zero_fill_at_size: true,
         speed_milliclocks_per_byte: per_byte,
-        // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a callee whose copies grow the code stays a call (called_once_os: gcc -Os does; the pin inlines it).
+        // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant
+        // fill is `rep stos` where its stores take more bytes (gcc -Os; the pin
+        // keeps up to MaxStoresPerMemsetOptSize stores). `mov dword/word/byte
+        // [esp+d8], imm` 8/7/5 B, at an absolute address 10/9/7; `xor eax, eax` 2,
+        // `or eax, -1` 3, `mov eax, imm32` 5; `lea edi, [esp+d8]` (4) or `mov
+        // edi, imm32` (5), `mov ecx, imm32` 5, `rep stos` 2; `fst qword` 4 / 6.
+        // DEVIATE SINK-CONST-PHI (owner x86-m32, exit 2026-11-27): the pin sinks
+        // `z -= a` / `z += b` of a diamond into the join as `z += phi(-a, b)`; on
+        // a 486 each arm then pays a `mov imm` and one a taken `jmp` (x_cordic -O3
+        // +20% against gcc, which keeps an immediate op per arm). Not at -Os.
+        keep_constant_arith_operands: true,
+        size_fill: Some(llrm_mir::target::SizeFill {
+            store: [[8, 7, 5], [10, 9, 7]],
+            value: [2, 3, 5],
+            setup: [11, 12],
+            fst: [4, 6],
+        }),
+        // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a
+        // callee whose copies grow the code stays a call (called_once_os:
+        // gcc -Os does; the pin inlines it).
         inline_size_guard_at_size: true,
-        // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called callee whose copy grows the code (gcc does; the pin copies it).
+        // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called
+        // callee whose copy grows the code (gcc does; the pin copies it).
         inline_size_guard_single_site: true,
+        // DEVIATE SZ3 (owner x86-m32, exit 2026-11-20): an -Os SZ2 trial also inlines the sites its
+        // splice brings. The pin inlines callee-first (`bar` into `foo`, cost 15 < 75, then `foo` into
+        // `main`); the size guard prices each edge alone and keeps both calls. byvalue_struct_address
+        // -Os 147 -> 39 B (clang 23), 176 m32 programs, no other cell moves.
+        inline_chain_trial: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
         // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
         recursive_inlining: Some((8, 450)),
@@ -96,15 +146,22 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // 22 sits on the O3 edge, zero margin). Owner x86-m32; exit 2026-12-10:
         // the estimate becomes gcc's own size count (translated, not fitted).
         recursive_edge_growth: Some((12, 22)),
-        // DEVIATE REC-2: the copies may add gcc's 450 at -O2 (fib 240256 -> 99687 clk,
-        // x_fib, frames), 150 at -O3 (rectwo, bintree, recchop are worse with 450; their
-        // O3 card is open). Owner x86-m32, exit 2026-11-20.
+        // DEVIATE REC-2: the copies may add gcc's 450 at -O2 (fib 240256 ->
+        // 99687 clk, x_fib, frames), 150 at -O3 (rectwo, bintree, recchop are
+        // worse with 450; their O3 card is open). Owner x86-m32, exit
+        // 2026-11-20.
         recursive_inlining_growth: Some((450, 150)),
-        // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion (passes.def:97, then
-        // pass_ipa_inline :164). At -O3 the copies of the loop beat the tree's (rectwo 1230664 -> 466986
-        // clk, recchop, x_hanoi2, bintree; no -O3 cell worse); at -O2 the tree's copies let GVN merge the
-        // pure same-argument calls (fib 99618 clk against 228901), so -O2 keeps today's order. Owner
-        // x86-m32, exit 2026-11-20.
+        // DEVIATE REC-7 (owner m32, exit 2026-11-27): depth 2 at -O2, gcc's 8
+        // at -O3. rectwo -O2 1449397 -> 347314 clk (1965 -> 277 B), fib
+        // 99618 -> 19993 (962 -> 215 B), frames 5035113 -> 4585856;
+        // depth 8 stays where it wins (-O3 rectwo 466986, x_hanoi2 155672).
+        recursive_inlining_depth: Some((2, 8)),
+        // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion
+        // (passes.def:97, then pass_ipa_inline :164). At -O3 the copies of the
+        // loop beat the tree's (rectwo 1230664 -> 466986 clk, recchop,
+        // x_hanoi2, bintree; no -O3 cell worse); at -O2 the tree's copies let
+        // GVN merge the pure same-argument calls (fib 99618 clk against
+        // 228901), so -O2 keeps today's order. Owner x86-m32, exit 2026-11-20.
         recursive_tre_first: (false, true),
         peel_folded_entry: true,
         // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
@@ -164,6 +221,15 @@ impl llrm_target::Target for M32 {
 
     fn name(&self) -> &'static str {
         "x86-m32"
+    }
+
+    // DEVIATE LEAF-FOLD-OS (owner m32, exit 2026-11-20): the pin keeps each
+    // `mov imm; jmp` leaf of a sparse switch (PHIElimination.cpp L841, L858,
+    // L879 split an edge only for a value live out past the phis, so the
+    // leaf stays and costs a `jmp`); at -Os the constant is made in the
+    // branching block and the branch goes to the join.
+    fn leaf_fold_at_size(&self) -> bool {
+        true
     }
 
     fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
@@ -245,6 +311,10 @@ impl llrm_target::Target for M32 {
 
     fn layout(&self) -> llrm_target::layout::Layout {
         LAYOUT.clone()
+    }
+
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
     }
 
     /// An argument takes a dword at least: `calling.toml`'s.
@@ -385,11 +455,27 @@ impl llrm_target::Target for M32 {
         llrm_x86::helpers::divide_used(signed, wide_divisor, 32, used).map_err(|refused| refused.message)
     }
 
+    fn divide_routine_small(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+    ) -> Result<llrm_target::routines::Divide, String> {
+        llrm_x86::helpers::divide_small(signed, wide_divisor, 32).map_err(|refused| refused.message)
+    }
+
     fn float_width(
         &self,
         _: u32,
     ) -> u32 {
         llrm_x86::X87_WIDTH
+    }
+
+    fn move_bytes(&self) -> Option<llrm_target::MoveBytes> {
+        Some(llrm_target::MoveBytes {
+            plain: 4,
+            copy: llrm_x86::encoding::copy_move_bytes,
+            literal: llrm_x86::encoding::literal_move_bytes,
+        })
     }
 
     fn register_op_bytes(
@@ -433,6 +519,12 @@ impl llrm_target::Target for M32 {
     /// X86ISelLowering.cpp: `setPrefLoopAlignment(Align(16))`.
     fn pref_loop_alignment(&self) -> u8 {
         4
+    }
+
+    /// DEVIATE ALIGN-O1 (owner m32, exit 2026-11-27): no loop alignment at
+    /// -O1, as gcc. `mandel` -O1 ran 5,376 one-byte nops against gcc's 0.
+    fn align_loops_at_o1(&self) -> bool {
+        false
     }
 
     /// DEVIATE SD545 (owner anyisa, exit 2026-11-20): the pin pads a loop
@@ -754,14 +846,16 @@ mod tests {
         assert_eq!(model.costs().load, 1, "the clock prices are the CPU's");
     }
 
-    /// The x87 byte rows were a flat 6: a register `faddp` (2 B encoded) priced at 3x,
-    /// and the memory operand of `fadd m` at 0 (`x87_add_m` = `x87_add`), so folding
-    /// a load looked free at -Os. A register form is the integer register row.
+    /// The x87 byte rows were a flat 6: a register `faddp` (2 B encoded) priced
+    /// at 3x, and the memory operand of `fadd m` at 0 (`x87_add_m` =
+    /// `x87_add`), so folding a load looked free at -Os. A register form is
+    /// the integer register row.
     #[test]
     fn m32_x87_byte_rows_split_register_and_memory_forms() {
         let sizes = OPCOSTS.size_costs();
-        // Mean encoded bytes of 71 float programs at -O2/-Os, per form, with the band of
-        // estimate/measured the integer rows hold: 1.4-1.5 for memory, 2 for register.
+        // Mean encoded bytes of 71 float programs at -O2/-Os, per form, with
+        // the band of estimate/measured the integer rows hold: 1.4-1.5
+        // for memory, 2 for register.
         for (form, estimate, measured, band) in [
             ("register add", sizes.float_add, 2.00, 1.9..=2.1),
             ("fld m", sizes.float_load, 5.56, 1.3..=1.6),

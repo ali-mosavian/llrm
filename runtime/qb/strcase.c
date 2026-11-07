@@ -13,7 +13,7 @@ static SD *recase(SD *sd, char low, char high, int shift)
 
         data[at] = c >= low && c <= high ? c + shift : c;
     }
-    str_tmp_free(sd);
+    str_free_if_tmp(sd);
     return result;
 }
 

@@ -1,27 +1,43 @@
 //! The instructions this target has above the pin's table, by code and name:
 //! the writebacks of [`super::indexed`], the short forms of
 //! [`super::short`], the divide-remainders of [`super::divrem`] and the
-//! `pea` push of [`super::pea`], which only [`crate::callpush`] makes.
+//! `pea` push of [`super::pea`], which only [`crate::callpush`] makes, and the
+//! `cmpa.l` compares of [`super::cmpa`].
 
 use llrm_dagisel::instr::InstrDesc;
 
 use super::asm::{AsmOperand, asm};
 use super::enc::{Piece, encoding};
-use super::{divrem, indexed, pea, scaled, short};
+use super::{cmpa, divrem, indexed, pea, scaled, short, widemul};
 
 /// The machine code of the instruction named `name`, the pin's or a local one.
 pub fn code_of(name: &str) -> Option<u16> {
-    short::code_of(name).or_else(|| scaled::code_of(name)).or_else(|| indexed::code_of(name)).or_else(|| divrem::code_of(name))
+    short::code_of(name)
+        .or_else(|| scaled::code_of(name))
+        .or_else(|| indexed::code_of(name))
+        .or_else(|| divrem::code_of(name))
+        .or_else(|| widemul::code_of(name))
+        .or_else(|| cmpa::code_of(name))
 }
 
 /// The name of machine code `code`.
 pub fn name_of(code: u32) -> Option<&'static str> {
-    short::name_of(code).or_else(|| scaled::name_of(code)).or_else(|| indexed::name_of(code)).or_else(|| divrem::name_of(code))
+    short::name_of(code)
+        .or_else(|| scaled::name_of(code))
+        .or_else(|| indexed::name_of(code))
+        .or_else(|| divrem::name_of(code))
+        .or_else(|| widemul::name_of(code))
+        .or_else(|| cmpa::name_of(code))
 }
 
 /// The description of machine code `code`.
 pub fn desc(code: u16) -> Option<&'static InstrDesc> {
-    short::desc(code).or_else(|| scaled::desc(code)).or_else(|| indexed::desc(code)).or_else(|| divrem::desc(code))
+    short::desc(code)
+        .or_else(|| scaled::desc(code))
+        .or_else(|| indexed::desc(code))
+        .or_else(|| divrem::desc(code))
+        .or_else(|| widemul::desc(code))
+        .or_else(|| cmpa::desc(code))
 }
 
 /// The pin's `asm` row of `name`, or the local instruction's.
@@ -31,7 +47,9 @@ pub fn text(name: &str) -> Option<&'static (&'static str, &'static str, &'static
         .or_else(|| scaled::scaled_asm(name))
         .or_else(|| indexed::source_asm(name))
         .or_else(|| divrem::divrem_asm(name))
+        .or_else(|| widemul::widemul_asm(name))
         .or_else(|| pea::pea_asm(name))
+        .or_else(|| cmpa::cmpa_asm(name))
 }
 
 /// The pin's encoding of `name`, or the local instruction's.
@@ -42,5 +60,7 @@ pub fn bits(name: &str) -> Option<(u16, &'static [Piece])> {
         .or_else(|| scaled::scaled_encoding(name))
         .or_else(|| indexed::source_encoding(name))
         .or_else(|| divrem::divrem_encoding(name))
+        .or_else(|| widemul::widemul_encoding(name))
         .or_else(|| pea::pea_encoding(name))
+        .or_else(|| cmpa::cmpa_encoding(name))
 }

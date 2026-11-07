@@ -11,6 +11,9 @@ use crate::spaces::Spaces;
 /// states. The names are the pin's `TargetLoweringBase` fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tuning {
+    /// DEVIATE SD-REPFILL: at size, a constant fill whose stores take more
+    /// bytes than a `rep stos` fill is the fill. None: the pin's stores.
+    pub size_fill: Option<SizeFill>,
     /// `MaxStoresPerMemset`, and at size `MaxStoresPerMemsetOptSize`.
     pub max_stores_per_memset: usize,
     pub max_stores_per_memset_opt_size: usize,
@@ -37,11 +40,44 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// DEVIATE SD446: a divide by a constant is chosen against the multiply-high
+    /// sequence by clocks plus bytes at `speed_milliclocks_per_byte`
+    /// (`hardware_divide_wins`); false: the clocks and margin alone.
+    pub divide_by_bytes: bool,
+    /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24): at -Os a divide by a
+    /// constant of a type narrower than a word keeps its `div` (DIV-OPTSIZE-1)
+    /// only while at most this many values are live across it; 0: always. The
+    /// `div` pins eax, edx and the divisor's register, the narrow multiply
+    /// sequence none.
+    pub narrow_divide_live_limit: u32,
+    /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): at size, MachineSink
+    /// leaves an instruction where it is when moving it would replace its one
+    /// result by more operands that die at it, across a later instruction that
+    /// clobbers registers (more values spilled). false: the pin's sink.
+    pub sink_spares_ranges: bool,
+    /// At -O1 (`OptLevel` 1) a full unroll is made only where its cost after
+    /// the folding the analysis simulates does not exceed the rolled loop's
+    /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
+    pub unroll_never_grows_at_o1: bool,
+    /// DEVIATE INL-O1 (owner x86-m32, exit 2026-11-24): where no byte rate is
+    /// stated (-O1), an inline that stays is held to the -Os bound (the callee
+    /// copied only if it does not grow the code); false: the pin's threshold.
+    pub inline_never_grows_without_rate: bool,
+    /// With `inline_never_grows_without_rate`: what a byte of growth costs an
+    /// -O1 inline, in thousandths of a clock, against the call's latency at
+    /// the site's frequency. m32: half the -O2 rate (-O1 weighs code size).
+    pub inline_o1_milliclocks_per_byte: i64,
+    /// Trips the -O1 no-growth rule above analyses for folds: the pin's
+    /// `-unroll-max-iteration-count-to-analyze` (10) when `None`.
+    pub unroll_o1_analyzed_trips: Option<u32>,
     /// A multiply by a constant is decomposed only where the chain's saved
     /// clocks pay for its extra bytes at `speed_milliclocks_per_byte`, the
     /// pin's own decompositions included (a tie keeps the `imul`); false:
     /// the pin's `combineMul` decomposes unconditionally.
     pub price_pin_multiplies: bool,
+    /// At -Os a multiply by a constant stays an `imul` (the pin's `hasMinSize`
+    /// rule, which the pin applies at -Oz only): the chain is no smaller.
+    pub imul_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
@@ -72,6 +108,15 @@ pub struct Tuning {
     /// there (a target without SSE2 floating point); none: floats are not
     /// held on a stack. The loop unroll caps its copies by it.
     pub x87_stack_slots: Option<u32>,
+    /// A float product of a value by a constant, where the same value times
+    /// the negated constant is made too, is made once: `a + v*(-C)` is
+    /// `a - v*C`, exact in IEEE (DEVIATE X87-SHARE, x87 targets only).
+    pub x87_share_negated_products: bool,
+    /// At `-Os` a zero fill of eight bytes or more is `fldz` and one `fst
+    /// qword` per double, not two `mov dword` zero stores: 4 bytes a double
+    /// at a short displacement against 8 (DEVIATE X87-ZERO-FILL, x87 targets
+    /// only; the pin's `getOptimalMemOpType` is `i32` without SSE).
+    pub x87_zero_fill_at_size: bool,
     /// A stack slot a loop holds in a register is shared only by what is as
     /// wide (`slots::width_rule_allows`); false: the pin's `ColorSlot`,
     /// which shares any two slots whose ranges do not overlap.
@@ -95,23 +140,43 @@ pub struct Tuning {
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
+    /// An -Os caller's SZ2 trial also inlines the sites its splice brings, priced by the
+    /// ordinary rules, before it measures: `foo` into `main` and then `bar` into that copy
+    /// meet the constants together, as the pin's callee-first order gives. One round.
+    pub inline_chain_trial: bool,
     /// A full unroll's discount for a local array it makes constant-indexed
     /// (promoted to registers) holds only while the promoted elements fit the
     /// register file (UP1). false: every such access is free.
     pub unroll_promotion_fits_registers: bool,
+    /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
+    /// `Tti::lsr_size_order`.
+    pub lsr_size_order: bool,
+    /// UP1 for the floats of an x87 target: the register file a promoted
+    /// float array's elements must fit is the x87 stack (`x87_stack_slots`,
+    /// 8), which holds nothing across the nest's inner loops. Ints keep the
+    /// rule above. false: floats are free (DEVIATE UP1-X87, owner x87).
+    pub unroll_promotion_fits_x87_stack: bool,
     /// A size build rotates a loop only when the header's exit test folds in
     /// the preheader (RS1): an unfolded copy is a compare and a branch, more
     /// than the loop-closing jump it removes. false: the pass's header limit
     /// alone.
     pub rotation_guard_must_fold_at_size: bool,
-    /// A size build rotates a loop only when the copied header is no bigger than
-    /// the branches the rotation removes (the loop-closing jump and the exit
-    /// test), in `CodeSize` (arm64's w15 rule). false: the header limit alone.
+    /// A size build rotates a loop only when the copied header is no bigger
+    /// than the branches the rotation removes (the loop-closing jump and
+    /// the exit test), in `CodeSize` (arm64's w15 rule). false: the header
+    /// limit alone.
     pub rotation_header_priced_at_size: bool,
+    /// Header instructions a size build's loop rotation may copy
+    /// (`RotationMaxHeaderSize`), where the machine states none itself
+    /// ([`Machine::size_rotation_header_limit`] wins). None: the pin's 16.
+    pub size_rotation_header_limit: Option<u32>,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
     pub keep_constant_displacements: bool,
+    /// DEVIATE SINK-CONST-PHI: a constant operand of an arithmetic instruction
+    /// is not made a phi by sinking (the pin: cheap), except at size.
+    pub keep_constant_arith_operands: bool,
     /// DEVIATE REC-2: (depth, callee `gcc_insns`) of the recursion copied at
     /// speed, gcc's `max-inline-recursive-depth` and
     /// `max-inline-insns-recursive` (`Tti::recursive_inlining`); none: the
@@ -126,9 +191,13 @@ pub struct Tuning {
     /// at (-O2, -O3), in `gcc_insns` (gcc's `max-inline-insns-recursive`, 450);
     /// none: `inline::MAX_INLINE_INSNS_RECURSIVE`.
     pub recursive_inlining_growth: Option<(i64, i64)>,
-    /// DEVIATE REC-2: at (-O2, -O3) a tree recursion's tail calls are eliminated before it is
-    /// copied into itself (gcc: `pass_tail_recursion` runs early, `passes.def` before `pass_ipa_inline`),
-    /// not after (D10).
+    /// DEVIATE REC-7: the copies' depth at (-O2, -O3), where the target wants
+    /// a depth apart from `recursive_inlining`'s; none: that one's.
+    pub recursive_inlining_depth: Option<(u32, u32)>,
+    /// DEVIATE REC-2: at (-O2, -O3) a tree recursion's tail calls are
+    /// eliminated before it is copied into itself (gcc:
+    /// `pass_tail_recursion` runs early, `passes.def` before
+    /// `pass_ipa_inline`), not after (D10).
     pub recursive_tre_first: (bool, bool),
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
@@ -151,6 +220,12 @@ pub struct Tuning {
     /// Linux x86-64 stays false: glibc's `memcpy` of 0-32 bytes is 6.4 TSC
     /// ticks a call, `rep movsb` 8.2 (Ryzen 9 9950X3D, fsrm; 2026-11-05).
     pub inline_variable_memcpy: bool,
+    /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541: tuned for size, a constant
+    /// `memcpy`/`memmove` whose load and store pieces take more bytes than the call of the library
+    /// routine (`mov edx, n` and the call) is the call, at the target's `CopyPrice`. The pin counts pieces
+    /// (`MaxStoresPerMemcpyOptSize`). gcc -Os calls from 32 B (mv64 10 B against the pin's 31).
+    /// None: the pin's pieces.
+    pub size_copy_price: Option<CopyPrice>,
     /// DEVIATE REC5-1 (owner w2, exit 2026-11-20): IPSCCP widens a range that
     /// keeps growing to its half-line, keeping the sign, not to overdefined
     /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
@@ -158,9 +233,34 @@ pub struct Tuning {
     pub ipsccp_widen_keeps_sign: bool,
 }
 
+/// Encoded bytes of a constant fill, stores against `rep stos`. Each pair or
+/// triple is [frame object, global]: a short displacement against an absolute
+/// address.
+/// The bytes a constant copy tuned for size is priced in (`Tuning::size_copy_price`): the library call
+/// (`mov edx, n` and the call) against the load and store pieces, a wide one (16 or 8 bytes) or a narrower one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CopyPrice {
+    pub call: u64,
+    pub wide_piece: u64,
+    pub narrow_piece: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SizeFill {
+    /// A dword, word and byte store of an immediate.
+    pub store: [[u64; 3]; 2],
+    /// The value in `eax` for zero, all ones and any other byte.
+    pub value: [u64; 3],
+    /// `lea`/`mov edi`, `mov ecx` and the `rep stos`.
+    pub setup: [u64; 2],
+    /// One `fst qword` of the x87 zero fill.
+    pub fst: [u64; 2],
+}
+
 impl Tuning {
     /// X86ISelLowering.cpp: 16/8, 8/4, 8/4 stores; no clock price for a byte.
     pub const PIN: Tuning = Tuning {
+        size_fill: None,
         max_stores_per_memset: 16,
         max_stores_per_memset_opt_size: 8,
         max_stores_per_memcpy: 8,
@@ -171,7 +271,15 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        divide_by_bytes: false,
+        narrow_divide_live_limit: 0,
+        sink_spares_ranges: false,
+        unroll_never_grows_at_o1: false,
+        inline_never_grows_without_rate: false,
+        inline_o1_milliclocks_per_byte: 0,
+        unroll_o1_analyzed_trips: None,
         price_pin_multiplies: false,
+        imul_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
@@ -180,24 +288,33 @@ impl Tuning {
         constant_hoisting: false,
         zext_imm_is_basic: false,
         x87_stack_slots: None,
+        x87_share_negated_products: false,
+        x87_zero_fill_at_size: false,
         slots_loop_width_rule: false,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
+        inline_chain_trial: false,
         unroll_promotion_fits_registers: false,
+        lsr_size_order: false,
+        unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_header_priced_at_size: false,
+        size_rotation_header_limit: None,
         keep_constant_displacements: false,
+        keep_constant_arith_operands: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
         recursive_inlining_growth: None,
+        recursive_inlining_depth: None,
         recursive_tre_first: (false, false),
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,
         inline_variable_memcpy: false,
+        size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
     };
 }
@@ -211,6 +328,11 @@ pub struct GlobalMerge {
     pub max_offset: u64,
     /// `OnlyOptimizeForSize`: only uses in `minsize` functions count.
     pub size_only: bool,
+    /// DEVIATE ARM64-GM-OPTSIZE (owner w15, exit 2026-11-30): with `size_only`,
+    /// uses in `optsize` functions count too, not only `minsize` ones (the
+    /// pin's `-Os` merges nothing; gcc's section anchors do: stft_fixed -Os
+    /// 15 `adrp` against gcc's 5). False: the pin.
+    pub optsize_counts: bool,
     /// The object format is Mach-O: the merged struct is `internal`, not
     /// `private`.
     pub mach_o: bool,
@@ -277,8 +399,8 @@ pub trait Machine {
     }
 
     /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
-    /// (DEVIATE SD443, exit 2026-11-07: interprocedural.rs). The pin runs it
-    /// once; a target that matches the pin's output turns it off.
+    /// (DEVIATE SD443, owner w2, exit 2026-11-15: interprocedural.rs). The pin
+    /// runs it once; a target that matches the pin's output turns it off.
     fn second_ipsccp(&self) -> bool {
         true
     }
@@ -703,7 +825,9 @@ pub fn three_operand_of(
     }
     let form = forms.iter().find(|form| form.index_width == 4 && form.scales.contains(&scale))?;
     if costs.address_dword > 0 && width != operand {
-        return Some(costs.address_dword + costs.address_third * parts.saturating_sub(2) as i64 + form.use_cost - costs.prefix);
+        return Some(
+            costs.address_dword + costs.address_third * parts.saturating_sub(2) as i64 + form.use_cost - costs.prefix,
+        );
     }
     Some(costs.sized(costs.address, width, operand) + form.use_cost)
 }
@@ -969,7 +1093,8 @@ mod operand_size_tests {
     /// replaced `inc` and `add` (5 bytes) by the six-byte form looked free.
     #[test]
     fn a_dword_lea_is_priced_by_its_parts_and_a_word_one_is_not() {
-        let costs = OperationCosts { address: 6, prefix: 1, address_dword: 10, address_third: 2, ..OperationCosts::default() };
+        let costs =
+            OperationCosts { address: 6, prefix: 1, address_dword: 10, address_third: 2, ..OperationCosts::default() };
         let real = [form(2, false, 0), form(4, true, 1)];
         assert_eq!(three_operand_of(&costs, &real, 2, 2, 1, true, 3), Some(6));
         assert_eq!(three_operand(&costs, &real, 4, 2, 1, false), Some(10));
@@ -997,6 +1122,9 @@ mod tests {
             (None, None, None)
         );
         assert_eq!(pin.x87_stack_slots, None);
+        assert!(!pin.x87_share_negated_products);
+        assert!(!pin.unroll_promotion_fits_x87_stack);
+        assert!(!pin.x87_zero_fill_at_size);
         assert!(!pin.slots_loop_width_rule);
         assert_eq!(pin.inline_threshold, None);
     }

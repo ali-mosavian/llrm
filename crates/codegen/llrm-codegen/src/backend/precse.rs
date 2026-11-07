@@ -56,8 +56,8 @@
 //! DEVIATE CSE3 (owner w-1, exit 2026-11-08): both selectors mark a load
 //! invariant when it reads a constant global or says so (`!invariant.load`, a
 //! `noalias readonly` argument), and the DAG selector the load of an incoming
-//! stack argument (an immutable fixed object). The pin also takes GOT and
-//! constant-pool loads, which ours lacks; the old selector reads an incoming
+//! stack argument (an immutable fixed object) and of a constant-pool entry. The
+//! pin also takes GOT loads, which ours lacks; the old selector reads an incoming
 //! argument as a memory operand of its reader, not a load of its own.
 //!
 //! Row CSE5 (was DEVIATE CSE5, retired 2026-10-25): `machinecse.rs`, the same
@@ -149,8 +149,12 @@ fn candidate(
     // (CSE2 keeps the narrower ones out).
     let remade = matches!(&what.dests[..], [Loc::Held(into)] if into.width == 8)
         && (what.op == Operation::Address || matches!(&what.sources[..], [Loc::Imm(imm)] if imm.address.is_some()));
+    let loads =
+        matches!(what.op, Operation::Move | Operation::FloatLoad) && matches!(what.sources.as_slice(), [Loc::Mem(_)]);
+    let loads_invariant = loads && one.invariant();
     if one.uses.is_empty()
         && !remade
+        && !loads_invariant
         && !matches!(
             what.sources.as_slice(),
             [Loc::Imm(imm)] if imm.address.is_none()
@@ -160,9 +164,6 @@ fn candidate(
     }
     let held = |place: &Loc| matches!(place, Loc::Held(_) | Loc::Imm(_) | Loc::Address(_));
     // `MI->mayLoad()` is a candidate only if `isDereferenceableInvariantLoad`.
-    let loads =
-        matches!(what.op, Operation::Move | Operation::FloatLoad) && matches!(what.sources.as_slice(), [Loc::Mem(_)]);
-    let loads_invariant = loads && one.invariant();
     let pure = pure && !loads || loads_invariant;
     pure && what.target.is_none()
         && !what.indirect
@@ -712,7 +713,9 @@ fn hoisted(
     // `PREMap`: expression -> the block it was last seen in or hoisted to.
     let mut seen: HashMap<Semantics, usize> = HashMap::default();
     let mut put: HashMap<usize, Vec<Arc<Insn>>> = HashMap::default();
-    let mut next = crate::backend::postings::next_value_following(body);
+    // Asked at the first hoist: the postings of the whole body are not built
+    // for a function that hoists nothing.
+    let mut next: Option<u32> = None;
     let mut like: Vec<(u32, u32)> = Vec::new();
     let mut stack = vec![body.entry];
     while let Some(at) = stack.pop() {
@@ -765,8 +768,8 @@ fn hoisted(
             if !(reaches(body, by_at, other, number) || reaches(body, by_at, number, other)) {
                 continue;
             }
-            let value = next;
-            next += 1;
+            let value = next.unwrap_or_else(|| body.next_value());
+            next = Some(value + 1);
             let mut made = what.clone();
             if let Some(Loc::Held(dest)) = made.dests.first_mut() {
                 dest.value = value;
@@ -1075,6 +1078,32 @@ mod tests {
         };
         assert_eq!(count(&body), 2, "the premise: two leas");
         assert_eq!(count(&shared(&body, &RegisterClasses::m16())), 1);
+    }
+
+    /// Compile time: `hoisted` took the next value from the postings of the
+    /// whole body, which made them for every function (14.9 M Ir of 83.9 M in
+    /// MachineCse on memexp -O2), whether or not anything was hoisted. A body
+    /// that hoists nothing builds no postings.
+    #[test]
+    fn test_a_body_that_hoists_nothing_builds_no_postings() {
+        let lea = |at, into| {
+            let memory = Mem {
+                base: Some(Held { value: 1, width: 4, offset: 0 }),
+                index: Some(Held { value: 1, width: 4, offset: 0 }),
+                scale: 2,
+                ..Mem::new(None, 4)
+            };
+            insn(at, Operation::Address, "lea", vec![held(into)], vec![Loc::Mem(memory)], vec![into], vec![1, 1])
+        };
+        let entry = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![lea(0, 10)]) };
+        let next = LirBlock::new(1, vec![lea(1, 11)]);
+        let mut body =
+            LirBody::new("lea", 0, vec![entry.into(), next.into()], IndexMap::default(), IndexMap::default());
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let before = crate::backend::postings::redone();
+        shared(&body, &RegisterClasses::m16());
+        assert_eq!(crate::backend::postings::redone(), before);
     }
 
     /// CSE7. x_life -O3 (#7261): the `lea` of a global and a register, shared
@@ -1520,6 +1549,62 @@ mod tests {
         assert_eq!(zeros(&shared(&next, &RegisterClasses::m16())), 1, "the next block reads the first");
         let far = build(2);
         assert_eq!(zeros(&shared(&far, &RegisterClasses::m16())), 2, "two edges away stays two");
+    }
+
+    /// A load of a constant-pool entry (`isDereferenceableInvariantLoad`) with
+    /// no register operand was never a candidate, so the six `movss xmm,
+    /// [1.0f]` of nbody_single stayed six through allocation where the pin
+    /// keeps one (+3 reloads, +24 B at -O3 m64). Two edges away is shared too:
+    /// a load is not as cheap as a move.
+    #[test]
+    fn test_an_invariant_pool_load_is_made_once_across_blocks() {
+        let load = |at: i64, result: u32| {
+            let mut one = insn(
+                at,
+                Operation::Move,
+                "movss",
+                vec![held(result)],
+                vec![Loc::Mem(llrm_lir::Mem::new(None, 4))],
+                vec![result],
+                vec![],
+            );
+            Arc::make_mut(&mut one).invariant = true;
+            one
+        };
+        let read = |at: i64, value: u32, result: u32| {
+            insn(
+                at,
+                Operation::Binary,
+                "addss",
+                vec![held(result)],
+                vec![held(value), held(1)],
+                vec![result],
+                vec![value, 1],
+            )
+        };
+        let blocks = vec![
+            LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![load(0, 10), read(1, 10, 11)]) },
+            LirBlock { succ: vec![2].into(), ..LirBlock::new(1, vec![]) },
+            LirBlock { succ: vec![].into(), ..LirBlock::new(2, vec![load(20, 20), read(21, 20, 21)]) },
+        ];
+        let mut body = LirBody::new(
+            "pool",
+            0,
+            blocks.into_iter().map(Into::<Block>::into).collect::<Vec<Block>>(),
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let loads = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("movss"))
+                .count()
+        };
+        assert_eq!(loads(&body), 2, "the premise: two loads");
+        assert_eq!(loads(&shared(&body, &RegisterClasses::of(&llrm_x86_m64::M64))), 1);
     }
 
     /// A store of a constant is not a copy: heuristic 2 took any `mov` that

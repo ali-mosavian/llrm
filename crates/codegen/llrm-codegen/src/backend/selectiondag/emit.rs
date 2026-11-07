@@ -348,6 +348,8 @@ struct Emitter<'a, 'd> {
     /// The machine nodes emitted: the scheduler's clone of a unit emits its
     /// node again.
     machine_emitted: llrm_support::hash::HashSet<u32>,
+    /// Nodes the scheduler emits in more than one unit (`IsCloned`).
+    cloned_nodes: llrm_support::hash::HashSet<u32>,
     /// The `CopyToReg EFLAGS` nodes emitted.
     flag_copies_done: llrm_support::hash::HashSet<u32>,
 }
@@ -485,6 +487,16 @@ pub fn emit_in(
         flag_insns: HashMap::default(),
         saved_carry: HashMap::default(),
         machine_emitted: Default::default(),
+        cloned_nodes: {
+            let mut seen = llrm_support::hash::HashSet::default();
+            let mut cloned = llrm_support::hash::HashSet::default();
+            for &node in units.iter().flat_map(|unit| &unit.nodes) {
+                if !seen.insert(node) {
+                    cloned.insert(node);
+                }
+            }
+            cloned
+        },
         flag_copies_done: Default::default(),
         pending_fcom: HashMap::default(),
         first_at: HashMap::default(),
@@ -527,6 +539,9 @@ pub fn emit_in(
             emitter.mark_pair(node, before);
             if dag.invariant_loads.contains(&node) {
                 emitter.mark_invariant_loads(before);
+            }
+            if dag.got_loads.contains(&node) {
+                emitter.make_got_loads(before);
             }
             if dag.volatile_accesses.contains(&node)
                 || matches!(
@@ -1180,6 +1195,35 @@ impl Emitter<'_, '_> {
         }
     }
 
+    /// A load of a GOT entry reads `[rip + sym]`; the encoder relocates an
+    /// External symbol's immediate as the entry's offset, so the load is that
+    /// immediate (`mov r, offset sym`, as `isel.rs` makes the legacy GOT load).
+    fn make_got_loads(
+        &mut self,
+        before: usize,
+    ) {
+        let Some(block) = self.blocks.last_mut() else { return };
+        for one in block.insns.iter_mut().skip(before) {
+            let Some(what) = one.what.as_ref() else { continue };
+            let ([Loc::Held(dest)], [Loc::Mem(mem)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+                continue;
+            };
+            let Some(address) = mem.addr else { continue };
+            if what.op != Operation::Move
+                || mem.base.is_some()
+                || mem.index.is_some()
+                || address.space != crate::model::ir::Space::External
+            {
+                continue;
+            }
+            let mut moved = (**one).clone();
+            if let Some(what) = moved.what.as_mut() {
+                what.sources = vec![Loc::Imm(Imm { value: 0, width: dest.width, address: Some(address) })];
+            }
+            *one = Arc::new(moved);
+        }
+    }
+
     fn mark_invariant_loads(
         &mut self,
         before: usize,
@@ -1193,7 +1237,16 @@ impl Emitter<'_, '_> {
                     |what| matches!(what.op, Operation::Move | Operation::FloatLoad)
                         && matches!(what.sources.as_slice(), [Loc::Mem(_)]),
                 );
-            if plain && !one.volatile() {
+            // A folded load: one memory source read into registers.
+            let folded = one
+                .what
+                .as_ref()
+                .is_some_and(
+                    |what| what.dests.iter().all(|dest| matches!(dest, Loc::Held(_)))
+                        && !what.dests.is_empty()
+                        && what.sources.iter().filter(|source| matches!(source, Loc::Mem(_))).count() == 1,
+                );
+            if (plain || folded) && !one.volatile() {
                 *one = Arc::new(Insn { invariant: true, ..(**one).clone() });
             }
         }
@@ -1550,6 +1603,7 @@ impl Emitter<'_, '_> {
         let Some(compare) = self.flag_insns.get(&producer).cloned() else {
             return Err(EmitError::Unsupported("flags overwritten between their producer and a consumer".to_owned()));
         };
+        let compare = self.unfold_memory_read(producer, compare);
         let at = self.next_address();
         let mut again = Insn { at, covers: Some((at, at)), ..(*compare).clone() };
         // A `sub` whose value nothing reads, made again for its flags, writes a
@@ -1566,6 +1620,73 @@ impl Emitter<'_, '_> {
         self.blocks.last_mut().expect("a block").insns.push(Arc::new(again));
         self.flags_now = Some(producer);
         Ok(())
+    }
+
+    /// The pin's scheduler unfolds the load a unit folded before it clones the
+    /// unit (`CopyAndMoveSuccessors`, `unfoldMemoryOperand`): the cell is read
+    /// once however many times the flags are made again. A volatile cell made
+    /// again in each compare was read once per compare (`cmp r, [b]` three
+    /// times for one `vv[j]`). The producer in the block becomes the load and
+    /// the register form, and `compare` its register form.
+    fn unfold_memory_read(
+        &mut self,
+        producer: u32,
+        compare: Arc<Insn>,
+    ) -> Arc<Insn> {
+        let Some(what) = compare.what.as_ref() else { return compare };
+        let Some(index) = what.sources.iter().position(|source| matches!(source, Loc::Mem(_))) else { return compare };
+        let Loc::Mem(cell) = &what.sources[index] else { return compare };
+        let width = cell.width;
+        let found = self.blocks.iter().enumerate().find_map(|(block, one)| {
+            one.insns
+                .iter()
+                .position(|insn| {
+                    insn.at == compare.at
+                        && insn.what.as_ref().is_some_and(|w| w.sources.iter().any(|s| matches!(s, Loc::Mem(_))))
+                })
+                .map(|place| (block, place))
+        });
+        let Some((block, place)) = found else { return compare };
+        let original = Arc::clone(&self.blocks[block].insns[place]);
+        let held = self.fresh(width);
+        let mut address = Vec::new();
+        for value in llrm_lir::values(&what.sources[index]).into_iter() {
+            if !address.contains(&value.value) {
+                address.push(value.value);
+            }
+        }
+        let at = self.next_address();
+        let read = Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Held(held)],
+            sources: vec![what.sources[index].clone()],
+            ..Semantics::new(Operation::Move)
+        };
+        let mut load = Insn::new(at, Some((at, at)), Some(read), vec![held.value], address);
+        load.volatile = original.volatile;
+        load.invariant = original.invariant;
+        let register_form = |insn: &Insn| -> Insn {
+            let mut what = insn.what.clone().expect("a compare");
+            if let Some(source) = what.sources.iter_mut().find(|source| matches!(source, Loc::Mem(_))) {
+                *source = Loc::Held(held);
+            }
+            let mut named = Vec::new();
+            for place in what.dests.iter().chain(&what.sources) {
+                named.extend(llrm_lir::values(place).into_iter().map(|h| h.value));
+            }
+            let mut uses: Vec<u32> = insn.uses.iter().copied().filter(|value| named.contains(value)).collect();
+            if !uses.contains(&held.value) {
+                uses.push(held.value);
+            }
+            Insn { what: Some(what), uses, volatile: false, invariant: false, ..insn.clone() }
+        };
+        let folded = Arc::new(register_form(&original));
+        let compare = Arc::new(register_form(&compare));
+        let insns = &mut self.blocks[block].insns;
+        insns[place] = folded;
+        insns.insert(place, Arc::new(load));
+        self.flag_insns.insert(producer, Arc::clone(&compare));
+        compare
     }
 
     /// The segment word `SEGMENT_OF` names, as a relocatable immediate. The
@@ -1724,15 +1845,17 @@ impl Emitter<'_, '_> {
         let cloned = !self.machine_emitted.insert(n);
         let mut dests = Vec::new();
         for (i, vt) in node.values.iter().enumerate().take(usize::from(desc.num_defs)) {
-            let held = if cloned {
+            // `CreateVirtualRegisters`: neither a clone nor its original takes
+            // the register a `CopyToReg` names.
+            let held = if cloned || self.cloned_nodes.contains(&n) {
                 self.fresh(width(self.ctx.map.scalar_sse(), *vt))
             } else {
                 self.exported_register(SDValue { node: n, res: i as u8 })
                     .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), *vt)))
             };
-            if !cloned {
-                self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
-            }
+            // `CreateVirtualRegisters`: a clone erases the map entry, so what
+            // is emitted after it reads its result.
+            self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
             dests.push(Loc::Held(held));
         }
         let cell_width =
@@ -4227,8 +4350,11 @@ impl Emitter<'_, '_> {
             // A constant-pool entry is memory nothing writes
             // (`PseudoSourceValue::isConstant`: the pin's
             // `isDereferenceableInvariantLoad`): LICM may carry it (DEVIATE
-            // X1).
-            if pooled {
+            // X1). Not the loads the CPU's prices keep one per reader: the
+            // MachineCSE of invariant loads would make them one again and
+            // FloatFold could not fold them (x87_pool_per_use_486.c, red
+            // since #7592).
+            if pooled && (constant || self.dag.has_one_use(value.node)) {
                 self.mark_invariant_loads(before);
             }
             if constant {

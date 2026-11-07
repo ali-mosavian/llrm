@@ -794,7 +794,7 @@ impl Analysis<'_> {
                 ty,
                 CostKind::Latency,
                 OperandInfo::ANY,
-                OperandInfo { constant: true, power_of_two: true, negated_power_of_two: false },
+                OperandInfo { constant: true, power_of_two: true, negated_power_of_two: false, value: None },
             )
         });
         Scaled64::get(cost.value as u64) + cost_of(instruction.operands[1 - select.cond_idx])

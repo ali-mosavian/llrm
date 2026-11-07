@@ -171,11 +171,16 @@ pub fn constrained(
     let ids = body.pins.keys().chain(pinned.into_iter().flat_map(|given| given.keys())).copied().max();
     let mut pinned: IndexMap<u32, RegId> = pinned.unwrap_or(&body.pins).clone();
 
-    let defined: BTreeSet<u32> =
-        body.blocks.iter().flat_map(|block| &block.insns).flat_map(|one| one.defines.iter().copied()).collect();
-    let constants = crate::backend::bodyfacts::_constants(body, &defined);
-
+    // Worked out at the first copy that wants a source: most bodies make none.
+    let constants = std::cell::OnceCell::new();
     let source = |value: u32, width: u32| -> Loc {
+        let constants = constants.get_or_init(|| {
+            #[cfg(test)]
+            CONSTANTS_WORKED.with(|n| n.set(n.get() + 1));
+            let defined: BTreeSet<u32> =
+                body.blocks.iter().flat_map(|block| &block.insns).flat_map(|one| one.defines.iter().copied()).collect();
+            crate::backend::bodyfacts::_constants(body, &defined)
+        });
         match constants.get(&value) {
             // Not a qword symbol address: the pin rematerialises a copy to a
             // fixed register only from a def as cheap as a move
@@ -462,6 +467,13 @@ pub fn distinct_classes(
     distinct_classes_given(body, floor, &uses).unwrap_or_else(|| body.clone())
 }
 
+/// How many registers every class holds, none where there is no class: the
+/// size of their intersection, counted without building it.
+fn shared<'a>(mut classes: impl Iterator<Item = &'a BTreeSet<RegId>> + Clone) -> Option<usize> {
+    let first = classes.next()?;
+    Some(first.iter().filter(|register| classes.clone().all(|class| class.contains(register))).count())
+}
+
 /// `distinct_classes`, given the body's confining reads: None where no value
 /// needs a copy.
 pub fn distinct_classes_given(
@@ -481,12 +493,7 @@ pub fn distinct_classes_given(
     // Which (block, instruction, value, role) reads take a copy.
     let mut peeled: BTreeSet<(usize, usize, u32, u8)> = BTreeSet::new();
     for (value, all) in &by_value {
-        let common = |chosen: &[&regclass::Use]| {
-            chosen.iter().fold(None::<BTreeSet<RegId>>, |had, one| {
-                Some(had.map_or_else(|| one.class.clone(), |had| had.intersection(&one.class).copied().collect()))
-            })
-        };
-        if common(all).is_none_or(|class| !class.is_empty()) {
+        if shared(all.iter().map(|one| &one.class)).is_none_or(|count| count > 0) {
             continue;
         }
         // Classes by how many reads share them, the most first.
@@ -546,11 +553,14 @@ pub fn distinct_classes_given(
             })
         };
         let all: Vec<&&regclass::Use> = all.iter().collect();
-        let Some(left) = class(&all).filter(|left| !left.is_empty() && left.len() < MIN_RC_SIZE) else { continue };
+        let Some(left) = shared(all.iter().map(|one| &one.class)).filter(|left| *left > 0 && *left < MIN_RC_SIZE)
+        else {
+            continue;
+        };
         let deepest = deepest_of(value);
         let (cold, kept): (Vec<&&regclass::Use>, Vec<&&regclass::Use>) =
             all.iter().partition(|one| !one.defining && depth_of(one.block) < deepest);
-        if !cold.is_empty() && class(&kept).is_none_or(|rest| rest.len() > left.len()) {
+        if !cold.is_empty() && class(&kept).is_none_or(|rest| rest.len() > left) {
             for one in cold {
                 peeled.insert((one.block, one.insn, *value, one.role as u8));
             }
@@ -959,6 +969,11 @@ pub fn hoisted(
 }
 
 #[cfg(test)]
+thread_local! {
+    pub(super) static CONSTANTS_WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 mod tests {
     //! Port of `tests/test_constrain.py`.
 
@@ -1187,6 +1202,16 @@ mod tests {
             .iter()
             .map(|one| format!("{:?} {:?} <- {:?}", what(one).name, what(one).dests, what(one).sources))
             .collect()
+    }
+
+    /// The body's constants were worked out for every body, copies or none:
+    /// 16.7 M Ir over 221 bodies of memory_expansion.
+    #[test]
+    fn test_a_body_with_no_requirement_works_out_no_constants() {
+        super::CONSTANTS_WORKED.with(|n| n.set(0));
+        let plain = _insn(semantics(Operation::Return, "ret", vec![], vec![]), &[], &[], 0);
+        let _ = constrained(&_body(vec![plain]), None, &crate::backend::classes::RegisterClasses::m16());
+        assert_eq!(super::CONSTANTS_WORKED.with(|n| n.get()), 0);
     }
 
     /// A shift counts from cl and names it nowhere.
@@ -1667,5 +1692,19 @@ mod laziness_tests {
         let body = LirBody::new("t", 0, crate::model::lir::shared(vec![block]), IndexMap::default(), IndexMap::default());
         assert!(distinct_classes_given(&body, 0, &[]).is_none());
         assert_eq!(body.facts.0.runs::<crate::analysis::graph::LoopDepths>(), 0);
+    }
+
+    /// The classes of a value's reads were intersected into sets to learn
+    /// whether any register is common (28.6 M Ir of memory_expansion -O2 in
+    /// `distinct_classes_given`); the count must be the intersection's size.
+    #[test]
+    fn shared_counts_the_registers_every_class_holds() {
+        let set = |registers: &[RegId]| registers.iter().copied().collect::<BTreeSet<RegId>>();
+        let (ax_bx, bx_cx, si_di) =
+            (set(&[RegId::AX, RegId::BX]), set(&[RegId::BX, RegId::CX]), set(&[RegId::SI, RegId::DI]));
+        assert_eq!(shared([].iter()), None);
+        assert_eq!(shared([&ax_bx].into_iter()), Some(2));
+        assert_eq!(shared([&ax_bx, &bx_cx].into_iter()), Some(1));
+        assert_eq!(shared([&ax_bx, &bx_cx, &si_di].into_iter()), Some(0));
     }
 }

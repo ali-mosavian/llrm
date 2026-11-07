@@ -69,6 +69,12 @@ pub fn builder_target() -> BuilderTarget {
     }
 }
 
+thread_local! {
+    /// The pin's block frequencies as they are (`Request::flat_loop_trips`), for
+    /// the selections made on this thread.
+    pub static FLAT_LOOP_TRIPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// One block, selected and scheduled.
 pub struct Selected {
     pub block: BlockId,
@@ -113,6 +119,10 @@ pub struct Selection {
     /// machine CFG comes from the IR); here a block with no terminator falls
     /// into the next one, so emission states the end.
     pub unreachable: llrm_mir::dense::IdSet<BlockId>,
+    /// The pin's block frequency of each IR block over the entry's
+    /// (`BlockFrequencyInfo` over `BranchProbabilityInfo`), by block number: what
+    /// the prices that choose between variants of the function weigh by.
+    pub frequencies: Vec<(u32, f64)>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -148,7 +158,8 @@ pub fn select_function_with(
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
     let target = builder_target();
     let sized = ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name));
-    let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY);
+    let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY)
+        && !super::pipeline::DECOMPOSE_MULS.with(std::cell::Cell::get);
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
@@ -221,7 +232,8 @@ pub fn select_function_with(
             module.global(id).linkage,
             llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
         );
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, unreachable })
+    let frequencies = crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, unreachable, frequencies })
 }
 
 /// The variables of `function` (after the debug import): parameters in the

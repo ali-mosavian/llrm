@@ -97,14 +97,27 @@ const FLOATS: [MVT; 3] = [MVT::F32, MVT::F64, MVT::F80];
 const ALL: [MVT; 10] =
     [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128, MVT::F32, MVT::F64, MVT::F80, MVT::Other];
 
-#[derive(Clone)]
-pub struct TargetLowering {
-    pub types: TargetLoweringInfo,
+/// The action maps, shared by every copy of a table until one writes.
+#[derive(Clone, Default)]
+struct Maps {
     operations: HashMap<(ISD, MVT), Action>,
     promoted_to: HashMap<(ISD, MVT), MVT>,
     load_ext: HashMap<(LoadExt, MVT, MVT), Action>,
     trunc_store: HashMap<(MVT, MVT), Action>,
     cond_code: HashMap<(CondCode, MVT), Action>,
+    /// `getLibcallName` of the integer operations (`RTLIB::MUL_I32` and the
+    /// like): the runtime routine a `LibCall` action calls. Empty unless the
+    /// target fills it.
+    libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// The routine a function tuned for size calls where it differs from
+    /// `libcall_names`'.
+    size_libcall_names: HashMap<(ISD, MVT), &'static str>,
+}
+
+#[derive(Clone)]
+pub struct TargetLowering {
+    pub types: TargetLoweringInfo,
+    maps: std::sync::Arc<Maps>,
     /// `addLegalFPImmediate`: the float constants an instruction makes.
     legal_fp_immediates: Vec<(MVT, u128)>,
     /// `isFPImmLegal` as a function of the value, for a target whose answer is
@@ -117,18 +130,13 @@ pub struct TargetLowering {
     keeps_f64_constants: bool,
     /// `canUseCMOV`: the target has the conditional move.
     cmov: bool,
-    /// `getLibcallName` of the integer operations (`RTLIB::MUL_I32` and the
-    /// like): the runtime routine a `LibCall` action calls. Empty unless the
-    /// target fills it.
-    libcall_names: HashMap<(ISD, MVT), &'static str>,
-    /// The routine a function tuned for size calls where it differs from
-    /// `libcall_names`'.
-    size_libcall_names: HashMap<(ISD, MVT), &'static str>,
     /// `(granule, least)`: in a function tuned for size a shift by a constant
     /// is the routine's call where the granules left after the whole moves
     /// times the bits beyond them reach `least` (each is a shift instruction
     /// per granule).
     size_shift_call: Option<(u128, u128)>,
+    /// The function is built for size: an `i64` divide calls the target's size routine.
+    small_divide: bool,
     /// The object spelling of a routine's name where the convention decorates
     /// it (`___addsf3@3`).
     libcall_symbols: HashMap<String, (String, u32)>,
@@ -145,19 +153,14 @@ impl TargetLowering {
     pub fn empty(types: TargetLoweringInfo) -> TargetLowering {
         let mut table = TargetLowering {
             types,
-            operations: HashMap::default(),
-            promoted_to: HashMap::default(),
-            load_ext: HashMap::default(),
-            trunc_store: HashMap::default(),
-            cond_code: HashMap::default(),
+            maps: Default::default(),
             legal_fp_immediates: Vec::new(),
             fp_imm_predicate: None,
             opt_for_size: false,
             keeps_f64_constants: false,
             cmov: false,
-            libcall_names: HashMap::default(),
-            size_libcall_names: HashMap::default(),
             size_shift_call: None,
+            small_divide: false,
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
             sdiv_pow2_cmov: None,
@@ -215,7 +218,7 @@ impl TargetLowering {
         vt: MVT,
         name: &'static str,
     ) {
-        self.libcall_names.insert((op, vt), name);
+        std::sync::Arc::make_mut(&mut self.maps).libcall_names.insert((op, vt), name);
     }
 
     /// The routine `op` of `vt` calls in a function tuned for size, where a
@@ -226,7 +229,7 @@ impl TargetLowering {
         vt: MVT,
         name: &'static str,
     ) {
-        self.size_libcall_names.insert((op, vt), name);
+        std::sync::Arc::make_mut(&mut self.maps).size_libcall_names.insert((op, vt), name);
     }
 
     /// A shift by a constant of a `bits`-wide value is a call to the shift
@@ -261,11 +264,17 @@ impl TargetLowering {
     ) -> bool {
         matches!(
             vt,
-            EVT::Simple(vt) if self.size_libcall_names.contains_key(&(op, vt))
+            EVT::Simple(vt) if self.maps.size_libcall_names.contains_key(&(op, vt))
         )
     }
 
     /// The routine `name` is spelled `symbol` in the object.
+    /// Both tables are the same allocations: neither has been written since
+    /// one was copied from the other.
+    pub fn shares_maps_with(&self, other: &TargetLowering) -> bool {
+        std::sync::Arc::ptr_eq(&self.maps, &other.maps)
+    }
+
     pub fn set_libcall_symbol(
         &mut self,
         name: &str,
@@ -301,7 +310,8 @@ impl TargetLowering {
     ) -> Option<&'static str> {
         let EVT::Simple(vt) = vt else { return None };
         if vt == MVT::F128 {
-            // `RTLIB::ADD_F128` and the rest: every target calls the compiler-rt routine
+            // `RTLIB::ADD_F128` and the rest: every target calls the
+            // compiler-rt routine
             return match op {
                 ISD::FAdd => libcalls::name(Libcall::Add(vt)),
                 ISD::FSub => libcalls::name(Libcall::Sub(vt)),
@@ -310,8 +320,8 @@ impl TargetLowering {
                 _ => None,
             };
         }
-        let sized = self.opt_for_size.then(|| self.size_libcall_names.get(&(op, vt)).copied()).flatten();
-        sized.or_else(|| self.libcall_names.get(&(op, vt)).copied())
+        let sized = self.opt_for_size.then(|| self.maps.size_libcall_names.get(&(op, vt)).copied()).flatten();
+        sized.or_else(|| self.maps.libcall_names.get(&(op, vt)).copied())
     }
 
     pub fn set_operation_action(
@@ -320,7 +330,7 @@ impl TargetLowering {
         vt: MVT,
         action: Action,
     ) {
-        self.operations.insert((op, vt), action);
+        std::sync::Arc::make_mut(&mut self.maps).operations.insert((op, vt), action);
     }
 
     fn set_ops(
@@ -344,7 +354,7 @@ impl TargetLowering {
         to: MVT,
     ) {
         self.set_operation_action(op, vt, Action::Promote);
-        self.promoted_to.insert((op, vt), to);
+        std::sync::Arc::make_mut(&mut self.maps).promoted_to.insert((op, vt), to);
     }
 
     pub fn set_load_ext_action(
@@ -354,7 +364,7 @@ impl TargetLowering {
         mem: MVT,
         action: Action,
     ) {
-        self.load_ext.insert((ext, vt, mem), action);
+        std::sync::Arc::make_mut(&mut self.maps).load_ext.insert((ext, vt, mem), action);
     }
 
     pub fn set_trunc_store_action(
@@ -363,7 +373,7 @@ impl TargetLowering {
         mem: MVT,
         action: Action,
     ) {
-        self.trunc_store.insert((vt, mem), action);
+        std::sync::Arc::make_mut(&mut self.maps).trunc_store.insert((vt, mem), action);
     }
 
     pub fn set_cond_code_action(
@@ -372,7 +382,7 @@ impl TargetLowering {
         vt: MVT,
         action: Action,
     ) {
-        self.cond_code.insert((cc, vt), action);
+        std::sync::Arc::make_mut(&mut self.maps).cond_code.insert((cc, vt), action);
     }
 
     pub fn add_legal_fp_immediate(
@@ -406,6 +416,19 @@ impl TargetLowering {
         predicate: fn(MVT, u128, bool) -> bool,
     ) {
         self.fp_imm_predicate = Some(predicate);
+    }
+
+    /// The function selected next is built for size, so its `i64` divide is the
+    /// size routine where the target has one.
+    pub fn set_small_divide(
+        &mut self,
+        small: bool,
+    ) {
+        self.small_divide = small;
+    }
+
+    pub fn small_divide(&self) -> bool {
+        self.small_divide
     }
 
     /// `DAG.shouldOptForSize()` for the function selected next.
@@ -442,7 +465,7 @@ impl TargetLowering {
     ) -> Action {
         match vt {
             EVT::Int(_) => Action::Expand,
-            EVT::Simple(vt) => self.operations.get(&(op, vt)).copied().unwrap_or(Action::Legal),
+            EVT::Simple(vt) => self.maps.operations.get(&(op, vt)).copied().unwrap_or(Action::Legal),
         }
     }
 
@@ -452,7 +475,7 @@ impl TargetLowering {
         vt: MVT,
         mem: MVT,
     ) -> Action {
-        self.load_ext.get(&(ext, vt, mem)).copied().unwrap_or(Action::Legal)
+        self.maps.load_ext.get(&(ext, vt, mem)).copied().unwrap_or(Action::Legal)
     }
 
     pub fn trunc_store_action(
@@ -460,7 +483,7 @@ impl TargetLowering {
         vt: MVT,
         mem: MVT,
     ) -> Action {
-        self.trunc_store.get(&(vt, mem)).copied().unwrap_or(Action::Legal)
+        self.maps.trunc_store.get(&(vt, mem)).copied().unwrap_or(Action::Legal)
     }
 
     pub fn cond_code_action(
@@ -468,7 +491,7 @@ impl TargetLowering {
         cc: CondCode,
         vt: MVT,
     ) -> Action {
-        self.cond_code.get(&(cc, vt)).copied().unwrap_or(Action::Legal)
+        self.maps.cond_code.get(&(cc, vt)).copied().unwrap_or(Action::Legal)
     }
 
     /// `TargetLowering::isSExtCheaperThanZExt(FromTy, ToTy)`.
@@ -539,7 +562,7 @@ impl TargetLowering {
         op: ISD,
         vt: MVT,
     ) -> MVT {
-        if let Some(&to) = self.promoted_to.get(&(op, vt)) {
+        if let Some(&to) = self.maps.promoted_to.get(&(op, vt)) {
             return to;
         }
         let ladder: &[MVT] = if INTS.contains(&vt) { &INTS } else { &FLOATS };
@@ -728,6 +751,15 @@ impl TargetLowering {
             }
         }
         t.set_trunc_store_action(MVT::F64, MVT::F32, Expand);
+
+        // `f128` is a legal type (`FPR128`) without arithmetic: the operations
+        // are RTLIB calls, the compares and selects and the conversions to and
+        // from it are `Custom` (`LowerF128Call`).
+        let quad = [MVT::F128];
+        t.set_ops(&[FAdd, FSub, FMul, FDiv], &quad, LibCall);
+        t.set_ops(&[ConstantFP], &quad, Expand);
+        t.set_ops(&[SetCC, BrCC, Select, SelectCC], &quad, Custom);
+        t.set_ops(&[FpExtend], &quad, Custom);
 
         // Atomics.
         let narrow = [MVT::I8, MVT::I16, MVT::I32, MVT::I64];
@@ -1019,6 +1051,21 @@ mod tests {
     #[test]
     fn test_action_tables_are_keyed_with_the_fixed_key_hasher() {
         let table = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I32], false));
-        let _: &llrm_support::hash::HashMap<(ISD, MVT), Action> = &table.operations;
+        let _: &llrm_support::hash::HashMap<(ISD, MVT), Action> = &table.maps.operations;
+    }
+
+    /// A per-function copy of the cached table deep-copied eight hash maps
+    /// (10.8 M of tiny600's 1 644 M instructions at -O0). The copy shares them
+    /// until it sets an action, and then leaves the original alone.
+    #[test]
+    fn test_a_table_copy_shares_its_maps_until_written() {
+        let base = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut copy = base.clone();
+        assert!(copy.shares_maps_with(&base), "clone deep-copied the action maps");
+        let before = base.operation_action(ISD::Add, EVT::I32);
+        copy.set_operation_action(ISD::Add, MVT::I32, Action::Expand);
+        assert!(!copy.shares_maps_with(&base));
+        assert_eq!(copy.operation_action(ISD::Add, EVT::I32), Action::Expand);
+        assert_eq!(base.operation_action(ISD::Add, EVT::I32), before, "write reached the original");
     }
 }

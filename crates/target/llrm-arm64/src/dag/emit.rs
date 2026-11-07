@@ -19,14 +19,13 @@
 //! instruction yet`), which `--isel=shadow` falls back on. Rows added
 //! to [`build`] each carry an encoder byte check. Exit: C2..Cn.
 
-use llrm_support::hash::HashMap;
-
 use llrm_codegen::backend::selectiondag::isd::ISD;
-use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
 use llrm_codegen::model::lir::SrcLoc;
 use llrm_dagisel::generated::aarch64::aarch64_apple_m1::MACHINE_OPCODES;
 use llrm_lir::registers::RegId;
+use llrm_support::hash::HashMap;
 
 use super::function::Selected;
 use super::globals::Globals;
@@ -277,7 +276,15 @@ fn memory_form(name: &str) -> Option<MemoryForm> {
     };
     let (width, bytes, sign) = match element {
         // `LDRSui` and `LDRDui` move a float
-        "S" | "D" => (Width::W, if element == "S" { 4 } else { 8 }, false),
+        "S" | "D" | "Q" => (
+            Width::W,
+            match element {
+                "S" => 4,
+                "D" => 8,
+                _ => 16,
+            },
+            false,
+        ),
         "BB" => (Width::W, 1, false),
         "HH" => (Width::W, 2, false),
         "W" => (Width::W, 4, false),
@@ -289,7 +296,7 @@ fn memory_form(name: &str) -> Option<MemoryForm> {
         "SW" => (Width::X, 4, true),
         _ => return None,
     };
-    Some(MemoryForm { width, bytes, sign, store, form, fp: matches!(element, "S" | "D") })
+    Some(MemoryForm { width, bytes, sign, store, form, fp: matches!(element, "S" | "D" | "Q") })
 }
 
 /// `CSELWr`, `CSINCXr` and the rest: the select and its width.
@@ -1474,9 +1481,18 @@ impl Emitter<'_> {
                     NodeData::PhysReg(id) => {
                         let (dst, src) = (self.mf.fpr(), fpr_of(id)?);
                         self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(src) });
+                        if node.values[0] == EVT::Simple(MVT::F128) {
+                            self.mf.wide.push(Reg::Fpr(dst));
+                        }
                         dst
                     }
-                    NodeData::Register(number) => self.fvreg(number),
+                    NodeData::Register(number) => {
+                        let one = self.fvreg(number);
+                        if node.values[0] == EVT::Simple(MVT::F128) {
+                            self.mf.wide.push(Reg::Fpr(one));
+                        }
+                        one
+                    }
                     other => return Err(format!("a register operand that is {other:?}")),
                 };
                 self.fvalues.insert((id, 0), value);
@@ -1531,6 +1547,9 @@ impl Emitter<'_> {
                 let Operand::Fpr(src) = self.operand(node.ops[2])? else {
                     return Err("a float copy of a constant".into());
                 };
+                if self.dag.value_type(node.ops[2]) == EVT::Simple(MVT::F128) {
+                    self.mf.wide.extend([Reg::Fpr(dst), Reg::Fpr(src)]);
+                }
                 self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(src) });
                 Ok(())
             }
@@ -1905,10 +1924,21 @@ pub fn emit(
             emitter.ops.push(Op::Copy { dst, src });
         }
         let mut places: Vec<Option<SrcLoc>> = Vec::new();
+        // The notes of nothing: where they stand does not matter.
+        for &(variable, _) in block.dbg_values.iter().filter(|(_, value)| value.is_none()) {
+            emitter.ops.push(Op::DbgValue { variable, reg: None });
+        }
         for unit in &block.units {
             for &node in unit.nodes.iter().rev() {
                 places.resize(emitter.ops.len(), None);
                 emitter.node(node)?;
+                // `InstrEmitter::EmitDbgValue`: after the node whose value a
+                // `llvm.dbg.value` names.
+                for &(variable, value) in block.dbg_values.iter().filter(|(_, value)| value.is_some_and(|v| v.node == node)) {
+                    let value = value.expect("filtered to a value");
+                    let reg = emitter.values.get(&(value.node, value.res)).map(|&gpr| Reg::Gpr(gpr));
+                    emitter.ops.push(Op::DbgValue { variable, reg });
+                }
                 if lines {
                     let order = block.dag.node(SDValue { node, res: 0 }).order as usize;
                     let place = block.dag.lines.get(order).copied().flatten();

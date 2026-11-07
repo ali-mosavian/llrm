@@ -86,8 +86,16 @@ pub fn is_trivially_re_materializable(
                         || matches!(addr.space, Space::Segment | Space::External) && through == RegId::None
                 })
         }
-        // A load from a cell: `mayLoad` and invariant.
-        (Operation::Move, Some("mov"), [Loc::Mem(cell)]) => {
+        // A load from a cell: `mayLoad` and invariant. The pin's switch takes
+        // the scalar and packed SSE loads with the integer ones: `MOVSSrm`,
+        // `MOVSDrm`, `MOVAPSrm`, `MOVUPSrm`, `MOVAPDrm`, `MOVUPDrm`, `MOVDQArm`,
+        // `MOVDQUrm`.
+        // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L830-L860>
+        (
+            Operation::Move,
+            Some("mov" | "movss" | "movsd" | "movaps" | "movups" | "movapd" | "movupd" | "movdqa" | "movdqu"),
+            [Loc::Mem(cell)],
+        ) => {
             invariant
                 && into.width == cell.width
                 && cell.addr.is_some()
@@ -121,6 +129,13 @@ pub fn flagged_loads(body: &LirBody) -> BTreeSet<u32> {
         .iter()
         .flat_map(|block| block.insns.iter())
         .filter(|one| one.invariant())
+        // a plain load: an instruction that folded one also reads registers
+        .filter(|one| {
+            one.what.as_ref().is_some_and(|what| {
+                matches!(what.op, crate::model::ir::Operation::Move | crate::model::ir::Operation::FloatLoad)
+                    && matches!(what.sources.as_slice(), [crate::model::ir::Loc::Mem(_)])
+            })
+        })
         .filter_map(|one| match one.defines.as_slice() {
             [value] if definitions.get(value) == Some(&1) => Some(*value),
             _ => None,
@@ -135,6 +150,24 @@ pub fn flagged_loads(body: &LirBody) -> BTreeSet<u32> {
 /// needs no per-live-range proof. Incoming arguments are the frame cells above
 /// the frame pointer. An x87 `fld` of one is such a load too.
 pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
+    let mut definitions: IndexMap<u32, usize> = IndexMap::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for value in &one.defines {
+            *definitions.entry(*value).or_default() += 1;
+        }
+    }
+    argument_load_insns(body)
+        .into_iter()
+        .filter_map(|(_, value, _)| (definitions.get(&value) == Some(&1)).then_some(value))
+        .collect()
+}
+
+/// The loads of `argument_loads`' kind with the value each defines, whatever
+/// else defines that value: the pin remakes a load per value number
+/// (`isRematerializable` of one `VNInfo`), and a value here that an
+/// instruction also redefines in place (a tied `add`) has a value number the
+/// load alone defines.
+pub fn argument_load_insns(body: &LirBody) -> Vec<(u64, u32, (i64, u32))> {
     let incoming = |cell: &crate::model::ir::Mem| {
         cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0)
             && cell.base.is_none()
@@ -148,17 +181,17 @@ pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
             match place {
                 // Its address is taken: any callee may write it.
                 Loc::Address(a) if a.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) => {
-                    return BTreeSet::new();
+                    return Vec::new();
                 }
                 Loc::Imm(imm) if imm.address.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) => {
-                    return BTreeSet::new();
+                    return Vec::new();
                 }
                 _ => {}
             }
             if what.op == Operation::Address {
                 if let Loc::Mem(cell) = place {
                     if cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0) {
-                        return BTreeSet::new();
+                        return Vec::new();
                     }
                 }
             }
@@ -168,12 +201,6 @@ pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
                     written.push(span(cell.addr.expect("an address"), cell.width));
                 }
             }
-        }
-    }
-    let mut definitions: IndexMap<u32, usize> = IndexMap::default();
-    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
-        for value in &one.defines {
-            *definitions.entry(*value).or_default() += 1;
         }
     }
     body.blocks
@@ -191,11 +218,29 @@ pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
             ((integer || float)
                 && incoming(cell)
                 && one.defines == [into.value]
-                && definitions.get(&into.value) == Some(&1)
                 && !written.iter().any(|(start, end)| *start < to && from < *end))
-            .then_some(into.value)
+            .then_some((one.id(), into.value, (addr.disp, cell.width)))
         })
         .collect()
+}
+
+/// The incoming argument cell (frame displacement, width) `one` loads, if it
+/// is a plain load of one: the shape `argument_load_insns` takes.
+pub fn argument_load_cell(one: &Insn) -> Option<(i64, u32)> {
+    let what = one.what.as_ref()?;
+    let ([Loc::Held(into)], [Loc::Mem(cell)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+        return None;
+    };
+    let addr = cell.addr?;
+    let integer = what.op == Operation::Move && what.name.as_deref() == Some("mov") && into.width == cell.width;
+    let float = what.op == Operation::FloatLoad && what.name.as_deref() == Some("fld");
+    ((integer || float)
+        && addr.space == Space::Frame
+        && addr.disp > 0
+        && cell.base.is_none()
+        && cell.index.is_none()
+        && one.defines == [into.value])
+    .then_some((addr.disp, cell.width))
 }
 
 /// The values of `body` with one definition that
@@ -428,6 +473,28 @@ mod tests {
         assert_eq!(argument_loads(&body), BTreeSet::from([1, 2]));
     }
 
+    /// The pin remakes a load per value number: a load of an argument whose
+    /// register an `or` also defines in place is a remattable value number,
+    /// though the register has two definitions (`sf32_pack` of x_sf_add m32
+    /// -Os spilled and reloaded its first parameter, +5 B).
+    #[test]
+    fn test_a_load_of_a_register_also_defined_in_place_is_a_load_to_remake() {
+        let or = {
+            let what = crate::model::ir::Semantics {
+                name: Some("or".into()),
+                dests: vec![word(1)],
+                sources: vec![word(1), Loc::Imm(crate::model::ir::Imm { value: 1, width: 2, address: None })],
+                ..crate::model::ir::Semantics::new(Operation::Binary)
+            };
+            Arc::new(Insn::new(1, None, Some(what), vec![1], vec![1]))
+        };
+        let body = one_block(vec![move_of(0, word(1), argument(6), vec![1]), or]);
+        assert!(argument_loads(&body).is_empty(), "two definitions: not a register to remake");
+        let loads = argument_load_insns(&body);
+        assert_eq!(loads.len(), 1);
+        assert_eq!((loads[0].1, loads[0].2), (1, (6, 2)), "value 1, the cell [6] two bytes");
+    }
+
     /// A parameter the function assigns, or whose address it takes, is not
     /// immutable: the loads of it stay.
     #[test]
@@ -449,6 +516,32 @@ mod tests {
         };
         let taken = one_block(vec![move_of(0, word(1), argument(6), vec![1]), lea]);
         assert!(argument_loads(&taken).is_empty(), "an address taken: any call may write");
+    }
+
+    /// An invariant `movss` load of a pool constant was not rematerialisable
+    /// (only `mov` was): once LICM hoisted it, the allocator spilled it with a
+    /// store and a frame 16 B larger (jpeg_single -O2 m64: +128 B, every slot
+    /// past 127 a 4-byte displacement).
+    #[test]
+    fn test_an_invariant_sse_load_is_rematerialisable() {
+        let cell = || Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(Space::Segment, 0)), 4));
+        let float = |name: &str| {
+            let mut one = (*move_of(0, Loc::Held(Held { value: 1, width: 4, offset: 0 }), cell(), vec![1])).clone();
+            let mut what = one.what.clone().unwrap();
+            what.name = Some(name.into());
+            one.what = Some(what);
+            one
+        };
+        for name in ["movss", "movsd"] {
+            let one = float(name);
+            let width = if name == "movsd" { 8 } else { 4 };
+            let mut what = one.what.clone().unwrap();
+            what.dests = vec![Loc::Held(Held { value: 1, width, offset: 0 })];
+            what.sources = vec![Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(Space::Segment, 0)), width))];
+            let one = Insn { what: Some(what), ..one };
+            assert!(is_trivially_re_materializable(&one, true), "{name} of an invariant cell");
+            assert!(!is_trivially_re_materializable(&one, false), "{name} of a cell that may change");
+        }
     }
 
     /// A load the instruction calls invariant is rematerialised and the same

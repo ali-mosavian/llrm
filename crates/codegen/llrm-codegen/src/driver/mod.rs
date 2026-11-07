@@ -71,7 +71,7 @@ pub struct Options {
     /// rounds to its type.
     pub float_store: bool,
     /// Whether a spill of a float rounds to the float's type (`Profile`'s
-    /// `rounds_float_spills`): set by llrm-c, which follows the pin.
+    /// `rounds_float_spills`): set by llrm-cc, which follows the pin.
     pub rounds_float_spills: bool,
     /// Whether a spill of an x87 value keeps its 80 bits (`Profile`'s
     /// `spills_extended`): set by llrm-qb, which follows real BC.
@@ -255,7 +255,7 @@ fn without_jump_tables(program: &mut Program) {
             if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
                 && !function.is_declaration()
             {
-                function.attrs.push(llrm_mir::Attribute::Str("no-jump-tables".to_owned(), Some("true".to_owned())));
+                function.attrs.push(llrm_mir::Attribute::Str("no-jump-tables".into(), Some("true".to_owned())));
             }
         }
     }

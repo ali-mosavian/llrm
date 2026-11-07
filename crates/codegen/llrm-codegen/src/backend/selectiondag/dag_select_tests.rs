@@ -150,6 +150,8 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
             &mut built.dag,
             &tli,
             &mut X86Lowering {
+                imul_if_smaller: false,
+                share_products: false,
                 cmov: false,
                 sse2: false,
                 min_size: false,
@@ -232,6 +234,8 @@ fn the_combiner_runs_between_the_legalizers() {
         &mut built.dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
+            share_products: false,
             cmov: false,
             sse2: false,
             min_size: false,
@@ -356,6 +360,8 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
         .expect("builds");
         let (mut lowering, mut hooks) = (
             X86Lowering {
+               imul_if_smaller: false,
+                share_products: false,
                 cmov: false,
                 sse2: false,
                 min_size: false,

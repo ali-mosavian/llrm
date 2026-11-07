@@ -1137,7 +1137,8 @@ fn a_stack_argument_beyond_the_ix_displacement_is_stored_through_iy() {
 
 /// `w >> 8` of a spilled word reloaded both bytes and then overwrote the low
 /// one (`ld e, -8(ix)` / `ld d, -7(ix)` / `ld e, d` / `ld d, #0`): 3 B and 19 T
-/// a site, 11 sites in div_constants_short. Only the high byte is loaded now.
+/// a site, 11 sites in div_constants_short. The byte is now moved or reloaded
+/// alone; the word is spilled by `push`/`pop` (f: 105 B with slots, 84 B).
 #[test]
 fn a_spilled_word_shifted_right_by_a_byte_reloads_one_byte() {
     let ir = include_str!("kernels/ir/reload_high_lane.ll");
@@ -1147,7 +1148,21 @@ fn a_spilled_word_shifted_right_by_a_byte_reloads_one_byte() {
         .windows(4)
         .any(|w| w[0].starts_with("ld e, -") && w[1].starts_with("ld d, -") && w[2] == "ld e, d" && w[3] == "ld d, #0");
     assert!(!dead, "{out}");
-    assert!(lines.windows(2).any(|w| w[0].starts_with("ld e, -") && w[1] == "ld d, #0"), "{out}");
+    let byte = lines.windows(2).any(|w| (w[0].starts_with("ld e, -") || w[0] == "ld e, d") && w[1] == "ld d, #0");
+    assert!(byte, "{out}");
+}
+
+/// `memory_expansion` at -Os was refused ("a conditional return in a function
+/// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
+/// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The
+/// function (two 700-byte arrays) keeps the jump.
+#[test]
+fn an_early_return_in_a_function_with_a_frame_compiles() {
+    let ir = include_str!("kernels/ir/conditional_return_with_frame.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "lc1", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(out.contains("pop ix"), "{level:?}: {out}");
+    }
 }
 
 /// A float argument or result killed the compiler ("legal parts: Type(F32)",
@@ -1840,6 +1855,7 @@ fn a_long_step_of_one_is_a_zero_test_and_a_conditional_step() {
     }
 }
 
+/// (-Os calls the size routine `__s_divsi3`, #7527.)
 /// The divisor's high word of a long divide went on the stack as `push bc`
 /// (a reserved slot) and two stores into it from `ix`: 10 B for the word, and
 /// 60 B in each `div_constants_long` function. It is `ld rr, #0; push rr`.
@@ -1850,7 +1866,7 @@ fn the_stack_word_of_a_long_divide_is_pushed_not_stored() {
     let out = text(&ir, "q", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
     let lines: Vec<&str> = out.lines().map(str::trim).collect();
     let call =
-        lines.iter().position(|l| l.contains("call __divsi3")).unwrap_or_else(|| panic!("no divide call\n{out}"));
+        lines.iter().position(|l| l.contains("call __s_divsi3")).unwrap_or_else(|| panic!("no divide call\n{out}"));
     let push = lines[..call].iter().rposition(|l| l.starts_with("push")).unwrap_or_else(|| panic!("no push\n{out}"));
     let pair = lines[push].trim_start_matches("push ");
     assert_eq!(lines[push - 1], format!("ld {pair}, #0"), "{out}");

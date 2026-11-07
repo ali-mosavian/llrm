@@ -869,7 +869,7 @@ fn _hoist(
             Operand::Constant(context.constant(Constant { ty: pointer_type, kind: ConstantKind::Global(callee) }));
         let mut argument_attrs = vec![Vec::new(); 4];
         if let Some(align) = align {
-            argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".to_owned(), align));
+            argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".into(), align));
         }
         let info = CallInfo {
             function_type,
@@ -1478,7 +1478,7 @@ fn _filled(
         .filter(|align| *align != u64::MAX);
     let mut argument_attrs = vec![Vec::new(); 4];
     if let Some(align) = dest_align {
-        argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".to_owned(), align));
+        argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".into(), align));
     }
     let info = CallInfo {
         function_type,

@@ -15,6 +15,11 @@
 //! which saves a copy per trip, the swap is for size alone: at speed it moved
 //! the allocation of the big seeds both ways (68000 -O2 +86 B net).
 //!
+//! Both sources dying is worth the swap when the result is copied into the
+//! physical register the other source was copied from (`r0 = ADD (MOV r1),
+//! (MOV r0)`): `commute_tied` then ties the result to it, as the pin's
+//! `SrcRegMap`/`DstRegMap` rule does, and the return copy goes.
+//!
 //! DEVIATE: the pin marks `ADD32dd` commutative and not its `ADD32dr` twin.
 //! Reason: both are the same add, and the tie to the dying source saves the
 //! copies. Exit: review 2026-11-20, a policy choice.
@@ -22,6 +27,7 @@
 //! # See also
 //! `TwoAddressInstructionPass::isProfitableToCommute`.
 
+use llrm_lir::registers::RegId;
 use llrm_spike_mf::{Kind, Operand, Reg};
 use llrm_support::hash::{HashMap, HashSet};
 
@@ -43,6 +49,10 @@ struct Flow {
     reads: HashMap<u32, u32>,
     /// The register a register is the only copy of.
     source: HashMap<u32, u32>,
+    /// The physical registers a register is copied into.
+    phys_out: HashMap<u32, Vec<RegId>>,
+    /// The physical registers a register is copied from.
+    phys_in: HashMap<u32, Vec<RegId>>,
 }
 
 impl Flow {
@@ -53,6 +63,8 @@ impl Flow {
             joins: HashSet::default(),
             reads: HashMap::default(),
             source: HashMap::default(),
+            phys_out: HashMap::default(),
+            phys_in: HashMap::default(),
         };
         let mut defs: HashMap<u32, u32> = HashMap::default();
         for inst in function.blocks.iter().flat_map(|block| &block.insts) {
@@ -68,6 +80,17 @@ impl Flow {
             {
                 flow.copies_of.entry(*from).or_default().push(*to);
                 flow.copied_from.entry(*to).or_default().push(*from);
+            }
+        }
+        for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+            match (inst.kind, &inst.operands[..]) {
+                (Kind::Copy, [Operand::Def(Reg::Phys(to)), Operand::Use(Reg::Virt(from))]) => {
+                    flow.phys_out.entry(*from).or_default().push(*to)
+                }
+                (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Phys(from))]) => {
+                    flow.phys_in.entry(*to).or_default().push(*from)
+                }
+                _ => {}
             }
         }
         for (to, from) in &flow.copied_from {
@@ -113,6 +136,22 @@ impl Flow {
         false
     }
 
+    /// Whether `result` is copied, through copies, into a physical register
+    /// that `source` was copied from.
+    fn returns_through_phys(
+        &self,
+        result: u32,
+        source: u32,
+    ) -> bool {
+        let out: Vec<RegId> =
+            self.closure(&self.copies_of, result).iter().filter_map(|r| self.phys_out.get(r)).flatten().copied().collect();
+        self.closure(&self.copied_from, source)
+            .iter()
+            .filter_map(|r| self.phys_in.get(r))
+            .flatten()
+            .any(|reg| out.contains(reg))
+    }
+
     /// Whether `result` reaches, through copies, a register `source` is a copy
     /// of.
     fn returns_to(
@@ -155,7 +194,8 @@ pub fn mark_commutative(
             let Some(other) = other else { continue };
             let returns_to_base = flow.returns_to(*result, *base) && !flow.returns_to(*result, other);
             let wanted = size || flow.returns_to(*result, other);
-            inst.commutable = wanted && flow.dies_here(other) && !flow.dies_here(*base) && !returns_to_base;
+            inst.commutable = wanted && flow.dies_here(other) && !flow.dies_here(*base) && !returns_to_base
+                || flow.dies_here(other) && flow.dies_here(*base) && flow.returns_through_phys(*result, other);
         }
     }
 }

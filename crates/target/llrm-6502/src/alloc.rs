@@ -13,6 +13,8 @@
 
 use std::fmt::Write;
 
+use llrm_codegen::model::ir::Loc;
+use llrm_codegen::model::lir::Insn;
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
@@ -194,6 +196,39 @@ impl<const STACK: bool> Target for Mos<STACK> {
     /// join of a value with its argument cell removes that copy.
     fn copy_cost() -> u32 {
         crate::timing::estimate(Cpu::Mos6502, "ldx rc2").map_or(1, |priced| priced.bytes + priced.cycles as u32)
+    }
+
+    /// `isAsCheapAsAMove` against the copy it replaces. In a register a literal
+    /// is `lda #n` (2 B, 2 clocks) against `tax`/`txa`/`tay`/`tya` (1 B, 2
+    /// clocks): the copy stays, as does a tie in clocks; there is no `xor a`.
+    /// In a cell the literal is `lda #n` + `sta rc` (4 B, 5 clocks) against
+    /// `sta rc` (2 B, 3) from a register or `lda rc` + `sta rc` (4 B, 6) from a
+    /// cell: only a cell-to-cell copy loses to it. Unpriced, `-Os` made a zero
+    /// again where `txa` was one byte (`shift_int32_variable`, +3 B).
+    fn literal_move_wins(
+        literal: &Insn,
+        source: &[RegId],
+        destination: &[RegId],
+        size: bool,
+    ) -> bool {
+        let Some(what) = literal.what.as_ref() else { return false };
+        let ([Loc::Held(_)], [Loc::Imm(_)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+            return false;
+        };
+        let price = |mnemonic: &str, operand: &str| {
+            crate::timing::instruction(Cpu::Mos6502, mnemonic, operand)
+                .map_or((u32::MAX / 4, u32::MAX / 4), |cost| (cost.bytes, cost.cycles))
+        };
+        let in_cells =
+            |registers: &[RegId]| !registers.is_empty() && registers.iter().all(|register| is_cell(*register));
+        let (copy, remat) = if in_cells(destination) {
+            let (load, store) = (price("lda", "#0"), price("sta", "rc2"));
+            let from = if in_cells(source) { price("lda", "rc2") } else { (0, 0) };
+            ((from.0 + store.0, from.1 + store.1), (load.0 + store.0, load.1 + store.1))
+        } else {
+            (price("tax", ""), price("lda", "#0"))
+        };
+        if size { remat.0 <= copy.0 } else { remat.1 < copy.1 }
     }
 
     /// A byte class the compare class narrowed has `any` as its larger class.
@@ -484,6 +519,8 @@ struct Compare {
     /// (`cmp g; sbc g+1`); `b` names nothing. Kept only when no store, call
     /// or saved flags lie between the compare and the end of its block.
     memory: Option<String>,
+    /// Over two words: the high pair, subtracted with the borrow of the first.
+    wide: Option<((String, u32), (String, u32))>,
 }
 
 impl Builder {
@@ -812,7 +849,7 @@ impl Builder {
             self.copy(d, acc);
         }
         let version = self.version(&cell);
-        self.pending = Some(Compare { a, b: (cell, version), word, zero: false, memory: None });
+        self.pending = Some(Compare { a, b: (cell, version), word, zero: false, memory: None, wide: None });
         Ok(())
     }
 
@@ -827,7 +864,7 @@ impl Builder {
         code: i64,
         branch: bool,
     ) -> Result<(), Unsupported> {
-        let Compare { a, b, word, zero, memory } =
+        let Compare { a, b, word, zero, memory, wide } =
             self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
         if self.version(&a.0) != a.1 || memory.is_none() && self.version(&b.0) != b.1 {
             return Err(Unsupported("a compare's operand changed before its branch".into()));
@@ -930,6 +967,31 @@ impl Builder {
             );
             sbc.sets_flags = true;
             self.push(sbc);
+        }
+        if let Some((a1, b1)) = wide {
+            if self.version(&a1.0) != a1.1 || self.version(&b1.0) != b1.1 {
+                return Err(Unsupported("a compare's operand changed before its branch".into()));
+            }
+            let (al, ah) = self.read_word(&a1.0)?;
+            let rhs = match self.word_constant(&b1.0) {
+                Some(bytes) => bytes.map(Operand::Imm),
+                None => {
+                    let (bl, bh) = self.read_word(&b1.0)?;
+                    for r in [bl, bh] {
+                        self.require(r, Class::MEM)?;
+                    }
+                    [Operand::Use(bl), Operand::Use(bh)]
+                }
+            };
+            for (lhs, rhs) in [al, ah].into_iter().zip(rhs) {
+                self.copy(acc, lhs);
+                let mut sbc = Inst::new(
+                    Kind::Op("SBC"),
+                    vec![Operand::Def(acc), Operand::Use(acc), rhs, Operand::Def(Reg::Phys(reg::FLAGS))],
+                );
+                sbc.sets_flags = true;
+                self.push(sbc);
+            }
         }
         Ok(())
     }
@@ -1789,6 +1851,7 @@ pub fn build_with_places(
                     word: false,
                     zero: false,
                     memory: None,
+                    wide: None,
                 });
             }
             // a global on the right of a compare: read at the compare, kept
@@ -1802,6 +1865,7 @@ pub fn build_with_places(
                     word: inst.opcode == op::CMP16M,
                     zero: false,
                     memory: Some(symbol),
+                    wide: None,
                 });
                 if !memory_holds_until_flags_are_read(items, at) {
                     b.load_compared_global(at)?;
@@ -1815,6 +1879,7 @@ pub fn build_with_places(
                     word: true,
                     zero: true,
                     memory: None,
+                    wide: None,
                 });
             }
             // the carry out of the first goes into the next: the instructions
@@ -1925,6 +1990,35 @@ pub fn build_with_places(
                     b.push(step);
                 }
             }
+            // one bit crosses between two words: the carry of a shift of the
+            // word that gives it up, rotated into the word that takes it
+            code @ (op::FSHL1 | op::FSHR1) => {
+                let (al, ah) = b.read_word(name(&o[1])?)?;
+                let (bl, bh) = b.read_word(name(&o[2])?)?;
+                let (dl, dh) = b.write_word(name(&o[0])?)?;
+                let acc = Reg::Phys(reg::A);
+                let (kind, kept, gives, first, second) = if code == op::FSHL1 {
+                    ("FSHL1", (al, ah), bh, dl, dh)
+                } else {
+                    ("FSHR1", (bl, bh), al, dh, dl)
+                };
+                b.copy(dl, kept.0);
+                b.copy(dh, kept.1);
+                for r in [dl, dh] {
+                    b.require(r, Class::MEM)?;
+                }
+                b.push(Inst::new(
+                    Kind::Op(kind),
+                    vec![
+                        Operand::Def(acc),
+                        Operand::Use(gives),
+                        Operand::Def(first),
+                        Operand::Use(first),
+                        Operand::Def(second),
+                        Operand::Use(second),
+                    ],
+                ));
+            }
             // 32 bits through `__sa` and `__sb` (runtime/mos_rt.s)
             code @ (op::MUL32
             | op::UDIV32
@@ -1984,6 +2078,18 @@ pub fn build_with_places(
                     b.copy(to, acc);
                 }
             }
+            op::CMP32 => {
+                let (a, c) = (name(&o[1])?, name(&o[2])?);
+                let (a1, c1) = (name(&o[3])?, name(&o[4])?);
+                b.pending = Some(Compare {
+                    a: (a.to_owned(), b.version(a)),
+                    b: (c.to_owned(), b.version(c)),
+                    word: true,
+                    zero: false,
+                    memory: None,
+                    wide: Some(((a1.to_owned(), b.version(a1)), (c1.to_owned(), b.version(c1)))),
+                });
+            }
             op::CMP16 => {
                 let (a, c) = (name(&o[1])?, name(&o[2])?);
                 b.pending = Some(Compare {
@@ -1992,6 +2098,7 @@ pub fn build_with_places(
                     word: true,
                     zero: false,
                     memory: None,
+                    wide: None,
                 });
             }
             spill_op if spill_op == spill::SAVE_FLAGS => {
@@ -2974,20 +3081,28 @@ fn emit_on(
         }
     };
     let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
+    // a variant is priced on its text before the transfer of known constants,
+    // the pass after the layout; what is kept is the text with it
     let price = |code: &str, slots: &[(String, usize)]| {
         crate::timing::estimate(cpu, &without_lines(code))
             .map(|priced| (priced.bytes + slots.iter().map(|(_, n)| *n as u32).sum::<u32>(), priced.cycles))
     };
-    let (mut code, mut slots, sunk, shared, moved) = run(function.clone(), true, true, false, true)?;
+    // a change of layout is kept where it wins both before the transfer and
+    // after it: a byte the pass saves must not tip the choice to a slower
+    // layout, nor a layout it would have undone
+    let wins = |kept: (&str, &str, &[(String, usize)]), other: (&str, &str, &[(String, usize)])| {
+        let better = |a: Result<(u32, u64), String>, b: Result<(u32, u64), String>| matches!((a, b), (Ok(a), Ok(b)) if a.0 > b.0 || a.1 > b.1);
+        better(price(kept.1, kept.2), price(other.1, other.2)) && better(price(kept.0, kept.2), price(other.0, other.2))
+    };
+    let (mut code, mut priced, mut slots, sunk, shared, moved) = run(function.clone(), true, true, false, true)?;
     // a layout that rotates a loop is kept only where it is no larger and no
     // slower than the order the blocks came in
     let mut place = true;
     if moved
-        && let Ok((other, other_slots, ..)) = run(function.clone(), true, true, false, false)
-        && let (Ok(kept), Ok(candidate)) = (price(&code, &slots), price(&other, &other_slots))
-        && (kept.0 > candidate.0 || kept.1 > candidate.1)
+        && let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), true, true, false, false)
+        && wins((&code, &priced, &slots), (&other, &other_priced, &other_slots))
     {
-        (code, slots, place) = (other, other_slots, false);
+        (code, priced, slots, place) = (other, other_priced, other_slots, false);
     }
     // a function with calls that spilled may do better with a register kept in
     // a slot across them only
@@ -2997,7 +3112,7 @@ fn emit_on(
     }
     // each change is kept only where it is no larger and no slower than the
     // function without it
-    let mut best = (code, slots);
+    let mut best = (code, priced, slots);
     let mut settings = (true, true);
     let mut variants = vec![(false, false)];
     if sunk && shared {
@@ -3007,24 +3122,24 @@ fn emit_on(
         variants.clear();
     }
     for (sink, share) in variants {
-        let Ok((other, other_slots, ..)) = run(function.clone(), sink, share, false, place) else { continue };
-        if let (Ok(kept), Ok(candidate)) = (price(&best.0, &best.1), price(&other, &other_slots)) {
-            if kept.0 > candidate.0 || kept.1 > candidate.1 {
-                best = (other, other_slots);
-                settings = (sink, share);
-            }
+        let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), sink, share, false, place) else {
+            continue;
+        };
+        if wins((&best.0, &best.1, &best.2), (&other, &other_priced, &other_slots)) {
+            best = (other, other_priced, other_slots);
+            settings = (sink, share);
         }
     }
     if splittable
-        && let Ok((other, other_slots, ..)) = run(function.clone(), settings.0, settings.1, true, place)
-        && let (Ok(kept), Ok(candidate)) = (price(&best.0, &best.1), price(&other, &other_slots))
+        && let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), settings.0, settings.1, true, place)
+        && let (Ok(kept), Ok(candidate)) = (price(&best.1, &best.2), price(&other_priced, &other_slots))
         && candidate.0 <= kept.0
         && candidate.1 <= kept.1
         && candidate != kept
     {
-        best = (other, other_slots);
+        best = (other, other_priced, other_slots);
     }
-    Ok(best)
+    Ok((best.0, best.2))
 }
 
 /// `rs0 += n` (the frame, `n` as a signed 16-bit amount).
@@ -3195,7 +3310,7 @@ fn emit_with<const STACK: bool>(
     _split: bool,
     place: bool,
     source: Option<(&str, Option<u32>)>,
-) -> Result<(String, Vec<(String, usize)>, bool, bool, bool), String> {
+) -> Result<(String, String, Vec<(String, usize)>, bool, bool, bool), String> {
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
@@ -3320,8 +3435,13 @@ fn emit_with<const STACK: bool>(
                     parallel_move(&mut out, &moves, a_live);
                 }
                 (Kind::Copy, _) => move_byte(&mut out, regs[0], regs[1], a_live, spare),
+                // a lane nothing reads is not moved (a word truncated to a byte)
                 (Kind::Op("UNPACK"), _) => {
-                    parallel_move(&mut out, &[(regs[0], lane(regs[2], 0)), (regs[1], lane(regs[2], 1))], a_live);
+                    let moves: Vec<_> = [(regs[0], lane(regs[2], 0)), (regs[1], lane(regs[2], 1))]
+                        .into_iter()
+                        .filter(|(to, _)| after[b][i].contains(to))
+                        .collect();
+                    parallel_move(&mut out, &moves, a_live);
                 }
                 (Kind::Op("PACK"), _) => {
                     parallel_move(&mut out, &[(lane(regs[0], 0), regs[1]), (lane(regs[0], 1), regs[2])], a_live);
@@ -3536,6 +3656,17 @@ fn emit_with<const STACK: bool>(
                         _ => writeln!(out, "  {first} {one}\n  {second} {two}").unwrap(),
                     }
                 }
+                // `lda give; asl|lsr a` leaves the bit in the carry; the word rotates it in
+                (Kind::Op(step @ ("FSHL1" | "FSHR1")), _) => {
+                    let (shift, first, second) = if step == "FSHL1" { ("asl", "rol", "rol") } else { ("lsr", "ror", "ror") };
+                    match regs[1] {
+                        r if r == reg::A => {}
+                        r if r == reg::X => out.push_str("  txa\n"),
+                        r if r == reg::Y => out.push_str("  tya\n"),
+                        r => writeln!(out, "  lda {}", register_name(r)).unwrap(),
+                    }
+                    writeln!(out, "  {shift} a\n  {first} {}\n  {second} {}", register_name(regs[2]), register_name(regs[4])).unwrap();
+                }
                 (Kind::Op("SRA1"), _) => {
                     let (lo, hi) = (register_name(regs[1]), register_name(regs[3]));
                     writeln!(out, "  lda {hi}\n  cmp #$80\n  ror {hi}\n  ror {lo}").unwrap()
@@ -3693,6 +3824,18 @@ fn emit_with<const STACK: bool>(
                             _ => None,
                         },
                         _ => None,
+                    });
+                    // `tax; cmp #k` (likewise `tay`): the compare left `a` alone, so
+                    // the register copied from it still holds what `a` does
+                    let held = held.or_else(|| {
+                        let n = out.lines.len();
+                        match (n.checked_sub(2).map(|first| &out.lines[first]), out.lines.last()) {
+                            (
+                                Some(Line::Inst(AsmInst { op: copy @ (AsmOp::Tax | AsmOp::Tay), .. })),
+                                Some(Line::Inst(AsmInst { op: AsmOp::Cmp, .. })),
+                            ) => Some(if *copy == AsmOp::Tax { reg::X } else { reg::Y }),
+                            _ => None,
+                        }
                     });
                     let opposite = ["bne", "beq", "bcs", "bcc", "bpl", "bmi"][*code as usize];
                     if held.is_some() && held == true_at {
@@ -3892,18 +4035,20 @@ fn emit_with<const STACK: bool>(
             }
         }
     }
+    let lines_of = source.map(|(file, scope)| (file, scope, &function.places[..]));
+    let tails = (
+        (!returns_a, a_callees),
+        (!returns_x, x_callees),
+        (!returns_y, y_callees),
+        result_cells,
+    );
+    let priced = own_labels(
+        &finish(out.clone(), false, None, tails.0.clone(), tails.1.clone(), tails.2.clone(), tails.3.clone()),
+        &function.name,
+    );
     Ok((
-        own_labels(
-            &finish(
-                out,
-                source.map(|(file, scope)| (file, scope, &function.places[..])),
-                (!returns_a, a_callees),
-                (!returns_x, x_callees),
-                (!returns_y, y_callees),
-                result_cells,
-            ),
-            &function.name,
-        ),
+        own_labels(&finish(out, true, lines_of, tails.0, tails.1, tails.2, tails.3), &function.name),
+        priced,
         slots,
         sunk,
         shared,
@@ -3950,6 +4095,7 @@ fn own_labels(
 /// long.
 fn finish(
     mut code: Asm,
+    known_loads: bool,
     lines_of: Option<(&str, Option<u32>, &[llrm_codegen::model::lir::SrcLoc])>,
     (no_a_result, a_callees): (bool, std::collections::BTreeSet<String>),
     (no_x_result, x_callees): (bool, std::collections::BTreeSet<String>),
@@ -3963,7 +4109,7 @@ fn finish(
     code.no_y_result = no_y_result;
     code.y_callees = y_callees;
     code.result_cells = result_cells;
-    crate::peephole::run(&mut code);
+    crate::peephole::run_with(&mut code, known_loads);
     crate::relax::relax(&mut code);
     if let Some((file, scope, places)) = lines_of {
         code.lines = with_lines(code.lines, file, scope, places);

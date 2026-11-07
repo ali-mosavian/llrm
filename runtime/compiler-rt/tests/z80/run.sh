@@ -18,7 +18,7 @@ for op in $OPS; do
   (cd $T/b; sdasz80 -o drv.rel drv.s)
   (cd $T; sdasz80 -o drv.rel drv.s; sdasz80 -o stub.rel stub.s
    sdldz80 -i -b _CODE=0x100 s.ihx crt0.rel b/drv.rel stub.rel >/dev/null
-   sdldz80 -i -m -b _CODE=0x100 $L r.ihx crt0.rel drv.rel int32.rel sf32_cmp.rel sf32_arith.rel >/dev/null)
+   sdldz80 -i -m -b _CODE=0x100 $L r.ihx crt0.rel drv.rel int32.rel sf32_cmp.rel sf32_common.rel sf32_round.rel sf32_addsub.rel sf32_muldiv.rel sf32_float.rel sf32_fix.rel >/dev/null)
   if [ -n "$L" ]; then c=$(awk '$1=="_CODE" {print "0x" $2 " + 0x" $3}' $T/r.map); t=$(awk '$1=="_SFLUT" {print "0x" $2}' $T/r.map)
     [ $(( $c )) -le $(( $t )) ] || { echo "$op: code and vectors run into the tables at $t"; exit 1; }; fi
   e=$(awk '$1=="_CODE" {print "0x" $2 " + 0x" $3}' $T/r.map)

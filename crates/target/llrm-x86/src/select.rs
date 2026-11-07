@@ -127,28 +127,87 @@ fn create_mem(
 /// `03`), the pin's `_REV` twin that only a disassembler reads. Same length,
 /// same operands, other bytes.
 fn pin_form(code: Code) -> Code {
-    static TWINS: LazyLock<std::collections::HashMap<Code, Code>> = LazyLock::new(|| {
-        let named: std::collections::HashMap<String, Code> =
-            Code::values().map(|one| (format!("{one:?}"), one)).collect();
-        let mut twins = std::collections::HashMap::new();
-        for one in Code::values() {
-            let name = format!("{one:?}");
-            let Some((mnemonic, forms)) = name.split_once('_') else { continue };
-            if !matches!(mnemonic, "Mov" | "Add" | "Or" | "Adc" | "Sbb" | "And" | "Sub" | "Xor" | "Cmp") {
-                continue;
-            }
-            let Some((register, memory)) = forms.split_once('_') else { continue };
-            let (Some(width), Some(other)) = (register.strip_prefix('r'), memory.strip_prefix("rm")) else { continue };
-            if width == other && matches!(width, "8" | "16" | "32" | "64") {
-                if let Some(twin) = named.get(&format!("{mnemonic}_rm{width}_r{width}")) {
-                    twins.insert(one, *twin);
-                }
+    match code {
+        Code::Mov_r8_rm8 => Code::Mov_rm8_r8,
+        Code::Mov_r16_rm16 => Code::Mov_rm16_r16,
+        Code::Mov_r32_rm32 => Code::Mov_rm32_r32,
+        Code::Mov_r64_rm64 => Code::Mov_rm64_r64,
+        Code::Add_r8_rm8 => Code::Add_rm8_r8,
+        Code::Add_r16_rm16 => Code::Add_rm16_r16,
+        Code::Add_r32_rm32 => Code::Add_rm32_r32,
+        Code::Add_r64_rm64 => Code::Add_rm64_r64,
+        Code::Or_r8_rm8 => Code::Or_rm8_r8,
+        Code::Or_r16_rm16 => Code::Or_rm16_r16,
+        Code::Or_r32_rm32 => Code::Or_rm32_r32,
+        Code::Or_r64_rm64 => Code::Or_rm64_r64,
+        Code::Adc_r8_rm8 => Code::Adc_rm8_r8,
+        Code::Adc_r16_rm16 => Code::Adc_rm16_r16,
+        Code::Adc_r32_rm32 => Code::Adc_rm32_r32,
+        Code::Adc_r64_rm64 => Code::Adc_rm64_r64,
+        Code::Sbb_r8_rm8 => Code::Sbb_rm8_r8,
+        Code::Sbb_r16_rm16 => Code::Sbb_rm16_r16,
+        Code::Sbb_r32_rm32 => Code::Sbb_rm32_r32,
+        Code::Sbb_r64_rm64 => Code::Sbb_rm64_r64,
+        Code::And_r8_rm8 => Code::And_rm8_r8,
+        Code::And_r16_rm16 => Code::And_rm16_r16,
+        Code::And_r32_rm32 => Code::And_rm32_r32,
+        Code::And_r64_rm64 => Code::And_rm64_r64,
+        Code::Sub_r8_rm8 => Code::Sub_rm8_r8,
+        Code::Sub_r16_rm16 => Code::Sub_rm16_r16,
+        Code::Sub_r32_rm32 => Code::Sub_rm32_r32,
+        Code::Sub_r64_rm64 => Code::Sub_rm64_r64,
+        Code::Xor_r8_rm8 => Code::Xor_rm8_r8,
+        Code::Xor_r16_rm16 => Code::Xor_rm16_r16,
+        Code::Xor_r32_rm32 => Code::Xor_rm32_r32,
+        Code::Xor_r64_rm64 => Code::Xor_rm64_r64,
+        Code::Cmp_r8_rm8 => Code::Cmp_rm8_r8,
+        Code::Cmp_r16_rm16 => Code::Cmp_rm16_r16,
+        Code::Cmp_r32_rm32 => Code::Cmp_rm32_r32,
+        Code::Cmp_r64_rm64 => Code::Cmp_rm64_r64,
+        other => other,
+    }
+}
+
+/// Every `op r, r/m` code whose `op r/m, r` twin of the same width exists, found
+/// by name: what `pin_form` must say, kept as its oracle.
+#[cfg(test)]
+fn twins_by_name() -> std::collections::HashMap<Code, Code> {
+    let named: std::collections::HashMap<String, Code> = Code::values().map(|one| (format!("{one:?}"), one)).collect();
+    let mut twins = std::collections::HashMap::new();
+    for one in Code::values() {
+        let name = format!("{one:?}");
+        let Some((mnemonic, forms)) = name.split_once('_') else { continue };
+        if !matches!(mnemonic, "Mov" | "Add" | "Or" | "Adc" | "Sbb" | "And" | "Sub" | "Xor" | "Cmp") {
+            continue;
+        }
+        let Some((register, memory)) = forms.split_once('_') else { continue };
+        let (Some(width), Some(other)) = (register.strip_prefix('r'), memory.strip_prefix("rm")) else { continue };
+        if width == other && matches!(width, "8" | "16" | "32" | "64") {
+            if let Some(twin) = named.get(&format!("{mnemonic}_rm{width}_r{width}")) {
+                twins.insert(one, *twin);
             }
         }
-        twins
-    });
-    TWINS.get(&code).copied().unwrap_or(code)
+    }
+    twins
 }
+
+/// `pin_form` built its table at the first call by formatting the name of each
+/// of iced's ~5000 codes (6.2 M Ir on memory_expansion). It is a match now: the
+/// answer for every code is the by-name derivation's.
+#[cfg(test)]
+mod pin_form_tests {
+    use super::*;
+
+    #[test]
+    fn pin_form_says_what_the_by_name_derivation_says_for_every_code() {
+        let twins = twins_by_name();
+        assert_eq!(twins.len(), 36, "nine mnemonics at four widths");
+        for code in Code::values() {
+            assert_eq!(pin_form(code), twins.get(&code).copied().unwrap_or(code), "{code:?}");
+        }
+    }
+}
+
 
 fn create_reg_reg(
     code: Code,
@@ -1606,7 +1665,7 @@ pub fn bit_test_immediate(
     at: At,
 ) -> Option<Emitted> {
     let width = width_of(register)?;
-    if ![2, 4].contains(&width) {
+    if ![2, 4, 8].contains(&width) {
         return None;
     }
     let code = code_of!("BT_RM", width * 8, "_IMM8")?;
@@ -1620,7 +1679,7 @@ pub fn bit_test_memory(
     bit: i64,
     at: At,
 ) -> Option<Emitted> {
-    if ![2, 4].contains(&cell.width) {
+    if ![2, 4, 8].contains(&cell.width) {
         return None;
     }
     let (r#where, relocated) = operand_of(cell, at.bits)?;

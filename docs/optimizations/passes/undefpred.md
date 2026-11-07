@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/undefpred.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/undefpred.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/undefpred.rs sha256:6899096828822a8983a73eebff8873f591c0713266de065f9b501a05bc0edc6d -->
+<!-- src: crates/opt/llrm-transforms/src/undefpred.rs sha256:ca0209281a259b11211d82afbc3162b9c18e9cf31ceac45b52ccf77ec25b3d7a -->
 
 # undefpred
 
@@ -30,10 +30,8 @@ The way in that gives the null is cut:
 |---|---|---|
 | [`removeUndefIntroducingPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9230) | `removed` | MIRROR; D1 |
 
-- D1. A conditional branch keeps no `llvm.assume` of its guarding condition:
-  a function pass cannot declare `llvm.assume`, a global of the module.
-  Exit: the pass given the module's declarations (issue to file with the
-  first user of an intrinsic created by a function pass).
+- D1. (retired) the pass is given the module's declarations, so a conditional
+  branch keeps the `llvm.assume` of its guarding condition.
 
 ## Used by
 Named by `simplifycfg`.

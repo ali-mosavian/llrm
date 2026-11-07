@@ -25,6 +25,19 @@ use llrm_lir::registers::RegId;
 use llrm_mir::target::{AddressForm, OperationCosts};
 use machine::Machine;
 
+/// The encoded sizes a target states of a register copy and a constant load.
+#[derive(Clone, Copy, Debug)]
+pub struct MoveBytes {
+    /// The widest operand an instruction takes without a size prefix (a REX.W
+    /// qword at m64 has one), in bytes; the `operand` the functions below take.
+    pub plain: i64,
+    /// Bytes of a copy between two `width`-byte registers.
+    pub copy: fn(width: i64, operand: i64) -> i64,
+    /// Bytes of loading `number` into a `width`-byte register; `address`: it
+    /// is a symbol's address, whose bytes the immediate takes whole.
+    pub literal: fn(number: i64, address: bool, width: i64, operand: i64) -> i64,
+}
+
 /// The registers a segmented target's string operation names: the count, the
 /// offsets it reads and writes through, and the segment its source defaults
 /// to.
@@ -367,7 +380,7 @@ impl<T: Target> BuilderArch for T {
         Target::stack_alignment(self)
     }
     fn roles(&self) -> llrm_mir::spaces::Spaces {
-        Target::layout(self).spaces.roles
+        Target::address_roles(self)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(self)
@@ -391,7 +404,7 @@ impl BuilderArch for &dyn Target {
         Target::stack_alignment(*self)
     }
     fn roles(&self) -> llrm_mir::spaces::Spaces {
-        Target::layout(*self).spaces.roles
+        Target::address_roles(*self)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(*self)
@@ -485,6 +498,11 @@ pub trait Target {
     /// frontend's addresses are.
     fn layout(&self) -> layout::Layout;
 
+    /// `layout().spaces.roles`, without cloning the layout: asked per function.
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        self.layout().spaces.roles
+    }
+
     /// The bytes an argument of `width` takes on the stack, and the least a
     /// stack cell holds.
     fn stack_slot_bytes(&self) -> i64;
@@ -493,6 +511,19 @@ pub trait Target {
     /// `stack_alignment`): a slot's worth unless it says more.
     fn stack_alignment(&self) -> i64 {
         self.stack_slot_bytes()
+    }
+
+    /// Whether a frame can realign the stack pointer for a local above the
+    /// stack alignment (the pin's `X86RegisterInfo::canRealignStack`,
+    /// [X86RegisterInfo.cpp#L823](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86RegisterInfo.cpp#L823)).
+    /// Where it cannot, no local is over-aligned: the pin clamps the object's
+    /// alignment to the stack alignment
+    /// (`MachineFrameInfo::clampStackAlignment`, MachineFrameInfo.cpp#L40);
+    /// here the cell keeps its alignment and the stack is left as the
+    /// caller made it (DEVIATE OA-2, owner w2, exit: m16 states its own
+    /// stack alignment).
+    fn can_realign_stack(&self) -> bool {
+        true
     }
 
     /// Whether every call finds the stack a multiple of `stack_alignment`
@@ -504,6 +535,12 @@ pub trait Target {
 
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
+
+    /// A `mov imm; jmp` block with one predecessor is folded into it at -Os
+    /// (LEAF-FOLD-OS).
+    fn leaf_fold_at_size(&self) -> bool {
+        false
+    }
 
     /// The pressure sets of the register classes and each set's limit, for a
     /// target that has them (the pre-RA scheduler tracks pressure per set).
@@ -629,6 +666,22 @@ pub trait Target {
         self.divide_routine(signed, wide_divisor)
     }
 
+    /// `divide_routine_used` for code built for size: a target may have a
+    /// routine shorter than the speed one; it refuses where it has none.
+    fn divide_routine_small(
+        &self,
+        _signed: bool,
+        _wide_divisor: bool,
+    ) -> Result<routines::Divide, String> {
+        Err("no size divide routine".into())
+    }
+
+    /// Whether -O1 code (bytes and clocks both strict) takes the size divide
+    /// too: only where its clocks stay under the bar; -Os always does.
+    fn small_divide_at_o1(&self) -> bool {
+        false
+    }
+
     /// The width a float value of `bytes` bytes is held at: x87 holds every one
     /// as its stack register, a vector file as its own size.
     fn float_width(
@@ -657,6 +710,12 @@ pub trait Target {
         width: i64,
     ) -> i64;
 
+    /// The encoded sizes of a register copy and a constant load, where the
+    /// target states them; none: the backend asks no price of them.
+    fn move_bytes(&self) -> Option<MoveBytes> {
+        None
+    }
+
     /// The CPU a compile is priced for where none is asked.
     fn default_cpu(&self) -> &'static str;
 
@@ -678,6 +737,12 @@ pub trait Target {
     /// bytes, 4); 0: loops are not aligned.
     fn pref_loop_alignment(&self) -> u8 {
         0
+    }
+
+    /// Whether loops are aligned at -O1. The pin's X86 aligns at every level
+    /// above -O0; gcc's `-falign-loops` starts at -O2.
+    fn align_loops_at_o1(&self) -> bool {
+        true
     }
 
     /// The most bytes of padding a loop header's alignment may take (the

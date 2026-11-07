@@ -70,7 +70,7 @@ pub fn query<'a>(
         metadata: c.env.metadata,
         dt: Some(c.env.analyses.dominator_tree()),
         assumptions: Some(c.env.analyses.assumption_cache()),
-        dom_conditions: c.env.analyses.dom_conditions(),
+        dom_conditions: if c.without_dom_conditions { None } else { c.env.analyses.dom_conditions() },
         cxt,
         ..Query::bare(c.context, c.function, c.env.layout)
     }

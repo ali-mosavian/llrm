@@ -1140,7 +1140,7 @@ def new_lib_failures(
     names; `on_head(by_package)` -> those of them that also fail on the head (exact names, only the failing ones are run there)."""
     smoke = parity_smoke_module()
     packages, graph = smoke.workspace_graph()
-    # The changed crates and every crate that depends on one: llrm-c's lib tests were red on parity while PRs merged, as each changed only a dependency.
+    # The changed crates and every crate that depends on one: llrm-cc's lib tests were red on parity while PRs merged, as each changed only a dependency.
     touched = smoke.dependants(smoke.touched_packages(files, packages), graph)
     # llrm-mir's scan tests (`no_file_gains_*`) read every crate's sources: a change to any .rs under crates/ can turn one red,
     # in a crate whose own lib tests ran (extload.rs, booleans.rs and selectiondag/ did, with llrm-mir untouched: three reds landed).
@@ -1177,6 +1177,7 @@ ALWAYS_SCANNERS = (
     "no_local_paths",
     "no_partial_ecx_counts",
     "no_todo",
+    "no_watcom_frontend",
     "selectiondag_registry",
     "target_facts",
     "tracked_build_products",
@@ -1681,7 +1682,7 @@ def _in_target(target: Path | None, kind: str = "test"):
     return lambda command, **kw: subprocess.run(command, env={**os.environ, "CARGO_TARGET_DIR": str(target / kind)}, **kw)
 
 
-ALONE_DEPENDANTS = {"llrm-qb", "llrm-c", "llrm-nib"}  # the dependants whose lib tests failed batches that passed alone (#4927); the rest of the closure is the batch's to run
+ALONE_DEPENDANTS = {"llrm-qb", "llrm-cc", "llrm-nib"}  # the dependants whose lib tests failed batches that passed alone (#4927); the rest of the closure is the batch's to run
 ALONE_JOBS = "2"  # PRs checked at once: three took 6 of 8 cargo processes beside the batch's tests
 SOURCE_SCANNING_PACKAGES = {"llrm-mir"}  # lib tests that scan other crates' sources (no_file_gains_*): upstream of the crates they judge, so a dependants run never reaches them
 

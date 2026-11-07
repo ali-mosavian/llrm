@@ -100,6 +100,10 @@ impl M68k {
 }
 
 impl Tti for M68k {
+    fn opt_size_inline_byte_gate(&self) -> bool {
+        true
+    }
+
     /// `UnrollingPreferences::Threshold` of the full unroll, 32 where the pin's
     /// is 300: an iteration's loop control is about 24 clk on the 68000 (an
     /// `addq`, a `cmp` and a taken `bcc`), 6 B at 4 clk/B, so a copy of the
@@ -173,19 +177,20 @@ impl Tti for M68k {
         }
     }
 
-    /// The per-target override of `SCEVCheapExpansionBudget`: a limit that
-    /// costs any operation (`smax(n, 1)` for `i + 1 < n`) is not worth
-    /// replacing a compare with in a function built for size; the guard and
-    /// the second counter cost more bytes than the compare saved.
+    /// The per-target value of `SCEVCheapExpansionBudget`: one operation. A
+    /// limit that costs a single operation (`n - 1`) is repaid by the counter
+    /// that goes (`subq`+`bne` for `addq`+`cmp`+`blt`); one that costs more
+    /// (`smax(n, 1)`) is not. Measured at -Os on the matrix at 0, 1 and the
+    /// pin's 4: 1 shrinks partition and memset (4 and 2 B) and changes no
+    /// other cell; 4 grows arrmax, arrsum, copy, countgt, fib and sum by 6 to
+    /// 14 B. The same value serves every level, so no `optsize` split.
+    /// DEVIATE (value; owner m68k, exit none: a per-target table value; the
+    /// pin's budget is 4).
     fn lftr_expansion_budget(
         &self,
-        optsize: bool,
+        _optsize: bool,
     ) -> u32 {
-        // DEVIATE 18 (exit 2026-11-12): from the 68020 on, a `cmp.l` with a
-        // memory limit costs little more than the `subq` of a counter, so the
-        // `smax` guard of the rewritten exit (8 B) is not repaid. The 68000
-        // keeps the pin's 4: there the compare is 10 clk per trip dearer.
-        if optsize || self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020) { 0 } else { 4 }
+        1
     }
 
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
@@ -349,7 +354,10 @@ impl Tti for M68k {
         // line). Past 32 bits the m68k makes a library call of it, and the
         // closed form of a sum (`(n-1)(n-2)/2` in `i33`) is then 250 B of
         // `__mulsi3` calls for a loop of 16. Exit: none, a target's prices.
-        if matches!(op, ArithOp::Mul | ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem)
+        if matches!(
+            op,
+            ArithOp::Mul | ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem
+        )
             && matches!(ty, Ty::Int(bits) if bits > 32)
         {
             return Cost::EXPENSIVE;

@@ -1,0 +1,92 @@
+; binary32 helpers shared by the sf32 members: the range checks before the round (pack32), inf, exponent bytes, NaN. The round and the frame exit are sf32_round.s: int->float needs only those.
+	.module sf32_common
+	.area _CODE
+
+	.globl pack32
+	.globl done
+	.globl inf
+	.globl exps
+	.globl retlo0
+	.globl rnd32
+pack32:	bit	7,b
+	jr	nz,low32
+	ld	a,b
+	or	a,a
+	jr	nz,inf
+	ld	a,c
+	inc	a
+	jr	z,inf
+	dec	a
+	jp	nz,rnd32
+low32:	ld	a,b		; e <= 0: shift right by 1 - e, folding the lost bits into bit 0
+	or	a,a
+	jr	z,11$
+	inc	a
+	jr	nz,1$		; far below: everything is sticky
+	ld	a,c
+	cp	a,#2
+	jr	c,1$
+11$:	ld	a,#1
+	sub	a,c
+	cp	a,#32
+	jr	c,2$
+1$:	ld	a,d
+	or	a,e
+	or	a,h
+	or	a,l
+	ld	de,#0
+	ld	h,d
+	ld	l,d
+	jr	z,5$
+	inc	l
+	jr	5$
+2$:	ld	b,a
+	ld	c,#0		; c: lost bits
+3$:	ld	a,b
+	cp	a,#8
+	jr	c,4$
+	ld	a,c
+	or	a,l
+	ld	c,a
+	ld	l,h
+	ld	h,e
+	ld	e,d
+	ld	d,#0
+	ld	a,b
+	sub	a,#8
+	ld	b,a
+	jr	3$
+4$:	or	a,a
+	jr	z,6$
+7$:	srl	d
+	rr	e
+	rr	h
+	rr	l
+	jr	nc,8$
+	set	0,c
+8$:	djnz	7$
+6$:	ld	a,c
+	or	a,a
+	jr	z,5$
+	set	0,l
+5$:	ld	c,#1
+	jp	rnd32
+inf:	ld	a,10(iy)
+	or	a,#0x7f
+	ld	d,a
+	ld	e,#0x80
+	jp	retlo0		; hl = 0, then the frame exit
+
+; exponent bytes of a and b
+exps:	ld	a,2(iy)
+	add	a,a
+	ld	a,3(iy)
+	adc	a,a
+	ld	8(iy),a
+	ld	a,6(iy)
+	add	a,a
+	ld	a,7(iy)
+	adc	a,a
+	ld	9(iy),a
+	ret
+

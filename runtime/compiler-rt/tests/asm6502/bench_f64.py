@@ -5,7 +5,7 @@ into the binary) and llvm-mos (compiler-rt soft double, mos-sim, the clock read 
 are the first N of tests/gen_vectors64.c's stream: random bits, denormals, edge values, one pair in eight special. Cycles are the call
 minus a stub that returns zero (A, X, rc2..rc7: eight stores, about 20 cycles, and a base record that must pass) for ours, minus a copy of the operand for llvm-mos. Bytes are the code reachable
 from the entry point: the library functions it calls (sim65_reach.py) plus the mos_rt.s routines they use; llvm-mos: text of the program
-with the operation minus the program without it. SDCC and cc65 have a 32-bit double: no f64 column for them."""
+with the operation minus the program without it. The library is built with config/6502/config.h (SF_CONFIG=file to try another), as tools/6502/crlib.py builds the shipped members: without it the bench measured the generic library. SDCC has a 32-bit double: no f64 column for it. cc65 rejects float types: no column."""
 import glob, os, re, subprocess, sys, tempfile
 here = os.path.dirname(os.path.abspath(__file__)); SF = os.path.join(here, '../..'); TESTS = os.path.join(here, '..')
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 300
@@ -42,9 +42,10 @@ _main:
 '''
 _srcs = subprocess.check_output([f'{here}/../fp_sources.sh', 'f64'], text=True).split() + subprocess.check_output([f'{here}/../fp_sources.sh', 'int64'], text=True).split()
 LIBPATH = {os.path.dirname(p).split('/')[-1] + '_' + os.path.basename(p)[:-2]: p for p in _srcs}
+LIBPATH['int_clzsi2'] = os.path.join(SF, 'lib/int/clzsi2.c')  # called by the -O2 configuration (SF_CLZ_CALL); unreachable at -Os
 LIBS = tuple(LIBPATH)
 def compile_libs(opt):
-    for f in LIBS: sh(CC, '--target=6502-sim65', f'-{opt}', '-S', '-DSF_INTABI', *os.environ.get('SF_EXTRA', '').split(), '-Iinclude', LIBPATH[f], '-o', f'{T}/{opt}_{f}.s')
+    for f in LIBS: sh(CC, '--target=6502-sim65', f'-{opt}', '-S', '-DSF_INTABI', '-include', os.environ.get('SF_CONFIG', 'config/6502/config.h'), *os.environ.get('SF_EXTRA', '-DSF_MUL32X32_6502').split(), '-Iinclude', LIBPATH[f], '-o', f'{T}/{opt}_{f}.s')
 
 def strip_exports(path):  # llrm-cc exports statics, which collide across objects
     s = open(path).read()
@@ -95,7 +96,10 @@ def ours(op, opt):
     for f in LIBS:
         p = f'{d}/r/{opt}_{f}.s'; strip_exports(p)
         sh('ca65', '-t', 'sim6502', '-U', p, '-o', p[:-2] + '.o'); objs.append(p[:-2] + '.o')
-    for a in os.environ.get('SF_ASM', '').split():  # extra hand-written library sources (e.g. config/6502/di64.s), linked into the library build only
+    libtext = ''.join(open(f'{d}/r/{opt}_{f}.s').read() for f in LIBS)
+    for a in os.environ.get('SF_ASM', f'{here}/../../config/6502/mul32x32.s').split():  # extra hand-written library sources, linked into the library build only; default: f64 mul's hand 32x32 (not reentrant, static cells; 41312 -> 11504 clk). SF_EXTRA= SF_ASM= (set, empty) builds the C.
+        # an extra counts for an operation only if its code calls it: add, sub and div were charged mul32x32.s's 153 B
+        if not any(re.search(r'\b%s\b' % re.escape(n), libtext) for n in re.findall(r'^\s*\.(?:export|globl)\s+(\w+)', open(a).read(), re.M)): continue
         r_ = sh('ca65', '-t', 'sim6502', '-I', f'{here}/../../config/6502', a, '-o', f'{d}/{os.path.basename(a)}.o'); assert r_.returncode == 0, r_.stderr; objs.append(f'{d}/{os.path.basename(a)}.o')
     open(f'{d}/stub.s', 'w').write('rc2 = 130\n' + ''.join('rc%d = %d\n' % (i, 128 + i) for i in range(3, 8)) + f'.export {SYM[op]}\n{SYM[op]}:\n lda #0\n ldx #0\n' + ''.join(f' sta rc{i}\n' for i in range(2, 8)) + ' rts\n')
     bss = sum(int(m.group(1)) for o in objs for m in [re.search(r'BSS:\s+(\d+)', sh('od65', '--dump-segsize', o).stdout)] if m)
@@ -131,8 +135,14 @@ def ours(op, opt):
     deltas, fails = [], 0
     for i in range(1, N + 1):
         c, rc = run('r', i, 1); deltas.append(c - base); fails += rc != 0
-    allc, rc = run('r', 1, N)  # one run over all records must cost what the single-record runs add up to
-    assert rc == 0 and allc == sum(d + base for d in deltas) - (N - 1) * s0, f'{op} {opt}: a {N}-record run costs {allc}, the single runs imply {sum(d + base for d in deltas) - (N - 1) * s0}'
+    allc, rc = run('r', 1, N)  # one run over all records must cost what the single-record runs add up to, plus the loop's step to the next record
+    # A single-record run leaves the loop after one pass; a longer one steps to the next record instead. That differs by e clk per step (-17: stepping is cheaper
+    # than leaving; 99 steps = the 1683 clk by which the 100-record run was under the sum of the singles). e is read from two pairs, which must agree.
+    e = run('r', 1, 2)[0] - (deltas[0] + base) - (deltas[1] + base) + s0
+    e2 = run('r', N - 1, 2)[0] - (deltas[N - 2] + base) - (deltas[N - 1] + base) + s0
+    assert e == e2, f'{op} {opt}: the loop step between records costs {e} then {e2} clk'
+    implied = sum(d + base for d in deltas) - (N - 1) * s0 + (N - 1) * e
+    assert rc == 0 and allc == implied, f'{op} {opt}: a {N}-record run costs {allc}, the single runs and {N - 1} loop steps of {e} clk imply {implied}'
     assert fails == 0, f'{op} {opt}: {fails} of {N} records fail'
     assert min(deltas) > 0
     lib = sum(code_size(o) for o in objs)

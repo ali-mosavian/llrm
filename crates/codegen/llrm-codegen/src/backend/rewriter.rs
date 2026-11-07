@@ -126,6 +126,7 @@ pub fn rewrite(
 #[cfg(test)]
 thread_local! {
     pub(crate) static INTERVALS_WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static VALUES_WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn _undef_supers(body: &LirBody) -> BTreeSet<usize> {
@@ -170,7 +171,12 @@ fn _undef_supers(body: &LirBody) -> BTreeSet<usize> {
     #[cfg(test)]
     INTERVALS_WORKED.with(|n| n.set(n.get() + 1));
     let index = ranges::indexed_shared(body);
-    let live = ranges::intervals_shared(body, Some(&index));
+    // Only the candidates' values are asked of: LLVM reads its `LiveIntervals`
+    // here, which are already there; ours would be worked out for every value.
+    let wanted: BTreeSet<u32> = candidates.iter().map(|(_, _, value)| *value).collect();
+    let live = ranges::intervals_among(body, &index, &crate::analysis::frequency::Frequency::of(body), &wanted);
+    #[cfg(test)]
+    VALUES_WORKED.with(|n| n.set(live.len()));
     for (at, position, value) in candidates {
         let block = &body.blocks[at];
         let one = &block.insns[position];
@@ -255,7 +261,7 @@ pub(crate) fn _dead_insertions(body: &LirBody) -> LirBody {
 }
 
 /// Retain byte ownership without requiring an encodable register self-copy.
-fn _identity_anchor(one: Arc<Insn>) -> Arc<Insn> {
+pub(crate) fn _identity_anchor(one: Arc<Insn>) -> Arc<Insn> {
     if one.group.is_some() || !_pointless(&one) {
         return one;
     }
@@ -267,7 +273,7 @@ fn _identity_anchor(one: Arc<Insn>) -> Arc<Insn> {
 /// `handleIdentityCopy`
 /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/VirtRegMap.cpp#L492>):
 /// an identity that is not still owned by the parallel-copy scheduler.
-fn _discardable_identity(one: &Insn) -> bool {
+pub(crate) fn _discardable_identity(one: &Insn) -> bool {
     one.group.is_none() && _pointless(one)
 }
 
@@ -286,7 +292,7 @@ fn _placed_for_rewrite(
 
 /// `MachineInstr::isIdentityCopy`: whether this instruction moves a register
 /// into itself.
-fn _pointless(one: &Insn) -> bool {
+pub(crate) fn _pointless(one: &Insn) -> bool {
     let Some(what) = &one.what else {
         return false;
     };
@@ -548,5 +554,20 @@ mod undef_tests {
         let found = _undef_supers(&narrow);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(INTERVALS_WORKED.with(|n| n.get()), 1);
+    }
+
+    /// Intervals were worked out for every value of the body to answer for
+    /// one narrow write: 39 M Ir over three bodies of memory_expansion.
+    #[test]
+    fn test_only_the_narrow_writes_values_get_intervals() {
+        VALUES_WORKED.with(|n| n.set(0));
+        let narrow = body(vec![
+            mov(1, held(1, 1), imm(5), 1, vec![]),
+            mov(2, held(2, 2), held(1, 2), 2, vec![1]),
+            mov(3, held(3, 2), held(2, 2), 3, vec![2]),
+            mov(4, held(4, 2), held(3, 2), 4, vec![3]),
+        ]);
+        assert_eq!(_undef_supers(&narrow).len(), 1);
+        assert_eq!(VALUES_WORKED.with(|n| n.get()), 1, "one candidate value, one interval");
     }
 }

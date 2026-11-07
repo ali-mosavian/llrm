@@ -88,7 +88,7 @@ def test_a_command_that_would_compile_at_the_other_target_is_refused():
     import pytest
 
     with pytest.raises(SystemExit, match="labelled m16 but would compile at -m32"):
-        sizesweep.require_target(["llrm-c", "a.c", "-m16", "-m32"], "m16")
+        sizesweep.require_target(["llrm-cc", "a.c", "-m16", "-m32"], "m16")
     with pytest.raises(SystemExit, match="default target"):
-        sizesweep.require_target(["llrm-c", "a.c"], "m16")
-    sizesweep.require_target(["llrm-c", "a.c", "-m16"], "m16")
+        sizesweep.require_target(["llrm-cc", "a.c"], "m16")
+    sizesweep.require_target(["llrm-cc", "a.c", "-m16"], "m16")

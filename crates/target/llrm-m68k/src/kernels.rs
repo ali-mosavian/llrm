@@ -23,6 +23,24 @@ pub enum Arg {
 use Arg::{Data, Func, Imm};
 
 /// `(kernel, arguments, the result worked out by hand)`.
+/// The rows of `rows` named in `only` (comma separated). A name no row has, or
+/// a list that names none, is an error: a filter that ran nothing must not
+/// read as a clean matrix.
+pub fn keep_named<T>(
+    rows: Vec<T>,
+    name: impl Fn(&T) -> &str,
+    only: &str,
+) -> Result<Vec<T>, String> {
+    let wanted: Vec<&str> = only.split(',').filter(|one| !one.is_empty()).collect();
+    if wanted.is_empty() {
+        return Err("no program named".to_owned());
+    }
+    if let Some(unknown) = wanted.iter().find(|one| !rows.iter().any(|row| name(row) == **one)) {
+        return Err(format!("no program named {unknown}"));
+    }
+    Ok(rows.into_iter().filter(|row| wanted.contains(&name(row))).collect())
+}
+
 pub fn table() -> Vec<(&'static str, Vec<Arg>, i32)> {
     vec![
         ("sum", vec![Imm(10)], 45),
@@ -38,6 +56,19 @@ pub fn table() -> Vec<(&'static str, Vec<Arg>, i32)> {
         ("strlen", vec![Data(0)], 13),
         ("copy", vec![Data(16), Data(0), Imm(13)], 33),
     ]
+}
+
+/// More argument sets for a kernel whose branch goes either way: with one
+/// input the code that skips the work looks faster than the code that runs it,
+/// and the mirrored layout reverses with the input (`max(7, 42)` made a
+/// mirrored branch cost a move on one side). The matrix averages the runs.
+pub fn extra_runs(name: &str) -> Vec<(Vec<Arg>, i32)> {
+    match name {
+        "max" => vec![(vec![Imm(42), Imm(7)], 42)],
+        "absdiff" => vec![(vec![Imm(52), Imm(10)], 42)],
+        "clamp" => vec![(vec![Imm(-5), Imm(0), Imm(42)], 0), (vec![Imm(20), Imm(0), Imm(42)], 20)],
+        _ => Vec::new(),
+    }
 }
 
 /// `(routine, arguments, the result worked out by hand, leaf)`: the second

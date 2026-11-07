@@ -1,4 +1,4 @@
-/* strcmp and strncpy, which Borland C inlines and its library leaves out: the QCport modules llrm-c compiles call them.
+/* strcmp and strncpy, which Borland C inlines and its library leaves out: the QCport modules llrm-cc compiles call them.
    They are defined after Borland's declarations, which are cdecl: a definition has the convention of its prior declaration.
    Built with -O1 and no loop-idiom pass, which would turn these loops into calls to themselves. */
 #include <string.h>

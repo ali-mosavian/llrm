@@ -93,7 +93,7 @@ static void string(SD *sd, enum Terminator end)
         room(sd->len);
         cn_write(sd->ptr, sd->len);
     }
-    str_tmp_free(sd);
+    str_free_if_tmp(sd);
     terminate(end);
 }
 

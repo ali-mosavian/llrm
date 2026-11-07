@@ -276,7 +276,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
         target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
         level = program.flags[0] if program.flags else "-O2"
         try:
-            # Its own files, as Nib's: a C file by llrm-c, a `.wc` by Open Watcom's wcc386, an assembly file by jwasm.
+            # Its own files, as Nib's: a C file by llrm-cc, a `.wc` by Open Watcom's wcc386, an assembly file by jwasm.
             others = []
             for at, source in enumerate(one for one in linked(program, target) if one.name != Path(dosbatch.target_link(target)["last"][0]).name):
                 extra = work / f"{stem}F{at}.obj"
@@ -344,7 +344,7 @@ def main() -> int:
     if mode:
         report.unlink(missing_ok=True)
         os.environ["LLRM_ISEL_REPORT"] = str(report)
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=cpulimit.pool_workers()) as pool:
         built = dict(zip((p.name for p in programs), pool.map(lambda p: build(p, objs, stems[p.name]), programs)))
     if mode:
         dag, old = dosbatch.isel_proof(report, mode)
