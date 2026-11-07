@@ -128,6 +128,7 @@ fn program() -> Object {
     Object {
         name: "ref.s".into(),
         bits: 64,
+        comdats: vec![],
         sections: vec![
             section("text", Role::Text, text, relocs),
             section("const", Role::ROData, b"hello\n".to_vec(), vec![]),
@@ -296,6 +297,7 @@ fn arm64_program() -> Object {
     Object {
         name: "m.s".into(),
         bits: 64,
+        comdats: vec![],
         sections: vec![
             text,
             section("const", Role::ROData, b"hi\0".to_vec(), vec![]),
@@ -382,6 +384,7 @@ fn ld64_links_it_with_a_clang_object() {
     let made = Object {
         name: "m.s".into(),
         bits: 64,
+        comdats: vec![],
         sections: vec![
             section(
                 "text",

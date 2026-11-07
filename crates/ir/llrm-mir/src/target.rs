@@ -141,6 +141,10 @@ pub struct Tuning {
     /// the exit test), in `CodeSize` (arm64's w15 rule). false: the header
     /// limit alone.
     pub rotation_header_priced_at_size: bool,
+    /// Header instructions a size build's loop rotation may copy
+    /// (`RotationMaxHeaderSize`), where the machine states none itself
+    /// ([`Machine::size_rotation_header_limit`] wins). None: the pin's 16.
+    pub size_rotation_header_limit: Option<u32>,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
@@ -246,6 +250,7 @@ impl Tuning {
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_header_priced_at_size: false,
+        size_rotation_header_limit: None,
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,

@@ -696,7 +696,7 @@ impl Builder<'_> {
         {
             return self.sse_fill_is_longer(length, fill.unwrap_or(0));
         }
-        if opt_size && let Some(costs) = self.target.tuning.size_fill {
+        if opt_size && let Some(costs) = self.target.tti.as_ref().and_then(|tti| tti.0.size_fill()) {
             let place = usize::from(!frame);
             let value = match fill {
                 Some(0) => costs.value[0],

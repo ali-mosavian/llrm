@@ -570,6 +570,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::size_rotation_header_limit`.
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        None
+    }
+
     /// Whether a priced full unroll counts a promoted local array's accesses
     /// as free only while its elements fit the registers (UP1).
     fn unroll_promotion_fits_registers(&self) -> bool {
@@ -848,6 +853,11 @@ pub trait Tti {
     /// (`Tuning::x87_zero_fill_at_size`).
     fn x87_zero_fill_at_size(&self) -> bool {
         false
+    }
+
+    /// `Tuning::size_fill`: the encoded bytes of a constant fill at size.
+    fn size_fill(&self) -> Option<crate::target::SizeFill> {
+        None
     }
 
     /// The target's `PartialThreshold` (its tuning table); none: the pass's

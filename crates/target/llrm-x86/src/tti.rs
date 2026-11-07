@@ -716,6 +716,10 @@ impl Tti for X86 {
         self.tuning.x87_zero_fill_at_size && !self.sse2
     }
 
+    fn size_fill(&self) -> Option<llrm_mir::target::SizeFill> {
+        self.tuning.size_fill
+    }
+
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         self.tuning.unroll_partial_threshold
     }
@@ -811,6 +815,10 @@ impl Tti for X86 {
 
     fn rotation_guard_must_fold_at_size(&self) -> bool {
         self.tuning.rotation_guard_must_fold_at_size
+    }
+
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        self.tuning.size_rotation_header_limit
     }
 
     fn rotation_header_priced_at_size(&self) -> bool {
