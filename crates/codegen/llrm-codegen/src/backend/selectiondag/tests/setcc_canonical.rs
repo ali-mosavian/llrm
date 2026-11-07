@@ -63,3 +63,35 @@ fn a_target_that_does_not_ask_keeps_greater_equal() {
     assert_eq!(dag.node(dag.operand(root, 2)).data, NodeData::CondCode(CondCode::SetUGe));
     assert_eq!(dag.constant(dag.operand(root, 1)), Some(12));
 }
+
+/// `__cmpdf2` at m32: a hoisted (opaque) constant was moved to `x >u c - 1`
+/// like any other, which expands with the operands swapped and the constant in
+/// registers (`neg; mov r, c; sbb`). The pin keeps `x >=u c` unless the moved
+/// constant is a legal immediate.
+#[test]
+fn an_opaque_constant_keeps_greater_equal_unless_the_moved_one_is_an_immediate() {
+    struct Imm32;
+    impl CombineHooks for Imm32 {
+        fn canonicalize_ge_le(&self) -> bool {
+            true
+        }
+        fn is_legal_icmp_immediate(&self, imm: i64) -> bool {
+            i32::try_from(imm).is_ok()
+        }
+    }
+    for (constant, opaque, want) in [
+        (0x7FF0_0000_0000_0001u128, true, (CondCode::SetUGe, 0x7FF0_0000_0000_0001u128)),
+        (0x7FF0_0000_0000_0001, false, (CondCode::SetUGt, 0x7FF0_0000_0000_0000)),
+        (5, true, (CondCode::SetUGt, 4)),
+    ] {
+        let mut dag = dag();
+        let x = dag.get_register(EVT::I64, 5);
+        let c = dag.get_constant_with(constant, EVT::I64, false, opaque);
+        let root = dag.get_setcc(EVT::I1, x, c, CondCode::SetUGe);
+        dag.set_root(root);
+        DagCombiner::new(&mut dag, &mut Imm32, CombineLevel::BeforeLegalizeTypes).run();
+        let root = dag.get_root();
+        assert_eq!(dag.node(dag.operand(root, 2)).data, NodeData::CondCode(want.0), "{constant:#x} {opaque}");
+        assert_eq!(dag.constant(dag.operand(root, 1)), Some(want.1), "{constant:#x} {opaque}");
+    }
+}

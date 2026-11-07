@@ -451,6 +451,11 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TargetLowering::isLegalICmpImmediate`: the base class has none.
+    fn is_legal_icmp_immediate(&self, _imm: i64) -> bool {
+        false
+    }
+
     /// `isTypeDesirableForOp(ISD::SETCC, VT)` for the narrower type
     /// `SimplifySetCC` compares a zero-extended or masked value in
     /// ([TargetLowering.cpp#L4950](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L4950)).
@@ -1144,14 +1149,19 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                     return Some(self.dag.get_bool_constant(true, vt));
                 }
                 let moved = if ge { c1.wrapping_sub(1) } else { c1.wrapping_add(1) } & mask;
+                // An opaque constant (hoisted) is kept unless the moved one is
+                // an immediate of the compare.
+                let fits = bits <= 64 && self.hooks.is_legal_icmp_immediate(llrm_mir::context::signed(moved, bits) as i64);
                 let new_cond = match (ge, unsigned) {
                     (true, false) => CondCode::SetGt,
                     (true, true) => CondCode::SetUGt,
                     (false, false) => CondCode::SetLt,
                     (false, true) => CondCode::SetULt,
                 };
-                let rhs = self.dag.get_constant(moved, op_type);
-                return Some(self.dag.get_setcc(vt, n0, rhs, new_cond));
+                if !self.dag.is_opaque(n1) || fits {
+                    let rhs = self.dag.get_constant(moved, op_type);
+                    return Some(self.dag.get_setcc(vt, n0, rhs, new_cond));
+                }
             }
         }
         if !matches!(cond, CondCode::SetEq | CondCode::SetNe)

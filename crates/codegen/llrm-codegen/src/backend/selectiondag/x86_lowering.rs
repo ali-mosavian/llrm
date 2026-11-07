@@ -288,6 +288,11 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `X86TargetLowering::isLegalICmpImmediate`: `isInt<32>`.
+    fn is_legal_icmp_immediate(&self, imm: i64) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
     /// Where `i16` is native (`i16_mul_chains`: m16) a dword's halves are the
     /// registers it is returned and passed in.
     fn split_dword_loads(&self) -> bool {

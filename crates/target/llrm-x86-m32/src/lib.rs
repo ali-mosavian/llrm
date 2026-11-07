@@ -82,6 +82,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // CH-STAGED (owner x86-m32): the pin hoists constants after LSR on every target.
+        constant_hoisting: true,
         // DEVIATE SZ4 (owner x86-m32, exit 2026-11-27): -Os copies a loop header of
         // at most 4 instructions, not the pin's 16 (the copy is a compare and a
         // branch, more than the jump rotation removes). m32 -Os kernels (73): x_hash -29 B,
