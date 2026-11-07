@@ -60,20 +60,29 @@ fn copied(
     if can_fall_through(tail) || tail.succ.contains(&tail.at) || !tail.phis.is_empty() {
         return None;
     }
-    if tail.insns.iter().any(|one| {
-        one.call.is_some() || one.group.is_some() || one.symbol == Some(true) || !one.spread.is_empty()
-    }) {
+    if tail
+        .insns
+        .iter()
+        .any(|one| one.call.is_some() || one.group.is_some() || one.symbol == Some(true) || !one.spread.is_empty())
+    {
         return None;
     }
     let most = if size { 1 } else { SIZE };
     let work = super::jumps::_real(tail);
-    let plain = work.iter().all(|one| {
-        one.what.as_ref().is_some_and(|what| {
-            !matches!(what.op, Operation::Barrier | Operation::Data | Operation::Call)
-                && !what.is_sibling_call()
-                && !(matches!(what.op, Operation::Jump | Operation::Branch) && what.indirect)
-        })
-    });
+    let plain = work
+        .iter()
+        .all(
+            |one| one.what
+                .as_ref()
+                .is_some_and(
+                    |what| !matches!(
+                        what.op,
+                        Operation::Barrier | Operation::Data | Operation::Call
+                    )
+                        && !what.is_sibling_call()
+                        && !(matches!(what.op, Operation::Jump | Operation::Branch) && what.indirect),
+                ),
+        );
     (plain && work.len() <= most).then_some(work)
 }
 
@@ -96,7 +105,8 @@ fn tail_duplicate(
     let falls = |pred: usize| {
         pred + 1 == at
             && real(&body.blocks[pred]).next_back().is_none_or(|last| {
-                operation(last) == Some(Operation::Jump) && last.what.as_ref().is_some_and(|what| what.target == Some(tail.at))
+                operation(last) == Some(Operation::Jump)
+                    && last.what.as_ref().is_some_and(|what| what.target == Some(tail.at))
             })
     };
     let mut chosen: Vec<usize> = preds
@@ -292,8 +302,10 @@ mod tests {
             assert_eq!(names(at(&done, arm)), ["mov", "mov", "jmp"], "arm {arm}");
             assert_eq!(at(&done, arm).succ.iter().copied().collect::<Vec<_>>(), [9]);
         }
-        let copies: Vec<Vec<u32>> =
-            [1, 2].iter().map(|arm| at(&done, *arm).insns.iter().flat_map(|one| one.defines.clone()).collect()).collect();
+        let copies: Vec<Vec<u32>> = [1, 2]
+            .iter()
+            .map(|arm| at(&done, *arm).insns.iter().flat_map(|one| one.defines.clone()).collect())
+            .collect();
         assert_eq!(copies, [vec![1, 3], vec![2, 3]], "the copy defines what the tail defined");
     }
 
