@@ -136,7 +136,21 @@ pub fn selections(
 pub fn selections_both(
     text: &str,
     request: &Request,
-) -> Result<Vec<(String, Result<Selection, String>, Result<Selection, String>)>, String> {
+) -> Result<Vec<Selected>, String> {
+    Ok(selections_with_alternatives(text, request)?.0)
+}
+
+/// A function's name and its selection scheduled by `Source` and by `ILP`.
+pub type Selected = (String, Result<Selection, String>, Result<Selection, String>);
+
+/// [`selections_both`], and again the functions that call `__mulsi3` for
+/// their long multiplies, selected with the multiplies by `2^k +- 1` left as
+/// shifts and an add: the caller keeps whichever form is smaller in the
+/// allocated function (`compile::lines_in`).
+pub fn selections_with_alternatives(
+    text: &str,
+    request: &Request,
+) -> Result<(Vec<Selected>, Vec<Selected>), String> {
     let mut program = program(text, request)?;
     program.modules.iter_mut().for_each(crate::prepare::split_phi_edges);
     let module = &program.modules[0];
@@ -146,20 +160,31 @@ pub fn selections_both(
         .filter(|global| global.function().is_some_and(|one| !one.is_declaration()))
         .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
-    Ok(names
-        .into_iter()
-        .map(|name| {
-            let select = |ilp: bool| {
-                crate::dagisel::pipeline::ILP.with(|one| one.set(ilp));
-                crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
-                let one = select_function_with(module, &name, request.cpu, request.level != Level::O0);
-                crate::dagisel::pipeline::ILP.with(|one| one.set(false));
-                one
-            };
-            let (source, ilp) = (select(false), select(true));
-            (name, source, ilp)
+    let select = |name: &str, ilp: bool| {
+        crate::dagisel::pipeline::ILP.with(|one| one.set(ilp));
+        crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
+        let one = select_function_with(module, name, request.cpu, request.level != Level::O0);
+        crate::dagisel::pipeline::ILP.with(|one| one.set(false));
+        one
+    };
+    let calls_the_routine = |name: &str| {
+        module.globals.iter().any(|global| {
+            global.name.as_deref() == Some(name)
+                && global.function().is_some_and(|one| {
+                    llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_MULTIPLY)
+                        && ["optsize", "minsize"].into_iter().any(|attr| llrm_mir::memory::has(&one.attrs, attr))
+                })
         })
-        .collect())
+    };
+    let main: Vec<Selected> = names.iter().map(|name| (name.clone(), select(name, false), select(name, true))).collect();
+    crate::dagisel::pipeline::DECOMPOSE_MULS.with(|one| one.set(true));
+    let alternatives: Vec<Selected> = names
+        .iter()
+        .filter(|name| calls_the_routine(name))
+        .map(|name| (name.clone(), select(name, false), select(name, true)))
+        .collect();
+    crate::dagisel::pipeline::DECOMPOSE_MULS.with(|one| one.set(false));
+    Ok((main, alternatives))
 }
 
 /// The cost model the mid-end reads: the pin's `opt` with no target, whose

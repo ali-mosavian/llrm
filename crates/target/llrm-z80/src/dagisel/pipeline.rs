@@ -69,6 +69,10 @@ thread_local! {
     /// Set while a function is selected the second time, under `ILP`
     /// (DEVIATE Z80S1).
     pub static ILP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function that calls `__mulsi3` for its long multiplies is
+    /// selected the second time, with the shifts and adds of `x * (2^k +- 1)`
+    /// kept (`driver::selections_with_alternatives`).
+    pub static DECOMPOSE_MULS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// What the scheduler reads of the instruction descriptions.

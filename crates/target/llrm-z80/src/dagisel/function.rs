@@ -158,7 +158,8 @@ pub fn select_function_with(
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
     let target = builder_target();
     let sized = ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name));
-    let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY);
+    let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY)
+        && !super::pipeline::DECOMPOSE_MULS.with(std::cell::Cell::get);
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
