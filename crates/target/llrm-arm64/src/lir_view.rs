@@ -180,6 +180,7 @@ fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
 /// from zero.
 pub fn view(function: &MFunc) -> MFunction<Class> {
     let mut lir = MFunction::<Class>::new(&function.name);
+    lir.odds = function.alloc_odds.clone();
     lir.classes = vec![Class::Gpr; (function.next_register - Gpr::FIRST_VIRTUAL) as usize];
     lir.locals =
         function.slots.iter().enumerate().map(|(at, slot)| (at as i32, slot.size as i64, slot.align as i64)).collect();

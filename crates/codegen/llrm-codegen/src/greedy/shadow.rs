@@ -1193,11 +1193,8 @@ pub fn decide_with(
 /// size.
 /// https://github.com/llvm/llvm-project/blob/main/llvm/lib/CodeGen/RegAllocGreedy.cpp#L3074
 fn intervals_to_allocate(body: &LirBody) -> LiveIntervals {
-    let handed = crate::liveness::liveintervals::take_handed_over_edited_to(body);
-    if std::env::var_os("PHIC_DBG").is_some() {
-        eprintln!("PHIC {} handed_over={}", body.name, handed.is_some());
-    }
-    let mut lis = handed.unwrap_or_else(|| LiveIntervals::new(body));
+    let mut lis =
+        crate::liveness::liveintervals::take_handed_over_edited_to(body).unwrap_or_else(|| LiveIntervals::new(body));
     lis.indexes.pack_indexes();
     lis
 }
