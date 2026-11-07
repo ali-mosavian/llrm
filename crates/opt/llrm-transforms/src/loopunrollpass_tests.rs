@@ -891,3 +891,31 @@ fn test_a_function_the_unroll_leaves_alone_makes_no_loop_analyses() {
     let made = get(Event::LoopAnalyses) - before;
     assert_eq!(made, 0, "{made} rebuilds of the tree and nest for a function nothing was unrolled in");
 }
+
+/// Every partial unroll of a top-level loop built the function's dominator tree
+/// again (467 builds, 517 M Ir of memory_expansion -O2); the pin applies the
+/// unroll's edge updates to the tree it has.
+#[test]
+fn test_partial_unrolls_in_sequence_build_one_dominator_tree() {
+    use llrm_mir::counts::{Event, get};
+    let text = sequential(8);
+    let text = (0..8).fold(text, |text, k| text.replace(&format!("icmp slt i16 %n{k}, 4"), &format!("icmp slt i16 %n{k}, 64")));
+    let mut module = parsed(&text);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu("i486").expect("a cpu");
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: true,
+    };
+    let (before, nests) = (get(Event::Dominators), get(Event::LoopAnalyses));
+    assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
+    let built = get(Event::Dominators) - before;
+    let nests = get(Event::LoopAnalyses) - nests;
+    assert!(built <= 2, "{built} dominator trees built for 8 partial unrolls ({nests} nests)");
+}

@@ -2068,6 +2068,72 @@ fn is_still_a_loop(
     run.function.predecessors(header).into_iter().any(|one| after.contains(&one))
 }
 
+/// The edges out of the blocks an unroll of the loop `body` can change: its
+/// own, its preheaders' and its exits'.
+fn unroll_edges(
+    function: &Function,
+    header: BlockId,
+    body: &[BlockId],
+) -> Vec<(BlockId, BlockId)> {
+    let inside: IdSet<BlockId> = body.iter().copied().collect();
+    let mut from: Vec<BlockId> = body.to_vec();
+    for pred in function.predecessors(header) {
+        if !inside.contains(&pred) {
+            from.push(pred);
+        }
+    }
+    for &one in body {
+        for next in function.successors(one) {
+            if !inside.contains(&next) && !from.contains(&next) {
+                from.push(next);
+            }
+        }
+    }
+    edges_from(function, &from)
+}
+
+fn edges_from(
+    function: &Function,
+    from: &[BlockId],
+) -> Vec<(BlockId, BlockId)> {
+    let mut edges = Vec::new();
+    for &one in from {
+        for next in function.successors(one) {
+            edges.push((one, next));
+        }
+    }
+    edges
+}
+
+/// `UnrollLoop`'s `DTU` updates: the edges the unroll made and removed, as
+/// `applyUpdates` takes them, from the edges before it of `before`'s blocks
+/// and the blocks made since the function had `capacity`.
+fn unroll_updates(
+    function: &Function,
+    capacity: usize,
+    before: &[(BlockId, BlockId)],
+) -> Vec<llrm_mir::domtree::Update> {
+    use llrm_mir::domtree::Update;
+    let mut from: Vec<BlockId> = before.iter().map(|&(one, _)| one).collect();
+    from.dedup();
+    from.extend(function.layout().iter().copied().filter(|one| one.0 as usize >= capacity));
+    let after = edges_from(function, &from);
+    let kept: std::collections::HashSet<(BlockId, BlockId)> = after.iter().copied().collect();
+    let was: std::collections::HashSet<(BlockId, BlockId)> = before.iter().copied().collect();
+    let mut updates = Vec::new();
+    for &(a, b) in before {
+        if !kept.contains(&(a, b)) {
+            updates.push(Update::delete(a, b));
+        }
+    }
+    for &(a, b) in &after {
+        if !was.contains(&(a, b)) {
+            updates.push(Update::insert(a, b));
+        }
+    }
+    updates
+}
+
 /// The `SimplifyIVs` half of `simplifyLoopAfterUnroll`
 /// ([LoopUnroll.cpp:350](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUnroll.cpp#L350)),
 /// run when the unroll is partial (`!CompletelyUnroll && Count > 1`):
@@ -2199,6 +2265,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         } else {
             Vec::new()
         };
+        let edges_before = (parent_header.is_none() && !holds_loops).then(|| unroll_edges(run.function, header, &body));
         let result = try_to_unroll_loop(run, &analyzed, lp);
         if result == Unrolled::Unmodified {
             continue;
@@ -2270,10 +2337,26 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         // A top-level loop with no loops inside leaves the analyses of the
         // other loops as they were: they are made again only otherwise (made
         // after every loop they were `n^2` over `n` loops in a function).
-        if parent_header.is_none() && !holds_loops {
+        if let Some(edges) = edges_before {
             let after = unrolled_blocks(run, capacity, &body);
+            // The tree follows the unroll's edges (`DTU`), where the nest is
+            // made again.
+            let updates = unroll_updates(run.function, capacity, &edges);
+            std::rc::Rc::make_mut(&mut analyzed.tree).apply_updates(run.function, &updates);
+            if llrm_support::env_flag!("LLRM_CHECK_DOMTREE_MEMO") {
+                assert!(*analyzed.tree == DomTree::of(run.function), "the unroll's updates left the tree different");
+            }
             if is_still_a_loop(run, header, &after) {
-                let fresh = Analyzed::of(run);
+                let loops = LoopInfo::analyze(run.function, || &*analyzed.tree);
+                let assumptions = AssumptionCache::of_declared(
+                    run.context,
+                    run.globals,
+                    run.metadata,
+                    run.function,
+                    run.outer.assume_declared(),
+                );
+                llrm_mir::counts::bump(llrm_mir::counts::Event::LoopAnalyses);
+                let fresh = Analyzed { tree: std::rc::Rc::clone(&analyzed.tree), loops: loops.into(), assumptions };
                 simplify_ivs_and_load_cse(run, &fresh, header);
                 simplify_loop_after_unroll(run, Some(&fresh.loops), &after);
             } else {
