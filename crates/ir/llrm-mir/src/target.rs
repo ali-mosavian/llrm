@@ -197,6 +197,7 @@ pub struct SizeFill {
 impl Tuning {
     /// X86ISelLowering.cpp: 16/8, 8/4, 8/4 stores; no clock price for a byte.
     pub const PIN: Tuning = Tuning {
+        size_fill: None,
         max_stores_per_memset: 16,
         max_stores_per_memset_opt_size: 8,
         max_stores_per_memcpy: 8,
