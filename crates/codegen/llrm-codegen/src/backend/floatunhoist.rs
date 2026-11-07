@@ -114,6 +114,14 @@ impl LIRTransform for FloatUnhoist<'_> {
             return Ok(body);
         }
         let Some(prices) = Prices::of(self.cpu) else { return Ok(body) };
+        // The scan below accepts a memory `fld` and nothing else: without one the
+        // loops and the read counts are not worth computing.
+        let has_candidate = body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| {
+            one.what.as_ref().is_some_and(|what| name_is(what, "fld")) && _loads_memory(one.what.as_ref())
+        });
+        if !has_candidate {
+            return Ok(body);
+        }
         Ok(unhoisted(&body, &prices))
     }
 }
