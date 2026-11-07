@@ -184,13 +184,20 @@ fn argument_store(
             (*k, base, Source::Immediate(*v))
         }
         (Kind::Op("MOV32ji"), [Operand::Use(base), Operand::Imm(v)]) => (0, base, Source::Immediate(*v)),
+        // a store of zero selects `clr.l`
+        (Kind::Op("CLR32p"), [Operand::Imm(k), Operand::Use(base)]) => (*k, base, Source::Immediate(0)),
+        (Kind::Op("CLR32j"), [Operand::Use(base)]) => (0, base, Source::Immediate(0)),
         _ => return None,
     };
     (REGISTER_INFO.root(physical(*base, assignment)) == reg::SP).then_some((offset, source))
 }
 
-/// `move.l value, -(%sp)`: `value` is a register or an immediate.
+/// `move.l value, -(%sp)`: `value` is a register or an immediate; zero is
+/// `clr.l -(%sp)`, 2 B where `pea (0).w` is 4.
 pub fn push_of(value: &mc::Operand) -> mc::Inst {
+    if matches!(value, mc::Operand::Imm(0)) {
+        return mc::Inst { opcode: "CLR32e", operands: vec![mc::Operand::Reg(reg::SP)] };
+    }
     let opcode = match value {
         mc::Operand::Reg(src) if crate::expand::is_address(*src) => "MOV32ea",
         mc::Operand::Reg(_) => "MOV32ed",
@@ -415,7 +422,14 @@ fn sequences(
                     Source::Register(src) => (mc::Operand::Reg(src), ("MOV32jr", "MOV32pr")),
                     Source::Immediate(v) => (mc::Operand::Imm(v), ("MOV32ji", "MOV32pi")),
                 };
-                let store = if offset == 0 {
+                let store = if matches!(source, Source::Immediate(0)) {
+                    // the `clr.l` the selector chose, priced as it is
+                    if offset == 0 {
+                        mc::Inst { opcode: "CLR32j", operands: vec![sp.clone()] }
+                    } else {
+                        mc::Inst { opcode: "CLR32p", operands: vec![mc::Operand::Imm(offset), sp.clone()] }
+                    }
+                } else if offset == 0 {
                     mc::Inst { opcode: store_rows.0, operands: vec![sp.clone(), value.clone()] }
                 } else {
                     mc::Inst {
