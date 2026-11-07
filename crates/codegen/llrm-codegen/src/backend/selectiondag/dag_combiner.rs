@@ -2279,6 +2279,27 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         {
             return Some(regrouped);
         }
+        // The tail of `visitADDLikeCommutative`
+        // ([L3550](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3550)):
+        // `(add X, (uaddo_carry Y, 0, c))` is `(uaddo_carry X, Y, c)`, and
+        // `(add X, carry)` is `(uaddo_carry X, 0, carry)`.
+        for (x, y) in [(n0, n1), (n1, n0)] {
+            if self.dag.opcode(y) == ISD::UAddOCarry && self.dag.is_null_constant(self.dag.operand(y, 1)) && y.res == 0 {
+                let values = self.dag.node(y).values.clone();
+                return Some(self.dag.get_node_multi(
+                    ISD::UAddOCarry,
+                    &values,
+                    &[x, self.dag.operand(y, 0), self.dag.operand(y, 2)],
+                ));
+            }
+            if self.tli.is_some_and(|tli| tli.is_operation_legal_or_custom(ISD::UAddOCarry, vt))
+                && let Some(carry) = self.as_carry(y)
+            {
+                let zero = self.dag.get_constant(0, vt);
+                let carry_vt = self.dag.value_type(carry);
+                return Some(self.dag.get_node_multi(ISD::UAddOCarry, &[vt, carry_vt], &[x, zero, carry]));
+            }
+        }
         // `(add a, b)` is `(or disjoint a, b)` where the two share no bits
         // ([L3318][pin]).
         //
@@ -2288,6 +2309,39 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node_flags(ISD::Or, vt, &[n0, n1], SDNodeFlags::DISJOINT));
         }
         None
+    }
+
+    /// `getAsCarry`
+    /// ([L3404](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3404)):
+    /// the carry result of an add or subtract behind the truncates, zero
+    /// extends and `& 1` that legalization put on it.
+    fn as_carry(
+        &self,
+        mut value: SDValue,
+    ) -> Option<SDValue> {
+        let mut masked = false;
+        loop {
+            match self.dag.opcode(value) {
+                ISD::Truncate | ISD::ZeroExtend => value = self.dag.operand(value, 0),
+                ISD::And if self.dag.constant(self.dag.operand(value, 1)) == Some(1) => {
+                    masked = true;
+                    value = self.dag.operand(value, 0);
+                }
+                _ => break,
+            }
+        }
+        if value.res != 1 {
+            return None;
+        }
+        let op = self.dag.opcode(value);
+        if !matches!(op, ISD::UAddOCarry | ISD::USubOCarry | ISD::UAddO | ISD::USubO) {
+            return None;
+        }
+        let vt = self.dag.node(value).values[0];
+        if !self.tli.is_some_and(|tli| tli.is_operation_legal_or_custom(op, vt)) {
+            return None;
+        }
+        (masked || self.dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrOne).then_some(value)
     }
 
     /// `visitSHL`, `visitSRL` and `visitSRA`, the constant-amount folds: the
@@ -2860,11 +2914,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// ([L3621](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3621)):
     /// a dead overflow is an `add`, a constant goes right, `x + 0` has no
     /// carry, and a sum that cannot overflow is an `add`. DEVIATE UADDO1: the
-    /// `(uaddo (xor a, -1), 1)` and `visitUADDOLike` carry folds are not
-    /// translated. Measured 2026-11-06 12:34Z (C corpus m16/m32/m64 -O2, QB,
-    /// Nib): their preconditions hold in one program
-    /// (tests/run/c/overflow_builtins.c, `uaddo X, (uaddo_carry Y, 0, c)`),
-    /// no bench cell. Port when a cell needs it.
+    /// `(uaddo (xor a, -1), 1)` fold is not translated (no cell);
+    /// `visitUADDOLike` is (`uaddo_like`, for `d / 1000` on a u64).
     fn visit_uaddo(
         &mut self,
         node: SDValue,
@@ -2893,6 +2944,36 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let sum = self.dag.get_node(ISD::Add, vt, &[n0, n1]);
             self.dag.combine_to(node, sum);
             self.dag.combine_to(overflow, no_carry);
+            return None;
+        }
+        self.uaddo_like(node, n0, n1).or_else(|| self.uaddo_like(node, n1, n0))
+    }
+
+    /// `visitUADDOLike`
+    /// ([L3673](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3673)):
+    /// `(uaddo X, (uaddo_carry Y, 0, c))` is `(uaddo_carry X, Y, c)` where
+    /// `Y + 1` cannot overflow, and `(uaddo X, carry)` is `(uaddo_carry X, 0,
+    /// carry)`.
+    fn uaddo_like(
+        &mut self,
+        node: SDValue,
+        x: SDValue,
+        y: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(x);
+        let values = self.dag.node(node).values.clone();
+        if self.dag.opcode(y) == ISD::UAddOCarry && self.dag.is_null_constant(self.dag.operand(y, 1)) {
+            let low = self.dag.operand(y, 0);
+            let one = self.dag.get_constant(1, vt);
+            if self.unsigned_add_never_overflows(low, one) {
+                return Some(self.dag.get_node_multi(ISD::UAddOCarry, &values, &[x, low, self.dag.operand(y, 2)]));
+            }
+        }
+        if self.tli.is_some_and(|tli| tli.is_operation_legal_or_custom(ISD::UAddOCarry, vt))
+            && let Some(carry) = self.as_carry(y)
+        {
+            let zero = self.dag.get_constant(0, vt);
+            return Some(self.dag.get_node_multi(ISD::UAddOCarry, &values, &[x, zero, carry]));
         }
         None
     }
