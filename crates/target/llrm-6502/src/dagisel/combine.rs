@@ -11,7 +11,7 @@
 //! `visit_mul`.
 
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
-use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
+use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{LoadExt, NodeData, SDValue, SelectionDAG};
@@ -27,6 +27,17 @@ pub struct MosCombines {
 pub struct MosLateCombines;
 
 impl CombineHooks for MosLateCombines {
+    /// DEVIATE 6502-SHL-COMMUTE: as [`MosCombines`]; every run of the
+    /// combiner must give alike.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
     fn fold_shift_of_shared_shift(
         &self,
         vt: EVT,
@@ -47,11 +58,25 @@ fn folds_shared_shift(
 }
 
 impl CombineHooks for MosCombines {
+    /// DEVIATE 6502-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the shift
+    /// runs on the zero-page cells (`asl rc17; rol rc18`) where the add went
+    /// through Y and X (bintree -O2 +20 B). The pin's default is true
+    /// (@ d1106deb71). Owner: llrm-target-6502. Exit: 2026-11-14, when the
+    /// select-shift fold re-fires here.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
     fn has_target_combine(
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate)
+        matches!(op, ISD::Mul | ISD::Add | ISD::Srl | ISD::Truncate)
     }
 
     /// DEVIATE 6502-SHARED-SHIFT: a word shift is one instruction whose two
@@ -73,70 +98,11 @@ impl CombineHooks for MosCombines {
         _level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Add => borrow_of_ult(dag, node).or_else(|| widened_add_with_carry(dag, node)),
-            ISD::Sub => borrow_of_ult(dag, node),
+            ISD::Add => widened_add_with_carry(dag, node),
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
             _ => decompose_mul(dag, node, self.sized),
         }
     }
-}
-
-/// `x + sext(a <u b)` and `x - zext(a <u b)` in a word of two or more bytes: the
-/// borrow of `a - b`, subtracted from `x` by a subtract with borrow. A split
-/// 64-bit subtract is `lo = a - b`, `hi = (ah - bh) + sext(a <u b)`; the
-/// compare was a chain of its own and its result a byte.
-///
-/// The pin's analogue is the target's `combineAddOrSubToADCOrSBB`
-/// ([X86ISelLowering.cpp#L53776](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L53776),
-/// `X +- setcc(B)` to `ADC`/`SBB`), the compare and the subtract sharing the
-/// flags by CSE. The generic combiner only reads a carry off an existing
-/// `usubo` (`getAsCarry`,
-/// [DAGCombiner.cpp#L3404](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3404)).
-/// Here the `usubo` replaces the subtract `a - b` and gives the borrow.
-fn borrow_of_ult(
-    dag: &mut SelectionDAG,
-    node: SDValue,
-) -> Option<SDValue> {
-    let vt = dag.value_type(node);
-    if !matches!(vt, EVT::I32 | EVT::I64) {
-        return None;
-    }
-    let (x, extended) = match dag.opcode(node) {
-        ISD::Add => [(0, 1), (1, 0)]
-            .into_iter()
-            .map(|(x, e)| (dag.operand(node, x), dag.operand(node, e)))
-            .find(|&(_, e)| dag.opcode(e) == ISD::SignExtend)?,
-        ISD::Sub if dag.opcode(dag.operand(node, 1)) == ISD::ZeroExtend => {
-            (dag.operand(node, 0), dag.operand(node, 1))
-        }
-        _ => return None,
-    };
-    let compare = dag.operand(extended, 0);
-    if dag.opcode(compare) != ISD::SetCC
-        || !matches!(dag.node(dag.operand(compare, 2)).data, NodeData::CondCode(CondCode::SetULt))
-    {
-        return None;
-    }
-    let (a, b) = (dag.operand(compare, 0), dag.operand(compare, 1));
-    if dag.value_type(a) != vt {
-        return None;
-    }
-    let difference = dag.get_node_multi(ISD::USubO, &[vt, EVT::I1], &[a, b]);
-    // the subtract of the same operands is the difference of the `usubo`
-    let plain: Vec<u32> = dag.users(a).filter(|&user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::Sub).collect();
-    for user in plain {
-        if dag.operand(SDValue { node: user, res: 0 }, 1) == b && dag.operand(SDValue { node: user, res: 0 }, 0) == a {
-            dag.replace_all_uses_with(SDValue { node: user, res: 0 }, SDValue { node: difference.node, res: 0 });
-        }
-    }
-    let borrow = SDValue { node: difference.node, res: 1 };
-    let (p, q) = if dag.opcode(x) == ISD::Sub && dag.has_one_use(x.node) {
-        (dag.operand(x, 0), dag.operand(x, 1))
-    } else {
-        (x, dag.get_constant(0, vt))
-    };
-    let result = dag.get_node_multi(ISD::USubOCarry, &[vt, EVT::I1], &[p, q, borrow]);
-    Some(SDValue { node: result.node, res: 0 })
 }
 
 /// `zext a + zext b + c` in a word, `c` a bit (the carry of the byte add

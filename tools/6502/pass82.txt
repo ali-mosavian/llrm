@@ -78,6 +78,5 @@ uint64_to_float
 value_of_valueless
 volatile_bitfield
 wide_frame
-word_compares
 write_through_parameter
 zz_f
