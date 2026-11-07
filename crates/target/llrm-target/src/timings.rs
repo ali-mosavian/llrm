@@ -42,7 +42,9 @@ pub struct CpuTable {
     /// pin's order.
     pub commute_loop_carried: bool,
     /// The pin's stand-alone `TailDuplicator` runs after allocation, once this
-    /// target's A/B has been made (`TailDuplicate` slot).
+    /// target's A/B has been made (`TailDuplicate` slot). DEVIATE TD-M64 (owner
+    /// greedy-subreg, exit 2026-11-12): on at m64 only; m32/m16 stay off until
+    /// their sfm16 rows (+16/+4 B) are explained; the pin runs it everywhere.
     pub post_ra_tail_duplicate: bool,
     /// Clocks a mispredicted branch costs (`MCSchedModel::MispredictPenalty`);
     /// `None`: the target states none.
