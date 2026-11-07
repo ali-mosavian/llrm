@@ -133,6 +133,14 @@ pub struct Tuning {
     /// wide (`slots::width_rule_allows`); false: the pin's `ColorSlot`,
     /// which shares any two slots whose ranges do not overlap.
     pub slots_loop_width_rule: bool,
+    /// DEVIATE CARRY-SI (x86 m16, m32, m64: owners the three x86 sessions, exit
+    /// 2026-11-21): the coalescer's slot indexes reach the allocator through the
+    /// pre-RA scheduler with the entries its erased and moved instructions left
+    /// empty (the pin's one `SlotIndexes`), so range sizes, and the dequeue and
+    /// spill weights that divide by them, are the pin's. false: the function
+    /// is numbered afresh after the scheduler, as the x86 numbers were tuned
+    /// (A/B 2026-11-07: x86_32 O1 14 cells +704 B worse).
+    pub carry_slot_indexes: bool,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
@@ -305,6 +313,7 @@ impl Tuning {
         x87_share_negated_products: false,
         x87_zero_fill_at_size: false,
         slots_loop_width_rule: false,
+        carry_slot_indexes: true,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
@@ -1140,6 +1149,7 @@ mod tests {
         assert!(!pin.unroll_promotion_fits_x87_stack);
         assert!(!pin.x87_zero_fill_at_size);
         assert!(!pin.slots_loop_width_rule);
+        assert!(pin.carry_slot_indexes);
         assert_eq!(pin.inline_threshold, None);
     }
 }
