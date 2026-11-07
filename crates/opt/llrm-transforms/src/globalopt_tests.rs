@@ -310,7 +310,10 @@ b0:
 }
 ",
     );
-    assert!(after.contains("@v = internal") && after.contains("global i16 0") && !after.contains("constant"), "{after}");
+    assert!(
+        after.contains("@v = internal") && after.contains("global i16 0") && !after.contains("constant"),
+        "{after}"
+    );
     assert!(after.contains("load volatile i16, ptr @v"), "{after}");
 }
 
