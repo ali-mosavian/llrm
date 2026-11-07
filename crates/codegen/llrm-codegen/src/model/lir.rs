@@ -1755,7 +1755,9 @@ pub fn inert() -> Semantics {
 /// Keep virtual dataflow and source-byte ownership for an elided machine op.
 #[must_use]
 pub fn anchor(one: Arc<Insn>) -> Arc<Insn> {
-    let mut anchored = (*one).clone();
+    // A freshly placed copy is unique: `make_mut` rewrites it without a clone.
+    let mut one = one;
+    let anchored = Arc::make_mut(&mut one);
     anchored.what = Some(inert());
     anchored.clobbers.clear();
     anchored.clobbers_high.clear();
@@ -1767,7 +1769,7 @@ pub fn anchor(one: Arc<Insn>) -> Arc<Insn> {
     anchored.spill_store = false;
     anchored.frame_adjust = false;
     anchored.rematerialized = false;
-    Arc::new(anchored)
+    one
 }
 
 /// Only the source bytes `one` owns: no machine work and no dataflow.

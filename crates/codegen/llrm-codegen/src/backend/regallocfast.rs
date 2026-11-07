@@ -704,9 +704,7 @@ impl Fast<'_> {
             let mut made = self.instruction(one)?;
             out.append(&mut self.after);
             if made.group.is_some() {
-                let mut copy = (*made).clone();
-                copy.group = None;
-                made = Arc::new(copy);
+                Arc::make_mut(&mut made).group = None;
             }
             out.push(made);
         }
@@ -873,9 +871,8 @@ impl Fast<'_> {
         if self.here.is_empty() && physical.is_empty() && one.undefs.is_empty() {
             return Ok(Arc::clone(one));
         }
-        let mut held: IndexMap<u32, RegId> = self.here.clone();
-        held.extend(physical.iter().map(|(value, register)| (*value, *register)));
-        let placed = crate::backend::rewriter::_placed(one, &held, self.classes).map_err(|why| Fallback(why.0))?;
+        self.here.extend(physical.iter().map(|(value, register)| (*value, *register)));
+        let placed = crate::backend::rewriter::_placed(one, &self.here, self.classes).map_err(|why| Fallback(why.0))?;
         // An identity move stays as an inert anchor: its value is defined.
         if placed.group.is_none() && crate::backend::rewriter::_pointless(&placed) {
             return Ok(crate::model::lir::anchor(placed));
