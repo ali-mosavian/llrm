@@ -17,7 +17,7 @@ const SCN_MEM_WRITE: u32 = 0x8000_0000;
 const SYM_CLASS_EXTERNAL: u8 = 2;
 const SYM_CLASS_STATIC: u8 = 3;
 const SYM_CLASS_FILE: u8 = 103;
-const SYM_CLASS_WEAK_EXTERNAL: u8 = 69;
+const SYM_CLASS_WEAK_EXTERNAL: u8 = 105;
 /// The linker falls back to the default symbol where no strong definition exists.
 const IMAGE_WEAK_EXTERN_SEARCH_ALIAS: u32 = 3;
 const SYM_TYPE_FUNCTION: u16 = 0x20;

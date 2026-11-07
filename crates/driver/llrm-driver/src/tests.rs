@@ -2167,7 +2167,7 @@ fn a_weak_definition_is_a_weak_symbol_in_an_elf_object() {
 }
 
 /// The pin writes a weak definition outside a COMDAT as a weak external
-/// (class 69, search-alias aux) that names a default symbol
+/// (class 0x69, search-alias aux) that names a default symbol
 /// `.weak.NAME.default.UNIQUE` in the definition's section, UNIQUE the first
 /// strong external symbol of the object.
 #[test]
@@ -2197,7 +2197,7 @@ fn a_weak_definition_is_a_weak_external_with_a_default_in_a_coff_object() {
     for weak in ["wf", "u"] {
         let row = rows.iter().find(|one| one.1 == weak).unwrap_or_else(|| panic!("{weak} in {rows:?}"));
         // section 0, class WEAK_EXTERNAL, one aux
-        assert_eq!((row.2, row.3, row.4), (0, 69, 1), "{weak}: {rows:?}");
+        assert_eq!((row.2, row.3, row.4), (0, 105, 1), "{weak}: {rows:?}");
         let aux = &bytes[table + 18 * (row.0 + 1)..table + 18 * (row.0 + 2)];
         let tag = u32::from_le_bytes(aux[..4].try_into().unwrap()) as usize;
         assert_eq!(index(&format!(".weak.{weak}.default.h")), Some(tag), "{rows:?}");
