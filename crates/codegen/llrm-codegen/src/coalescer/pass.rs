@@ -151,6 +151,13 @@ pub(super) fn remat_priced(
         let Some(Semantics { sources, dests, .. }) = def.what.as_ref() else { return false };
         let ([Loc::Imm(literal)], [Loc::Held(held)]) = (sources.as_slice(), dests.as_slice()) else { return false };
         let width = i64::from(held.width);
+        // DEVIATE C13 (owner greedy-anyisa, exit: the greedy rematerializes a
+        // spilled zero as the pin's does): a value wider than the operand size
+        // often spills, and its remade zero is a 9 B `movq $0, slot` for a 5 B
+        // store of the shared one (jpeg_fixed m64 -Os +42 B).
+        if width > operand {
+            return false;
+        }
         (bytes.literal)(literal.value, literal.address.is_some(), width, operand) < (bytes.copy)(width, operand)
     })
 }

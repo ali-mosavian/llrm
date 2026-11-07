@@ -1783,11 +1783,11 @@ fn constant_of(
     Arc::new(Insn::new(0, None, Some(what), vec![v], vec![]))
 }
 
-/// The encoded sizes of a flat 64-bit target: a copy is two bytes, three for a
-/// qword (REX.W), a zero is `xor` (two), any other constant five.
+/// The encoded sizes of a flat 32-bit target: a copy is two bytes, three for a
+/// word (66h) or a qword (REX.W), a zero is `xor` (two), any other constant five.
 fn flat_bytes() -> llrm_target::MoveBytes {
     llrm_target::MoveBytes {
-        copy: |width, _| if width > 4 { 3 } else { 2 },
+        copy: |width, _| if width == 4 { 2 } else { 3 },
         literal: |number, _, _, _| if number == 0 { 2 } else { 5 },
     }
 }
@@ -1856,25 +1856,25 @@ fn size_copy_of_def_is_remade_after(
     result == JoinResult::Joined && !names(&lis).contains(&(vec![2], vec![1]))
 }
 
-/// m64 `recgcd` and `idiv_loop_os` -Os kept `mov rsi, rcx` (3 B, REX.W) where the
-/// pin has `xor esi, esi` (2 B), +2 B: a size build never remade a zero that stays
-/// read. The target's encodings decide: a qword zero is remade, a dword zero is a
-/// tie with the copy and stays one (a remade zero stored to a spill slot cost
-/// `over_aligned_local_after_even_pushes` m64 +9 B), a constant dearer than the
-/// copy stays one.
+/// The target's encodings decide at size: a word zero (`xor` 2 B against a 66h
+/// copy, 3 B) is remade, a dword zero is a tie with the copy and stays one, and so
+/// does a constant dearer than the copy. A qword zero is left a copy (C13): its
+/// `xor` beat the REX.W copy (m64 `recgcd`, +2 B) but a remade zero that spills is a
+/// 9 B `movq $0, slot` (jpeg_fixed m64 -Os +42 B, over_aligned_local_after_even_pushes +9).
 #[test]
 fn test_for_size_a_zero_that_stays_read_is_made_again_where_the_target_prices_it() {
     let price = || Some(super::pass::remat_priced(flat_bytes(), 4));
-    assert!(size_copy_of_constant_is_remade(0, 8, price()), "xor 2 B against a 3 B copy");
+    assert!(size_copy_of_constant_is_remade(0, 2, price()), "xor 2 B against a 3 B copy");
     assert!(!size_copy_of_constant_is_remade(0, 4, price()), "a tie keeps the copy");
-    assert!(!size_copy_of_constant_is_remade(7, 8, price()), "5 B against a 3 B copy");
+    assert!(!size_copy_of_constant_is_remade(7, 2, price()), "5 B against a 3 B copy");
+    assert!(!size_copy_of_constant_is_remade(0, 8, price()), "a qword zero may spill (C13)");
 }
 
 /// A target that states no price keeps DEVIATE C10: at size no copy of a
 /// constant that stays read is remade (40 of 813 sources +1,383 bytes).
 #[test]
 fn test_for_size_without_a_price_a_constant_that_stays_read_stays_a_copy() {
-    assert!(!size_copy_of_constant_is_remade(0, 8, None));
+    assert!(!size_copy_of_constant_is_remade(0, 2, None));
 }
 
 /// mul_constants m32 -Os: `mov edx, eax` became `lea eax, [esi+0x3c6ef35f]` (6 B for 2):
