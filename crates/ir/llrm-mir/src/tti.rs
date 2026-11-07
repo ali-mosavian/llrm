@@ -759,6 +759,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE SETCC-TREE-BRANCH: `Tuning::branch_compare_trees_at_size`.
+    fn branch_compare_trees_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): `Tuning::sink_spares_ranges`.
     fn sink_spares_ranges(&self) -> bool {
         false

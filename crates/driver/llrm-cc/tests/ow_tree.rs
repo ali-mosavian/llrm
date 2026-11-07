@@ -50,11 +50,11 @@ fn the_tree_under_cache_is_found_with_no_environment_variable() {
     assert!(!text.contains("ow-fetch.sh") && !text.contains("LLRM_OW"), "{text}");
 }
 
-/// toolchain/cache.sh fills the directory in place and writes `.complete` last.
-/// A directory without it (an interrupted or running fetch) resolved `{ow}` and
-/// the compile then failed on a missing library instead of naming ow-fetch.sh.
+/// An interrupted `tools/ow-fetch.sh` leaves the directory without `.complete`;
+/// `{ow}` resolved to it and the compile failed on a missing library instead of
+/// naming the command that makes the tree.
 #[test]
-fn a_tree_without_its_complete_marker_is_missing() {
+fn a_tree_without_its_complete_mark_is_missing() {
     let home = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("ow-home-partial-{}", std::process::id()));
     std::fs::create_dir_all(home.join(format!(".cache/llrm/ow-src-{}", commit()))).unwrap();
     let first = stderr_with(&home).lines().next().unwrap_or_default().to_owned();
