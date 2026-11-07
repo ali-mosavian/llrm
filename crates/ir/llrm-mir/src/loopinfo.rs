@@ -660,6 +660,49 @@ impl LoopInfo<BlockId> {
         }
     }
 
+    /// `LoopInfoBase::removeBlock`, for `gone` at once: each block is in no
+    /// loop afterwards. Every block must be innermost in `loop_id`; the
+    /// loop and its parents shrink, and the loops after it move down.
+    pub fn remove_blocks_from_loop(
+        &mut self,
+        loop_id: LoopId,
+        gone: &[BlockId],
+    ) {
+        if gone.is_empty() {
+            return;
+        }
+        for block in gone {
+            debug_assert_eq!(self.bb_map[block.0 as usize], loop_id.0, "a block not innermost in this loop");
+            self.bb_map[block.0 as usize] = NONE;
+        }
+        let data = &self.loops[loop_id.0 as usize];
+        let (from, to) = (data.start as usize, (data.start + data.len) as usize);
+        let mut removed: Vec<u32> = Vec::new();
+        for at in from..to {
+            if self.bb_map[self.layout[at].0 as usize] == NONE {
+                removed.push(at as u32);
+            }
+        }
+        let mut next = 0;
+        self.layout = self
+            .layout
+            .iter()
+            .enumerate()
+            .filter(|&(at, _)| {
+                let drop = removed.get(next) == Some(&(at as u32));
+                next += usize::from(drop);
+                !drop
+            })
+            .map(|(_, &block)| block)
+            .collect();
+        for one in &mut self.loops {
+            let before = removed.partition_point(|&at| at < one.start);
+            let inside = removed.partition_point(|&at| at < one.start + one.len) - before;
+            one.start -= before as u32;
+            one.len -= inside as u32;
+        }
+    }
+
     /// `Loop::addBasicBlockToLoop` for one block.
     pub fn add_basic_block_to_loop(
         &mut self,
