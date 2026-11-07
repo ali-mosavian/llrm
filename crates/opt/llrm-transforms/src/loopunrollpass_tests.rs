@@ -833,3 +833,36 @@ fn test_at_o1_a_loop_whose_copies_fit_the_loop_is_unrolled() {
     let mut module = parsed(THREE_LOADS);
     assert!(unrolled_o1(&mut module, true), "{}", printed(&module));
 }
+
+/// An outer loop of unknown trips holding `n` four-trip loops in sequence.
+fn nested(n: usize) -> String {
+    let mut text = String::from(
+        "define i16 @f(i16 %x, i16 %m) {\nb0:\n  br label %o\n\no:\n  %j = phi i16 [ 0, %b0 ], [ %jn, %latch ]\n  %c0 = phi i16 [ %x, %b0 ], [ %r, %latch ]\n  br label %l0\n\n",
+    );
+    for k in 0..n {
+        let next = if k + 1 == n { "latch".to_owned() } else { format!("l{}", k + 1) };
+        let (pre, init) = if k == 0 { ("o".to_owned(), "c0".to_owned()) } else { (format!("x{}", k - 1), format!("r{}", k - 1)) };
+        text += &format!(
+            "l{k}:\n  %i{k} = phi i16 [ 0, %{pre} ], [ %n{k}, %l{k} ]\n  %a{k} = phi i16 [ %{init}, %{pre} ], [ %s{k}, %l{k} ]\n  %s{k} = add i16 %a{k}, %i{k}\n  %n{k} = add i16 %i{k}, 1\n  %g{k} = icmp slt i16 %n{k}, 4\n  br i1 %g{k}, label %l{k}, label %x{k}\n\nx{k}:\n  %r{k} = phi i16 [ %s{k}, %l{k} ]\n  br label %{next}\n\n",
+        );
+    }
+    text += &format!(
+        "latch:\n  %r = add i16 %r{last}, 0\n  %jn = add i16 %j, 1\n  %e = icmp slt i16 %jn, %m\n  br i1 %e, label %o, label %end\n\nend:\n  ret i16 %r\n}}\n",
+        last = n - 1
+    );
+    text
+}
+
+/// Every full unroll of a loop inside another made the dominator tree and loop
+/// info again 3-4 times (1,211 calls on memory_expansion, the pin updates both
+/// in place and makes none): after the CFG-neutral `simplify_loop_after_unroll`
+/// the tree and nest were still right.
+#[test]
+fn test_unrolling_inner_loops_makes_the_loop_analyses_at_most_twice_per_loop() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(&nested(8));
+    let before = get(Event::LoopAnalyses);
+    assert!(unrolled(&mut module));
+    let made = get(Event::LoopAnalyses) - before;
+    assert!(made <= 2 * 8 + 3, "{made} analyses made for 8 inner loops");
+}

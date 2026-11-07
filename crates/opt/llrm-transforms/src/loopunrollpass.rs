@@ -382,6 +382,7 @@ pub(crate) struct Analyzed {
 
 impl Analyzed {
     pub(crate) fn of(run: &Run) -> Self {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LoopAnalyses);
         let tree = DomTree::of(run.function);
         let loops = LoopInfo::analyze(run.function, || &tree);
         let assumptions = AssumptionCache::of_declared(
@@ -2271,14 +2272,17 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             simplify_ivs_and_load_cse(run, &analyzed, header);
         }
         simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
-        analyzed = Analyzed::of(run);
         // `UnrollLoop` puts the loops it cloned back in loop-simplify form
         // (`simplifyLoop` of the outer loop); here the whole function is, when
         // the unrolled loop had an outer loop or held loops (U6).
         if parent_header.is_some() || siblings_of(&analyzed.loops).iter().any(|one| !old.contains(one)) {
-            crate::loopsimplify::simplified(run.function);
+            // The blocks change only when loop-simplify changed them (LCSSA
+            // edits phis alone).
+            let reshaped = crate::loopsimplify::simplified(run.function);
             let _ = crate::lcssa::closed(run.context, run.layout, run.function);
-            analyzed = Analyzed::of(run);
+            if reshaped {
+                analyzed = Analyzed::of(run);
+            }
         }
         let mut fresh: Vec<BlockId> =
             siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
