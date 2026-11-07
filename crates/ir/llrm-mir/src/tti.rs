@@ -845,6 +845,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::size_fill`: the encoded bytes of a constant fill at size.
+    fn size_fill(&self) -> Option<crate::target::SizeFill> {
+        None
+    }
+
     /// The target's `PartialThreshold` (its tuning table); none: the pass's
     /// own.
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
