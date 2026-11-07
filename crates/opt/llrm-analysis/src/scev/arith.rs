@@ -1,14 +1,15 @@
 //! The arithmetic folds: `getAddExpr`, `getMulExpr`, their helpers and the
 //! flag strengthening they share.
 
-use super::ConstantRange;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use llrm_mir::hash::HashMap;
 use llrm_mir::hash::HashSet;
 use llrm_mir::opcode::BinaryOp;
 
+use super::ConstantRange;
 use super::ap::Ap;
 use super::expr::{Kind, Scev, Ty, Type, Use, flags};
 use super::{Cx, Flags, Key, KeyLike, ScalarEvolution};
@@ -260,8 +261,8 @@ impl ScalarEvolution {
             _ => self.type_of(ops[0].scev),
         };
         let kind = || match tag {
-            Type::Add => Kind::Add(ops.to_vec()),
-            Type::Mul => Kind::Mul(ops.to_vec()),
+            Type::Add => Kind::Add(Rc::from(ops)),
+            Type::Mul => Kind::Mul(Rc::from(ops)),
             _ => unreachable!("an add or a multiply"),
         };
         let size = self.compute_expression_size(ops);

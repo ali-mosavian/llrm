@@ -803,6 +803,15 @@ impl Printer<'_> {
                 let indices: Vec<String> = indices.iter().map(u32::to_string).collect();
                 format!("{} {}, {}", inst.opcode.mnemonic(), values.join(", "), indices.join(", "))
             }
+            Opcode::ExtractElement | Opcode::InsertElement => {
+                let values: Vec<String> = (0..ops.len()).map(typed).collect();
+                format!("{} {}", inst.opcode.mnemonic(), values.join(", "))
+            }
+            Opcode::ShuffleVector(mask) => {
+                let lanes: Vec<String> =
+                    mask.iter().map(|&lane| if lane < 0 { "i32 poison".to_owned() } else { format!("i32 {lane}") }).collect();
+                format!("shufflevector {}, {}, <{} x i32> <{}>", typed(0), typed(1), mask.len(), lanes.join(", "))
+            }
             Opcode::Alloca { allocated, align, address_space } => {
                 let mut text = format!("alloca {}", self.ty(*allocated));
                 if !ops.is_empty() {

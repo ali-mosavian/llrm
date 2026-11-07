@@ -457,7 +457,8 @@ struct Builder {
     block_of: HashMap<String, u32>,
     /// How many times each cell or register has been defined so far.
     versions: HashMap<String, u32>,
-    /// High halves of pointer cells written as plain bytes: the pair never sees them.
+    /// High halves of pointer cells written as plain bytes: the pair never sees
+    /// them.
     lost_halves: HashSet<String>,
     /// The compare whose flags the next branch reads, and the ones saved to
     /// cells for later.
@@ -3873,6 +3874,24 @@ fn emit_with<const STACK: bool>(
             y_callees.insert(format!("{callee}_fast"));
         }
     }
+    // the cells a return reads: the bytes of a long result
+    let mut result_cells = std::collections::BTreeSet::new();
+    for operand in function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| inst.kind == Kind::Op("RTS"))
+        .flat_map(|inst| &inst.operands)
+    {
+        if let Operand::Use(Reg::Phys(r)) = operand {
+            if is_pair(*r) {
+                result_cells.insert(register_name(lane(*r, 0)));
+                result_cells.insert(register_name(lane(*r, 1)));
+            } else {
+                result_cells.insert(register_name(*r));
+            }
+        }
+    }
     Ok((
         own_labels(
             &finish(
@@ -3881,6 +3900,7 @@ fn emit_with<const STACK: bool>(
                 (!returns_a, a_callees),
                 (!returns_x, x_callees),
                 (!returns_y, y_callees),
+                result_cells,
             ),
             &function.name,
         ),
@@ -3934,6 +3954,7 @@ fn finish(
     (no_a_result, a_callees): (bool, std::collections::BTreeSet<String>),
     (no_x_result, x_callees): (bool, std::collections::BTreeSet<String>),
     (no_y_result, y_callees): (bool, std::collections::BTreeSet<String>),
+    result_cells: std::collections::BTreeSet<String>,
 ) -> String {
     code.no_a_result = no_a_result;
     code.a_callees = a_callees;
@@ -3941,6 +3962,7 @@ fn finish(
     code.x_callees = x_callees;
     code.no_y_result = no_y_result;
     code.y_callees = y_callees;
+    code.result_cells = result_cells;
     crate::peephole::run(&mut code);
     crate::relax::relax(&mut code);
     if let Some((file, scope, places)) = lines_of {
