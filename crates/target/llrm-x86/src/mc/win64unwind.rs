@@ -2,10 +2,16 @@
 //! `.pdata` (`RUNTIME_FUNCTION`) for each function of `.text`.
 //!
 //! # How it works
-//! There is no Win64 frame lowering to declare the prologue (DEVIATE COFF-SEH-1,
-//! owner object-refactor, exit 2026-11-30: LLVM's `.seh_*` directives,
-//! `X86WinCOFFStreamer`), so the prologue is read
-//! back from the function's final bytes: a straight-line run of `push` of a
+//! The compiler declares the prologue with `.seh_*` directives (`from_seh`).
+//! DEVIATE COFF-SEH-1 (owner object-refactor, exit 2026-11-30): code that
+//! declares nothing, an assembled object, has its prologue read back from the
+//! function's final bytes where LLVM would need the directives
+//! (`X86WinCOFFStreamer`). In the Win64 corpus (170 objects, 824 functions,
+//! 2026-11-07) every function is declared, none is read back. The read-back is
+//! kept for assembled input, and is deleted if the assembler declares
+//! `.seh_*`.
+//!
+//! The read-back takes a straight-line run of `push` of a
 //! register, `sub rsp, imm`, `lea`/`mov` of the frame register from `rsp`, and
 //! `mov`/`movaps` of a non-volatile register to `[rsp+d]`. The run ends at the
 //! first other instruction; a prologue that does not fit what the unwind codes
