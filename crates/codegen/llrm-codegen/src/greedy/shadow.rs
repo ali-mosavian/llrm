@@ -268,6 +268,13 @@ impl GreedyEnv for BodyEnv<'_> {
         self.tii.encoding_bytes(insn, virt, phys)
     }
 
+    fn encoding_class(
+        &self,
+        phys: RegId,
+    ) -> Option<u8> {
+        self.tii.encoding_class(phys)
+    }
+
     fn reg_cost(
         &self,
         phys: RegId,
