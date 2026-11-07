@@ -126,6 +126,9 @@ pub struct Selected {
     /// The frame object each source variable lives in (`llvm.dbg.declare` of a
     /// static `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
+    /// The value each `llvm.dbg.value` of this block names, as the selected
+    /// nodes left it (`transferDbgValues`), in source order.
+    pub dbg_values: Vec<(llrm_mir::MetadataId, SDValue)>,
     /// The probabilities the builder kept for the edges of merged conditions.
     pub edge_probs: Vec<(u32, u32, u32)>,
 }
@@ -271,6 +274,20 @@ pub fn select_function_in(
                 Ok(PhiCopy { to, dst, src, float })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let in_block: std::collections::HashSet<llrm_mir::module::InstId> =
+            built.dag.inst_order.iter().map(|&(inst, _)| inst).collect();
+        let dbg_values = function
+            .debug_records()
+            .iter()
+            .filter_map(|record| {
+                let llrm_mir::DebugWhat::Value(llrm_mir::Operand::Value(value)) = record.what else { return None };
+                if !in_block.contains(&record.before) {
+                    return None;
+                }
+                let node = built.values.iter().find(|(one, _)| *one == value)?.1;
+                Some((record.variable, built.dag.resolve(node)))
+            })
+            .collect();
         selected.push(Selected {
             dag: built.dag,
             units,
@@ -282,6 +299,7 @@ pub fn select_function_in(
             phis,
             tables: info.jump_tables.clone(),
             declared: declared.clone(),
+            dbg_values,
             edge_probs: info.edge_probs.iter().map(|(from, to, p)| (from.0, to.0, *p)).collect(),
         });
     }

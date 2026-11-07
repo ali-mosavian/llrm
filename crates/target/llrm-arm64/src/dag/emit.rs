@@ -1928,6 +1928,12 @@ pub fn emit(
             for &node in unit.nodes.iter().rev() {
                 places.resize(emitter.ops.len(), None);
                 emitter.node(node)?;
+                // `InstrEmitter::EmitDbgValue`: after the node whose value a
+                // `llvm.dbg.value` names.
+                for &(variable, value) in block.dbg_values.iter().filter(|(_, value)| value.node == node) {
+                    let reg = emitter.values.get(&(value.node, value.res)).map(|&gpr| Reg::Gpr(gpr));
+                    emitter.ops.push(Op::DbgValue { variable, reg });
+                }
                 if lines {
                     let order = block.dag.node(SDValue { node, res: 0 }).order as usize;
                     let place = block.dag.lines.get(order).copied().flatten();

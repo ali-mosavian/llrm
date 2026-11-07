@@ -84,8 +84,11 @@ fn the_dag_path_places_the_variables_in_their_frame_objects() {
     for (text, level) in FIXTURES {
         let names =
             |mode| variables(&described(text, level, mode)).into_iter().map(|(name, _)| name).collect::<Vec<_>>();
-        assert_eq!(names(IselMode::Dag), names(IselMode::Hand), "{level:?}");
-        assert!(!names(IselMode::Dag).is_empty(), "premise: variables");
+        // At -O2 the DAG path also places variables the hand selector cannot
+        // (`a_dag_path_at_o2_names_every_variable_the_hand_selector_does`).
+        let (dag, hand) = (names(IselMode::Dag), names(IselMode::Hand));
+        assert!(level != Level::O0 || dag == hand, "{level:?}");
+        assert!(!dag.is_empty(), "premise: variables");
     }
 }
 
@@ -177,7 +180,9 @@ fn the_dag_path_has_the_same_rows_and_variables_on_darwin() {
         assert!(row_lines(&hand).len() > 2, "premise: the hand selector has rows");
         assert_eq!(row_lines(&dag), row_lines(&hand), "{level:?}");
         let names = |described: &Described| variables(described).into_iter().map(|(name, _)| name).collect::<Vec<_>>();
-        assert_eq!(names(&dag), names(&hand), "{level:?}");
+        let (dag, hand) = (names(&dag), names(&hand));
+        assert!(hand.iter().all(|name| dag.contains(name)), "{level:?}: {dag:?} against {hand:?}");
+        assert!(level != Level::O0 || dag == hand, "{level:?}");
     }
 }
 
@@ -191,4 +196,40 @@ fn the_first_row_is_the_scope_line() {
         assert_eq!((rows[0].offset, rows[0].line), (0, 2), "{mode:?}: {rows:?}");
         assert_eq!(rows[1].line, 3, "{mode:?}: {rows:?}");
     }
+}
+
+/// A variable `llvm.dbg.value` puts in a register got no location at all at
+/// -O2: only `llvm.dbg.declare` reached the machine function, so 296 of the 400
+/// variables the pin places were missing in ours (dwarf_loc_diff, arm64
+/// bench, 2026-11-06).
+#[test]
+fn a_variable_in_a_register_has_a_location_from_dbg_value() {
+    // The counts are the process's: hold the selector mode, so no other compile
+    // runs between the two readings.
+    let _guard = MODE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    driver::set_isel_mode(IselMode::Dag);
+    let before = llrm_arm64::lir_view::note_counts();
+    let object = driver::object_with(include_str!("data/debug_value_o2.ll"), Platform::Linux, "t", Level::O2, true)
+        .expect("lowers");
+    let after = llrm_arm64::lir_view::note_counts();
+    // No note may go unplaced here: a pass with most locations dropped would
+    // still find some.
+    let located = variables(&object);
+    assert_eq!((after.0 - before.0, after.1 - before.1), (2, 2), "notes seen and placed: {located:?}");
+    let place = |name: &str| located.iter().find(|(one, _)| one == name).map(|(_, place)| place.clone());
+    assert!(place("n").is_some_and(|place| place.contains("Register(")), "{located:?}");
+    assert!(place("m").is_some_and(|place| place.contains("Register(")), "{located:?}");
+}
+
+/// At -O2 the DAG path places the variables `llvm.dbg.value` keeps in
+/// registers as well as the frame ones, so it names every variable the hand
+/// selector does and may name more: a subset, not an equality. Its own test, so
+/// that dropping a hand name goes red here and not only at -O0.
+#[test]
+fn a_dag_path_at_o2_names_every_variable_the_hand_selector_does() {
+    let (text, level) = FIXTURES[1];
+    let names = |mode| variables(&described(text, level, mode)).into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+    let (dag, hand) = (names(IselMode::Dag), names(IselMode::Hand));
+    assert!(!hand.is_empty(), "premise: the hand selector names variables");
+    assert!(hand.iter().all(|name| dag.contains(name)), "{dag:?} against {hand:?}");
 }
