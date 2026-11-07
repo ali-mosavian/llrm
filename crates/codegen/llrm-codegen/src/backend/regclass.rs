@@ -254,6 +254,10 @@ pub enum Kind {
 impl Kind {
     const ALL: [Kind; 5] = [Kind::WordIndexes, Kind::Addressing, Kind::WordBases, Kind::Bytes, Kind::Xmm];
 
+    fn bit(self) -> u8 {
+        1 << Self::ALL.iter().position(|one| *one == self).unwrap_or(0)
+    }
+
     fn registers<'a>(
         self,
         registers: &'a RegisterClasses,
@@ -666,6 +670,10 @@ thread_local! {
     /// for the test that fixes how many one allocation makes.
     #[cfg(test)]
     pub(crate) static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Intersections of register sets made while collecting classes, counted for the
+    /// test that fixes how many a value's repeated restrictions cost.
+    #[cfg(test)]
+    pub(crate) static INTERSECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A set of register numbers as bits: `collected` inserts one for most
@@ -728,6 +736,8 @@ fn collected(
     SCANS.with(|one| one.set(one.get() + 1));
     let regs = body.regs();
     let mut out: Classes = IndexMap::default();
+    // Each value's restricting kinds, as a mask: intersected once per mask, not per item.
+    let mut confined_by: IndexMap<u32, u8> = IndexMap::default();
     let mut selecting = Bits::default();
     let mut numeric = Bits::default();
     let mut word_pairs: Vec<(u32, u32)> = Vec::new();
@@ -756,7 +766,8 @@ fn collected(
                                 spare: false,
                             });
                         }
-                        _restrict(&mut out, value, choices);
+                        let _ = choices;
+                        *confined_by.entry(value).or_insert(0u8) |= kind.bit();
                     }
                     Item::Numeric(value) => {
                         numeric.insert(value);
@@ -776,6 +787,20 @@ fn collected(
         }
     }
     drop(_scan);
+    let mut by_mask: crate::support::hash::HashMap<u8, BTreeSet<RegId>> = Default::default();
+    for (&value, &mask) in &confined_by {
+        let set = by_mask.entry(mask).or_insert_with(|| {
+            let mut kinds = Kind::ALL.iter().filter(|kind| mask & kind.bit() != 0);
+            let mut set = kinds.next().map(|kind| kind.registers(registers).clone()).unwrap_or_default();
+            for kind in kinds {
+                #[cfg(test)]
+                INTERSECTIONS.with(|n| n.set(n.get() + 1));
+                set = set.intersection(kind.registers(registers)).copied().collect();
+            }
+            set
+        });
+        out.insert(value, set.clone());
+    }
     let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
     for value in selecting.without(&numeric) {
         _restrict(&mut out, value, &selectors);
@@ -1483,6 +1508,35 @@ mod tests {
         assert!(restricted("addsd", 16));
         assert!(!restricted("add", 16), "a 16-byte integer operand");
     }
+
+    /// Every restriction of a value was an intersection of two `BTreeSet`s and a new
+    /// set: 50 `addsd` on one value made 49 (mem expansion -O2: `collected` 114 M Ir,
+    /// the set intersections and drops the biggest part). A value's restrictions are
+    /// now a mask of kinds, intersected once per distinct mask.
+    #[test]
+    fn test_repeated_restrictions_of_one_value_are_intersected_once() {
+        let regs = Regs(&llrm_x86_m64::REGISTER_INFO);
+        let held = |value| Loc::Held(Held { value, width: 8, offset: 0 });
+        let insns: Vec<Arc<Insn>> = (0..50)
+            .map(|at| {
+                let what = Semantics {
+                    name: Some("addsd".into()),
+                    dests: vec![held(1)],
+                    sources: vec![held(1), held(2)],
+                    ..Semantics::new(Operation::Binary)
+                };
+                Arc::new(Insn::new(at, None, Some(what), vec![1], vec![1, 2]))
+            })
+            .collect();
+        let block = LirBlock { at: 0, insns: insns.into(), succ: vec![].into(), phis: vec![].into(), cold: false, align: 0, max_skip: 0 };
+        let mut body = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+        body.registers = Some(regs);
+        INTERSECTIONS.with(|n| n.set(0));
+        let found = classes(&body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m64::M64));
+        assert!(found.get(&1).is_some_and(|class| !class.is_empty()), "the value keeps its xmm class");
+        let made = INTERSECTIONS.with(|n| n.get());
+        assert!(made <= 2, "{made} intersections for 100 restrictions of 2 values");
+    }
 }
 
 /// Values the spiller leaves alone: x87 values, pinned ones, and the body's
@@ -1636,4 +1690,5 @@ pub fn explicit_selectors_given(
         blocks.push(block.with_insns(insns));
     }
     Some(body.with_blocks(blocks))
+
 }
