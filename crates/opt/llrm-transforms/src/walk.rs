@@ -657,12 +657,21 @@ impl ProgramPass for Walk {
                                     // -Os).
                                     let costs = program.target.size_costs();
                                     let now = module.global(id).function().expect("a body");
-                                    let gone: i64 = if credit > 0 {
+                                    // DEVIATE (owner softfloat, exit 2026-11-20): the callee's bytes are summed per
+                                    // site off the byte gate's targets, as the x86 model was fit with.
+                                    let gone: i64 = if credit > 0 && tti.opt_size_inline_byte_gate() {
                                         let sites: Vec<GlobalId> =
                                             calls.iter().filter_map(|one| trials[one].callee).collect();
                                         dying_callees_bytes(module, &sites, |body| {
                                             function_bytes(module, &program.layout, &costs, body)
                                         })
+                                    } else if credit > 0 {
+                                        calls
+                                            .iter()
+                                            .filter_map(|one| trials[one].callee)
+                                            .filter_map(|callee| module.global(callee).function())
+                                            .map(|body| function_bytes(module, &program.layout, &costs, body))
+                                            .sum()
                                     } else {
                                         0
                                     };
@@ -708,7 +717,7 @@ impl ProgramPass for Walk {
                                 // instructions).
                                 let priced = rate > 0 && size == crate::inlinecost::CallerSize::Speed;
                                 let kept_bytes = function_bytes(module, &program.layout, &program.target.size_costs(), &kept);
-                                if trial_accepted(priced, tried, best, credit, saved, growth, rate, kept_bytes) {
+                                if trial_accepted(tti.opt_size_inline_byte_gate(), priced, tried, best, credit, saved, growth, rate, kept_bytes) {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
@@ -1253,6 +1262,7 @@ pub fn function_bytes(
 /// `canon` (a libcall per site on m68k) was inlined five times for +28 B at -Os.
 #[allow(clippy::too_many_arguments)]
 fn trial_accepted(
+    byte_gate: bool,
     priced: bool,
     tried: i64,
     best: i64,
@@ -1265,7 +1275,7 @@ fn trial_accepted(
     if priced {
         return credit > 0 && growth * rate <= saved * 1000;
     }
-    (tried <= best || (tried <= best + credit && growth <= 0))
+    (if byte_gate { tried <= best || (tried <= best + credit && growth <= 0) } else { tried <= best + credit })
         || (saved > 0 && growth * rate <= saved * 1000)
         || (rate == 0 && credit == 0 && -growth * 8 >= kept_bytes)
 }
