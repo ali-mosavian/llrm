@@ -87,6 +87,18 @@ const UNOPTIMIZED: &[&str] = &[
     "CmpAsSub",
     "CallFrameOpt",
     "TailDuplicate",
+    // The pin's -O0 `addMachinePasses` has none of these (TargetPassConfig.cpp
+    // d1106deb71cc): `addMachineSSAOptimization` (DeadMachineInstructionElim)
+    // and `addOptimizedRegAlloc` (ProcessImplicitDefs) are O>0 only, as is
+    // `addMachineLateOptimization` (BranchFolder); the float and leaf rewrites
+    // are ours alone.
+    "DeadMachineInstructionElim",
+    "ProcessImplicitDefs",
+    "LeafFold",
+    "FloatUnhoist",
+    "FloatFold",
+    "FloatSink",
+    "ControlFlow",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
@@ -752,6 +764,22 @@ mod tests {
         for name in ["UNOPTIMIZED", "SLOTS"] {
             let line = text.lines().find(|line| line.starts_with(&format!("const {name}:"))).expect("the list");
             assert!(line.contains(": &["), "{line}");
+        }
+    }
+
+    /// The pin's -O0 `addMachinePasses` runs no `DeadMachineInstructionElim`
+    /// (`addMachineSSAOptimization` is O>0 only), no `ProcessImplicitDefs`
+    /// (`addOptimizedRegAlloc`: the fast allocator takes `addFastRegAlloc`) and
+    /// no branch folding or tail duplication (`addMachineLateOptimization`).
+    /// Ours ran them at -O0: 12 M Ir of 78 M on div_constants_short.
+    #[test]
+    fn test_the_o0_pipeline_has_none_of_the_phases_the_pin_runs_only_when_optimizing() {
+        let o0 = crate::backend::cpu::Profile { optimized: false, ..crate::backend::cpu::named("486").unwrap().clone() };
+        let phases = machine(&IndexMap::default(), None, None, None, false, &o0, &crate::backend::target::BUILT_IN)
+            .expect("the phases");
+        let names: Vec<&str> = phases.iter().map(|phase| phase.class_name()).collect();
+        for gone in ["DeadMachineInstructionElim", "ProcessImplicitDefs", "ControlFlow", "TailDuplicate"] {
+            assert!(!names.contains(&gone), "{gone} runs at -O0: {names:?}");
         }
     }
 
