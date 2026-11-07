@@ -1166,7 +1166,11 @@ fn staged(
     };
     let selected = if let Some(done) = dag {
         if done.is_ok() {
-            shadow::record(name, Selector::Dag);
+            if crate::backend::selectiondag::fastisel::take_took() {
+                shadow::record_fast(name);
+            } else {
+                shadow::record(name, Selector::Dag);
+            }
         }
         done
     } else {
