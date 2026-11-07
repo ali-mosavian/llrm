@@ -1945,9 +1945,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let NodeData::Mem(info) = self.dag.node(load).data else { return None };
-        if info.volatile {
-            return None;
-        }
         let op = self.dag.opcode(node);
         let wanted = match op {
             ISD::ZeroExtend => LoadExt::ZExtLoad,
@@ -1962,6 +1959,19 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             Some(_) => return None,
         };
         let wide = self.dag.value_type(node);
+        // `tryToFoldExtOfLoad` (DAGCombiner.cpp#L15712): a load that is not
+        // simple (volatile) is extended too, with its memory operand, where
+        // the target has the extending load (`isLoadLegal`); it was left alone
+        // at every target: `load volatile i8` + `zext` was a `move.b` and an
+        // `and.l #255` at m68k (every seed had them, ~60% of the 68000 gap).
+        if info.volatile {
+            let (EVT::Simple(wide_mvt), EVT::Simple(mem_mvt)) = (wide, info.mem_vt) else { return None };
+            if self.tli.is_none_or(|tli| {
+                    !tli.folds_extend_of_volatile_load() || tli.load_ext_action(ext, wide_mvt, mem_mvt) != Action::Legal
+                }) {
+                return None;
+            }
+        }
         let others: Vec<u32> = self.dag.users(load).filter(|&user| user != node.node).collect();
         let mut compares = Vec::new();
         if !others.is_empty() {
