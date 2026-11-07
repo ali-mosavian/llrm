@@ -118,3 +118,28 @@ fn a_branch_on_the_order_of_two_long_longs_reads_the_flags_of_the_chain() {
 fn a_select_on_the_order_of_two_long_longs_reads_the_flags_of_the_chain() {
     consumer_bytes("select", 64, 0);
 }
+
+/// `k_valuege`: `x >= y` of two `i32` as a value. "Not below" was a select of the borrow byte: `bne; lda #1; jmp;
+/// lda #0; and #1`, a branch for a bit.
+fn value_ge() -> String {
+    "define i16 @k_valuege(ptr %a, ptr %b) {
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  %c = icmp uge i32 %x, %y
+  %r = zext i1 %c to i16
+  ret i16 %r
+}
+"
+    .to_owned()
+}
+
+#[test]
+fn an_unsigned_greater_or_equal_of_two_words_as_a_value_is_straight_line() {
+    let ir = format!("target datalayout = \"{}\"\n{}", datalayout(), value_ge());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let from = text.find("k_valuege:").unwrap_or_else(|| panic!("no k_valuege in\n{text}"));
+    let body: String = text[from..].split(".segment").next().unwrap().to_owned();
+    assert!(!body.contains("jmp"), "a bit made through a branch:\n{body}");
+    let bytes = estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
+    assert!(bytes <= 0, "k_valuege: {bytes} B\n{body}");
+}

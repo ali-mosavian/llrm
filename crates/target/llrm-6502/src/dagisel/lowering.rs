@@ -596,9 +596,11 @@ fn lower_setcc_carry(
         CondCode::SetULt | CondCode::SetLt if vt == EVT::I1 => Some(below),
         CondCode::SetULt | CondCode::SetLt => Some(dag.get_node(ISD::ZeroExtend, vt, &[below])),
         _ => {
-            // "not below" is a select of the borrow, as any condition is
-            let (zero, one) = (dag.get_constant(0, EVT::I8), dag.get_constant(1, EVT::I8));
-            let byte = dag.get_select(EVT::I8, below, zero, one);
+            // "not below" is the borrow's byte flipped: bytes only, no `xor` of
+            // the bit, whose select tests itself
+            let one = dag.get_constant(1, EVT::I8);
+            let byte = carry_byte(dag, below);
+            let byte = dag.get_node(ISD::Xor, EVT::I8, &[byte, one]);
             Some(if vt == EVT::I8 { byte } else { dag.get_node(ISD::Truncate, vt, &[byte]) })
         }
     }
