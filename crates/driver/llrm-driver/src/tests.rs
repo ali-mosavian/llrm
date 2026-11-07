@@ -4523,3 +4523,41 @@ fn a_zero_extended_select_mask_stays_an_immediate_in_the_loop_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("306674911"), "{listing}");
 }
+
+
+/// Position-independent m64: a symbol defined elsewhere is reached through
+/// the GOT, as the pin does (`X86Subtarget::classifyGlobalReference` is
+/// `MO_GOTPCREL` for a declaration that is not `dso_local`): the address is
+/// one `mov r64, [rip + g@GOTPCREL]` and the value a second load. Every symbol
+/// was assumed `dso_local` (`dag_function.rs`), so the read was the single
+/// `mov eax, [rip + g]` of a static link and the extern read flattered every
+/// cell by one load.
+#[test]
+fn an_extern_global_read_at_m64_pie_is_loaded_through_the_got() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @g = external global i32\n\
+                define i32 @f() {\n  %v = load i32, ptr @g\n  ret i32 %v\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    // masm names a symbol operand without brackets: `dword ptr g` is the
+    // direct read; the GOT form reads through a register (`ptr [r..]`). The
+    // first version counted `[` and read 0 loads for the direct listing.
+    assert!(!listing.contains("ptr g"), "{listing}");
+    assert!(listing.lines().any(|line| line.trim().starts_with("mov eax, dword ptr [")), "{listing}");
+}
+
+/// A call to a function defined elsewhere stays a direct `call` (the linker
+/// makes the PLT entry), and a global defined in the module is read directly:
+/// only an undefined data symbol goes through the GOT.
+#[test]
+fn a_call_and_a_defined_global_at_m64_pie_stay_direct() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @d = global i32 5\n\
+                declare i32 @ext()\n\
+                define i32 @f() {\n  %a = load i32, ptr @d\n  %b = call i32 @ext()\n  %c = add i32 %a, %b\n  ret i32 %c\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("ptr d") && listing.contains("call ext"), "{listing}");
+}

@@ -1061,6 +1061,9 @@ impl Dag for DagisAdapter<'_> {
         if !mems.is_empty() && mems.iter().all(|mem| self.dag.invariant_loads.contains(mem)) {
             self.dag.invariant_loads.insert(node);
         }
+        if !mems.is_empty() && mems.iter().all(|mem| self.dag.got_loads.contains(mem)) {
+            self.dag.got_loads.insert(node);
+        }
         self.mem_refs.insert(node, mems.to_vec());
     }
 

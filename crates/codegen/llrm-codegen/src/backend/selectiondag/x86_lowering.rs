@@ -1804,6 +1804,38 @@ fn lower_global_address(
 ) -> Option<SDValue> {
     let NodeData::Global { symbol, offset } = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
+    // `classifyGlobalReference`: a symbol that is not `dso_local` in position
+    // independent 64-bit code is `MO_GOTPCREL`; `LowerGlobalOrExternal` then
+    // loads its address from the GOT and adds the offset after (no folding).
+    if vt == EVT::I64 && !dag.config().absolute_symbols && !dag.local_symbols.get(symbol as usize).copied().unwrap_or(true) {
+        let target = dag.intern(
+            ISD::TargetGlobalAddress,
+            &[vt],
+            &[],
+            SDNodeFlags::default(),
+            NodeData::Global { symbol, offset: 0 },
+        );
+        let entry = dag.get_node(x86isd::WRAPPER_RIP, vt, &[target]);
+        let info = MemInfo {
+            mem_vt: vt,
+            align: 8,
+            volatile: false,
+            base: MemBase::Got,
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        let root = dag.entry_node();
+        let load = dag.get_load(vt, root, entry, info);
+        dag.invariant_loads.insert(load.node);
+        dag.got_loads.insert(load.node);
+        return Some(if offset == 0 {
+            load
+        } else {
+            let delta = dag.get_constant(offset as u128, vt);
+            dag.get_node(ISD::Add, vt, &[load, delta])
+        });
+    }
     let (folded, rest) = if offset >= 0 && offset <= i64::from(i32::MAX) { (offset, 0) } else { (0, offset) };
     let target = dag.intern(
         ISD::TargetGlobalAddress,
