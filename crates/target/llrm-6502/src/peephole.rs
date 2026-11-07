@@ -195,11 +195,11 @@ pub fn hoist_common_successor_code(asm: &mut Asm) {
     let mut at = 0;
     while at < asm.lines.len() {
         at += 1;
-        let Some((hoisted, fall, target)) = common_successor_code(&asm.lines, at - 1) else { continue };
+        let Some((hoisted, fall, target, insert)) = common_successor_code(&asm.lines, at - 1, Exits::of(asm)) else { continue };
         let count = hoisted.len();
         let mut lines = Vec::with_capacity(asm.lines.len());
         for (index, line) in asm.lines.drain(..).enumerate() {
-            if index == at - 1 {
+            if index == insert {
                 lines.extend(hoisted.iter().cloned().map(Line::Inst));
             }
             if (fall..fall + count).contains(&index) || (target..target + count).contains(&index) {
@@ -212,12 +212,14 @@ pub fn hoist_common_successor_code(asm: &mut Asm) {
     }
 }
 
-/// The instructions to hoist above the branch at `at`, and where the two copies
-/// start (the fall-through path's first, the target's first).
+/// The instructions to hoist above the branch at `at`, where the two copies
+/// start (the fall-through path's first, the target's first), and where the
+/// hoisted copy goes (the branch, or the flag setup before it).
 fn common_successor_code(
     lines: &[Line],
     at: usize,
-) -> Option<(Vec<Inst>, usize, usize)> {
+    exits: Exits,
+) -> Option<(Vec<Inst>, usize, usize, usize)> {
     let Line::Inst(branch) = &lines[at] else { return None };
     let flag = tested_flag(branch.op)?;
     let Operand::Direct(label) = &branch.operand else { return None };
@@ -242,7 +244,94 @@ fn common_successor_code(
         }
         hoisted.push(one.clone());
     }
-    (!hoisted.is_empty()).then_some((hoisted, fall, target))
+    if hoisted.is_empty() {
+        let (copy, insert) = hoist_above_flag_setup(lines, at, fall, target, flag, exits)?;
+        return Some((copy, fall, target, insert));
+    }
+    Some((hoisted, fall, target, at))
+}
+
+/// Whether `inst` reads only registers, an immediate or a named cell or global.
+fn plain_operand(inst: &Inst) -> bool {
+    matches!(inst.operand, Operand::Imm(_)) || matches!(inst.operand, Operand::Direct(_))
+}
+
+/// Both paths of a `beq`/`bne`/`bmi`/`bpl` start with `lda c; sta d` (the
+/// loads write the flags the branch reads, so they cannot sit between the test
+/// and the branch): the copy goes before the loads that make the flags
+/// (`lda rc6; ora rc7; bne`), which read none of the cells the copy stores.
+/// The copy leaves `a` and `n`/`z` set by its last load, and the setup then sets
+/// both, so neither successor may read `a`, `n` or `z` before writing them.
+/// Returns the copy and the index of the setup's first instruction.
+fn hoist_above_flag_setup(
+    lines: &[Line],
+    at: usize,
+    fall: usize,
+    target: usize,
+    flag: char,
+    exits: Exits,
+) -> Option<(Vec<Inst>, usize)> {
+    if flag != 'z' && flag != 'n' {
+        return None;
+    }
+    let mut copy = Vec::new();
+    while let (Some(Line::Inst(one)), Some(Line::Inst(other))) = (lines.get(fall + copy.len()), lines.get(target + copy.len())) {
+        let cell = matches!(one.op, Op::Sta) && one.operand.is_cell() || matches!(one.op, Op::Lda) && (one.operand.is_cell() || matches!(one.operand, Operand::Imm(_)));
+        if one.op != other.op || one.operand != other.operand || !cell {
+            break;
+        }
+        copy.push(one.clone());
+    }
+    if copy.first().is_none_or(|first| first.op != Op::Lda) {
+        return None;
+    }
+    // the setup: plain loads and logic right before the branch, from its last `lda`
+    let mut start = at;
+    while let Some(Line::Inst(inst)) = start.checked_sub(1).map(|b| &lines[b]) {
+        if !matches!(inst.op, Op::Lda | Op::Ora | Op::And | Op::Eor) || !plain_operand(inst) {
+            break;
+        }
+        start -= 1;
+    }
+    while start < at && !matches!(&lines[start], Line::Inst(Inst { op: Op::Lda, .. })) {
+        start += 1;
+    }
+    if start == at {
+        return None;
+    }
+    let stored: Vec<&Operand> = copy.iter().filter(|inst| inst.op == Op::Sta).map(|inst| &inst.operand).collect();
+    if lines[start..at].iter().any(|line| line.inst().is_some_and(|inst| stored.contains(&&inst.operand))) {
+        return None;
+    }
+    let count = copy.len();
+    let leaves_a_and_flags_unread =
+        |from: usize| dead_from(lines, from, Registers::A, &mut HashSet::default(), exits) && !reads_nz_first(lines, from);
+    (leaves_a_and_flags_unread(fall + count) && leaves_a_and_flags_unread(target + count)).then_some((copy, start))
+}
+
+/// Whether a branch on `n` or `z` runs before anything writes them, straight on
+/// from `from` (a jump, a call or raw text that is not preceded by a write stops
+/// the search as unsafe).
+fn reads_nz_first(
+    lines: &[Line],
+    from: usize,
+) -> bool {
+    for line in &lines[from..] {
+        let inst = match line {
+            Line::Inst(inst) => inst,
+            // a label changes nothing on this path
+            Line::Label(_) => continue,
+            _ => return true,
+        };
+        match inst.op {
+            Op::Beq | Op::Bne | Op::Bmi | Op::Bpl => return true,
+            Op::Lda | Op::Ldx | Op::Ldy | Op::Tax | Op::Tay | Op::Txa | Op::Tya | Op::Cmp | Op::Cpx | Op::Cpy | Op::And
+            | Op::Ora | Op::Eor | Op::Adc | Op::Sbc | Op::Inx | Op::Iny | Op::Dex | Op::Dey => return false,
+            Op::Sta | Op::Stx | Op::Sty | Op::Stz | Op::Clc | Op::Sec => {}
+            _ => return true,
+        }
+    }
+    true
 }
 
 /// `bcs l / jmp m / l:` is `bcc m / l:` (labels nothing names between the

@@ -41,6 +41,12 @@ impl CombineHooks for MosLateCombines {
         wide == EVT::I16 && narrow == EVT::I8
     }
 
+    /// DEVIATE SD213: a word `or` of two bytes read as a long is a byte `or`
+    /// (`logical_value` 410 -> 402 B).
+    fn known_zero_narrowing(&self) -> bool {
+        true
+    }
+
     /// DEVIATE 6502-SHL-COMMUTE: as [`MosCombines`]; every run of the
     /// combiner must give alike.
     fn is_desirable_to_commute_with_shift(
@@ -101,6 +107,12 @@ impl CombineHooks for MosCombines {
         narrow: EVT,
     ) -> bool {
         wide == EVT::I16 && narrow == EVT::I8
+    }
+
+    /// DEVIATE SD213: a word `or` of two bytes read as a long is a byte `or`
+    /// (`logical_value` 410 -> 402 B).
+    fn known_zero_narrowing(&self) -> bool {
+        true
     }
 
     /// DEVIATE 6502-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the shift
