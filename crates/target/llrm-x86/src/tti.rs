@@ -681,6 +681,10 @@ impl Tti for X86 {
         self.tuning.inline_never_grows_without_rate
     }
 
+    fn inline_o1_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.inline_o1_milliclocks_per_byte
+    }
+
     fn sink_spares_ranges(&self) -> bool {
         self.tuning.sink_spares_ranges
     }
