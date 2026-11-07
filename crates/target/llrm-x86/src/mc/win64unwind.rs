@@ -2,8 +2,9 @@
 //! `.pdata` (`RUNTIME_FUNCTION`) for each function of `.text`.
 //!
 //! # How it works
-//! There is no Win64 frame lowering to declare the prologue (DEVIATE from
-//! LLVM's `.seh_*` directives, `X86WinCOFFStreamer`), so the prologue is read
+//! There is no Win64 frame lowering to declare the prologue (DEVIATE COFF-SEH-1,
+//! owner object-refactor, exit 2026-11-30: LLVM's `.seh_*` directives,
+//! `X86WinCOFFStreamer`), so the prologue is read
 //! back from the function's final bytes: a straight-line run of `push` of a
 //! register, `sub rsp, imm`, `lea`/`mov` of the frame register from `rsp`, and
 //! `mov`/`movaps` of a non-volatile register to `[rsp+d]`. The run ends at the
