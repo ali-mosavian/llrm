@@ -3074,7 +3074,11 @@ fn a_literal_made_into_a_cell_is_stored_from_the_index_register_that_holds_it() 
     let other = "  ldy #1\n  pha\n  lda #0\n  sta rc8\n  pla\n  lda rc8\n  rts\n";
     assert_eq!(pass(drop_known_loads, other), other, "y holds another value");
     let read = "  ldy #0\n  pha\n  lda #0\n  sta rc8\n  pla\n  beq l\n  rts\n";
-    assert_eq!(pass(drop_known_loads, read), read, "the branch reads the flags pla set");
+    assert_eq!(
+        pass(drop_known_loads, read),
+        "  ldy #0\n  pha\n  tya\n  sta rc8\n  pla\n  beq l\n  rts\n",
+        "the branch reads the flags pla set: no store from y, the load is a transfer"
+    );
 }
 
 /// A pointer's halves read for a word compare: `ldy rc7; lda rc6; cmp rc2; bne l; tya; cmp rc3`.
