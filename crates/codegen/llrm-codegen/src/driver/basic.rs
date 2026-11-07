@@ -1133,6 +1133,7 @@ pub fn assembled(
         requests: object.requests.clone(),
         far_bss: BTreeSet::new(),
         code_segments: Default::default(),
+        comdats: Default::default(),
         debug,
         stack: 0,
         object: options.arch.object(),

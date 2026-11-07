@@ -209,6 +209,29 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TLI.isDesirableToCommuteWithShift`
+    /// ([TargetLowering.h#L4763][pin]): whether the constant shift `shift`
+    /// may move through its operand (`shl (add x, c1), c2` is `add (shl x,
+    /// c2), c1 << c2`). The pin's default, which x86, m68k and wasm use: not
+    /// when the operand has other users, nor when it is a sign extension whose
+    /// source has other users. AArch64 and ARM override it; no in-tree target
+    /// here does.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L4763
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        dag: &SelectionDAG,
+        shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        let operand = dag.operand(shift, 0);
+        if !dag.has_one_use(operand.node) {
+            return false;
+        }
+        !(dag.opcode(operand) == ISD::SignExtend && !dag.has_one_use(dag.operand(operand, 0).node))
+    }
+
     /// `visitSRL`'s `shift (shift x, c1), c2` as one shift by the sum, and
     /// `SimplifyDemandedBits`' `srl (shl x, c1), c2` (and the reverse) as the
     /// one shift by the difference, where the inner shift has other users (the
@@ -932,6 +955,22 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let NodeData::CondCode(cond) = self.dag.node(self.dag.operand(node, 2)).data else { return None };
         let op_type = self.dag.value_type(n0);
+        // `SimplifySetCC` ([L5632][pin]): `setuo|seto x, C` of a constant that
+        // is no NaN is `setuo|seto x, x`, which needs no 0.0 materialized.
+        // DEVIATE: the `setcc (fneg x), C` arm after it is not ported.
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5632
+        if op_type.is_floating_point() {
+            if matches!(cond, CondCode::SetO | CondCode::SetUo)
+                && self.dag.opcode(n0) != ISD::ConstantFP
+                && self.fp_const(n1).is_some_and(|class| !class.nan)
+            {
+                let vt = self.dag.value_type(node);
+                return Some(self.dag.get_setcc(vt, n0, n0, cond));
+            }
+            return None;
+        }
         if !op_type.is_integer() {
             return None;
         }
@@ -2300,6 +2339,26 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                         vt,
                     );
                 return Some(self.dag.get_node(ISD::And, vt, &[self.dag.operand(n0, 0), mask]));
+            }
+        }
+        // `shl (add x, c1), c2` is `add (shl x, c2), c1 << c2`, and the same
+        // for `or` ([L11252][pin]): `x << c2` is shared by the address uses
+        // and the constant folds into an offset. DEVIATE: scalar constants
+        // only (the pin also folds splat vectors). Exit: none planned.
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11252
+        if op == ISD::Shl
+            && matches!(self.dag.opcode(n0), ISD::Add | ISD::Or)
+            && self.hooks.is_desirable_to_commute_with_shift(self.dag, node, self.level)
+        {
+            let n01 = self.dag.operand(n0, 1);
+            if let Some(shl1) = self.dag.fold_constant_arithmetic(ISD::Shl, vt, &[n01, n1]) {
+                let shl0 = self.dag.get_node(ISD::Shl, vt, &[self.dag.operand(n0, 0), n1]);
+                self.add_to_worklist(shl0.node);
+                let disjoint = self.dag.opcode(n0) == ISD::Or && self.dag.node(n0).flags.0 & SDNodeFlags::DISJOINT.0 != 0;
+                let flags = if disjoint { SDNodeFlags::DISJOINT } else { SDNodeFlags::default() };
+                return Some(self.dag.get_node_flags(self.dag.opcode(n0), vt, &[shl0, shl1], flags));
             }
         }
         // `srl (sra x, y), w-1` is `srl x, w-1`: the sign bit is the one `sra`

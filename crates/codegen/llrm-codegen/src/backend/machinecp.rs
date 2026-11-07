@@ -28,7 +28,7 @@
 //! effects are the old ones with the renamed lanes replaced.
 //!
 //! LLVM's `CopyTracker` is one `DenseMap` of units; here the units are 28
-//! slots of an array and a set of units is a `u64` mask.
+//! slots of an array and a set of units is a `u128` mask.
 //!
 //! DEVIATE 1: LLVM asks a machine operand whether it is `renamable` and
 //! whether `getRegClassConstraint` admits the new register; llrm has neither
@@ -67,17 +67,18 @@ use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Block, Insn, LirBody};
 use crate::support::hash::IndexMap;
 
-/// The byte lanes of the general registers (seven roots of four bytes), then
-/// of the six segment registers. A segment register is tracked as the source
-/// of a copy, never as its destination: a string instruction reads `es`, which
-/// its effect does not say, so a dead-looking `mov es, bx` must stay.
-const UNITS: usize = 40;
+/// The byte lanes of the general registers (seven roots of four bytes, then
+/// the eight roots long mode adds), then of the six segment registers. A
+/// segment register is tracked as the source of a copy, never as its
+/// destination: a string instruction reads `es`, which its effect does not say,
+/// so a dead-looking `mov es, bx` must stay.
+const UNITS: usize = 72;
 
 /// The units of the general registers.
-const GENERAL: usize = 28;
+const GENERAL: usize = 60;
 
 /// A set of units.
-type Mask = u64;
+type Mask = u128;
 
 thread_local! {
     static STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -429,8 +430,22 @@ impl Machine {
     fn new(body: &LirBody) -> Self {
         let regs = body.regs();
         let segments = [RegId::ES, RegId::CS, RegId::SS, RegId::DS, RegId::FS, RegId::GS];
-        let lanes: Vec<Lane> =
-            llrm_x86::registers::ROOTS.into_iter().chain(segments).flat_map(|one| _lanes(regs, one)).collect();
+        // The long-mode roots are units in every body so a segment register
+        // keeps its unit; a body without them never names these lanes.
+        let roots64 = llrm_x86::registers::ROOTS64
+            .into_iter()
+            .flat_map(
+                |one| {
+                    let lanes: Vec<Lane> = _lanes(regs, one).into_iter().collect();
+                    if lanes.is_empty() { (0..4).map(|byte| (one, byte)).collect() } else { lanes }
+                },
+            );
+        let lanes: Vec<Lane> = llrm_x86::registers::ROOTS
+            .into_iter()
+            .flat_map(|one| _lanes(regs, one))
+            .chain(roots64)
+            .chain(segments.into_iter().flat_map(|one| _lanes(regs, one)))
+            .collect();
         assert_eq!(lanes.len(), UNITS, "the general registers' byte lanes");
         let mut places = vec![[u8::MAX; 4]; 512];
         for (unit, (register, byte)) in lanes.iter().enumerate() {
