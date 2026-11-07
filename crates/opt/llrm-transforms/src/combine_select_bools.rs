@@ -11,7 +11,8 @@
 //! itself.
 //!
 //! DEVIATE 1: `impliesPoisonOrCond` lacks its `trunc nuw` case (it finds
-//! less); the `samesign` compare case is translated.
+//! less); the `samesign` compare case is translated, but a `C2` that is
+//! undef or poison is not matched (the pin's `m_APIntAllowPoison`; it finds less).
 //!
 //! DEVIATE 2 (temporary): the folds that need another family's helper are left
 //! out, named where they stood: the factorization of `(A && B) || (C && B)`,

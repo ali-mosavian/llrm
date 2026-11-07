@@ -114,3 +114,13 @@ fn a_samesign_compare_that_leaves_the_other_compare_open_keeps_the_select() {
     let out = combined("i16 %x", body);
     assert!(out.contains("select i1 %a, i1 %b, i1 false"), "{out}");
 }
+
+/// The `expected = false` arm: `select a, true, b` with `b = icmp samesign ult x, 9`
+/// and `a = icmp ult x, 100`. A negative `x` makes `a` false, so `b` is
+/// only used when `a` is false and `x` is not negative: `or`.
+#[test]
+fn a_select_of_true_over_a_samesign_compare_is_an_or() {
+    let body = "  %a = icmp ult i16 %x, 100\n  %b = icmp samesign ult i16 %x, 9\n  %r = select i1 %a, i1 true, i1 %b\n  ret i1 %r\n";
+    let out = combined("i16 %x", body);
+    assert!(out.contains("or i1 %a, %b") && !out.contains("select"), "{out}");
+}
