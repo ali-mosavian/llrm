@@ -5,7 +5,7 @@ into the binary) and llvm-mos (compiler-rt soft double, mos-sim, the clock read 
 are the first N of tests/gen_vectors64.c's stream: random bits, denormals, edge values, one pair in eight special. Cycles are the call
 minus a stub that returns zero (A, X, rc2..rc7: eight stores, about 20 cycles, and a base record that must pass) for ours, minus a copy of the operand for llvm-mos. Bytes are the code reachable
 from the entry point: the library functions it calls (sim65_reach.py) plus the mos_rt.s routines they use; llvm-mos: text of the program
-with the operation minus the program without it. SDCC and cc65 have a 32-bit double: no f64 column for them."""
+with the operation minus the program without it. SDCC has a 32-bit double: no f64 column for it. cc65 rejects float types: no column."""
 import glob, os, re, subprocess, sys, tempfile
 here = os.path.dirname(os.path.abspath(__file__)); SF = os.path.join(here, '../..'); TESTS = os.path.join(here, '..')
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 300

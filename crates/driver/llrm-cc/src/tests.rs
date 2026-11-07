@@ -353,9 +353,10 @@ fn an_unchanged_pin_clang_is_asked_its_version_once() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The shared flags keep their meaning for every other target: x86_16 reads `-mcmodel` for near and far code, so clang
-/// gets it there, and no backend of a row without `llc_mcmodel` is handed a flag it never took. The m68k row's clang
-/// is not given the flag (it refuses it) and its backend is.
+/// The shared flags keep their meaning for every other target: x86_16 reads
+/// `-mcmodel` for near and far code, so clang gets it there, and no backend of
+/// a row without `llc_mcmodel` is handed a flag it never took. The m68k row's
+/// clang is not given the flag (it refuses it) and its backend is.
 #[test]
 fn mcmodel_goes_to_the_m68k_backend_and_not_to_its_clang() {
     let table = targets(TARGETS).unwrap();
@@ -366,7 +367,10 @@ fn mcmodel_goes_to_the_m68k_backend_and_not_to_its_clang() {
     for (name, row) in table.iter().filter(|(name, _)| !name.starts_with("m68k-")) {
         assert!(!row.llc_mcmodel, "{name}");
         assert!(clang_flags(row, &one).iter().any(|arg| arg == "-mcmodel=medium"), "{name}: clang lost the flag");
-        assert!(!llc_args(row, &one, Path::new("x.ll"), Path::new("x.o")).iter().any(|arg| arg == "-mcmodel=medium"), "{name}");
+        assert!(
+            !llc_args(row, &one, Path::new("x.ll"), Path::new("x.o")).iter().any(|arg| arg == "-mcmodel=medium"),
+            "{name}"
+        );
     }
 }
 
@@ -389,7 +393,52 @@ fn m32_rows_unroll_at_o1_unless_told_otherwise() {
         assert!(!clang.iter().any(|f| f == "-funroll-loops") && !llc.iter().any(|f| f == "-funroll-loops"), "{line}");
     }
     let (clang, llc) = flags("x86_64-linux", "-O1 -c x.c");
-    assert!(!clang.iter().any(|f| f == "-funroll-loops") && !llc.iter().any(|f| f == "-funroll-loops"), "m64 as before");
+    assert!(
+        !clang.iter().any(|f| f == "-funroll-loops") && !llc.iter().any(|f| f == "-funroll-loops"),
+        "m64 as before"
+    );
     let (clang, _) = flags("x86_16-dos", "-O1 -c x.c");
     assert!(!clang.iter().any(|f| f == "-funroll-loops"), "m16 as before");
+}
+
+/// A dist read the description files from the checkout it was built in, so
+/// deleting or moving the checkout failed every compile (2345 of 3911 cells of
+/// a post-merge A/B). Every description targets.toml names is embedded: the
+/// table parses with no file read.
+#[test]
+fn every_description_a_target_names_is_embedded() {
+    let table: BTreeMap<String, Target> = toml::from_str(TARGETS).unwrap();
+    let mut wanted: Vec<(String, String)> = table
+        .values()
+        .filter_map(|one| {
+            one.description
+                .clone()
+                .map(|name| (name, one.description_file.clone().unwrap_or_else(|| "datalayout.toml".into())))
+        })
+        .collect();
+    for name in
+        TARGETS.match_indices("{datalayout:").map(|(at, _)| TARGETS[at + 12..].split('}').next().unwrap().to_owned())
+    {
+        wanted.push((name, "datalayout.toml".into()));
+    }
+    assert!(wanted.len() > 8);
+    for (name, file) in wanted {
+        assert!(
+            DESCRIPTIONS.iter().any(|(one, f, _)| *one == name && *f == file),
+            "llrm-{name}/{file} is read from the checkout at run time: add it to DESCRIPTIONS"
+        );
+    }
+}
+
+/// A dist whose checkout was moved failed every DOS compile with `flat.h file
+/// not found`: each header a recipe names under `{root}/toolchain/clang` is
+/// embedded, so the driver can write them out when the checkout's own directory
+/// is gone.
+#[test]
+fn every_toolchain_header_a_recipe_includes_is_embedded() {
+    let names: Vec<&str> = TOOLCHAIN_FILES.iter().map(|(name, _)| *name).collect();
+    for header in ["flat.h", "borland.h", "floatm.h", "watcom.h"] {
+        assert!(names.contains(&header), "{header} missing from the embedded toolchain: {names:?}");
+    }
+    assert!(TOOLCHAIN_FILES.iter().all(|(_, bytes)| !bytes.is_empty()));
 }

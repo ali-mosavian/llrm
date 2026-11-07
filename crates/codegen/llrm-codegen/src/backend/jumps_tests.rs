@@ -2709,3 +2709,27 @@ fn the_tail_merge_digest_ignores_what_is_no_operand_and_sees_what_is() {
     assert_ne!(base, with(&|what| what.dests = vec![bx()]), "a register is an operand");
     assert_ne!(base, with(&|what| what.name = Some("add".into())), "the opcode is hashed");
 }
+
+/// x_prefix -Os (m32): `jle` into an edge block holding an identity copy's
+/// anchor and a `jmp` stayed `jle L; ...; L: jmp M`, 2 B and a taken jump more.
+/// `threaded` keeps the anchor's dataflow; the late pass, past every reader of
+/// values, goes round it.
+#[test]
+fn test_a_branch_into_an_identity_copy_anchor_and_a_jump_goes_to_the_jump_target_late() {
+    let anchor = {
+        let one = _inserted(nothing(7, None));
+        Arc::new(Insn { defines: vec![500], uses: vec![600], ..(*one).clone() })
+    };
+    let blocks = || -> Vec<Block> {
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 7)], vec![7, 4]).into(),
+            block(4, vec![Arc::new(Insn { uses: vec![500], ..(*_move(4, cx())).clone() }), _return(5)], vec![]).into(),
+            block(7, vec![Arc::clone(&anchor), _inserted(_jump(8, 9))], vec![9]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
+        ]
+    };
+    let early = threaded(&body("f", 1, blocks()));
+    assert!(early.blocks[0].succ.contains(&7), "the anchor keeps the edge block while values are read");
+    let late = threaded_late(&body("f", 1, blocks()));
+    assert!(late.blocks[0].succ.contains(&9) && !late.blocks[0].succ.contains(&7), "{:?}", late.blocks[0].succ);
+}
