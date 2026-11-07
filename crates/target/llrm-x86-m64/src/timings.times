@@ -33,6 +33,8 @@ cache_line          =
 # in lib.rs stays 312, borrowed from x86-m32: no consumer reads this row at m64 yet.
 line_fill_clocks    10
 pairing             =
+# DEVIATE TA-LC (owner anyisa, exit 2026-11-27): m64 A/B, 1984 cells.
+commute_loop_carried 1
 [clocks]
 alu_rr              =
 cmov                =

@@ -1,9 +1,8 @@
 //! Ranges and no-wrap flag inference (S2): `getRangeRef` and what it is made
 //! of, `getConstantMultiple`, `setNoWrapFlags`, `inferNoWrapViaConstantRanges`.
 
-use llrm_mir::apint::Word;
 use llrm_mir::apint::U256;
-use super::ConstantRange;
+use llrm_mir::apint::Word;
 use llrm_mir::constantrange::{PreferredRangeType, RangeIntrinsic};
 use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
@@ -12,6 +11,7 @@ use llrm_mir::valuetracking::known::{compute_known_bits, pointer_alignment, poin
 use llrm_mir::valuetracking::nonzero::is_known_non_zero;
 use llrm_mir::valuetracking::signbits::compute_num_sign_bits;
 
+use super::ConstantRange;
 use super::ap::Ap;
 use super::backedge::ExitCountKind;
 use super::expr::{Kind, Scev, Ty, Type, Use, flags};
@@ -77,7 +77,7 @@ impl ScalarEvolution {
                 // If there are no wrap guarentees, find the trailing zeros,
                 // which is the sum of trailing zeros for all its operands.
                 let mut tz = 0u32;
-                for operand in &ops {
+                for operand in ops.iter() {
                     tz += self.get_min_trailing_zeros(cx, operand.scev, ctx_i);
                 }
                 shifted_by_zeros(tz)
@@ -421,7 +421,8 @@ impl ScalarEvolution {
             let max = Ap::all_ones(bit_width);
             let remainder = max.urem(multiple);
             if !remainder.is_zero() {
-                conservative_result = ConstantRange::new(bit_width, U256::ZERO, max.sub(remainder).add(Ap::one(bit_width)).word());
+                conservative_result =
+                    ConstantRange::new(bit_width, U256::ZERO, max.sub(remainder).add(Ap::one(bit_width)).word());
             }
         } else {
             let tz = self.get_min_trailing_zeros(cx, s, None);
@@ -494,8 +495,10 @@ impl ScalarEvolution {
                     let start = self.addrec_start(add_rec);
                     let unsigned_min_value = self.get_unsigned_range_min(cx, start);
                     if !unsigned_min_value.is_zero() {
-                        conservative_result = conservative_result
-                            .intersect_with(&ConstantRange::new(bit_width, unsigned_min_value.word(), U256::ZERO), range_type);
+                        conservative_result = conservative_result.intersect_with(
+                            &ConstantRange::new(bit_width, unsigned_min_value.word(), U256::ZERO),
+                            range_type,
+                        );
                     }
                 }
 
@@ -628,7 +631,11 @@ impl ScalarEvolution {
                 let (known_min, known_max) = (known.min_value(), known.max_value());
                 if known_min != known_max.wrapping_add(1) & llrm_mir::context::mask(bit_width) {
                     conservative_result = conservative_result.intersect_with(
-                        &ConstantRange::new(bit_width, U256::from_u128(known_min), U256::from_u128(known_max.wrapping_add(1))),
+                        &ConstantRange::new(
+                            bit_width,
+                            U256::from_u128(known_min),
+                            U256::from_u128(known_max.wrapping_add(1)),
+                        ),
                         range_type,
                     );
                 }
@@ -662,7 +669,11 @@ impl ScalarEvolution {
                             min_val = Ap::new(bit_width, u128::from(align));
                         }
                         conservative_result = conservative_result.intersect_with(
-                            &ConstantRange::non_empty(bit_width, min_val.word(), max_val.add(Ap::one(bit_width)).word()),
+                            &ConstantRange::non_empty(
+                                bit_width,
+                                min_val.word(),
+                                max_val.add(Ap::one(bit_width)).word(),
+                            ),
                             range_type,
                         );
                     }
@@ -728,7 +739,8 @@ impl ScalarEvolution {
             }
         };
         let Some(node) = q.metadata_node(inst, "range") else {
-            return llrm_mir::valuetracking::pattern::call_range(&q, cx.function.instruction(inst)).map(|range| range.to_word());
+            return llrm_mir::valuetracking::pattern::call_range(&q, cx.function.instruction(inst))
+                .map(|range| range.to_word());
         };
         let mut range: Option<ConstantRange> = None;
         for pair in node.operands.chunks(2) {

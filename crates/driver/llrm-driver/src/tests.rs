@@ -3999,3 +3999,92 @@ fn a_64_bit_compare_with_a_shifted_mask_is_a_shift_and_a_narrow_test() {
     assert!(low.contains("shl rdi, 16"), "{low}");
     assert!(!low.contains("and ") && !low.contains("movabs"), "{low}");
 }
+
+/// ZIMM priced `0x9E3779B9` at one instruction in a size build too, so
+/// ConstantHoisting kept every `mov r32, imm32` (5 B) where one register
+/// copy (3 B) did: `mul_constants` -Os +30 B.
+#[test]
+fn a_zero_extended_constant_used_many_times_in_a_size_build_is_materialized_once_at_m64() {
+    // Eight loops, each seeded with the same constant, as `mul_constants` has.
+    let loops: String = (0..8)
+        .map(|i| {
+            format!(
+                "pre{i}:\n  br label %l{i}\n\
+                 l{i}:\n  %x{i} = phi i64 [ 2654435769, %pre{i} ], [ %n{i}, %l{i} ]\n\
+                 \x20 %c{i} = phi i64 [ 0, %pre{i} ], [ %d{i}, %l{i} ]\n\
+                 \x20 %m{i} = mul i64 %x{i}, 1664525\n  %n{i} = add i64 %m{i}, 1013904223\n\
+                 \x20 %d{i} = add i64 %c{i}, 1\n  %e{i} = icmp eq i64 %d{i}, 200\n\
+                 \x20 br i1 %e{i}, label %o{i}, label %l{i}\n\
+                 o{i}:\n  call void @g(i64 %n{i})\n  br label %pre{next}\n",
+                next = i + 1
+            )
+        })
+        .collect();
+    let text = format!(
+        "target datalayout = \"@m64-datalayout@\"\n\
+         target triple = \"x86_64-unknown-linux-gnu\"\n\
+         declare void @g(i64)\n\
+         define void @f() optsize {{\nentry:\n  br label %pre0\n{loops}pre8:\n  ret void\n}}\n"
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let loads = listing.lines().filter(|line| line.contains("0x9e3779b9") || line.contains("2654435769")).count();
+    assert_eq!(loads, 1, "{listing}");
+}
+
+/// ZIMM priced `0xFF000000` and `0x80000000` at one instruction each, so
+/// ConstantHoisting never made them candidates and lost the pin's base and
+/// offset (`div_constants_long` -O3 +16 B, `constant_hoisting_shares_a_wide_
+/// compare_constant64.c` +4 B).
+#[test]
+fn two_neighbouring_zero_extended_constants_share_a_base_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i1 @f(i64 %a, i64 %b) {\n\
+                \x20 %x = shl i64 %a, 1\n  %c1 = icmp ugt i64 %x, 4278190080\n\
+                \x20 %y = shl i64 %b, 1\n  %c2 = icmp ugt i64 %y, 4278190080\n\
+                \x20 %p = sub i64 2147483648, %a\n  %q = sub i64 2147483648, %b\n\
+                \x20 %c3 = icmp ult i64 %p, %q\n  %r1 = or i1 %c1, %c2\n  %r = xor i1 %r1, %c3\n  ret i1 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("2130706432"), "{listing}");
+}
+
+/// A lone zero-extended constant read in both arms of a branch stays two
+/// `mov r32, imm32`: one in the entry would be a register held across the
+/// branch (a same-block pair is merged by ISel whatever the pass does).
+#[test]
+fn a_lone_zero_extended_constant_in_two_blocks_is_not_hoisted_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @h1(i1)\n declare void @h2(i1)\n\
+                define void @f(i64 %a, i64 %b, i1 %c) {\n\
+                \x20 br i1 %c, label %t, label %e\n\
+                t:\n  %x = shl i64 %a, 1\n  %r1 = icmp ugt i64 %x, 4278190080\n  call void @h1(i1 %r1)\n  ret void\n\
+                e:\n  %y = shl i64 %b, 1\n  %r2 = icmp ugt i64 %y, 4278190080\n  call void @h2(i1 %r2)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert_eq!(listing.matches("4278190080").count(), 2, "{listing}");
+}
+
+/// The mask of a `select c, 0, K` was hoisted beside `0xFFFFFFFF` as a `lea`
+/// held in a register through the loop, pushing the loop's temporaries to
+/// `r8`/`r9` (`crc` -O1 147 -> 162 B). Kept attached it is `and eax, imm32`.
+#[test]
+fn a_zero_extended_select_mask_stays_an_immediate_in_the_loop_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i64 %x, i64 %n) {\n\
+                entry:\n  %a = xor i64 %x, 4294967295\n  br label %loop\n\
+                loop:\n  %i = phi i64 [ 0, %entry ], [ %i2, %loop ]\n\
+                \x20 %v = phi i64 [ %a, %entry ], [ %nv, %loop ]\n\
+                \x20 %b = and i64 %v, 1\n  %c = icmp eq i64 %b, 0\n\
+                \x20 %m = select i1 %c, i64 0, i64 3988292384\n  %s = lshr i64 %v, 1\n\
+                \x20 %nv = xor i64 %s, %m\n  %i2 = add i64 %i, 1\n  %e = icmp eq i64 %i2, %n\n\
+                \x20 br i1 %e, label %exit, label %loop\n\
+                exit:\n  %r = xor i64 %nv, 4294967295\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("306674911"), "{listing}");
+}
+

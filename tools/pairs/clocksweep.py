@@ -28,6 +28,7 @@ from concurrent.futures import ProcessPoolExecutor
 ROOT = Path(__file__).resolve().parents[2]
 for path in ("tools/dosbatch", "tools", "crates/target/llrm-x86-m16/bench"):
     sys.path.insert(0, str(ROOT / path))
+import cpulimit  # noqa: E402
 
 LIMIT = 250_000_000  # instructions per program: the emulator steps about 10^6 a second; grep.bas runs 186 M
 TINY = 2.0  # a program under this many times the least count of its language is within the start-up
@@ -82,7 +83,7 @@ def measure(out: Path, select: list[str], limit: int, dosbox: bool = False) -> N
     objs = work.with_name(work.name + "-obj")
     objs.mkdir(parents=True, exist_ok=True)
     stems = {one.name: f"T{at:03d}" for at, one in enumerate(todo)}
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=cpulimit.pool_workers()) as pool:
         built = dict(zip((one.name for one in todo), pool.map(lambda one: run_tests.build(one, objs, stems[one.name]), todo)))
     exes, rows = {}, {}
     for one in todo:
@@ -111,7 +112,7 @@ def measure(out: Path, select: list[str], limit: int, dosbox: bool = False) -> N
         stdin = (one.source.parent / one.stdin).read_bytes() if one.stdin else None
         jobs.append((str(exe), files, stdin, limit))
         names.append(one)
-    with ProcessPoolExecutor(max_workers=max(1, (os.cpu_count() or 2) // 2)) as pool:
+    with ProcessPoolExecutor(max_workers=cpulimit.pool_workers()) as pool:
         for one, got in zip(names, pool.map(run_one, jobs)):
             if "error" not in got:
                 want = run_tests.lines(one.out.read_text())

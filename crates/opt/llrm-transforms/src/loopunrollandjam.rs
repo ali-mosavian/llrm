@@ -1567,6 +1567,7 @@ impl FunctionPass for LoopUnrollAndJam {
             peeled: Default::default(),
             finished: Default::default(),
             created: Vec::new(),
+            first: Default::default(),
             scev: llrm_analysis::scev::ScalarEvolution::new(),
             options: UnrollOptions {
                 opt_level: self.opt_level,

@@ -27,9 +27,13 @@ def rates(header: str) -> dict[str, float]:
     return table
 
 
-def excess(level: str, rate: float, ours: tuple[int, int], other: tuple[int, int]) -> float:
+def excess(level: str, rate: float, ours: tuple[int, int | None], other: tuple[int, int | None]) -> float:
+    """Bytes over; at O2 less the allowance for the clocks saved. A bytes-only cell (a program that calls a
+    runtime routine, nothing runs) has no clocks on either side and is judged on bytes alone."""
     extra = ours[0] - other[0]
-    return extra if level == "Os" else extra - rate * (other[1] - ours[1])
+    if level == "Os" or ours[1] is None or other[1] is None:
+        return extra
+    return extra - rate * (other[1] - ours[1])
 
 
 def _seen(lines):
@@ -49,7 +53,8 @@ def _seen(lines):
         if key not in keys:
             keys.append(key)
         try:
-            seen.setdefault(key, {})[row[3]] = (int(row[4]), int(row[5]))
+            clocks = int(row[5]) if row[5] != "" else None
+            seen.setdefault(key, {})[row[3]] = (int(row[4]), clocks)
         except (ValueError, IndexError):
             continue
     return rates(header), seen, keys
@@ -70,6 +75,30 @@ def skipped(lines) -> list[tuple[str, str, str]]:
     return [key for key in keys if "ours" not in seen.get(key, {}) or not ({"gcc", "clang"} & set(seen.get(key, {})))]
 
 
+# Programs whose branch goes either way, and the inputs the matrix must have averaged: one input makes
+# mirrored branch layouts look different by the data alone (max(7, 42) judged a move that the other
+# order skips).
+INPUTS = {"max": 2, "absdiff": 2, "clamp": 3}
+
+
+def single_input(lines) -> list[tuple[str, str, str, str]]:
+    """The rows of an order-sensitive program that ran fewer inputs than INPUTS names."""
+    found = []
+    for line in lines:
+        row = line.rstrip("\n").split("\t")
+        if line.startswith("#") or len(row) < 8 or row[1] not in INPUTS or row[3] not in ("ours", "gcc", "clang"):
+            continue
+        if row[5] != "" and f"inputs {INPUTS[row[1]]}" not in row[7]:
+            found.append((row[0], row[1], row[2], row[3]))
+    return found
+
+
+def missing(lines) -> list[tuple[str, str, str]]:
+    """The cells with no `ours` number: a column that is absent hides its cells, so a matrix with any fails."""
+    _, seen, keys = _seen(lines)
+    return [key for key in keys if "ours" not in seen.get(key, {})]
+
+
 def count(lines) -> tuple[int, int]:
     results = list(cells(lines))
     return sum(1 for *_, e in results if e > 0), len(results)
@@ -80,6 +109,15 @@ if __name__ == "__main__":
         for target, prog, level, e in sorted(cells(open(sys.argv[1])), key=lambda c: -c[3]):
             if e > 0:
                 print(f"{target} {prog} {level} +{e:.1f} B")
+    lost = missing(open(sys.argv[1]))
+    if lost:
+        print("no `ours` number (the matrix is incomplete): " + ", ".join("/".join(key) for key in lost))
+        sys.exit(2)
+    once = single_input(open(sys.argv[1]))
+    if once:
+        print("order-sensitive program run on fewer inputs than " + str(INPUTS) + ": "
+              + ", ".join("/".join(key) for key in once[:6]))
+        sys.exit(2)
     worse, total = count(open(sys.argv[1]))
     left = skipped(open(sys.argv[1]))
     print(f"{worse} worse of {total} judged cells; {len(left)} skipped (no ours or no external number): "
