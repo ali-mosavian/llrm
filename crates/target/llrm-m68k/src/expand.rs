@@ -452,6 +452,10 @@ pub fn finish_with(
                 let opcode = crate::callpush::memory_push(name).ok_or("a folded load has a push")?;
                 Ok(mc::Inst { opcode, operands })
             }
+            None if matches!(insts[store].kind, Kind::Op("CLR32p" | "CLR32j")) => {
+                // a `clr.l` store has no value operand: it stores zero
+                Ok(crate::callpush::push_of(&mc::Operand::Imm(0)))
+            }
             None => {
                 let operands = convert(insts[store], pushed)?;
                 Ok(crate::callpush::push_of(operands.last().ok_or("a push of nothing")?))

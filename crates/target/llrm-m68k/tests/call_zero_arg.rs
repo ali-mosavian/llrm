@@ -19,5 +19,6 @@ fn a_zero_argument_is_pushed_like_any_other_constant() {
         let out = assembly(ZERO_ARG, cpu_of(cpu).unwrap(), Level::Os).expect("compiles");
         assert!(out.contains("clr.l\t-(%sp)"), "{cpu}: the zero is not pushed with clr.l\n{out}");
         assert!(!out.contains("lea\t(-8,%sp)"), "{cpu}: the call area is still reserved\n{out}");
+        assert!(!out.contains("%sp, -(%sp)"), "{cpu}: the stack pointer is pushed as the argument\n{out}");
     }
 }
