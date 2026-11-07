@@ -108,7 +108,8 @@ pub(super) fn full_unroll_pays(
     // The accesses of a local array the copies make constant-indexed: the
     // array is promoted to registers, so they cost no clocks and no bytes
     // (frameless: `local[i]` filled and read by two 12-trip loops).
-    let (mut promoted, mut promoted_runs, ints, floats, rmw) = promoted_accesses(run, analyzed, lp, &known);
+    let (mut promoted, mut promoted_runs, ints, floats, forwarded) = promoted_accesses(run, analyzed, lp, &known);
+    let rmw = forwarded.len();
     // DEVIATE UP1-REG (owner m64, exit 2026-11-20): the promoted elements are
     // registers only while they fit: more than the file holds, and they are
     // stack slots again (fpbench -O2 m64: four 6-element float arrays, 24
@@ -121,13 +122,17 @@ pub(super) fn full_unroll_pays(
     // (381,454 clk; rolled 362,987, gcc 363,879).
     let fits_registers = run.tti.unroll_promotion_fits_registers();
     let x87_room = run.tti.x87_stack_slots().filter(|_| run.tti.unroll_promotion_fits_x87_stack()).map(i64::from);
+    // The elements the copies hold past the stack's slots are stored and
+    // loaded again every run of the loop (priced below).
+    let spilled = x87_room.map_or(0, |room| x87_spilled(run, lp, &forwarded, trips, room));
     if fits_registers || x87_room.is_some() {
         let machine = run.outer.target();
         let float_room = x87_room.unwrap_or_else(|| {
             if machine.float_registers() > 0 { machine.float_registers() } else { machine.registers() }
         });
         let ints_over = fits_registers && ints as i64 * i64::from(trips) > machine.registers();
-        if ints_over || floats as i64 * i64::from(trips) > float_room {
+        let floats_over = if x87_room.is_some() { spilled > 0 } else { floats as i64 * i64::from(trips) > float_room };
+        if ints_over || floats_over {
             promoted = 0;
             promoted_runs = 0;
         }
@@ -150,7 +155,12 @@ pub(super) fn full_unroll_pays(
     // bytes do not: the saving is counted over those runs (x_cordic: the
     // 12-trip loop inside a loop of `n` runs `n` times, 89 clocks each).
     let runs = ASSUMED_TRIPS.pow((lp.get_loop_depth() - 1).min(2));
-    let saved = (saved_units * body_clocks / rolled_units + constant_clocks) * runs;
+    // DEVIATE UP2-X87 (owner x87, exit 2026-11-20): an element past the stack
+    // is stored and loaded again each run (nbody -O2 m32: 16 elements for 8
+    // slots, the unroll priced to save 44 clocks a run ran 92 more: 14 more
+    // stores, 17 more exchanges).
+    let spill_clocks = spilled * (clocks.float_store + clocks.float_load);
+    let saved = (saved_units * body_clocks / rolled_units + constant_clocks - spill_clocks) * runs;
     why(
         run,
         lp,
@@ -165,6 +175,7 @@ pub(super) fn full_unroll_pays(
             ints,
             floats,
             rmw,
+            spilled,
             float_file: run.outer.target().float_registers(),
             rate,
         }
@@ -187,6 +198,7 @@ pub(super) struct Priced {
     pub ints: usize,
     pub floats: usize,
     pub rmw: usize,
+    pub spilled: i64,
     pub float_file: i64,
     pub rate: i64,
 }
@@ -194,7 +206,7 @@ pub(super) struct Priced {
 impl Priced {
     pub(super) fn line(&self) -> String {
         format!(
-            "priced unroll: {} trips, saves {} clk, adds {} B (body {} B; units {} of {}, promoted {}, ints {}, floats {}, rmw {}), float file {}, rate {}",
+            "priced unroll: {} trips, saves {} clk, adds {} B (body {} B; units {} of {}, promoted {}, ints {}, floats {}, rmw {}, spilled {}), float file {}, rate {}",
             self.trips,
             self.saved,
             self.added,
@@ -205,6 +217,7 @@ impl Priced {
             self.ints,
             self.floats,
             self.rmw,
+            self.spilled,
             self.float_file,
             self.rate
         )
@@ -317,6 +330,95 @@ fn constant_operand_uses(
     (uses, known)
 }
 
+/// The stack slots a full unroll of `lp` costs beyond what the code already
+/// needs. DEVIATE UP2-X87 (owner x87, exit 2026-11-20): the arrays `lp` both
+/// reads and writes (`forwarded`) leave one live value per trip from the loop
+/// to their next read, and those values share the stack with whatever else is
+/// live in the blocks between: the peak of the float values live there, plus
+/// the copies' elements, against the slots the stack has (`room`) and against
+/// the peak the rolled function already has. nbody -O2 m32: the update loop's
+/// 2 arrays x 4 trips lie across the pair loops (peak 6 rolled, 14 unrolled,
+/// 4,005 `fxch`); fpbench -O2 m32: 2 arrays x 6 trips lie across straight-line
+/// code (peak 17 either way).
+fn x87_spilled(
+    run: &Run,
+    lp: Loop,
+    forwarded: &IdSet<ValueId>,
+    trips: u32,
+    room: i64,
+) -> i64 {
+    use std::collections::HashSet;
+    let function = &*run.function;
+    let is_float = |value: ValueId| {
+        llrm_mir::tti::Ty::of(&run.context.types, function.value(value).ty).is_some_and(|ty| ty.is_float())
+    };
+    let rolled = llrm_analysis::liveness::pressure_by_block(function, &|value| usize::from(is_float(value)));
+    let peak_rolled = rolled.iter().map(|&(_, peak)| peak as i64).max().unwrap_or(0);
+    let inside: HashSet<BlockId> = lp.get_blocks().iter().copied().collect();
+    // The blocks that run after the loop: from its exits, round any loop
+    // around it.
+    let mut after: HashSet<BlockId> = HashSet::new();
+    let mut work: Vec<BlockId> = lp.get_exit_blocks(function);
+    while let Some(block) = work.pop() {
+        if after.insert(block) {
+            work.extend(function.successors(block));
+        }
+    }
+    // The blocks from which an array is read again, found backwards from
+    // those reads outside the loop.
+    let reads_of = |root: ValueId| -> Vec<BlockId> {
+        function
+            .layout()
+            .iter()
+            .copied()
+            .filter(|block| !inside.contains(block))
+            .filter(|&block| {
+                function.iter_block(block).any(|inst| {
+                    let one = function.instruction(inst);
+                    matches!(one.opcode, Opcode::Load { .. }) && alloca_of(function, one.operands[0]) == Some(root)
+                })
+            })
+            .collect()
+    };
+    let mut held: Vec<HashSet<BlockId>> = Vec::new();
+    for root in forwarded.iter() {
+        let mut before: HashSet<BlockId> = HashSet::new();
+        let mut work = reads_of(root);
+        while let Some(block) = work.pop() {
+            if before.insert(block) {
+                work.extend(function.predecessors(block));
+            }
+        }
+        let mut span: HashSet<BlockId> = after.intersection(&before).copied().collect();
+        span.extend(inside.iter().copied());
+        held.push(span);
+    }
+    let elements = i64::from(trips);
+    let peak_unrolled = rolled
+        .iter()
+        .map(|&(block, peak)| peak as i64 + elements * held.iter().filter(|span| span.contains(&block)).count() as i64)
+        .max()
+        .unwrap_or(0);
+    (peak_unrolled - peak_rolled.max(room)).max(0)
+}
+
+/// The alloca `pointer` addresses through geps, whatever their indices.
+fn alloca_of(
+    function: &Function,
+    mut pointer: Operand,
+) -> Option<ValueId> {
+    loop {
+        let Operand::Value(value) = pointer else { return None };
+        let ValueDef::Instruction(def) = function.value(value).def else { return None };
+        let one = function.instruction(def);
+        match one.opcode {
+            Opcode::Alloca { .. } => return Some(value),
+            Opcode::GetElementPtr { .. } => pointer = one.operands[0],
+            _ => return None,
+        }
+    }
+}
+
 /// The loads and stores in the blocks of `lp` (and, as many as they run, those of
 /// the loops inside it) of a local array that does not
 /// escape, at an address computed from the counters of `lp` (`known`) alone: in
@@ -326,7 +428,7 @@ fn promoted_accesses(
     analyzed: &Analyzed,
     lp: Loop,
     known: &IdSet<ValueId>,
-) -> (i64, i64, usize, usize, usize) {
+) -> (i64, i64, usize, usize, IdSet<ValueId>) {
     let function = &*run.function;
     let (mut found, mut runs) = (0, 0);
     let (mut ints, mut floats): (IdSet<ValueId>, IdSet<ValueId>) = (IdSet::new(), IdSet::new());
@@ -387,7 +489,7 @@ fn promoted_accesses(
             }
         }
     }
-    (found, runs, ints.len(), floats.len(), rmw.len())
+    (found, runs, ints.len(), floats.len(), rmw)
 }
 
 /// The float values a full unroll of `lp` by `trips` keeps live across its
