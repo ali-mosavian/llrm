@@ -1717,6 +1717,47 @@ fn test_a_promotion_past_the_target_register_count_is_refused() {
     assert_eq!(counters_promoted(I486(llrm_mir::target::Neutral)), 5);
 }
 
+/// Ten globals the loop only stores to, each a promotion candidate.
+fn ten_stored() -> String {
+    let globals: String = (1..=10).map(|k| format!("@g{k} = global i16 0\n")).collect();
+    let body: String = (1..=10).map(|k| format!("  store i16 %i, ptr @g{k}\n")).collect();
+    format!(
+        "{globals}
+define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+{body}  %i1 = add i16 %i, 1
+  %c = icmp eq i16 %i1, %n
+  br i1 %c, label %b2, label %b1
+
+b2:
+  ret i16 0
+}}
+"
+    )
+}
+
+/// A location the loop only stores to holds no register across the loop, so
+/// the cap does not count it. Charged as a load-promoted one, the pass that
+/// sinks the stores of locations the pass before it loaded found no room:
+/// jpeg_single m32 -O2 kept two stores a byte in its checksum loop.
+#[test]
+fn test_a_store_only_promotion_is_not_charged_a_register() {
+    let promoted = |machine: Box<dyn llrm_mir::target::Machine>| {
+        DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+        let mut module = parsed(&ten_stored());
+        let mut passes = llrm_mir::passes::PassManager::default();
+        passes.add(Licm { apply: false, speculate: true });
+        passes.run_module(&mut module, std::rc::Rc::from(machine)).expect("runs");
+        DECIDED.with(|all| all.borrow().promoted.len())
+    };
+    assert_eq!(promoted(Box::new(llrm_x86_m16::Dos::default())), 10);
+    assert_eq!(promoted(Box::new(I486(llrm_mir::target::Neutral))), 10);
+}
+
 /// The dot loop of a Nib zip (`i < a && i < b`, both bounds invariant) tested
 /// both bounds on every trip: the pin's LICM (`hoistMinMax`) makes one compare
 /// against `umin(a, b)`, the `umin` in the preheader.

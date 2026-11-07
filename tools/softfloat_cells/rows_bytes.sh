@@ -45,7 +45,9 @@ for O in Os O2; do
           if gcc -m32 -march=i486 -$O -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables -msoft-float -w -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$r.c -o $T/g.o 2>/dev/null; then [ $g != ERR ] && g=$((g + $(bytes $T/g.o))); else g=ERR; fi
         else g=-; fi
       done
-      case $name in add+sub|mul|div|neg|float) [ $tgt = m32 ] && [ "$c" != ERR ] && c="$c*";; esac
+      # m32 compiler-rt int->float is x87 arithmetic (fild/fmul/fadd), not a soft-float routine: no rank
+      [ $tgt = m32 ] && [ $name = float ] && c=fpu
+      case $name in add+sub|mul|div|neg|float) [ $tgt = m32 ] && [ "$c" != fpu ] && [ "$c" != ERR ] && c="$c*";; esac
       row+=("$o" "$c" "$g")
     done
     x64=-; x32=-

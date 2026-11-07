@@ -112,6 +112,9 @@ pub struct Profile {
     pub ports: llrm_target::PortTable,
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
+    /// The encoded sizes of a register copy and a constant load, where the
+    /// target states them.
+    pub move_bytes: Option<llrm_target::MoveBytes>,
     /// `Target::bsf_rep_prefix`.
     pub bsf_rep_prefix: bool,
     /// `getPrefLoopAlignment` as a power of two; 0: loops are not aligned.
@@ -160,6 +163,8 @@ pub struct Profile {
     pub commute_loop_carried: bool,
     /// Clocks a mispredicted branch costs, where the target states it.
     pub mispredict_penalty: Option<i64>,
+    /// `mispredict_penalty` at -O1, -Os and -Oz, where the target states one.
+    pub mispredict_penalty_size: Option<i64>,
     /// `-fexcess-precision=standard` (`-ffloat-store`): a float conversion
     /// rounds to its type, where otherwise x87 keeps the wider value in its
     /// register, as gcc's `-fexcess-precision=fast` does.
@@ -357,6 +362,7 @@ impl Profile {
             foreign: arch.flat_foreign(),
             ports: arch.flat_ports(),
             operand_bytes: arch.operand_bytes(),
+            move_bytes: arch.move_bytes(),
             bsf_rep_prefix: arch.bsf_rep_prefix(),
             loop_alignment: arch.pref_loop_alignment(),
             loop_max_skip: arch.loop_alignment_max_skip(),
@@ -378,6 +384,7 @@ impl Profile {
             tail_dup_threshold: None,
             commute_loop_carried: false,
             mispredict_penalty: None,
+            mispredict_penalty_size: None,
             float_store: false,
             rounds_float_spills: false,
             stable_loads: true,
@@ -411,6 +418,16 @@ impl Profile {
             return 0;
         }
         self.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+    }
+
+    /// Clocks a mispredicted branch costs in this function: the size row at
+    /// -O1, -Os and -Oz (no byte price at speed) where stated.
+    pub fn mispredict_penalty_here(&self) -> Option<i64> {
+        if self.size || self.min_size || !self.speed_rate {
+            self.mispredict_penalty_size.or(self.mispredict_penalty)
+        } else {
+            self.mispredict_penalty
+        }
     }
 
     /// DEVIATE TA-LC applies here: the table says so, at -O1 to -O3 only (at
@@ -573,6 +590,7 @@ fn _profile(
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
         commute_loop_carried: table.commute_loop_carried,
         mispredict_penalty: table.mispredict_penalty,
+        mispredict_penalty_size: table.mispredict_penalty_size,
         ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
     })
 }

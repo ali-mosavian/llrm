@@ -52,3 +52,112 @@ fn a_signed_less_than_of_two_words_is_one_borrow_chain() {
 fn a_signed_less_or_equal_of_two_words_is_one_borrow_chain() {
     bytes_of("sle", 106);
 }
+
+/// `k_branch` and `k_select`: the order of two `i32` read by a branch and by a select.
+fn consumer(kind: &str) -> String {
+    match kind {
+        "branch" => "declare void @one()
+declare void @two()
+define void @k_branch(ptr %a, ptr %b) {
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  %c = icmp uge i32 %x, %y
+  br i1 %c, label %t, label %f
+t:
+  call void @one()
+  ret void
+f:
+  call void @two()
+  ret void
+}
+"
+        .to_owned(),
+        _ => "define i16 @k_select(ptr %a, ptr %b, i16 %p, i16 %q) {
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  %c = icmp uge i32 %x, %y
+  %r = select i1 %c, i16 %p, i16 %q
+  ret i16 %r
+}
+"
+        .to_owned(),
+    }
+}
+
+fn consumer_bytes(kind: &str, limit: u32) {
+    let name = format!("k_{kind}");
+    let ir = format!("target datalayout = \"{}\"\n{}", datalayout(), consumer(kind));
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let from = text.find(&format!("{name}:")).unwrap_or_else(|| panic!("no {name} in\n{text}"));
+    let body: String = text[from..].split(".segment").next().unwrap().to_owned();
+    let bytes = estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
+    assert!(bytes <= limit, "{name}: {bytes} B\n{body}");
+}
+
+/// A branch on `x >= y` made the borrow a byte (`lda #0; sbc #0; and #1`), selected it to 0 or 1 and tested it
+/// again: 77 B for the branch and 94 B for the select, where the flags of the last `sbc` are 70 B and 85 B.
+/// `int32.c`'s `udivmod` took it per call, `div_constants_short -Os` ran 25% more cycles.
+#[test]
+fn a_branch_on_the_order_of_two_words_reads_the_flags_of_the_chain() {
+    consumer_bytes("branch", 72);
+}
+
+#[test]
+fn a_select_on_the_order_of_two_words_reads_the_flags_of_the_chain() {
+    consumer_bytes("select", 88);
+}
+
+/// `k_valuege`: `x >= y` of two `i32` as a value. "Not below" was a select of the borrow byte: `bne; lda #1; jmp;
+/// lda #0; and #1`, a branch for a bit.
+fn value_ge() -> String {
+    "define i16 @k_valuege(ptr %a, ptr %b) {
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  %c = icmp uge i32 %x, %y
+  %r = zext i1 %c to i16
+  ret i16 %r
+}
+"
+    .to_owned()
+}
+
+#[test]
+fn an_unsigned_greater_or_equal_of_two_words_as_a_value_is_straight_line() {
+    let ir = format!("target datalayout = \"{}\"\n{}", datalayout(), value_ge());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let from = text.find("k_valuege:").unwrap_or_else(|| panic!("no k_valuege in\n{text}"));
+    let body: String = text[from..].split(".segment").next().unwrap().to_owned();
+    assert!(!body.contains("jmp"), "a bit made through a branch:\n{body}");
+    let bytes = estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
+    assert!(bytes <= 81, "k_valuege: {bytes} B\n{body}");
+}
+
+/// `k_sign`: a branch on `x >= 0` of an `i32` (`x <= -1` is the same sign).
+fn sign_ir() -> String {
+    "declare void @one()
+declare void @two()
+define void @k_sign(ptr %a) {
+  %x = load i32, ptr %a
+  %c = icmp sge i32 %x, 0
+  br i1 %c, label %t, label %f
+t:
+  call void @one()
+  ret void
+f:
+  call void @two()
+  ret void
+}
+"
+    .to_owned()
+}
+
+/// `x >= 0` went through the four-limb chain with the sign bits flipped (`lda #255; cmp; sbc ...; sbc rc6`), where
+/// the sign of the high word is `bpl`: `__fixunssfsi` and `__fixunsdfdi` grew by 20 B and ran slower.
+#[test]
+fn a_long_at_or_above_zero_is_the_sign_of_its_high_word() {
+    let ir = format!("target datalayout = \"{}\"\n{}", datalayout(), sign_ir());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let from = text.find("k_sign:").unwrap_or_else(|| panic!("no k_sign in\n{text}"));
+    let body: String = text[from..].split(".segment").next().unwrap().to_owned();
+    assert!(!body.contains("sbc"), "a chain for a sign:\n{body}");
+}

@@ -144,6 +144,7 @@ macro_rules! facts {
 
             /// The fact of a flag's name.
             pub fn flag(key: &str) -> Option<Fact> {
+                crate::counts::bump(crate::counts::Event::FlagNamesResolved);
                 match key { $($fkey => Some(Fact::$flag),)* _ => None }
             }
 
@@ -420,10 +421,10 @@ impl Fact {
             Fact::Memory(Effect::Inaccessible) => {
                 Some(Attribute::Memory(vec![(Some("inaccessiblemem".to_owned()), "readwrite".to_owned())]))
             }
-            Fact::Dereferenceable(value) | Fact::Align(value) => Some(Attribute::Int(self.key().to_owned(), value)),
+            Fact::Dereferenceable(value) | Fact::Align(value) => Some(Attribute::Int(self.key().into(), value)),
             Fact::Memory(effect) => Some(Attribute::Memory(vec![(None, effect.spelled().to_owned())])),
             Fact::Initializes(bytes) => Some(Attribute::Initializes(vec![(0, bytes as i64)])),
-            Fact::Inline(how) => Some(Attribute::Flag(how.flag().to_owned())),
+            Fact::Inline(how) => Some(Attribute::Flag(how.flag().into())),
             // A range wants the width of what it bounds: `typed_attribute`.
             Fact::Invariant
             | Fact::Unroll(_)
@@ -438,7 +439,7 @@ impl Fact {
             | Fact::NoInfs
             | Fact::NoSignedZeros
             | Fact::AllowReciprocal => None,
-            _ => Some(Attribute::Flag(self.key().to_owned())),
+            _ => Some(Attribute::Flag(self.key().into())),
         }
     }
 
@@ -509,7 +510,7 @@ impl Fact {
     ) -> bool {
         crate::counts::bump(crate::counts::Event::AttributeScans);
         match self.flag_key() {
-            Some(key) => attributes.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == key)),
+            Some(_) => attributes.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name.fact() == Some(self))),
             None => attributes.iter().filter_map(Fact::of_attribute).any(|fact| fact == self),
         }
     }
@@ -517,7 +518,7 @@ impl Fact {
     /// The fact a carrier states, if it states one.
     pub fn of_attribute(attribute: &Attribute) -> Option<Fact> {
         match attribute {
-            Attribute::Flag(name) => Fact::flag(name).or_else(|| Inlining::of_flag(name).map(Fact::Inline)),
+            Attribute::Flag(name) => name.fact().or_else(|| Inlining::of_flag(name).map(Fact::Inline)),
             Attribute::Int(name, value) => Fact::valued(name, *value),
             Attribute::Initializes(ranges) => match ranges[..] {
                 [(0, bytes)] => Some(Fact::Initializes(bytes as u64)),
@@ -604,6 +605,7 @@ impl Facts {
 
     /// The facts `attributes` state; any other attribute is not a fact.
     pub fn of(attributes: &[Attribute]) -> Facts {
+        crate::counts::bump(crate::counts::Event::FactSets);
         let mut facts = Vec::with_capacity(attributes.len());
         for fact in attributes.iter().filter_map(Fact::of_attribute) {
             if !facts.contains(&fact) {
@@ -750,14 +752,14 @@ mod tests {
     #[test]
     fn facts_are_read_from_attributes_and_others_are_ignored() {
         let attributes = vec![
-            Attribute::Flag("noalias".to_owned()),
-            Attribute::Flag("builtin".to_owned()),
-            Attribute::Flag("noalias".to_owned()),
+            Attribute::Flag("noalias".into()),
+            Attribute::Flag("builtin".into()),
+            Attribute::Flag("noalias".into()),
         ];
         let facts = Facts::of(&attributes);
         assert!(facts.no_alias());
         assert_eq!(facts.iter().count(), 1);
-        assert!(!Facts::of(&[Attribute::Flag("readonly".to_owned())]).no_alias());
+        assert!(!Facts::of(&[Attribute::Flag("readonly".into())]).no_alias());
     }
 
     /// A routine that ends the program states `inaccessiblemem`, and a pass
@@ -783,7 +785,7 @@ mod tests {
         assert_eq!(bounds(-1, 1).typed_attribute(ty, 16), Some(Attribute::Range { ty, lower: 0xffff, upper: 2 }));
         assert_eq!(Fact::of_range(0xffff, 2, 16, true), Some(bounds(-1, 1)));
         assert_eq!(Fact::of_range(0, 2, 16, false), Some(bounds(0, 1)));
-        let attributes = [bounds(3, 9).typed_attribute(ty, 8).unwrap(), Attribute::Flag("noalias".to_owned())];
+        let attributes = [bounds(3, 9).typed_attribute(ty, 8).unwrap(), Attribute::Flag("noalias".into())];
         let facts = Facts::of_typed(&attributes, |_| Some(8), false);
         assert_eq!((facts.range(), facts.no_alias()), (Some(Bounds { lo: 3, hi: 9 }), true));
         assert_eq!(Fact::from_wire("range", Some(5), Some(2)), None, "lo above hi is no range");
@@ -841,8 +843,8 @@ mod tests {
         for (how, name) in
             [(Inlining::Never, "noinline"), (Inlining::Hint, "inlinehint"), (Inlining::Always, "alwaysinline")]
         {
-            assert_eq!(Fact::Inline(how).attribute(), Some(Attribute::Flag(name.to_owned())));
-            assert_eq!(Facts::of(&[Attribute::Flag(name.to_owned())]).inline(), Some(how));
+            assert_eq!(Fact::Inline(how).attribute(), Some(Attribute::Flag(name.into())));
+            assert_eq!(Facts::of(&[Attribute::Flag(name.into())]).inline(), Some(how));
             assert_eq!(
                 Fact::from_wire("inline", Fact::Inline(how).wire_value().map(|one| one.0), None),
                 Some(Fact::Inline(how))
@@ -857,7 +859,7 @@ mod tests {
     #[test]
     fn never_outranks_always_in_either_order() {
         let flags = |names: &[&str]| -> Vec<Attribute> {
-            names.iter().map(|name| Attribute::Flag((*name).to_owned())).collect()
+            names.iter().map(|name| Attribute::Flag((*name).into())).collect()
         };
         for names in [["noinline", "alwaysinline"], ["alwaysinline", "noinline"]] {
             assert_eq!(Facts::of(&flags(&names)).inline(), Some(Inlining::Never), "{names:?}");

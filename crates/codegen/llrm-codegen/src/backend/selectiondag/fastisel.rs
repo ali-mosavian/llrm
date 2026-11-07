@@ -178,7 +178,7 @@ struct Fast<'a> {
     dag: SelectionDAG,
     /// The memory chain: every load and store follows the one before.
     chain: SDValue,
-    values: std::collections::HashMap<ValueId, SDValue>,
+    values: llrm_mir::dense::IdMap<ValueId, SDValue>,
     next: Option<BlockId>,
 }
 

@@ -251,3 +251,16 @@ fn a_symbol_annotation_inside_the_operands_keeps_the_rest() {
     assert_eq!(gnu("jsr 80004064 <kmain>"), "jsr 0x80004064:l");
     assert_eq!(clocks(Cpu::M68020, &gnu("lea %pc@(80000062) <a>,%a0")), clocks(Cpu::M68020, "lea (0x20,%pc), %a0"));
 }
+
+/// objdump prints the `pea 0:w` the callpush pass pushes for a zero argument
+/// as `pea 0 <f>` and `pea 4 <f+0x4>`, and the Os `clr.l -(%sp)` as `clrl
+/// %sp@-`; `cycles` listed both as uncovered (`?`) in the O2/Os clock tables of
+/// #7715 and priced neither.
+#[test]
+fn a_pushed_zero_and_a_short_absolute_pea_are_priced() {
+    for (cpu, pea, clr) in [(Cpu::M68000, 16, 22), (Cpu::M68020, 7, 6)] {
+        assert_eq!(clocks(cpu, &gnu("pea 0 <f>")), pea, "{cpu:?} pea 0");
+        assert_eq!(clocks(cpu, &gnu("pea 4 <f+0x4>")), pea, "{cpu:?} pea 4");
+        assert_eq!(clocks(cpu, &gnu("clrl %sp@-")), clr, "{cpu:?} clr.l -(%sp)");
+    }
+}

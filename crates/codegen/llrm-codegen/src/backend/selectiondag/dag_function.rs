@@ -862,7 +862,8 @@ fn selected_in(
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let bitness = arch.object().bitness;
-    // One cost model for the function: `Profile::target` builds one (and clones the price tables) per call.
+    // One cost model for the function: `Profile::target` builds one (and clones
+    // the price tables) per call.
     let machine = cpu.target();
     let m16 = match bitness {
         16 => true,
@@ -931,8 +932,9 @@ fn selected_in(
         _ => (BuilderTarget::m32(), AddrMode::Flat32),
     };
     let mut builder_target = builder_target;
-    // The frontends compile static code: every symbol is `dso_local`.
-    builder_target.dag.dso_local_symbols = true;
+    // Static code: every symbol is `dso_local`. A 64-bit PIE reaches a symbol
+    // defined elsewhere through the GOT (X86Subtarget::classifyGlobalReference).
+    builder_target.dag.dso_local_symbols = bitness != 64 || !module.position_independent();
     builder_target.dag.absolute_symbols = !module.position_independent();
     let builder_target = builder_target
         .with_tuning(machine.tuning())
@@ -1093,7 +1095,18 @@ fn selected_in(
     let mut work: Vec<(BlockId, BlockId, crate::backend::selectiondag::builder::BlockDag)> = Vec::new();
     let mut fast_blocks = (!cpu.optimized && super::fastisel::enabled())
         .then(|| {
-            super::fastisel::build_all(module, function, &builder_target, &|wanted: &str| tables.names.iter().find(|(_, name)| name.split('|').next() == Some(wanted)).map(|(op, _)| *op), &layout, &convention, arch, &mut info)
+            super::fastisel::build_all(
+                module,
+                function,
+                &builder_target,
+                &|wanted: &str| {
+                    tables.names.iter().find(|(_, name)| name.split('|').next() == Some(wanted)).map(|(op, _)| *op)
+                },
+                &layout,
+                &convention,
+                arch,
+                &mut info,
+            )
         })
         .flatten()
         .unwrap_or_default();
@@ -1231,7 +1244,34 @@ fn selected_in(
             );
         llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
     });
+    let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
+        if cpu.optimized && !fast && block == parent {
+            // `SelectAllBasicBlocks`: a phi knows what its incoming values do
+            // once all its predecessors are selected.
+            let ready = function.predecessors(block).iter().all(|pred| selected_blocks.contains(pred));
+            let phis: Vec<_> = function
+                .iter_block(block)
+                .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                .collect();
+            for phi in phis {
+                if ready {
+                    let bits = |bits: u32| match bits {
+                        1..=8 => Some(8),
+                        9..=16 => Some(16),
+                        17..=32 => Some(32),
+                        33..=64 if m64 => Some(64),
+                        _ => None,
+                    };
+                    super::live_out::compute_phi_live_out_reg_info(module, function, phi, &bits, &mut info);
+                } else if let Some(reg) = function.instruction(phi).result.and_then(|r| info.value_regs.get(&r)) {
+                    info.live_out.remove(reg);
+                }
+            }
+        }
+        if block == parent {
+            selected_blocks.insert(block);
+        }
         if !built.live_ins.is_empty() && block != function.layout()[0] {
             return refuse("register arguments outside the entry block");
         }
@@ -1275,6 +1315,7 @@ fn selected_in(
                             freq: 1.0,
                             milliclocks_per_byte: mul_rate,
                             by_clocks: true,
+                            no_growth: !cpu.speed_rate,
                             price_pin: false,
                         })
                     } else {
@@ -1287,6 +1328,7 @@ fn selected_in(
                                     freq: frequencies.relative_to_entry(parent),
                                     milliclocks_per_byte: mul_rate,
                                     by_clocks: false,
+                                    no_growth: false,
                                     price_pin,
                                 },
                             )

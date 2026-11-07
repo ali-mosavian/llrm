@@ -64,7 +64,7 @@ fn cluster(mut ops: OpList) -> OpList {
                         && (!crate::pairs::is_memory(between)
                             || touch(between).is_some_and(|other| commutes(&touch_of(&first), &other)))
                 }
-                Op::Copy { .. } | Op::Imm { .. } | Op::FrameAddress { .. } => true,
+                Op::Copy { .. } | Op::Imm { .. } | Op::FrameAddress { .. } | Op::DbgValue { .. } => true,
                 Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } => false,
             };
             if !passable || defs.contains(&base) || defs.contains(&source) {
@@ -112,7 +112,7 @@ fn passes(
                     && (!crate::pairs::is_memory(inst)
                         || touch(inst).is_some_and(|other| commutes(&touch_of(moved), &other)))
             }
-            Op::Copy { .. } | Op::Imm { .. } | Op::FrameAddress { .. } => true,
+            Op::Copy { .. } | Op::Imm { .. } | Op::FrameAddress { .. } | Op::DbgValue { .. } => true,
             Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } => false,
         };
         passable && !defs.contains(&base) && !defs.contains(&value) && !uses.contains(&value)
