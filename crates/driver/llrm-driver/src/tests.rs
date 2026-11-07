@@ -4110,3 +4110,18 @@ fn an_extern_global_read_at_m64_pie_is_loaded_through_the_got() {
     assert!(!listing.contains("ptr g"), "{listing}");
     assert!(listing.lines().any(|line| line.trim().starts_with("mov eax, dword ptr [")), "{listing}");
 }
+
+/// A call to a function defined elsewhere stays a direct `call` (the linker
+/// makes the PLT entry), and a global defined in the module is read directly:
+/// only an undefined data symbol goes through the GOT.
+#[test]
+fn a_call_and_a_defined_global_at_m64_pie_stay_direct() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @d = global i32 5\n\
+                declare i32 @ext()\n\
+                define i32 @f() {\n  %a = load i32, ptr @d\n  %b = call i32 @ext()\n  %c = add i32 %a, %b\n  ret i32 %c\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("ptr d") && listing.contains("call ext"), "{listing}");
+}

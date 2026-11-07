@@ -139,6 +139,9 @@ pub enum MemBase {
     ConstantPool(u32),
     /// A jump table entry (`MachinePointerInfo::getJumpTable`).
     JumpTable,
+    /// A GOT entry (`MachinePointerInfo::getGOT`): the address of a symbol
+    /// another object defines, which the linker fills.
+    Got,
     /// The IR pointer the access reads or writes (`MachinePointerInfo::V`):
     /// an index into [`SelectionDAG::mem_locations`] (1-based). Only a target
     /// whose `useAA` is true records it.
@@ -450,6 +453,11 @@ pub struct SelectionDAG {
     /// it, so the set follows it into a machine node. A load a combine or the
     /// legalizer remakes is not in it.
     pub invariant_loads: HashSet<u32>,
+    /// The loads of a GOT entry (`MachinePointerInfo::getGOT`); like
+    /// `invariant_loads`, the number follows the node into a machine node. The
+    /// emitter makes such a load the symbol's External immediate, which the
+    /// encoder relocates as `R_X86_64_REX_GOTPCRELX`.
+    pub got_loads: HashSet<u32>,
     /// The offset from the incoming stack pointer of each fixed object (the
     /// negative frame indices the builder makes for stack arguments):
     /// `MachineFrameInfo::getObjectOffset`.
@@ -528,6 +536,7 @@ impl SelectionDAG {
             temporaries: Vec::new(),
             local_symbols: Default::default(),
             invariant_loads: HashSet::default(),
+            got_loads: HashSet::default(),
             fixed_offsets: Default::default(),
             volatile_accesses: HashSet::default(),
             direct_copies: HashSet::default(),
