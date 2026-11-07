@@ -2811,3 +2811,19 @@ fn a_constant_pair_select_leaves_no_store_to_a_cell_nothing_reads() {
         "stores {stores:?}\n{body}"
     );
 }
+
+/// `__cmpdf2`'s NaN test reaches the backend as a compare of `trunc i64 to i63`
+/// (InstCombine's fold of `(x << 1) u> C`). The odd width went to `parts` as
+/// 63/8 and refused ("integer wider than a power-of-two count of registers"),
+/// so lib/fp/f64/cmp.c did not build. The pin promotes it to `i64` first.
+#[test]
+fn an_i63_compare_of_a_truncated_i64_compiles() {
+    let ir = module(
+        "define i32 @g(i64 %x, i64 %y) {\n  %a = trunc i64 %x to i63\n  \
+         %c1 = icmp ult i63 %a, -4503599627370495\n  %b = trunc i64 %y to i63\n  \
+         %c2 = icmp ult i63 %b, -4503599627370495\n  %o = and i1 %c1, %c2\n  \
+         br i1 %o, label %t, label %f\nt:\n  %m = or i64 %x, %y\n  %z = icmp eq i64 %m, 0\n  \
+         %r = zext i1 %z to i32\n  ret i32 %r\nf:\n  ret i32 1\n}\n",
+    );
+    assembly(&ir, &Request::new(Level::O2)).unwrap();
+}

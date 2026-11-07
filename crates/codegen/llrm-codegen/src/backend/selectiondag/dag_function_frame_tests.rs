@@ -1728,6 +1728,29 @@ fn a_constant_fill_of_odd_size_or_byte_alignment_stays_rep_stosb() {
     assert_eq!(constant_fill_unit(202, 1).as_deref(), Some("1"));
 }
 
+/// `d / 1000` on a u64 at m32: the high-multiply expansion added its partial
+/// products with `add; setb; add` (6 `setb`, 6 `add`), where the pin folds
+/// `(add X, (zext carry))` and `(uaddo X, carry)` into `adc`. The pin has no
+/// `setb` at all (it expands the divide before type legalization, so every
+/// carry is still a node when the combine runs); ours keeps 2 until then.
+#[test]
+fn at_m32_a_carry_added_back_is_adc_not_setb() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %d) {
+  %q = udiv i64 %d, 1000
+  ret i64 %q
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(named("setb") <= 2 && named("adc") >= 4, "setb {} adc {}", named("setb"), named("adc"));
+}
+
 /// rectwo -O2 at m32: gcc's depth-8 copies of `paths` into itself made 1965 B
 /// that ran 1449397 clk (gcc 849 B, 555823 clk). Depth 2 at -O2 is 277 B and
 /// 347314 clk; -O3 keeps gcc's 8.

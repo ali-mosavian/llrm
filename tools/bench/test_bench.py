@@ -1484,10 +1484,10 @@ def test_references_skip_levels_they_are_not_built_at(tmp_path, monkeypatch):
     (tmp_path / "lib").mkdir()
     (tmp_path / "lib" / "C0M.OBJ").write_bytes(b"")
     asked = []
-    monkeypatch.setattr(bench, "BORLAND", {"bcc": (tmp_path, "bcc", {"O2": "", "Os": "-O1"})})
+    monkeypatch.setattr(bench, "BORLAND", {"bcc": (tmp_path, "bcc", {"O1": "-O1", "O2": "", "Os": "-O1"})})
     monkeypatch.setattr(bench, "reference_programs", lambda selected: [])
     monkeypatch.setattr(bench, "with_startup", lambda selected, timing: selected)
     monkeypatch.setattr(bench, "build_borland", lambda language, variants, opt, folder: asked.append(opt) or {})
     monkeypatch.setattr(bench, "BASIC_REFERENCES", {})
     bench.measure_references([], ["O1", "O2", "O3", "Os"], tmp_path)
-    assert asked == ["O2", "Os"]
+    assert asked == ["O1", "O2", "Os"]
