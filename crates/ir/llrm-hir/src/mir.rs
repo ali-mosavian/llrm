@@ -857,7 +857,7 @@ fn emit_module<'h>(
         let Some(&reference) = tables.callees.get(&callable.name) else { continue };
         let llrm_mir::ConstantKind::Global(global) = module.context.get(reference).kind else { continue };
         if let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind {
-            function.attrs.push(Attribute::Flag(RETURNS_TWICE.to_owned()));
+            function.attrs.push(Attribute::Flag(RETURNS_TWICE.into()));
         }
     }
     // Initialized once every function its data addresses is declared: one only
@@ -1345,7 +1345,7 @@ fn argument_classes(
     memory: &[i64],
     result_pointer: Option<i64>,
 ) -> Vec<(usize, Attribute)> {
-    let attribute = |value: &str| Attribute::Str(llrm_mir::opcode::ARGUMENT.to_owned(), Some(value.to_owned()));
+    let attribute = |value: &str| Attribute::Str(llrm_mir::opcode::ARGUMENT.into(), Some(value.to_owned()));
     memory
         .iter()
         .map(|&at| (at as usize, attribute(llrm_mir::opcode::MEMORY)))
@@ -1384,7 +1384,7 @@ fn byval_attributes(
         .map(|(&at, &count)| {
             (
                 at as usize,
-                Attribute::Type("byval".to_owned(), types.intern(Type::Array { element: byte, count: count as u64 })),
+                Attribute::Type("byval".into(), types.intern(Type::Array { element: byte, count: count as u64 })),
             )
         })
         .collect()
@@ -1469,7 +1469,7 @@ fn declare(
     }
     if function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Any) {
         if let llrm_mir::GlobalKind::Function(placed) = &mut module.globals[global.0 as usize].kind {
-            placed.attrs.push(Attribute::Flag(llrm_mir::callgraph::NEAR_CODE.to_owned()));
+            placed.attrs.push(Attribute::Flag(llrm_mir::callgraph::NEAR_CODE.into()));
         }
     }
     Ok((global, abi.0))
@@ -3921,7 +3921,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let signed = ty.signed.filter(|_| {
                     ty.kind == model::TypeKind::Integer && ty.width * 8 < i64::from(self.tables.layout.pointer(0).bits)
                 })?;
-                Some((index, Attribute::Flag(if signed { "signext" } else { "zeroext" }.to_owned())))
+                Some((index, Attribute::Flag(if signed { "signext" } else { "zeroext" }.into())))
             })
             .chain(classes)
             .collect()

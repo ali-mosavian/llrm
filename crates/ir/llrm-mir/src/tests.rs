@@ -789,8 +789,8 @@ fn crate_sources() -> Vec<(String, String)> {
     sources
 }
 
-/// Every flag word a pass writes with `Attribute::Flag("word".to_owned())` or
-/// `Attribute::Flag(PATH::CONST.to_owned())` (a `const CONST: &str = "word"`
+/// Every flag word a pass writes with `Attribute::Flag("word".into())` or
+/// `Attribute::Flag(PATH::CONST.into())` (a `const CONST: &str = "word"`
 /// anywhere), with a file that writes it. A flag made from a variable is not
 /// seen.
 fn written_flag_words(sources: &[(String, String)]) -> std::collections::BTreeMap<String, String> {
@@ -859,8 +859,8 @@ fn every_flag_word_a_pass_writes_is_one_mir_reads() {
 fn the_flag_scan_reads_literals_and_constants() {
     let sources = vec![(
         "x.rs".to_owned(),
-        "const KEPT: &str = \"kept-word\";\nfn f() { a.push(Attribute::Flag(\"lit-word\".to_owned())); \
-         b.push(llrm::Attribute::Flag(crate::m::KEPT.to_owned())); c.push(Attribute::Flag(name)); \
+        "const KEPT: &str = \"kept-word\";\nfn f() { a.push(Attribute::Flag(\"lit-word\".into())); \
+         b.push(llrm::Attribute::Flag(crate::m::KEPT.into())); c.push(Attribute::Flag(name)); \
          d.push(line.contains(\"Attribute::Flag(\") || line.contains(\"has(\")); }\n"
             .to_owned(),
     )];

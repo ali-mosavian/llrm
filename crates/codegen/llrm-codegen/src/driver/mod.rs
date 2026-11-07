@@ -255,7 +255,7 @@ fn without_jump_tables(program: &mut Program) {
             if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
                 && !function.is_declaration()
             {
-                function.attrs.push(llrm_mir::Attribute::Str("no-jump-tables".to_owned(), Some("true".to_owned())));
+                function.attrs.push(llrm_mir::Attribute::Str("no-jump-tables".into(), Some("true".to_owned())));
             }
         }
     }
