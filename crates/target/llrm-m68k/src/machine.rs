@@ -185,13 +185,11 @@ impl Tti for M68k {
         &self,
         optsize: bool,
     ) -> u32 {
-        // DEVIATE 18 (owner m68k, exit 2026-11-14; the pin's budget is 4):
-        // from the 68020 on, a `cmp.l` with a memory limit costs little more
-        // than the `subq` of a counter, so a guard that needs `smax` (sum,
-        // 8 B) is not repaid; one that costs a single operation still is
-        // (memset, partition: `subq`+`bne` for `addq`+`cmp`+`blt`). The 68000
-        // keeps the pin's 4: there the compare is 10 clk per trip dearer.
-        if optsize { 0 } else if self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020) { 1 } else { 4 }
+        // DEVIATE 18 (owner m68k, exit 2026-11-14; the pin's budget is 4): a
+        // guard that needs `smax` (sum, 8 B and a counter beside the limit) is
+        // not repaid, where one that costs a single operation still is
+        // (memset, partition: `subq`+`bne` for `addq`+`cmp`+`blt`).
+        if optsize { 0 } else { 1 }
     }
 
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
@@ -355,7 +353,10 @@ impl Tti for M68k {
         // line). Past 32 bits the m68k makes a library call of it, and the
         // closed form of a sum (`(n-1)(n-2)/2` in `i33`) is then 250 B of
         // `__mulsi3` calls for a loop of 16. Exit: none, a target's prices.
-        if matches!(op, ArithOp::Mul | ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem)
+        if matches!(
+            op,
+            ArithOp::Mul | ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem
+        )
             && matches!(ty, Ty::Int(bits) if bits > 32)
         {
             return Cost::EXPENSIVE;
