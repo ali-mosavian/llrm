@@ -45,5 +45,17 @@ tip_verdict() {
   if [ -n "$crates" ]; then
     out=$( (cd "$w" && CARGO_TARGET_DIR="$t" $(tip_test_cmd "$crates") 2>&1; echo "rc=$?") ); rc=${out##*rc=}; out=${out%rc=*}
   fi
+  # the root scanners (ALWAYS_SCANNERS of parity_squash.py), absolute on the tip: the landing checks are relative to the base, so once a scanner was red on the base no PR was blamed
+  # (target_facts: 24 files over its baseline for 5 days, 2026-11-07).
+  local scanners sout src
+  scanners=$(python3 - "$(dirname "${BASH_SOURCE[0]}")/../parity_squash.py" <<'PY'
+import re, sys
+text = open(sys.argv[1]).read()
+block = re.search(r"ALWAYS_SCANNERS = \((.*?)\n\)", text, re.S).group(1)
+print(" ".join("--test " + name for name in re.findall(r'"(\w+)"', block)))
+PY
+  ) || { echo "STOP: release/next red: the scanner list could not be read from parity_squash.py"; return 1; }
+  sout=$( (cd "$w" && CARGO_TARGET_DIR="$t" cargo test -q --no-fail-fast $scanners 2>&1; echo "rc=$?") ); src=${sout##*rc=}; sout=${sout%rc=*}
+  out+=$'\n'"$sout"; [ "$rc" = 0 ] && rc=$src
   red_tip "$allow" "$rc" <<<"$out"
 }
