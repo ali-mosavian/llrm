@@ -35,13 +35,15 @@ fn built(
 /// side effect of trying (a frame object, a pool cell) would move bytes.
 #[test]
 fn fast_isel_on_main_alone_leaves_the_dag_object() {
-    for target in ["x86_64-linux", "x86_32-linux"] {
-        let (dag, _, _) = built(target, "-O0", false);
-        let (fast, report, _) = built(target, "-O0", true);
-        let main_fast = report.lines().any(|line| line.starts_with("main fast") || line.starts_with("_main fast"));
-        assert!(!main_fast, "{target}: main has a call, FastISel must not take it: {report}");
-        assert_eq!(dag, fast, "{target}: fallback changed the object");
-    }
+    // m64 takes `main` since the SysV call and global-address selectors
+    let (_, report, _) = built("x86_64-linux", "-O0", true);
+    assert!(report.lines().any(|line| line.starts_with("main fast") || line.starts_with("_main fast")), "x86_64: {report}");
+    let target = "x86_32-linux";
+    let (dag, _, _) = built(target, "-O0", false);
+    let (fast, report, _) = built(target, "-O0", true);
+    let main_fast = report.lines().any(|line| line.starts_with("main fast") || line.starts_with("_main fast"));
+    assert!(!main_fast, "{target}: main has a variadic call, FastISel must not take it: {report}");
+    assert_eq!(dag, fast, "{target}: fallback changed the object");
 }
 
 /// `five` is `ret i32 5`: at -O0 with the flag it is selected by FastISel
