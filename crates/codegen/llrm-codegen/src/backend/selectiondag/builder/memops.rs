@@ -702,7 +702,14 @@ impl Builder<'_> {
                 Some(_) => costs.value[2],
                 None => return false,
             };
-            let stores = length / 4 * costs.store[0] + u64::from(length % 4 >= 2) * costs.store[1] + length % 2 * costs.store[2];
+            let mut stores =
+                length / 4 * costs.store[0] + u64::from(length % 4 >= 2) * costs.store[1] + length % 2 * costs.store[2];
+            // DEVIATE X87-ZERO-FILL stores whole doubles of zero as `fldz` (2) and
+            // one `fst qword` (6 at an absolute address) each: its stores are the
+            // pin's to beat, so the fill is taken only where it beats those too.
+            if fill == Some(0) && length >= 8 && length % 8 == 0 && !self.volatile_memory && self.x87_zero_fill() {
+                stores = stores.min(2 + length / 8 * 6);
+            }
             return stores > value + costs.setup;
         }
         if self.target.dag.pointer.size_in_bits() != 16 {
