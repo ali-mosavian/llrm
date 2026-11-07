@@ -43,6 +43,10 @@ pub enum TypeAction {
     /// A float with no register class (`TypeSoftenFloat`): it travels as the
     /// integer of its width and its operations are library calls.
     SoftenFloat,
+    /// A vector type no register class holds (`TypeScalarizeVector` and its split/widen kin; the
+    /// DEVIATE SD13 subset only names it): the builder never creates such a value, it lowers a
+    /// vector IR type this way only where the target lists the vector as a register class.
+    ScalarizeVector,
 }
 
 /// The simple integer types, narrowest first (the pin's `i1`..`i128` without
@@ -69,6 +73,8 @@ pub struct TargetLoweringInfo {
     /// `f128` has a register class (AArch64 `FPR128`), no arithmetic: its
     /// operations are library calls on `q` registers.
     legal_f128: bool,
+    /// The vector types a register class holds (`addRegisterClass(MVT::v16i8, &X86::VR128RegClass)`).
+    vectors: Vec<MVT>,
 }
 
 /// What `getScalarShiftAmountTy` returns.
@@ -113,6 +119,7 @@ impl TargetLoweringInfo {
             int_size: 32,
             narrow_library_shift: false,
             legal_f128: false,
+            vectors: legal.iter().copied().filter(|vt| vt.is_vector()).collect(),
         }
     }
 
@@ -208,6 +215,15 @@ impl TargetLoweringInfo {
         TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32, MVT::I64], false)
     }
 
+    /// m64 with `hasSSE2()`: the integer vectors join `VR128` (`X86ISelLowering.cpp`, the SSE2 arm:
+    /// `addRegisterClass(MVT::v16i8, ...)` and the other three).
+    pub fn x86_64_sse2() -> TargetLoweringInfo {
+        TargetLoweringInfo::new(
+            &[MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
+            false,
+        )
+    }
+
     /// m16: the same registers, and the far pointer (SD2).
     pub fn x86_16() -> TargetLoweringInfo {
         TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], true).with_int_size(16)
@@ -229,6 +245,13 @@ impl TargetLoweringInfo {
                     (action, EVT::Simple(to))
                 }
                 None => match mvt {
+                    _ if mvt.is_vector() => {
+                        if self.vectors.contains(&mvt) {
+                            (TypeAction::Legal, vt)
+                        } else {
+                            (TypeAction::ScalarizeVector, EVT::Simple(mvt.element().expect("a vector")))
+                        }
+                    }
                     MVT::F32 if self.soft_float => (TypeAction::SoftenFloat, EVT::I32),
                     MVT::F64 if self.soft_float => (TypeAction::SoftenFloat, EVT::I64),
                     // `f128` is softened to the `i128` of its bits unless the
@@ -306,6 +329,17 @@ mod tests {
         assert_eq!(soft.type_conversion(EVT::Simple(MVT::F32)), (TypeAction::SoftenFloat, EVT::I32));
         assert_eq!(soft.type_conversion(EVT::Simple(MVT::F64)), (TypeAction::SoftenFloat, EVT::I64));
         assert_eq!(soft.type_conversion(EVT::I32), (TypeAction::Legal, EVT::I32));
+    }
+
+    /// A vector type is legal only where a register class holds it: SSE2 m64 yes, every other target
+    /// scalarizes (so no other target ever builds a vector value).
+    #[test]
+    fn a_vector_type_is_legal_only_with_a_register_class() {
+        let v = EVT::Simple(MVT::V16I8);
+        assert!(TargetLoweringInfo::x86_64_sse2().is_type_legal(v));
+        assert_eq!(TargetLoweringInfo::x86_64().type_conversion(v), (TypeAction::ScalarizeVector, EVT::I8));
+        assert_eq!(TargetLoweringInfo::x86_32().type_action(EVT::Simple(MVT::V2I64)), TypeAction::ScalarizeVector);
+        assert_eq!(TargetLoweringInfo::aarch64().type_action(EVT::Simple(MVT::V4I32)), TypeAction::ScalarizeVector);
     }
 
     /// Every target compared into an `i8`; AArch64 compares into an `i32`.
