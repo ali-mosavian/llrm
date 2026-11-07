@@ -69,7 +69,7 @@
 //!   not exceed the `CodeSize` of the call and the pushes of its arguments.
 //!   LLVM's `OptSizeThreshold` 50 allows growth; a fixed bound (25) copied a
 //!   14-instruction loop into ten sites (`idioms.bas`, +690 B).
-//!   Measured 2026-11-08 (m32 -Os, 176 programs, guard off = the pin's rule):
+//!   Measured 2026-11-07 (m32 -Os, 176 programs, guard off = the pin's rule):
 //!   47 cells worse, 4 better, +22946 B net (`memory_expansion` 23740 ->
 //!   40688, `div_constants_long` +989, `idioms` +507, `rep_tails` +485); the
 //!   one gain is `byvalue_struct_address` 147 -> 16. The guard stays.
