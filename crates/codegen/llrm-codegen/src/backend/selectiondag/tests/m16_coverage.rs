@@ -51,6 +51,7 @@ fn selects(body: &str) -> Result<(), String> {
             &mut built.dag,
             &tli,
             &mut X86Lowering {
+                imul_if_smaller: false,
                 share_products: false,
                 cmov: false,
                 sse2: false,

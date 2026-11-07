@@ -29,6 +29,7 @@ fn an_undef_float_is_zero() {
             &mut dag,
             &tli,
             &mut X86Lowering {
+                imul_if_smaller: false,
                 share_products: false,
                 cmov: false,
                 sse2: false,
