@@ -1799,6 +1799,26 @@ fn size_copy_of_constant_is_remade(
     width: u32,
     price: Option<super::env::RematWins>,
 ) -> bool {
+    size_copy_of_def_is_remade(constant_of(1, value, width), width, price)
+}
+
+/// `size_copy_of_constant_is_remade` for any definition `a` of value 1.
+fn size_copy_of_def_is_remade(
+    a: Arc<Insn>,
+    width: u32,
+    price: Option<super::env::RematWins>,
+) -> bool {
+    size_copy_of_def_is_remade_after(Vec::new(), Vec::new(), a, width, price)
+}
+
+/// `size_copy_of_def_is_remade`, with `before` the definition and `after` the copy.
+fn size_copy_of_def_is_remade_after(
+    before: Vec<Arc<Insn>>,
+    after: Vec<Arc<Insn>>,
+    a: Arc<Insn>,
+    width: u32,
+    price: Option<super::env::RematWins>,
+) -> bool {
     use std::collections::BTreeSet;
 
     let wide = |v: u32| Loc::Held(Held { value: v, width, offset: 0 });
@@ -1809,8 +1829,8 @@ fn size_copy_of_constant_is_remade(
         ..Semantics::new(Operation::Move)
     };
     let c = Arc::new(Insn::new(0, None, Some(what), vec![2], vec![1]));
-    let a = constant_of(1, value, width);
-    let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
+    let head: Vec<Arc<Insn>> = before.into_iter().chain([a, Arc::clone(&c)]).chain(after).collect();
+    let was = body(&[(&head, &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
     let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
     let env = TargetEnv {
         palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
@@ -1820,7 +1840,7 @@ fn size_copy_of_constant_is_remade(
         aliases: Default::default(),
         should_join: None,
         freq: Vec::new(),
-        remat: None,
+        remat: Some(Box::new(|_| true)),
         remat_wins: price,
         joins_global_copies: false,
         joins_pinned_copies: true,
@@ -1855,4 +1875,21 @@ fn test_for_size_a_zero_that_stays_read_is_made_again_where_the_target_prices_it
 #[test]
 fn test_for_size_without_a_price_a_constant_that_stays_read_stays_a_copy() {
     assert!(!size_copy_of_constant_is_remade(0, 8, None));
+}
+
+/// mul_constants m32 -Os: `mov edx, eax` became `lea eax, [esi+0x3c6ef35f]` (6 B for 2):
+/// the definition was an `lea` of a register and a constant, not a plain constant,
+/// which the byte price did not cover and let through. It stays a copy.
+#[test]
+fn test_for_size_an_lea_of_a_register_that_stays_read_stays_a_copy() {
+    let base = Loc::Held(Held { value: 9, width: 4, offset: 0 });
+    let what = Semantics {
+        name: Some("lea".into()),
+        dests: vec![held(1)],
+        sources: vec![base, Loc::Imm(crate::model::ir::Imm { value: 0x3c6e_f35f, width: 4, address: None })],
+        ..Semantics::new(Operation::Move)
+    };
+    let lea = Arc::new(Insn::new(0, None, Some(what), vec![1], vec![9]));
+    let price = Some(super::pass::remat_priced(flat_bytes(), 4));
+    assert!(!size_copy_of_def_is_remade_after(vec![def(9)], vec![read(9)], lea, 4, price));
 }

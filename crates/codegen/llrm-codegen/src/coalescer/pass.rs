@@ -146,8 +146,10 @@ pub(super) fn remat_priced(
         if !size || alone {
             return true;
         }
-        let Some(Semantics { sources, dests, .. }) = def.what.as_ref() else { return true };
-        let ([Loc::Imm(literal)], [Loc::Held(held)]) = (sources.as_slice(), dests.as_slice()) else { return true };
+        // Not a plain constant (an `lea` of a register and a constant): no
+        // price stated, so the source that stays read keeps its copy (C10).
+        let Some(Semantics { sources, dests, .. }) = def.what.as_ref() else { return false };
+        let ([Loc::Imm(literal)], [Loc::Held(held)]) = (sources.as_slice(), dests.as_slice()) else { return false };
         let width = i64::from(held.width);
         (bytes.literal)(literal.value, literal.address.is_some(), width, operand) < (bytes.copy)(width, operand)
     })
