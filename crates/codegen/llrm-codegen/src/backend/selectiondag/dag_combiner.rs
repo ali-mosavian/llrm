@@ -1077,6 +1077,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_setcc(vt, op0, zero, flipped));
             }
         }
+        // `SimplifySetCC`'s remainder of a division by a constant, unsigned.
+        if matches!(cond, CondCode::SetEq | CondCode::SetNe)
+            && self.dag.opcode(n0) == ISD::URem
+            && let Some(folded) = self.build_urem_eq_fold(vt, n0, c1, cond)
+        {
+            return Some(folded);
+        }
         // `(x + c0) == c1` is `x == c1 - c0`, `(x ^ c0) == c1` is `x == c0 ^
         // c1` and `(c0 - x) == c1` is `x == c0 - c1`, for a single-use
         // operand.
@@ -2330,7 +2337,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             if let Some(shl1) = self.dag.fold_constant_arithmetic(ISD::Shl, vt, &[n01, n1]) {
                 let shl0 = self.dag.get_node(ISD::Shl, vt, &[self.dag.operand(n0, 0), n1]);
                 self.add_to_worklist(shl0.node);
-                let disjoint = self.dag.opcode(n0) == ISD::Or && self.dag.node(n0).flags.0 & SDNodeFlags::DISJOINT.0 != 0;
+                let disjoint =
+                    self.dag.opcode(n0) == ISD::Or && self.dag.node(n0).flags.0 & SDNodeFlags::DISJOINT.0 != 0;
                 let flags = if disjoint { SDNodeFlags::DISJOINT } else { SDNodeFlags::default() };
                 return Some(self.dag.get_node_flags(self.dag.opcode(n0), vt, &[shl0, shl1], flags));
             }
