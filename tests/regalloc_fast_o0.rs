@@ -102,3 +102,26 @@ fn early_tail_duplication_runs_at_o1_and_not_at_o0() {
         assert_eq!(said.contains("lir earlytaildup"), ran, "{level}: {said}");
     }
 }
+
+/// An argument was copied out of its register before it was stored
+/// (`mov eax, edi; mov [rbp-4], eax`): RegAllocFast had no copy hints
+/// (DEVIATE R1), so the pin's `mov [rbp-4], edi` cost a `mov` per parameter.
+#[test]
+fn o0_stores_an_argument_straight_from_its_register() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "int f(int a, long b, int c)\n{\n    return a + (int)b + c;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let stored = |register: &str| asm.lines().any(|line| line.contains("ptr [rbp-") && line.trim_end().ends_with(&format!(", {register}")));
+    assert!(stored("edi") && stored("rsi") && stored("edx"), "{asm}");
+}

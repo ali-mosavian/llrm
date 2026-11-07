@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:3a0340bc15f155f82da23c1f6d08d7dbf946cbdcfc1823d30a80fb087fc3941d -->
+<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:1836a1e61429289dc08b25503ea012adc3ef4681b0f86df015d27b431a11983b -->
 
 # inline
 
@@ -140,8 +140,8 @@ in `inline_tests.rs`.
 Library of [`crate::interprocedural`](../analyses/interprocedural.md), which runs it once every body has
 reached its fixed point, then sends each changed body back through the
 pipeline (`inline<N>`, `ipa-inline<N>.`; `LLRM_DEBUG=inline` logs each
-verdict). Off at -O0; the threshold is 90 at -O1 and -Og, 225 at -O2, 250 at
--O3 and -Omax. Per-level budgets are in `docs/reference/levels.md`.
+site: caller, callee, cost, threshold, verdict). Off at -O0; the threshold is the pin's
+225 at -O1 and -O2, 250 at -O3 and -Omax. Per-level budgets are in `docs/reference/levels.md`.
 
 ## Needs
 [`crate::profit`](profit.md) (operation prices, block frequencies),

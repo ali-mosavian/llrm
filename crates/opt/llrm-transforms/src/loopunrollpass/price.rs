@@ -47,6 +47,7 @@ pub(super) fn full_unroll_pays(
     let inlinable = !run.options.target_unrolling
         && run.this.is_some_and(|this| matches!(run.globals[this.0 as usize].linkage, Linkage::Internal | Linkage::Private));
     if inlinable || rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
+        why(run, lp, &format!("unpriced unroll: inlinable {inlinable}, rate {rate}"));
         return true;
     }
     // A loop of known trips in a nest of loops of known trips is a step to
@@ -60,6 +61,7 @@ pub(super) fn full_unroll_pays(
     // outer loop unrolls, its 3-, 2- and 1-trip inner copies were each priced
     // alone and kept rolled, +38,016).
     if !run.first.contains(&lp.get_header()) {
+        why(run, lp, "unpriced unroll: a copy of this run");
         return true;
     }
     // Unless nothing in this loop depends on a counter of the loops around it:
@@ -72,6 +74,7 @@ pub(super) fn full_unroll_pays(
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count)
         && (!prices_nest || reads_outer_counter(run, analyzed, lp))
     {
+        why(run, lp, "unpriced unroll: the nest bypass");
         return true;
     }
     // The same for a loop around loops that all run few trips: the pin unrolls
@@ -80,6 +83,7 @@ pub(super) fn full_unroll_pays(
     // +8 B for -23,816 instructions, priced +267 B). The bound is the pin's own
     // for what it analyzes, `-unroll-max-iteration-count-to-analyze`.
     if bounds_few_trips(run, se, analyzed, lp, up.max_iterations_count_to_analyze) {
+        why(run, lp, "unpriced unroll: inner loops of few trips");
         return true;
     }
     let clocks = crate::profit::costs(run.outer);
@@ -901,7 +905,11 @@ fn reads_outer_counter(
                     one.opcode,
                     Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::Phi | Opcode::GetElementPtr { .. }
                 );
-                let sink = !passes && !matches!(one.opcode, Opcode::Br);
+                // DEVIATE ARM64-UNROLL-PRICE (owner w15, exit 2026-11-30): a load reads
+                // its address, which is addressing, not data (tile -O2: `tile[(y + dy) & 63]
+                // [(x + dx) & 63]` bypassed the pricing for 364 B and 2,155 instructions
+                // where the rolled loop is 68 B and 4,181).
+                let sink = !passes && !matches!(one.opcode, Opcode::Br | Opcode::Load { .. });
                 let reads_data = if passes { one.result.is_some_and(|result| data.contains(&result)) } else { sink };
                 if !reads_data {
                     continue;

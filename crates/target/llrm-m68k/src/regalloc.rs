@@ -32,6 +32,11 @@ const CALLER_SAVED_ADDRESS_FIRST: [RegId; 4] = [reg::A1, reg::A0, reg::D0, reg::
 /// gcc's 26). Used with [`crate::compile::Options::indexed`]; the pin's order
 /// stays for the pinned output. Owner m68k. Exit: 2026-11-28, when the shared
 /// greedy prices a class by what its users need.
+/// Tried 2026-11-07 for fib/countgt/copy/crc16 (greedy-subreg), both reverted:
+/// no narrowing join of an address-capable value (0 better, 7 of 12 kernels
+/// worse) and a tied source kept in its own class (0 better, arrsum +8 B).
+/// The gap needs pressure (t and i hold d0, d1; b goes to an address register),
+/// which neither a join rule nor a class sees.
 ///
 /// DEVIATE M68K-ARGREMAT (with `ARGUMENT_REMAT`): a load of an incoming stack
 /// argument that nothing writes is made again where it is read, not stored to
@@ -47,6 +52,10 @@ pub struct Registers<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool>;
 pub type M68kRegisters = Registers<true, true>;
 
 impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool> Target for Registers<ADDRESS_FIRST, ARGUMENT_REMAT> {
+    fn spills_named_by_lane() -> bool {
+        true
+    }
+
     type Class = Class;
 
     fn meet(

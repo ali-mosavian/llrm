@@ -12,7 +12,7 @@ use llrm_spike_mf::tolir::allocate_greedy;
 use llrm_support::hash::HashMap;
 
 use crate::flagcse::writes_flags;
-use crate::mc::inst::{Gpr, Inst, Target, Vreg, Wide};
+use crate::mc::inst::{Gpr, Inst, Shift, Target, Vreg, Wide};
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{MFunc, Op};
 use crate::regalloc::{Allocation, spill_access};
@@ -94,6 +94,21 @@ fn label_of(inst: &Inst) -> Option<&str> {
 /// `mov xd, xzr`: the register-31 source of a copy is the zero register.
 /// The name of the definition of zero (`mov xd, xzr`).
 const ZERO: &str = "Zero";
+
+/// `isReMaterializable && isAsCheapAsAMove` for an `ADD`/`SUB`: the pin flags every
+/// form of `AddSub` (AArch64InstrFormats.td#L3098), and `isAsCheapAsAMove` keeps the
+/// immediate and the unshifted register forms (`SUBWrs`/`ADDWrs` only with
+/// `hasALULSLFast`, the extended forms not). A flag-setting form has an
+/// `$nzcv` def and is not.
+fn cheap_alu(op: &Op) -> bool {
+    match op {
+        Op::I(Inst::AddSubImm { op, .. }) => !op.set_flags,
+        Op::I(Inst::AddSubShifted { op, shift: Shift::Lsl, amount: 0, .. }) => !op.set_flags,
+        _ => false,
+    }
+}
+/// A constant one instruction makes (`movz`, `movn` or a logical immediate): the size of the copy it replaces.
+const ONE_INSN_IMM: &str = "Imm1";
 
 fn is_zero_copy(op: &Op) -> bool {
     matches!(op, Op::Copy { dst: Reg::Gpr(_), src: Reg::Gpr(Gpr(31)) })
@@ -215,7 +230,12 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                     ),
                 ),
                 Op::Copy { .. } => (Kind::Copy, false, false, false),
-                Op::Imm { .. } => (Kind::Op("Imm"), false, false, false),
+                Op::Imm { bits, value, dst } => (
+                    Kind::Op(if crate::expand_imm::mov_imm(*value, *bits, *dst).len() == 1 { ONE_INSN_IMM } else { "Imm" }),
+                    false,
+                    false,
+                    false,
+                ),
                 Op::FrameAddress { .. } => (Kind::Op("FrameAddress"), false, false, false),
                 Op::JumpTable { .. } => (Kind::Op("JumpTable"), true, true, false),
                 Op::Call { .. } => (Kind::Op("Call"), false, false, true),
@@ -288,6 +308,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             inst.early_clobber = matches!(op, Op::I(Inst::Atomic { .. }) | Op::JumpTable { .. });
             inst.rematerializable = fused
                 || zero
+                || cheap_alu(&op)
                 || matches!(
                     op,
                     Op::Imm { .. }
@@ -298,7 +319,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 &op,
                 Op::I(Inst::Load { mmo, .. }) if mmo.object == crate::mc::inst::MemObject::ConstantPool
             );
-            inst.cheap_as_move = zero || matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
+            inst.cheap_as_move = zero || cheap_alu(&op) || matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
             insts.push(inst);
         }
         lir.blocks.push(Block { id: at as u32, insts, phis: Vec::new() });
@@ -696,13 +717,22 @@ impl AllocTarget for Arm64 {
     /// Mirrors `RegisterCoalescer::reMaterializeDef`
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L1298>):
     /// the pin makes a trivially rematerializable def again for a copy with no
-    /// size guard. The zero register's `mov xd, xzr` is one four-byte
-    /// `orr`, the size of the copy it replaces. Another constant may take
-    /// several instructions (`mul_constants` -Os grew 124 B when every
-    /// constant was made again); its operand here is an identity, not the
-    /// value, so only the zero is known to be one.
+    /// size guard. The zero register's `mov xd, xzr` and a constant one
+    /// `movz`/`movn`/logical immediate makes are each one four-byte
+    /// instruction, the size of the copy they replace. A constant that takes
+    /// several instructions stays a copy (`mul_constants` -Os grew 124 B when
+    /// every constant was made again); its operand here is an identity, so
+    /// the length is carried in the name.
     fn literal_move_is_copy_sized(literal: &llrm_codegen::model::lir::Insn) -> bool {
-        literal.what.as_ref().and_then(|what| what.name.as_deref()).is_some_and(Self::is_zero_def)
+        literal
+            .what
+            .as_ref()
+            .and_then(|what| what.name.as_deref())
+            .is_some_and(|name| Self::is_zero_def(name) || name == ONE_INSN_IMM || name.starts_with("AddSub"))
+    }
+
+    fn remat_reads_registers() -> bool {
+        true
     }
 
     fn candidates(class: Class) -> Vec<RegId> {

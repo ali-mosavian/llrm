@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_const.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_const.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_const.rs sha256:a7db5633630d553c72054796f7526e1c72f0ea737c22a1964a02059281b457bf -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_const.rs sha256:b0977169f1b724f8f613ca7b6220b5e930e15ddcb114f317607d9b8940c5ab79 -->
 
 # combine_icmp_const
 
@@ -20,7 +20,6 @@ MIRROR: the order of the folds and each condition.
 
 OWED, each at its place as a `// OWED:` comment: the other opcodes of
 `foldICmpBinOpWithConstant` (`foldICmpXorConstant`, `foldICmpOrConstant`,
-`foldICmpShlConstant`,
 `foldICmpSRemConstant`, `foldICmpUDivConstant`, `foldICmpDivConstant`,
 ),
 the `or`-of-select case of `foldICmpBinOpEqualityWithConstant`, the

@@ -463,15 +463,15 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
             header = folder / "bench_io.h"
             if header.exists():
                 header.write_bytes(header.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
-    native.run_limited([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
-                   env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, seconds=1800)
+    ran = native.run_limited([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
+                   env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, seconds=int(os.environ.get("LLRM_BORLAND_SECONDS", "1800")))
     support = [word for one in dosbatch.c_support(dosbatch.REAL_MODE, folder) for word in ("file", str(one))]
     out: dict[str, tuple[Path, Path] | str] = {}
     for _, stem in variants_:
         obj, exe, listing = folder / f"{stem}.OBJ", folder / f"{stem}.exe", folder / f"{stem}.map"
         if not obj.exists():
             message = folder / f"{stem}.MSG"
-            out[stem] = f"{compiler}: " + (message.read_text(errors="replace").strip()[-200:] if message.exists() else "no object")
+            out[stem] = f"{compiler}: " + (message.read_text(errors="replace").strip()[-200:] if message.exists() else ran if isinstance(ran, str) else "no object")  # a timed-out job said "no object" for all 31 programs of bcc -Os
             continue
         lib = home / "lib"
         try:

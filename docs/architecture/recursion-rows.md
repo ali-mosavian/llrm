@@ -93,7 +93,7 @@ Owner w10; review 2026-12-01. The pin copies no recursive callee ([`IsRecursiveC
 
 ## Open rows, x86-m32 -O3 (2026-11-05, owner x86-m32, exit 2026-11-20)
 
-Against gcc 15 -O3 on the vsgcc harness (486 clocks): the copies alone do not close them; gcc first clones the function on constant arguments (ipa-cp), then inlines recursively. Cloner: llrm-w2-memops. Card: `~/scratch/handoff/m32-rec-queens-o3-card-2026-11-05.md` (copies of `place`: 251 -> 1471 B, clocks -0.3%, not landed).
+Against gcc 15 -O3 on the vsgcc harness (486 clocks): the copies alone do not close them; gcc first clones the function on constant arguments (ipa-cp), then inlines recursively. Cloner: llrm-w2-memops. Card: m32-rec-queens-o3-card-2026-11-05 in the handoff notes (copies of `place`: 251 -> 1471 B, clocks -0.3%, not landed).
 
 - **REC-1:** queens, 154117 vs 94851 clk. gcc: `place.constprop.N` for row = 0, 1, 2, ..., each inlined into the previous, then 8 recursive inlines.
 - **REC-2:** rectwo, 1230664 vs 555904 clk. gcc: `paths/5` clone on `n != 0`, then 8 recursive inlines; hand-specialised ours is still 2.3x gcc.
@@ -102,7 +102,7 @@ Against gcc 15 -O3 on the vsgcc harness (486 clocks): the copies alone do not cl
 
 ## REC-2 update (2026-11-05, x86-m32): the tail call goes first at -O3
 
-`Tti::recursive_tre_first` (-O2, -O3) is (false, true) for x86-m32; every other target (x86-m64 included, its tuning is its own) keeps the D10 order. gcc runs `pass_tail_recursion` before `pass_ipa_inline` ([passes.def:97 and :164](https://github.com/gcc-mirror/gcc/blob/releases/gcc-15.2.0/gcc/passes.def#L97)), so its copies are of the loop and nest; the pin copies no recursion. Measured, one binary, executed, 16 programs x O1/O2/O3/Os (128 rows, all ok; `~/scratch/x86m32-ops/ab17.jsonl`): -O3 rectwo 1230664 -> 466986 clk (880 -> 1112 B, gate +674770 -> -88836), recchop +59 -> -800, x_hanoi2 and bintree better, nothing passes -> fails; O1 and Os identical.
+`Tti::recursive_tre_first` (-O2, -O3) is (false, true) for x86-m32; every other target (x86-m64 included, its tuning is its own) keeps the D10 order. gcc runs `pass_tail_recursion` before `pass_ipa_inline` ([passes.def:97 and :164](https://github.com/gcc-mirror/gcc/blob/releases/gcc-15.2.0/gcc/passes.def#L97)), so its copies are of the loop and nest; the pin copies no recursion. Measured, one binary, executed, 16 programs x O1/O2/O3/Os (128 rows, all ok; record ab17.jsonl of the x86-m32 A/B): -O3 rectwo 1230664 -> 466986 clk (880 -> 1112 B, gate +674770 -> -88836), recchop +59 -> -800, x_hanoi2 and bintree better, nothing passes -> fails; O1 and Os identical.
 
 - **REC-6, owner x86-m32, exit 2026-11-20:** -O2 keeps the tree's copies. Cause: GVN and jump threading merge the pure same-argument calls across the copies of the two-call body (fib 24 call sites, 57,077 executed instructions); the loop copies cannot merge across iterations (7 sites, 171,973), so TRE-first at -O2 turns fib 99618 -> 228901 clk and x_fib 99618 -> 228901 (gate -110986 -> +18142, -127950 -> +1178). rectwo -O2 is 1965 B / 1449397 clk against gcc's 849 B / 555823 (+893922). Exit: a mechanism that merges the pure calls of the loop copies, or the O2 cell closes.
 - **REC-7, owner x86-m32, exit 2026-11-20:** x_hanoi2 -O3 (+34274) and bintree -O3 (+5976) stay over the bar after the change. Cause not yet traced; the TRE-first copies are bigger (x_hanoi2 993 -> 1299 B, bintree 1150 -> 889 B) against gcc's.

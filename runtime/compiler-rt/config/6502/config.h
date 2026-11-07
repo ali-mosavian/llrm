@@ -9,6 +9,9 @@
 #define SF_SHIFT_LOOP 1 /* shift by a per-bit loop: fix_si keeps the two-direction shift (single larger count: 6502 -Os +15% cycles) */
 #ifndef __OPTIMIZE_SIZE__
 #define SF_SHIFT_STEPS 1
+#define SF_CLZ_CALL 1 /* -O2 open-codes the static-inline clz helpers: f64 mul 5739 -> 5182 B (llvm-mos 5509), div 5212 -> 4651, add 5152 -> 5037; -Os keeps them (+7 B with the call) */
+#else
+#define SF_DIV64_STEP_SHIFT 1 /* the 64-bit divide shifts its divisor by byte and bit steps, not shift libcalls: int64_division -Os 5601 -> 5283 B, +0.3% clocks (-O2 +16% clocks) */
 #endif
 /* mul and div come from config/6502/sf32_6502.c (add stays generic: its tight form is 415 B larger). */
 #define SF_EXT_MULDIV 1

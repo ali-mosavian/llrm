@@ -246,6 +246,7 @@ pub fn items_with(
         crate::addrarith::refine_lea_round_trips(&mut function, &assignment, cpu, wants_size);
         crate::addrarith::refine_address_adds(&mut function, &assignment, cpu, wants_size);
         crate::chain::post_increment_chains(&mut function, &assignment, cpu, wants_size);
+        crate::addrcmp::compare_address_registers(&mut function, &assignment);
         crate::narrow::merge_logic_immediates(&mut function, &assignment);
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
         crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);

@@ -148,6 +148,12 @@ impl CombineHooks for WasmCombines {
         true
     }
 
+    /// `visitSUB`'s `C2-(A+C1)` is `(C2-C1)-A` (DAGCombiner.cpp#L4432) and the
+    /// folds beside it: the pin has them on for every target.
+    fn sub_algebra_folds(&self) -> bool {
+        true
+    }
+
     fn fold_sext_in_reg_of_load(&self) -> bool {
         true
     }
