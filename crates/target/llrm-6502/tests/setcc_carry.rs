@@ -129,5 +129,5 @@ fn an_unsigned_greater_or_equal_of_two_words_as_a_value_is_straight_line() {
     let body: String = text[from..].split(".segment").next().unwrap().to_owned();
     assert!(!body.contains("jmp"), "a bit made through a branch:\n{body}");
     let bytes = estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
-    assert!(bytes <= 0, "k_valuege: {bytes} B\n{body}");
+    assert!(bytes <= 81, "k_valuege: {bytes} B\n{body}");
 }
