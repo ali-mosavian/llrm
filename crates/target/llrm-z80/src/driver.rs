@@ -96,10 +96,6 @@ pub fn program(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
-        // Bytes over speed on an 8-bit target: no unrolling (the 6502's
-        // stand-in for the override table).
-        options.unroll = false;
-        options.loop_unrolling = false;
         // No zero- or sign-extending load: the compare of a loaded byte stays a
         // byte compare (`cp #255`), not a word compare of its extension.
         options.extload = false;
@@ -110,7 +106,8 @@ pub fn program(
             apply_pass_flag(&mut options, flag);
         }
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
-        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
+        program.modules.iter_mut().for_each(crate::prepare::mark_long_multiplies);
     }
     Ok(program)
 }
@@ -161,6 +158,11 @@ pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
     Rc::new(Z80Machine)
 }
 
+/// `opcosts.txt`.
+pub static DESCRIPTION: std::sync::LazyLock<llrm_target::opcosts::Description> = std::sync::LazyLock::new(|| {
+    llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses")
+});
+
 struct Z80Machine;
 
 impl llrm_mir::target::Machine for Z80Machine {
@@ -179,6 +181,11 @@ impl llrm_mir::target::Machine for Z80Machine {
 
     fn costs(&self) -> llrm_mir::target::OperationCosts {
         llrm_mir::target::Neutral.costs()
+    }
+
+    /// Real code bytes for the decisions weighed at a rate (`opcosts.txt`).
+    fn byte_costs(&self) -> llrm_mir::target::OperationCosts {
+        DESCRIPTION.size_costs()
     }
 
     fn registers(&self) -> i64 {
@@ -224,9 +231,9 @@ pub fn source_of(
 }
 
 /// [`source_of`] for every function of the module, from one parse.
-pub fn sources_of(text: &str) -> std::collections::HashMap<String, (String, Option<u32>)> {
+pub fn sources_of(text: &str) -> llrm_support::hash::HashMap<String, (String, Option<u32>)> {
     SOURCE_PARSES.with(|one| one.set(one.get() + 1));
-    let mut out = std::collections::HashMap::new();
+    let mut out = llrm_support::hash::HashMap::default();
     let Ok(module) = llrm_mir::parse::module(&without_triple(text)) else { return out };
     let Some((file, _)) = llrm_mir::dbgimport::unit_file(&module) else { return out };
     for global in &module.globals {

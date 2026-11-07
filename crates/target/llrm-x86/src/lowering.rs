@@ -59,6 +59,20 @@ impl Lowering for X86 {
         bits.max(32)
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L3721
+    // Both nodes, used or not, on a scalar of a simple type. DEVIATE OV1: an
+    // integer that is not a simple type is `!isOperationExpand`, a per-type
+    // legalization answer the lowering does not keep; it is refused. Exit:
+    // that table.
+    fn should_form_overflow_op(
+        &self,
+        _op: llrm_mir::lowering::OverflowOp,
+        bits: u32,
+        _math_used: bool,
+    ) -> bool {
+        llrm_mir::lowering::simple_int(bits)
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L3805
     fn prefer_zero_compare_branch(&self) -> bool {
         true

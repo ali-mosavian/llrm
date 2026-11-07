@@ -205,6 +205,7 @@ impl Hooks for WasmLowering<'_> {
             split,
             variadic: false,
             sret,
+            byval: None,
         };
         let mut outs: Vec<Out> = Vec::new();
         // `CanLowerReturn` is false for an `i128` result: it comes back
@@ -242,7 +243,7 @@ impl Hooks for WasmLowering<'_> {
         let results: Vec<In> = if cell.is_some() {
             Vec::new()
         } else {
-            vec![In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any }]
+            vec![In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any, byval: None }]
         };
         let (chain, values) =
             WasmCalling { pointer: EVT::I32, bulk_memory_opt: true }.lower_call(dag, root, callee, &outs, &results);

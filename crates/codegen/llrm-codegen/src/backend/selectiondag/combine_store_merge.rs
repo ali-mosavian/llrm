@@ -401,9 +401,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let element_bits = mem.size_in_bits();
         let total = element_bits * stores.len() as u32;
         let mask = super::fold::mask(element_bits);
-        // Little endian: the lowest address is the lowest bits.
+        // Little endian: the lowest address is the lowest bits; big endian
+        // the highest.
         let mut joined = 0u128;
-        for link in stores.iter().rev() {
+        let little = self.hooks.little_endian();
+        for at in 0..stores.len() {
+            let link = &stores[if little { stores.len() - 1 - at } else { at }];
             joined =
                 (joined << element_bits) | (self.dag.constant(self.dag.operand(link.store, 1)).unwrap_or(0) & mask);
         }
@@ -413,8 +416,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let value = self.dag.get_constant(joined, stored);
         let ptr = self.dag.operand(first, 2);
         let new = self.dag.get_store(chain, value, ptr, info);
+        // `WorklistInserter`: what the DAG makes is queued as it is made.
+        self.add_to_worklist(value.node);
+        self.add_to_worklist(new.node);
         for link in stores {
-            self.replace_value(link.store, new);
+            self.combine_store_to(link.store, new);
         }
         self.add_to_worklist(chain.node);
         true

@@ -1,6 +1,6 @@
 //! `ICFLoopSafetyInfo` and its helpers (`MustExecute.cpp`), over one loop.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use llrm_analysis::cfg;
 use llrm_analysis::cfg::Shape;
@@ -12,6 +12,30 @@ use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::Outer;
 
 use super::calls;
+
+/// What [`LoopSafety`] has found of one loop, kept across its queries: the pin
+/// computes one `ICFLoopSafetyInfo` per `runOnLoop` and updates it as
+/// instructions move (`insertInstructionTo`, `removeInstruction`). Nothing here
+/// is updated, so the owner calls [`clear`](Self::clear) after every edit of the
+/// function or of its accesses.
+#[derive(Default)]
+pub struct SafetyMemo {
+    first_icf: RefCell<IdMap<BlockId, Option<usize>>>,
+    first_write: RefCell<IdMap<BlockId, Option<usize>>>,
+    guaranteed: RefCell<IdMap<BlockId, bool>>,
+    may_throw: Cell<Option<bool>>,
+    /// How many times the loop was scanned for a block that may throw.
+    pub scans: Cell<usize>,
+}
+
+impl SafetyMemo {
+    pub fn clear(&self) {
+        self.first_icf.borrow_mut().clear();
+        self.first_write.borrow_mut().clear();
+        self.guaranteed.borrow_mut().clear();
+        self.may_throw.set(None);
+    }
+}
 
 /// [`ICFLoopSafetyInfo`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/MustExecute.h#L111):
 /// per block, its first instruction that may not transfer execution to its
@@ -25,10 +49,7 @@ pub struct LoopSafety<'a> {
     outer: &'a Outer,
     loop_: &'a Loop,
     shape: &'a Shape,
-    first_icf: RefCell<IdMap<BlockId, Option<usize>>>,
-    first_write: RefCell<IdMap<BlockId, Option<usize>>>,
-    guaranteed: RefCell<IdMap<BlockId, bool>>,
-    may_throw: bool,
+    memo: &'a SafetyMemo,
     allow_speculation: bool,
 }
 
@@ -42,8 +63,9 @@ impl<'a> LoopSafety<'a> {
         outer: &'a Outer,
         loop_: &'a Loop,
         shape: &'a Shape,
+        memo: &'a SafetyMemo,
     ) -> Self {
-        let mut safety = Self {
+        let safety = Self {
             context,
             layout,
             function,
@@ -51,13 +73,13 @@ impl<'a> LoopSafety<'a> {
             outer,
             loop_,
             shape,
-            first_icf: Default::default(),
-            first_write: Default::default(),
-            guaranteed: Default::default(),
-            may_throw: false,
+            memo,
             allow_speculation: true,
         };
-        safety.may_throw = loop_.body.iter().any(|&at| safety.block_may_throw(cfg::block(at)));
+        if memo.may_throw.get().is_none() {
+            memo.scans.set(memo.scans.get() + 1);
+            memo.may_throw.set(Some(loop_.body.iter().any(|&at| safety.block_may_throw(cfg::block(at)))));
+        }
         safety
     }
 
@@ -76,7 +98,7 @@ impl<'a> LoopSafety<'a> {
 
     /// `anyBlockMayThrow`.
     pub fn any_block_may_throw(&self) -> bool {
-        self.may_throw
+        self.memo.may_throw.get().expect("set when made")
     }
 
     /// `blockMayThrow`: `ICF.hasICF(BB)`.
@@ -84,7 +106,7 @@ impl<'a> LoopSafety<'a> {
         &self,
         block: BlockId,
     ) -> bool {
-        self.first_special(&self.first_icf, block, |inst| !self.transfers_execution(inst)).is_some()
+        self.first_special(&self.memo.first_icf, block, |inst| !self.transfers_execution(inst)).is_some()
     }
 
     /// `MW.mayWriteToMemory(BB)`.
@@ -92,7 +114,7 @@ impl<'a> LoopSafety<'a> {
         &self,
         block: BlockId,
     ) -> bool {
-        self.first_special(&self.first_write, block, |inst| self.may_write_to_memory(inst)).is_some()
+        self.first_special(&self.memo.first_write, block, |inst| self.may_write_to_memory(inst)).is_some()
     }
 
     fn first_special(
@@ -154,7 +176,7 @@ impl<'a> LoopSafety<'a> {
             &self.outer.globals,
             self.function,
         );
-        self.accesses.writes_in(&unit, inst).is_none_or(|writes| !writes.is_empty())
+        self.accesses.writes_any_in(&unit, inst)
     }
 
     /// [`ICFLoopSafetyInfo::isGuaranteedToExecute`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MustExecute.cpp#L304).
@@ -163,7 +185,7 @@ impl<'a> LoopSafety<'a> {
         inst: InstId,
     ) -> bool {
         let block = self.function.parent(inst).expect("an instruction in a block");
-        !self.preceded_by(&self.first_icf, inst, |one| !self.transfers_execution(one))
+        !self.preceded_by(&self.memo.first_icf, inst, |one| !self.transfers_execution(one))
             && self.all_loop_paths_lead_to_block(block)
     }
 
@@ -173,7 +195,7 @@ impl<'a> LoopSafety<'a> {
         inst: InstId,
     ) -> bool {
         let block = self.function.parent(inst).expect("an instruction in a block");
-        !self.preceded_by(&self.first_write, inst, |one| self.may_write_to_memory(one))
+        !self.preceded_by(&self.memo.first_write, inst, |one| self.may_write_to_memory(one))
             && self.does_not_write_memory_before_block(block)
     }
 
@@ -229,11 +251,11 @@ impl<'a> LoopSafety<'a> {
         if cfg::id(block) == self.loop_.header {
             return true;
         }
-        if let Some(&known) = self.guaranteed.borrow().get(&block) {
+        if let Some(&known) = self.memo.guaranteed.borrow().get(&block) {
             return known;
         }
         let answer = self.all_loop_paths_lead_to_block_impl(block);
-        self.guaranteed.borrow_mut().insert(block, answer);
+        self.memo.guaranteed.borrow_mut().insert(block, answer);
         answer
     }
 

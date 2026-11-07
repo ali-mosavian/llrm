@@ -170,7 +170,7 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false, false, false, &mut Temporaries::new(0))
+    select_block_with(dag, cpu, false, false, false, false, &mut Temporaries::new(0))
 }
 
 /// [`select_block`], with the pin's source-order scheduler where
@@ -182,10 +182,11 @@ pub fn select_block_with(
     source_order: bool,
     indexed: bool,
     short: bool,
+    absolute_data: bool,
     frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
-    let mut lowering = M68kLowering { indexed };
+    let mut lowering = M68kLowering { indexed, short, absolute_data };
     let selector = Selector::new(match cpu {
         Cpu::M68000 | Cpu::M68010 => m68k_m68000::TABLE,
         Cpu::M68020 | Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => m68k_m68020::TABLE,

@@ -77,6 +77,7 @@ fn object(
             }],
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
+            comdats: Vec::new(),
             frames: Vec::new(),
         },
     }
@@ -393,6 +394,34 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
             );
         }
     }
+}
+
+/// GNU objdump numbers a version 5 file table from 1, as a sequence starts at
+/// file 1: a table of the one file at entry 0 was "mangled line number section
+/// (bad file number)" to `objdump -dl`, and no source line was shown. Entry 0
+/// repeats the primary file, as the pin's does.
+#[test]
+fn gnu_objdump_reads_the_line_table_of_a_version_5_object() {
+    let Ok(objdump) = which_objdump() else {
+        skipped("objdump is not installed");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    for version in [4u16, 5] {
+        let made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version });
+        let path = scratch.path().join(format!("v{version}.o"));
+        std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
+        let said = std::process::Command::new(&objdump).arg("-dl").arg(&path).output().unwrap();
+        let text = format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
+        assert!(!text.contains("bad file number") && text.contains("f.c:"), "DWARF {version}:\n{text}");
+    }
+}
+
+fn which_objdump() -> Result<std::path::PathBuf, ()> {
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).map(|dir| dir.join("objdump")).find(|path| path.exists()))
+        .flatten()
+        .ok_or(())
 }
 
 /// A variable the optimiser removed (a list of no entry) is a DIE with a name

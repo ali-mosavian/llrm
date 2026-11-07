@@ -367,7 +367,7 @@ impl<T: Target> BuilderArch for T {
         Target::stack_alignment(self)
     }
     fn roles(&self) -> llrm_mir::spaces::Spaces {
-        Target::layout(self).spaces.roles
+        Target::address_roles(self)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(self)
@@ -391,7 +391,7 @@ impl BuilderArch for &dyn Target {
         Target::stack_alignment(*self)
     }
     fn roles(&self) -> llrm_mir::spaces::Spaces {
-        Target::layout(*self).spaces.roles
+        Target::address_roles(*self)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(*self)
@@ -485,6 +485,11 @@ pub trait Target {
     /// frontend's addresses are.
     fn layout(&self) -> layout::Layout;
 
+    /// `layout().spaces.roles`, without cloning the layout: asked per function.
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        self.layout().spaces.roles
+    }
+
     /// The bytes an argument of `width` takes on the stack, and the least a
     /// stack cell holds.
     fn stack_slot_bytes(&self) -> i64;
@@ -493,6 +498,19 @@ pub trait Target {
     /// `stack_alignment`): a slot's worth unless it says more.
     fn stack_alignment(&self) -> i64 {
         self.stack_slot_bytes()
+    }
+
+    /// Whether a frame can realign the stack pointer for a local above the
+    /// stack alignment (the pin's `X86RegisterInfo::canRealignStack`,
+    /// [X86RegisterInfo.cpp#L823](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86RegisterInfo.cpp#L823)).
+    /// Where it cannot, no local is over-aligned: the pin clamps the object's
+    /// alignment to the stack alignment
+    /// (`MachineFrameInfo::clampStackAlignment`, MachineFrameInfo.cpp#L40);
+    /// here the cell keeps its alignment and the stack is left as the
+    /// caller made it (DEVIATE OA-2, owner w2, exit: m16 states its own
+    /// stack alignment).
+    fn can_realign_stack(&self) -> bool {
+        true
     }
 
     /// Whether every call finds the stack a multiple of `stack_alignment`
@@ -660,6 +678,14 @@ pub trait Target {
     /// The CPU a compile is priced for where none is asked.
     fn default_cpu(&self) -> &'static str;
 
+    /// Whether a `bsf` whose flags are dead carries the `rep` prefix, the
+    /// TZCNT encoding (`X86MCInstLower`). A processor without `tzcnt` runs it
+    /// as `bsf`, so the prefix is a dead byte there; the pin emits it for
+    /// compatibility with later processors.
+    fn bsf_rep_prefix(&self) -> bool {
+        true
+    }
+
     /// `TargetLowering::getPrefFunctionAlignment` as a power of two (X86: 16
     /// bytes, 4); 0: functions are not aligned.
     fn pref_function_alignment(&self) -> u8 {
@@ -669,6 +695,13 @@ pub trait Target {
     /// `TargetLowering::getPrefLoopAlignment` as a power of two (X86: 16
     /// bytes, 4); 0: loops are not aligned.
     fn pref_loop_alignment(&self) -> u8 {
+        0
+    }
+
+    /// The most bytes of padding a loop header's alignment may take (the
+    /// `MaxBytesForAlignment` the pin's X86 never sets, gcc's `.p2align
+    /// 4,,10`); 0: no limit.
+    fn loop_alignment_max_skip(&self) -> u8 {
         0
     }
 
@@ -693,13 +726,13 @@ pub trait Target {
     /// How deep the floating register stack is: the roots of class `x87` its
     /// register file states.
     fn float_stack(&self) -> usize {
-        registers::parse(&self.registers_text()).map_or(0, |all| registers::of_class(&all, "x87").len())
+        registers::float_facts(&self.registers_text()).0
     }
 
     /// Whether scalar floating point lives in SSE registers: its register
     /// file states roots of class `xmm`.
     fn scalar_sse(&self) -> bool {
-        registers::parse(&self.registers_text()).is_ok_and(|all| !registers::of_class(&all, "xmm").is_empty())
+        registers::float_facts(&self.registers_text()).1
     }
 
     /// The indexed addresses a memory access may use, priced by `costs` (its
@@ -753,6 +786,7 @@ pub trait Target {
             pointer: self.frame_register(),
             stack: self.stack_pointer(),
             saved: self.callee_saved(),
+            vector_saved: Vec::new(),
             slot: self.stack_slot_bytes(),
             align: self.stack_alignment(),
             optional: self.frame_optional(),
@@ -821,6 +855,9 @@ pub struct FrameRegisters {
     pub stack: RegId,
     /// Each callee-saved register by its full register and the one pushed.
     pub saved: Vec<(RegId, RegId)>,
+    /// The callee-saved vector registers (Win64's xmm6-15), each by its full
+    /// register and itself: saved with `movaps` into the frame, not pushed.
+    pub vector_saved: Vec<(RegId, RegId)>,
     /// The bytes the stack is kept a multiple of.
     pub slot: i64,
     /// The bytes the stack pointer is a multiple of at a call, as the callee

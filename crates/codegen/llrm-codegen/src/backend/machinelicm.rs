@@ -35,8 +35,12 @@
 //! BASIC program at -Os and -O2, counters in a throwaway build):
 //! `getOrCreatePreheader` splitting an edge: the 6 to 32 loops per language
 //! and level without a preheader hold 0 hoistable instructions;
-//! `ExtractHoistableLoad`: 0 instructions, none of the 158 loop instructions
-//! flagged invariant (`isDereferenceableInvariantLoad`) is a folded load;
+//! `ExtractHoistableLoad`'s pricing held for the C, nib and BASIC corpus (no
+//! scalar SSE) and is wrong for SSE code: nbody_single -O3 m64 left
+//! `mulss xmm, [rip+K]` in a loop where the pin has the constant in a register
+//! before it. It is ported (`Policy::unfold`): scalar SSE arithmetic that reads
+//! a constant-pool cell is split, and the load moves if it can.
+//!
 //! `MayCSE`: only reached in the pin's high-pressure branch for an instruction
 //! outside a block that runs every trip, where the `constant` path above
 //! already hoists what the allocator can make again.
@@ -208,9 +212,7 @@ fn sign_flip(one: &Insn) -> bool {
 /// once per outer trip.
 fn innermost(facts: &licm::Facts<'_, Wrapped>) -> bool {
     facts
-        .blocks
-        .iter()
-        .filter(|block| facts.inside.contains(&block.at))
+        .inside_blocks()
         .flat_map(|block| block.succ.iter().filter(move |&&to| to <= block.at))
         .collect::<std::collections::BTreeSet<_>>()
         .len()
@@ -223,9 +225,7 @@ fn reads<'a>(
     value: u32,
 ) -> impl Iterator<Item = &'a Wrapped> {
     facts
-        .blocks
-        .iter()
-        .filter(|block| facts.inside.contains(&block.at))
+        .inside_blocks()
         .flat_map(|block| block.insns.iter())
         .filter(move |one| one.0.uses.contains(&value))
 }
@@ -269,7 +269,7 @@ fn candidate(
     if !classes.requirements(what).is_empty() {
         return false;
     }
-    let load = loads && loaded(one).is_some();
+    let load = (loads || one.invariant()) && loaded(one).is_some();
     let pure = load
         || matches!(
             what.op,
@@ -289,7 +289,7 @@ fn candidate(
     };
     pure && what.target.is_none()
         && !what.indirect
-        && !one.uses.is_empty()
+        && (!one.uses.is_empty() || load && one.invariant())
         && one.defines.len() == 1
         && matches!(what.dests.as_slice(), [Loc::Held(_)])
         && what.sources.iter().all(held)
@@ -317,6 +317,13 @@ impl licm::Inst for Wrapped {
 
     fn uses(&self) -> &[u32] {
         &self.0.uses
+    }
+
+    fn each_value(
+        &self,
+        each: impl FnMut(u32),
+    ) {
+        self.0.each_value(each);
     }
 
     fn is_copy(&self) -> bool {
@@ -351,6 +358,14 @@ impl licm::Inst for Wrapped {
         other: &Self,
     ) -> bool {
         let (Some(one), Some(two)) = (&self.0.what, &other.0.what) else { return false };
+        // DEVIATE X2 (owner m64, exit 2026-11-20): an x87 value is a stack
+        // entry and the allocator gives each loop-carried entry its own
+        // definition; the pin's RFP registers are virtual until the stackifier
+        // (X86FloatingPoint), which copes with one register feeding two. Two
+        // `fldz` stay two values.
+        if one.dests.iter().any(|place| matches!(place, Loc::Held(held) if held.width == 10)) {
+            return false;
+        }
         let widths = |what: &Semantics| -> Vec<Option<u32>> {
             what.dests.iter().map(|place| if let Loc::Held(held) = place { Some(held.width) } else { None }).collect()
         };
@@ -393,6 +408,8 @@ struct X86<'a> {
     named: usize,
     loads: bool,
     size: bool,
+    /// The next value an unfolded load defines.
+    fresh: u32,
 }
 
 impl licm::Policy<Wrapped> for X86<'_> {
@@ -406,6 +423,74 @@ impl licm::Policy<Wrapped> for X86<'_> {
         pool_load(&one.0)
     }
 
+    /// `ExtractHoistableLoad` ([L1400][unfold]): scalar SSE arithmetic that reads
+    /// an invariant cell (a constant-pool entry) beside a register is the
+    /// load and the operation on a register (`unfoldMemoryOperand`).
+    ///
+    /// [unfold]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLICM.cpp#L1400
+    fn unfold(
+        &mut self,
+        one: &Wrapped,
+    ) -> Option<(Wrapped, Wrapped)> {
+        let insn = &one.0;
+        let what = insn.what.as_ref()?;
+        let arithmetic = what.name.as_deref().is_some_and(|name| {
+            ["add", "sub", "mul", "div", "min", "max"]
+                .iter()
+                .any(|op| name.strip_prefix(op).is_some_and(|rest| rest == "ss" || rest == "sd"))
+        });
+        let [Loc::Held(dest)] = what.dests.as_slice() else { return None };
+        let cells = what.sources.iter().filter(|source| matches!(source, Loc::Mem(_))).count();
+        let (at, cell) = what.sources.iter().enumerate().find_map(|(at, source)| match source {
+            Loc::Mem(cell) => Some((at, cell)),
+            _ => None,
+        })?;
+        if !arithmetic
+            || cells != 1
+            || !insn.invariant()
+            || insn.defines.len() != 1
+            || insn.call.is_some()
+            || insn.group.is_some()
+            || insn.volatile()
+            || cell.base.is_some()
+            || cell.index.is_some()
+            || cell.selector.is_some()
+            || cell.stack_argument
+        {
+            return None;
+        }
+        let name = match cell.width {
+            4 => "movss",
+            8 => "movsd",
+            _ => return None,
+        };
+        let value = self.fresh;
+        self.fresh += 1;
+        let held = llrm_lir::Held { value, width: cell.width, offset: 0 };
+        let load = Insn {
+            invariant: true,
+            ..Insn::new(
+                insn.at,
+                insn.covers,
+                Some(Semantics {
+                    name: Some(name.into()),
+                    dests: vec![Loc::Held(held)],
+                    sources: vec![Loc::Mem(cell.clone())],
+                    ..Semantics::new(Operation::Move)
+                }),
+                vec![value],
+                vec![],
+            )
+        };
+        let mut sources = what.sources.clone();
+        sources[at] = Loc::Held(held);
+        let mut uses = insn.uses.clone();
+        uses.push(value);
+        let rest =
+            Insn { uses, what: Some(Semantics { sources, ..what.clone() }), invariant: false, ..(**insn).clone() };
+        Some((Wrapped(Arc::new(load)), Wrapped(Arc::new(rest))))
+    }
+
     fn begin(
         &mut self,
         facts: &licm::Facts<'_, Wrapped>,
@@ -414,7 +499,7 @@ impl licm::Policy<Wrapped> for X86<'_> {
         self.floats_named = facts.named.iter().filter(|value| self.floating.contains(value)).count();
         // An x87 value cannot be live across a call (`floatassign` does not
         // spill across one), and the stack holds `float_stack` values.
-        let inside = || facts.blocks.iter().filter(|block| facts.inside.contains(&block.at));
+        let inside = || facts.inside_blocks();
         self.calls = inside().any(|block| {
             block.insns.iter().any(|one| {
                 one.0.call.is_some()
@@ -449,7 +534,7 @@ impl licm::Policy<Wrapped> for X86<'_> {
         if constant_load(one) || sign_flip(one) {
             // A loop that stores an x87 value works around a held constant with
             // `fxch`es (x_ld_to_float, 64-bit, +530 clk).
-            let stores = facts.blocks.iter().filter(|block| facts.inside.contains(&block.at)).any(|block| {
+            let stores = facts.inside_blocks().any(|block| {
                 block.insns.iter().any(|read| read.0.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore))
             });
             // Only a constant that is flipped: `fld1; fchs` a trip (10 clk) is
@@ -485,9 +570,14 @@ impl licm::Policy<Wrapped> for X86<'_> {
         }
         let loads_here = self.loads && (facts.every_trip)(at);
         let limit = self.classes.available.len();
+        // `IsProfitableToHoist`'s high-pressure branch lets an
+        // `isDereferenceableInvariantLoad` through: the allocator can load it
+        // again where it wants it.
+        // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLICM.cpp#L1386-L1392>
+        let invariant_load = loaded(one).is_some() && one.invariant();
         let mut movable = candidate(one, self.classes, loads_here)
             && value.is_some_and(|value| !self.floating.contains(&value))
-            && self.named < limit;
+            && (self.named < limit || invariant_load);
         // `IsProfitableToHoist`: "Trivially rematerializable instructions
         // should always be hoisted providing the register allocator can just
         // pull them down again", unless a copy in the loop takes the value.
@@ -596,6 +686,7 @@ pub fn hoisted_sized(
         named: 0,
         loads: false,
         size,
+        fresh: body.next_value(),
     };
     let Some(moved) = licm::hoist(&blocks, body.entry, &mut policy) else { return body.clone() };
     let blocks: Vec<crate::model::lir::Block> = body
@@ -734,6 +825,90 @@ mod tests {
         assert!(renames <= 3 * duplicates as usize, "{renames}");
     }
 
+    /// After a round of renames the sweep visited every instruction of the
+    /// function, loop after loop: 2.9M `rename_uses` calls on
+    /// memory_expansion -O2. Only a block that reads a renamed value is swept.
+    #[test]
+    fn test_blocks_that_read_no_duplicate_are_not_swept_for_renames() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let mut inside = Vec::new();
+        for number in 0..5u32 {
+            let value = 10 + 2 * number;
+            let at = i64::from(10 + 3 * number);
+            inside.push(insn(at, Operation::Binary, "add", vec![held(value)], vec![held(1), held(2)], vec![value], vec![1, 2]));
+            inside.push(insn(at + 1, Operation::Compare, "cmp", vec![], vec![held(value), held(3)], vec![], vec![value, 3]));
+        }
+        inside.push(insn(500, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]));
+        let tail = 200i64;
+        let mut blocks = vec![
+            block(0, vec![1], vec![insn(0, Operation::Jump, "jmp", vec![], vec![], vec![], vec![])]).into(),
+            block(1, vec![1, 1000], inside).into(),
+        ];
+        for number in 0..tail {
+            let at = 1000 + number;
+            let next = if number + 1 == tail { vec![] } else { vec![at + 1] };
+            let value = 5000 + number as u32;
+            blocks.push(
+                block(at, next, vec![insn(at * 10, Operation::Move, "mov", vec![held(value)], vec![held(3)], vec![value], vec![3])])
+                    .into(),
+            );
+        }
+        let mut body = LirBody::new("loop", 0, blocks, IndexMap::default(), IndexMap::default());
+        body.inputs = [1, 2, 3].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        crate::backend::licm_core::SWEPT.with(|swept| swept.set(0));
+        let done = hoisted(&body, &RegisterClasses::m16());
+        let adds = done.blocks[0].insns.iter().filter(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("add")).count();
+        assert_eq!(adds, 1, "the premise: the duplicates are made once");
+        let swept = crate::backend::licm_core::SWEPT.with(|swept| swept.get());
+        assert!(swept <= 40, "{swept}");
+    }
+
+    /// The policy read every block of the function, filtered to the loop's,
+    /// for each loop: with 400 loops of 3 blocks, memory_expansion's
+    /// `lir machinelicm` spent 60M instructions in `begin`. It reads the
+    /// loop's blocks only.
+    #[test]
+    fn test_a_loop_is_read_through_its_own_blocks_not_the_functions() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let loops = 60i64;
+        let mut blocks: Vec<LirBlock> = Vec::new();
+        for number in 0..loops {
+            let (pre, body) = (10 * number, 10 * number + 1);
+            let value = 100 + number as u32;
+            blocks.push(block(pre, vec![body], vec![insn(pre, Operation::Jump, "jmp", vec![], vec![], vec![], vec![])]));
+            let next = if number + 1 == loops { 10 * loops } else { 10 * (number + 1) };
+            blocks.push(
+                block(
+                    body,
+                    vec![body, next],
+                    vec![
+                        insn(body * 10, Operation::Binary, "add", vec![held(value)], vec![held(1), held(2)], vec![value], vec![1, 2]),
+                        insn(body * 10 + 1, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]),
+                    ],
+                ),
+            );
+        }
+        blocks.push(block(10 * loops, vec![], vec![insn(99999, Operation::Return, "ret", vec![], vec![], vec![], vec![])]));
+        let mut body = LirBody::new("loops", 0, blocks.into_iter().map(crate::model::lir::Block::from).collect(), IndexMap::default(), IndexMap::default());
+        body.inputs = [1, 2, 3].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        crate::backend::licm_core::READ.with(|read| read.set(0));
+        let done = hoisted(&body, &RegisterClasses::m16());
+        let hoisted_adds = done
+            .blocks
+            .iter()
+            .filter(|one| one.at % 10 == 0)
+            .flat_map(|one| one.insns.iter())
+            .filter(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("add"))
+            .count();
+        assert_eq!(hoisted_adds as i64, loops, "the premise: every loop's add is made before it");
+        let read = crate::backend::licm_core::READ.with(|read| read.get());
+        assert!(read <= 8 * loops as usize, "{read}");
+    }
+
     /// bintree's `insert` at -O1, a loop after `tailrecurse`: `t[3*node]` is
     /// read on every trip of a loop that stores nothing. The pin's
     /// EarlyMachineLICM hoists its `lea` and load (`AllowedToHoistLoads`);
@@ -849,6 +1024,48 @@ mod tests {
         // makes `$fpcw` non-constant, so `fld1` stays in the loop (ML2 holds
         // it only to flip it: `test_a_flipped_x87_constant_is_held...`).
         assert_eq!(run(false, true), ["jmp"]);
+    }
+
+    /// FRAC.BAS `fracline2` (qb): two `fldz` made before the loop were one
+    /// value after EliminateCSE, read by both loop-carried entries of the x87
+    /// stack: "floating stack input is unavailable" (once "value#10 is read
+    /// but never defined"). Each x87 value is its own stack entry, so two
+    /// constant loads stay two values.
+    #[test]
+    fn test_two_hoisted_x87_constants_stay_two_values() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
+        let first = insn(10, Operation::FloatLoad, "fldz", vec![wide(10)], vec![], vec![10], vec![]);
+        let second = insn(11, Operation::FloatLoad, "fldz", vec![wide(11)], vec![], vec![11], vec![]);
+        let read_first =
+            insn(12, Operation::Binary, "fadd", vec![wide(12)], vec![wide(1), wide(10)], vec![12], vec![1, 10]);
+        let read_second =
+            insn(13, Operation::Binary, "fadd", vec![wide(13)], vec![wide(12), wide(11)], vec![13], vec![12, 11]);
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![1, 2], vec![first, second, read_first, read_second, branch(14)]).into(),
+                block(2, vec![], vec![insn(15, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.float_stack = 8;
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let done = hoisted(&body, &RegisterClasses::m16());
+        let before: Vec<u32> = done.blocks[0]
+            .insns
+            .iter()
+            .filter(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("fldz")))
+            .flat_map(|one| one.defines.iter().copied())
+            .collect();
+        assert_eq!(before, [10, 11]);
     }
 
     /// x_ld_abs -O2 at m32: the unrolled copies of `x[i] - 16 - r` made `-1.0`
@@ -1085,5 +1302,105 @@ mod tests {
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
         let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64));
         assert_eq!((done.blocks[0].insns.len(), done.blocks[1].insns.len()), (2, 1));
+    }
+
+    /// `ExtractHoistableLoad`: a `mulss` that reads a constant-pool cell
+    /// (`isDereferenceableInvariantLoad`) beside a value the loop changes was
+    /// left whole in the loop, its load made on every trip (nbody_single -O3
+    /// m64: three `mulss xmm, [rip+K]` in the loop where the pin has the
+    /// constants in registers before it, +73 B). The load is hoisted and the
+    /// `mulss` reads it.
+    #[test]
+    fn test_an_invariant_load_folded_into_an_instruction_of_the_loop_is_hoisted() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let cell = Loc::Mem(llrm_lir::Mem::new(None, 4));
+        let step = insn(10, Operation::Binary, "addss", vec![held(2)], vec![held(2), held(1)], vec![2], vec![2, 1]);
+        let mut folded = insn(11, Operation::Binary, "mulss", vec![held(3)], vec![held(2), cell], vec![3], vec![2]);
+        Arc::make_mut(&mut folded).invariant = true;
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![1, 2], vec![step, folded, branch(12)]).into(),
+                block(2, vec![], vec![insn(13, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64));
+        let names = |at: usize| -> Vec<String> {
+            done.blocks[at]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
+        };
+        assert_eq!(names(0), ["movss", "jmp"], "the constant is loaded before the loop");
+        assert_eq!(names(1), ["addss", "mulss", "jcxz"]);
+        let mul = &done.blocks[1].insns[1];
+        assert!(
+            mul.what.as_ref().is_some_and(|what| what.sources.iter().all(|source| matches!(source, Loc::Held(_)))),
+            "the mulss reads a register"
+        );
+    }
+
+    /// A loop that already names more values than the target has registers
+    /// kept the load of an invariant cell in it (`CanCauseHighRegPressure`
+    /// refused everything); the pin's high-pressure branch hoists an invariant
+    /// load all the same. General registers only: a value no general register
+    /// holds (`regclass::floating`) is not moved by `movable` at all.
+    #[test]
+    fn test_an_invariant_load_is_hoisted_out_of_a_loop_that_names_every_register() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let mut inside: Vec<Arc<Insn>> = (1..=20u32)
+            .map(|n| {
+                let sum = 100 + n;
+                insn(n as i64, Operation::Binary, "add", vec![held(sum)], vec![held(sum), held(n)], vec![sum], vec![sum, n])
+            })
+            .collect();
+        let mut load = insn(
+            50,
+            Operation::Move,
+            "mov",
+            vec![held(200)],
+            vec![Loc::Mem(llrm_lir::Mem::new(None, 4))],
+            vec![200],
+            vec![],
+        );
+        Arc::make_mut(&mut load).invariant = true;
+        inside.push(load);
+        inside.push(insn(51, Operation::Binary, "add", vec![held(101)], vec![held(101), held(200)], vec![101], vec![101, 200]));
+        inside.push(branch(52));
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![1, 2], inside).into(),
+                block(2, vec![], vec![insn(60, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = (1..=20).chain(101..=120).collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64));
+        let names = |at: usize| -> Vec<String> {
+            done.blocks[at]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
+        };
+        assert_eq!(names(0), ["mov", "jmp"], "the constant is loaded before the loop");
     }
 }

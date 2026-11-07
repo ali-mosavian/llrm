@@ -140,7 +140,7 @@ enum Pending {
     Function(String, crate::types::TypeId),
     /// A library routine: its convention and what the library states of it.
     Routine(String, crate::types::TypeId, u32, Vec<crate::opcode::Attribute>, Vec<crate::opcode::Attribute>),
-    Table(String, crate::module::GlobalVariable),
+    Table(String, crate::module::GlobalVariable, crate::module::UnnamedAddr),
 }
 
 /// The size of each function a global variable's initializer names.
@@ -403,11 +403,11 @@ impl Declared {
                         kind: GlobalKind::Function(Box::new(function)),
                     }
                 }
-                Pending::Table(name, variable) => GlobalValue {
+                Pending::Table(name, variable, unnamed_addr) => GlobalValue {
                     name: name.clone().into(),
                     linkage: crate::module::Linkage::Private,
                     visibility: crate::module::Visibility::Default,
-                    unnamed_addr: Default::default(),
+                    unnamed_addr: *unnamed_addr,
                     address_space: 0,
                     kind: GlobalKind::Variable(variable.clone()),
                 },
@@ -425,6 +425,11 @@ impl Declared {
             Pending::Function(name, _) | Pending::Routine(name, ..) => Some(name),
             Pending::Table(..) => None,
         }
+    }
+
+    /// The module's globals as declarations, where the pass was given them.
+    pub fn declarations(&self) -> Option<&[GlobalValue]> {
+        self.held.as_deref().map(Vec::as_slice)
     }
 
     /// The metadata nodes made so far, which the module has after the pass.
@@ -542,23 +547,26 @@ impl Declared {
         id
     }
 
-    /// A private constant of type `ty`, `initializer` its value, named `stem`
-    /// and the first number after it that no global has; a table already made
-    /// with the same type and value is that one.
+    /// A private constant of type `ty`, `initializer` its value, `unnamed_addr`
+    /// as the pass that makes it states, named `stem` and the first number
+    /// after it that no global has; a table already made with the same type,
+    /// value and `unnamed_addr` is that one.
     pub fn table(
         &mut self,
         stem: &str,
         ty: crate::types::TypeId,
         initializer: crate::context::ConstantId,
+        unnamed_addr: crate::module::UnnamedAddr,
     ) -> GlobalId {
         let same = |one: &Pending| {
             matches!(
                 one,
-                Pending::Table(_, held) if held.ty == ty && held.initializer == Some(initializer)
+                Pending::Table(_, held, unnamed)
+                    if held.ty == ty && held.initializer == Some(initializer) && *unnamed == unnamed_addr
             )
         };
         if let Some(at) = self.pending.iter().position(same) {
-            let Pending::Table(name, _) = &self.pending[at] else { unreachable!("a table") };
+            let Pending::Table(name, ..) = &self.pending[at] else { unreachable!("a table") };
             let name = name.clone();
             return self.names()[&name];
         }
@@ -574,7 +582,7 @@ impl Declared {
             initializer: Some(initializer),
             align: None,
         };
-        self.pending.push(Pending::Table(name, variable));
+        self.pending.push(Pending::Table(name, variable, unnamed_addr));
         id
     }
 
@@ -603,8 +611,9 @@ impl Declared {
                     }
                     (name, id)
                 }
-                Pending::Table(name, variable) => {
+                Pending::Table(name, variable, unnamed_addr) => {
                     let id = module.add_variable(&name, variable, crate::module::Linkage::Private)?;
+                    module.globals[id.0 as usize].unnamed_addr = unnamed_addr;
                     (name, id)
                 }
             };
@@ -1765,9 +1774,30 @@ fn why_printed() -> bool {
     *ON.get_or_init(|| llrm_env::set("LLRM_WHY"))
 }
 
+thread_local! {
+    static CHECKING_MODULES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `body` with `LLRM_CHECK_MODULES` on for this thread, for a test of a pass that must tell the analyses what it changed
+/// (the variable is read once per process, so a test cannot set it).
+pub fn with_module_check<R>(body: impl FnOnce() -> R) -> R {
+    let before = CHECKING_MODULES.with(|on| on.replace(true));
+    let done = body();
+    CHECKING_MODULES.with(|on| on.set(before));
+    done
+}
+
 fn check_modules() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
+    CHECKING_MODULES.with(std::cell::Cell::get) || *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
+}
+
+/// The other bodies as they stand now, for `LLRM_CHECK_CAPTURES` to read a callee in. Every place that runs a pass on a function
+/// takes it first: one taken earlier holds bodies the later edits have changed.
+pub fn snapshot_for_audit(module: &Module) {
+    if check_captures() {
+        MODULE_SNAPSHOT.with(|held| *held.borrow_mut() = Some(Rc::new(module.clone())));
+    }
 }
 
 pub(crate) fn check_captures() -> bool {
@@ -2748,8 +2778,12 @@ impl ModuleAnalyses {
 
     /// The result of `M` a pass dropped, handed over to the run that brings it
     /// up to date: not kept, so that it is the only holder where nothing else
-    /// holds it. A run that does not take it leaves it to be compared.
+    /// holds it. A run that does not take it leaves it to be compared. None
+    /// for a run afresh (`LLRM_CHECK_MODULES`), which keeps nothing of the last.
     pub fn take_dropped<M: ModuleAnalysis>(&mut self) -> Option<Rc<M::Result>> {
+        if self.scratch {
+            return None;
+        }
         let one = self.dropped.remove(&TypeId::of::<M>())?;
         self.taken.insert(TypeId::of::<M>());
         Some(one.downcast::<M::Result>().expect("keyed by its type"))
@@ -2837,14 +2871,13 @@ impl ModuleAnalyses {
         counted(kind.name, false);
         let fresh = (kind.run)(module, self);
         if check_modules() {
-            self.scratch = true;
-            let again = (kind.run)(module, self);
-            self.scratch = false;
-            assert!(
-                (kind.agree)(&*fresh, &*again),
-                "{}: brought up to date, it is not what working it out afresh gives",
-                kind.name
-            );
+            if let Err(detail) = self.agrees_afresh(kind, module, &*fresh) {
+                panic!(
+                    "{}: brought up to date, it is not what working it out afresh gives (running @{}){detail}",
+                    kind.name,
+                    running_function()
+                );
+            }
         }
         if why() {
             let class = match self.dropped.get(&kind.id) {
@@ -2864,6 +2897,38 @@ impl ModuleAnalyses {
         let result = self.dropped.remove(&kind.id).filter(|old| (kind.agree)(&**old, &*fresh)).unwrap_or(fresh);
         self.results.insert(kind.id, (kind, Rc::clone(&result)));
         result
+    }
+
+    /// Whether `result` is what `kind` gives worked out afresh; else what differs, where the analysis can say.
+    fn agrees_afresh(
+        &mut self,
+        kind: Kind,
+        module: &Module,
+        result: &dyn Any,
+    ) -> Result<(), String> {
+        self.scratch = true;
+        let again = (kind.run)(module, self);
+        self.scratch = false;
+        if (kind.agree)(result, &*again) {
+            return Ok(());
+        }
+        let (Some(kept), Some(afresh)) = (result.downcast_ref::<Vec<GlobalValue>>(), again.downcast_ref::<Vec<GlobalValue>>()) else {
+            return Err(String::new());
+        };
+        let Some(at) = kept.iter().zip(afresh).position(|(a, b)| a != b) else { return Err(String::new()) };
+        let name = module.global(GlobalId(at as u32)).name.as_deref().unwrap_or("?");
+        Err(format!("; @{name} (id {at}) kept {:.300?} afresh {:.300?}", kept[at], afresh[at]))
+    }
+
+    /// `agrees_afresh` for a test: `M` run twice as `LLRM_CHECK_MODULES` runs it.
+    #[cfg(test)]
+    pub(crate) fn run_agrees_afresh<M: ModuleAnalysis>(
+        &mut self,
+        module: &Module,
+    ) -> bool {
+        let kind = Kind::of::<M>();
+        let first = (kind.run)(module, self);
+        self.agrees_afresh(kind, module, &*first).is_ok()
     }
 
     /// Drops what `preserved` does not keep.
@@ -3578,9 +3643,7 @@ impl PassManager {
                 let id = GlobalId(at as u32);
                 // The other bodies as they stand, for an audit that
                 // reads a callee.
-                if check_captures() {
-                    MODULE_SNAPSHOT.with(|held| *held.borrow_mut() = Some(Rc::new(module.clone())));
-                }
+                snapshot_for_audit(module);
                 let Module { context, globals, metadata, .. } = &mut *module;
                 let global = &mut globals[at];
                 let GlobalKind::Function(function) = &mut global.kind else { continue };

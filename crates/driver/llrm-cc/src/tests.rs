@@ -286,6 +286,19 @@ fn the_6502_rows_select_their_own_backend_and_cpu() {
     assert_eq!(table["x86_64-linux"].llc_program, "llrm-llc");
 }
 
+/// A C global `sp` collided with cc65's own `sp` at link. The cc65 rows name
+/// the platform whose C symbols take cc65's `_`; the sim65 rows keep bare
+/// names.
+#[test]
+fn the_cc65_rows_take_the_platform_with_cc65s_symbol_prefix() {
+    let table = targets(TARGETS).unwrap();
+    let one = built("-Os -S x.c");
+    for (row, cpu) in [("6502-cc65", "--cpu=6502"), ("65c02-cc65", "--cpu=65c02")] {
+        let args = llc_args(&table[row], &one, Path::new("x.ll"), Path::new("x.s"));
+        assert_eq!(args[..3], ["-Os", "--platform=sim65-cc65", cpu], "{row}: {args:?}");
+    }
+}
+
 /// `-ffp-contract=off` was put on every machine that fuses a multiply-add, so
 /// arm64 never formed `fmadd` where the pin's clang and gcc do. No row turns
 /// contraction off; a user who wants unfused results says so.
@@ -309,4 +322,50 @@ fn the_z80_row_selects_its_own_backend() {
     let args = llc_args(&table["z80-sdcc"], &built("-O2 -S x.c"), Path::new("x.ll"), Path::new("x.s"));
     assert!(args.contains(&"-S".to_owned()) && args.contains(&"-O2".to_owned()), "{args:?}");
     assert_eq!(table["z80-sdcc"].c_abi.as_ref().map(|c| (c.int, c.long, c.pointer)), Some((2, 4, 2)));
+}
+
+/// Every build spawned `clang --version` just to check the pin: ~6M
+/// instructions on a 31M compile of grep. A clang unchanged in path, size and
+/// mtime is now judged once; a changed or non-pin one is asked again.
+#[test]
+fn an_unchanged_pin_clang_is_asked_its_version_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("llrm-cc-pin-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let count = dir.join("count");
+    let clang = dir.join("clang");
+    let script = |said: &str| {
+        std::fs::write(&clang, format!("#!/bin/sh\necho x >> {}\necho {said}\n", count.display())).unwrap();
+        std::fs::set_permissions(&clang, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    let spawns = || std::fs::read_to_string(&count).unwrap_or_default().lines().count();
+    script(pin());
+    assert!(check_pin(&clang).is_ok());
+    assert!(check_pin(&clang).is_ok());
+    assert_eq!(spawns(), 1, "the second check spawned again");
+    script(&format!("{} changed", pin()));
+    assert!(check_pin(&clang).is_ok());
+    assert_eq!(spawns(), 2, "a clang of another size was trusted unasked");
+    script("not-a-pin");
+    assert!(check_pin(&clang).is_err(), "a replaced non-pin clang passed on the old stamp");
+    assert!(check_pin(&clang).is_err());
+    assert_eq!(spawns(), 4);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The shared flags keep their meaning for every other target: x86_16 reads `-mcmodel` for near and far code, so clang
+/// gets it there, and no backend of a row without `llc_mcmodel` is handed a flag it never took. The m68k row's clang
+/// is not given the flag (it refuses it) and its backend is.
+#[test]
+fn mcmodel_goes_to_the_m68k_backend_and_not_to_its_clang() {
+    let table = targets(TARGETS).unwrap();
+    let one = built("-O2 -mcmodel=medium -c x.c");
+    let m68k = &table["m68k-68000"];
+    assert!(llc_args(m68k, &one, Path::new("x.ll"), Path::new("x.o")).iter().any(|arg| arg == "-mcmodel=medium"));
+    assert!(!clang_flags(m68k, &one).iter().any(|arg| arg == "-mcmodel=medium"));
+    for (name, row) in table.iter().filter(|(name, _)| !name.starts_with("m68k-")) {
+        assert!(!row.llc_mcmodel, "{name}");
+        assert!(clang_flags(row, &one).iter().any(|arg| arg == "-mcmodel=medium"), "{name}: clang lost the flag");
+        assert!(!llc_args(row, &one, Path::new("x.ll"), Path::new("x.o")).iter().any(|arg| arg == "-mcmodel=medium"), "{name}");
+    }
 }

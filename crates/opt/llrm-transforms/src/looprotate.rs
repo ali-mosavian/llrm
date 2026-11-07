@@ -28,9 +28,10 @@
 //!   the function. `process_loop` reads one `LoopInfo` made before the
 //!   rotation; the blocks the rotation adds belong to the loops outside the
 //!   rotated one, which the driver derives again before it reaches them.
-//! - R2 `check-exit-count` is not translated:
-//!   `profitableToRotateLoopExitingLatch` asks ScalarEvolution for exit counts
-//!   only under that option, which no `PassBuilder` pipeline sets.
+//! - R2 `check-exit-count` is the late slot's option
+//!   (PassBuilderPipelines.cpp#L1621); R7 below prices it.
+//! - R7 `profitableToRotateLoopExitingLatch` under that option makes a
+//!   ScalarEvolution session of its own for the question.
 //! - R3 New blocks go at the end of the layout: `Function::insert_block` after
 //!   a block scans the layout. LLVM puts them next to their neighbours.
 //! - R4 No `llvm.experimental.noalias.scope.decl` scope cloning and no
@@ -117,11 +118,20 @@ pub struct Options {
     /// `CodeSize` of the branches the rotation removes, the loop-closing jump
     /// and the header's exit test.
     pub priced_at_size: bool,
+    /// DEVIATE RS1 (size builds, target opt-in, owner m64, exit 2026-11-20):
+    /// a loop is rotated only if the copied exit test folds in the
+    /// preheader. gcc's `ch_base::copy_headers` copies at `-Os` only when the
+    /// code does not grow; an unfolded guard is a compare and a branch
+    /// against the one jump the rotation removes.
+    pub guard_must_fold: bool,
     /// `RotationOnly`: no `simplifyLoopLatch`.
     pub rotation_only: bool,
     /// `IsUtilMode`: rotate even a loop whose latch already exits.
     pub is_util_mode: bool,
     pub prepare_for_lto: bool,
+    /// `CheckExitCount`: a loop whose latch exit count rotating makes
+    /// computable is rotated (the late slot, PassBuilderPipelines.cpp#L1621).
+    pub check_exit_count: bool,
 }
 
 /// What the rotation reads and changes.
@@ -142,6 +152,9 @@ pub struct Run<'a> {
     /// Blocks emptied by a merge, erased together by `finish` (R3's twin:
     /// erasing one scans the layout).
     pub dead: IdSet<BlockId>,
+    /// The expressions `profitable_to_rotate_loop_exiting_latch` asks about,
+    /// kept while no loop has changed (R7); a rotation drops them.
+    scev: std::cell::RefCell<Option<llrm_analysis::scev::analysis::ScevSession>>,
 }
 
 impl Run<'_> {
@@ -478,9 +491,9 @@ fn rewrite_uses_of_cloned_instructions(
     }
 }
 
-/// `profitableToRotateLoopExitingLatch` (R2: without the exit-count test):
-/// whether a header phi has no user but in the header's exit, so rotating
-/// makes it dead.
+/// `profitableToRotateLoopExitingLatch`: whether a header phi has no user but
+/// in the header's exit, so rotating makes it dead, or (`CheckExitCount`)
+/// rotating makes the latch's exit count computable.
 fn profitable_to_rotate_loop_exiting_latch(
     run: &Run,
     lp: Loop,
@@ -500,7 +513,23 @@ fn profitable_to_rotate_loop_exiting_latch(
         }
         return true;
     }
-    false
+    if !run.options.check_exit_count {
+        return false;
+    }
+    // DEVIATE R7: expressions made for this one question (the pass keeps no
+    // ScalarEvolution), one session for the loops until a rotation changes the
+    // function; exit 2026-11-20 with a session the driver holds.
+    let Some(latch) = lp.get_loop_latch(run.function) else { return false };
+    let mut held = run.scev.borrow_mut();
+    let session = held.get_or_insert_with(|| {
+        llrm_analysis::scev::analysis::ScevSession::within(run.context, run.globals, run.metadata, run.function)
+    });
+    let (se, env) = session.split(run.layout, run.globals, run.metadata);
+    let cx = env.cx(&*run.context, &*run.function);
+    use llrm_analysis::scev::backedge::ExitCountKind::Exact;
+    let latch_count = se.get_exit_count(&cx, header, latch, Exact);
+    let header_count = se.get_exit_count(&cx, header, header, Exact);
+    se.is_could_not_compute(latch_count) && !se.is_could_not_compute(header_count)
 }
 
 /// `LoopInfo::replacementPreservesLCSSAForm`.
@@ -580,6 +609,84 @@ fn split_critical_edge(
         create_phis_for_split_loop_exit(run, pred, split, dest);
     }
     Some(split)
+}
+
+/// Whether the header's exit count is computable (RS1): a counted loop keeps
+/// its rotated form, which the induction variable passes after it read.
+fn header_exit_count_known(
+    run: &Run,
+    lp: Loop,
+    header: BlockId,
+) -> bool {
+    let mut held = run.scev.borrow_mut();
+    let session = held.get_or_insert_with(|| {
+        llrm_analysis::scev::analysis::ScevSession::within(run.context, run.globals, run.metadata, run.function)
+    });
+    let (se, env) = session.split(run.layout, run.globals, run.metadata);
+    let cx = env.cx(&*run.context, &*run.function);
+    let _ = lp;
+    use llrm_analysis::scev::backedge::ExitCountKind::Exact;
+    let count = se.get_exit_count(&cx, header, header, Exact);
+    !se.is_could_not_compute(count)
+}
+
+/// Whether the header's exit test is a constant once its phis read the
+/// preheader's values: the copy the rotation would put in the preheader
+/// (RS1), simplified as `rotate_loop` does and removed again.
+fn guard_folds(
+    run: &mut Run,
+    orig_header: BlockId,
+    orig_preheader: BlockId,
+    header_end: InstId,
+) -> bool {
+    let entry = run.function.terminator(orig_preheader).expect("a terminated preheader");
+    let mut map = IdMap::<ValueId, Operand>::new();
+    let mut copies: Vec<InstId> = Vec::new();
+    for inst in run.function.iter_block(orig_header).collect::<Vec<_>>() {
+        if inst == header_end {
+            break;
+        }
+        let operation = run.function.instruction(inst);
+        let Some(result) = operation.result else { continue };
+        if operation.opcode == Opcode::Phi {
+            if let Some((value, _)) = arms(run.function, inst).into_iter().find(|&(_, from)| from == orig_preheader) {
+                map.insert(result, value);
+            }
+            continue;
+        }
+        let copy = run.function.clone_instruction(inst);
+        run.function.insert(copy, Position::Before(entry)).expect("a placed preheader");
+        let operands = run.function.instruction(copy).operands.clone();
+        for (index, operand) in operands.into_iter().enumerate() {
+            if let Operand::Value(one) = operand
+                && let Some(&mapped) = map.get(&one)
+            {
+                run.function.set_operand(copy, index, mapped);
+            }
+        }
+        match llrm_mir::simplify::simplify_instruction(run.context, run.layout, run.function, copy) {
+            Some(value) => {
+                map.insert(result, value);
+            }
+            None => {
+                if let Some(made) = run.function.instruction(copy).result {
+                    map.insert(result, Operand::Value(made));
+                }
+            }
+        }
+        copies.push(copy);
+    }
+    let mut condition = run.function.instruction(header_end).operands[0];
+    if let Operand::Value(one) = condition
+        && let Some(&mapped) = map.get(&one)
+    {
+        condition = mapped;
+    }
+    let folds = constant_int(run.context, condition).is_some();
+    for copy in copies.into_iter().rev() {
+        run.function.erase(copy).expect("a temporary copy");
+    }
+    folds
 }
 
 /// `rotateLoop`: whether the loop was rotated. `simplified_latch`: the latch
@@ -676,6 +783,12 @@ fn rotate_loop(
     if !lp.has_dedicated_exits(run.function) {
         return None;
     }
+    if run.options.guard_must_fold
+        && !guard_folds(run, orig_header, orig_preheader, header_end)
+        && !header_exit_count_known(run, lp, orig_header)
+    {
+        return None;
+    }
 
     // Find the new loop header: the header's one successor inside the loop. The
     // header's other successor is outside the loop.
@@ -717,6 +830,14 @@ fn rotate_loop(
     // For the rest of the instructions, either hoist to the old preheader if
     // possible or create a clone in the old preheader if not.
     let loop_entry_branch = run.function.terminator(orig_preheader).expect("a terminated preheader");
+    // The local scope declarations of the header: after the rotation they are
+    // duplicated and their scopes cloned (LoopRotationUtils.cpp:500).
+    let declarations: Vec<InstId> = header_instructions
+        .iter()
+        .copied()
+        .filter(|&inst| crate::noaliasscopes::declares(run.function, inst))
+        .collect();
+    let mut cloned_declarations: Vec<(InstId, InstId)> = Vec::new();
     for &inst in &header_instructions[rest..] {
         let operation = run.function.instruction(inst);
         // If the instruction's operands are invariant and it doesn't read or
@@ -778,8 +899,46 @@ fn rotate_loop(
                 if let (Some(original), Some(result)) = (original, run.function.instruction(copy).result) {
                     value_map.insert(original, Operand::Value(result));
                 }
+                if declarations.contains(&inst) {
+                    cloned_declarations.push((inst, copy));
+                }
             }
         }
+    }
+
+    // `ValueMap[*NoAliasDeclInstructions.begin()]` and what follows
+    // (LoopRotationUtils.cpp:625): the declarations again at the top of the new
+    // header, then the scopes of the header and of the preheader's copy cloned.
+    if let Some(&(_, first_copy)) = cloned_declarations.first() {
+        let scopes = crate::noaliasscopes::declared_scopes(run.function, declarations.iter().copied());
+        let at = run
+            .function
+            .iter_block(new_header)
+            .find(|&inst| run.function.instruction(inst).opcode != Opcode::Phi)
+            .expect("a terminator");
+        for &declaration in &declarations {
+            let again = run.function.clone_instruction(declaration);
+            run.function.insert(again, Position::Before(at)).expect("a placed new header");
+        }
+        let header_now = run.function.iter_block(orig_header).collect::<Vec<_>>();
+        crate::noaliasscopes::cloned_and_adapted(
+            run.function,
+            &scopes,
+            &header_now,
+            "h.rot",
+            run.metadata,
+            run.declared,
+        );
+        let tail: Vec<InstId> =
+            run.function.iter_block(orig_preheader).skip_while(|&inst| inst != first_copy).collect();
+        crate::noaliasscopes::cloned_and_adapted(
+            run.function,
+            &scopes,
+            &tail,
+            "pre.rot",
+            run.metadata,
+            run.declared,
+        );
     }
 
     // Along with all the other instructions, the header's terminator was cloned
@@ -934,7 +1093,11 @@ pub fn process_loop(
     {
         run.function.set_metadata(term, "llvm.loop", Some(md));
     }
-    rotated_latch.is_some() || simplified_latch.is_some()
+    let changed = rotated_latch.is_some() || simplified_latch.is_some();
+    if changed {
+        run.scev.take();
+    }
+    changed
 }
 
 /// `LoopRotatePass` over a function: every loop, each after the loops it holds,
@@ -975,18 +1138,10 @@ pub fn rotate_loops(run: &mut Run) -> bool {
     changed
 }
 
-/// DEVIATE (m16 only): under `-Os` a header is copied only when it has four
-/// instructions or fewer (`RotationMaxHeaderSize` is 16 in the pin,
-/// `hasMinSize` alone lowers it). Code bytes m16 -Os, QCport 65 modules + 71
-/// vsgcc programs, by limit: 16 = 262435 + 14831, 4 = 262098 + 14745 with no
-/// object larger than at 16; 3 and 2 save more (261979, 260491) but x_mergesort
-/// +21 and, at 2, x_base64 +23 and d_alias +20: an unrotated counted loop loses
-/// its trip count to SCEV (a `div` appears), which no header size predicts.
-const SIZE_MAX_HEADER: u32 = 4;
-
 /// The header instructions a loop may copy: none without header duplication,
-/// the pin's 16, or `SIZE_MAX_HEADER` for a size build on a target with
-/// segment registers (m16), the only target the byte sweep was run for.
+/// else the pin's 16, or the target's own limit for a size build
+/// (`Machine::size_rotation_header_limit`; the pin lowers it for `minsize`
+/// only).
 pub fn header_limit(
     duplicate_headers: bool,
     size: bool,
@@ -994,8 +1149,8 @@ pub fn header_limit(
 ) -> u32 {
     if !duplicate_headers {
         0
-    } else if size && target.segment_registers() > 0 {
-        SIZE_MAX_HEADER
+    } else if size {
+        target.size_rotation_header_limit().unwrap_or(16)
     } else {
         16
     }
@@ -1003,12 +1158,14 @@ pub fn header_limit(
 
 /// `LoopRotatePass`: every loop of the function rotated with header
 /// duplication on (`EnableHeaderDuplication`), whose limit is the pass's
-/// default of 16 header instructions (`SIZE_MAX_HEADER` at -Os), or none where
+/// default of 16 header instructions (the target's at -Os), or none where
 /// the function is optimized for size or `-fno-tree-ch` says so.
 pub struct LoopRotate {
     pub duplicate_headers: bool,
     /// Code bytes outrank speed (`-Os`): the header is copied only when small.
     pub size: bool,
+    /// `CheckExitCount`.
+    pub check_exit_count: bool,
 }
 
 impl FunctionPass for LoopRotate {
@@ -1030,9 +1187,11 @@ impl FunctionPass for LoopRotate {
         let options = Options {
             max_header_size: header_limit(self.duplicate_headers, self.size, outer.target()),
             priced_at_size: self.size && tti.rotation_header_priced_at_size(),
+            guard_must_fold: self.size && tti.rotation_guard_must_fold_at_size(),
             rotation_only: false,
             is_util_mode: false,
             prepare_for_lto: false,
+            check_exit_count: self.check_exit_count,
         };
         let mut run = Run {
             context: unit.context,
@@ -1047,6 +1206,7 @@ impl FunctionPass for LoopRotate {
             options,
             has_one_live_use: &|_| false,
             dead: IdSet::new(),
+            scev: Default::default(),
         };
         if rotate_loops(&mut run) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -1108,6 +1268,7 @@ pub fn rotate_function_knowing(
             options,
             has_one_live_use: &|_| false,
             dead: IdSet::new(),
+            scev: Default::default(),
         };
         rotate_loops(&mut run)
     };

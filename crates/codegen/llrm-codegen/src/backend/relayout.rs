@@ -79,6 +79,7 @@ use std::sync::Arc;
 
 use crate::backend::assemble::Machined;
 use crate::backend::frame::Frame;
+use crate::backend::frameobjects::{Sorting, order_frame_objects};
 use crate::model::ir::{Addr, AddressRef, Loc, Mem, Semantics, Space};
 use crate::model::lir::{CallMemory, DebugPlace, DebugVariable, Insn, LirBlock, LirBody, WHOLE_FRAME, outside};
 use crate::support::hash::IndexMap;
@@ -159,24 +160,16 @@ struct Object {
     uses: u64,
 }
 
-/// `X86FrameLowering::orderFrameObjects`: the indices of `objects` (in
-/// creation order) in the order they are laid from the top of the frame. The
-/// pin sorts ascending by `uses / size` (compared cross-multiplied, a tie by
-/// alignment), stable, and flips the list for an FP frame (hottest nearest BP);
-/// a frame addressed from the stack pointer keeps it (hottest nearest SP).
+/// `X86FrameLowering::orderFrameObjects` over `objects`, in creation order; a
+/// frame addressed from the stack pointer keeps the sorted order (hottest
+/// nearest SP), an FP frame flips it (hottest nearest BP).
 fn order(
     objects: &[Object],
     sp: bool,
 ) -> Vec<usize> {
-    let mut sorted: Vec<usize> = (0..objects.len()).collect();
-    sorted.sort_by(|&a, &b| {
-        let (a, b) = (&objects[a], &objects[b]);
-        (a.uses * b.size as u64).cmp(&(b.uses * a.size as u64)).then(a.align.cmp(&b.align))
-    });
-    if !sp {
-        sorted.reverse();
-    }
-    sorted
+    let sorting: Vec<_> =
+        objects.iter().map(|one| Sorting { size: one.size as u64, align: one.align, uses: one.uses }).collect();
+    order_frame_objects(&sorting, !sp)
 }
 
 /// The new first byte of each object of `objects`, laid in `placed` order from
@@ -339,6 +332,11 @@ fn moved_body(
             .collect::<Option<std::collections::BTreeMap<_, _>>>()?,
     );
     out.variables = body.variables.iter().map(|one| moved.variable(one)).collect::<Option<Vec<_>>>()?;
+    out.vector_saves = body
+        .vector_saves
+        .iter()
+        .map(|(register, cell)| Some((*register, moved.mem(cell)?)))
+        .collect::<Option<Vec<_>>>()?;
     Some(out)
 }
 
@@ -844,6 +842,7 @@ mod tests {
             pops: Default::default(),
             popped: 0,
             registers: llrm_target::FrameRegisters {
+                vector_saved: Vec::new(),
                 pointer: RegId::BP,
                 stack: RegId::SP,
                 saved: Vec::new(),

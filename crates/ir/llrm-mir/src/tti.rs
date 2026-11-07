@@ -123,10 +123,14 @@ pub struct OperandInfo {
     pub constant: bool,
     pub power_of_two: bool,
     pub negated_power_of_two: bool,
+    /// The constant, sign-extended from its width, where a target prices the
+    /// size of an immediate by it; the pin's `OperandValueInfo` has none, and
+    /// no target but the m68k reads it.
+    pub value: Option<i128>,
 }
 
 impl OperandInfo {
-    pub const ANY: OperandInfo = OperandInfo { constant: false, power_of_two: false, negated_power_of_two: false };
+    pub const ANY: OperandInfo = OperandInfo { constant: false, power_of_two: false, negated_power_of_two: false, value: None };
 
     /// A constant operand of this value at `width` bits.
     pub fn constant(
@@ -143,6 +147,12 @@ impl OperandInfo {
             constant: true,
             power_of_two: bits != 0 && bits & (bits - 1) == 0,
             negated_power_of_two: negated != 0 && negated & (negated - 1) == 0,
+            value: Some(if width >= 128 || width == 0 {
+                value
+            } else {
+                let shift = 128 - width;
+                (((value as u128) << shift) as i128) >> shift
+            }),
         }
     }
 }
@@ -295,6 +305,120 @@ pub struct UnrollingPreferences {
     pub unroll_and_jam_inner_loop_threshold: u32,
 }
 
+/// `TTI::MemCmpExpansionOptions`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MemCmpExpansionOptions {
+    /// Load sizes in bytes, largest first.
+    pub load_sizes: Vec<u32>,
+    pub max_num_loads: u32,
+    pub num_loads_per_block: u32,
+    pub allow_overlapping_loads: bool,
+    /// Sizes a run of loads may be merged into (three-way compares only).
+    pub allowed_tail_expansions: Vec<u32>,
+}
+
+/// The fields of `HardwareLoopInfo` a target sets in
+/// `isHardwareLoopProfitable`; the pass keeps the rest (the exit block, branch
+/// and count it finds).
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfo.h#L104>
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HardwareLoopTarget {
+    /// `CountType`'s width: the pin's default is 32
+    /// (`hardware-loop-counter-bitwidth`).
+    pub count_bits: u32,
+    /// `LoopDecrement`: what `llvm.loop.decrement` takes off the counter.
+    pub loop_decrement: u64,
+    /// `IsNestingLegal`: a loop inside another may be a hardware loop.
+    pub is_nesting_legal: bool,
+    /// `CounterInReg`: the counter is a register value carried round the loop
+    /// by a phi (`loop.decrement.reg`), not state the target keeps.
+    pub counter_in_reg: bool,
+    /// `PerformEntryTest`: the loop's entry guard may be folded into the
+    /// counter's set (`test.set.loop.iterations`).
+    pub perform_entry_test: bool,
+    /// Beyond the pin (PPC's `checkCallInLoop` is its own check): the counter
+    /// is lost across a call, so a loop that calls is left alone.
+    pub rejects_calls: bool,
+    /// Beyond the pin: the counter is one more register, so a loop is
+    /// converted only where its own counter dies, replaced by this one.
+    pub requires_dead_counter: bool,
+}
+
+impl Default for HardwareLoopTarget {
+    /// `HardwareLoopInfo(L)`'s defaults.
+    fn default() -> Self {
+        HardwareLoopTarget {
+            count_bits: 32,
+            loop_decrement: 1,
+            is_nesting_legal: false,
+            counter_in_reg: false,
+            perform_entry_test: false,
+            rejects_calls: false,
+            requires_dead_counter: false,
+        }
+    }
+}
+
+/// An argument of a call, as the call sequence sees it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CallArgument {
+    /// The value's type; none for an aggregate or a vector.
+    pub ty: Option<Ty>,
+    /// The bytes copied onto the stack, for a `byval` argument.
+    pub byval_bytes: Option<u64>,
+}
+
+/// Rule 1 of the inliner's policy: an `optsize` caller's inline of a callee
+/// that stays must not grow the code (SZ1).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SizeRule {
+    /// The fewest calls a callee has in the module for the rule to hold its
+    /// sites (a callee called once is the pin's: the copy meets constants the
+    /// cost model follows, and folds with the sites around it).
+    pub min_sites: i64,
+    /// Whether the rule stands down where the pin's own cost, net of the
+    /// instructions it folds, is below zero: the pin counts that inline as
+    /// shrinking the caller (a one-instruction wrapper, a callee whose body
+    /// folds away).
+    pub yields_to_negative_cost: bool,
+}
+
+/// What a target states of the inliner's verdict beyond the pin's analyzer.
+/// The inliner reads this and nothing else of the target's inline hooks:
+/// `Tti::inline_policy` is the one place a target says it.
+///
+/// DEVIATE: the pin's `getInlineCost` is `cost < threshold` alone (the default
+/// policy states nothing). Reason: a small platform's call is 3 bytes and its
+/// cycles are few; the two rules of the user's 11-04 ruling are bytes against
+/// the call at `-Os`, and bytes against clocks on a hot path at `-O2`/`-O3`.
+/// Exit: none; step 4 of `handoff/inline-cost-model-design.md`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlinePolicy {
+    /// Rule 1, at `-Os` and `-Oz`; none: not held.
+    pub by_size: Option<SizeRule>,
+    /// Rule 2, at `-O2` and `-O3`: what a byte of growth is worth in
+    /// thousandths of a clock against the call's latency, weighted by the
+    /// site's frequency. 0: the pin's threshold alone.
+    pub by_rate: i64,
+}
+
+impl InlinePolicy {
+    /// The pin's verdict: neither rule.
+    pub const PIN: InlinePolicy = InlinePolicy { by_size: None, by_rate: 0 };
+}
+
+/// A call site: its arguments and the static frame its callee builds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CallShape {
+    pub arguments: Vec<CallArgument>,
+    /// The bytes of the callee's static allocas.
+    pub callee_frame_bytes: u64,
+    /// The bytes of the caller's static allocas: a caller with none has no
+    /// frame, and an inlined callee's moves into it instead of vanishing.
+    pub caller_frame_bytes: u64,
+}
+
 /// The target a cost is for.
 pub trait Tti {
     /// The implementation's name, for what reports which target priced a
@@ -346,12 +470,65 @@ pub trait Tti {
         crate::jumpmerge::CondMerging::SPLIT
     }
 
+    /// The inliner's policy for this target. The default is built from the
+    /// hooks below that a target already states, so a target may keep stating
+    /// those or return a policy of its own.
+    fn inline_policy(&self) -> InlinePolicy {
+        InlinePolicy {
+            by_size: self
+                .opt_size_inline_by_code_size()
+                .then(
+                    || SizeRule {
+                        min_sites: self.opt_size_inline_guard_min_sites(),
+                        yields_to_negative_cost: self.opt_size_inline_guard_yields_to_negative_cost(),
+                    },
+                ),
+            by_rate: self.speed_inline_milliclocks_per_byte(),
+        }
+    }
+
     /// Whether an `optsize` caller's inline of a callee that stays must not
     /// grow the code: the callee's `CodeSize` over the instructions the
     /// inline cost did not fold, against the call and the pushes of its
     /// arguments (SZ1). The pin's `OptSizeThreshold` 50 allows growth.
     fn opt_size_inline_by_code_size(&self) -> bool {
         false
+    }
+
+    /// The cost model the inliner counts a callee's size with, where the
+    /// target's `CodeSize` is not bytes: the same model with `CodeSize` in
+    /// bytes of code. None: `CodeSize` as it is. The other passes keep
+    /// `CodeSize` in the pin's units, which their thresholds are in.
+    fn inline_size_view(&self) -> Option<std::rc::Rc<dyn Tti>> {
+        None
+    }
+
+    /// What one call costs the caller and the callee together, in `kind`:
+    /// the call and return, the arguments' setup (a by-value copy, a push
+    /// past the argument registers), and the frame the callee builds and tears
+    /// down. Inlining removes all of it, so the inliner's size and rate bounds
+    /// read it in place of the call instruction's flat price. None: the pin's
+    /// flat price (the call as one instruction and one per argument).
+    fn call_sequence_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (shape, kind);
+        None
+    }
+
+    /// What building and tearing down the callee's frame costs in `kind`,
+    /// once per call executed. Inlining removes it from the callee, which then
+    /// stays or dies: in bytes it is saved once, when the callee dies, and
+    /// only where the caller already has a frame. None: no frame term.
+    fn callee_frame_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (shape, kind);
+        None
     }
 
     /// What a byte of growth is worth, in thousandths of a clock, to a speed
@@ -362,6 +539,13 @@ pub trait Tti {
         0
     }
 
+    /// Whether one wider store of constants may start off its own size
+    /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
+    /// at a multiple of its size.
+    fn merges_unaligned_stores(&self) -> bool {
+        false
+    }
+
     /// Whether a size build's loop rotation copies a header only when the copy
     /// is no bigger than the branches the rotation removes: the loop-closing
     /// jump and the header's own exit test, in `CodeSize`. False: the pass's
@@ -370,12 +554,47 @@ pub trait Tti {
         false
     }
 
+    /// Whether a priced full unroll counts a promoted local array's accesses
+    /// as free only while its elements fit the registers (UP1).
+    fn unroll_promotion_fits_registers(&self) -> bool {
+        false
+    }
+
+    /// Whether a size build's loop rotation copies a header only when its
+    /// exit test folds in the preheader (RS1). False: the pass's header limit
+    /// alone.
+    fn rotation_guard_must_fold_at_size(&self) -> bool {
+        false
+    }
+
     /// The fewest calls a callee has in the module for the bound above to hold
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around
     /// it).
+    /// Whether an -Os caller's SZ2 trial also inlines the sites its splice brings
+    /// (`Tuning::inline_chain_trial`).
+    fn opt_size_inline_chain_trial(&self) -> bool {
+        false
+    }
+
+    /// Whether an -Os caller's SZ2 trial prices the dying callee once and refuses copies that grow the
+    /// bytes where the callee's credit alone made the count accept. Only where `function_bytes` is
+    /// calibrated against objects (m68k, `size_calibration.rs`); the x86 model is not, and a truthful
+    /// credit refuses trials that shrink the build there.
+    fn opt_size_inline_byte_gate(&self) -> bool {
+        false
+    }
+
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
         1
+    }
+
+    /// Whether the bound above stands down where the pin's own cost, net of
+    /// the instructions it folds, is below zero: the pin counts that inline as
+    /// shrinking the caller (a one-instruction wrapper, a callee whose body
+    /// folds away). False: the bound holds whatever the cost.
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
+        false
     }
 
     /// Whether a constant address offset may become a phi: false where the
@@ -430,8 +649,16 @@ pub trait Tti {
     }
 
     /// `getSchedModel().LoopMicroOpBufferSize`: the micro-ops the target's loop
-    /// buffer holds; 0 where its scheduling model has none (T11: only the
-    /// models of the cpus the plan page pins are known, and none has one).
+    /// buffer holds; 0 where its scheduling model has none (X86: 28 for the
+    /// `SandyBridgeModel` cpus; the others' models are not known here).
+    /// The program's code is (not) position independent: addressing modes
+    /// differ (`isPositionIndependent`). Set once per program.
+    fn set_position_independent(
+        &self,
+        _position_independent: bool,
+    ) {
+    }
+
     fn loop_micro_op_buffer_size(&self) -> u32 {
         0
     }
@@ -439,6 +666,13 @@ pub trait Tti {
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
+    /// DEVIATE UP1: what a code byte a full unroll adds is worth in
+    /// thousandths of a clock at -O2/-O3, where the unroll must save that many
+    /// clocks to be made (`loopunrollprice`); 0: the pin's threshold alone.
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
         0
     }
 
@@ -452,9 +686,41 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::imul_at_size`.
+    fn imul_at_size(&self) -> bool {
+        false
+    }
+
     /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
     fn has_cmov(&self) -> bool {
         true
+    }
+
+    /// DEVIATE D5 (`twoentryphi.rs`): what each select costs beyond its own
+    /// price when folding a two-entry phi (a select is a branch and a move
+    /// where there is no conditional move). 0: as at the pin, which does not
+    /// count the selects. `optsize`: the function is a size build.
+    fn select_branch_extra(
+        &self,
+        optsize: bool,
+    ) -> i64 {
+        let _ = optsize;
+        0
+    }
+
+    /// `Tuning::sink_select_arms`.
+    fn sinks_select_arms(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::inline_variable_memcpy`.
+    fn inlines_variable_memcpy(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::ipsccp_widen_keeps_sign`.
+    fn ipsccp_widen_keeps_sign(&self) -> bool {
+        false
     }
 
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
@@ -480,10 +746,29 @@ pub trait Tti {
         None
     }
 
-    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3);
+    /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
+    /// constants fold enough of it to pay the copy at the speed rate.
+    fn peels_folded_entry(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3),
+    /// in `gcc_insns` of the callee;
     /// none: no bar.
     fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
         None
+    }
+
+    /// DEVIATE REC-2: what the copies of a recursive function in itself may add
+    /// at (-O2, -O3), in `gcc_insns`; none: the pass's own.
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        None
+    }
+
+    /// DEVIATE REC-2: whether, at (-O2, -O3), a tree recursion's tail calls are
+    /// eliminated before its copies of itself are made.
+    fn recursive_tre_first(&self) -> (bool, bool) {
+        (false, false)
     }
 
     /// DEVIATE REC-1: the ceilings (depth, callee size in `gcc_insns`) within
@@ -508,16 +793,49 @@ pub trait Tti {
         None
     }
 
+    /// Whether a product by a constant and one by its negation are made once
+    /// on the x87 stack (`Tuning::x87_share_negated_products`).
+    fn x87_share_negated_products(&self) -> bool {
+        false
+    }
+
     /// The target's `PartialThreshold` (its tuning table); none: the pass's
     /// own.
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         None
     }
 
+    /// The `PartialThreshold` of the unroll-and-jam's outer loop (its tuning
+    /// table); none: `unroll_partial_threshold_override`'s.
+    fn unroll_jam_partial_threshold_override(&self) -> Option<u32> {
+        None
+    }
+
+    /// Tuning `unroll_jam_exact_count`.
+    fn unroll_jam_exact_count(&self) -> bool {
+        false
+    }
+
+    /// Tuning `constant_hoisting`.
+    fn constant_hoisting(&self) -> bool {
+        false
+    }
+
     /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
     /// 50.
     fn unswitch_threshold_override(&self) -> Option<i64> {
         None
+    }
+
+    /// `isHardwareLoopProfitable`: whether the target counts loops in hardware
+    /// (`djnz`, `dbra`, `loop`), and how, in `info`. The hook sees no loop
+    /// yet: no target reads one (DEVIATE 3 of `hardwareloops`). Off by
+    /// default; the pass does not run for a target that says no.
+    fn is_hardware_loop_profitable(
+        &self,
+        _info: &mut HardwareLoopTarget,
+    ) -> bool {
+        false
     }
 
     /// `getUnrollingPreferences` given the loop's shape, which targets read
@@ -610,6 +928,33 @@ pub trait Tti {
         bits: u32,
     ) -> Cost;
 
+    /// `int_imm_cost_inst` for a pass that also knows whether the function is
+    /// built for size (`ConstantHoisting`'s `OptForSize`). The pin's cost
+    /// does not depend on it; a target's DEVIATE may (x86 ZIMM).
+    fn int_imm_cost_inst_for_size(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+        _for_size: bool,
+    ) -> Cost {
+        self.int_imm_cost_inst(op, index, imm, bits)
+    }
+
+    /// `int_imm_cost_inst` as the pin prices it, before any DEVIATE of the
+    /// target's own (x86 ZIMM): what `ConstantHoisting` asks to keep a
+    /// constant a candidate.
+    fn int_imm_cost_inst_pin(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        self.int_imm_cost_inst(op, index, imm, bits)
+    }
+
     /// `isTruncateFree`.
     fn is_truncate_free(
         &self,
@@ -625,6 +970,29 @@ pub trait Tti {
         signed: bool,
     ) -> bool {
         let _ = (bits, signed);
+        false
+    }
+
+    /// `enableMemCmpExpansion(OptSize, IsZeroCmp)`: how a `memcmp` may be
+    /// expanded to loads and compares; none (the base class) leaves the call.
+    fn enable_mem_cmp_expansion(
+        &self,
+        opt_size: bool,
+        is_zero_cmp: bool,
+    ) -> Option<MemCmpExpansionOptions> {
+        let _ = (opt_size, is_zero_cmp);
+        None
+    }
+
+    /// `allowsMisalignedMemoryAccesses` of an `bits`-wide integer access in
+    /// `address_space` at `align` bytes. The base class has none.
+    fn allows_misaligned_memory_accesses(
+        &self,
+        bits: u32,
+        address_space: u32,
+        align: u64,
+    ) -> bool {
+        let _ = (bits, address_space, align);
         false
     }
 
@@ -715,6 +1083,57 @@ pub trait Tti {
         }
     }
 
+    /// `getIntImmCodeSizeCost`: the code size of the constant at operand
+    /// `index` of an `op`; the base class has none.
+    fn int_imm_code_size_cost(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        let _ = (op, index, imm, bits);
+        Cost::FREE
+    }
+
+    /// `getIntImmCostIntrin`: the constant at operand `index` of a call to the
+    /// intrinsic `name`; the base class makes it free.
+    fn int_imm_cost_intrin(
+        &self,
+        name: &str,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        let _ = (name, index, imm, bits);
+        Cost::FREE
+    }
+
+    /// `preferToKeepConstantsAttached` (`BasicTTIImpl`): a divide or remainder
+    /// by a constant keeps it unless `isIntDivCheap`, which the base class
+    /// says it is not. `min_size`: the function is `minsize`.
+    fn prefer_to_keep_constants_attached(
+        &self,
+        div_rem_by_constant: bool,
+        min_size: bool,
+    ) -> bool {
+        let _ = min_size;
+        div_rem_by_constant
+    }
+
+    /// DEVIATE ZIMM (M64-ZIMM-CRC): a zero-extended 32-bit constant that is
+    /// one arm of a `select` beside zero. The target turns it into a mask
+    /// `and` with the constant as an immediate, so hoisting it only holds a
+    /// register. The pin's `preferToKeepConstantsAttached` has no such case.
+    fn keeps_select_mask_attached(
+        &self,
+        bits: u128,
+        width: u32,
+    ) -> bool {
+        let _ = (bits, width);
+        false
+    }
+
     /// `TargetTransformInfoImplBase::isLegalAddImmediate`: none.
     fn is_legal_add_immediate(
         &self,
@@ -784,6 +1203,41 @@ pub trait Tti {
         false
     }
 
+    /// Beyond the pin (AArch64 and ARM step by any small immediate): whether a
+    /// post-increment access of `access_bytes` may step its pointer by `step`
+    /// bytes. m68k's `(An)+` steps by the access size and no other amount.
+    fn is_post_inc_step_legal(
+        &self,
+        _access_bytes: i64,
+        _step: i64,
+    ) -> bool {
+        true
+    }
+
+    /// Beyond the pin: whether a size build keeps a loop whose closed form
+    /// (`rewriteLoopExitValues`) costs more code than the loop, as the 16-bit
+    /// targets do. m68k's wide multiplies are library calls.
+    fn sizes_exit_values(&self) -> bool {
+        false
+    }
+
+    /// Beyond the pin: whether a function built for size turns a store or
+    /// copy loop into a `memset` or `memcpy` call (`LoopIdiomRecognize`). The
+    /// pin does; a target whose call setup and library routine are more bytes
+    /// than the loop (m68k: three pushes, `jsr`, `lea` against a four
+    /// instruction loop) says false.
+    fn memory_idioms_at_optsize(&self) -> bool {
+        true
+    }
+
+    /// Beyond the pin: whether a shift by a variable amount needs the count
+    /// in one fixed register (x86's `cl`), which costs a move and holds the
+    /// register. A size build then keeps `mul X, select(c, 8, 2)` rather than
+    /// the pin's `shl X, select(c, 3, 1)` (`visitMul`'s `tryGetLog2`).
+    fn variable_shift_count_in_fixed_register(&self) -> bool {
+        false
+    }
+
     /// Beyond the pin: whether a strict exit compare of a unit-stride counter
     /// that never passes its bound should become `!=` (`exitne`). Counting to
     /// zero and testing `!=` is cheap where a decrement sets the flags and one
@@ -792,6 +1246,17 @@ pub trait Tti {
     /// default; a target opts in where it measured a win.
     fn prefers_exit_ne(&self) -> bool {
         false
+    }
+
+    /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
+    /// (default 4), for a function built for size or not: the operations
+    /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L41)
+    fn lftr_expansion_budget(
+        &self,
+        _optsize: bool,
+    ) -> u32 {
+        4
     }
 
     /// `isNumRegsMajorCostOfLSR`.
@@ -864,10 +1329,40 @@ pub trait Tti {
         8
     }
 
+    /// The values LICM may hold across a loop before it refuses a promotion
+    /// (DEVIATE LP1, `licm/pressure.rs` in llrm-transforms): the register count
+    /// by default; `None` where registers are not what a value is held in and
+    /// the pin promotes without a cap.
+    fn licm_register_limit(&self) -> Option<u32> {
+        Some(self.number_of_gpr_registers())
+    }
+
+    /// DEVIATE LSR-N: integer widths LSR takes as native induction variables
+    /// besides the datalayout's `n`. The pin's `IVUsers` skips every type
+    /// `isLegalInteger` refuses, so on a datalayout of `n8` no 16- or 32-bit
+    /// counter, product or pointer is reduced. None: the datalayout's.
+    /// Owner llrm-target-6502; exit: 16-bit widths and `-Os` with a byte-aware
+    /// LSR cost, 2026-11-20.
+    fn lsr_native_integer_widths(&self) -> &'static [u32] {
+        &[]
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
         1
+    }
+
+    /// `TCC_Basic` in this target's cost units for `kind` (DEVIATE TB1; the
+    /// pin's is the constant 1): the SCEV expansion budgets
+    /// (`isHighCostExpansion`, 4 of them) are counted in it. A target whose
+    /// costs are not about one per instruction (the Z80 prices in machine
+    /// cycles) says what a basic instruction costs.
+    fn tcc_basic(
+        &self,
+        _kind: CostKind,
+    ) -> Cost {
+        Cost::BASIC
     }
 
     /// DEVIATE LU12: whether the adds of a use whose fixups all lie after the
@@ -1015,6 +1510,16 @@ pub trait Tti {
             ty,
             Ty::Int(8 | 16 | 32) | Ty::Float | Ty::Double | Ty::Pointer
         )
+    }
+
+    /// `haveFastSqrt`: a legal `FSQRT` on `ty`
+    /// ([BasicTTIImpl.h:674](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L674)).
+    /// Default: none, for a target without an FPU or a sqrt instruction.
+    fn have_fast_sqrt(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
     }
 
     /// `shouldBuildLookupTables`: whether the target jumps through a table
@@ -1272,6 +1777,27 @@ mod access_tests {
                 bits: u32,
             ) -> Cost {
                 self.0.int_imm_cost_inst(op, index, imm, bits)
+            }
+
+            fn int_imm_cost_inst_for_size(
+                &self,
+                op: ImmUser,
+                index: u32,
+                imm: i128,
+                bits: u32,
+                for_size: bool,
+            ) -> Cost {
+                self.0.int_imm_cost_inst_for_size(op, index, imm, bits, for_size)
+            }
+
+            fn int_imm_cost_inst_pin(
+                &self,
+                op: ImmUser,
+                index: u32,
+                imm: i128,
+                bits: u32,
+            ) -> Cost {
+                self.0.int_imm_cost_inst_pin(op, index, imm, bits)
             }
 
             fn is_truncate_free(

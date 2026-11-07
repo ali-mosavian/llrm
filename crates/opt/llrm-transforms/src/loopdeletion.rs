@@ -756,7 +756,7 @@ fn break_loop_backedge(
     }
     // LCSSA form of the outermost loop, which may have lost a block.
     if had_parent {
-        let _ = crate::lcssa::closed(run.function);
+        let _ = crate::lcssa::closed(run.context, run.layout, run.function);
     }
 }
 

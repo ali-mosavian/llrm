@@ -1389,9 +1389,12 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
     assert_eq!(
         late,
         [
+            "drop-unnecessary-assumes@1577",
             "float2int@1594",
             "lower-constant-intrinsics@1597",
+            "rotate@1621",
             "loop-interchange@1631",
+            "drop-unnecessary-assumes@1360",
             "infer-alignment@1362",
             "loop-load-elim@1400",
             "combine@1403",
@@ -1405,6 +1408,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "licm@1508",
             "instsimplify@1662",
             "divrempairs@1667",
+            "expandmemcmp@1673",
             "tailrec@1677",
             "simplifycfg@1682"
         ]
@@ -2215,9 +2219,12 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     assert_eq!(
         late,
         [
+            "drop-unnecessary-assumes@1577",
             "float2int@1594",
             "lower-constant-intrinsics@1597",
+            "rotate@1621",
             "loop-interchange@1631",
+            "drop-unnecessary-assumes@1360",
             "infer-alignment@1362",
             "loop-load-elim@1400",
             "combine@1403",
@@ -2231,6 +2238,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "licm@1508",
             "instsimplify@1662",
             "divrempairs@1667",
+            "expandmemcmp@1673",
             "tailrec@1677",
             "simplifycfg@1682"
         ]
@@ -2297,6 +2305,31 @@ fn test_the_write_through_promote_runs_after_sroa_only_where_gvn_has_no_pre() {
     let o1 = Applied { options: pipeline::Options { pre: false, ..Default::default() }, ..Applied::default() };
     for (slot, parts) in &parts(&o1) {
         assert!(parts.contains(&"promote"), "{slot} {parts:?}");
+    }
+}
+
+/// `write_through: false` leaves the write-through `Promote` out at -O1 too:
+/// wasm32 jpeg_fixed -O1 forwarded 29 `@inpos` loads across blocks, which the
+/// pin's -O1 (no GVN) does not, and was 259 B over.
+#[test]
+fn test_the_write_through_promote_is_left_out_at_o1_when_the_option_is_off() {
+    let parts = |applied: &Applied| {
+        let mut slots = Vec::new();
+        for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
+            for one in pipeline::llvm_order(applied, phase) {
+                if matches!(one.name(), "sroa@1179" | "promote@1241" | "sroa@646" | "sroa@776") {
+                    slots.push((one.name(), one.parts()));
+                }
+            }
+        }
+        slots
+    };
+    let options = |write_through| pipeline::Options { pre: false, write_through, ..Default::default() };
+    let on = Applied { options: options(true), ..Applied::default() };
+    let off = Applied { options: options(false), ..Applied::default() };
+    assert!(parts(&on).iter().all(|(_, parts)| parts.contains(&"promote")));
+    for (slot, parts) in &parts(&off) {
+        assert!(!parts.contains(&"promote") && !parts.contains(&"deadslots"), "{slot} {parts:?}");
     }
 }
 
@@ -2903,4 +2936,78 @@ b:
     };
     assert!(narrowed(pipeline::Options::standard()), "premise: -O2 narrows it");
     assert!(!narrowed(pipeline::Options::basic()), "-O1 narrowed with CVP, which the pin's O1 lacks");
+}
+
+/// The pin's early `SimplifyCFGPass()` (L1178) has `ConvertSwitchRangeToICmp`
+/// off (`opt -print-pipeline-passes`: `simplifycfg<...no-switch-range-to-icmp...>`);
+/// ours turned a two-way switch over a case range into an `icmp` there, ahead of
+/// the passes that read the switch. The slots that name the option (L1245, ...)
+/// keep it.
+#[test]
+fn test_the_early_simplifycfg_slot_leaves_a_switch_range_alone() {
+    let text = "define i32 @f(i32 %x) {\nb0:\n  switch i32 %x, label %d [\n    i32 0, label %a\n    i32 1, label %a\n    i32 2, label %a\n  ]\na:\n  ret i32 1\nd:\n  ret i32 2\n}\n";
+    let run = |slot: &str| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied { only: Some(slot.to_owned()), options: pipeline::Options::standard(), ..Applied::default() };
+        assert!(pipeline::slot_built(&applied, slot), "no slot {slot}");
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the slot runs");
+        llrm_mir::print::module(&module)
+    };
+    let early = run("decide@1178");
+    assert!(early.contains("switch i32"), "the early slot made the range an icmp:\n{early}");
+    let later = run("decide@1244");
+    assert!(!later.contains("switch i32"), "premise: the later slot folds the range:\n{later}");
+}
+
+thread_local! {
+    static GETENVS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts the calling thread's `getenv` calls in this test binary, then answers
+/// from `environ` as libc does.
+#[unsafe(no_mangle)]
+pub extern "C" fn getenv(name: *const std::ffi::c_char) -> *const std::ffi::c_char {
+    unsafe extern "C" {
+        static environ: *const *const std::ffi::c_char;
+    }
+    GETENVS.with(|count| count.set(count.get() + 1));
+    let name = unsafe { std::ffi::CStr::from_ptr(name) }.to_bytes();
+    let mut at = unsafe { environ };
+    while !at.is_null() && !unsafe { *at }.is_null() {
+        let entry = unsafe { std::ffi::CStr::from_ptr(*at) }.to_bytes();
+        if entry.len() > name.len() && entry.starts_with(name) && entry[name.len()] == b'=' {
+            return unsafe { (*at).add(name.len() + 1) };
+        }
+        at = unsafe { at.add(1) };
+    }
+    std::ptr::null()
+}
+
+/// `Slot::run` read the environment (`W2_SLOT_COUNT`) on every pass run: 17,322
+/// `getenv` calls, 10.3 M Ir on memory_expansion, for a debug switch. The reads
+/// of a compile do not grow with the functions it compiles.
+#[test]
+fn getenv_calls_do_not_grow_with_the_functions_compiled() {
+    let function = |name: usize| {
+        format!(
+            "define i32 @f{name}(i32 %n) {{\nb0:\n  br label %h\nh:\n  %i = phi i32 [ 0, %b0 ], [ %j, %h ]\n  %a = phi i32 [ 0, %b0 ], [ %b, %h ]\n  %b = add i32 %a, %i\n  %j = add i32 %i, 1\n  %c = icmp slt i32 %j, %n\n  br i1 %c, label %h, label %x\nx:\n  ret i32 %b\n}}\n"
+        )
+    };
+    let reads = |functions: usize| {
+        let text: String = (0..functions).map(function).collect();
+        let mut module = llrm_analysis::testing::parsed(&text);
+        let applied =
+            Applied { only: Some("decide@1178".to_owned()), options: pipeline::Options::standard(), ..Applied::default() };
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        let before = GETENVS.with(std::cell::Cell::get);
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the pipeline runs");
+        GETENVS.with(std::cell::Cell::get) - before
+    };
+    reads(1); // the first run reads what is read once
+    let (one, eight) = (reads(1), reads(8));
+    assert_eq!(one, eight, "getenv calls grow with the work: {one} for 1 function, {eight} for 8");
+    assert_eq!(eight, 0, "a pass run reads the environment: {eight} calls");
 }

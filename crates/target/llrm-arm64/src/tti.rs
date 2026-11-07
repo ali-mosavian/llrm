@@ -280,6 +280,14 @@ fn intrinsic_prices() -> &'static Prices {
 }
 
 impl Tti for AArch64 {
+    /// `FSQRT` is legal on `f32` and `f64`.
+    fn have_fast_sqrt(
+        &self,
+        ty: llrm_mir::tti::Ty,
+    ) -> bool {
+        matches!(ty, llrm_mir::tti::Ty::Float | llrm_mir::tti::Ty::Double)
+    }
+
     fn name(&self) -> &'static str {
         "AArch64"
     }
@@ -296,6 +304,50 @@ impl Tti for AArch64 {
     /// (w15-arm64-rate-proposal-11-03.md); widened to 30 clean cells by 11-12.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         250_000
+    }
+
+    /// DEVIATE UP1 (arm64): a full unroll at -O2/-O3 must save 250 clocks for
+    /// each byte it adds, the bar's price (score = instructions + 250 per
+    /// byte). Without it matmul -O2 is 1560 B against gcc's 304 for 3x fewer
+    /// instructions. Exit: the per-target clock model (2026-11-20).
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        250_000
+    }
+
+    fn merges_unaligned_stores(&self) -> bool {
+        true
+    }
+
+    /// `AArch64TTIImpl::enableMemCmpExpansion`
+    /// ([L5499](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L5499)).
+    /// llrm's arm64 targets are never `+strict-align`, whose hook returns
+    /// none. The load cap is `getMaxExpandSizeMemcmp`
+    /// ([L1266](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L1266)).
+    fn enable_mem_cmp_expansion(
+        &self,
+        opt_size: bool,
+        is_zero_cmp: bool,
+    ) -> Option<MemCmpExpansionOptions> {
+        let max_num_loads = if opt_size { 4 } else { 8 };
+        Some(MemCmpExpansionOptions {
+            load_sizes: vec![8, 4, 2, 1],
+            max_num_loads,
+            num_loads_per_block: if is_zero_cmp { max_num_loads } else { 1 },
+            allow_overlapping_loads: true,
+            allowed_tail_expansions: vec![3, 5, 6],
+        })
+    }
+
+    /// `AArch64TargetLowering::allowsMisalignedMemoryAccesses`
+    /// ([L3199](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L3199)):
+    /// any scalar access, since the targets are not `+strict-align`.
+    fn allows_misaligned_memory_accesses(
+        &self,
+        _bits: u32,
+        _address_space: u32,
+        _align: u64,
+    ) -> bool {
+        true
     }
 
     /// A `sext`/`zext` of a load is the extending load (`ldrsb`, `ldrh`, ...)
@@ -964,5 +1016,17 @@ impl Lowering for AArch64Lowering {
         bits: u32,
     ) -> u32 {
         bits.max(32)
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.h#L339
+    // Overflow ops for a check alone are cheap here: the base class's answer
+    // with the math taken as used.
+    fn should_form_overflow_op(
+        &self,
+        op: llrm_mir::lowering::OverflowOp,
+        bits: u32,
+        _math_used: bool,
+    ) -> bool {
+        op == llrm_mir::lowering::OverflowOp::UAdd && llrm_mir::lowering::simple_int(bits)
     }
 }

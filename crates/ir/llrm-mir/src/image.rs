@@ -53,6 +53,10 @@ impl Writer<'_> {
                 self.put(out, at, &bits.to_le_bytes()[..bytes]);
                 Ok(())
             }
+            (ConstantKind::Float128(bits), Type::Float(FloatKind::F128)) => {
+                self.put(out, at, &bits.to_le_bytes());
+                Ok(())
+            }
             // The bytes are the memory image of an `[N x i8]` (`c"..."`, a data
             // object's image): copied as they are. Wider elements would need
             // the layout's byte order, and nothing builds that.

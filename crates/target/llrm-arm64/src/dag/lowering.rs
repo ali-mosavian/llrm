@@ -25,8 +25,8 @@
 //! [`LowerSELECT`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L13428).
 
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
-use llrm_codegen::backend::selectiondag::mvt::EVT;
-use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
+use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_dagisel::generated::aarch64::ids::isd as a64;
 
 use crate::expand_imm::mov_imm;
@@ -199,7 +199,7 @@ fn legal_arith_immed(immed: u64) -> bool {
 }
 
 /// `AArch64_AM::isLegalCmpImmed`: also as the `ADDS` of its negation.
-fn legal_cmp_immed(value: i128) -> bool {
+pub(super) fn legal_cmp_immed(value: i128) -> bool {
     legal_arith_immed(value.unsigned_abs().try_into().unwrap_or(u64::MAX))
 }
 
@@ -721,6 +721,16 @@ pub fn lower_brcond(
         } else {
             (cond, CondCode::SetNe)
         };
+    // `LowerBR_CC`'s `setcc([su]{add,sub,mul}o ==|!= 0|1)`: the branch reads the
+    // flags of the arithmetic, on the condition that says overflow (opposite
+    // for the inverted bit).
+    let overflow = bit(dag, tested).unwrap_or(tested);
+    if is_xalu_overflow(dag, overflow)
+        && let Some((_, flags, overflowed)) = xalu_flags(dag, overflow.node)
+    {
+        let ccode = cond_const(dag, if code == CondCode::SetEq { overflowed ^ 1 } else { overflowed });
+        return Some(dag.get_node(ISD::Target(a64::BRCOND), EVT::OTHER, &[chain, dest, ccode, flags]));
+    }
     // `br_cc setne (and|or of compares), 1` (the pin's inversion by `setne
     // -1`): a `CCMP` chain.
     let tree = bit(dag, tested).unwrap_or(tested);
@@ -893,7 +903,6 @@ pub fn fp_imm_legal(
     bits: u128,
     _opt_for_size: bool,
 ) -> bool {
-    use llrm_codegen::backend::selectiondag::mvt::MVT;
     let (value, width) = match vt {
         MVT::F64 => (f64::from_bits(bits as u64), 64),
         MVT::F32 => (f64::from(f32::from_bits(bits as u32)), 32),
@@ -917,6 +926,92 @@ pub fn lower_atomic_load_and(
     let ones = dag.get_constant(u128::MAX, vt);
     let complement = dag.get_node(ISD::Xor, vt, &[ones, rhs]);
     Some(dag.get_atomic_rmw(ISD::AtomicLoadClr, chain, ptr, complement, info))
+}
+
+/// `LowerVAARG` (Apple's list: a pointer to the next 8-byte slot): the list is
+/// loaded, rounded up to the type's alignment when that exceeds a slot,
+/// stepped by the argument's size (an integer takes at least a slot, a float
+/// other than `f64` is an `f64` rounded down), stored back, and the value
+/// loaded through the pointer.
+pub fn lower_vaarg(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    const SLOT: u128 = 8;
+    let vt = dag.value_type(node);
+    let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
+    let align = dag.constant(dag.operand(node, 3)).unwrap_or(0);
+    let info = |mem_vt: EVT, align: u32| MemInfo {
+        mem_vt,
+        align,
+        volatile: false,
+        base: MemBase::Unknown,
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let loaded = dag.get_load(EVT::I64, chain, list, info(EVT::I64, 8));
+    let mut at = SDValue { node: loaded.node, res: 0 };
+    if align > SLOT {
+        let add = dag.get_constant(align - 1, EVT::I64);
+        at = dag.get_node(ISD::Add, EVT::I64, &[at, add]);
+        let mask = dag.get_constant((-(align as i128)) as u128, EVT::I64);
+        at = dag.get_node(ISD::And, EVT::I64, &[at, mask]);
+    }
+    let bytes = u128::from(vt.size_in_bits().div_ceil(8));
+    let narrow_float = vt.is_floating_point() && vt != EVT::Simple(MVT::F64);
+    let size = if narrow_float {
+        SLOT
+    } else if vt.is_integer() {
+        bytes.max(SLOT)
+    } else {
+        bytes
+    };
+    let step = dag.get_constant(size, EVT::I64);
+    let next = dag.get_node(ISD::Add, EVT::I64, &[at, step]);
+    let stored = dag.get_store(SDValue { node: loaded.node, res: 1 }, next, list, info(EVT::I64, 8));
+    if narrow_float {
+        let wide = dag.get_load(EVT::Simple(MVT::F64), stored, at, info(EVT::Simple(MVT::F64), 8));
+        let one = dag.get_constant_with(1, EVT::I64, true, false);
+        let narrow = dag.get_node(ISD::FpRound, vt, &[SDValue { node: wide.node, res: 0 }, one]);
+        return Some(dag.get_node_multi(
+            ISD::MergeValues,
+            &[vt, EVT::OTHER],
+            &[narrow, SDValue { node: wide.node, res: 1 }],
+        ));
+    }
+    Some(dag.get_load(vt, stored, at, info(vt, align.max(1) as u32)))
+}
+
+/// `LowerFunnelShift`: a constant amount is taken mod the width and made an
+/// `FSHR` (`EXTR`); `FSHL` by 0 is its first operand, `FSHR` by 0 its second.
+/// A variable amount is `None`: the legalizer expands it.
+pub fn lower_funnel_shift(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let amount_node = dag.operand(node, 2);
+    let amount = dag.constant(amount_node)?;
+    let vt = dag.value_type(node);
+    let bits = u128::from(vt.size_in_bits());
+    let (x, y) = (dag.operand(node, 0), dag.operand(node, 1));
+    let mut wrapped = amount % bits;
+    if dag.opcode(node) == ISD::FShl {
+        if wrapped == 0 {
+            return Some(x);
+        }
+        wrapped = bits - wrapped;
+    } else {
+        if wrapped == 0 {
+            return Some(y);
+        }
+        if wrapped == amount {
+            return Some(node);
+        }
+    }
+    let shift_vt = dag.value_type(amount_node);
+    let by = dag.get_constant(wrapped, shift_vt);
+    Some(dag.get_node(ISD::FShr, vt, &[x, y, by]))
 }
 
 /// `LowerABS`: `x` or `0 - x` selected by the sign of `SUBS x, 0`.

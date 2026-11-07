@@ -43,6 +43,11 @@ pub fn scratch(text: &str) -> Vec<String> {
     order(text, "@scratch")
 }
 
+/// Whether a `@lanes bytes` line says the file's lanes are the bytes of each root.
+pub fn byte_lanes(text: &str) -> bool {
+    order(text, "@lanes").iter().any(|word| word == "bytes")
+}
+
 /// The 8-bit allocation order a `@bytes al cl dl ah ch dh bl bh` line states
 /// (the GR8 class of X86RegisterInfo.td): the high bytes are in it.
 pub fn bytes(text: &str) -> Vec<String> {
@@ -76,6 +81,20 @@ thread_local! {
 /// does not parse one per block.
 pub fn parsed() -> usize {
     PARSED.with(std::cell::Cell::get)
+}
+
+/// The depth of the `x87` stack and whether the file has `xmm` roots, of the
+/// register file `text`: parsed once per distinct text, not per question (two
+/// parses per function, 10% of a 600-function module's compile).
+pub fn float_facts(text: &str) -> (usize, bool) {
+    static FACTS: std::sync::Mutex<std::collections::BTreeMap<String, (usize, bool)>> =
+        std::sync::Mutex::new(std::collections::BTreeMap::new());
+    if let Some(&found) = FACTS.lock().expect("the facts lock").get(text) {
+        return found;
+    }
+    let facts = parse(text).map_or((0, false), |all| (of_class(&all, "x87").len(), !of_class(&all, "xmm").is_empty()));
+    FACTS.lock().expect("the facts lock").insert(text.to_owned(), facts);
+    facts
 }
 
 pub fn parse(text: &str) -> Result<Vec<Register>, String> {
@@ -236,7 +255,7 @@ pub fn source_with(
     let columns: Vec<String> = (0..WIDTH_COLUMNS).map(|at| widths.get(at).copied().unwrap_or(0).to_string()).collect();
     // Each root at each width: the first register by iced's number.
     code.push_str(&format!(
-        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let bytes: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root.index();\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, bytes, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views }}\n}};\n",
+        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let bytes: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root.index();\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, bytes, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views, byte_lanes: {} }}\n}};\n",
         loads.join(", "),
         scratch.join(", "),
         bytes.join(", "),
@@ -246,7 +265,8 @@ pub fn source_with(
         optional("data_segment")?,
         optional("stack_segment")?,
         optional("code_segment")?,
-        optional("far_segment")?
+        optional("far_segment")?,
+        byte_lanes(text)
     ));
     Ok(code)
 }

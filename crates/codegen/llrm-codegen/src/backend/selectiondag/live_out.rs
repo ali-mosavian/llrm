@@ -60,7 +60,7 @@ pub fn assert_live_out_copies(
 ) {
     for id in dag.node_ids().collect::<Vec<_>>() {
         let copy = SDValue { node: id, res: 0 };
-        if dag.opcode(copy) != ISD::CopyFromReg {
+        if dag.opcode(copy) != ISD::CopyFromReg || dag.direct_copies.contains(&id) {
             continue;
         }
         let NodeData::Register(reg) = dag.node(dag.operand(copy, 1)).data else { continue };

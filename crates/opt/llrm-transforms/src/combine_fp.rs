@@ -33,12 +33,60 @@
 
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::module::{InstId, Operand};
-use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+use llrm_mir::fpclass::FC_NAN;
+use llrm_mir::opcode::{BinaryOp, FloatPredicate, Flags, Opcode};
+use llrm_mir::valuetracking::fp::compute_known_fp_class;
 use llrm_mir::types::{FloatKind, Type};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_muldivrem::simplify_first;
-use crate::combine_shared::simplify_associative_or_commutative;
+use crate::combine_shared::{query, simplify_associative_or_commutative};
+
+/// `visitFCmpInst`'s head, as far as translated: `simplifyFCmpInst`; `fcmp pred
+/// X, X` of an unordered-or-X predicate is `uno X, 0.0` and of an
+/// ordered-and-equal one `ord X, 0.0`; an `ord`/`uno` operand known never NaN
+/// becomes `0.0`, which `simplifyFCmpInst` then decides. DEVIATE 4: the
+/// complexity swap and everything after the `fneg` folds are not translated.
+pub fn visit_fcmp(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    if let Some(found) = simplify_first(c, inst) {
+        return Visit::Replace(found);
+    }
+    let instruction = c.function.instruction(inst).clone();
+    let Opcode::FCmp(pred) = instruction.opcode else { return Visit::None };
+    let (op0, op1) = (instruction.operands[0], instruction.operands[1]);
+    let Some(Type::Float(kind)) = c.function.operand_type(c.context, op0).map(|ty| c.context.types.get(ty).clone()) else {
+        return Visit::None;
+    };
+    let ty = c.function.operand_type(c.context, op0).expect("float operand");
+    let zero = Operand::Constant(c.context.constant(Constant { ty, kind: ConstantKind::float_zero(kind) }));
+    if op0 == op1 {
+        let canonical = match pred {
+            FloatPredicate::Uno | FloatPredicate::Ult | FloatPredicate::Ugt | FloatPredicate::Une => Some(FloatPredicate::Uno),
+            FloatPredicate::Ord | FloatPredicate::Oeq | FloatPredicate::Oge | FloatPredicate::Ole => Some(FloatPredicate::Ord),
+            _ => None,
+        };
+        if let Some(canonical) = canonical {
+            c.function.set_fcmp_predicate(inst, canonical);
+            c.function.set_operand(inst, 1, zero);
+            return Visit::Changed;
+        }
+    }
+    if matches!(pred, FloatPredicate::Ord | FloatPredicate::Uno) {
+        for (index, op) in [op0, op1].into_iter().enumerate() {
+            if op == zero {
+                continue;
+            }
+            if compute_known_fp_class(&query(c, Some(inst)), op, FC_NAN, 0).is_known_never_nan() {
+                c.function.set_operand(inst, index, zero);
+                return Visit::Changed;
+            }
+        }
+    }
+    Visit::None
+}
 
 /// `visitFAdd` and `visitFMul`, as far as translated: `simplify*Inst`, then
 /// `SimplifyAssociativeOrCommutative` (constants to the right; `(X op C1) op
@@ -53,7 +101,18 @@ pub fn visit_fadd_or_fmul(
     if simplify_associative_or_commutative(c, inst) {
         return Visit::Changed;
     }
-    crate::combine_fp_int_casts::fold_fbinop_of_int_casts(c, inst).unwrap_or(Visit::None)
+    if let Some(found) = crate::combine_fp_int_casts::fold_fbinop_of_int_casts(c, inst) {
+        return found;
+    }
+    // `foldBinopWithPhiOperands` and `foldBinOpIntoSelectOrPhi`, as the pin's
+    // `visitFAdd` (InstCombineAddSub.cpp L2133) and `visitFMul`
+    // (InstCombineMulDivRem.cpp L1013) have them after the vector fold.
+    for found in [c.fold_binop_with_phi_operands(inst), c.fold_bin_op_into_select_or_phi(inst)] {
+        if !matches!(found, Visit::None) {
+            return found;
+        }
+    }
+    Visit::None
 }
 
 /// `visitFSub` (InstCombineAddSub.cpp:3322), up to `X - (-Y) --> X + Y`: the
@@ -84,7 +143,18 @@ pub fn visit_fsub(
     if let Some(y) = fneg_operand(c, op1) {
         return c.replace_with_binop(inst, BinaryOp::FAdd, op0, y, instruction.flags);
     }
-    crate::combine_fp_int_casts::fold_fbinop_of_int_casts(c, inst).unwrap_or(Visit::None)
+    if let Some(found) = crate::combine_fp_int_casts::fold_fbinop_of_int_casts(c, inst) {
+        return found;
+    }
+    // `foldBinopWithPhiOperands` and `foldBinOpIntoSelectOrPhi`, as the pin's
+    // `visitFAdd` (InstCombineAddSub.cpp L2133) and `visitFMul`
+    // (InstCombineMulDivRem.cpp L1013) have them after the vector fold.
+    for found in [c.fold_binop_with_phi_operands(inst), c.fold_bin_op_into_select_or_phi(inst)] {
+        if !matches!(found, Visit::None) {
+            return found;
+        }
+    }
+    Visit::None
 }
 
 /// `visitCallInst`'s `Intrinsic::fmuladd`

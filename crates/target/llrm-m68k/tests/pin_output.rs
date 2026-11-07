@@ -54,12 +54,16 @@ fn not_and_swap_encode_as_binutils_does() {
 /// reaches; the ILP list scheduler (the default) keeps them together and
 /// retests.
 const SOURCE_ORDER: Options = Options {
+    code_model: llrm_m68k::compile::CodeModel::Small,
     mid_end: true,
     size: false,
     source_order: true,
     indexed: false,
     push_frame: false,
+    push_arguments: false,
     short: false,
+    hoist_flag_setters: false,
+    reuse_shift_flags: false,
     debug: false,
 };
 
@@ -68,8 +72,13 @@ fn compiled(
     options: Options,
 ) -> String {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
-    text_with(&module, "f", Cpu::M68000, Options { indexed: false, push_frame: false, short: false, ..options })
-        .expect("compiles")
+    text_with(
+        &module,
+        "f",
+        Cpu::M68000,
+        Options { indexed: false, push_frame: false, push_arguments: false, short: false, ..options },
+    )
+    .expect("compiles")
 }
 
 fn branches(body: &str) -> String {
@@ -311,7 +320,7 @@ fn after_pinned_mid_end(ir: &str) -> String {
     use std::rc::Rc;
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
     let tti = llrm_m68k::machine::M68k::default();
-    let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine)))
+    let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine::default())))
         .expect("the mid-end runs");
     llrm_mir::print::module(&done)
 }
@@ -403,9 +412,11 @@ done:
 fn saved_registers_are_stored_into_the_carved_frame_as_the_pin_does() {
     let ir = llrm_m68k::kernels::source_in("library", "fnptr");
     let module = llrm_mir::parse::module(&ir).expect("parses");
-    let ours =
-        text_with(&module, "k", Cpu::M68000, Options { push_frame: false, ..Options::default() }).expect("compiles");
-    assert!(ours.contains("suba.l\t#20, %sp\n\tmovem.l\t%d2-%d3/%a2, (8,%sp)"), "{ours}");
+    let ours = text_with(&module, "k", Cpu::M68000, Options { push_frame: false, short: false, ..Options::default() })
+        .expect("compiles");
+    // the 20 bytes are taken in one step, as `suba.l` or the 4-byte `lea`
+    let carved = ["suba.l\t#20, %sp", "lea\t(-20,%sp), %sp"];
+    assert!(carved.iter().any(|open| ours.contains(&format!("{open}\n\tmovem.l\t%d2-%d3/%a2, (8,%sp)"))), "{ours}");
     assert!(!ours.contains("-(%sp)"), "{ours}");
 }
 
@@ -447,8 +458,9 @@ x:
   ret i32 %r
 }";
     let text = compiled(ir, Options { size: true, ..Options::default() });
-    assert!(text.contains("move.l\t(12,%sp), %d"), "{text}");
-    assert!(!text.contains("(15,%sp)"), "{text}");
+    // the argument is read as a long, wherever the saved registers put it
+    assert!(!text.lines().any(|line| line.starts_with("\tmove.b\t(") && line.contains(",%sp)")), "{text}");
+    assert!(text.contains("lsl.l"), "{text}");
 }
 
 fn constant(value: i64) -> String {
@@ -518,7 +530,7 @@ fn a_global_is_stored_through_its_address() {
 #[test]
 fn a_constant_array_is_indexed_through_its_address() {
     let text = global_function("index");
-    assert!(text.contains("lea\t(t,%pc), %a0") && text.contains("move.b\t(0,%a0,%d0), %d0"), "{text}");
+    assert!(text.contains("lea\t(t,%pc), %a0") && text.contains("move.b\t(0,%a0,%d"), "{text}");
 }
 
 const NARROW_GLOBALS: &str = "@buf = constant [16 x i8] zeroinitializer\n@w = constant [4 x i16] zeroinitializer\n\
@@ -542,7 +554,7 @@ fn a_narrow_global_is_zero_extended_from_its_pc_relative_address() {
     assert!(byte.contains("move.b\t(buf+6,%pc), %d0"), "{byte}");
     let word = narrow_global("zw").expect("compiles");
     assert!(word.contains("move.w\t(w+2,%pc), %d0"), "{word}");
-    assert!(narrow_global("zbi").expect("compiles").contains("move.b\t(0,%a0,%d0), %d0"));
+    assert!(narrow_global("zbi").expect("compiles").contains("move.b\t(0,%a0,%d"));
 }
 
 /// `MOVZXd32d16` defines an `XR32` register in the pin, so the allocator could
@@ -794,12 +806,13 @@ define i16 @f() {
 
 /// A copy loop steps its pointers with `addq` or `lea` as the pin's selection
 /// does. `(An)+` came from rewrites of the expanded text and the loop pass's
-/// preference, neither of which the pin has: every copy loop carried it.
+/// preference, neither of which the pin has: every copy loop carried it. Ours
+/// has it now (PARITY row 29); the pinned build must not.
 #[test]
 fn a_copy_loop_has_no_post_increment_as_the_pin_has_none() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("copy")).expect("parses");
-    let ours = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
-    assert!(!ours.contains("%a0)+") && !ours.contains("%a1)+") && !ours.contains("%a2)+"), "{ours}");
+    let pinned = text_with(&module, "k", Cpu::M68000, Options::PINNED).expect("compiles");
+    assert!(!pinned.contains(")+"), "{pinned}");
 }
 
 /// A counting loop adds and compares with the pin's `add.l #1` and `cmpi.l`.

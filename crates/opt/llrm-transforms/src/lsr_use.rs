@@ -62,7 +62,7 @@
 use llrm_analysis::scev::expr::{Scev, Ty, Type};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::module::{BlockId, InstId, Operand};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::opcode::{CastOp, Opcode};
 use llrm_mir::tti::{Cost as TtiCost, LsrCost, Tti};
 use llrm_mir::valuetracking::pattern::{phi_incoming, result_of};
 use llrm_support::hash::{HashSet, IndexSet};
@@ -219,7 +219,7 @@ impl Use {
         f: &Formula,
         l: BlockId,
     ) -> bool {
-        assert!(f.is_canonical(se, l), "Invalid canonical representation");
+        debug_assert!(f.is_canonical(se, l), "Invalid canonical representation");
         if !self.formulae.is_empty() && self.rigid_formula {
             return false;
         }
@@ -354,7 +354,7 @@ pub fn is_am_completely_folded_formula(
 ) -> bool {
     // Either a canonical formula or a scale is right; a non-canonical one with
     // no scale is not.
-    assert!(f.is_canonical(se, l) || f.scale != 0);
+    debug_assert!(f.is_canonical(se, l) || f.scale != 0);
     is_am_completely_folded_between(
         tti,
         min_offset,
@@ -491,6 +491,8 @@ pub struct Rating<'a, 'b> {
     pub as_written: bool,
     /// Registers held across the loop by values LSR does not manage.
     pub other_register_units: u32,
+    /// The compile is for size.
+    pub size: bool,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1232
@@ -501,6 +503,10 @@ pub struct Cost {
     /// The registers rated scaled so far, with their scale: the target's
     /// `scaled_index_insns` is paid once for each (DEVIATE LU1).
     scaled: Vec<(Scev, i64)>,
+    /// The registers rated so far as part of an address (DEVIATE LU8).
+    addressed: Vec<Scev>,
+    /// Rated for size (set by `rate_formula`).
+    size: bool,
 }
 
 impl Cost {
@@ -535,7 +541,34 @@ impl Cost {
         tti: &dyn Tti,
         other: &Cost,
     ) -> bool {
+        // DEVIATE LU8: where the address forms name fewer registers than the
+        // target has (m16: bx, si, di), a solution that fits them beats one
+        // that does not, whatever the model counts: the registers past the
+        // class are reloaded every trip. Between two that both fit, or both
+        // overflow, the target's order stands.
+        // The reloads an overflow costs are about two instructions a trip: a
+        // fitting solution that spends more than that on other instructions
+        // (the bases computed into non-address registers) does not win.
+        let (mine, theirs) = (self.overflows(tti), other.overflows(tti));
+        if mine != theirs {
+            let (fits, over) = if mine { (&other.c, &self.c) } else { (&self.c, &other.c) };
+            // For size the reloads fold into memory operands and cost bytes
+            // only, while every extra instruction costs its own (DEVIATE LU8).
+            let spare = if self.size || other.size { 0 } else { 2 };
+            if fits.insns <= over.insns.saturating_add(spare) {
+                return theirs;
+            }
+        }
         tti.is_lsr_cost_less(&self.c, &other.c)
+    }
+
+    /// Whether the address registers rated exceed the target's address class.
+    fn overflows(
+        &self,
+        tti: &dyn Tti,
+    ) -> bool {
+        let class = tti.address_registers();
+        class < tti.number_of_gpr_registers() && self.addressed.len() > class as usize && !self.is_loser()
     }
 
     /// `RateFormula`: the cost of `f` for `lu`, `regs` the registers already
@@ -550,10 +583,11 @@ impl Cost {
         lu: &Use,
         mut losers: Option<&mut HashSet<Scev>>,
     ) {
+        self.size = r.size;
         if self.is_loser() {
             return;
         }
-        assert!(f.is_canonical(r.se, r.l), "Cost is accurate only for canonical formula");
+        debug_assert!(f.is_canonical(r.se, r.l), "Cost is accurate only for canonical formula");
         let (prev_add_rec, prev_regs, prev_base_adds) = (self.c.add_rec_cost, self.c.num_regs, self.c.num_base_adds);
         for reg in f.scaled_reg.into_iter().chain(f.base_regs.iter().copied()) {
             if visited.contains(&reg) {
@@ -563,6 +597,18 @@ impl Cost {
             self.rate_primary_register(r, f, reg, regs, lu, losers.as_deref_mut());
             if self.is_loser() {
                 return;
+            }
+        }
+
+        // DEVIATE LU8: tally the registers the address forms hold, for
+        // `overflows`.
+        if lu.kind == Kind::Address {
+            for reg in f.scaled_reg.into_iter().chain(f.base_regs.iter().copied()) {
+                // A constant or a global folds into the displacement; a far
+                // pointer cast from a segment alone has no offset to hold.
+                if !holds_no_offset(r, reg) && !self.addressed.contains(&reg) {
+                    self.addressed.push(reg);
+                }
             }
         }
 
@@ -729,7 +775,12 @@ impl Cost {
             if r.tti.preferred_addressing_mode().has_post_indexed()
                 && (r.tti.is_post_inc_load_legal(ty) || r.tti.is_post_inc_store_legal(ty))
                 && let Some((start, step, _)) = r.se.match_affine_add_rec(reg)
-                && r.se.as_constant(step).is_some()
+                && let Some(step_bytes) = r.se.as_constant(step).map(|c| c.sext_value() as i64)
+                && lu
+                    .access_ty
+                    .mem_ty
+                    .and_then(|t| r.cx.context.types.int_bits(t))
+                    .is_none_or(|bits| r.tti.is_post_inc_step_legal(i64::from(bits / 8), step_bytes))
                 && r.se.as_constant(start).is_none()
                 && r.se.is_loop_invariant(r.cx, start, Some(r.l))
                 && lu.all_fixups_unconditional
@@ -799,16 +850,13 @@ pub fn may_use_post_inc_mode(
     s: Scev,
     l: BlockId,
 ) -> bool {
-    let int_access = lu.access_ty.mem_ty.is_some_and(|ty| cx.context.types.int_bits(ty).is_some());
-    if lu.kind != Kind::Address || !int_access {
-        return false;
-    }
+    let access_bits = lu.access_ty.mem_ty.and_then(|ty| cx.context.types.int_bits(ty));
+    let Some(access_bits) = access_bits.filter(|_| lu.kind == Kind::Address) else { return false };
     let Some((start, step, _)) = se.match_affine_add_rec(s) else { return false };
-    if se.as_constant(step).is_none() {
-        return false;
-    }
+    let Some(step_bytes) = se.as_constant(step).map(|c| c.sext_value() as i64) else { return false };
     let ty = crate::lsr_generate::tti_ty(se.type_of(s));
     (tti.is_post_inc_load_legal(ty) || tti.is_post_inc_store_legal(ty))
+        && tti.is_post_inc_step_legal(i64::from(access_bits / 8), step_bytes)
         && se.as_constant(start).is_none()
         && se.is_loop_invariant(cx, start, Some(l))
 }
@@ -876,6 +924,29 @@ pub fn setup_cost(
             setup_cost(se, cx, tti, lhs.scev, depth - 1) + setup_cost(se, cx, tti, rhs.scev, depth - 1)
         }
         _ => 0,
+    }
+}
+
+/// Whether `s` takes no register in an address: a constant, or an address-space
+/// cast (a far pointer made of a segment, its offset zero).
+fn holds_no_offset(
+    r: &mut Rating,
+    s: Scev,
+) -> bool {
+    // A local is addressed off the frame register, outside the class.
+    if is_stack_slot(r, s) {
+        return true;
+    }
+    match r.se.unknown_value(s) {
+        Some(Operand::Constant(_)) => true,
+        Some(Operand::Value(v)) => {
+            let llrm_mir::module::ValueDef::Instruction(def) = r.cx.function.value(v).def else { return false };
+            matches!(
+                r.cx.function.instruction(def).opcode,
+                Opcode::Cast(CastOp::AddrSpaceCast)
+            )
+        }
+        _ => false,
     }
 }
 

@@ -2783,7 +2783,7 @@ impl crate::passes::Analysis for LviCache {
         analyses: &mut crate::passes::Analyses,
     ) {
         let outer = std::rc::Rc::clone(analyses.outer());
-        let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+        let assumptions = AssumptionCache::of_declared(context, &outer.globals, &outer.metadata, function, outer.assume_declared());
         let mut scratch = context.clone();
         let mut env = Env::new(&mut scratch, &outer.globals, &outer.metadata, function, layout, &assumptions);
         let stale = result.0.borrow_mut().disagreements(&mut env);

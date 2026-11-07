@@ -1,69 +1,62 @@
-reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
-blessed = "2026-10-15"
+reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
+blessed = "2026-11-05"
+corpus = "01195747f5878bf4655af53a360d23f1"
 
 [ow.O2]
-instructions = 294
-memory_operands = 84
-code_bytes = 191
-data_bytes = 0
+instructions = 298
+memory_operands = 88
+code_bytes = 195
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0049
 
 [ow.Os]
-instructions = 289
-memory_operands = 84
-code_bytes = 187
-data_bytes = 0
+instructions = 293
+memory_operands = 88
+code_bytes = 191
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0049
 
 [bcc.O2]
-instructions = 179
-memory_operands = 41
-code_bytes = 213
-data_bytes = 0
+instructions = 184
+memory_operands = 46
+code_bytes = 217
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0032
 
 [bcc.Os]
-instructions = 167
-memory_operands = 48
-code_bytes = 187
-data_bytes = 0
+instructions = 172
+memory_operands = 53
+code_bytes = 191
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0031
 
 [tc.O2]
-instructions = 295
-memory_operands = 112
-code_bytes = 209
-data_bytes = 0
+instructions = 299
+memory_operands = 117
+code_bytes = 212
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0048
 
 [tc.Os]
-instructions = 303
-memory_operands = 132
-code_bytes = 201
-data_bytes = 0
+instructions = 307
+memory_operands = 137
+code_bytes = 204
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0049
 
 [tcpp.O2]
-instructions = 288
-memory_operands = 77
+instructions = 292
+memory_operands = 81
 code_bytes = 204
-data_bytes = 0
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0046
 
 [tcpp.Os]
-instructions = 282
-memory_operands = 77
+instructions = 286
+memory_operands = 81
 code_bytes = 200
-data_bytes = 0
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0045
 
 [bc.O2]
 instructions = 448

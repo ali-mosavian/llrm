@@ -12,7 +12,7 @@ fn replaced(text: &str) -> (bool, String) {
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    crate::lcssa::closed(function).expect("closes");
+    crate::lcssa::closed(context, &crate::testing::layout(), function).expect("closes");
     let changed = super::replaced(context, &layout, function, &mut declared, &outer);
     let after = printed(&module);
     let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[100]];

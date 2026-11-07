@@ -19,7 +19,7 @@ use llrm_dagisel::interp::Outcome;
 use super::SelectionDAG;
 use super::actions::TargetLowering;
 use super::dag_combiner::CombineHooks;
-use super::dag_select::{Refusal, do_instruction_selection_with, legalized_with, remove_assertions};
+use super::dag_select::{Refusal, do_instruction_selection_with, legalized_with};
 use super::dagisel_adapter::{DagisAdapter, PinRegisters};
 use super::legalize_dag;
 use super::schedule::{SchedInfo, Unit, schedule};
@@ -99,17 +99,21 @@ pub fn select_units<T: DagTarget>(
     dag.first_temporary = temporaries.objects();
     target.prepare(dag);
     let phases = target.phases();
-    let legal = legalized_with(dag, phases.tli, phases.lowering, phases.arch);
+    let legal = crate::support::debug::timed("dag legalize", || legalized_with(dag, phases.tli, phases.lowering, phases.arch));
     legal.map_err(|why| target.legalize_failed(why))?;
     for (at, (size, align)) in std::mem::take(&mut dag.temporaries).into_iter().enumerate() {
         let made = temporaries.create_stack_temporary(size, align);
         debug_assert_eq!(made, dag.first_temporary + at as i32);
     }
     target.preprocess(dag, temporaries);
-    remove_assertions(dag);
     let (registers, select) = target.selection();
-    do_instruction_selection_with(dag, registers, |adapter, node| select.select(adapter, node))?;
+    crate::support::debug::timed("dag match", || {
+        do_instruction_selection_with(dag, registers, |adapter, node| select.select(adapter, node))
+    })?;
     target.postprocess(dag);
+    if llrm_support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "selected") {
+        eprintln!("selected:\n{}", dag.dump());
+    }
     let root = dag.get_root();
-    Ok(schedule(dag, root, info))
+    Ok(crate::support::debug::timed("dag schedule", || schedule(dag, root, info)))
 }

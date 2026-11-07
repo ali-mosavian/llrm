@@ -12,8 +12,6 @@
 //! calls) needs none. Reason: frame objects wait for the Z80 machine function.
 //! Exit: M4.
 
-use std::collections::HashMap;
-
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::DagConfig;
@@ -102,9 +100,19 @@ pub struct Selection {
     /// The width in bits of the register of every value that has one: a phi
     /// input is read on an edge laid out before any block that names it (a
     /// loop's back edge).
-    pub widths: HashMap<u32, u32>,
+    /// The bit width of each register a value lives in, by register number; 0
+    /// where nothing is recorded.
+    pub widths: Vec<u32>,
     /// `-g`: the variables the debug info names and where each is (the `.adb`).
     pub variables: Vec<Variable>,
+    /// The function calls a routine that returns twice (`setjmp`).
+    pub returns_twice: bool,
+    /// `internal` or `private` linkage: the label is not exported.
+    pub local: bool,
+    /// The blocks IR `unreachable` ends. The pin emits nothing for it (the
+    /// machine CFG comes from the IR); here a block with no terminator falls
+    /// into the next one, so emission states the end.
+    pub unreachable: llrm_mir::dense::IdSet<BlockId>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -139,10 +147,12 @@ pub fn select_function_with(
     let arch = Z80;
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
     let target = builder_target();
+    let sized = ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name));
+    let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY);
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = llrm_support::hash::HashSet::default();
     for &block in function.layout() {
         if optimize {
             // `SelectAllBasicBlocks`: a phi knows what its incoming values do
@@ -165,11 +175,19 @@ pub fn select_function_with(
         }
         let built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
-        select_built(Some((function, block)), block, built, cpu, optimize, &mut info, &mut selected)?;
+        select_built(
+            Some((function, block)),
+            block,
+            built,
+            cpu,
+            (optimize, sized, long_multiply),
+            &mut info,
+            &mut selected,
+        )?;
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
-    let mut widths: HashMap<u32, u32> = info
+    let mut sized: Vec<(u32, u32)> = info
         .value_regs
         .iter()
         .map(|(value, reg)| (*reg, 8 * layout.alloc_size(&module.context.types, function.value(value).ty) as u32))
@@ -183,11 +201,27 @@ pub fn select_function_with(
         .filter(|(_, parts)| *parts > 1)
         .collect();
     for (reg, parts) in wide {
-        widths.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
+        sized.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
+    }
+    let mut widths = vec![0; sized.iter().map(|(reg, _)| *reg as usize + 1).max().unwrap_or(0)];
+    for (reg, width) in sized {
+        widths[reg as usize] = width;
     }
     let variables =
         variable_sites(module, function, name, &info, selected.first().map_or(&[][..], |b| &b.live_ins[..]));
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables })
+    let returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
+    let mut unreachable = llrm_mir::dense::IdSet::new();
+    for &block in function.layout() {
+        if function.terminator(block).is_some_and(|last| function.instruction(last).opcode == Opcode::Unreachable) {
+            unreachable.insert(block);
+        }
+    }
+    let local =
+        matches!(
+            module.global(id).linkage,
+            llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+        );
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, unreachable })
 }
 
 /// The variables of `function` (after the debug import): parameters in the
@@ -274,14 +308,15 @@ fn select_built(
     block: BlockId,
     mut built: BlockDag,
     cpu: Cpu,
-    optimize: bool,
+    (optimize, sized, long_multiply): (bool, bool, bool),
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
     // the scratch slots the legalizers ask for (a long long result's memory)
     // are frame objects numbered after the function's
     built.dag.first_temporary = info.next_stack_object();
-    let units = select_block(&mut built.dag, cpu, info, optimize).map_err(|why| format!("{why:?}"))?;
+    let units =
+        select_block(&mut built.dag, cpu, info, optimize, (sized, long_multiply)).map_err(|why| format!("{why:?}"))?;
     for (size, align) in std::mem::take(&mut built.dag.temporaries) {
         info.new_stack_object(size, align);
     }
@@ -319,7 +354,7 @@ fn select_built(
     }
     selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
     for (extra, made) in built.extra {
-        select_built(None, extra, made, cpu, optimize, info, selected)?;
+        select_built(None, extra, made, cpu, (optimize, sized, long_multiply), info, selected)?;
     }
     Ok(())
 }

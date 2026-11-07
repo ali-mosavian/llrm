@@ -51,6 +51,7 @@ use std::sync::Arc;
 use llrm_dagisel::instr::{self, InstrDesc, operand_type};
 use llrm_dagisel::x86_addr::AddrMode;
 use llrm_dagisel::x86_classes::{Role, class_tag};
+use llrm_lir::registers::RegId;
 use llrm_support::hash::HashMap;
 
 use super::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
@@ -145,6 +146,15 @@ pub trait Conventions {
         None
     }
 
+    /// What a call of `callee` may read and write, as its attributes state it
+    /// (`llrm_mir::memory::of`); any memory where they are not known.
+    fn effects(
+        &self,
+        _callee: Option<&Callee>,
+    ) -> llrm_mir::memory::Effects {
+        llrm_mir::memory::Effects::ANY
+    }
+
     /// The registers a call of `callee` keeps only the pushed part of (a
     /// 16-bit push of a 32-bit register): their upper half is destroyed.
     fn clobbers_high(
@@ -187,8 +197,32 @@ pub trait FrameMap {
     }
 }
 
+/// What the x87 forms cost, in clocks per form and in thousandths of a clock
+/// per code byte: the prices [`Emitter::sharing_pays`] weighs a pool constant
+/// loaded once against a memory operand at each reader.
+#[derive(Clone, Copy, Debug)]
+pub struct X87Prices {
+    pub load: i64,
+    pub add: i64,
+    pub add_m: i64,
+    pub mul: i64,
+    pub mul_m: i64,
+    pub div: i64,
+    pub div_m: i64,
+    pub milliclocks_per_byte: i64,
+    /// The bytes of `fld m` / `fadd m` on a pool cell (6 flat, 4 real mode);
+    /// the register forms take 2.
+    pub memory_bytes: i64,
+}
+
 /// The pin's machine opcode names, by number.
 pub struct EmitContext<'a> {
+    /// DEVIATE X87-POOL-SHARE (owner x87, exit 2026-11-20): the prices that
+    /// decide whether a pool constant read several times is loaded once (the
+    /// pin: `IsProfitableToFold` needs `hasOneUse`) or read as a memory
+    /// operand at each reader, where that is cheaper (i486: `fmul m` 14 clocks
+    /// against `fmul st` 16). None: the pin's rule.
+    pub x87_prices: Option<X87Prices>,
     /// The registers a call destroys (EAX, ECX, EDX at m32).
     pub caller_saved: &'a std::collections::BTreeSet<llrm_lir::registers::RegId>,
     /// The stack pointer: a `CopyFromReg` of it is the base `SP`, not a value.
@@ -211,6 +245,10 @@ pub struct EmitContext<'a> {
     /// The multiple a call's argument area is rounded to, so a call finds the
     /// stack aligned (`aligned_calls`); 1 where calls need none.
     pub call_alignment: i64,
+    /// The function's convention changes the stack pointer only in the
+    /// prologue and epilogue: its calls' areas are frame pseudos, reserved
+    /// there, at any width.
+    pub reserved_calls: bool,
     pub map: &'a OpcodeMap,
     pub names: &'a HashMap<u16, &'a str>,
     /// The jump tables of the function, by `JumpTable` index.
@@ -336,11 +374,21 @@ pub struct EmitState {
     /// The bytes of the float type (4, 8 or 10) of each LIR value that is a DAG
     /// value of a float type: `LirBody::float_bytes`, which a spill rounds to.
     pub float_bytes: std::collections::BTreeMap<u32, u32>,
+    /// Whether every value of a `float_bytes` number is exactly an f32 the
+    /// program holds: a load of one or a constant. A spill of such a value as
+    /// a dword loses no bit, wherever the language keeps wider temporaries.
+    pub float_exact: std::collections::BTreeMap<u32, bool>,
 }
 
 impl Default for EmitState {
     fn default() -> EmitState {
-        EmitState { vregs: HashMap::default(), next_value: 1, at: 1, float_bytes: Default::default() }
+        EmitState {
+            vregs: HashMap::default(),
+            next_value: 1,
+            at: 1,
+            float_bytes: Default::default(),
+            float_exact: Default::default(),
+        }
     }
 }
 
@@ -499,6 +547,15 @@ pub fn emit_in(
         };
         let widest = emitter.state.float_bytes.entry(*number).or_insert(0);
         *widest = bytes.max(*widest);
+        let node = dag.node(*value);
+        // `flds`, `fldz` and `fld1`: the f32 the program holds.
+        let exact = bytes == 4
+            && matches!(
+                node.opcode,
+                ISD::Machine(op) if emitter.ctx.names.get(&(op as u16)).is_some_and(|name| matches!(*name, "LD_Fp32m" | "LD_Fp032" | "LD_Fp132"))
+            );
+        let all = emitter.state.float_exact.entry(*number).or_insert(true);
+        *all &= exact;
     }
     let mut blocks = emitter.blocks;
     if ctx.address_mode == AddrMode::Real16 {
@@ -1136,7 +1193,13 @@ impl Emitter<'_, '_> {
                     |what| matches!(what.op, Operation::Move | Operation::FloatLoad)
                         && matches!(what.sources.as_slice(), [Loc::Mem(_)]),
                 );
-            if plain && !one.volatile() {
+            // A folded load: one memory source read into registers.
+            let folded = one.what.as_ref().is_some_and(|what| {
+                what.dests.iter().all(|dest| matches!(dest, Loc::Held(_)))
+                    && !what.dests.is_empty()
+                    && what.sources.iter().filter(|source| matches!(source, Loc::Mem(_))).count() == 1
+            });
+            if (plain || folded) && !one.volatile() {
                 *one = Arc::new(Insn { invariant: true, ..(**one).clone() });
             }
         }
@@ -1169,6 +1232,13 @@ impl Emitter<'_, '_> {
                     self.ss_copies.insert(n);
                 }
                 self.es_is_ss = self.ss_copies.contains(&n);
+                // An inline block that takes ES as an input (a backward
+                // string move) requires it there: it runs with the selector
+                // it asked for, not what a far access left in ES.
+                if self.feeds_call(n) {
+                    let held = self.made_again_for_fixed_use(selector);
+                    self.arguments.push((held, llrm_lir::registers::RegId::ES));
+                }
                 Ok(())
             }
             ISD::CopyToReg
@@ -1708,6 +1778,11 @@ impl Emitter<'_, '_> {
         let op = Operation::named(&form.operation)
             .ok_or_else(|| EmitError::Unsupported(format!("{name}: operation {}", form.operation)))?;
         self.push(op, &form.name, dests, sources);
+        if name.split('|').next().is_some_and(|pin| pin.ends_with("_DB"))
+            && let Some(last) = self.blocks.last_mut().and_then(|block| block.insns.last_mut())
+        {
+            *last = Arc::new(Insn { disjoint: true, ..(**last).clone() });
+        }
         Ok(())
     }
 
@@ -1846,6 +1921,49 @@ impl Emitter<'_, '_> {
         Ok(())
     }
 
+    /// The registers of `GR32_TC` / `GR64_TC` the arguments do not take, that
+    /// a caller-saved register is: the epilogue restores every other one
+    /// before the jump.
+    fn tail_call_registers(
+        &self,
+        requires: &[(Held, RegId)],
+    ) -> Result<Vec<RegId>, EmitError> {
+        let registers = self.ctx.registers;
+        let mut free: Vec<RegId> = Vec::new();
+        for (id, one) in registers.entries() {
+            if one.classes & llrm_lir::registers::class::TAIL_CALL != 0
+                && self.ctx.caller_saved.contains(&registers.root(id))
+                && requires.iter().all(|(_, taken)| registers.root(*taken) != registers.root(id))
+                && free.iter().all(|kept| registers.root(*kept) != registers.root(id))
+            {
+                free.push(id);
+            }
+        }
+        if free.is_empty() {
+            return Err(EmitError::Unsupported("a sibling call with no free register".to_owned()));
+        }
+        Ok(free)
+    }
+
+    /// The jump of a sibling call, through `target`, with `requires` pinned.
+    fn push_tail_jump(
+        &mut self,
+        requires: Vec<(Held, RegId)>,
+        target: Loc,
+    ) {
+        let at = self.next_address();
+        let mut uses: Vec<u32> = requires.iter().map(|(held, _)| held.value).collect();
+        uses.dedup();
+        let what = Semantics {
+            indirect: true,
+            name: Some("jmp".into()),
+            sources: vec![target],
+            ..Semantics::new(Operation::Return)
+        };
+        let insn = Insn { requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+        self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
+    }
+
     fn next_address(&mut self) -> i64 {
         self.state.next_address()
     }
@@ -1911,12 +2029,19 @@ impl Emitter<'_, '_> {
             None => {
                 let mut clobbers =
                     self.ctx.conventions.clobbers(callee).unwrap_or_else(|| self.ctx.caller_saved.clone());
-                clobbers.extend(self.arguments.iter().map(|(_, register)| *register));
+                // An inline block names what it writes: an input it does not
+                // list (ES for a string move) survives it.
+                if !matches!(
+                    callee,
+                    Some(Callee::Named(name)) if llrm_mir::intrinsics::asm(name).is_some()
+                ) {
+                    clobbers.extend(self.arguments.iter().map(|(_, register)| *register));
+                }
                 clobbers
             }
         };
         let memory = Arc::new(crate::model::lir::CallMemory {
-            effects: llrm_mir::memory::Effects::ANY,
+            effects: self.ctx.conventions.effects(callee),
             private: Vec::new(),
             // A callee that pops its own arguments lists SP among what it
             // disturbs; the pushes and the call account for that, and a
@@ -1928,6 +2053,10 @@ impl Emitter<'_, '_> {
                 .into_iter()
                 .filter(|register| *register != self.ctx.stack_pointer)
                 .collect(),
+            block: matches!(
+                callee,
+                Some(Callee::Named(name)) if llrm_mir::intrinsics::asm(name).is_some()
+            ),
         });
         let mut uses = _read(&what);
         let requires = std::mem::take(&mut self.arguments);
@@ -2476,12 +2605,17 @@ impl Emitter<'_, '_> {
                 }
                 // The area is a multiple of the call alignment; the callee pops
                 // `popped` of it, the caller the rest.
-                let bytes = (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment;
+                let bytes = if self.ctx.reserved_calls {
+                    bytes
+                } else {
+                    (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment
+                };
                 // Flat 32-bit: the pin's pseudos, which `callframe.rs` turns
                 // into pushes or `sub`/`add` (DEVIATE CF4).
-                if self.ctx.address_mode == AddrMode::Flat32 {
+                if self.ctx.address_mode == AddrMode::Flat32 || self.ctx.reserved_calls {
                     if bytes != 0 {
-                        let imm = |value: i64| Loc::Imm(Imm { value, width: 4, address: None });
+                        let width = if self.ctx.address_mode == AddrMode::Flat64 { 8 } else { 4 };
+                        let imm = |value: i64| Loc::Imm(Imm { value, width, address: None });
                         let (pseudo, sources) = if name.starts_with("ADJCALLSTACKDOWN") {
                             ("call_frame_setup", vec![imm(bytes), imm(0), imm(0)])
                         } else {
@@ -2534,28 +2668,34 @@ impl Emitter<'_, '_> {
                     return Err(EmitError::Unsupported("a sibling call through a non-register".to_owned()));
                 };
                 let mut requires = std::mem::take(&mut self.arguments);
-                let registers = self.ctx.registers;
-                let free = registers
-                    .entries()
-                    .filter(|(_, one)| one.classes & llrm_lir::registers::class::TAIL_CALL != 0)
-                    .map(|(id, _)| id)
-                    .find(|one| {
-                        self.ctx.caller_saved.contains(&registers.root(*one))
-                            && requires.iter().all(|(_, taken)| registers.root(*taken) != registers.root(*one))
-                    })
-                    .ok_or_else(|| EmitError::Unsupported("a sibling call with no free register".to_owned()))?;
-                requires.push((callee, free));
-                let at = self.next_address();
-                let mut uses: Vec<u32> = requires.iter().map(|(held, _)| held.value).collect();
-                uses.dedup();
-                let what = Semantics {
-                    indirect: true,
-                    name: Some("jmp".into()),
-                    sources: vec![Loc::Held(callee)],
-                    ..Semantics::new(Operation::Return)
-                };
-                let insn = Insn { requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
-                self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
+                let free = self.tail_call_registers(&requires)?;
+                requires.push((callee, free[0]));
+                self.push_tail_jump(requires, Loc::Held(callee));
+                return Ok(Some(()));
+            }
+            // An indirect sibling call through a cell of memory (the pin's
+            // `X86tcret (load addr)`): the registers the cell is addressed by
+            // are pinned as the address of `TCRETURNri` is. A cell with more
+            // registers than are free is loaded into one first, which is
+            // `TCRETURNri` (a call is never refused for it).
+            "TCRETURNmi" | "TCRETURNmi64" => {
+                let bytes = if name == "TCRETURNmi64" { 8 } else { 4 };
+                let group =
+                    node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short sibling call".to_owned()))?;
+                let cell = self.cell(group, bytes)?;
+                let mut requires = std::mem::take(&mut self.arguments);
+                let free = self.tail_call_registers(&requires)?;
+                let mut addressed: Vec<Held> = cell.base.into_iter().chain(cell.index).collect();
+                addressed.dedup_by_key(|held| held.value);
+                if addressed.len() <= free.len() {
+                    requires.extend(addressed.into_iter().zip(free.iter().copied()));
+                    self.push_tail_jump(requires, Loc::Mem(cell));
+                } else {
+                    let target = self.fresh(bytes);
+                    self.push(Operation::Move, "mov", vec![Loc::Held(target)], vec![Loc::Mem(cell)]);
+                    requires.push((target, free[0]));
+                    self.push_tail_jump(requires, Loc::Held(target));
+                }
                 return Ok(Some(()));
             }
             "CALLpcrel32" | "CALL64pcrel32" => {
@@ -2917,6 +3057,15 @@ impl Emitter<'_, '_> {
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 return Ok(Some(()));
             }
+            // `llvm.trap`: the `TRAP` node the intrinsic made.
+            "INT3" => {
+                self.push(Operation::Nothing, "int3", Vec::new(), Vec::new());
+                return Ok(Some(()));
+            }
+            "TRAP" => {
+                self.push(Operation::Nothing, "ud2", Vec::new(), Vec::new());
+                return Ok(Some(()));
+            }
             "SAHF" => {
                 if let Some((left, right)) = self.pending_fcom.remove(&n) {
                     self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
@@ -3169,6 +3318,23 @@ impl Emitter<'_, '_> {
             "MOV32r_1" => Some(-1),
             _ => None,
         };
+        // `MOV32ri64` of a symbol (`selectMOV64Imm32`, static code): a dword
+        // load that zero-extends, `mov r32, sym` (5 bytes, R_X86_64_32) where
+        // the RIP form `lea r64, [rip+sym]` is 7.
+        if name == "MOV32ri64"
+            && let Some(&source) = node.ops.first()
+            && matches!(
+                self.dag.node(source).data,
+                NodeData::Global { .. } | NodeData::JumpTable(_) | NodeData::PoolIndex(..)
+            )
+            && let Ok(Loc::Imm(imm)) = self.operand(source)
+            && imm.address.is_some()
+        {
+            let held = self.result_register(SDValue { node: n, res: 0 }, width);
+            self.values.insert(SDValue { node: n, res: 0 }, held.value);
+            self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(Imm { width: 4, ..imm })]);
+            return Ok(Some(()));
+        }
         if let Some(value) = constant {
             let held = self.result_register(SDValue { node: n, res: 0 }, width);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);
@@ -3999,6 +4165,43 @@ impl Emitter<'_, '_> {
         }
     }
 
+    /// Whether one load of the pool constant `value` beats a memory operand at
+    /// each of its readers (DEVIATE X87-POOL-SHARE, see [`EmitContext`]): the
+    /// load and the register forms against the memory forms, clocks plus
+    /// bytes at the target's rate. A size build, or no prices: shared (fewer
+    /// bytes from two readers on).
+    fn sharing_pays(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        let Some(p) = self.ctx.x87_prices else { return true };
+        if self.ctx.opt_size {
+            return true;
+        }
+        let rate = p.milliclocks_per_byte;
+        let (mut fold, mut shared) = (0i64, p.load * 1000 + p.memory_bytes * rate);
+        for user in self.dag.users(value) {
+            let reads =
+                self.dag.node(SDValue { node: user, res: 0 }).ops.iter().filter(|op| **op == value).count() as i64;
+            let name = match self.dag.opcode(SDValue { node: user, res: 0 }) {
+                ISD::Machine(op) => self.ctx.names.get(&(op as u16)).copied().unwrap_or(""),
+                _ => "",
+            };
+            let (register, memory) = if name.contains("MUL") {
+                (p.mul, p.mul_m)
+            } else if name.contains("DIV") {
+                (p.div, p.div_m)
+            } else {
+                (p.add, p.add_m)
+            };
+            fold += reads * (memory * 1000 + p.memory_bytes * rate);
+            shared += reads * (register * 1000 + 2 * rate);
+        }
+        // The tables hold whole clocks: a difference under one is rounding,
+        // and the old shape (a memory operand at each reader) stays.
+        shared + 1000 <= fold
+    }
+
     fn operand(
         &mut self,
         value: SDValue,
@@ -4008,10 +4211,15 @@ impl Emitter<'_, '_> {
             return Ok(Loc::Imm(Imm { value: sign_extend(bits, w * 8), width: w, address: None }));
         }
         if let Some((mnemonic, cell)) = self.lazy.get(&value).cloned() {
-            // DEVIATE SD234: the pin loads `LD_F1` once for all its readers; a
-            // call or block end is the only place the stack cannot hold it
+            // DEVIATE SD234: the pin loads `LD_F1` and a multi-use pool
+            // constant once for all its readers; a call or block
+            // end is the only place the stack cannot hold it
             let at = (self.stack_breaks, self.blocks.len());
-            let constant = cell.is_none();
+            // A pool constant with one reader is loaded there, for the memory
+            // operand it folds into; with several it is one load, as the pin
+            // keeps it (`IsProfitableToFold` needs `hasOneUse`), unless the
+            // CPU's prices make a memory operand at each reader cheaper.
+            let constant = cell.is_none() || (!self.dag.has_one_use(value.node) && self.sharing_pays(value));
             if constant {
                 if let Some(&(held, breaks, blocks)) = self.loaded.get(&value) {
                     if (breaks, blocks) == at {
@@ -4025,8 +4233,11 @@ impl Emitter<'_, '_> {
             // A constant-pool entry is memory nothing writes
             // (`PseudoSourceValue::isConstant`: the pin's
             // `isDereferenceableInvariantLoad`): LICM may carry it (DEVIATE
-            // X1).
-            if pooled {
+            // X1). Not the loads the CPU's prices keep one per reader: the
+            // MachineCSE of invariant loads would make them one again and
+            // FloatFold could not fold them (x87_pool_per_use_486.c, red
+            // since #7592).
+            if pooled && (constant || self.dag.has_one_use(value.node)) {
                 self.mark_invariant_loads(before);
             }
             if constant {

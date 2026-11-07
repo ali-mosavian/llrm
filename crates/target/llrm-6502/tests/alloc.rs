@@ -2373,6 +2373,66 @@ fn a_reload_across_a_carry_op_or_another_cells_store_goes() {
     }
 }
 
+/// `lda rc5; sta g; lda rc5; sta h` loaded the cell twice (x16 fin: eleven
+/// zero stores, each `lda rc2; sta g`): a store to a global changes neither the
+/// register nor the cell. A zero-page indexed store, a store through a pointer,
+/// a write to the cell, a label and a branch on the flags are kept.
+#[test]
+fn a_load_repeated_across_a_store_to_a_global_goes() {
+    use llrm_6502::peephole::drop_reloads;
+    assert_eq!(
+        pass(drop_reloads, "  lda rc5\n  sta g\n  lda rc5\n  sta h\n  rts\n"),
+        "  lda rc5\n  sta g\n  sta h\n  rts\n"
+    );
+    assert_eq!(
+        pass(drop_reloads, "  lda rc5\n  sta g,x\n  lda rc5\n  adc rc6\n  rts\n"),
+        "  lda rc5\n  sta g,x\n  adc rc6\n  rts\n"
+    );
+    for kept in [
+        "  lda rc5\n  sta rc6,y\n  lda rc5\n  adc rc6\n",
+        "  lda rc5\n  sta (rc2),y\n  lda rc5\n  adc rc6\n",
+        "  lda rc5\n  inc rc5\n  lda rc5\n  adc rc6\n",
+        "  lda rc5\nl:\n  lda rc5\n  adc rc6\n",
+        "  lda rc5\n  sta g\n  lda rc5\n  beq l\n",
+    ] {
+        assert_eq!(pass(drop_reloads, kept), kept);
+    }
+}
+
+/// `lda #0; sta rc8` then `jsr f; lda rc8; sta g; lda cf; cmp rc8; beq` kept
+/// two loads of the zero in `rc8` and a compare against it, 6 bytes and 12
+/// clocks more than `lda #0`/`cmp #0` that `drop_zero_compares` then removes.
+/// A cell stored an immediate reads as that immediate until it is written
+/// another way, a label, an unlisted instruction, or a call that does not keep
+/// it (`rc2`..`rc7`; `rc8`..`rc15` survive).
+#[test]
+fn a_cell_stored_an_immediate_reads_as_the_immediate() {
+    use llrm_6502::peephole::fold_known_cells;
+    assert_eq!(
+        pass(fold_known_cells, "  lda #0\n  sta rc8\n  jsr f\n  lda rc8\n  cmp rc8\n  rts\n"),
+        "  lda #0\n  sta rc8\n  jsr f\n  lda #0\n  cmp #0\n  rts\n"
+    );
+    assert_eq!(
+        pass(fold_known_cells, "  ldx #3\n  stx rc9\n  txa\n  clc\n  adc rc9\n  sta g\n  ldy rc9\n  rts\n"),
+        "  ldx #3\n  stx rc9\n  txa\n  clc\n  adc #3\n  sta g\n  ldy #3\n  rts\n"
+    );
+    for kept in [
+        // a call does not keep rc2
+        "  lda #0\n  sta rc2\n  jsr f\n  lda rc2\n  rts\n",
+        // written another way
+        "  lda #0\n  sta rc8\n  inc rc8\n  lda rc8\n  rts\n",
+        "  lda #0\n  sta rc8\n  sta rc8,y\n  lda rc8\n  rts\n",
+        "  lda #0\n  sta rc8\n  sta (rc2),y\n  lda rc8\n  rts\n",
+        "  lda #0\n  sta rc8\n  lda g\n  sta rc8\n  lda rc8\n  rts\n",
+        // a label brings other paths
+        "  lda #0\n  sta rc8\nl:\n  lda rc8\n  rts\n",
+        // the shared restore rewrites the cell
+        "  lda #0\n  sta rc8\n  jsr __crest\n  lda rc8\n  rts\n",
+    ] {
+        assert_eq!(pass(fold_known_cells, kept), kept);
+    }
+}
+
 /// `cmp #0` with a label between it and its branch (`lz4`, 4 sites): a path
 /// that jumps to the label brings its own flags, and this path's come from `a`.
 /// A label before the compare joins paths whose flags differ.
@@ -2841,7 +2901,8 @@ done:
 fn a_hot_count_takes_x_from_a_count_held_for_later() {
     let text = compile(TWO_COPIES, "two");
     let first = text.split("two_b2:").nth(1).and_then(|rest| rest.split("two_b1:").next()).expect("loop");
-    assert!(first.contains("  tax\n"), "the first loop's count is not in x:\n{text}");
+    // the count's high byte steps in x (`dex` on a borrow, once `adc #255; tax`)
+    assert!(first.contains("  dex\n"), "the first loop's count is not in x:\n{text}");
 }
 
 /// A byte stored before it is tested against zero is still the byte in `a`,
@@ -2944,5 +3005,281 @@ fn every_block_has_a_label_whatever_order_the_folding_laid_its_new_ones() {
     let all = labels_with_new_blocks(&labels, &function);
     for block in &function.blocks {
         assert!(!all[block.id as usize].is_empty(), "block {} has no label: {all:?}", block.id);
+    }
+}
+
+/// `lda #0; sta rc5; lda rc5; sta rc6; jmp` (x16basic-c mathlib): the reload
+/// stayed because the scan for who reads its flags stopped at the jump's target.
+#[test]
+fn a_reload_before_a_jump_goes() {
+    use llrm_6502::peephole::drop_reloads;
+    assert_eq!(
+        pass(drop_reloads, "  sta rc5\n  lda rc5\n  sta rc6\n  jmp L\n"),
+        "  sta rc5\n  sta rc6\n  jmp L\n"
+    );
+}
+
+/// x16basic-c `fp_fin`: a zero word live across a call took `rc8`/`rc9`, for a
+/// `pha`/`pla` pair each, instead of being made again at its three reads. A
+/// remade literal has no store, so its definition is not part of the spill's
+/// cost.
+#[test]
+fn a_zero_across_a_call_is_made_again_not_kept_in_a_saved_cell() {
+    let ir = "declare i16 @chrget(i16)\n@a = external global i16\n@b = external global i16\n\
+              define i8 @f() {\n  %c = call i16 @chrget(i16 0)\n  store i16 0, ptr @a\n  store i16 0, ptr @b\n  %t = trunc i16 %c to i8\n  ret i8 %t\n}";
+    let text = compile_at(ir, "f", 16, Tuning::SIZE);
+    assert!(!text.contains("pha"), "{text}");
+}
+
+/// x16basic-c `strs.c` -O2 (`fn_chrd`) did not compile: a word used as a
+/// pointer has its high byte stored elsewhere. The byte was read as a cell
+/// nothing defined, and the coalescer panicked ("a unique value").
+#[test]
+fn the_high_byte_of_a_pointer_word_is_read_from_its_pair() {
+    let ir = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/pointer_high_byte.ll")).unwrap();
+    let text = compile_at(&ir, "f", 16, Tuning::SPEED);
+    assert!(text.contains("sta facmoh"), "{text}");
+    assert!(text.contains("sta (rc"), "{text}");
+}
+
+/// A pointer cell lives in its pair, so a plain byte written to its high half
+/// never reached the pointer. The builder took the write and went on (the
+/// wrong address, no message); it now refuses and names the cell.
+#[test]
+fn a_byte_written_to_a_pointer_cells_high_half_is_refused() {
+    use llrm_6502::alloc::build;
+    use llrm_6502::dagisel::generated::ids::opcode as op;
+    use llrm_6502::emit::{MInst, Operand};
+    use llrm_6502::select::Item;
+    let items = vec![
+        Item::Inst(MInst::new(op::LDI8, vec![Operand::reg("w_p"), Operand::Imm(7)])),
+        Item::Inst(MInst::new(op::LDI8, vec![Operand::reg("w_p+1"), Operand::Imm(5)])),
+        Item::Inst(MInst::new(op::LDI8, vec![Operand::reg("v_a"), Operand::Imm(1)])),
+        Item::Inst(MInst::new(op::STP8, vec![Operand::reg("v_a"), Operand::reg("w_p"), Operand::Imm(0)])),
+    ];
+    let refused = build("f", &items).err().expect("the write is refused");
+    assert!(refused.0.contains("w_p+1"), "{}", refused.0);
+}
+
+/// `ldy #0; pha; lda #0; sta rc8; pla`: a zero made into a cell while `a` is
+/// live, with `y` already holding it (tests/run/c os_files, memory_expansion
+/// -Os: 30 of these in one function, 4 bytes where `sty rc8` is 2).
+#[test]
+fn a_literal_made_into_a_cell_is_stored_from_the_index_register_that_holds_it() {
+    use llrm_6502::peephole::drop_known_loads;
+    assert_eq!(
+        pass(drop_known_loads, "  ldy #0\n  pha\n  lda #0\n  sta rc8\n  pla\n  lda rc8\n  rts\n"),
+        "  ldy #0\n  sty rc8\n  lda rc8\n  rts\n"
+    );
+    let other = "  ldy #1\n  pha\n  lda #0\n  sta rc8\n  pla\n  lda rc8\n  rts\n";
+    assert_eq!(pass(drop_known_loads, other), other, "y holds another value");
+    let read = "  ldy #0\n  pha\n  lda #0\n  sta rc8\n  pla\n  beq l\n  rts\n";
+    assert_eq!(pass(drop_known_loads, read), read, "the branch reads the flags pla set");
+}
+
+/// A pointer's halves read for a word compare: `ldy rc7; lda rc6; cmp rc2; bne l; tya; cmp rc3`.
+#[test]
+fn a_high_half_loaded_into_y_and_moved_to_a_is_loaded_into_a() {
+    use llrm_6502::peephole::load_straight_into_a;
+    assert_eq!(
+        pass(
+            load_straight_into_a,
+            "  ldy rc7\n  lda rc6\n  cmp rc2\n  bne l\n  tya\n  cmp rc3\nl:\n  bne top\n  ldy #0\n  rts\ntop:\n  ldy #0\n  rts\n"
+        ),
+        "  lda rc6\n  cmp rc2\n  bne l\n  lda rc7\n  cmp rc3\nl:\n  bne top\n  ldy #0\n  rts\ntop:\n  ldy #0\n  rts\n"
+    );
+}
+
+/// `adc #3; tax; lda rc1; adc #0; tay; stx rc6; sty rc7` (a frame address, x16
+/// crunch): the sums are in `a` when transferred, so they are stored there.
+/// Kept: the register read between, the cell touched between, the register
+/// live after, a label between.
+#[test]
+fn a_byte_transferred_to_an_index_register_to_be_stored_is_stored_from_a() {
+    use llrm_6502::peephole::store_before_transfer;
+    assert_eq!(
+        pass(
+            store_before_transfer,
+            "  clc\n  lda rc0\n  adc #3\n  tax\n  lda rc1\n  adc #0\n  tay\n  stx rc6\n  sty rc7\n  ldy #0\n  sta (rc6),y\n  ldx #0\n  rts\n"
+        ),
+        "  clc\n  lda rc0\n  adc #3\n  sta rc6\n  lda rc1\n  adc #0\n  sta rc7\n  ldy #0\n  sta (rc6),y\n  ldx #0\n  rts\n"
+    );
+    for kept in [
+        // the register is read between
+        "  lda rc0\n  tax\n  lda rc1\n  sta rc5,x\n  stx rc6\n  ldx #0\n  rts\n",
+        // the cell is read between
+        "  lda rc0\n  tax\n  lda rc6\n  stx rc6\n  ldx #0\n  rts\n",
+        // the register is live after
+        "  lda rc0\n  tax\n  lda rc1\n  stx rc6\n  txa\n  rts\n",
+        // a label between
+        "  lda rc0\n  tax\nl:\n  lda rc1\n  stx rc6\n  ldx #0\n  rts\n",
+    ] {
+        assert_eq!(pass(store_before_transfer, kept), kept);
+    }
+}
+
+/// `ldx rc17; ...; txa; ...; jsr walk`: the call writes `x` (the `mos` result
+/// register) and reads none, so the load into `x` is dead after the transfer.
+/// With the later `ldx rc10` gone (a compare moved above its step) the fold
+/// was lost: phi_slot_unknown_arm kept `ldx rc17; txa` for `lda rc17`, +2
+/// clocks a trip, +4384 clocks.
+#[test]
+fn a_load_into_x_is_dead_before_a_call_that_does_not_take_x() {
+    use llrm_6502::peephole::load_straight_into_a;
+    let code = |callee: &str| {
+        format!(
+            "  ldx rc17\n  lda rc16\n  clc\n  adc rc7\n  sta rc18\n  txa\n  adc rc19\n  sta rc19\n  jsr {callee}\n  stx rc3\n  rts\n"
+        )
+    };
+    assert_eq!(
+        pass(load_straight_into_a, &code("walk")),
+        "  lda rc16\n  clc\n  adc rc7\n  sta rc18\n  lda rc17\n  adc rc19\n  sta rc19\n  jsr walk\n  stx rc3\n  rts\n"
+    );
+    // a runtime routine may read `x` as an argument no instruction lists
+    let runtime = code("__mulhi3");
+    assert_eq!(pass(load_straight_into_a, &runtime), runtime);
+    // a callee the function passes `x` to
+    let mut asm = Asm::parse(&code("walk"));
+    asm.x_callees.insert("walk".to_owned());
+    load_straight_into_a(&mut asm);
+    assert_eq!(asm.text(), code("walk"));
+}
+
+/// The same for `y`: PTRSTEP, `ldy rc3; lda rc2; cmp rc4; bne; tya; cmp rc5`
+/// kept the load and the `tya` (+1 B, +2 clocks) because `y` was live at the
+/// `jsr`/`rts` after it; the fold is `lda rc3` once `y` is dead there.
+#[test]
+fn a_load_into_y_is_dead_at_a_return_and_before_a_call_that_does_not_take_y() {
+    use llrm_6502::peephole::load_straight_into_a;
+    let code = |tail: &str| format!("  ldy rc3\n  lda rc2\n  sta rc4\n  tya\n  cmp rc5\n{tail}");
+    let folded = |tail: &str| format!("  lda rc2\n  sta rc4\n  lda rc3\n  cmp rc5\n{tail}");
+    // a return: `mos` returns A:X, so `y` is dead
+    let mut asm = Asm::parse(&code("  rts\n"));
+    asm.no_y_result = true;
+    load_straight_into_a(&mut asm);
+    assert_eq!(asm.text(), folded("  rts\n"));
+    let mut asm = Asm::parse(&code("  jsr walk\n  rts\n"));
+    asm.no_y_result = true;
+    load_straight_into_a(&mut asm);
+    assert_eq!(asm.text(), folded("  jsr walk\n  rts\n"));
+    // a runtime routine may read `y` as an argument no instruction lists
+    let runtime = code("  jsr __mulhi3\n  rts\n");
+    let mut asm = Asm::parse(&runtime);
+    asm.no_y_result = true;
+    load_straight_into_a(&mut asm);
+    assert_eq!(asm.text(), runtime);
+    // a callee the function passes `y` to
+    let mut asm = Asm::parse(&code("  jsr walk\n  rts\n"));
+    asm.no_y_result = true;
+    asm.y_callees.insert("walk".to_owned());
+    load_straight_into_a(&mut asm);
+    assert_eq!(asm.text(), code("  jsr walk\n  rts\n"));
+}
+
+mod post_ra {
+    use llrm_6502::alloc::{Class, compare_before_step};
+    use llrm_6502::reg;
+    use llrm_lir::registers::RegId;
+    use llrm_spike_mf::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+
+    fn def(r: RegId) -> Operand {
+        Operand::Def(Reg::Phys(r))
+    }
+    fn used(r: RegId) -> Operand {
+        Operand::Use(Reg::Phys(r))
+    }
+    fn copy(
+        to: RegId,
+        from: RegId,
+    ) -> Inst {
+        Inst::new(Kind::Copy, vec![def(to), used(from)])
+    }
+    fn compare() -> [Inst; 3] {
+        let mut cmp = Inst::new(Kind::Op("CMP"), vec![def(reg::FLAGS), used(reg::A), Operand::Imm(3)]);
+        cmp.sets_flags = true;
+        let mut sbc = Inst::new(Kind::Op("SBC"), vec![def(reg::A), used(reg::A), Operand::Imm(0), def(reg::FLAGS)]);
+        sbc.sets_flags = true;
+        [cmp, copy(reg::A, reg::X), sbc]
+    }
+    fn function(insts: Vec<Inst>) -> MFunction<Class> {
+        let mut branch = Inst::new(Kind::Op("BCS"), vec![Operand::Block(1), used(reg::FLAGS)]);
+        branch.terminator = true;
+        let mut jump = Inst::new(Kind::Op("JMP"), vec![Operand::Block(2)]);
+        jump.terminator = true;
+        let mut first = insts;
+        first.extend([branch, jump]);
+        let block = |id, insts| Block { id, insts, phis: Vec::new() };
+        MFunction {
+            name: "f".to_owned(),
+            blocks: vec![
+                block(0, first),
+                block(1, vec![Inst::new(Kind::Op("RTS"), vec![])]),
+                block(2, vec![Inst::new(Kind::Op("RTS"), vec![])]),
+            ],
+            classes: Vec::new(),
+            fixed: Default::default(),
+            locals: Vec::new(),
+            optimize_for_size: false,
+            returns_twice: false,
+            places: Vec::new(),
+            variables: Vec::new(),
+        }
+    }
+    fn copies(function: &MFunction<Class>) -> Vec<(RegId, RegId)> {
+        let phys = |o: &Operand| match o {
+            Operand::Def(Reg::Phys(r)) | Operand::Use(Reg::Phys(r)) => Some(*r),
+            _ => None,
+        };
+        function.blocks[0]
+            .insts
+            .iter()
+            .filter(|i| matches!(i.kind, Kind::Copy))
+            .map(|i| (phys(&i.operands[0]).unwrap(), phys(&i.operands[1]).unwrap()))
+            .collect()
+    }
+    fn at(
+        function: &MFunction<Class>,
+        op: &str,
+    ) -> usize {
+        function.blocks[0].insts.iter().position(|i| matches!(&i.kind, Kind::Op(name) if *name == op)).unwrap()
+    }
+    fn run(function: &mut MFunction<Class>) {
+        compare_before_step(function, &|r| match r {
+            Reg::Phys(p) => p,
+            Reg::Virt(_) => unreachable!("allocated"),
+        });
+    }
+    fn step() -> Inst {
+        Inst::new(Kind::Op("INC16"), vec![def(reg::Y), def(reg::RC3), used(reg::Y), used(reg::RC3)])
+    }
+
+    /// shift_int64_variable at -O2: the old high byte was loaded into `x` for
+    /// free (a reload through `x`) and the compare reads it there: `txa`.
+    /// Forwarding that copy to the cell made the compare `lda rc3` (+1 B,
+    /// +1 clock) and kept the load. The copy stays and the compare keeps
+    /// reading `x`.
+    #[test]
+    fn a_copy_into_an_index_register_is_not_forwarded_to_the_cell() {
+        let [cmp, read, sbc] = compare();
+        let mut f = function(vec![copy(reg::X, reg::RC3), copy(reg::Y, reg::A), step(), cmp, read, sbc]);
+        assert!(copies(&f).contains(&(reg::X, reg::RC3)), "premise: the copy into x");
+        run(&mut f);
+        assert!(copies(&f).contains(&(reg::X, reg::RC3)), "the copy stays");
+        assert!(copies(&f).contains(&(reg::A, reg::X)), "the compare reads x");
+        assert!(at(&f, "CMP") < at(&f, "INC16"), "the compare moved above the step");
+    }
+
+    /// A copy into a cell is a real store (`stx rc3`): the compare moves above
+    /// the step, the readers take `x`, the copy goes.
+    #[test]
+    fn a_copy_into_a_cell_is_forwarded_and_removed() {
+        let [cmp, _, sbc] = compare();
+        let read = copy(reg::A, reg::RC3);
+        let step = Inst::new(Kind::Op("INC16"), vec![def(reg::X), def(reg::Y), used(reg::X), used(reg::Y)]);
+        let mut f = function(vec![copy(reg::RC3, reg::X), step, cmp, read, sbc]);
+        assert!(copies(&f).contains(&(reg::RC3, reg::X)), "premise: the copy into a cell");
+        run(&mut f);
+        assert!(!copies(&f).iter().any(|(to, from)| *to == reg::RC3 || *from == reg::RC3), "{:?}", copies(&f));
+        assert!(copies(&f).contains(&(reg::A, reg::X)), "the compare reads x");
     }
 }

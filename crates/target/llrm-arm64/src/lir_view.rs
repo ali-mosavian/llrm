@@ -3,13 +3,13 @@
 //! between the two, so the view keeps the original [`MFunc`] and writes the
 //! allocator's registers into it.
 
-use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use llrm_lir::registers::{RegId, Regs};
 use llrm_spike_mf::mfunc::{Block, Inst as LirInst, Kind, MFunction, Operand, Reg as LirReg};
 use llrm_spike_mf::regalloc::{Assignment, Target as AllocTarget};
 use llrm_spike_mf::tolir::allocate_greedy;
+use llrm_support::hash::HashMap;
 
 use crate::flagcse::writes_flags;
 use crate::mc::inst::{Gpr, Inst, Target, Vreg, Wide};
@@ -91,16 +91,74 @@ fn label_of(inst: &Inst) -> Option<&str> {
 /// What an operation is apart from its registers, as a number: the allocator
 /// sees the instruction by name and this, and `rebuild` finds the operation
 /// again by it.
+/// `mov xd, xzr`: the register-31 source of a copy is the zero register.
+/// The name of the definition of zero (`mov xd, xzr`).
+const ZERO: &str = "Zero";
+
+fn is_zero_copy(op: &Op) -> bool {
+    matches!(op, Op::Copy { dst: Reg::Gpr(_), src: Reg::Gpr(Gpr(31)) })
+}
+
 fn content(op: &Op) -> i64 {
     use std::hash::{Hash, Hasher};
     let mut blank = op.clone();
     blank.visit(&mut |register, _| match register {
-        RegRef::Gpr(register) => *register = Gpr(0),
-        RegRef::Fpr(register) => *register = Vreg(0),
+        RegRef::Gpr(register) if register.is_virtual() => *register = Gpr(Gpr::FIRST_VIRTUAL),
+        RegRef::Fpr(register) if register.is_virtual() => *register = Vreg(Gpr::FIRST_VIRTUAL),
+        _ => {}
     });
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     format!("{blank:?}").hash(&mut hasher);
     hasher.finish() as i64
+}
+
+/// The `adrp` and `add :lo12:` the pin keeps as one `MOVaddr` until after
+/// allocation (`AArch64ExpandPseudo`): a page register defined once, read by
+/// one `add` of the same symbol in the same block. By block: the index of the
+/// `add` and of its `adrp`. As one instruction the allocator can make the
+/// address again where it is needed instead of spilling it.
+fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
+    let mut seen: HashMap<Reg, (u32, u32)> = HashMap::default();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        let mut op = op.clone();
+        op.visit(&mut |register, role| {
+            let count = seen.entry(register.key()).or_default();
+            match role {
+                Role::Def => count.0 += 1,
+                Role::Use => count.1 += 1,
+                Role::UseDef => {
+                    count.0 += 1;
+                    count.1 += 1;
+                }
+            }
+        });
+    }
+    function
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut pages: HashMap<Reg, (usize, &Target)> = HashMap::default();
+            let mut pairs = HashMap::default();
+            for (at, op) in block.ops.iter().enumerate() {
+                match op {
+                    Op::I(Inst::Adr { page: true, rd, target, got: false })
+                        if seen.get(&Reg::Gpr(*rd)) == Some(&(1, 1)) =>
+                    {
+                        pages.insert(Reg::Gpr(*rd), (at, target));
+                    }
+                    Op::I(Inst::AddPageOffset { rn, target, .. }) => {
+                        if let Some(&(adrp, page_target)) = pages.get(&Reg::Gpr(*rn))
+                            && page_target == target
+                        {
+                            pairs.insert(at, adrp);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            pairs
+        })
+        .collect()
 }
 
 /// The allocator's function for `function`, registers of both classes numbered
@@ -114,11 +172,24 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
     let mut origin = 0u32;
+    let pairs = address_pairs(function);
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insts = Vec::new();
-        for op in &block.ops {
+        let first_halves: Vec<usize> = pairs[at].values().copied().collect();
+        for (index, op) in block.ops.iter().enumerate() {
             origin += 1;
+            // A debug note is no instruction to the allocator (`isDebugInstr`):
+            // `rebuild` puts it back after the operation that made its value.
+            if op.is_debug() || first_halves.contains(&index) {
+                continue;
+            }
+            let fused = pairs[at].contains_key(&index);
+            let zero = is_zero_copy(op);
             let (kind, terminator, barrier, call) = match op {
+                // A copy of the zero register is a move of 0: made again where
+                // it is read (`reMaterializeTrivialDef`), not copied from one
+                // value.
+                Op::Copy { .. } if zero => (Kind::Op(ZERO), false, false, false),
                 Op::I(inst) => (
                     Kind::Op(name_of(inst)),
                     matches!(
@@ -149,12 +220,21 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 Op::JumpTable { .. } => (Kind::Op("JumpTable"), true, true, false),
                 Op::Call { .. } => (Kind::Op("Call"), false, false, true),
                 Op::Return { .. } => (Kind::Op("Return"), true, true, false),
+                Op::DbgValue { .. } => unreachable!("a debug note is skipped above"),
             };
             let mut operands = Vec::new();
             let mut ties = Vec::new();
             let mut op = op.clone();
+            let mut page_read = fused;
             op.visit(&mut |register, role| {
                 let key = register.key();
+                // The page register of a fused `MOVaddr` is not a value.
+                if fused && role == Role::Use && std::mem::take(&mut page_read) {
+                    return;
+                }
+                if zero && role == Role::Use {
+                    return;
+                }
                 let reg = to_lir(key);
                 if let LirReg::Virt(n) = reg {
                     lir.classes[n as usize] = match key {
@@ -183,7 +263,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                     .extend(targets.iter().filter_map(|label| labels.get(label.as_str())).map(|&b| Operand::Block(b)));
             }
             if kind != Kind::Copy {
-                operands.push(Operand::Imm(content(&op)));
+                operands.push(Operand::Imm(if fused { content(&op).wrapping_add(1) } else { content(&op) }));
             }
             let mut inst = LirInst::new(kind, operands);
             inst.ties = ties;
@@ -206,17 +286,19 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 Op::I(Inst::Svc { .. } | Inst::Dmb { .. } | Inst::Atomic { .. })
             );
             inst.early_clobber = matches!(op, Op::I(Inst::Atomic { .. }) | Op::JumpTable { .. });
-            inst.rematerializable = matches!(
-                op,
-                Op::Imm { .. }
-                    | Op::I(Inst::FpMoveImm { .. } | Inst::Adr { .. })
-                    | Op::I(Inst::MoveWide { op: Wide::Zero | Wide::Not, .. })
-            );
+            inst.rematerializable = fused
+                || zero
+                || matches!(
+                    op,
+                    Op::Imm { .. }
+                        | Op::I(Inst::FpMoveImm { .. } | Inst::Adr { .. })
+                        | Op::I(Inst::MoveWide { op: Wide::Zero | Wide::Not, .. })
+                );
             inst.invariant_load = matches!(
                 &op,
                 Op::I(Inst::Load { mmo, .. }) if mmo.object == crate::mc::inst::MemObject::ConstantPool
             );
-            inst.cheap_as_move = matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
+            inst.cheap_as_move = zero || matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
             insts.push(inst);
         }
         lir.blocks.push(Block { id: at as u32, insts, phis: Vec::new() });
@@ -227,20 +309,95 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
 /// `function`, its registers the physical ones greedy chose in `lir`
 /// (`assignment` by virtual number) and the spills it wrote: each operation is
 /// the original one found by its [`content`], the spills and copies new.
+static NOTES_SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static NOTES_PLACED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The debug notes `rebuild` was given and the ones it put back after the
+/// operation that made their value, so far in the process: the rest said
+/// nothing, and a test that finds locations must also see how many were lost.
+pub fn note_counts() -> (u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (NOTES_SEEN.load(Relaxed), NOTES_PLACED.load(Relaxed))
+}
+
 pub fn rebuild(
     function: &mut MFunc,
     lir: &MFunction<Class>,
     assignment: &Assignment,
     spill_slots: &[(i32, Class)],
 ) {
-    let mut originals: HashMap<i64, Op> = HashMap::new();
+    let mut originals: HashMap<i64, Op> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         originals.entry(content(op)).or_insert_with(|| op.clone());
+    }
+    // The fused `MOVaddr`s stand under the content `view` gave them.
+    let pairs = address_pairs(function);
+    let mut fused: HashMap<i64, Op> = HashMap::default();
+    for (block, pairs) in function.blocks.iter().zip(&pairs) {
+        for &add in pairs.keys() {
+            fused.entry(content(&block.ops[add]).wrapping_add(1)).or_insert_with(|| block.ops[add].clone());
+        }
+    }
+    // The debug notes, by the number `view` gave the operation that made their
+    // value, with the position of that value among the operation's registers
+    // (`registers` below): the note is put back after it, naming the register
+    // allocation left there. A note whose value the operation before it did not
+    // make says nothing.
+    let mut notes: HashMap<u32, Vec<(llrm_mir::MetadataId, usize, Option<Reg>)>> = HashMap::default();
+    let mut arrived: Vec<(llrm_mir::MetadataId, Reg)> = Vec::new();
+    // Variables with a note the converter cannot place (a value from another
+    // block, a float, nothing): the earlier notes would stay standing, saying
+    // more than the code does, so such a variable says nothing at all.
+    let mut lost: std::collections::HashSet<llrm_mir::MetadataId> = std::collections::HashSet::new();
+    let mut number = 0u32;
+    for (block_at, block) in function.blocks.iter().enumerate() {
+        let is_entry = block_at == 0;
+        // Where each register was last written in this block: the operation's
+        // number and the register's position among its registers.
+        let mut made: HashMap<Reg, (u32, usize, Option<Reg>)> = HashMap::default();
+        for op in block.ops.iter() {
+            number += 1;
+            if op.is_debug() {
+                NOTES_SEEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            if let Op::DbgValue { variable, reg } = op {
+                match reg.and_then(|reg| made.get(&reg)) {
+                    Some(&(anchor, position, comes_in)) => {
+                        notes.entry(anchor).or_default().push((*variable, position, comes_in));
+                    }
+                    None => {
+                        lost.insert(*variable);
+                    }
+                }
+                continue;
+            }
+            if op.is_debug() || is_zero_copy(op) {
+                continue;
+            }
+            // A copy of an argument register in the entry block: if allocation
+            // removes it, the value is in that register from the entry.
+            let comes_in = match op {
+                Op::Copy { dst, src: src @ Reg::Gpr(from) } if is_entry && !from.is_virtual() && *dst != *src => {
+                    Some(*src)
+                }
+                _ => None,
+            };
+            let mut position = 0usize;
+            op.clone().visit(&mut |register, role| {
+                if role.writes() {
+                    made.insert(register.key(), (number, position, comes_in));
+                }
+                position += if role == Role::UseDef { 2 } else { 1 };
+            });
+        }
     }
     // The place of each operation, by the number `view` gave it.
     let places: Vec<_> =
         function.blocks.iter().flat_map(|block| (0..block.ops.len()).map(|at| block.ops.loc(at))).collect();
-    let mut slots: HashMap<i32, u32> = HashMap::new();
+    // Registers the selector made 128 bits wide, physical ones (an `f128`
+    // argument or result, copied between `v0`..`v7`) included.
+    let wide = crate::regalloc::wide_registers(function);
+    let mut slots: HashMap<i32, u32> = HashMap::default();
     for (slot, class) in spill_slots {
         let (size, align) = if *class == Class::Quad { (16, 16) } else { (8, 8) };
         slots.insert(*slot, function.slot(size, align));
@@ -254,9 +411,31 @@ pub fn rebuild(
         LirReg::Phys(id) if id.index() >= crate::reg::V0.index() => Class::Fpr,
         LirReg::Phys(_) => Class::Gpr,
     };
-    for (block, lir_block) in function.blocks.iter_mut().zip(&lir.blocks) {
+    // A note whose operation allocation removed (a copy of an argument register
+    // the value was coalesced with) stands at the entry, naming that register.
+    let present: std::collections::HashSet<u32> =
+        lir.blocks.iter().flat_map(|block| block.insts.iter().map(|inst| inst.origin)).collect();
+    for (anchor, list) in &notes {
+        if !present.contains(anchor) {
+            for &(variable, _, comes_in) in list {
+                match comes_in {
+                    Some(reg) => arrived.push((variable, reg)),
+                    None => {
+                        lost.insert(variable);
+                    }
+                }
+            }
+        }
+    }
+    for (block_at, (block, lir_block)) in function.blocks.iter_mut().zip(&lir.blocks).enumerate() {
         let mut ops = Vec::with_capacity(lir_block.insts.len());
         let mut locs = Vec::with_capacity(lir_block.insts.len());
+        if block_at == 0 {
+            for &(variable, reg) in &arrived {
+                ops.push(Op::DbgValue { variable, reg: Some(reg) });
+                locs.push(None);
+            }
+        }
         for inst in &lir_block.insts {
             let before = ops.len();
             let registers: Vec<(LirReg, Class)> = inst
@@ -275,7 +454,18 @@ pub fn rebuild(
                 Kind::Copy => {
                     let (dst, src) = (reg_at(0), reg_at(1));
                     if dst != src {
-                        ops.push(Op::Copy { dst, src });
+                        // A copy of 128 bits moves all of them.
+                        match (dst, src) {
+                            (Reg::Fpr(rd), Reg::Fpr(rn))
+                                if registers[0].1 == Class::Quad
+                                    || registers[1].1 == Class::Quad
+                                    || wide.contains(&dst)
+                                    || wide.contains(&src) =>
+                            {
+                                ops.push(Op::I(Inst::VectorMov { rd, rn }));
+                            }
+                            _ => ops.push(Op::Copy { dst, src }),
+                        }
                     }
                 }
                 Kind::Op(name @ ("SpillStore" | "SpillLoad")) => {
@@ -284,11 +474,29 @@ pub fn rebuild(
                     let quad = registers[0].1 == Class::Quad;
                     ops.push(spill_access(reg_at(0), slot, name == "SpillLoad", quad));
                 }
+                Kind::Op(_)
+                    if matches!(
+                        inst.operands.last(),
+                        Some(Operand::Imm(hash)) if fused.contains_key(hash)
+                    ) =>
+                {
+                    // `AArch64ExpandPseudo`: `adrp rd` and `add rd, rd,
+                    // :lo12:`.
+                    let Some(Operand::Imm(hash)) = inst.operands.last() else { unreachable!() };
+                    let Op::I(Inst::AddPageOffset { target, .. }) = &fused[hash] else { unreachable!() };
+                    let Reg::Gpr(rd) = reg_at(0) else { panic!("a page offset into a vector register") };
+                    ops.push(Op::I(Inst::Adr { page: true, rd, target: target.clone(), got: false }));
+                    ops.push(Op::I(Inst::AddPageOffset { rd, rn: rd, target: target.clone() }));
+                }
                 Kind::Op(_) => {
                     let Some(Operand::Imm(hash)) = inst.operands.last() else { panic!("an operation with no content") };
                     let mut op = originals[hash].clone();
+                    let zero = is_zero_copy(&op);
                     let mut at = 0;
                     op.visit(&mut |register, role| {
+                        if zero && role == Role::Use {
+                            return;
+                        }
                         let new = reg_at(at);
                         at += if role == Role::UseDef { 2 } else { 1 };
                         match (register, new) {
@@ -300,7 +508,10 @@ pub fn rebuild(
                     ops.push(op);
                 }
             }
-            if ops.len() > before {
+            for &(variable, position, _) in notes.get(&inst.origin).map_or(&[][..], Vec::as_slice) {
+                ops.push(Op::DbgValue { variable, reg: Some(reg_at(position)) });
+            }
+            for _ in before..ops.len() {
                 locs.push(if inst.origin == 0 { None } else { places[inst.origin as usize - 1] });
             }
         }
@@ -320,7 +531,21 @@ pub fn rebuild(
                 None => *loc = last,
             }
         }
+        let kept: Vec<bool> =
+            ops.iter().map(|op| !matches!(op, Op::DbgValue { variable, .. } if lost.contains(variable))).collect();
+        let mut at = 0;
+        ops.retain(|_| (kept[at], at += 1).0);
+        at = 0;
+        locs.retain(|_| (kept[at], at += 1).0);
+        NOTES_PLACED.fetch_add(
+            ops.iter().filter(|op| op.is_debug()).count() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         block.ops = ops.into_iter().zip(locs).collect();
+    }
+    if llrm_support::env_var("LLRM_NOTE_COUNTS").is_some() {
+        let (seen, placed) = note_counts();
+        eprintln!("debug notes: {seen} seen, {placed} placed so far ({})", function.name);
     }
 }
 
@@ -331,7 +556,10 @@ pub fn written_callee_saved(function: &MFunc) -> Allocation {
         let (defs, _) = op.defs_and_uses();
         for register in defs {
             match register {
-                Reg::Gpr(Gpr(n)) if (19..=28).contains(&n) && !allocation.saved_gprs.contains(&n) => {
+                Reg::Gpr(Gpr(n))
+                    if ((19..=28).contains(&n) || (n == 29 && frame_pointer_free()))
+                        && !allocation.saved_gprs.contains(&n) =>
+                {
                     allocation.saved_gprs.push(n)
                 }
                 Reg::Fpr(Vreg(n)) if (8..=15).contains(&n) && !allocation.saved_fprs.contains(&n) => {
@@ -347,10 +575,13 @@ pub fn written_callee_saved(function: &MFunc) -> Allocation {
 }
 
 /// `function` with every register physical, by the shared greedy allocator.
-pub fn allocate(function: &mut MFunc) -> Result<Allocation, String> {
+pub fn allocate(
+    function: &mut MFunc,
+    size: bool,
+) -> Result<Allocation, String> {
     let mut lir = view(function);
     crate::licm::hoist(&mut lir);
-    let (assignment, slots) = allocate_greedy::<Arm64>(&mut lir, Regs(&crate::REGISTER_INFO), false)?;
+    let (assignment, slots) = allocate_greedy::<Arm64>(&mut lir, Regs(&crate::REGISTER_INFO), size)?;
     rebuild(function, &lir, &assignment, &slots);
     Ok(written_callee_saved(function))
 }
@@ -374,6 +605,29 @@ fn darwin() -> bool {
     DARWIN.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Whether the next function has no frame record, so `x29` is an ordinary
+/// callee-saved register (`getReservedRegs` reserves it when `hasFP`).
+static FP_FREE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_frame_pointer_free(free: bool) {
+    FP_FREE.store(free, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether `x16` and `x17` may be allocated: the frame needs no scratch.
+static SCRATCH_FREE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_scratch_free(free: bool) {
+    SCRATCH_FREE.store(free, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn scratch_free() -> bool {
+    SCRATCH_FREE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn frame_pointer_free() -> bool {
+    FP_FREE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The caller-saved general registers the allocator hands out.
 pub fn gpr_caller_saved_count() -> usize {
     15 + 1 + usize::from(!darwin())
@@ -383,8 +637,20 @@ fn gpr_order() -> Vec<RegId> {
     // The caller-saved registers first, then x19..x28. x16 and x17 are the
     // frame lowerer's scratch registers; x15 and, off Darwin, x18 are
     // allocatable (the pin's `getReservedRegs` reserves x18 on Darwin only).
-    let extra: Vec<u32> = if darwin() { vec![15] } else { vec![15, 18] };
-    (9..=14u32).chain((0..=8).rev()).chain(extra).chain(19..=28).map(|n| id(Class::Gpr, n)).collect()
+    let mut extra: Vec<u32> = vec![15];
+    if scratch_free() {
+        extra.extend([16, 17]);
+    }
+    if !darwin() {
+        extra.push(18);
+    }
+    (9..=14u32)
+        .chain((0..=8).rev())
+        .chain(extra)
+        .chain(19..=28)
+        .chain(frame_pointer_free().then_some(29))
+        .map(|n| id(Class::Gpr, n))
+        .collect()
 }
 
 fn callee_saved_fpr(id: RegId) -> bool {
@@ -417,6 +683,18 @@ impl AllocTarget for Arm64 {
         true
     }
 
+    /// The coalescer makes a definition again for a copy only if it is
+    /// `isAsCheapAsAMove`; `MOVaddr` is not (the pair is two instructions),
+    /// so a copy of an address stays a `mov`. The spiller takes it still.
+    fn literal_move_wins(
+        literal: &llrm_codegen::model::lir::Insn,
+        _source: &[RegId],
+        _destination: &[RegId],
+        _size: bool,
+    ) -> bool {
+        literal.what.as_ref().is_none_or(|what| what.name.as_deref() != Some("AddPageOffset"))
+    }
+
     fn candidates(class: Class) -> Vec<RegId> {
         match class {
             Class::Gpr => gpr_order(),
@@ -439,7 +717,8 @@ impl AllocTarget for Arm64 {
     fn reserved(root: RegId) -> bool {
         // sp/xzr, the frame pointer, the link register and the platform
         // register.
-        [crate::reg::X29, crate::reg::X30, crate::reg::SP, crate::reg::XZR].contains(&root)
+        [crate::reg::X30, crate::reg::SP, crate::reg::XZR].contains(&root)
+            || (root == crate::reg::X29 && !frame_pointer_free())
             || (darwin() && root == crate::reg::X18)
     }
 
@@ -461,6 +740,18 @@ impl AllocTarget for Arm64 {
         let mut inst = LirInst::new(Kind::Op("SpillStore"), vec![Operand::Use(register), Operand::Frame(slot)]);
         inst.may_store = true;
         Some(inst)
+    }
+
+    fn is_zero_def(name: &str) -> bool {
+        name == ZERO
+    }
+
+    /// `str xzr, [slot]`.
+    fn zero_store(
+        _class: Class,
+        slot: i32,
+    ) -> Option<LirInst> {
+        Self::spill_store(Class::Gpr, LirReg::Phys(crate::reg::XZR), slot)
     }
 
     fn spill_load(
@@ -541,6 +832,37 @@ mod tests {
         assert_eq!(lines, [Some(8), Some(9), Some(10), Some(11)], "the copy of x0 into itself (line 7) goes");
     }
 
+    /// The pin keeps `adrp` + `add :lo12:` of one symbol as a single `MOVaddr`
+    /// until after allocation, so the allocator can make the address again
+    /// where it is read (jpeg_single -O3: the address was stored and
+    /// reloaded across a call, +252 B). Here the pair is one rematerializable
+    /// instruction that defines one value, and it expands into the register
+    /// greedy chose.
+    #[test]
+    fn an_address_pair_is_one_rematerializable_instruction_until_after_allocation() {
+        let mut function = MFunc::new("f");
+        let (page, address) = (function.gpr(), function.gpr());
+        let target = Target::Symbol { name: "_msg".into(), addend: 0 };
+        let ops = vec![
+            Op::I(Inst::Adr { page: true, rd: page, target: target.clone(), got: false }),
+            Op::I(Inst::AddPageOffset { rd: address, rn: page, target: target.clone() }),
+            Op::Return { uses: vec![Reg::Gpr(address)], tail: None },
+        ];
+        function.blocks.push(MBlock { label: "L0".into(), ops: OpList::from(ops) });
+        let lir = view(&function);
+        let insts = &lir.blocks[0].insts;
+        assert_eq!(insts.len(), 2, "the pair is one instruction and the return: {insts:?}");
+        assert!(insts[0].rematerializable, "{:?}", insts[0]);
+        let defs = insts[0].operands.iter().filter(|o| matches!(o, Operand::Def(_))).count();
+        let uses = insts[0].operands.iter().filter(|o| matches!(o, Operand::Use(_))).count();
+        assert_eq!((defs, uses), (1, 0), "{:?}", insts[0]);
+        let mut back = function.clone();
+        rebuild(&mut back, &lir, &Assignment(vec![crate::reg::X5, crate::reg::X6]), &[]);
+        let ops = &back.blocks[0].ops;
+        assert_eq!(ops[0], Op::I(Inst::Adr { page: true, rd: Gpr(6), target: target.clone(), got: false }), "{ops:?}");
+        assert_eq!(ops[1], Op::I(Inst::AddPageOffset { rd: Gpr(6), rn: Gpr(6), target }), "{ops:?}");
+    }
+
     /// The registers greedy chose go back into the original operations, a
     /// copy between the same register goes, and a tied register stays one.
     #[test]
@@ -568,5 +890,16 @@ mod tests {
         assert_eq!(copy.operands[1], Operand::Use(LirReg::Phys(crate::reg::V0)));
         assert_eq!(from_lir(LirReg::Phys(crate::reg::X5), Class::Gpr), Reg::Gpr(Gpr(5)));
         assert_eq!(from_lir(LirReg::Phys(crate::reg::V3), Class::Fpr), Reg::Fpr(Vreg(3)));
+    }
+
+    /// An `Imm 1` into the fixed `w0` and one into a virtual register had one
+    /// content (every register blanked to 0): the allocator took the fixed one
+    /// as the template of the other, and jpeg -Os read `w10` that `movz w0`
+    /// had been emitted for (a wrong checksum).
+    #[test]
+    fn a_fixed_register_and_a_virtual_one_do_not_share_content() {
+        let into = |dst| Op::Imm { dst: Gpr(dst), bits: 32, value: 1 };
+        assert_ne!(content(&into(0)), content(&into(Gpr::FIRST_VIRTUAL + 7)));
+        assert_eq!(content(&into(Gpr::FIRST_VIRTUAL + 1)), content(&into(Gpr::FIRST_VIRTUAL + 7)));
     }
 }

@@ -21,7 +21,7 @@ BAN=; [ "$CPU" = 68060 ] && BAN='(mul|div)[us]l [^ ]*,%d[0-7],%d'; [ "$CPU" = 68
 [ "$MODE" = obj ] && { cp $T/sf64s.o "$3"; exit 0; }
 CF="-m$CPU -msoft-float -O2 -nostdlib -static -ffreestanding -Iinclude -I$T"
 LIB="$T/sf64s.o"
-for f in $(tests/fp_sources.sh f64) lib/int/int64.c lib/int/int32.c; do
+for f in $(tests/fp_sources.sh f64) $(tests/fp_sources.sh int64) lib/int/int32.c; do
   o=$T/$(echo $f | tr / _).o; timeout 900 $B-gcc $CF -c $f -o $o
   $B-objcopy -W __adddf3 -W __subdf3 -W __muldf3 -W __divdf3 $o; LIB="$LIB $o"
 done

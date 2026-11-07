@@ -209,6 +209,8 @@ impl llrm_mir::target::Machine for Flat {
             real_mode: None,
             registers: None,
             tuning: llrm_mir::target::Tuning::PIN,
+            loop_micro_op_buffer: 0,
+            position_independent: std::cell::Cell::new(true),
         }))
     }
 }
@@ -348,4 +350,131 @@ dead:
     let (live, dead) = after.split_once("dead:").expect("a dead block");
     assert!(live.contains("trunc i32 %e to i16"), "{after}");
     assert!(dead.contains("trunc i32 %e to i16"), "{after}");
+}
+
+/// quicksort -O3 (m64), partition loop: the address was `(base + (n << 2)) +
+/// (i << 2) - 4`, a `gep` with an index of its own under a `gep` with another.
+/// The match gave up on the second index and left the whole address in a
+/// register made in the loop header (`lea rbp,[r15+rdi*4]`, 11 leas in `sort`
+/// against the pin's 6). The pin retries with the inner `gep` as a register
+/// (`matchOperationAddr`, "try stuffing the base into a register", L5408), so
+/// the store's block makes `inner + (i << 2) - 4` itself.
+#[test]
+fn test_an_address_over_a_base_with_an_index_of_its_own_is_made_where_it_is_used() {
+    let after = sunk_flat(
+        "define void @f(ptr %base, i32 %n, i32 %cv) {
+b0:
+  %n4 = shl i32 %n, 2
+  %inner = getelementptr i8, ptr %base, i32 %n4
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b3 ]
+  %s = shl i32 %i, 2
+  %p = getelementptr i8, ptr %inner, i32 %s
+  %q = getelementptr i8, ptr %p, i32 -4
+  %v = load i32, ptr %q
+  %c = icmp slt i32 %v, %cv
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %q2 = getelementptr i8, ptr %p, i32 -4
+  store i32 %cv, ptr %q2
+  br label %b3
+
+b3:
+  %i1 = add i32 %i, 1
+  %done = icmp eq i32 %i1, %n
+  br i1 %done, label %b4, label %b1
+
+b4:
+  ret void
+}
+",
+    );
+    let (_, rest) = after.split_once("b2:").expect("a block b2");
+    let b2 = rest.split_once("b3:").expect("a block b3").0;
+    assert!(!b2.contains("%p"), "the store reads the address made in the header: {after}");
+    assert!(b2.contains("%i"), "the store's block makes its address from the index: {after}");
+}
+
+/// The same shape in real mode (four registers): the address stays as it was.
+/// With the base and the index both live to the store, m16 bintree -Os grew
+/// 5 bytes and phi_slot_unknown_arm -O1 9 (DEVIATE CGP2).
+#[test]
+fn test_an_address_over_a_base_with_an_index_of_its_own_stays_in_real_mode() {
+    let after = sunk(
+        "define void @f(ptr %base, i16 %n, i16 %cv) {
+b0:
+  %n2 = shl i16 %n, 1
+  %inner = getelementptr i8, ptr %base, i16 %n2
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b3 ]
+  %s = shl i16 %i, 1
+  %p = getelementptr i8, ptr %inner, i16 %s
+  %v = load i16, ptr %p
+  %c = icmp slt i16 %v, %cv
+  br i1 %c, label %b2, label %b3
+
+b2:
+  store i16 %cv, ptr %p
+  br label %b3
+
+b3:
+  %i1 = add i16 %i, 1
+  %done = icmp eq i16 %i1, %n
+  br i1 %done, label %b4, label %b1
+
+b4:
+  ret void
+}
+",
+    );
+    let (_, rest) = after.split_once("b2:").expect("a block b2");
+    let b2 = rest.split_once("b3:").expect("a block b3").0;
+    assert!(b2.contains("%p"), "the store reads the address made in the header: {after}");
+}
+
+/// Real mode, a far address kept live across a call: made again in the
+/// store's block from the base and the offset, which the loop keeps live
+/// anyway, it holds two words fewer through the call. The price (DEVIATE
+/// CGP2) takes the retry; QCport game/ent.c -O2 `_ent_place_models` -11 bytes.
+#[test]
+fn test_an_address_over_a_base_with_an_index_of_its_own_is_made_again_in_real_mode_where_it_would_cross_a_call() {
+    let after = sunk(
+        "declare i16 @g(i16)
+define void @f(ptr addrspace(1) %base, i16 %m) {
+b0:
+  %inner = getelementptr i8, ptr addrspace(1) %base, i16 %m
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b3 ]
+  %o = phi i16 [ 0, %b0 ], [ %o1, %b3 ]
+  %p = getelementptr i8, ptr addrspace(1) %inner, i16 %o
+  %v = load i16, ptr addrspace(1) %p
+  %c = icmp eq i16 %v, -32768
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %r = call i16 @g(i16 %i)
+  store i16 %r, ptr addrspace(1) %p
+  br label %b3
+
+b3:
+  %i1 = add i16 %i, 1
+  %o1 = add i16 %o, 18
+  %done = icmp eq i16 %o1, 0
+  br i1 %done, label %b4, label %b1
+
+b4:
+  ret void
+}
+",
+    );
+    let (_, rest) = after.split_once("b2:").expect("a block b2");
+    let b2 = rest.split_once("b3:").expect("a block b3").0;
+    assert!(!b2.contains("%p"), "the store makes its address from the base and the offset: {after}");
 }

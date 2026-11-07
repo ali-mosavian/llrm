@@ -66,7 +66,7 @@ __umodqi3:
 	ret
 
 ; hl / de -> de (__udivhi3), hl % de -> de (__umodhi3). The division leaves the quotient in de and the remainder in
-; hl; the remainder entry swaps them. Restoring division in two shapes. A divisor under 128
+; hl (a caller that wants both takes them there: the pair, `lower_divrem`); the remainder entry swaps them. Restoring division in two shapes. A divisor under 128
 ; keeps the remainder in a: 16 steps, the quotient shifting into hl as the dividend shifts out. A larger divisor
 ; leaves a quotient of at most 9 bits, so the 7 high bits of the dividend are the first remainder and 9 steps follow
 ; (the remainder is then at most 16 bits, never more), the dividend's low byte in a shifting out as the quotient
@@ -170,6 +170,30 @@ negde:	xor	a
 	sbc	a,a
 	sub	a,d
 	ld	d,a
+	ret
+
+; hl / de, signed, quotient and remainder in one call: the quotient in de, the remainder in hl. The quotient is negative
+; when the signs differ, the remainder takes the dividend's.
+	.globl __divremhi4
+__divremhi4:
+	ld	a,h
+	or	a,a
+	push	af
+	xor	a,d
+	push	af
+	call	abshlde
+	call	__udivhi3
+	pop	af
+	jp	p,1$
+	call	negde
+1$:	pop	af
+	ret	p
+	xor	a
+	sub	a,l
+	ld	l,a
+	sbc	a,a
+	sub	a,h
+	ld	h,a
 	ret
 
 	.globl __modhi3
@@ -300,28 +324,76 @@ __ashrsi3:
 	ex	de,hl
 	ret
 
+; ---- long multiply -------------------------------------------------------------------------------
+
+; The product of two longs, low 32 bits: a is hl (low) and de (high), b bc (low) and the word the caller stored on the
+; stack (high); the result is de (low) and hl (high). Shift and add over b's 32 bits in the shadow registers. The
+; return address waits in iy and the caller's word stays where it was (it pops it).
+	.globl __mulsi3
+__mulsi3:
+	pop	iy
+	exx
+	pop	de
+	ld	hl,#0
+	exx
+	push	de
+	ld	d,b
+	ld	e,c
+	ld	b,h
+	ld	c,l
+	ld	hl,#0
+	exx
+	pop	bc
+	exx
+	ld	a,#32
+1$:	exx
+	srl	d
+	rr	e
+	exx
+	rr	d
+	rr	e
+	jr	nc,2$
+	add	hl,bc
+	exx
+	adc	hl,bc
+	exx
+2$:	sla	c
+	rl	b
+	exx
+	rl	c
+	rl	b
+	exx
+	dec	a
+	jr	nz,1$
+	push	hl
+	exx
+	pop	de
+	push	af
+	jp	(iy)
+
 ; ---- long divide and remainder -------------------------------------------------------------------
 
 ; The dividend is hl (low) and de (high), the divisor bc (low) and the word the caller stored on the stack (high);
-; the result is de (low) and hl (high). Restoring division over a frame addressed through ix, which is kept: 32 steps,
-; the quotient shifting into the dividend's place as the remainder shifts in. Mode bits in the frame: 0 remainder
-; wanted, 1 signed, 2 quotient negative, 3 remainder negative.
+; the result is de (low) and hl (high). The divisor is aligned under the dividend and each step takes it off where
+; it fits: one step per quotient bit, in the shadow registers, over a frame addressed through ix, which is kept.
+; Mode bits in the frame: 0 remainder wanted, 1 signed, 2 quotient negative, 3 remainder negative.
 	.globl __udivsi3
 __udivsi3:
 	xor	a
-	jr	udivmodsi
+	jr	__udivmodsi4
 	.globl __umodsi3
 __umodsi3:
 	ld	a,#1
-	jr	udivmodsi
+	jr	__udivmodsi4
 	.globl __divsi3
 __divsi3:
 	ld	a,#2
-	jr	udivmodsi
+	jr	__udivmodsi4
 	.globl __modsi3
 __modsi3:
 	ld	a,#3
-udivmodsi:
+	.globl __udivmodsi4
+__udivmodsi4:
 	push	ix
 	ld	ix,#0
 	add	ix,sp
@@ -330,6 +402,7 @@ udivmodsi:
 	push	de
 	push	hl
 	ld	hl,#0
+	push	hl
 	push	hl
 	push	hl
 	bit	1,-1(ix)
@@ -368,39 +441,103 @@ udivmodsi:
 	ld	a,-1(ix)
 	xor	a,#4
 	ld	-1(ix),a
-loop:	ld	b,#32
-1$:	sla	-8(ix)
-	rl	-7(ix)
-	rl	-6(ix)
-	rl	-5(ix)
-	rl	-12(ix)
-	rl	-11(ix)
-	rl	-10(ix)
-	rl	-9(ix)
-	sbc	a,a
-	ld	c,a
-	ld	a,-12(ix)
-	sub	a,-4(ix)
-	ld	l,a
-	ld	a,-11(ix)
-	sbc	a,-3(ix)
-	ld	h,a
-	ld	a,-10(ix)
-	sbc	a,4(ix)
-	ld	e,a
-	ld	a,-9(ix)
-	sbc	a,5(ix)
-	ld	d,a
-	jr	nc,2$
-	ld	a,c
+; The divisor is shifted left under the dividend (while its top bit is clear and it stays no greater), then
+; each step subtracts it where it fits, a quotient bit, and shifts it right: one step per quotient bit, not per
+; dividend bit. The dividend (remainder) is hl low and hl' high, the divisor de and de', the quotient bc and bc'
+; (the routine's own shadow set), a counts the steps left.
+loop:	ld	l,-8(ix)
+	ld	h,-7(ix)
+	ld	e,-4(ix)
+	ld	d,-3(ix)
+	exx
+	ld	l,-6(ix)
+	ld	h,-5(ix)
+	ld	e,4(ix)
+	ld	d,5(ix)
+	ld	bc,#0
+	exx
+	ld	bc,#0
+	xor	a,a
+; a divisor of zero: the quotient is all ones, the remainder the dividend
+	ld	a,e
+	or	a,d
+	exx
+	or	a,e
+	or	a,d
+	exx
+	jr	nz,udm_nz
+	ld	bc,#0xFFFF
+	exx
+	ld	bc,#0xFFFF
+	exx
+	jr	udm_out
+udm_nz:	xor	a,a
+udm_al:	exx
+	bit	7,d
+	exx
+	jr	nz,udm_lp
+	sla	e
+	rl	d
+	exx
+	rl	e
+	rl	d
+	exx
 	or	a,a
-	jr	z,3$
-2$:	ld	-12(ix),l
+	sbc	hl,de
+	exx
+	sbc	hl,de
+	exx
+	jr	c,udm_ov
+	add	hl,de
+	exx
+	adc	hl,de
+	exx
+	inc	a
+	jr	udm_al
+; the divisor passed the dividend: back one place
+udm_ov:	add	hl,de
+	exx
+	adc	hl,de
+	srl	d
+	rr	e
+	exx
+	rr	d
+	rr	e
+udm_lp:	or	a,a
+	sbc	hl,de
+	exx
+	sbc	hl,de
+	exx
+	jr	c,udm_no
+	scf
+	jr	udm_q
+udm_no:	add	hl,de
+	exx
+	adc	hl,de
+	exx
+	or	a,a
+udm_q:	rl	c
+	rl	b
+	exx
+	rl	c
+	rl	b
+	srl	d
+	rr	e
+	exx
+	rr	d
+	rr	e
+	dec	a
+	jp	p,udm_lp
+udm_out:	ld	-12(ix),l
 	ld	-11(ix),h
-	ld	-10(ix),e
-	ld	-9(ix),d
-	inc	-8(ix)
-3$:	djnz	1$
+	ld	-8(ix),c
+	ld	-7(ix),b
+	exx
+	ld	-10(ix),l
+	ld	-9(ix),h
+	ld	-6(ix),c
+	ld	-5(ix),b
+udm_done:
 	bit	0,-1(ix)
 	jr	nz,4$
 	bit	2,-1(ix)
@@ -444,15 +581,680 @@ loop:	ld	b,#32
 	pop	ix
 	ret
 
+; ---- long quotient and remainder in one call, the speed family (`__udivremsi4`, `__divremsi4`) ---------------------
+; The arguments of the others and the address of a long for the remainder on the stack above the divisor's high word;
+; the quotient is returned (de low, hl high), the remainder stored through the address. The divisor aligned under the
+; dividend, one step per quotient bit, as `__udivsi3` (its own copy of the steps: a program that pairs a divide and a
+; remainder and also divides alone pays for both, the plain routines are as they were).
+	.globl __udivremsi4
+__udivremsi4:
+	push	ix
+	ld	ix,#0
+	add	ix,sp
+	push	af
+	push	bc
+	push	de
+	push	hl
+	ld	hl,#0
+	push	hl
+	push	hl
+	push	hl
+	call	__dvr_core
+	.globl __dvr_ep
+__dvr_ep:
+	ld	l,6(ix)
+	ld	h,7(ix)
+	ld	a,-12(ix)
+	ld	(hl),a
+	inc	hl
+	ld	a,-11(ix)
+	ld	(hl),a
+	inc	hl
+	ld	a,-10(ix)
+	ld	(hl),a
+	inc	hl
+	ld	a,-9(ix)
+	ld	(hl),a
+	ld	e,-8(ix)
+	ld	d,-7(ix)
+	ld	l,-6(ix)
+	ld	h,-5(ix)
+	ld	sp,ix
+	pop	ix
+	ret
+; signed: the magnitudes divided, the quotient negated if the signs differ, the remainder if the dividend is negative.
+; -1(ix): bit 2 the quotient is negative, bit 3 the remainder.
+	.globl __divremsi4
+__divremsi4:
+	push	ix
+	ld	ix,#0
+	add	ix,sp
+	xor	a
+	push	af
+	push	bc
+	push	de
+	push	hl
+	ld	hl,#0
+	push	hl
+	push	hl
+	push	hl
+	bit	7,-5(ix)
+	jr	z,1$
+	xor	a
+	sub	a,-8(ix)
+	ld	-8(ix),a
+	ld	a,#0
+	sbc	a,-7(ix)
+	ld	-7(ix),a
+	ld	a,#0
+	sbc	a,-6(ix)
+	ld	-6(ix),a
+	ld	a,#0
+	sbc	a,-5(ix)
+	ld	-5(ix),a
+	ld	a,#12
+	ld	-1(ix),a
+1$:	bit	7,5(ix)
+	jr	z,2$
+	xor	a
+	sub	a,-4(ix)
+	ld	-4(ix),a
+	ld	a,#0
+	sbc	a,-3(ix)
+	ld	-3(ix),a
+	ld	a,#0
+	sbc	a,4(ix)
+	ld	4(ix),a
+	ld	a,#0
+	sbc	a,5(ix)
+	ld	5(ix),a
+	ld	a,-1(ix)
+	xor	a,#4
+	ld	-1(ix),a
+2$:	call	__dvr_core
+	bit	3,-1(ix)
+	jr	z,3$
+	xor	a
+	sub	a,-12(ix)
+	ld	-12(ix),a
+	ld	a,#0
+	sbc	a,-11(ix)
+	ld	-11(ix),a
+	ld	a,#0
+	sbc	a,-10(ix)
+	ld	-10(ix),a
+	ld	a,#0
+	sbc	a,-9(ix)
+	ld	-9(ix),a
+3$:	bit	2,-1(ix)
+	jp	z,__dvr_ep
+	xor	a
+	sub	a,-8(ix)
+	ld	-8(ix),a
+	ld	a,#0
+	sbc	a,-7(ix)
+	ld	-7(ix),a
+	ld	a,#0
+	sbc	a,-6(ix)
+	ld	-6(ix),a
+	ld	a,#0
+	sbc	a,-5(ix)
+	ld	-5(ix),a
+	jp	__dvr_ep
+	.globl __dvr_core
+__dvr_core:
+dvr_lp0:	ld	l,-8(ix)
+	ld	h,-7(ix)
+	ld	e,-4(ix)
+	ld	d,-3(ix)
+	exx
+	ld	l,-6(ix)
+	ld	h,-5(ix)
+	ld	e,4(ix)
+	ld	d,5(ix)
+	ld	bc,#0
+	exx
+	ld	bc,#0
+	xor	a,a
+; a divisor of zero: the quotient is all ones, the remainder the dividend
+	ld	a,e
+	or	a,d
+	exx
+	or	a,e
+	or	a,d
+	exx
+	jr	nz,dvr_nz
+	ld	bc,#0xFFFF
+	exx
+	ld	bc,#0xFFFF
+	exx
+	jr	dvr_out
+dvr_nz:	xor	a,a
+dvr_al:	exx
+	bit	7,d
+	exx
+	jr	nz,dvr_lp
+	sla	e
+	rl	d
+	exx
+	rl	e
+	rl	d
+	exx
+	or	a,a
+	sbc	hl,de
+	exx
+	sbc	hl,de
+	exx
+	jr	c,dvr_ov
+	add	hl,de
+	exx
+	adc	hl,de
+	exx
+	inc	a
+	jr	dvr_al
+; the divisor passed the dividend: back one place
+dvr_ov:	add	hl,de
+	exx
+	adc	hl,de
+	srl	d
+	rr	e
+	exx
+	rr	d
+	rr	e
+dvr_lp:	or	a,a
+	sbc	hl,de
+	exx
+	sbc	hl,de
+	exx
+	jr	c,dvr_no
+	scf
+	jr	dvr_q
+dvr_no:	add	hl,de
+	exx
+	adc	hl,de
+	exx
+	or	a,a
+dvr_q:	rl	c
+	rl	b
+	exx
+	rl	c
+	rl	b
+	srl	d
+	rr	e
+	exx
+	rr	d
+	rr	e
+	dec	a
+	jp	p,dvr_lp
+dvr_out:	ld	-12(ix),l
+	ld	-11(ix),h
+	ld	-8(ix),c
+	ld	-7(ix),b
+	exx
+	ld	-10(ix),l
+	ld	-9(ix),h
+	ld	-6(ix),c
+	ld	-5(ix),b
+	ret
+
+; ---- long divide and remainder, the size family (`__s_`, chosen for a function tuned for size) --------------------
+; The same arguments and results as `__udivsi3` and the others. The restoring division, one step per dividend bit
+; (32), over registers alone: the dividend, and the quotient as its bits leave, is de and de', the remainder hl and
+; hl', the divisor bc and bc' (each pair the low word, then the high word in the other set); a counts the steps. A
+; remainder that carries out of its 32 bits is above the divisor. A divisor of zero gives all ones and the dividend.
+	.globl __s_udivsi3
+__s_udivsi3:
+	call	sdu
+	exx
+	push	de
+	exx
+	pop	hl
+	ret
+	.globl __s_umodsi3
+__s_umodsi3:
+	call	sdu
+	ex	de,hl
+	exx
+	push	hl
+	exx
+	pop	hl
+	ret
+; the divisor's high word is on the stack above the two return addresses
+	.globl __s_dvcore
+__s_dvcore:
+sdu:	exx
+	ld	hl,#4
+	add	hl,sp
+	ld	c,(hl)
+	inc	hl
+	ld	b,(hl)
+	exx
+sdm:	ex	de,hl
+	push	hl
+	exx
+	pop	de
+	ld	hl,#0
+	exx
+	ld	hl,#0
+	ld	a,#32
+sdm_lp:	sla	e
+	rl	d
+	exx
+	rl	e
+	rl	d
+	exx
+	adc	hl,hl
+	exx
+	adc	hl,hl
+	exx
+	jr	c,sdm_t
+	or	a,a
+	sbc	hl,bc
+	exx
+	sbc	hl,bc
+	exx
+	jr	nc,sdm_q
+	add	hl,bc
+	exx
+	adc	hl,bc
+	exx
+	jr	sdm_n
+sdm_t:	or	a,a
+	sbc	hl,bc
+	exx
+	sbc	hl,bc
+	exx
+sdm_q:	inc	e
+sdm_n:	dec	a
+	jr	nz,sdm_lp
+	ret
+; ---- long quotient and remainder in one call --------------------------------------------------------------------------
+; The arguments of the others and the address of a long for the remainder on the stack above the divisor's high word
+; (that is the stack above the return address, then the divisor's high word, then the address); the quotient is
+; returned (de low, hl high), the remainder stored through the address. Over the same register-only core as the size
+; family: a program that pairs a divide and a remainder pays for this one routine and the core, no frame routine.
+	.globl __s_udivremsi4
+__s_udivremsi4:
+	call	sdu
+	push	de
+	push	hl
+	ld	hl,#8
+	add	hl,sp
+	ld	c,(hl)
+	inc	hl
+	ld	b,(hl)
+	pop	de
+	ld	a,e
+	ld	(bc),a
+	inc	bc
+	ld	a,d
+	ld	(bc),a
+	inc	bc
+	exx
+	push	hl
+	push	de
+	exx
+	pop	hl
+	pop	de
+	ld	a,e
+	ld	(bc),a
+	inc	bc
+	ld	a,d
+	ld	(bc),a
+	pop	de
+	ret
+; signed: the magnitudes divided, the quotient negated if the signs differ, the remainder if the dividend is negative.
+; -1(ix): bit 0 the quotient is negative, bit 1 the remainder is.
+	.globl __s_divremsi4
+__s_divremsi4:
+	push	ix
+	ld	ix,#0
+	add	ix,sp
+	xor	a
+	push	af
+	bit	7,d
+	jr	z,1$
+	xor	a
+	sub	a,l
+	ld	l,a
+	ld	a,#0
+	sbc	a,h
+	ld	h,a
+	ld	a,#0
+	sbc	a,e
+	ld	e,a
+	ld	a,#0
+	sbc	a,d
+	ld	d,a
+	ld	a,#3
+	ld	-1(ix),a
+1$:	bit	7,5(ix)
+	jr	z,2$
+	xor	a
+	sub	a,c
+	ld	c,a
+	ld	a,#0
+	sbc	a,b
+	ld	b,a
+	ld	a,#0
+	sbc	a,4(ix)
+	ld	4(ix),a
+	ld	a,#0
+	sbc	a,5(ix)
+	ld	5(ix),a
+	ld	a,-1(ix)
+	xor	a,#1
+	ld	-1(ix),a
+2$:	exx
+	ld	c,4(ix)
+	ld	b,5(ix)
+	exx
+	call	sdm
+	bit	1,-1(ix)
+	jr	z,3$
+	ld	c,l
+	ld	b,h
+	ld	hl,#0
+	or	a,a
+	sbc	hl,bc
+	exx
+	ld	c,l
+	ld	b,h
+	ld	hl,#0
+	sbc	hl,bc
+	exx
+3$:	ld	c,6(ix)
+	ld	b,7(ix)
+	ld	a,l
+	ld	(bc),a
+	inc	bc
+	ld	a,h
+	ld	(bc),a
+	exx
+	ld	c,6(ix)
+	ld	b,7(ix)
+	inc	bc
+	inc	bc
+	ld	a,l
+	ld	(bc),a
+	inc	bc
+	ld	a,h
+	ld	(bc),a
+	push	de
+	exx
+	pop	hl
+	bit	0,-1(ix)
+	jr	z,4$
+	xor	a
+	sub	a,e
+	ld	e,a
+	ld	a,#0
+	sbc	a,d
+	ld	d,a
+	ld	a,#0
+	sbc	a,l
+	ld	l,a
+	ld	a,#0
+	sbc	a,h
+	ld	h,a
+4$:	ld	sp,ix
+	pop	ix
+	ret
+; a signed divide takes the magnitudes, divides, and gives the result the sign C gives it. -1(ix): bit 0 the
+; remainder is wanted, bit 1 the result is negative.
+	.globl __s_divsi3
+__s_divsi3:
+	xor	a
+	jr	sds
+	.globl __s_modsi3
+__s_modsi3:
+	ld	a,#1
+sds:	push	ix
+	ld	ix,#0
+	add	ix,sp
+	push	af
+	bit	7,d
+	jr	z,1$
+	xor	a
+	sub	a,l
+	ld	l,a
+	ld	a,#0
+	sbc	a,h
+	ld	h,a
+	ld	a,#0
+	sbc	a,e
+	ld	e,a
+	ld	a,#0
+	sbc	a,d
+	ld	d,a
+	ld	a,-1(ix)
+	xor	a,#2
+	ld	-1(ix),a
+1$:	bit	7,5(ix)
+	jr	z,2$
+	xor	a
+	sub	a,c
+	ld	c,a
+	ld	a,#0
+	sbc	a,b
+	ld	b,a
+	ld	a,#0
+	sbc	a,4(ix)
+	ld	4(ix),a
+	ld	a,#0
+	sbc	a,5(ix)
+	ld	5(ix),a
+	bit	0,-1(ix)
+	jr	nz,2$
+	ld	a,-1(ix)
+	xor	a,#2
+	ld	-1(ix),a
+2$:	exx
+	ld	c,4(ix)
+	ld	b,5(ix)
+	exx
+	call	sdm
+	bit	0,-1(ix)
+	jr	nz,3$
+	exx
+	push	de
+	exx
+	pop	hl
+	jr	4$
+3$:	ex	de,hl
+	exx
+	push	hl
+	exx
+	pop	hl
+4$:	bit	1,-1(ix)
+	jr	z,5$
+	xor	a
+	sub	a,e
+	ld	e,a
+	ld	a,#0
+	sbc	a,d
+	ld	d,a
+	ld	a,#0
+	sbc	a,l
+	ld	l,a
+	ld	a,#0
+	sbc	a,h
+	ld	h,a
+5$:	ld	sp,ix
+	pop	ix
+	ret
+
 ; ---- 64-bit divide, remainder and shifts ----------------------------------------------------------
 ; A long long travels as four words, low first. The result is written through hl (the hidden pointer, also
 ; returned in de); the first operand's words are de, bc, 4(ix), 6(ix) and the second's the next four words on the
 ; stack (8(ix) up) or, for a shift, a count byte at 8(ix). The caller pops its arguments.
 
 ; The mode is in a: 0 quotient of unsigned, 1 remainder of unsigned, 2 quotient of signed, 3 remainder of signed.
-; Restoring division over a frame: the dividend shifts left through the remainder, 64 steps, the quotient bit
+; The size family (`__s_`, chosen for a function tuned for size) is the restoring division over a frame: the dividend shifts left through the remainder, 64 steps, the quotient bit
 ; entering at the bottom. Frame: -16..-9 quotient/dividend, -8..-1 remainder, -17 mode (bit 2 quotient negative,
 ; bit 3 remainder negative), -18 steps left, -19 carry out of the remainder, -21,-20 result pointer.
+	.globl __s_udivdi3
+__s_udivdi3:
+	xor	a
+	jr	udivmoddi_s
+	.globl __s_umoddi3
+__s_umoddi3:
+	ld	a,#1
+	jr	udivmoddi_s
+	.globl __s_divdi3
+__s_divdi3:
+	ld	a,#2
+	jr	udivmoddi_s
+	.globl __s_moddi3
+__s_moddi3:
+	ld	a,#3
+udivmoddi_s:
+	push	ix
+	ld	ix,#0
+	add	ix,sp
+	ld	iy,#-21
+	add	iy,sp
+	ld	sp,iy
+	ld	-21(ix),l
+	ld	-20(ix),h
+	ld	-17(ix),a
+	ld	-16(ix),e
+	ld	-15(ix),d
+	ld	-14(ix),c
+	ld	-13(ix),b
+	ld	a,4(ix)
+	ld	-12(ix),a
+	ld	a,5(ix)
+	ld	-11(ix),a
+	ld	a,6(ix)
+	ld	-10(ix),a
+	ld	a,7(ix)
+	ld	-9(ix),a
+	xor	a
+	ld	b,#8
+	push	ix
+	pop	hl
+	ld	de,#-8
+	add	hl,de
+1$:	ld	(hl),a
+	inc	hl
+	djnz	1$
+	bit	1,-17(ix)
+	jr	z,loop64s
+	bit	7,-9(ix)
+	jr	z,2$
+	push	ix
+	pop	hl
+	ld	de,#-16
+	add	hl,de
+	call	neg64
+	ld	a,-17(ix)
+	xor	a,#12
+	ld	-17(ix),a
+2$:	bit	7,15(ix)
+	jr	z,loop64s
+	push	ix
+	pop	hl
+	ld	de,#8
+	add	hl,de
+	call	neg64
+	ld	a,-17(ix)
+	xor	a,#4
+	ld	-17(ix),a
+loop64s:
+	.globl __s_slow
+__s_slow:
+d64_slow:
+	ld	-18(ix),#64
+3$:	push	ix
+	pop	hl
+	ld	de,#-16
+	add	hl,de
+	sla	(hl)
+	ld	b,#15
+4$:	inc	hl
+	rl	(hl)
+	djnz	4$
+	sbc	a,a
+	ld	-19(ix),a
+	push	ix
+	pop	hl
+	ld	de,#8
+	add	hl,de
+	ex	de,hl
+	push	ix
+	pop	hl
+	ld	bc,#-8
+	add	hl,bc
+	or	a,a
+	ld	b,#8
+5$:	ld	a,(hl)
+	ex	de,hl
+	sbc	a,(hl)
+	ex	de,hl
+	ld	(hl),a
+	inc	hl
+	inc	de
+	djnz	5$
+	jr	nc,7$
+	ld	a,-19(ix)
+	or	a,a
+	jr	nz,7$
+	ld	bc,#-8
+	add	hl,bc
+	ex	de,hl
+	add	hl,bc
+	ex	de,hl
+	or	a,a
+	ld	b,#8
+6$:	ld	a,(de)
+	adc	a,(hl)
+	ld	(hl),a
+	inc	hl
+	inc	de
+	djnz	6$
+	jr	8$
+7$:	inc	-16(ix)
+8$:	dec	-18(ix)
+	jp	nz,3$
+fin64:	push	ix
+	pop	hl
+	ld	de,#-16
+	add	hl,de
+	bit	0,-17(ix)
+	jr	z,9$
+	ld	de,#8
+	add	hl,de
+	bit	3,-17(ix)
+	jr	10$
+9$:	bit	2,-17(ix)
+10$:	jr	z,11$
+	call	neg64
+	ld	bc,#-8
+	add	hl,bc
+11$:	ld	e,-21(ix)
+	ld	d,-20(ix)
+	ld	bc,#8
+	ldir
+	ld	e,-21(ix)
+	ld	d,-20(ix)
+	ld	sp,ix
+	pop	ix
+	ret
+
+; Negates the eight bytes at hl in place; hl is left at their end.
+neg64:
+	ld	b,#8
+	or	a,a
+1$:	ld	a,#0
+	sbc	a,(hl)
+	ld	(hl),a
+	inc	hl
+	djnz	1$
+	ret
+
+; The speed family keeps the same frame and result; a divisor of 32 bits or less runs in registers, so the
+; dividend's leading zeros cost a shift each and not a quotient step. The size family does not reach this code.
 	.globl __udivdi3
 __udivdi3:
 	xor	a
@@ -522,93 +1324,121 @@ udivmoddi:
 	xor	a,#4
 	ld	-17(ix),a
 loop64:
+	ld	a,12(ix)
+	or	a,13(ix)
+	or	a,14(ix)
+	or	a,15(ix)
+	jp	nz,d64_big
+; a divisor of 32 bits or less: the dividend (hl de, then hl' de') shifts left through a
+; 32-bit remainder (bc' low, bc high), the quotient bits entering below it; its leading zeros are skipped. The
+; steps left are at -18(ix)
+d64_small:
 	ld	-18(ix),#64
-3$:	push	ix
-	pop	hl
-	ld	de,#-16
-	add	hl,de
-	sla	(hl)
-	ld	b,#15
-4$:	inc	hl
-	rl	(hl)
-	djnz	4$
-	sbc	a,a
-	ld	-19(ix),a
-	push	ix
-	pop	hl
-	ld	de,#8
-	add	hl,de
+	ld	l,-16(ix)
+	ld	h,-15(ix)
+	ld	e,-14(ix)
+	ld	d,-13(ix)
+	exx
+	ld	l,-12(ix)
+	ld	h,-11(ix)
+	ld	e,-10(ix)
+	ld	d,-9(ix)
+	ld	bc,#0
+	exx
+	ld	bc,#0
+d64_sk:	exx
+	bit	7,d
+	exx
+	jr	nz,d64_st
+	add	hl,hl
 	ex	de,hl
-	push	ix
-	pop	hl
-	ld	bc,#-8
-	add	hl,bc
-	or	a,a
-	ld	b,#8
-5$:	ld	a,(hl)
+	adc	hl,hl
 	ex	de,hl
-	sbc	a,(hl)
+	exx
+	adc	hl,hl
 	ex	de,hl
-	ld	(hl),a
-	inc	hl
-	inc	de
-	djnz	5$
-	jr	nc,7$
-	ld	a,-19(ix)
-	or	a,a
-	jr	nz,7$
-	ld	bc,#-8
-	add	hl,bc
+	adc	hl,hl
 	ex	de,hl
-	add	hl,bc
+	exx
+	dec	-18(ix)
+	jr	nz,d64_sk
+	jr	d64_fn
+d64_st:	add	hl,hl
 	ex	de,hl
-	or	a,a
-	ld	b,#8
-6$:	ld	a,(de)
-	adc	a,(hl)
-	ld	(hl),a
-	inc	hl
-	inc	de
-	djnz	6$
-	jr	8$
-7$:	inc	-16(ix)
-8$:	dec	-18(ix)
-	jp	nz,3$
-	push	ix
-	pop	hl
-	ld	de,#-16
-	add	hl,de
-	bit	0,-17(ix)
-	jr	z,9$
-	ld	de,#8
-	add	hl,de
-	bit	3,-17(ix)
-	jr	10$
-9$:	bit	2,-17(ix)
-10$:	jr	z,11$
-	call	neg64
-	ld	bc,#-8
-	add	hl,bc
-11$:	ld	e,-21(ix)
-	ld	d,-20(ix)
-	ld	bc,#8
-	ldir
-	ld	e,-21(ix)
-	ld	d,-20(ix)
-	ld	sp,ix
-	pop	ix
-	ret
-
-; Negates the eight bytes at hl in place; hl is left at their end.
-neg64:
-	ld	b,#8
-	or	a,a
-1$:	ld	a,#0
-	sbc	a,(hl)
-	ld	(hl),a
-	inc	hl
-	djnz	1$
-	ret
+	adc	hl,hl
+	ex	de,hl
+	exx
+	adc	hl,hl
+	ex	de,hl
+	adc	hl,hl
+	ex	de,hl
+	rl	c
+	rl	b
+	exx
+	rl	c
+	rl	b
+	push	bc
+	exx
+	push	bc
+	ld	a,c
+	sub	a,8(ix)
+	ld	c,a
+	ld	a,b
+	sbc	a,9(ix)
+	ld	b,a
+	exx
+	ld	a,c
+	sbc	a,10(ix)
+	ld	c,a
+	ld	a,b
+	sbc	a,11(ix)
+	ld	b,a
+	jr	c,d64_no
+	pop	af
+	pop	af
+	inc	l
+	jr	d64_nx
+d64_no:	exx
+	pop	bc
+	exx
+	pop	bc
+d64_nx:	dec	-18(ix)
+	jp	nz,d64_st
+d64_fn:	ld	-16(ix),l
+	ld	-15(ix),h
+	ld	-14(ix),e
+	ld	-13(ix),d
+	ld	-6(ix),c
+	ld	-5(ix),b
+	exx
+	ld	-12(ix),l
+	ld	-11(ix),h
+	ld	-10(ix),e
+	ld	-9(ix),d
+	ld	-8(ix),c
+	ld	-7(ix),b
+	jp	fin64
+; a divisor of more than 32 bits: over a dividend of 32 bits or less the quotient is zero and the remainder the
+; dividend; otherwise the restoring loop, one step per dividend bit
+d64_big:
+	ld	a,-12(ix)
+	or	a,-11(ix)
+	or	a,-10(ix)
+	or	a,-9(ix)
+	jp	nz,d64_slow
+	ld	a,-16(ix)
+	ld	-8(ix),a
+	ld	-16(ix),#0
+	ld	a,-15(ix)
+	ld	-7(ix),a
+	ld	-15(ix),#0
+	ld	a,-14(ix)
+	ld	-6(ix),a
+	ld	-14(ix),#0
+	ld	a,-13(ix)
+	ld	-5(ix),a
+	ld	-13(ix),#0
+	jp	fin64
 
 ; A shift of a long long by the count byte at 8(ix), left, logical right or arithmetic right (a = 0, 1, 2): the
 ; operand is written to the result, shifted whole bytes with ldir/lddr, then the rest a bit at a time. Frame: -2,-1

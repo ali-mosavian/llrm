@@ -411,6 +411,28 @@ pub fn cast(
             }
             Some(context.constant(Constant { ty: to, kind: ConstantKind::Int((value as i128) as u128 & mask(width)) }))
         }
+        // An integer of up to 64 significant bits is exact in binary128.
+        (CastOp::SIToFP | CastOp::UIToFP, Type::Float(FloatKind::F128)) => {
+            let (x, from) = number(context, c)?;
+            let (magnitude, negative) = if op == CastOp::SIToFP && signed(x, from) < 0 {
+                (signed(x, from).unsigned_abs(), true)
+            } else if op == CastOp::SIToFP {
+                (signed(x, from) as u128, false)
+            } else {
+                (x, false)
+            };
+            let bits = if magnitude == 0 {
+                0
+            } else {
+                let top = 127 - magnitude.leading_zeros();
+                if top > 112 {
+                    return None;
+                }
+                let fraction = (magnitude << (112 - top)) & ((1u128 << 112) - 1);
+                (u128::from(negative) << 127) | ((0x3FFF + u128::from(top)) << 112) | fraction
+            };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Float128(bits) }))
+        }
         (CastOp::SIToFP | CastOp::UIToFP, Type::Float(kind)) if kind != FloatKind::X86Fp80 => {
             let (x, from) = number(context, c)?;
             // Straight from the integer to the target precision: no rounding

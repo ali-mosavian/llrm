@@ -148,7 +148,7 @@ pub fn get_exact_sdiv(
         ScevKind::Add(operands) => {
             if ignore_significant_bits || is_add_sextable(se, cx, lhs) {
                 let mut ops = Vec::with_capacity(operands.len());
-                for op in operands {
+                for op in operands.iter().copied() {
                     ops.push(ScevUse::of(get_exact_sdiv(se, cx, op.scev, rhs, ignore_significant_bits)?));
                 }
                 return Some(se.get_add_expr(cx, ops, Flags::default(), 0).scev);
@@ -168,7 +168,7 @@ pub fn get_exact_sdiv(
                 }
                 let mut ops = Vec::with_capacity(operands.len());
                 let mut found = false;
-                for op in operands {
+                for op in operands.iter().copied() {
                     let mut s = op.scev;
                     if !found && let Some(q) = get_exact_sdiv(se, cx, s, rhs, ignore_significant_bits) {
                         s = q;
@@ -210,7 +210,8 @@ pub fn extract_immediate(
     s: Scev,
 ) -> (Immediate, Scev) {
     match se.node(s).kind.clone() {
-        ScevKind::Add(mut ops) => {
+        ScevKind::Add(ops) => {
+            let mut ops = ops.to_vec();
             let mut result = extract_immediate_operand(se, cx, &mut ops);
             if result.is_zero() {
                 let (found, rest) = extract_immediate(se, cx, ops[0].scev);
@@ -224,7 +225,8 @@ pub fn extract_immediate(
             }
             (result, s)
         }
-        ScevKind::AddRec(mut ops, header) => {
+        ScevKind::AddRec(ops, header) => {
+            let mut ops = ops.to_vec();
             let (result, rest) = extract_immediate(se, cx, ops[0].scev);
             if result.is_non_zero() {
                 ops[0] = ScevUse::of(rest);
@@ -254,7 +256,8 @@ pub fn extract_symbol(
             }
             (None, s)
         }
-        ScevKind::Add(mut ops) => {
+        ScevKind::Add(ops) => {
+            let mut ops = ops.to_vec();
             let last = ops.len() - 1;
             let (result, rest) = extract_symbol(se, cx, ops[last].scev);
             if result.is_some() {
@@ -263,7 +266,8 @@ pub fn extract_symbol(
             }
             (None, s)
         }
-        ScevKind::AddRec(mut ops, header) => {
+        ScevKind::AddRec(ops, header) => {
+            let mut ops = ops.to_vec();
             let (result, rest) = extract_symbol(se, cx, ops[0].scev);
             if result.is_some() {
                 ops[0] = ScevUse::of(rest);
@@ -500,6 +504,34 @@ pub struct Collection<'a, 'b> {
 }
 
 impl<'a, 'b> Collection<'a, 'b> {
+    /// The collection as it stands: the uses with their formulae, to be taken
+    /// on from here two ways.
+    pub fn fork(&self) -> Self {
+        Self {
+            cx: self.cx,
+            tti: self.tti,
+            l: self.l,
+            safe_to_expand: self.safe_to_expand,
+            hardware_loop_profitable: self.hardware_loop_profitable,
+            iv_inc_insert_pos: self.iv_inc_insert_pos,
+            iv_inc_block: self.iv_inc_block,
+            uses: self.uses.clone(),
+            use_map: self.use_map.clone(),
+            reg_uses: self.reg_uses.clone(),
+            factors: self.factors.clone(),
+            types: self.types.clone(),
+            baseline_cost: self.baseline_cost.clone(),
+            changed: self.changed,
+            swapped_compares: self.swapped_compares.clone(),
+            insert_attempts: self.insert_attempts,
+            other_register_units: self.other_register_units,
+            ignore_pressure: std::cell::Cell::new(self.ignore_pressure.get()),
+            size: self.size,
+            rated: std::cell::Cell::new(self.rated.get()),
+            chain_uses: self.chain_uses.clone(),
+        }
+    }
+
     /// The registers other values of the loop hold, as the rating counts them.
     pub fn pressure_units(&self) -> u32 {
         if self.ignore_pressure.get() { 0 } else { self.other_register_units }
@@ -911,6 +943,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     hardware_loop_profitable: self.hardware_loop_profitable,
                     as_written: true,
                     other_register_units: self.pressure_units(),
+                    size: self.size,
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);
@@ -1040,12 +1073,23 @@ impl<'a, 'b> Collection<'a, 'b> {
 /// They compete with the formulae for the target's registers, which the phis
 /// alone did not show (shellsort bas -Os: a third formula register spilled the
 /// `i32` chain).
+thread_local! {
+    static UNITS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread counted a loop's register units, for a test
+/// that a loop is counted once however many solutions are rated.
+pub fn register_units_computed() -> usize {
+    UNITS_COMPUTED.with(std::cell::Cell::get)
+}
+
 pub fn loop_register_units(
     se: &mut ScalarEvolution,
     cx: &Cx,
     tti: &dyn Tti,
     l: BlockId,
 ) -> u32 {
+    UNITS_COMPUTED.with(|n| n.set(n.get() + 1));
     let Some(lp) = cx.loops.get_loop_for(l) else { return 0 };
     let word = tti.gpr_bits();
     let mut weights: llrm_mir::dense::IdMap<llrm_mir::module::ValueId, usize> = llrm_mir::dense::IdMap::new();

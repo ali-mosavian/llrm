@@ -370,3 +370,81 @@ fn test_the_x87_stack_slots_reach_the_unroll_query_only_without_sse2() {
     let slots = |cpu: &str| X86::of_cpu(cpu).expect("a cpu").with_tuning(tuning.clone()).x87_stack_slots();
     assert_eq!((slots("i486"), slots("pentium"), slots("core2")), (Some(8), Some(8), None));
 }
+
+fn unroll_defaults() -> UnrollingPreferences {
+    UnrollingPreferences {
+        threshold: 150,
+        max_percent_threshold_boost: 400,
+        opt_size_threshold: 0,
+        partial_threshold: 150,
+        partial_opt_size_threshold: 150,
+        default_unroll_runtime_count: 8,
+        max_count: u32::MAX,
+        max_upper_bound: 8,
+        full_unroll_max_count: u32::MAX,
+        be_insns: 2,
+        partial: false,
+        runtime: false,
+        allow_remainder: true,
+        unroll_remainder: false,
+        allow_expensive_trip_count: false,
+        force: false,
+        upper_bound: false,
+        max_iterations_count_to_analyze: 10,
+        unroll_and_jam: false,
+        unroll_and_jam_inner_loop_threshold: 60,
+    }
+}
+
+/// `x86-64` and `core2` run `SandyBridgeModel` (LoopMicroOpBufferSize 28), so
+/// the base `getUnrollingPreferences` enables partial and runtime unrolling
+/// there, up to 28 micro-ops and not past a call. Without it x86-64 reported no
+/// preference and the partial/runtime unroll never ran (0 diffs in the A/B).
+/// The `GenericModel` cpus (`i486` and the rest) have no loop buffer: none.
+#[test]
+fn test_partial_and_runtime_unrolling_follow_the_cpu_models_loop_buffer() {
+    for cpu in ["x86-64", "core2"] {
+        let tti = X86::of_cpu(cpu).unwrap();
+        let mut up = unroll_defaults();
+        tti.get_unrolling_preferences(false, &mut up);
+        assert!(up.partial && up.runtime && up.upper_bound, "{cpu}");
+        assert_eq!((up.partial_threshold, up.opt_size_threshold, up.partial_opt_size_threshold), (28, 0, 0), "{cpu}");
+        let mut calls = unroll_defaults();
+        tti.get_unrolling_preferences(true, &mut calls);
+        assert!(!calls.partial && !calls.runtime && !calls.upper_bound, "{cpu} with a call");
+    }
+    for cpu in ["i386", "i486", "pentium", "pentiumpro", "k5", "k6", "athlon"] {
+        let mut up = unroll_defaults();
+        X86::of_cpu(cpu).unwrap().get_unrolling_preferences(false, &mut up);
+        assert!(!up.partial && !up.runtime && !up.upper_bound, "{cpu}");
+    }
+}
+
+/// crc -O1 m64: ConstantHoisting rebased the mask 0xedb88320 against 0xffffffff
+/// (`lea r, [rcx-0x12477cdf]`) because the pin prices a 64-bit constant of 32
+/// leading zeros at 2 (`isInt<32>` only) though `mov r32, imm32` zero-extends:
+/// 147 B became 162 (gcc 118). With zext_imm_is_basic it costs one.
+#[test]
+fn a_zero_extended_32_bit_constant_costs_one_instruction_where_the_target_says_so() {
+    let mut tuning = llrm_mir::target::Tuning::PIN;
+    let pin = X86::of_cpu("i486").unwrap();
+    assert_eq!(pin.int_imm_cost(0xedb8_8320, 64), Cost::of(2));
+    tuning.zext_imm_is_basic = true;
+    let zimm = X86::of_cpu("i486").unwrap().with_tuning(tuning);
+    assert_eq!(zimm.int_imm_cost(0xedb8_8320, 64), Cost::of(1));
+    assert_eq!(zimm.int_imm_cost(0x1_0000_0000, 64), Cost::of(2));
+    assert_eq!(zimm.int_imm_cost(0xedb8_8320, 32), Cost::of(1));
+}
+
+/// ZIMM priced a constant hoisted at `-Os` as one instruction, so
+/// ConstantHoisting kept 21 copies of `mov eax, 0x9E3779B9` (5 B each) where
+/// one register held it (3 B copies): `mul_constants` -Os +30 B.
+#[test]
+fn a_function_built_for_size_keeps_the_pins_cost_for_a_zero_extended_constant() {
+    let mut tuning = llrm_mir::target::Tuning::PIN;
+    tuning.zext_imm_is_basic = true;
+    let zimm = X86::of_cpu("i486").unwrap().with_tuning(tuning);
+    let cost = |for_size| zimm.int_imm_cost_inst_for_size(ImmUser::Other, 0, 0x9e37_79b9, 64, for_size);
+    assert_eq!(cost(false), Cost::of(1));
+    assert_eq!(cost(true), Cost::of(2));
+}

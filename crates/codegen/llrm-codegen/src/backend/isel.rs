@@ -185,7 +185,9 @@ use crate::support::hash::IndexMap;
 mod combined;
 /// The abstract values an operand list names, `ir.values` deciding.
 fn _named_values(where_: &[Loc]) -> Vec<u32> {
-    where_.iter().flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)).collect()
+    let mut out = Vec::with_capacity(where_.iter().map(|operand| ir::values(operand).len()).sum());
+    out.extend(where_.iter().flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)));
+    out
 }
 
 /// The values an instruction writes: a destination that *is* a value.
@@ -200,14 +202,13 @@ pub(crate) fn _written(dests: &[Loc]) -> Vec<u32> {
 }
 
 /// The values an instruction reads: its sources, and the addresses its
-/// destinations are reached by.
+/// destinations are reached by. Sized for what it holds: a list grown a push
+/// at a time was reallocated twice (107,000 growths in memory_expansion).
 pub(crate) fn _read(what: &ir::Semantics) -> Vec<u32> {
-    let mut out = _named_values(&what.sources);
-    for where_ in &what.dests {
-        if !matches!(where_, Loc::Held(_)) {
-            out.extend(ir::values(where_).into_iter().map(|one| one.value));
-        }
-    }
+    let addressed = || what.dests.iter().filter(|where_| !matches!(where_, Loc::Held(_)));
+    let count: usize = what.sources.iter().chain(addressed()).map(|operand| ir::values(operand).len()).sum();
+    let mut out = Vec::with_capacity(count);
+    out.extend(what.sources.iter().chain(addressed()).flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)));
     out
 }
 
@@ -388,8 +389,10 @@ fn passing(
                 return refuse(format!("calling convention {convention}"));
             };
             // `fastcc` is C's callee-pop twin unless the description states a
-            // `fastcc` of its own.
-            let twin = convention == llrm_mir::opcode::FAST && found.cc.as_deref() != Some("fast");
+            // `fastcc` of its own, or says C has no such twin (x86-64).
+            let twin = convention == llrm_mir::opcode::FAST
+                && found.cc.as_deref() != Some("fast")
+                && arch.calling().callee_pop(0) == Some(llrm_mir::opcode::FAST);
             let pops = twin || found.cleanup == Cleanup::Callee;
             Ok(Passing {
                 in_order: found.order == Order::LeftToRight,
@@ -594,6 +597,46 @@ pub fn convention_for_abi(
     }
     if interrupt && widths.iter().any(|&one| one != 2) {
         return refuse("an interrupt handler's parameter that is not a register");
+    }
+    // Row W64-1 (owner x86-m64, exit 2026-11-14): Win64's by-value structs and
+    // vectors are passed by the ABI's own rules (a pointer to a caller copy,
+    // XMM0, ...), not probed: refused, not guessed. A 128-bit integer is two
+    // i64 words (CC_X86_Win64_C has no rule for it): refused only where the
+    // pair would straddle the fourth register, which the pin splits between
+    // R9 and the stack. Row W64-2 (owner object-refactor, exit when vectors
+    // open): clang hands `__int128` over as `ptr align 16` arguments and a
+    // `<2 x i64>` result in XMM0, which the vector refusal below still stops.
+    if registers.is_some_and(|entry| entry.positional) {
+        let wide = |ty: TypeId| matches!(types.get(ty), Type::Int(128));
+        let unprobed = |ty: TypeId| match types.get(ty) {
+            Type::Int(bits) => *bits > 128,
+            Type::Vector { .. } => true,
+            _ => false,
+        };
+        let shape = |index: usize| byval_type(parameter_attrs.get(index).map_or(&[], Vec::as_slice)).is_some();
+        if param_types.iter().enumerate().any(|(index, &ty)| unprobed(ty) || shape(index)) || unprobed(result) {
+            return refuse("a Win64 by-value struct, vector or integer wider than 128 bits (row W64-1)");
+        }
+        let registers_len = registers.map_or(0, |entry| entry.argument_registers.len());
+        let mut position = usize::from(
+            param_types
+                .iter()
+                .enumerate()
+                .any(|(index, _)| class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) == Some(llrm_mir::opcode::RESULT_POINTER)),
+        );
+        for (index, &ty) in param_types.iter().enumerate() {
+            if class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) == Some(llrm_mir::opcode::RESULT_POINTER) {
+                continue;
+            }
+            if wide(ty) {
+                if position + 1 == registers_len {
+                    return refuse("a Win64 128-bit integer split between R9 and the stack (row W64-1)");
+                }
+                position += 2;
+            } else {
+                position += 1;
+            }
+        }
     }
     let mut parameters = Vec::new();
     let mut cursor = first;
@@ -1071,6 +1114,8 @@ pub(super) fn size_of(
         (_, Type::Struct { .. } | Type::Named(_)) => {
             u32::try_from(layout.store_size(&module.context.types, ty)).map_err(|_| Unselected("a struct".into()))
         }
+        // Two eightbytes where the datalayout has a legal i64.
+        (_, Type::Int(128)) if layout.largest_legal_integer() >= 64 => Ok(16),
         _ => width_of(module, layout, ty),
     }
 }
@@ -1362,8 +1407,6 @@ pub fn selected_with<'c>(
     })
 }
 
-/// The alignment the frame keeps a local to without realigning the stack.
-pub(crate) const OVER_ALIGNED: i64 = 16;
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes
 /// them in.
@@ -2271,7 +2314,17 @@ impl Selector<'_, '_, '_> {
                 -self.depth
             };
             self.extents.push((disp, size));
-            if align > OVER_ALIGNED {
+            // The pin realigns where `MaxAlignment > StackAlignment`
+            // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineFrameInfo.h#L641),
+            // DEVIATE OA-1 (owner w2, exit: x86-m32's sysv32 stack_alignment
+            // = 16 lands, then the pin's threshold is this value): the
+            // threshold is the target's stack alignment, at least two slots.
+            // The m32 native alignment is 4, and the pin's rule would realign
+            // every 8-aligned double or i64 local the frame lays on its own
+            // alignment (the 486 clocks): +775 B in fcmp_all -O0.
+            if self.arch.can_realign_stack()
+                && align > self.arch.stack_alignment().max(2 * i64::from(self.arch.stack_slot_bytes()))
+            {
                 self.over_aligned.push((disp, align));
             }
             homes.insert(group, disp);
@@ -6364,7 +6417,7 @@ impl Selector<'_, '_, '_> {
         effects: llrm_mir::memory::Effects,
         disturbs: BTreeSet<RegId>,
     ) -> Arc<crate::model::lir::CallMemory> {
-        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs })
+        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs, block: false })
     }
 
     /// A direct call: its arguments pushed as its convention orders them,
@@ -8603,5 +8656,25 @@ mod anchoring_tests {
         let before: IndexMap<i64, Vec<u32>> = [(4, vec![0])].into_iter().collect();
         let stands = after_definers(&insns, &before, &notes);
         assert_eq!(stands.get(&2), Some(&vec![0]), "{stands:?}");
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+    use super::*;
+
+    /// The list of values an instruction reads was grown by pushes: five
+    /// values took a capacity of eight, and every selected instruction paid
+    /// the reallocations (107,000 growths in memory_expansion). It is sized
+    /// for the values it holds.
+    #[test]
+    fn test_the_values_an_instruction_reads_are_listed_in_one_allocation() {
+        let held = |value: u32| Loc::Held(Held { value, width: 4, offset: 0 });
+        let mut what = Semantics::new(Operation::Binary);
+        what.dests = vec![held(9)];
+        what.sources = (1..=5).map(held).collect();
+        let read = _read(&what);
+        assert_eq!(read, vec![1, 2, 3, 4, 5]);
+        assert_eq!(read.capacity(), read.len());
     }
 }

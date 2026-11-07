@@ -1,7 +1,7 @@
 //! The pieces of the C -> ours pipeline the benchmarks and the differential
 //! tests share.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -73,8 +73,12 @@ pub fn reachable_runtime(text: &str) -> String {
     let by_name: HashMap<&str, usize> = blocks.iter().enumerate().map(|(i, (n, _))| (n.as_str(), i)).collect();
     let mut wanted = vec![false; blocks.len()];
     let mut queue: Vec<usize> = Vec::new();
+    // a name in a comment is not a reference: the comment that introduces the memory routines named them in `__ashrsi3_fast`'s block
     let tokens = |s: &str| -> Vec<usize> {
-        s.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter_map(|t| by_name.get(t).copied()).collect()
+        s.lines()
+            .flat_map(|line| line.split(';').next().unwrap_or("").split(|c: char| !(c.is_alphanumeric() || c == '_')))
+            .filter_map(|t| by_name.get(t).copied())
+            .collect()
     };
     for i in tokens(text) {
         queue.push(i);

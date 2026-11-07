@@ -384,7 +384,7 @@ fn has_poison_generating_metadata(instruction: &Instruction) -> bool {
 /// `Operator::hasPoisonGeneratingAnnotations()`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Operator.cpp#L78>
-fn has_poison_generating_annotations(
+pub fn has_poison_generating_annotations(
     q: &Query,
     op: Operator,
 ) -> bool {
@@ -936,12 +936,33 @@ pub fn is_guaranteed_to_transfer_execution_to_successor(
     q: &Query,
     inst: InstId,
 ) -> bool {
-    if matches!(
-        q.function.instruction(inst).opcode,
-        Opcode::Ret | Opcode::Unreachable
-    ) {
+    let opcode = &q.function.instruction(inst).opcode;
+    if matches!(opcode, Opcode::Ret | Opcode::Unreachable) {
         return false;
     }
+    // Only these can throw, not return or be volatile: the rest transfer.
+    if !matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Resume | Opcode::Load { .. } | Opcode::Store { .. })
+    {
+        return true;
+    }
+    transfers_by_effects(q, inst)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Instructions that reached an attribute-reading path, by test.
+    pub(crate) static EFFECT_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `!mayThrow() && willReturn()` of an instruction whose opcode can do either.
+/// Kept out of line: the callers' scan loops are hot and almost never get here.
+#[inline(never)]
+fn transfers_by_effects(
+    q: &Query,
+    inst: InstId,
+) -> bool {
+    #[cfg(test)]
+    EFFECT_CHECKS.with(|one| one.set(one.get() + 1));
     !may_throw(q, inst) && will_return(q, inst)
 }
 
@@ -1114,6 +1135,31 @@ fn handle_guaranteed_well_defined_ops(
     inst: InstId,
     handle: &mut dyn FnMut(Operand) -> bool,
 ) -> bool {
+    if !matches!(
+        q.function.instruction(inst).opcode,
+        Opcode::Store { .. }
+            | Opcode::Load { .. }
+            | Opcode::Call(_)
+            | Opcode::Invoke(_)
+            | Opcode::Ret
+            | Opcode::Switch
+            | Opcode::Br
+    ) {
+        return false;
+    }
+    well_defined_ops_of(q, inst, handle)
+}
+
+/// The opcodes `handleGuaranteedWellDefinedOps` reads operands of; out of
+/// line for the same reason as [`transfers_by_effects`].
+#[inline(never)]
+fn well_defined_ops_of(
+    q: &Query,
+    inst: InstId,
+    handle: &mut dyn FnMut(Operand) -> bool,
+) -> bool {
+    #[cfg(test)]
+    EFFECT_CHECKS.with(|one| one.set(one.get() + 1));
     let instruction = q.function.instruction(inst);
     match &instruction.opcode {
         Opcode::Store { .. } => {

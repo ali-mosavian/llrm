@@ -6,6 +6,7 @@ pub mod addr;
 #[path = "generated/asm.rs"]
 pub mod asm;
 pub mod call;
+pub mod divrem;
 #[rustfmt::skip]
 #[path = "generated/enc.rs"]
 pub mod enc;
@@ -17,6 +18,8 @@ pub mod hooks;
 pub mod indexed;
 pub mod local;
 pub mod lowering;
+pub mod pea;
 pub mod pipeline;
 pub mod predicates;
+pub mod scaled;
 pub mod short;
