@@ -99,6 +99,11 @@ impl<T: Target> Converted<T> {
         size: bool,
         joins_pinned: bool,
     ) {
+        if std::env::var_os("PHIC_DBG").is_some() {
+            let n: usize = self.body.blocks.iter().map(|b| b.insns.len()).sum();
+            let c: usize = self.body.blocks.iter().flat_map(|b| b.insns.iter()).filter(|i| i.what.as_ref().is_some_and(|w| w.op == Operation::Move && w.name.as_deref() == Some(COPY))).count();
+            eprintln!("PHIC {} pre-coalesce insns={n} copies={c} blocks={}", self.body.name, self.body.blocks.len());
+        }
         let infos = self.tii.infos.clone();
         let kind_infos = infos.clone();
         let kinds = Rc::new(RefCell::new(UseKindTable::default()));
@@ -221,6 +226,11 @@ impl<T: Target> Converted<T> {
         }
         self.body = body;
         self.joined = joined;
+        if std::env::var_os("PHIC_DBG").is_some() {
+            let n: usize = self.body.blocks.iter().map(|b| b.insns.len()).sum();
+            let c: usize = self.body.blocks.iter().flat_map(|b| b.insns.iter()).filter(|i| i.what.as_ref().is_some_and(|w| w.op == Operation::Move && w.name.as_deref() == Some(COPY))).count();
+            eprintln!("PHIC {} post-coalesce insns={n} copies={c}", self.body.name);
+        }
     }
 
     /// The body ordered by the translated pre-RA `MachineScheduler`
