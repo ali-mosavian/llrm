@@ -29,7 +29,8 @@
 //! - the loop does not already use as many values of its register class as the
 //!   target has registers (`CanCauseHighRegPressure`, with the values named in
 //!   the loop standing for the pressure: DEVIATE ML1, the pin tracks the live
-//!   registers of each block of the loop).
+//!   registers of each block of the loop; a block that does not run on every trip also needs
+//!   the loop's peak of live registers below that, `AvoidSpeculation`).
 //!
 //! Not ported, priced at no yield (release/next 34d21c9f34, every C, nib and
 //! BASIC program at -Os and -O2, counters in a throwaway build):
@@ -407,10 +408,47 @@ struct X86<'a> {
     calls: bool,
     floats_named: usize,
     named: usize,
+    /// The most general registers live at once in the loop, once asked for.
+    peak: Option<usize>,
+    live_out: Option<crate::backend::liverows::Live>,
     loads: bool,
     size: bool,
     /// The next value an unfolded load defines.
     fresh: u32,
+}
+
+impl X86<'_> {
+    /// The most general registers live at one point of the loop: the pin's
+    /// `RegPressure` after it walked the loop's blocks. A block that does not
+    /// run on every trip is not hoisted out of at that pressure
+    /// (`AvoidSpeculation`, L1349).
+    fn peak_pressure(
+        &mut self,
+        facts: &licm::Facts<'_, Wrapped>,
+    ) -> usize {
+        if let Some(peak) = self.peak {
+            return peak;
+        }
+        let body = self.body;
+        let live = self.live_out.get_or_insert_with(|| crate::backend::liverows::live_out(body));
+        let mut peak = 0;
+        for block in facts.inside_blocks() {
+            let mut now: std::collections::BTreeSet<u32> = live
+                .get(&block.at)
+                .map(|set| set.iter().filter(|value| !self.floating.contains(value)).collect())
+                .unwrap_or_default();
+            peak = peak.max(now.len());
+            for one in block.insns.iter().rev() {
+                for value in one.0.defines.iter() {
+                    now.remove(value);
+                }
+                now.extend(one.0.uses.iter().filter(|value| !self.floating.contains(value)));
+                peak = peak.max(now.len());
+            }
+        }
+        self.peak = Some(peak);
+        peak
+    }
 }
 
 impl licm::Policy<Wrapped> for X86<'_> {
@@ -506,6 +544,7 @@ impl licm::Policy<Wrapped> for X86<'_> {
         &mut self,
         facts: &licm::Facts<'_, Wrapped>,
     ) {
+        self.peak = None;
         self.named = facts.named.iter().filter(|value| !self.floating.contains(value)).count();
         self.floats_named = facts.named.iter().filter(|value| self.floating.contains(value)).count();
         // An x87 value cannot be live across a call (`floatassign` does not
@@ -586,9 +625,11 @@ impl licm::Policy<Wrapped> for X86<'_> {
         // again where it wants it.
         // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLICM.cpp#L1386-L1392>
         let invariant_load = loaded(one).is_some() && one.invariant();
+        let facts_every_trip = (facts.every_trip)(at);
         let mut movable = candidate(one, self.classes, loads_here)
             && value.is_some_and(|value| !self.floating.contains(&value))
-            && (self.named < limit || invariant_load);
+            && (self.named < limit || invariant_load)
+            && (invariant_load || facts_every_trip || self.peak_pressure(facts) < limit);
         // `IsProfitableToHoist`: "Trivially rematerializable instructions
         // should always be hoisted providing the register allocator can just
         // pull them down again", unless a copy in the loop takes the value.
@@ -695,6 +736,8 @@ pub fn hoisted_sized(
         calls: false,
         floats_named: 0,
         named: 0,
+        peak: None,
+        live_out: None,
         loads: false,
         size,
         fresh: body.next_value(),
@@ -1473,6 +1516,63 @@ mod tests {
             mul.what.as_ref().is_some_and(|what| what.sources.iter().all(|source| matches!(source, Loc::Held(_)))),
             "the mulss reads a register"
         );
+    }
+
+    /// x_hanoi2 -O1 (m32): a `shl` of an argument in the body of a loop that
+    /// holds every register was made at the entry and spilled, 4096 leaf calls
+    /// paying it; the pin's `AvoidSpeculation` leaves it where it runs only
+    /// when the body does. Here the loop names 2 values but keeps 16 live.
+    #[test]
+    fn test_a_sum_in_a_conditionally_run_block_of_a_loop_holding_every_register_stays() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let mut body_insns: Vec<Arc<Insn>> = (0..20u32)
+            .map(|n| {
+                insn(
+                    10 + n as i64,
+                    Operation::Move,
+                    "mov",
+                    vec![held(100 + n)],
+                    vec![Loc::Mem(llrm_lir::Mem::new(None, 4))],
+                    vec![100 + n],
+                    vec![],
+                )
+            })
+            .collect();
+        body_insns.push(insn(40, Operation::Binary, "add", vec![held(200)], vec![held(1), held(2)], vec![200], vec![1, 2]));
+        body_insns.extend((0..20u32).map(|n| {
+            let sum = 300 + n;
+            let before = if n == 0 { 200 } else { sum - 1 };
+            insn(
+                50 + n as i64,
+                Operation::Binary,
+                "add",
+                vec![held(sum)],
+                vec![held(before), held(100 + n)],
+                vec![sum],
+                vec![before, 100 + n],
+            )
+        }));
+        body_insns.push(jump(90));
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![2, 3], vec![branch(5)]).into(),
+                block(2, vec![1], body_insns).into(),
+                block(3, vec![], vec![insn(99, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64));
+        let adds = |at: usize| done.blocks[at].insns.iter().filter(|one| one.defines.contains(&200)).count();
+        assert_eq!((adds(0), adds(2)), (0, 1), "the sum stays in the block that runs when the loop goes on");
     }
 
     /// A loop that already names more values than the target has registers
