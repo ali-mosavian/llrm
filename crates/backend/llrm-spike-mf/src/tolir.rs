@@ -1398,7 +1398,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
             && self.is_plain_move(what)
             && let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice())
             && dest.width == source.width
-            && dest.width as u32 <= cell.width
+            && dest.width as u32 == cell.width
             && dest.value != source.value
             && self.class_of(dest.value) == self.class_of(source.value)
         {
