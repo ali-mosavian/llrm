@@ -604,6 +604,7 @@ impl Facts {
 
     /// The facts `attributes` state; any other attribute is not a fact.
     pub fn of(attributes: &[Attribute]) -> Facts {
+        crate::counts::bump(crate::counts::Event::FactSets);
         let mut facts = Vec::with_capacity(attributes.len());
         for fact in attributes.iter().filter_map(Fact::of_attribute) {
             if !facts.contains(&fact) {
