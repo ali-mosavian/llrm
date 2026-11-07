@@ -24,3 +24,4 @@ int main(void)
     report((long)(f(0xffffffffu, 3) & 0x7fffffff));
     return 0;
 }
+// x86-widths: the .out hashes 32-bit ints
