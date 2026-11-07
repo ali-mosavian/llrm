@@ -78,9 +78,9 @@ fn a_loop_whose_copies_make_data_constant_is_unrolled_with_its_nest() {
 
 /// jpeg_fixed -O2: `decode` (called twice, too big to inline at 250 clocks a
 /// byte) was unrolled by the early pass unpriced, 528 B against 192 rolled.
-/// The 16-trip helper here was 119 instructions unrolled, about 30 rolled.
+/// The 16-trip helper here was 69 instructions unrolled, 22 priced.
 #[test]
 fn a_helper_the_inliner_keeps_is_priced_by_the_early_unroll() {
     let insns = instructions(include_str!("data/early_unroll_helper.ll"), Level::O2);
-    assert!(insns < 60, "{insns} instructions");
+    assert!(insns < 40, "{insns} instructions");
 }
