@@ -283,3 +283,35 @@ def test_the_library_functions_an_object_calls_are_named(tmp_path):
     path = tmp_path / "c.obj"
     path.write_bytes(object_with(10, record(0x8C, name("__I4D") + b"\0" + name("_report@3") + b"\0")))
     assert externs(path) == ["__I4D", "_report@3"]
+
+
+def test_every_no_nopl_pad_form_of_1_to_15_bytes_reads_as_padding():
+    """The 486/Pentium pad (`nops` in llrm-x86 `mc/backend.rs`, `longest` 1) is GNU as's `mov esi,esi` / `lea esi,[esi+0]` forms, 7 bytes at most an
+    instruction. The size judge must read all of a pad of any length as padding, or a loop's alignment reads as growth. The byte forms are those of
+    `NOPS_NO_NOPL`."""
+    from sizes import padding
+
+    forms = [
+        bytes([0x90]),
+        bytes([0x89, 0xF6]),
+        bytes([0x8D, 0x76, 0x00]),
+        bytes([0x8D, 0x74, 0x26, 0x00]),
+        bytes([0x90, 0x8D, 0x74, 0x26, 0x00]),
+        bytes([0x8D, 0xB6, 0, 0, 0, 0]),
+        bytes([0x8D, 0xB4, 0x26, 0, 0, 0, 0]),
+    ]
+
+    def pad(count):
+        out = b""
+        while count:
+            this = min(count, len(forms))
+            out += forms[this - 1]
+            count -= this
+        return out
+
+    for count in range(1, 16):
+        code = b"\x31\xc0" * ((16 - count) // 2) + (b"\x40" if (16 - count) % 2 else b"")  # xor eax,eax; inc eax: code, not pad
+        content = code + pad(count)
+        assert len(content) == 16
+        found, skipped = padding(content + b"\xc3", 32)
+        assert (found, skipped) == (count, 0), (count, found, skipped)

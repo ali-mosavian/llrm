@@ -1440,6 +1440,14 @@ pub trait Tti {
         self.number_of_gpr_registers()
     }
 
+    /// Whether a one-register formula of the first use makes its register a
+    /// loser for the later uses (`VisitedRegs`, `SolveRecurse` L5600): the pin's
+    /// rule. DEVIATE LS1 turns it off where the target has too few registers
+    /// for the narrower search to hide a counter that serves two uses.
+    fn lsr_visited_registers_lose(&self) -> bool {
+        true
+    }
+
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
     /// as written is dropped when it needs more registers than exist.
     fn lsr_drops_spilling_solution(&self) -> bool {

@@ -73,7 +73,7 @@ SD *B_STRS(int n, SD *text)
     if (text->len == 0)
         qb_error(BE_ILLFUN);
     first = text->ptr[0];
-    str_tmp_free(text);
+    str_free_if_tmp(text);
     return repeated(n, first);
 }
 
@@ -99,6 +99,6 @@ int B_FLEN(SD *sd)
 {
     int len = sd->len;
 
-    str_tmp_free(sd);
+    str_free_if_tmp(sd);
     return len;
 }

@@ -35,18 +35,6 @@
 //! `I->getType()` is `void` for it). DEVIATE LU3: see `solve`, the drop of a
 //! rewrite that spills (real mode).
 //!
-//! DEVIATE LS1: the pin's rule that a single-register formula of the first
-//! use is "visited" (formulae later in the search that name it lose) is off.
-//! It keeps the search short, but the narrowing already holds the space under
-//! `ComplexityLimit` and the search is pruned by the best cost, so the work
-//! stays bounded by the same limit times the uses
-//! (`the_whole_search_is_linear_in_the_uses`). With the rule on, a counter
-//! that serves two uses is hidden from the second by the first's other
-//! formulae: a loop that sums `a[i] * (i + 1)` keeps a pointer beside the
-//! counter and a `cmp`, where the byte index ending at zero shares the
-//! counter and saves the `cmp`. Exit: none while the pin's rule picks the
-//! worse solution under its own cost model.
-//!
 //! DEVIATE LU3b: the registers the loop keeps live beside its recurrences (the
 //! values its body defines that SCEV does not make a recurrence, in registers
 //! of the target's width, `Tti::gpr_bits`) are taken off the budget the solver
@@ -113,6 +101,9 @@ impl Collection<'_, '_> {
                 workspace.push(f_idx);
                 if workspace.len() != self.uses.len() {
                     self.solve_recurse(se, solution, solution_cost, workspace, &new_cost, &new_regs, visited);
+                    if self.tti.lsr_visited_registers_lose() && f.num_regs() == 1 && workspace.len() == 1 {
+                        visited.insert(f.scaled_reg.unwrap_or_else(|| f.base_regs[0]));
+                    }
                 } else {
                     *solution_cost = new_cost.clone();
                     *solution = workspace.clone();
