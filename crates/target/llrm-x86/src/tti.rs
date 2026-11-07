@@ -797,6 +797,10 @@ impl Tti for X86 {
         self.tuning.unroll_promotion_fits_registers
     }
 
+    fn unroll_promotion_fits_x87_stack(&self) -> bool {
+        self.tuning.unroll_promotion_fits_x87_stack && !self.sse2
+    }
+
     fn rotation_guard_must_fold_at_size(&self) -> bool {
         self.tuning.rotation_guard_must_fold_at_size
     }

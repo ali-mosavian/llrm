@@ -560,6 +560,11 @@ pub trait Tti {
         false
     }
 
+    /// The same for the floats of an x87 target, against the stack's slots.
+    fn unroll_promotion_fits_x87_stack(&self) -> bool {
+        false
+    }
+
     /// Whether a size build's loop rotation copies a header only when its
     /// exit test folds in the preheader (RS1). False: the pass's header limit
     /// alone.
