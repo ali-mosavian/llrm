@@ -117,9 +117,6 @@ pub fn take_handed_over(body: &LirBody) -> Option<LiveIntervals> {
 pub fn take_handed_over_edited_to(body: &LirBody) -> Option<LiveIntervals> {
     HANDED_OVER.with(|slot| {
         let mut held = slot.borrow_mut().take()?;
-        if held.analysed != super::slotindex::analysed() {
-            return None;
-        }
         held.lis.take()?.edited_to(body)
     })
 }
@@ -494,7 +491,34 @@ impl LiveIntervals {
                 }
                 previous = Some(one.id());
             }
-            if !self.blocks[n].iter().map(|one| one.id()).eq(block.insns.iter().map(|one| one.id())) {
+            // What is left is a reordering: the pre-RA scheduler's moves. Each
+            // instruction not already where the new order wants it goes out
+            // and in again, `handleMove` (LiveIntervals.cpp#L1513): the entry
+            // it leaves stays, empty, as the pin's does.
+            let target: Vec<InstrKey> = block.insns.iter().map(|one| one.id()).collect();
+            if self.blocks[n].len() != target.len() {
+                return None;
+            }
+            for (at, key) in target.iter().enumerate() {
+                if self.blocks[n][at].id() == *key {
+                    continue;
+                }
+                let Some(insn) = self.insns.get(key).map(Arc::clone) else { return None };
+                // An instruction of a parallel copy shares its index: not moved.
+                if insn.group.is_some() {
+                    return None;
+                }
+                touched.extend(insn.defines.iter().chain(&insn.uses).copied());
+                self.remove_instr(n, *key);
+                match at.checked_sub(1) {
+                    Some(before) => self.insert_instr_after(n, target[before], insn),
+                    None => {
+                        let first = self.blocks[n].first().map(|first| first.id());
+                        self.insert_instr_before(n, first, insn)
+                    }
+                };
+            }
+            if !self.blocks[n].iter().map(|one| one.id()).eq(target.iter().copied()) {
                 return None;
             }
         }

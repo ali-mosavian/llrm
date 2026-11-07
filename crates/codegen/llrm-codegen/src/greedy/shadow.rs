@@ -1195,6 +1195,10 @@ pub fn decide_with(
 fn intervals_to_allocate(body: &LirBody) -> LiveIntervals {
     let mut lis =
         crate::liveness::liveintervals::take_handed_over_edited_to(body).unwrap_or_else(|| LiveIntervals::new(body));
+    if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") {
+        // The premise: the intervals the edits left are the ones made afresh.
+        lis.assert_intervals_cover_afresh(body);
+    }
     lis.indexes.pack_indexes();
     lis
 }
@@ -1742,6 +1746,34 @@ mod tests {
             after.blocks[0].insns.iter().map(|one| lis.indexes.get_instruction_index(one.id()).get_index()).collect();
         let steps: Vec<u32> = at.windows(2).map(|pair| pair[1] - pair[0]).collect();
         assert!(steps.iter().all(|step| *step == SlotIndex::INSTR_DIST), "{steps:?}");
+    }
+
+    /// The pre-RA scheduler numbers a body of its own and reorders the
+    /// coalescer's, and the hand-over of the coalescer's intervals was refused:
+    /// the allocator numbered afresh, with none of the entries the erased
+    /// copies and the moved instructions leave empty in the pin's list.
+    /// Ranges ran 2.2x shorter than the pin's on idioms `main` -O1 (455 entries
+    /// against 992), and the spill weights, which divide by size, 2x higher.
+    #[test]
+    fn test_the_allocator_keeps_the_entries_the_coalescer_and_the_scheduler_left_empty() {
+        let make = |from: i64, n: i64| -> Vec<Arc<Insn>> {
+            (from..from + n).map(|k| Arc::new(Insn::new(k, None, None, vec![], vec![]))).collect()
+        };
+        let body_of = |list: Vec<Arc<Insn>>| {
+            LirBody::new("holes", 0, vec![Block::from(LirBlock::new(0, list))], IndexMap::default(), IndexMap::default())
+        };
+        let all = make(0, 4);
+        let before = body_of(all.clone());
+        crate::liveness::liveintervals::hand_over(LiveIntervals::new(&before), &before);
+        // The scheduler's own numbering of the function.
+        drop(LiveIntervals::new(&body_of(make(100, 3))));
+        // Erased `1`, and `2` moved to the front.
+        let after = body_of(vec![Arc::clone(&all[2]), Arc::clone(&all[0]), Arc::clone(&all[3])]);
+        let lis = intervals_to_allocate(&after);
+        let entries = lis.indexes.get_last_index().get_index() / SlotIndex::INSTR_DIST + 1;
+        // Start, 4 instructions, the end of the block, and the move's new entry;
+        // numbered afresh the body has 5.
+        assert_eq!(entries, 7, "the entries of the coalescer's list, not a fresh one");
     }
 
     /// Greedy's spill weights read `MachineBlockFrequencyInfo`
