@@ -660,104 +660,79 @@ fn encloses_known_trips(
     true
 }
 
-/// Whether an instruction of `lp` reads a value computed from the counters of
-/// the loops around it alone: what unrolling the whole nest turns into a
-/// constant (tests/run int64_division: the divisors are the outer counters).
+/// Whether unrolling the whole nest around `lp` folds real work: a value the
+/// nest makes constant (every loop-carried value that starts known and is
+/// stepped from known values) that is data, not an address: it is divided, a
+/// float is made of it, it selects, it indexes a constant table, or it is
+/// stored, passed or returned. An index sum that only addresses memory or ends
+/// the loop does not (matmul -O2: `i * 8 + k`). tests/run int64_division: the
+/// divisors are the outer counters; stft -O2: the bit-reverse of the counter
+/// is stored.
 fn reads_outer_counter(
     run: &Run,
     analyzed: &Analyzed,
     lp: Loop,
 ) -> bool {
+    let _ = analyzed;
     let function = &*run.function;
     let Some(outermost) = std::iter::successors(lp.get_parent_loop(), |parent| parent.get_parent_loop()).last() else {
         return false;
     };
+    let blocks = outermost.get_blocks();
     let inside = lp.get_blocks();
-    // The counters: the phis of every enclosing loop header that start at a
-    // constant; then whatever pure arithmetic of them (and constants) the
-    // enclosing loops compute outside `lp`.
-    let mut known: IdSet<ValueId> = IdSet::new();
-    let mut around = lp.get_parent_loop();
-    while let Some(parent) = around {
-        let preheader = parent.get_loop_preheader(function);
-        known.extend(
-            function
-                .iter_block(parent.get_header())
-                .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-                .filter(|&inst| {
-                    // a counter starts at a constant (the running value of a
-                    // loop, like crc, does not)
-                    function
-                        .instruction(inst)
-                        .operands
-                        .chunks(2)
-                        .any(|pair| Some(pair[1]) == preheader.map(Operand::Block) && matches!(pair[0], Operand::Constant(_)))
-                })
-                .filter_map(|inst| function.instruction(inst).result),
-        );
-        around = parent.get_parent_loop();
+    // Every loop's header phis, with the block they start from and the one
+    // that steps them.
+    let loops: Vec<Loop> = std::iter::once(lp)
+        .chain(std::iter::successors(lp.get_parent_loop(), |parent| parent.get_parent_loop()))
+        .collect();
+    let mut seeds: Vec<(InstId, Operand, Operand)> = Vec::new();
+    for one in &loops {
+        let (Some(preheader), Some(latch)) = (one.get_loop_preheader(function), one.get_loop_latch(function)) else {
+            return false;
+        };
+        for inst in function.iter_block(one.get_header()).take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi) {
+            let pairs: Vec<&[Operand]> = function.instruction(inst).operands.chunks(2).collect();
+            let start = pairs.iter().find(|pair| pair[1] == Operand::Block(preheader)).map(|pair| pair[0]);
+            let step = pairs.iter().find(|pair| pair[1] == Operand::Block(latch)).map(|pair| pair[0]);
+            if let (Some(start), Some(step)) = (start, step) {
+                seeds.push((inst, start, step));
+            }
+        }
     }
-    let constant = |operand: Operand, known: &IdSet<ValueId>| match operand {
-        Operand::Constant(_) => true,
-        Operand::Value(value) => known.contains(&value),
-        Operand::Block(_) => false,
-    };
-    let mut grew = true;
-    while grew {
-        grew = false;
-        for &block in outermost.get_blocks().iter().filter(|block| !inside.contains(block)) {
-            for inst in function.iter_block(block) {
-                let one = function.instruction(inst);
-                let pure = matches!(one.opcode, Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::Select);
-                let Some(result) = one.result else { continue };
-                if pure
-                    && !known.contains(&result)
-                    && one.operands.iter().all(|&operand| constant(operand, &known))
-                    && one.operands.iter().any(|&operand| matches!(operand, Operand::Value(_)))
-                {
+    let headers: Vec<InstId> = seeds.iter().map(|&(inst, ..)| inst).collect();
+    let (known, real) = loop {
+        let mut known: IdSet<ValueId> = IdSet::new();
+        let mut real = false;
+        let mut grew = true;
+        while grew {
+            grew = false;
+            let all_known = |operands: &[Operand], known: &IdSet<ValueId>| {
+                operands.iter().all(|&operand| match operand {
+                    Operand::Constant(_) => true,
+                    Operand::Value(value) => known.contains(&value),
+                    Operand::Block(_) => true,
+                })
+            };
+            for &(inst, start, _) in &seeds {
+                let Some(result) = function.instruction(inst).result else { continue };
+                if !known.contains(&result) && all_known(&[start], &known) {
                     known.insert(result);
                     grew = true;
                 }
             }
-        }
-    }
-    let _ = analyzed;
-    // What the nest's unroll turns into a constant inside `lp`: a division, a
-    // float operation, a select or an element of a constant table whose
-    // operands are all counters or constants. A counter that only indexes
-    // memory folds into an address, which the copies' own offsets already
-    // are (matmul -O2, nbody_single, tile: 8 x 8 x 8 copies of an index sum).
-    let mut folds = false;
-    // The nest's unroll makes the counter of `lp` itself a constant as well.
-    let header = lp.get_header();
-    let own_preheader = lp.get_loop_preheader(function);
-    known.extend(
-        function
-            .iter_block(header)
-            .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
-            .filter(|&inst| {
-                function
-                    .instruction(inst)
-                    .operands
-                    .chunks(2)
-                    .any(|pair| Some(pair[1]) == own_preheader.map(Operand::Block) && matches!(pair[0], Operand::Constant(_)))
-            })
-            .filter_map(|inst| function.instruction(inst).result),
-    );
-    let mut grew = true;
-    while grew {
-        grew = false;
-        for &block in inside.iter() {
-            for inst in function.iter_block(block) {
-                let one = function.instruction(inst);
-                let Some(result) = one.result else { continue };
-                if known.contains(&result) {
-                    continue;
-                }
-                let element = matches!(one.opcode, Opcode::Load { volatile: false, .. })
-                    && matches!(local_array_at(run, one.operands[0], &known), Some(Base::Table));
-                let real = element
-                    || matches!(
+            for &block in blocks.iter() {
+                for inst in function.iter_block(block) {
+                    if headers.contains(&inst) {
+                        continue;
+                    }
+                    let one = function.instruction(inst);
+                    let Some(result) = one.result else { continue };
+                    if known.contains(&result) {
+                        continue;
+                    }
+                    let element = matches!(one.opcode, Opcode::Load { volatile: false, .. })
+                        && matches!(local_array_at(run, one.operands[0], &known), Some(Base::Table));
+                    let divides = matches!(
                         one.opcode,
                         Opcode::Binary(
                             BinaryOp::UDiv
@@ -772,22 +747,68 @@ fn reads_outer_counter(
                         ) | Opcode::Select
                             | Opcode::FCmp(_)
                     );
-                let address = matches!(
+                    let pure = element
+                        || divides
+                        || matches!(
+                            one.opcode,
+                            Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::GetElementPtr { .. } | Opcode::Phi
+                        );
+                    let has_value = one.operands.iter().any(|&operand| matches!(operand, Operand::Value(_)));
+                    if pure && has_value && all_known(&one.operands, &known) {
+                        known.insert(result);
+                        real |= (element || divides) && inside.contains(&block);
+                        grew = true;
+                    }
+                }
+            }
+        }
+        // A loop-carried value is constant only if what steps it is.
+        let before = seeds.len();
+        seeds.retain(|&(_, _, step)| match step {
+            Operand::Value(value) => known.contains(&value),
+            _ => true,
+        });
+        if seeds.len() == before {
+            break (known, real);
+        }
+        let _ = &headers;
+    };
+    // Which of the constants are data: read by something that is not
+    // addressing or counting, or by a computation of such a value.
+    let mut data: IdSet<ValueId> = IdSet::new();
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for &block in blocks.iter() {
+            for inst in function.iter_block(block) {
+                let one = function.instruction(inst);
+                let passes = matches!(
                     one.opcode,
-                    Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::GetElementPtr { .. }
+                    Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::Phi | Opcode::GetElementPtr { .. }
                 );
-                if (real || address)
-                    && one.operands.iter().all(|&operand| constant(operand, &known))
-                    && one.operands.iter().any(|&operand| matches!(operand, Operand::Value(_)))
-                {
-                    known.insert(result);
-                    folds |= real;
-                    grew = true;
+                let sink = !passes && !matches!(one.opcode, Opcode::Br);
+                let reads_data = if passes { one.result.is_some_and(|result| data.contains(&result)) } else { sink };
+                if !reads_data {
+                    continue;
+                }
+                for &operand in &one.operands {
+                    if let Operand::Value(value) = operand
+                        && known.contains(&value)
+                        && data.insert(value)
+                    {
+                        grew = true;
+                    }
                 }
             }
         }
     }
-    folds
+    // Data the copies of `lp` itself make constant.
+    real || inside.iter().any(|&block| {
+        function.iter_block(block).any(|inst| {
+            let one = function.instruction(inst);
+            one.opcode != Opcode::Phi && one.result.is_some_and(|result| data.contains(&result))
+        })
+    })
 }
 
 /// Whether `lp` holds a loop whose trip count follows a counter of `lp` (a
