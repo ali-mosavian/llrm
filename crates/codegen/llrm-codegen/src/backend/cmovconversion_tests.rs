@@ -132,8 +132,8 @@ fn a_carried_register_cmov_is_a_branch_at_the_sandybridge_latencies() {
     let before = body_carried();
     assert_ne!(converted(&before, &profile), before);
     let old: Vec<(String, i64)> = [("mov_rm", 1), ("cmov", 1), ("alu_rm", 1)].map(|(a, b)| (a.to_owned(), b)).to_vec();
-    profile._latencies.retain(|(name, _)| !old.iter().any(|(other, _)| other == name));
-    profile._latencies.extend(old);
+    std::sync::Arc::make_mut(&mut profile._latencies).retain(|(name, _)| !old.iter().any(|(other, _)| other == name));
+    std::sync::Arc::make_mut(&mut profile._latencies).extend(old);
     assert_eq!(converted(&before, &profile), before);
 }
 

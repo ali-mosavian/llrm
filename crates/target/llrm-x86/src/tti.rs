@@ -779,6 +779,10 @@ impl Tti for X86 {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_at_size
     }
 
+    fn opt_size_inline_chain_trial(&self) -> bool {
+        self.tuning.inline_chain_trial
+    }
+
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
         if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
             || self.tuning.inline_size_guard_single_site

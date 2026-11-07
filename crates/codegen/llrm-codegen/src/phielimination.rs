@@ -154,6 +154,12 @@ fn edges_to_split(
     split
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Blocks looked at as predecessors of a block with phis, over one `lowered`.
+    pub(crate) static PREDECESSORS_LOOKED_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `body` with every phi lowered to copies.
 pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
     if body.blocks.iter().all(|block| block.phis.is_empty()) {
@@ -213,10 +219,10 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
     let mut head: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut tails: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut born: IndexMap<u32, u32> = IndexMap::default();
-    let mut preds: IndexMap<i64, usize> = IndexMap::default();
+    let mut predecessors: IndexMap<i64, Vec<&Block>> = IndexMap::default();
     for block in &body.blocks {
         for &to in block.succ.iter() {
-            *preds.entry(to).or_insert(0) += 1;
+            predecessors.entry(to).or_default().push(block);
         }
     }
     // `LoweredPHIs`: kept for the whole function, so identical phis of
@@ -225,8 +231,16 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
     for block in &body.blocks {
         // If all incoming edges are critical, identical phis are lowered
         // through one register, so fewer copies are made.
-        let all_critical = preds.get(&block.at).copied().unwrap_or(0) >= 2
-            && body.blocks.iter().filter(|one| one.succ.contains(&block.at)).all(|one| one.succ.len() >= 2);
+        // `AllEdgesCritical`: walks the block's own predecessors, and only where there are phis.
+        let all_critical = !block.phis.is_empty()
+            && predecessors.get(&block.at).is_some_and(|found| {
+                found.len() >= 2
+                    && found.iter().all(|one| {
+                        #[cfg(test)]
+                        PREDECESSORS_LOOKED_AT.with(|n| n.set(n.get() + 1));
+                        one.succ.len() >= 2
+                    })
+            });
         for phi in block.phis.iter() {
             let width = widths[&phi.result];
             // `allPhiOperandsUndefined`: an `implicit_def` of the result, and
@@ -675,5 +689,30 @@ mod tests {
             copies(&now.blocks[0])
         );
         assert_eq!(copies(&now.blocks[3]).len(), 1, "{:?}", copies(&now.blocks[3]));
+    }
+
+    /// `AllEdgesCritical` scanned every block of the body for the predecessors of every
+    /// block that has two or more, phis or not (`PHIElimination.cpp` L332-338 walks only
+    /// the block's own predecessors, and only for a block that starts with a phi):
+    /// memory_expansion -O2 spent 29 M Ir in `lowered`, quadratic in the blocks.
+    #[test]
+    fn test_the_predecessors_of_a_block_with_phis_are_not_found_by_scanning_the_body() {
+        const DIAMONDS: i64 = 100;
+        let mut blocks = Vec::new();
+        for k in 0..DIAMONDS {
+            let (head, left, right, join) = (3 * k, 3 * k + 1, 3 * k + 2, 3 * k + 3);
+            let (x, y) = (10 + 2 * k as u32, 11 + 2 * k as u32);
+            let phi = Phi { result: 1000 + k as u32, incoming: vec![(left, x), (right, y)] };
+            let phis = if k == 0 { vec![] } else { vec![Phi { result: 999 + k as u32, incoming: vec![(head - 2, 10 + 2 * (k as u32 - 1)), (head - 1, 11 + 2 * (k as u32 - 1))] }] };
+            blocks.push(block(head, vec![branch(right), jump(left)], &[left, right], phis));
+            blocks.push(block(left, vec![def(x), jump(join)], &[join], vec![]));
+            blocks.push(block(right, vec![def(y), jump(join)], &[join], vec![]));
+            let _ = phi;
+        }
+        blocks.push(block(3 * DIAMONDS, vec![read(1)], &[], vec![]));
+        PREDECESSORS_LOOKED_AT.with(|n| n.set(0));
+        lowered(&body(blocks)).expect("lowers");
+        let looked_at = PREDECESSORS_LOOKED_AT.with(|n| n.get());
+        assert!(looked_at <= 4 * DIAMONDS as usize, "{looked_at} blocks looked at for {DIAMONDS} joins");
     }
 }

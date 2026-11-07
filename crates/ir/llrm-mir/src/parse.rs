@@ -19,6 +19,7 @@ use crate::opcode::{
     FLAG_ATTRIBUTES, FLOAT_PREDICATE, Flags, INT_ATTRIBUTES, INT_PREDICATE, Opcode, RMW_OPS, TARGET_FLAG_ATTRIBUTES,
     TYPE_ATTRIBUTES, Tail, spelled,
 };
+use crate::print::SCOPE_DECL_KIND;
 use crate::types::{FloatKind, StructBody, Type, TypeId};
 
 type Parsed<T> = Result<T, ParseError>;
@@ -1959,6 +1960,9 @@ impl Parser {
         let (void, bool) = (self.module.context.types.void(), self.module.context.types.int(1));
         let fast = ["fast", "reassoc", "nnan", "ninf", "nsz", "arcp", "contract", "afn"];
         let mut flags = Flags::default();
+        // `(metadata !N)` of a scope declaration: MIR keeps the node as an
+        // attachment.
+        let mut scope_decl: Option<MetadataId> = None;
         let (opcode, ty, operands) = if let Some(op) = spelled(&BINARY, &word) {
             flags = match op {
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl => self.flags(&["nuw", "nsw"]),
@@ -2323,6 +2327,13 @@ impl Parser {
                             self.expect_punct(',')?;
                         }
                         let ty = self.ty()?;
+                        if matches!(self.module.context.types.get(ty), Type::Metadata)
+                            && let Token::MetadataId(number) = *self.peek()
+                        {
+                            self.next();
+                            scope_decl = Some(self.metadata_id(number));
+                            continue;
+                        }
                         argument_attrs.push(self.attributes(false)?);
                         operands.push(self.value(local, ty)?);
                         argument_types.push(ty);
@@ -2383,7 +2394,10 @@ impl Parser {
                 }
             }
         };
-        let metadata = self.attachments()?;
+        let mut metadata = self.attachments()?;
+        if let Some(node) = scope_decl {
+            metadata.insert(0, (SCOPE_DECL_KIND.to_owned(), node));
+        }
         let id = InstId(local.function.instructions.len() as u32);
         let result = if self.module.context.types.is_void(ty) {
             if result_name.is_some() {
