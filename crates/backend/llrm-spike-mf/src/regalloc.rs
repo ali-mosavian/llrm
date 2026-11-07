@@ -249,6 +249,13 @@ pub trait Target {
         join.extra_cost() <= join.copy_frequency * Self::copy_cost() as f32
     }
 
+    /// Whether a move of a symbol's address is made again where it is read, as any literal is. The pin does for
+    /// `MOV32ri` of a global; the price is the target's: z80's `ld hl, #sym` is 3 B against a spill and a reload, 6502's
+    /// pair of immediates is not (the objects grew).
+    fn remats_symbol_addresses() -> bool {
+        false
+    }
+
     /// `isAsCheapAsAMove` against the copy it replaces: whether making the
     /// literal move `literal` again for a copy from a value that may take
     /// `source` to one that may take `destination` costs no more than the
