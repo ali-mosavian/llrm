@@ -4,18 +4,18 @@
 
 	.globl pack32
 	.globl done
-	.globl retnan
 	.globl inf
 	.globl exps
+	.globl retlo0
 	.globl rnd32
 pack32:	bit	7,b
 	jr	nz,low32
 	ld	a,b
 	or	a,a
-	jp	nz,inf
+	jr	nz,inf
 	ld	a,c
 	inc	a
-	jp	z,inf
+	jr	z,inf
 	dec	a
 	jp	nz,rnd32
 low32:	ld	a,b		; e <= 0: shift right by 1 - e, folding the lost bits into bit 0
@@ -75,8 +75,7 @@ inf:	ld	a,10(iy)
 	or	a,#0x7f
 	ld	d,a
 	ld	e,#0x80
-	ld	hl,#0
-	jp	done
+	jp	retlo0		; hl = 0, then the frame exit
 
 ; exponent bytes of a and b
 exps:	ld	a,2(iy)
@@ -91,6 +90,3 @@ exps:	ld	a,2(iy)
 	ld	9(iy),a
 	ret
 
-retnan:	ld	hl,#0
-	ld	de,#0x7fc0
-	jp	done

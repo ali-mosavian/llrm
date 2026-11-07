@@ -4,6 +4,8 @@
 	.area _CODE
 
 	.globl rnd32
+	.globl retnan
+	.globl retlo0
 	.globl done
 rnd32:	ld	a,l
 	cp	a,#0x80
@@ -31,6 +33,9 @@ nou32:	ld	l,h
 	rr	e
 	or	a,10(iy)
 	ld	d,a
+	jr	done
+retnan:	ld	de,#0x7fc0
+retlo0:	ld	hl,#0
 done:	ex	de,hl		; the long result: low word in de, high word in hl
 	ld	iy,#24
 	add	iy,sp
