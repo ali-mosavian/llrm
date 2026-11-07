@@ -139,6 +139,18 @@ impl Mssa {
         &self.accesses[access as usize]
     }
 
+    /// The dominator tree the graph reasons with, replaced: the pin's
+    /// `MemorySSA` holds the caller's live `DominatorTree`, so an edit of the
+    /// CFG is followed by its update. Here the graph holds a copy, and the
+    /// caller gives the new one after the edit (the updater's CFG edits ask
+    /// for it before they run).
+    pub fn set_dominance(
+        &mut self,
+        dominance: Dominance,
+    ) {
+        self.dominance = dominance;
+    }
+
     /// `getMemoryAccess(const Instruction *)`.
     pub fn get_memory_access(
         &self,
