@@ -152,8 +152,7 @@ fn pin() -> &'static str {
 }
 const OW_COMMIT_FILE: &str = include_str!("../../../../toolchain/owshim/ow-commit");
 
-/// The Open Watcom tree `{ow}` names: `~/.cache/llrm/ow-src-<commit>` under
-/// `home`, the commit toolchain/owshim/ow-commit pins. tools/ow-fetch.sh makes
+/// The Open Watcom tree `{ow}` names: `llrm/ow-src-<commit>` under `cache`, the commit toolchain/owshim/ow-commit pins. tools/ow-fetch.sh makes
 /// it; llrm-cc never does.
 pub fn ow_tree_in(cache: &Path) -> PathBuf {
     cache.join("llrm").join(format!("ow-src-{}", OW_COMMIT_FILE.trim()))
@@ -172,14 +171,15 @@ fn cache_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".cache"))
 }
 
-/// `word` with `{ow}` replaced by the tree under `home` where it exists; where
-/// it does not the word stays, and `missing_ow` says so.
+/// `word` with `{ow}` replaced by the tree under `cache` where it is complete
+/// (toolchain/cache.sh writes `.complete` last); where it is not the word
+/// stays, and `missing_ow` says so.
 fn with_ow(
     word: &str,
     cache: &Path,
 ) -> String {
     let tree = ow_tree_in(cache);
-    if word.contains("{ow}") && tree.is_dir() {
+    if word.contains("{ow}") && tree.join(".complete").is_file() {
         word.replace("{ow}", &tree.display().to_string())
     } else {
         word.to_owned()
