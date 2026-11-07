@@ -310,8 +310,8 @@ pub trait Machine {
     }
 
     /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
-    /// (DEVIATE SD443, exit 2026-11-07: interprocedural.rs). The pin runs it
-    /// once; a target that matches the pin's output turns it off.
+    /// (DEVIATE SD443, owner w2, exit 2026-11-15: interprocedural.rs). The pin
+    /// runs it once; a target that matches the pin's output turns it off.
     fn second_ipsccp(&self) -> bool {
         true
     }
