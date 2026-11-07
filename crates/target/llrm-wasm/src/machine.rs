@@ -169,6 +169,10 @@ impl Tti for Wasm {
     }
 
     /// The pin's `sinkUnusedInvariants` (grep -O2, stft_fixed -O1).
+    fn folds_select_to_cmp(&self) -> bool {
+        true
+    }
+
     fn sinks_unused_invariants(&self) -> bool {
         true
     }

@@ -2,7 +2,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::InstId;
 use llrm_mir::opcode::Opcode;
 
-use crate::combine::{Combiner, Visit, combine_with_declared};
+use crate::combine::{Combiner, TargetHooks, Visit, combine_for};
 use crate::testing::{parsed, printed};
 
 /// `visit` that does only `visitSelectInst`.
@@ -13,17 +13,47 @@ fn visit(
     if c.function.instruction(inst).opcode == Opcode::Select { c.visit_select(inst) } else { Visit::None }
 }
 
-/// `@f(i32 %x, i32 %y)` with `body` returning `%r`, after `visitSelectInst`.
-fn run(body: &str) -> String {
+/// `@f(i32 %x, i32 %y)` with `body` returning `%r`, after `visitSelectInst`, on
+/// a target that does (`makes`) or does not make `scmp`/`ucmp`.
+fn run_on(
+    body: &str,
+    makes: bool,
+) -> String {
     let text = format!("define i32 @f(i32 %x, i32 %y) {{\nb0:\n{body}  ret i32 %r\n}}\n");
     let mut module = parsed(&text);
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    combine_with_declared(context, &globals, &metadata, &DataLayout::default(), function, visit, &mut declared);
+    let hooks = TargetHooks { select_to_cmp: makes, ..Default::default() };
+    combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
     declared.place(&mut module).unwrap();
     printed(&module)
+}
+
+fn run(body: &str) -> String {
+    run_on(body, true)
+}
+
+/// The pin makes `scmp` on every target; ours only where `Tti` says so (62
+/// cells of other targets grew with it on: arm64 sfm16 -Os +500 B, m68k -O2
+/// +320 B).
+#[test]
+fn a_target_that_does_not_make_scmp_keeps_the_select_chain() {
+    let body = "  %lt = icmp slt i32 %x, %y\n  %gt = icmp sgt i32 %x, %y\n  %z = zext i1 %gt to i32\n  %r = select i1 %lt, i32 -1, i32 %z\n";
+    let out = run_on(body, false);
+    assert!(out.contains("select") && !out.contains("scmp"), "{out}");
 }
 
 /// Wasm `__eqsf2` kept `select (slt x, y), -1, (zext (sgt x, y))` and a

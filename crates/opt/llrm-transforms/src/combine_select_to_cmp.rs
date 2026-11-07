@@ -193,6 +193,9 @@ pub(crate) fn select_to_cmp(
     inst: InstId,
     sel: &Sel,
 ) -> Option<Visit> {
+    if !c.env.hooks.select_to_cmp {
+        return None;
+    }
     let found = matched(c, sel)?;
     let cmp = c.function.instruction(c.definition_of(sel.cond)?).operands[0];
     let ty = c.type_of(cmp);
