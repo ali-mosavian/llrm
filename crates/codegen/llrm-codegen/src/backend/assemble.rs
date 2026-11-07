@@ -207,6 +207,10 @@ pub fn assembled_by(
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();
     let mut data_publics = Vec::new();
+    let mut weak: BTreeSet<String> = BTreeSet::new();
+    let is_weak = |linkage: Linkage| {
+        matches!(linkage, Linkage::Weak | Linkage::WeakOdr | Linkage::LinkOnce | Linkage::LinkOnceOdr)
+    };
     let mut comdats: std::collections::BTreeMap<String, masm::Comdat> = Default::default();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
@@ -309,6 +313,8 @@ pub fn assembled_by(
                 }
                 if global.linkage == llrm_mir::Linkage::External {
                     data_publics.push(names[&(globals::space(module, id), at as i64)].clone());
+                } else if is_weak(global.linkage) {
+                    weak.insert(names[&(globals::space(module, id), at as i64)].clone());
                 }
             }
             GlobalKind::Function(function) if !function.is_declaration() => {
@@ -410,6 +416,9 @@ pub fn assembled_by(
                     names.insert((space, index), globals::DGROUP.to_owned());
                     Addr { index, ..Addr::new(space, 0) }
                 });
+                if is_weak(global.linkage) {
+                    weak.insert(names[&(Space::Segment, at as i64)].clone());
+                }
                 let procedure = masm::Procedure {
                     name: names[&(Space::Segment, at as i64)].clone(),
                     public: global.linkage == Linkage::External,
@@ -627,6 +636,7 @@ pub fn assembled_by(
         requests: BTreeSet::new(),
         debug,
         far_bss: BTreeSet::new(),
+        weak,
         code_segments,
         comdats,
         stack: 0,

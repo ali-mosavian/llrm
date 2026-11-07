@@ -71,6 +71,7 @@ pub fn eh_target() -> EhTarget<'static> {
         return_saved: true,
         entry: FrameRow { offset: 0, cfa_register: "rsp".into(), cfa_offset: 8, saved: Vec::new() },
         register: &register,
+        def_cfa_on_register_change: false,
     }
 }
 
@@ -124,6 +125,7 @@ pub fn eh_target32() -> EhTarget<'static> {
         return_saved: true,
         entry: FrameRow { offset: 0, cfa_register: "esp".into(), cfa_offset: 4, saved: Vec::new() },
         register: &|name| register_in(32, name),
+        def_cfa_on_register_change: false,
     }
 }
 
@@ -234,6 +236,26 @@ mod tests {
         let file = X86Objects.write_object("elf", &object(both())).unwrap();
         assert!(file.windows(4).any(|word| word == 0x7000_0001u32.to_le_bytes()));
         assert!(file.windows(PIN.len()).any(|bytes| bytes == PIN));
+    }
+
+    /// Pad `DW_CFA_nop` to 4 bytes, not 8: the pin aligns the CIE and every FDE
+    /// but the last to 4 (`emitValueToAlignment(IsEH ? 4 : ...)`, the FDE to the
+    /// size of its pointer encoding) and the last FDE to the code pointer
+    /// size. Ours padded all to 8, 4 bytes more per FDE that ends at 4 mod 8
+    /// (pin `x86_64` `recfloat.c`: FDE lengths 0x10 and 0x18; ours 0x14 and 0x14).
+    #[test]
+    fn an_fde_but_the_last_is_aligned_to_4_as_the_pin_aligns_it() {
+        let leaf = |offset| Frame { section: 0, offset, length: 4, rows: Vec::new(), cfi: Vec::new(), seh: Vec::new() };
+        let frames = vec![leaf(0), leaf(8), leaf(0x10)];
+        let written = llrm_dwarf::eh_frame::expanded(&object(frames), &eh_target()).unwrap();
+        let image = &written.sections.last().unwrap().image;
+        let length_at = |at: usize| u32::from_le_bytes(image[at..at + 4].try_into().unwrap()) as usize;
+        let (first, second) = (24, 24 + 4 + length_at(24));
+        let third = second + 4 + length_at(second);
+        // a leaf's FDE is 4 + 4 + 4 + 4 + 1 + 3 bytes of body: 0x14 with the 4 bytes of length
+        assert_eq!((length_at(first), length_at(second)), (0x10, 0x10), "{image:x?}");
+        assert_eq!(length_at(third), 0x14, "the last FDE is aligned to 8: {image:x?}");
+        assert_eq!(image.len(), third + 4 + 0x14);
     }
 
     /// Pin clang's `-O1 -fomit-frame-pointer` of a function that pushes rbx,
