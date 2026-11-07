@@ -177,8 +177,6 @@ pub struct MulPricing<'a> {
     pub milliclocks_per_byte: i64,
     /// `Tuning::multiply_by_clocks`: the fewest clocks, no byte term.
     pub by_clocks: bool,
-    /// -O1: a chain by clocks is made only where it is no longer than the `imul`.
-    pub no_growth: bool,
     /// `Tuning::price_pin_multiplies`: the pin's decompositions are priced
     /// too, and a tie keeps the `imul`.
     pub price_pin: bool,
@@ -2505,9 +2503,9 @@ fn priced_chain(
 ) -> Option<SDValue> {
     use crate::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
-    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, no_growth, price_pin } = pricing;
+    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin } = pricing;
     let chain = if by_clocks {
-        arithmetic::chain_by_clocks_within(c, width, cpu, arch, no_growth)
+        arithmetic::chain_by_clocks(c, width, cpu)
     } else {
         arithmetic::priced_chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte, price_pin)
     }
