@@ -1064,7 +1064,7 @@ fn should_full_unroll(
                 full_unroll_trip_count,
                 eph,
                 rolled.min(u64::from(u32::MAX)) as u32,
-                up.max_iterations_count_to_analyze,
+                run.tti.unroll_o1_analyzed_trips().map_or(up.max_iterations_count_to_analyze, |trips| trips.max(up.max_iterations_count_to_analyze)),
                 None,
                 false,
             )
