@@ -179,15 +179,19 @@ pub struct Tuning {
     pub ipsccp_widen_keeps_sign: bool,
 }
 
-/// Encoded bytes of a constant fill, stores against `rep stos`.
+/// Encoded bytes of a constant fill, stores against `rep stos`. Each pair or
+/// triple is [frame object, global]: a short displacement against an absolute
+/// address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SizeFill {
     /// A dword, word and byte store of an immediate.
-    pub store: [u64; 3],
+    pub store: [[u64; 3]; 2],
     /// The value in `eax` for zero, all ones and any other byte.
     pub value: [u64; 3],
-    /// `lea edi`, `mov ecx` and the `rep stos`.
-    pub setup: u64,
+    /// `lea`/`mov edi`, `mov ecx` and the `rep stos`.
+    pub setup: [u64; 2],
+    /// One `fst qword` of the x87 zero fill.
+    pub fst: [u64; 2],
 }
 
 impl Tuning {

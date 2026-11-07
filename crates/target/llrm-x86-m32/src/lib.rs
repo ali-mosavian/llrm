@@ -92,10 +92,16 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant
         // fill is `rep stos` where its stores take more bytes (gcc -Os; the pin
-        // keeps up to MaxStoresPerMemsetOptSize stores). Encodings at a stack
-        // address: `mov dword/word/byte [esp+d8], imm` 8/7/5 B; `xor eax, eax` 2,
-        // `or eax, -1` 3, `mov eax, imm32` 5; `mov edi`, `mov ecx`, `rep stos` 12.
-        size_fill: Some(llrm_mir::target::SizeFill { store: [8, 7, 5], value: [2, 3, 5], setup: 12 }),
+        // keeps up to MaxStoresPerMemsetOptSize stores). `mov dword/word/byte
+        // [esp+d8], imm` 8/7/5 B, at an absolute address 10/9/7; `xor eax, eax` 2,
+        // `or eax, -1` 3, `mov eax, imm32` 5; `lea edi, [esp+d8]` (4) or `mov
+        // edi, imm32` (5), `mov ecx, imm32` 5, `rep stos` 2; `fst qword` 4 / 6.
+        size_fill: Some(llrm_mir::target::SizeFill {
+            store: [[8, 7, 5], [10, 9, 7]],
+            value: [2, 3, 5],
+            setup: [11, 12],
+            fst: [4, 6],
+        }),
         // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a
         // callee whose copies grow the code stays a call (called_once_os:
         // gcc -Os does; the pin inlines it).
