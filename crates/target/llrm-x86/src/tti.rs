@@ -775,6 +775,10 @@ impl Tti for X86 {
         self.tuning.inline_variable_memcpy
     }
 
+    fn copy_price_for_size(&self) -> Option<llrm_mir::target::CopyPrice> {
+        self.tuning.size_copy_price
+    }
+
     fn ipsccp_widen_keeps_sign(&self) -> bool {
         self.tuning.ipsccp_widen_keeps_sign
     }

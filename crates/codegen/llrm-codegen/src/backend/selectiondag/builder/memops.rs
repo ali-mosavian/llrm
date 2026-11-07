@@ -833,6 +833,33 @@ impl Builder<'_> {
         setup + wide * 5 + (ops.len() as u64 - wide) * 8 > fill
     }
 
+    /// DEVIATE MEM-OS (`Tuning::size_copy_price`, x86-64 tuned for size): whether the load and store
+    /// pieces of a constant copy take more bytes than the call, at the target's prices.
+    /// A copy from a constant (stored as immediates) and a volatile one keep the pin's pieces.
+    fn copy_is_longer_than_call(
+        &self,
+        length: u64,
+        source: SDValue,
+    ) -> bool {
+        let Some(price) = self.target.tti.as_ref().and_then(|tti| tti.0.copy_price_for_size()) else {
+            return false;
+        };
+        if self.volatile_memory || self.constant_slice(source).is_some() {
+            return false;
+        }
+        let Some(ops) = Self::mem_ops(length, self.widest_mem_op_sse(length, false), usize::MAX, false) else {
+            return false;
+        };
+        let pieces: u64 = ops
+            .iter()
+            .map(|width| match width {
+                16 | 8 => price.wide_piece,
+                _ => price.narrow_piece,
+            })
+            .sum();
+        pieces > price.call
+    }
+
     /// `getMemsetStores`: the fill value splatted to the widest operation,
     /// truncated for the narrower ones.
     fn inline_memset(
@@ -1207,6 +1234,7 @@ impl Builder<'_> {
                     && constant.is_some_and(|bytes| bytes / 4 + u64::from((bytes % 4).count_ones()) > limit as u64);
                 let inline = match constant {
                     Some(_) if strings => None,
+                    Some(bytes) if opt_size && self.copy_is_longer_than_call(bytes, other) => None,
                     Some(bytes) if matches!(which, Intrinsic::MemCpy) => {
                         self.inline_memcpy(root, dst, other, bytes, limit, dst_align, src_align)?
                     }
