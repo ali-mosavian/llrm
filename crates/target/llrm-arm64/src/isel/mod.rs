@@ -856,5 +856,8 @@ pub(crate) fn global_needs_got(
     // module's "PIC Level" flag) goes through the GOT for what is not defined
     // here, as the pin's `shouldAssumeDSOLocal` (clang -fPIE marks a definition
     // `dso_local`).
-    (platform == Platform::Darwin || flagged_pic(module)) && !local && !defined
+    // A hidden or protected declaration binds inside the module: the pin loads it
+    // directly (`shouldAssumeDSOLocal`), not through the GOT, at Linux PIE.
+    let bound_here = global.visibility != llrm_mir::module::Visibility::Default;
+    (platform == Platform::Darwin || (flagged_pic(module) && !bound_here)) && !local && !defined
 }

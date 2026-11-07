@@ -22,7 +22,7 @@
 //!   `computeKnownBits` (constants, `AND` with a constant, zero-extension,
 //!   constant shifts); the folds decline what it cannot prove. Owner sdag-c.
 //!   Exit: when the DAG API has known bits. Review 2026-12-10.
-//! - **SD251** `matchAddressRecursively`'s `ZERO_EXTEND` case has only the
+//! - **SD313** `matchAddressRecursively`'s `ZERO_EXTEND` case has only the
 //!   `nuw` shift part: `zext(addlike)` and `zext(and(srl))` are not matched.
 //!   Exit 2026-11-20.
 //! - **SD35** The 64-bit and x32 branches, RIP-relative modes, large code
@@ -786,7 +786,7 @@ impl<D: AddrDag> Matcher<'_, D> {
             }
             isd::ZERO_EXTEND => {
                 // Widen a zero-extended `nuw` shift so the shift is the scale
-                // ([L2982][zext]). DEVIATE SD251: not the `zext(addlike)` and
+                // ([L2982][zext]). DEVIATE SD313: not the `zext(addlike)` and
                 // `zext(and(srl))` parts, which the pin matches here too.
                 // Exit 2026-11-20.
                 //

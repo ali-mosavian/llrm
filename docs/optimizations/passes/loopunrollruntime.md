@@ -1,12 +1,14 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollruntime.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollruntime.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollruntime.rs sha256:dc75d61864ca3900a3358d314b0ad4bf7029b23f0ec7f1de35c08192b3e818b9 -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollruntime.rs sha256:db870f8685f832ab5b77d3d3d99e1a88d96083734ee38d0dbf738fae45ea6301 -->
 
 # loopunrollruntime
 
-The epilog remainder of `UnrollRuntimeLoopRemainder`
+The remainder of `UnrollRuntimeLoopRemainder`
 (`LoopUnrollRuntime.cpp` at `d1106deb71cc`): before a loop of a run-time
 trip count is unrolled by `count`, a copy of the loop runs the `trip count %
-count` iterations the unrolled loop leaves.
+count` iterations the unrolled loop leaves, after it (epilog) or before it
+(prolog). The caller picks the form as `isEpilogProfitable` does: the epilog
+where a header phi starts at an integer constant, else the prolog.
 
 ## How it works
 The preheader computes the trip count `TC = BECount + 1` (SCEV expanded),
@@ -22,8 +24,6 @@ With `count` 2 the epilog runs once: its backedge is broken and its latch
 merged into its exit.
 
 ## Deviations from LLVM
-- D1: only the epilog form: the prolog is for `-unroll-allow-remainder`
-  loops the unroller's runtime mode makes, which llrm has no pass for.
 - D2: only a loop with one exiting block and one exit block. The pin's
   multi-exit mode needs `UnrollRuntimeMultiExit` or a target that says it
   pays; the jam refuses such loops before it gets here.
@@ -38,11 +38,14 @@ merged into its exit.
 ## Example
 A loop `for (i = 0; i < n; i++) body` unrolled by 4 becomes, in the
 preheader, `xtraiter = (n) & 3`; the unrolled loop runs `n - xtraiter`
-iterations; the epilog `body.epil` runs `xtraiter` times.
+iterations; the epilog `body.epil` runs `xtraiter` times. As a prolog,
+`body.prol` runs `xtraiter` times first, the unrolled loop starts from what
+it left (`.unr` phis in `body.prol.loopexit`) and is skipped when the
+prolog ran every iteration.
 
 ## See also
-`UnrollRuntimeLoopRemainder` (L672), `ConnectEpilog` (L255),
-`CloneLoopBlocks` (L404), `CreateTripRemainder` (L607).
+`UnrollRuntimeLoopRemainder` (L672), `ConnectProlog` (L82), `ConnectEpilog`
+(L255), `CloneLoopBlocks` (L404), `CreateTripRemainder` (L607).
 
 ## Used by
-Named by `loopunrollandjam`.
+Named by `loopunrollandjam`, `loopunrollpass`.

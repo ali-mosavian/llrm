@@ -669,6 +669,10 @@ impl Tti for X86 {
         self.tuning.multiply_by_clocks
     }
 
+    fn narrow_divide_live_limit(&self) -> u32 {
+        self.tuning.narrow_divide_live_limit
+    }
+
     fn divide_by_bytes(&self) -> bool {
         self.tuning.divide_by_bytes
     }
@@ -775,8 +779,8 @@ impl Tti for X86 {
         self.tuning.inline_variable_memcpy
     }
 
-    fn copy_for_size_is_priced_against_call(&self) -> bool {
-        self.tuning.size_copy_vs_call
+    fn copy_price_for_size(&self) -> Option<llrm_mir::target::CopyPrice> {
+        self.tuning.size_copy_price
     }
 
     fn ipsccp_widen_keeps_sign(&self) -> bool {
@@ -815,6 +819,10 @@ impl Tti for X86 {
 
     fn unroll_promotion_fits_registers(&self) -> bool {
         self.tuning.unroll_promotion_fits_registers
+    }
+
+    fn lsr_size_order(&self) -> bool {
+        self.tuning.lsr_size_order
     }
 
     fn unroll_promotion_fits_x87_stack(&self) -> bool {
@@ -1221,10 +1229,15 @@ impl Tti for X86 {
             return false;
         }
         // Long mode, position independent (the PIE a default clang makes): a
-        // symbol is `[rip + symbol]`, which takes no displacement
-        // beside it and no index (the `isPositionIndependent() && is64Bit()`
-        // rule).
-        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale > 1) {
+        // symbol is `[rip + symbol]`, which takes no displacement, index or
+        // base register beside it.
+        // DEVIATE PIE64: the pin refuses only an offset or a scale above 1
+        // (`isPositionIndependent() && is64Bit()`), so `@sym + reg` is one
+        // address to it; the backend forms the symbol with a `lea` at every
+        // use, which the metric never saw (histo -O2 -80 B, jpeg_fixed -O1
+        // -832 B, objects of m32 and non-PIE unchanged). Owner w12, exit
+        // 2026-11-30.
+        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale != 0 || has_base_reg) {
             return false;
         }
         match scale {
@@ -1310,15 +1323,8 @@ impl Tti for X86 {
 
     /// Real mode declares the registers the allocator has, and the live count
     /// LSR keeps is exact there: the six fill (PLASMA's loop, 4 + 2 live).
-    ///
-    /// DEVIATE LU3d: a target that states its allocatable registers
-    /// (`with_registers`: the frame and stack pointers are not among them)
-    /// keeps none back: the pin's one stands for the stack pointer its count
-    /// of eight includes, so reserving it again counts it twice (not an `i8`
-    /// counter the pin makes). owner: w12, exit: 2026-11-20 (the m32/m64 A/B in the
-    /// PR; without it the line goes).
     fn lsr_reserved_registers(&self) -> u32 {
-        u32::from(self.real_mode.is_none() && self.registers.is_none())
+        u32::from(self.real_mode.is_none())
     }
 
     /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold

@@ -41,6 +41,12 @@ impl CombineHooks for MosLateCombines {
         wide == EVT::I16 && narrow == EVT::I8
     }
 
+    /// DEVIATE SD257: a word `or` of two bytes read as a long is a byte `or`
+    /// (`logical_value` 410 -> 402 B).
+    fn known_zero_narrowing(&self) -> bool {
+        true
+    }
+
     /// DEVIATE 6502-SHL-COMMUTE: as [`MosCombines`]; every run of the
     /// combiner must give alike.
     fn is_desirable_to_commute_with_shift(
@@ -103,6 +109,12 @@ impl CombineHooks for MosCombines {
         wide == EVT::I16 && narrow == EVT::I8
     }
 
+    /// DEVIATE SD257: a word `or` of two bytes read as a long is a byte `or`
+    /// (`logical_value` 410 -> 402 B).
+    fn known_zero_narrowing(&self) -> bool {
+        true
+    }
+
     /// DEVIATE 6502-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the shift
     /// runs on the zero-page cells (`asl rc17; rol rc18`) where the add went
     /// through Y and X (bintree -O2 +20 B). The pin's default is true
@@ -121,7 +133,7 @@ impl CombineHooks for MosCombines {
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate | ISD::Or)
+        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate | ISD::Or | ISD::SetCC)
     }
 
     /// DEVIATE 6502-SHARED-SHIFT: a word shift is one instruction whose two
@@ -147,9 +159,46 @@ impl CombineHooks for MosCombines {
             ISD::Sub => borrow_of_ult(dag, node),
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
             ISD::Or => funnel_by_one(dag, node),
+            ISD::SetCC => range_on_low_byte(dag, node),
             _ => decompose_mul(dag, node, self.sized),
         }
     }
+}
+
+/// `(x - c) <u n` of a word, with `0 < c` and `c + n <= 256`: `x` lies in
+/// `[c, c + n)`, below 256, so its high byte is zero and the low byte moves to
+/// `lo - c`. The word is compared as `(lo(x) - c, hi(x)) <u n`: a byte subtract
+/// where the word subtract made both bytes (`isspace`'s `c >= 9 && c <= 13`,
+/// `adc #255` on the high byte and a borrow chain into the compare).
+///
+/// DEVIATE SD258 (owner llrm-target-6502, exit 2026-12-05): the pin keeps the
+/// word range check (`foldRangeTest`'s result) for the target to lower; a
+/// target with byte lanes gains the narrower subtract. Not a pin combine.
+fn range_on_low_byte(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (sum, bound) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.value_type(sum) != EVT::I16
+        || dag.opcode(sum) != ISD::Add
+        || !matches!(dag.node(dag.operand(node, 2)).data, NodeData::CondCode(CondCode::SetULt))
+    {
+        return None;
+    }
+    let (x, offset) = (dag.operand(sum, 0), dag.constant(dag.operand(sum, 1))?);
+    let (n, c) = (dag.constant(bound)?, (0x10000 - offset) & 0xFFFF);
+    if c == 0 || c > 255 || n == 0 || c + n > 256 {
+        return None;
+    }
+    let vt = dag.value_type(node);
+    let low = dag.get_node(ISD::Truncate, EVT::I8, &[x]);
+    let eight = dag.get_constant(8, EVT::I16);
+    let shifted = dag.get_node(ISD::Srl, EVT::I16, &[x, eight]);
+    let high = dag.get_node(ISD::Truncate, EVT::I8, &[shifted]);
+    let c_byte = dag.get_constant(c, EVT::I8);
+    let diff = dag.get_node(ISD::Sub, EVT::I8, &[low, c_byte]);
+    let pair = dag.get_node(ISD::BuildPair, EVT::I16, &[diff, high]);
+    Some(dag.get_setcc(vt, pair, bound, CondCode::SetULt))
 }
 
 /// `(a << 1) | (b >> 15)` and `(a << 15) | (b >> 1)` of a word: one bit crosses

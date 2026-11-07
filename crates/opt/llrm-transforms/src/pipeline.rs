@@ -916,7 +916,7 @@ pub(crate) fn llvm_order(
             slot(
                 "unroll@1476",
                 Box::new(loopunrollpass::LoopFullUnroll {
-                    opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                    opt_level: unroll_level(&applied.options),
                     opt_size: size,
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
@@ -1033,7 +1033,7 @@ pub(crate) fn llvm_order(
                 slot(
                     "unroll@753",
                     Box::new(loopunrollpass::LoopFullUnroll {
-                        opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                        opt_level: unroll_level(&applied.options),
                         opt_size: size,
                         only_when_forced: !applied.options.loop_unrolling,
                         target_unrolling: false,
@@ -1135,6 +1135,19 @@ pub fn timed() {
         function: |name, run| debug::in_function(name, run),
         count: |what, hit| debug::counted(what, hit),
     });
+}
+
+/// The level `LoopFullUnroll` is told: 1 at -O1 (`pre` off, as `ABSENT_AT_O1`
+/// reads it), else 3 or 2 by the target percent. It was always 2 or 3, so the
+/// -O1 rule `unroll_never_grows_at_o1` never ran.
+fn unroll_level(options: &Options) -> u32 {
+    if !options.pre {
+        1
+    } else if options.limits.target_percent >= 200 {
+        3
+    } else {
+        2
+    }
 }
 
 /// `program` through the pipeline.

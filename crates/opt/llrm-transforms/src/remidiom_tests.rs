@@ -153,3 +153,38 @@ fn test_a_counter_one_past_the_dividend_is_a_remainder_plus_one() {
     assert!(text.contains("add i32 %") && text.contains(", 1"), "{text}");
     assert!(!text.contains("udiv") && !text.contains("mul"), "{text}");
 }
+
+/// `(i * 7) % 5 == 0`: LSR keeps `-x` as a counter and writes `(x / 5) * 5 +
+/// -x`. At -Os that was `div; lea; add` with a spare counter and three
+/// spills in `x_life`'s fill loop (+22 B) where `div; test edx` is enough.
+const NEGATED: &str = "define void @f(ptr %p) {
+entry:
+  br label %loop
+
+loop:
+  %x = phi i32 [ 0, %entry ], [ %xn, %loop ]
+  %y = phi i32 [ 0, %entry ], [ %yn, %loop ]
+  %q = udiv i32 %x, 5
+  %m = mul nuw i32 %q, 5
+  %r = add i32 %y, %m
+  %z = icmp eq i32 %r, 0
+  %b = zext i1 %z to i8
+  store i8 %b, ptr %p
+  %xn = add nuw nsw i32 %x, 7
+  %yn = add i32 %y, -7
+  %c = icmp ult i32 %xn, 40200
+  br i1 %c, label %loop, label %exit
+
+exit:
+  ret void
+}
+";
+
+#[test]
+fn test_a_negated_counter_is_the_negated_remainder() {
+    let text = after(NEGATED, true);
+    assert!(text.contains("urem i32 %x, 5"), "{text}");
+    assert!(text.contains("sub i32 0, %"), "{text}");
+    assert!(!text.contains("udiv") && !text.contains("mul"), "{text}");
+    assert!(!text.contains("%y"), "the dead -x counter is gone: {text}");
+}

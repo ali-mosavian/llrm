@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/looprotate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/looprotate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/looprotate.rs sha256:c3b723d22e7e43ea7576bd1d95fd21dc73cf72de74971009596e72855a9832c1 -->
+<!-- src: crates/opt/llrm-transforms/src/looprotate.rs sha256:fd036ee386efbf49f9b07afd5bb6fdc24d4654bdafbd51f25211ba90b656c02e -->
 
 # looprotate
 
@@ -33,9 +33,10 @@ latch if they are joined by a jump.
   the function. `process_loop` reads one `LoopInfo` made before the
   rotation; the blocks the rotation adds belong to the loops outside the
   rotated one, which the driver derives again before it reaches them.
-- R2 `check-exit-count` is not translated:
-  `profitableToRotateLoopExitingLatch` asks ScalarEvolution for exit counts
-  only under that option, which no `PassBuilder` pipeline sets.
+- R2 `check-exit-count` is the late slot's option
+  (PassBuilderPipelines.cpp#L1621); R7 below prices it.
+- R7 `profitableToRotateLoopExitingLatch` under that option makes a
+  ScalarEvolution session of its own for the question.
 - R3 New blocks go at the end of the layout: `Function::insert_block` after
   a block scans the layout. LLVM puts them next to their neighbours.
 - R4 No `llvm.experimental.noalias.scope.decl` scope cloning and no

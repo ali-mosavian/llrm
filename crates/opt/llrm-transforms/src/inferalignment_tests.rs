@@ -71,3 +71,15 @@ fn a_mask_of_an_aligned_address_is_decided() {
     assert!(changed);
     assert!(text.contains("add i32 0, %i"), "{text}");
 }
+
+/// Compile time: every instruction was copied whole to be looked at for a
+/// mask, a truncation or a call (56,940 copies, 48 M Ir on memexp -O2). Plain
+/// arithmetic and returns are not copied.
+#[test]
+fn an_instruction_that_is_not_a_mask_a_trunc_or_a_call_is_not_copied() {
+    super::COPIES.with(|copies| copies.set(0));
+    inferred("  %a = add i32 %n, 1\n  %b = mul i32 %a, 3\n  ret i32 %b\n");
+    assert_eq!(super::COPIES.with(std::cell::Cell::get), 0);
+    inferred("  %a = and i32 %n, 7\n  ret i32 %a\n");
+    assert_eq!(super::COPIES.with(std::cell::Cell::get), 2, "an `and` is copied once a walk");
+}

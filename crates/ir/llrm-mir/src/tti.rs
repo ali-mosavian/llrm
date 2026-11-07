@@ -591,7 +591,9 @@ pub trait Tti {
     /// full unroll instead of following the nest's decision (unrolling the
     /// nest folds nothing there), and a priced unroll counts the constant trips
     /// of the loops around it, not 32 each. False: the nest bypass holds for
-    /// every such loop, the pin's threshold alone, and 32 a loop.
+    /// every such loop, the pin's threshold alone, and 32 a loop. A load's
+    /// address does not count as a counter read (2026-11-07, owner w15, exit
+    /// 2026-11-30: tile -O2 364 B and 2,155 instructions, rolled 68 B and 4,181).
     fn unroll_prices_nest_loops_without_outer_counter(&self) -> bool {
         false
     }
@@ -732,6 +734,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24): `Tuning::narrow_divide_live_limit`.
+    fn narrow_divide_live_limit(&self) -> u32 {
+        0
+    }
+
     /// `Tuning::divide_by_bytes`.
     fn divide_by_bytes(&self) -> bool {
         false
@@ -780,9 +787,9 @@ pub trait Tti {
         false
     }
 
-    /// `Tuning::size_copy_vs_call`.
-    fn copy_for_size_is_priced_against_call(&self) -> bool {
-        false
+    /// `Tuning::size_copy_price`.
+    fn copy_price_for_size(&self) -> Option<crate::target::CopyPrice> {
+        None
     }
 
     /// DEVIATE LG3: the bytes of the instructions a loop's setup and exit test
@@ -837,6 +844,14 @@ pub trait Tti {
     /// DEVIATE REC-2: what the copies of a recursive function in itself may add
     /// at (-O2, -O3), in `gcc_insns`; none: the pass's own.
     fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        None
+    }
+
+    /// DEVIATE REC-1 (arm64): the least share (numerator, denominator) of a
+    /// recursion's body clocks that its calls to itself spend on the call,
+    /// return and argument words for its copies to be made: a copy removes
+    /// those and nothing else. None: no bound.
+    fn recursive_inlining_call_share(&self) -> Option<(i64, i64)> {
         None
     }
 
@@ -1273,6 +1288,13 @@ pub trait Tti {
         key(a) < key(b)
     }
 
+    /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): LSR ranks formulae
+    /// by their bytes first when the function is built for size; false is the
+    /// pin's order at every level.
+    fn lsr_size_order(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LU13 (owner z80, exit 2026-11-30: a per-class register model in
     /// the LSR cost): a call clobbers every register, so each register the
     /// loop keeps across one is a frame slot, reloaded each trip and, for a
@@ -1348,6 +1370,16 @@ pub trait Tti {
     /// free anyway (x86: the rewrite moved `bq32` rows the wrong way). Off by
     /// default; a target opts in where it measured a win.
     fn prefers_exit_ne(&self) -> bool {
+        false
+    }
+
+    /// Whether `IndVarSimplify` runs `sinkUnusedInvariants`. The pin runs it
+    /// on every target.
+    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-21): off by default;
+    /// on, 17 other-target cells grew (6502 jpeg, arm64 jpeg, x86_32 grep).
+    /// Flip the default when those are fixed.
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp)
+    fn sinks_unused_invariants(&self) -> bool {
         false
     }
 

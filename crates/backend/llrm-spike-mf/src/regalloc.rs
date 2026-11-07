@@ -155,6 +155,12 @@ pub trait Target {
     /// pin's is `enableMachineScheduler()`: x86 and AArch64 true; M68k and
     /// WebAssembly false (the default of a target that sets nothing). Here
     /// true, as before, until a target's owner states otherwise.
+    ///
+    /// m68k (owner greedy-subreg, exit 2026-11-29): keeps true. False is the
+    /// pin's value and fixes `fib` -Os (the local copy `v7 = COPY a` joins before
+    /// the global `a := b`), but makes 7-9 cells per CPU/level worse (68000 O2
+    /// div_constants_long +284 B), as in idiv_loop_os, where the pin's own
+    /// order gives the same `bra` + `moveq #0`. Not flipped while a strict cell is worse.
     fn joins_global_copies() -> bool {
         true
     }
@@ -210,6 +216,19 @@ pub trait Target {
         false
     }
 
+    /// Whether the row `name` loads a frame object a call filled (see
+    /// `frame_address`): made again where it is read.
+    fn is_buffer_load(_name: &str) -> bool {
+        false
+    }
+
+    /// The frame object whose address `inst` puts in a register (z80 `LEAFI`),
+    /// for the buffers a call fills (`call_result_buffers`); None for the
+    /// targets that pass no address of a local to a call this way.
+    fn frame_address(_inst: &Inst) -> Option<i32> {
+        None
+    }
+
     /// Whether a value is spilled, not given a callee-saved register, when
     /// its spill costs less than the register's first use.
     fn csr_spill_first() -> bool {
@@ -230,6 +249,13 @@ pub trait Target {
         join.extra_cost() <= join.copy_frequency * Self::copy_cost() as f32
     }
 
+    /// Whether a move of a symbol's address is made again where it is read, as any literal is. The pin does for
+    /// `MOV32ri` of a global; the price is the target's: z80's `ld hl, #sym` is 3 B against a spill and a reload, 6502's
+    /// pair of immediates is not (the objects grew).
+    fn remats_symbol_addresses() -> bool {
+        false
+    }
+
     /// `isAsCheapAsAMove` against the copy it replaces: whether making the
     /// literal move `literal` again for a copy from a value that may take
     /// `source` to one that may take `destination` costs no more than the
@@ -241,6 +267,13 @@ pub trait Target {
         _size: bool,
     ) -> bool {
         true
+    }
+
+    /// Whether a rematerializable instruction may read registers (the pin's
+    /// `isReMaterializable` with `allUsesAvailableAt`, not the trivial form):
+    /// AArch64 flags every non-flag-setting `ADD`/`SUB`.
+    fn remat_reads_registers() -> bool {
+        false
     }
 
     /// Whether making the literal move `literal` again takes no more bytes than
@@ -329,6 +362,13 @@ pub trait Target {
         _slot: i32,
     ) -> Option<Inst> {
         None
+    }
+    /// Whether a spill store or reload of a byte of a wider register names the
+    /// register of that lane, as every other instruction names the value. A
+    /// target whose byte registers are not halves of the wider one (z80's `e`
+    /// of `de`) numbers the value as before.
+    fn spills_named_by_lane() -> bool {
+        false
     }
     /// Whether `spill_store_lane` is stated.
     fn spills_lanes() -> bool {

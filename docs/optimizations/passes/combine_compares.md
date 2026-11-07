@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_compares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_compares.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:640e0e46a06a3ce03f1e1d909bdeb588e40ec2aea748eacb5bba750da743b658 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:88b21a66e032dc5f1e264ec0d1e91e652cb32204723014aa91fd1f6e1970134d -->
 
 # combine_compares
 
@@ -32,10 +32,6 @@ the producing fold unidentified (not `foldICmpAndConstConst`,
 `getDemandedBitsLHSMask`; a known-bits or range fold in the icmp visitor is
 the lead). `(a & -4) == C` folds at C = 0 and signmin only
 (`a s< -32764` at i16); `((b + M) & M) u< b` is `b != 0` for M = 3, 7.
-
-DEVIATE 2 (temporary): `foldICmpUsingKnownBits` computes the known bits of
-the operands, where LLVM first runs `SimplifyDemandedBits` on them
-(InstCombineSimplifyDemanded.cpp, not translated): the same facts or fewer.
 
 ## Used by
 `combine::visit`, once the compares slot is flipped.

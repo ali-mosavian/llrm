@@ -44,6 +44,12 @@ pub struct Tuning {
     /// sequence by clocks plus bytes at `speed_milliclocks_per_byte`
     /// (`hardware_divide_wins`); false: the clocks and margin alone.
     pub divide_by_bytes: bool,
+    /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24): at -Os a divide by a
+    /// constant of a type narrower than a word keeps its `div` (DIV-OPTSIZE-1)
+    /// only while at most this many values are live across it; 0: always. The
+    /// `div` pins eax, edx and the divisor's register, the narrow multiply
+    /// sequence none.
+    pub narrow_divide_live_limit: u32,
     /// At -O1 (`OptLevel` 1) a full unroll is made only where its cost after
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
@@ -126,6 +132,9 @@ pub struct Tuning {
     /// (promoted to registers) holds only while the promoted elements fit the
     /// register file (UP1). false: every such access is free.
     pub unroll_promotion_fits_registers: bool,
+    /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
+    /// `Tti::lsr_size_order`.
+    pub lsr_size_order: bool,
     /// UP1 for the floats of an x87 target: the register file a promoted
     /// float array's elements must fit is the x87 stack (`x87_stack_slots`,
     /// 8), which holds nothing across the nest's inner loops. Ints keep the
@@ -197,10 +206,10 @@ pub struct Tuning {
     pub inline_variable_memcpy: bool,
     /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541: tuned for size, a constant
     /// `memcpy`/`memmove` whose load and store pieces take more bytes than the call of the library
-    /// routine (`mov edx, n` and the call, 10 B) is the call. The pin counts pieces
+    /// routine (`mov edx, n` and the call) is the call, at the target's `CopyPrice`. The pin counts pieces
     /// (`MaxStoresPerMemcpyOptSize`). gcc -Os calls from 32 B (mv64 10 B against the pin's 31).
-    /// false: the pin's pieces.
-    pub size_copy_vs_call: bool,
+    /// None: the pin's pieces.
+    pub size_copy_price: Option<CopyPrice>,
     /// DEVIATE REC5-1 (owner w2, exit 2026-11-20): IPSCCP widens a range that
     /// keeps growing to its half-line, keeping the sign, not to overdefined
     /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
@@ -211,6 +220,15 @@ pub struct Tuning {
 /// Encoded bytes of a constant fill, stores against `rep stos`. Each pair or
 /// triple is [frame object, global]: a short displacement against an absolute
 /// address.
+/// The bytes a constant copy tuned for size is priced in (`Tuning::size_copy_price`): the library call
+/// (`mov edx, n` and the call) against the load and store pieces, a wide one (16 or 8 bytes) or a narrower one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CopyPrice {
+    pub call: u64,
+    pub wide_piece: u64,
+    pub narrow_piece: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SizeFill {
     /// A dword, word and byte store of an immediate.
@@ -238,6 +256,7 @@ impl Tuning {
         price_fills: false,
         multiply_by_clocks: false,
         divide_by_bytes: false,
+        narrow_divide_live_limit: 0,
         unroll_never_grows_at_o1: false,
         price_pin_multiplies: false,
         imul_at_size: false,
@@ -259,6 +278,7 @@ impl Tuning {
         inline_size_guard_single_site: false,
         inline_chain_trial: false,
         unroll_promotion_fits_registers: false,
+        lsr_size_order: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_header_priced_at_size: false,
@@ -274,7 +294,7 @@ impl Tuning {
         unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,
         inline_variable_memcpy: false,
-        size_copy_vs_call: false,
+        size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
     };
 }

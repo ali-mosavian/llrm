@@ -112,6 +112,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TLI.hasAndNotCompare(Y)`: `(X & Y) == Y` is cheaper as `(~X & Y) == 0`
+    /// for a value of this type (x86: NOT+TEST for any scalar integer).
+    fn has_and_not_compare(
+        &self,
+        _vt: EVT,
+    ) -> bool {
+        false
+    }
+
     fn fold_xor_of_and_with_mask(&self) -> bool {
         false
     }
@@ -169,6 +178,13 @@ pub trait CombineHooks {
     /// until x86 is judged.
     fn reduce_load_width_through_freeze(&self) -> bool {
         false
+    }
+
+    /// `TargetLowering::isLegalAddImmediate`: whether an `add` takes the
+    /// signed immediate. Default true (arm64 and wasm are not judged); x86
+    /// is `isInt<32>`.
+    fn legal_add_immediate(&self, _imm: i64) -> bool {
+        true
     }
 
     /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)`.
@@ -377,6 +393,14 @@ pub trait CombineHooks {
         _wide: EVT,
         _narrow: EVT,
     ) -> bool {
+        false
+    }
+
+    /// DEVIATE SD257 (owner llrm-target-6502, exit 2026-12-05): `ShrinkDemandedOp`
+    /// sizes the narrow type by the bits that are demanded and not known zero,
+    /// not by the demanded bits alone (the pin). Off elsewhere: x86-64
+    /// `div_constants_short` +80 B (the narrowed `imul` loses its fusion).
+    fn known_zero_narrowing(&self) -> bool {
         false
     }
 
@@ -1235,8 +1259,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// `foldSetCCWithAnd`'s power-of-two mask arm
     /// ([TargetLowering.cpp#L4340][pin]): `(X & 2^k) == 0` is `(trunc X to
     /// k+1 bits) >= 0` and `!= 0` is `< 0`, when the truncate is free and
-    /// both types are legal. DEVIATE: the `(X & Y) == Y` and and-not arms are
-    /// not ported.
+    /// both types are legal; and the `(X & Y) == Y` arms for a constant Y.
+    /// DEVIATE: a variable Y is not ported.
     ///
     /// [pin]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L4340
@@ -1247,12 +1271,32 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         c1: u128,
         cond: CondCode,
     ) -> Option<SDValue> {
-        if c1 != 0 || !matches!(cond, CondCode::SetEq | CondCode::SetNe) || self.dag.opcode(n0) != ISD::And {
+        if !matches!(cond, CondCode::SetEq | CondCode::SetNe) || self.dag.opcode(n0) != ISD::And {
             return None;
         }
         let op_type = self.dag.value_type(n0);
         let mask = self.dag.constant(self.dag.operand(n0, 1))?;
         let mask = mask & super::fold::mask(op_type.size_in_bits());
+        if c1 != 0 {
+            // `(X & Y) == Y`, Y a constant: a single bit is `(X & Y) != 0`;
+            // else, where the target has and-not, `(~X & Y) == 0`.
+            if !op_type.is_integer() || mask == 0 || c1 & super::fold::mask(op_type.size_in_bits()) != mask {
+                return None;
+            }
+            if mask.is_power_of_two() {
+                let inverse = if cond == CondCode::SetEq { CondCode::SetNe } else { CondCode::SetEq };
+                let zero = self.dag.get_constant(0, op_type);
+                return Some(self.dag.get_setcc(vt, n0, zero, inverse));
+            }
+            if self.dag.has_one_use(n0.node) && self.hooks.has_and_not_compare(op_type) {
+                let not_x = self.dag.get_not(self.dag.operand(n0, 0), op_type);
+                let y = self.dag.operand(n0, 1);
+                let and = self.dag.get_node(ISD::And, op_type, &[not_x, y]);
+                let zero = self.dag.get_constant(0, op_type);
+                return Some(self.dag.get_setcc(vt, and, zero, cond));
+            }
+            return None;
+        }
         if !mask.is_power_of_two() || !self.dag.has_one_use(n0.node) {
             return None;
         }
@@ -2228,6 +2272,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         let ones = super::fold::mask(vt.size_in_bits());
         let cb = self.dag.constant(n1)?;
+        let bits = vt.size_in_bits();
+        // `TLI.isLegalAddImmediate((CA * CM + CB).getSExtValue())`
+        let legal = |this: &Self, imm: u128| {
+            let shift = 128 - bits;
+            this.hooks.legal_add_immediate((((imm << shift) as i128) >> shift) as i64)
+        };
         // `m_OneUse(m_Mul(m_Add(m_Value(A), m_ConstInt(CA)), m_ConstInt(CM)))`.
         let product = |this: &Self, v: SDValue| -> Option<(SDValue, u128, u128)> {
             if this.dag.opcode(v) != ISD::Mul || !this.dag.has_one_use(v.node) {
@@ -2242,6 +2292,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         };
         if let Some((a, ca, cm)) = product(self, n0) {
             let imm = ca.wrapping_mul(cm).wrapping_add(cb) & ones;
+            if !legal(self, imm) {
+                return None;
+            }
             let (cm, imm) = (self.dag.get_constant(cm, vt), self.dag.get_constant(imm, vt));
             let mul = self.dag.get_node(ISD::Mul, vt, &[a, cm]);
             return Some(self.dag.get_node(ISD::Add, vt, &[mul, imm]));
@@ -2251,6 +2304,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             for (mul, b) in [(x, y), (y, x)] {
                 if let Some((a, ca, cm)) = product(self, mul) {
                     let imm = ca.wrapping_mul(cm).wrapping_add(cb) & ones;
+                    if !legal(self, imm) {
+                        continue;
+                    }
                     let (cm, imm) = (self.dag.get_constant(cm, vt), self.dag.get_constant(imm, vt));
                     let product = self.dag.get_node(ISD::Mul, vt, &[a, cm]);
                     let sum = self.dag.get_node(ISD::Add, vt, &[product, b]);
@@ -2309,8 +2365,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             // CM), CM*CA + CB)`, also through an intermediate add; "this can
             // help if the inner add has multiple uses"
             // ([pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3179)).
-            // DEVIATE: the wrap flags of the result are not kept, and
-            // `isLegalAddImmediate` is the pin's default (true). Exit
+            // DEVIATE: the wrap flags of the result are not kept. Exit
             // 2026-11-12.
             if vt.size_in_bits() <= 64 {
                 if let Some(found) = self.fold_add_of_mul_of_add(n0, n1, vt) {

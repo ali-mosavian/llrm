@@ -29,7 +29,7 @@
 //! Results are kept in the profile, as a multiply is asked about again and
 //! again.
 //!
-//! DEVIATE M1 (AM-M1, priced): the pin's X86 does a scalar constant multiply
+//! DEVIATE M1 (owner w6/w10, exit 2026-12-01; AM-M1, priced): the pin's X86 does a scalar constant multiply
 //! by `combineMul`
 //! ([X86ISelLowering.cpp#L51191](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191))
 //! and `decomposeMulByConstant` (#L3636): a `lea` for 3, 5 and 9 (times a power
@@ -44,8 +44,7 @@
 //! pin's, and keeps `imul` at m16 -Os, where they grow 27 of 175 by 3550 B);
 //! QCport m16 -38 B at -O1..-O3, 0 at -Os. Instructions against the pin on the
 //! same IR: lea +471 at -O2 (`docs/working/instruction-gap-vs-pin.md`). Exit:
-//! none while the clocks decide; reviewed with the tuning phase. Owner w-4,
-//! review 2026-12-01.
+//! none while the clocks decide; reviewed with the tuning phase.
 //!
 //! # Example
 //! What the ranking answers on a 486 (`targets::tuned_for(M32, "486")`):

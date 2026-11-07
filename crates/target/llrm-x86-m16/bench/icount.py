@@ -375,13 +375,20 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set 
     def current_drive(ax):
         uc.reg_write(UC_X86_REG_AX, (ax & 0xFF00) | 2)  # C:
 
+    def free_space(ax):
+        # a drive of 32 MB, all free: AX sectors per cluster, BX free clusters, CX bytes per sector, DX clusters in all
+        uc.reg_write(UC_X86_REG_AX, 4)
+        uc.reg_write(UC_X86_REG_BX, 0x4000)
+        uc.reg_write(UC_X86_REG_CX, 512)
+        uc.reg_write(UC_X86_REG_DX, 0x8000)
+
     # int 21h by function (AH): a service the program reaches that is not here stops the run with its number
     dos = {
         0x4C: exit_, 0x3C: open_, 0x3D: open_, 0x3F: read_, 0x40: write_, 0x3E: close_, 0x44: ioctl_, 0x09: print_string,
         0x02: print_char, 0x30: version, 0x2C: time_, 0x35: get_vector, 0x33: break_flag, 0x06: console_io,
         0x0B: input_status, 0x4A: resize, 0x25: set_vector, 0x0E: accepted, 0x42: seek,
         0x19: current_drive, 0x47: get_directory, 0x1A: set_dta, 0x2F: get_dta, 0x41: unlink, 0x4E: find_first,
-        0x4F: find_next, 0x43: attributes, 0x3B: accepted, 0x39: accepted, 0x3A: accepted,
+        0x4F: find_next, 0x36: free_space, 0x43: attributes, 0x3B: accepted, 0x39: accepted, 0x3A: accepted,
     }
 
     def interrupt(uc, number, _):

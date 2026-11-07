@@ -35,13 +35,15 @@ fn built(
 /// side effect of trying (a frame object, a pool cell) would move bytes.
 #[test]
 fn fast_isel_on_main_alone_leaves_the_dag_object() {
-    for target in ["x86_64-linux", "x86_32-linux"] {
-        let (dag, _, _) = built(target, "-O0", false);
-        let (fast, report, _) = built(target, "-O0", true);
-        let main_fast = report.lines().any(|line| line.starts_with("main fast") || line.starts_with("_main fast"));
-        assert!(!main_fast, "{target}: main has a call, FastISel must not take it: {report}");
-        assert_eq!(dag, fast, "{target}: fallback changed the object");
-    }
+    // m64 takes `main` since the SysV call and global-address selectors
+    let (_, report, _) = built("x86_64-linux", "-O0", true);
+    assert!(report.lines().any(|line| line.starts_with("main fast") || line.starts_with("_main fast")), "x86_64: {report}");
+    let target = "x86_32-linux";
+    let (dag, _, _) = built(target, "-O0", false);
+    let (fast, report, _) = built(target, "-O0", true);
+    let main_fast = report.lines().any(|line| line.starts_with("main fast") || line.starts_with("_main fast"));
+    assert!(!main_fast, "{target}: main has a variadic call, FastISel must not take it: {report}");
+    assert_eq!(dag, fast, "{target}: fallback changed the object");
 }
 
 /// `five` is `ret i32 5`: at -O0 with the flag it is selected by FastISel
@@ -269,4 +271,315 @@ fn fast_isel_takes_a_multiply_at_m32_and_m64() {
         let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
         assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
     }
+}
+
+/// At m64 a call left its caller to the DAG; `urem_eq.c` and `array.c` end in `printf`. Fixed and variadic callee, integer arguments.
+#[test]
+fn fast_isel_takes_a_call_at_m64() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "int inc(int a);\nint many(int a, ...);\nint h(int a)\n{\n    many(a, a);\n    return inc(a + 1);\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_DEBUG", "isel")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(asm.contains("call") && asm.contains("mov al, 0"), "{asm}");
+}
+
+/// At m64 a global array element (`sext` index, `gep`, `lea` of the global)
+/// left `h` to the DAG; `array.c` stores and loads exactly this.
+#[test]
+fn fast_isel_takes_a_global_array_element_at_m64() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "int a[64];\nint h(int i)\n{\n    a[i] = i;\n    return a[i];\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_DEBUG", "isel")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(asm.contains("movsx"), "{asm}");
+}
+
+/// A compare whose result is a value (`x == c`, widened) sent every such
+/// function to the DAG ("fast declined at ICmp"); `urem_eq.c` is made of them.
+#[test]
+fn fast_isel_takes_a_compare_as_a_value() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(unsigned x)\n{\n    return x % 5 == 0;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(asm.contains("div") && !asm.contains("imul") && !asm.contains("ror"), "{target}: {asm}");
+    }
+}
+
+/// At m64 an `i64` parameter, local, add, multiply, compare and return left
+/// the function to the DAG ("a parameter that is not a 4-byte stack cell or
+/// one register"); `array.c`'s `long s` is a store of one.
+#[test]
+fn fast_isel_takes_the_i64_core_at_m64() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "long h(long a, long b)\n{\n    long c = a + b;\n    if (c > a)\n        return c - 1;\n    return c * b + 7;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_DEBUG", "isel")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(asm.contains("qword ptr [rbp-") && asm.contains("imul rax"), "{asm}");
+}
+
+/// At m64 `zext`/`trunc` between `i32` and `i64` and an `i64` divide left the
+/// function to the DAG ("fast declined at Cast"); `urem_eq.c`'s `main` mixes them.
+#[test]
+fn fast_isel_takes_widening_and_i64_divide_at_m64() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "unsigned long h(unsigned a, unsigned long b)\n{\n    unsigned long w = a;\n    unsigned t = (unsigned)(b / w);\n    return t + b % 10;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_DEBUG", "isel")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(asm.contains("div rcx") || asm.contains("div r"), "{asm}");
+}
+
+/// An `i64` argument or result left a caller to the DAG ("fast declined at
+/// Call"): `main` of `urem_eq.c` and `array.c` calls `printf("%ld")` and `report(long)`.
+#[test]
+fn fast_isel_takes_i64_call_arguments_and_results_at_m64() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "long next(long a);\nvoid report(long v);\nlong h(long a)\n{\n    report(a);\n    return next(a + 1);\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_DEBUG", "isel")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(asm.contains("mov rdi, rax") || asm.contains("mov rdi,"), "{asm}");
+}
+
+/// A multiply by a constant put the constant in a register (`mov eax, 3;
+/// imul eax, ecx`), 5 bytes dearer than the pin's `imul r, r, imm` or `shl`
+/// (`llrm_mixed`, `llrm_six` of `wc_mixed.c`).
+#[test]
+fn fast_isel_multiplies_by_a_constant_with_an_immediate() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(int a)\n{\n    return a * 3 + a * 8;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(asm.contains("shl") && asm.lines().any(|line| line.contains("imul") && line.trim_end().ends_with(", 3")), "{target}: {asm}");
+    }
+}
+
+/// A one-use load right before its user was loaded into a register first
+/// (`mov rax, [b]; mov rcx, [b]; add rcx, rax`), where the pin folds it
+/// (`mov rax, [b]; add rax, [b]`): `llrm_wide` of `wc_mixed.c`, 49 B against 32.
+#[test]
+fn fast_isel_folds_a_load_into_the_instruction_after_it() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(int a, int b)\n{\n    return a + b - a * b;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        let folded = |op: &str| asm.lines().any(|line| line.trim_start().starts_with(op) && line.contains("ptr ["));
+        assert!(folded("add") && folded("imul"), "{target}: {asm}");
+    }
+}
+
+/// A `volatile` load or store left its function to the DAG ("fast declined at
+/// Store { volatile: true }"): the pin selects them like any other, only never
+/// folding the load. 14 of `div_constants_long.c`'s functions, +458 B over clang.
+#[test]
+fn fast_isel_takes_volatile_accesses_and_never_folds_a_volatile_load() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(int a)\n{\n    volatile int v = a;\n    return a + v;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(!asm.lines().any(|line| line.trim_start().starts_with("add") && line.contains("ptr [")), "{target}: a volatile load was folded: {asm}");
+    }
+}
+
+/// FastISel called `llvm.usub.sat.i64` like a function: the object named a
+/// symbol that does not exist and `assemble.rs` panicked ("no entry found for
+/// key") on `sat_builtins.c` and `sat_sub_u64_shared_compare.c`. An intrinsic
+/// call is the DAG's (F3).
+#[test]
+fn fast_isel_leaves_an_intrinsic_call_to_the_dag() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(
+            scratch.path().join("a.c"),
+            "typedef unsigned long long u64;\nu64 h(u64 a, u64 b)\n{\n    return __builtin_elementwise_sub_sat(a, b);\n}\n",
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .current_dir(scratch.path())
+            .args(["-O0", "-c", "a.c", "-o", "a.o"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{target}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
+/// A shift by a constant left its function to the DAG ("fast declined at
+/// Binary(Shl)"): `next` of `div_constants_long.c`, the shifts of `mulconst_i64.c`.
+#[test]
+fn fast_isel_takes_shifts_by_a_constant() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(
+            scratch.path().join("a.c"),
+            "int h(int a, unsigned b)\n{\n    return (a << 3) + (a >> 2) + (int)(b >> 5);\n}\n",
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(asm.contains("shl") && asm.contains("sar") && asm.contains("shr"), "{target}: {asm}");
+    }
+}
+
+/// A 64-bit constant past `imm32` left its function to the DAG ("fast declined
+/// at Binary(Mul)", the store of a wide immediate): `mulconst_i64.c` is 19 such
+/// functions, +487 B over clang. The pin makes it with `movabs`.
+#[test]
+fn fast_isel_materializes_a_wide_constant_with_movabs() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), "long h(long a)\n{\n    return a * 0x123456789abcL + 5;\n}\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}");
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(asm.contains("20015998343868") || asm.to_uppercase().contains("123456789ABC"), "{asm}");
 }
