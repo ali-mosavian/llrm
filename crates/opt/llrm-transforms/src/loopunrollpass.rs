@@ -1029,6 +1029,29 @@ fn should_full_unroll(
     // When computing the unrolled size, note that BEInsns are not replicated
     // like the rest of the loop body.
     let unrolled_size = uce.unrolled_loop_size(up, full_unroll_trip_count);
+    // DEVIATE UNROLL-O1: at -O1 on a target that says so, the copies must not
+    // cost more than the rolled loop: by size, or by the cost the analysis
+    // finds once the trip's constants fold (gcc's size-neutral complete unroll).
+    if run.options.opt_level == 1 && !run.options.opt_size && run.tti.unroll_never_grows_at_o1() {
+        let rolled = u64::from(uce.rolled_loop_size());
+        let fits = unrolled_size <= rolled
+            || analyze_loop_unroll_cost(
+                run,
+                se,
+                analyzed,
+                lp,
+                full_unroll_trip_count,
+                eph,
+                rolled.min(u64::from(u32::MAX)) as u32,
+                up.max_iterations_count_to_analyze,
+                None,
+                false,
+            )
+            .is_some_and(|cost| u64::from(cost.unrolled_cost) <= rolled);
+        return (fits
+            && price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up))
+        .then_some(full_unroll_trip_count);
+    }
     // DEVIATE U1: a loop of few trips is held to the target's `optsize` bar
     // (the pin's is `OptSizeThreshold`, 0 on x86).
     let few = if run.options.opt_size {

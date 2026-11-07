@@ -164,6 +164,20 @@ pub fn chain_by_clocks<'a>(
     Ok((immediate_multiply(target, number)? + prefix - clocks > 0).then_some(chain))
 }
 
+/// `chain_by_clocks`; with `no_growth` the chain must not be longer in bytes
+/// than the `imul r,r,imm` it replaces (-O1: no cell larger).
+pub fn chain_by_clocks_within<'a>(
+    number: i64,
+    width: i64,
+    cpu: impl Into<ProfileOrName<'a>>,
+    arch: &dyn llrm_target::Target,
+    no_growth: bool,
+) -> Result<Option<Vec<(&'static str, i64)>>, String> {
+    let Some(chain) = chain_by_clocks(number, width, cpu)? else { return Ok(None) };
+    let grows = chain_bytes(&chain, width, arch) > arch.multiply_immediate_bytes(number, width);
+    Ok((!(no_growth && grows)).then_some(chain))
+}
+
 /// The chain for a multiply by `number` of `width` bytes in a block `freq`
 /// times as hot as the entry, where the clocks it saves over `imul r,r,imm`
 /// pay for the bytes it adds at `milliclocks_per_byte` (the target's rate at
