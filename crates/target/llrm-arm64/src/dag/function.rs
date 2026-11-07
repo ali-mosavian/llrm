@@ -274,7 +274,7 @@ pub fn select_function_in(
                 Ok(PhiCopy { to, dst, src, float })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let in_block: std::collections::HashSet<llrm_mir::module::InstId> =
+        let in_block: llrm_mir::dense::IdSet<llrm_mir::module::InstId> =
             built.dag.inst_order.iter().map(|&(inst, _)| inst).collect();
         // A note with no node to follow (the value is in another block) or no
         // value at all (`undef`, a constant, a piece, an assignment) is kept as
