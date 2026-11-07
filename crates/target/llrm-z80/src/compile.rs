@@ -1946,10 +1946,14 @@ thread_local! {
 /// call beats the copies depends on what the function keeps live across it,
 /// which the selection cannot see (div_constants_long -Os: 28 calls, +177 B
 /// over the copies; mul_constants the other way, -227 B), so each function is
-/// built both ways and priced. The routine is linked once for all of them:
-/// the functions the call makes smaller keep it only where together they
-/// save more than the routine's bytes (switch_table_holes -Os: 40 B saved,
-/// 57 B routine).
+/// built both ways and priced. The module is what is priced: its functions'
+/// bytes and the runtime routines they reach, each linked once (`__mulsi3`
+/// 57 B for the calls, the shift routines the copies call), so the functions
+/// the call makes smaller keep it only where together they save what the
+/// routines cost (switch_table_holes -Os: 40 B saved, 57 B routine).
+/// DEVIATE z80-mul-function-price: the pin's `decomposeMulByConstant` has no
+/// such choice. Owner z80, exit 2026-11-20 (a pricing of the other
+/// libcalls a variant moves).
 fn decomposes(
     selected: &Selections,
     alternatives: &Selections,
@@ -1961,32 +1965,98 @@ fn decomposes(
         held.borrow().as_ref().filter(|(was, _)| *was == key).map(|(_, set)| set.clone())
     });
     let set = held.unwrap_or_else(|| {
-        let price = |selections: &Selections, name: &str| {
-            lines_of(selections, name, 0, request)
-                .ok()
-                .map(|lines| expand::price_emitted(&lines, !matches!(request.level, Level::Os | Level::Oz)))
-        };
-        let mut saved = 0u64;
-        let mut gains = Vec::new();
-        for (one, ..) in alternatives.iter() {
-            let (call, decomposed) = (price(selected, one), price(alternatives, one));
-            let gain = match (call, decomposed) {
-                (Some(call), Some(decomposed)) if cheaper(request.level, call, decomposed) => {
-                    u64::from(decomposed.0.saturating_sub(call.0))
-                }
-                _ => 0,
-            };
-            saved += gain;
-            gains.push((one.clone(), gain));
-        }
-        let keeps_routine = saved > u64::from(crate::prepare::MULSI3_BYTES);
-        let set: std::collections::HashSet<String> =
-            gains.into_iter().filter(|(_, gain)| !keeps_routine || *gain == 0).map(|(one, _)| one).collect();
-        let set = std::rc::Rc::new(set);
+        let set = std::rc::Rc::new(decomposed_functions(selected, alternatives, request));
         DECOMPOSED.with(|held| *held.borrow_mut() = Some((key, set.clone())));
         set
     });
     set.contains(name)
+}
+
+/// The functions of the module that call `__mulsi3`, built with the shifts
+/// and adds where the module is smaller for it (bytes first at the size
+/// levels).
+fn decomposed_functions(
+    selected: &Selections,
+    alternatives: &Selections,
+    request: &Request,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    let speed = !matches!(request.level, Level::Os | Level::Oz);
+    // the printed form of every function, and for those with an alternative
+    // the form with the shifts
+    let priced = |lines: Vec<Line>| {
+        let bytes = expand::price_emitted(&lines, speed).0;
+        (bytes, crate::runtime_size::referenced(&lines))
+    };
+    let mut fixed: Vec<(u32, HashSet<String>)> = Vec::new();
+    let mut either: Vec<(String, (u32, HashSet<String>), Option<(u32, HashSet<String>)>)> = Vec::new();
+    for (one, ..) in selected.iter() {
+        let call = lines_of(selected, one, 0, request).ok().map(priced);
+        let Some(call) = call else { continue };
+        if !alternatives.iter().any(|(other, ..)| other == one) {
+            fixed.push(call);
+            continue;
+        }
+        let differs = {
+            let (a, b) = (machine_function_with(selected, one, true), machine_function_with(alternatives, one, true));
+            !matches!((a, b), (Ok(a), Ok(b)) if format!("{a:?}") == format!("{b:?}"))
+        };
+        let decomposed = if differs { lines_of(alternatives, one, 0, request).ok().map(priced) } else { None };
+        either.push((one.clone(), call, decomposed));
+    }
+    let total = |decomposes: &HashSet<usize>| {
+        let mut reached: HashSet<String> = HashSet::new();
+        let mut bytes = 0;
+        for (one_bytes, refs) in &fixed {
+            bytes += one_bytes;
+            reached.extend(refs.iter().cloned());
+        }
+        for (at, (_, call, decomposed)) in either.iter().enumerate() {
+            let (one_bytes, refs) = match decomposed {
+                Some(decomposed) if decomposes.contains(&at) => decomposed,
+                _ => call,
+            };
+            bytes += one_bytes;
+            reached.extend(refs.iter().cloned());
+        }
+        bytes + crate::runtime_size::reached(&reached)
+    };
+    // descend from all shifts and from all calls (two functions may together
+    // pay for a routine neither pays for alone); the smaller module wins, a tie
+    // goes to the shifts
+    let every: HashSet<usize> = (0..either.len()).filter(|at| either[*at].2.is_some()).collect();
+    let descend = |start: HashSet<usize>| {
+        let mut chosen = start;
+        let mut best = total(&chosen);
+        for _ in 0..3 {
+            let mut moved = false;
+            for at in 0..either.len() {
+                if either[at].2.is_none() {
+                    continue;
+                }
+                let mut other = chosen.clone();
+                if !other.remove(&at) {
+                    other.insert(at);
+                }
+                let price = total(&other);
+                if price < best {
+                    (chosen, best, moved) = (other, price, true);
+                }
+            }
+            if !moved {
+                break;
+            }
+        }
+        (best, chosen)
+    };
+    let (from_shifts, from_calls) = (descend(every), descend(HashSet::new()));
+    let chosen = if from_calls.0 < from_shifts.0 { from_calls.1 } else { from_shifts.1 };
+    either
+        .iter()
+        .enumerate()
+        .filter(|(at, (_, _, decomposed))| decomposed.is_some() && chosen.contains(at))
+        .map(|(_, (one, ..))| one.clone())
+        .collect()
 }
 
 fn lines_of(
