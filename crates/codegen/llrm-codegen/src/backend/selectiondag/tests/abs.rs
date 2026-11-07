@@ -11,6 +11,7 @@ fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue) -> SDValue) -> (Selec
     let root = build(&mut dag, x);
     dag.set_root(root);
     let mut hooks = X86Lowering {
+        imul_if_smaller: false,
         share_products: false,
         cmov: true,
         sse2: false,
