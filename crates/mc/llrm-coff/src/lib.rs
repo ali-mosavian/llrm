@@ -17,6 +17,9 @@ const SCN_MEM_WRITE: u32 = 0x8000_0000;
 const SYM_CLASS_EXTERNAL: u8 = 2;
 const SYM_CLASS_STATIC: u8 = 3;
 const SYM_CLASS_FILE: u8 = 103;
+const SYM_CLASS_WEAK_EXTERNAL: u8 = 69;
+/// The linker falls back to the default symbol where no strong definition exists.
+const IMAGE_WEAK_EXTERN_SEARCH_ALIAS: u32 = 3;
 const SYM_TYPE_FUNCTION: u16 = 0x20;
 const SYM_ABSOLUTE: i16 = -1;
 const SYM_DEBUG: i16 = -2;
@@ -251,9 +254,33 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         count += 1;
     }
     count += 2 * object.sections.len() as u32;
-    // Each object symbol's index in the table.
-    let coff_symbol: Vec<u32> = (count..count + object.symbols.len() as u32).collect();
-    count += object.symbols.len() as u32;
+    // Each object symbol's index in the table: a weak definition outside a
+    // COMDAT is three entries, the weak external, its aux and its default.
+    let in_comdat = |one: &llrm_object::Symbol| {
+        matches!(one.definition, Definition::Defined { section, .. }
+            if object.comdats.iter().any(|comdat| comdat.section == section))
+    };
+    let weak_alone = |one: &llrm_object::Symbol| {
+        one.binding == Binding::Weak && matches!(one.definition, Definition::Defined { .. }) && !in_comdat(one)
+    };
+    let mut coff_symbol: Vec<u32> = Vec::new();
+    for one in &object.symbols {
+        coff_symbol.push(count);
+        count += if weak_alone(one) { 3 } else { 1 };
+    }
+    // The name the defaults of weak externals end with: the first strong
+    // external symbol in a section, else the first in a COMDAT.
+    let unique: Option<&str> = [false, true].into_iter().find_map(|comdat| {
+        object
+            .symbols
+            .iter()
+            .find(|one| {
+                matches!(one.definition, Definition::Defined { .. })
+                    && (one.binding == Binding::Public || (in_comdat(one) && one.binding == Binding::Weak))
+                    && in_comdat(one) == comdat
+            })
+            .map(|one| one.name.as_str())
+    });
 
     // Sections' bytes and relocation entries.
     let mut images: Vec<Vec<u8>> = Vec::new();
@@ -299,11 +326,36 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let name = symbol_name(&one.name, &mut strings);
         // A symbol in a COMDAT section is external, so the linker keeps one of
         // the copies of the name.
-        // DEVIATE COFF-WEAK-1 (owner object-refactor, exit 2026-11-20): a weak
-        // symbol outside a COMDAT is static here; the pin writes class 69.
-        let in_comdat = matches!(one.definition, Definition::Defined { section, .. }
-            if object.comdats.iter().any(|comdat| comdat.section == section));
-        let class = if one.binding == Binding::Public || in_comdat { SYM_CLASS_EXTERNAL } else { SYM_CLASS_STATIC };
+        let comdat = in_comdat(one);
+        let class = if one.binding == Binding::Public || comdat { SYM_CLASS_EXTERNAL } else { SYM_CLASS_STATIC };
+        if weak_alone(one) {
+            // As the pin: a weak external (search alias) naming a default
+            // `.weak.NAME.default.UNIQUE` that has the definition.
+            let Definition::Defined { section, offset } = one.definition else { unreachable!() };
+            let default = coff_symbol[object.symbols.iter().position(|other| std::ptr::eq(other, one)).unwrap()] + 2;
+            symbol(&mut table, Entry { name, value: 0, section: 0, kind: 0, class: SYM_CLASS_WEAK_EXTERNAL, aux: 1 });
+            put32(&mut table, default);
+            put32(&mut table, IMAGE_WEAK_EXTERN_SEARCH_ALIAS);
+            table.extend([0u8; 10]);
+            let kind = if object.sections[section].role == Role::Text { SYM_TYPE_FUNCTION } else { 0 };
+            let default_name = match unique {
+                Some(unique) => format!(".weak.{}.default.{unique}", one.name),
+                None => format!(".weak.{}.default", one.name),
+            };
+            let default_name = symbol_name(&default_name, &mut strings);
+            symbol(
+                &mut table,
+                Entry {
+                    name: default_name,
+                    value: offset as u32,
+                    section: section as i16 + 1,
+                    kind,
+                    class: SYM_CLASS_EXTERNAL,
+                    aux: 0,
+                },
+            );
+            continue;
+        }
         match one.definition {
             Definition::Defined { section, offset } => {
                 let kind = if object.sections[section].role == Role::Text { SYM_TYPE_FUNCTION } else { 0 };
