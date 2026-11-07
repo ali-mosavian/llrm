@@ -799,3 +799,61 @@ j:
     assert!(preserved.contains("alloca"), "{preserved}");
     assert!(!after.contains("alloca") && !after.contains("store"), "{after}");
 }
+
+/// Asks for the loops of the function and changes nothing.
+struct AsksForShape;
+
+impl llrm_mir::passes::FunctionPass for AsksForShape {
+    fn name(&self) -> &'static str {
+        "asks-for-shape"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// A split that left every block and edge as they were dropped the loops and
+/// dominators the manager held, as `SROAPass::run` keeps them
+/// (`preserveSet<CFGAnalyses>`): memexp -O2 derived 2,397 shapes, 161 of the
+/// drops after SROA alone. Here the second ask derived a second shape.
+#[test]
+fn test_a_split_that_leaves_the_cfg_keeps_the_shape() {
+    let mut module = module(
+        "define i32 @f(i32 %a, i32 %n) {
+b0:
+  %s = alloca { i32, i32 }
+  %p0 = getelementptr { i32, i32 }, ptr %s, i32 0, i32 0
+  %p1 = getelementptr { i32, i32 }, ptr %s, i32 0, i32 1
+  store i32 %a, ptr %p0
+  store i32 %n, ptr %p1
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %j, %b1 ]
+  %j = add i32 %i, 1
+  %k = icmp slt i32 %j, %n
+  br i1 %k, label %b1, label %b2
+
+b2:
+  %x = load i32, ptr %p0
+  %y = load i32, ptr %p1
+  %r = add i32 %x, %y
+  ret i32 %r
+}
+",
+    );
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(AsksForShape);
+    manager.add(SroaModifyCfg);
+    manager.add(AsksForShape);
+    let before = llrm_analysis::cfg::shapes_derived();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
+    assert!(!llrm_mir::print::module(&module).contains("alloca"), "the split did not happen");
+    assert_eq!(llrm_analysis::cfg::shapes_derived() - before, 1, "a split that left the CFG dropped the shape");
+}

@@ -139,7 +139,7 @@ void B_PNTC(SD *pattern, short border, short background)
     c = gfx_pixel(gfx_x1, gfx_y1);
     span_count = 0;
     if (c < 0 || c == edge) {
-        str_tmp_free(pattern);
+        str_free_if_tmp(pattern);
         return;
     }
     seen = (byte *)qb_paint_queue_open(&bytes);
@@ -192,5 +192,5 @@ void B_PNTC(SD *pattern, short border, short background)
         }
     }
     qb_paint_queue_close();
-    str_tmp_free(pattern);
+    str_free_if_tmp(pattern);
 }

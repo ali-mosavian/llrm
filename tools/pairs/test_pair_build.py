@@ -32,10 +32,10 @@ def stub(scratch: Path, log: Path) -> dict:
         echo "$CARGO_TARGET_DIR" >> {log}
         sleep 0.3
         mkdir -p $CARGO_TARGET_DIR/dist $CARGO_TARGET_DIR/deps
-        # llrm-c reads a header from the tree it was built in when it runs, as the real one does
-        for b in llrm-c llrm-qb llrm-nib nibfront; do printf '#!/bin/sh\\n# %s\\ncat "%s/tree.txt"\\n' "$(git rev-parse HEAD)" "$(pwd)" > $CARGO_TARGET_DIR/dist/$b; done
+        # llrm-cc reads a header from the tree it was built in when it runs, as the real one does
+        for b in llrm-cc llrm-qb llrm-nib nibfront; do printf '#!/bin/sh\\n# %s\\ncat "%s/tree.txt"\\n' "$(git rev-parse HEAD)" "$(pwd)" > $CARGO_TARGET_DIR/dist/$b; done
         for t in jwasm jwlink dosbox-x; do echo $t > $CARGO_TARGET_DIR/dist/$t; done
-        chmod +x $CARGO_TARGET_DIR/dist/*; echo "llrm-c: $(pwd)/src.rs" > $CARGO_TARGET_DIR/dist/llrm-c.d
+        chmod +x $CARGO_TARGET_DIR/dist/*; echo "llrm-cc: $(pwd)/src.rs" > $CARGO_TARGET_DIR/dist/llrm-cc.d
         """))
     stub.chmod(0o755)
     return {**os.environ, "PAIR_CARGO": f"{stub} cargo"}
@@ -62,7 +62,7 @@ def test_two_concurrent_builds_of_different_shas_each_carry_their_own_tree(tmp_p
     for worker in workers:
         worker.join()
     for sha in (first, second):
-        assert built_from(scratch / f"sbp-{sha}" / "dist" / "llrm-c") == sha
+        assert built_from(scratch / f"sbp-{sha}" / "dist" / "llrm-cc") == sha
     assert subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() == second
     assert len(list(scratch.glob("wt-pair-*"))) == 2, "the build worktrees are kept for the dist to read"
 
@@ -79,14 +79,14 @@ def test_a_pair_leaves_only_the_binaries_per_sha_and_all_builds_share_one_target
         build(scratch, repo, sha, env)
     for sha in shas:
         left = sorted(p.relative_to(scratch / f"sbp-{sha}").as_posix() for p in (scratch / f"sbp-{sha}").rglob("*") if p.is_file())
-        assert left == ["dist/dosbox-x", "dist/jwasm", "dist/jwlink", "dist/llrm-c", "dist/llrm-c.d", "dist/llrm-nib", "dist/llrm-qb", "dist/nibfront", "ok"], (sha, left)
+        assert left == ["dist/dosbox-x", "dist/jwasm", "dist/jwlink", "dist/llrm-cc", "dist/llrm-cc.d", "dist/llrm-nib", "dist/llrm-qb", "dist/nibfront", "ok"], (sha, left)
     assert set(log.read_text().split()) == {str(scratch / "tgt-dist")}
     build(scratch, repo, shas[0], env)  # built already: no second build
     assert len(log.read_text().split()) == 2
 
 
 def test_a_built_dist_is_write_once_and_a_rebuild_goes_to_another_dir(tmp_path):
-    """Another session copied a different llrm-c over a built sbp-<sha>/dist (md5 01fdf3625b2a became ecbc4f3de389): `ok` records the sums, the files are read-only, a changed file is refused, a rebuild never overwrites."""
+    """Another session copied a different llrm-cc over a built sbp-<sha>/dist (md5 01fdf3625b2a became ecbc4f3de389): `ok` records the sums, the files are read-only, a changed file is refused, a rebuild never overwrites."""
     repo = tmp_path / "wt-head10"
     (sha,) = repo_with_commits(repo, 1)
     scratch = tmp_path / "scratch"
@@ -94,8 +94,8 @@ def test_a_built_dist_is_write_once_and_a_rebuild_goes_to_another_dir(tmp_path):
     env = stub(scratch, tmp_path / "targets.log")
     build(scratch, repo, sha, env)
     ok = (scratch / f"sbp-{sha}" / "ok").read_text()
-    assert f"sha: {sha}" in ok and "cmd: build --profile dist" in ok and "  llrm-c" in ok, ok
-    binary = scratch / f"sbp-{sha}" / "dist" / "llrm-c"
+    assert f"sha: {sha}" in ok and "cmd: build --profile dist" in ok and "  llrm-cc" in ok, ok
+    binary = scratch / f"sbp-{sha}" / "dist" / "llrm-cc"
     assert not os.access(binary, os.W_OK)
     original = binary.read_bytes()
     binary.chmod(0o755)
@@ -105,24 +105,24 @@ def test_a_built_dist_is_write_once_and_a_rebuild_goes_to_another_dir(tmp_path):
     binary.write_bytes(original)
     build(scratch, repo, sha, env)  # restored: kept as it is
     subprocess.run(["bash", str(SCRIPT), str(scratch), sha], cwd=repo, env={**env, "PAIR_REBUILD": "1"}, check=True)
-    assert built_from(scratch / f"sbp-{sha}-2" / "dist" / "llrm-c") == sha
+    assert built_from(scratch / f"sbp-{sha}-2" / "dist" / "llrm-cc") == sha
     assert built_from(binary) == sha
 
 
 def test_the_dist_still_compiles_after_the_pair_and_an_old_worktree_is_pruned(tmp_path):
-    """w-1's ex4 was void: the build worktree was removed on exit, and llrm-c opens predefined.h under the build tree at run time, so every compile failed on both arms."""
+    """w-1's ex4 was void: the build worktree was removed on exit, and llrm-cc opens predefined.h under the build tree at run time, so every compile failed on both arms."""
     repo = tmp_path / "wt-head10"
     first, second = repo_with_commits(repo, 2)
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     env = stub(scratch, tmp_path / "targets.log")
     build(scratch, repo, first, env)
-    ran = subprocess.run([str(scratch / f"sbp-{first}" / "dist" / "llrm-c")], capture_output=True, text=True)
+    ran = subprocess.run([str(scratch / f"sbp-{first}" / "dist" / "llrm-cc")], capture_output=True, text=True)
     assert ran.returncode == 0 and ran.stdout.strip() == "tree 0", ran
     old = scratch / f"wt-pair-{first}"
     os.utime(old, (1, 1))
     build(scratch, repo, second, {**env, "PAIR_KEEP_MIN": "60"})
-    assert old.exists(), "the tree of a dist still there is kept: llrm-c reads its headers from it"
+    assert old.exists(), "the tree of a dist still there is kept: llrm-cc reads its headers from it"
     assert (scratch / f"wt-pair-{second}").exists()
     # With its dist gone the old tree is pruned by age.
     shutil.rmtree(scratch / f"sbp-{first}")
@@ -146,11 +146,11 @@ def test_a_failed_cargo_build_publishes_no_dist(tmp_path):
     failing.chmod(0o755)
     done = subprocess.run(["bash", str(SCRIPT), str(scratch), head], cwd=repo, env={**env, "PAIR_CARGO": f"{failing} cargo"}, capture_output=True, text=True)
     assert done.returncode != 0
-    assert not (scratch / f"sbp-{head}" / "ok").exists() and not (scratch / f"sbp-{head}" / "dist" / "llrm-c").exists()
+    assert not (scratch / f"sbp-{head}" / "ok").exists() and not (scratch / f"sbp-{head}" / "dist" / "llrm-cc").exists()
 
 
 def test_a_build_that_left_the_previous_binary_in_place_is_refused_not_stored_under_the_new_sha(tmp_path):
-    """Four dists (5e4cac094d, aa8170fbbd, 8cb8ed34df, 3d22dc1faa) were the previous build copied under a new sha: their llrm-c.d named another commit's worktree."""
+    """Four dists (5e4cac094d, aa8170fbbd, 8cb8ed34df, 3d22dc1faa) were the previous build copied under a new sha: their llrm-cc.d named another commit's worktree."""
     repo = tmp_path / "wt-head10"
     first, second = repo_with_commits(repo, 2)
     scratch = tmp_path / "scratch"
@@ -162,7 +162,7 @@ def test_a_build_that_left_the_previous_binary_in_place_is_refused_not_stored_un
     idle.chmod(0o755)
     done = subprocess.run(["bash", str(SCRIPT), str(scratch), second], cwd=repo, env={**env, "PAIR_CARGO": f"{idle} cargo"}, capture_output=True, text=True)
     assert done.returncode != 0 and "not built from" in done.stderr, done.stderr
-    assert not (scratch / f"sbp-{second}" / "dist" / "llrm-c").exists()
+    assert not (scratch / f"sbp-{second}" / "dist" / "llrm-cc").exists()
 
 
 def test_the_cargo_of_a_dist_build_asks_buildslot_to_jump_the_queue(tmp_path):
@@ -181,7 +181,7 @@ def test_the_cargo_of_a_dist_build_asks_buildslot_to_jump_the_queue(tmp_path):
 
 
 def test_the_cargo_line_for_this_repos_head_names_bins_that_exist_with_the_features_they_require(tmp_path):
-    """pair_build exited 101 on every current sha: `target llrm-c in package llrm requires the features: c-legacy`, and objsweep --arm64 found no llrm-arm64-llc."""
+    """pair_build exited 101 on every current sha: `target llrm-cc in package llrm requires the features: c-legacy`, and objsweep --arm64 found no llrm-arm64-llc."""
     import json
     repo = Path(__file__).resolve().parents[2]
     head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
@@ -191,7 +191,7 @@ def test_the_cargo_line_for_this_repos_head_names_bins_that_exist_with_the_featu
 echo "$@" > {log}
 mkdir -p $CARGO_TARGET_DIR/dist
 while [ $# -gt 0 ]; do if [ "$1" = --bin ]; then echo "$2" > $CARGO_TARGET_DIR/dist/$2; fi; shift; done
-echo "llrm-c: $(pwd)/x" > $CARGO_TARGET_DIR/dist/llrm-c.d
+echo "llrm-cc: $(pwd)/x" > $CARGO_TARGET_DIR/dist/llrm-cc.d
 """)
     cargo.chmod(0o755)
     scratch = tmp_path / "scratch"
@@ -205,7 +205,7 @@ echo "llrm-c: $(pwd)/x" > $CARGO_TARGET_DIR/dist/llrm-c.d
     features = set(words[words.index("--features") + 1].split(",")) if "--features" in words else set()
     meta = json.loads(subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1", "--offline"], cwd=repo, check=True, capture_output=True, text=True).stdout)
     targets = {t["name"]: t for p in meta["packages"] for t in p["targets"] if "bin" in t["kind"]}
-    assert {"llrm-c", "llrm-qb", "llrm-nib", "nibfront", "llrm-arm64-llc"} <= set(bins)
+    assert {"llrm-cc", "llrm-qb", "llrm-nib", "nibfront", "llrm-arm64-llc"} <= set(bins)
     for name in bins:
         assert name in targets, name
         assert set(targets[name].get("required-features", [])) <= features, (name, targets[name].get("required-features"), features)

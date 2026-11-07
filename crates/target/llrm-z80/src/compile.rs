@@ -7,7 +7,7 @@ use llrm_spike_mf::regalloc::{Assignment, Target, eliminate_phis_with, two_addre
 use llrm_spike_mf::tolir::allocate_greedy;
 
 use crate::driver::Level;
-use crate::driver::{Request, selections_both};
+use crate::driver::{Request, selections_with_alternatives};
 use crate::expand::{self, Line, finish};
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, emit};
 use crate::regalloc::Z80Registers;
@@ -49,6 +49,9 @@ pub fn take_text_compares() -> usize {
 /// that module in turn ([`text_in`]): no comparison of its text per function.
 pub struct Prepared {
     selections: Selections,
+    /// The functions that call `__mulsi3`, selected with the multiplies
+    /// decomposed.
+    alternatives: Selections,
     /// With `-g`: the source file and start line of each function, from one
     /// parse of the module.
     sources: llrm_support::hash::HashMap<String, (String, Option<u32>)>,
@@ -68,7 +71,8 @@ pub fn prepare(
 ) -> Result<Prepared, String> {
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
     let sources = if request.debug { crate::driver::sources_of(ir) } else { Default::default() };
-    Ok(Prepared { selections: Selections::new(selections_both(ir, request)?), sources })
+    let (selections, alternatives) = selections_with_alternatives(ir, request)?;
+    Ok(Prepared { selections: Selections::new(selections), alternatives: Selections::new(alternatives), sources })
 }
 
 type SelectionKey = (String, Vec<(String, String)>);
@@ -85,7 +89,7 @@ type Selections = std::rc::Rc<
 thread_local! {
     /// The module most recently run through the mid-end and selection, with
     /// what it was run for.
-    static SELECTED: std::cell::RefCell<Option<(String, SelectionKey, Selections)>> =
+    static SELECTED: std::cell::RefCell<Option<(String, SelectionKey, Selections, Selections)>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -97,6 +101,15 @@ fn cached_selections(
     ir: &str,
     request: &Request,
 ) -> Result<Selections, String> {
+    cached_both(ir, request).map(|(selected, _)| selected)
+}
+
+/// [`cached_selections`] and the alternatives of the functions that call
+/// `__mulsi3`.
+fn cached_both(
+    ir: &str,
+    request: &Request,
+) -> Result<(Selections, Selections), String> {
     // everything the result reads: the text, the request, and the LLRM_ and
     // Z80_ switches of the environment. Compared whole: hashing the text of a
     // large module for each of its functions was a tenth of the compile.
@@ -109,15 +122,16 @@ fn cached_selections(
         environment,
     );
     let held = SELECTED.with(|held| {
-        held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(_, _, one)| one.clone())
+        held.borrow().as_ref().filter(|(text, was, ..)| text == ir && *was == key).map(|(_, _, one, other)| (one.clone(), other.clone()))
     });
     if let Some(one) = held {
         return Ok(one);
     }
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
-    let one = Selections::new(selections_both(ir, request)?);
-    SELECTED.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, one.clone())));
-    Ok(one)
+    let (main, alternatives) = selections_with_alternatives(ir, request)?;
+    let (one, other) = (Selections::new(main), Selections::new(alternatives));
+    SELECTED.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, one.clone(), other.clone())));
+    Ok((one, other))
 }
 
 /// [`machine_function`], with or without the return blocks copied into their
@@ -1875,7 +1889,8 @@ pub fn lines(
     number: usize,
     request: &Request,
 ) -> Result<Vec<Line>, String> {
-    lines_in(&cached_selections(ir, request)?, name, number, request)
+    let (selected, alternatives) = cached_both(ir, request)?;
+    lines_in(&selected, &alternatives, name, number, request)
 }
 
 /// The block frequencies of function `name`, relative to its entry.
@@ -1898,13 +1913,83 @@ pub fn weighted_lines(
     name: &str,
     request: &Request,
 ) -> Result<Vec<(Line, f64)>, String> {
-    let selected = cached_selections(ir, request)?;
-    let lines = lines_in(&selected, name, 0, request)?;
+    let (selected, alternatives) = cached_both(ir, request)?;
+    let lines = lines_in(&selected, &alternatives, name, 0, request)?;
     let frequencies = frequencies_of(&selected, name).into_iter().collect();
     Ok(expand::weighted(&lines, &frequencies))
 }
 
+/// The lines of function `name`. A function that calls `__mulsi3` for its long
+/// multiplies is also built with them left as shifts and adds, and the form
+/// the module's plan names stays ([`decomposes`]).
 fn lines_in(
+    selected: &Selections,
+    alternatives: &Selections,
+    name: &str,
+    number: usize,
+    request: &Request,
+) -> Result<Vec<Line>, String> {
+    if alternatives.iter().any(|(one, ..)| one == name) && decomposes(selected, alternatives, name, request) {
+        return lines_of(alternatives, name, number, request);
+    }
+    lines_of(selected, name, number, request)
+}
+
+thread_local! {
+    /// The functions of the module whose alternatives are `__mulsi3`'s
+    /// (by the address of that list) that keep the shifts and adds.
+    static DECOMPOSED: std::cell::RefCell<Option<(usize, std::rc::Rc<std::collections::HashSet<String>>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Whether `name` keeps its long multiplies as shifts and adds. Whether the
+/// call beats the copies depends on what the function keeps live across it,
+/// which the selection cannot see (div_constants_long -Os: 28 calls, +177 B
+/// over the copies; mul_constants the other way, -227 B), so each function is
+/// built both ways and priced. The routine is linked once for all of them:
+/// the functions the call makes smaller keep it only where together they
+/// save more than the routine's bytes (switch_table_holes -Os: 40 B saved,
+/// 57 B routine).
+fn decomposes(
+    selected: &Selections,
+    alternatives: &Selections,
+    name: &str,
+    request: &Request,
+) -> bool {
+    let key = std::rc::Rc::as_ptr(alternatives) as usize;
+    let held = DECOMPOSED.with(|held| {
+        held.borrow().as_ref().filter(|(was, _)| *was == key).map(|(_, set)| set.clone())
+    });
+    let set = held.unwrap_or_else(|| {
+        let price = |selections: &Selections, name: &str| {
+            lines_of(selections, name, 0, request)
+                .ok()
+                .map(|lines| expand::price_emitted(&lines, !matches!(request.level, Level::Os | Level::Oz)))
+        };
+        let mut saved = 0u64;
+        let mut gains = Vec::new();
+        for (one, ..) in alternatives.iter() {
+            let (call, decomposed) = (price(selected, one), price(alternatives, one));
+            let gain = match (call, decomposed) {
+                (Some(call), Some(decomposed)) if cheaper(request.level, call, decomposed) => {
+                    u64::from(decomposed.0.saturating_sub(call.0))
+                }
+                _ => 0,
+            };
+            saved += gain;
+            gains.push((one.clone(), gain));
+        }
+        let keeps_routine = saved > u64::from(crate::prepare::MULSI3_BYTES);
+        let set: std::collections::HashSet<String> =
+            gains.into_iter().filter(|(_, gain)| !keeps_routine || *gain == 0).map(|(one, _)| one).collect();
+        let set = std::rc::Rc::new(set);
+        DECOMPOSED.with(|held| *held.borrow_mut() = Some((key, set.clone())));
+        set
+    });
+    set.contains(name)
+}
+
+fn lines_of(
     selected: &Selections,
     name: &str,
     number: usize,
@@ -1961,7 +2046,8 @@ pub fn text(
     request: &Request,
 ) -> Result<String, String> {
     let source = request.debug.then(|| crate::driver::source_of(ir, name)).flatten();
-    text_of(source, &cached_selections(ir, request)?, name, number, request)
+    let (selected, alternatives) = cached_both(ir, request)?;
+    text_of(source, &selected, &alternatives, name, number, request)
 }
 
 /// [`text`] of a function of a [`Prepared`] module.
@@ -1972,12 +2058,13 @@ pub fn text_in(
     request: &Request,
 ) -> Result<String, String> {
     let source = prepared.sources.get(name).cloned();
-    text_of(source, &prepared.selections, name, number, request)
+    text_of(source, &prepared.selections, &prepared.alternatives, name, number, request)
 }
 
 fn text_of(
     source: Option<(String, Option<u32>)>,
     selected: &Selections,
+    alternatives: &Selections,
     name: &str,
     number: usize,
     request: &Request,
@@ -2001,7 +2088,7 @@ fn text_of(
         .find(|(one, ..)| one == name)
         .is_some_and(|(_, source, _)| source.as_ref().is_ok_and(|s| s.local));
     out.push_str(&format!("{}{}\n", crate::data::symbol(name), if local { ":" } else { "::" }));
-    for line in lines_in(selected, name, number, request)? {
+    for line in lines_in(selected, alternatives, name, number, request)? {
         match line {
             Line::Label(label) => out.push_str(&format!("{label}:\n")),
             Line::Inst(text) => out.push_str(&format!("\t{text}\n")),

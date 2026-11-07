@@ -512,8 +512,9 @@ def run(prog, variant, hot=False, limit=300_000_000):
             total["clocks"] += clk
             tally(by_op, pins[0], clk)
         st["firstrep"] = not (rep and prev == address)
-        if ins.mnemonic == Mnemonic.NOP:   # alignment padding (clang): counted apart, not work
+        if ins.mnemonic == Mnemonic.NOP:   # alignment padding (clang): not work, but the 486 spends its clock on it
             total["nops"] += 1
+            total["clocks"] += clocks.clocks("nop")
             st["prev"] = address
             hits[address] += 1
             return

@@ -91,6 +91,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // a full unroll is made only where its simulated cost does not exceed the rolled loop's
         // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.
         unroll_never_grows_at_o1: true,
+        // DEVIATE UNROLL-O1A (owner w9, exit 2026-11-27, with UNROLL-O1): the -O1 rule analyses the
+        // folds of up to 16 trips, gcc's `max-completely-peel-times`, not the pin's 10 (a 16-trip loop
+        // over a constant table folds to nothing and stayed rolled: 64 -> 158 B).
+        unroll_o1_analyzed_trips: Some(16),
         // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
@@ -100,6 +104,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         unroll_promotion_fits_x87_stack: true,
         lsr_size_order: true,
         narrow_divide_live_limit: 4,
+        sink_spares_ranges: true,
+        inline_never_grows_without_rate: true,
+        inline_o1_milliclocks_per_byte: per_byte / 2,
         x87_zero_fill_at_size: true,
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant

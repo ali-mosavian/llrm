@@ -125,7 +125,7 @@
 //! [`crate::backend::parcopy`] orders after allocation.
 //!
 //! From `ISEL_DUMP=1` of a C Fibonacci loop (`t = a + b; a = b; b = t;`)
-//! compiled with `llrm-c -O2 -m16`: the stage before `PhiElimination`, and
+//! compiled with `llrm-cc -O2 -m16`: the stage before `PhiElimination`, and
 //! `PhiElimination`.
 //!
 //! # Runs

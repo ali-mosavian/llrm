@@ -1,6 +1,6 @@
 """The llrm side of the QB tests: a BASIC program on our runtime for both targets, linked by jwlink.
 
-The real-mode target is built with llrm-qb and llrm-c and the target's own start-up, the flat one runs under DOS/32A.  Neither
+The real-mode target is built with llrm-qb and llrm-cc and the target's own start-up, the flat one runs under DOS/32A.  Neither
 goes through Microsoft's LINK or LIB; BCOM45 (BC, LINK and its runtime) stays what a test compares against, built by
 dosbatch.  The targets are the ones the link recipes name."""
 

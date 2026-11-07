@@ -294,6 +294,50 @@ pub fn trade_passes(
     saved_clocks * 1000 >= extra_bytes * byte_milliclocks(cpu)
 }
 
+/// What a choice between two priced candidates minimizes: the level's price.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Price {
+    /// Bytes, then clocks (`-Os`).
+    Size,
+    /// A candidate is taken only when no larger and no slower (`-O1`).
+    Strict,
+    /// Clocks plus bytes at the CPU's byte price (`-O2`, `-O3`).
+    Rate,
+}
+
+impl Price {
+    /// The price of a build: `size` wins, then `strict`.
+    pub fn of(
+        size: bool,
+        strict: bool,
+    ) -> Price {
+        if size {
+            Price::Size
+        } else if strict {
+            Price::Strict
+        } else {
+            Price::Rate
+        }
+    }
+
+    /// Whether `candidate` beats `incumbent`, each `(bytes, clocks)`, on `cpu`.
+    pub fn beats(
+        self,
+        cpu: SelectCpu,
+        candidate: (usize, u32),
+        incumbent: (usize, u32),
+    ) -> bool {
+        match self {
+            Price::Size => candidate < incumbent,
+            Price::Strict => candidate.0 <= incumbent.0 && candidate.1 <= incumbent.1 && candidate != incumbent,
+            Price::Rate => {
+                let key = |(bytes, clocks): (usize, u32)| order(cpu, false, clocks, bytes as u32);
+                key(candidate) < key(incumbent)
+            }
+        }
+    }
+}
+
 /// The order a priced choice minimizes on `cpu`: bytes then clocks for size,
 /// else clocks plus bytes at the CPU's byte price, ties to fewer clocks.
 pub fn order(

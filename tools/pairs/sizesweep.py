@@ -47,7 +47,7 @@ TARGETS = {"m16": "-m16", "m32": "-m32"}
 
 
 def own_target(flags: list[str]) -> str:
-    """The target a program's own flags name (`m16`, `m32`), else `m16`: the compilers' default target is the 16-bit DOS one (llrm-c with and without -m16 emit the same -S)."""
+    """The target a program's own flags name (`m16`, `m32`), else `m16`: the compilers' default target is the 16-bit DOS one (llrm-cc with and without -m16 emit the same -S)."""
     for flag in flags:
         if flag in ("-m16", "-m32"):
             return "m" + flag[2:]
@@ -79,7 +79,7 @@ def _sweep(run_tests, sizes, scratch: Path, before: str, after: str, isel: str, 
     skipped = len(run_tests.discover([])) - len(programs)
     header = [f"# target {target}: {len(programs)} programs compiled with {TARGETS[target]} forced, {skipped} variants of the other target left out; {level} --isel={isel}; cpu: the compiler's default (no -march)"]
     for program in programs:
-        tool = {".bas": "llrm-qb", ".nib": "llrm-nib", ".c": "llrm-c"}[program.source.suffix]
+        tool = {".bas": "llrm-qb", ".nib": "llrm-nib", ".c": "llrm-cc"}[program.source.suffix]
         measured = []
         for dist in (before, after):
             obj = scratch / "sizesweep.obj"

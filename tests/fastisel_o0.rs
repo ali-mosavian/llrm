@@ -532,3 +532,54 @@ fn fast_isel_leaves_an_intrinsic_call_to_the_dag() {
         assert!(out.status.success(), "{target}: {}", String::from_utf8_lossy(&out.stderr));
     }
 }
+
+/// A shift by a constant left its function to the DAG ("fast declined at
+/// Binary(Shl)"): `next` of `div_constants_long.c`, the shifts of `mulconst_i64.c`.
+#[test]
+fn fast_isel_takes_shifts_by_a_constant() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(
+            scratch.path().join("a.c"),
+            "int h(int a, unsigned b)\n{\n    return (a << 3) + (a >> 2) + (int)(b >> 5);\n}\n",
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(asm.contains("shl") && asm.contains("sar") && asm.contains("shr"), "{target}: {asm}");
+    }
+}
+
+/// A 64-bit constant past `imm32` left its function to the DAG ("fast declined
+/// at Binary(Mul)", the store of a wide immediate): `mulconst_i64.c` is 19 such
+/// functions, +487 B over clang. The pin makes it with `movabs`.
+#[test]
+fn fast_isel_materializes_a_wide_constant_with_movabs() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), "long h(long a)\n{\n    return a * 0x123456789abcL + 5;\n}\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}");
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(asm.contains("20015998343868") || asm.to_uppercase().contains("123456789ABC"), "{asm}");
+}

@@ -39,6 +39,9 @@ pub fn split_phi_edges(module: &mut Module) {
     }
 }
 
+/// The bytes of the `__mulsi3` routine (`runtime/z80_rt.s`).
+pub const MULSI3_BYTES: u32 = 57;
+
 /// The attribute that lets a function tuned for size call `__mulsi3`.
 pub const LONG_MULTIPLY: &str = "llrm-mulsi3";
 

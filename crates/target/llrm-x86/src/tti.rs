@@ -665,12 +665,28 @@ impl Tti for X86 {
         self.tuning.unroll_never_grows_at_o1
     }
 
+    fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
+        self.tuning.unroll_o1_analyzed_trips
+    }
+
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
     }
 
     fn narrow_divide_live_limit(&self) -> u32 {
         self.tuning.narrow_divide_live_limit
+    }
+
+    fn inline_never_grows_without_rate(&self) -> bool {
+        self.tuning.inline_never_grows_without_rate
+    }
+
+    fn inline_o1_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.inline_o1_milliclocks_per_byte
+    }
+
+    fn sink_spares_ranges(&self) -> bool {
+        self.tuning.sink_spares_ranges
     }
 
     fn divide_by_bytes(&self) -> bool {
@@ -1323,15 +1339,8 @@ impl Tti for X86 {
 
     /// Real mode declares the registers the allocator has, and the live count
     /// LSR keeps is exact there: the six fill (PLASMA's loop, 4 + 2 live).
-    ///
-    /// DEVIATE LU3d: a target that states its allocatable registers
-    /// (`with_registers`: the frame and stack pointers are not among them)
-    /// keeps none back: the pin's one stands for the stack pointer its count
-    /// of eight includes, so reserving it again counts it twice (not an `i8`
-    /// counter the pin makes). owner: w12, exit: 2026-11-20 (the m32/m64 A/B in the
-    /// PR; without it the line goes).
     fn lsr_reserved_registers(&self) -> u32 {
-        u32::from(self.real_mode.is_none() && self.registers.is_none())
+        u32::from(self.real_mode.is_none())
     }
 
     /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold
@@ -1368,6 +1377,14 @@ impl Tti for X86 {
 
     fn mirrors_conditional_counters(&self) -> bool {
         self.real_mode.is_some()
+    }
+
+    /// DEVIATE LS1: real mode keeps every formula of the first use in play
+    /// (A/B 2026-11-07: the pin's rule is +1..+8 B in 41 of 192 m16 cells, in
+    /// none better; m32 -37 B net, m64 0). owner: w12, exit: 2026-11-30, when
+    /// the m16 cause cards close.
+    fn lsr_visited_registers_lose(&self) -> bool {
+        self.real_mode.is_none()
     }
 
     /// Real mode forms a scaled index with an address-size prefix.

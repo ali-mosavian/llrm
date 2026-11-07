@@ -43,7 +43,7 @@ def test_levels_given_on_the_command_line_are_not_read_as_options(tmp_path, monk
     times where it meant to say 'identical'."""
     import subprocess
     import sys
-    fake = tmp_path / "llrm-c"
+    fake = tmp_path / "llrm-cc"
     fake.write_text('#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\necho x > "$2"\n')
     fake.chmod(0o755)
     done = subprocess.run([sys.executable, str(HERE / "identical.py"), str(fake), str(fake), "--levels=-O2,-Os", "--programs-only", "--no-bench"], capture_output=True, text=True, env={**__import__("os").environ, "CARGO_TARGET_DIR": str(tmp_path)})
@@ -86,7 +86,7 @@ def test_a_binary_older_than_its_head_is_stale(tmp_path):
     import time
 
     _repo(tmp_path)
-    binary = tmp_path / "llrm-c"
+    binary = tmp_path / "llrm-cc"
     binary.write_text("x")
     assert identical.stale(str(binary), "HEAD", "OLD", tmp_path) is None
     os.utime(binary, (time.time() - 3600, time.time() - 3600))
@@ -98,7 +98,7 @@ def test_a_binary_older_than_its_head_is_stale(tmp_path):
 def _bench_or_skip(tmp_path):
     import os
 
-    if not os.environ.get("LLRM_BIN") and not os.environ.get("CARGO_TARGET_DIR") and not (HERE.parent / "target/release/llrm-c").exists():
+    if not os.environ.get("LLRM_BIN") and not os.environ.get("CARGO_TARGET_DIR") and not (HERE.parent / "target/release/llrm-cc").exists():
         pytest.skip("no built binaries")
     try:
         return identical.bench_compiles(tmp_path)
@@ -125,7 +125,7 @@ def test_a_change_to_one_bench_row_alone_fails_the_check(tmp_path):
     and was 'identical' on the same program compiled with default flags, which is all the corpus held."""
     def compiler(directory, marker):
         directory.mkdir()
-        for tool in ("llrm-c", "llrm-qb"):
+        for tool in ("llrm-cc", "llrm-qb"):
             script = directory / tool
             script.write_text(
                 '#!/bin/sh\nout=""; hit=0; case "$*" in *frames.bas*-O2*-fno-inline-functions*) hit=1;; esac\n'
@@ -133,7 +133,7 @@ def test_a_change_to_one_bench_row_alone_fails_the_check(tmp_path):
                 f'if [ $hit = 1 ]; then echo {marker} > "$out"; else echo same > "$out"; fi\n'
             )
             script.chmod(0o755)
-        return str(directory / "llrm-c")
+        return str(directory / "llrm-cc")
 
     old, new = compiler(tmp_path / "old", "a"), compiler(tmp_path / "new", "b")
     flags = ["-O2", "-fno-inline-functions"]
@@ -160,7 +160,7 @@ def test_two_llrm_llc_builds_are_compared_through_the_llrm_cc_beside_each(tmp_pa
     src.write_text("int f(void) { return 0; }\n")
     work = tmp_path / "w"
     work.mkdir()
-    name, _, why = identical.same(("p", "-O2", "llrm-c", ["-m32", "-O2", str(src), "-o", "OBJ"]), str(tmp_path / "old/llrm-llc"), str(tmp_path / "new/llrm-llc"), work)
+    name, _, why = identical.same(("p", "-O2", "llrm-cc", ["-m32", "-O2", str(src), "-o", "OBJ"]), str(tmp_path / "old/llrm-llc"), str(tmp_path / "new/llrm-llc"), work)
     assert why == "different"
     assert (work / "p-O2.old.obj").read_text() == f"old {tmp_path}/old/llrm-llc x86_32-wat\n"
     assert (work / "p-O2.new.obj").read_text() == f"new {tmp_path}/new/llrm-llc x86_32-wat\n"

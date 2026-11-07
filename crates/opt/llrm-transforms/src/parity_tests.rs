@@ -707,6 +707,7 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("copyprop@18", "codegen:backend/machinecp"),
     ("lsr", "lsr_pass"),
     ("canonfreeze", "canonfreeze"),
+    ("looptermfold", "looptermfold"),
     ("hardwareloops", "hardwareloops"),
     ("constanthoisting", "constanthoisting"),
 ];

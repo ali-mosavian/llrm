@@ -305,6 +305,7 @@ pub fn functions_with(
                         machine.calls,
                     )),
         );
+        machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
         let allocate = |machine: &mut crate::mfunc::MFunc, scratch: bool| {
             crate::lir_view::set_scratch_free(scratch);
             // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for
