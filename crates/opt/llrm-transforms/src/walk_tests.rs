@@ -2742,12 +2742,13 @@ fn m32_tree_calls(
 }
 
 /// bench fib at m32 -O2 was 334151 clocks against gcc's 210636: the pin's
-/// inliner copies no recursive callee, gcc's `recursive_inlining` copies fib
-/// into itself to depth 8 (REC-2).
+/// inliner copies no recursive callee. gcc's `recursive_inlining` copies it to
+/// depth 8 (REC-2); m32 stops at depth 2 at -O2 (REC-7: fib 99618 -> 19993
+/// clocks), so 6 calls remain.
 #[test]
 fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     let calls = m32_fib_calls(crate::pipeline::Options::default());
-    assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
+    assert_eq!(calls, 6, "-O2 left {calls} calls of fib");
 }
 
 /// Calls of `@paths` after the default pipeline on x86-m32: bench rectwo's
