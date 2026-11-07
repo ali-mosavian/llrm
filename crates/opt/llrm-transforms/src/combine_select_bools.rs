@@ -10,8 +10,8 @@
 //! negation; De Morgan in select form; a select of a select that decides
 //! itself.
 //!
-//! DEVIATE 1: `impliesPoisonOrCond` is `impliesPoison` alone: the `samesign`
-//! compare and `trunc nuw` cases are not found (it finds less).
+//! DEVIATE 1: `impliesPoisonOrCond` lacks its `trunc nuw` case (it finds
+//! less); the `samesign` compare case is translated.
 //!
 //! DEVIATE 2 (temporary): the folds that need another family's helper are left
 //! out, named where they stood: the factorization of `(A && B) || (C && B)`,
@@ -29,7 +29,8 @@
 
 use llrm_mir::module::InstId;
 use llrm_mir::module::Operand;
-use llrm_mir::opcode::{BinaryOp, Flags};
+use llrm_mir::constantrange::ConstantRange;
+use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::valuetracking::guarantee::implies_poison;
 use llrm_mir::valuetracking::pattern;
 
@@ -85,14 +86,40 @@ impl Combiner<'_> {
         self.same_constant(v, zero)
     }
 
-    /// `impliesPoisonOrCond(assumed, v, ..)` (DEVIATE 1).
+    /// `impliesPoisonOrCond`
+    /// ([L3713](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineSelect.cpp#L3713)),
+    /// without its `trunc nuw` case (DEVIATE 1).
     fn implies_poison_or_cond(
         &self,
         inst: InstId,
         assumed_poison: Operand,
         v: Operand,
+        expected: bool,
     ) -> bool {
-        implies_poison(&query(self, Some(inst)), assumed_poison, v)
+        if implies_poison(&query(self, Some(inst)), assumed_poison, v) {
+            return true;
+        }
+        // `assumed` is `icmp samesign pred X, C1` and `v` is `icmp pred2 X, C2`:
+        // X has C1's sign whenever `assumed` is not poison, so `v` is decided there.
+        let Some(assumed) = self.definition_of(assumed_poison).map(|def| self.function.instruction(def)) else {
+            return false;
+        };
+        let Opcode::ICmp(_) = assumed.opcode else { return false };
+        if !assumed.flags.contains(Flags::SAMESIGN) {
+            return false;
+        }
+        let Some(c1) = self.constant_int(assumed.operands[1]) else { return false };
+        let Some(other) = self.definition_of(v).map(|def| self.function.instruction(def)) else { return false };
+        let Opcode::ICmp(pred) = other.opcode else { return false };
+        if other.operands[0] != assumed.operands[0] {
+            return false;
+        }
+        let Some(c2) = self.constant_int(other.operands[1]) else { return false };
+        let Some(width) = self.context.types.int_bits(self.type_of(assumed.operands[0])) else { return false };
+        let min = 1u128 << (width - 1);
+        let non_negative = c1 & min == 0;
+        let signs = if non_negative { ConstantRange::new(width, min, 0) } else { ConstantRange::new(width, 0, min) };
+        signs.icmp(if expected { pred } else { pred.inverse() }, &ConstantRange::single(width, c2))
     }
 }
 
@@ -102,7 +129,7 @@ fn or_of_condition(
     inst: InstId,
     sel: &Sel,
 ) -> Option<Visit> {
-    if !c.is_true(sel.if_true) || !c.implies_poison_or_cond(inst, sel.if_false, sel.cond) {
+    if !c.is_true(sel.if_true) || !c.implies_poison_or_cond(inst, sel.if_false, sel.cond, false) {
         return None;
     }
     Some(c.replace_with_binop(inst, BinaryOp::Or, sel.cond, sel.if_false, Flags::default()))
@@ -118,7 +145,7 @@ fn logical_or_reassociated(
         return None;
     }
     let (_, [a, inner_true, b]) = c.select_of(sel.cond)?;
-    if !c.is_true(inner_true) || !c.implies_poison_or_cond(inst, sel.if_false, b) {
+    if !c.is_true(inner_true) || !c.implies_poison_or_cond(inst, sel.if_false, b, false) {
         return None;
     }
     let either = c.create_binop(inst, BinaryOp::Or, b, sel.if_false, Flags::default());
@@ -131,7 +158,7 @@ fn and_of_condition(
     inst: InstId,
     sel: &Sel,
 ) -> Option<Visit> {
-    if !c.is_false(sel.if_false) || !c.implies_poison_or_cond(inst, sel.if_true, sel.cond) {
+    if !c.is_false(sel.if_false) || !c.implies_poison_or_cond(inst, sel.if_true, sel.cond, true) {
         return None;
     }
     Some(c.replace_with_binop(inst, BinaryOp::And, sel.cond, sel.if_true, Flags::default()))
@@ -147,7 +174,7 @@ fn logical_and_reassociated(
         return None;
     }
     let (_, [a, b, inner_false]) = c.select_of(sel.cond)?;
-    if !c.is_false(inner_false) || !c.implies_poison_or_cond(inst, sel.if_true, b) {
+    if !c.is_false(inner_false) || !c.implies_poison_or_cond(inst, sel.if_true, b, true) {
         return None;
     }
     let both = c.create_binop(inst, BinaryOp::And, b, sel.if_true, Flags::default());

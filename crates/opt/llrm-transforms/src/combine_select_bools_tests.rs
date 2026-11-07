@@ -95,3 +95,22 @@ fn a_select_that_repeats_its_condition_s_select_uses_the_inner_condition() {
     );
     assert!(out.matches("select").count() == 1 && out.contains("select i1 %a, i1 %b, i1 false"), "{out}");
 }
+
+/// arm64 jpeg_fixed -Os: `200 < x < 208` as two `icmp samesign` joined by a
+/// select was kept (the pin's `impliesPoisonOrCond` samesign case was left
+/// out), so the range check `add -201; icmp ult 7` never formed: IR 745
+/// instructions against the pin's 721.
+#[test]
+fn a_select_of_samesign_compares_of_one_value_is_an_and() {
+    let body = "  %a = icmp samesign ugt i16 %x, 2\n  %b = icmp samesign ult i16 %x, 9\n  %r = select i1 %a, i1 %b, i1 false\n  ret i1 %r\n";
+    let out = combined("i16 %x", body);
+    assert!(out.contains("and i1 %a, %b") && !out.contains("select"), "{out}");
+}
+
+/// The samesign case only decides what the sign half of `x` decides.
+#[test]
+fn a_samesign_compare_that_leaves_the_other_compare_open_keeps_the_select() {
+    let body = "  %a = icmp ult i16 %x, -25536\n  %b = icmp samesign ult i16 %x, 9\n  %r = select i1 %a, i1 %b, i1 false\n  ret i1 %r\n";
+    let out = combined("i16 %x", body);
+    assert!(out.contains("select i1 %a, i1 %b, i1 false"), "{out}");
+}
