@@ -17,8 +17,12 @@
 //!
 //! MIRROR: the order of the folds and each guard.
 //!
-//! DEVIATE 1: `foldFreezeIntoRecurrence` (L5271) and `freezeOtherUses`
-//! (L5339) are not translated. Exit 2026-11-12.
+//! After the other folds a freeze of a value with other users is hoisted
+//! just after the value's definition and replaces the value in every use it
+//! dominates (`freezeOtherUses`, L5339).
+//!
+//! DEVIATE 1: `foldFreezeIntoRecurrence` (L5271) is not translated. Exit
+//! 2026-11-12.
 //!
 //! DEVIATE 2: no vectors, so `getFreezeVectorReplacement` and the shuffle
 //! guard are not here.
@@ -27,13 +31,15 @@
 //! `combine` (its dispatch on `Opcode::Freeze`).
 
 use llrm_mir::context::ConstantKind;
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::edit::Position;
+use llrm_mir::module::{InstId, Operand, Use, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::valuetracking::guarantee::{Operator, can_create_undef_or_poison, is_guaranteed_not_to_be_undef_or_poison};
 use llrm_mir::valuetracking::pattern;
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{query, simplify_visited};
+use crate::local::dominates_instruction_use;
 
 impl Combiner<'_> {
     /// `visitFreeze`.
@@ -61,7 +67,82 @@ impl Combiner<'_> {
             let replacement = self.undef_replacement(freeze);
             return Visit::Replace(replacement);
         }
+        // Replace uses of Op with freeze(Op).
+        if self.freeze_other_uses(freeze) {
+            return Visit::Changed;
+        }
         Visit::None
+    }
+
+    /// `freezeOtherUses` (L5339); whether the function changed.
+    fn freeze_other_uses(
+        &mut self,
+        freeze: InstId,
+    ) -> bool {
+        let original = self.function.instruction(freeze).operands[0];
+        let Operand::Value(value) = original else { return false };
+        if self.has_one_use(original) {
+            return false;
+        }
+        // Right after the definition, so that the freeze dominates the most
+        // uses.
+        let move_before = match self.function.value(value).def {
+            ValueDef::Argument(_) => {
+                let entry = self.function.entry().expect("a function with arguments has a body");
+                self.function
+                    .iter_block(entry)
+                    .find(|&one| !matches!(self.function.instruction(one).opcode, Opcode::Phi | Opcode::Alloca { .. }))
+                    .expect("a terminated block")
+            }
+            ValueDef::Instruction(def) => {
+                let Some(found) = self.insertion_point_after_def(def) else { return false };
+                found
+            }
+        };
+        let mut changed = false;
+        if move_before != freeze {
+            self.function.move_to(freeze, Position::Before(move_before)).expect("a placed freeze");
+            changed = true;
+        }
+        let tree = self.env.analyses.dominator_tree();
+        let uses: Vec<Use> = self.function.users(value).iter().copied().collect();
+        let mut users = Vec::new();
+        for one in uses {
+            if one.user == freeze || !dominates_instruction_use(&tree, self.function, freeze, one) {
+                continue;
+            }
+            let frozen = self.function.instruction(freeze).result.expect("a value");
+            self.function.set_operand(one.user, one.index as usize, Operand::Value(frozen));
+            users.push(one.user);
+            changed = true;
+        }
+        // Freezing a user's operand can expose a fold on that user's users.
+        for user in users {
+            if let Some(result) = self.function.instruction(user).result {
+                let those: Vec<InstId> = self.function.users(result).iter().map(|one| one.user).collect();
+                for one in those {
+                    self.worklist.push(one);
+                }
+            }
+            self.worklist.push(user);
+        }
+        changed
+    }
+
+    /// `Instruction::getInsertionPointAfterDef` (Instruction.cpp#L345).
+    fn insertion_point_after_def(
+        &self,
+        def: InstId,
+    ) -> Option<InstId> {
+        let operation = self.function.instruction(def);
+        match &operation.opcode {
+            Opcode::Phi => Some(self.first_insertion_point(self.function.parent(def)?)),
+            Opcode::Invoke(_) => {
+                let Operand::Block(normal) = operation.operands[operation.operands.len() - 3] else { return None };
+                Some(self.first_insertion_point(normal))
+            }
+            _ => self.function.next_in_block(def),
+        }
     }
 
     fn is_undef_or_poison(

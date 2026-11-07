@@ -229,7 +229,7 @@ fn a_sext_bool_plus_one_and_a_low_bit_flip_are_cheaper() {
 #[test]
 fn a_zext_of_a_narrow_add_is_kept_when_the_bound_is_unknown() {
     let text = "define i32 @f(i16 %x) {\nb0:\n  %a = add i16 %x, -3\n  %z = zext i16 %a to i32\n  %r = add i32 %z, 3\n  ret i32 %r\n}\n";
-    assert_eq!(combined(text), text);
+    assert_eq!(combined(text), text.replace("%r = add i32", "%r = add nuw nsw i32"));
 }
 
 /// `combineAddSubWithShlAddSub`: `A + (-B << N)` is `A - (B << N)` (`opt`).
@@ -318,7 +318,7 @@ fn an_extended_value_plus_a_constant_that_cannot_wrap_is_added_narrow() {
         "i32",
         "i8 %x",
         "  %m = and i8 %x, 15\n  %a = zext i8 %m to i32\n  %r = add i32 %a, 3\n  ret i32 %r\n",
-        "  %m = and i8 %x, 15\n  %0 = add nuw i8 %m, 3\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
+        "  %m = and i8 %x, 15\n  %0 = add nuw nsw i8 %m, 3\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
     );
 }
 
@@ -329,7 +329,7 @@ fn two_extensions_whose_sum_fits_are_added_narrow() {
         "i32",
         "i8 %x, i8 %y",
         "  %m = and i8 %x, 15\n  %a = zext i8 %m to i32\n  %n = and i8 %y, 7\n  %b = zext i8 %n to i32\n  %r = add i32 %a, %b\n  ret i32 %r\n",
-        "  %m = and i8 %x, 15\n  %n = and i8 %y, 7\n  %0 = add nuw i8 %m, %n\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
+        "  %m = and i8 %x, 15\n  %n = and i8 %y, 7\n  %0 = add nuw nsw i8 %m, %n\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
     );
 }
 
