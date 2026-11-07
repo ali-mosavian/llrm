@@ -718,6 +718,12 @@ pub trait Tti {
         false
     }
 
+    /// Whether `sinks_select_arms` also holds in a size build: the branch form
+    /// leaves out the copy of the other arm, so it is not longer.
+    fn sinks_select_arms_for_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::inline_variable_memcpy`.
     fn inlines_variable_memcpy(&self) -> bool {
         false
@@ -801,6 +807,12 @@ pub trait Tti {
     /// Whether a product by a constant and one by its negation are made once
     /// on the x87 stack (`Tuning::x87_share_negated_products`).
     fn x87_share_negated_products(&self) -> bool {
+        false
+    }
+
+    /// Whether a zero fill is stored as zero doubles through the FPU at `-Os`
+    /// (`Tuning::x87_zero_fill_at_size`).
+    fn x87_zero_fill_at_size(&self) -> bool {
         false
     }
 

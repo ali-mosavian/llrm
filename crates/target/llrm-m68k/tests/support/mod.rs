@@ -40,7 +40,7 @@ pub fn oracle_with(
     if skip == Some("1") {
         return Ok(Oracle::Skipped("ORACLE SKIPPED: GCC_M68K is not set and M68K_ISA_SKIP_ORACLE=1".to_owned()));
     }
-    Err("GCC_M68K is not set: the unpacked m68k binutils (e.g. ~/scratch/gcc-m68k); M68K_ISA_SKIP_ORACLE=1 skips this oracle".to_owned())
+    Err("GCC_M68K is not set: the unpacked m68k binutils (an unpacked m68k binutils tree); M68K_ISA_SKIP_ORACLE=1 skips this oracle".to_owned())
 }
 
 /// The binutils root for an oracle test. Unset, the test fails naming what to set; `M68K_ISA_SKIP_ORACLE=1`
