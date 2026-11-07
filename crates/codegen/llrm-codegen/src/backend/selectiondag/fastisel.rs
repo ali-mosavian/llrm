@@ -170,6 +170,8 @@ struct Wide {
     mov_mr: u16,
     mov_mi: u16,
     mov_ri: u16,
+    /// `movabs r64, imm64`, for a constant that is not a sign-extended `imm32`.
+    movabs: u16,
     alu: [(u16, u16); 5],
     cmp_rr: u16,
     cmp_ri: u16,
@@ -253,6 +255,7 @@ impl Names {
                 mov_mr: opcode("MOV64mr")?,
                 mov_mi: opcode("MOV64mi32")?,
                 mov_ri: opcode("MOV64ri32")?,
+                movabs: opcode("MOV64ri")?,
                 alu: [both("ADD")?, both("SUB")?, both("AND")?, both("OR")?, both("XOR")?],
                 cmp_rr: opcode("CMP64rr")?,
                 cmp_ri: opcode("CMP64ri32")?,
@@ -473,6 +476,13 @@ impl Fast<'_> {
                 // constant with `getMOVriOpcode`; here every constant is `MOV32ri`. Exit 2026-11-27 with F1.
                 let wide = self.is_wide(operand)?;
                 let (_, _, _, mov_ri, _, _, _, _, vt) = self.set(wide)?;
+                if wide && self.int_signed(operand).is_none() {
+                    // `X86MaterializeInt`: a 64-bit constant past `imm32` is `movabs`
+                    let Operand::Constant(id) = operand else { return None };
+                    let ConstantKind::Int(value) = self.module.context.get(id).kind else { return None };
+                    let imm = self.dag.get_constant_with(value as u64 as u128, EVT::I64, true, false);
+                    return Some(self.node(self.names.wide.as_ref()?.movabs, &[EVT::I64], &[imm]));
+                }
                 let value = if wide { self.int_signed(operand)? } else { self.int(operand)? };
                 let imm = self.dag.get_constant_with(value as u128, vt, true, false);
                 Some(self.node(mov_ri, &[vt], &[imm]))
