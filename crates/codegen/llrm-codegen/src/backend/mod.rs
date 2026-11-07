@@ -200,6 +200,7 @@ pub mod callframe;
 pub mod cmpsub;
 pub mod deadmi;
 pub mod earlytaildup;
+pub mod latetaildup;
 pub mod edges;
 pub mod fixupbw;
 pub mod fixupleas;
