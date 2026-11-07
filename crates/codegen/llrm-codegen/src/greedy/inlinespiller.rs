@@ -83,6 +83,10 @@ pub struct Tables {
     /// The definition of each such register as the body had it: what a split
     /// copy of the register leads back to (`scanRemattable`'s original value).
     pub remat_roots: RefCell<HashMap<u32, Arc<Insn>>>,
+    /// The immutable argument cells nothing writes: a load of one that defines
+    /// a register other instructions define too is a value number a split copy
+    /// leads back to and can remake (`scanRemattable`).
+    pub remat_cells: RefCell<crate::support::hash::HashSet<(i64, u32)>>,
     /// The family each value of the body belongs to (a clone of a value is of
     /// its family) and the wide reads (more than 2 bytes) of each family, by
     /// (slot, block): a call loses a family member's high half only where a
@@ -338,7 +342,11 @@ impl<'a> InlineSpiller<'a> {
         vrai: &crate::liveness::calcspillweights::VirtRegAuxInfo<'_>,
     ) -> Option<Vec<u32>> {
         let own_remat = self.tables.remat.borrow().contains(&reg);
-        if !own_remat && !self.tables.remat.borrow().contains(&self.original) {
+        let original_remat = self.tables.remat.borrow().contains(&self.original);
+        // The original defined by other instructions too: its value number at
+        // the split copy may still be a load of an argument cell.
+        let by_value_number = !own_remat && !original_remat;
+        if by_value_number && self.tables.remat_cells.borrow().is_empty() {
             return None;
         }
         let mut def: Option<InstrKey> = None;
@@ -353,7 +361,20 @@ impl<'a> InlineSpiller<'a> {
         // The instruction that defines `reg`: what goes once it is made again.
         let own = Arc::clone(lis.instr(def?));
         let mut def = Arc::clone(&own);
-        if !own_remat {
+        if by_value_number {
+            // `scanRemattable` asks the original's value number at the copy
+            // (`OrigVNI`), and `isRematerializable` is of that one value
+            // number: other definitions of the register do not matter.
+            if self.tii.copy_source(&own).is_none() {
+                return None;
+            }
+            let root = self.reaching_remat_def(lis, &own);
+            let root = root?;
+            if !root.uses.is_empty() {
+                return None;
+            }
+            def = root;
+        } else if !own_remat {
             // `scanRemattable` asks the original's value number at the def, so
             // a split copy of a remattable value is remattable: the
             // definition made again is the original's. Only a
@@ -497,6 +518,31 @@ impl<'a> InlineSpiller<'a> {
             self.dead.push(own.id());
         }
         Some(made)
+    }
+
+    /// The remattable load that defines the value `copy` reads, through
+    /// copies of copies: the original's value number at the copy.
+    fn reaching_remat_def(
+        &self,
+        lis: &mut LiveIntervals,
+        copy: &Arc<Insn>,
+    ) -> Option<Arc<Insn>> {
+        let mut at = Arc::clone(copy);
+        for _ in 0..8 {
+            let from = self.tii.copy_source(&at)?;
+            let index = lis.indexes.get_instruction_index(at.id());
+            let value = lis.interval_rc(from).query(&index).value_in()?;
+            let site = lis.indexes.get_instruction_from_index(&value.def())?;
+            let found = Arc::clone(lis.instr(site));
+            if let Some(cell) = super::remat::argument_load_cell(&found)
+                && self.tables.remat_cells.borrow().contains(&cell)
+                && self.tii.is_trivially_re_materializable(&found, true)
+            {
+                return Some(found);
+            }
+            at = found;
+        }
+        None
     }
 
     /// A parallel copy that reads the register is a load: `mov %d, %reg` as a
