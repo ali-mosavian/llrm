@@ -88,6 +88,17 @@ pub trait CombineHooks {
     /// `visitXOR`'s `(xor (and x, y), y)` is `(and (not x), y)`. DEVIATE: off
     /// by default so x86's rows stay as they are until the judge has seen
     /// them. Exit: x86 judged.
+    /// `TLI.hasAndNot(Y)`: the target has an and-not instruction for a value of
+    /// this type (`constant`: a non-opaque constant). Off: the pin's x86
+    /// without BMI.
+    fn has_and_not(
+        &self,
+        _vt: EVT,
+        _constant: bool,
+    ) -> bool {
+        false
+    }
+
     fn fold_xor_of_and_with_mask(&self) -> bool {
         false
     }
@@ -1077,6 +1088,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_setcc(vt, op0, zero, flipped));
             }
         }
+        // `SimplifySetCC`'s remainder of a division by a constant, unsigned.
+        if matches!(cond, CondCode::SetEq | CondCode::SetNe)
+            && self.dag.opcode(n0) == ISD::URem
+            && let Some(folded) = self.build_urem_eq_fold(vt, n0, c1, cond)
+        {
+            return Some(folded);
+        }
         // `(x + c0) == c1` is `x == c1 - c0`, `(x ^ c0) == c1` is `x == c0 ^
         // c1` and `(c0 - x) == c1` is `x == c0 - c1`, for a single-use
         // operand.
@@ -1565,6 +1583,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let not_one = self.dag.get_constant(ones - 1, vt);
             return Some(self.dag.get_node(ISD::Rotl, vt, &[not_one, amount]));
         }
+        if let Some(merged) = self.unfold_masked_merge(node) {
+            return Some(merged);
+        }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
             return self.reassociate_ops(ISD::Xor, n0, n1, self.dag.node(node).flags);
         }
@@ -1994,6 +2015,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(reassociated) = self.reassociate_ops(ISD::And, n0, n1, self.dag.node(node).flags) {
             return Some(reassociated);
         }
+        if let Some(folded) = self.fold_bitwise_op_with_neg(node) {
+            return Some(folded);
+        }
         if let (Some(c1), true) = (self.dag.constant(n1), !self.dag.is_opaque(n1)) {
             // `(and (or x, C), D)` is `D` when `D` is a subset of `C`.
             if self.dag.opcode(n0) == ISD::Or {
@@ -2295,6 +2319,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(folded);
             }
         }
+        if op == ISD::Shl && matches!(self.dag.opcode(n0), ISD::Srl | ISD::Sra) {
+            if let Some(folded) = self.shl_of_exact_shift(node) {
+                return Some(folded);
+            }
+        }
         if op == ISD::Shl && self.dag.opcode(n0) == ISD::Srl {
             if let Some(folded) = self.shl_of_srl(node) {
                 return Some(folded);
@@ -2330,7 +2359,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             if let Some(shl1) = self.dag.fold_constant_arithmetic(ISD::Shl, vt, &[n01, n1]) {
                 let shl0 = self.dag.get_node(ISD::Shl, vt, &[self.dag.operand(n0, 0), n1]);
                 self.add_to_worklist(shl0.node);
-                let disjoint = self.dag.opcode(n0) == ISD::Or && self.dag.node(n0).flags.0 & SDNodeFlags::DISJOINT.0 != 0;
+                let disjoint =
+                    self.dag.opcode(n0) == ISD::Or && self.dag.node(n0).flags.0 & SDNodeFlags::DISJOINT.0 != 0;
                 let flags = if disjoint { SDNodeFlags::DISJOINT } else { SDNodeFlags::default() };
                 return Some(self.dag.get_node_flags(self.dag.opcode(n0), vt, &[shl0, shl1], flags));
             }
@@ -2411,6 +2441,37 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let shifted_x = self.dag.get_node(op, vt, &[x, sum]);
         let shifted_y = self.dag.get_node(op, vt, &[y, c1]);
         Some(self.dag.get_node(logic_op, vt, &[shifted_x, shifted_y]))
+    }
+
+    /// `visitSHL`'s exact fold ([L11196][pin]): `shl (sr[la] exact x, c1), c2`
+    /// is `shl x, c2 - c1` when `c1 <= c2` and `sr[la] x, c1 - c2` otherwise.
+    /// The bits shifted out are zero, so no mask is left, and the inner
+    /// shift's other uses do not matter.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11196
+    fn shl_of_exact_shift(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (inner, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if self.dag.node(inner).flags.0 & SDNodeFlags::EXACT.0 == 0 {
+            return None;
+        }
+        let (c2, c1) = (self.dag.constant(n1)?, self.dag.constant(self.dag.operand(inner, 1))?);
+        let vt = self.dag.value_type(node);
+        let width = u128::from(vt.size_in_bits());
+        if c1 >= width || c2 >= width {
+            return None;
+        }
+        let x = self.dag.operand(inner, 0);
+        let amount_vt = self.dag.value_type(n1);
+        if c1 <= c2 {
+            let by = self.dag.get_constant(c2 - c1, amount_vt);
+            return Some(self.dag.get_node(ISD::Shl, vt, &[x, by]));
+        }
+        let by = self.dag.get_constant(c1 - c2, amount_vt);
+        Some(self.dag.get_node(self.dag.opcode(inner), vt, &[x, by]))
     }
 
     /// `visitSHL`: `shl (srl x, c1), c2` is `and (srl x, c1 - c2), (-1 << c1

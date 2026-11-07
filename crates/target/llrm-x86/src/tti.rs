@@ -1298,8 +1298,9 @@ impl Tti for X86 {
     ///
     /// DEVIATE LU3d: a target that states its allocatable registers
     /// (`with_registers`: the frame and stack pointers are not among them)
-    /// keeps none back; the pin's one stands for the stack pointer its count
-    /// of eight includes. owner: w12, exit: 2026-11-20 (the m32/m64 A/B in the
+    /// keeps none back: the pin's one stands for the stack pointer its count
+    /// of eight includes, so reserving it again counts it twice (not an `i8`
+    /// counter the pin makes). owner: w12, exit: 2026-11-20 (the m32/m64 A/B in the
     /// PR; without it the line goes).
     fn lsr_reserved_registers(&self) -> u32 {
         u32::from(self.real_mode.is_none() && self.registers.is_none())

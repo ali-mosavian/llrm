@@ -712,6 +712,7 @@ impl Builder<'_> {
         opt_size: bool,
         fill: Option<u128>,
         frame: bool,
+        alignment: u64,
     ) -> bool {
         let zero = fill == Some(0);
         if opt_size
@@ -722,6 +723,11 @@ impl Builder<'_> {
             return self.sse_fill_is_longer(length, fill.unwrap_or(0));
         }
         if opt_size && let Some(costs) = self.target.tti.as_ref().and_then(|tti| tti.0.size_fill()) {
+            // `rep stosd` takes whole aligned dwords; a tail or an unaligned fill is
+            // `rep stosb` or stores again (rep_tails -Os grew a byte).
+            if length % 4 != 0 || alignment < 4 {
+                return false;
+            }
             let place = usize::from(!frame);
             let value = match fill {
                 Some(0) => costs.value[0],
@@ -1290,6 +1296,7 @@ impl Builder<'_> {
                             opt_size,
                             self.dag.constant(other).map(|byte| byte & 0xff),
                             self.dag.opcode(dst) == ISD::FrameIndex,
+                            alignment,
                         ) =>
                     {
                         self.inline_memset(root, dst, other, bytes, limit, alignment)?

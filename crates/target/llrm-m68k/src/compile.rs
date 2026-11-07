@@ -229,7 +229,7 @@ pub fn items_with(
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
-        crate::regalloc::allocate_greedy(&mut function, wants_size)?
+        crate::regalloc::allocate_greedy(&mut function, wants_size, options.indexed)?
     };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     if options.short {

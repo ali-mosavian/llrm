@@ -1177,6 +1177,8 @@ fn at_m32_os_a_28_byte_fill_is_rep_stos_and_at_speed_stores() {
     assert_eq!(memset_shape_m32(28, -1, true).0, 1, "-Os: a fill");
     assert_eq!(memset_shape_m32(28, -1, false).0, 0, "-O2: stores");
     assert_eq!(memset_shape_m32(4, -1, true).0, 0, "one dword store is smaller than the fill");
+    // rep_tails -Os grew a byte when a 5-byte fill (no whole dwords) was a fill.
+    assert_eq!(memset_shape_m32(5, 7, true).0, 0, "a tail is stores");
 }
 
 /// A 10-byte clear at m16 -Os was a `rep stosb` on bytes alone (19 B of

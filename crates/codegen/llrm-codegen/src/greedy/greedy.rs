@@ -768,11 +768,18 @@ impl<'a> RAGreedy<'a> {
             let decision = self.select_or_split(&virt_reg, &mut split_vregs);
             if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
                 let verdict = match &decision {
-                    Select::Reg(phys) => format!("assign {phys:?}"),
+                    Select::Reg(phys) => format!("assign {}", self.matrix.tri().name(*phys)),
                     Select::Fail => "FAIL".to_owned(),
                     Select::None => format!("split/spill into {split_vregs:?}"),
                 };
-                eprintln!("  hint {:?} prio {:#x}", self.simple_hint(virt_reg.reg()), self.get_priority(&virt_reg));
+                eprintln!(
+                    "  hint {:?} prio {:#x}",
+                    self.simple_hint(virt_reg.reg()).map(|hint| match hint {
+                        Hint::Phys(phys) => self.matrix.tri().name(phys),
+                        Hint::Virt(virt) => format!("v{virt}"),
+                    }),
+                    self.get_priority(&virt_reg)
+                );
                 eprintln!(
                     "{}",
                     decision_line(

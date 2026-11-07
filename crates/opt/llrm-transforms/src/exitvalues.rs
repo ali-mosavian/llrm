@@ -198,7 +198,8 @@ fn rewrite_loop_exit_values(
     // that motivated it is QCport m16 -Os. A target whose wide multiplies are
     // library calls takes it too (`Tti::sizes_exit_values`).
     //
-    // DEVIATE 16 (exit 2026-11-12): such a target takes it at speed too. The
+    // DEVIATE 16 (owner m68k, exit 2026-11-14; off at 68020+ made 6 sum cells
+    // worse, A/B 2026-11-07): such a target takes it at speed too. The
     // closed form of a sum is `i33` multiplies, 250 B of `__mulsi3` calls
     // against a 16-byte loop, and it loses clocks until the trip count passes
     // about 70 (68000) or 100 (68020, six `muls.l`), where the break-even is
