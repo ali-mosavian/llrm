@@ -961,6 +961,7 @@ fn selected_in(
     // defined elsewhere through the GOT
     // (X86Subtarget::classifyGlobalReference).
     builder_target.dag.dso_local_symbols = bitness != 64 || !module.position_independent();
+    builder_target.dag.defined_dso_local = !builder_target.dag.dso_local_symbols;
     builder_target.dag.absolute_symbols = !module.position_independent();
     let builder_target = builder_target
         .with_tuning(machine.tuning())

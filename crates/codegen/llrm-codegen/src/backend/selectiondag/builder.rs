@@ -554,7 +554,7 @@ pub fn fresh_dag(
         .tables
         .get_or_insert_with(|| {
             let (global_names, local_symbols) = module_tables
-                .unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols));
+                .unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols, target.dag.defined_dso_local));
             super::function_lowering::Tables {
                 global_names,
                 local_symbols,
