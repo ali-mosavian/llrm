@@ -840,6 +840,14 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-1 (arm64): the least share (numerator, denominator) of a
+    /// recursion's body clocks that its calls to itself spend on the call,
+    /// return and argument words for its copies to be made: a copy removes
+    /// those and nothing else. None: no bound.
+    fn recursive_inlining_call_share(&self) -> Option<(i64, i64)> {
+        None
+    }
+
     /// DEVIATE REC-7: the depth of the copies at (-O2, -O3); none: the depth
     /// of `recursive_inlining`.
     fn recursive_inlining_depth(&self) -> Option<(u32, u32)> {
