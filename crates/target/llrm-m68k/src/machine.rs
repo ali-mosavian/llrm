@@ -181,11 +181,13 @@ impl Tti for M68k {
         &self,
         optsize: bool,
     ) -> u32 {
-        // DEVIATE 18 (exit 2026-11-12): from the 68020 on, a `cmp.l` with a
-        // memory limit costs little more than the `subq` of a counter, so the
-        // `smax` guard of the rewritten exit (8 B) is not repaid. The 68000
+        // DEVIATE 18 (owner m68k, exit 2026-11-14; the pin's budget is 4):
+        // from the 68020 on, a `cmp.l` with a memory limit costs little more
+        // than the `subq` of a counter, so a guard that needs `smax` (sum,
+        // 8 B) is not repaid; one that costs a single operation still is
+        // (memset, partition: `subq`+`bne` for `addq`+`cmp`+`blt`). The 68000
         // keeps the pin's 4: there the compare is 10 clk per trip dearer.
-        if optsize || self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020) { 0 } else { 4 }
+        if optsize { 0 } else if self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020) { 1 } else { 4 }
     }
 
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
