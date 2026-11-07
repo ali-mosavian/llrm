@@ -685,7 +685,7 @@ impl Parser {
             | Token::Global(_) => !matches!(self.peek_at(1), Token::Punct('=')),
             Token::Punct('[' | '{' | '<') => true,
             Token::Word(word) => {
-                ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr"]
+                ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr", "splat"]
                     .contains(&word.as_str())
                     || spelled(&CAST, word).is_some()
                     || constant_binary(word)
@@ -827,7 +827,7 @@ impl Parser {
                 Token::Str(_) => {
                     let key = self.string()?;
                     let value = if self.eat_punct('=') { Some(self.string()?) } else { None };
-                    out.push(Attribute::Str(key, value));
+                    out.push(Attribute::Str(key.into(), value));
                 }
                 // `captures(none)` is `nocapture`; any other capture kind says
                 // what the callee may do with the pointer, which no pass here
@@ -843,7 +843,7 @@ impl Parser {
                         self.next();
                     }
                     if none {
-                        out.push(Attribute::Flag("nocapture".to_owned()));
+                        out.push(Attribute::Flag("nocapture".into()));
                     }
                 }
                 Token::Word(word) if TARGET_FLAG_ATTRIBUTES.contains(&word.as_str()) => {
@@ -858,11 +858,11 @@ impl Parser {
                             self.next();
                         }
                     }
-                    out.push(Attribute::Flag(word));
+                    out.push(Attribute::Flag(word.into()));
                 }
                 Token::Word(word) if FLAG_ATTRIBUTES.contains(&word.as_str()) => {
                     self.next();
-                    out.push(Attribute::Flag(word));
+                    out.push(Attribute::Flag(word.into()));
                 }
                 Token::Word(word) if INT_ATTRIBUTES.contains(&word.as_str()) => {
                     self.next();
@@ -871,14 +871,14 @@ impl Parser {
                     if parenthesized {
                         self.expect_punct(')')?;
                     }
-                    out.push(Attribute::Int(word, value));
+                    out.push(Attribute::Int(word.into(), value));
                 }
                 Token::Word(word) if TYPE_ATTRIBUTES.contains(&word.as_str()) => {
                     self.next();
                     self.expect_punct('(')?;
                     let ty = self.ty()?;
                     self.expect_punct(')')?;
-                    out.push(Attribute::Type(word, ty));
+                    out.push(Attribute::Type(word.into(), ty));
                 }
                 Token::Word(word) if word == "range" => {
                     self.next();
@@ -1210,6 +1210,19 @@ impl Parser {
                     );
                 }
                 ConstantKind::Aggregate(members)
+            }
+            Token::Word(word) if word == "splat" => {
+                let Type::Vector { element, count } = shape else {
+                    return self.fail_on(line, "`splat` is a vector constant");
+                };
+                self.expect_punct('(')?;
+                let member_ty = self.ty()?;
+                if member_ty != element {
+                    return self.fail_on(line, "a splat's element is the vector's element type");
+                }
+                let member = self.constant(member_ty)?;
+                self.expect_punct(')')?;
+                ConstantKind::Aggregate(vec![member; count as usize])
             }
             Token::Word(word) if word == "getelementptr" => {
                 let mut flags = Flags::default();

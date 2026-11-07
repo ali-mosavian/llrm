@@ -14,7 +14,10 @@ fn visit(
         Opcode::Binary(BinaryOp::FDiv) => super::visit_fdiv(c, inst),
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FMul) => super::visit_fadd_or_fmul(c, inst),
         Opcode::Binary(BinaryOp::FSub) => super::visit_fsub(c, inst),
-        Opcode::FCmp(_) => super::visit_fcmp(c, inst),
+        // `simplifyFCmpInst` first, as `combine::visit` does: `fcmp uno 0.0, 0.0` is `X, X` to the
+        // visitor and would be canonicalised for ever.
+        Opcode::FCmp(_) => crate::combine_muldivrem::simplify_first(c, inst)
+            .map_or_else(|| crate::combine_fcmp::visit_fcmp(c, inst), Visit::Replace),
         // `simplifyCastInst`, as every visit starts with.
         Opcode::Cast(_) => crate::combine_muldivrem::simplify_first(c, inst).map_or(Visit::None, Visit::Replace),
         Opcode::Call(_) => c.visit_call(inst),

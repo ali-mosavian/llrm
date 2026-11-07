@@ -486,7 +486,7 @@ fn runtime(
     global.address_space = far;
     let GlobalKind::Function(function) = &mut global.kind else { unreachable!("a function") };
     function.calling_convention = BASIC;
-    function.attrs.extend(attrs.iter().map(|one| Attribute::Flag((*one).to_owned())));
+    function.attrs.extend(attrs.iter().map(|one| Attribute::Flag((*one).into())));
 }
 
 /// Each ON ERROR gone, where no call lands.

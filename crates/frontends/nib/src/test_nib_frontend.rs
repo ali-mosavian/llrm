@@ -686,7 +686,8 @@ fn update(v: &[i32]) -> i32:
 
 fn main() -> i16:
     let v: i32[6] = [1, 2, 3, 4, 5, 6]
-    update(&v)
+    print(update(&v))
+    print(update(&v))
     return 0
 ";
 
@@ -816,7 +817,9 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     let view_address = addresses.iter().find(|one| one.operands == [model::Operand::place_ref(view.id)]).unwrap();
     let call =
         instructions(caller).find(|one| one.op == model::Op::Call && one.callee.as_deref() == Some("bump")).unwrap();
-    assert_eq!(call.operands, [model::Operand::value_ref(view_address.results[0])]);
+    // The view's words and data pointer, read from the descriptor built here.
+    assert_eq!(call.operands.len(), 3, "{:?}", call.operands);
+    assert!(view_address.results.len() == 1, "the view is still built on the frame");
     let pointer = caller.values.iter().find(|value| value.id == payload_address.results[0]).unwrap();
     let pointer_type = program.modules[0].types.iter().find(|one| one.id == pointer.r#type).unwrap();
     assert_eq!(pointer_type.width, 4);
@@ -825,19 +828,14 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     let assembly = listing_on(&program, "main", &O2_calls_kept(), "486");
     let bump = between(&assembly, "_bump proc near", "_bump endp");
     let main = between(&assembly, "_main proc far", "_main endp");
-    // The payload's address is the view's pointer, the view's address the
-    // argument.
-    let payload =
-        Regex::new(r"    lea ([a-z]+), \[bp-\d+\]\n").unwrap().captures(main).unwrap_or_else(|| panic!("{main}"))[1]
-            .to_owned();
-    assert!(Regex::new(&format!(r"    mov word ptr \[bp-\d+\], {payload}\n")).unwrap().is_match(main), "{main}");
-    assert!(Regex::new(r"    mov (?:[a-z]+|word ptr \[bp-\d+\]), ss\n").unwrap().is_match(main), "{main}");
+    // The view is passed as its parts and the length folds away: the payload's
+    // address, a stack pointer of one word, is `bump`'s one argument, in AX,
+    // and nothing is pushed or popped. No view is built or read.
     assert!(main.contains("call _bump"));
-    // `bump` is internal and called directly: the view, a stack pointer of one
-    // word, is its first argument, in AX, and nothing is pushed or popped.
     assert!(!main.contains("add sp, 2") && !bump.contains("ret 2"), "{main}{bump}");
     assert!(Regex::new(r"    lea ax, \[bp-\d+\]\n    call _bump").unwrap().is_match(main), "{main}");
-    assert!(bump.contains("es:["));
+    assert!(!main.contains(", ss\n"), "{main}");
+    assert!(bump.contains("ss:[bx+2]") && !bump.contains("es:["), "{bump}");
     assert!(
         !object_of(
             &program,
@@ -900,33 +898,31 @@ fn stored_constants(listing: &str) -> BTreeSet<i64> {
 }
 
 #[test]
-fn test_array_parameter_is_one_unsized_view_pointer() {
+fn test_array_parameter_is_its_descriptor_words_and_a_data_pointer() {
+    // A `&[T]` parameter of a function only this program calls arrives as the
+    // descriptor's words and the far data pointer; the callee's descriptor is
+    // rebuilt on its frame, and the length is read from that.
     let program = parsed(&fixture("sum.nib"));
     let module = &program.modules[0];
     let function = function(&program, "sum");
     let by_id = |id: i64| module.types.iter().find(|one| one.id == id).unwrap();
-    let pointer = by_id(function.values[0].r#type);
-    let descriptor = by_id(pointer.element.unwrap());
-    let element = by_id(descriptor.element.unwrap());
-    let metadata = module.types.iter().find(|one| one.name == "u16").unwrap();
+    let words: Vec<_> = function.values[..2].iter().map(|one| by_id(one.r#type)).collect();
+    let data = by_id(function.values[2].r#type);
+    let element = by_id(data.element.unwrap());
     let descriptor_loads: Vec<&model::Operand> = instructions(function)
         .filter(|one| one.op == model::Op::Load && matches!(one.operands[0], model::Operand::DescriptorPlace(_)))
         .map(|one| &one.operands[0])
         .collect();
 
-    assert_eq!(function.parameters.len(), 1);
-    assert_eq!(pointer.kind, model::TypeKind::Pointer);
-    assert_eq!(pointer.rank, 1);
-    assert_eq!((descriptor.kind, descriptor.width), (model::TypeKind::Opaque, 8));
+    assert_eq!(function.parameters.len(), 3);
+    assert!(words.iter().all(|one| one.name == "u16"), "{words:?}");
+    assert_eq!((data.kind, data.rank, data.width), (model::TypeKind::Pointer, 0, 4));
     assert_eq!(element.name, "i16");
-    assert_eq!(
-        descriptor_loads,
-        [&model::Operand::DescriptorPlace(model::DescriptorPlace {
-            base: function.parameters[0],
-            field: model::DescriptorField::Length,
-            r#type: metadata.id,
-        })]
-    );
+    // The one length read is from a descriptor that is not a parameter.
+    assert_eq!(descriptor_loads.len(), 1, "{descriptor_loads:?}");
+    let model::Operand::DescriptorPlace(place) = descriptor_loads[0] else { unreachable!() };
+    assert!(!function.parameters.contains(&place.base), "the descriptor is rebuilt on the frame");
+    assert_eq!(place.field, model::DescriptorField::Length);
 }
 
 #[test]
@@ -965,7 +961,7 @@ fn test_three_array_initializer_keeps_the_fixed_frame_address_component() {
 }
 
 #[test]
-fn test_scoped_array_range_is_one_descriptor_pointer_and_executes() {
+fn test_scoped_array_range_is_two_words_and_a_data_pointer_and_executes() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
@@ -975,12 +971,13 @@ fn test_scoped_array_range_is_one_descriptor_pointer_and_executes() {
 
     let program = parsed(&source);
     let function = function(&program, "sum");
-    let pointer = program.modules[0].types.iter().find(|one| one.id == function.values[0].r#type).unwrap();
+    let pointer = program.modules[0].types.iter().find(|one| one.id == function.values[2].r#type).unwrap();
 
-    assert_eq!(function.parameters.len(), 1);
+    // Two words, then the data pointer.
+    assert_eq!(function.parameters.len(), 3);
     assert_eq!(pointer.kind, model::TypeKind::Pointer);
     assert_eq!(pointer.width, 4);
-    assert_eq!(pointer.rank, 1);
+    assert_eq!(pointer.rank, 0);
 }
 
 #[test]
@@ -1185,6 +1182,39 @@ fn test_unroll_is_priced_against_the_loop_as_optimized() {
     let counted = Regex::new(r"mov cx, (\d+)\n(?:[^\n]*\n){0,6}?\s*rep stos([bwd])\n").unwrap().captures(body).expect("a counted fill");
     let width = match &counted[2] { "b" => 1, "w" => 2, _ => 4 };
     assert_eq!(counted[1].parse::<usize>().unwrap() * width, 512, "{body}");
+}
+
+/// -O2 with function inlining off: the function under test stays a function.
+fn o2_calls_kept() -> Options {
+    let mut options = level("O2");
+    options.pipeline.inline = llrm_transforms::inline::Threshold::none();
+    options
+}
+
+#[test]
+fn test_a_constant_length_slice_reaches_the_callee_as_a_constant() {
+    // A `&[T]` parameter was one pointer to a descriptor, so the callee of a
+    // call kept as a call reloaded its length from memory: `total` read
+    // `load i16, ptr %0` for the loop bound, never the 8 its caller passes.
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = "fn total(a: &[i16]) -> i16:\n    let mut s: i16 = 0\n    for x in a:\n        s += x\n    return s\n\n@export(\"cdecl16\")\nfn value() -> i16:\n    let mut v: i16[8] = [1] * 8\n    return total(v) + total(v)\n";
+    let program = parsed(&written(&directory, "slice_by_value.nib", text));
+    let mir = optimized_mir(&program, &o2_calls_kept());
+    let start = mir
+        .match_indices("define")
+        .map(|(at, _)| at)
+        .find(|&at| mir[at..].lines().next().is_some_and(|line| line.contains("@total(")))
+        .unwrap_or_else(|| panic!("total stays a function: {mir}"));
+    let body = &mir[start..];
+    let body = &body[..body.find("\n}").unwrap()];
+    let header = body.lines().next().unwrap();
+
+    assert!(!header.contains("llrm.reads"), "the callee still reads a descriptor: {header}");
+    assert!(!body.contains("= load ptr"), "the data pointer is still loaded from a descriptor: {body}");
+    assert!(
+        !body.contains("getelementptr i8, ptr addrspace(5) %0, i16 4"),
+        "a descriptor field is still addressed: {body}"
+    );
 }
 
 #[test]
@@ -2520,11 +2550,12 @@ fn test_a_loop_through_a_copied_pointer_converges() {
     nib_compile::assembled(&parsed(&source), "assign", &level("O2"), &crate::real_mode().os).expect("assembles");
 }
 
-/// A borrowed view's descriptor is the caller's, never written in the
-/// call: stated as LLVM's `noalias readonly dereferenceable`, for LICM to
-/// hoist its loads, and `nocapture`, as `multiply` keeps none of them.
+/// A borrowed view is passed as its descriptor words and its data pointer;
+/// the pointer is stated as LLVM's `noalias` (the checker keeps a mutable lend
+/// apart from the call's other arguments), `readonly` where the borrow is
+/// shared, and `nocapture`, as `multiply` keeps none of them.
 #[test]
-fn test_a_borrowed_view_states_facts_of_its_descriptor() {
+fn test_a_borrowed_view_states_facts_of_its_data() {
     use llrm_mir::facts::Fact;
     let program = parsed(&fixture("matmul8.nib"));
     let multiply = function(&program, "multiply");
@@ -2539,12 +2570,18 @@ fn test_a_borrowed_view_states_facts_of_its_descriptor() {
             .map(|one| one.fact)
             .collect()
     };
-    for index in 0..multiply.parameters.len() {
-        assert_eq!(
-            stated(index),
-            vec![Fact::NoAlias, Fact::ReadOnly, Fact::Dereferenceable(10), Fact::NoCapture],
-            "parameter {index}"
-        );
+    // Three rank-2 views: each three words, then its data pointer.
+    assert_eq!(multiply.parameters.len(), 12);
+    for (view, mutable) in [(0, false), (1, false), (2, true)] {
+        for word in 0..3 {
+            assert_eq!(stated(view * 4 + word), Vec::<Fact>::new(), "view {view} word {word}");
+        }
+        let expected = if mutable {
+            vec![Fact::NoAlias, Fact::NoCapture]
+        } else {
+            vec![Fact::NoAlias, Fact::ReadOnly, Fact::NoCapture]
+        };
+        assert_eq!(stated(view * 4 + 3), expected, "view {view} data");
     }
 }
 
@@ -2845,7 +2882,7 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
 /// above needs two callers to keep the loop.
 #[test]
 fn test_a_range_loop_whose_bound_every_caller_passes_is_copied_out() {
-    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    return 0\n";
+    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 7))\n    return 0\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "copied.nib", source));
     let pipeline =
@@ -3320,8 +3357,9 @@ fn test_a_library_cut_to_nothing_assembles_without_an_entry() {
 }
 
 /// `zip(a, b)` walks two slices' elements by one counter and stops at the
-/// shorter: the loop tests each length, as the pin's clang -O2 does on the C
-/// with `i < a->len && i < b->len` (two exits, one counter).
+/// shorter: the loop tests each length (the pin's clang -O2 on the C
+/// `i < a->len && i < b->len`: two exits, one counter) -- or, with the lengths
+/// passed by value, runs the shorter's count (one exit).
 ///
 /// This pinned one exit, on the flags of a biased byte counter, and no `[bp-`
 /// operand. The LLVM order on by default (#2369, 7b2e73546) keeps both tests,
@@ -3351,7 +3389,11 @@ fn test_a_zip_loop_tests_each_slices_length_as_llvm_does() {
         })
         .expect("a loop");
     let tests = lines[head..=end].iter().filter(|one| one.starts_with('j') && !one.starts_with("jmp")).count();
-    assert_eq!(tests, 2, "{:#?}", &lines[head..=end]);
+    // The lengths arrive as parameters, so the shorter is chosen once before
+    // the loop and the loop has one exit on its counter (it tested both each
+    // trip when it read them from the descriptors).
+    assert_eq!(tests, 1, "{:#?}", &lines[head..=end]);
+    assert!(lines[..head].contains(&"cmp ax, cx"), "the shorter length is chosen before the loop: {lines:#?}");
 }
 
 /// `@noipa` keeps a bench kernel a procedure its caller calls: at -O3

@@ -1413,8 +1413,8 @@ pub fn recorded(
         manager.add(cgpaddr::CgpAddr);
     }
     // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
-    if applied.options.prices_bytes() && applied.options.wanted("cgpselectarms") {
-        manager.add(crate::cgpselect::SelectArms);
+    if (applied.options.prices_bytes() || applied.options.for_size) && applied.options.wanted("cgpselectarms") {
+        manager.add(crate::cgpselect::SelectArms { size: applied.options.for_size });
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
@@ -1477,7 +1477,7 @@ fn mark_for_size(
             }
             for name in ["optsize"].into_iter().chain(min_size.then_some("minsize")) {
                 if !function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == name)) {
-                    function.attrs.push(Attribute::Flag(name.to_owned()));
+                    function.attrs.push(Attribute::Flag(name.into()));
                 }
             }
         }

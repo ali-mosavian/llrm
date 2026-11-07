@@ -721,7 +721,7 @@ fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
         should_join: None,
         freq: Vec::new(),
         remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
-        remat_wins: Some(Box::new(|_, _, _, _| false)),
+        remat_wins: Some(Box::new(|_, _, _, _, _| false)),
         joins_global_copies: false,
         joins_pinned_copies: true,
         joins_sub_registers: true,
@@ -1766,4 +1766,131 @@ fn test_an_implicit_def_overlapping_a_live_value_is_erased_by_the_join() {
         insns.iter().filter(|one| one.defines.is_empty() && one.uses.len() == 1).map(|one| one.uses[0]).collect();
     assert_eq!(reads.len(), 2, "{last:?}");
     assert_eq!(reads[0], reads[1], "the two phi values are one register");
+}
+
+/// `v := mov value`: a constant with its value, for a size price.
+fn constant_of(
+    v: u32,
+    value: i64,
+    width: u32,
+) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Held(Held { value: v, width, offset: 0 })],
+        sources: vec![Loc::Imm(crate::model::ir::Imm { value, width, address: None })],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![v], vec![]))
+}
+
+/// The encoded sizes of a flat 32-bit target: a copy is two bytes, three for a
+/// word (66h) or a qword (REX.W), a zero is `xor` (two), any other constant five.
+fn flat_bytes() -> llrm_target::MoveBytes {
+    llrm_target::MoveBytes {
+        plain: 4,
+        copy: |width, _| if width == 4 { 2 } else { 3 },
+        literal: |number, _, _, _| if number == 0 { 2 } else { 5 },
+    }
+}
+
+/// Whether the copy of the constant `value`, which stays read after the loop,
+/// is made again in a build for size, with `price` as the target's.
+fn size_copy_of_constant_is_remade(
+    value: i64,
+    width: u32,
+    price: Option<super::env::RematWins>,
+) -> bool {
+    size_copy_of_def_is_remade(constant_of(1, value, width), width, price)
+}
+
+/// `size_copy_of_constant_is_remade` for any definition `a` of value 1.
+fn size_copy_of_def_is_remade(
+    a: Arc<Insn>,
+    width: u32,
+    price: Option<super::env::RematWins>,
+) -> bool {
+    size_copy_of_def_is_remade_after(Vec::new(), Vec::new(), a, width, price)
+}
+
+/// `size_copy_of_def_is_remade`, with `before` the definition and `after` the copy.
+fn size_copy_of_def_is_remade_after(
+    before: Vec<Arc<Insn>>,
+    after: Vec<Arc<Insn>>,
+    a: Arc<Insn>,
+    width: u32,
+    price: Option<super::env::RematWins>,
+) -> bool {
+    use std::collections::BTreeSet;
+
+    let wide = |v: u32| Loc::Held(Held { value: v, width, offset: 0 });
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![wide(2)],
+        sources: vec![wide(1)],
+        ..Semantics::new(Operation::Move)
+    };
+    let c = Arc::new(Insn::new(0, None, Some(what), vec![2], vec![1]));
+    let head: Vec<Arc<Insn>> = before.into_iter().chain([a, Arc::clone(&c)]).chain(after).collect();
+    let was = body(&[(&head, &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
+    let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+    let env = TargetEnv {
+        palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+        pins: IndexMap::default(),
+        size: true,
+        keep_pinned: false,
+        aliases: Default::default(),
+        should_join: None,
+        freq: Vec::new(),
+        remat: Some(Box::new(|_| true)),
+        remat_wins: price,
+        joins_global_copies: false,
+        joins_pinned_copies: true,
+        joins_sub_registers: true,
+        joins_lanes: false,
+        regs: None,
+        kind_of: None,
+        kinds: Default::default(),
+        check_kinds: false,
+    };
+    let mut lis = LiveIntervals::new(&was);
+    let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
+    result == JoinResult::Joined && !names(&lis).contains(&(vec![2], vec![1]))
+}
+
+/// The target's encodings decide at size: a word zero (`xor` 2 B against a 66h
+/// copy, 3 B) is remade, a dword zero is a tie with the copy and stays one, and so
+/// does a constant dearer than the copy. A qword zero is left a copy (C13): its
+/// `xor` beat the REX.W copy (m64 `recgcd`, +2 B) but a remade zero that spills is a
+/// 9 B `movq $0, slot` (jpeg_fixed m64 -Os +42 B, over_aligned_local_after_even_pushes +9).
+#[test]
+fn test_for_size_a_zero_that_stays_read_is_made_again_where_the_target_prices_it() {
+    let price = || Some(super::pass::remat_priced(flat_bytes()));
+    assert!(size_copy_of_constant_is_remade(0, 2, price()), "xor 2 B against a 3 B copy");
+    assert!(!size_copy_of_constant_is_remade(0, 4, price()), "a tie keeps the copy");
+    assert!(!size_copy_of_constant_is_remade(7, 2, price()), "5 B against a 3 B copy");
+    assert!(!size_copy_of_constant_is_remade(0, 8, price()), "a qword zero may spill (C13)");
+}
+
+/// A target that states no price keeps DEVIATE C10: at size no copy of a
+/// constant that stays read is remade (40 of 813 sources +1,383 bytes).
+#[test]
+fn test_for_size_without_a_price_a_constant_that_stays_read_stays_a_copy() {
+    assert!(!size_copy_of_constant_is_remade(0, 2, None));
+}
+
+/// mul_constants m32 -Os: `mov edx, eax` became `lea eax, [esi+0x3c6ef35f]` (6 B for 2):
+/// the definition was an `lea` of a register and a constant, not a plain constant,
+/// which the byte price did not cover and let through. It stays a copy.
+#[test]
+fn test_for_size_an_lea_of_a_register_that_stays_read_stays_a_copy() {
+    let base = Loc::Held(Held { value: 9, width: 4, offset: 0 });
+    let what = Semantics {
+        name: Some("lea".into()),
+        dests: vec![held(1)],
+        sources: vec![base, Loc::Imm(crate::model::ir::Imm { value: 0x3c6e_f35f, width: 4, address: None })],
+        ..Semantics::new(Operation::Move)
+    };
+    let lea = Arc::new(Insn::new(0, None, Some(what), vec![1], vec![9]));
+    let price = Some(super::pass::remat_priced(flat_bytes()));
+    assert!(!size_copy_of_def_is_remade_after(vec![def(9)], vec![read(9)], lea, 4, price));
 }
