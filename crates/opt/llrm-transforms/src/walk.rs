@@ -658,12 +658,11 @@ impl ProgramPass for Walk {
                                     let costs = program.target.size_costs();
                                     let now = module.global(id).function().expect("a body");
                                     let gone: i64 = if credit > 0 {
-                                        calls
-                                            .iter()
-                                            .filter_map(|one| trials[one].callee)
-                                            .filter_map(|callee| module.global(callee).function())
-                                            .map(|body| function_bytes(module, &program.layout, &costs, body))
-                                            .sum()
+                                        let sites: Vec<GlobalId> =
+                                            calls.iter().filter_map(|one| trials[one].callee).collect();
+                                        dying_callees_bytes(module, &sites, |body| {
+                                            function_bytes(module, &program.layout, &costs, body)
+                                        })
                                     } else {
                                         0
                                     };
@@ -708,21 +707,8 @@ impl ProgramPass for Walk {
                                 // pairs saved on every call, +441k
                                 // instructions).
                                 let priced = rate > 0 && size == crate::inlinecost::CallerSize::Speed;
-                                if if priced {
-                                    credit > 0 && growth * rate <= saved * 1000
-                                } else {
-                                    tried <= best + credit
-                                        || (saved > 0 && growth * rate <= saved * 1000)
-                                        || (rate == 0
-                                            && credit == 0
-                                            && -growth * 8
-                                                >= function_bytes(
-                                                    module,
-                                                    &program.layout,
-                                                    &program.target.size_costs(),
-                                                    &kept,
-                                                ))
-                                } {
+                                let kept_bytes = function_bytes(module, &program.layout, &program.target.size_costs(), &kept);
+                                if trial_accepted(priced, tried, best, credit, saved, growth, rate, kept_bytes) {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
@@ -1259,6 +1245,29 @@ pub fn function_bytes(
         .saturating_add(costs.function)
         .saturating_mul(costs.function_scale)
         / 100
+}
+
+/// SZ2: whether a trial's copies are kept. Priced (speed, a byte rate): the callee must go with them and the growth
+/// must be worth the clocks saved. At size the instruction count decides (`tried <= best + credit`), but a callee that
+/// goes with its last calls must also leave the bytes no larger: the count priced a float compare as an add, and
+/// `canon` (a libcall per site on m68k) was inlined five times for +28 B at -Os.
+#[allow(clippy::too_many_arguments)]
+fn trial_accepted(
+    priced: bool,
+    tried: i64,
+    best: i64,
+    credit: i64,
+    saved: i64,
+    growth: i64,
+    rate: i64,
+    kept_bytes: i64,
+) -> bool {
+    if priced {
+        return credit > 0 && growth * rate <= saved * 1000;
+    }
+    (tried <= best + credit && (credit == 0 || growth <= 0))
+        || (saved > 0 && growth * rate <= saved * 1000)
+        || (rate == 0 && credit == 0 && -growth * 8 >= kept_bytes)
 }
 
 /// SZ2: the bytes the module loses when the callees of a trial's `sites` go
