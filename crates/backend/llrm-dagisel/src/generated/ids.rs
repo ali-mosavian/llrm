@@ -411,6 +411,7 @@ pub mod x86isd {
     pub const LLRM_CODE: u16 = 24582;
     pub const LLRM_COPY128: u16 = 24592;
     pub const LLRM_FARCALL: u16 = 24584;
+    pub const LLRM_MOVE128: u16 = 24594;
     pub const LLRM_PORT: u16 = 24586;
     pub const LLRM_PTRDIFF: u16 = 24583;
     pub const LLRM_TC_RETURN: u16 = 24587;
@@ -727,6 +728,7 @@ pub mod x86 {
     pub const ADD16mr: u16 = 583;
     pub const ADD32mi: u16 = 614;
     pub const ADD32mr: u16 = 624;
+    pub const ADD32rr: u16 = 644;
     pub const ADD64rr: u16 = 685;
     pub const ADD8mi: u16 = 696;
     pub const ADD8mr: u16 = 702;
@@ -797,7 +799,15 @@ pub mod x86 {
     pub const INC16m: u16 = 1901;
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
+    pub const MOV16mr: u16 = 2561;
+    pub const MOV16rm: u16 = 2568;
+    pub const MOV32mr: u16 = 2580;
     pub const MOV32r0: u16 = 386;
+    pub const MOV32rm: u16 = 2588;
+    pub const MOV64mr: u16 = 2598;
+    pub const MOV64rm: u16 = 2605;
+    pub const MOV8mr: u16 = 2617;
+    pub const MOV8rm: u16 = 2624;
     pub const MOVAPSmr: u16 = 2633;
     pub const MOVAPSrm: u16 = 2634;
     pub const MOVSX16rm8: u16 = 2735;
@@ -862,7 +872,9 @@ pub mod x86 {
     pub const SBB32rr: u16 = 4208;
     pub const SBB8mi: u16 = 4240;
     pub const SBB8mr: u16 = 4244;
+    pub const SHL32ri: u16 = 4351;
     pub const SHL64ri: u16 = 4381;
+    pub const SHR32ri: u16 = 4539;
     pub const SHR64ri: u16 = 4569;
     pub const SI: u16 = 62;
     pub const SP: u16 = 65;
@@ -912,6 +924,7 @@ pub mod x86 {
         (583, "ADD16mr"),
         (614, "ADD32mi"),
         (624, "ADD32mr"),
+        (644, "ADD32rr"),
         (685, "ADD64rr"),
         (696, "ADD8mi"),
         (702, "ADD8mr"),
@@ -954,6 +967,14 @@ pub mod x86 {
         (1901, "INC16m"),
         (1912, "INC32m"),
         (1933, "INC8m"),
+        (2561, "MOV16mr"),
+        (2568, "MOV16rm"),
+        (2580, "MOV32mr"),
+        (2588, "MOV32rm"),
+        (2598, "MOV64mr"),
+        (2605, "MOV64rm"),
+        (2617, "MOV8mr"),
+        (2624, "MOV8rm"),
         (2633, "MOVAPSmr"),
         (2634, "MOVAPSrm"),
         (2735, "MOVSX16rm8"),
@@ -993,7 +1014,9 @@ pub mod x86 {
         (4208, "SBB32rr"),
         (4240, "SBB8mi"),
         (4244, "SBB8mr"),
+        (4351, "SHL32ri"),
         (4381, "SHL64ri"),
+        (4539, "SHR32ri"),
         (4569, "SHR64ri"),
         (4744, "SUB16mi"),
         (4754, "SUB16mr"),
@@ -1273,6 +1296,7 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LLRM_CODE" => 24582,
         "LLRM_COPY128" => 24592,
         "LLRM_FARCALL" => 24584,
+        "LLRM_MOVE128" => 24594,
         "LLRM_PORT" => 24586,
         "LLRM_PTRDIFF" => 24583,
         "LLRM_TC_RETURN" => 24587,

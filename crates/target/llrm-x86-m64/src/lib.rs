@@ -428,6 +428,8 @@ impl llrm_target::Target for M64 {
                             constant_hoisting: true,
                             // DEVIATE ZIMM (owner m64, exit 2026-11-27): see Tuning.
                             zext_imm_is_basic: true,
+                            // DEVIATE MEM-OS (owner anyisa, exit 2026-11-14): see Tuning.
+                            size_copy_vs_call: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

@@ -116,6 +116,7 @@ pub fn run_with(
     fold_known_cells(asm);
     hoist_common_successor_code(asm);
     branch_over_jump(asm);
+    duplicate_return_tail(asm);
     drop_reloads(asm);
     drop_flag_reload(asm);
     drop_dead_repeat_load(asm);
@@ -129,6 +130,8 @@ pub fn run_with(
     load_straight_into_a(asm);
     store_before_transfer(asm);
     drop_cancelling_transfers(asm);
+    crate::peephole_cells::carry_stays_in_the_flag(asm);
+    crate::peephole_cells::fold_temp_operand(asm);
     crate::peephole_cells::arithmetic_chain_in_a(asm);
     crate::peephole_cells::chain_ends_in_a(asm);
     // the chain's load can follow the store it was loaded from
@@ -1131,6 +1134,82 @@ pub fn drop_cancelling_transfers(asm: &mut Asm) {
     asm.lines = out;
 }
 
+/// `jmp l` where `l:` starts a block of straight-line loads, stores and
+/// transfers that ends in `rts`, no longer than the jump: the block itself. A
+/// zero-trip path that stored its result and jumped to the return that loads
+/// it returns the constant (`dotx`: `lda #0; sta rc7; jmp b3` and `b3: lda rc7;
+/// rts` become `lda #0; rts` once the load and the store are dropped). The
+/// pin's `TailDuplicator` copies a return block into its predecessors the
+/// same way ([TailDuplicator.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L545)).
+/// A block nothing reaches afterwards is dropped.
+pub fn duplicate_return_tail(asm: &mut Asm) {
+    let mut at = 0;
+    let mut changed = false;
+    while at < asm.lines.len() {
+        let Line::Inst(jump) = &asm.lines[at] else {
+            at += 1;
+            continue;
+        };
+        let Some(target) = jump.target().filter(|_| jump.op == Op::Jmp) else {
+            at += 1;
+            continue;
+        };
+        let Some(label) = asm.lines.iter().position(|line| matches!(line, Line::Label(name) if name == target)) else {
+            at += 1;
+            continue;
+        };
+        let mut tail = Vec::new();
+        let mut bytes = 0;
+        let mut returns = false;
+        for line in &asm.lines[label + 1..] {
+            let Line::Inst(inst) = line else { break };
+            let straight = matches!(
+                inst.op,
+                Op::Lda | Op::Ldx | Op::Ldy | Op::Sta | Op::Stx | Op::Sty | Op::Tax | Op::Tay | Op::Txa | Op::Tya | Op::Clc | Op::Sec
+            );
+            if inst.op == Op::Rts {
+                returns = true;
+                tail.push(line.clone());
+                break;
+            }
+            bytes += inst.bytes();
+            if !straight || bytes > jump.bytes() {
+                break;
+            }
+            tail.push(line.clone());
+        }
+        if returns {
+            asm.lines.splice(at..=at, tail.iter().cloned());
+            at += tail.len();
+            changed = true;
+        } else {
+            at += 1;
+        }
+    }
+    if changed {
+        drop_unreached_blocks(asm);
+    }
+}
+
+/// The lines after an unconditional `jmp`, `bra` or `rts` up to the next label
+/// that something names: nothing runs them.
+fn drop_unreached_blocks(asm: &mut Asm) {
+    let mut at = 1;
+    while at < asm.lines.len() {
+        let after_exit = matches!(&asm.lines[at - 1], Line::Inst(inst) if matches!(inst.op, Op::Jmp | Op::Bra | Op::Rts));
+        let unnamed = matches!(&asm.lines[at], Line::Label(name) if references(&asm.lines, name) == 0);
+        if after_exit && unnamed {
+            let mut end = at + 1;
+            while matches!(asm.lines.get(end), Some(Line::Inst(_))) {
+                end += 1;
+            }
+            asm.lines.drain(at..end);
+        } else {
+            at += 1;
+        }
+    }
+}
+
 /// `jmp l` where `l:` is directly followed by `rts` (past other labels): the
 /// `rts` itself, one byte and one jump shorter.
 pub fn jump_to_return(asm: &mut Asm) {
@@ -1173,7 +1252,7 @@ fn writes_cell(
 /// it or call out. The default assumes nothing: a return reads the register and
 /// so does a call.
 #[derive(Clone, Copy, Default)]
-struct Exits<'a> {
+pub(crate) struct Exits<'a> {
     /// A return does not read `a`: the function leaves nothing there.
     no_a_result: bool,
     /// The routines called with an argument in `a`; a call to any other one
@@ -1191,7 +1270,7 @@ struct Exits<'a> {
 }
 
 impl<'a> Exits<'a> {
-    fn of(asm: &'a Asm) -> Exits<'a> {
+    pub(crate) fn of(asm: &'a Asm) -> Exits<'a> {
         Exits {
             no_a_result: asm.no_a_result,
             a_callees: Some(&asm.a_callees),
@@ -1206,7 +1285,7 @@ impl<'a> Exits<'a> {
 /// Whether register `bit` (A, X or Y) is written before it is read, along every
 /// path from `lines[from]`. An instruction not listed counts as a read; a call
 /// and a return do as `exits` says.
-fn dead_from(
+pub(crate) fn dead_from(
     lines: &[Line],
     from: usize,
     bit: Registers,

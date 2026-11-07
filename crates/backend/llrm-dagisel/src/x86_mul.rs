@@ -35,6 +35,7 @@ fn constant_is_wider<D: AddrDag>(
     c: SDValue,
     other: SDValue,
     signed: bool,
+    flat: bool,
 ) -> bool {
     let Some(value) = dag.constant(c) else { return true };
     let width = crate::x86_addr::vt_bits(dag.value_type(other));
@@ -50,7 +51,12 @@ fn constant_is_wider<D: AddrDag>(
     // sign is not one the early-out counts (a 31-bit `x / 5` magic against an
     // unknown `i32` was a tie it lost: the magic stayed the r/m operand, 41
     // clocks, where the dividend is the one priced).
-    let sign = u32::from(signed && zeros == 0);
+    // An unsigned variable of unknown length is as likely short as long (a
+    // loop counter against `x / 100`'s 31-bit magic: gcc puts the magic in
+    // EAX, the pin the counter, and the 486 read 41 clocks where the counter
+    // costs 17), so a constant one bit short of it goes to EAX too: DEVIATE
+    // SD444 widened to the unsigned case, flat targets only (m16 unmeasured).
+    let sign = u32::from(zeros == 0 && (signed || flat));
     bits >= (width - zeros.min(width)).saturating_sub(sign)
 }
 
@@ -119,7 +125,7 @@ pub fn select_mul_lohi<D: AddrDag>(
         && hooks.options.multiply_early_out
         && dag.opcode(n1.node) == isd::Constant
         && dag.opcode(n0.node) != isd::Constant
-        && constant_is_wider(dag, n1, n0, is_signed)
+        && constant_is_wider(dag, n1, n0, is_signed, hooks.options.address_mode != crate::x86_addr::AddrMode::Real16)
     {
         std::mem::swap(&mut n0, &mut n1);
     }

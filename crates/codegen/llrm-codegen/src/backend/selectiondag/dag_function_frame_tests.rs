@@ -1764,3 +1764,26 @@ fn at_m32_the_copies_of_a_recursive_function_are_two_deep_at_o2_and_eight_at_o3(
     };
     assert_eq!((depth(false), depth(true)), (2, 8));
 }
+
+/// `(x & 0x7f800000) == 0x7f800000` (a float's exponent all ones) at m32 was
+/// `and; cmp; sete` with the mask loaded twice; the pin's `foldSetCCWithAnd`
+/// (`hasAndNotCompare`) makes it `not; test; sete` (gcc's too): x_sf_f2i -Os
+/// +27 B against gcc.
+#[test]
+fn at_m32_a_mask_equal_to_itself_is_not_and_test() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i1 @f(i32 %x) {
+  %a = and i32 %x, 2139095040
+  %c = icmp eq i32 %a, 2139095040
+  ret i1 %c
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(named("not") == 1 && named("test") == 1 && named("cmp") == 0, "not {} test {} cmp {}", named("not"), named("test"), named("cmp"));
+}

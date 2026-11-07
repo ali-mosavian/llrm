@@ -464,7 +464,6 @@ fn allocate_once(
     }
     place_copies_where_needed(&mut function, &assignment);
     read_copies_at_their_source(&mut function, &assignment);
-    return_conditionally(&mut function);
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
     let slots: Vec<(i32, usize)> = slots.into_iter().map(|(slot, class)| (slot, size(class))).collect();
     // the function with every slot in the frame, to keep if the push and pop
@@ -531,6 +530,10 @@ fn allocate_once(
             best = stacked;
             best_price = now;
         }
+    }
+    // A conditional return skips the epilogue, so a function with a frame keeps its jump.
+    if !expand::needs_frame(&best.0, &best.2) {
+        return_conditionally(&mut best.0);
     }
     Ok((best, held))
 }

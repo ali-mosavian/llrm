@@ -55,6 +55,19 @@ pub enum CombineLevel {
 
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
 pub trait CombineHooks {
+    /// `TLI.shouldNormalizeToSelectSequence`: `select (or c0, c1), x, y` is
+    /// `select c0, x, (select c1, x, y)` (and the `and` form likewise). The
+    /// pin's default asks whether the type is split; DEVIATE: false here (the
+    /// select-of-select merges instead) for the targets written before the
+    /// hook, X86 overrides. Exit: each target answers as the pin does.
+    fn normalize_to_select_sequence(
+        &self,
+        _vt: EVT,
+        _cond_vt: EVT,
+    ) -> bool {
+        false
+    }
+
     /// `TLI.convertSelectOfConstantsToMath`: a select of two constants is an
     /// extend of the condition plus a constant. The pin's default is false;
     /// DEVIATE: true here because this combiner was written for x86, which
@@ -95,6 +108,15 @@ pub trait CombineHooks {
         &self,
         _vt: EVT,
         _constant: bool,
+    ) -> bool {
+        false
+    }
+
+    /// `TLI.hasAndNotCompare(Y)`: `(X & Y) == Y` is cheaper as `(~X & Y) == 0`
+    /// for a value of this type (x86: NOT+TEST for any scalar integer).
+    fn has_and_not_compare(
+        &self,
+        _vt: EVT,
     ) -> bool {
         false
     }
@@ -1222,8 +1244,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// `foldSetCCWithAnd`'s power-of-two mask arm
     /// ([TargetLowering.cpp#L4340][pin]): `(X & 2^k) == 0` is `(trunc X to
     /// k+1 bits) >= 0` and `!= 0` is `< 0`, when the truncate is free and
-    /// both types are legal. DEVIATE: the `(X & Y) == Y` and and-not arms are
-    /// not ported.
+    /// both types are legal; and the `(X & Y) == Y` arms for a constant Y.
+    /// DEVIATE: a variable Y is not ported.
     ///
     /// [pin]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L4340
@@ -1234,12 +1256,32 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         c1: u128,
         cond: CondCode,
     ) -> Option<SDValue> {
-        if c1 != 0 || !matches!(cond, CondCode::SetEq | CondCode::SetNe) || self.dag.opcode(n0) != ISD::And {
+        if !matches!(cond, CondCode::SetEq | CondCode::SetNe) || self.dag.opcode(n0) != ISD::And {
             return None;
         }
         let op_type = self.dag.value_type(n0);
         let mask = self.dag.constant(self.dag.operand(n0, 1))?;
         let mask = mask & super::fold::mask(op_type.size_in_bits());
+        if c1 != 0 {
+            // `(X & Y) == Y`, Y a constant: a single bit is `(X & Y) != 0`;
+            // else, where the target has and-not, `(~X & Y) == 0`.
+            if !op_type.is_integer() || mask == 0 || c1 & super::fold::mask(op_type.size_in_bits()) != mask {
+                return None;
+            }
+            if mask.is_power_of_two() {
+                let inverse = if cond == CondCode::SetEq { CondCode::SetNe } else { CondCode::SetEq };
+                let zero = self.dag.get_constant(0, op_type);
+                return Some(self.dag.get_setcc(vt, n0, zero, inverse));
+            }
+            if self.dag.has_one_use(n0.node) && self.hooks.has_and_not_compare(op_type) {
+                let not_x = self.dag.get_not(self.dag.operand(n0, 0), op_type);
+                let y = self.dag.operand(n0, 1);
+                let and = self.dag.get_node(ISD::And, op_type, &[not_x, y]);
+                let zero = self.dag.get_constant(0, op_type);
+                return Some(self.dag.get_setcc(vt, and, zero, cond));
+            }
+            return None;
+        }
         if !mask.is_power_of_two() || !self.dag.has_one_use(n0.node) {
             return None;
         }
@@ -1311,10 +1353,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// `visitSELECT` ([L13507][pin]) up to the setcc folds: a flipped
     /// condition swaps the arms; an `i1` select is logic
     /// (`foldBoolSelectToLogic`); a select of a select on the same arm
-    /// merges into one with an `and`/`or` condition (X86 does not normalize
-    /// to a select sequence). The split of an `and`/`or` condition into a
-    /// sequence, taken only when the inner select already has users, is not
-    /// translated: the arena cannot tell a live user from a dead one.
+    /// merges into one with an `and`/`or` condition, and an `and`/`or`
+    /// condition splits into a select sequence where the target asks for it
+    /// (`normalize_to_select_sequence`, X86 does).
     ///
     /// [pin]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13507
@@ -1371,20 +1412,55 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(math);
         }
         let arm_vt = self.dag.value_type(n1);
-        // `select c0, (select c1, x, y), y` is `select (and c0, c1), x, y`.
+        let normalize = self.hooks.normalize_to_select_sequence(vt, cond_vt);
+        // `select (and c0, c1), x, y` is `select c0, (select c1, x, y), y`,
+        // `select (or c0, c1), x, y` is `select c0, x, (select c1, x, y)`; the
+        // pin also splits when the inner select exists already, which the
+        // arena cannot tell from a dead one (only `normalize` splits here).
+        if normalize && self.dag.has_one_use(n0.node) && matches!(self.dag.opcode(n0), ISD::And | ISD::Or) {
+            let (c0, c1) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            match self.dag.opcode(n0) {
+                ISD::And => {
+                    let inner = self.dag.get_select(arm_vt, c1, n1, n2);
+                    return Some(self.dag.get_select(arm_vt, c0, inner, n2));
+                }
+                ISD::Or => {
+                    let inner = self.dag.get_select(arm_vt, c1, n1, n2);
+                    return Some(self.dag.get_select(arm_vt, c0, n1, inner));
+                }
+                _ => {}
+            }
+        }
+        // `select c0, (select c1, x, y), y` is `select (and c0, c1), x, y`: the
+        // `and` itself without a normalizing target, else only where the two
+        // compares fold to one (`visitANDLike`; its `add`/`srl` arm is not
+        // translated).
         if self.dag.opcode(n1) == ISD::Select && self.dag.has_one_use(n1.node) {
             let (c1, x, y) = (self.dag.operand(n1, 0), self.dag.operand(n1, 1), self.dag.operand(n1, 2));
             if y == n2 && self.dag.value_type(c1) == cond_vt {
-                let and = self.dag.get_node(ISD::And, cond_vt, &[n0, c1]);
-                return Some(self.dag.get_select(arm_vt, and, x, n2));
+                let and = if normalize {
+                    self.fold_logic_of_setccs(true, n0, c1)
+                } else {
+                    Some(self.dag.get_node(ISD::And, cond_vt, &[n0, c1]))
+                };
+                if let Some(and) = and {
+                    return Some(self.dag.get_select(arm_vt, and, x, n2));
+                }
             }
         }
-        // `select c0, x, (select c1, x, y)` is `select (or c0, c1), x, y`.
+        // `select c0, x, (select c1, x, y)` is `select (or c0, c1), x, y`, the
+        // same way (`visitORLike`; its `and`-pair arm is not translated).
         if self.dag.opcode(n2) == ISD::Select && self.dag.has_one_use(n2.node) {
             let (c1, x, y) = (self.dag.operand(n2, 0), self.dag.operand(n2, 1), self.dag.operand(n2, 2));
             if x == n1 && self.dag.value_type(c1) == cond_vt {
-                let or = self.dag.get_node(ISD::Or, cond_vt, &[n0, c1]);
-                return Some(self.dag.get_select(arm_vt, or, n1, y));
+                let or = if normalize {
+                    self.fold_logic_of_setccs(false, n0, c1)
+                } else {
+                    Some(self.dag.get_node(ISD::Or, cond_vt, &[n0, c1]))
+                };
+                if let Some(or) = or {
+                    return Some(self.dag.get_select(arm_vt, or, n1, y));
+                }
             }
         }
         if let Some(folded) = self.select_sign_folds(n0, n1, n2).or_else(|| self.select_single_bit_test(n0, n1, n2)) {
@@ -2383,7 +2459,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let op = self.dag.opcode(value);
-        if !matches!(op, ISD::UAddOCarry | ISD::USubOCarry | ISD::UAddO | ISD::USubO) {
+        // DEVIATE (owner x86-m32, exit 2026-11-14): the pin also takes the
+        // borrow of USUBO and USUBO_CARRY. A target whose borrow is the inverted
+        // carry (the 6502's `sbc`) read it as the carry: `sub_overflow` returned
+        // 3 for 4 (#7850). Add only until the target states what its borrow is.
+        if !matches!(op, ISD::UAddOCarry | ISD::UAddO) {
             return None;
         }
         let vt = self.dag.node(value).values[0];
