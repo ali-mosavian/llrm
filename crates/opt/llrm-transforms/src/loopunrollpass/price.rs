@@ -145,7 +145,11 @@ pub(super) fn full_unroll_pays(
     // The loop runs once for each trip of the loops around it, which the
     // bytes do not: the saving is counted over those runs (x_cordic: the
     // 12-trip loop inside a loop of `n` runs `n` times, 89 clocks each).
-    let runs = ASSUMED_TRIPS.pow((lp.get_loop_depth() - 1).min(2));
+    let runs = if run.tti.unroll_prices_nest_loops_without_outer_counter() {
+        enclosing_runs(run, se, analyzed, lp)
+    } else {
+        ASSUMED_TRIPS.pow((lp.get_loop_depth() - 1).min(2))
+    };
     let saved = (saved_units * body_clocks / rolled_units + constant_clocks) * runs;
     why(
         run,
@@ -167,6 +171,44 @@ pub(super) fn full_unroll_pays(
         .line(),
     );
     unroll_pays(saved, added, rate)
+}
+
+/// How many times `lp` runs for one entry of its outermost loop: the product
+/// of the trip counts of the loops around it, each its constant count where
+/// the analysis has one, else `ASSUMED_TRIPS`, the pin's branch probability
+/// (nbody_single -O2: the 6-trip loop inside the 1000-trip loop ran 32 times
+/// by the assumption, 1000 by its count: 17,408 clocks saved against 72,250
+/// the bytes cost, kept rolled, +236,000 instructions).
+fn enclosing_runs(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+) -> i64 {
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let (mut runs, mut assumed): (i64, u32) = (1, 0);
+    let mut around = lp.get_parent_loop();
+    while let Some(parent) = around {
+        let trips = se.get_small_constant_trip_count(&cx, parent.get_header());
+        if trips != 0 {
+            runs = runs.saturating_mul(i64::from(trips)).min(1 << 24);
+        } else if assumed < 2 {
+            // As before: at most two unknown loops around count.
+            assumed += 1;
+            runs *= ASSUMED_TRIPS;
+        }
+        around = parent.get_parent_loop();
+    }
+    runs
 }
 
 /// What a priced unroll weighed, the line of `LLRM_DEBUG=unroll`: `floats` and
@@ -686,6 +728,22 @@ fn reads_outer_counter(
     // memory folds into an address, which the copies' own offsets already
     // are (matmul -O2, nbody_single, tile: 8 x 8 x 8 copies of an index sum).
     let mut folds = false;
+    // The nest's unroll makes the counter of `lp` itself a constant as well.
+    let header = lp.get_header();
+    let own_preheader = lp.get_loop_preheader(function);
+    known.extend(
+        function
+            .iter_block(header)
+            .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+            .filter(|&inst| {
+                function
+                    .instruction(inst)
+                    .operands
+                    .chunks(2)
+                    .any(|pair| Some(pair[1]) == own_preheader.map(Operand::Block) && matches!(pair[0], Operand::Constant(_)))
+            })
+            .filter_map(|inst| function.instruction(inst).result),
+    );
     let mut grew = true;
     while grew {
         grew = false;

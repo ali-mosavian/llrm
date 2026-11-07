@@ -553,8 +553,9 @@ pub trait Tti {
     /// DEVIATE ARM64-UNROLL-PRICE: whether a loop of a nest of known trips
     /// that reads no counter of the loops around it is priced like any other
     /// full unroll instead of following the nest's decision (unrolling the
-    /// nest folds nothing there). False: the nest bypass holds for every such
-    /// loop, the pin's threshold alone.
+    /// nest folds nothing there), and a priced unroll counts the constant trips
+    /// of the loops around it, not 32 each. False: the nest bypass holds for
+    /// every such loop, the pin's threshold alone, and 32 a loop.
     fn unroll_prices_nest_loops_without_outer_counter(&self) -> bool {
         false
     }

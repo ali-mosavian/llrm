@@ -49,3 +49,16 @@ fn a_nest_whose_counters_only_index_memory_is_priced_not_bypassed() {
     let insns = instructions(include_str!("data/bench_matmul.ll"), Level::O2);
     assert!(insns < 130, "{insns} instructions");
 }
+
+/// nbody_single -O2: the 6-trip loops sit in a 1000-trip loop and were priced
+/// as if it ran 32 times: 17,408 clocks saved against 72,250 for the bytes,
+/// kept rolled: 737,170 instructions where unrolled they are 501,176.
+#[test]
+fn probe_nbody_single() {
+    panic!("insns {} labels {}", instructions(include_str!("data/bench_nbody_single.ll"), Level::O2), labels(include_str!("data/bench_nbody_single.ll")));
+}
+
+#[test]
+fn probe_stft() {
+    panic!("insns {} labels {}", instructions(include_str!("data/bench_stft_fixed.ll"), Level::O2), labels(include_str!("data/bench_stft_fixed.ll")));
+}
