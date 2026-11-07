@@ -1,0 +1,3 @@
+# Build intermediates of build.sh.
+*
+!.gitignore
