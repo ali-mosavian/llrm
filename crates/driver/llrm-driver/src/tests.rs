@@ -2606,6 +2606,36 @@ fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
     assert!(listing.contains("rep stosq") && listing.contains("rep movsq"), "{listing}");
 }
 
+/// histo -Os m64: a 512-byte zero fill is past the pin's inline threshold (128,
+/// X86SelectionDAGInfo.cpp L205), so ours called `memset` and saved four
+/// registers around it: 178 B against gcc's `rep stos`, 170 B. For size, whole
+/// aligned blocks are `rep stosq` where its setup is fewer bytes than the call's;
+/// -O2 keeps the call, and a fill not aligned to a block keeps it too.
+#[test]
+fn a_large_aligned_fill_at_m64_optsize_is_a_rep_stos_not_a_memset_call() {
+    let fill = |attrs: &str, align: u32, size: u32| {
+        format!(
+            "target datalayout = \"@m64-datalayout@\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             declare void @use(ptr)\n\
+             declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+             define void @f() {attrs} {{\n  %b = alloca [{size} x i8], align {align}\n\
+             \x20 call void @llvm.memset.p0.i64(ptr align {align} %b, i8 0, i64 {size}, i1 false)\n\
+             \x20 call void @use(ptr %b)\n  ret void\n}}\n"
+        )
+    };
+    let listing = |level: &str, attrs: &str, align: u32, size: u32| {
+        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), &fill(attrs, align, size), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let small = listing("-Os", "optsize", 16, 512);
+    assert!(small.contains("rep stosq") && !small.contains("memset"), "{small}");
+    let fast = listing("-O2", "", 16, 512);
+    assert!(fast.contains("memset") && !fast.contains("rep stos"), "{fast}");
+    let unaligned = listing("-Os", "optsize", 1, 512);
+    assert!(unaligned.contains("memset") && !unaligned.contains("rep stos"), "{unaligned}");
+}
+
 /// A variable `alloca` at m64 under `--isel=dag` named the 16-bit `sp` at
 /// quadword width (`isel: 0x0004 names 25 at width 8`, the verifier): the
 /// lowering took `RegId::SP` for every pointer width. It is `rsp`.
