@@ -54,7 +54,7 @@ impl ScevCache {
     /// keeps them current while it edits holds them for its run and `put`s
     /// them back before it says it kept `Scevs`.
     pub fn take(&self) -> ScalarEvolution {
-        std::mem::replace(&mut *self.0.borrow_mut(), ScalarEvolution::new())
+        std::mem::replace(&mut *self.0.borrow_mut(), ScalarEvolution::placeholder())
     }
 
     /// `scev` as the entry's expressions again.
