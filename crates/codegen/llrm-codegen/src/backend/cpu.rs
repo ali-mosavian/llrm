@@ -415,10 +415,16 @@ impl Profile {
         if self.size || self.min_size { self.target().size_milliclocks_per_byte() } else { 0 }
     }
 
+    /// Code is tuned for clocks: not -O0 (the pin's -O0 is FastISel and no DAG
+    /// combine, so nothing there trades bytes for clocks) and not for size.
+    pub fn has_speed_goal(&self) -> bool {
+        self.optimized && !(self.size || self.min_size)
+    }
+
     /// Clocks a byte of code is worth at speed, in thousandths: the target's
     /// rate at -O2 and -O3, none at -O1 and for size.
     pub fn speed_milliclocks_per_byte(&self) -> i64 {
-        if self.size || self.min_size || !self.speed_rate {
+        if !self.has_speed_goal() || !self.speed_rate {
             return 0;
         }
         self.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
