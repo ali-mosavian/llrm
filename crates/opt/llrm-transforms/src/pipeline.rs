@@ -701,14 +701,20 @@ impl FunctionPass for Together {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let mut changed = false;
+        let mut cfg = true;
         for part in &mut self.parts {
             let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
             if !preserved.are_all_preserved() {
                 changed = true;
+                cfg &= preserved.cfg_preserved();
                 analyses.invalidate(unit.function, &preserved);
             }
         }
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        match (changed, cfg) {
+            (false, _) => PreservedAnalyses::all(),
+            (true, true) => PreservedAnalyses::none().preserve_cfg(),
+            (true, false) => PreservedAnalyses::none(),
+        }
     }
 }
 
