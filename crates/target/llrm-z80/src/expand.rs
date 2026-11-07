@@ -430,6 +430,15 @@ impl Printer<'_> {
                 self.push("add a, a");
                 self.push("sbc a, a");
             }
+            // the same in another register, through `a` where nothing reads
+            // it or the flags afterwards: 4 B against 14
+            "SRA8" if shift_count(inst)? == 7 && self.dead_after(reg::A, rest) && self.flags_dead(rest) => {
+                let to = name_of(self, 0)?;
+                self.push(format!("ld a, {to}"));
+                self.push("add a, a");
+                self.push("sbc a, a");
+                self.push(format!("ld {to}, a"));
+            }
             "SHL8" | "SRL8" | "SRA8" => {
                 let to = name_of(self, 0)?;
                 let mnemonic = match op {
@@ -1133,6 +1142,19 @@ impl Printer<'_> {
             // both are
             (false, true) if bl == "#0" && bh == "#0" => {
                 self.push(format!("ld a, {}", name(ah)));
+                self.push(format!("or a, {}", name(al)));
+            }
+            // a constant with a zero byte: the other byte subtracted and the
+            // zero byte's partner or-ed in, `(lo ^ c) | hi` is zero only for
+            // equality (no scratch register for two nonzero bytes)
+            (false, true) if bh == "#0" && bl.starts_with('#') => {
+                self.push(format!("ld a, {}", name(al)));
+                self.push(format!("sub a, {bl}"));
+                self.push(format!("or a, {}", name(ah)));
+            }
+            (false, true) if bl == "#0" && bh.starts_with('#') => {
+                self.push(format!("ld a, {}", name(ah)));
+                self.push(format!("sub a, {bh}"));
                 self.push(format!("or a, {}", name(al)));
             }
             // two pairs, one of them `hl`: `sbc hl, rr` sets zero for the whole

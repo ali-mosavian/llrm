@@ -229,6 +229,7 @@ pub fn items_with(
             crate::loopinc::post_increment_across_blocks(&mut function);
         }
     }
+    function.odds = Some(edge_odds(module, name)?);
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
     crate::regalloc::split_flag_edges(&mut function);

@@ -3,7 +3,7 @@
 
 #include "qb.h"
 
-void copy_bytes(char *to, const char *from, unsigned n)
+void copy_rt(char *to, const char *from, unsigned n)
 {
     memmove(to, from, n);
 }

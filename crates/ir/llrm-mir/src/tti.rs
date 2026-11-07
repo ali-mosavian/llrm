@@ -729,6 +729,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::unroll_o1_analyzed_trips`.
+    fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
+        None
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false

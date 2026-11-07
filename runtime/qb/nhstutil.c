@@ -86,23 +86,31 @@ static char *take(StrEntry *entry, uword bytes, SD *owner)
    (SS_SCAN). */
 static StrEntry *scan(StrEntry *from, StrEntry *limit, uword bytes)
 {
-    StrEntry *entry = from, *after;
+    StrEntry *entry = from;
 
     while (entry <= limit && !AT_END(entry)) {
-        if (IS_FREE(entry)) {
-            after = FOLLOWING(entry);
+        uword header = entry->header, size;
+        StrEntry *after;
+
+        if (header & 1) {
+            /* one pass over the free neighbours: the header is written once, the sizes read once */
+            size = header - 1 + WORD;
+            after = (StrEntry *)((char *)entry + size);
             while (!AT_END(after) && IS_FREE(after)) {
                 /* the hint must not be left inside the entry that swallows it:
                    the next allocation would overwrite its header */
                 if (after == str_free)
                     str_free = entry;
-                MAKE_FREE(entry, ENTRY_BYTES(entry) + ENTRY_BYTES(after));
-                after = FOLLOWING(entry);
+                size += FREE_DATA(after) + WORD;
+                after = (StrEntry *)((char *)entry + size);
             }
-            if (ENTRY_BYTES(entry) >= bytes)
+            MAKE_FREE(entry, size);
+            if (size >= bytes)
                 return entry;
+        } else {
+            after = (StrEntry *)((char *)entry + WORD + EVEN(((SD *)header)->len));
         }
-        entry = FOLLOWING(entry);
+        entry = after;
     }
     return NULL;
 }
