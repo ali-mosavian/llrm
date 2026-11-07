@@ -7,6 +7,7 @@ pub mod data;
 pub mod driver;
 pub mod expand;
 pub mod forward;
+pub mod frequency;
 pub mod inline_rt;
 pub mod bump;
 pub mod carry;
