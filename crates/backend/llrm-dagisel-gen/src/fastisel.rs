@@ -98,23 +98,30 @@ impl Table {
     ) -> Result<Chosen, String> {
         use crate::predicate::{self, Decided};
         let mut picked = BTreeMap::new();
-        for (key, rows) in &self.rows {
+        let mut undecided = 0;
+        'rows: for (key, rows) in &self.rows {
             for arm in &rows.arms {
                 let take = match &arm.cond {
                     None => true,
-                    Some(text) => match predicate::parse(text)?.decide(&|atom| cpu.verdict(atom))? {
-                        Decided::Yes => true,
-                        Decided::No => false,
-                        Decided::Open(_) => return Err(format!("{key:?}: `{text}` is decided at run time")),
+                    // An atom the CPU file does not state, or one decided at run time,
+                    // leaves the whole row to the DAG: a later arm may not be taken
+                    // past an arm that might have been.
+                    Some(text) => match predicate::parse(text).and_then(|e| e.decide(&|atom| cpu.verdict(atom))) {
+                        Ok(Decided::Yes) => true,
+                        Ok(Decided::No) => false,
+                        Ok(Decided::Open(_)) | Err(_) => {
+                            undecided += 1;
+                            continue 'rows;
+                        }
                     },
                 };
                 if take {
                     picked.insert(key.clone(), arm.clone());
-                    break;
+                    continue 'rows;
                 }
             }
         }
-        Ok(Chosen { picked })
+        Ok(Chosen { picked, undecided })
     }
 
     pub fn parsed(&self) -> usize {
@@ -272,6 +279,7 @@ pub fn parse(text: &str) -> Result<Table, String> {
 /// The arm of each row a CPU takes.
 pub struct Chosen {
     picked: BTreeMap<Key, Arm>,
+    undecided: usize,
 }
 
 impl Chosen {
@@ -282,6 +290,11 @@ impl Chosen {
 
     pub fn is_empty(&self) -> bool {
         self.picked.is_empty()
+    }
+
+    /// Rows left out because a condition could not be decided for the CPU.
+    pub fn undecided(&self) -> usize {
+        self.undecided
     }
 
     /// The rows as Rust source: `(namespace, op, vt, ret, shape, opcode, class)`

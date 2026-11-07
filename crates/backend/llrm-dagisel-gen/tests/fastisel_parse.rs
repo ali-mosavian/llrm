@@ -116,3 +116,16 @@ fn the_rust_table_is_sorted_and_names_the_i486_add() {
     sorted.sort();
     assert_eq!(rows, sorted, "rows are not in key order");
 }
+
+/// An arm whose condition the CPU file says nothing of must not be taken, and
+/// must not stop the whole table: the row is undecided and the compiler falls
+/// back to the DAG for it. (The first `resolve` returned the error and the
+/// regen of every CPU died on the first unknown atom.)
+#[test]
+fn a_condition_nothing_states_leaves_its_row_undecided() {
+    let text = "Register fastEmit_ISD_ADD_MVT_i32_rr(MVT RetVT, Register Op0, Register Op1) {\n  if (RetVT.SimpleTy != MVT::i32)\n    return Register();\n  if ((Subtarget->madeUpThing())) {\n    return fastEmitInst_rr(X86::ADD32rr, &X86::GR32RegClass, Op0, Op1);\n  }\n  return Register();\n}\n";
+    let cpu = llrm_dagisel_gen::features::Cpu::load(FEATURES, "i486").unwrap();
+    let chosen = fastisel::parse(text).unwrap().resolve(&cpu).unwrap();
+    assert!(chosen.pick("ISD", "ADD", "i32", Shape::Rr).is_none());
+    assert_eq!(chosen.undecided(), 1);
+}
