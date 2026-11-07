@@ -695,6 +695,14 @@ impl AllocTarget for Arm64 {
         literal.what.as_ref().is_none_or(|what| what.name.as_deref() != Some("AddPageOffset"))
     }
 
+    /// The zero register's `mov xd, xzr` is one four-byte `orr`, the size of the copy it
+    /// replaces. Another constant may take several instructions (`mul_constants` -Os
+    /// grew 124 B when every constant was made again); its operand here is an
+    /// identity, not the value, so only the zero is known to be one.
+    fn literal_move_is_copy_sized(literal: &llrm_codegen::model::lir::Insn) -> bool {
+        literal.what.as_ref().and_then(|what| what.name.as_deref()).is_some_and(Self::is_zero_def)
+    }
+
     fn candidates(class: Class) -> Vec<RegId> {
         match class {
             Class::Gpr => gpr_order(),

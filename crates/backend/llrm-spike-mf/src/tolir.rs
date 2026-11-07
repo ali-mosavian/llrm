@@ -1247,8 +1247,8 @@ impl<T: Target> SpikeInstrInfo<T> {
 
 /// Whether the coalescer makes the literal `literal` again for a copy from a value
 /// in `source` to one in `destination`. DEVIATE C10 (register_coalescer.rs): at -Os
-/// a constant that stays read (`!alone`) is not made again; the target's price
-/// decides the rest.
+/// a constant that stays read (`!alone`) is not made again unless the target says the
+/// move is no longer than the copy; the target's price decides the rest.
 pub fn literal_remat_wins<T: Target>(
     literal: &Insn,
     source: &[RegId],
@@ -1256,7 +1256,7 @@ pub fn literal_remat_wins<T: Target>(
     size: bool,
     alone: bool,
 ) -> bool {
-    (!size || alone) && T::literal_move_wins(literal, source, destination, size)
+    (!size || alone || T::literal_move_is_copy_sized(literal)) && T::literal_move_wins(literal, source, destination, size)
 }
 
 

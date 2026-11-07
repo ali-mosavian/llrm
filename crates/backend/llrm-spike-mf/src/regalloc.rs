@@ -242,6 +242,14 @@ pub trait Target {
         true
     }
 
+    /// Whether making the literal move `literal` again takes no more bytes than the
+    /// copy it replaces, so that a build for size may do it where the constant stays
+    /// read (DEVIATE C10 keeps the copy otherwise). The default is no: a literal move
+    /// is longer than a register copy on the machines this was priced for.
+    fn literal_move_is_copy_sized(_literal: &llrm_codegen::model::lir::Insn) -> bool {
+        false
+    }
+
     /// What one register-to-register copy costs, in the unit of
     /// [`Target::operand_cost`].
     fn copy_cost() -> u32 {
