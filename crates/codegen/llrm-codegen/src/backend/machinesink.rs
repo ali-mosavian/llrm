@@ -362,8 +362,10 @@ struct Sinker {
     /// `GetAllSortedSuccessors` of each block, made once: it asks nothing of
     /// the instruction.
     sorted: Vec<Vec<usize>>,
-    /// The order the selector added each edge in (`addSuccessor`), which the
-    /// pin's equal-depth successors keep; an edge it did not state has none.
+    /// The order the selector recorded each edge's odds in, which is the order
+    /// it added them (`addSuccessor`) and which the pin's equal-depth
+    /// successors keep. A stated edge sorts before one with no odds (edges a
+    /// later pass made, e.g. a split); those keep terminator order after them.
     stated: HashMap<(usize, usize), usize>,
     merged: HashMap<(u32, usize), usize>,
     /// `HasStoreCache`.

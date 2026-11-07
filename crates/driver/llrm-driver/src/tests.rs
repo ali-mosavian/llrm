@@ -3495,6 +3495,35 @@ fn a_branch_on_an_inverted_bool_phi_is_not_negated_at_m32() {
     assert!(listing.contains("test cl, cl"), "{listing}");
 }
 
+/// `while (env(i, line) >= 0 && len > 8 && line[0]=='C' && ... line[7]=='=')`
+/// as an unrotated loop: the eight byte loads of `line` stayed in the block
+/// above the chain, `mov r8, [esp+k]` held across the branches (os_execute m32
+/// -Os); the pin sinks each into the chain block that compares it.
+#[test]
+fn byte_loads_of_a_chain_sink_into_their_compare_blocks_at_m32() {
+    let mut body = String::new();
+    for (at, byte) in [67, 79, 77, 83, 80, 69, 67, 61].iter().enumerate() {
+        let prev = if at == 0 { "%big".to_owned() } else { format!("%c{}", at - 1) };
+        body += &format!(
+            "  %p{at} = getelementptr inbounds i8, ptr %buf, i32 {at}\n  %v{at} = load i8, ptr %p{at}\n\
+             \x20 %e{at} = icmp eq i8 %v{at}, {byte}\n  %c{at} = select i1 {prev}, i1 %e{at}, i1 false\n"
+        );
+    }
+    let text = format!(
+        "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
+         declare i32 @env(i32, ptr)\ndeclare void @hit()\n\
+         define void @f() optsize {{\n  %buf = alloca [96 x i8]\n  br label %lp\nlp:\n\
+         \x20 %i = phi i32 [ 0, %0 ], [ %n, %chain ]\n  %len = call i32 @env(i32 %i, ptr %buf)\n\
+         \x20 %ok = icmp sgt i32 %len, -1\n  br i1 %ok, label %chain, label %out\nchain:\n\
+         \x20 %big = icmp ugt i32 %len, 8\n{body}  %n = add i32 %i, 1\n  br i1 %c7, label %yes, label %lp\n\
+         yes:\n  call void @hit()\n  ret void\nout:\n  ret void\n}}\n"
+    );
+    let (built, _) = compiled(&flags(&["-m32", "-Os", "--isel=dag"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("mov dl, byte ptr"), "{listing}");
+    assert!(listing.matches("cmp byte ptr").count() >= 8, "{listing}");
+}
+
 /// The locals' base was aligned to the stack's 16 below the pushed registers
 /// (the pin aligns each object to its own and only the total to the stack):
 /// a function with one int local and two saved registers had `sub rsp, 24`
