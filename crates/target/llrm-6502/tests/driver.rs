@@ -558,6 +558,39 @@ fn exit_code_with(
     code
 }
 
+/// Clocks of `strncpy(dst, src, 30)` on a 20-byte source, as `sim65 -c` counts
+/// them with the program's start: `text` is the compiled function, the rest a
+/// `_main` and a `memset` that fills the tail.
+fn clocks_of_strncpy(text: &str) -> u64 {
+    const MAIN: &str = ".export _main, memset\n.segment \"BSS\"\nsrc: .res 32\ndst: .res 40\n.segment \"CODE\"\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  ldx #0\nfill:\n  lda #65\n  sta src,x\n  inx\n  cpx #20\n  bne fill\n  lda #0\n  sta src,x\n  lda #<dst\n  sta rc2\n  lda #>dst\n  sta rc3\n  lda #<src\n  sta rc4\n  lda #>src\n  sta rc5\n  lda #30\n  sta rc6\n  lda #0\n  sta rc7\n  jsr k_strncpy\n  ldx #0\n  rts\nmemset:\n  lda rc6\n  ora rc7\n  beq @done\n  ldy #0\n@loop:\n  lda rc4\n  sta (rc2),y\n  iny\n  bne @c\n  inc rc3\n@c:\n  lda rc6\n  bne @d\n  dec rc7\n@d:\n  dec rc6\n  lda rc6\n  ora rc7\n  bne @loop\n@done:\n  rts\n";
+    let dir = std::env::temp_dir().join(format!("llrm6502-clocks-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("t.s"), format!("{text}\n{MAIN}")).unwrap();
+    common::pipeline::tool(&dir, "cl65", &["-t", "sim6502", "-o", "t.bin", "t.s"])
+        .unwrap_or_else(|e| panic!("{e}\n{text}"));
+    let out = std::process::Command::new("sim65").arg("-c").arg(dir.join("t.bin")).output().unwrap();
+    std::fs::remove_dir_all(dir).ok();
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let words: Vec<&str> = said.split_whitespace().collect();
+    words
+        .windows(2)
+        .find(|pair| pair[1] == "cycles")
+        .and_then(|pair| pair[0].parse().ok())
+        .unwrap_or_else(|| panic!("no cycle count in {said:?}"))
+}
+
+/// A constant another register holds is loaded by a transfer, one byte
+/// shorter in `strncpy`, and that byte tipped `emit_on` to the layout without
+/// the rotated loop: 3304 clocks for the call at `-O2` where the parent took
+/// 3266. A layout is kept where it wins before the transfer pass and after it.
+#[test]
+fn a_byte_the_transfer_saves_does_not_pick_the_slower_layout() {
+    let text =
+        assembly(include_str!("fixtures/strncpy_o2.ll"), &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let clocks = clocks_of_strncpy(&text);
+    assert!(clocks <= 3266, "strncpy takes {clocks} clocks; the parent's layout takes 3266:\n{text}");
+}
+
 /// A global holding the address of another (`static const char *p = buf + 3`,
 /// a table of pointers) was refused: "a global initializer that is not an
 /// integer, array or struct". function_table, static_pointers, tail_calls and
@@ -2387,8 +2420,13 @@ fn a_long_multiply_by_a_near_power_of_two_is_shifts_where_clocks_count() {
     let linked = format!("{fast}\n{}", common::pipeline::reachable_runtime(&fast));
     assert_eq!(exit_code_of(&linked, "t3"), 0x09, "{fast}");
     assert_eq!(exit_code_of(&linked, "t257"), 0x07, "{fast}");
-    // tuned for size: the call stays for 3, not for 257
-    let ir = ir.replace("noinline {", "noinline optsize {");
+    // tuned for size: the call stays for 3, not for 257, while a variable
+    // multiply keeps the routine linked (alone, `by3` is shifts: mul_image.rs)
+    let ir = format!(
+        "{}\n{}",
+        ir.replace("noinline {", "noinline optsize {"),
+        "define i32 @prod(i32 %a, i32 %b) noinline optsize {\n  %r = mul i32 %a, %b\n  ret i32 %r\n}"
+    );
     let small = assembly(&ir, &Request::new(Level::Os)).unwrap();
     let (by3, by257) = (function_text(&small, "by3"), function_text(&small, "by257"));
     assert!(by3.contains("__mulsi3"), "{by3}");
@@ -2572,4 +2610,220 @@ define i8 @high_byte_of_the_amount() {
         let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{level:?}: {e}"));
         assert_eq!(exit_code_of(&text, "high_byte_of_the_amount"), 0, "{level:?}\n{text}");
     }
+}
+
+/// Stack arguments (the long arguments past `rc2..rc7`) were reached through a
+/// frame pointer built per access: `clc; lda rc0; adc #n; sta rcA; lda rc1;
+/// adc #0; sta rcB; ldy #0; lda (rcA),y` (13 B, or an 8 B copy of `rc0`; x16
+/// tail_calls -Os +463 B vs gcc). The frame index belongs in the address as
+/// `rc0` plus a `ldy` offset: `ldy #n; lda (rc0),y`.
+#[test]
+fn a_stack_argument_is_read_through_rc0_without_a_frame_pointer() {
+    let ir = module(
+        "@x = global [3 x i32] zeroinitializer\n\
+         define i8 @sum(i32 %a, i32 %b, i32 %c) noinline {\n  %s = add i32 %a, %b\n  %t = add i32 %s, %c\n  \
+         %m = lshr i32 %t, 8\n  %u = lshr i32 %t, 24\n  %p = trunc i32 %m to i8\n  %q = trunc i32 %u to i8\n  \
+         %r = add i8 %p, %q\n  ret i8 %r\n}\n\
+         define i8 @t() {\n  %a = load volatile i32, ptr @x\n  %pb = getelementptr i32, ptr @x, i16 1\n  \
+         %b = load volatile i32, ptr %pb\n  %pc = getelementptr i32, ptr @x, i16 2\n  %c = load volatile i32, ptr %pc\n  \
+         %r = call i8 @sum(i32 %a, i32 %b, i32 %c)\n  ret i8 %r\n}",
+    )
+    .replace(
+        "@x = global [3 x i32] zeroinitializer",
+        "@x = global [3 x i32] [i32 16909060, i32 270544960, i32 65538]",
+    );
+    for level in [Level::Os, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        let body = &text[text.find("sum:").expect("sum")..];
+        let body = &body[..body.find("rts").expect("rts of sum")];
+        let builds = body.matches("lda rc0\n  adc").count() + body.matches("lda rc0\n  sta").count();
+        assert_eq!(builds, 0, "{builds} frame-pointer builds in sum at {level:?}:\n{body}");
+        assert_eq!(exit_code_of(&text, "t"), 68, "{text}");
+    }
+}
+
+/// A frame object past the 255 bytes one `(zp),Y` offset reaches still takes a
+/// built address; folding frame objects into `rc0` plus `ldy` must not turn
+/// such a frame into a refusal ("past the 255") or a wrapped offset.
+#[test]
+fn a_local_past_255_bytes_from_rc0_is_still_reached() {
+    let ir = module(
+        "define i8 @t() {\n  %a = alloca [300 x i8]\n  %p = getelementptr inbounds i8, ptr %a, i16 3\n  \
+         %q = getelementptr inbounds i8, ptr %a, i16 290\n  store volatile i8 5, ptr %p\n  \
+         store volatile i8 9, ptr %q\n  %x = load volatile i8, ptr %p\n  %y = load volatile i8, ptr %q\n  \
+         %r = add i8 %x, %y\n  ret i8 %r\n}",
+    );
+    for level in [Level::Os, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert_eq!(exit_code_of(&text, "t"), 14, "{text}");
+    }
+}
+
+/// A long division called the speed routine with the pin-structure wide path
+/// at any site: its 141 bytes (423 clocks at 3 a byte) came into programs that
+/// divide once, cold (`compound_assignment_types`: +139 B for -9 clocks). A
+/// module links it only where its division sites run 3 times (`hotdivision`): in a loop,
+/// or in a function called from one. Elsewhere the routine with the small wide
+/// path (the compact one is 3195 clocks slower on one call); -Os never has a
+/// speed one.
+#[test]
+fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
+    let cold = module("define i32 @f(i32 %a, i32 %b) {\n  %r = srem i32 %a, %b\n  ret i32 %r\n}");
+    let looped = module(
+        "define i32 @f(i32 %a, i32 %b, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%j, %l]\n  \
+         %s = phi i32 [%a, %entry], [%r, %l]\n  %r = srem i32 %s, %b\n  %j = add i32 %i, 1\n  \
+         %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
+    );
+    let from_a_loop = module(
+        "define i32 @d(i32 %a, i32 %b) noinline {\n  %r = srem i32 %a, %b\n  ret i32 %r\n}\n\
+         define i32 @f(i32 %a, i32 %b, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%j, %l]\n  \
+         %s = phi i32 [%a, %entry], [%r, %l]\n  %r = call i32 @d(i32 %s, i32 %b)\n  %j = add i32 %i, 1\n  \
+         %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
+    );
+    let text = assembly(&cold, &Request::new(Level::O2)).unwrap();
+    assert!(
+        text.contains("jsr __modsi3_fast_small\n") && !text.contains("jsr __modsi3_fast\n"),
+        "a cold site:\n{text}"
+    );
+    for (ir, what) in [(&looped, "a loop"), (&from_a_loop, "a function called from a loop")] {
+        let text = assembly(ir, &Request::new(Level::O2)).unwrap();
+        assert!(text.contains("jsr __modsi3_fast\n") && !text.contains("_small"), "{what}:\n{text}");
+        let small = assembly(ir, &Request::new(Level::Os)).unwrap();
+        assert!(small.contains("__modsi3") && !small.contains("_fast"), "{what} at -Os:\n{small}");
+    }
+}
+
+/// A long division whose divisor is known to be a byte (a constant, or a
+/// zero-extended byte) called the general routine and linked the 141 B wide
+/// path with it: `a % 5` cost +141 B for nothing. At speed it calls the byte
+/// entry; a divisor of any width, and -Os, keep their routines.
+#[test]
+fn a_long_division_by_a_known_byte_calls_the_byte_entry_at_speed() {
+    for (opcode, routine) in [("udiv", "__udivsi3"), ("sdiv", "__divsi3"), ("urem", "__umodsi3"), ("srem", "__modsi3")]
+    {
+        let by_constant = module(&format!("define i32 @f(i32 %a) {{\n  %r = {opcode} i32 %a, 5\n  ret i32 %r\n}}"));
+        let by_byte = module(&format!(
+            "define i32 @f(i32 %a, i8 %b) {{\n  %d = zext i8 %b to i32\n  %r = {opcode} i32 %a, %d\n  ret i32 %r\n}}"
+        ));
+        let by_word = module(&format!(
+            "define i32 @f(i32 %a, i32 %b, i32 %n) {{\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%j, %l]\n  \
+             %s = phi i32 [%a, %entry], [%r, %l]\n  %r = {opcode} i32 %s, %b\n  %j = add i32 %i, 1\n  \
+             %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}}"
+        ));
+        for (ir, what) in [(&by_constant, "a constant"), (&by_byte, "a zero-extended byte")] {
+            let text = assembly(ir, &Request::new(Level::O2)).unwrap();
+            assert!(text.contains(&format!("{routine}_fast_byte")), "{opcode} by {what}:\n{text}");
+            let small = assembly(ir, &Request::new(Level::Os)).unwrap();
+            assert!(!small.contains("_byte") && !small.contains("_fast"), "{opcode} by {what} at -Os:\n{small}");
+        }
+        let text = assembly(&by_word, &Request::new(Level::O2)).unwrap();
+        assert!(
+            text.contains(&format!("{routine}_fast")) && !text.contains("_byte"),
+            "{opcode} by a word in a loop:\n{text}"
+        );
+    }
+}
+
+/// A 16-bit loop counter tested with `ult` against its OLD value while the
+/// stepped one is already made kept two copies of it: `stx rc3; sty rc2` at
+/// the loop top and `lda rc3; cmp #63; lda rc2; sbc #0` after the step
+/// (`shift_int64` -Os +5 B, `overflow_builtins` +9 B). The branch reads the
+/// carry alone and `inx`/`iny` leave it, so the compare is made before the
+/// step.
+fn counter_loop(condition: &str) -> String {
+    module(&format!(
+        "@g = global i16 0\n\
+         define i8 @t() {{\nentry:\n  br label %l\nl:\n  %i = phi i16 [0, %entry], [%j, %l]\n  \
+         store volatile i16 %i, ptr @g\n  %j = add i16 %i, 1\n  %c = icmp {condition}\n  \
+         br i1 %c, label %l, label %x\nx:\n  %v = load volatile i16, ptr @g\n  %b = trunc i16 %v to i8\n  ret i8 %b\n}}"
+    ))
+}
+
+#[test]
+fn a_carry_branch_on_the_old_counter_is_compared_before_the_step() {
+    let ir = counter_loop("samesign ult i16 %i, 63");
+    for level in [Level::Os, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        let (compare, step) = (text.find("cmp #63"), text.find("inx"));
+        assert!(compare.is_some() && step.is_some(), "no compare or no step:\n{text}");
+        assert!(compare < step, "the compare comes after the step:\n{text}");
+        assert!(!text.contains("stx rc") && !text.contains("sty rc"), "a copy of the counter:\n{text}");
+        assert_eq!(exit_code_of(&text, "t"), 63, "{text}");
+    }
+}
+
+/// A branch on Z (`ne`) reads the flags `inx` sets: its compare keeps its
+/// place after the step, and the copy of the old counter stays.
+#[test]
+fn a_zero_branch_on_the_old_counter_keeps_its_compare_after_the_step() {
+    let ir = counter_loop("ne i16 %i, 63");
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    let (compare, step) = (text.find("cmp #63"), text.find("inx"));
+    assert!(compare.is_some() && step.is_some(), "no compare or no step:\n{text}");
+    assert!(step < compare, "the compare moved above the step:\n{text}");
+    assert!(text.contains("stx rc") || text.contains("sty rc"), "{text}");
+    assert_eq!(exit_code_of(&text, "t"), 63, "{text}");
+}
+
+/// The compare of the NEW counter (`%j < 63`) must not move above the step:
+/// it would test the old value and run one trip too many. The last value
+/// stored is 62.
+#[test]
+fn a_compare_of_the_new_counter_stays_after_the_step() {
+    let ir = counter_loop("samesign ult i16 %j, 63");
+    for level in [Level::Os, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert_eq!(exit_code_of(&text, "t"), 62, "{text}");
+    }
+}
+
+/// A down counter's step (`lda lo; bne; dec hi; dec lo`) takes the accumulator;
+/// the compare that moves above it still sees the old value: the loop stores
+/// 63 down to 5 and ends on 5.
+#[test]
+fn a_carry_branch_on_the_old_down_counter_runs_the_same_trips() {
+    let ir = module(
+        "@g = global i16 0\n\
+         define i8 @t() {\nentry:\n  br label %l\nl:\n  %i = phi i16 [63, %entry], [%j, %l]\n  \
+         store volatile i16 %i, ptr @g\n  %j = sub i16 %i, 1\n  %c = icmp samesign ugt i16 %i, 5\n  \
+         br i1 %c, label %l, label %x\nx:\n  %v = load volatile i16, ptr @g\n  %b = trunc i16 %v to i8\n  ret i8 %b\n}",
+    );
+    for level in [Level::Os, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert_eq!(exit_code_of(&text, "t"), 5, "{text}");
+    }
+}
+
+/// `select i16 -1, 1` left `lda #255; sta rc4; sta rc5` in front of the `bcs`
+/// over its second arm: two stores to argument cells nothing reads, 6 B in
+/// stricmp (84 against llvm-mos's 70).
+#[test]
+fn a_constant_pair_select_leaves_no_store_to_a_cell_nothing_reads() {
+    let ir = module(
+        "define i16 @f(ptr %p, i8 %b) {\n  %a = load i8, ptr %p\n  %c = icmp ult i8 %a, %b\n  %r = select i1 %c, i16 -1, i16 1\n  ret i16 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let body: String = text[text.find("__r_f:").unwrap()..].split(".segment").next().unwrap().to_owned();
+    let stores: Vec<&str> = body.lines().filter(|l| l.trim_start().starts_with("st") && l.contains("rc")).collect();
+    // `sta rc5` (the loaded byte kept for the compare) is read; the 255 stores are not
+    assert!(
+        !body.lines().any(|l| l.trim() == "stx rc2" || l.trim() == "stx rc3"),
+        "stores {stores:?}\n{body}"
+    );
+}
+
+/// `__cmpdf2`'s NaN test reaches the backend as a compare of `trunc i64 to i63`
+/// (InstCombine's fold of `(x << 1) u> C`). The odd width went to `parts` as
+/// 63/8 and refused ("integer wider than a power-of-two count of registers"),
+/// so lib/fp/f64/cmp.c did not build. The pin promotes it to `i64` first.
+#[test]
+fn an_i63_compare_of_a_truncated_i64_compiles() {
+    let ir = module(
+        "define i32 @g(i64 %x, i64 %y) {\n  %a = trunc i64 %x to i63\n  \
+         %c1 = icmp ult i63 %a, -4503599627370495\n  %b = trunc i64 %y to i63\n  \
+         %c2 = icmp ult i63 %b, -4503599627370495\n  %o = and i1 %c1, %c2\n  \
+         br i1 %o, label %t, label %f\nt:\n  %m = or i64 %x, %y\n  %z = icmp eq i64 %m, 0\n  \
+         %r = zext i1 %z to i32\n  ret i32 %r\nf:\n  ret i32 1\n}\n",
+    );
+    assembly(&ir, &Request::new(Level::O2)).unwrap();
 }

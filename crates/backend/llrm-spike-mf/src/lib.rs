@@ -20,6 +20,7 @@ pub mod reloads;
 pub mod reschedule;
 pub mod sink;
 pub mod spill;
+pub mod taildup;
 pub mod tailmerge;
 pub mod tolir;
 

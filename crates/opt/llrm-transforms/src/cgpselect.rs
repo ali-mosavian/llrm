@@ -291,11 +291,14 @@ fn branched(
     }
 }
 
-/// [`select_arms_sunk`] as a pass, after `cgpaddr`, at the speed rate only
-/// (-O2 and -O3: -O1 and -Os are strict bytes and the branch form is up to 3 B
-/// longer), where the target states `sinks_select_arms` and has no
-/// conditional move.
-pub struct SelectArms;
+/// [`select_arms_sunk`] as a pass, after `cgpaddr`, at the speed rate (-O2 and
+/// -O3) and, where the target states `sinks_select_arms_for_size`, in a size
+/// build (-Os); not at -O1, where the branch form is up to 3 B longer on some
+/// targets. The target states `sinks_select_arms` and has no conditional move.
+pub struct SelectArms {
+    /// A size build (-Os): the target must state `sinks_select_arms_for_size`.
+    pub size: bool,
+}
 
 impl FunctionPass for SelectArms {
     fn name(&self) -> &'static str {
@@ -311,8 +314,14 @@ impl FunctionPass for SelectArms {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let wanted = analyses.outer().target().tti().is_some_and(|tti| !tti.has_cmov() && tti.sinks_select_arms());
-        if wanted && select_arms_sunk(unit.context, unit.function) {
+        let size = self.size;
+        let wanted = analyses
+            .outer()
+            .target()
+            .tti()
+            .is_some_and(|tti| !tti.has_cmov() && tti.sinks_select_arms() && (!size || tti.sinks_select_arms_for_size()));
+        let fused = |bits: u32, signed: bool| analyses.outer().target().tti().is_some_and(|tti| tti.has_div_rem_op(bits, signed));
+        if wanted && select_arms_sunk(unit.context, unit.function, &fused) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -333,9 +342,10 @@ impl FunctionPass for SelectArms {
 pub fn select_arms_sunk(
     context: &Context,
     function: &mut Function,
+    fused: &dyn Fn(u32, bool) -> bool,
 ) -> bool {
     let mut changed = false;
-    while let Some((select, yes, no)) = sinkable(context, function) {
+    while let Some((select, yes, no)) = sinkable(context, function, fused) {
         sunk(function, select, yes, no);
         changed = true;
     }
@@ -346,6 +356,7 @@ pub fn select_arms_sunk(
 fn sinkable(
     context: &Context,
     function: &Function,
+    fused: &dyn Fn(u32, bool) -> bool,
 ) -> Option<(InstId, Option<InstId>, Option<InstId>)> {
     for &block in function.layout() {
         for select in function.iter_block(block) {
@@ -359,12 +370,50 @@ fn sinkable(
             }
             let arm = |operand: Operand| -> Option<InstId> { sinkable_def(function, block, operand) };
             let (yes, no) = (arm(yes), arm(no));
-            if yes.is_some() || no.is_some() {
+            if (yes.is_some() || no.is_some()) && !splits_div_rem(context, function, block, select, fused) {
                 return Some((select, yes, no));
             }
         }
     }
     None
+}
+
+/// Whether the branch made at `select` would part a quotient from the
+/// remainder of the same operands (`u % r` then `u / r`, a trip of `itoa`):
+/// the DAG makes one `udivrem` of the pair only within a block, and where the
+/// target states a combined operation (`has_div_rem_op`) the pair is one
+/// runtime call, two once parted (k_itoa -O2: 2747 -> 4720 clocks, +41 B).
+fn splits_div_rem(
+    context: &Context,
+    function: &Function,
+    block: BlockId,
+    select: InstId,
+    fused: &dyn Fn(u32, bool) -> bool,
+) -> bool {
+    use llrm_mir::opcode::BinaryOp::{SDiv, SRem, UDiv, URem};
+    let divisions = |before: bool| -> Vec<(bool, bool, Operand, Operand)> {
+        let mut seen_select = false;
+        let mut found = Vec::new();
+        for inst in function.iter_block(block) {
+            if inst == select {
+                seen_select = true;
+                continue;
+            }
+            if seen_select == before {
+                continue;
+            }
+            let one = function.instruction(inst);
+            let (Opcode::Binary(op), [a, b]) = (&one.opcode, &one.operands[..]) else { continue };
+            let signed = matches!(op, SDiv | SRem);
+            let Some(bits) = context.types.int_bits(one.ty) else { continue };
+            if matches!(op, UDiv | URem | SDiv | SRem) && fused(bits, signed) {
+                found.push((signed, matches!(op, URem | SRem), *a, *b));
+            }
+        }
+        found
+    };
+    let (before, after) = (divisions(true), divisions(false));
+    before.iter().any(|&(signed, rem, a, b)| after.contains(&(signed, !rem, a, b)))
 }
 
 /// The instruction of `block` that makes `operand`, where it is pure and only

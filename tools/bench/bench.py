@@ -99,11 +99,12 @@ BCC = Path(os.environ.get("TOOLCHAINS", Path.home() / "work/other/d32x/toolchain
 TURBO = Path(os.environ.get("TURBO", Path.home() / "scratch/toolchains"))
 # Borland-family references: language -> (toolchain folder, compiler, switches per level). All medium model, 8087,
 # linked with the toolchain's own C0M, CM, FP87 and MATHM. BCC's switches (-3 -Ox, -O1) are added by bcc.sh.
+REFERENCE_OPTS = ("O1", "O2", "Os")  # the levels the reference compilers are built at (BORLAND's level maps, build_watcom's flags); O1 is their size level, the nearest to a light -O1: none has a separate one
 BORLAND = {
-    "bcc": (BCC, "bcc", {"O2": "", "Os": "-O1"}),
+    "bcc": (BCC, "bcc", {"O1": "-O1", "O2": "", "Os": "-O1"}),
     # TC 2.01: -G speed, -O jumps, -Z registers; `huge` is its spelling of __huge
-    "tc": (TURBO / "tc201", "tcc", {"O2": "-G -O -Z -r -1 -D__huge=huge", "Os": "-O -Z -r -1 -D__huge=huge"}),
-    "tcpp": (TURBO / "tcpp30", "tcc", {"O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
+    "tc": (TURBO / "tc201", "tcc", {"O1": "-O -Z -r -1 -D__huge=huge", "O2": "-G -O -Z -r -1 -D__huge=huge", "Os": "-O -Z -r -1 -D__huge=huge"}),
+    "tcpp": (TURBO / "tcpp30", "tcc", {"O1": "-2 -O -Z -r", "O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
 }
 STARTUP = Path(__file__).with_name("startup")  # an empty kernel per language: what a toolchain's start-up costs
 REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos"), "bq16": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
@@ -503,6 +504,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
     """The reference compilers on the same programs: Open Watcom and BCC 3.1 for C (languages `ow`, `bcc`, at each level)
     and QuickBASIC 4.5's BC for BASIC (language `bc`, one level: /O). With --time each also gets its kernel time."""
     out: dict[tuple[str, str, str], dict] = {}
+    opts = [opt for opt in opts if opt in REFERENCE_OPTS]  # a reference has no O3: `--opt O1 O3` raised KeyError after 35 minutes and dropped the run's JSON
     folder = work / "reference"
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
@@ -545,7 +547,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
             for source, target in ((f"{stem}.EXE", exe), (f"{stem}.MAP", listing), (f"{stem}.OBJ", obj)):
                 shutil.copy(folder / reference / source, target)
             own(key, stem, directory, variant, (exe, listing), obj)
-    with ProcessPoolExecutor() as pool:
+    with ProcessPoolExecutor(max_workers=workers()) as pool:
         for (key, _), counts in zip(owned, pool.map(measure, [job for _, job in owned])):
             out[key] = counts
     if timing:
@@ -613,12 +615,24 @@ def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
         data, bss = sizes.data_bytes(obj)
         return key, {"instructions": ran.inclusive[region.upper()], **code_fields(obj), "data_bytes": data, "bss_bytes": bss} | (flat_clocks(key, image, region, ran.inclusive[region.upper()], work / f"{stem}-{key[2]}") if image else {})
 
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=workers()) as pool:
         found = dict(pool.map(one, flat.items()))
     return {key: counts for key, counts in found.items() if key[0] != "startup"}
 
 
 START = time.monotonic()
+
+
+def workers() -> int:
+    """Pool size: the guard's base slot count, so a bench run takes no more cores than one admitted job (a storm of 32 workers starved the others)."""
+    return cpulimit.pool_workers()
+
+
+def guarded_argv() -> list[str] | None:
+    """The command that runs this one under tools/load_guard.sh, or None when it already is."""
+    if os.environ.get("LG_GUARDED") == "1":
+        return None
+    return [str(Path(__file__).resolve().parents[1] / "load_guard.sh"), sys.executable, *sys.argv]
 
 
 def cores() -> str:
@@ -647,7 +661,7 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
         for opt in opts:
             out |= measure_opt(selected, opt, work, timing)
     else:
-        with ProcessPoolExecutor(max_workers=len(opts)) as pool:
+        with ProcessPoolExecutor(max_workers=min(len(opts), workers())) as pool:
             for part in pool.map(measure_opt, [selected] * len(opts), opts, [work] * len(opts), [timing] * len(opts)):
                 out |= part
     if ONLY is None or native.OURS in ONLY:
@@ -668,7 +682,7 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
     todo = [(directory, variant) for directory, variant in everything if not tools_missing(variant)]
     stems = {(v.name, v.language): f"V{at:03d}" for at, (_, v) in enumerate(todo)}
     objects = qbbuild.runtimes(work / f"runtime-{opt}") if any(v.language in OURS_BASIC for _, v in todo) else None
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=workers()) as pool:
         built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)], objects), todo))
     stage(f"{opt}: built {len(todo)} programs")
     basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language in BASIC_LANGUAGES and not isinstance(b, str)}
@@ -697,7 +711,7 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
             files, want, counted = counting_input(variant, directory, folder / "ci-input" / stem)
             jobs.append((key, (stem, exe, listing, variant.region if counted else None, want, folder / f"{stem}.obj", files)))
             needs[key] = timing_input(variant, directory, None if timing else folder / "ci-input" / stem)
-    with ProcessPoolExecutor() as pool:
+    with ProcessPoolExecutor(max_workers=workers()) as pool:
         counted = [(key, job) for key, job in jobs if job is not None]
         for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
             out[key] = counts
@@ -1262,6 +1276,8 @@ def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
 
 
 def main() -> int:
+    if (argv := guarded_argv()) and os.environ.get("LG_BENCH_UNGUARDED") != "1":
+        os.execv(argv[0], argv)
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
     parser.add_argument("--opt", nargs="+", default=["O2", "Os"])

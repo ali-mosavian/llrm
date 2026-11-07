@@ -1,4 +1,5 @@
-//! An expensive constant used in two blocks, on real-mode x86.
+//! An expensive constant used in two blocks, on real-mode x86 with the pass on
+//! (`Tuning.constant_hoisting` is off there until the staging ends).
 
 use super::ConstantHoisting;
 use crate::testing::{parsed, printed};
@@ -10,7 +11,7 @@ fn hoisted(text: &str) -> String {
     let mut module = parsed(&format!("{HEAD}{text}"));
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(ConstantHoisting);
-    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos { constant_hoisting: true, ..Default::default() })).unwrap();
     printed(&module)
 }
 

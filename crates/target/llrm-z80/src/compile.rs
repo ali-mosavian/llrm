@@ -104,7 +104,10 @@ fn cached_selections(
         std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
     environment.sort();
     TEXT_COMPARES.with(|one| one.set(one.get() + 1));
-    let key = (format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8)), environment);
+    let key = (
+        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips)),
+        environment,
+    );
     let held = SELECTED.with(|held| {
         held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(_, _, one)| one.clone())
     });
@@ -205,6 +208,8 @@ fn allocated_with(
     request: &Request,
     duplicate: bool,
 ) -> Result<Allocated, String> {
+    SLOT_BY_CONFLICTS.with(|one| one.set(request.slot_by_conflicts));
+    expand::set_frequencies(&frequencies_of(selected, name));
     let mut function = machine_function_with(selected, name, duplicate)?;
     eliminate_phis_with(&mut function, false);
     let mut hoisted = function.clone();
@@ -239,7 +244,7 @@ fn priced_in_loops(
     expand::PRICING.with(|one| one.set(priced_before_peepholes(level)));
     let lines = finish(function, assignment, 0, slots, reads.clone());
     expand::PRICING.with(|one| one.set(false));
-    lines.ok().map(|lines| expand::price_in_loops(&lines))
+    lines.ok().map(|lines| expand::price_emitted(&lines, !matches!(level, Level::Os | Level::Oz)))
 }
 
 /// Whether a variant is priced before the printer's peepholes. At the speed
@@ -273,6 +278,20 @@ mod tests {
     fn variants_are_priced_with_the_peepholes_only_at_the_size_levels() {
         assert!(priced_before_peepholes(Level::O2) && priced_before_peepholes(Level::O3));
         assert!(!priced_before_peepholes(Level::Os) && !priced_before_peepholes(Level::Oz));
+    }
+
+    /// The push and pop form is smaller and dearer in weighted clocks: kept at
+    /// the size levels (bytes first), dropped at -O2 (3 T a byte does not pay
+    /// 1000 T), kept where it is cheaper by that rate, and a tie stays framed.
+    #[test]
+    fn push_and_pop_stay_only_where_they_price_lower() {
+        let (framed, stacked) = (Some((1000, 50_000)), Some((960, 51_000)));
+        assert!(keeps_stacked(Level::Os, framed, stacked) && keeps_stacked(Level::Oz, framed, stacked));
+        assert!(!keeps_stacked(Level::O2, framed, stacked) && !keeps_stacked(Level::O3, framed, stacked));
+        let cheaper_stack = Some((960, 49_000));
+        assert!(keeps_stacked(Level::O2, framed, cheaper_stack));
+        assert!(!keeps_stacked(Level::Os, framed, framed) && !keeps_stacked(Level::O2, framed, framed));
+        assert!(keeps_stacked(Level::O2, None, stacked));
     }
 
     #[test]
@@ -370,6 +389,18 @@ fn improved(
 thread_local! {
     /// Full allocations run since the last [`take_allocations`].
     static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The request's `slot_by_conflicts`, for the allocation on this thread.
+    static SLOT_BY_CONFLICTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+thread_local! {
+    static STACK_REFUSALS: std::cell::RefCell<Vec<(i32, StackRefusal)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The slots `stack_slots` refused since the last call, with the first reason
+/// each.
+pub fn take_stack_refusals() -> Vec<(i32, StackRefusal)> {
+    STACK_REFUSALS.with(|one| std::mem::take(&mut *one.borrow_mut()))
 }
 
 /// The allocations run on this thread since the last call.
@@ -433,16 +464,92 @@ fn allocate_once(
     }
     place_copies_where_needed(&mut function, &assignment);
     read_copies_at_their_source(&mut function, &assignment);
-    return_conditionally(&mut function);
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
-    let mut slots: Vec<(i32, usize)> = slots.into_iter().map(|(slot, class)| (slot, size(class))).collect();
-    if slots_are_a_stack(&mut function, &assignment) {
-        slots.clear();
-    } else {
-        spills_first(&mut function, &assignment);
-        narrow_reload_for_byte_shift(&mut function, &assignment);
+    let slots: Vec<(i32, usize)> = slots.into_iter().map(|(slot, class)| (slot, size(class))).collect();
+    // the function with every slot in the frame, to keep if the push and pop
+    // form is not cheaper
+    let mut framed = function.clone();
+    spills_first(&mut framed, &assignment);
+    narrow_reload_for_byte_shift(&mut framed, &assignment);
+    let framed = (framed, assignment.clone(), slots.clone(), reads.clone());
+    // Pushes and pops are 1 B and 10-11 T where a slot through IX is 3 B and
+    // 19 T a byte, but they change what the printer and the later choices
+    // keep in a pair (fill_nest -Os: the constant 4660 left bc, +65% T): the
+    // function is priced framed, with the slots that are plain stacks, and
+    // with the slots read again peeked too, by the rule that picks the other
+    // variants. More slots on the stack is not always cheaper
+    // (logical_value -Os: +12 B).
+    let mut best_price = priced_in_loops(&framed, level);
+    let mut best = framed;
+    // the base's whole-function pass (a frame of spills only is a stack, and
+    // no frame) is the start to beat
+    let mut frameless = function.clone();
+    if frameless_slots_are_a_stack(&mut frameless, &assignment) {
+        best = (frameless, assignment.clone(), Vec::new(), reads.clone());
+        best_price = priced_in_loops(&best, level);
     }
-    Ok(((function, assignment, slots, reads), held))
+    // Z80-SLOT-CONFLICT is one more candidate, kept only where it prices
+    // lower than the others
+    let mut choices = vec![(false, false), (true, false)];
+    if SLOT_BY_CONFLICTS.with(std::cell::Cell::get) {
+        choices.push((true, true));
+    }
+    for (peek, by_conflicts) in choices {
+        let mut candidate = function.clone();
+        let report = stack_slot_report_by(&mut candidate, &assignment, peek, by_conflicts);
+        if peek && !by_conflicts {
+            if std::env::var_os("LLRM_Z80_STACK_WHY").is_some() {
+                for (slot, (stores, loads)) in &report.accesses {
+                    let verdict = match report.refused.iter().find(|(one, _)| one == slot) {
+                        Some((_, why)) => format!("refused {why:?}"),
+                        None => "pushed".to_owned(),
+                    };
+                    eprintln!("stack-slot {name} slot {slot} stores {stores} loads {loads} {verdict}");
+                }
+            }
+            STACK_REFUSALS.with(|one| one.borrow_mut().extend(report.refused.iter().copied()));
+        }
+        let pushed = report.pushed;
+        if pushed.is_empty() {
+            continue;
+        }
+        let mut slots = slots.clone();
+        slots.retain(|(slot, _)| !pushed.contains(slot));
+        if !slots.is_empty() {
+            spills_first(&mut candidate, &assignment);
+            narrow_reload_for_byte_shift(&mut candidate, &assignment);
+        }
+        let stacked = (candidate, assignment.clone(), slots, reads.clone());
+        let now = priced_in_loops(&stacked, level);
+        if std::env::var_os("LLRM_Z80_STACK_PRICE").is_some() {
+            eprintln!(
+                "stack-price {name} {level:?} peek {peek} conflicts {by_conflicts} best {best_price:?} stacked {now:?}"
+            );
+        }
+        if keeps_stacked(level, best_price, now) {
+            best = stacked;
+            best_price = now;
+        }
+    }
+    // A conditional return skips the epilogue, so a function with a frame keeps its jump.
+    if !expand::needs_frame(&best.0, &best.2) {
+        return_conditionally(&mut best.0);
+    }
+    Ok((best, held))
+}
+
+/// Whether the push and pop form of a function stays: where it prices lower
+/// by the rule that picks the other variants (bytes first at the size levels,
+/// weighted clocks plus 3 a byte otherwise), or where either price is missing.
+fn keeps_stacked(
+    level: Level,
+    framed: Option<(u32, u64)>,
+    stacked: Option<(u32, u64)>,
+) -> bool {
+    match (framed, stacked) {
+        (Some(was), Some(now)) => cheaper(level, now, was),
+        _ => true,
+    }
 }
 
 /// The sign of a word tested next to its shift left by one (`c & 0x8000 ? .. :
@@ -617,17 +724,18 @@ fn stack_pair(register: llrm_lir::registers::RegId) -> Option<llrm_lir::register
     [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair)
 }
 
-/// Spill slots that nothing else needs a frame for become `push` and `pop`, and
-/// the frame goes: `digits` kept a counter across a call with `ld -1(ix), b` /
-/// `ld b, -1(ix)` and the 13 bytes of frame setup and teardown SDCC does
-/// without.
+/// The pass the push-and-pop conversion was before `stack_slots`, the start
+/// the other forms must beat. Spill slots that nothing else needs a frame for
+/// become `push` and `pop`, and the frame goes: `digits` kept a counter across
+/// a call with `ld -1(ix), b` / `ld b, -1(ix)` and the 13 bytes of frame setup
+/// and teardown SDCC does without.
 ///
 /// Every path must treat the slots as a stack: a store with the slot empty, a
 /// load of the slot on top, an empty stack at each return, one stack where
 /// paths meet. A byte slot saves its pair, so the other half must not be live
 /// after the `pop` (`PhysLiveness`). `a` is not saved this way: its pair is the
 /// flags.
-pub fn slots_are_a_stack(
+pub fn frameless_slots_are_a_stack(
     function: &mut MFunction,
     assignment: &Assignment,
 ) -> bool {
@@ -723,6 +831,315 @@ pub fn slots_are_a_stack(
         }
     }
     true
+}
+
+/// Whether any spill slot of `function` became a `push` and `pop`: see
+/// [`stack_slots`].
+pub fn slots_are_a_stack(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) -> bool {
+    !stack_slots(function, assignment).is_empty()
+}
+
+/// Spill slots that are used as a stack become `push` and `pop`: `digits` kept
+/// a counter across a call with `ld -1(ix), b` / `ld b, -1(ix)` and the 13
+/// bytes of frame setup and teardown SDCC does without, and a slot through IX
+/// costs 3 B each way a byte where a pair is 1 B each way.
+///
+/// A slot is one when every access is the same lane (a word, or the same half
+/// of a pair: `pop` puts the low byte back in a low half) and every path
+/// treats it as such: a store with the slot not
+/// on the stack, a load of the slot on top, an empty stack at each return, one
+/// stack where paths meet. A byte slot saves its pair, so the other half must
+/// not be live after the `pop` (`PhysLiveness`). `a` is not saved this way: its
+/// pair is the flags. No spill sits between the reservation of a call's stack
+/// arguments and the call: the arguments must lie lowest. A slot that fails
+/// stays in the frame; the others are pushed below it, past the locals.
+///
+/// Returns the slots made pushes and pops.
+pub fn stack_slots(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) -> Vec<i32> {
+    stack_slot_report(function, assignment, true).pushed
+}
+
+/// Why a spill slot stays in the frame instead of becoming a `push` and `pop`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StackRefusal {
+    /// A register that is not a pair half (`a`): its pair holds the flags.
+    NoPair,
+    /// A spill between the reservation of a call's stack arguments and the
+    /// call.
+    CallArea,
+    /// A byte stored from one half of a pair and loaded into the other half:
+    /// `pop` puts the low byte back in a low half (copy_runs `sum` spilled `e`
+    /// and reloaded `d`). A word may be loaded into any pair.
+    DifferentLane,
+    /// A store with the slot already on the stack.
+    StoreOnStack,
+    /// A load of the slot with another slot on top.
+    LoadNotOnTop,
+    /// A return with the slot still on the stack.
+    StackAtReturn,
+    /// Two paths meet with different stacks.
+    PathsDisagree,
+    /// A byte slot whose pair's other half is live after the `pop`.
+    ByteMateLive,
+}
+
+/// What [`stack_slots`] decided, slot by slot.
+pub struct StackReport {
+    /// The slots made pushes and pops.
+    pub pushed: Vec<i32>,
+    /// The slots kept in the frame and the first reason each was dropped.
+    pub refused: Vec<(i32, StackRefusal)>,
+    /// The stores and loads of every slot in play, before any was dropped.
+    pub accesses: std::collections::BTreeMap<i32, (usize, usize)>,
+}
+
+/// [`stack_slots`] with the reason for every slot it refuses.
+pub fn stack_slot_report(
+    function: &mut MFunction,
+    assignment: &Assignment,
+    peek: bool,
+) -> StackReport {
+    stack_slot_report_by(function, assignment, peek, false)
+}
+
+/// [`stack_slot_report`] with the choice of the slot sent back to the frame:
+/// `by_conflicts` false drops the slot a load found under others (the first
+/// violation); true drops the slot in the most such conflicts.
+pub fn stack_slot_report_by(
+    function: &mut MFunction,
+    assignment: &Assignment,
+    peek: bool,
+    by_conflicts: bool,
+) -> StackReport {
+    use llrm_spike_mf::livephys::PhysLiveness;
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let spill = |inst: &Inst| match (inst.kind, &inst.operands[..]) {
+        (Kind::Op("SPILL8" | "SPILL16"), [Operand::Frame(slot), Operand::Use(reg)]) => {
+            Some((true, *slot, register(*reg)))
+        }
+        (Kind::Op("RELOAD8" | "RELOAD16"), [Operand::Def(reg), Operand::Frame(slot)]) => {
+            Some((false, *slot, register(*reg)))
+        }
+        _ => None,
+    };
+    // the slots in play, less those no stack can hold
+    let mut chosen: std::collections::BTreeSet<i32> = std::collections::BTreeSet::new();
+    let mut barred: std::collections::BTreeMap<i32, StackRefusal> = std::collections::BTreeMap::new();
+    let mut accesses: std::collections::BTreeMap<i32, (usize, usize)> = std::collections::BTreeMap::new();
+    let mut lane_of: std::collections::BTreeMap<i32, u8> = std::collections::BTreeMap::new();
+    let call_bytes = expand::call_bytes_at_entry(function);
+    for (b, block) in function.blocks.iter().enumerate() {
+        let mut area = call_bytes[b].0 != 0;
+        for inst in &block.insts {
+            match (inst.kind, inst.operands.first()) {
+                (Kind::Op("ADJCALLSTACKDOWN"), Some(Operand::Imm(size))) if *size != 0 => area = true,
+                (Kind::Op("ADJCALLSTACKUP"), Some(Operand::Imm(size))) if *size != 0 => area = false,
+                _ => {}
+            }
+            if let Some((store, slot, register)) = spill(inst) {
+                chosen.insert(slot);
+                let counts = accesses.entry(slot).or_default();
+                if store {
+                    counts.0 += 1;
+                } else {
+                    counts.1 += 1;
+                }
+                // 0: a whole pair, 1: the low half, 2: the high half
+                let lane = match (stack_pair(register), register) {
+                    (Some(pair), one) if pair == one => 0,
+                    (Some(pair), one) if expand::lanes(pair).is_ok_and(|(lo, _)| lo == one) => 1,
+                    _ => 2,
+                };
+                if *lane_of.entry(slot).or_insert(lane) != lane {
+                    barred.entry(slot).or_insert(StackRefusal::DifferentLane);
+                }
+                if stack_pair(register).is_none() {
+                    barred.entry(slot).or_insert(StackRefusal::NoPair);
+                } else if area {
+                    barred.entry(slot).or_insert(StackRefusal::CallArea);
+                }
+            }
+        }
+    }
+    chosen.retain(|slot| !barred.contains_key(slot));
+    let mut refused: Vec<(i32, StackRefusal)> = barred.into_iter().collect();
+    if chosen.is_empty() {
+        return StackReport { pushed: Vec::new(), refused, accesses };
+    }
+    let succs = llrm_spike_mf::regalloc::successors(function);
+    let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
+    // the first slot that keeps `chosen` from being a stack, or none
+    // per block and instruction: whether a load's slot is read again after it
+    let read_again = |function: &MFunction, chosen: &std::collections::BTreeSet<i32>| -> Vec<Vec<bool>> {
+        use std::collections::BTreeSet;
+        let n = function.blocks.len();
+        let (mut live_in, mut live_out) = (vec![BTreeSet::<i32>::new(); n], vec![BTreeSet::<i32>::new(); n]);
+        let step = |inst: &Inst, now: &mut BTreeSet<i32>| match spill(inst) {
+            Some((true, slot, _)) if chosen.contains(&slot) => {
+                now.remove(&slot);
+            }
+            Some((false, slot, _)) if chosen.contains(&slot) => {
+                now.insert(slot);
+            }
+            _ => {}
+        };
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for b in (0..n).rev() {
+                live_out[b] = succs[b].iter().flat_map(|&next| live_in[next].iter().copied()).collect();
+                let mut now = live_out[b].clone();
+                function.blocks[b].insts.iter().rev().for_each(|inst| step(inst, &mut now));
+                if now != live_in[b] {
+                    live_in[b] = now;
+                    changed = true;
+                }
+            }
+        }
+        (0..n)
+            .map(|b| {
+                let mut now = live_out[b].clone();
+                let mut flags: Vec<bool> = function.blocks[b]
+                    .insts
+                    .iter()
+                    .rev()
+                    .map(|inst| {
+                        let again = matches!(spill(inst), Some((false, slot, _)) if now.contains(&slot));
+                        step(inst, &mut now);
+                        again
+                    })
+                    .collect();
+                flags.reverse();
+                flags
+            })
+            .collect()
+    };
+    // DEVIATE Z80-SLOT-CONFLICT: on a load with other slots on top the pin has
+    // no counterpart (StackSlotColoring.cpp only shares frame slots, by weight,
+    // first fit); here the slot in the most such conflicts goes back to the
+    // frame, not the slot loaded. Owner z80, exit 2026-11-20.
+    let violation = |function: &MFunction,
+                     chosen: &std::collections::BTreeSet<i32>,
+                     peeks: &mut std::collections::BTreeSet<(usize, usize)>|
+     -> Option<(i32, StackRefusal)> {
+        peeks.clear();
+        let mut conflicts: std::collections::BTreeMap<i32, usize> = std::collections::BTreeMap::new();
+        let again = read_again(function, chosen);
+        let mut entry: Vec<Option<Vec<i32>>> = vec![None; function.blocks.len()];
+        entry[0] = Some(Vec::new());
+        let mut work = vec![0usize];
+        while let Some(b) = work.pop() {
+            let mut stack = entry[b].clone().expect("a block on the list has a stack");
+            for (at, inst) in function.blocks[b].insts.iter().enumerate() {
+                match spill(inst) {
+                    Some((true, slot, _)) if chosen.contains(&slot) => {
+                        if stack.contains(&slot) {
+                            return Some((slot, StackRefusal::StoreOnStack));
+                        }
+                        stack.push(slot);
+                    }
+                    Some((false, slot, _)) if chosen.contains(&slot) => {
+                        if stack.last() != Some(&slot) {
+                            if !by_conflicts {
+                                return Some((slot, StackRefusal::LoadNotOnTop));
+                            }
+                            // count the slots in the way, and go on as if the
+                            // load had found its slot on top
+                            *conflicts.entry(slot).or_default() += 1;
+                            match stack.iter().rposition(|held| *held == slot) {
+                                Some(below) => {
+                                    for blocker in stack.drain(below + 1..) {
+                                        *conflicts.entry(blocker).or_default() += 1;
+                                    }
+                                }
+                                None => continue,
+                            }
+                        }
+                        // read again later: `pop` then `push` leaves it on top
+                        if peek && again[b][at] {
+                            peeks.insert((b, at));
+                        } else {
+                            stack.pop();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if succs[b].is_empty() && !stack.is_empty() {
+                return stack.last().map(|&slot| (slot, StackRefusal::StackAtReturn));
+            }
+            for &next in &succs[b] {
+                match &entry[next] {
+                    Some(seen) if *seen != stack => {
+                        let at =
+                            seen.iter().zip(&stack).position(|(a, b)| a != b).unwrap_or(seen.len().min(stack.len()));
+                        return stack.get(at).or_else(|| seen.get(at)).map(|&slot| (slot, StackRefusal::PathsDisagree));
+                    }
+                    Some(_) => {}
+                    None => {
+                        entry[next] = Some(stack.clone());
+                        work.push(next);
+                    }
+                }
+            }
+        }
+        if let Some((&slot, _)) = conflicts.iter().max_by_key(|(slot, count)| (**count, std::cmp::Reverse(**slot))) {
+            return Some((slot, StackRefusal::LoadNotOnTop));
+        }
+        // the other half of a pair a byte slot saves is dead once the pair is
+        // restored
+        for (b, block) in function.blocks.iter().enumerate() {
+            for (at, inst) in block.insts.iter().enumerate() {
+                let Some((false, slot, register)) = spill(inst) else { continue };
+                if !chosen.contains(&slot) {
+                    continue;
+                }
+                let pair = stack_pair(register).expect("checked above");
+                if register != pair {
+                    let after = live.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, at + 1);
+                    let (lo, hi) = expand::lanes(pair).expect("a pair has two halves");
+                    let mate = if register == lo { hi } else { lo };
+                    if after.is_live(&REGISTER_INFO, mate) {
+                        return Some((slot, StackRefusal::ByteMateLive));
+                    }
+                }
+            }
+        }
+        None
+    };
+    let mut peeks = std::collections::BTreeSet::new();
+    while let Some((slot, why)) = violation(function, &chosen, &mut peeks) {
+        chosen.remove(&slot);
+        refused.push((slot, why));
+    }
+    for (b, block) in function.blocks.iter_mut().enumerate() {
+        for (at, inst) in block.insts.iter_mut().enumerate() {
+            match spill(inst) {
+                Some((true, slot, _)) if chosen.contains(&slot) => {
+                    inst.kind = Kind::Op("PUSHP");
+                    inst.operands.remove(0);
+                    inst.may_store = false;
+                }
+                Some((false, slot, _)) if chosen.contains(&slot) => {
+                    inst.kind = Kind::Op(if peeks.contains(&(b, at)) { "PEEKP" } else { "POPP" });
+                    inst.operands.remove(1);
+                    inst.may_load = false;
+                }
+                _ => {}
+            }
+        }
+    }
+    refused.sort_by_key(|(slot, _)| *slot);
+    StackReport { pushed: chosen.into_iter().collect(), refused, accesses }
 }
 
 /// Moves the entry block's spills of argument registers up to its start while
@@ -1443,6 +1860,32 @@ pub fn lines(
     lines_in(&cached_selections(ir, request)?, name, number, request)
 }
 
+/// The block frequencies of function `name`, relative to its entry.
+fn frequencies_of(
+    selected: &Selections,
+    name: &str,
+) -> Vec<(u32, f64)> {
+    selected
+        .iter()
+        .find(|(one, ..)| one == name)
+        .and_then(|(_, source, _)| source.as_ref().ok())
+        .map(|selection| selection.frequencies.clone())
+        .unwrap_or_default()
+}
+
+/// The lines of function `name` as [`lines`] gives them, each with the weight
+/// its price counts its clocks by: the frequency of its block.
+pub fn weighted_lines(
+    ir: &str,
+    name: &str,
+    request: &Request,
+) -> Result<Vec<(Line, f64)>, String> {
+    let selected = cached_selections(ir, request)?;
+    let lines = lines_in(&selected, name, 0, request)?;
+    let frequencies = frequencies_of(&selected, name).into_iter().collect();
+    Ok(expand::weighted(&lines, &frequencies))
+}
+
 fn lines_in(
     selected: &Selections,
     name: &str,
@@ -1483,7 +1926,7 @@ fn lines_in(
     crate::dagisel::pipeline::ILP.with(|one| one.set(false));
     match (source, ilp) {
         (Ok(source), Ok(ilp)) => {
-            let price = |lines: &[Line]| expand::price_in_loops(lines);
+            let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
             Ok(if cheaper(request.level, price(&ilp), price(&source)) { ilp } else { source })
         }
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
@@ -1532,7 +1975,14 @@ fn text_of(
             symbol(&mut out, format!("C${file}${line}$0_0${number}_0"));
         }
     }
-    out.push_str(&format!("{}::\n", crate::data::symbol(name)));
+    // an `internal` function is the module's own: `name:` is local to it, so
+    // two modules may each define a helper of that name (`static inline`
+    // `sf_clz64` in the f64 mul and div clashed at link)
+    let local = selected
+        .iter()
+        .find(|(one, ..)| one == name)
+        .is_some_and(|(_, source, _)| source.as_ref().is_ok_and(|s| s.local));
+    out.push_str(&format!("{}{}\n", crate::data::symbol(name), if local { ":" } else { "::" }));
     for line in lines_in(selected, name, number, request)? {
         match line {
             Line::Label(label) => out.push_str(&format!("{label}:\n")),

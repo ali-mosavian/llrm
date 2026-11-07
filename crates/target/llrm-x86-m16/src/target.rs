@@ -66,6 +66,9 @@ pub struct Dos {
     /// The pin's tuning limits instead of the table's overrides: for tests of
     /// a pass's own thresholds.
     pub pin_tuning: bool,
+    /// `Tuning.constant_hoisting` on: m64 runs the pass first (CH-STAGED), so a
+    /// test of the pass asks for it here.
+    pub constant_hoisting: bool,
     /// REC-1: (depth, callee size) of the recursion the target copies at
     /// speed. None by default (the entry in `RealMode` below); tests of the
     /// mechanism set it.
@@ -96,12 +99,91 @@ impl Default for Dos {
             private: None,
             calling: None,
             pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
+            constant_hoisting: false,
             recursive_inlining: None,
         }
     }
 }
 
 impl Dos {
+    /// The tuning table's overrides, or the pin's limits.
+    fn table_tuning(&self) -> llrm_mir::target::Tuning {
+        if self.pin_tuning {
+            return llrm_mir::target::Tuning::PIN;
+        }
+        llrm_mir::target::Tuning {
+            // Trial: arm64's -Os unrotate rule (header priced against the branches removed).
+            rotation_header_priced_at_size: true,
+            max_stores_per_memset: 4,
+            max_stores_per_memcpy: 2,
+            max_stores_per_memmove: 2,
+            // DEVIATE SD223/SD225 (real mode): a dword store is 4 bytes
+            // (prefix, opcode, ModRM, disp8) against 13 for the fill (`lea di`,
+            // `mov es,ss`, `mov cx`, `rep stos`, the zero) that also takes ax,
+            // cx and di from the code around it, so four; a dword load and
+            // store pair is 8 bytes against about 16 for `rep movs`, so two.
+            max_stores_per_memset_opt_size: 4,
+            max_stores_per_memcpy_opt_size: 2,
+            max_stores_per_memmove_opt_size: 2,
+            // Tuning constant fitted to sc.c, weapons, mdl and lru, not
+            // derived.
+            size_milliclocks_per_byte: 10_000,
+            // The user's rate for m16 at speed (one clock is two bytes): the
+            // `timings.times` row the judge reads too.
+            speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
+            price_fills: true,
+            // DEVIATE: real mode weighs code bytes over clocks at every level,
+            // so the full unroll takes the pin's size threshold
+            // (`OptSizeThreshold`,
+            // 0) and no boost: the 8-trip loops of matmul and fpbench were 2045
+            // and 1350 bytes unrolled, 306 and 418 not.
+            unroll_threshold: Some(0),
+            unroll_max_percent_threshold_boost: Some(100),
+            x87_stack_slots: Some(8),
+            // DEVIATE SLOTS-LOOPWIDTH (owner greedy-subreg, exit 2026-11-20):
+            // the pin's ColorSlot shares any two slots whose ranges do not
+            // overlap. Here a word shares no slot a double word holds through a
+            // loop: stft_fixed -O2 -523266 clk and -3 B, jpeg_fixed -Os -2 B;
+            // open rows (oversight rules): jpeg_single C -Os +1 B (-217 clk), jpeg_fixed and
+            // jpeg_single nib -O2 +1 B each (-1 clk).
+            slots_loop_width_rule: true,
+            // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
+            // (partial and runtime on) copied matmul's outer body, 455 code
+            // bytes against 297, past Borland C's 298.
+            unroll_partial_threshold: Some(0),
+            // DEVIATE: the -O3 non-trivial unswitch copies the loop; the byte
+            // bar holds at every level, so no candidate is cheap enough (queens
+            // 178 -> 229 bytes, Borland C 172).
+            unswitch_threshold: Some(0),
+            // DEVIATE: bytes over clocks at every level: the inliner's bar is
+            // the pin's `OptSizeThreshold`, 50, not 225. jpeg_single.nib: 3178
+            // instructions in 6 procedures at 225, 1559 in 10 at 50 (main
+            // 1703).
+            inline_threshold: Some(50),
+            // DEVIATE: bytes over clocks at -O2 too: a callee that stays is
+            // not copied into a speed caller where it grows the code (D11).
+            // qlight c: `ls_scale_byte` x4, 376 -> 185 B. Open rows, clocks
+            // above 854bb7efc4 (numbered, owner w10): parity/qlight c +19,
+            // branch c +16, qmove c +41, qbsp c +36, sum_three c +2. Cause: a
+            // constant `imul` where main has a shift chain (the pin keeps
+            // imul; a priced chain measured 2 to 3 B per clock, not worth
+            // it), and frame reloads in sum_three. Exit 2026-11-30: the
+            // bytes those rows hold above main recovered by the register
+            // allocator, then re-price the chain.
+            // DEVIATE: a constant offset is a displacement of the access at
+            // m16; behind a sunk phi it costs an add and a register
+            // (qbsp `r_point_leaf`: two `[bx+si+2|4]` loads became an index
+            // select, +6 B, +36 clk).
+            keep_constant_displacements: true,
+            // DEVIATE: byte registers are scarce at every level, not only at
+            // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a
+            // `setcc` pair and an `or` that took `bp` addressing out of the
+            // loop; split, sieve bq16 -O2 is 8780 -> 8436 memory operands.
+            split_merged_conditions: true,
+            ..llrm_mir::target::Tuning::PIN
+        }
+    }
+
     /// On a 486 with the pin's tuning limits.
     pub fn pin_tuned() -> Self {
         Self { pin_tuning: true, ..Self::default() }
@@ -149,6 +231,7 @@ impl Dos {
             private: None,
             calling: None,
             pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
+            constant_hoisting: false,
             recursive_inlining: None,
         }
     }
@@ -261,11 +344,13 @@ impl Machine for Dos {
     }
 
     fn tuning(&self) -> llrm_mir::target::Tuning {
+        let table = (|| {
         if self.pin_tuning {
             return llrm_mir::target::Tuning::PIN;
         }
         llrm_mir::target::Tuning {
-            // Trial: arm64's -Os unrotate rule (header priced against the branches removed).
+            // Trial: arm64's -Os unrotate rule (header priced against the
+            // branches removed).
             rotation_header_priced_at_size: true,
             max_stores_per_memset: 4,
             max_stores_per_memcpy: 2,
@@ -285,6 +370,11 @@ impl Machine for Dos {
             // `timings.times` row the judge reads too.
             speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
             price_fills: true,
+            // DEVIATE SD446 (owner m16, exit 2026-12-01): a divide by a constant weighs
+            // its bytes at the rate against the multiply-high sequence; the pin's
+            // `isIntDivCheap` is `minsize` alone
+            // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L593).
+            divide_by_bytes: true,
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,
@@ -293,6 +383,16 @@ impl Machine for Dos {
             unroll_threshold: Some(0),
             unroll_max_percent_threshold_boost: Some(100),
             x87_stack_slots: Some(8),
+            x87_share_negated_products: true,
+            unroll_promotion_fits_x87_stack: true,
+            x87_zero_fill_at_size: true,
+            // DEVIATE SLOTS-LOOPWIDTH (owner greedy-subreg, exit 2026-11-20):
+            // the pin's ColorSlot shares any two slots whose ranges do not
+            // overlap. Here a word shares no slot a double word holds through a
+            // loop: stft_fixed -O2 -523266 clk and -3 B, jpeg_fixed -Os -2 B;
+            // open rows (oversight rules): jpeg_single C -Os +1 B (-217 clk),
+            // jpeg_fixed and jpeg_single nib -O2 +1 B each (-1 clk).
+            slots_loop_width_rule: true,
             // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
             // (partial and runtime on) copied matmul's outer body, 455 code
             // bytes against 297, past Borland C's 298.
@@ -328,6 +428,8 @@ impl Machine for Dos {
             split_merged_conditions: true,
             ..llrm_mir::target::Tuning::PIN
         }
+        })();
+        llrm_mir::target::Tuning { constant_hoisting: self.constant_hoisting, ..table }
     }
 
     fn size_costs(&self) -> OperationCosts {
@@ -495,6 +597,28 @@ mod tests {
 
     use super::Dos;
 
+    /// The x87 byte rows were a flat 6: a register `faddp` (2 B encoded) priced
+    /// at 3x, and the memory operand of `fadd m` at 0 (`x87_add_m` =
+    /// `x87_add`), so folding a load looked free at -Os. A register form is
+    /// the integer register row.
+    #[test]
+    fn m16_x87_byte_rows_split_register_and_memory_forms() {
+        let sizes = super::DESCRIPTION.size_costs();
+        // Mean encoded bytes of the 16 float bench programs at -Os, per form.
+        for (form, estimate, measured) in [
+            ("register add", sizes.float_add, 2.00),
+            ("fld m", sizes.float_load, 3.28),
+            ("fstp m", sizes.float_store, 2.92),
+            ("add m", sizes.float_add + sizes.float_load_folded, 3.69),
+            ("fstp st", sizes.float_release, 2.00),
+        ] {
+            let ratio = estimate as f64 / measured;
+            assert!((0.85..=2.15).contains(&ratio), "{form}: {estimate} B estimated, {measured} B encoded");
+        }
+        assert_eq!(sizes.float_add, sizes.add, "a register x87 add is the integer register row");
+        assert!(sizes.float_load_folded > 0, "a memory operand costs bytes over the register form");
+    }
+
     /// BASIC's convention (MIR's cc 1000, `pascal far`) had no row in
     /// calling.toml, so the DAG path took a call of it to destroy every
     /// register, SI and DI too, and spilled the pointer it kept in SI (the
@@ -617,6 +741,21 @@ mod encoding_tests {
         );
         let clocks = dos.costs();
         assert_eq!(clocks.argument, clocks.load + clocks.store);
+    }
+
+    /// `lea` in real mode is 3 bytes in words (`8D 40 07`), 5 as dwords behind
+    /// both prefixes (`67 66 8D 40 07`) and 6 with a base, an index and a
+    /// displacement (`67 66 8D 44 01 07`; jwasm). The table priced every dword
+    /// form at the word form plus the prefixes, 8 of its unit (twice the
+    /// bytes): inc + add (5 bytes) lost to the six-byte `lea`.
+    #[test]
+    fn a_lea_is_priced_at_its_encoding_by_width_and_parts() {
+        use llrm_mir::target::{Machine, three_operand, three_operand_of};
+        let sized = super::Dos::default().size_costs();
+        let forms = super::address_forms(&sized, 0);
+        let price = |width, word| three_operand(&sized, &forms, width, 2, 1, word).expect("a form");
+        let three = three_operand_of(&sized, &forms, 4, 2, 1, false, 3).expect("a form");
+        assert_eq!((price(2, true), price(4, false), three), (2 * 3, 2 * 5, 2 * 6));
     }
 
     /// A fill's bytes are the instructions it becomes as encoded: `rep stos`

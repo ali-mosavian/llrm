@@ -71,12 +71,28 @@ impl Machine for WasmMachine {
         Some(Rc::new(Wasm))
     }
 
+    fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
+        Some(Rc::new(crate::ir_lowering::WasmIrLowering))
+    }
+
     fn spaces(&self) -> Spaces {
         Spaces::FLAT
     }
 
     fn costs(&self) -> OperationCosts {
         OperationCosts::default()
+    }
+
+    /// The code bytes of one instruction of each class, as assembled
+    /// (`tests/size_costs.rs` reads them back with `wasm-objdump`): a memory
+    /// access is the opcode, the alignment and an offset of one LEB byte; a
+    /// `br_if` the opcode and its depth; a call the opcode and the padded
+    /// five-byte function index of a relocatable object. The ALU classes and
+    /// the float operations are one opcode byte, the default's 1. Not
+    /// priced here (the default stands): the `local.get`/`local.set` traffic,
+    /// the constants, and the `block`/`end` of a branch.
+    fn size_costs(&self) -> OperationCosts {
+        OperationCosts { load: 3, store: 3, float_load: 3, float_store: 3, branch: 2, call: 6, ..self.costs() }
     }
 
     fn registers(&self) -> i64 {
@@ -156,6 +172,15 @@ impl Tti for Wasm {
     /// pin's LICM promotes without a cap (bench nbody_fixed -O2).
     fn licm_register_limit(&self) -> Option<u32> {
         None
+    }
+
+    /// DEVIATE LG3: a tie of instructions plus setup between the end-biased
+    /// solution and the pin's goes by bytes: `i32.const` is one byte before its
+    /// LEB128, `local.get` and `local.set` two, an add or a compare one. A
+    /// branch on a zero compare is free; a compare against a constant is
+    /// `i32.const; i32.ne` (quicksort -O2 +10 B, tile -O1 -3 B).
+    fn lsr_bytes(&self) -> Option<llrm_mir::tti::LsrBytes> {
+        Some(llrm_mir::tti::LsrBytes { constant: 1, local_get: 2, local_set: 2, op: 1 })
     }
 
     /// `WebAssemblyTargetLowering::isLegalAddressingMode`: offsets add as

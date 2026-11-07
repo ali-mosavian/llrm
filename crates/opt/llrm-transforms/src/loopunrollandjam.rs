@@ -1072,25 +1072,14 @@ pub(crate) fn unroll_and_jam_loop(
     let analyzed = Analyzed::of(run);
     let sub_blocks_now: Blocks =
         analyzed.loops.get_loop_for(sub_header_now).map(|one| one.get_blocks().to_vec()).unwrap_or_default();
-    let did = crate::simplifyindvar::simplified_loop_ivs(
-        run.context,
-        run.layout,
-        run.function,
-        run.declared,
-        run.outer,
-        sub_header_now,
-    );
+    let did = simplified_ivs_of(run, &analyzed, sub_header_now);
     llrm_support::debug!("unroll-jam", "simplified the IVs of the inner loop: {did}");
     simplify_loop_after_unroll(run, Some(&analyzed.loops), &sub_blocks_now);
     if !completely_unroll && count > 1 {
-        let did = crate::simplifyindvar::simplified_loop_ivs(
-            run.context,
-            run.layout,
-            run.function,
-            run.declared,
-            run.outer,
-            header,
-        );
+        // `simplify_loop_after_unroll` may have changed the blocks: the
+        // analyses are made again.
+        let fresh = Analyzed::of(run);
+        let did = simplified_ivs_of(run, &fresh, header);
         llrm_support::debug!("unroll-jam", "simplified the IVs of the outer loop: {did}");
     }
     let analyzed = Analyzed::of(run);
@@ -1578,6 +1567,7 @@ impl FunctionPass for LoopUnrollAndJam {
             peeled: Default::default(),
             finished: Default::default(),
             created: Vec::new(),
+            first: Default::default(),
             scev: llrm_analysis::scev::ScalarEvolution::new(),
             options: UnrollOptions {
                 opt_level: self.opt_level,
@@ -1629,6 +1619,34 @@ impl FunctionPass for LoopUnrollAndJam {
         }
         PreservedAnalyses::none()
     }
+}
+
+/// `simplifyLoopIVs` of the loop headed by `header` over `analyzed`, which
+/// describes the function as it stands, with expressions of its own.
+fn simplified_ivs_of(
+    run: &mut Run,
+    analyzed: &Analyzed,
+    header: BlockId,
+) -> bool {
+    let env = llrm_analysis::scev::expander::Env {
+        globals: run.globals,
+        metadata: run.metadata,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let mut se = ScalarEvolution::new();
+    crate::simplifyindvar::simplified_loop_ivs(
+        run.context,
+        run.layout,
+        run.function,
+        run.declared,
+        run.outer,
+        &mut se,
+        env,
+        header,
+    )
 }
 
 #[cfg(test)]

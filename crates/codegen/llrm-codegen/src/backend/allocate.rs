@@ -600,6 +600,18 @@ impl RegAlloc {
         let base = llrm_support::debug::span("regalloc base");
         let mut pins = prefer.clone();
         pins.extend(required);
+        if !cpu.optimized {
+            // -O0: the pin's RegAllocFast.
+            match crate::backend::regallocfast::allocate(&body, &pins, &segments, &self.classes, &mut frame.borrow_mut())
+            {
+                Ok(placed) => {
+                    drop(base);
+                    llrm_support::debug!("regalloc", "{}: fast", body.name);
+                    return Ok(datagroup::restored(&placed, data_free, &segments));
+                }
+                Err(why) => llrm_support::debug!("regalloc", "{}: fast fell back: {}", body.name, why.0),
+            }
+        }
         // Each spill gets a slot of its own; they are shared once, over the
         // allocation (`crate::backend::slots::slots_colored`).
         frame.borrow_mut().defer_colours = true;
@@ -621,7 +633,11 @@ impl RegAlloc {
         drop(base);
         llrm_support::debug!("regalloc", "{}: {} insns, {} spilled", body.name, out.insns().len(), spilled.len());
         let colored = llrm_support::debug::timed("spill slots shared", || {
-            crate::backend::slots::slots_colored(&out, &mut frame.borrow_mut())
+            crate::backend::slots::slots_colored(
+                &out,
+                &mut frame.borrow_mut(),
+                cpu.target().tuning().slots_loop_width_rule,
+            )
         });
         let _apply = llrm_support::debug::span("regalloc apply");
         crate::backend::rewriter::rewrite(&colored, &got, &self.classes)

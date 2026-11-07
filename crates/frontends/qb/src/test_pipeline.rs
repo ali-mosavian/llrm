@@ -250,3 +250,40 @@ fn test_an_array_of_words_is_aligned_to_a_word() {
     let text = mir_of(&["DIM SHARED a(1 TO 4) AS INTEGER", "a(1) = 1"]);
     assert!(text.lines().any(|line| line.starts_with("@\"A%\"") && line.contains(", align 2")), "{text}");
 }
+
+/// BC /O leaves the module header's OF_STA (word at 0x0A) zero when no ON ERROR
+/// gives the program a line to report; llrm-qb always pointed it at an empty
+/// statement table, so B$STOP printed "in line No line number" where BC's
+/// prints "at address" (tests/run/qb/stop_pds71 failed at every level).
+#[test]
+fn test_a_module_without_a_handler_leaves_the_statement_word_zero() {
+    use std::path::Path;
+
+    use crate::{compile as qb_compile, driver as qb_driver};
+
+    let object = |lines: &[&str], stack: bool| {
+        let directory = tempfile::TempDir::new().unwrap();
+        let basic = directory.path().join("T.BAS");
+        std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
+        let mut frontend = qb_driver::Frontend::new("pds71", "pds71");
+        frontend.checked_stack = stack;
+        let program = qb_driver::parsed(&basic, &frontend, None).unwrap();
+        let bytes = qb_compile::object_bytes(
+            &program,
+            Path::new("T.BAS"),
+            None,
+            &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()),
+        )
+        .unwrap();
+        let records = llrm_omf::omf::parse(&bytes).expect("parses");
+        llrm_omf::module::of(&records).expect("a module")
+    };
+    let plain = object(&["PRINT \"before\"", "STOP", "END"], false);
+    assert!(!plain.operands.contains_key(&0x0A), "OF_STA is fixed up with no handler");
+    let handled = object(&["ON ERROR GOTO oops", "PRINT \"before\"", "STOP", "END", "oops:", "RESUME NEXT"], false);
+    assert!(handled.operands.contains_key(&0x0A), "OF_STA is missing with a handler");
+    // BC /D keeps the word: -fsanitize=stack's report names "line No line
+    // number".
+    let stacked = object(&["PRINT \"before\"", "STOP", "END"], true);
+    assert!(stacked.operands.contains_key(&0x0A), "OF_STA is dropped under -fsanitize=stack");
+}

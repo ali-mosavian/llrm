@@ -3,7 +3,7 @@
 set -e
 # a compile or link that fails prints its FAIL line and makes the script exit 1 at its end: a caller that reads only the exit code sees it
 FAILED=0; fail() { echo "$@"; FAILED=1; }
-P=$1; R=$(cd "$(dirname "$0")/../../../.." && pwd); O=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}; K=$(cd "$(dirname "$0")" && pwd)/kernels; if [ -d $K/$P ]; then S=$K/$P/$P.c; else S=$R/bench/$P/$P.c; fi
+P=$1; R=$(cd "$(dirname "$0")/../../../.." && pwd); O=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}; K=$(cd "$(dirname "$0")" && pwd)/kernels; if [ "${P#run_}" != "$P" ]; then S=$R/tests/run/c/${P#run_}.c; elif [ -d $K/$P ]; then S=$K/$P/$P.c; else S=$R/bench/$P/$P.c; fi
 LLRM=${LLRM:-$(python3 "$R/tools/llrmbin.py" bin)/llrm-cc}
 # llrm-cc takes its target as a row; the Open Watcom tree and the pin come from the environment
 export LLRM_OW=${LLRM_OW:-$HOME/scratch/ow-src}
@@ -52,6 +52,9 @@ NV_GCC=; NV_CLANG=; [ -z "${VSGCC_NOVEC:-}" ] || { NV_GCC="-fno-tree-vectorize -
 for o in O1 O2 O3 Os; do
   gcc $F $NV_GCC -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || fail "FAIL gcc$o $P"
   $CLANG $F $NV_CLANG -mstack-alignment=4 -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || fail "FAIL clang$o $P"
+  # the objects above carry no unwind tables, as the other columns need; the .eh_frame column reads these (llrm always writes one)
+  gcc ${F/-fno-asynchronous-unwind-tables/-fasynchronous-unwind-tables} $NV_GCC -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.eh.o $S 2>/dev/null || fail "FAIL gcc$o eh $P"
+  $CLANG ${F/-fno-asynchronous-unwind-tables/-fasynchronous-unwind-tables} $NV_CLANG -mstack-alignment=4 -$o -c -o $P.clang$o.eh.o $S 2>/dev/null || fail "FAIL clang$o eh $P"
   CS="gcc clang"
   if [ $o = O2 ] || [ $o = Os ]; then  # the ELF build of llrm is for loops.py
     $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -$o -march=i486 -fobject-format=elf -c -o $P.llrmElf$o.o $S 2>$P.llrmElf$o.err || fail "FAIL llrmElf$o $P"

@@ -54,19 +54,38 @@ fn a_mask_keeps_its_immediate_form_and_its_value() {
     }
 }
 
-/// `s + (a > b) + a` is `sgt; and.l #1; add`, the pin's patterns. `moveq #0`
-/// before the compare and `neg.b` after the `sgt` were a rewrite of it, 2 bytes
-/// shorter, that the pin does not make.
-#[test]
-fn a_boolean_added_is_masked_as_the_pin_does() {
-    let ir = "define i32 @f(i32 %a, i32 %b, i32 %s) {\n  %c = icmp sgt i32 %a, %b\n  %z = zext i1 %c to i32\n  %t = add i32 %s, %z\n  %r = add i32 %t, %a\n  ret i32 %r\n}";
-    let ours = text_with(&module(ir), "f", Cpu::M68000, Options::default()).unwrap();
-    assert!(ours.contains("and.l\t#1,") && !ours.contains("neg.b"), "{ours}");
+const BOOL_ADD: &str = "define i32 @f(i32 %a, i32 %b, i32 %s) {\n  %c = icmp sgt i32 %a, %b\n  %z = zext i1 %c to i32\n  %t = add i32 %s, %z\n  %r = add i32 %t, %a\n  ret i32 %r\n}";
+
+/// The value of `s + (a > b) + a` at the edges of the compare.
+fn bool_add_runs(
+    asm: &str,
+    options: fn() -> Options,
+) {
     for (a, b, s) in [(5, 3, 10), (3, 5, 10), (4, 4, 10), (-1, -2, 7), (-2, -1, 7)] {
-        if let Some(code) = status(ir, &[a, b, s], Options::default()) {
-            assert_eq!(code, (s as i32 + i32::from(a > b) + a as i32) & 0xFF, "f({a}, {b}, {s}): {ours}");
+        if let Some(code) = status(BOOL_ADD, &[a, b, s], options()) {
+            assert_eq!(code, (s as i32 + i32::from(a > b) + a as i32) & 0xFF, "f({a}, {b}, {s}): {asm}");
         }
     }
+}
+
+/// Under the pin's own options `s + (a > b) + a` is `sgt; and.l #1; add`, the
+/// pin's patterns. `moveq #0` before the compare and `neg.b` after the `sgt`
+/// were a rewrite of it, 2 bytes shorter, that the pin does not make.
+#[test]
+fn a_boolean_added_is_masked_as_the_pin_does() {
+    let ours = text_with(&module(BOOL_ADD), "f", Cpu::M68000, Options::PINNED).unwrap();
+    assert!(ours.contains("and.l\t#1,") && !ours.contains("neg.b"), "{ours}");
+    bool_add_runs(&ours, || Options::PINNED);
+}
+
+/// DEVIATE (#7222): with the short forms the compare's sign extension is
+/// cheaper than its mask, so the sum subtracts it: `sgt; ext.w; ext.l; sub.l`.
+/// This test asserted the mask for the default options and was red from 11-05.
+#[test]
+fn a_boolean_added_is_subtracted_sign_extended_with_the_short_forms() {
+    let ours = text_with(&module(BOOL_ADD), "f", Cpu::M68000, Options::default()).unwrap();
+    assert!(ours.contains("ext.l") && ours.contains("sub.l") && !ours.contains("and.l\t#1,"), "{ours}");
+    bool_add_runs(&ours, Options::default);
 }
 
 /// Binary search over `a[m] = 2m + 1`, no memory: two selects on one compare,

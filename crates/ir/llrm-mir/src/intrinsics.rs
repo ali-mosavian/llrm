@@ -129,6 +129,14 @@ pub enum Intrinsic {
     /// `llvm.prefetch`: a hint to bring an address into the cache; no code is
     /// needed where the target has no prefetch instruction.
     Prefetch,
+    /// `llvm.trap`: the program stops here (`ud2` on x86); control does not
+    /// continue.
+    Trap,
+    /// `llvm.debugtrap`: a breakpoint (`int3` on x86).
+    DebugTrap,
+    /// `llvm.ubsantrap`: stops with the sanitizer's check kind (`ud1 kind(%eax), %eax`
+    /// on x86, `X86MCInstLower.cpp` `UBSAN_UD1`); not translated.
+    UbsanTrap,
     /// `llvm.fake.use`: keeps its operands live for a debugger at `-Og`; no
     /// code runs it.
     FakeUse,
@@ -556,7 +564,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 82] = [
+const TABLE: [Spec; 85] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -748,6 +756,30 @@ const TABLE: [Spec; 82] = [
         own: None,
     },
     Spec {
+        name: "llvm.trap",
+        intrinsic: Intrinsic::Trap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.debugtrap",
+        intrinsic: Intrinsic::DebugTrap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.ubsantrap",
+        intrinsic: Intrinsic::UbsanTrap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[Slot::Int(8)],
+        own: None,
+    },
+    Spec {
         name: "llvm.prefetch",
         intrinsic: Intrinsic::Prefetch,
         overloads: &[Kind::Pointer],
@@ -918,7 +950,7 @@ fn from_intrinsics_td(
 ) {
     let Some(set) = table_set(name) else { return };
     let Type::Function { returns, parameters, .. } = types.get(function.ty).clone() else { return };
-    function.attrs = set.function.iter().map(|one| Attribute::Flag((*one).to_owned())).collect();
+    function.attrs = set.function.iter().map(|one| Attribute::Flag((*one).into())).collect();
     if !set.memory.is_empty() {
         function.attrs.push(Attribute::Memory(
             set.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),
@@ -930,8 +962,8 @@ fn from_intrinsics_td(
         let ty = if at == 0 { Some(returns) } else { parameters.get(at as usize - 1).copied() };
         let Some(ty) = ty else { continue };
         let attrs = attrs.iter().filter_map(|attr| match *attr {
-            intrinsic_attrs::Attr::Flag(one) => Some(Attribute::Flag(one.to_owned())),
-            intrinsic_attrs::Attr::Int(one, value) => Some(Attribute::Int(one.to_owned(), value)),
+            intrinsic_attrs::Attr::Flag(one) => Some(Attribute::Flag(one.into())),
+            intrinsic_attrs::Attr::Int(one, value) => Some(Attribute::Int(one.into(), value)),
             // At the argument's own width; `lower == upper` is no range.
             intrinsic_attrs::Attr::Range(lower, upper) => {
                 let bits = types.int_bits(ty)?;
@@ -1058,7 +1090,7 @@ impl Intrinsic {
             return Some((vec![crate::facts::Fact::NoUnwind.carrier()], Vec::new()));
         }
         let own = self.spec().own?;
-        let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).to_owned())).collect::<Vec<_>>();
+        let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).into())).collect::<Vec<_>>();
         let mut attrs = flags(own.attrs);
         attrs.push(Attribute::Memory(
             own.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),

@@ -184,9 +184,24 @@ fn argument_store(
             (*k, base, Source::Immediate(*v))
         }
         (Kind::Op("MOV32ji"), [Operand::Use(base), Operand::Imm(v)]) => (0, base, Source::Immediate(*v)),
+        // a store of zero selects `clr.l`
+        (Kind::Op("CLR32p"), [Operand::Imm(k), Operand::Use(base)]) => (*k, base, Source::Immediate(0)),
+        (Kind::Op("CLR32j"), [Operand::Use(base)]) => (0, base, Source::Immediate(0)),
         _ => return None,
     };
     (REGISTER_INFO.root(physical(*base, assignment)) == reg::SP).then_some((offset, source))
+}
+
+/// [`push_of`], where a function built for size pushes zero as `clr.l
+/// -(%sp)`: 2 B against `pea (0).w`'s 4, and 6 clk slower on the 68000.
+pub fn push_of_sized(
+    value: &mc::Operand,
+    size: bool,
+) -> mc::Inst {
+    if size && matches!(value, mc::Operand::Imm(0)) {
+        return mc::Inst { opcode: "CLR32e", operands: vec![mc::Operand::Reg(reg::SP)] };
+    }
+    push_of(value)
 }
 
 /// `move.l value, -(%sp)`: `value` is a register or an immediate.
@@ -389,7 +404,16 @@ fn sequences(
         let call = (down + 1..insts.len()).find(|&i| insts[i].call);
         let up = call
             .and_then(|call| (call + 1..insts.len()).find(|&i| matches!(insts[i].kind, Kind::Op("ADJCALLSTACKUP"))));
-        let (Some(call), Some(up)) = (call, up) else {
+        // A cleanup belongs to the call before it in its own block, with no
+        // other call or call area between: a tail shared by two paths leaves
+        // one `up` after two calls, and the one in another block is not this
+        // call's. The arguments may be pushed before a diamond the call is
+        // after.
+        let own_up = call.zip(up).filter(|&(call, up)| {
+            blocks[up] == blocks[call]
+                && insts[call + 1..up].iter().all(|inst| !inst.call && !matches!(inst.kind, Kind::Op("ADJCALLSTACKDOWN")))
+        });
+        let Some((call, up)) = own_up else {
             others.push(bytes);
             at += 1;
             continue;
@@ -406,7 +430,14 @@ fn sequences(
                     Source::Register(src) => (mc::Operand::Reg(src), ("MOV32jr", "MOV32pr")),
                     Source::Immediate(v) => (mc::Operand::Imm(v), ("MOV32ji", "MOV32pi")),
                 };
-                let store = if offset == 0 {
+                let store = if matches!(source, Source::Immediate(0)) {
+                    // the `clr.l` the selector chose, priced as it is
+                    if offset == 0 {
+                        mc::Inst { opcode: "CLR32j", operands: vec![sp.clone()] }
+                    } else {
+                        mc::Inst { opcode: "CLR32p", operands: vec![mc::Operand::Imm(offset), sp.clone()] }
+                    }
+                } else if offset == 0 {
                     mc::Inst { opcode: store_rows.0, operands: vec![sp.clone(), value.clone()] }
                 } else {
                     mc::Inst {
@@ -414,7 +445,7 @@ fn sequences(
                         operands: vec![mc::Operand::Imm(offset), sp.clone(), value.clone()],
                     }
                 };
-                parts.push((i, offset, source, cost(&store, cpu)?, cost(&push_of(&value), cpu)?));
+                parts.push((i, offset, source, cost(&store, cpu)?, cost(&push_of_sized(&value, size), cpu)?));
             } else if names_sp(insts[i], assignment) || matches!(insts[i].kind, Kind::Op("ADJCALLSTACKDOWN")) {
                 convertible = false;
             }

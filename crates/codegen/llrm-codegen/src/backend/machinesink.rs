@@ -69,9 +69,11 @@
 //!
 //! DEVIATE M6 (no number): an instruction that reads or writes any physical
 //! register stays, where `FindSuccToSinkTo` lets a physical def marked dead
-//! through (and a use of a constant register). Effect: none seen, 0 sinks
-//! missed over d_faces and the 820-object corpus at -O2 (counted: no
-//! instruction that passes `safe_to_move` has a physical write and no read).
+//! through (and a use of a constant register). The frame register of a frame
+//! cell, local or argument, is not one: the pin's frame index carries none
+//! (os_execute m64 -Os kept eight `mov r8,[rsp+k]` the pin sinks and folds,
+//! +35 B). The earlier count (0 sinks missed over d_faces and the 820-object
+//! corpus at -O2) saw physical writes only, not reads.
 //! The flags are the pin's rule in full: a def moves only if dead (read by no
 //! later instruction of its block and no successor), and not into a block that
 //! reads them (`SinkInstruction`'s zombie check).
@@ -360,6 +362,11 @@ struct Sinker {
     /// `GetAllSortedSuccessors` of each block, made once: it asks nothing of
     /// the instruction.
     sorted: Vec<Vec<usize>>,
+    /// The order the selector recorded each edge's odds in, which is the order
+    /// it added them (`addSuccessor`) and which the pin's equal-depth
+    /// successors keep. A stated edge sorts before one with no odds (edges a
+    /// later pass made, e.g. a split); those keep terminator order after them.
+    stated: HashMap<(usize, usize), usize>,
     merged: HashMap<(u32, usize), usize>,
     /// `HasStoreCache`.
     has_store_cache: HashMap<(usize, usize), bool>,
@@ -473,6 +480,13 @@ impl Sinker {
             }
         }
         let depths = crate::analysis::intervals::depths_shared(body);
+        let stated = body
+            .odds
+            .taken
+            .keys()
+            .enumerate()
+            .filter_map(|(rank, (from, to))| Some(((*position.get(from)?, *position.get(to)?), rank)))
+            .collect();
         let mut sinker = Self {
             size,
             arguments: crate::greedy::remat::argument_loads(body),
@@ -495,6 +509,7 @@ impl Sinker {
             cycle,
             considered: HashSet::default(),
             sorted: Vec::new(),
+            stated,
             merged: HashMap::default(),
             to_split: Vec::new(),
             has_store_cache: HashMap::default(),
@@ -591,7 +606,21 @@ impl Sinker {
         // An incoming argument's cell is a fixed stack object in the pin, a
         // frame index with no register: the frame register the address is
         // spelled through is not a read of one.
-        let fixed_stack = one.defines.first().is_some_and(|value| self.arguments.contains(value));
+        // A local object's cell is a frame index in the pin too: `%stack.N`
+        // carries no register until frame lowering, so its load sinks.
+        let frame_cell = one.what.as_ref().is_some_and(|what| {
+            let mut cells = what.sources.iter().chain(&what.dests).filter_map(|place| match place {
+                Loc::Mem(mem) => Some(mem),
+                _ => None,
+            });
+            cells.clone().next().is_some()
+                && cells.all(|mem| {
+                    mem.base.is_none()
+                        && mem.index.is_none()
+                        && mem.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame)
+                })
+        });
+        let fixed_stack = frame_cell || one.defines.first().is_some_and(|value| self.arguments.contains(value));
         let reads = effect.all_reads();
         // DEVIATE (segment-reads): an access through the default data segment
         // names no register in the pin (`MOV32rm` carries `$noreg`), so its
@@ -622,6 +651,7 @@ impl Sinker {
             .any(
                 |&(register, _)| register != llrm_lir::registers::RegId::None
                     && !(fixed_stack && (self.regs.is_frame(register) || self.regs.is_stack_segment(register)))
+                    && !(frame_cell && self.regs.is_stack(register))
                     && !(default_segment && self.regs.is_data_segment(register)),
             );
         if physical_reads || physical(&effect.writes) || flags(&reads) {
@@ -712,6 +742,7 @@ impl Sinker {
         let sorted = (0..n)
             .map(|block| {
                 let mut all = self.cfg.succs[block].clone();
+                all.sort_by_key(|&succ| self.stated.get(&(block, succ)).copied().unwrap_or(usize::MAX));
                 for &child in &children[block] {
                     if !all.contains(&child) {
                         all.push(child);
@@ -1120,6 +1151,13 @@ pub fn sunk_within(
     limit: usize,
     classes: Option<&crate::backend::classes::RegisterClasses>,
 ) -> LirBody {
+    // `ProcessBlock` (MachineSink.cpp#L959-L961) leaves a block with one
+    // successor or fewer, or none of its own, at once: a body with no other
+    // block has nothing to sink and no edge to split, and needs none of the
+    // analyses the round builds.
+    if !body.blocks.iter().any(|block| block.succ.len() > 1 && !block.insns.is_empty()) {
+        return body.clone();
+    }
     let mut body = body.clone();
     // Each round walks the blocks, then breaks the edges it marked; it ends
     // when nothing moved and nothing was marked.
@@ -1915,6 +1953,43 @@ mod tests {
         assert_eq!(built, 1, "graphs built for one round");
     }
 
+    /// A body without a block of two successors has nothing the sink can move
+    /// (`ProcessBlock` returns at once for each of its blocks), yet every
+    /// round built a graph, dominators, frequencies and liveness for it:
+    /// memory_expansion's `MachineSink` was 34.0 M against the pin's 3.9 M.
+    /// Counted, not timed.
+    #[test]
+    fn test_a_body_without_a_branch_builds_no_analyses() {
+        let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let body = |blocks: Vec<LirBlock>| {
+            let mut body = LirBody::new(
+                "f",
+                0,
+                blocks.into_iter().collect(),
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            body
+        };
+        let graphs = |body: &LirBody| {
+            let before = crate::liveness::blockfrequency::GRAPH_BUILDS.with(std::cell::Cell::get);
+            let _ = sunk(body, false);
+            crate::liveness::blockfrequency::GRAPH_BUILDS.with(std::cell::Cell::get) - before
+        };
+        let straight = body(vec![block(0, vec![1], vec![]), block(1, vec![], vec![ret(1)])]);
+        let branching = body(vec![
+            block(0, vec![1, 2], vec![jump(0)]),
+            block(1, vec![2], vec![]),
+            block(2, vec![], vec![ret(2)]),
+        ]);
+        assert_eq!(graphs(&straight), 0, "graphs built for a body that cannot sink");
+        assert!(graphs(&branching) > 0, "a body with a branch is still analysed");
+    }
+
     /// x_bubble's inner loop: `j + 1` is computed in the header, read by the
     /// phi and by the compare in the latch, and the latch post-dominates the
     /// header. It stayed in the header (row M2: an instruction inside a
@@ -1997,5 +2072,98 @@ mod tests {
         // against the latch's pressure: room for it, and none.
         assert_eq!(names(&sunk_within(&bubble(12), false, 7, None), 3), ["add", "cmp", "jne"], "room");
         assert_eq!(names(&sunk_within(&bubble(12), false, 3, None), 1), ["mov", "add", "cmp", "jle"], "full");
+    }
+
+    /// A loop block that branches back to its header or on to the next block
+    /// of a condition chain: the selector adds the chain edge first, and the
+    /// pin's sort keeps that order among blocks of one depth, so a load used
+    /// down the chain sinks one block along (os_execute m32 -Os: eight byte
+    /// loads stayed in the block above, `mov r8, [esp+k]` held across the
+    /// branches, +22 B over the unrotated loop's `cmp [slot], imm`). Sorted
+    /// by the block's `succ` order the header came first, and took the load.
+    #[test]
+    fn test_successors_of_one_depth_keep_the_order_the_selector_added_them_in() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem { through: llrm_lir::registers::RegId::BP, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 4) };
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+        let mut body = LirBody::new(
+            "chain",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(10)]).into(),
+                block(1, vec![2], vec![jump(11)]).into(),
+                block(
+                    2,
+                    vec![1, 3],
+                    vec![insn(12, Operation::Move, "mov", vec![held(3)], vec![Loc::Mem(cell)], vec![3], vec![]), jump(13)],
+                )
+                .into(),
+                block(
+                    3,
+                    vec![1, 4],
+                    vec![insn(14, Operation::Move, "mov", vec![held(5)], vec![held(3)], vec![5], vec![3]), jump(15)],
+                )
+                .into(),
+                block(4, vec![], vec![ret(16)]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        body.odds.taken.insert((2, 3), crate::model::lir::BlockOdds::CERTAIN as u32 - 1000);
+        body.odds.taken.insert((2, 1), 1000);
+        body.odds.taken.insert((3, 4), 1000);
+        body.odds.taken.insert((3, 1), crate::model::lir::BlockOdds::CERTAIN as u32 - 1000);
+        let sinker = Sinker::new(&body, true, None);
+        assert_eq!(sinker.sorted_successors(2).first(), Some(&3), "{:?}", sinker.sorted_successors(2));
+        assert_eq!(sinker.sorted_successors(3).first(), Some(&4), "{:?}", sinker.sorted_successors(3));
+    }
+
+    /// A byte load of a local buffer, compared in only one arm, stayed in the
+    /// block above the branch: its cell is addressed through the frame
+    /// register, and a physical read kept it (DEVIATE M6; os_execute m64 -Os
+    /// +35 B over the pin, eight `mov r8,[rsp+k]` the pin sinks and folds into
+    /// `cmp [slot], imm`). The pin's local is a frame index with no register.
+    #[test]
+    fn test_a_load_of_a_local_cell_sinks_into_the_arm_that_reads_it() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem { through: llrm_lir::registers::RegId::BP, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 4) };
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let mut body = LirBody::new(
+            "local",
+            0,
+            vec![
+                block(
+                    0,
+                    vec![1, 2],
+                    vec![
+                        insn(10, Operation::Move, "mov", vec![held(3)], vec![Loc::Mem(cell)], vec![3], vec![]),
+                        jump(11),
+                    ],
+                )
+                .into(),
+                block(
+                    1,
+                    vec![],
+                    vec![
+                        insn(12, Operation::Move, "mov", vec![held(5)], vec![held(3)], vec![5], vec![3]),
+                        insn(13, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+                    ],
+                )
+                .into(),
+                block(2, vec![], vec![insn(14, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let sunk = sunk(&body, false);
+        let loads = |at: usize| sunk.blocks[at].insns.iter().any(|one| one.defines.contains(&3));
+        assert!(loads(1) && !loads(0), "the load moved into the arm that reads it");
     }
 }

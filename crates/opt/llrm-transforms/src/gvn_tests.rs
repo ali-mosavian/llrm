@@ -1286,3 +1286,39 @@ z:
     let out = printed(&module);
     assert!(!out.contains("call i32 @llvm.umax"), "{out}");
 }
+
+/// PRE made `%r.pre-phi` with one input for a predecessor that reaches the
+/// join by two edges (a switch with two cases to it): "a phi in block 47 has 1
+/// inputs from %switch.early.test for 2 edges" in queens at m32 -O3.
+#[test]
+fn test_a_phi_made_for_a_join_has_an_input_per_edge_of_a_switch_predecessor() {
+    let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = add i16 %x, %y
+  switch i16 %x, label %b4 [
+    i16 1, label %b3
+    i16 2, label %b3
+  ]
+
+b2:
+  br label %b3
+
+b3:
+  %r = add i16 %x, %y
+  ret i16 %r
+
+b4:
+  ret i16 0
+}
+";
+    let mut module = parsed(text);
+    let layout = llrm_analysis::testing::layout(&module);
+    let outer = llrm_mir::passes::Outer::of(&module, None);
+    let (context, function) = module.function_mut("f").expect("@f");
+    run_impl_cfg(context, &layout, function, &outer, true, None);
+    let problems = llrm_mir::verify::phi_arity(function);
+    assert!(problems.is_empty(), "{problems:?}\n{}", printed(&module));
+}

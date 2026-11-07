@@ -90,7 +90,8 @@ pub fn optimized_in(
 ) -> bool {
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let headers: Vec<BlockId> = {
-        let mut headers: Vec<BlockId> = env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
+        let mut headers: Vec<BlockId> =
+            env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
         crate::loopfilter::retain(&mut headers);
         headers
     };
@@ -330,7 +331,7 @@ impl ExitOpt<'_> {
             // b - 1).
             if let Kind::UMin(ops) = self.se.node(max_iter).kind.clone() {
                 let mut elements = Vec::new();
-                for op in ops {
+                for op in ops.iter().copied() {
                     let one = self.se.get_one(&cx, self.se.type_of(op.scev));
                     elements.push(Use::of(self.se.get_minus_scev(&cx, op, Use::of(one), 0, 0)));
                 }

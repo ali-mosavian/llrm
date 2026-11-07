@@ -119,7 +119,17 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
         set(&[op], &[MVT::I32], Action::LibCall);
     }
     set(&[UMulLoHi, SMulLoHi], &[MVT::I8, MVT::I16], Action::Expand);
-    set(&[SMulO, UMulO], &int, Action::Custom);
+    // DEVIATE M68K-WIDEMUL (see `widemul`): the 64-bit `mulu.l` and `muls.l`.
+    // The pin keeps `LibCall`. Owner m68k. Exit: 2026-11-27.
+    if cpu.has_wide_multiply() {
+        set(&[UMulLoHi, SMulLoHi], &[MVT::I32], Action::Custom);
+    }
+    // DEVIATE: `mulu.l` and `muls.l`, which `lower_xalu` selects for an `i32`
+    // multiply with overflow, exist from the 68020; the 68000 expands it
+    // (`expandMULO`) through the 64-bit product. The pin keeps `Custom` on
+    // every CPU. Exit: never, while the pin does.
+    set(&[SMulO, UMulO], &[MVT::I8, MVT::I16], Action::Custom);
+    set(&[SMulO, UMulO], &[MVT::I32], if m68020 { Action::Custom } else { Action::Expand });
     set(&[ShlParts, SraParts, SrlParts], &[MVT::I32], Action::Custom);
     set(&[AddC, AddE, SubC, SubE, SAddO, UAddO, SSubO, USubO], &int, Action::Custom);
     set(&[BrCond], &[MVT::Other], Action::Custom);
@@ -156,6 +166,9 @@ pub struct M68kLowering {
     /// The beyond-pin size rewrites (`addq`, `extb.l`, `sub` of a sign-extended
     /// compare).
     pub short: bool,
+    /// A global's address is an absolute one, not PC-relative (the medium
+    /// model on the 68000 and 68010, the large model).
+    pub absolute_data: bool,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
@@ -219,8 +232,9 @@ impl Hooks for M68kLowering {
             ISD::SraParts => Some(lower_shift_right_parts(dag, node, true)),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
-            ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node)),
+            ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node, self.absolute_data)),
             ISD::VAStart => lower_vastart(dag, node),
+            ISD::UMulLoHi | ISD::SMulLoHi => Some(lower_wide_multiply(dag, node)),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
             _ => None,
         }
@@ -369,6 +383,19 @@ fn lower_xalu(
         &[result_vt, overflow_vt],
         &[SDValue { node: arith.node, res: 0 }, overflow],
     ))
+}
+
+/// `UMUL_LOHI` / `SMUL_LOHI` of two `i32`s as `mulu.l` / `muls.l` with a
+/// register pair: the low and the high half, in the order of the node's
+/// results.
+fn lower_wide_multiply(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let name = if dag.opcode(node) == ISD::SMulLoHi { "SMUL64" } else { "UMUL64" };
+    let code = super::widemul::code_of(name).expect("a widening multiply");
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    dag.get_node_multi(ISD::Machine(u32::from(code)), &[EVT::I32, EVT::I32], &[lhs, rhs])
 }
 
 /// `TargetLowering::expandMULO` through the type twice as wide: the product

@@ -471,7 +471,7 @@ impl Analysis for ReadsOnly {
             .find(|one| one.name.as_deref() == Some("g"))
             .and_then(|one| one.function())
             .expect("@g");
-        g.attrs.contains(&Attribute::Flag("readonly".to_owned()))
+        g.attrs.contains(&Attribute::Flag("readonly".into()))
     }
 }
 
@@ -509,7 +509,7 @@ impl ModulePass for MarkReadonly {
     ) -> Vec<GlobalId> {
         let g = module.named("g").unwrap();
         let GlobalKind::Function(function) = &mut module.globals[g.0 as usize].kind else { panic!("a function") };
-        function.attrs.push(Attribute::Flag("readonly".to_owned()));
+        function.attrs.push(Attribute::Flag("readonly".into()));
         vec![g]
     }
 }
@@ -688,13 +688,31 @@ fn module_analyses_of_the_declarations_stand_until_a_declaration_changes() {
     );
     // A declaration moved: an attribute on the function.
     let (_, function) = module.function_mut("f").unwrap();
-    function.attrs.push(Attribute::Flag("readnone".to_owned()));
+    function.attrs.push(Attribute::Flag("readnone".into()));
     analyses.invalidate(&PreservedAnalyses::none());
     assert!(!Rc::ptr_eq(&first.0, &analyses.get::<Declarations>(&module)), "declarations did not follow the attribute");
     assert!(
         !Rc::ptr_eq(&first.1, &analyses.get::<CalleeEffects>(&module)),
         "callee effects did not follow the attribute"
     );
+}
+
+/// `LLRM_CHECK_MODULES` ran every compile into a panic, "declarations: brought up to date, it is not
+/// what working it out afresh gives", then the same for callee-effects: the afresh run took the patch
+/// path on the result the first run left behind, from before `stamp` gave `f` its attributes.
+#[test]
+fn analyses_worked_out_afresh_ignore_the_result_the_first_run_left() {
+    use crate::passes::{CalleeEffects, Declarations};
+    let mut module = module();
+    let program = crate::program::ProgramProxy::of(&module, Rc::new(Neutral));
+    let mut analyses = ModuleAnalyses::new(program);
+    analyses.get::<Declarations>(&module);
+    analyses.get::<CalleeEffects>(&module);
+    let (_, function) = module.function_mut("f").unwrap();
+    function.attrs.push(Attribute::Flag("readnone".into()));
+    analyses.invalidate(&PreservedAnalyses::none());
+    assert!(analyses.run_agrees_afresh::<Declarations>(&module), "declarations kept the listing from before the attribute");
+    assert!(analyses.run_agrees_afresh::<CalleeEffects>(&module), "callee effects kept the map from before the attribute");
 }
 
 /// A pass that named nothing loses the result though the body did not move:
