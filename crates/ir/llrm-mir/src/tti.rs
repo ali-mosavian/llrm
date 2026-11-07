@@ -1439,6 +1439,15 @@ pub trait Tti {
         &[]
     }
 
+    /// DEVIATE LSR-OUTER (POC): LSR also reduces a loop that has subloops;
+    /// the pin skips it "until we can model them better with formulae"
+    /// (LoopStrengthReduce.cpp#L6374). Off. owner: w12, exit: 2026-11-20
+    /// (A/B: keep, or drop the branch). The environment variable
+    /// `LLRM_LSR_OUTER` turns it on for a measurement.
+    fn lsr_outer_loops(&self) -> bool {
+        false
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {

@@ -259,7 +259,8 @@ fn plan_loop(
     // Skip nested loops until we can model them better with formulae: the
     // shadow variables and the exit tests above are made on every loop, as the
     // pin's constructor does before it looks at the nesting.
-    if !lp.is_innermost() {
+    // DEVIATE LSR-OUTER (POC, `Tti::lsr_outer_loops`): not skipped when asked.
+    if !lp.is_innermost() && !(tti.lsr_outer_loops() || std::env::var_os("LLRM_LSR_OUTER").is_some()) {
         return planned(None);
     }
 
