@@ -112,9 +112,11 @@ pub fn run_with(
     hoist_common_successor_code(asm);
     branch_over_jump(asm);
     drop_reloads(asm);
+    drop_flag_reload(asm);
     if known_loads {
         drop_known_loads(asm);
     }
+    hoist_loop_constant(asm);
     drop_zero_compares(asm);
     step_in_place(asm);
     load_straight_into_a(asm);
@@ -252,6 +254,84 @@ pub fn branch_over_jump(asm: &mut Asm) {
         let Operand::Direct(far) = &jmp.operand else { continue };
         let inverted = Inst::new(branch.op.opposite().unwrap(), Operand::Direct(far.clone()));
         asm.lines.splice(at - 1..=jump, [Line::Inst(inverted)]);
+    }
+}
+
+/// `inc m` or `dec m` then `lda m` with `a` dead after it: the load only sets
+/// the flags the step already set from the same result (a 16-bit down-counter's
+/// `dec rc4; lda rc4; bne`).
+pub fn drop_flag_reload(asm: &mut Asm) {
+    let exits = Exits::of(asm);
+    let keep: Vec<bool> = (0..asm.lines.len())
+        .map(|at| {
+            let (Some(Line::Inst(step)), Line::Inst(load)) = (at.checked_sub(1).map(|b| &asm.lines[b]), &asm.lines[at]) else {
+                return true;
+            };
+            let reload = load.op == Op::Lda
+                && matches!(step.op, Op::Inc | Op::Dec)
+                && load.operand.is_cell()
+                && step.operand == load.operand
+                && dead_from(&asm.lines, at + 1, Registers::A, &mut HashSet::default(), exits);
+            !reload
+        })
+        .collect();
+    retain(asm, &keep);
+}
+
+/// `l: ldy #k` at the top of a loop that nothing else enters and that does not
+/// write `y` again (no call, no other write): the load runs once, before the
+/// loop (`x` the same). The pin's MachineLICM hoists the constant; here the
+/// register keeps it.
+pub fn hoist_loop_constant(asm: &mut Asm) {
+    let mut at = 0;
+    while at < asm.lines.len() {
+        at += 1;
+        let Line::Label(label) = &asm.lines[at - 1] else { continue };
+        let (Some(Line::Inst(load)), Some(Line::Inst(next))) = (asm.lines.get(at), asm.lines.get(at + 1)) else { continue };
+        let writes = match load.op {
+            Op::Ldy => [Op::Ldy, Op::Tay, Op::Iny, Op::Dey],
+            Op::Ldx => [Op::Ldx, Op::Tax, Op::Inx, Op::Dex],
+            _ => continue,
+        };
+        if !matches!(load.operand, Operand::Imm(_)) || !matches!(next.op.flags(&next.operand), Flags::Of(_)) {
+            continue;
+        }
+        // the entry falls into the label, and every other reference is a branch back from the loop
+        let mut before = at - 1;
+        while before > 0 && matches!(&asm.lines[before - 1], Line::Label(name) if references(&asm.lines, name) == 0) {
+            before -= 1;
+        }
+        let Some(Line::Inst(entry)) = before.checked_sub(1).map(|index| &asm.lines[index]) else { continue };
+        if matches!(entry.op, Op::Jmp | Op::Bra | Op::Rts) {
+            continue;
+        }
+        let mut last = at;
+        let mut closed = true;
+        for (index, line) in asm.lines.iter().enumerate() {
+            match line {
+                Line::Inst(Inst { operand, .. }) if operand.name() == Some(label.as_str()) => {
+                    if index < at {
+                        closed = false;
+                    }
+                    last = last.max(index);
+                }
+                Line::Raw(text) if text.contains(label.as_str()) => closed = false,
+                _ => {}
+            }
+        }
+        if !closed || last == at {
+            continue;
+        }
+        let quiet = asm.lines[at + 1..=last].iter().all(|line| match line {
+            Line::Inst(inst) => !writes.contains(&inst.op) && inst.op != Op::Jsr,
+            Line::Label(_) => true,
+            Line::Raw(_) => false,
+        });
+        if !quiet {
+            continue;
+        }
+        let moved = asm.lines.remove(at);
+        asm.lines.insert(before, moved);
     }
 }
 
