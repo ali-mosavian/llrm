@@ -37,16 +37,16 @@ int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
 int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
 #endif
 #endif
-#if !defined(SF_CMP_SPLIT)
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
 int SF_NAME(eqsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
 #endif
-#if !defined(SF_CMP_SPLIT)
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
 int SF_NAME(nesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
 #endif
-#if !defined(SF_CMP_SPLIT)
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
 int SF_NAME(ltsf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
 #endif
-#if !defined(SF_CMP_SPLIT)
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
 int SF_NAME(lesf2)(sf_float a, sf_float b) { return SF_CMP_FWD(a, b); }
 #endif
 #if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_GE)
@@ -55,8 +55,16 @@ SF_CMP_CORE int SF_NAME(gesf2)(sf_float a, sf_float b) { return SF_CMP_REV(a, b)
 int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
 #endif
 #endif
-#if !defined(SF_CMP_SPLIT)
+#if !defined(SF_CMP_SPLIT) && !defined(SF_CMP_ALIAS_ENTRIES)
 int SF_NAME(gtsf2)(sf_float a, sf_float b) { return SF_CMP_GT(a, b); }
+#endif
+
+#ifdef SF_CMP_ALIAS_ENTRIES /* one object, aliases for the entries that are the core's or ge's own result (wasm: a name costs no bytes, a wrapper 12) */
+int SF_NAME(eqsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(nesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(ltsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(lesf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(cmpsf2));
+int SF_NAME(gtsf2)(sf_float a, sf_float b) SF_CMP_ALIAS(SF_NAME(gesf2));
 #endif
 
 #include "../core_end.inc"
