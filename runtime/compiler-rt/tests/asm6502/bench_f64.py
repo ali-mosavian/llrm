@@ -131,8 +131,14 @@ def ours(op, opt):
     deltas, fails = [], 0
     for i in range(1, N + 1):
         c, rc = run('r', i, 1); deltas.append(c - base); fails += rc != 0
-    allc, rc = run('r', 1, N)  # one run over all records must cost what the single-record runs add up to
-    assert rc == 0 and allc == sum(d + base for d in deltas) - (N - 1) * s0, f'{op} {opt}: a {N}-record run costs {allc}, the single runs imply {sum(d + base for d in deltas) - (N - 1) * s0}'
+    allc, rc = run('r', 1, N)  # one run over all records must cost what the single-record runs add up to, plus the loop's step to the next record
+    # A single-record run leaves the loop after one pass; a longer one steps to the next record instead. That differs by e clk per step (-17: stepping is cheaper
+    # than leaving; 99 steps = the 1683 clk by which the 100-record run was under the sum of the singles). e is read from two pairs, which must agree.
+    e = run('r', 1, 2)[0] - (deltas[0] + base) - (deltas[1] + base) + s0
+    e2 = run('r', N - 1, 2)[0] - (deltas[N - 2] + base) - (deltas[N - 1] + base) + s0
+    assert e == e2, f'{op} {opt}: the loop step between records costs {e} then {e2} clk'
+    implied = sum(d + base for d in deltas) - (N - 1) * s0 + (N - 1) * e
+    assert rc == 0 and allc == implied, f'{op} {opt}: a {N}-record run costs {allc}, the single runs and {N - 1} loop steps of {e} clk imply {implied}'
     assert fails == 0, f'{op} {opt}: {fails} of {N} records fail'
     assert min(deltas) > 0
     lib = sum(code_size(o) for o in objs)
