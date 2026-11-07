@@ -1528,6 +1528,7 @@ mod mul_lohi {
         };
         assert_eq!(copied_to_eax(32758), (true, false), "15 bits against 32: the pin's order");
         assert_eq!(copied_to_eax(0x82f6_3b7f), (false, true), "a 32-bit magic goes to EAX");
+        assert_eq!(copied_to_eax(0x51eb_851f), (false, true), "`x / 100`'s 31-bit magic against an unknown dividend");
     }
 
     /// recmany/switch at m16 -O2: a signed `x % 5` magic is 31 bits
