@@ -226,6 +226,10 @@ impl Target for Z80Registers {
         Some(Inst { may_store: true, ..Inst::new(Kind::Op(name), vec![Operand::Frame(slot), Operand::Use(register)]) })
     }
 
+    fn remats_symbol_addresses() -> bool {
+        true
+    }
+
     fn spills_lanes() -> bool {
         true
     }
