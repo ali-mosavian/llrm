@@ -169,3 +169,12 @@ fn a_carried_register_cmov_is_a_branch_at_o2_and_stays_at_o1_and_size_at_m64() {
     os.min_size = true;
     assert_eq!(converted(&before, &os), before, "-Oz");
 }
+
+/// A `movzx` from memory is a load (SandyBridge `WriteLoad`, 5), not the register form's 1: the
+/// YCbCr loop of jpeg_fixed -O2 kept three clamp `cmovs` the pin turns into branches, its byte
+/// loads priced 4 clocks short.
+#[test]
+fn a_movzx_from_memory_costs_a_load_in_the_depth_walk() {
+    let load = insn(1, Operation::Extend, "movzx", vec![held(6)], vec![cell()], vec![6], vec![4]);
+    assert_eq!(latency_of(&load, cpu()), 5);
+}
