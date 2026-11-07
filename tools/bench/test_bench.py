@@ -1491,3 +1491,16 @@ def test_references_skip_levels_they_are_not_built_at(tmp_path, monkeypatch):
     monkeypatch.setattr(bench, "BASIC_REFERENCES", {})
     bench.measure_references([], ["O1", "O2", "O3", "Os"], tmp_path)
     assert asked == ["O1", "O2", "Os"]
+
+
+def test_a_timed_out_borland_job_says_so_not_no_object(tmp_path, monkeypatch):
+    """bcc -Os read "bcc: no object" for all 31 programs: the one DOSBox job outlived run_limited's wall limit (the guard had stopped it), its "timed out" text was dropped."""
+    home = tmp_path / "home"
+    (home / "lib").mkdir(parents=True)
+    source = tmp_path / "p.c"
+    source.write_bytes(b"int main(void){return 0;}\n")
+    monkeypatch.setattr(bench, "BORLAND", {"bcc": (home, "bcc", {"Os": "-O1"})})
+    monkeypatch.setattr(bench.native, "run_limited", lambda command, **kwargs: "timed out after 1800 s: bcc.sh")
+    monkeypatch.setattr(bench.dosbatch, "c_support", lambda mode, folder: [])
+    built = bench.build_borland("bcc", [(types.SimpleNamespace(source=source), "R000")], "Os", tmp_path / "work")
+    assert built["R000"].startswith("bcc: timed out after 1800 s"), built

@@ -125,3 +125,4 @@ int main(void) {
     }
     return 0;
 }
+// x86-widths: the .out is a 64-bit long (2147483648 and more)

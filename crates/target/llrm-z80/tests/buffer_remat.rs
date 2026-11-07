@@ -18,3 +18,44 @@ fn a_remainder_read_after_a_call_is_loaded_again_not_spilled() {
     let stores = lines.iter().filter(|line| line.starts_with("ld -") && line.contains("(ix),")).count();
     assert_eq!(stores, 4, "only the quotient (4 bytes) is stored\n{out}");
 }
+
+/// Every `LD16rf` was a remake candidate once the target named the row, a
+/// local variable's load too: `wrapv_overflow_check` and two more grew. Only a
+/// load of a buffer a call fills is one.
+#[test]
+fn a_load_of_a_local_variable_is_not_remade_but_a_load_of_a_call_buffer_is() {
+    use llrm_codegen::greedy::tii::TargetInstrInfo;
+    use llrm_spike_mf::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_spike_mf::tolir::to_lir;
+    use llrm_z80::REGISTER_INFO;
+    use llrm_z80::regalloc::{Class, Z80Registers};
+
+    let v = |n: u32| Reg::Virt(n);
+    let op = |name, operands| Inst::new(Kind::Op(name), operands);
+    let mut f = MFunction::<Class>::new("f");
+    f.classes = vec![Class::Gr16; 4];
+    let stores = Inst { may_store: true, ..op("STSP16", vec![Operand::Use(v(0)), Operand::Imm(2)]) };
+    let call = Inst { call: true, ..op("CALL", vec![Operand::Symbol("__s_udivremsi4".into(), 0)]) };
+    let load = |into, frame| Inst {
+        may_load: true,
+        ..op("LD16rf", vec![Operand::Def(v(into)), Operand::Frame(frame), Operand::Imm(0)])
+    };
+    let insts = vec![
+        op("LEAFI", vec![Operand::Def(v(0)), Operand::Frame(0)]),
+        stores,
+        call,
+        load(1, 0),
+        load(2, 1),
+        op("USE", vec![Operand::Use(v(1)), Operand::Use(v(2))]),
+    ];
+    f.blocks.push(Block { id: 0, insts, phis: vec![] });
+    let converted = to_lir::<Z80Registers>(&f, llrm_lir::registers::Regs(&REGISTER_INFO)).expect("converts");
+    let loads: Vec<_> = converted.body.blocks[0]
+        .insns
+        .iter()
+        .filter(|one| one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("LD16rf")))
+        .collect();
+    assert_eq!(loads.len(), 2);
+    assert!(converted.tii.remat_shape(loads[0]), "the buffer the call filled");
+    assert!(!converted.tii.remat_shape(loads[1]), "a local variable");
+}

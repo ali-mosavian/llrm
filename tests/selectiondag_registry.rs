@@ -36,7 +36,7 @@ fn tracked(pattern: &str) -> Vec<Source> {
 /// Numbers a `///` or `//` comment names as `DEVIATE SDn` with no registry row,
 /// found when the test began to read those comments (2026-11-07): a ratchet,
 /// each to get its row and leave this list; a number not here needs its row at once.
-const UNREGISTERED: &[u32] = &[440, 441, 447, 448, 543];
+const UNREGISTERED: &[u32] = &[];
 
 /// A number outside its owner's block: SD44..SD99 are closed, SD100.. go
 /// to sdag-a, SD200.. to sdag-b, SD300.. to sdag-c, SD400.. to sdag-d.
@@ -62,6 +62,16 @@ fn problems(
     plan: &Source,
     code: &[Source],
     docs: &[Source],
+) -> Vec<String> {
+    problems_with(plan, code, docs, UNREGISTERED)
+}
+
+/// [`problems`] with the ratchet list `unregistered`.
+fn problems_with(
+    plan: &Source,
+    code: &[Source],
+    docs: &[Source],
+    unregistered: &[u32],
 ) -> Vec<String> {
     let row = Regex::new(r"^\|\s*SD(\d+)\s*\|\s*([\w-]+)\s*\|").unwrap();
     let bold = Regex::new(r"^\s*[-*]\s+\*\*SD(\d+)\*\*").unwrap();
@@ -117,7 +127,7 @@ fn problems(
         }
     }
     for (id, place) in &mentioned {
-        if !rows.contains_key(id) && !declared.contains_key(id) && !UNREGISTERED.contains(id) {
+        if !rows.contains_key(id) && !declared.contains_key(id) && !unregistered.contains(id) {
             out.push(format!("SD{id} is named by a DEVIATE comment at {place} but has no row in the registry of {}", plan.path));
         }
     }
@@ -225,7 +235,7 @@ fn a_comment_naming_a_number_with_no_row_is_reported() {
     // DEVIATE SD1: has one
     // DEVIATE SD440: on the ratchet
 ")];
-    let found = problems(&plan, &code, &[]);
+    let found = problems_with(&plan, &code, &[], &[440]);
     assert!(found.iter().any(|problem| problem.contains("SD3") && problem.contains("a.rs:1")), "{found:?}");
     assert!(found.iter().any(|problem| problem.contains("SD4") && problem.contains("a.rs:2")), "{found:?}");
     assert_eq!(found.len(), 2, "{found:?}");
