@@ -871,6 +871,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Select => self.visit_select(node),
             ISD::SelectCC => self.visit_select_cc(node),
             ISD::Store => self.visit_store(node).or_else(|| self.indexed(node)),
+            ISD::LifetimeEnd => self.visit_lifetime_end(node),
             ISD::Freeze => self.visit_freeze(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::BrCond => self.visit_brcond(node),
@@ -2767,9 +2768,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// a dead overflow is an `add`, a constant goes right, `x + 0` has no
     /// carry, and a sum that cannot overflow is an `add`. DEVIATE UADDO1: the
     /// `(uaddo (xor a, -1), 1)` and `visitUADDOLike` carry folds are not
-    /// translated. Measured 2026-11-06 12:34Z (C corpus m16/m32/m64 -O2, QB, Nib): their
-    /// preconditions hold in one program (tests/run/c/overflow_builtins.c, `uaddo X,
-    /// (uaddo_carry Y, 0, c)`), no bench cell. Port when a cell needs it.
+    /// translated. Measured 2026-11-06 12:34Z (C corpus m16/m32/m64 -O2, QB,
+    /// Nib): their preconditions hold in one program
+    /// (tests/run/c/overflow_builtins.c, `uaddo X, (uaddo_carry Y, 0, c)`),
+    /// no bench cell. Port when a cell needs it.
     fn visit_uaddo(
         &mut self,
         node: SDValue,

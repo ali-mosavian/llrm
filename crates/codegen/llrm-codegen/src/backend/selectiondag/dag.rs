@@ -461,6 +461,11 @@ pub struct SelectionDAG {
     /// (`MachineFrameInfo::getObjectAlign`): what the known bits of its
     /// address say. Empty where the layout may place an object lower.
     pub frame_alignments: Vec<u64>,
+    /// The bytes of each static alloca's frame object, by frame index
+    /// (`MachineFrameInfo::getObjectSize`), set where a `lifetime` marker names
+    /// it; 0 where not known. The group of allocas that share an index (stack
+    /// colouring) is as big as its largest.
+    pub frame_object_bytes: Vec<u64>,
     /// The IR pointers of the accesses ([`MemBase::Value`]).
     pub mem_locations: Vec<MemLocation>,
     /// The frame index of the first variadic argument (`VarArgsFrameIndex`),
@@ -558,6 +563,7 @@ impl SelectionDAG {
             register_masks: vec![Vec::new()],
             first_temporary: 0,
             frame_alignments: Vec::new(),
+            frame_object_bytes: Vec::new(),
             mem_locations: Vec::new(),
             var_args_frame_index: None,
             var_args_save: None,
