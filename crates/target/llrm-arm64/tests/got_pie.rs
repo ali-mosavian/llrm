@@ -34,3 +34,16 @@ fn an_extern_global_is_loaded_through_the_got_at_linux_pie() {
     }
     assert!(pie.to_lowercase().contains("got"), "{pie}");
 }
+
+/// A hidden extern global at Linux PIE was read through the GOT (3 loads) where
+/// the pin reads it directly (`adrp` + `ldr :lo12:`, 1 load): hidden binds in
+/// the module. Default visibility and `extern_weak` keep the GOT.
+#[test]
+fn a_hidden_extern_global_is_read_directly_at_linux_pie() {
+    let hidden = BODY.replace("@ext = external global i32", "@ext = external hidden global i32");
+    let weak = BODY.replace("@ext = external global i32", "@ext = extern_weak global i32");
+    let direct = driver::assembly(&format!("{hidden}{PIE}"), Platform::Linux, Level::O2).expect("lowers");
+    assert_eq!(loads(&direct), 1, "{direct}");
+    let got = driver::assembly(&format!("{weak}{PIE}"), Platform::Linux, Level::O2).expect("lowers");
+    assert_eq!(loads(&got), 2, "{got}");
+}
