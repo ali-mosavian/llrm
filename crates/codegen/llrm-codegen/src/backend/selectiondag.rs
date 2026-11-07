@@ -120,6 +120,7 @@ pub mod ctcount_combine;
 mod dag;
 pub mod dag_combiner;
 pub mod dag_function;
+pub mod fastisel;
 pub mod dag_select;
 pub mod dag_target;
 pub mod dagisel_adapter;
