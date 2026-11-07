@@ -183,6 +183,22 @@ pub struct MulPricing<'a> {
 }
 
 impl CombineHooks for X86Lowering<'_> {
+    /// `X86TargetLowering::shouldNormalizeToSelectSequence` is true unless CCMP
+    /// (APX) keeps the `and`/`or` tree.
+    ///
+    /// DEVIATE SQ1 (owner greedy-subreg, exit 2026-11-21): only where there is
+    /// a `cmov`. Without one the split is two branches where the merged
+    /// condition was one `sete`/`or`/branch; the pin's `EmitLoweredSelect`
+    /// shares the compare of back-to-back selects, ours does not: +16 B at m32
+    /// -O2 (sfm16_*), +4 at m16. Exit: the select expansion shares the flags.
+    fn normalize_to_select_sequence(
+        &self,
+        _vt: EVT,
+        _cond_vt: EVT,
+    ) -> bool {
+        self.cmov
+    }
+
     /// `X86TargetLowering::mergeStoresAfterLegalization`: `!MemVT.isVector()`.
     /// The only vector a store here holds is the opaque 16 bytes of an SSE
     /// move (`I128`).
