@@ -41,7 +41,7 @@ fn compile(
 }
 
 fn available() -> bool {
-    let set = std::env::var_os("LLRM_CLANG_M16").is_some() && llrm_cc::ow_tree().is_dir();
+    let set = std::env::var_os("LLRM_CLANG_M16").is_some() && llrm_cc::ow_present();
     if !set {
         eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
     }

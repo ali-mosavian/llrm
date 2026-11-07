@@ -19,7 +19,7 @@ fn has(
 
 #[test]
 fn a_remainder_by_a_constant_in_a_loop_is_not_an_idiv_at_m16_o2() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
         eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }

@@ -8,7 +8,7 @@ for p in $(tests/fp_sources.sh f32); do
 done
 o=; for x in $T/*.o; do nm $x | grep -q ' T __unordsf2' && o=$x; done
 got=$(size -A $o | awk '/^\.text/{t+=$2} END{print t}'); echo "m32 -Os unord object $(basename $o): $got B (cap 42)"; [ "$got" -le 42 ] || rc=1
-if [ -d "${XDG_CACHE_HOME:-$HOME/.cache}/llrm/ow-src-$(cat ../../toolchain/owshim/ow-commit)" ]; then
+if [ -f "${XDG_CACHE_HOME:-$HOME/.cache}/llrm/ow-src-$(cat ../../toolchain/owshim/ow-commit)/.complete" ]; then
   # config/x86_m16 sets SF_CMP_SPLIT: eq/ne/lt/le are aliases of the core in __cmpsf2 (reach 216 -> 106 B at -Os, 224 -> 114 at -O2 before/after).
   for flags_caps in ":Os:106:O2:114"; do
     IFS=: read -r fl o1 c1 o2 c2 <<<"$flags_caps"

@@ -11,7 +11,7 @@ const SOURCE: &str = "typedef unsigned int u32; typedef unsigned long long u64;\
 #[test]
 fn an_adc_never_reads_the_flags_of_a_mul_or_logical_op() {
     assert!(
-        llrm_cc::ow_tree().is_dir(),
+        llrm_cc::ow_present(),
         "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
     );
     assert!(

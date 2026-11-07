@@ -17,6 +17,21 @@ class ResolverTests(unittest.TestCase):
             self.assertEqual(llrmbin.bin_dir({"CARGO_TARGET_DIR": built, "LLRM_BIN": "/x"}, Path(repo)), Path("/x"))
             self.assertEqual(llrmbin.bin_dir({}, Path(repo)), Path(repo) / "target" / "release")
 
+    def test_an_open_watcom_tree_is_present_only_once_it_is_complete(self):
+        """toolchain/cache.sh writes `.complete` last: a directory without it is an interrupted fetch, and the compile then
+        failed on a missing library instead of naming tools/ow-fetch.sh."""
+        with tempfile.TemporaryDirectory() as cache:
+            old = os.environ.get("XDG_CACHE_HOME")
+            os.environ["XDG_CACHE_HOME"] = cache
+            try:
+                tree = llrmbin.ow_tree()
+                tree.mkdir(parents=True)
+                self.assertFalse(llrmbin.ow_present())
+                (tree / ".complete").write_text("")
+                self.assertTrue(llrmbin.ow_present())
+            finally:
+                os.environ.pop("XDG_CACHE_HOME") if old is None else os.environ.__setitem__("XDG_CACHE_HOME", old)
+
     def test_a_binary_older_than_its_source_is_refused(self):
         """`cargo build -p llrm-cc` builds only the library: bench and a repro ran a day-old llrm-cc and measured the old
         compiler. The resolver names the binaries older than a file cargo's dep-info lists, and refuses them."""

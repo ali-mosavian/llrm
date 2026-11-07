@@ -152,9 +152,9 @@ fn pin() -> &'static str {
 }
 const OW_COMMIT_FILE: &str = include_str!("../../../../toolchain/owshim/ow-commit");
 
-/// The Open Watcom tree `{ow}` names: `~/.cache/llrm/ow-src-<commit>` under
-/// `home`, the commit toolchain/owshim/ow-commit pins. tools/ow-fetch.sh makes
-/// it; llrm-cc never does.
+/// The Open Watcom tree `{ow}` names: `llrm/ow-src-<commit>` under the cache
+/// directory `cache`, the commit toolchain/owshim/ow-commit pins.
+/// tools/ow-fetch.sh makes it; llrm-cc never does.
 pub fn ow_tree_in(cache: &Path) -> PathBuf {
     cache.join("llrm").join(format!("ow-src-{}", OW_COMMIT_FILE.trim()))
 }
@@ -162,6 +162,18 @@ pub fn ow_tree_in(cache: &Path) -> PathBuf {
 /// The Open Watcom tree on this machine (`ow_tree_in` of the cache directory).
 pub fn ow_tree() -> PathBuf {
     ow_tree_in(&cache_dir())
+}
+
+/// Whether the tree under `cache` is whole: toolchain/cache.sh writes
+/// `.complete` last, so a directory without it is an interrupted or running
+/// fetch.
+pub fn ow_present_in(cache: &Path) -> bool {
+    ow_tree_in(cache).join(".complete").is_file()
+}
+
+/// `ow_present_in` the cache directory of this machine.
+pub fn ow_present() -> bool {
+    ow_present_in(&cache_dir())
 }
 
 /// `$XDG_CACHE_HOME`, else `~/.cache`: where toolchain/owclib.sh puts the tree.
@@ -172,14 +184,14 @@ fn cache_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".cache"))
 }
 
-/// `word` with `{ow}` replaced by the tree under `home` where it exists; where
-/// it does not the word stays, and `missing_ow` says so.
+/// `word` with `{ow}` replaced by the tree under `cache` where it is whole;
+/// where it does not the word stays, and `missing_ow` says so.
 fn with_ow(
     word: &str,
     cache: &Path,
 ) -> String {
     let tree = ow_tree_in(cache);
-    if word.contains("{ow}") && tree.is_dir() {
+    if word.contains("{ow}") && ow_present_in(cache) {
         word.replace("{ow}", &tree.display().to_string())
     } else {
         word.to_owned()

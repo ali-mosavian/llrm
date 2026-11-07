@@ -1416,7 +1416,7 @@ def red_env_cause() -> str:
     import llrmbin  # noqa: PLC0415
 
     tree = llrmbin.ow_tree()
-    return "" if tree.is_dir() else f" ({tree} is missing: run tools/ow-fetch.sh; a missing Open Watcom tree, not a miscompile)"
+    return "" if llrmbin.ow_present() else f" ({tree} is missing: run tools/ow-fetch.sh; a missing Open Watcom tree, not a miscompile)"
 
 
 def _run_behavioural() -> str:

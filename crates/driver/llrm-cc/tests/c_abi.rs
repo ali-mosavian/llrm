@@ -41,7 +41,7 @@ fn test_every_row_lays_types_out_as_its_description_says() {
             eprintln!("{name}: skipped, {variable} is not set");
             continue;
         };
-        if row.clang.iter().any(|word| word.contains("{env:")) && !llrm_cc::ow_tree().is_dir() {
+        if row.clang.iter().any(|word| word.contains("{env:")) && !llrm_cc::ow_present() {
             eprintln!("{name}: skipped, the Open Watcom tree is missing (tools/ow-fetch.sh)");
             continue;
         }

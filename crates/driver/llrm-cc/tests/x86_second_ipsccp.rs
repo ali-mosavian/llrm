@@ -11,7 +11,7 @@ use std::process::Command;
 #[test]
 fn a_function_called_with_constants_after_inlining_loses_its_parameters_at_m32() {
     assert!(
-        llrm_cc::ow_tree().is_dir(),
+        llrm_cc::ow_present(),
         "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
     );
     assert!(

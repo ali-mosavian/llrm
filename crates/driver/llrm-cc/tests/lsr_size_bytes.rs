@@ -20,7 +20,7 @@ void copy_w(short n) { short i; for (i = 0; i < n; ++i) b[i] = a[i]; }
 #[test]
 fn test_m32_os_lsr_picks_the_smaller_loop_formulae() {
     assert!(
-        llrm_cc::ow_tree().is_dir(),
+        llrm_cc::ow_present(),
         "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
     );
     assert!(

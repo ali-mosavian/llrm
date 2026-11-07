@@ -12,7 +12,7 @@ fn compiles(
     name: &str,
     source: &str,
 ) -> Result<(), String> {
-    let (Some(_), true) = (std::env::var_os("LLRM_CLANG_M16"), llrm_cc::ow_tree().is_dir()) else {
+    let (Some(_), true) = (std::env::var_os("LLRM_CLANG_M16"), llrm_cc::ow_present()) else {
         eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return Ok(());
     };
@@ -57,7 +57,7 @@ fn a_long_double_between_a_char_and_a_short_with_an_initializer() {
 fn a_huge_pointer_stepping_past_64k_draws_no_warning() {
     let source = "long __huge a[20000];\nlong take(void) { long __huge *p = a; p += 17000; return *p; }\n";
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    if std::env::var_os("LLRM_CLANG_M16").is_none() || !llrm_cc::ow_tree().is_dir() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || !llrm_cc::ow_present() {
         return;
     }
     let dir = std::env::temp_dir().join(format!("llrm-cc-wat16-huge-{}", std::process::id()));

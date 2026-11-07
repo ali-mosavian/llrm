@@ -11,7 +11,7 @@ const SOURCE: &str = "unsigned long long udiv64by32(unsigned hi, unsigned lo, un
 #[test]
 fn the_builtin_is_one_div_and_no_call() {
     assert!(
-        llrm_cc::ow_tree().is_dir(),
+        llrm_cc::ow_present(),
         "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
     );
     assert!(
