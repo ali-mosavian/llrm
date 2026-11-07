@@ -184,6 +184,10 @@ impl llrm_target::Target for M64 {
         LAYOUT.clone()
     }
 
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
+    }
+
     /// An argument takes a dword at least: `calling.toml`'s.
     fn stack_slot_bytes(&self) -> i64 {
         CALLING.native().slot_bytes

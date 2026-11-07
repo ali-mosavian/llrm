@@ -283,6 +283,10 @@ impl llrm_target::Target for M16 {
         layout()
     }
 
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
+    }
+
     fn conventions(&self) -> &'static [&'static str] {
         &CONVENTIONS
     }
