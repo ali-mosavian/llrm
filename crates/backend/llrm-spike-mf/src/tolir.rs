@@ -1472,8 +1472,13 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         // A straight COPY folds as a load or a store
         // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetInstrInfo.cpp#L794>):
         // the spilled end is the slot, the other end stays a register.
+        // A pinned end (`requires`/`delivers`) is a register this converter
+        // numbers, not the allocator: 6502 copied `rs0` into a slot as
+        // `lda rc18446744073709551603`.
         if one.group.is_none()
             && one.def_lanes.is_empty()
+            && one.requires.is_empty()
+            && one.delivers.is_empty()
             && self.is_plain_move(what)
             && let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice())
             && dest.width == source.width
