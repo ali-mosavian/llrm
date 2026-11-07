@@ -1031,11 +1031,16 @@ fn selected_in(
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
     let objects = crate::backend::stackcoloring::share_frame(module, function, &mut info, &sizes);
     let alloca_count = objects.len() as i32;
+    // A local above the alignment the stack keeps realigns it: the pin's
+    // `MaxAlignment > StackAlignment`
+    // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineFrameInfo.h#L641).
+    // DEVIATE OA-1: at least two slots, see `isel.rs`.
+    let kept = arch.stack_alignment().max(2 * arch.stack_slot_bytes());
     let mut over_aligned: Vec<(i64, i64)> = Vec::new();
     for (index, (size, align)) in objects.into_iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
         debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
-        if align > crate::backend::isel::OVER_ALIGNED {
+        if align > kept {
             over_aligned.push((frame.locals.borrow()[index].0, align));
         }
     }
@@ -1124,7 +1129,24 @@ fn selected_in(
         .map(|r| regs.root(*r))
         .filter(|r| !kept.contains(r) && !frame_registers.contains(r))
         .collect();
+    let x87_prices = (!arch.scalar_sse())
+        .then(|| {
+            let cost = |name: &str| cpu.cost(name).ok();
+            Some(super::emit::X87Prices {
+                load: cost("x87_load")?,
+                add: cost("x87_add")?,
+                add_m: cost("x87_add_m")?,
+                mul: cost("x87_mul")?,
+                mul_m: cost("x87_mul_m")?,
+                div: cost("x87_div")?,
+                div_m: cost("x87_div_m")?,
+                milliclocks_per_byte: cpu.speed_milliclocks_per_byte(),
+                memory_bytes: if matches!(address_mode, AddrMode::Real16) { 4 } else { 6 },
+            })
+        })
+        .flatten();
     let ctx = EmitContext {
+        x87_prices,
         tables: &tables_of_function,
         caller_saved: &caller_saved,
         conventions: &CallConventions { module, arch, contracts, general: &cpu.general },
@@ -1209,8 +1231,12 @@ fn selected_in(
             &tli,
             &mut X86Lowering {
                 cmov: tli.can_use_cmov(),
+                share_products: cpu.target().tti().is_some_and(|tti| tti.x87_share_negated_products()),
                 sse2,
-                min_size: cpu.min_size || bytes_beat_clocks,
+                min_size: cpu.min_size
+                    || bytes_beat_clocks
+                    || (cpu.size && cpu.target().tti().is_some_and(|tti| tti.imul_at_size())),
+                imul_if_smaller: cpu.size && !cpu.min_size && cpu.target().tti().is_some_and(|tti| tti.imul_at_size()),
                 three_address_adds: !(cpu.size || cpu.min_size)
                     && !matches!(
                         cpu.three_address(),

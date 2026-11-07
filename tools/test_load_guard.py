@@ -52,6 +52,8 @@ class Env:
         self.load = os.path.join(self.dir.name, "load")
         self.count = os.path.join(self.dir.name, "count")
         self.slots = os.path.join(self.dir.name, "slots")
+        self.meminfo = os.path.join(self.dir.name, "meminfo")
+        self.set_mem(10)
         self.set_load(1.0, 1.0)
         self.guards = []
 
@@ -62,6 +64,9 @@ class Env:
                 guard.wait(timeout=5)
         self.dir.cleanup()
 
+    def set_mem(self, gb):
+        open(self.meminfo, "w").write(f"MemTotal: 200000000 kB\nMemAvailable: {gb * 1024 * 1024} kB\n")
+
     def set_load(self, one, five):
         open(self.load, "w").write(f"{one} {five} 1.0 1/1 1\n")
 
@@ -71,7 +76,7 @@ class Env:
     def start(self, *command, **env):
         guard = subprocess.Popen(
             [GUARD, *command],
-            env={**os.environ, "LG_LOAD_FILE": self.load, "LG_POLL": "0.1", "LG_SLOT_DIR": self.slots, **env},
+            env={**os.environ, "LG_LOAD_FILE": self.load, "LG_POLL": "0.1", "LG_SLOT_DIR": self.slots, "LG_MEMINFO": self.meminfo, **env},
             stderr=subprocess.PIPE, text=True,
         )
         self.guards.append(guard)
@@ -143,17 +148,17 @@ class Pipeline(Env, unittest.TestCase):
 
 class Admission(Env, unittest.TestCase):
     def test_with_one_free_slot_only_one_of_two_concurrent_starters_runs(self):
-        env = {"LG_SLOTS": "1", "LG_NO_WAIT": "1", "LG_SETTLE": "0"}
+        env = {"LG_SLOTS": "1", "LG_SLOTS_HIGH": "1", "LG_NO_WAIT": "1", "LG_SETTLE": "0"}
         first = self.start("sleep", "3", **env)
         second = self.start("sleep", "3", **env)
         codes = sorted([first.wait(timeout=10), second.wait(timeout=10)])
         self.assertEqual(codes, [0, 75], "both starters ran, or neither")
 
     def test_a_waiting_starter_runs_when_the_slot_is_released(self):
-        first = self.start("sleep", "30", LG_SLOTS="1", LG_SETTLE="0")
+        first = self.start("sleep", "30", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SETTLE="0")
         self.assertTrue(until(lambda: os.path.isdir(self.slots) and any(descendants(first.pid))))
         marker = os.path.join(self.dir.name, "ran")
-        second = self.start("touch", marker, LG_SLOTS="1", LG_SETTLE="0")
+        second = self.start("touch", marker, LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SETTLE="0")
         time.sleep(0.5)
         self.assertFalse(os.path.exists(marker), "it ran without a slot")
         first.terminate()
@@ -179,12 +184,12 @@ class Admission(Env, unittest.TestCase):
         err = guard.communicate()[1]
         waits = re.findall(r"load_guard: \d\d:\d\dZ waiting for load \(1m 30.0, 5m 30.0, slots 0/3 busy\)", err)
         self.assertGreaterEqual(len(waits), 2, err)
-        self.assertRegex(err, r"load_guard: \d\d:\d\dZ admit slot \d \(1m 1.0\)")
+        self.assertRegex(err, r"load_guard: \d\d:\d\dZ admit slot \d \(1m 1.0, slots 5\)")
 
     def test_a_starter_without_a_slot_says_it_waits_for_a_slot(self):
-        first = self.start("sleep", "30", LG_SLOTS="1", LG_SETTLE="0")
+        first = self.start("sleep", "30", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SETTLE="0")
         self.assertTrue(until(lambda: os.path.isdir(self.slots) and any(descendants(first.pid))))
-        second = self.start("true", LG_SLOTS="1", LG_WAIT_LOG="0.3", LG_SETTLE="0")
+        second = self.start("true", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_WAIT_LOG="0.3", LG_SETTLE="0")
         time.sleep(1.0)
         first.terminate()
         first.wait(timeout=5)
@@ -192,12 +197,11 @@ class Admission(Env, unittest.TestCase):
         self.assertRegex(second.communicate()[1], r"waiting for slot \(1m [\d.]+, 5m [\d.]+, slots 1/1 busy\)")
 
 
-    def test_the_start_threshold_is_27_on_the_one_minute_load(self):
-        """Baseline load is ~25: a threshold of 25 starved every starter."""
-        self.set_load(26.9, 1.0)
+    def test_the_start_threshold_is_25_on_the_one_minute_load(self):
+        self.set_load(24.9, 1.0)
         admitted = self.start("true", LG_NO_WAIT="1", LG_SETTLE="0")
         self.assertEqual(admitted.wait(timeout=5), 0)
-        self.set_load(27.0, 1.0)
+        self.set_load(25.0, 1.0)
         refused = self.start("true", LG_NO_WAIT="1", LG_SETTLE="0")
         self.assertEqual(refused.wait(timeout=5), 75)
 
@@ -205,12 +209,282 @@ class Admission(Env, unittest.TestCase):
         """Both saw the same 1m load and both went; the load rose only after they had started."""
         env = {"LG_SETTLE": "1.5"}
         first = self.start("true", **env)
-        self.assertEqual(first.wait(timeout=5), 0)
+        self.assertEqual(first.wait(timeout=20), 0)
         began = time.time()
         second = self.start("true", **env)
         self.assertEqual(second.wait(timeout=10), 0)
         self.assertGreaterEqual(time.time() - began, 1.0, "the second starter did not wait for the first to settle")
 
 
+class SlotCount(Env, unittest.TestCase):
+    """Three slots were held by long jobs while the load sat at 12 and m68k starved; the count now follows the load."""
+
+    def admitted(self, load, wanted):
+        """How many of `wanted` long jobs the guard admits at 1m `load`."""
+        self.set_load(load, load)
+        jobs = [self.start("sleep", "30", LG_NO_WAIT="1", LG_SETTLE="0") for _ in range(wanted)]
+        time.sleep(1.5)
+        return sum(1 for job in jobs if job.poll() is None)
+
+    def test_five_slots_while_the_one_minute_load_is_under_20(self):
+        self.assertEqual(self.admitted(15.0, 7), 5)
+
+    def test_three_slots_at_a_load_of_26_and_no_admission_at_all(self):
+        self.assertEqual(self.admitted(23.0, 7), 3)  # 22..25: base count, admitting
+        self.assertEqual(self.admitted(26.0, 1), 0, "a job was admitted at 1m 26")
+
+    def test_between_20_and_22_the_count_stays_what_it_was(self):
+        self.assertEqual(self.admitted(15.0, 1), 1)  # widens to 5
+        self.set_load(21.0, 21.0)
+        late = [self.start("sleep", "30", LG_NO_WAIT="1", LG_SETTLE="0") for _ in range(5)]
+        time.sleep(1.5)
+        self.assertEqual(sum(1 for job in late if job.poll() is None), 4, "21 must keep 5 slots (1 already running)")
+
+    def test_a_fresh_start_at_21_has_three_slots(self):
+        self.assertEqual(self.admitted(21.0, 5), 3)
+
+    def test_quiet_jobs_are_admitted_only_under_a_load_of_20(self):
+        self.set_load(21.0, 21.0)
+        self.assertEqual(self.start("true", LG_QUIET="1", LG_NO_WAIT="1", LG_SETTLE="0").wait(timeout=5), 75)
+        self.set_load(19.0, 19.0)
+        self.assertEqual(self.start("true", LG_QUIET="1", LG_NO_WAIT="1", LG_SETTLE="0").wait(timeout=5), 0)
+
+    def test_running_jobs_are_not_stopped_when_the_count_falls(self):
+        self.assertEqual(self.admitted(15.0, 5), 5)
+        self.set_load(24.0, 24.0)
+        time.sleep(1.0)
+        self.assertTrue(all(job.poll() is None for job in self.guards))
+
+
+class Resume(Env, unittest.TestCase):
+    """cargo, m68k and ct-rc-base sat stopped ~6 min at 1m 12-15 because the 5m average was still high."""
+
+    def stopped_group(self):
+        guard = self.start(*self.counter())
+        self.assertTrue(until(lambda: os.path.exists(self.count)))
+        pgid = int(subprocess.run(["pgrep", "-P", str(guard.pid), "-f", "while :"], capture_output=True, text=True).stdout.split()[0])
+        self.set_load(30.0, 30.0)
+        self.assertTrue(until(lambda: state(pgid) == "T"))
+        return pgid
+
+    def test_a_group_resumes_at_one_minute_12_though_five_minute_is_34(self):
+        pgid = self.stopped_group()
+        self.set_load(12.0, 34.0)
+        self.assertTrue(until(lambda: state(pgid) != "T"), "stayed stopped at 1m 12 / 5m 34")
+
+    def test_a_group_stays_stopped_at_one_minute_22_and_five_minute_34(self):
+        pgid = self.stopped_group()
+        self.set_load(22.0, 34.0)
+        time.sleep(1.0)
+        self.assertEqual(state(pgid), "T")
+
+
+class SlotFile(Env, unittest.TestCase):
+    """A waiter's `echo > slots_now` truncates the file; another waiter's `cat` then read an empty count, `[ $busy -lt $slots ]` failed
+    with "integer expression expected", and that pass admitted nobody (13:39Z, every waiter's log)."""
+
+    def test_slot_count_in_the_mid_band_never_prints_empty_beside_a_truncating_writer(self):
+        os.makedirs(self.slots)
+        slot_file = os.path.join(self.slots, "slots_now")
+        open(slot_file, "w").write("3\n")
+        script = open(GUARD).read()
+        start = script.index("slot_count() {")
+        body = script[start:script.index("\n}\n", start) + 3]
+        harness = (
+            "above() { awk -v a=\"$1\" -v b=\"$2\" 'BEGIN{exit !(a>b)}'; }\n"
+            f"base=3 high=5 widen1=20 narrow1=22 wide=7 widest=10 widest1=14 slot_dir={self.slots}\n{body}\n"
+            f"( while :; do : > {slot_file}; echo 3 > {slot_file}; done ) & w=$!\n"
+            "empty=0; for i in $(seq 1 400); do n=$(slot_count 21 2>/dev/null | tail -1); [ -n \"$n\" ] || empty=$((empty+1)); done\n"
+            "kill $w; echo empty=$empty\n"
+        )
+        done = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.stdout.strip().splitlines()[-1], "empty=0", done.stdout + done.stderr)
+
+
+class TermInsideTheQueue(Env, unittest.TestCase):
+    """A waiter that got SIGTERM inside prio_edit ran its EXIT trap (prio_edit del) in the same shell, which flocked prio.lock a
+    second time on a new descriptor and waited for itself: the waiter never died (test_the_fast_settle... timed out in tearDown under load)."""
+
+    def test_a_waiter_terminated_while_it_holds_the_priority_lock_exits(self):
+        wrapper_dir = os.path.join(self.dir.name, "bin")
+        os.makedirs(wrapper_dir)
+        slow = os.path.join(wrapper_dir, "flock")
+        open(slow, "w").write("#!/bin/sh\n/usr/bin/flock \"$@\"; rc=$?; sleep 0.3; exit $rc\n")
+        os.chmod(slow, 0o755)
+        self.set_load(23.0, 23.0)
+        env = {"LG_SETTLE": "60", "LG_SETTLE_FAST": "1"}
+        self.assertEqual(self.start("true", **env).wait(timeout=10), 0)  # leaves the settle period running
+        path = f"{wrapper_dir}:{os.environ['PATH']}"
+        for attempt in range(6):  # a waiter spends most of each poll inside prio_edit first, holding the lock
+            guard = self.start("true", PATH=path, **env)
+            time.sleep(0.4 + 0.07 * attempt)
+            guard.terminate()
+            self.assertTrue(until(lambda: guard.poll() is not None, 3), f"attempt {attempt}: stuck on its own lock")  # LG_LOCK_WAIT 2 s
+            self.assertTrue(until(lambda: self.slots_free(), 2), f"attempt {attempt}: a slot stayed locked after the exit")
+
+    def slots_free(self):
+        import fcntl
+        slot_dir = os.path.join(self.dir.name, "slots")
+        for name in os.listdir(slot_dir):
+            if not name.startswith("slot."):
+                continue
+            with open(os.path.join(slot_dir, name)) as f:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    return False
+        return True
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class Order(Env, unittest.TestCase):
+    """27 waiters drained at one per minute in no order: a miscompile build waited behind benches."""
+
+    def admit_order(self, tiers, **env):
+        self.set_load(30.0, 30.0)  # nobody starts until all are queued
+        log = os.path.join(self.dir.name, "order")
+        jobs = []
+        for tier in tiers:
+            jobs.append(self.start("bash", "-c", f"echo {tier} >> {log}", LG_TIER=str(tier), LG_SETTLE="0", LG_POLL="0.05", **env))
+            time.sleep(0.3)
+        self.set_load(1.0, 1.0)
+        for job in jobs:
+            job.wait(timeout=15)
+        return open(log).read().split()
+
+    def test_waiters_are_admitted_by_tier_not_by_arrival(self):
+        self.assertEqual(self.admit_order([3, 1, 2]), ["1", "2", "3"])
+
+    def test_inside_a_tier_the_earlier_waiter_goes_first(self):
+        self.assertEqual(self.admit_order([2, 2, 2]), ["2", "2", "2"])
+
+    def test_four_jobs_at_a_low_load_start_within_the_fast_settle(self):
+        self.set_load(5.0, 5.0)
+        began = time.time()
+        jobs = [self.start("true", LG_SETTLE="60", LG_SETTLE_FAST="1", LG_SLOTS="5", LG_POLL="0.05") for _ in range(4)]
+        for job in jobs:
+            self.assertEqual(job.wait(timeout=15), 0)
+        self.assertLess(time.time() - began, 8, "the 60 s settle applied at 1m load 5")
+
+
+class Drain(Env, unittest.TestCase):
+    """The 15 s settle applied only under 1m 15, but each admission lifts the load past 15: the queue of 27 drained at one per minute."""
+
+    def test_four_jobs_at_one_minute_16_start_within_the_fast_settle(self):
+        self.set_load(16.0, 16.0)
+        began = time.time()
+        jobs = [self.start("true", LG_SETTLE="60", LG_SETTLE_FAST="1", LG_POLL="0.05") for _ in range(4)]
+        for job in jobs:
+            self.assertEqual(job.wait(timeout=15), 0)
+        self.assertLess(time.time() - began, 10, "the 60 s settle applied at 1m load 16")
+
+    def test_the_fast_settle_does_not_apply_at_one_minute_23(self):
+        self.set_load(23.0, 23.0)
+        first = self.start("true", LG_SETTLE="60", LG_SETTLE_FAST="1", LG_POLL="0.05")
+        self.assertEqual(first.wait(timeout=20), 0)
+        second = self.start("true", LG_SETTLE="60", LG_SETTLE_FAST="1", LG_POLL="0.05")
+        time.sleep(3)
+        self.assertIsNone(second.poll(), "second starter ran inside the 60 s settle at 1m 23")
+
+    def admitted(self, load, gb, wanted=9):
+        self.set_load(load, load)
+        self.set_mem(gb)
+        jobs = [self.start("sleep", "30", LG_NO_WAIT="1", LG_SETTLE="0") for _ in range(wanted)]
+        time.sleep(2)
+        return sum(1 for job in jobs if job.poll() is None)
+
+    def test_seven_slots_at_one_minute_17_with_80_gb_available(self):
+        self.assertEqual(self.admitted(17.0, 80), 7)
+
+    def test_five_slots_at_one_minute_17_with_30_gb_available(self):
+        self.assertEqual(self.admitted(17.0, 30), 5)
+
+    def test_seven_slots_at_one_minute_21_with_80_gb_available(self):
+        """Five slots at 1m 18.5 left 34 waiters queued with load 18 and the start limit 25: slots, not load, were the bottleneck."""
+        self.assertEqual(self.admitted(21.0, 80), 7)
+
+    def test_three_slots_at_one_minute_23_with_80_gb_available(self):
+        self.assertEqual(self.admitted(23.0, 80), 3)
+
+    def test_a_waiter_wakes_within_ten_seconds_of_the_load_dropping(self):
+        """The 15 s default poll let only the head waiter admit every 15-30 s: 38 queued at 1m 8, five slots free."""
+        self.set_load(30.0, 30.0)
+        waiter = self.start("true", LG_POLL="", LG_SETTLE="0")
+        time.sleep(1)
+        self.set_load(1.0, 1.0)
+        self.assertEqual(waiter.wait(timeout=10), 0, "the waiter slept through the 15 s default poll")
+
+    def test_an_aged_tier_3_waiter_outranks_a_fresh_tier_2(self):
+        """Tier 2 arrivals at 3-4 per minute starved every tier-3 PR gate for over an hour."""
+        self.set_load(30.0, 30.0)
+        log = os.path.join(self.dir.name, "order")
+        jobs = [self.start("bash", "-c", f"echo 3 >> {log}", LG_TIER="3", LG_SETTLE="0", LG_POLL="0.05", LG_AGE_STEP="2")]
+        time.sleep(3)
+        jobs.append(self.start("bash", "-c", f"echo 2 >> {log}", LG_TIER="2", LG_SETTLE="0", LG_POLL="0.05", LG_AGE_STEP="2"))
+        time.sleep(0.5)
+        self.set_load(1.0, 1.0)
+        for job in jobs:
+            job.wait(timeout=15)
+        self.assertEqual(open(log).read().split(), ["3", "2"])
+
+    def test_an_aged_tier_4_waiter_never_passes_a_tier_2(self):
+        self.set_load(30.0, 30.0)
+        log = os.path.join(self.dir.name, "order")
+        jobs = [self.start("bash", "-c", f"echo 4 >> {log}", LG_TIER="4", LG_SETTLE="0", LG_POLL="0.05", LG_AGE_STEP="1")]
+        time.sleep(4)
+        jobs.append(self.start("bash", "-c", f"echo 2 >> {log}", LG_TIER="2", LG_SETTLE="0", LG_POLL="0.05", LG_AGE_STEP="1"))
+        time.sleep(0.5)
+        self.set_load(1.0, 1.0)
+        for job in jobs:
+            job.wait(timeout=15)
+        self.assertEqual(open(log).read().split(), ["2", "4"])
+
+    def test_a_waiter_whose_prio_line_was_erased_is_still_admitted(self):
+        """An old-copy waiter's prune read 'tier start pid 25' as pid '<pid> 25' and dropped every new line: new waiters never became first and starved with slots free."""
+        self.set_load(30.0, 30.0)
+        waiter = self.start("true", LG_TIER="3", LG_SETTLE="0", LG_POLL="0.05")
+        time.sleep(0.5)
+        open(os.path.join(self.slots, "prio"), "w").close()
+        self.set_load(1.0, 1.0)
+        self.assertEqual(waiter.wait(timeout=10), 0, "the waiter never became first after its line was erased")
+
+    def test_ten_slots_at_one_minute_13_with_80_gb_available(self):
+        self.assertEqual(self.admitted(13.0, 80, wanted=12), 10)
+
+    def test_ten_slots_at_one_minute_16_with_80_gb_available(self):
+        """Seven slots at 1m 16 left 38 waiters queued with load 16 and the start limit 25."""
+        self.assertEqual(self.admitted(16.0, 80, wanted=12), 10)
+
+    def test_seven_slots_at_one_minute_18_with_80_gb_available(self):
+        self.assertEqual(self.admitted(18.0, 80, wanted=12), 7)
+
+    def test_five_slots_at_one_minute_13_with_30_gb_available(self):
+        self.assertEqual(self.admitted(13.0, 30, wanted=12), 5)
+
+    def test_slots_wide_file_holds_the_wide_count(self):
+        self.admitted(13.0, 80, wanted=1)
+        self.assertEqual(open(os.path.join(self.slots, "slots_wide")).read().strip(), "10")
+
+    def test_a_quiet_head_does_not_block_a_normal_waiter_at_one_minute_22(self):
+        """A LG_QUIET tier-1 waiter (start line 20) at the head of the queue starved every normal waiter in the 20-25 band."""
+        self.set_load(22.0, 22.0)
+        quiet = self.start("sleep", "30", LG_TIER="1", LG_QUIET="1", LG_SETTLE="0")
+        time.sleep(0.5)
+        normal = self.start("true", LG_TIER="4", LG_SETTLE="0")
+        self.assertEqual(normal.wait(timeout=5), 0, "the quiet head blocked a waiter whose start line is 25")
+        self.assertIsNone(quiet.poll())
+
+    def test_tier_order_holds_with_the_wider_count(self):
+        self.set_load(30.0, 30.0)
+        log = os.path.join(self.dir.name, "order")
+        jobs = []
+        for tier in (3, 1, 2):
+            jobs.append(self.start("bash", "-c", f"echo {tier} >> {log}", LG_TIER=str(tier), LG_SETTLE="0", LG_POLL="0.05"))
+            time.sleep(0.3)
+        self.set_load(16.0, 16.0)
+        for job in jobs:
+            job.wait(timeout=15)
+        self.assertEqual(open(log).read().split(), ["1", "2", "3"])

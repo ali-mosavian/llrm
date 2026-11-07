@@ -545,7 +545,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
             for source, target in ((f"{stem}.EXE", exe), (f"{stem}.MAP", listing), (f"{stem}.OBJ", obj)):
                 shutil.copy(folder / reference / source, target)
             own(key, stem, directory, variant, (exe, listing), obj)
-    with ProcessPoolExecutor() as pool:
+    with ProcessPoolExecutor(max_workers=workers()) as pool:
         for (key, _), counts in zip(owned, pool.map(measure, [job for _, job in owned])):
             out[key] = counts
     if timing:
@@ -613,12 +613,24 @@ def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
         data, bss = sizes.data_bytes(obj)
         return key, {"instructions": ran.inclusive[region.upper()], **code_fields(obj), "data_bytes": data, "bss_bytes": bss} | (flat_clocks(key, image, region, ran.inclusive[region.upper()], work / f"{stem}-{key[2]}") if image else {})
 
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=workers()) as pool:
         found = dict(pool.map(one, flat.items()))
     return {key: counts for key, counts in found.items() if key[0] != "startup"}
 
 
 START = time.monotonic()
+
+
+def workers() -> int:
+    """Pool size: the guard's base slot count, so a bench run takes no more cores than one admitted job (a storm of 32 workers starved the others)."""
+    return cpulimit.pool_workers()
+
+
+def guarded_argv() -> list[str] | None:
+    """The command that runs this one under tools/load_guard.sh, or None when it already is."""
+    if os.environ.get("LG_GUARDED") == "1":
+        return None
+    return [str(Path(__file__).resolve().parents[1] / "load_guard.sh"), sys.executable, *sys.argv]
 
 
 def cores() -> str:
@@ -647,7 +659,7 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
         for opt in opts:
             out |= measure_opt(selected, opt, work, timing)
     else:
-        with ProcessPoolExecutor(max_workers=len(opts)) as pool:
+        with ProcessPoolExecutor(max_workers=min(len(opts), workers())) as pool:
             for part in pool.map(measure_opt, [selected] * len(opts), opts, [work] * len(opts), [timing] * len(opts)):
                 out |= part
     if ONLY is None or native.OURS in ONLY:
@@ -668,7 +680,7 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
     todo = [(directory, variant) for directory, variant in everything if not tools_missing(variant)]
     stems = {(v.name, v.language): f"V{at:03d}" for at, (_, v) in enumerate(todo)}
     objects = qbbuild.runtimes(work / f"runtime-{opt}") if any(v.language in OURS_BASIC for _, v in todo) else None
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=workers()) as pool:
         built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)], objects), todo))
     stage(f"{opt}: built {len(todo)} programs")
     basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language in BASIC_LANGUAGES and not isinstance(b, str)}
@@ -697,7 +709,7 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
             files, want, counted = counting_input(variant, directory, folder / "ci-input" / stem)
             jobs.append((key, (stem, exe, listing, variant.region if counted else None, want, folder / f"{stem}.obj", files)))
             needs[key] = timing_input(variant, directory, None if timing else folder / "ci-input" / stem)
-    with ProcessPoolExecutor() as pool:
+    with ProcessPoolExecutor(max_workers=workers()) as pool:
         counted = [(key, job) for key, job in jobs if job is not None]
         for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
             out[key] = counts
@@ -1262,6 +1274,8 @@ def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
 
 
 def main() -> int:
+    if (argv := guarded_argv()) and os.environ.get("LG_BENCH_UNGUARDED") != "1":
+        os.execv(argv[0], argv)
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
     parser.add_argument("--opt", nargs="+", default=["O2", "Os"])

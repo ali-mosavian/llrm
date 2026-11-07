@@ -344,7 +344,7 @@ def main() -> int:
     if mode:
         report.unlink(missing_ok=True)
         os.environ["LLRM_ISEL_REPORT"] = str(report)
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=cpulimit.pool_workers()) as pool:
         built = dict(zip((p.name for p in programs), pool.map(lambda p: build(p, objs, stems[p.name]), programs)))
     if mode:
         dag, old = dosbatch.isel_proof(report, mode)

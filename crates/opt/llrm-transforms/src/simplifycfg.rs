@@ -502,7 +502,7 @@ fn block_simplified(
     let mut changed = terminator_folded(context, callees, function, block, true);
     *folded |= changed;
     changed |= transform::duplicate_phis_in(function, block).expect("a phi nothing reads is erased");
-    if undefpred::removed(context, spec, function, block) {
+    if undefpred::removed(context, spec, declared, function, block) {
         return true;
     }
     changed |= cfg::merged_into_predecessor(function, block);

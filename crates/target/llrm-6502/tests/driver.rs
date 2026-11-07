@@ -2387,8 +2387,13 @@ fn a_long_multiply_by_a_near_power_of_two_is_shifts_where_clocks_count() {
     let linked = format!("{fast}\n{}", common::pipeline::reachable_runtime(&fast));
     assert_eq!(exit_code_of(&linked, "t3"), 0x09, "{fast}");
     assert_eq!(exit_code_of(&linked, "t257"), 0x07, "{fast}");
-    // tuned for size: the call stays for 3, not for 257
-    let ir = ir.replace("noinline {", "noinline optsize {");
+    // tuned for size: the call stays for 3, not for 257, while a variable
+    // multiply keeps the routine linked (alone, `by3` is shifts: mul_image.rs)
+    let ir = format!(
+        "{}\n{}",
+        ir.replace("noinline {", "noinline optsize {"),
+        "define i32 @prod(i32 %a, i32 %b) noinline optsize {\n  %r = mul i32 %a, %b\n  ret i32 %r\n}"
+    );
     let small = assembly(&ir, &Request::new(Level::Os)).unwrap();
     let (by3, by257) = (function_text(&small, "by3"), function_text(&small, "by257"));
     assert!(by3.contains("__mulsi3"), "{by3}");
@@ -2684,4 +2689,92 @@ fn a_long_division_by_a_known_byte_calls_the_byte_entry_at_speed() {
             "{opcode} by a word in a loop:\n{text}"
         );
     }
+}
+
+/// A 16-bit loop counter tested with `ult` against its OLD value while the
+/// stepped one is already made kept two copies of it: `stx rc3; sty rc2` at
+/// the loop top and `lda rc3; cmp #63; lda rc2; sbc #0` after the step
+/// (`shift_int64` -Os +5 B, `overflow_builtins` +9 B). The branch reads the
+/// carry alone and `inx`/`iny` leave it, so the compare is made before the
+/// step.
+fn counter_loop(condition: &str) -> String {
+    module(&format!(
+        "@g = global i16 0\n\
+         define i8 @t() {{\nentry:\n  br label %l\nl:\n  %i = phi i16 [0, %entry], [%j, %l]\n  \
+         store volatile i16 %i, ptr @g\n  %j = add i16 %i, 1\n  %c = icmp {condition}\n  \
+         br i1 %c, label %l, label %x\nx:\n  %v = load volatile i16, ptr @g\n  %b = trunc i16 %v to i8\n  ret i8 %b\n}}"
+    ))
+}
+
+#[test]
+fn a_carry_branch_on_the_old_counter_is_compared_before_the_step() {
+    let ir = counter_loop("samesign ult i16 %i, 63");
+    for level in [Level::Os, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        let (compare, step) = (text.find("cmp #63"), text.find("inx"));
+        assert!(compare.is_some() && step.is_some(), "no compare or no step:\n{text}");
+        assert!(compare < step, "the compare comes after the step:\n{text}");
+        assert!(!text.contains("stx rc") && !text.contains("sty rc"), "a copy of the counter:\n{text}");
+        assert_eq!(exit_code_of(&text, "t"), 63, "{text}");
+    }
+}
+
+/// A branch on Z (`ne`) reads the flags `inx` sets: its compare keeps its
+/// place after the step, and the copy of the old counter stays.
+#[test]
+fn a_zero_branch_on_the_old_counter_keeps_its_compare_after_the_step() {
+    let ir = counter_loop("ne i16 %i, 63");
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    let (compare, step) = (text.find("cmp #63"), text.find("inx"));
+    assert!(compare.is_some() && step.is_some(), "no compare or no step:\n{text}");
+    assert!(step < compare, "the compare moved above the step:\n{text}");
+    assert!(text.contains("stx rc") || text.contains("sty rc"), "{text}");
+    assert_eq!(exit_code_of(&text, "t"), 63, "{text}");
+}
+
+/// The compare of the NEW counter (`%j < 63`) must not move above the step:
+/// it would test the old value and run one trip too many. The last value
+/// stored is 62.
+#[test]
+fn a_compare_of_the_new_counter_stays_after_the_step() {
+    let ir = counter_loop("samesign ult i16 %j, 63");
+    for level in [Level::Os, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert_eq!(exit_code_of(&text, "t"), 62, "{text}");
+    }
+}
+
+/// A down counter's step (`lda lo; bne; dec hi; dec lo`) takes the accumulator;
+/// the compare that moves above it still sees the old value: the loop stores
+/// 63 down to 5 and ends on 5.
+#[test]
+fn a_carry_branch_on_the_old_down_counter_runs_the_same_trips() {
+    let ir = module(
+        "@g = global i16 0\n\
+         define i8 @t() {\nentry:\n  br label %l\nl:\n  %i = phi i16 [63, %entry], [%j, %l]\n  \
+         store volatile i16 %i, ptr @g\n  %j = sub i16 %i, 1\n  %c = icmp samesign ugt i16 %i, 5\n  \
+         br i1 %c, label %l, label %x\nx:\n  %v = load volatile i16, ptr @g\n  %b = trunc i16 %v to i8\n  ret i8 %b\n}",
+    );
+    for level in [Level::Os, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert_eq!(exit_code_of(&text, "t"), 5, "{text}");
+    }
+}
+
+/// `select i16 -1, 1` left `lda #255; sta rc4; sta rc5` in front of the `bcs`
+/// over its second arm: two stores to argument cells nothing reads, 6 B in
+/// stricmp (84 against llvm-mos's 70).
+#[test]
+fn a_constant_pair_select_leaves_no_store_to_a_cell_nothing_reads() {
+    let ir = module(
+        "define i16 @f(ptr %p, i8 %b) {\n  %a = load i8, ptr %p\n  %c = icmp ult i8 %a, %b\n  %r = select i1 %c, i16 -1, i16 1\n  ret i16 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let body: String = text[text.find("__r_f:").unwrap()..].split(".segment").next().unwrap().to_owned();
+    let stores: Vec<&str> = body.lines().filter(|l| l.trim_start().starts_with("st") && l.contains("rc")).collect();
+    // `sta rc5` (the loaded byte kept for the compare) is read; the 255 stores are not
+    assert!(
+        !body.lines().any(|l| l.trim() == "stx rc2" || l.trim() == "stx rc3"),
+        "stores {stores:?}\n{body}"
+    );
 }

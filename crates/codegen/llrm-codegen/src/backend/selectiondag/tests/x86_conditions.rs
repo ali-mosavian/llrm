@@ -30,7 +30,18 @@ fn lowered(
     DagLegalizer::new(
         dag,
         &tli,
-        &mut X86Lowering { cmov, sse2: false, min_size: false, three_address_adds: false, i16_mul_chains: false, sext_load: false, zext_free: false, profile: None },
+        &mut X86Lowering {
+            share_products: false,
+            imul_if_smaller: false,
+            cmov,
+            sse2: false,
+            min_size: false,
+            three_address_adds: false,
+            i16_mul_chains: false,
+            sext_load: false,
+            zext_free: false,
+            profile: None,
+        },
     )
     .run()
     .unwrap();
@@ -138,16 +149,65 @@ fn narrow_selects_widen_by_cpu() {
     }
 }
 
-/// The pin's `foldBinOpIntoSelect`, `(xor (and x, y), y)` and GE/LE canonicalization ran on every target but x86,
-/// which kept `select (add c, 1)` as an add of a select (bintree C -7 B and -16% clocks at -O2).
+/// The pin's `foldBinOpIntoSelect`, `(xor (and x, y), y)` and GE/LE
+/// canonicalization ran on every target but x86, which kept `select (add c, 1)`
+/// as an add of a select (bintree C -7 B and -16% clocks at -O2).
 #[test]
 fn x86_runs_the_pin_combines_the_corpus_judged_better() {
     use super::super::dag_combiner::CombineHooks;
-    let hooks = X86Lowering { cmov: true, sse2: false, min_size: false, three_address_adds: false, i16_mul_chains: false, sext_load: false, zext_free: false, profile: None };
+    let hooks = X86Lowering {
+        share_products: false,
+        imul_if_smaller: false,
+        cmov: true,
+        sse2: false,
+        min_size: false,
+        three_address_adds: false,
+        i16_mul_chains: false,
+        sext_load: false,
+        zext_free: false,
+        profile: None,
+    };
     assert!(hooks.fold_bin_op_into_select() && hooks.fold_xor_of_and_with_mask() && hooks.canonicalize_ge_le());
-    assert!(!hooks.rebuild_brcond_condition() && !hooks.fold_mul_of_add_with_constant());
-    let m64 = X86Lowering { zext_free: true, ..hooks };
+    assert!(!hooks.rebuild_brcond_condition() && hooks.fold_mul_of_add_with_constant());
+    let m64 = X86Lowering { share_products: false, zext_free: true, ..hooks };
     assert!(m64.rebuild_brcond_condition() && m64.fold_and_of_extload());
+}
+
+/// At m16 `(x + c1) * c2` distributed to `x * c2 + c1*c2` took the constant out
+/// of a 3-part `lea` into a trailing `add`: regparm3_matrix_4 and _22 -40..-62
+/// B but +62..+84 executed instructions, +38 and +32 clk-eq worse at -O1..-O3
+/// (1 clk = 2 B). The pin does the same; m16 keeps the multiply of the sum for
+/// speed, and distributes it at -Os (strict bytes) and on m32 and m64.
+#[test]
+fn m16_distributes_a_multiply_of_a_sum_only_for_size() {
+    use super::super::dag_combiner::{CombineLevel, DagCombiner};
+    let flat = X86Lowering {
+        share_products: false,
+        imul_if_smaller: false,
+        cmov: true,
+        sse2: false,
+        min_size: false,
+        three_address_adds: false,
+        i16_mul_chains: false,
+        sext_load: false,
+        zext_free: false,
+        profile: None,
+    };
+    let m16 = X86Lowering { share_products: false, i16_mul_chains: true, ..flat };
+    let m16_size = X86Lowering { share_products: false, min_size: true, ..m16 };
+    let root_of = |mut hooks: X86Lowering| {
+        let mut dag = dag();
+        let x = dag.get_register(EVT::I16, 5);
+        let (three, five) = (dag.get_constant(3, EVT::I16), dag.get_constant(5, EVT::I16));
+        let sum = dag.get_node(ISD::Add, EVT::I16, &[x, three]);
+        let product = dag.get_node(ISD::Mul, EVT::I16, &[sum, five]);
+        dag.set_root(product);
+        DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).run();
+        dag.opcode(dag.get_root())
+    };
+    assert_eq!(root_of(m16), ISD::Mul, "m16 -O2 keeps the multiply of the sum");
+    assert_eq!(root_of(m16_size), ISD::Add, "m16 -Os distributes");
+    assert_eq!(root_of(flat), ISD::Add, "m32 and m64 distribute");
 }
 
 /// `and (freeze (extload i8)), 255` kept the load wide and the mask: x86 did
@@ -160,6 +220,8 @@ fn x86_narrows_a_mask_over_a_frozen_extending_load() {
     let mut dag = dag();
     super::pin_folds::masked_frozen_extload(&mut dag);
     let mut x86 = X86Lowering {
+        imul_if_smaller: false,
+        share_products: false,
         cmov: true,
         sse2: false,
         min_size: false,
