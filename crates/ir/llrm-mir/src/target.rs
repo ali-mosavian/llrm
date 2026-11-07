@@ -126,6 +126,9 @@ pub struct Tuning {
     /// (promoted to registers) holds only while the promoted elements fit the
     /// register file (UP1). false: every such access is free.
     pub unroll_promotion_fits_registers: bool,
+    /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
+    /// `Tti::lsr_size_order`.
+    pub lsr_size_order: bool,
     /// UP1 for the floats of an x87 target: the register file a promoted
     /// float array's elements must fit is the x87 stack (`x87_stack_slots`,
     /// 8), which holds nothing across the nest's inner loops. Ints keep the
@@ -195,6 +198,12 @@ pub struct Tuning {
     /// Linux x86-64 stays false: glibc's `memcpy` of 0-32 bytes is 6.4 TSC
     /// ticks a call, `rep movsb` 8.2 (Ryzen 9 9950X3D, fsrm; 2026-11-05).
     pub inline_variable_memcpy: bool,
+    /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541: tuned for size, a constant
+    /// `memcpy`/`memmove` whose load and store pieces take more bytes than the call of the library
+    /// routine (`mov edx, n` and the call) is the call, at the target's `CopyPrice`. The pin counts pieces
+    /// (`MaxStoresPerMemcpyOptSize`). gcc -Os calls from 32 B (mv64 10 B against the pin's 31).
+    /// None: the pin's pieces.
+    pub size_copy_price: Option<CopyPrice>,
     /// DEVIATE REC5-1 (owner w2, exit 2026-11-20): IPSCCP widens a range that
     /// keeps growing to its half-line, keeping the sign, not to overdefined
     /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
@@ -205,6 +214,15 @@ pub struct Tuning {
 /// Encoded bytes of a constant fill, stores against `rep stos`. Each pair or
 /// triple is [frame object, global]: a short displacement against an absolute
 /// address.
+/// The bytes a constant copy tuned for size is priced in (`Tuning::size_copy_price`): the library call
+/// (`mov edx, n` and the call) against the load and store pieces, a wide one (16 or 8 bytes) or a narrower one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CopyPrice {
+    pub call: u64,
+    pub wide_piece: u64,
+    pub narrow_piece: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SizeFill {
     /// A dword, word and byte store of an immediate.
@@ -253,6 +271,7 @@ impl Tuning {
         inline_size_guard_single_site: false,
         inline_chain_trial: false,
         unroll_promotion_fits_registers: false,
+        lsr_size_order: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_header_priced_at_size: false,
@@ -268,6 +287,7 @@ impl Tuning {
         unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,
         inline_variable_memcpy: false,
+        size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
     };
 }

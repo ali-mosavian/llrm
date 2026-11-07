@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_branch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_branch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_branch.rs sha256:fd376cdc7027df83a8e71651158a0f6e1125ab0ac1e608dc7b7de1254b461ce6 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_branch.rs sha256:c45ae1ea491058d65ea8e8803947454eeda0c1d43d9c5ffad260636e327c2b27 -->
 
 # combine_branch
 
@@ -27,7 +27,7 @@ MIRROR: every use of the condition that an edge dominates becomes `true`
 (the first edge) or `false` (the second): a second branch on the same
 compare, further down, reads a number.
 
-DEVIATE 2: branch weights are not swapped (MIR carries none on a branch).
+MIRROR: the weights swap with the successors (`swapSuccessors`).
 
 ## Example
 ```text

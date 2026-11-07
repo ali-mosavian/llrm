@@ -357,6 +357,9 @@ pub struct Combiner<'a> {
     /// What the pass declares in its module
     /// (`Intrinsic::getOrInsertDeclaration`).
     pub declared: &'a mut Declared,
+    /// `SQ.getWithoutDomCondCache()`: ValueTracking queries drop the
+    /// dominating conditions while set (`foldICmpUsingKnownBits`).
+    pub without_dom_conditions: bool,
 }
 
 impl Combiner<'_> {
@@ -729,7 +732,14 @@ pub(crate) fn combine_for(
         fixed_shift_count,
         back_edges: Default::default(),
     };
-    let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
+    let mut c = Combiner {
+        context,
+        function,
+        env: &env,
+        worklist: InstWorklist::default(),
+        declared,
+        without_dom_conditions: false,
+    };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
     changed |= drain(&mut c, visit);
     changed

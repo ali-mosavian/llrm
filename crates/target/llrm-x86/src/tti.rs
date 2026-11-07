@@ -775,6 +775,10 @@ impl Tti for X86 {
         self.tuning.inline_variable_memcpy
     }
 
+    fn copy_price_for_size(&self) -> Option<llrm_mir::target::CopyPrice> {
+        self.tuning.size_copy_price
+    }
+
     fn ipsccp_widen_keeps_sign(&self) -> bool {
         self.tuning.ipsccp_widen_keeps_sign
     }
@@ -811,6 +815,10 @@ impl Tti for X86 {
 
     fn unroll_promotion_fits_registers(&self) -> bool {
         self.tuning.unroll_promotion_fits_registers
+    }
+
+    fn lsr_size_order(&self) -> bool {
+        self.tuning.lsr_size_order
     }
 
     fn unroll_promotion_fits_x87_stack(&self) -> bool {
