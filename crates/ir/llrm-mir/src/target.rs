@@ -11,6 +11,9 @@ use crate::spaces::Spaces;
 /// states. The names are the pin's `TargetLoweringBase` fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tuning {
+    /// DEVIATE SD-REPFILL: at size, a constant fill whose stores take more
+    /// bytes than a `rep stos` fill is the fill. None: the pin's stores.
+    pub size_fill: Option<SizeFill>,
     /// `MaxStoresPerMemset`, and at size `MaxStoresPerMemsetOptSize`.
     pub max_stores_per_memset: usize,
     pub max_stores_per_memset_opt_size: usize,
@@ -37,6 +40,10 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// At -O1 (`OptLevel` 1) a full unroll is made only where its cost after
+    /// the folding the analysis simulates does not exceed the rolled loop's
+    /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
+    pub unroll_never_grows_at_o1: bool,
     /// A multiply by a constant is decomposed only where the chain's saved
     /// clocks pay for its extra bytes at `speed_milliclocks_per_byte`, the
     /// pin's own decompositions included (a tie keeps the `imul`); false:
@@ -181,9 +188,25 @@ pub struct Tuning {
     pub ipsccp_widen_keeps_sign: bool,
 }
 
+/// Encoded bytes of a constant fill, stores against `rep stos`. Each pair or
+/// triple is [frame object, global]: a short displacement against an absolute
+/// address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SizeFill {
+    /// A dword, word and byte store of an immediate.
+    pub store: [[u64; 3]; 2],
+    /// The value in `eax` for zero, all ones and any other byte.
+    pub value: [u64; 3],
+    /// `lea`/`mov edi`, `mov ecx` and the `rep stos`.
+    pub setup: [u64; 2],
+    /// One `fst qword` of the x87 zero fill.
+    pub fst: [u64; 2],
+}
+
 impl Tuning {
     /// X86ISelLowering.cpp: 16/8, 8/4, 8/4 stores; no clock price for a byte.
     pub const PIN: Tuning = Tuning {
+        size_fill: None,
         max_stores_per_memset: 16,
         max_stores_per_memset_opt_size: 8,
         max_stores_per_memcpy: 8,
@@ -194,6 +217,7 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        unroll_never_grows_at_o1: false,
         price_pin_multiplies: false,
         imul_at_size: false,
         unroll_threshold: None,
@@ -305,8 +329,8 @@ pub trait Machine {
     }
 
     /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
-    /// (DEVIATE SD443, exit 2026-11-07: interprocedural.rs). The pin runs it
-    /// once; a target that matches the pin's output turns it off.
+    /// (DEVIATE SD443, owner w2, exit 2026-11-15: interprocedural.rs). The pin
+    /// runs it once; a target that matches the pin's output turns it off.
     fn second_ipsccp(&self) -> bool {
         true
     }

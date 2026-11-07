@@ -327,7 +327,7 @@ impl MemoryEffects {
                 }
                 Attribute::Flag(name) => {
                     use llrm_mir::facts::Fact;
-                    let info = match Fact::flag(name) {
+                    let info = match name.fact() {
                         Some(Fact::ReadNone) => ModRefInfo::NoModRef,
                         Some(Fact::ReadOnly) => ModRefInfo::Ref,
                         Some(Fact::WriteOnly) => ModRefInfo::Mod,
@@ -1035,7 +1035,7 @@ mod tests {
     fn effects_of_flags_scan_no_attribute_list() {
         use llrm_mir::counts::{Event, get};
         use llrm_mir::opcode::Attribute;
-        let flag = |name: &str| Attribute::Flag(name.to_owned());
+        let flag = |name: &str| Attribute::Flag(name.into());
         let attrs: Vec<Attribute> =
             ["nounwind", "mustprogress", "nofree", "readonly", "willreturn"].into_iter().map(flag).collect();
         let before = get(Event::AttributeScans);
@@ -1047,5 +1047,26 @@ mod tests {
         assert_eq!(effects, MemoryEffects::everywhere(ModRefInfo::Ref));
         assert_eq!(MemoryEffects::of_attrs(&[flag("readnone"), flag("readonly")]), MemoryEffects::none());
         assert_eq!(MemoryEffects::of_attrs(&[flag("writeonly")]), MemoryEffects::everywhere(ModRefInfo::Mod));
+    }
+
+    /// Reading attributes matched each flag's name against the facts' names
+    /// (`Fact::flag`, a string match, ~60 Ir): 646,400 matches, 39 M Ir on
+    /// memory_expansion. A name is resolved when the attribute is made; reading
+    /// it resolves nothing.
+    #[test]
+    fn reading_attributes_resolves_no_flag_names() {
+        use llrm_mir::counts::{Event, get};
+        use llrm_mir::opcode::Attribute;
+        let attrs: Vec<Attribute> = ["nounwind", "mustprogress", "nofree", "readonly", "willreturn", "noalias", "nocapture"]
+            .into_iter()
+            .map(|name| Attribute::Flag(name.into()))
+            .collect();
+        let before = get(Event::FlagNamesResolved);
+        for _ in 0..1000 {
+            let _ = MemoryEffects::of_attrs(&attrs);
+            let _ = llrm_mir::facts::Fact::NoAlias.stated_by(&attrs);
+            let _ = llrm_mir::facts::Fact::of_attribute(&attrs[3]);
+        }
+        assert_eq!(get(Event::FlagNamesResolved), before, "a read matched a flag name against the facts");
     }
 }

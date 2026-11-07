@@ -278,6 +278,9 @@ pub struct LsrCost {
     pub imm_cost: u32,
     pub setup_cost: u32,
     pub scale_cost: u32,
+    /// DEVIATE LU13: frame words a trip reloads or stores for the registers
+    /// kept across a call that clobbers them (0 unless the target says so).
+    pub spills: u32,
 }
 
 /// `TTI::MemIndexedMode`.
@@ -694,6 +697,11 @@ pub trait Tti {
         0
     }
 
+    /// `Tuning::unroll_never_grows_at_o1`.
+    fn unroll_never_grows_at_o1(&self) -> bool {
+        false
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false
@@ -835,6 +843,11 @@ pub trait Tti {
     /// (`Tuning::x87_zero_fill_at_size`).
     fn x87_zero_fill_at_size(&self) -> bool {
         false
+    }
+
+    /// `Tuning::size_fill`: the encoded bytes of a constant fill at size.
+    fn size_fill(&self) -> Option<crate::target::SizeFill> {
+        None
     }
 
     /// The target's `PartialThreshold` (its tuning table); none: the pass's
@@ -1217,6 +1230,17 @@ pub trait Tti {
             (c.num_regs, c.add_rec_cost, c.num_iv_muls, c.num_base_adds, c.scale_cost, c.imm_cost, c.setup_cost)
         };
         key(a) < key(b)
+    }
+
+    /// DEVIATE LU13 (owner z80, exit 2026-11-30: a per-class register model in
+    /// the LSR cost): a call clobbers every register, so each register the
+    /// loop keeps across one is a frame slot, reloaded each trip and, for a
+    /// recurrence, stored each trip. The pin has no call term in
+    /// `LoopStrengthReduce.cpp` (it reads `getNumberOfRegisters` at L1613,
+    /// `isLSRCostLess` at L1663 and `isNumRegsMajorCostOfLSR` at L6385 only).
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1613
+    fn lsr_call_clobbers_registers(&self) -> bool {
+        false
     }
 
     /// `getPreferredAddressingMode`: which indexed addressing LSR favors.

@@ -661,6 +661,10 @@ impl Tti for X86 {
         self.tuning.unroll_milliclocks_per_byte
     }
 
+    fn unroll_never_grows_at_o1(&self) -> bool {
+        self.tuning.unroll_never_grows_at_o1
+    }
+
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
     }
@@ -706,6 +710,10 @@ impl Tti for X86 {
 
     fn x87_zero_fill_at_size(&self) -> bool {
         self.tuning.x87_zero_fill_at_size && !self.sse2
+    }
+
+    fn size_fill(&self) -> Option<llrm_mir::target::SizeFill> {
+        self.tuning.size_fill
     }
 
     fn unroll_partial_threshold_override(&self) -> Option<u32> {

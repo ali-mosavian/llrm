@@ -493,6 +493,8 @@ pub struct Rating<'a, 'b> {
     pub other_register_units: u32,
     /// The compile is for size.
     pub size: bool,
+    /// The loop calls, and the target's call takes every register (LU13).
+    pub across_call: bool,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1232
@@ -528,6 +530,7 @@ impl Cost {
             imm_cost: u32::MAX,
             setup_cost: u32::MAX,
             scale_cost: u32::MAX,
+            spills: u32::MAX,
         };
     }
 
@@ -859,6 +862,11 @@ impl Cost {
             return;
         }
         self.c.num_regs += 1;
+        // DEVIATE LU13: kept across a call, a recurrence is reloaded and
+        // stored every trip, an invariant reloaded.
+        if r.across_call {
+            self.c.spills += if r.se.addrec_header(reg) == Some(r.l) { 2 } else { 1 };
+        }
 
         // Favor registers that need no setup in the preheader.
         self.c.setup_cost += setup_cost(r.se, r.cx, r.tti, reg, SETUP_COST_DEPTH_LIMIT);

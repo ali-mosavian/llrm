@@ -811,6 +811,30 @@ define i32 @f(i32 %a) {
     assert_eq!(names.iter().filter(|n| *n == "imul").count(), 0, "{names:?}");
 }
 
+/// m32 -O1 made `x * 1664525` a chain by clocks with no byte term: tests/run/c
+/// mul_constants -O1 was 531 B larger than the pin's (2279 against 1748), where
+/// -O1 allows no cell larger. At -O1 a chain longer than the `imul` stays one.
+#[test]
+fn at_m32_o1_a_multiply_whose_chain_is_longer_than_the_imul_stays_an_imul() {
+    let module = crate::testing::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+  %r = mul i32 %a, 1664525
+  ret i32 %r
+}
+",
+    )
+    .expect("parses");
+    let imuls = |speed_rate: bool| {
+        let mut cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu").clone();
+        cpu.speed_rate = speed_rate;
+        let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count()
+    };
+    assert_eq!(imuls(false), 1, "-O1: the imul");
+    assert_eq!(imuls(true), 0, "-O2: the chain");
+}
+
 /// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:
 /// no byte divide): examples/dice.nib and easing.nib stopped compiling.
 #[test]

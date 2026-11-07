@@ -431,11 +431,15 @@ struct Emitter {
     /// register up (`AArch64PrologueEmitter::emitCalleeSavedGPRLocations`
     /// follows `emitFramePointerSetup`).
     saved: Vec<Cfi>,
+    /// The restores' `.cfi_restore`s, stated together before the terminator
+    /// (`AArch64EpilogueEmitter::finalizeEpilogue`: `emitCalleeSavedGPRRestores`
+    /// at `getFirstTerminator`).
+    restored: Vec<Cfi>,
 }
 
 impl Emitter {
     fn new() -> Self {
-        Self { insts: Vec::new(), locs: Vec::new(), saved: Vec::new() }
+        Self { insts: Vec::new(), locs: Vec::new(), saved: Vec::new(), restored: Vec::new() }
     }
 
     /// The instructions made since the last call are from `loc`.
@@ -691,6 +695,19 @@ fn epilogue(
 ) {
     let first = emitter.insts.len();
     take_down(frame, emitter);
+    // The restores in the pin's callee-saved order: x19..x28, then x30 and x29
+    // (the record, link register first), then d8..d15.
+    let mut restores = std::mem::take(&mut emitter.restored);
+    restores.sort_by_key(|cfi| match cfi {
+        Cfi::Restore { register: 30 } => (1, 0),
+        Cfi::Restore { register: 29 } => (1, 1),
+        Cfi::Restore { register } if *register >= 64 => (2, *register),
+        Cfi::Restore { register } => (0, *register),
+        _ => (3, 0),
+    });
+    for cfi in restores {
+        emitter.cfi(cfi);
+    }
     // Only an epilogue that does something is marked.
     if emitter.insts.len() > first {
         emitter.insts.insert(first, Inst::Mark(FrameMark::EpilogueBegin));
@@ -822,7 +839,7 @@ fn declare(
         if store {
             emitter.saved.push(Cfi::Offset { register, offset: offset as i64 + 8 * index as i64 - size });
         } else {
-            emitter.cfi(Cfi::Restore { register });
+            emitter.restored.push(Cfi::Restore { register });
         }
     }
     if !store && moves.is_some() {

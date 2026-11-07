@@ -36,6 +36,13 @@ impl Cpu {
         ["m68000", "m68010", "m68020", "m68030", "m68040", "m68060"][self as usize]
     }
 
+    /// Whether `mulu.l` and `muls.l` give the 64-bit product (DEVIATE
+    /// M68K-WIDEMUL, see [`super::widemul`]): the 68020 to the 68040. The
+    /// 68060 does not implement it.
+    pub fn has_wide_multiply(self) -> bool {
+        self.at_least(Cpu::M68020) && self != Cpu::M68060
+    }
+
     /// `Subtarget->atLeastM68020()` and its siblings.
     pub fn at_least(
         self,

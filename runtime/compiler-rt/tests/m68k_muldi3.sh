@@ -1,5 +1,5 @@
 #!/bin/bash
-# __muldi3 on the m68k: config/m68k/div64/muldi3.s (three mulu.l, 68020/030/040) against host products under qemu-m68k; the 68000 and 68060 keep lib/int/muldi3.c.
+# __muldi3 on the m68k: config/m68k/div64/muldi3.s (three mulu.l at 68020/030/040, mulu.w at 68000) against host products under qemu-m68k; the 68060 keeps lib/int/muldi3.c.
 #   tests/m68k_muldi3.sh [CPU...]   default 68000 68020 68030 68040 68060. LLRM_CC=<llrm-cc> builds the C members. Env: GCC_M68K.
 # The 68020 member is 40 B; the C one was 144 (libgcc 52): the bound fails the C build.
 set -e
@@ -32,8 +32,6 @@ cc -O2 $T/gen.c -o $T/gen && $T/gen > $T/vectors.h
 cat > $T/main.c <<'C'
 #include <stdint.h>
 #include "vectors.h"
-/* the 68000 C member calls it; a 68000 has no 32-bit multiply */
-unsigned __mulsi3(unsigned a, unsigned b) { unsigned r = 0; for (; b; b >>= 1, a <<= 1) if (b & 1) r += a; return r; }
 /* through a pointer: gcc inlines a 64-bit multiply at -m68020 (mulu.l), and the member under test was never called */
 uint64_t __muldi3(uint64_t, uint64_t);
 static uint64_t (*volatile mul)(uint64_t, uint64_t) = __muldi3;
@@ -55,6 +53,8 @@ for c in "$@"; do
   $B-ld -static -e main -o $T/$c/exe $T/main$c.o $T/$c/muldi3.o
   qemu-m68k -cpu m$c $T/$c/exe && echo "$c: exit=0" || { echo "$c: exit=$?"; exit 1; }
   size=$($B-size $T/$c/muldi3.o | awk 'NR==2{print $1}')
+  # the 68000 member is mulu.w asm with no __mulsi3 (the C one linked it: 754 B with it, libgcc 166)
+  [ "$c" != 68000 ] || [ "$size" -le 134 ] || { echo "FAIL: 68000 __muldi3 is $size B, bound 134"; exit 1; }
   case $c in 68020|68030|68040)
     [ "$size" -le 40 ] || { echo "FAIL: $c __muldi3 is $size B, bound 40"; exit 1; }
     $B-objdump -d $T/$c/exe | awk '/<__muldi3>:/{f=1;next} /^$/{f=0} f' | grep -qE 'mulul' || { echo "$c: no 64-bit mulu.l"; exit 1;};;
