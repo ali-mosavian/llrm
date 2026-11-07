@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/precse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/precse.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/precse.rs sha256:241e0e2243f6a2b011b650253cb89af0a58ada7081bcd1a572794414008ab178 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/precse.rs sha256:62e344f732f1589509e6b54fa94189cc31f13b45f37d86024e6b94a4b295d716 -->
 
 # precse
 
@@ -61,8 +61,8 @@ phi operands without a copy (DAG isel).
 DEVIATE CSE3 (owner w-1, exit 2026-11-08): both selectors mark a load
 invariant when it reads a constant global or says so (`!invariant.load`, a
 `noalias readonly` argument), and the DAG selector the load of an incoming
-stack argument (an immutable fixed object). The pin also takes GOT and
-constant-pool loads, which ours lacks; the old selector reads an incoming
+stack argument (an immutable fixed object) and of a constant-pool entry. The
+pin also takes GOT loads, which ours lacks; the old selector reads an incoming
 argument as a memory operand of its reader, not a load of its own.
 
 Row CSE5 (was DEVIATE CSE5, retired 2026-10-25): `machinecse.rs`, the same
