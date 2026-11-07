@@ -406,7 +406,54 @@ pub fn fold_add_rest(
         fold_narrow_math,
         fold_bitwise_pair,
     ];
-    folds.iter().find_map(|fold| fold(c, inst, lhs, rhs)).unwrap_or(Visit::None)
+    if let Some(found) = folds.iter().find_map(|fold| fold(c, inst, lhs, rhs)) {
+        return found;
+    }
+    infer_wrap_flags(c, inst, lhs, rhs, flags)
+}
+
+/// The `willNotOverflowSignedAdd` / `willNotOverflowUnsignedAdd` block that
+/// ends `visitAdd`: an add that cannot wrap gains `nsw` / `nuw`, and the users
+/// of its induction variable are queued again (:1973).
+///
+/// DEVIATE 1: the folds the module header lists as untranslated sit before this
+/// block in `visitAdd`; here it simply runs after the translated ones.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp#L1973>
+fn infer_wrap_flags(
+    c: &mut Combiner,
+    inst: InstId,
+    lhs: Operand,
+    rhs: Operand,
+    flags: Flags,
+) -> Visit {
+    use llrm_mir::valuetracking::range::{
+        OverflowResult::NeverOverflows, compute_overflow_for_signed_add, compute_overflow_for_unsigned_add,
+    };
+    let mut new = flags;
+    {
+        let q = query(c, Some(inst));
+        if !flags.contains(Flags::NSW) && compute_overflow_for_signed_add(&q, lhs, rhs) == NeverOverflows {
+            new.insert(Flags::NSW);
+        }
+        if !flags.contains(Flags::NUW) && compute_overflow_for_unsigned_add(&q, lhs, rhs) == NeverOverflows {
+            new.insert(Flags::NUW);
+        }
+    }
+    if new == flags {
+        return Visit::None;
+    }
+    c.function.set_flags(inst, new);
+    // Re-enqueue users of the induction variable of add recurrence.
+    let recurrence = pattern::match_simple_recurrence_of(&query(c, Some(inst)), inst);
+    if let Some((phi, ..)) = recurrence {
+        let result = c.function.instruction(phi).result.expect("a phi value");
+        let users: Vec<InstId> = c.function.users(result).iter().map(|one| one.user).collect();
+        for user in users {
+            c.worklist.push(user);
+        }
+    }
+    Visit::Changed
 }
 
 #[cfg(test)]

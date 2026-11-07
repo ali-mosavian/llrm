@@ -224,12 +224,48 @@ fn a_sext_bool_plus_one_and_a_low_bit_flip_are_cheaper() {
 }
 
 /// `add (zext (add X, -3)), 3` is `zext X` when X is at least 3. Known here
-/// only by the C++ condition: with nothing known about `%x` the add stays
-/// (`opt` keeps it and sets `nuw nsw`).
+/// only by the C++ condition: with nothing known about `%x` the add stays and
+/// `opt` sets `nuw nsw` on the wide one.
 #[test]
 fn a_zext_of_a_narrow_add_is_kept_when_the_bound_is_unknown() {
-    let text = "define i32 @f(i16 %x) {\nb0:\n  %a = add i16 %x, -3\n  %z = zext i16 %a to i32\n  %r = add i32 %z, 3\n  ret i32 %r\n}\n";
-    assert_eq!(combined(text), text);
+    check(
+        "i32",
+        "i16 %x",
+        "  %a = add i16 %x, -3\n  %z = zext i16 %a to i32\n  %r = add i32 %z, 3\n  ret i32 %r\n",
+        "  %a = add i16 %x, -3\n  %z = zext i16 %a to i32\n  %r = add nuw nsw i32 %z, 3\n  ret i32 %r\n",
+    );
+}
+
+/// `bench_grep -Os`: an `add nsw` of values that cannot wrap stayed without
+/// `nuw` (`opt`: `add nuw nsw`), so the GEP split below lost `inbounds nuw`.
+#[test]
+fn an_add_that_cannot_wrap_gains_nuw_and_nsw() {
+    check(
+        "i32",
+        "i8 %a, i8 %b",
+        "  %za = zext i8 %a to i32\n  %zb = zext i8 %b to i32\n  %s = add i32 %za, %zb\n  ret i32 %s\n",
+        "  %za = zext i8 %a to i32\n  %zb = zext i8 %b to i32\n  %s = add nuw nsw i32 %za, %zb\n  ret i32 %s\n",
+    );
+}
+
+/// `bench_grep -Os` through the whole combiner: the index add gains `nuw`, so
+/// the split of `gep @nxt, 0, m + b` keeps `inbounds nuw` on both GEPs (`opt`
+/// at a 32-bit pointer width). Without it both were plain `getelementptr i8`.
+#[test]
+fn a_split_gep_over_a_non_wrapping_index_add_keeps_inbounds_nuw() {
+    let text = "@nxt = internal global [2560 x i8] zeroinitializer, align 16\n\
+define i8 @f(i8 %a, i8 %b) {\nb0:\n  %za = zext i8 %a to i32\n  %zb = zext i8 %b to i32\n  %m = mul nuw nsw i32 %za, 10\n  \
+%s = add nsw i32 %m, %zb\n  %g = getelementptr inbounds [2560 x i8], ptr @nxt, i32 0, i32 %s\n  %v = load i8, ptr %g\n  ret i8 %v\n}\n";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let layout = DataLayout::parse("e-m:e-p:32:32-i64:64-n32:64-S128").expect("a layout");
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
+    crate::combine::combine(context, &globals, &Default::default(), &metadata, &layout, function, &mut declared);
+    let out = printed(&module);
+    assert!(out.contains("getelementptr inbounds nuw i8, ptr @nxt, i32 %m"), "{out}");
+    assert!(out.contains("getelementptr inbounds nuw i8, ptr %0, i32 %zb"), "{out}");
 }
 
 /// `combineAddSubWithShlAddSub`: `A + (-B << N)` is `A - (B << N)` (`opt`).
@@ -318,7 +354,7 @@ fn an_extended_value_plus_a_constant_that_cannot_wrap_is_added_narrow() {
         "i32",
         "i8 %x",
         "  %m = and i8 %x, 15\n  %a = zext i8 %m to i32\n  %r = add i32 %a, 3\n  ret i32 %r\n",
-        "  %m = and i8 %x, 15\n  %0 = add nuw i8 %m, 3\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
+        "  %m = and i8 %x, 15\n  %0 = add nuw nsw i8 %m, 3\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
     );
 }
 
@@ -329,7 +365,7 @@ fn two_extensions_whose_sum_fits_are_added_narrow() {
         "i32",
         "i8 %x, i8 %y",
         "  %m = and i8 %x, 15\n  %a = zext i8 %m to i32\n  %n = and i8 %y, 7\n  %b = zext i8 %n to i32\n  %r = add i32 %a, %b\n  ret i32 %r\n",
-        "  %m = and i8 %x, 15\n  %n = and i8 %y, 7\n  %0 = add nuw i8 %m, %n\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
+        "  %m = and i8 %x, 15\n  %n = and i8 %y, 7\n  %0 = add nuw nsw i8 %m, %n\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
     );
 }
 
