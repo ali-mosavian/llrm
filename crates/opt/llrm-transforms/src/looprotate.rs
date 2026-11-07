@@ -93,6 +93,9 @@ use llrm_mir::context::{ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
+use llrm_analysis::mssa::Mssa;
+use llrm_analysis::mssa::updater::MemorySsaUpdater;
+use llrm_analysis::memoryssa::Accesses;
 use llrm_mir::domtree::{DomTree, Update, UpdateKind};
 use llrm_mir::loopinfo::{Loop, LoopInfo};
 use llrm_mir::memory::Callees;
@@ -222,6 +225,28 @@ impl Run<'_> {
 pub struct Kept {
     pub dt: DomTree,
     pub info: LoopInfo,
+    /// `MemorySSA` and its updater, where the manager holds the graph
+    /// (`AR.MSSA`).
+    pub mssa: Option<MssaKeep>,
+}
+
+/// The memory graph the rotation updates (`MemorySSAUpdater *MSSAU`).
+pub struct MssaKeep {
+    pub mssa: Mssa,
+    pub accesses: Accesses,
+    pub updater: MemorySsaUpdater,
+    pub outer: std::rc::Rc<llrm_mir::passes::Outer>,
+}
+
+impl MssaKeep {
+    /// The graph reasons with the tree as it stands: given after each edit of
+    /// the CFG (`set_dominance`).
+    fn dominance(
+        &mut self,
+        dt: &DomTree,
+    ) {
+        self.mssa.set_dominance(llrm_analysis::cfg::Dominance::new(std::rc::Rc::new(dt.clone())));
+    }
 }
 
 impl Kept {
@@ -229,7 +254,7 @@ impl Kept {
     pub fn of(function: &Function) -> Self {
         let dt = DomTree::of(function);
         let info = LoopInfo::analyze(function, || &dt);
-        Self { dt, info }
+        Self { dt, info, mssa: None }
     }
 
     /// `MergeBlockIntoPredecessor(bb, &DTU, LI)` and its dominator and loop
@@ -253,6 +278,16 @@ impl Kept {
         to: BlockId,
     ) -> Option<BlockId> {
         let split = edges::split_critical_edge(run.function, from, to)?;
+        if let Some(keep) = &mut self.mssa {
+            keep.updater.wire_old_predecessors_to_new_immediate_predecessor(
+                &mut keep.mssa,
+                run.function,
+                to,
+                split,
+                &[from],
+                true,
+            );
+        }
         // Tell the tree of the new path first, then of the old edge's end, so
         // `to` stays reachable the whole time.
         let mut updates = vec![
@@ -263,6 +298,9 @@ impl Kept {
             updates.push(Update { kind: UpdateKind::Delete, from, to });
         }
         self.dt.apply_updates(&*run.function, &updates);
+        if let Some(keep) = &mut self.mssa {
+            keep.dominance(&self.dt);
+        }
         // Update LoopInfo if it is around.
         let target = match (self.info.get_loop_for(from), self.info.get_loop_for(to)) {
             // If one or the other block is in no loop, the new one is not.
@@ -321,6 +359,18 @@ impl cfg::MergeObserver for MergeUpdates<'_> {
         self.updates.push(Update { kind: UpdateKind::Delete, from: pred, to: bb });
     }
 
+    fn moved(
+        &mut self,
+        function: &Function,
+        bb: BlockId,
+        pred: BlockId,
+        start: InstId,
+    ) {
+        if let Some(keep) = &mut self.kept.mssa {
+            keep.updater.move_all_after_merge_blocks(&mut keep.mssa, function, bb, pred, start);
+        }
+    }
+
     fn done(
         &mut self,
         function: &Function,
@@ -334,6 +384,9 @@ impl cfg::MergeObserver for MergeUpdates<'_> {
         }
         // `bb` is unreachable once its edges are gone: the update drops it.
         self.kept.dt.apply_updates(function, &self.updates);
+        if let Some(keep) = &mut self.kept.mssa {
+            keep.dominance(&self.kept.dt);
+        }
     }
 }
 
@@ -963,6 +1016,8 @@ fn rotate_loop(
         .filter(|&inst| crate::noaliasscopes::declares(run.function, inst))
         .collect();
     let mut cloned_declarations: Vec<(InstId, InstId)> = Vec::new();
+    // `ValueMapMSSA`: the clones that stand in the preheader.
+    let mut clones: IdMap<InstId, InstId> = IdMap::new();
     for &inst in &header_instructions[rest..] {
         let operation = run.function.instruction(inst);
         // If the instruction's operands are invariant and it doesn't read or
@@ -1018,12 +1073,15 @@ fn rotate_loop(
                         run.function.replace_value(result, value);
                     }
                     run.function.erase(copy).expect("a replaced copy");
+                } else {
+                    clones.insert(inst, copy);
                 }
             }
             _ => {
                 if let (Some(original), Some(result)) = (original, run.function.instruction(copy).result) {
                     value_map.insert(original, Operand::Value(result));
                 }
+                clones.insert(inst, copy);
                 if declarations.contains(&inst) {
                     cloned_declarations.push((inst, copy));
                 }
@@ -1090,22 +1148,42 @@ fn rotate_loop(
     }
     run.function.erase(loop_entry_branch).expect("a jump defines nothing");
 
+    // Update MemorySSA before the rewrite call below changes the 1:1
+    // instruction:cloned_instruction_or_value mapping.
+    if let Some(keep) = &mut kept.mssa {
+        let unit = llrm_analysis::memory::Unit::within(run.context, run.layout, run.function, &keep.outer);
+        for (_, copy) in clones.iter() {
+            keep.accesses.add_instruction(&unit, *copy);
+        }
+        let effect = llrm_analysis::mssa::shadow::effect_of_in(&keep.accesses, &unit);
+        keep.updater.update_for_cloned_block_into_pred(
+            &mut keep.mssa,
+            run.function,
+            orig_header,
+            orig_preheader,
+            &|inst| clones.get(&inst).copied(),
+            &effect,
+        );
+    }
+
     // If there were any uses of instructions in the duplicated block outside
     // the loop, update them, inserting phis as required.
     rewrite_uses_of_cloned_instructions(run, orig_header, orig_preheader, &value_map);
 
     // `NewHeader` is now the header of the loop, and the tree is told the
     // preheader branches to it and to the exit now, not to the old header.
-    let kept = &mut *kept;
     kept.info.move_to_header(loop_id, new_header);
-    kept.dt.apply_updates(
-        &*run.function,
-        &[
-            Update { kind: UpdateKind::Insert, from: orig_preheader, to: exit },
-            Update { kind: UpdateKind::Insert, from: orig_preheader, to: new_header },
-            Update { kind: UpdateKind::Delete, from: orig_preheader, to: orig_header },
-        ],
-    );
+    let updates = [
+        Update { kind: UpdateKind::Insert, from: orig_preheader, to: exit },
+        Update { kind: UpdateKind::Insert, from: orig_preheader, to: new_header },
+        Update { kind: UpdateKind::Delete, from: orig_preheader, to: orig_header },
+    ];
+    if let Some(keep) = &mut kept.mssa {
+        keep.updater.apply_updates(&mut keep.mssa, run.function, &updates, &mut kept.dt, true);
+        keep.dominance(&kept.dt);
+    } else {
+        kept.dt.apply_updates(&*run.function, &updates);
+    }
 
     // At this point the major CFG changes are finished. The duplicated branch
     // may now branch on a constant; if that means the loop is entered, the
@@ -1161,6 +1239,10 @@ fn rotate_loop(
         run.function.erase(guard).expect("a branch defines nothing");
         // With our CFG finalized, update the tree.
         kept.dt.delete_edge(&*run.function, orig_preheader, exit);
+        if let Some(keep) = &mut kept.mssa {
+            keep.dominance(&kept.dt);
+            keep.updater.remove_edge(&mut keep.mssa, run.function, orig_preheader, exit);
+        }
     }
 
     // Now that the CFG is consistent again, try to merge the old header into
@@ -1269,6 +1351,15 @@ pub fn rotate_loops(
         let fresh = Kept::of(run.function);
         assert!(kept.dt == fresh.dt, "the dominator tree the rotation kept is not the function's");
         assert!(kept.info.equivalent(&fresh.info, run.function), "the loops the rotation kept are not the function's");
+        if let Some(keep) = &mut kept.mssa {
+            let unit = llrm_analysis::memory::Unit::within(run.context, run.layout, run.function, &keep.outer);
+            let accesses = Accesses::plain(&unit, &Default::default());
+            let aa = llrm_analysis::mssa::alias::AliasQuery::new(&unit, &accesses);
+            let effect = llrm_analysis::mssa::shadow::effect_of(&accesses, run.function);
+            let dominance = llrm_analysis::cfg::Dominance::of(run.function);
+            llrm_analysis::mssa::shadow::same_as_fresh(&mut keep.mssa, run.function, &dominance, &effect, &aa)
+                .unwrap_or_else(|why| panic!("the memory graph the rotation kept is not the function's: {why}"));
+        }
     }
     changed
 }
@@ -1322,7 +1413,20 @@ impl FunctionPass for LoopRotate {
         let mut kept = Kept {
             dt: (*analyses.get::<llrm_mir::passes::Dominators>(&*unit.context, unit.layout, &*unit.function)).clone(),
             info: (*analyses.get::<llrm_mir::passes::Loops>(&*unit.context, unit.layout, &*unit.function)).clone(),
+            mssa: None,
         };
+        // `AR.MSSA`: the graph is updated where the manager holds one.
+        if let Some(held) = analyses.cached::<llrm_analysis::manager::MemorySsa>()
+            && let Ok(held) = &*held
+            && let Ok(accesses) = held.accesses(&*unit.context, unit.layout, &*unit.function, analyses)
+        {
+            kept.mssa = Some(MssaKeep {
+                mssa: held.mssa.clone(),
+                accesses: (*accesses).clone(),
+                updater: MemorySsaUpdater::new(),
+                outer: std::rc::Rc::clone(&outer),
+            });
+        }
         let tti = target_tti(outer.target());
         let options = Options {
             max_header_size: header_limit(self.duplicate_headers, self.size, outer.target(), &*tti),
@@ -1354,12 +1458,20 @@ impl FunctionPass for LoopRotate {
         drop(run);
         // `PA.preserve<DominatorTreeAnalysis>()` and `LoopAnalysis`: the ones
         // the rotation kept right are the manager's from here.
-        let Kept { dt, info } = kept;
+        let Kept { dt, info, mssa } = kept;
         analyses.replace::<llrm_mir::passes::Dominators>(&*unit.function, dt);
         analyses.replace::<llrm_mir::passes::Loops>(&*unit.function, info);
-        PreservedAnalyses::none()
+        let mut preserved = PreservedAnalyses::none()
             .preserve_updated::<llrm_mir::passes::Dominators>()
-            .preserve_updated::<llrm_mir::passes::Loops>()
+            .preserve_updated::<llrm_mir::passes::Loops>();
+        if let Some(MssaKeep { mssa, accesses, .. }) = mssa {
+            analyses.replace::<llrm_analysis::manager::MemorySsa>(
+                &*unit.function,
+                Ok(std::rc::Rc::new(llrm_analysis::manager::MssaGraph::new(mssa, Some(std::rc::Rc::new(accesses))))),
+            );
+            preserved = preserved.preserve_updated::<llrm_analysis::manager::MemorySsa>();
+        }
+        preserved
     }
 }
 

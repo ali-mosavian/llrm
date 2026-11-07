@@ -678,3 +678,88 @@ fn test_a_rotation_keeps_the_dominator_tree_and_the_loops() {
     assert!(printed(&module).contains(".lr.ph") || printed(&module) != printed(&parsed(COUNTED)), "the loop was not rotated");
     assert_eq!(held.get(), (true, true), "dominators, loops held after the rotation");
 }
+
+/// Makes the memory graph, so the rotation after it has one to update.
+struct Warm;
+
+impl llrm_mir::passes::FunctionPass for Warm {
+    fn name(&self) -> &'static str {
+        "warm"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        let _ = analyses.get::<llrm_analysis::manager::MemorySsa>(&*unit.context, unit.layout, &*unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// A loop that loads and stores in its header, behind a store: the clones
+/// in the preheader read what that store wrote.
+const MEMORY: &str = "@ga = global i16 0
+@gb = global i16 0
+
+define i16 @f(i16 %x, i16 %n) {
+b0:
+  store i16 %x, ptr @ga
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %v = load i16, ptr @ga
+  store i16 %v, ptr @gb
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %w = load i16, ptr @gb
+  store i16 %w, ptr @ga
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = load i16, ptr @gb
+  ret i16 %r
+}
+";
+
+/// Compile time: LICM built the memory graph again after every rotation (64
+/// of 65 on memexp -O2). The rotation updates it as the pin's
+/// `MemorySSAUpdater` calls do, and it says what a fresh graph says (checked
+/// in debug builds by `rotate_loops`).
+#[test]
+fn test_a_rotation_keeps_the_memory_graph() {
+    let mut module = parsed(MEMORY);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let before = printed(&module);
+    let held = std::rc::Rc::new(std::cell::Cell::new((false, false)));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(Warm);
+    manager.add(super::LoopRotate { duplicate_headers: true, size: false, check_exit_count: false });
+    manager.add(HoldsMemory(held.clone()));
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    assert_ne!(printed(&module), before, "the loop was not rotated");
+    assert!(held.get().0, "the memory graph is held after the rotation");
+}
+
+struct HoldsMemory(std::rc::Rc<std::cell::Cell<(bool, bool)>>);
+
+impl llrm_mir::passes::FunctionPass for HoldsMemory {
+    fn name(&self) -> &'static str {
+        "holds-memory"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        self.0.set((analyses.cached::<llrm_analysis::manager::MemorySsa>().is_some(), false));
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
