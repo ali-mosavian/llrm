@@ -46,24 +46,24 @@ def test_the_report_is_a_table_of_failure_culprit_owner_repro():
 
 
 def test_failing_tests_are_attributed_to_the_crate_whose_binary_ran_them():
-    """Per-crate runs lost the root package's features: 19 llrm-c tests failed with 'built without the toolchain feature' and were reported as the batch's."""
+    """Per-crate runs lost the root package's features: 19 llrm-cc tests failed with 'built without the toolchain feature' and were reported as the batch's."""
     out = (
-        "     Running unittests src/lib.rs (target/release/deps/llrm_c-0123abcd)\n\nfailures:\n    compile::tests::test_a\n\ntest result: FAILED. 1 failed\n"
+        "     Running unittests src/lib.rs (target/release/deps/llrm_cc-0123abcd)\n\nfailures:\n    compile::tests::test_a\n\ntest result: FAILED. 1 failed\n"
         "     Running unittests src/lib.rs (target/release/deps/llrm_mir-4567ef01)\n\ntest result: ok. 3 passed\n"
         "     Running unittests src/lib.rs (target/release/deps/llrm_qb-89abcdef)\n\nfailures:\n    t::test_b\n    test_c\n\ntest result: FAILED. 2 failed\n"
     )
-    assert postland.by_binary(out) == {"llrm-c": ["compile::tests::test_a"], "llrm-qb": ["t::test_b", "test_c"]}
+    assert postland.by_binary(out) == {"llrm-cc": ["compile::tests::test_a"], "llrm-qb": ["t::test_b", "test_c"]}
 
 
 def test_a_failed_run_that_names_no_test_is_a_failure_not_a_pass():
     """`cargo test -q` printed no `Running` lines, the parse found nothing, and 59 untested landings were reported 'No new failure'."""
-    assert postland.unit_result("error: could not compile `llrm-c`\n", 101) == {"unit workspace::failed-without-a-test-name"}
+    assert postland.unit_result("error: could not compile `llrm-cc`\n", 101) == {"unit workspace::failed-without-a-test-name"}
     assert postland.unit_result("test result: ok. 3 passed\n", 0) == set()
 
 
 def test_stderr_and_stdout_keep_their_order(tmp_path):
     """Cargo's `Running` (stderr) must stay before its crate's results (stdout); read apart, 14 failing tests had no crate."""
-    script = "echo 'Running unittests (deps/llrm_c-0a1b)' >&2; echo 'failures:'; echo '    t::x'"
+    script = "echo 'Running unittests (deps/llrm_cc-0a1b)' >&2; echo 'failures:'; echo '    t::x'"
     output, code = postland.merged(["sh", "-c", script], tmp_path, {})
     assert code == 0 and output.index("Running") < output.index("failures:")
 
@@ -96,8 +96,8 @@ def test_the_report_opens_with_what_ran_so_a_short_list_is_not_read_as_health():
 def test_the_summaries_count_the_groups_and_the_crates_that_ran_and_say_so_when_none_did():
     assert postland.group_summary("[c] 351 programs: 349 pass, 0 known, 2 fail\n[nib] 49 programs: 49 pass, 0 known, 0 fail\n") == "2 groups, 400 programs, 2 failing"
     assert postland.group_summary("") == "NOT RUN (no group line)"
-    out = "     Running unittests src/lib.rs (deps/llrm_c-0a1b)\ntest result: FAILED. 140 passed; 2 failed; 0 ignored\n"
-    assert postland.unit_summary(out) == "llrm-c 142/2" and postland.unit_summary("error") == "NOT RUN (no test result)"
+    out = "     Running unittests src/lib.rs (deps/llrm_cc-0a1b)\ntest result: FAILED. 140 passed; 2 failed; 0 ignored\n"
+    assert postland.unit_summary(out) == "llrm-cc 142/2" and postland.unit_summary("error") == "NOT RUN (no test result)"
 
 
 def test_the_partial_report_lists_what_ran_and_each_raw_failure_line():
@@ -152,7 +152,7 @@ def test_check_runs_smoke_once_and_names_its_result_in_the_covered_block(monkeyp
     monkeypatch.setattr(postland, "dist", lambda at, sha: tmp_path)
     monkeypatch.setattr(postland, "combine_premise", lambda *args: "premise: ok")
     monkeypatch.setattr(postland, "run_groups", lambda at, bins, only=None: (set(), "57 groups, 863 programs, 0 failing", {}))
-    monkeypatch.setattr(postland, "unit_failures", lambda at, name=None: (set(), "llrm-c 173/0"))
+    monkeypatch.setattr(postland, "unit_failures", lambda at, name=None: (set(), "llrm-cc 173/0"))
     monkeypatch.setattr(postland, "smoke", lambda at, bins, previous: (calls.append(previous) or {"smoke ratchet:x"}, "SMOKE LINE"))
     failing, covered = postland.check("f" * 40, "e" * 40)
     assert calls == ["e" * 40] and "smoke ratchet:x" in failing

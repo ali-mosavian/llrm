@@ -74,7 +74,7 @@ pub fn mode_target(
         .ok_or("--mode N: no target with that mode")?;
     let cpu = target.default_cpu();
     let machine = llrm_codegen::backend::cpu::tuned_for(&*target, cpu, size)?.target();
-    // m16 states no TTI: llrm-c prices there by the generic rules, and so does
+    // m16 states no TTI: llrm-cc prices there by the generic rules, and so does
     // this.
     let tti = machine.tti().map_or("none", |tti| tti.name());
     let described = format!("{} cpu {cpu} tti {tti} datalayout {}", target.name(), target.layout().datalayout);

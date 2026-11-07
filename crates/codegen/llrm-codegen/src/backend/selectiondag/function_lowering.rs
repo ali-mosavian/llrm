@@ -41,6 +41,9 @@ pub struct FunctionLoweringInfo {
     /// The register a variadic function keeps the pointer to its variadic
     /// arguments in (`WebAssemblyFunctionInfo::VarargBufferVreg`).
     pub variadic_buffer: Option<u32>,
+    /// The fixed object of the first variadic argument on the stack
+    /// (`VarArgsFrameIndex`), for `llrm.vararg.address` in any block.
+    pub vararg_frame_index: Option<i32>,
     /// The words a target's `va_start` writes (`VarArgsFrameIndex` and the save
     /// areas' tops).
     pub variadic_area: Option<super::target_calling::VariadicArea>,
@@ -165,6 +168,7 @@ impl FunctionLoweringInfo {
             sret_reg: None,
             demote_reg: None,
             variadic_buffer: None,
+            vararg_frame_index: None,
             variadic_area: None,
             bpi: None,
             edge_probs: Vec::new(),

@@ -729,6 +729,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::unroll_o1_analyzed_trips`.
+    fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
+        None
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false
@@ -737,6 +742,26 @@ pub trait Tti {
     /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24): `Tuning::narrow_divide_live_limit`.
     fn narrow_divide_live_limit(&self) -> u32 {
         0
+    }
+
+    /// DEVIATE INL-O1: `Tuning::inline_never_grows_without_rate`.
+    fn inline_never_grows_without_rate(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE INL-O1: `Tuning::inline_o1_milliclocks_per_byte`.
+    fn inline_o1_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
+    /// DEVIATE VASTART-PROMOTE: `Tuning::promote_va_list`.
+    fn promote_va_list(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): `Tuning::sink_spares_ranges`.
+    fn sink_spares_ranges(&self) -> bool {
+        false
     }
 
     /// `Tuning::divide_by_bytes`.
@@ -844,6 +869,14 @@ pub trait Tti {
     /// DEVIATE REC-2: what the copies of a recursive function in itself may add
     /// at (-O2, -O3), in `gcc_insns`; none: the pass's own.
     fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        None
+    }
+
+    /// DEVIATE REC-1 (arm64): the least share (numerator, denominator) of a
+    /// recursion's body clocks that its calls to itself spend on the call,
+    /// return and argument words for its copies to be made: a copy removes
+    /// those and nothing else. None: no bound.
+    fn recursive_inlining_call_share(&self) -> Option<(i64, i64)> {
         None
     }
 
@@ -1423,6 +1456,14 @@ pub trait Tti {
         self.number_of_gpr_registers()
     }
 
+    /// Whether a one-register formula of the first use makes its register a
+    /// loser for the later uses (`VisitedRegs`, `SolveRecurse` L5600): the pin's
+    /// rule. DEVIATE LS1 turns it off where the target has too few registers
+    /// for the narrower search to hide a counter that serves two uses.
+    fn lsr_visited_registers_lose(&self) -> bool {
+        true
+    }
+
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
     /// as written is dropped when it needs more registers than exist.
     fn lsr_drops_spilling_solution(&self) -> bool {
@@ -1443,6 +1484,17 @@ pub trait Tti {
     /// pointer that steps with it, where the address takes no scale. False
     /// keeps the pin's loops. Exit: none, a pass of its own.
     fn mirrors_conditional_counters(&self) -> bool {
+        false
+    }
+
+    /// Whether `LoopTermFold` runs after LSR for this target, for a function
+    /// built for size or not: the pin enables it for RISCV, AVR and Mips only
+    /// (`EnableLoopTermFold`,
+    /// [TargetPassConfig.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/TargetPassConfig.cpp#L875)).
+    fn enables_loop_term_fold(
+        &self,
+        _optsize: bool,
+    ) -> bool {
         false
     }
 

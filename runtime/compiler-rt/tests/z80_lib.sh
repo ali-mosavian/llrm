@@ -23,7 +23,7 @@ sdasz80 -g -o "$OUT/umulhisi3.rel" config/z80/umulhisi3.s; cp config/z80/umulhis
 # f32 add sub mul div, int<->float and compares are hand asm (config/z80/sf32_*.s): 1705 + 171 B for all of them, 3-14x SDCC's clocks. Like SDCC's own f32 library they keep
 # operands in static cells and are not reentrant, and they clobber IY (free in the llrm-z80 convention).
 # one member per operation (sdld pulls a whole member: a one-op program links under 1000 B, tests/z80_sf32_split_test.sh); the add/sub member keeps the name fp_f32_add_sub the z80 A/B instrument requires
-for pair in sf32_common:fp_f32_common sf32_addsub:fp_f32_add_sub sf32_muldiv:fp_f32_mul_div sf32_float:fp_f32_float sf32_fix:fp_f32_fix sf32_cmp:fp_f32_cmp; do src=${pair%%:*}; dst=${pair##*:}; cp config/z80/$src.s "$OUT/$dst.s"; sdasz80 -g -o "$OUT/$dst.rel" "$OUT/$dst.s"; done
+for pair in sf32_common:fp_f32_common sf32_round:fp_f32_round sf32_addsub:fp_f32_add_sub sf32_muldiv:fp_f32_mul_div sf32_float:fp_f32_float sf32_fix:fp_f32_fix sf32_cmp:fp_f32_cmp; do src=${pair%%:*}; dst=${pair##*:}; cp config/z80/$src.s "$OUT/$dst.s"; sdasz80 -g -o "$OUT/$dst.rel" "$OUT/$dst.s"; done
 bash "$(dirname "$0")/z80_lib_symbols.sh" "$OUT" || exit 1
 bash "$(dirname "$0")/z80_lib_closed.sh" "$OUT" || exit 1
 echo "ok: $(grep -hE '^[A-Za-z_][A-Za-z0-9_]*::|\.globl' $OUT/*.s | wc -l) globals in $OUT"

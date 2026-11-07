@@ -222,6 +222,7 @@ pub fn machine_with<'a>(
             size: target.size,
             limit: classes.available.len(),
             classes: Rc::clone(classes),
+            spare_ranges: target.size && target.target().tti().is_some_and(|tti| tti.sink_spares_ranges()),
         }),
         // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
         // nothing reads is a compare (optimizeCompareInstr).
@@ -599,7 +600,7 @@ mod tests {
     /// The pin folds a once-read load into `ADD32rm` in selection, before the
     /// combiner. Folded after it, the combiner saw `add rr` for a stack
     /// argument and rebuilt a six-term sum as a tree: `mov eax, edx` and a
-    /// different register order in two llrm-c listings.
+    /// different register order in two llrm-cc listings.
     #[test]
     fn test_a_load_is_folded_before_the_combiner_sees_the_chain() {
         let names: Vec<&'static str> =

@@ -29,10 +29,10 @@
 //! coalescing the copies `eliminateRegSequence` makes
 //! (RegisterCoalescer.cpp#L464). Exit: the lane model, 2026-11-30.
 //!
-//! DEVIATE 2: the `MFunction` states no block odds. A branch with one edge
-//! that stays in its loop and one that leaves gets 31 in 32 to stay (LLVM's
-//! loop branch heuristic); every other branch is even. Exit: the odds the
-//! front end knows (the IR's branch weights).
+//! DEVIATE 2: a target whose `MFunction` states no odds (`odds` is `None`)
+//! gets 31 in 32 to stay on a branch with one edge that stays in its loop and
+//! one that leaves (LLVM's loop branch heuristic); every other branch is
+//! even. Exit: each target states the IR's edge probabilities.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -516,7 +516,10 @@ pub fn to_lir<T: Target>(
     let entry = if function.blocks.is_empty() { 0 } else { 0 };
     let mut body = LirBody::new(function.name.clone(), entry, blocks, IndexMap::default(), made.pins.clone());
     body.returns_twice = function.returns_twice;
-    loop_branch_odds(&mut body);
+    match &function.odds {
+        Some(odds) => stated_odds(&mut body, function, odds),
+        None => loop_branch_odds(&mut body),
+    }
     body.inputs = entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect();
     let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
     for (v, class) in function.classes.iter().enumerate() {
@@ -562,6 +565,24 @@ pub fn to_lir<T: Target>(
             register_cost: T::register_cost,
         },
     })
+}
+
+/// The odds the `MFunction` states, by block number in `body`. An edge with
+/// none shares what the others leave (`getSuccProbability`).
+fn stated_odds<C>(
+    body: &mut LirBody,
+    function: &MFunction<C>,
+    odds: &crate::placement::Odds,
+) {
+    for block in body.blocks.iter() {
+        let from = function.blocks[block.at as usize].id;
+        for &to in block.succ.iter() {
+            let id = function.blocks[to as usize].id;
+            if let Some((probability, _)) = odds.get(&(from, id)) {
+                body.odds.taken.insert((block.at, to), probability.get_numerator());
+            }
+        }
+    }
 }
 
 /// The edge odds of a branch with one edge that stays in its innermost loop
@@ -1282,25 +1303,30 @@ pub fn literal_remat_wins<T: Target>(
 /// virtual-register use and `allUsesAvailableAt` asks at the copy whether it
 /// still holds (the callers do).
 fn is_cheap_move<T: Target>(one: &Insn) -> bool {
-    is_literal_move(one) || (T::remat_reads_registers() && is_move_with_reads(one))
+    is_literal_move(one)
+        || (T::remat_reads_registers() && is_move_with_reads(one, false))
+        || (T::remats_symbol_addresses() && one.uses.is_empty() && is_move_with_reads(one, true))
 }
 
 /// One register written by a move of a literal, whatever the target names it:
 /// the target's `isAsCheapAsAMove && isReMaterializable` for a constant.
 fn is_literal_move(one: &Insn) -> bool {
-    one.uses.is_empty() && is_move_with_reads(one)
+    one.uses.is_empty() && is_move_with_reads(one, false)
 }
 
 /// [`is_literal_move`] that may read registers: the registers it reads, then
 /// the identity of the operation.
-fn is_move_with_reads(one: &Insn) -> bool {
+fn is_move_with_reads(
+    one: &Insn,
+    symbol: bool,
+) -> bool {
     let Some(what) = one.what.as_ref() else { return false };
     one.defines.len() == 1
         && one.group.is_none()
         && one.requires.is_empty()
         && one.delivers.is_empty()
         && one.clobbers.is_empty()
-        && one.symbol != Some(true)
+        && (symbol || one.symbol != Some(true))
         // a lane def makes part of its value: making it again does not
         && one.def_lanes.is_empty()
         && one.partial_defs.is_empty()
@@ -2184,10 +2210,16 @@ pub fn from_lir<T: Target>(
                     .find_map(|loc| if let Loc::Held(held) = loc { Some(*held) } else { None })
                     .ok_or("a spill of no value")?;
                 let numbered = number(value, &mut classes);
-                let class = classes[match numbered {
-                    Reg::Virt(v) => v as usize,
-                    Reg::Phys(_) => 0,
-                }];
+                // A pinned value is no virtual register: its class is one that holds its register
+                // (vreg 0's class made a spill of `hl` a byte store, `ld -4(ix), hl`).
+                let class = match numbered {
+                    Reg::Virt(v) => classes[v as usize],
+                    Reg::Phys(register) => classes
+                        .iter()
+                        .copied()
+                        .find(|class| T::candidates(*class).contains(&register))
+                        .unwrap_or_else(T::any),
+                };
                 let register = if T::spills_named_by_lane() {
                     lane_or_number(&named, &mut classes, &mut number)
                 } else {

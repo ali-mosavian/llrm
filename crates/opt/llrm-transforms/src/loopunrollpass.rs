@@ -1064,7 +1064,7 @@ fn should_full_unroll(
                 full_unroll_trip_count,
                 eph,
                 rolled.min(u64::from(u32::MAX)) as u32,
-                up.max_iterations_count_to_analyze,
+                run.tti.unroll_o1_analyzed_trips().map_or(up.max_iterations_count_to_analyze, |trips| trips.max(up.max_iterations_count_to_analyze)),
                 None,
                 false,
             )
@@ -2134,6 +2134,56 @@ fn unroll_updates(
     updates
 }
 
+/// The blocks of the natural loop of `header` in the tree: those that reach a
+/// back edge without passing the header.
+fn natural_loop(
+    function: &Function,
+    tree: &DomTree,
+    header: BlockId,
+) -> IdSet<BlockId> {
+    let mut found: IdSet<BlockId> = IdSet::new();
+    found.insert(header);
+    let mut work: Vec<BlockId> = function.predecessors(header).into_iter().filter(|&p| tree.dominates(header, p)).collect();
+    while let Some(one) = work.pop() {
+        if found.insert(one) {
+            work.extend(function.predecessors(one));
+        }
+    }
+    found
+}
+
+/// The nest after an unroll that kept the loop headed by `header` and made no
+/// other loop (`UnrollLoop` updates `LI` in place): the blocks the unroll made
+/// join the loop and those it merged away leave it. `None` where the loop's
+/// blocks are not those, and the nest is made again.
+fn followed_nest(
+    run: &Run,
+    analyzed: &mut Analyzed,
+    header: BlockId,
+    body: &[BlockId],
+    capacity: usize,
+    merged: usize,
+) -> bool {
+    let gone: Vec<BlockId> = run.emptied[merged..].iter().copied().filter(|one| body.contains(one)).collect();
+    let made: Vec<BlockId> = run
+        .function
+        .layout()
+        .iter()
+        .copied()
+        .filter(|one| one.0 as usize >= capacity && !run.emptied.contains(one))
+        .collect();
+    let mut expected: IdSet<BlockId> = body.iter().copied().filter(|one| !gone.contains(one)).collect();
+    expected.extend(made.iter().copied());
+    if natural_loop(run.function, &analyzed.tree, header) != expected {
+        return false;
+    }
+    let loops = std::rc::Rc::make_mut(&mut analyzed.loops);
+    let Some(id) = loops.get_loop_for(header).map(|one| one.id()) else { return false };
+    loops.remove_blocks_from_loop(id, &gone);
+    loops.add_basic_blocks_to_loop(id, &made);
+    true
+}
+
 /// The `SimplifyIVs` half of `simplifyLoopAfterUnroll`
 /// ([LoopUnroll.cpp:350](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUnroll.cpp#L350)),
 /// run when the unroll is partial (`!CompletelyUnroll && Count > 1`):
@@ -2266,6 +2316,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             Vec::new()
         };
         let edges_before = (parent_header.is_none() && !holds_loops).then(|| unroll_edges(run.function, header, &body));
+        let merged = run.emptied.len();
         let result = try_to_unroll_loop(run, &analyzed, lp);
         if result == Unrolled::Unmodified {
             continue;
@@ -2347,7 +2398,16 @@ pub fn unroll_loops(run: &mut Run) -> bool {
                 assert!(*analyzed.tree == DomTree::of(run.function), "the unroll's updates left the tree different");
             }
             if is_still_a_loop(run, header, &after) {
-                let loops = LoopInfo::analyze(run.function, || &*analyzed.tree);
+                if !followed_nest(run, &mut analyzed, header, &body, capacity, merged) {
+                    analyzed.loops = LoopInfo::analyze(run.function, || &*analyzed.tree).into();
+                    llrm_mir::counts::bump(llrm_mir::counts::Event::LoopAnalyses);
+                }
+                if llrm_support::env_flag!("LLRM_CHECK_DOMTREE_MEMO") {
+                    assert!(
+                        analyzed.loops.equivalent(&LoopInfo::analyze(run.function, || &*analyzed.tree), run.function),
+                        "the unroll's updates left the nest different"
+                    );
+                }
                 let assumptions = AssumptionCache::of_declared(
                     run.context,
                     run.globals,
@@ -2355,8 +2415,11 @@ pub fn unroll_loops(run: &mut Run) -> bool {
                     run.function,
                     run.outer.assume_declared(),
                 );
-                llrm_mir::counts::bump(llrm_mir::counts::Event::LoopAnalyses);
-                let fresh = Analyzed { tree: std::rc::Rc::clone(&analyzed.tree), loops: loops.into(), assumptions };
+                let fresh = Analyzed {
+                    tree: std::rc::Rc::clone(&analyzed.tree),
+                    loops: std::rc::Rc::clone(&analyzed.loops),
+                    assumptions,
+                };
                 simplify_ivs_and_load_cse(run, &fresh, header);
                 simplify_loop_after_unroll(run, Some(&fresh.loops), &after);
             } else {

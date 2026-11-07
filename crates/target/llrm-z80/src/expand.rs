@@ -430,6 +430,15 @@ impl Printer<'_> {
                 self.push("add a, a");
                 self.push("sbc a, a");
             }
+            // the same in another register, through `a` where nothing reads
+            // it or the flags afterwards: 4 B against 14
+            "SRA8" if shift_count(inst)? == 7 && self.dead_after(reg::A, rest) && self.flags_dead(rest) => {
+                let to = name_of(self, 0)?;
+                self.push(format!("ld a, {to}"));
+                self.push("add a, a");
+                self.push("sbc a, a");
+                self.push(format!("ld {to}, a"));
+            }
             "SHL8" | "SRL8" | "SRA8" => {
                 let to = name_of(self, 0)?;
                 let mnemonic = match op {
@@ -1133,6 +1142,19 @@ impl Printer<'_> {
             // both are
             (false, true) if bl == "#0" && bh == "#0" => {
                 self.push(format!("ld a, {}", name(ah)));
+                self.push(format!("or a, {}", name(al)));
+            }
+            // a constant with a zero byte: the other byte subtracted and the
+            // zero byte's partner or-ed in, `(lo ^ c) | hi` is zero only for
+            // equality (no scratch register for two nonzero bytes)
+            (false, true) if bh == "#0" && bl.starts_with('#') => {
+                self.push(format!("ld a, {}", name(al)));
+                self.push(format!("sub a, {bl}"));
+                self.push(format!("or a, {}", name(ah)));
+            }
+            (false, true) if bl == "#0" && bh.starts_with('#') => {
+                self.push(format!("ld a, {}", name(ah)));
+                self.push(format!("sub a, {bh}"));
                 self.push(format!("or a, {}", name(al)));
             }
             // two pairs, one of them `hl`: `sbc hl, rr` sets zero for the whole
@@ -2399,16 +2421,26 @@ fn tail_calls(function: &MFunction) -> MFunction {
     if escapes {
         return function;
     }
-    for block in &mut function.blocks {
+    // a block that ends in a call and falls into a block of only `ret` returns
+    // as the call does: the shared return stands where its own `ret` did
+    let falls_into_return: Vec<bool> = (0..function.blocks.len())
+        .map(|at| {
+            function.blocks.get(at + 1).is_some_and(|next| matches!(&next.insts[..], [one] if one.kind == Kind::Op("RET")))
+        })
+        .collect();
+    for (index, block) in function.blocks.iter_mut().enumerate() {
         let insts = &block.insts;
         let n = insts.len();
         let bare_adjust = |inst: &Inst| {
             matches!(inst.kind, Kind::Op("ADJCALLSTACKUP")) && matches!(inst.operands.first(), Some(Operand::Imm(0)))
         };
-        if n >= 2 && insts[n - 1].kind == Kind::Op("RET") {
-            let at = if bare_adjust(&insts[n - 2]) { n - 3 } else { n - 2 };
-            if n >= 2 && at < n && insts[at].call && insts[at].kind == Kind::Op("CALL") && (at == n - 2 || at == n - 3)
-            {
+        let returns = n >= 1 && insts[n - 1].kind == Kind::Op("RET");
+        // the end as it would stand with the `ret` the next block holds
+        let falls = !returns && n >= 1 && falls_into_return[index] && (bare_adjust(&insts[n - 1]) || insts[n - 1].call);
+        let end = n + usize::from(falls);
+        if end >= 2 && (returns || falls) {
+            let at = if bare_adjust(&insts[end - 2]) { end - 3 } else { end - 2 };
+            if at < n && insts[at].call && insts[at].kind == Kind::Op("CALL") && (at == end - 2 || at == end - 3) {
                 let symbol = insts[at].operands.first().cloned();
                 if let Some(symbol @ Operand::Symbol(..)) = symbol {
                     // the call's argument registers stay read: the copies that

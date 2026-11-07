@@ -23,7 +23,7 @@ int B_FASC(SD *sd)
     if (sd->len == 0)
         qb_error(BE_ILLFUN);
     code = (byte)sd->ptr[0];
-    str_tmp_free(sd);
+    str_free_if_tmp(sd);
     return code;
 }
 
@@ -57,7 +57,7 @@ SD *B_FOCT(unsigned long value)
 }
 
 /* The string of `size` bytes holding `value`'s bytes. */
-static SD *made(const void *value, unsigned size)
+static inline __attribute__((always_inline)) SD *made(const void *value, unsigned size)
 {
     char *data;
     SD *result = str_tmp(size, &data);
@@ -89,12 +89,12 @@ SD *B_FMKD(double value)
 /* The bytes of the first `size` characters of `sd`, in `into`; a shorter
    string is an Illegal function call.  The string is freed if it was a
    temporary. */
-static void bytes_of(SD *sd, void *into, unsigned size)
+static inline __attribute__((always_inline)) void bytes_of(SD *sd, void *into, unsigned size)
 {
     if (sd->len < size)
         qb_error(BE_ILLFUN);
     copy_bytes(into, sd->ptr, size);
-    str_tmp_free(sd);
+    str_free_if_tmp(sd);
 }
 
 int B_FCVI(SD *sd)

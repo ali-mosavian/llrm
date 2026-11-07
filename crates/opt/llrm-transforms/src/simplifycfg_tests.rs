@@ -1526,3 +1526,25 @@ switch.early.test:
     simplify_with(&super::Options::L1438, &mut module);
     assert_eq!(results(&module, &[&[]]), before, "{}", printed(&module));
 }
+
+/// Compile time: every block of every run was copied into a `Vec` to look for
+/// a call that never returns, 22.7 K blocks in memexp -O2 and one in a
+/// hundred held such a call. A block with none is not listed.
+#[test]
+fn test_a_block_without_a_noreturn_call_is_not_listed() {
+    let mut module = parsed(
+        "declare void @f2(i16)
+
+define i16 @f(i16 %x) {
+b0:
+  call void @f2(i16 %x)
+  %y = add i16 %x, 1
+  ret i16 %y
+}
+",
+    );
+    super::BLOCKS_LISTED.with(|one| one.set(0));
+    simplify(&mut module);
+    let listed = super::BLOCKS_LISTED.with(|one| one.get());
+    assert_eq!(listed, 0, "{listed} blocks listed");
+}

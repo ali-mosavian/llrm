@@ -451,7 +451,7 @@ exit:
 /// `a[i + 1] = a[i]` going up reads what it wrote: it spreads `a[0]`, which no
 /// memmove does. The check that the store is not ahead of the load had its
 /// sense inverted (`loadAndStoreMayFormMemmove` returned what LLVM's `return
-/// false` condition said), so the loop became a memmove and `llrm-c` stopped
+/// false` condition said), so the loop became a memmove and `llrm-cc` stopped
 /// with "a memmove whose direction no pass proved" (tests/run/c/idioms.c, once
 /// LoopRotate was on).
 #[test]
@@ -469,7 +469,7 @@ fn test_a_loop_that_shifts_a_buffer_the_safe_way_is_a_memmove() {
     let after = pass_output(&shift_loop(1, 0, false));
     assert!(after.contains("llvm.memmove"), "{after}");
     // llrm's code generator lowers a memmove only with its direction stated:
-    // `llrm-c` stopped with "a memmove whose direction no pass proved".
+    // `llrm-cc` stopped with "a memmove whose direction no pass proved".
     assert!(after.contains("!llrm.forward"), "{after}");
     let after = pass_output(&shift_loop(0, 1, true));
     assert!(after.contains("llvm.memmove"), "{after}");

@@ -387,6 +387,16 @@ impl ProgramPass for Walk {
                         // waits: one above it gets no
                         // copies, so its elimination stays at the pin's slot.
                         let tree = self_calls(module, &program.layout, id, self.inline.single);
+                        if llrm_support::debug::enabled("recursion")
+                            && let (Some(tti), true) = (tti.as_deref(), tree.is_some())
+                        {
+                            eprintln!(
+                                "recursion: @{} gcc_insns {} call/total clocks {:?}",
+                                module.global(id).name.owned().unwrap_or_default(),
+                                crate::inline::gcc_work(module.global(id).function().expect("a function")),
+                                self_call_share(module, &*program.target, tti, &program.layout, id)
+                            );
+                        }
                         let priced = tti.as_deref().and_then(|tti| tti.priced_self_inlining());
                         let fits = match (&tree, priced, tti.as_deref()) {
                             (Some(frequencies), Some(ceilings), Some(tti)) => {
@@ -401,7 +411,14 @@ impl ProgramPass for Walk {
                                 ) > 0
                             }
                             _ => recursion.is_some_and(|one| {
-                                module
+                                let share = tti.as_deref().and_then(|tti| tti.recursive_inlining_call_share());
+                                let calls_dominate = share.is_none_or(|(num, den)| {
+                                    tti.as_deref()
+                                        .and_then(|tti| self_call_share(module, &*program.target, tti, &program.layout, id))
+                                        .is_some_and(|(calls, total)| calls * den >= total * num)
+                                });
+                                calls_dominate
+                                    && module
                                     .global(id)
                                     .function()
                                     .is_some_and(
@@ -896,6 +913,48 @@ pub(crate) fn self_calls_from(
 /// the loop-bodied rows (growth/gain 0.28 or more: quicksort, bintree, recchop)
 /// and the call-bound ones (0.13 or less: fib, frames, rectwo).
 const COPY_MARGIN: f64 = 4.0;
+
+/// The clocks the calls of `id` to itself spend on the call, return and
+/// argument words (`CallPrice`), and the clocks of its whole body (latency of
+/// every instruction, the calls included), counted statically.
+pub(crate) fn self_call_share(
+    module: &Module,
+    program_target: &dyn llrm_mir::target::Machine,
+    tti: &dyn llrm_mir::tti::Tti,
+    layout: &llrm_mir::datalayout::DataLayout,
+    id: GlobalId,
+) -> Option<(i64, i64)> {
+    let body = module.global(id).function()?;
+    let sites: Vec<llrm_mir::module::InstId> = body
+        .walk()
+        .filter_map(|(_, inst)| (llrm_mir::memory::callee(&module.context, body, inst) == Some(id)).then_some(inst))
+        .collect();
+    let &first = sites.first()?;
+    let arguments = body.instruction(first).operands.len().saturating_sub(1);
+    let bytes = program_target.byte_costs();
+    let price = llrm_mir::callprice::CallPrice::new(
+        &program_target.costs(),
+        &bytes,
+        arguments,
+        tti.speed_milliclocks_per_byte(),
+    );
+    let total: i64 = body
+        .walk()
+        .map(
+            |(_, inst)| llrm_mir::instructioncost::instruction_cost(
+                tti,
+                &module.context,
+                layout,
+                &module.globals,
+                body,
+                inst,
+                llrm_mir::tti::CostKind::Latency,
+            )
+            .value,
+        )
+        .sum();
+    Some((price.clocks * sites.len() as i64, total))
+}
 
 /// DEVIATE REC-1 (priced): the depth of copies of itself that `id` is given,
 /// 0 for none. A level of copies saves the calls it removes, `c` clocks each

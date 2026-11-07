@@ -11,7 +11,6 @@
 
 	.globl __fixsfsi
 	.globl __fixunssfsi
-	.globl done
 	.globl __fixsfsi
 __fixsfsi:
 	ld	c,#1

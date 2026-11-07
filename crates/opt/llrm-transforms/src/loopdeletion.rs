@@ -287,7 +287,7 @@ fn is_loop_dead(
     changed: &mut bool,
     preheader: BlockId,
 ) -> bool {
-    let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
+    let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::placeholder());
     let dead = is_loop_dead_with(run, analyzed, lp, exiting_blocks, exit_block, changed, preheader, &mut se);
     run.scev = se;
     dead
@@ -836,7 +836,7 @@ fn break_backedge_if_not_taken(
     analyzed: &Analyzed,
     lp: Loop,
 ) -> Result {
-    let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
+    let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::placeholder());
     let result = break_backedge_with(run, analyzed, lp, &mut se);
     run.scev = se;
     result
@@ -972,7 +972,7 @@ fn delete_loops_with(
         // counts.
         match run.function.touched_since(mark) {
             Some(touched) => {
-                let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
+                let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::placeholder());
                 se.forget_touched(&cx_of(run, &analyzed), &touched);
                 run.scev = se;
             }
@@ -1017,14 +1017,14 @@ impl FunctionPass for LoopDeletion {
             outer: &outer,
             function: unit.function,
             emptied: Vec::new(),
-            scev: ScalarEvolution::new(),
+            scev: ScalarEvolution::placeholder(),
         };
         run.scev = held.take();
         let tree = analyses.get::<Dominators>(run.context, run.layout, run.function);
         let loops = analyses.get::<Loops>(run.context, run.layout, run.function);
         let analyzed = Analyzed::held(&run, tree, loops);
         let changed = delete_loops_with(&mut run, analyzed);
-        held.put(std::mem::replace(&mut run.scev, ScalarEvolution::new()));
+        held.put(std::mem::replace(&mut run.scev, ScalarEvolution::placeholder()));
         if changed { PreservedAnalyses::none().preserve::<Scevs>() } else { PreservedAnalyses::all() }
     }
 }

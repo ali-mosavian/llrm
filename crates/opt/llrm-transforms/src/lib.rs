@@ -322,6 +322,7 @@ pub mod lsr_generate;
 mod lsr_generate_tests;
 pub mod lsr_implement;
 pub mod lsr_narrow;
+pub mod looptermfold;
 pub mod lsr_pass;
 #[cfg(test)]
 mod lsr_pass_tests;
@@ -375,6 +376,7 @@ pub mod reassociate_pairs;
 pub mod reassociate_rank;
 pub mod reassociate_tree;
 pub mod remidiom;
+pub mod vastart;
 pub mod rotate;
 pub mod rpoattrs;
 pub mod runtimechecks;

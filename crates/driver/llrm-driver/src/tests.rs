@@ -97,7 +97,7 @@ fn a_targets_operations_are_priced_from_its_own_timings_and_mapping() {
     assert!(flat.cost("pop_seg").is_err() && real.cost("call_near").is_err());
 }
 
-/// The CPU a compile is priced for with none asked is the target's: llrm-c took
+/// The CPU a compile is priced for with none asked is the target's: llrm-cc took
 /// the 386 for every target, so a flat compile with no `-march` died on a CPU
 /// its tables do not have. Asking for another names the target's own.
 #[test]
@@ -1496,7 +1496,7 @@ fn stdcall_is_refused_by_name() {
 }
 
 /// At m16 an unmarked function takes the register-size convention (`_f@3`,
-/// callee clobbers CX and DX), as llrm-c's did, and `main` is Watcom's `main_`.
+/// callee clobbers CX and DX), as llrm-cc's did, and `main` is Watcom's `main_`.
 /// `-mabi=watcom` forced on the Watcom row made every function save BX, CX and
 /// DX and call `main_`: the m16 -Os programs came out 16% larger.
 #[test]
@@ -1542,7 +1542,7 @@ fn m16_library_calls_are_the_watcom_register_convention() {
 }
 
 /// A C `static` function at m16 stayed a far procedure (`call far ptr`,
-/// `retf`) where llrm-c entered it by a near call: 3 bytes a call site, 1 a
+/// `retf`) where llrm-cc entered it by a near call: 3 bytes a call site, 1 a
 /// return, the growth of the programs that call a static helper often. One
 /// whose address is taken stays far.
 #[test]
@@ -1770,7 +1770,7 @@ fn no_inline_takes_the_source_name_under_every_abi() {
 }
 
 /// `-fsanitize=stack` reached llrm-llc from llrm-cc and did nothing for IR:
-/// llrm-c marked the functions it compiled, an IR module's were never marked,
+/// llrm-cc marked the functions it compiled, an IR module's were never marked,
 /// so `stackover.c` ran off the stack instead of ending in "Stack Overflow!".
 #[test]
 fn fsanitize_stack_makes_every_function_compare_sp_on_entry() {
@@ -4694,6 +4694,25 @@ fn a_single_bit_mask_test_at_m64_is_a_narrow_sign_test_not_cmp_adc() {
 
 /// The pin's `combineMul` covers i64 as well as i32: `x * 40` is `lea; shl`. Ours returned early for i64 and kept
 /// `imul r64, r64, imm`; 100+ products in mul_constants -O2 became `movabs` + `imul` (+450 B over the pin llc).
+/// `add(mul(add(A, CA), CM), CB)` folds only when `CA*CM + CB` is a legal add immediate (`isInt<32>` on x86). Ours
+/// had no check: the unrolled LCG chain of mul_constants became 64-bit `mov` constants and `imul r, r` (+875 B at -O2/-O3).
+#[test]
+fn a_mul_add_chain_is_not_folded_into_a_64_bit_immediate_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i64 %x0, i64 %t0, i64 %n) {\nentry:\n  br label %l\nl:\n  \
+                %v2 = phi i64 [ %x0, %entry ], [ %v11, %l ]\n  %v3 = phi i64 [ 0, %entry ], [ %v23, %l ]\n  \
+                %v4 = phi i64 [ %t0, %entry ], [ %r, %l ]\n  %v5 = mul i64 %v2, 1664525\n  \
+                %v6 = add i64 %v5, 1013904223\n  %v7 = mul i64 %v4, 961\n  %v8 = mul i64 %v6, 93\n  \
+                %v9 = add i64 %v8, %v7\n  %v10 = mul i64 %v6, 1664525\n  %v11 = add i64 %v10, 1013904223\n  \
+                %v12 = mul i64 %v11, 3\n  %r = add i64 %v12, %v9\n  %v23 = add nuw nsw i64 %v3, 2\n  \
+                %v24 = icmp eq i64 %v23, %n\n  br i1 %v24, label %out, label %l\nout:\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let wide = listing.split(|c: char| !c.is_ascii_digit()).filter(|n| n.len() >= 11).count();
+    assert_eq!(wide, 0, "{listing}");
+}
+
 #[test]
 fn an_i64_multiply_by_a_lea_constant_is_not_an_imul_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\

@@ -220,6 +220,13 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `X86TargetLowering::isLegalAddImmediate`: `isInt<32>`. Without it
+    /// `add(mul(add(A, CA), CM), CB)` folded the LCG chain of mul_constants
+    /// into 64-bit constants (+875 B at -O2/-O3).
+    fn legal_add_immediate(&self, imm: i64) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
     /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)` when
     /// the other multiply of `x` by `c2` is in the DAG: the pin's x86 runs
     /// it (`isMulAddWithConstProfitable` has no X86 override). Judged on

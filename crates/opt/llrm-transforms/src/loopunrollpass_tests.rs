@@ -776,12 +776,25 @@ fn unrolled_o1(
     module: &mut Module,
     never_grows: bool,
 ) -> bool {
+    unrolled_o1_analysing(module, never_grows, None)
+}
+
+/// `unrolled_o1`, the target stating how many trips the no-growth rule analyses.
+fn unrolled_o1_analysing(
+    module: &mut Module,
+    never_grows: bool,
+    analyzed_trips: Option<u32>,
+) -> bool {
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
     crate::testing::closed(module).expect("closes");
     let tti = X86::of_cpu("i486")
         .expect("a cpu")
-        .with_tuning(llrm_mir::target::Tuning { unroll_never_grows_at_o1: never_grows, ..llrm_mir::target::Tuning::PIN });
+        .with_tuning(llrm_mir::target::Tuning {
+            unroll_never_grows_at_o1: never_grows,
+            unroll_o1_analyzed_trips: analyzed_trips,
+            ..llrm_mir::target::Tuning::PIN
+        });
     let options = Options {
         opt_level: 1,
         opt_size: false,
@@ -823,6 +836,42 @@ b2:
 fn test_at_o1_a_loop_whose_copies_cost_more_than_the_loop_stays_rolled() {
     assert!(unrolled_o1(&mut parsed(&counted(8)), false), "the pin's O1 bar unrolls it");
     assert!(!unrolled_o1(&mut parsed(&counted(8)), true), "eight copies of a multiply and an add grow");
+}
+
+/// float_in_memory_loop -O1 m32: sixteen trips of a load from a constant table
+/// and an add fold to nothing when copied (the analysis prices the copies at 0
+/// units against 4 rolled), but the -O1 guard analysed only the pin's first ten
+/// trips (`-unroll-max-iteration-count-to-analyze`), found nothing for sixteen
+/// and kept the loop: 64 -> 158 B. The pricing path analyses all the trips; so
+/// does the guard now.
+#[test]
+fn test_at_o1_a_loop_of_more_than_ten_trips_that_folds_away_is_unrolled() {
+    let table = (1..=16).map(|n| format!("i32 {n}")).collect::<Vec<_>>().join(", ");
+    let text = format!(
+        "@t = constant [16 x i32] [{table}]
+
+define i32 @f() {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi i32 [ 0, %b0 ], [ %s, %b1 ]
+  %q = getelementptr inbounds i32, ptr @t, i32 %i
+  %v = load i32, ptr %q
+  %s = add i32 %acc, %v
+  %next = add i32 %i, 1
+  %go = icmp ult i32 %next, 16
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i32 %s
+}}
+"
+    );
+    assert!(!unrolled_o1(&mut parsed(&text), true), "the pin's cap of ten analysed trips keeps it rolled");
+    let mut module = parsed(&text);
+    assert!(unrolled_o1_analysing(&mut module, true, Some(16)), "{}", printed(&module));
 }
 
 /// x_life O1 (gcc unrolls the dx loop and shrinks): three copies of a load
@@ -893,18 +942,20 @@ fn test_a_function_the_unroll_leaves_alone_makes_no_loop_analyses() {
 }
 
 /// Every partial unroll of a top-level loop built the function's dominator tree
-/// again (467 builds, 517 M Ir of memory_expansion -O2); the pin applies the
-/// unroll's edge updates to the tree it has.
+/// and loop info again (467 builds of each, 517 M and 277 M Ir of
+/// memory_expansion -O2); the pin updates both in place (`UnrollLoop`'s `DTU`
+/// and `LI`).
 #[test]
-fn test_partial_unrolls_in_sequence_build_one_dominator_tree() {
+fn test_partial_unrolls_in_sequence_build_one_dominator_tree_and_nest() {
     use llrm_mir::counts::{Event, get};
-    let text = sequential(8);
-    let text = (0..8).fold(text, |text, k| text.replace(&format!("icmp slt i16 %n{k}, 4"), &format!("icmp slt i16 %n{k}, 64")));
+    let text = (0..8).fold(sequential(8), |text, k| {
+        text.replace(&format!("icmp slt i16 %n{k}, 4"), &format!("icmp slt i16 %n{k}, 1024"))
+    });
     let mut module = parsed(&text);
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
     crate::testing::closed(&mut module).expect("closes");
-    let tti = X86::of_cpu("i486").expect("a cpu");
+    let tti = X86::of_cpu("x86-64").expect("a cpu");
     let options = Options {
         opt_level: 2,
         opt_size: false,
@@ -913,9 +964,9 @@ fn test_partial_unrolls_in_sequence_build_one_dominator_tree() {
         prepare_for_lto: false,
         target_unrolling: true,
     };
-    let (before, nests) = (get(Event::Dominators), get(Event::LoopAnalyses));
+    let (trees, nests) = (get(Event::Dominators), get(Event::LoopAnalyses));
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
-    let built = get(Event::Dominators) - before;
-    let nests = get(Event::LoopAnalyses) - nests;
-    assert!(built <= 2, "{built} dominator trees built for 8 partial unrolls ({nests} nests)");
+    assert_eq!(printed(&module).matches("phi i16 [ 0,").count(), 8, "partial: the eight loops remain");
+    let (trees, nests) = (get(Event::Dominators) - trees, get(Event::LoopAnalyses) - nests);
+    assert!(trees <= 2 && nests <= 2, "{trees} dominator trees and {nests} nests built for 8 partial unrolls");
 }

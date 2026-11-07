@@ -2821,7 +2821,8 @@ impl<'a> TypeLegalizer<'a> {
             (None, true) => llrm_target::routines::Used::Quotient,
             (None, false) => llrm_target::routines::Used::Remainder,
         };
-        let Ok(routine) = arch.divide_routine_used(signed, wide, used) else {
+        let small = self.tli.small_divide().then(|| arch.divide_routine_small(signed, wide).ok()).flatten();
+        let Some(routine) = small.or_else(|| arch.divide_routine_used(signed, wide, used).ok()) else {
             return Err(LegalizeError::Unsupported { op, ty: vt, what: "the i64 divide routine is unavailable" });
         };
         let mut args = vec![

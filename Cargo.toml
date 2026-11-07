@@ -62,7 +62,6 @@ llrm-iselgen = { path = "crates/backend/llrm-iselgen" }
 llrm-peepgen = { path = "crates/backend/llrm-peepgen" }
 llrm-nib = { path = "crates/frontends/nib" }
 llrm-qb = { path = "crates/frontends/qb" }
-llrm-c = { path = "crates/frontends/llrm-c" }
 llrm-qbruntime = { path = "runtime/qb" }
 
 [package]
@@ -84,7 +83,6 @@ llrm-bcdriver = { workspace = true }
 llrm-driver = { workspace = true }
 llrm-nib = { workspace = true }
 llrm-qb = { workspace = true }
-llrm-c = { workspace = true, optional = true }
 llrm-cc = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
@@ -93,12 +91,8 @@ tempfile = { workspace = true }
 default = ["toolchain"]
 # gcc-derived estimates (GPL-3.0-or-later): REC-2 recursion copies. Off by default.
 gcc-gpl = ["llrm-transforms/gcc-gpl"]
-# What the build scripts bootstrap: Open Watcom's wccq (llrm-c), jwasm and jwlink, and DOSBox-X.
-# The lib tests need only wccq.
+# What the build scripts bootstrap: jwasm and jwlink, and DOSBox-X.
 toolchain = ["jw", "dosrun"]
-# The Watcom-dialect llrm-c, kept until llrm-cc replaces it (C4): not built by default.
-c-legacy = ["dep:llrm-c"]
-wccq = ["c-legacy", "llrm-c/toolchain"]
 jw = []
 dosrun = []
 system-alloc = []
@@ -115,11 +109,6 @@ toml = { workspace = true }
 [[bin]]
 name = "llrm-qb"
 path = "src/bin/llrm-qb.rs"
-
-[[bin]]
-name = "llrm-c"
-path = "src/bin/llrm-c.rs"
-required-features = ["c-legacy"]
 
 [[bin]]
 name = "llrm-cc"

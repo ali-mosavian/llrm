@@ -69,6 +69,10 @@ thread_local! {
     /// Set while a function is selected the second time, under `ILP`
     /// (DEVIATE Z80S1).
     pub static ILP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function that calls `__mulsi3` for its long multiplies is
+    /// selected the second time, with the shifts and adds of `x * (2^k +- 1)`
+    /// kept (`driver::selections_with_alternatives`).
+    pub static DECOMPOSE_MULS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// What the scheduler reads of the instruction descriptions.
@@ -149,7 +153,10 @@ pub enum Refusal {
 }
 
 /// The Z80's combiner hooks.
-struct Z80Combines;
+struct Z80Combines {
+    /// The size routine `__mulsi3` is this function's long multiply.
+    long_multiply: bool,
+}
 
 impl CombineHooks for Z80Combines {
     /// DEVIATE Z80-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the folded
@@ -171,7 +178,10 @@ impl CombineHooks for Z80Combines {
     ///
     /// A long multiplied by `2^k +- 1` (k up to 8) is `k` long shifts and an
     /// add (each a `add hl, hl` / `adc` pair); the multiply expands through
-    /// byte lanes instead: 49 instructions for `x * 3`, 58 for `x * 7`.
+    /// byte lanes instead: 49 instructions for `x * 3`, 58 for `x * 7`. Where
+    /// the function calls `__mulsi3` for its long multiplies (tuned for size,
+    /// a module with enough of them) the call, about 14 B, is the smaller
+    /// form: the decomposition left alone grew 12 -Os cells.
     fn decompose_mul_by_constant(
         &self,
         vt: EVT,
@@ -180,9 +190,24 @@ impl CombineHooks for Z80Combines {
         let near_power = |n: u128| n.is_power_of_two() && n <= 256;
         match vt {
             EVT::I8 | EVT::I16 => true,
-            EVT::I32 => c >= 3 && (near_power(c - 1) || near_power(c + 1)),
+            EVT::I32 => !self.long_multiply && c >= 3 && (near_power(c - 1) || near_power(c + 1)),
             _ => false,
         }
+    }
+
+    /// The byte-lane multiply of a long whose three high bytes are zero is 15
+    /// instructions for `x * 3` where the shifts and the add are 21 (a
+    /// zero-extended byte, byte_multiply -O2 +36 B and +38,149 T); a
+    /// zero-extended word keeps the decomposition (23 against 44).
+    fn decompose_mul_by_constant_of(
+        &self,
+        dag: &SelectionDAG,
+        x: SDValue,
+        vt: EVT,
+        c: u128,
+    ) -> bool {
+        self.decompose_mul_by_constant(vt, c)
+            && !(vt == EVT::I32 && llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero(dag, x, 0xFFFF_FF00))
     }
 
     /// The pin's default: a compare of a masked or zero-extended value against
@@ -261,19 +286,20 @@ pub fn select_block(
         tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
     }
     let mut lowering = Z80Lowering { sized };
+    let mut combines = Z80Combines { long_multiply: sized && long_multiply };
     let arch = Z80;
     if optimize {
         live_out::assert_live_out_copies(dag, info);
     }
-    DagCombiner::new(dag, &mut Z80Combines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut combines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     TypeLegalizer::new(dag, &tli)
         .with_target(&arch)
         .with_hooks(&mut lowering)
         .run()
         .map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut Z80Combines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut combines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut Z80Combines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut combines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
     if optimize {
         live_out::compute_live_out_vreg_info(dag, info);
     }
