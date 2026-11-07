@@ -52,6 +52,8 @@ def main(argv):
     clocks = argv[argv.index("--clocks") + 1] if "--clocks" in argv else "mean"
     noise = float(argv[argv.index("--noise") + 1]) if "--noise" in argv else 0.0
     worse, better, same, missing = compare(rows(argv[1], clocks), rows(argv[2], clocks), level, noise)
+    if missing:
+        print(f"{level}: VOID, {len(missing)} rows are on one side only (refused, failed or not run): no verdict")
     print(f"{level}: failing {len(worse)} better {len(better)} same {len(same)} missing {len(missing)}")
     for tag, group in (("FAIL", worse), ("better", better)):
         for name, (bb, bc), (nb, nc) in group:

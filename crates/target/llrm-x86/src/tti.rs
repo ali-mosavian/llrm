@@ -669,6 +669,10 @@ impl Tti for X86 {
         self.tuning.multiply_by_clocks
     }
 
+    fn divide_by_bytes(&self) -> bool {
+        self.tuning.divide_by_bytes
+    }
+
     fn price_pin_multiplies(&self) -> bool {
         self.tuning.price_pin_multiplies
     }
@@ -710,6 +714,10 @@ impl Tti for X86 {
 
     fn x87_zero_fill_at_size(&self) -> bool {
         self.tuning.x87_zero_fill_at_size && !self.sse2
+    }
+
+    fn size_fill(&self) -> Option<llrm_mir::target::SizeFill> {
+        self.tuning.size_fill
     }
 
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
@@ -809,12 +817,23 @@ impl Tti for X86 {
         self.tuning.rotation_guard_must_fold_at_size
     }
 
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        self.tuning.size_rotation_header_limit
+    }
+
     fn rotation_header_priced_at_size(&self) -> bool {
         self.tuning.rotation_header_priced_at_size
     }
 
     fn constant_offset_phi_is_cheap(&self) -> bool {
         !self.tuning.keep_constant_displacements
+    }
+
+    fn constant_arith_phi_is_cheap(
+        &self,
+        optsize: bool,
+    ) -> bool {
+        optsize || !self.tuning.keep_constant_arith_operands
     }
 
     /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
@@ -870,12 +889,17 @@ impl Tti for X86 {
     // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
     // divides to `Expand` (L340) and leaves the two-result ones at the base
     // class's `Legal`, so every register type has one.
+    //
+    // DEVIATE DR1 (exit 2026-11-20): the 32-bit mode's inline `i64` divide
+    // routine returns both, so `i64` has one too (the pin's x86 has none and
+    // `DivRemPairs` writes `x % y` as `x - x / y * y`: a 64-bit multiply and
+    // a subtract per remainder, x_ll_div).
     fn has_div_rem_op(
         &self,
         bits: u32,
         _signed: bool,
     ) -> bool {
-        self.is_type_legal(Ty::Int(bits))
+        self.is_type_legal(Ty::Int(bits)) || (bits == 64 && !self.quad && self.real_mode.is_none())
     }
 
     /// `FSQRT` is legal on every scalar float: the SSE instruction, or x87's.
@@ -1281,8 +1305,9 @@ impl Tti for X86 {
     ///
     /// DEVIATE LU3d: a target that states its allocatable registers
     /// (`with_registers`: the frame and stack pointers are not among them)
-    /// keeps none back; the pin's one stands for the stack pointer its count
-    /// of eight includes. owner: w12, exit: 2026-11-20 (the m32/m64 A/B in the
+    /// keeps none back: the pin's one stands for the stack pointer its count
+    /// of eight includes, so reserving it again counts it twice (not an `i8`
+    /// counter the pin makes). owner: w12, exit: 2026-11-20 (the m32/m64 A/B in the
     /// PR; without it the line goes).
     fn lsr_reserved_registers(&self) -> u32 {
         u32::from(self.real_mode.is_none() && self.registers.is_none())

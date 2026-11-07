@@ -1990,6 +1990,35 @@ pub fn build_with_places(
                     b.push(step);
                 }
             }
+            // one bit crosses between two words: the carry of a shift of the
+            // word that gives it up, rotated into the word that takes it
+            code @ (op::FSHL1 | op::FSHR1) => {
+                let (al, ah) = b.read_word(name(&o[1])?)?;
+                let (bl, bh) = b.read_word(name(&o[2])?)?;
+                let (dl, dh) = b.write_word(name(&o[0])?)?;
+                let acc = Reg::Phys(reg::A);
+                let (kind, kept, gives, first, second) = if code == op::FSHL1 {
+                    ("FSHL1", (al, ah), bh, dl, dh)
+                } else {
+                    ("FSHR1", (bl, bh), al, dh, dl)
+                };
+                b.copy(dl, kept.0);
+                b.copy(dh, kept.1);
+                for r in [dl, dh] {
+                    b.require(r, Class::MEM)?;
+                }
+                b.push(Inst::new(
+                    Kind::Op(kind),
+                    vec![
+                        Operand::Def(acc),
+                        Operand::Use(gives),
+                        Operand::Def(first),
+                        Operand::Use(first),
+                        Operand::Def(second),
+                        Operand::Use(second),
+                    ],
+                ));
+            }
             // 32 bits through `__sa` and `__sb` (runtime/mos_rt.s)
             code @ (op::MUL32
             | op::UDIV32
@@ -3406,8 +3435,13 @@ fn emit_with<const STACK: bool>(
                     parallel_move(&mut out, &moves, a_live);
                 }
                 (Kind::Copy, _) => move_byte(&mut out, regs[0], regs[1], a_live, spare),
+                // a lane nothing reads is not moved (a word truncated to a byte)
                 (Kind::Op("UNPACK"), _) => {
-                    parallel_move(&mut out, &[(regs[0], lane(regs[2], 0)), (regs[1], lane(regs[2], 1))], a_live);
+                    let moves: Vec<_> = [(regs[0], lane(regs[2], 0)), (regs[1], lane(regs[2], 1))]
+                        .into_iter()
+                        .filter(|(to, _)| after[b][i].contains(to))
+                        .collect();
+                    parallel_move(&mut out, &moves, a_live);
                 }
                 (Kind::Op("PACK"), _) => {
                     parallel_move(&mut out, &[(lane(regs[0], 0), regs[1]), (lane(regs[0], 1), regs[2])], a_live);
@@ -3622,6 +3656,17 @@ fn emit_with<const STACK: bool>(
                         _ => writeln!(out, "  {first} {one}\n  {second} {two}").unwrap(),
                     }
                 }
+                // `lda give; asl|lsr a` leaves the bit in the carry; the word rotates it in
+                (Kind::Op(step @ ("FSHL1" | "FSHR1")), _) => {
+                    let (shift, first, second) = if step == "FSHL1" { ("asl", "rol", "rol") } else { ("lsr", "ror", "ror") };
+                    match regs[1] {
+                        r if r == reg::A => {}
+                        r if r == reg::X => out.push_str("  txa\n"),
+                        r if r == reg::Y => out.push_str("  tya\n"),
+                        r => writeln!(out, "  lda {}", register_name(r)).unwrap(),
+                    }
+                    writeln!(out, "  {shift} a\n  {first} {}\n  {second} {}", register_name(regs[2]), register_name(regs[4])).unwrap();
+                }
                 (Kind::Op("SRA1"), _) => {
                     let (lo, hi) = (register_name(regs[1]), register_name(regs[3]));
                     writeln!(out, "  lda {hi}\n  cmp #$80\n  ror {hi}\n  ror {lo}").unwrap()
@@ -3779,6 +3824,18 @@ fn emit_with<const STACK: bool>(
                             _ => None,
                         },
                         _ => None,
+                    });
+                    // `tax; cmp #k` (likewise `tay`): the compare left `a` alone, so
+                    // the register copied from it still holds what `a` does
+                    let held = held.or_else(|| {
+                        let n = out.lines.len();
+                        match (n.checked_sub(2).map(|first| &out.lines[first]), out.lines.last()) {
+                            (
+                                Some(Line::Inst(AsmInst { op: copy @ (AsmOp::Tax | AsmOp::Tay), .. })),
+                                Some(Line::Inst(AsmInst { op: AsmOp::Cmp, .. })),
+                            ) => Some(if *copy == AsmOp::Tax { reg::X } else { reg::Y }),
+                            _ => None,
+                        }
                     });
                     let opposite = ["bne", "beq", "bcs", "bcc", "bpl", "bmi"][*code as usize];
                     if held.is_some() && held == true_at {

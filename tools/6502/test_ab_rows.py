@@ -52,5 +52,37 @@ class Rows(unittest.TestCase):
         self.assertEqual(ab_rows.main(["x", a, b, "--level", "O1"]), 1)
         self.assertEqual(ab_rows.main(["x", a, b, "--level", "O1", "--clocks", "min"]), 0)
 
+class Void(unittest.TestCase):
+    """The 2026-11-07 funnel A/B printed "failing 0 better 9" for a build that panicked on 42 of 86 programs:
+    the first line read as a verdict. A run with rows on one side only says VOID first."""
+    def first_line(self, a, b):
+        import io, contextlib
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ab_rows.main(["x", tsv(a), tsv(b), "--level", "O1"])
+        return out.getvalue().splitlines()[0]
+
+    def test_rows_on_one_side_only_make_the_first_line_void(self):
+        self.assertIn("VOID", self.first_line([("p", 1, 1), ("q", 1, 1)], [("p", 1, 1)]))
+
+    def test_a_complete_run_has_no_void_line(self):
+        self.assertNotIn("VOID", self.first_line([("p", 1, 1)], [("p", 1, 1)]))
+
+    def test_a_compiler_that_panics_leaves_its_program_out_of_the_table(self):
+        import json, os, pathlib, subprocess, sys, tempfile
+        here = pathlib.Path(__file__).resolve().parent
+        work = pathlib.Path(tempfile.mkdtemp())
+        cc = work / "panicking-cc"
+        cc.write_text("#!/bin/sh\necho \"thread 'main' panicked at dag.rs:1080:29:\" >&2\nexit 101\n"); cc.chmod(0o755)
+        out = work / "p.tsv"
+        env = dict(os.environ, OURS_RT=str(here.parents[1] / "crates/target/llrm-6502/runtime/mos_rt.s"),
+                   OURS_CORPUS=str(here.parents[1] / "tests/run/c"))
+        subprocess.run([sys.executable, str(here / "ours_cr.py"), str(cc), "O1", str(out), "bit_setclear"], env=env, cwd=here,
+                       capture_output=True, timeout=120)
+        status = [row[1] for row in json.load(open(str(out) + ".json"))]
+        self.assertEqual(status, ["REFUSED"])
+        good = tsv([("bit_setclear", 10, 10)])
+        self.assertEqual(ab_rows.main(["x", good, str(out), "--level", "O1"]), 1)
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@
 //! forms of the pin's block: no `2^N +- 2^M`. Exit: the hook in the shared
 //! `visit_mul`.
 
+use super::lowering::mosisd;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
@@ -27,6 +28,19 @@ pub struct MosCombines {
 pub struct MosLateCombines;
 
 impl CombineHooks for MosLateCombines {
+    /// `isTruncateFree` and `isZExtFree` for a word and its low byte: the
+    /// byte is a lane of the pair, and an any-extension leaves the high one
+    /// unwritten. `ShrinkDemandedOp` then does an add or a subtract whose
+    /// result is truncated (`p - s` returned as a byte) on the byte, not on the
+    /// word with its high half dropped after (`schr` -O2 47 B).
+    fn free_narrowing(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        wide == EVT::I16 && narrow == EVT::I8
+    }
+
     /// DEVIATE 6502-SHL-COMMUTE: as [`MosCombines`]; every run of the
     /// combiner must give alike.
     fn is_desirable_to_commute_with_shift(
@@ -45,6 +59,24 @@ impl CombineHooks for MosLateCombines {
     ) -> bool {
         folds_shared_shift(vt, inner)
     }
+
+    /// The pieces of a wide shift by one are made by type legalization, after
+    /// the first run: [`funnel_by_one`] reads them here.
+    fn has_target_combine(
+        &self,
+        op: ISD,
+    ) -> bool {
+        matches!(op, ISD::Or | ISD::Add)
+    }
+
+    fn perform_dag_combine(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+        _level: CombineLevel,
+    ) -> Option<SDValue> {
+        funnel_by_one(dag, node)
+    }
 }
 
 /// A word shift by 1 to 4 is a chain of that many steps for both bytes, and
@@ -58,6 +90,19 @@ fn folds_shared_shift(
 }
 
 impl CombineHooks for MosCombines {
+    /// `isTruncateFree` and `isZExtFree` for a word and its low byte: the
+    /// byte is a lane of the pair, and an any-extension leaves the high one
+    /// unwritten. `ShrinkDemandedOp` then does an add or a subtract whose
+    /// result is truncated (`p - s` returned as a byte) on the byte, not on the
+    /// word with its high half dropped after (`schr` -O2 47 B).
+    fn free_narrowing(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        wide == EVT::I16 && narrow == EVT::I8
+    }
+
     /// DEVIATE 6502-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the shift
     /// runs on the zero-page cells (`asl rc17; rol rc18`) where the add went
     /// through Y and X (bintree -O2 +20 B). The pin's default is true
@@ -76,7 +121,7 @@ impl CombineHooks for MosCombines {
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate)
+        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate | ISD::Or)
     }
 
     /// DEVIATE 6502-SHARED-SHIFT: a word shift is one instruction whose two
@@ -98,12 +143,44 @@ impl CombineHooks for MosCombines {
         _level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Add => borrow_of_ult(dag, node).or_else(|| widened_add_with_carry(dag, node)),
+            ISD::Add => borrow_of_ult(dag, node).or_else(|| widened_add_with_carry(dag, node)).or_else(|| funnel_by_one(dag, node)),
             ISD::Sub => borrow_of_ult(dag, node),
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
+            ISD::Or => funnel_by_one(dag, node),
             _ => decompose_mul(dag, node, self.sized),
         }
     }
+}
+
+/// `(a << 1) | (b >> 15)` and `(a << 15) | (b >> 1)` of a word: one bit crosses
+/// from `b` (`a`) to the other word, `FSHL1` and `FSHR1`. A wide shift by one
+/// bit is split into words that way (`ExpandShiftByConstant`); it was a bit
+/// made into a byte (`asl a; lda #0; rol a`) and `ora`ed in.
+///
+/// The pin's analogue is `MatchRotate`'s funnel shift
+/// ([DAGCombiner.cpp#L9464](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L9464)),
+/// which asks the type for a legal or custom `FSHL`: that makes one for every
+/// amount, and its expansion hides the shifts from the folds that ran on them.
+fn funnel_by_one(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    if !matches!(dag.opcode(node), ISD::Or | ISD::Add) || dag.value_type(node) != EVT::I16 {
+        return None;
+    }
+    let shift = |dag: &SelectionDAG, v: SDValue, op: ISD, by: u128| {
+        (dag.opcode(v) == op && dag.constant(dag.operand(v, 1)) == Some(by)).then(|| dag.operand(v, 0))
+    };
+    let (x, y) = (dag.operand(node, 0), dag.operand(node, 1));
+    for (left, right) in [(x, y), (y, x)] {
+        if let (Some(a), Some(b)) = (shift(dag, left, ISD::Shl, 1), shift(dag, right, ISD::Srl, 15)) {
+            return Some(dag.get_node(mosisd::FSHL1, EVT::I16, &[a, b]));
+        }
+        if let (Some(a), Some(b)) = (shift(dag, left, ISD::Shl, 15), shift(dag, right, ISD::Srl, 1)) {
+            return Some(dag.get_node(mosisd::FSHR1, EVT::I16, &[a, b]));
+        }
+    }
+    None
 }
 
 /// `x + sext(a <u b)` and `x - zext(a <u b)` in a word of two or more bytes: the

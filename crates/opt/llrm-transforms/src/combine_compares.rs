@@ -365,7 +365,7 @@ fn fold_gep_icmp(
     if pred.is_signed() {
         return None;
     }
-    let lhs_gep = c.defining_gep(gep_operand).and_then(|def| c.gep_of(def))?;
+    let lhs_gep = c.defining_gep_ref(gep_operand).map(|gep| c.gep_view(gep))?;
     let equality = matches!(pred, IntPredicate::Eq | IntPredicate::Ne);
     // Unsigned predicates can be folded if the GEPs have any nowrap flag.
     let can_fold = |flags: GepFlags| equality || flags != GepFlags::default();
@@ -388,7 +388,7 @@ fn fold_gep_icmp(
         return Some(new_icmp_of(c, base.lhs_flags, offset, zero));
     }
 
-    let rhs_gep = c.defining_gep(rhs).and_then(|def| c.gep_of(def))?;
+    let rhs_gep = c.defining_gep_ref(rhs).map(|gep| c.gep_view(gep))?;
     let flags = GepFlags::of(lhs_gep.flags).and(GepFlags::of(rhs_gep.flags));
     let same_shape = lhs_gep.indices.len() == rhs_gep.indices.len() && lhs_gep.source == rhs_gep.source;
 

@@ -24,3 +24,45 @@ fn a_nest_whose_inner_count_follows_the_outer_counter_is_the_pins_decision() {
 fn init_loops_whose_stores_merge_when_unrolled_are_unrolled() {
     assert_eq!(labels(include_str!("data/bench_lru.ll")), 11);
 }
+
+/// crc -O2: the 8-trip bit loop inside the 9-trip byte loop was unrolled
+/// through the nest bypass (152 B, 262 instructions) where the rolled loop is
+/// 88 B and 494 instructions; 250 clocks a byte prices the 64 B at 16,000.
+/// Nothing in the bit loop depends on the byte counter, so there is nothing
+/// for unrolling the nest to fold. Unrolled it has 4 labels, rolled 6.
+#[test]
+fn a_nest_loop_that_uses_no_outer_counter_is_priced_not_bypassed() {
+    assert_eq!(labels(include_str!("data/bench_crc.ll")), 6);
+}
+
+fn instructions(source: &str, level: Level) -> usize {
+    let asm = driver::assembly(source, Platform::Linux, level).expect("lowers");
+    asm.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count()
+}
+
+/// matmul -O2: the 8 x 8 x 8 nest reads its counters only to index memory,
+/// and the nest bypass unrolled it anyway: 202 instructions where gcc's rolled
+/// nest is 89. Its multiply loops are priced; loops that store a computed
+/// constant still unroll. Fewer than 190.
+#[test]
+fn a_nest_whose_counters_only_index_memory_is_priced_not_bypassed() {
+    let insns = instructions(include_str!("data/bench_matmul.ll"), Level::O2);
+    assert!(insns < 190, "{insns} instructions");
+}
+
+/// nbody_single -O2: the 6-trip loops sit in a 1000-trip loop and were priced
+/// as if it ran 32 times: 17,408 clocks saved against 72,250 for the bytes,
+/// kept rolled: 737,170 instructions where unrolled they are 501,176. Rolled
+/// the module is 112 instructions, unrolled 190.
+#[test]
+fn a_loop_in_a_known_thousand_trip_loop_is_priced_by_its_real_runs() {
+    assert!(instructions(include_str!("data/bench_nbody_single.ll"), Level::O2) >= 185);
+}
+
+/// stft_fixed -O2: the 8-trip bit-reverse of the outer counter folds to a
+/// constant per outer trip; priced alone it was kept rolled (+12,544
+/// instructions and +28 B over unrolled). Rolled it has 29 labels, unrolled 27.
+#[test]
+fn a_loop_whose_copies_make_data_constant_is_unrolled_with_its_nest() {
+    assert!(labels(include_str!("data/bench_stft_fixed.ll")) <= 27);
+}

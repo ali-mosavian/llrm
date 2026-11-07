@@ -40,6 +40,10 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// DEVIATE SD446: a divide by a constant is chosen against the multiply-high
+    /// sequence by clocks plus bytes at `speed_milliclocks_per_byte`
+    /// (`hardware_divide_wins`); false: the clocks and margin alone.
+    pub divide_by_bytes: bool,
     /// At -O1 (`OptLevel` 1) a full unroll is made only where its cost after
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
@@ -137,10 +141,17 @@ pub struct Tuning {
     /// the exit test), in `CodeSize` (arm64's w15 rule). false: the header
     /// limit alone.
     pub rotation_header_priced_at_size: bool,
+    /// Header instructions a size build's loop rotation may copy
+    /// (`RotationMaxHeaderSize`), where the machine states none itself
+    /// ([`Machine::size_rotation_header_limit`] wins). None: the pin's 16.
+    pub size_rotation_header_limit: Option<u32>,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
     pub keep_constant_displacements: bool,
+    /// DEVIATE SINK-CONST-PHI: a constant operand of an arithmetic instruction
+    /// is not made a phi by sinking (the pin: cheap), except at size.
+    pub keep_constant_arith_operands: bool,
     /// DEVIATE REC-2: (depth, callee `gcc_insns`) of the recursion copied at
     /// speed, gcc's `max-inline-recursive-depth` and
     /// `max-inline-insns-recursive` (`Tti::recursive_inlining`); none: the
@@ -217,6 +228,7 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        divide_by_bytes: false,
         unroll_never_grows_at_o1: false,
         price_pin_multiplies: false,
         imul_at_size: false,
@@ -241,7 +253,9 @@ impl Tuning {
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_header_priced_at_size: false,
+        size_rotation_header_limit: None,
         keep_constant_displacements: false,
+        keep_constant_arith_operands: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
         recursive_inlining_growth: None,

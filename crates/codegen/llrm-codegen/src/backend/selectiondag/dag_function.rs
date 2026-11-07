@@ -832,6 +832,23 @@ fn div_prices(
         divide_long: costs.divide_long,
         margin: costs.divide_margin,
         product: Some(super::dag::ProductPrice(std::rc::Rc::new(product))),
+        bytes: {
+            let rate = cpu.speed_milliclocks_per_byte();
+            let size = cpu.target().size_costs();
+            (rate > 0 && cpu.target().tti().is_some_and(|tti| tti.divide_by_bytes())).then(|| super::dag::DivBytes {
+                prefix: size.prefix,
+                add: size.add,
+                shift: size.shift,
+                extend: size.extend,
+                multiply: size.multiply,
+                multiply_long: size.multiply_long,
+                multiply_high: size.multiply_high,
+                divide: size.divide,
+                divide_long: size.divide_long,
+                milliclocks_per_byte: rate,
+                frequency: 1.0,
+            })
+        },
     })
 }
 
@@ -1228,7 +1245,11 @@ fn selected_in(
     let price_pin = speed_goal && machine.tti().is_some_and(|tti| tti.price_pin_multiplies());
     // The function's one `BranchProbabilityInfo`: the builder's edge
     // probabilities read the same one (the pin has it as an analysis).
-    let frequencies = ((mul_rate > 0 || price_pin) && !mul_by_clocks).then(|| {
+    // The divide weighs its bytes by the block's frequency too (SD446), whether
+    // or not the multiplies are priced by clocks alone (m16): without it
+    // every divide was priced as run once.
+    let divide_bytes = mul_rate > 0 && cpu.target().tti().is_some_and(|tti| tti.divide_by_bytes());
+    let frequencies = (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes).then(|| {
         let bpi = info
             .bpi
             .get_or_insert_with(
@@ -1275,6 +1296,10 @@ fn selected_in(
         if !built.live_ins.is_empty() && block != function.layout()[0] {
             return refuse("register arguments outside the entry block");
         }
+        if let Some(frequencies) = &frequencies {
+            built.dag.set_divide_frequency(frequencies.relative_to_entry(parent));
+        }
+        built.dag.live_in_phys = built.live_ins.iter().map(|&(register, vreg)| (vreg, register)).collect();
         let arrived = arrival_widths(&built.dag, &built.live_ins);
         let done = if fast {
             super::dag_select::select_block_fast(
@@ -1315,12 +1340,12 @@ fn selected_in(
                             freq: 1.0,
                             milliclocks_per_byte: mul_rate,
                             by_clocks: true,
-                            no_growth: !cpu.speed_rate,
                             price_pin: false,
                         })
                     } else {
                         frequencies
                             .as_ref()
+                            .filter(|_| mul_rate > 0 || price_pin)
                             .map(
                                 |frequencies| super::x86_lowering::MulPricing {
                                     cpu,
@@ -1328,7 +1353,6 @@ fn selected_in(
                                     freq: frequencies.relative_to_entry(parent),
                                     milliclocks_per_byte: mul_rate,
                                     by_clocks: false,
-                                    no_growth: false,
                                     price_pin,
                                 },
                             )

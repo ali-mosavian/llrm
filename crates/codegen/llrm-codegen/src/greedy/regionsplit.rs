@@ -906,12 +906,12 @@ impl Splitter<'_, '_> {
         let mut cost = BlockFrequency(0);
         if !self.add_split_constraints(cand, &mut cost) {
             if trace {
-                eprintln!("{phys:?}\tno positive bundles");
+                eprintln!("{}\tno positive bundles", self.matrix.tri().name(phys));
             }
             return;
         }
         if trace {
-            eprint!("{phys:?}\tstatic = {}", self.shown(cost));
+            eprint!("{}\tstatic = {}", self.matrix.tri().name(phys), self.shown(cost));
         }
         if cost >= *best_cost {
             if trace {
@@ -978,10 +978,11 @@ impl Splitter<'_, '_> {
         virt: &Rc<LiveInterval>,
         remat_defs_free: bool,
     ) -> BlockFrequency {
-        // DEVIATE CSR4 (exit 2026-11-20, with CSR3 `csr_spill_first`, ours not the
-        // pin's; the pin's caller is `tryAssignCSRFirstTime`): a rematerializable range is not stored, and
-        // its definition goes when every use recomputes the value, so the
-        // writes cost nothing. Only for `csr_spill_first` targets; LLVM
+        // DEVIATE CSR4 (exit 2026-11-20, with CSR3 `csr_spill_first`, ours not
+        // the pin's; the pin's caller is `tryAssignCSRFirstTime`): a
+        // rematerializable range is not stored, and its definition goes
+        // when every use recomputes the value, so the writes cost
+        // nothing. Only for `csr_spill_first` targets; LLVM
         // charges them (its callee-saved cost is too small to matter).
         let writes_free = remat_defs_free && self.ss.env.is_rematerializable(virt.reg());
         let mut cost = 0u64;

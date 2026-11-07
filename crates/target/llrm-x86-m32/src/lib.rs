@@ -82,6 +82,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // DEVIATE SZ4 (owner x86-m32, exit 2026-11-27): -Os copies a loop header of
+        // at most 4 instructions, not the pin's 16 (the copy is a compare and a
+        // branch, more than the jump rotation removes). m32 -Os kernels (73): x_hash -29 B,
+        // x_rle -8 B, none larger; limits 1..3 grow x_insertion/x_jpeg_single, 1 grows 60 cells.
+        size_rotation_header_limit: Some(4),
         // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27, with `unroll_at_o1`): at -O1
         // a full unroll is made only where its simulated cost does not exceed the rolled loop's
         // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.
@@ -101,6 +106,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // [esp+d8], imm` 8/7/5 B, at an absolute address 10/9/7; `xor eax, eax` 2,
         // `or eax, -1` 3, `mov eax, imm32` 5; `lea edi, [esp+d8]` (4) or `mov
         // edi, imm32` (5), `mov ecx, imm32` 5, `rep stos` 2; `fst qword` 4 / 6.
+        // DEVIATE SINK-CONST-PHI (owner x86-m32, exit 2026-11-27): the pin sinks
+        // `z -= a` / `z += b` of a diamond into the join as `z += phi(-a, b)`; on
+        // a 486 each arm then pays a `mov imm` and one a taken `jmp` (x_cordic -O3
+        // +20% against gcc, which keeps an immediate op per arm). Not at -Os.
+        keep_constant_arith_operands: true,
         size_fill: Some(llrm_mir::target::SizeFill {
             store: [[8, 7, 5], [10, 9, 7]],
             value: [2, 3, 5],
@@ -197,6 +207,15 @@ impl llrm_target::Target for M32 {
 
     fn name(&self) -> &'static str {
         "x86-m32"
+    }
+
+    // DEVIATE LEAF-FOLD-OS (owner m32, exit 2026-11-20): the pin keeps each
+    // `mov imm; jmp` leaf of a sparse switch (PHIElimination.cpp L841, L858,
+    // L879 split an edge only for a value live out past the phis, so the
+    // leaf stays and costs a `jmp`); at -Os the constant is made in the
+    // branching block and the branch goes to the join.
+    fn leaf_fold_at_size(&self) -> bool {
+        true
     }
 
     fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
@@ -478,6 +497,12 @@ impl llrm_target::Target for M32 {
     /// X86ISelLowering.cpp: `setPrefLoopAlignment(Align(16))`.
     fn pref_loop_alignment(&self) -> u8 {
         4
+    }
+
+    /// DEVIATE ALIGN-O1 (owner m32, exit 2026-11-27): no loop alignment at
+    /// -O1, as gcc. `mandel` -O1 ran 5,376 one-byte nops against gcc's 0.
+    fn align_loops_at_o1(&self) -> bool {
+        false
     }
 
     /// DEVIATE SD545 (owner anyisa, exit 2026-11-20): the pin pads a loop

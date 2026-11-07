@@ -85,6 +85,8 @@ pub struct RegisterClasses {
     frame_after: Option<RegId>,
     /// The pressure sets and limits of the target, where it has them.
     pub pressure: Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)>,
+    /// `Target::leaf_fold_at_size`.
+    pub leaf_fold_at_size: bool,
 }
 
 impl RegisterClasses {
@@ -169,6 +171,7 @@ impl RegisterClasses {
             registers: llrm_lir::registers::Regs(arch.registers()),
             frame_after: file.iter().find(|one| one.is("frame_follows")).map(|one| named(&one.name)),
             pressure: arch.pressure(),
+            leaf_fold_at_size: arch.leaf_fold_at_size(),
         };
         classes.status_word = classes.found_status_word();
         classes

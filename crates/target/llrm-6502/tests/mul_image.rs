@@ -69,3 +69,17 @@ fn a_shift_the_function_has_is_not_made_again_by_a_factored_multiply() {
     let steps = body.matches("asl").count();
     assert!(steps <= 6, "{steps} shift steps\n{body}");
 }
+
+/// `(unsigned)x * 20` shifted the first pair in a copy of `x` (`asl rc4; rol
+/// rc3`, twice) and loaded it for the add: 40 B at -O2. The pair shifts in `a`
+/// when only a carry op stands between it and the load.
+#[test]
+fn a_shift_chain_before_an_add_runs_in_a() {
+    let ir = "define i16 @k_mul20(i8 %x) nounwind {\n  %w = zext i8 %x to i16\n  %r = mul i16 %w, 20\n  ret i16 %r\n}\n";
+    let ir = format!("target datalayout = \"{}\"\n{ir}", datalayout());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let from = text.find("k_mul20:").unwrap_or_else(|| panic!("{text}"));
+    let body = text[from..].split(".segment").next().unwrap();
+    let bytes = estimate(Cpu::Mos6502, body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
+    assert!(bytes <= 34, "{bytes} B\n{body}");
+}

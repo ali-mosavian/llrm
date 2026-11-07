@@ -370,6 +370,11 @@ impl Machine for Dos {
             // `timings.times` row the judge reads too.
             speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
             price_fills: true,
+            // DEVIATE SD446 (owner m16, exit 2026-12-01): a divide by a constant weighs
+            // its bytes at the rate against the multiply-high sequence; the pin's
+            // `isIntDivCheap` is `minsize` alone
+            // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L593).
+            divide_by_bytes: true,
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,
