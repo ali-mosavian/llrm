@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
+import cpulimit  # noqa: E402
 llrmbin = dosbatch.llrmbin
 import run_tests  # noqa: E402
 from dosbatch import ROOT, Job  # noqa: E402
@@ -44,7 +45,7 @@ def main() -> int:
     objs.mkdir(parents=True, exist_ok=True)
     stems = {one.stem: f"T{at:03d}" for at, one in enumerate(sources)}
     programs = [Program(one, settings[one.stem].get("flags", "").split(), None) for one in sources]
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=cpulimit.pool_workers()) as pool:
         failed = dict(zip((one.stem for one in sources), pool.map(lambda p: run_tests.compile_one(p, objs / f"{stems[p.source.stem]}.obj"), programs)))
     jobs = []
     for one in sources:

@@ -130,13 +130,53 @@ impl Table {
     }
 }
 
+impl Table {
+    /// The table of a file that states `@lanes bytes`: the 32 flag lanes, then a
+    /// lane for each byte of each root. A view covers the bytes `lane / 8 ..
+    /// (lane + bits) / 8` of its root (the 6502's `rc3` is byte 1 of `rs1`).
+    fn of_bytes(regs: Regs) -> Table {
+        let entries = || regs.table.iter().flatten();
+        let bytes_of = |entry: &llrm_lir::registers::Entry| ((entry.bits / 8).max(1)) as usize;
+        let mut lanes: Vec<Lane> = (0..32).map(|bit| (RegId::None, bit)).collect();
+        for root in entries().filter(|entry| entry.root == entry.id) {
+            let top = entries()
+                .filter(|view| view.root == root.id)
+                .map(|view| (view.lane / 8) as usize + bytes_of(view))
+                .max()
+                .unwrap_or(1);
+            lanes.extend((0..top).map(|byte| (root.id, byte as u32)));
+        }
+        lanes.sort();
+        assert!(lanes.len() <= 128, "{} lanes of a register file are more than a mask holds", lanes.len());
+        let (mut first, mut count, mut bytes) = ([0_u8; REGISTERS], [0_u8; REGISTERS], [0_u8; REGISTERS]);
+        for (bit, lane) in lanes.iter().enumerate() {
+            let slot = lane.0.index();
+            if count[slot] == 0 {
+                first[slot] = u8::try_from(bit).expect("fits");
+            }
+            count[slot] += 1;
+            bytes[slot] = count[slot];
+        }
+        for entry in entries().filter(|entry| entry.root != entry.id) {
+            let root = entry.root.index();
+            let slot = entry.id.index();
+            first[slot] = first[root] + u8::try_from(entry.lane / 8).expect("a byte offset");
+            count[slot] = u8::try_from(bytes_of(entry)).expect("a register is under 256 bytes");
+            bytes[slot] = count[slot];
+        }
+        Table { lanes, first, count, bytes }
+    }
+}
+
 /// The table the file of `regs` stands under: x86's for an x86 file, else one
 /// built once and kept.
 fn table_of(regs: Regs) -> &'static Table {
     static FILES: Mutex<Vec<(usize, &'static Table)>> = Mutex::new(Vec::new());
     // A file with an integer view under four bytes (`al`, `ax`) has byte lanes;
     // one without writes a root whole (arm64's `w` write clears the `x`).
-    if regs.0.entries().any(|(_, entry)| entry.bits / 8 < 4 && entry.classes & llrm_lir::registers::class::INT != 0) {
+    if !regs.0.byte_lanes
+        && regs.0.entries().any(|(_, entry)| entry.bits / 8 < 4 && entry.classes & llrm_lir::registers::class::INT != 0)
+    {
         return &X86;
     }
     let key = regs.0 as *const _ as usize;
@@ -144,7 +184,8 @@ fn table_of(regs: Regs) -> &'static Table {
     if let Some((_, table)) = files.iter().find(|(one, _)| *one == key) {
         return table;
     }
-    let table: &'static Table = Box::leak(Box::new(Table::of_file(regs)));
+    let table: &'static Table =
+        Box::leak(Box::new(if regs.0.byte_lanes { Table::of_bytes(regs) } else { Table::of_file(regs) }));
     files.push((key, table));
     table
 }

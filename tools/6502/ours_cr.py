@@ -119,12 +119,15 @@ def sh(cmd, cwd, timeout=300, text=True):
 def expected(p):
     t = p.read_text().split()
     return [int(x) for x in t] if all(re.fullmatch(r"-?\d+", x) for x in t) else None
+RTLIB = os.environ.get("OURS_RTLIB")  # the runtime archive (tools/6502/mkrt.py): the product's link, ld65 pulls the members
+if RTLIB:
+    RTLIB = str(Path(RTLIB).resolve())
 def bytes_of(mapfile, objs=()):
     tot = 0; cur = None
     for l in open(mapfile).read().split("Segment list:")[0].splitlines():
         if l.endswith(":") and not l.startswith(" "):
             cur = l[:-1]
-        elif cur and re.match(r"\s+(CODE|RODATA|DATA)\s", l) and cur in ("f.o", *objs):
+        elif cur and re.match(r"\s+(CODE|RODATA|DATA)\s", l) and (cur in ("f.o", *objs) or (RTLIB and cur.startswith(RTLIB + "("))):
             tot += int(re.search(r"Size=([0-9A-F]+)", l).group(1), 16)
     return tot
 def base_members(work):
@@ -172,10 +175,16 @@ def one(job):
         return name, "REFUSED", (why or [c.stderr[-100:]])[0][:140]
     asm = (w / "o.s").read_text()
     modtext = ""
-    (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PAD}\n' if PAD else "") + asm + reachable_runtime(asm))
-    objs, why = resolve(w, lambda mods: (f'.segment "CODE"\n.res {PAD}\n' if PAD else '') + asm + reachable_runtime(asm + mods), OURS, [flag])
-    if why: return name, "LINK", why[:140]
-    modtext = "".join((w / o.replace('.o', '.s')).read_text() for o in objs)
+    if RTLIB:
+        objs, why = [RTLIB], None
+    else:
+        (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PAD}\n' if PAD else "") + asm + reachable_runtime(asm))
+        objs, why = resolve(w, lambda mods: (f'.segment "CODE"\n.res {PAD}\n' if PAD else '') + asm + reachable_runtime(asm + mods), OURS, [flag])
+        if why: return name, "LINK", why[:140]
+        modtext = "".join((w / o.replace('.o', '.s')).read_text() for o in objs)
+    runtime = (lambda text: "") if RTLIB else reachable_runtime
+    if RTLIB:
+        (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PAD}\n' if PAD else "") + asm)
     out = []
     for dump in (True, False):
         k = sh(["cl65", "-t", "sim6502", *(["--asm-define", "DUMP"] if dump else []), "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
@@ -200,14 +209,14 @@ def one(job):
     # sim65 adds a cycle per page-crossing branch or indexed access: one layout
     # is not the program's clocks. Mean over the other paddings of code.
     for pad in PADS[1:]:
-        (w / "f.s").write_text(".autoimport +\n" + f'.segment "CODE"\n.res {pad}\n' + asm + reachable_runtime(asm + modtext))
+        (w / "f.s").write_text(".autoimport +\n" + f'.segment "CODE"\n.res {pad}\n' + asm + runtime(asm + modtext))
         k = sh(["cl65", "-t", "sim6502", "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
         if k.returncode:
             return name, "LINK", k.stderr[-100:]
         r = sh(["sim65", "-c", "-x", "4000000000", "x.bin"], w, timeout=120, text=False)
         cycles.append(int(re.search(rb"(\d+) cycles", r.stdout).group(1)))
     # executed instructions and bytes of the first layout (the padding is not the program's bytes)
-    (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PADS[0]}\n' if PADS[0] else "") + asm + reachable_runtime(asm + modtext))
+    (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PADS[0]}\n' if PADS[0] else "") + asm + runtime(asm + modtext))
     sh(["cl65", "-t", "sim6502", "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
     nb = bytes_of(w / "x.map", objs)
     ins = sh([INSNS, "-c", "-x", "4000000000", "x.bin"], w, timeout=300, text=False)

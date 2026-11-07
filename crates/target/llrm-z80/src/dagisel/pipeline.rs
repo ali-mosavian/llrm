@@ -152,6 +152,19 @@ pub enum Refusal {
 struct Z80Combines;
 
 impl CombineHooks for Z80Combines {
+    /// DEVIATE Z80-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the folded
+    /// constant `c << n` is a `ld bc, #k` and an `add hl, bc` where the add of
+    /// a small `c` was `inc hl`s (bintree -O2 +14 B). The pin's default is
+    /// true. Owner: llrm-target-z80. Exit: 2026-11-20, a price per constant.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
     /// A byte or word multiply by a constant is a library call (`__mulhi3`, a
     /// loop over the constant's bits, tens of T-states a bit); `2^n +- 1` as
     /// shifts and one add is a `add hl, hl` and a copy per shifted bit.
@@ -191,7 +204,7 @@ pub fn select_block(
     if long_multiply {
         tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
     }
-    let mut lowering = Z80Lowering;
+    let mut lowering = Z80Lowering { sized };
     let arch = Z80;
     if optimize {
         live_out::assert_live_out_copies(dag, info);

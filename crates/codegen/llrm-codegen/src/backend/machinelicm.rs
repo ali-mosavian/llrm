@@ -35,8 +35,12 @@
 //! BASIC program at -Os and -O2, counters in a throwaway build):
 //! `getOrCreatePreheader` splitting an edge: the 6 to 32 loops per language
 //! and level without a preheader hold 0 hoistable instructions;
-//! `ExtractHoistableLoad`: 0 instructions, none of the 158 loop instructions
-//! flagged invariant (`isDereferenceableInvariantLoad`) is a folded load;
+//! `ExtractHoistableLoad`'s pricing held for the C, nib and BASIC corpus (no
+//! scalar SSE) and is wrong for SSE code: nbody_single -O3 m64 left
+//! `mulss xmm, [rip+K]` in a loop where the pin has the constant in a register
+//! before it. It is ported (`Policy::unfold`): scalar SSE arithmetic that reads
+//! a constant-pool cell is split, and the load moves if it can.
+//!
 //! `MayCSE`: only reached in the pin's high-pressure branch for an instruction
 //! outside a block that runs every trip, where the `constant` path above
 //! already hoists what the allocator can make again.
@@ -265,7 +269,7 @@ fn candidate(
     if !classes.requirements(what).is_empty() {
         return false;
     }
-    let load = loads && loaded(one).is_some();
+    let load = (loads || one.invariant()) && loaded(one).is_some();
     let pure = load
         || matches!(
             what.op,
@@ -285,7 +289,7 @@ fn candidate(
     };
     pure && what.target.is_none()
         && !what.indirect
-        && !one.uses.is_empty()
+        && (!one.uses.is_empty() || load && one.invariant())
         && one.defines.len() == 1
         && matches!(what.dests.as_slice(), [Loc::Held(_)])
         && what.sources.iter().all(held)
@@ -404,6 +408,8 @@ struct X86<'a> {
     named: usize,
     loads: bool,
     size: bool,
+    /// The next value an unfolded load defines.
+    fresh: u32,
 }
 
 impl licm::Policy<Wrapped> for X86<'_> {
@@ -415,6 +421,74 @@ impl licm::Policy<Wrapped> for X86<'_> {
         one: &Wrapped,
     ) -> bool {
         pool_load(&one.0)
+    }
+
+    /// `ExtractHoistableLoad` ([L1400][unfold]): scalar SSE arithmetic that reads
+    /// an invariant cell (a constant-pool entry) beside a register is the
+    /// load and the operation on a register (`unfoldMemoryOperand`).
+    ///
+    /// [unfold]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLICM.cpp#L1400
+    fn unfold(
+        &mut self,
+        one: &Wrapped,
+    ) -> Option<(Wrapped, Wrapped)> {
+        let insn = &one.0;
+        let what = insn.what.as_ref()?;
+        let arithmetic = what.name.as_deref().is_some_and(|name| {
+            ["add", "sub", "mul", "div", "min", "max"]
+                .iter()
+                .any(|op| name.strip_prefix(op).is_some_and(|rest| rest == "ss" || rest == "sd"))
+        });
+        let [Loc::Held(dest)] = what.dests.as_slice() else { return None };
+        let cells = what.sources.iter().filter(|source| matches!(source, Loc::Mem(_))).count();
+        let (at, cell) = what.sources.iter().enumerate().find_map(|(at, source)| match source {
+            Loc::Mem(cell) => Some((at, cell)),
+            _ => None,
+        })?;
+        if !arithmetic
+            || cells != 1
+            || !insn.invariant()
+            || insn.defines.len() != 1
+            || insn.call.is_some()
+            || insn.group.is_some()
+            || insn.volatile()
+            || cell.base.is_some()
+            || cell.index.is_some()
+            || cell.selector.is_some()
+            || cell.stack_argument
+        {
+            return None;
+        }
+        let name = match cell.width {
+            4 => "movss",
+            8 => "movsd",
+            _ => return None,
+        };
+        let value = self.fresh;
+        self.fresh += 1;
+        let held = llrm_lir::Held { value, width: cell.width, offset: 0 };
+        let load = Insn {
+            invariant: true,
+            ..Insn::new(
+                insn.at,
+                insn.covers,
+                Some(Semantics {
+                    name: Some(name.into()),
+                    dests: vec![Loc::Held(held)],
+                    sources: vec![Loc::Mem(cell.clone())],
+                    ..Semantics::new(Operation::Move)
+                }),
+                vec![value],
+                vec![],
+            )
+        };
+        let mut sources = what.sources.clone();
+        sources[at] = Loc::Held(held);
+        let mut uses = insn.uses.clone();
+        uses.push(value);
+        let rest =
+            Insn { uses, what: Some(Semantics { sources, ..what.clone() }), invariant: false, ..(**insn).clone() };
+        Some((Wrapped(Arc::new(load)), Wrapped(Arc::new(rest))))
     }
 
     fn begin(
@@ -496,9 +570,14 @@ impl licm::Policy<Wrapped> for X86<'_> {
         }
         let loads_here = self.loads && (facts.every_trip)(at);
         let limit = self.classes.available.len();
+        // `IsProfitableToHoist`'s high-pressure branch lets an
+        // `isDereferenceableInvariantLoad` through: the allocator can load it
+        // again where it wants it.
+        // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLICM.cpp#L1386-L1392>
+        let invariant_load = loaded(one).is_some() && one.invariant();
         let mut movable = candidate(one, self.classes, loads_here)
             && value.is_some_and(|value| !self.floating.contains(&value))
-            && self.named < limit;
+            && (self.named < limit || invariant_load);
         // `IsProfitableToHoist`: "Trivially rematerializable instructions
         // should always be hoisted providing the register allocator can just
         // pull them down again", unless a copy in the loop takes the value.
@@ -607,6 +686,7 @@ pub fn hoisted_sized(
         named: 0,
         loads: false,
         size,
+        fresh: body.next_value(),
     };
     let Some(moved) = licm::hoist(&blocks, body.entry, &mut policy) else { return body.clone() };
     let blocks: Vec<crate::model::lir::Block> = body
@@ -1222,5 +1302,105 @@ mod tests {
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
         let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64));
         assert_eq!((done.blocks[0].insns.len(), done.blocks[1].insns.len()), (2, 1));
+    }
+
+    /// `ExtractHoistableLoad`: a `mulss` that reads a constant-pool cell
+    /// (`isDereferenceableInvariantLoad`) beside a value the loop changes was
+    /// left whole in the loop, its load made on every trip (nbody_single -O3
+    /// m64: three `mulss xmm, [rip+K]` in the loop where the pin has the
+    /// constants in registers before it, +73 B). The load is hoisted and the
+    /// `mulss` reads it.
+    #[test]
+    fn test_an_invariant_load_folded_into_an_instruction_of_the_loop_is_hoisted() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let cell = Loc::Mem(llrm_lir::Mem::new(None, 4));
+        let step = insn(10, Operation::Binary, "addss", vec![held(2)], vec![held(2), held(1)], vec![2], vec![2, 1]);
+        let mut folded = insn(11, Operation::Binary, "mulss", vec![held(3)], vec![held(2), cell], vec![3], vec![2]);
+        Arc::make_mut(&mut folded).invariant = true;
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![1, 2], vec![step, folded, branch(12)]).into(),
+                block(2, vec![], vec![insn(13, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64));
+        let names = |at: usize| -> Vec<String> {
+            done.blocks[at]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
+        };
+        assert_eq!(names(0), ["movss", "jmp"], "the constant is loaded before the loop");
+        assert_eq!(names(1), ["addss", "mulss", "jcxz"]);
+        let mul = &done.blocks[1].insns[1];
+        assert!(
+            mul.what.as_ref().is_some_and(|what| what.sources.iter().all(|source| matches!(source, Loc::Held(_)))),
+            "the mulss reads a register"
+        );
+    }
+
+    /// A loop that already names more values than the target has registers
+    /// kept the load of an invariant cell in it (`CanCauseHighRegPressure`
+    /// refused everything); the pin's high-pressure branch hoists an invariant
+    /// load all the same. General registers only: a value no general register
+    /// holds (`regclass::floating`) is not moved by `movable` at all.
+    #[test]
+    fn test_an_invariant_load_is_hoisted_out_of_a_loop_that_names_every_register() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let mut inside: Vec<Arc<Insn>> = (1..=20u32)
+            .map(|n| {
+                let sum = 100 + n;
+                insn(n as i64, Operation::Binary, "add", vec![held(sum)], vec![held(sum), held(n)], vec![sum], vec![sum, n])
+            })
+            .collect();
+        let mut load = insn(
+            50,
+            Operation::Move,
+            "mov",
+            vec![held(200)],
+            vec![Loc::Mem(llrm_lir::Mem::new(None, 4))],
+            vec![200],
+            vec![],
+        );
+        Arc::make_mut(&mut load).invariant = true;
+        inside.push(load);
+        inside.push(insn(51, Operation::Binary, "add", vec![held(101)], vec![held(101), held(200)], vec![101], vec![101, 200]));
+        inside.push(branch(52));
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![1, 2], inside).into(),
+                block(2, vec![], vec![insn(60, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = (1..=20).chain(101..=120).collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64));
+        let names = |at: usize| -> Vec<String> {
+            done.blocks[at]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
+        };
+        assert_eq!(names(0), ["mov", "jmp"], "the constant is loaded before the loop");
     }
 }

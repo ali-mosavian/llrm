@@ -21,12 +21,74 @@ pub struct MosCombines {
     pub sized: bool,
 }
 
+/// The combines after legalization: only the shared-shift answer, which every
+/// run of the combiner must give alike (a fold the first run declined would
+/// be made by the next).
+pub struct MosLateCombines;
+
+impl CombineHooks for MosLateCombines {
+    /// DEVIATE 6502-SHL-COMMUTE: as [`MosCombines`]; every run of the
+    /// combiner must give alike.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
+    fn fold_shift_of_shared_shift(
+        &self,
+        vt: EVT,
+        inner: u32,
+    ) -> bool {
+        folds_shared_shift(vt, inner)
+    }
+}
+
+/// A word shift by 1 to 4 is a chain of that many steps for both bytes, and
+/// the other half reads it; from 5 a byte shift or a bit trick is cheaper
+/// than the chain whoever else reads it.
+fn folds_shared_shift(
+    vt: EVT,
+    inner: u32,
+) -> bool {
+    vt != EVT::I16 || inner >= 5
+}
+
 impl CombineHooks for MosCombines {
+    /// DEVIATE 6502-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the shift
+    /// runs on the zero-page cells (`asl rc17; rol rc18`) where the add went
+    /// through Y and X (bintree -O2 +20 B). The pin's default is true
+    /// (@ d1106deb71). Owner: llrm-target-6502. Exit: 2026-11-14, when the
+    /// select-shift fold re-fires here.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
     fn has_target_combine(
         &self,
         op: ISD,
     ) -> bool {
         matches!(op, ISD::Mul | ISD::Add | ISD::Srl | ISD::Truncate)
+    }
+
+    /// DEVIATE 6502-SHARED-SHIFT: a word shift is one instruction whose two
+    /// bytes both come from one chain, so the high half of `x >> 3` reads that
+    /// shift, not a byte shift of its own (`x >> 11`). Exit: none; the pin's
+    /// pieces are shared by node CSE.
+    fn fold_shift_of_shared_shift(
+        &self,
+        vt: EVT,
+        inner: u32,
+    ) -> bool {
+        folds_shared_shift(vt, inner)
     }
 
     fn perform_dag_combine(

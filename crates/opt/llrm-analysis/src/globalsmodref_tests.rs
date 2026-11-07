@@ -553,6 +553,41 @@ b0:
     let at = MemoryLocation::get(&unit, load).expect("a load");
     let mut aa = GlobalsAAResult::new(&unit, &info);
     let mut aaqi = AAQueryInfo::default();
-    // It answered `Ref`: the declaration reads any global and, naming none, writes none.
+    // It answered `Ref`: the declaration reads any global and, naming none,
+    // writes none.
     assert!(aa.get_mod_ref_info(calls[0], Some(&at), &mut aaqi).is_mod_set(), "DMA mode register");
+}
+
+/// A callee declared after the Unit was built (id == the table's length)
+/// panicked `is_port` with an index out of bounds on arm64 -O3 `particle`.
+#[test]
+fn a_callee_declared_after_the_unit_was_built_is_not_a_port() {
+    use crate::aa::{AAQueryInfo, AAResults, MemoryLocation};
+    let module = parsed(
+        "@g = internal global i16 0
+
+declare void @late(i16)
+
+define i16 @f() {
+b0:
+  %a = load i16, ptr @g
+  call void @late(i16 11)
+  ret i16 %a
+}
+",
+    );
+    let info = compute(&module);
+    let layout = crate::testing::layout(&module);
+    let f = crate::testing::function(&module, "f");
+    let mut unit = crate::memory::Unit::of(&module, &layout, f).with_globals_mr(&info);
+    let late = module.globals.iter().position(|global| global.name.as_deref() == Some("late")).unwrap();
+    unit.globals = &module.globals[..late];
+    let call =
+        f.walk().map(|(_, inst)| inst).find(|&inst| matches!(f.instruction(inst).opcode, Opcode::Call(_))).unwrap();
+    let value = crate::testing::value(f, "a");
+    let load = f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(value)).unwrap();
+    let at = MemoryLocation::get(&unit, load).expect("a load");
+    let mut aa = GlobalsAAResult::new(&unit, &info);
+    let mut aaqi = AAQueryInfo::default();
+    let _ = aa.get_mod_ref_info(call, Some(&at), &mut aaqi);
 }
