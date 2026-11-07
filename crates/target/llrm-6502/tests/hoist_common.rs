@@ -76,3 +76,17 @@ fn a_label_nothing_names_keeps_what_is_known() {
     drop_known_loads(&mut asm);
     assert_eq!(asm.text(), "f:\n  ldy #0\n  inc rc2\nq:\n  lda (rc2),y\n  rts\n");
 }
+
+/// `fletcher`'s `if (a >= 255) a -= 255`: the sum is in `a` and copied to `x`
+/// for the compare; the select stored it back through `txa; jmp` (11 bytes)
+/// where `cmp #255; bne l; lda #0; l:` keeps it (6): the function was 64 bytes.
+#[test]
+fn a_select_of_what_a_compare_left_in_a_overwrites_it_in_place() {
+    use llrm_6502::dagisel::hooks::Cpu;
+    use llrm_6502::driver::{Level, Request, assembly};
+    let text = assembly(include_str!("data/fletcher.ll"), &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let from = text.find("fletcher:").unwrap();
+    let body = text[from..].split(".segment").next().unwrap();
+    let bytes = llrm_6502::timing::estimate(Cpu::Mos6502, body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
+    assert!(bytes <= 56, "{bytes} B\n{body}");
+}

@@ -3820,6 +3820,18 @@ fn emit_with<const STACK: bool>(
                         },
                         _ => None,
                     });
+                    // `tax; cmp #k` (likewise `tay`): the compare left `a` alone, so
+                    // the register copied from it still holds what `a` does
+                    let held = held.or_else(|| {
+                        let n = out.lines.len();
+                        match (n.checked_sub(2).map(|first| &out.lines[first]), out.lines.last()) {
+                            (
+                                Some(Line::Inst(AsmInst { op: copy @ (AsmOp::Tax | AsmOp::Tay), .. })),
+                                Some(Line::Inst(AsmInst { op: AsmOp::Cmp, .. })),
+                            ) => Some(if *copy == AsmOp::Tax { reg::X } else { reg::Y }),
+                            _ => None,
+                        }
+                    });
                     let opposite = ["bne", "beq", "bcs", "bcc", "bpl", "bmi"][*code as usize];
                     if held.is_some() && held == true_at {
                         // the value to keep is already in `a`: skip the load of
