@@ -4703,3 +4703,26 @@ fn an_i64_multiply_by_a_lea_constant_is_not_an_imul_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("imul"), "{listing}");
 }
+
+/// At -O3 the m64 recursive inliner copied bintree's `walk` as a tree (9 self-calls, 672 B, +78% clocks vs
+/// clang's loop). gcc eliminates the tail call first (REC-2, as m32): the copies are of the loop.
+#[test]
+fn a_tail_recursive_walk_is_not_copied_as_a_tree_at_m64_o3() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @walk(ptr %t, i32 %at, i32 %depth) {\n\
+                entry:\n  %z = icmp eq i32 %at, 0\n  br i1 %z, label %nil, label %node\n\
+                nil:\n  ret i64 0\n\
+                node:\n  %b = mul nsw i32 %at, 3\n  %l1 = add nsw i32 %b, 1\n  %l2 = sext i32 %l1 to i64\n\
+                \x20 %lp = getelementptr inbounds i32, ptr %t, i64 %l2\n  %left = load i32, ptr %lp, align 4\n\
+                \x20 %d1 = add nsw i32 %depth, 1\n  %a = call i64 @walk(ptr %t, i32 %left, i32 %d1)\n\
+                \x20 %k2 = sext i32 %b to i64\n  %kp = getelementptr inbounds i32, ptr %t, i64 %k2\n  %key = load i32, ptr %kp, align 4\n\
+                \x20 %k3 = sext i32 %key to i64\n  %d3 = sext i32 %depth to i64\n  %m = mul nsw i64 %k3, %d3\n\
+                \x20 %r1 = add nsw i32 %b, 2\n  %r2 = sext i32 %r1 to i64\n  %rp = getelementptr inbounds i32, ptr %t, i64 %r2\n  %right = load i32, ptr %rp, align 4\n\
+                \x20 %c = call i64 @walk(ptr %t, i32 %right, i32 %d1)\n\
+                \x20 %s = add nsw i64 %a, %m\n  %s2 = add nsw i64 %s, %c\n  ret i64 %s2\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O3", "--isel=dag"]), text, "walk").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let calls = listing.matches("call ").count();
+    assert!(calls <= 2, "{calls} calls\n{listing}");
+}
