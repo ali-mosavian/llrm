@@ -299,6 +299,20 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE ARM64-CALL-LATENCY (owner w15, exit 2026-11-30): a call costs the
+    /// caller `bl` and `ret` (2 clocks) and one setup move per argument, where the
+    /// flat price counts it as 1. The inline rate test (`speed_inline_milliclocks_per_byte`)
+    /// weighs the clocks an inline saves against its bytes; at 1 it refused
+    /// `next` (18 units, 83x) that the pin inlines (jpeg_fixed -O2: ours 12.9M
+    /// at 250 clk/B against clang's 12.4M). Pin: the flat price.
+    fn call_sequence_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        (kind == CostKind::Latency).then(|| Cost::of(2 + shape.arguments.len() as i64))
+    }
+
     /// 0.004 B/clock, provisional: one byte of growth is 250 frequency-weighted
     /// clocks. The median of the -O2/-O3 cells where inlining grew the code
     /// (w15-arm64-rate-proposal-11-03.md); widened to 30 clean cells by 11-12.
