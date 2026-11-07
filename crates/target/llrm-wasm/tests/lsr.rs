@@ -98,3 +98,20 @@ fn a_counter_keeps_the_bases_when_the_end_biased_one_costs_setup() {
     let text = llrm_mir::print::module(&module);
     assert!(text.contains(", 32\n") && !text.contains("i32 32\n  %scevgep"), "{text}");
 }
+
+/// bench/quicksort's order check (`a[i - 1] > a[i]`, i = 1..1023): the end-biased
+/// formulae tied the pin's solution on instructions plus setup (11 against 11)
+/// and won on the compare immediate, counting `-4092` up to zero with two
+/// constants set up outside the loop and a negative-offset load: +10 B (wasm32
+/// quicksort O1/O2/O3, spill_store_order +5).
+#[test]
+fn a_tie_of_instructions_and_setup_keeps_the_pin_counting_up() {
+    let mut module = llrm_mir::parse::module(include_str!("lsr/order_check.ll")).expect("parses");
+    let mut manager = PassManager::default();
+    let elements = llrm_transforms::pipeline_text::parse("loop-reduce").expect("pipeline");
+    llrm_transforms::pipeline_text::build(&elements, &mut manager).ok().expect("builds");
+    manager.run_module(&mut module, Rc::new(WasmMachine)).expect("runs");
+    let text = llrm_mir::print::module(&module);
+    let exit = text.lines().find(|line| line.contains("icmp eq")).expect("an exit test");
+    assert!(!exit.trim_end().ends_with(", 0"), "{exit}\n{text}");
+}
