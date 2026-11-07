@@ -36,5 +36,10 @@ class Rows(unittest.TestCase):
     def test_allow_worse_counts_failing_rows(self):
         self.assertEqual(run("O1", [("p", 1, 1)], [("p", 1, 2)], "--allow-worse", "1"), 0)
 
+    def test_noise_forgives_clocks_within_the_fraction_only(self):
+        self.assertEqual(run("O1", [("p", 100, 10000)], [("p", 90, 10005)], "--noise", "0.001"), 0)
+        self.assertEqual(run("O1", [("p", 100, 10000)], [("p", 90, 10011)], "--noise", "0.001"), 1)
+        self.assertEqual(run("O1", [("p", 100, 10000)], [("p", 101, 10000)], "--noise", "0.001"), 1)
+
 if __name__ == "__main__":
     unittest.main()
