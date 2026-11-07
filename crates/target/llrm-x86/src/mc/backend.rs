@@ -65,8 +65,36 @@ pub fn nops(
         &[0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00],
     ];
     const NOPS_16: [&[u8]; 4] = [&[0x90], &[0x66, 0x90], &[0x8d, 0x74, 0x00], &[0x8d, 0xb4, 0x00, 0x00]];
-    let table: &[&[u8]] = if sixteen { &NOPS_16 } else { &NOPS_32 };
-    let longest = if sixteen { longest.min(4) } else { longest }.max(1);
+    // DEVIATE NOP-LEA (owner x87, exit 2026-11-21): where the CPU has no `nopl`
+    // (`longest` 1: 386, 486, Pentium) the pin writes one `nop` a byte, each an
+    // executed clock when the pad falls into a loop; GNU as writes the
+    // `mov esi,esi` / `lea esi,[esi+0]` forms (`i386_align_code`'s `f32_patt`),
+    // up to 7 bytes an instruction, which change nothing and which the size
+    // judge's `is_pad` already reads as padding.
+    const NOPS_NO_NOPL: [&[u8]; 7] = [
+        &[0x90],
+        &[0x89, 0xf6],
+        &[0x8d, 0x76, 0x00],
+        &[0x8d, 0x74, 0x26, 0x00],
+        &[0x90, 0x8d, 0x74, 0x26, 0x00],
+        &[0x8d, 0xb6, 0x00, 0x00, 0x00, 0x00],
+        &[0x8d, 0xb4, 0x26, 0x00, 0x00, 0x00, 0x00],
+    ];
+    let table: &[&[u8]] = if sixteen {
+        &NOPS_16
+    } else if longest <= 1 {
+        &NOPS_NO_NOPL
+    } else {
+        &NOPS_32
+    };
+    let longest = if sixteen {
+        longest.min(4)
+    } else if longest <= 1 {
+        NOPS_NO_NOPL.len()
+    } else {
+        longest
+    }
+    .max(1);
     let (mut left, mut out) = (count, Vec::with_capacity(count));
     while left != 0 {
         let this = left.min(longest);
@@ -88,7 +116,6 @@ mod tests {
     /// then the rest); 16-bit mode has four forms.
     #[test]
     fn padding_is_the_nops_writenopdata_writes() {
-        assert_eq!(nops(3, 1, false), [0x90, 0x90, 0x90]);
         assert_eq!(nops(3, 10, false), [0x0f, 0x1f, 0x00]);
         assert_eq!(nops(15, 10, false).len(), 15);
         assert_eq!(&nops(15, 10, false)[10..], [0x0f, 0x1f, 0x44, 0x00, 0x00], "the rest after a 10-byte nop");
@@ -96,6 +123,24 @@ mod tests {
         assert_eq!(nops(4, 4, true), [0x8d, 0xb4, 0x00, 0x00]);
         assert_eq!(nops(5, 4, true), [0x8d, 0xb4, 0x00, 0x00, 0x90]);
         assert_eq!(nops(0, 1, false), Vec::<u8>::new());
+    }
+
+    /// A 486 or Pentium has no `nopl`: a pad of 11 bytes was eleven `nop`s, eleven
+    /// clocks each time x_matmul_f -O2 fell into its k loop (1,604 executed in a
+    /// run). It is `lea esi,[esi+0]` forms now, 7 bytes an instruction as GNU as
+    /// writes them: 2 instructions for 11 bytes.
+    #[test]
+    fn a_pad_without_nopl_is_a_few_long_no_operations() {
+        assert_eq!(nops(1, 1, false), [0x90]);
+        assert_eq!(nops(3, 1, false), [0x8d, 0x76, 0x00]);
+        assert_eq!(nops(7, 1, false), [0x8d, 0xb4, 0x26, 0x00, 0x00, 0x00, 0x00]);
+        let pad = nops(11, 1, false);
+        assert_eq!(pad.len(), 11);
+        assert_eq!(pad[..7], [0x8d, 0xb4, 0x26, 0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(pad[7..], [0x8d, 0x74, 0x26, 0x00], "the rest after a 7-byte form");
+        for count in 0..40 {
+            assert_eq!(nops(count, 1, false).len(), count);
+        }
     }
 
     /// The backend is `nops` behind the trait, never a different pad.
