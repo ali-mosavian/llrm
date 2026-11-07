@@ -47,6 +47,7 @@ pub(super) fn full_unroll_pays(
     let inlinable = !run.options.target_unrolling
         && run.this.is_some_and(|this| matches!(run.globals[this.0 as usize].linkage, Linkage::Internal | Linkage::Private));
     if inlinable || rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
+        why(run, lp, &format!("unpriced unroll: inlinable {inlinable}, rate {rate}"));
         return true;
     }
     // A loop of known trips in a nest of loops of known trips is a step to
@@ -60,6 +61,7 @@ pub(super) fn full_unroll_pays(
     // outer loop unrolls, its 3-, 2- and 1-trip inner copies were each priced
     // alone and kept rolled, +38,016).
     if !run.first.contains(&lp.get_header()) {
+        why(run, lp, "unpriced unroll: a copy of this run");
         return true;
     }
     // Unless nothing in this loop depends on a counter of the loops around it:
@@ -69,9 +71,16 @@ pub(super) fn full_unroll_pays(
     // -O3 is speed: the nest's decision holds there (matmul -O3: 672
     // instructions kept against 4,148 priced, clang's 608).
     let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3;
+    // DEVIATE ARM64-UNROLL-PRICE (owner w15, exit 2026-11-30): and only while the
+    // whole nest can still unroll, within the bound the pin gives one loop
+    // (`threshold` x `max_percent_threshold_boost`): an inner loop unrolled in a
+    // nest that cannot finish folds nothing (tile -O2: the 40-trip loop in a
+    // 25-trip loop, 364 B for 2,155 instructions; gcc's rolled 80 B for 4,184).
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count)
-        && (!prices_nest || reads_outer_counter(run, analyzed, lp))
+        && (!prices_nest
+            || (reads_outer_counter(run, analyzed, lp) && nest_can_finish(run, se, analyzed, lp, trips, uce, up)))
     {
+        why(run, lp, "unpriced unroll: the nest bypass");
         return true;
     }
     // The same for a loop around loops that all run few trips: the pin unrolls
@@ -80,6 +89,7 @@ pub(super) fn full_unroll_pays(
     // +8 B for -23,816 instructions, priced +267 B). The bound is the pin's own
     // for what it analyzes, `-unroll-max-iteration-count-to-analyze`.
     if bounds_few_trips(run, se, analyzed, lp, up.max_iterations_count_to_analyze) {
+        why(run, lp, "unpriced unroll: inner loops of few trips");
         return true;
     }
     let clocks = crate::profit::costs(run.outer);
@@ -740,6 +750,37 @@ fn local_array_at(
             Operand::Block(_) => return None,
         }
     }
+}
+
+/// Whether the nest around `lp` (innermost, every loop around it of known
+/// trips) unrolled whole stays within the largest unrolled size one loop may
+/// have: the body of `lp` times the trips of all the loops.
+fn nest_can_finish(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    trips: u32,
+    uce: &UnrollCostEstimator,
+    up: &UnrollingPreferences,
+) -> bool {
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let mut units = u64::from(uce.rolled_loop_size().max(1)) * u64::from(trips);
+    let mut around = lp.get_parent_loop();
+    while let Some(parent) = around {
+        units = units.saturating_mul(u64::from(se.get_small_constant_trip_count(&cx, parent.get_header()).max(1)));
+        around = parent.get_parent_loop();
+    }
+    units <= u64::from(up.threshold) * u64::from(up.max_percent_threshold_boost) / 100
 }
 
 /// Whether `lp` is innermost and has an enclosing loop, and every loop around
