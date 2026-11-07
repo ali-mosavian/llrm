@@ -335,13 +335,18 @@ fn plan_loop(
         let folds_base_and_counter = tti.is_legal_addressing_mode(false, 0, true, 1);
         let spent = cost.c.insns + cost.c.setup_cost;
         let saved = pin_cost.c.insns + pin_cost.c.setup_cost;
+        // DEVIATE LG3: where the target gives a byte model its code size
+        // decides: the solution with them is kept only if it is not larger.
+        let bytes = tti.lsr_bytes().is_some();
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || pin_cost.is_less(tti, &cost)
                 || (!folds_base_and_counter
-                    && (cost.c.num_base_adds > pin_cost.c.num_base_adds
-                        || spent > saved
-                        || (spent == saved && tti.lsr_bytes().is_some() && cost.bytes >= pin_cost.bytes))));
+                    && if bytes {
+                        cost.bytes > pin_cost.bytes
+                    } else {
+                        cost.c.num_base_adds > pin_cost.c.num_base_adds || spent > saved
+                    }));
         llrm_support::debug!("lsr", "  pin's space solved: kept {kept} (bytes {} against the pin's {})", cost.bytes, pin_cost.bytes);
         if kept {
             lsr = pin;

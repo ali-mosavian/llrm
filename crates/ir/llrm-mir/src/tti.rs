@@ -265,6 +265,10 @@ pub struct LsrBytes {
     pub local_set: u32,
     /// An add or a compare.
     pub op: u32,
+    /// A constant that is not negative, added to an address, is the access's
+    /// own offset field and costs no instruction (wasm `load offset=`); a
+    /// negative one is `const; add`.
+    pub memarg_folds_offset: bool,
 }
 
 /// `TTI::LSRCost`: what loop strength reduction compares formulas by.
