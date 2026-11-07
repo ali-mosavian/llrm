@@ -72,6 +72,7 @@ fn module(procedures: Vec<Procedure>) -> Module {
         private: Default::default(),
         far_bss: Default::default(),
         code_segments: Default::default(),
+        comdats: Default::default(),
         padding: Default::default(),
         requests: Default::default(),
         debug: None,
