@@ -37,8 +37,8 @@ def code_of(disassembly: str) -> dict[str, list[str]]:
     for line in disassembly.splitlines():
         if (head := re.match(r"^[0-9a-f]+ <(.+)>:$", line)) is not None:
             current = out.setdefault(head.group(1), [])
-        elif current is not None and (row := re.match(r"^\s*([0-9a-f]+):\t(.*)$", line)):
-            current.append(f"{row.group(1)} {re.split(r"#|//", row.group(2))[0].strip()}")
+        elif current is not None and (row := re.match(r"^\s*([0-9a-f]+):\s+(.*)$", line)):
+            current.append(f"{row.group(1)} {re.split(r"\s#\s|//", row.group(2))[0].strip()}")
     return out
 
 
