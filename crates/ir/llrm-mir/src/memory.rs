@@ -523,7 +523,7 @@ pub fn state_access_ranges(
 ) {
     let text: Vec<String> = ranges.iter().map(|(low, high)| format!("{low}:{high}")).collect();
     attrs.retain(|attr| !matches!(attr, Attribute::Str(name, _) if name == key));
-    attrs.push(Attribute::Str(key.to_string(), Some(text.join(","))));
+    attrs.push(Attribute::Str(key.into(), Some(text.join(","))));
 }
 
 /// What `inst` may do to memory the program can name: a call's effects
@@ -623,7 +623,7 @@ mod stated_tests {
     use super::*;
 
     fn flag(name: &str) -> Attribute {
-        Attribute::Flag(name.to_owned())
+        Attribute::Flag(name.into())
     }
 
     /// `through`, `returns` and the single-flag asks read the flags off the
@@ -636,10 +636,10 @@ mod stated_tests {
             vec![],
             vec![flag("readnone")],
             vec![flag("readonly"), flag("nounwind")],
-            vec![flag("writeonly"), Attribute::Int("dereferenceable".to_owned(), 8)],
+            vec![flag("writeonly"), Attribute::Int("dereferenceable".into(), 8)],
             vec![flag("readonly"), flag("writeonly"), flag("willreturn")],
             vec![Attribute::Memory(vec![(None, "read".to_owned())]), flag("noinline"), flag("nocapture")],
-            vec![flag("noalias"), flag("noretain"), Attribute::Str("willreturn".to_owned(), None)],
+            vec![flag("noalias"), flag("noretain"), Attribute::Str("willreturn".into(), None)],
         ];
         for attrs in &lists {
             let facts = Facts::of(attrs);
@@ -666,7 +666,7 @@ mod effects_tests {
     use super::*;
 
     fn flag(name: &str) -> Attribute {
-        Attribute::Flag(name.to_owned())
+        Attribute::Flag(name.into())
     }
 
     /// `at` read the flags of the list once per attribute and location, and

@@ -370,7 +370,7 @@ impl ProgramPass for Walk {
                             function_mut(module, id)
                                 .1
                                 .attrs
-                                .push(llrm_mir::opcode::Attribute::Flag(SELF_COPIED.to_owned()));
+                                .push(llrm_mir::opcode::Attribute::Flag(SELF_COPIED.into()));
                         }
                         // DEVIATE (recursion): a tree-recursive function waits
                         // for its tail-call elimination
@@ -408,7 +408,7 @@ impl ProgramPass for Walk {
                             function_mut(module, id)
                                 .1
                                 .attrs
-                                .push(llrm_mir::opcode::Attribute::Flag(crate::tailcallelim::DEFERRED.to_owned()));
+                                .push(llrm_mir::opcode::Attribute::Flag(crate::tailcallelim::DEFERRED.into()));
                             // The flag is part of its declaration: the analyses that list declarations patch only what is told changed.
                             modules[at].changed(id);
                         }
@@ -781,7 +781,7 @@ impl ProgramPass for Walk {
                         function_mut(module, id)
                             .1
                             .attrs
-                            .push(llrm_mir::opcode::Attribute::Flag(PROMOTED_IN_WALK.to_owned()));
+                            .push(llrm_mir::opcode::Attribute::Flag(PROMOTED_IN_WALK.into()));
                         if visited.contains(&id) {
                             (self.simplify)(module, &mut modules[at], id, "promote.");
                         }
@@ -1123,7 +1123,7 @@ impl SelfInline {
                         ),
                     );
                 if copies > 0 {
-                    function_mut(module, id).1.attrs.push(llrm_mir::opcode::Attribute::Flag(SELF_COPIED.to_owned()));
+                    function_mut(module, id).1.attrs.push(llrm_mir::opcode::Attribute::Flag(SELF_COPIED.into()));
                 }
                 modules[at].changed(id);
                 modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());

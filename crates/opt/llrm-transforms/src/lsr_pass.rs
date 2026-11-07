@@ -267,6 +267,8 @@ fn plan_loop(
         Default::default()
     };
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
+    // DEVIATE LU13: the loop calls and the target's call takes every register.
+    let across_call = tti.lsr_call_clobbers_registers() && crate::lsr_collect::loop_calls(&cx, tti, header);
     // The loop's register units do not change between the two builds.
     let units = std::cell::Cell::new(None);
     let build = |se: &mut ScalarEvolution| {
@@ -280,6 +282,7 @@ fn plan_loop(
             }
         };
         lsr.size = size;
+        lsr.across_call = across_call;
         llrm_support::debug!("lsr", "  other registers: {}", lsr.other_register_units);
         lsr.chain_uses = chains.inc_set.clone();
         lsr.collect_interesting_types_and_factors(se, &users);
@@ -327,13 +330,16 @@ fn plan_loop(
         // loop must not outweigh the instructions it saves in it (nbody -O1:
         // four `base + 32` against one compare).
         let folds_base_and_counter = tti.is_legal_addressing_mode(false, 0, true, 1);
+        let spent = cost.c.insns + cost.c.setup_cost;
+        let saved = pin_cost.c.insns + pin_cost.c.setup_cost;
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || pin_cost.is_less(tti, &cost)
                 || (!folds_base_and_counter
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
-                        || cost.c.insns + cost.c.setup_cost > pin_cost.c.insns + pin_cost.c.setup_cost)));
-        llrm_support::debug!("lsr", "  pin's space solved: kept {kept}");
+                        || spent > saved
+                        || (spent == saved && tti.lsr_bytes().is_some() && cost.bytes >= pin_cost.bytes))));
+        llrm_support::debug!("lsr", "  pin's space solved: kept {kept} (bytes {} against the pin's {})", cost.bytes, pin_cost.bytes);
         if kept {
             lsr = pin;
             solution = pin_solution;

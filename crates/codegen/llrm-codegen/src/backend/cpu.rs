@@ -112,6 +112,9 @@ pub struct Profile {
     pub ports: llrm_target::PortTable,
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
+    /// The encoded sizes of a register copy and a constant load, where the
+    /// target states them.
+    pub move_bytes: Option<llrm_target::MoveBytes>,
     /// `Target::bsf_rep_prefix`.
     pub bsf_rep_prefix: bool,
     /// `getPrefLoopAlignment` as a power of two; 0: loops are not aligned.
@@ -357,6 +360,7 @@ impl Profile {
             foreign: arch.flat_foreign(),
             ports: arch.flat_ports(),
             operand_bytes: arch.operand_bytes(),
+            move_bytes: arch.move_bytes(),
             bsf_rep_prefix: arch.bsf_rep_prefix(),
             loop_alignment: arch.pref_loop_alignment(),
             loop_max_skip: arch.loop_alignment_max_skip(),

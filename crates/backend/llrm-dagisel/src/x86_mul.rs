@@ -107,12 +107,14 @@ pub fn select_mul_lohi<D: AddrDag>(
         order_reg_for_mul(dag, &mut n0, &mut n1, lo);
     }
 
-    // DEVIATE SD444: where the multiply ends early on the r/m operand
-    // (10 + the bits of that operand), a constant with more significant bits
-    // as the other operand can have (a division's full-width magic) goes to
-    // `EAX`, so the variable is the r/m operand whose length is read. A
-    // narrower constant stays the r/m operand, as in the pin, which keeps
-    // operand 0 in `EAX`.
+    // DEVIATE SD444 (owner w2, exit 2026-11-17): where the multiply ends early
+    // on the r/m operand (10 + the bits of that operand), a constant with more
+    // significant bits than the other operand can have (a division's
+    // full-width magic) goes to `EAX`, so the variable is the r/m operand whose
+    // length is read. A narrower constant stays the r/m operand, as in the pin.
+    // Stays while the 486 row (`mul` 43 clocks against 19 for a short dividend;
+    // +4M clocks on 7 frames/huge rows) holds; the exit is a re-measure
+    // against the pin's order on the 486 rows.
     if folded.is_none()
         && hooks.options.multiply_early_out
         && dag.opcode(n1.node) == isd::Constant

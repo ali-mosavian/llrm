@@ -949,8 +949,9 @@ fn selected_in(
         _ => (BuilderTarget::m32(), AddrMode::Flat32),
     };
     let mut builder_target = builder_target;
-    // The frontends compile static code: every symbol is `dso_local`.
-    builder_target.dag.dso_local_symbols = true;
+    // Static code: every symbol is `dso_local`. A 64-bit PIE reaches a symbol
+    // defined elsewhere through the GOT (X86Subtarget::classifyGlobalReference).
+    builder_target.dag.dso_local_symbols = bitness != 64 || !module.position_independent();
     builder_target.dag.absolute_symbols = !module.position_independent();
     let builder_target = builder_target
         .with_tuning(machine.tuning())
@@ -1339,6 +1340,7 @@ fn selected_in(
                             freq: 1.0,
                             milliclocks_per_byte: mul_rate,
                             by_clocks: true,
+                            no_growth: !cpu.speed_rate,
                             price_pin: false,
                         })
                     } else {
@@ -1352,6 +1354,7 @@ fn selected_in(
                                     freq: frequencies.relative_to_entry(parent),
                                     milliclocks_per_byte: mul_rate,
                                     by_clocks: false,
+                                    no_growth: false,
                                     price_pin,
                                 },
                             )

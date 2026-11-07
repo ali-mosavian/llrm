@@ -12,12 +12,13 @@ printf 'int main(void) { return 0; }\n' > $T/null.c
 for c in 68000 68020; do
   mkdir -p $T/$c; ar_objs=
   for src in $(tests/fp_sources.sh f64 f32_64 f32 int); do f=$(basename $(dirname $src))_$(basename $src .c)
-    case $src in lib/int/udivdi3.c|lib/int/umoddi3.c|lib/int/divdi3.c|lib/int/moddi3.c|lib/int/udivmod_w.c|lib/int/muldi3.c) [ $c = 68000 ] || continue;; esac # 68020: the divu.l members below
+    case $src in lib/int/udivdi3.c|lib/int/umoddi3.c|lib/int/divdi3.c|lib/int/moddi3.c|lib/int/udivmod_w.c) [ $c = 68000 ] || continue;; lib/int/muldi3.c) continue;; esac # 68020: the divu.l members below
     case $src in lib/fp/f64/add_sub.c|lib/fp/f64/mul.c|lib/fp/f64/div.c) continue;; esac # config/m68k/sf64.s replaces them
     LLRM_CC_TARGET=m68k-$c $D/llrm-cc -$opt -S -Iinclude -include config/m68k/config.h ${EXTRA_INC:+-include $EXTRA_INC} $src -o $T/$c/$f.s 2> /dev/null || continue
     awk 'BEGIN{print ".text"} /^(__|sf[0-9]+_)[A-Za-z0-9_]*:$/ {l=$0; sub(/:$/,"",l); print ".globl " l} {print}' $T/$c/$f.s > $T/$c/$f.g.s
     $B-as -m$c -o $T/$c/$f.o $T/$c/$f.g.s 2> /dev/null && ar_objs="$ar_objs $T/$c/$f.o"
   done
+  if [ $c = 68000 ]; then LLRM_CC=$D/llrm-cc tools/m68k_div64_members.sh 68000 $T/m$c; ar_objs="$ar_objs $T/m$c/muldi3.o"; fi # the mulu.w asm
   if [ $c = 68020 ]; then LLRM_CC=$D/llrm-cc tools/m68k_div64_members.sh 68020 $T/m$c; ar_objs="$ar_objs $T/m$c/udivdi3.o $T/m$c/umoddi3.o $T/m$c/divdi3.o $T/m$c/moddi3.o $T/m$c/muldi3.o"; fi # what libsf.a ships
   ds=; [ $c = 68020 ] && ds="--defsym M68020=1"
   $B-as -m$c $ds -o $T/$c/sf64.o config/m68k/sf64.s; ar_objs="$ar_objs $T/$c/sf64.o"

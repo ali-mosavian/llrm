@@ -1143,6 +1143,43 @@ entry:
     (fills, stores)
 }
 
+/// The Fill and mov-to-memory counts of a flat m32 constant fill of `length` bytes
+/// of `value`, `size` for -Os.
+fn memset_shape_m32(length: u32, value: i32, size: bool) -> (usize, usize) {
+    let text = format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@g = global [64 x i8] zeroinitializer
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+define void @f() {{
+  call void @llvm.memset.p0.i32(ptr @g, i8 {value}, i32 {length}, i1 false)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = size;
+    let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats = || insns.iter().filter_map(|i| i.what.as_ref());
+    let fills = whats().filter(|w| w.op == crate::model::ir::Operation::Fill).count();
+    let stores = whats()
+        .filter(|w| w.name.as_deref() == Some("mov") && matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    (fills, stores)
+}
+
+/// lru -Os at m32: two constant-store loops became memsets of 6..28 bytes, and
+/// the pin's eight-store limit kept them as stores (gcc: `rep stos`, 26 B
+/// smaller). At -Os the fill is taken where it is fewer bytes; at speed the
+/// stores stay, and a lone dword stays a store.
+#[test]
+fn at_m32_os_a_28_byte_fill_is_rep_stos_and_at_speed_stores() {
+    assert_eq!(memset_shape_m32(28, -1, true).0, 1, "-Os: a fill");
+    assert_eq!(memset_shape_m32(28, -1, false).0, 0, "-O2: stores");
+    assert_eq!(memset_shape_m32(4, -1, true).0, 0, "one dword store is smaller than the fill");
+}
+
 /// A 10-byte clear at m16 -Os was a `rep stosb` on bytes alone (19 B of
 /// stores against 16): 57 clocks of a 486 for 3 bytes, 17 clocks a byte
 /// against the target's 10.

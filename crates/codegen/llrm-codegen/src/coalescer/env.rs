@@ -255,7 +255,9 @@ impl TargetEnv {
 }
 
 /// See [`TargetEnv::remat_wins`].
-pub type RematWins = Box<dyn Fn(&Insn, &BTreeSet<RegId>, &BTreeSet<RegId>, bool) -> bool>;
+/// `(definition, source's registers, destination's, size build, alone)`:
+/// `alone` is that the source has no other reader, so its own definition goes.
+pub type RematWins = Box<dyn Fn(&Insn, &BTreeSet<RegId>, &BTreeSet<RegId>, bool, bool) -> bool>;
 
 /// One side of a copy about to be joined.
 pub struct JoinSide {
@@ -312,18 +314,23 @@ impl CoalescerEnv for TargetEnv {
         }
     }
 
+    fn prices_remat(&self) -> bool {
+        self.remat_wins.is_some()
+    }
+
     fn remat_wins(
         &self,
         def: &Insn,
         source: u32,
         destination: u32,
+        alone: bool,
     ) -> bool {
         let palettes = self.palettes.borrow();
         let (Some(wins), Some(from), Some(to)) = (&self.remat_wins, palettes.get(&source), palettes.get(&destination))
         else {
             return true;
         };
-        wins(def, from, to, self.size)
+        wins(def, from, to, self.size, alone)
     }
 
     fn keeps(
@@ -534,8 +541,8 @@ pub fn joined_with_map(
         lis.track_changes();
     }
     // `RegisterCoalescer::runOnMachineFunction` returns at once for a function
-    // that exposes `returns_twice`: after `longjmp` a joined variable would hold
-    // a value the first return never set
+    // that exposes `returns_twice`: after `longjmp` a joined variable would
+    // hold a value the first return never set
     // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L4338>).
     let stats = if body.returns_twice { driver::Stats::default() } else { driver::run(&mut lis, env, depth) };
     let after = lis.body_like(body);

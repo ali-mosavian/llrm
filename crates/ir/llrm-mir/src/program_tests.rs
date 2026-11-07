@@ -81,7 +81,7 @@ impl ModulePass for Mark {
         SEEN.with_borrow_mut(|seen| seen.push(analyses.program().cached::<Defined>().map(|one| *one)));
         let Some(id) = module.named(self.0) else { return Vec::new() };
         let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else { panic!("a function") };
-        function.attrs.push(Attribute::Flag("readonly".to_owned()));
+        function.attrs.push(Attribute::Flag("readonly".into()));
         vec![id]
     }
 }
