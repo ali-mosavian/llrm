@@ -82,6 +82,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // DEVIATE SZ4 (owner x86-m32, exit 2026-11-27): -Os copies a loop header of
+        // at most 4 instructions, not the pin's 16 (the copy is a compare and a
+        // branch, more than the jump rotation removes). m32 -Os kernels (73): x_hash -29 B,
+        // x_rle -8 B, none larger; limits 1..3 grow x_insertion/x_jpeg_single, 1 grows 60 cells.
+        size_rotation_header_limit: Some(4),
         // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
