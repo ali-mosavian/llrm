@@ -467,6 +467,13 @@ pub fn distinct_classes(
     distinct_classes_given(body, floor, &uses).unwrap_or_else(|| body.clone())
 }
 
+/// How many registers every class holds, none where there is no class: the
+/// size of their intersection, counted without building it.
+fn shared<'a>(mut classes: impl Iterator<Item = &'a BTreeSet<RegId>> + Clone) -> Option<usize> {
+    let first = classes.next()?;
+    Some(first.iter().filter(|register| classes.clone().all(|class| class.contains(register))).count())
+}
+
 /// `distinct_classes`, given the body's confining reads: None where no value
 /// needs a copy.
 pub fn distinct_classes_given(
@@ -486,12 +493,7 @@ pub fn distinct_classes_given(
     // Which (block, instruction, value, role) reads take a copy.
     let mut peeled: BTreeSet<(usize, usize, u32, u8)> = BTreeSet::new();
     for (value, all) in &by_value {
-        let common = |chosen: &[&regclass::Use]| {
-            chosen.iter().fold(None::<BTreeSet<RegId>>, |had, one| {
-                Some(had.map_or_else(|| one.class.clone(), |had| had.intersection(&one.class).copied().collect()))
-            })
-        };
-        if common(all).is_none_or(|class| !class.is_empty()) {
+        if shared(all.iter().map(|one| &one.class)).is_none_or(|count| count > 0) {
             continue;
         }
         // Classes by how many reads share them, the most first.
@@ -551,11 +553,14 @@ pub fn distinct_classes_given(
             })
         };
         let all: Vec<&&regclass::Use> = all.iter().collect();
-        let Some(left) = class(&all).filter(|left| !left.is_empty() && left.len() < MIN_RC_SIZE) else { continue };
+        let Some(left) = shared(all.iter().map(|one| &one.class)).filter(|left| *left > 0 && *left < MIN_RC_SIZE)
+        else {
+            continue;
+        };
         let deepest = deepest_of(value);
         let (cold, kept): (Vec<&&regclass::Use>, Vec<&&regclass::Use>) =
             all.iter().partition(|one| !one.defining && depth_of(one.block) < deepest);
-        if !cold.is_empty() && class(&kept).is_none_or(|rest| rest.len() > left.len()) {
+        if !cold.is_empty() && class(&kept).is_none_or(|rest| rest.len() > left) {
             for one in cold {
                 peeled.insert((one.block, one.insn, *value, one.role as u8));
             }
@@ -1687,5 +1692,19 @@ mod laziness_tests {
         let body = LirBody::new("t", 0, crate::model::lir::shared(vec![block]), IndexMap::default(), IndexMap::default());
         assert!(distinct_classes_given(&body, 0, &[]).is_none());
         assert_eq!(body.facts.0.runs::<crate::analysis::graph::LoopDepths>(), 0);
+    }
+
+    /// The classes of a value's reads were intersected into sets to learn
+    /// whether any register is common (28.6 M Ir of memory_expansion -O2 in
+    /// `distinct_classes_given`); the count must be the intersection's size.
+    #[test]
+    fn shared_counts_the_registers_every_class_holds() {
+        let set = |registers: &[RegId]| registers.iter().copied().collect::<BTreeSet<RegId>>();
+        let (ax_bx, bx_cx, si_di) =
+            (set(&[RegId::AX, RegId::BX]), set(&[RegId::BX, RegId::CX]), set(&[RegId::SI, RegId::DI]));
+        assert_eq!(shared([].iter()), None);
+        assert_eq!(shared([&ax_bx].into_iter()), Some(2));
+        assert_eq!(shared([&ax_bx, &bx_cx].into_iter()), Some(1));
+        assert_eq!(shared([&ax_bx, &bx_cx, &si_di].into_iter()), Some(0));
     }
 }
