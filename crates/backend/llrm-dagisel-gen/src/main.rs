@@ -132,7 +132,7 @@ fn run() -> Result<(), String> {
     }
     // The pin's memory-fold tables, read backwards for the scheduler's unfold.
     if let Some(path) = fold_inc {
-        write("foldtables.rs", foldtables::render(&read(Some(path), "--fold-tables")?, &ids)?)?;
+        write("foldtables.rs", foldtables::render(&read(Some(path), "--fold-tables")?, &ids, &mut emitted)?)?;
         modules.push_str("pub mod foldtables;\n");
     }
     write("instrinfo.rs", emit::render_instr_info(&instrinfo, &ids, &emitted, &emit::Style::X86)?)?;

@@ -797,7 +797,11 @@ pub mod x86 {
     pub const INC16m: u16 = 1901;
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
+    pub const MOV16rm: u16 = 2568;
     pub const MOV32r0: u16 = 386;
+    pub const MOV32rm: u16 = 2588;
+    pub const MOV64rm: u16 = 2605;
+    pub const MOV8rm: u16 = 2624;
     pub const MOVAPSmr: u16 = 2633;
     pub const MOVAPSrm: u16 = 2634;
     pub const MOVSX16rm8: u16 = 2735;
@@ -954,6 +958,10 @@ pub mod x86 {
         (1901, "INC16m"),
         (1912, "INC32m"),
         (1933, "INC8m"),
+        (2568, "MOV16rm"),
+        (2588, "MOV32rm"),
+        (2605, "MOV64rm"),
+        (2624, "MOV8rm"),
         (2633, "MOVAPSmr"),
         (2634, "MOVAPSrm"),
         (2735, "MOVSX16rm8"),
