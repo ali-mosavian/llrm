@@ -4104,6 +4104,9 @@ fn an_extern_global_read_at_m64_pie_is_loaded_through_the_got() {
                 define i32 @f() {\n  %v = load i32, ptr @g\n  ret i32 %v\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    let loads = listing.lines().map(str::trim).filter(|line| line.starts_with("mov") && line.contains('[')).count();
-    assert_eq!(loads, 2, "{listing}");
+    // masm names a symbol operand without brackets: `dword ptr g` is the
+    // direct read; the GOT form reads through a register (`ptr [r..]`). The
+    // first version counted `[` and read 0 loads for the direct listing.
+    assert!(!listing.contains("ptr g"), "{listing}");
+    assert!(listing.lines().any(|line| line.trim().starts_with("mov eax, dword ptr [")), "{listing}");
 }
