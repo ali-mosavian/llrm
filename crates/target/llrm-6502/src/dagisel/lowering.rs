@@ -140,6 +140,11 @@ pub fn target_lowering() -> TargetLowering {
     for op in [Load, Store] {
         tl.set_operation_action(op, MVT::I1, Action::Custom);
     }
+    // a word access is two byte accesses interleaved in program order, as
+    // the pin's MOS legalizes i16 memory (`lower_word_load`)
+    for op in [Load, Store] {
+        tl.set_operation_action(op, MVT::I16, Action::Custom);
+    }
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
     for op in [SetCC, Select] {
@@ -178,6 +183,8 @@ impl Hooks for MosLowering {
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::Load if dag.value_type(node) == EVT::I1 => lower_bit_load(dag, node),
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
+            ISD::Load if dag.value_type(node) == EVT::I16 => lower_word_load(dag, node),
+            ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I16 => lower_word_store(dag, node),
             ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
             ISD::Mul | ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem | ISD::Shl | ISD::Srl | ISD::Sra
                 if dag.value_type(node) == EVT::I32 =>
@@ -356,6 +363,45 @@ fn lower_bit_load(
     let masked = dag.get_node(ISD::And, EVT::I8, &[byte, one]);
     let bit = dag.get_node(ISD::Truncate, EVT::I1, &[masked]);
     Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I1, EVT::OTHER], &[bit, SDValue { node: byte.node, res: 1 }]))
+}
+
+/// A plain word load as two byte loads, low at the address, on one chain.
+fn lower_word_load(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    if info.ext.is_some() {
+        return None;
+    }
+    let (chain, ptr) = (dag.operand(node, 0), dag.operand(node, 1));
+    let info = MemInfo { mem_vt: EVT::I8, ..info };
+    let high_ptr = dag.get_object_ptr_offset(ptr, 1);
+    let (lo, hi) = (dag.get_load(EVT::I8, chain, ptr, info), dag.get_load(EVT::I8, chain, high_ptr, info));
+    let eight = dag.get_constant(8, EVT::I8);
+    let low = dag.get_node(ISD::ZeroExtend, EVT::I16, &[lo]);
+    let high = dag.get_node(ISD::AnyExtend, EVT::I16, &[hi]);
+    let high = dag.get_node(ISD::Shl, EVT::I16, &[high, eight]);
+    let word = dag.get_node(ISD::Or, EVT::I16, &[low, high]);
+    let chains = dag.get_token_factor(&[SDValue { node: lo.node, res: 1 }, SDValue { node: hi.node, res: 1 }]);
+    Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I16, EVT::OTHER], &[word, chains]))
+}
+
+/// A plain word store as two byte stores, low at the address.
+fn lower_word_store(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    let (chain, value, ptr) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let info = MemInfo { mem_vt: EVT::I8, ..info };
+    let high_ptr = dag.get_object_ptr_offset(ptr, 1);
+    let eight = dag.get_constant(8, EVT::I8);
+    let shifted = dag.get_node(ISD::Srl, EVT::I16, &[value, eight]);
+    let lo = dag.get_node(ISD::Truncate, EVT::I8, &[value]);
+    let hi = dag.get_node(ISD::Truncate, EVT::I8, &[shifted]);
+    let (low_store, high_store) = (dag.get_store(chain, lo, ptr, info), dag.get_store(chain, hi, high_ptr, info));
+    Some(dag.get_token_factor(&[low_store, high_store]))
 }
 
 /// The store of a bit: the byte of 0 or 1 (`lower_bit_load`).
