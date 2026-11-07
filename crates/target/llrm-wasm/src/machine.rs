@@ -180,7 +180,7 @@ impl Tti for Wasm {
     /// branch on a zero compare is free; a compare against a constant is
     /// `i32.const; i32.ne` (quicksort -O2 +10 B, tile -O1 -3 B).
     fn lsr_bytes(&self) -> Option<llrm_mir::tti::LsrBytes> {
-        Some(llrm_mir::tti::LsrBytes { constant: 1, local_get: 2, local_set: 2, op: 1 })
+        Some(llrm_mir::tti::LsrBytes { constant: 1, local_get: 2, local_set: 2, op: 1, memarg_folds_offset: true })
     }
 
     /// `WebAssemblyTargetLowering::isLegalAddressingMode`: offsets add as

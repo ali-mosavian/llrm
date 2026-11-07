@@ -115,3 +115,20 @@ fn a_tie_of_instructions_and_setup_keeps_the_pin_counting_up() {
     let exit = text.lines().find(|line| line.contains("icmp eq")).expect("an exit test");
     assert!(!exit.trim_end().ends_with(", 0"), "{exit}\n{text}");
 }
+
+/// bench/dot's sum loop at wasm32 -O2, as the pin sees it (`a[i] * b[i]` four
+/// times per trip over two stack arrays): the end-biased solution counted the
+/// offsets of its addresses as `const; add` where they are negative and the
+/// pin's, `base + counter + 96 + k`, as one add, so it won on bytes and the
+/// loop was 12 B larger (dot -O2 786 -> 812 B).
+#[test]
+fn a_sum_loop_keeps_non_negative_offsets_in_the_access() {
+    let mut module = llrm_mir::parse::module(include_str!("lsr/dot_loop.ll")).expect("parses");
+    let mut manager = PassManager::default();
+    let elements = llrm_transforms::pipeline_text::parse("loop-reduce").expect("pipeline");
+    llrm_transforms::pipeline_text::build(&elements, &mut manager).ok().expect("builds");
+    manager.run_module(&mut module, Rc::new(WasmMachine)).expect("runs");
+    let text = llrm_mir::print::module(&module);
+    let negative = text.lines().find(|line| line.contains("getelementptr i8") && line.contains(", i32 -"));
+    assert!(negative.is_none(), "{negative:?}\n{text}");
+}

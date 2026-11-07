@@ -649,7 +649,8 @@ impl Cost {
 
         if let Some(m) = bytes_model {
             let constant = |v: i64| m.constant + leb_len(v);
-            if !absorbed && inside && f.unfolded_offset.is_non_zero() {
+            let memarg = m.memarg_folds_offset && lu.kind == Kind::Address;
+            if !memarg && !absorbed && inside && f.unfolded_offset.is_non_zero() {
                 self.bytes += constant(f.unfolded_offset.0) + m.op;
             }
             if lu.kind == Kind::ICmpZero && !f.has_zero_end() {
@@ -658,7 +659,12 @@ impl Cost {
             if lu.kind == Kind::Address {
                 for fixup in &lu.fixups {
                     let offset = fixup.offset.add_unsigned(f.base_offset);
-                    if offset.is_non_zero() {
+                    if memarg {
+                        // The whole constant of the address: the access's
+                        // offset field, or an add where it is negative.
+                        let total = offset.add_unsigned(f.unfolded_offset).0;
+                        self.bytes += if total >= 0 { leb_len(total) - 1 } else { constant(total) + m.op };
+                    } else if offset.is_non_zero() {
                         self.bytes += leb_len(offset.0);
                     }
                 }
@@ -739,7 +745,15 @@ impl Cost {
             self.c.insns += self.c.num_base_adds - prev_base_adds;
         }
         if let Some(m) = bytes_model {
-            self.bytes += (self.c.num_base_adds - prev_base_adds) * (m.op + m.local_get);
+            if m.memarg_folds_offset && lu.kind == Kind::Address {
+                // The constants are the access's offset field (above): only
+                // the register adds are code.
+                let folded = f.scale != 0 && is_am_completely_folded(r.tti, lu, f);
+                let reg_adds = if parts > 1 && inside { parts - 1 - usize::from(folded) } else { 0 };
+                self.bytes += reg_adds as u32 * (m.op + m.local_get);
+            } else {
+                self.bytes += (self.c.num_base_adds - prev_base_adds) * (m.op + m.local_get);
+            }
         }
     }
 
