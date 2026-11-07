@@ -971,7 +971,7 @@ fn selected_in(
         let features = Features { cmov, ..Features::default() };
         lowering_for(32, features, || TargetLowering::x86_32(features, MVT::I32))
     };
-    tli.set_small_divide(cpu.size);
+    tli.set_small_divide(cpu.bytes_strict());
     // The soft-float routines are spelled as the C compiler spelled their
     // definitions.
     for (name, number, symbol) in libcalls {

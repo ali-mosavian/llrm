@@ -389,6 +389,20 @@ fn the_size_divide_agrees_with_the_speed_divide_and_is_short() {
     }
 }
 
+/// The size divide of operands that fit a dword is one `div`, not 64 rounds:
+/// at -O1 nbody_fixed took 57.9M clocks for 8.9M (bc: 38.1M).
+#[test]
+fn the_size_divide_of_dword_operands_is_a_few_instructions() {
+    for bits in [16, 32] {
+        for signed in [false, true] {
+            let small = divide_small(signed, true, bits).expect("assembles");
+            let (got, steps) = divided(&small, bits, 262144, 1000);
+            assert_eq!(got, (262, 144), "{}", small.name);
+            assert!(steps < 40, "{} took {steps} instructions", small.name);
+        }
+    }
+}
+
 /// A divide by a divisor of two dwords estimates the quotient with one `div`
 /// and corrects it: 144 instructions at the worst, where a round per bit of
 /// the quotient is some 600.

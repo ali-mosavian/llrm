@@ -85,8 +85,9 @@ fn quotient_and_remainder_are_read_from_their_own_registers() {
     assert_eq!(register(&remainder, rroot), NodeData::PhysReg(routine.remainder[0]));
 }
 
-/// nbody_fixed at m16 -O1 held a 313-byte inline `i64` divide: a function built
-/// for size called the speed routine, though the target has a shorter one.
+/// nbody_fixed at m16 -O1 held a 313-byte inline `i64` divide: code whose
+/// bytes are strict (-O1, size) called the speed routine, though the target
+/// has a shorter one.
 #[test]
 fn a_function_built_for_size_calls_the_size_divide() {
     let (dag, _) = quotient_sized(ISD::UDiv, false, true);

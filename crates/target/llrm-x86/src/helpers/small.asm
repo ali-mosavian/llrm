@@ -1,6 +1,16 @@
 ; In: edx:eax / ecx:ebx, ecx:ebx != 0. Out: quotient edx:eax, remainder ecx:ebx. Keeps ebp, esi, edi.
 ; One bit of the quotient a round: the size routine, for code that is built for bytes.
+; Both high dwords zero (the usual case): one div, as libgcc's does.
 small:
+    test edx, edx
+    jnz small_loop
+    test ecx, ecx
+    jnz small_loop
+    div ebx
+    mov ebx, edx
+    xor edx, edx
+    jmp small_done
+small_loop:
     push ebp
     push esi
     push edi
@@ -32,3 +42,4 @@ small_next:
     pop edi
     pop esi
     pop ebp
+small_done:

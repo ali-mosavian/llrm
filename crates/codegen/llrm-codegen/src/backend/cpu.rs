@@ -426,6 +426,12 @@ impl Profile {
         self.optimized && !(self.size || self.min_size)
     }
 
+    /// Optimized code whose bytes are not traded for clocks: -O1 and size (no
+    /// speed rate), where a smaller routine of the same result wins.
+    pub fn bytes_strict(&self) -> bool {
+        self.optimized && (!self.has_speed_goal() || !self.speed_rate)
+    }
+
     /// Clocks a byte of code is worth at speed, in thousandths: the target's
     /// rate at -O2 and -O3, none at -O1 and for size.
     pub fn speed_milliclocks_per_byte(&self) -> i64 {
@@ -1177,5 +1183,22 @@ mod loop_carried_tests {
         assert!(!loop_carried_applies(true, true, false), "-Os");
         assert!(!loop_carried_applies(true, false, true), "-Oz");
         assert!(!loop_carried_applies(false, false, false), "no key: the pin's order");
+    }
+}
+
+#[cfg(test)]
+mod bytes_strict_tests {
+    use super::*;
+
+    /// nbody_fixed at -O1 kept a 313-byte inline divide because only `size`
+    /// asked for the small routine; -O1 trades no bytes for clocks either.
+    #[test]
+    fn o1_and_size_are_bytes_strict_and_o2_and_o0_are_not() {
+        let base = tuned("486", false).expect("a profile").clone();
+        let at = |optimized, size, speed_rate| Profile { optimized, size, speed_rate, ..base.clone() };
+        assert!(at(true, false, false).bytes_strict(), "-O1: no speed rate");
+        assert!(at(true, true, true).bytes_strict(), "-Os");
+        assert!(!at(true, false, true).bytes_strict(), "-O2 and -O3 price bytes in clocks");
+        assert!(!at(false, false, false).bytes_strict(), "-O0 is not tuned");
     }
 }
