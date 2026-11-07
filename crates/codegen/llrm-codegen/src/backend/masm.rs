@@ -1743,6 +1743,8 @@ fn red_zone(
     let slot = procedure.registers.slot;
     let rounded = (procedure.reserve + slot - 1) / slot * slot;
     if procedure.registers.red_zone == 0
+        || moves_stack(&procedure.body)
+        || realign_of(&procedure.body) != 0
         || rounded == 0
         || procedure.stack_check.is_some()
         || procedure.probe_stack.is_some()

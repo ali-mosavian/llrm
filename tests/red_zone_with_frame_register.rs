@@ -20,3 +20,24 @@ fn a_leaf_with_a_frame_register_has_no_sub_rsp() {
     assert!(asm.contains("push rbp") && asm.contains("pop rbp"), "{asm}");
     assert!(!asm.contains("sub rsp") && !asm.contains("leave"), "{asm}");
 }
+
+/// The red zone took a function with a variable-sized object (`int a[n]`):
+/// `tests/llc/vla.c` printed nothing at -O0 (the pin: `!hasVarSizedObjects()`).
+#[test]
+fn a_function_with_a_vla_does_not_use_the_red_zone() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "#include <stdio.h>\nstatic int f(int n)\n{\n    int a[n];\n    for (int i = 0; i < n; i++)\n        a[i] = i * i;\n    int s = 0;\n    for (int i = 0; i < n; i++)\n        s += a[i];\n    return s;\n}\nint main(void)\n{\n    printf(\"%d\\n\", f(10));\n    return 0;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .current_dir(scratch.path())
+        .args(["-O0", "a.c", "-o", "a.out"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let run = Command::new(scratch.path().join("a.out")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "285\n", "status {:?}", run.status);
+}
