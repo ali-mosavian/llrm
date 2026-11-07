@@ -133,6 +133,7 @@ struct Calls {
     call: u16,
     cdq: u16,
     idiv: u16,
+    div: u16,
 }
 
 impl Names {
@@ -157,6 +158,7 @@ impl Names {
                     call: opcode("CALLpcrel32")?,
                     cdq: opcode("CDQ")?,
                     idiv: opcode("IDIV32r")?,
+                    div: opcode("DIV32r")?,
                 })
             })(),
         })
@@ -330,8 +332,9 @@ impl Fast<'_> {
                     let done = self.node(lea, &[EVT::I32], &ops);
                     self.values.insert(instruction.result?, done);
                 }
-                Opcode::Binary(op @ (llrm_mir::opcode::BinaryOp::SDiv | llrm_mir::opcode::BinaryOp::SRem)) => {
-                    // `cdq; idiv r`: the quotient in eax, the remainder in edx
+                Opcode::Binary(op @ (llrm_mir::opcode::BinaryOp::SDiv | llrm_mir::opcode::BinaryOp::SRem | llrm_mir::opcode::BinaryOp::UDiv | llrm_mir::opcode::BinaryOp::URem)) => {
+                    // signed `cdq; idiv r`, unsigned `mov edx,0; div r`: quotient in eax, remainder in edx
+                    use llrm_mir::opcode::BinaryOp::*;
                     let calls = self.names.calls.as_ref()?;
                     if !self.m32 || self.module.context.types.int_bits(instruction.ty) != Some(32) {
                         return None;
@@ -340,9 +343,15 @@ impl Fast<'_> {
                     let eax = self.eax_reg()?;
                     let copy = self.dag.get_copy_to_phys_reg(self.dag.entry_node(), eax, left, None);
                     let glue = SDValue { node: copy.node, res: 1 };
-                    let sign = self.node(calls.cdq, &[EVT::GLUE], &[glue]);
-                    let divided = self.node(calls.idiv, &[EVT::GLUE], &[right, sign]);
-                    let register = if matches!(op, llrm_mir::opcode::BinaryOp::SDiv) { eax } else { self.edx };
+                    let divided = if matches!(op, SDiv | SRem) {
+                        let sign = self.node(calls.cdq, &[EVT::GLUE], &[glue]);
+                        self.node(calls.idiv, &[EVT::GLUE], &[right, sign])
+                    } else {
+                        let zero = self.dag.get_constant_with(0, EVT::I32, true, false);
+                        let clear = self.dag.get_copy_to_phys_reg(self.dag.entry_node(), self.edx, zero, Some(glue));
+                        self.node(calls.div, &[EVT::GLUE], &[right, SDValue { node: clear.node, res: 1 }])
+                    };
+                    let register = if matches!(op, SDiv | UDiv) { eax } else { self.edx };
                     let result = self.dag.get_copy_from_phys_reg(self.dag.entry_node(), register, EVT::I32, divided);
                     self.values.insert(instruction.result?, SDValue { node: result.node, res: 0 });
                 }
