@@ -171,11 +171,20 @@ pub fn constrained(
     let ids = body.pins.keys().chain(pinned.into_iter().flat_map(|given| given.keys())).copied().max();
     let mut pinned: IndexMap<u32, RegId> = pinned.unwrap_or(&body.pins).clone();
 
-    let defined: BTreeSet<u32> =
-        body.blocks.iter().flat_map(|block| &block.insns).flat_map(|one| one.defines.iter().copied()).collect();
-    let constants = crate::backend::bodyfacts::_constants(body, &defined);
-
+    // Worked out at the first copy that wants a source: most bodies make none.
+    let constants = std::cell::OnceCell::new();
     let source = |value: u32, width: u32| -> Loc {
+        let constants = constants.get_or_init(|| {
+            #[cfg(test)]
+            CONSTANTS_WORKED.with(|n| n.set(n.get() + 1));
+            let defined: BTreeSet<u32> = body
+                .blocks
+                .iter()
+                .flat_map(|block| &block.insns)
+                .flat_map(|one| one.defines.iter().copied())
+                .collect();
+            crate::backend::bodyfacts::_constants(body, &defined)
+        });
         match constants.get(&value) {
             // Not a qword symbol address: the pin rematerialises a copy to a
             // fixed register only from a def as cheap as a move
@@ -959,6 +968,11 @@ pub fn hoisted(
 }
 
 #[cfg(test)]
+thread_local! {
+    pub(super) static CONSTANTS_WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 mod tests {
     //! Port of `tests/test_constrain.py`.
 
@@ -1187,6 +1201,16 @@ mod tests {
             .iter()
             .map(|one| format!("{:?} {:?} <- {:?}", what(one).name, what(one).dests, what(one).sources))
             .collect()
+    }
+
+    /// The body's constants were worked out for every body, copies or none:
+    /// 16.7 M Ir over 221 bodies of memory_expansion.
+    #[test]
+    fn test_a_body_with_no_requirement_works_out_no_constants() {
+        super::CONSTANTS_WORKED.with(|n| n.set(0));
+        let plain = _insn(semantics(Operation::Return, "ret", vec![], vec![]), &[], &[], 0);
+        let _ = constrained(&_body(vec![plain]), None, &crate::backend::classes::RegisterClasses::m16());
+        assert_eq!(super::CONSTANTS_WORKED.with(|n| n.get()), 0);
     }
 
     /// A shift counts from cl and names it nowhere.
