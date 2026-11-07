@@ -294,5 +294,5 @@ fn fast_isel_takes_a_call_at_m64() {
     let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
     assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
-    assert!(asm.contains("call") && asm.contains("%edi"), "{asm}");
+    assert!(asm.contains("call") && asm.contains("mov al, 0"), "{asm}");
 }
