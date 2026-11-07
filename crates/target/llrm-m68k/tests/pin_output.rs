@@ -66,6 +66,7 @@ const SOURCE_ORDER: Options = Options {
     reuse_shift_flags: false,
     post_inc_across_blocks: false,
     tail_duplicate: false,
+    rematerialize_arguments: false,
     debug: false,
 };
 

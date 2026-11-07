@@ -642,6 +642,16 @@ pub trait Tti {
         true
     }
 
+    /// Whether a constant operand of an arithmetic instruction may become a phi
+    /// in `sinkLastInstruction`: false where the join then costs a `mov` and a
+    /// taken jump per use (DEVIATE SINK-CONST-PHI). Never at size.
+    fn constant_arith_phi_is_cheap(
+        &self,
+        _optsize: bool,
+    ) -> bool {
+        true
+    }
+
     /// How many percent of its `CodeSize` units a call and the pushes of its
     /// arguments take in code, where they are bigger than the average
     /// instruction (X86: a far call is 5 bytes and a push 1 to 4, against 2 to

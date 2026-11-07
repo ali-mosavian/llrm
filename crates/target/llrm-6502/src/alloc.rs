@@ -3435,8 +3435,13 @@ fn emit_with<const STACK: bool>(
                     parallel_move(&mut out, &moves, a_live);
                 }
                 (Kind::Copy, _) => move_byte(&mut out, regs[0], regs[1], a_live, spare),
+                // a lane nothing reads is not moved (a word truncated to a byte)
                 (Kind::Op("UNPACK"), _) => {
-                    parallel_move(&mut out, &[(regs[0], lane(regs[2], 0)), (regs[1], lane(regs[2], 1))], a_live);
+                    let moves: Vec<_> = [(regs[0], lane(regs[2], 0)), (regs[1], lane(regs[2], 1))]
+                        .into_iter()
+                        .filter(|(to, _)| after[b][i].contains(to))
+                        .collect();
+                    parallel_move(&mut out, &moves, a_live);
                 }
                 (Kind::Op("PACK"), _) => {
                     parallel_move(&mut out, &[(lane(regs[0], 0), regs[1]), (lane(regs[0], 1), regs[2])], a_live);
@@ -3819,6 +3824,18 @@ fn emit_with<const STACK: bool>(
                             _ => None,
                         },
                         _ => None,
+                    });
+                    // `tax; cmp #k` (likewise `tay`): the compare left `a` alone, so
+                    // the register copied from it still holds what `a` does
+                    let held = held.or_else(|| {
+                        let n = out.lines.len();
+                        match (n.checked_sub(2).map(|first| &out.lines[first]), out.lines.last()) {
+                            (
+                                Some(Line::Inst(AsmInst { op: copy @ (AsmOp::Tax | AsmOp::Tay), .. })),
+                                Some(Line::Inst(AsmInst { op: AsmOp::Cmp, .. })),
+                            ) => Some(if *copy == AsmOp::Tax { reg::X } else { reg::Y }),
+                            _ => None,
+                        }
                     });
                     let opposite = ["bne", "beq", "bcs", "bcc", "bpl", "bmi"][*code as usize];
                     if held.is_some() && held == true_at {

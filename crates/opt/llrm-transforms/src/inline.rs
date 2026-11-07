@@ -135,8 +135,8 @@
 //! Library of [`crate::interprocedural`], which runs it once every body has
 //! reached its fixed point, then sends each changed body back through the
 //! pipeline (`inline<N>`, `ipa-inline<N>.`; `LLRM_DEBUG=inline` logs each
-//! verdict). Off at -O0; the threshold is 90 at -O1 and -Og, 225 at -O2, 250 at
-//! -O3 and -Omax. Per-level budgets are in `docs/reference/levels.md`.
+//! site: caller, callee, cost, threshold, verdict). Off at -O0; the threshold is the pin's
+//! 225 at -O1 and -O2, 250 at -O3 and -Omax. Per-level budgets are in `docs/reference/levels.md`.
 //!
 //! # Needs
 //! [`crate::profit`] (operation prices, block frequencies),

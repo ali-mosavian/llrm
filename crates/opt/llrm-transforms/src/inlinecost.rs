@@ -2143,7 +2143,11 @@ impl<'a> Analyzer<'a> {
             .saturating_add(self.callee_frame(llrm_mir::tti::CostKind::Latency))
             .max(1);
         let frequency = self.site.relative_frequency.unwrap_or(1.0).max(0.0);
-        (growth * rate) as f64 > saved as f64 * 1000.0 * frequency
+        let grows = (growth * rate) as f64 > saved as f64 * 1000.0 * frequency;
+        if llrm_support::debug::enabled("inline") {
+            eprintln!("inline:   bytes-vs-clocks: growth={growth} rate={rate} saved={saved} frequency={frequency:.2} -> {}", if grows { "grows" } else { "pays" });
+        }
+        grows
     }
 
     fn finalize(&mut self) -> Result<(), String> {
@@ -2475,13 +2479,7 @@ pub fn shadow(
                             ),
                     );
                 let verdict = inline_cost(&site, params);
-                let line = match &verdict {
-                    InlineCost::Always(why) => format!("always ({why})"),
-                    InlineCost::Never(why) => format!("never ({why})"),
-                    InlineCost::Cost { cost, threshold, .. } => {
-                        format!("cost={cost} threshold={threshold} {}", if verdict.is_ok() { "inline" } else { "no" })
-                    }
-                };
+                let line = describe(&verdict);
                 eprintln!(
                     "[inlinecost] {} -> {} #{}: {line}{}",
                     caller_global_name(module, caller_id),
@@ -2490,6 +2488,18 @@ pub fn shadow(
                     if leaf { " leaf" } else { "" }
                 );
             }
+        }
+    }
+}
+
+/// A verdict as `LLRM_DEBUG=inline` and `LLRM_EXP_INLINECOST` print it:
+/// `cost=90 threshold=225 inline`, set beside `clang -Rpass=inline`.
+pub fn describe(verdict: &InlineCost) -> String {
+    match verdict {
+        InlineCost::Always(why) => format!("always ({why})"),
+        InlineCost::Never(why) => format!("never ({why})"),
+        InlineCost::Cost { cost, threshold, .. } => {
+            format!("cost={cost} threshold={threshold} {}", if verdict.is_ok() { "inline" } else { "no" })
         }
     }
 }
@@ -2876,6 +2886,15 @@ pub fn decide(
         tti: context.tti,
     };
     let cost = inline_cost(&site, context.params);
+    if llrm_support::debug::enabled("inline") {
+        eprintln!(
+            "inline: {} -> {}: {} (site frequency {:?})",
+            caller_global_name(module, caller_id),
+            callee_global.name.as_deref().unwrap_or("?"),
+            describe(&cost),
+            site.relative_frequency
+        );
+    }
     // `-fno-inline-functions`: clang's pipeline is the always-inliner
     // alone.
     let inline =

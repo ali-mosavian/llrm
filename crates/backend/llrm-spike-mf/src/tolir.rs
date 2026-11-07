@@ -1283,6 +1283,84 @@ fn is_literal_move(one: &Insn) -> bool {
         && matches!(what.sources.as_slice(), [Loc::Imm(_)])
 }
 
+/// One register written by a load of a frame slot.
+fn is_frame_load<T: Target>(one: &Insn) -> bool {
+    let Some(what) = one.what.as_ref() else { return false };
+    what.name.as_deref().is_some_and(T::is_invariant_argument_load)
+        && one.defines.len() == 1
+        && one.uses.is_empty()
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty()
+        && one.def_lanes.is_empty()
+        && one.partial_defs.is_empty()
+        && !one.undef_super
+        && !one.volatile
+        && matches!(what.dests.as_slice(), [Loc::Held(held)] if held.value == one.defines[0])
+        && frame_cell(what).is_some()
+}
+
+/// The frame slot a load reads: its one memory source, the rest immediates (the
+/// displacement a pin row names beside it).
+fn frame_cell(what: &Semantics) -> Option<Addr> {
+    let mut found = None;
+    for place in &what.sources {
+        match place {
+            Loc::Mem(cell) if found.is_none() => found = cell.addr.filter(|addr| addr.space == Space::Frame),
+            Loc::Imm(imm) if imm.address.is_none() => {}
+            _ => return None,
+        }
+    }
+    found
+}
+
+/// The values defined once by a load of an incoming stack argument (a frame
+/// slot below zero) that nothing in `body` writes or takes the address of.
+fn incoming_argument_loads<T: Target>(body: &LirBody) -> BTreeSet<u32> {
+    let incoming = |addr: Addr| addr.space == Space::Frame && addr.disp < 0;
+    let mut written: BTreeSet<i64> = BTreeSet::new();
+    let mut definitions: llrm_support::hash::HashMap<u32, usize> = Default::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for value in &one.defines {
+            *definitions.entry(*value).or_default() += 1;
+        }
+        let Some(what) = one.what.as_ref() else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            match place {
+                Loc::Address(a) if a.addr.is_some_and(incoming) => return BTreeSet::new(),
+                Loc::Imm(imm) if imm.address.is_some_and(incoming) => return BTreeSet::new(),
+                _ => {}
+            }
+        }
+        for place in &what.dests {
+            if let Loc::Mem(cell) = place {
+                if let Some(addr) = cell.addr.filter(|addr| incoming(*addr)) {
+                    written.insert(addr.disp);
+                }
+            }
+        }
+        if what.op == Operation::Address {
+            if let Some(addr) = what.sources.iter().find_map(|place| match place {
+                Loc::Mem(cell) => cell.addr.filter(|addr| incoming(*addr)),
+                _ => None,
+            }) {
+                written.insert(addr.disp);
+            }
+        }
+    }
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| is_frame_load::<T>(one))
+        .filter_map(|one| {
+            let Some(what) = one.what.as_ref() else { return None };
+            let addr = frame_cell(what).filter(|addr| incoming(*addr))?;
+            (!written.contains(&addr.disp) && definitions.get(&one.defines[0]) == Some(&1)).then_some(one.defines[0])
+        })
+        .collect()
+}
+
 /// How wide `insn` holds `value`.
 fn held_width(
     insn: &Insn,
@@ -1333,22 +1411,23 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         &self,
         one: &Insn,
     ) -> bool {
-        is_literal_move(one)
+        is_literal_move(one) || is_frame_load::<T>(one)
     }
 
     fn is_trivially_re_materializable(
         &self,
         def: &Insn,
-        _invariant: bool,
+        invariant: bool,
     ) -> bool {
-        self.remat_shape(def)
+        let r = is_literal_move(def) || (invariant && is_frame_load::<T>(def));
+        r
     }
 
     fn argument_loads(
         &self,
-        _body: &LirBody,
+        body: &LirBody,
     ) -> BTreeSet<u32> {
-        BTreeSet::new()
+        incoming_argument_loads::<T>(body)
     }
 
     /// The read the target takes from memory (`Target::fold_spill`) becomes a
@@ -1390,6 +1469,25 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         cell: &Mem,
     ) -> Option<Arc<Insn>> {
         let what = one.what.as_ref()?;
+        // A straight COPY folds as a load or a store
+        // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetInstrInfo.cpp#L794>):
+        // the spilled end is the slot, the other end stays a register.
+        if one.group.is_none()
+            && one.def_lanes.is_empty()
+            && self.is_plain_move(what)
+            && let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice())
+            && dest.width == source.width
+            && dest.width as u32 == cell.width
+            && dest.value != source.value
+            && self.class_of(dest.value) == self.class_of(source.value)
+        {
+            if dest.value == reg {
+                return Some(self.store_reg_to_stack_slot(one, source.value, cell));
+            }
+            if source.value == reg {
+                return Some(self.load_reg_from_stack_slot(one, dest.value, cell));
+            }
+        }
         if one.group.is_none()
             && !what.sources.iter().any(|loc| matches!(loc, Loc::Held(_)))
             && what.name.as_deref().is_some_and(T::is_zero_def)
