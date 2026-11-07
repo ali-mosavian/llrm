@@ -17,7 +17,10 @@
 //! A float part takes `s0`..`s7`/`d0`..`d7` apart from the integer registers,
 //! or 4/8 bytes of stack.
 //!
-//! DEVIATE SD526: not translated are `f16`/`fp128` and vectors, HFAs, `byval`,
+//! An `f128` takes `q0`..`q7` (`CCIfType<[f128], CCAssignToReg<[Q0..Q7]>>`) or
+//! 16 bytes of stack aligned to 16.
+//!
+//! DEVIATE SD526: not translated are `f16` and vectors, HFAs, `byval`,
 //! a tail call that needs stack arguments or an
 //! argument area of a different size, and a callee reached through the GOT;
 //! `accepts` refuses what it can see. Exit: B3.
@@ -37,6 +40,12 @@ use llrm_sdag::actions::LoadExt;
 
 use crate::reg;
 
+/// The registers a call clobbers that the scheduler's live-register check reads
+/// (`CheckForLiveRegDefMasked`): the condition flags. The AAPCS caller-saved
+/// registers are not listed: nothing but a glued argument copy holds one across
+/// a call. DEVIATE: the pin's mask lists them; owner arm64, exit 2026-11-30.
+const CALL_CLOBBERS: [u16; 1] = [llrm_dagisel::generated::aarch64::ids::reg::NZCV];
+
 /// `AArch64ISD::RET_GLUE`, the pin's number.
 pub const RET_GLUE: u16 = llrm_dagisel::generated::aarch64::ids::isd::RET_GLUE;
 
@@ -51,6 +60,8 @@ const W: [RegId; 8] = [reg::W0, reg::W1, reg::W2, reg::W3, reg::W4, reg::W5, reg
 
 const S: [RegId; 8] = [reg::S0, reg::S1, reg::S2, reg::S3, reg::S4, reg::S5, reg::S6, reg::S7];
 const D: [RegId; 8] = [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7];
+// the 128-bit root of each `q`
+const Q: [RegId; 8] = [reg::V0, reg::V1, reg::V2, reg::V3, reg::V4, reg::V5, reg::V6, reg::V7];
 
 /// The register part `at` of type `vt` is in.
 fn register(
@@ -61,6 +72,7 @@ fn register(
         EVT::I32 => W[at],
         EVT::Simple(MVT::F32) => S[at],
         EVT::Simple(MVT::F64) => D[at],
+        EVT::Simple(MVT::F128) => Q[at],
         _ => X[at],
     }
 }
@@ -113,8 +125,11 @@ fn place(
                 }
                 let bytes = vt.size_in_bits() / 8;
                 if linux {
-                    let offset = stack.next_multiple_of(8);
-                    stack = offset + 8;
+                    // an `f128` is 16 bytes aligned to 16 (`CCIfType<[f128],
+                    // CCAssignToStack<16, 16>>`)
+                    let (align, slot) = if bytes == 16 { (16, 16) } else { (8, 8) };
+                    let offset = stack.next_multiple_of(align);
+                    stack = offset + slot;
                     return Location::Stack { offset: offset as i64, bytes };
                 }
                 let offset = stack.next_multiple_of(u64::from(bytes));
@@ -244,7 +259,7 @@ impl TargetCalling for Aarch64Calling {
             locations.iter().filter(|l| matches!(l, Location::Register(r) if registers.contains(r))).count() as u32
         };
         let gprs = used(&X) + used(&W);
-        let fprs = used(&S) + used(&D);
+        let fprs = used(&S) + used(&D) + used(&Q);
         let (gr_size, vr_size) = (8 * (8 - gprs), 16 * (8 - fprs));
         let mut chain = chain;
         let mut gr_top = VaWord::Constant(0);
@@ -359,12 +374,16 @@ impl TargetCalling for Aarch64Calling {
         outs: &[Out],
         ins: &[In],
     ) -> Result<(), &'static str> {
-        let integer = |vt: EVT| matches!(vt, EVT::I32 | EVT::I64 | EVT::Simple(MVT::F32 | MVT::F64));
+        let integer = |vt: EVT| matches!(
+            vt,
+            EVT::I32 | EVT::I64 | EVT::Simple(MVT::F32 | MVT::F64 | MVT::F128)
+        );
         let known = |arg_vt: EVT, split: bool| {
             if split {
                 arg_vt == EVT::integer(128)
             } else {
-                arg_vt.size_in_bits() <= 64 && (arg_vt.is_integer() || arg_vt.is_floating_point())
+                (arg_vt.size_in_bits() <= 64 && (arg_vt.is_integer() || arg_vt.is_floating_point()))
+                    || arg_vt == EVT::Simple(MVT::F128)
             }
         };
         let outs: Vec<Part> =
@@ -429,7 +448,7 @@ impl TargetCalling for Aarch64Calling {
         for &(register, value) in &registers {
             operands.push(dag.get_phys_register(dag.value_type(value), register));
         }
-        operands.push(dag.get_register_mask());
+        operands.push(dag.get_register_mask_clobbering(&CALL_CLOBBERS));
         operands.extend(glue);
         Some(dag.get_node_multi(ISD::Target(TC_RETURN), &[EVT::OTHER, EVT::GLUE], &operands))
     }
@@ -514,7 +533,7 @@ impl TargetCalling for Aarch64Calling {
         for &(register, value) in &registers {
             operands.push(dag.get_phys_register(dag.value_type(value), register));
         }
-        operands.push(dag.get_register_mask());
+        operands.push(dag.get_register_mask_clobbering(&CALL_CLOBBERS));
         operands.extend(glue);
         let call = dag.get_node_multi(ISD::Target(CALL), &[EVT::OTHER, EVT::GLUE], &operands);
         let end =

@@ -4,7 +4,7 @@
 
 /* hi:lo divided by d, with hi < d: the quotient in the low word and the remainder in the high word of the result, as one divide instruction gives them
  * (SF_UDIV64BY32 from the config). */
-#ifndef SF_UDIV64BY32
+#if defined(SF_DIV64_UDIV) && !defined(SF_UDIV64BY32)
 static inline uint64_t sf_udiv64by32(uint32_t hi, uint32_t lo, uint32_t d)
 {
     uint64_t n = ((uint64_t)hi << 32) | lo;
@@ -25,6 +25,7 @@ static inline sf64 div_core(uint64_t sign, int ea, int eb, uint64_t ma, uint64_t
      * a value in 2^63..2^64: mb = 2^52 makes the 32-bit part wrap (clamped). */
     uint64_t B = mb << 11, hi, lo;
     uint32_t b32 = (uint32_t)(B >> 32), h32, l32, x32 = 0x7504F333u - b32;
+    _Pragma("clang loop unroll(disable)")
     for (int i = 0; i < 3; i++) {
         sf_mul32x32(x32, b32, &h32, &l32);
         uint32_t corr32 = 0u - h32;

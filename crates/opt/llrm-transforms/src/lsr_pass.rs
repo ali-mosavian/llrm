@@ -170,6 +170,9 @@ fn nearest_common_dominator(
 /// changes the IR that `IvUsers` was built over. Cost: d_faces -O2, 38
 /// constructions against the pin's 32, about 0.5 M of 16.8 M instructions (3%).
 /// Exit: reuse `IvUsers` across the IR edit. Owner w-5. Review 2026-11-19.
+/// A compare the edit moved or copied is a use of its own: the set is no longer
+/// carried then (`carry_exit_test` judged it against program order, which the
+/// walk no longer uses).
 /// What `LSRInstance`'s constructor decides for the loop with header `header`:
 /// the plan, or none where the loop is left as it is. `marked` are the exit
 /// tests already edited to take the post-incremented value; none until the
@@ -211,7 +214,13 @@ fn plan_loop(
     let safe_to_speculate =
         |inst: InstId| crate::licm::hoist::is_safe_to_speculatively_execute_in(context, layout, function, outer, inst);
     let is_ephemeral = |inst: InstId| ephemeral.contains(&inst);
-    let env_users = Env { safe_to_speculate: &safe_to_speculate, ephemeral: &is_ephemeral };
+    let env_users = Env {
+        safe_to_speculate: &safe_to_speculate,
+        ephemeral: &is_ephemeral,
+        // DEVIATE LSR-N holds at speed only: at `-Os` a counter LSR adds for a
+        // wide loop grew tail_calls by 354 bytes.
+        native_widths: if size { &[] } else { tti.lsr_native_integer_widths() },
+    };
     let mut users = match carried {
         Some(users) => {
             users.assert_current(se, &cx, &env_users);
@@ -261,6 +270,8 @@ fn plan_loop(
         Default::default()
     };
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
+    // DEVIATE LU13: the loop calls and the target's call takes every register.
+    let across_call = tti.lsr_call_clobbers_registers() && crate::lsr_collect::loop_calls(&cx, tti, header);
     // The loop's register units do not change between the two builds.
     let units = std::cell::Cell::new(None);
     let build = |se: &mut ScalarEvolution| {
@@ -274,6 +285,7 @@ fn plan_loop(
             }
         };
         lsr.size = size;
+        lsr.across_call = across_call;
         llrm_support::debug!("lsr", "  other registers: {}", lsr.other_register_units);
         lsr.chain_uses = chains.inc_set.clone();
         lsr.collect_interesting_types_and_factors(se, &users);
@@ -321,13 +333,16 @@ fn plan_loop(
         // loop must not outweigh the instructions it saves in it (nbody -O1:
         // four `base + 32` against one compare).
         let folds_base_and_counter = tti.is_legal_addressing_mode(false, 0, true, 1);
+        let spent = cost.c.insns + cost.c.setup_cost;
+        let saved = pin_cost.c.insns + pin_cost.c.setup_cost;
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || pin_cost.is_less(tti, &cost)
                 || (!folds_base_and_counter
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
-                        || cost.c.insns + cost.c.setup_cost > pin_cost.c.insns + pin_cost.c.setup_cost)));
-        llrm_support::debug!("lsr", "  pin's space solved: kept {kept}");
+                        || spent > saved
+                        || (spent == saved && tti.lsr_bytes().is_some() && cost.bytes >= pin_cost.bytes))));
+        llrm_support::debug!("lsr", "  pin's space solved: kept {kept} (bytes {} against the pin's {})", cost.bytes, pin_cost.bytes);
         if kept {
             lsr = pin;
             solution = pin_solution;
@@ -441,20 +456,21 @@ pub fn reduced_held(
                     size,
                 ) {
                     Outcome::Planned(None) => break,
-                    Outcome::Edit(edits, mut users) => {
+                    Outcome::Edit(edits, users) => {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrPrepared);
                         let applied = lsr_prepare::apply(function, &context.types, header, &edits);
-                        marked = Some(applied.marked.clone());
-                        // A moved or copied test is the same use; `OptimizeMax`
-                        // makes a new compare, so its users are made again.
-                        if edits.iter().all(|edit| edit.max.is_none()) {
-                            let ok = applied.moved.iter().all(|&test| users.carry_exit_test(function, test, None))
-                                && applied
-                                    .copied
-                                    .iter()
-                                    .all(|&(old, copy)| users.carry_exit_test(function, old, Some(copy)));
-                            carried = ok.then_some(users);
+                        // An edit that moves or copies no compare leaves the
+                        // uses as they were. A compare
+                        // it moved or copied changed its operand's
+                        // use list, so the uses are made again over the edited
+                        // loop.
+                        if edits.iter().all(|edit| edit.max.is_none())
+                            && applied.moved.is_empty()
+                            && applied.copied.is_empty()
+                        {
+                            carried = Some(users);
                         }
+                        marked = Some(applied.marked);
                         changed = true;
                         continue;
                     }

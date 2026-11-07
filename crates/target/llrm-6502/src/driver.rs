@@ -54,7 +54,7 @@ impl Level {
         }
     }
 
-    fn tuning(self) -> Tuning {
+    pub(crate) fn tuning(self) -> Tuning {
         match self {
             Self::Os | Self::Oz => Tuning::SIZE,
             _ => Tuning::SPEED,
@@ -255,9 +255,11 @@ pub fn assembly(
         .collect();
     let data = data_text(module, &program.layout)?;
     let mut selections = Vec::new();
+    let mut from_module = Vec::new();
     for name in &names {
         let mut selection = select_function(module, name, request.cpu)?;
         let mut as_called = true;
+        let mut paged_chosen = false;
         selection.zero_page = request.platform.zero_page;
         selection.tuning = request.level.tuning();
         if let Some(looped) = looped.as_ref().filter(|_| copies.contains(name)) {
@@ -275,10 +277,13 @@ pub fn assembly(
             other.tuning = request.level.tuning();
             if cheaper(module, name, &other, paged, &selection, request)? {
                 selection = other;
+                paged_chosen = true;
             }
         }
         selections.push(selection);
+        from_module.push(as_called && !paged_chosen);
     }
+    crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
     // Set once the selection is final: pricing the alternatives sees none.
     let file = request.debug.then(|| llrm_mir::dbgimport::unit_file(module)).flatten().map(|(name, _)| name);
     for (name, selection) in names.iter().zip(selections.iter_mut()) {
@@ -356,16 +361,32 @@ impl llrm_mir::target::Machine for Mos6502Machine {
         llrm_mir::target::Neutral.spaces()
     }
 
+    /// Clocks and bytes of the sequences the backend emits, per native byte
+    /// (`crate::opcosts`); `byte_costs` falls back to the bytes.
     fn costs(&self) -> llrm_mir::target::OperationCosts {
-        llrm_mir::target::Neutral.costs()
+        static CLOCKS: std::sync::OnceLock<llrm_mir::target::OperationCosts> = std::sync::OnceLock::new();
+        CLOCKS.get_or_init(|| crate::opcosts::clocks(crate::dagisel::hooks::Cpu::Mos6502)).clone()
     }
 
+    fn size_costs(&self) -> llrm_mir::target::OperationCosts {
+        static BYTES: std::sync::OnceLock<llrm_mir::target::OperationCosts> = std::sync::OnceLock::new();
+        BYTES.get_or_init(|| crate::opcosts::bytes(crate::dagisel::hooks::Cpu::Mos6502)).clone()
+    }
+
+    /// The bytes the allocator can put a value in on the smallest zero page
+    /// (`a`, `x`, `y`, `rc2`..`rc15`). 0 left every pressure estimate off: no
+    /// loop was ever too wide for the registers.
+    ///
+    /// DEVIATE (6502-OPCOSTS): `Room` counts values, not bytes, so a wide value
+    /// takes one of these. Exit: residents weighed by `OperationCosts::words`
+    /// (2026-11-20).
     fn registers(&self) -> i64 {
-        llrm_mir::target::Neutral.registers()
+        crate::alloc::register_file(0).0
     }
 
+    /// The bytes a call leaves: the callee-kept cells `rc8`..`rc15`.
     fn call_registers(&self) -> i64 {
-        llrm_mir::target::Neutral.call_registers()
+        crate::alloc::register_file(0).1
     }
 
     fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {

@@ -6,9 +6,9 @@ set -e
 cd "$(dirname "$0")/.."
 OUT=${1:?output directory}; OPT=${2:-Os}; LLC=${LLRM_Z80_LLC:?path of llrm-z80-llc}; CLANG=${LLRM_PIN_CLANG:-/opt/llrm-pin/bin/clang}
 DL="e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"
-MODULES="fp/f64/add_sub fp/f64/mul fp/f64/div fp/f64/float fp/f64/pack fp/f32/pack fp/f32/extend fp/f32/trunc fp/f32/add_sub fp/f32/mul fp/f32/div
- fp/f32/float_si fp/f32/float_usi fp/f32/float_di fp/f32/fix_si fp/f32/fix_usi fp/f32/fix_di fp/f64/fix_si fp/f64/fix_usi fp/f64/fix_di fp/f64/fix_udi
- fp/f32/cmp fp/f64/cmp fp/f32/neg fp/f64/neg fp/f32/unord fp/f64/unord int/clzsi2"
+MODULES="fp/f64/add_sub fp/f64/mul fp/f64/div fp/f64/float fp/f64/pack fp/f32/pack fp/f32/extend fp/f32/trunc
+ fp/f32/float_di fp/f32/fix_di fp/f64/fix_si fp/f64/fix_usi fp/f64/fix_di fp/f64/fix_udi
+ fp/f64/cmp fp/f32/neg fp/f64/neg fp/f64/unord int/clzsi2"
 mkdir -p "$OUT"; T=$(mktemp -d); trap 'rm -r $T' EXIT
 for m in $MODULES; do
   n=$(echo "$m" | tr / _)
@@ -19,12 +19,11 @@ for m in $MODULES; do
   sdasz80 -g -o $OUT/$n.rel $OUT/$n.s
 done
 sdasz80 -g -o "$OUT/div64.rel" config/z80/div64.s; cp config/z80/div64.s "$OUT/div64.s"
-defined=$(grep -h '\.globl' $OUT/*.s | awk '{print $2}' | sort -u)
-missing=""
-for s in __adddf3 __subdf3 __muldf3 __divdf3 __eqdf2 __nedf2 __ltdf2 __ledf2 __gtdf2 __gedf2 __cmpdf2 __addsf3 __subsf3 __mulsf3 __divsf3 __eqsf2 __nesf2 __ltsf2 __lesf2 \
-         __gtsf2 __gesf2 __cmpsf2 __floatsidf __floatunsidf __floatdidf __floatundidf __floatsisf __floatunsisf __fixdfsi __fixunsdfsi __fixdfdi __fixunsdfdi \
-         __fixsfsi __fixunssfsi __fixunssfdi __extendsfdf2 __truncdfsf2; do
-  echo "$defined" | grep -qx "$s" || missing="$missing $s"
-done
-[ -z "$missing" ] || { echo "FAIL: not defined:$missing"; exit 1; }
-echo "ok: $(echo "$defined" | wc -l) globals in $OUT"
+sdasz80 -g -o "$OUT/umulhisi3.rel" config/z80/umulhisi3.s; cp config/z80/umulhisi3.s "$OUT/umulhisi3.s"
+# f32 add sub mul div, int<->float and compares are hand asm (config/z80/sf32_*.s): 1705 + 171 B for all of them, 3-14x SDCC's clocks. Like SDCC's own f32 library they keep
+# operands in static cells and are not reentrant, and they clobber IY (free in the llrm-z80 convention).
+# one member per operation (sdld pulls a whole member: a one-op program links under 1000 B, tests/z80_sf32_split_test.sh); the add/sub member keeps the name fp_f32_add_sub the z80 A/B instrument requires
+for pair in sf32_common:fp_f32_common sf32_addsub:fp_f32_add_sub sf32_muldiv:fp_f32_mul_div sf32_float:fp_f32_float sf32_fix:fp_f32_fix sf32_cmp:fp_f32_cmp; do src=${pair%%:*}; dst=${pair##*:}; cp config/z80/$src.s "$OUT/$dst.s"; sdasz80 -g -o "$OUT/$dst.rel" "$OUT/$dst.s"; done
+bash "$(dirname "$0")/z80_lib_symbols.sh" "$OUT" || exit 1
+bash "$(dirname "$0")/z80_lib_closed.sh" "$OUT" || exit 1
+echo "ok: $(grep -hE '^[A-Za-z_][A-Za-z0-9_]*::|\.globl' $OUT/*.s | wc -l) globals in $OUT"

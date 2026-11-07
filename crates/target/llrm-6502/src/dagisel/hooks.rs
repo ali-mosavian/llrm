@@ -55,16 +55,27 @@ impl MosHooks {
 }
 
 /// `SelectIndirect`: the pointer and the byte offset.
-fn select_indirect<D: Dag>(
+fn select_indirect<D: AddrDag>(
     dag: &mut D,
     value: SDValue,
     results: &mut Vec<(SDValue, Option<u32>)>,
 ) {
-    let (base, offset) = match (dag.opcode(value.node) == isd::ADD).then(|| dag.constant(dag.operand(value.node, 1))) {
+    // A sum that is also wanted as a value (the pointer a loop steps) is the
+    // address as it is: folding its constant instead keeps the old pointer
+    // alive beside the new one, a copy of the pair each trip.
+    let folds = dag.opcode(value.node) == isd::ADD && !dag.has_materializing_use(value);
+    let (base, offset) = match folds.then(|| dag.constant(dag.operand(value.node, 1))) {
         Some(Some(c)) if (0..256).contains(&c) => (dag.operand(value.node, 0), c),
         _ => (value, 0),
     };
     let offset = dag.target_constant(offset, mvt::i8);
+    // A frame object stays an object (`rc0` plus its offset once the frame is
+    // laid out), not a pointer value built by `LEASP16`: the address becomes a
+    // `TargetFrameIndex`, as x86's `getAddressOperands` makes it.
+    let base = match dag.frame_index(base) {
+        Some(index) => dag.target_frame_index(index, mvt::i16),
+        None => base,
+    };
     results.push((base, None));
     results.push((offset, None));
 }

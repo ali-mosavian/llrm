@@ -23,11 +23,7 @@ fn module(ir: &str) -> llrm_mir::module::Module {
 }
 
 fn binutils(tool: &str) -> Option<Command> {
-    let root = std::env::var("GCC_M68K").ok().filter(|root| !root.is_empty());
-    let Some(root) = root else {
-        assert!(std::env::var("M68K_ISA_SKIP_ORACLE").is_ok_and(|flag| flag == "1"), "GCC_M68K is not set");
-        return None;
-    };
+    let root = support::oracle_root()?;
     let mut command = Command::new(format!("{root}/usr/bin/m68k-linux-gnu-{tool}"));
     command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));
     Some(command)
@@ -114,13 +110,18 @@ fn immediates_one_to_eight_are_quick_and_the_rest_are_not() {
             ("sub", 5, "subq.l\t#5, %d0"),
             ("add", -3, "subq.l\t#3, %d0"),
             ("sub", -8, "addq.l\t#8, %d0"),
-            ("add", 9, "add.l\t#9, %d0"),
-            ("add", -9, "add.l\t#-9, %d0"),
-            ("add", 100, "add.l\t#100, %d0"),
+            // not quick: the constant is a `moveq` (2 B) and a register add
+            ("add", 9, "moveq\t#9,"),
+            ("add", -9, "moveq\t#-9,"),
+            ("add", 100, "moveq\t#100,"),
         ] {
             let ir = format!("define i32 @f(i32 %x) {{\n  %r = {op} i32 %x, {value}\n  ret i32 %r\n}}");
             let out = text(&ir, cpu);
             assert!(out.contains(want), "{cpu:?} {op} {value}: want {want}:\n{out}");
+            if (1..=8).contains(&i32::abs(value)) {
+                continue;
+            }
+            assert!(!out.contains("addq") && !out.contains("subq"), "{cpu:?} {op} {value}: a quick form:\n{out}");
         }
     }
 }

@@ -148,7 +148,7 @@ pub fn get_exact_sdiv(
         ScevKind::Add(operands) => {
             if ignore_significant_bits || is_add_sextable(se, cx, lhs) {
                 let mut ops = Vec::with_capacity(operands.len());
-                for op in operands {
+                for op in operands.iter().copied() {
                     ops.push(ScevUse::of(get_exact_sdiv(se, cx, op.scev, rhs, ignore_significant_bits)?));
                 }
                 return Some(se.get_add_expr(cx, ops, Flags::default(), 0).scev);
@@ -168,7 +168,7 @@ pub fn get_exact_sdiv(
                 }
                 let mut ops = Vec::with_capacity(operands.len());
                 let mut found = false;
-                for op in operands {
+                for op in operands.iter().copied() {
                     let mut s = op.scev;
                     if !found && let Some(q) = get_exact_sdiv(se, cx, s, rhs, ignore_significant_bits) {
                         s = q;
@@ -210,7 +210,8 @@ pub fn extract_immediate(
     s: Scev,
 ) -> (Immediate, Scev) {
     match se.node(s).kind.clone() {
-        ScevKind::Add(mut ops) => {
+        ScevKind::Add(ops) => {
+            let mut ops = ops.to_vec();
             let mut result = extract_immediate_operand(se, cx, &mut ops);
             if result.is_zero() {
                 let (found, rest) = extract_immediate(se, cx, ops[0].scev);
@@ -224,7 +225,8 @@ pub fn extract_immediate(
             }
             (result, s)
         }
-        ScevKind::AddRec(mut ops, header) => {
+        ScevKind::AddRec(ops, header) => {
+            let mut ops = ops.to_vec();
             let (result, rest) = extract_immediate(se, cx, ops[0].scev);
             if result.is_non_zero() {
                 ops[0] = ScevUse::of(rest);
@@ -254,7 +256,8 @@ pub fn extract_symbol(
             }
             (None, s)
         }
-        ScevKind::Add(mut ops) => {
+        ScevKind::Add(ops) => {
+            let mut ops = ops.to_vec();
             let last = ops.len() - 1;
             let (result, rest) = extract_symbol(se, cx, ops[last].scev);
             if result.is_some() {
@@ -263,7 +266,8 @@ pub fn extract_symbol(
             }
             (None, s)
         }
-        ScevKind::AddRec(mut ops, header) => {
+        ScevKind::AddRec(ops, header) => {
+            let mut ops = ops.to_vec();
             let (result, rest) = extract_symbol(se, cx, ops[0].scev);
             if result.is_some() {
                 ops[0] = ScevUse::of(rest);
@@ -491,6 +495,8 @@ pub struct Collection<'a, 'b> {
     /// The compile is for size: a setup instruction costs a byte like a loop
     /// one.
     pub size: bool,
+    /// The loop calls and the target's call clobbers every register (LU13).
+    pub across_call: bool,
     /// How many formulae were rated: the work the filter, narrowing and solver
     /// did.
     pub rated: std::cell::Cell<usize>,
@@ -523,6 +529,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             other_register_units: self.other_register_units,
             ignore_pressure: std::cell::Cell::new(self.ignore_pressure.get()),
             size: self.size,
+            across_call: self.across_call,
             rated: std::cell::Cell::new(self.rated.get()),
             chain_uses: self.chain_uses.clone(),
         }
@@ -562,6 +569,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             other_register_units: 0,
             ignore_pressure: std::cell::Cell::new(false),
             size: false,
+            across_call: false,
             rated: std::cell::Cell::new(0),
             chain_uses: HashSet::default(),
         }
@@ -940,6 +948,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     as_written: true,
                     other_register_units: self.pressure_units(),
                     size: self.size,
+                    across_call: self.across_call,
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);
@@ -1077,6 +1086,34 @@ thread_local! {
 /// that a loop is counted once however many solutions are rated.
 pub fn register_units_computed() -> usize {
     UNITS_COMPUTED.with(std::cell::Cell::get)
+}
+
+/// Whether the loop of header `l` holds a call that the target lowers to one
+/// (an `llvm.` intrinsic that is not lowered to a call does not count).
+pub fn loop_calls(
+    cx: &Cx,
+    tti: &dyn Tti,
+    l: BlockId,
+) -> bool {
+    let Some(lp) = cx.loops.get_loop_for(l) else { return false };
+    lp.get_blocks().iter().any(|&block| {
+        cx.function.iter_block(block).any(|inst| {
+            if !matches!(cx.function.instruction(inst).opcode, Opcode::Call(_)) {
+                return false;
+            }
+            match llrm_mir::memory::callee(cx.context, cx.function, inst) {
+                Some(callee) if (callee.0 as usize) < cx.globals.len() => {
+                    let value = &cx.globals[callee.0 as usize];
+                    !value.name.as_deref().is_some_and(|name| name.starts_with("llvm."))
+                        && tti.is_lowered_to_call(
+                            value.name.as_deref(),
+                            matches!(value.linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private),
+                        )
+                }
+                _ => true,
+            }
+        })
+    })
 }
 
 pub fn loop_register_units(

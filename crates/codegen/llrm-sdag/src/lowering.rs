@@ -60,6 +60,15 @@ pub struct TargetLoweringInfo {
     shift_amount: ShiftAmount,
     /// `getSetCCResultType` for a scalar: x86 compares into an `i8`.
     set_cc_result: MVT,
+    /// `TargetLibraryInfo::getIntSize`: the C `int` in bits, 16 for the 16-bit
+    /// arches and 32 otherwise (`TargetLibraryInfo.cpp#L123`).
+    int_size: u32,
+    /// A library shift keeps the shift-amount type (z80's asm helpers read a
+    /// byte).
+    narrow_library_shift: bool,
+    /// `f128` has a register class (AArch64 `FPR128`), no arithmetic: its
+    /// operations are library calls on `q` registers.
+    legal_f128: bool,
 }
 
 /// What `getScalarShiftAmountTy` returns.
@@ -95,13 +104,29 @@ impl TargetLoweringInfo {
                 integers[below] = (TypeAction::PromoteInteger, nearest_legal);
             }
         }
-        TargetLoweringInfo { integers, far, soft_float: false, shift_amount: ShiftAmount::I8, set_cc_result: MVT::I8 }
+        TargetLoweringInfo {
+            integers,
+            far,
+            soft_float: false,
+            shift_amount: ShiftAmount::I8,
+            set_cc_result: MVT::I8,
+            int_size: 32,
+            narrow_library_shift: false,
+            legal_f128: false,
+        }
     }
 
     /// The target has no FPU: `f32` and `f64` are softened to `i32` and
     /// `i64` (`TypeSoftenFloat`).
     pub fn with_soft_float(mut self) -> TargetLoweringInfo {
         self.soft_float = true;
+        self
+    }
+
+    /// `f128` is a legal type (`addRegisterClass(MVT::f128,
+    /// &AArch64::FPR128RegClass)`).
+    pub fn with_legal_f128(mut self) -> TargetLoweringInfo {
+        self.legal_f128 = true;
         self
     }
 
@@ -130,6 +155,35 @@ impl TargetLoweringInfo {
         self
     }
 
+    /// The C `int` of a 16-bit target (`isArch16Bit`).
+    pub fn with_int_size(
+        mut self,
+        bits: u32,
+    ) -> TargetLoweringInfo {
+        self.int_size = bits;
+        self
+    }
+
+    /// DEVIATE: the library shifts of this target take the amount in the
+    /// shift-amount type, where the pin makes it an `int`. Owner:
+    /// llrm-target-z80 (asm helpers read a byte). Exit: the z80 change that
+    /// sets `with_int_size(16)` with `ld b,c` in the helpers, in one commit
+    /// (2026-11-20).
+    pub fn with_narrow_library_shift(mut self) -> TargetLoweringInfo {
+        self.narrow_library_shift = true;
+        self
+    }
+
+    pub fn narrow_library_shift(&self) -> bool {
+        self.narrow_library_shift
+    }
+
+    /// `getIntSize`: the type a library shift takes its amount in
+    /// (`ExpandIntRes_Shift`).
+    pub fn int_size(&self) -> u32 {
+        self.int_size
+    }
+
     pub fn shift_amount(&self) -> ShiftAmount {
         self.shift_amount
     }
@@ -141,6 +195,7 @@ impl TargetLoweringInfo {
         TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false)
             .with_set_cc_result(MVT::I32)
             .with_shift_amount_type(MVT::I64)
+            .with_legal_f128()
     }
 
     /// m32: `addRegisterClass` of `i8`, `i16`, `i32`; no far pointer.
@@ -155,7 +210,7 @@ impl TargetLoweringInfo {
 
     /// m16: the same registers, and the far pointer (SD2).
     pub fn x86_16() -> TargetLoweringInfo {
-        TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], true)
+        TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], true).with_int_size(16)
     }
 
     /// `getTypeConversion`: the action for `vt` and the type it becomes.
@@ -176,6 +231,9 @@ impl TargetLoweringInfo {
                 None => match mvt {
                     MVT::F32 if self.soft_float => (TypeAction::SoftenFloat, EVT::I32),
                     MVT::F64 if self.soft_float => (TypeAction::SoftenFloat, EVT::I64),
+                    // `f128` is softened to the `i128` of its bits unless the
+                    // target has a quad register
+                    MVT::F128 if !self.legal_f128 => (TypeAction::SoftenFloat, EVT::I128),
                     _ => (TypeAction::Legal, vt),
                 },
             },

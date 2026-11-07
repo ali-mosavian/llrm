@@ -63,6 +63,13 @@ def test_the_output_starts_with_the_target_line_and_the_module_carries_it(tmp_pa
     assert f"-mtriple={of.triple} -mcpu={of.cpu} -mattr=-sse,-sse2,-mmx" in llc.stdout
 
 
+def test_the_64_bit_target_has_the_sse_its_cpu_has():
+    """m64 got the i486's `-sse,-sse2,-mmx`: the pin's llc did every double in x87 (nbody, stft_single -Os), 150+ bytes off the real column."""
+    pin = load()
+    assert "+sse2" in pin.target("m64").features and "-sse" not in pin.target("m64").features
+    assert pin.target("m32").features == "-sse,-sse2,-mmx"
+
+
 def test_a_module_that_names_its_own_layout_keeps_it():
     pin = load()
     text = 'target datalayout = "e-p:16:16"\n' + MODULE

@@ -1135,6 +1135,34 @@ fn a_stack_argument_beyond_the_ix_displacement_is_stored_through_iy() {
     assert!(text.contains("add iy, sp") && text.contains("(iy)"), "{text}");
 }
 
+/// `w >> 8` of a spilled word reloaded both bytes and then overwrote the low
+/// one (`ld e, -8(ix)` / `ld d, -7(ix)` / `ld e, d` / `ld d, #0`): 3 B and 19 T
+/// a site, 11 sites in div_constants_short. Only the high byte is loaded now.
+#[test]
+fn a_spilled_word_shifted_right_by_a_byte_reloads_one_byte() {
+    let ir = include_str!("kernels/ir/reload_high_lane.ll");
+    let out = text(ir, "f", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    let dead = lines
+        .windows(4)
+        .any(|w| w[0].starts_with("ld e, -") && w[1].starts_with("ld d, -") && w[2] == "ld e, d" && w[3] == "ld d, #0");
+    assert!(!dead, "{out}");
+    assert!(lines.windows(2).any(|w| w[0].starts_with("ld e, -") && w[1] == "ld d, #0"), "{out}");
+}
+
+/// `memory_expansion` at -Os was refused ("a conditional return in a function
+/// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
+/// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The
+/// function (two 700-byte arrays) keeps the jump.
+#[test]
+fn an_early_return_in_a_function_with_a_frame_compiles() {
+    let ir = include_str!("kernels/ir/conditional_return_with_frame.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "lc1", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(out.contains("pop ix"), "{level:?}: {out}");
+    }
+}
+
 /// A float argument or result killed the compiler ("legal parts: Type(F32)",
 /// 8 programs of tests/run/c); it is softened to an integer now (#6578), so
 /// passing one through is register moves and a return, no routine.
@@ -1632,6 +1660,78 @@ fn a_function_tuned_for_size_calls_the_small_long_long_divide() {
     assert!(out.contains("call __udivdi3") && !out.contains("_s\n"), "{out}");
 }
 
+/// A function tuned for size called the long divide made for speed: 391 B to
+/// link where the register-only routine is 76 (div_constants_ulong, -Os: +278 B
+/// against SDCC). It calls the size routine, for the signed and the unsigned
+/// divide and remainder; any other function the speed one.
+#[test]
+fn a_function_tuned_for_size_calls_the_small_long_divide() {
+    let body = |attr: &str, ops: [&str; 2]| {
+        format!(
+            "define i32 @f(i32 %a, i32 %b) {attr} {{\n  %q = {} i32 %a, %b\n  %r = {} i32 %b, %a\n  %s = add i32 %q, %r\n  ret i32 %s\n}}",
+            ops[0], ops[1]
+        )
+    };
+    for (ops, small, fast) in [
+        (["udiv", "urem"], ["call __s_udivsi3", "call __s_umodsi3"], ["call __udivsi3", "call __umodsi3"]),
+        (["sdiv", "srem"], ["call __s_divsi3", "call __s_modsi3"], ["call __divsi3", "call __modsi3"]),
+    ] {
+        for attr in ["optsize", "minsize"] {
+            let out = compiled(&body(attr, ops), "f");
+            assert!(small.iter().all(|call| out.contains(call)), "{attr} {ops:?}: {out}");
+        }
+        let out = compiled(&body("", ops), "f");
+        assert!(fast.iter().all(|call| out.contains(call)) && !out.contains("__s_"), "{ops:?}: {out}");
+    }
+}
+
+/// A long divided and taken the remainder of by the same operands was two calls
+/// (`x / d` and `x % d` of div_constants: two 388 B-routine runs of the same
+/// loop). They are one call to the routine that stores the remainder through an
+/// address (the pin's `useDivRem`); a divide alone, or a remainder of other
+/// operands, keeps its own call.
+#[test]
+fn a_long_divide_and_remainder_of_the_same_operands_are_one_call() {
+    let body = |attr: &str, ops: [&str; 2]| {
+        format!(
+            "define i32 @f(i32 %a, i32 %b) {attr} {{\n  %q = {} i32 %a, %b\n  %r = {} i32 %a, %b\n  %s = add i32 %q, %r\n  ret i32 %s\n}}",
+            ops[0], ops[1]
+        )
+    };
+    for (ops, fast, small, others) in [
+        (["udiv", "urem"], "call __udivremsi4", "call __s_udivremsi4", ["__udivsi3", "__umodsi3"]),
+        (["sdiv", "srem"], "call __divremsi4", "call __s_divremsi4", ["__divsi3", "__modsi3"]),
+    ] {
+        for (attr, call) in [("", fast), ("optsize", small)] {
+            let out = compiled(&body(attr, ops), "f");
+            assert_eq!(out.matches("call").count(), 1, "{ops:?} {attr}: {out}");
+            assert!(out.contains(call), "{ops:?} {attr}: {out}");
+        }
+        let alone =
+            compiled(&format!("define i32 @f(i32 %a, i32 %b) {{\n  %q = {} i32 %a, %b\n  ret i32 %q\n}}", ops[0]), "f");
+        assert!(alone.contains(&format!("call {}", others[0])) && !alone.contains("rem"), "{ops:?} alone: {alone}");
+    }
+}
+
+/// A word divided and taken the remainder of by the same operands was a divide,
+/// a multiply and a subtract (`x % d` as `x - (x / d) * d`: `__udivhi3`,
+/// `__mulhi3`, 14 B a site more than the remainder call). They are one call;
+/// the routine leaves the quotient in `de` and the remainder in `hl`.
+#[test]
+fn a_word_divide_and_remainder_of_the_same_operands_are_one_call() {
+    for (ops, call) in [(["udiv", "urem"], "call __udivhi3"), (["sdiv", "srem"], "call __divremhi4")] {
+        for attr in ["", "optsize"] {
+            let ir = format!(
+                "define i16 @f(i16 %a, i16 %b) {attr} {{\n  %q = {} i16 %a, %b\n  %r = {} i16 %a, %b\n  %s = add i16 %q, %r\n  ret i16 %s\n}}",
+                ops[0], ops[1]
+            );
+            let out = compiled(&ir, "f");
+            assert_eq!(out.matches("call").count(), 1, "{ops:?} {attr}: {out}");
+            assert!(out.contains(call) && !out.contains("__mulhi3"), "{ops:?} {attr}: {out}");
+        }
+    }
+}
+
 /// A long multiplied by a constant was split into its halves, each half
 /// shifted and subtracted, in a function tuned for size: `x * 31` was 99 B and
 /// `x * 1000` 185 B, where a call is 14 (div_constants_short, mul_constants,
@@ -1712,7 +1812,8 @@ fn a_long_order_is_one_borrow_chain() {
 #[test]
 fn a_long_subtract_borrow_shared_with_the_order_chain_still_fuses() {
     let text = compiled("define i64 @f(i64 %a, i64 %b) optsize {\n  %r = sub i64 %a, %b\n  ret i64 %r\n}", "f");
-    let instructions = text.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
+    let instructions =
+        text.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
     assert!(instructions <= 135, "{instructions} instructions:\n{text}");
 }
 
@@ -1770,4 +1871,108 @@ fn the_stack_word_of_a_long_divide_is_pushed_not_stored() {
         !lines[push..call].iter().any(|l| l.starts_with("ld -") && l.contains("(ix)")),
         "stored into the slot\n{out}"
     );
+}
+
+/// The shift routines of the z80 (`__ashlsi3` and the others) read their count
+/// from `a`, one byte; the pin makes a library shift's amount the C `int`, so
+/// the shared legalizer's default would hand them a word in `bc` and every
+/// shift of a long by a constant would be wrong. z80 keeps the byte until its
+/// helpers take a word (`with_narrow_library_shift`).
+#[test]
+fn a_long_shift_routine_takes_its_count_in_a_as_a_byte() {
+    let shifted = compiled("define i32 @f(i32 %a) optsize {\n  %r = shl i32 %a, 5\n  ret i32 %r\n}", "f");
+    assert!(shifted.contains("ld a, #5"), "{shifted}");
+    assert!(!shifted.contains("ld bc, #5") && !shifted.contains("ld hl, #5"), "{shifted}");
+}
+
+/// Positive control for the stack-slot refusal counter: `x` is spilled before
+/// `y` and reloaded first, so its slot is not on top. The counter reading
+/// "nothing refused" here would be the instrument being wrong, not the
+/// allocator (the reasons are measured on div_constants_short).
+#[test]
+fn a_slot_reloaded_under_another_is_refused_and_named() {
+    let ir = include_str!("kernels/ir/stack_slots_crossed.ll");
+    llrm_z80::compile::take_stack_refusals();
+    let out = text(ir, "f", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let refused = llrm_z80::compile::take_stack_refusals();
+    assert!(refused.iter().any(|(_, why)| *why == llrm_z80::compile::StackRefusal::LoadNotOnTop), "{refused:?}\n{out}");
+}
+
+/// The other half of the control: one value kept across one call is a plain
+/// `push` and `pop`, and the counter names nothing. A counter that refused
+/// every slot would pass the crossed-order test alone. The word is spilled
+/// from `de` and reloaded into `bc`: a word slot may come back in any pair (a
+/// rule of "the same register" refused it and lost the whole saving).
+#[test]
+fn a_slot_that_is_a_stack_is_not_refused() {
+    let ir = include_str!("kernels/ir/stack_slots_single.ll");
+    llrm_z80::compile::take_stack_refusals();
+    let out = text(ir, "f", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let refused = llrm_z80::compile::take_stack_refusals();
+    assert!(refused.is_empty(), "{refused:?}\n{out}");
+    assert!(out.contains("push") && !out.contains("(ix)"), "{out}");
+}
+
+/// copy_runs and loop_versioning at -Os gave wrong sums (164226 for 929463):
+/// `sum` kept its loop count in a byte slot stored from `e` and reloaded into
+/// `d`, and `push de` / `pop de` restores `e` into `e`. A byte slot whose
+/// stores and loads use different halves of a pair stays in the frame; a word
+/// may come back in another pair.
+#[test]
+fn a_byte_stored_from_one_half_of_a_pair_and_loaded_into_the_other_stays_in_the_frame() {
+    let ir = include_str!("kernels/ir/stack_slot_other_register.ll");
+    llrm_z80::compile::take_stack_refusals();
+    let out = text(ir, "sum", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let refused = llrm_z80::compile::take_stack_refusals();
+    assert!(
+        refused.iter().any(|(_, why)| *why == llrm_z80::compile::StackRefusal::DifferentLane),
+        "{refused:?}\n{out}"
+    );
+    assert!(!out.contains("pop de\n\tdec d"), "{out}");
+}
+
+/// Spill slots were push and pop only at -Os and -Oz: at -O2 and -O3 the
+/// slot read again lost `pop bc; push bc` to two IX loads, 4,000 B and 12.8M T
+/// over the corpus (div_constants_short -O2 1.36M T). A slot read again is now
+/// peeked at every level.
+#[test]
+fn spill_slots_are_push_and_pop_at_every_level() {
+    let ir = include_str!("kernels/ir/stack_slots_framed.ll");
+    for level in [Level::O2, Level::O3, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(out.contains("call _g\n\tpush de") && !out.contains("ld -4(ix)"), "{level:?}\n{out}");
+    }
+}
+
+/// The base pass at -O2: a function whose frame holds only spills loses the
+/// frame to `push` and `pop`, at every level.
+#[test]
+fn a_function_with_only_spills_loses_its_frame_at_o2() {
+    let ir = include_str!("kernels/ir/stack_slots_single.ll");
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("push de") && !out.contains("(ix)"), "{out}");
+}
+
+/// Peeking every slot that is read again made logical_value -Os 152 lines
+/// instead of 148 (+12 B): the frame stayed for the other slots and each moved
+/// slot added its own `ld`. The function is priced with and without the peeks,
+/// and the cheaper stays.
+#[test]
+fn peeking_slots_is_kept_only_where_it_is_smaller() {
+    let out = text(include_str!("kernels/ir/stack_peek_not_always_cheaper.ll"), "main", 0, &Request::new(Level::Os))
+        .expect("compiles");
+    let lines = out.lines().count();
+    assert!(lines <= 148, "{lines} lines\n{out}");
+}
+
+/// An `internal` function was labelled `name::`, a global: two modules that
+/// each define the same `static inline` helper failed to link (`_sf_clz64` in
+/// the soft-float f64 mul and div: float_bits, float_in_place_update).
+#[test]
+fn an_internal_function_is_a_local_label_and_an_external_one_is_global() {
+    let ir = include_str!("kernels/ir/stack_slot_other_register.ll");
+    let internal = text(ir, "sum", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(internal.starts_with("_sum:\n"), "{internal}");
+    let external = text(include_str!("kernels/ir/digits.ll"), "digits", 0, &Request::new(Level::Os)).expect("compiles");
+    assert!(external.starts_with("_digits::\n"), "{external}");
 }

@@ -197,8 +197,32 @@ pub trait FrameMap {
     }
 }
 
+/// What the x87 forms cost, in clocks per form and in thousandths of a clock
+/// per code byte: the prices [`Emitter::sharing_pays`] weighs a pool constant
+/// loaded once against a memory operand at each reader.
+#[derive(Clone, Copy, Debug)]
+pub struct X87Prices {
+    pub load: i64,
+    pub add: i64,
+    pub add_m: i64,
+    pub mul: i64,
+    pub mul_m: i64,
+    pub div: i64,
+    pub div_m: i64,
+    pub milliclocks_per_byte: i64,
+    /// The bytes of `fld m` / `fadd m` on a pool cell (6 flat, 4 real mode);
+    /// the register forms take 2.
+    pub memory_bytes: i64,
+}
+
 /// The pin's machine opcode names, by number.
 pub struct EmitContext<'a> {
+    /// DEVIATE X87-POOL-SHARE (owner x87, exit 2026-11-20): the prices that
+    /// decide whether a pool constant read several times is loaded once (the
+    /// pin: `IsProfitableToFold` needs `hasOneUse`) or read as a memory
+    /// operand at each reader, where that is cheaper (i486: `fmul m` 14 clocks
+    /// against `fmul st` 16). None: the pin's rule.
+    pub x87_prices: Option<X87Prices>,
     /// The registers a call destroys (EAX, ECX, EDX at m32).
     pub caller_saved: &'a std::collections::BTreeSet<llrm_lir::registers::RegId>,
     /// The stack pointer: a `CopyFromReg` of it is the base `SP`, not a value.
@@ -324,6 +348,8 @@ struct Emitter<'a, 'd> {
     /// The machine nodes emitted: the scheduler's clone of a unit emits its
     /// node again.
     machine_emitted: llrm_support::hash::HashSet<u32>,
+    /// Nodes the scheduler emits in more than one unit (`IsCloned`).
+    cloned_nodes: llrm_support::hash::HashSet<u32>,
     /// The `CopyToReg EFLAGS` nodes emitted.
     flag_copies_done: llrm_support::hash::HashSet<u32>,
 }
@@ -461,6 +487,16 @@ pub fn emit_in(
         flag_insns: HashMap::default(),
         saved_carry: HashMap::default(),
         machine_emitted: Default::default(),
+        cloned_nodes: {
+            let mut seen = llrm_support::hash::HashSet::default();
+            let mut cloned = llrm_support::hash::HashSet::default();
+            for &node in units.iter().flat_map(|unit| &unit.nodes) {
+                if !seen.insert(node) {
+                    cloned.insert(node);
+                }
+            }
+            cloned
+        },
         flag_copies_done: Default::default(),
         pending_fcom: HashMap::default(),
         first_at: HashMap::default(),
@@ -503,6 +539,9 @@ pub fn emit_in(
             emitter.mark_pair(node, before);
             if dag.invariant_loads.contains(&node) {
                 emitter.mark_invariant_loads(before);
+            }
+            if dag.got_loads.contains(&node) {
+                emitter.make_got_loads(before);
             }
             if dag.volatile_accesses.contains(&node)
                 || matches!(
@@ -1156,6 +1195,35 @@ impl Emitter<'_, '_> {
         }
     }
 
+    /// A load of a GOT entry reads `[rip + sym]`; the encoder relocates an
+    /// External symbol's immediate as the entry's offset, so the load is that
+    /// immediate (`mov r, offset sym`, as `isel.rs` makes the legacy GOT load).
+    fn make_got_loads(
+        &mut self,
+        before: usize,
+    ) {
+        let Some(block) = self.blocks.last_mut() else { return };
+        for one in block.insns.iter_mut().skip(before) {
+            let Some(what) = one.what.as_ref() else { continue };
+            let ([Loc::Held(dest)], [Loc::Mem(mem)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+                continue;
+            };
+            let Some(address) = mem.addr else { continue };
+            if what.op != Operation::Move
+                || mem.base.is_some()
+                || mem.index.is_some()
+                || address.space != crate::model::ir::Space::External
+            {
+                continue;
+            }
+            let mut moved = (**one).clone();
+            if let Some(what) = moved.what.as_mut() {
+                what.sources = vec![Loc::Imm(Imm { value: 0, width: dest.width, address: Some(address) })];
+            }
+            *one = Arc::new(moved);
+        }
+    }
+
     fn mark_invariant_loads(
         &mut self,
         before: usize,
@@ -1169,7 +1237,16 @@ impl Emitter<'_, '_> {
                     |what| matches!(what.op, Operation::Move | Operation::FloatLoad)
                         && matches!(what.sources.as_slice(), [Loc::Mem(_)]),
                 );
-            if plain && !one.volatile() {
+            // A folded load: one memory source read into registers.
+            let folded = one
+                .what
+                .as_ref()
+                .is_some_and(
+                    |what| what.dests.iter().all(|dest| matches!(dest, Loc::Held(_)))
+                        && !what.dests.is_empty()
+                        && what.sources.iter().filter(|source| matches!(source, Loc::Mem(_))).count() == 1,
+                );
+            if (plain || folded) && !one.volatile() {
                 *one = Arc::new(Insn { invariant: true, ..(**one).clone() });
             }
         }
@@ -1202,6 +1279,13 @@ impl Emitter<'_, '_> {
                     self.ss_copies.insert(n);
                 }
                 self.es_is_ss = self.ss_copies.contains(&n);
+                // An inline block that takes ES as an input (a backward
+                // string move) requires it there: it runs with the selector
+                // it asked for, not what a far access left in ES.
+                if self.feeds_call(n) {
+                    let held = self.made_again_for_fixed_use(selector);
+                    self.arguments.push((held, llrm_lir::registers::RegId::ES));
+                }
                 Ok(())
             }
             ISD::CopyToReg
@@ -1693,15 +1777,17 @@ impl Emitter<'_, '_> {
         let cloned = !self.machine_emitted.insert(n);
         let mut dests = Vec::new();
         for (i, vt) in node.values.iter().enumerate().take(usize::from(desc.num_defs)) {
-            let held = if cloned {
+            // `CreateVirtualRegisters`: neither a clone nor its original takes
+            // the register a `CopyToReg` names.
+            let held = if cloned || self.cloned_nodes.contains(&n) {
                 self.fresh(width(self.ctx.map.scalar_sse(), *vt))
             } else {
                 self.exported_register(SDValue { node: n, res: i as u8 })
                     .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), *vt)))
             };
-            if !cloned {
-                self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
-            }
+            // `CreateVirtualRegisters`: a clone erases the map entry, so what
+            // is emitted after it reads its result.
+            self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
             dests.push(Loc::Held(held));
         }
         let cell_width =
@@ -1741,6 +1827,11 @@ impl Emitter<'_, '_> {
         let op = Operation::named(&form.operation)
             .ok_or_else(|| EmitError::Unsupported(format!("{name}: operation {}", form.operation)))?;
         self.push(op, &form.name, dests, sources);
+        if name.split('|').next().is_some_and(|pin| pin.ends_with("_DB"))
+            && let Some(last) = self.blocks.last_mut().and_then(|block| block.insns.last_mut())
+        {
+            *last = Arc::new(Insn { disjoint: true, ..(**last).clone() });
+        }
         Ok(())
     }
 
@@ -1987,7 +2078,14 @@ impl Emitter<'_, '_> {
             None => {
                 let mut clobbers =
                     self.ctx.conventions.clobbers(callee).unwrap_or_else(|| self.ctx.caller_saved.clone());
-                clobbers.extend(self.arguments.iter().map(|(_, register)| *register));
+                // An inline block names what it writes: an input it does not
+                // list (ES for a string move) survives it.
+                if !matches!(
+                    callee,
+                    Some(Callee::Named(name)) if llrm_mir::intrinsics::asm(name).is_some()
+                ) {
+                    clobbers.extend(self.arguments.iter().map(|(_, register)| *register));
+                }
                 clobbers
             }
         };
@@ -2004,6 +2102,10 @@ impl Emitter<'_, '_> {
                 .into_iter()
                 .filter(|register| *register != self.ctx.stack_pointer)
                 .collect(),
+            block: matches!(
+                callee,
+                Some(Callee::Named(name)) if llrm_mir::intrinsics::asm(name).is_some()
+            ),
         });
         let mut uses = _read(&what);
         let requires = std::mem::take(&mut self.arguments);
@@ -3002,6 +3104,15 @@ impl Emitter<'_, '_> {
             "FNSTSW16r" => {
                 let held = self.fresh(2);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
+                return Ok(Some(()));
+            }
+            // `llvm.trap`: the `TRAP` node the intrinsic made.
+            "INT3" => {
+                self.push(Operation::Nothing, "int3", Vec::new(), Vec::new());
+                return Ok(Some(()));
+            }
+            "TRAP" => {
+                self.push(Operation::Nothing, "ud2", Vec::new(), Vec::new());
                 return Ok(Some(()));
             }
             "SAHF" => {
@@ -4103,6 +4214,43 @@ impl Emitter<'_, '_> {
         }
     }
 
+    /// Whether one load of the pool constant `value` beats a memory operand at
+    /// each of its readers (DEVIATE X87-POOL-SHARE, see [`EmitContext`]): the
+    /// load and the register forms against the memory forms, clocks plus
+    /// bytes at the target's rate. A size build, or no prices: shared (fewer
+    /// bytes from two readers on).
+    fn sharing_pays(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        let Some(p) = self.ctx.x87_prices else { return true };
+        if self.ctx.opt_size {
+            return true;
+        }
+        let rate = p.milliclocks_per_byte;
+        let (mut fold, mut shared) = (0i64, p.load * 1000 + p.memory_bytes * rate);
+        for user in self.dag.users(value) {
+            let reads =
+                self.dag.node(SDValue { node: user, res: 0 }).ops.iter().filter(|op| **op == value).count() as i64;
+            let name = match self.dag.opcode(SDValue { node: user, res: 0 }) {
+                ISD::Machine(op) => self.ctx.names.get(&(op as u16)).copied().unwrap_or(""),
+                _ => "",
+            };
+            let (register, memory) = if name.contains("MUL") {
+                (p.mul, p.mul_m)
+            } else if name.contains("DIV") {
+                (p.div, p.div_m)
+            } else {
+                (p.add, p.add_m)
+            };
+            fold += reads * (memory * 1000 + p.memory_bytes * rate);
+            shared += reads * (register * 1000 + 2 * rate);
+        }
+        // The tables hold whole clocks: a difference under one is rounding,
+        // and the old shape (a memory operand at each reader) stays.
+        shared + 1000 <= fold
+    }
+
     fn operand(
         &mut self,
         value: SDValue,
@@ -4112,10 +4260,15 @@ impl Emitter<'_, '_> {
             return Ok(Loc::Imm(Imm { value: sign_extend(bits, w * 8), width: w, address: None }));
         }
         if let Some((mnemonic, cell)) = self.lazy.get(&value).cloned() {
-            // DEVIATE SD234: the pin loads `LD_F1` once for all its readers; a
-            // call or block end is the only place the stack cannot hold it
+            // DEVIATE SD234: the pin loads `LD_F1` and a multi-use pool
+            // constant once for all its readers; a call or block
+            // end is the only place the stack cannot hold it
             let at = (self.stack_breaks, self.blocks.len());
-            let constant = cell.is_none();
+            // A pool constant with one reader is loaded there, for the memory
+            // operand it folds into; with several it is one load, as the pin
+            // keeps it (`IsProfitableToFold` needs `hasOneUse`), unless the
+            // CPU's prices make a memory operand at each reader cheaper.
+            let constant = cell.is_none() || (!self.dag.has_one_use(value.node) && self.sharing_pays(value));
             if constant {
                 if let Some(&(held, breaks, blocks)) = self.loaded.get(&value) {
                     if (breaks, blocks) == at {
@@ -4129,8 +4282,11 @@ impl Emitter<'_, '_> {
             // A constant-pool entry is memory nothing writes
             // (`PseudoSourceValue::isConstant`: the pin's
             // `isDereferenceableInvariantLoad`): LICM may carry it (DEVIATE
-            // X1).
-            if pooled {
+            // X1). Not the loads the CPU's prices keep one per reader: the
+            // MachineCSE of invariant loads would make them one again and
+            // FloatFold could not fold them (x87_pool_per_use_486.c, red
+            // since #7592).
+            if pooled && (constant || self.dag.has_one_use(value.node)) {
                 self.mark_invariant_loads(before);
             }
             if constant {

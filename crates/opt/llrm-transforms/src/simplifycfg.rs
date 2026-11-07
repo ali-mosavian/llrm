@@ -110,10 +110,10 @@
 //! - D3. `markAliveBlocks` also turns what follows a call of a `noreturn`
 //!   function, `llvm.assume(false)` and a store to `undef` into `unreachable`
 //!   (`FoldInstsToUnreachable`): the `noreturn` call is ported
-//!   (`insts_folded_to_unreachable`); `assume(false)` and the store to null
-//!   are not. Exit 2026-12-01. The store reads the target's
-//!   `NullPointerIsDefined`, which the MIR has no flag for. `invoke`,
-//!   `catchswitch` and `indirectbr` do not exist in the MIR.
+//!   (`insts_folded_to_unreachable`); `assume(false)` and the store to null are
+//!   not. Exit 2026-12-01. The store reads the target's `NullPointerIsDefined`,
+//!   which the MIR has no flag for. `invoke`, `catchswitch` and `indirectbr` do
+//!   not exist in the MIR.
 //! - D4. No branch weights: the MIR has none, so the case weights
 //!   `ConstantFoldTerminator` merges and the `!prof` it sets are not kept.
 //!   `!make.implicit` is not a MIR kind. There is no `DomTreeUpdater`; as at
@@ -186,10 +186,10 @@ use llrm_analysis::occurrence::arms;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
+use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::footprint::Footprint;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, PreservedAnalyses, Unit};
 
@@ -502,7 +502,7 @@ fn block_simplified(
     let mut changed = terminator_folded(context, callees, function, block, true);
     *folded |= changed;
     changed |= transform::duplicate_phis_in(function, block).expect("a phi nothing reads is erased");
-    if undefpred::removed(context, spec, function, block) {
+    if undefpred::removed(context, spec, declared, function, block) {
         return true;
     }
     changed |= cfg::merged_into_predecessor(function, block);
@@ -524,7 +524,7 @@ fn block_simplified(
     let acted = match terminator_kind(function, block) {
         // Each fold of `simplifyCondBranch` returns `requestResimplify()`.
         Terminator::Conditional => {
-            let acted = cond_branch_simplified(options, context, spec, function, block, folded, headers);
+            let acted = cond_branch_simplified(options, context, spec, declared, function, block, folded, headers);
             *resimplify |= acted;
             acted
         }
@@ -585,6 +585,7 @@ fn cond_branch_simplified(
     options: &Options,
     context: &mut Context,
     spec: &Speculation,
+    declared: &mut Declared,
     function: &mut Function,
     block: BlockId,
     folded: &mut bool,
@@ -601,7 +602,10 @@ fn cond_branch_simplified(
     if function.is_placed(block) && dominating_condition_folded(context, spec, function, block) {
         return true;
     }
-    if options.speculate_blocks && function.is_placed(block) && branchtocommon::folded(context, spec, function, block) {
+    if options.speculate_blocks
+        && function.is_placed(block)
+        && branchtocommon::folded(context, spec, declared, function, block)
+    {
         return true;
     }
     if function.is_placed(block) && branch_hoisted(options, context, spec, function, block) {

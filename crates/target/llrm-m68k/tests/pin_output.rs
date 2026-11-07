@@ -54,6 +54,7 @@ fn not_and_swap_encode_as_binutils_does() {
 /// reaches; the ILP list scheduler (the default) keeps them together and
 /// retests.
 const SOURCE_ORDER: Options = Options {
+    code_model: llrm_m68k::compile::CodeModel::Small,
     mid_end: true,
     size: false,
     source_order: true,
@@ -61,6 +62,12 @@ const SOURCE_ORDER: Options = Options {
     push_frame: false,
     push_arguments: false,
     short: false,
+    hoist_flag_setters: false,
+    reuse_shift_flags: false,
+    post_inc_across_blocks: false,
+    tail_duplicate: false,
+    rematerialize_arguments: false,
+    loop_top_by_jumps: false,
     debug: false,
 };
 
@@ -317,8 +324,12 @@ fn after_pinned_mid_end(ir: &str) -> String {
     use std::rc::Rc;
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
     let tti = llrm_m68k::machine::M68k::default();
-    let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine::default())))
-        .expect("the mid-end runs");
+    let done = llrm_m68k::compile::mid_end_described_by(
+        &module,
+        &tti,
+        Some(Rc::new(llrm_m68k::machine::M68kMachine::default())),
+    )
+    .expect("the mid-end runs");
     llrm_mir::print::module(&done)
 }
 
@@ -398,6 +409,10 @@ done:
   ret i32 %s1
 }";
     let ours = compiled(ir, Options::default());
+    assert!(
+        ours.contains("move.b\t(%a") && ours.contains("add.l\t#-1, %d"),
+        "the byte load and the separate step are not there, nothing was tested:\n{ours}"
+    );
     assert!(!ours.contains("-(%a"), "{ours}");
 }
 

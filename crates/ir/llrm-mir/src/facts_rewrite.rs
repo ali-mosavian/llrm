@@ -311,6 +311,10 @@ mod tests {
             // LowerMemIntrinsics.cpp makes the pattern loop's GEP `inbounds`;
             // `memsetpattern.rs` sets the flag on it and reads none.
             "memsetpattern.rs",
+            // SimplifyLibCalls.cpp's `optimizeMemPCpy` and `optimizeMemCCpy`
+            // return `CreateInBoundsGEP(i8, dst, n)`; `memops.rs` sets the flag
+            // on that new GEP and reads none.
+            "memops.rs",
             // SelectionDAGBuilder.cpp copies `nsw`, `nuw` and a GEP's
             // `inbounds` into the node's SDNodeFlags (`visitBinary`,
             // `visitGetElementPtr`); the DAG grants no promise from them.
@@ -636,6 +640,10 @@ mod tests {
             // `visitSwitchInst`'s `switch (X << C)` is `switch X` when the
             // `shl` is `nuw` or `nsw`; the `shl` is read, never rewritten.
             "combine_switch.rs",
+            // `zeromerge` makes one `inbounds` GEP per member of the new
+            // `alloca` it builds (llrm only); it reads no flag off an
+            // existing instruction.
+            "zeromerge.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

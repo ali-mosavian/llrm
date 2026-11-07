@@ -81,6 +81,14 @@ impl llrm_target::Target for M64 {
         bytes
     }
 
+    fn move_bytes(&self) -> Option<llrm_target::MoveBytes> {
+        Some(llrm_target::MoveBytes {
+            plain: 4,
+            copy: llrm_x86::encoding::copy_move_bytes,
+            literal: llrm_x86::encoding::literal_move_bytes,
+        })
+    }
+
     fn register_op_bytes(
         &self,
         width: i64,
@@ -182,6 +190,10 @@ impl llrm_target::Target for M64 {
 
     fn layout(&self) -> llrm_target::layout::Layout {
         LAYOUT.clone()
+    }
+
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
     }
 
     /// An argument takes a dword at least: `calling.toml`'s.
@@ -411,6 +423,11 @@ impl llrm_target::Target for M64 {
                             // count (particle -O3: count 3 of 100 left a nest copy,
                             // +433 B, +8.6% clk).
                             unroll_jam_exact_count: true,
+                            // CH-STAGED (owner m64, exit 2026-11-20): the pin hoists
+                            // constants after LSR on every target; m64 first.
+                            constant_hoisting: true,
+                            // DEVIATE ZIMM (owner m64, exit 2026-11-27): see Tuning.
+                            zext_imm_is_basic: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })
@@ -430,6 +447,16 @@ impl llrm_target::Target for M64 {
 
 #[cfg(test)]
 mod tests {
+    /// The m64 sheet had a cache line and no line fill, so no byte rate was
+    /// derivable at m64 and the borrowed 312 had no number to be compared with.
+    /// Zen 5 fills a 64 B line from L2 in 10 clk: 156 mclk/B.
+    #[test]
+    fn test_the_sheet_states_the_measured_line_fill_and_derives_its_byte_rate() {
+        let cpu = super::TIMINGS.cpu("x86-64").expect("the default CPU");
+        assert_eq!((cpu.cache_line, cpu.line_fill_clocks), (Some(64), Some(10)));
+        assert_eq!(cpu.byte_rate(), Some(156));
+    }
+
     /// x86-64 described no x87 registers, so an x87 value (a QB `fatan`, a
     /// `long double`) had no register class and the DAG path refused it.
     #[test]

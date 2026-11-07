@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::sdcc::{driver, prototype};
-use super::{Kernel, Row, kernel_source, work};
+use super::{Kernel, Row, kernel_source, pad_bytes, work};
 
 fn sdk() -> PathBuf {
     std::env::var_os("LLVM_MOS")
@@ -126,7 +126,14 @@ pub fn row(
         let function = if which == "k" { kernel_object.clone() } else { format!("{tag}-{which}.o") };
         let image = format!("{name}.bin");
         let source = format!("{name}.c");
+        let pad = pad_bytes();
         let mut args = vec![level, source.as_str(), function.as_str(), "-o", image.as_str()];
+        if pad > 0 {
+            // code bytes before the function, as the other columns get
+            std::fs::write(dir.join("pad.c"), format!("void pad(void) {{ __asm__ volatile(\".fill {pad}\"); }}\n"))
+                .unwrap();
+            args.insert(2, "pad.c");
+        }
         args.extend(cpu);
         tool(&dir, &args)?;
         Ok(dir.join(image))

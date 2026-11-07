@@ -4,6 +4,7 @@
 # recipe (DOS) runs its build under it and is checked against the host build of the same file; DOS programs print with
 # `report(long)` set LLRM_CC_DIR to a directory of freestanding programs.
 set -u
+. "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
 root=$(cd "$(dirname "$0")/.." && pwd)
 # The segmented DOS/Watcom/Borland rows read `#pragma aux` link names only in the pinned fork clang (toolchain/clang/pin, line 2).
 # Without it libm names stay unmangled and every program fails to link (`_atan` undefined): stop here with one line instead.
@@ -28,7 +29,10 @@ runner=${LLRM_CC_RUN:-}
 reftriple=${LLRM_CC_REF_TRIPLE:-}
 refrun=; [ -z "$reftriple" ] || refrun=$runner
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
-progs=${*:-$(cd "$dir" && ls *.c | sed 's/\.c$//')}
+progs=${*:-$(cd "$dir" && ls *.c 2>/dev/null | sed 's/\.c$//')}
+[ -n "$progs" ] || { echo "cc_check: no programs in $dir" >&2; exit 2; }
+# A runner that is not there runs neither side: rc 127 and empty output on both reads as agreement.
+[ -z "$runner" ] || command -v "${runner%% *}" >/dev/null 2>&1 || { echo "cc_check: LLRM_CC_RUN '$runner' is not executable" >&2; exit 2; }
 bad=0
 for p in $progs; do
   src=$dir/$p.c

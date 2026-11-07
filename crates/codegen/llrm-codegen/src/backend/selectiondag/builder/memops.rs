@@ -6,8 +6,8 @@
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{Instruction, Operand};
-use llrm_mir::opcode::{Attribute, CallInfo};
+use llrm_mir::module::{Instruction, Operand, ValueDef};
+use llrm_mir::opcode::{Attribute, CallInfo, Opcode};
 
 use super::super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue};
 use super::super::isd::ISD;
@@ -83,6 +83,26 @@ impl Builder<'_> {
                 }
                 Ok(())
             }
+            // `case Intrinsic::trap`: a `TRAP` node on the chain (selected
+            // as `ud2`).
+            Intrinsic::Trap => {
+                let root = self.root();
+                let trap = self.dag.get_node(ISD::Trap, EVT::OTHER, &[root]);
+                self.dag.set_root(trap);
+                Ok(())
+            }
+            // `case Intrinsic::debugtrap`: a `DEBUGTRAP` node (selected
+            // as `int3`).
+            Intrinsic::DebugTrap => {
+                let root = self.root();
+                let trap = self.dag.get_node(ISD::DebugTrap, EVT::OTHER, &[root]);
+                self.dag.set_root(trap);
+                Ok(())
+            }
+            // `case Intrinsic::ubsantrap`: `UBSAN_UD1` (a `ud1` with the kind
+            // as its displacement) is not translated: a named refusal, not a
+            // panic.
+            Intrinsic::UbsanTrap => Err(Refused("llvm.ubsantrap: M16-UBSANTRAP, not translated")),
             // `case Intrinsic::experimental_noalias_scope_decl: return;`
             Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse | Intrinsic::NoAliasScopeDecl => Ok(()),
             // `SelectionDAGBuilder.cpp#L7680`: the region information is
@@ -354,6 +374,28 @@ impl Builder<'_> {
     ) -> Result<(), Refused> {
         let Some(Operand::Value(object)) = instruction.operands.iter().rev().nth(1).copied() else { return Ok(()) };
         let Some(index) = self.info.static_allocas.get(&object).copied() else { return Ok(()) };
+        // `MFI.getObjectSize` of the frame object, which `visitLIFETIME_END`
+        // bounds the dying stores by.
+        if let ValueDef::Instruction(def) = self.function.value(object).def
+            && let Opcode::Alloca { allocated, .. } = self.function.instruction(def).opcode
+        {
+            let count = match self.function.instruction(def).operands.first() {
+                None => Some(1),
+                Some(Operand::Constant(id)) => match self.module.context.get(*id).kind {
+                    ConstantKind::Int(bits) => u64::try_from(bits).ok(),
+                    _ => None,
+                },
+                Some(_) => None,
+            };
+            if let Some(count) = count {
+                let bytes = self.layout.alloc_size(&self.module.context.types, allocated).saturating_mul(count);
+                let at = usize::try_from(index).unwrap_or(0);
+                if self.dag.frame_object_bytes.len() <= at {
+                    self.dag.frame_object_bytes.resize(at + 1, 0);
+                }
+                self.dag.frame_object_bytes[at] = self.dag.frame_object_bytes[at].max(bytes);
+            }
+        }
         let root = self.root();
         let frame = self.dag.get_target_frame_index(self.target.dag.pointer, index);
         let node =
@@ -437,6 +479,11 @@ impl Builder<'_> {
     ) -> u64 {
         let sse2 = self.target.dag.pointer.size_in_bits() == 64 && self.target.target_nodes.is_none();
         if sse2 && !integer_only && !self.volatile_memory && size >= 16 { 16 } else { self.widest_mem_op(size) }
+    }
+
+    /// `Tuning::x87_zero_fill_at_size` of this target's cost model.
+    fn x87_zero_fill(&self) -> bool {
+        self.target.tti.as_ref().is_some_and(|tti| tti.0.x87_zero_fill_at_size())
     }
 
     /// The alignment of a frame object a copy of `size` bytes fills, when the
@@ -540,7 +587,9 @@ impl Builder<'_> {
                 let mut value = 0u128;
                 for at in 0..width {
                     let byte = bytes.as_ref().and_then(|bytes| bytes.get((base + src_off + at) as usize)).copied();
-                    value |= u128::from(byte.unwrap_or(0)) << (8 * at);
+                    // the first byte is the low bits on a little-endian target
+                    let place = if self.dag.config().big_endian { width - at - 1 } else { at };
+                    value |= u128::from(byte.unwrap_or(0)) << (8 * place);
                 }
                 let value = self.dag.get_constant(value, vt);
                 let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
@@ -605,8 +654,27 @@ impl Builder<'_> {
         dst_align: u64,
         src_align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        let widest = self.widest_mem_op(size);
+        let widest = self.widest_mem_op_sse(size, false);
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
+        if ops.contains(&16) {
+            // DEVIATE SD540 (see `LLRM_MOVE128`): the pin's `v4i32` pieces are
+            // loaded and stored by one node
+            let (mut off, mut left) = (0u64, size);
+            let mut operands = vec![chain];
+            for width in &ops {
+                if *width > left {
+                    off -= width - left;
+                }
+                let align = common_alignment(src_align, off).min(common_alignment(dst_align, off));
+                operands.push(self.dag.get_object_ptr_offset(dst, off as i64));
+                operands.push(self.dag.get_object_ptr_offset(src, off as i64));
+                operands.push(self.dag.get_constant(u128::from(*width), EVT::I32));
+                operands.push(self.dag.get_constant(u128::from(align), EVT::I32));
+                off += width;
+                left = left.saturating_sub(*width);
+            }
+            return Ok(Some(self.dag.get_node(x86isd::LLRM_MOVE128, EVT::OTHER, &operands)));
+        }
         let (mut off, mut left) = (0u64, size);
         let mut loads = Vec::new();
         let mut placed = Vec::new();
@@ -662,6 +730,8 @@ impl Builder<'_> {
         length: u64,
         opt_size: bool,
         fill: Option<u128>,
+        frame: bool,
+        alignment: u64,
     ) -> bool {
         let zero = fill == Some(0);
         if opt_size
@@ -670,6 +740,31 @@ impl Builder<'_> {
             && self.target.target_nodes.is_none()
         {
             return self.sse_fill_is_longer(length, fill.unwrap_or(0));
+        }
+        if opt_size && let Some(costs) = self.target.tti.as_ref().and_then(|tti| tti.0.size_fill()) {
+            // `rep stosd` takes whole aligned dwords; a tail or an unaligned
+            // fill is `rep stosb` or stores again (rep_tails -Os
+            // grew a byte).
+            if length % 4 != 0 || alignment < 4 {
+                return false;
+            }
+            let place = usize::from(!frame);
+            let value = match fill {
+                Some(0) => costs.value[0],
+                Some(0xff) => costs.value[1],
+                Some(_) => costs.value[2],
+                None => return false,
+            };
+            let store = costs.store[place];
+            let mut stores = length / 4 * store[0] + u64::from(length % 4 >= 2) * store[1] + length % 2 * store[2];
+            // DEVIATE X87-ZERO-FILL stores whole doubles of zero as `fldz` (2)
+            // and one `fst qword` each: its stores are the pin's to
+            // beat, so the fill is taken only where it beats those
+            // too.
+            if fill == Some(0) && length >= 8 && length % 8 == 0 && !self.volatile_memory && self.x87_zero_fill() {
+                stores = stores.min(2 + length / 8 * costs.fst[place]);
+            }
+            return stores > value + costs.setup[place];
         }
         if self.target.dag.pointer.size_in_bits() != 16 {
             return false;
@@ -754,6 +849,21 @@ impl Builder<'_> {
         // value held in a register has no 16-byte form here.
         let widest = self.widest_mem_op_sse(size, self.dag.constant(value).is_none());
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
+        // DEVIATE X87-ZERO-FILL (owner x87, exit 2026-11-27): at `-Os` on a
+        // target whose floats are on the x87 stack, a zero fill of whole
+        // doubles is `fldz` and one `fst qword` per double (4 bytes at a short
+        // displacement), not two `mov dword` zero stores (8): nbody m32 -Os,
+        // 127 bytes of fills against gcc's 92. The pin's
+        // `getOptimalMemOpType` is `i32` without SSE (clang stores dwords;
+        // `X86TargetLowering::getOptimalMemOpType`, X86ISelLoweringCall.cpp at
+        // d1106deb71cc, line not read here). `Tuning::x87_zero_fill_at_size`
+        // gates it per target (and not with SSE2, in the Tti getter). Whole
+        // doubles only: a dword tail needs the integer zero register anyway,
+        // and the mixed form moved x_jpeg_single -Os +5 B through the
+        // allocation it changed.
+        let fpu_zero =
+            zero && size >= 8 && size % 8 == 0 && self.has_opt_size() && !self.volatile_memory && self.x87_zero_fill();
+        let ops = if fpu_zero { vec![8u64; (size / 8) as usize] } else { ops };
         let largest = ops.iter().copied().filter(|width| *width != 16).max().unwrap_or(8);
         let largest_vt = EVT::integer(largest as u32 * 8);
         let splat = self.memset_value(value, largest_vt);
@@ -762,6 +872,23 @@ impl Builder<'_> {
         for width in ops {
             if width > left {
                 off -= width - left;
+            }
+            if fpu_zero && width == 8 {
+                let to = self.dag.get_object_ptr_offset(dst, off as i64);
+                let info = MemInfo {
+                    mem_vt: EVT::Simple(MVT::F64),
+                    align: common_alignment(align, off) as u32,
+                    volatile: false,
+                    base: MemBase::Unknown,
+                    ext: None,
+                    space: self.space_of(dst),
+                    ordering: None,
+                };
+                let zero_double = self.dag.get_constant_fp(0, EVT::Simple(MVT::F64));
+                chains.push(self.dag.get_store(chain, zero_double, to, info));
+                off += width;
+                left = left.saturating_sub(width);
+                continue;
             }
             if width == 16 {
                 let align = self.dag.get_constant(u128::from(common_alignment(align, off)), EVT::I32);
@@ -857,6 +984,19 @@ impl Builder<'_> {
         Some((Some(bytes), from))
     }
 
+    /// The low `count` bytes of `bits` as the target lays them in memory.
+    fn memory_bytes(
+        &self,
+        bits: u128,
+        count: usize,
+    ) -> Vec<u8> {
+        if self.dag.config().big_endian {
+            bits.to_be_bytes()[16 - count..].to_vec()
+        } else {
+            bits.to_le_bytes()[..count].to_vec()
+        }
+    }
+
     /// `ReadDataFromGlobal`: the constant's bytes at `at`, where the layout
     /// puts them; `None` for anything but integers, floats and aggregates of
     /// them.
@@ -874,12 +1014,12 @@ impl Builder<'_> {
                 let width = types.int_bits(constant.ty)?;
                 (width % 8 == 0).then_some(())?;
                 let count = (width / 8) as usize;
-                bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+                bytes.get_mut(at..at + count)?.copy_from_slice(&self.memory_bytes(*bits, count));
             }
             ConstantKind::Float(bits) => match types.get(constant.ty) {
                 Type::Float(kind @ (FloatKind::Float | FloatKind::Double)) => {
                     let count = kind.value_bytes() as usize;
-                    bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+                    bytes.get_mut(at..at + count)?.copy_from_slice(&self.memory_bytes(u128::from(*bits), count));
                 }
                 _ => return None,
             },
@@ -966,7 +1106,17 @@ impl Builder<'_> {
         let callee = self.dag.get_target_external_symbol(word, routine.name);
         let root = self.memory_root();
         let env = CallEnv { arch: self.full_arch()?, pointer: word };
-        let (chain, _) = lib_call(&mut self.dag, &env, root, callee, &args, 0, 0, &[]);
+        let (chain, _) = lib_call(
+            &mut self.dag,
+            &env,
+            root,
+            callee,
+            &args,
+            0,
+            0,
+            &[],
+            &super::super::dagisel_adapter::call_clobbered_flags(),
+        );
         self.dag.set_root(chain);
         Ok(())
     }
@@ -1158,7 +1308,13 @@ impl Builder<'_> {
                 };
                 let inline = match constant {
                     Some(bytes)
-                        if !self.fill_is_smaller(bytes, opt_size, self.dag.constant(other).map(|byte| byte & 0xff)) =>
+                        if !self.fill_is_smaller(
+                            bytes,
+                            opt_size,
+                            self.dag.constant(other).map(|byte| byte & 0xff),
+                            self.dag.opcode(dst) == ISD::FrameIndex,
+                            alignment,
+                        ) =>
                     {
                         self.inline_memset(root, dst, other, bytes, limit, alignment)?
                     }
@@ -1433,11 +1589,7 @@ impl Builder<'_> {
         if flat && tail {
             return self.backward_rep_movsb(chain, dst, src, size);
         }
-        // `push ds; pop es`: both pointers are near, in DS; ES holds whatever
-        // the last far access left. It is not an input: a selector carried
-        // in ES from before the block was a far access's, and a near move
-        // wrote through it (idiom_edges.c bytes_down at -O2).
-        let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5] };
+        let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0xFD, 0xF3, 0x66, 0xA5] };
         if tail {
             code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
         }
@@ -1456,6 +1608,14 @@ impl Builder<'_> {
             names.push(name_of(strings.expect("a flat move has no tail").tail));
             values.push(rest);
         }
+        // ES is an input the emit step requires (`feeds_call`): the block
+        // leaves it as the selector it was given, so late cleanup keeps one
+        // load for every string move and drops it after a far access.
+        let segment = strings.map(|strings| (name_of(strings.destination_segment), self.segment_of(None)));
+        if let Some((name, selector)) = segment {
+            names.push(name);
+            values.push(selector);
+        }
         let block = llrm_mir::intrinsics::AsmBlock {
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
@@ -1463,7 +1623,7 @@ impl Builder<'_> {
             clobbers: names
                 .iter()
                 .copied()
-                .chain(strings.map(|strings| name_of(strings.destination_segment)))
+                .filter(|name| Some(*name) != segment.map(|(es, _)| es))
                 .map(Into::into)
                 .collect(),
             memory: true,
@@ -1503,6 +1663,7 @@ impl Builder<'_> {
         let name_of = |register| self.arch.registers().name(register).expect("a described register");
         // A flat target names no string registers: `cx`, `si` and `di` are
         // its operands, and ES already holds what `pop es` loads.
+        let segment = strings.map(|strings| (name_of(strings.destination_segment), self.segment_of(None)));
         let operands = match strings {
             Some(strings) => {
                 [(name_of(strings.count), count), (name_of(strings.source), from), (name_of(strings.destination), to)]
@@ -1513,22 +1674,17 @@ impl Builder<'_> {
             }
         };
         let block = llrm_mir::intrinsics::AsmBlock {
-            // `push ds; pop es` first at m16, as the dword move does.
-            code: if strings.is_some() { vec![0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC] } else { vec![0xFD, 0xF3, 0xA4, 0xFC] },
-            inputs: operands.iter().map(|(name, _)| (*name).into()).collect(),
+            code: vec![0xFD, 0xF3, 0xA4, 0xFC],
+            inputs: operands.iter().map(|(name, _)| *name).chain(segment.map(|(es, _)| es)).map(Into::into).collect(),
             outputs: Vec::new(),
-            clobbers: operands
-                .iter()
-                .map(|(name, _)| *name)
-                .chain(strings.map(|strings| name_of(strings.destination_segment)))
-                .map(Into::into)
-                .collect(),
+            clobbers: operands.iter().map(|(name, _)| (*name).into()).collect(),
             memory: true,
             fixups: Vec::new(),
         };
         let name = llrm_mir::intrinsics::asm_name(&block);
         let registers: Vec<_> = operands
             .into_iter()
+            .chain(segment)
             .map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value))
             .collect();
         let (chain, _) = lower_asm(&mut self.dag, chain, &name, &[], &registers, &[]);

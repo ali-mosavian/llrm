@@ -149,8 +149,22 @@ fn a_global_address_is_a_pc_relative_wrapper() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let address = dag.get_global_address(EVT::I32, 3, 0);
 
-    let wrapped = llrm_m68k::dagisel::call::lower_global_address(&mut dag, address);
+    let wrapped = llrm_m68k::dagisel::call::lower_global_address(&mut dag, address, false);
 
     assert_eq!(dag.opcode(wrapped), m68kisd::WRAPPER_PC);
+    assert_eq!(dag.opcode(dag.operand(wrapped, 0)), ISD::TargetGlobalAddress);
+}
+
+/// Where the code model makes data absolute (`classifyGlobalReference`: the
+/// medium model on the 68000, the large model) the wrapper is `Wrapper`.
+/// This file did not compile from #7479, which added the argument.
+#[test]
+fn an_absolute_global_address_is_a_plain_wrapper() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let address = dag.get_global_address(EVT::I32, 3, 0);
+
+    let wrapped = llrm_m68k::dagisel::call::lower_global_address(&mut dag, address, true);
+
+    assert_eq!(dag.opcode(wrapped), m68kisd::WRAPPER);
     assert_eq!(dag.opcode(dag.operand(wrapped, 0)), ISD::TargetGlobalAddress);
 }

@@ -1538,6 +1538,12 @@ pub struct Module {
     /// The `section "NAME"` of a global, by its name (`#pragma data_seg`,
     /// `#pragma code_seg`). Printing does not carry it.
     pub sections: std::collections::BTreeMap<String, String>,
+    /// The comdats `$name = comdat KIND` declares, by name, with their
+    /// selection kind (`any`, `exactmatch`, `largest`, `nodeduplicate`,
+    /// `samesize`).
+    pub comdats: std::collections::BTreeMap<String, String>,
+    /// The comdat of a global or function, by its name.
+    pub comdat_of: std::collections::BTreeMap<String, String>,
     #[doc(hidden)]
     pub symbols: SymbolIndex,
 }

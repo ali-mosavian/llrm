@@ -424,6 +424,18 @@ pub struct Alias {
     pub binding: llrm_object::Binding,
 }
 
+/// A function or global's COMDAT.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Comdat {
+    pub name: String,
+    pub selection: llrm_object::Selection,
+    /// A global: where its items are in `Module::data`, the segment and the
+    /// range of its items there.
+    pub extent: Option<(String, std::ops::Range<usize>)>,
+    /// A global that is never written (`constant`): COFF's `.rdata`.
+    pub constant: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
     /// The register file of the target the module is for.
@@ -447,9 +459,16 @@ pub struct Module {
     /// Of those, the segments of uninitialised data: class FAR_BSS, which an
     /// image does not store.
     pub far_bss: BTreeSet<String>,
+    /// The defined functions and globals of weak linkage (`weak`, `weak_odr`,
+    /// `linkonce`, `linkonce_odr`), by their names in the object.
+    pub weak: BTreeSet<String>,
     /// The code segment of a procedure that is not in `code` (`#pragma
     /// code_seg`), by its name.
     pub code_segments: std::collections::BTreeMap<String, String>,
+    /// The COMDAT each function or global of the module is in (`$f = comdat
+    /// any`, `comdat($f)`), by the symbol's name. COFF writes each as a
+    /// section of its own; the other formats ignore them.
+    pub comdats: std::collections::BTreeMap<String, Comdat>,
     /// Externs nothing references, declared so LINK pulls in their module.
     pub requests: BTreeSet<String>,
     /// `-g`'s debug information.
@@ -1135,7 +1154,7 @@ pub(crate) fn wrap_of(
     frame: bool,
     stack_addressed: bool,
 ) -> Option<crate::backend::shrinkwrap::Wrap> {
-    if moves_stack(body) || realign_of(body) != 0 {
+    if body.unwrapped || moves_stack(body) || realign_of(body) != 0 {
         return None;
     }
     let lows = saved_of(procedure);
@@ -1314,7 +1333,8 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // stack alignment below the locals (`calculateFrameObjectOffsets`, the
     // final `alignTo(Offset, StackAlign)`), so its lowest local sits at
     // `[rsp+pad]`, a disp8 more than ours. Where the frame register is
-    // omitted the pad goes above the locals instead, as the base layout had it.
+    // omitted the pad goes above the locals instead, as the base layout had it,
+    // unless that moves them off the widest object's alignment (below).
     let pad = if procedure.body.bits == 64 && dropped && procedure.reserve != 0 && aligns_for_calls(&procedure) {
         let call = procedure.registers.align;
         let rounded = (procedure.reserve + slot - 1) / slot * slot;
@@ -1322,8 +1342,13 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     } else {
         0
     };
+    // A pad above the locals moves their base off the widest object's
+    // alignment (a 16-aligned array at `[rsp+8]`: movaps faulted); one that is
+    // not a multiple of it goes below them.
+    let above_locals = if pad % align == 0 { pad } else { 0 };
+    let shifted = gap + above_locals;
     let gap = gap + pad;
-    match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap - above) {
+    match crate::backend::relayout::pushed_down(&procedure.body, pushed + shifted - above) {
         Some(body) => Procedure {
             body: lir::LirBody { saved_first: true, slot_dropped: dropped, ..body },
             reserve: procedure.reserve + gap,
@@ -2055,6 +2080,11 @@ struct Sequences {
     exit: Vec<Semantics>,
     enter: Vec<Semantics>,
     leave: Vec<Semantics>,
+    /// `leave` where the pieces are taken back at a point that is not a
+    /// return: no register is dead there, so a one-slot `pop` is an `add`
+    /// (`findDeadCallerSavedReg` answers none unless the instruction is a
+    /// return).
+    leave_mid: Vec<Semantics>,
     kept: Vec<Semantics>,
     restores: Vec<Semantics>,
     saved: Vec<RegId>,
@@ -2084,8 +2114,20 @@ impl Sequences {
         let restores: Vec<Semantics> = leave.drain(..count).collect();
         let saved: Vec<RegId> =
             procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect();
-        let mut sequences =
-            Self { wrap, entry: Vec::new(), exit: Vec::new(), enter, leave, kept, restores, saved, count, first };
+        let leave_mid = without_dead_pop(procedure, &leave);
+        let mut sequences = Self {
+            wrap,
+            entry: Vec::new(),
+            exit: Vec::new(),
+            enter,
+            leave,
+            leave_mid,
+            kept,
+            restores,
+            saved,
+            count,
+            first,
+        };
         let wrapped = |sequences: &Self, piece: crate::backend::shrinkwrap::Piece| {
             sequences.wrap.as_ref().is_some_and(|wrap| wrap.wrapped.contains(&piece))
         };
@@ -2113,6 +2155,17 @@ impl Sequences {
         sequences
     }
 
+    /// `piece` taken back where the instruction is not a return.
+    fn piece_mid(
+        &self,
+        piece: &crate::backend::shrinkwrap::Piece,
+    ) -> Vec<Semantics> {
+        match piece {
+            crate::backend::shrinkwrap::Piece::Frame => self.leave_mid.clone(),
+            _ => self.piece(piece).1,
+        }
+    }
+
     /// The items that set a piece up and take it back.
     fn piece(
         &self,
@@ -2133,6 +2186,34 @@ impl Sequences {
     }
 }
 
+/// `leave` with the one-slot `pop` of the dead register an `add sp, slot`:
+/// for a point that is not a return, where any caller-saved register may be
+/// live. The pin picks a register only at a return: `findDeadCallerSavedReg`
+/// is 0 elsewhere, so `emitSPUpdate` adds to the stack pointer
+/// (X86RegisterInfo.cpp#L1051 of the pin d1106deb71cc).
+fn without_dead_pop(
+    procedure: &Procedure,
+    leave: &[Semantics],
+) -> Vec<Semantics> {
+    let Some((_, dead)) = procedure.registers.slot_scratch else { return leave.to_vec() };
+    let slot = procedure.registers.slot;
+    leave
+        .iter()
+        .map(|one| {
+            let pops_dead = one.name.as_deref() == Some("pop") && one.dests == [reg(dead)];
+            if !pops_dead {
+                return one.clone();
+            }
+            semantics(
+                Operation::Binary,
+                "add",
+                vec![sp_reg()],
+                vec![sp_reg(), Loc::Imm(ir::Imm { value: slot, width: 2, address: None })],
+            )
+        })
+        .collect()
+}
+
 /// The procedure's items with the frame register LIR names BP, or not where
 /// `omit`.
 fn built(
@@ -2144,6 +2225,7 @@ fn built(
     let sequences = Sequences::of(procedure, omit);
     let (wrap, enter, unwrapped_leave) = (&sequences.wrap, sequences.entry.clone(), sequences.exit.clone());
     let item = |piece: &crate::backend::shrinkwrap::Piece| sequences.piece(piece);
+    let item_mid = |piece: &crate::backend::shrinkwrap::Piece| sequences.piece_mid(piece);
     let blocks = &procedure.body.blocks;
     llrm_support::debug!(
         "notes",
@@ -2292,7 +2374,7 @@ fn built(
             if let Some(pieces) =
                 closing.filter(|_| ends_in_jump && last_printed.is_some_and(|last| Arc::ptr_eq(last, one)))
             {
-                out.extend(pieces.iter().flat_map(|piece| item(piece).1).map(Item::Semantics));
+                out.extend(pieces.iter().flat_map(item_mid).map(Item::Semantics));
                 out.extend(wrapped_frame.then_some(Item::Mark(Mark::Closed)));
                 closed = true;
             }
@@ -2460,7 +2542,7 @@ fn built(
             }
         }
         if let Some(pieces) = closing.filter(|_| !closed) {
-            out.extend(pieces.iter().flat_map(|piece| item(piece).1).map(Item::Semantics));
+            out.extend(pieces.iter().flat_map(item_mid).map(Item::Semantics));
             out.extend(wrapped_frame.then_some(Item::Mark(Mark::Closed)));
         }
         let fall = _falls_to(block, &procedure.name)?;
@@ -2475,7 +2557,7 @@ fn built(
     }
     for (edge, restore, pieces) in split_edges {
         out.push(Item::Label(Label { name: label(number, edge) }));
-        out.extend(pieces.iter().flat_map(|piece| item(piece).1).map(Item::Semantics));
+        out.extend(pieces.iter().flat_map(item_mid).map(Item::Semantics));
         out.extend(wrapped_frame.then_some(Item::Mark(Mark::Closed)));
         out.push(Item::Semantics(Semantics { target: restore, ..semantics(Operation::Jump, "jmp", vec![], vec![]) }));
     }
@@ -4574,13 +4656,72 @@ mod tests {
             procedures: Vec::new(),
             private: BTreeSet::new(),
             far_bss: BTreeSet::new(),
+            weak: BTreeSet::new(),
             code_segments: Default::default(),
+            comdats: Default::default(),
             padding: Default::default(),
             requests: BTreeSet::new(),
             debug: None,
             stack: 0,
         };
         assert!(text(&module).unwrap().starts_with(".386\n.model flat\n\n"));
+    }
+
+    /// A one-slot frame is undone by `pop <dead>` at a return, where
+    /// `findDeadCallerSavedReg` finds a register nothing reads. Where the pieces
+    /// are taken back at a point that is not a return (a shrink-wrapped restore
+    /// before a loop) any caller-saved register may be live: the `pop ecx` landed
+    /// after `xor ecx, ecx` and cleared the loop counter (scroll at -O1 m64,
+    /// exit 139). There the slot is an `add`.
+    #[test]
+    fn test_a_one_slot_frame_is_not_popped_into_a_register_off_a_return() {
+        let ret = insn(0, semantics(Operation::Return, "ret", vec![], vec![]));
+        let mut body = lir::LirBody::new(
+            "get",
+            1,
+            vec![lir::LirBlock::new(1, vec![ret]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        // The slot is the whole reserve, as after alignment padding.
+        body.slot_dropped = true;
+        let registers = llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
+            pointer: RegId::EBP,
+            stack: RegId::ESP,
+            saved: Vec::new(),
+            slot: 4,
+            align: 4,
+            optional: false,
+            enter: false,
+            wrap_split_size: false,
+            red_zone: 0,
+            slot_scratch: Some((RegId::EAX, RegId::ECX)),
+            free: false,
+            kept: false,
+            exit_cfi: true,
+            saved_first: false,
+        };
+        let procedure = Procedure {
+            name: "_get".into(),
+            public: true,
+            far: false,
+            body,
+            reserve: 4,
+            callees: IndexMap::default(),
+            interrupt: None,
+            size: false,
+            entry: 0,
+            stack_check: None,
+            probe_stack: None,
+            registers,
+        };
+        let sequences = Sequences::of(&procedure, true);
+        let names = |items: &[Semantics]| -> Vec<String> {
+            items.iter().filter_map(|one| one.name.as_deref().map(str::to_owned)).collect()
+        };
+        assert_eq!(names(&sequences.leave), ["pop"], "at a return the slot is a pop of the dead register");
+        assert_eq!(names(&sequences.leave_mid), ["add"], "off a return it is an add");
     }
 
     /// The frame register and stack pointer are LIR's BP and SP whatever the

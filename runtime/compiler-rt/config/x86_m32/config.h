@@ -12,13 +12,15 @@ unsigned long long llrm_udiv64by32(unsigned hi, unsigned lo, unsigned d) __asm__
 #define SF_UDIV64BY32(hi, lo, d) llrm_udiv64by32((hi), (lo), (d))
 #define SF_DIV64_UDIV 1
 #define SF_SPECIALS_ONCE 1 /* -O2 llrm mul 79912 -> 76737 clk, div 144865 -> 143041, same bytes; at -Os it costs 29 B */
+#define SF_CMP_BRANCHY 1 /* compare core three-way on branches (compiler-rt's form): x_sf_cmp64 -O2 95332 -> 89898 clk, +11 B; -Os keeps the select form (+3 B) */
 #endif
 #ifdef __OPTIMIZE_SIZE__
-#define SF_NO_EXACT32 1 /* f64 int conversions: the 32-bit exact path costs +25 B here at -Os */
+#define SF_CONV_DIRECT32 1 /* f64 sidf/unsidf call the exact 32-bit path, not pack: llrm-cc -Os alone m32 516 -> 104 B, 468 -> 89; all four linked +23 B */
 #define SF_UNPACK_OUTLINE 1 /* -Os add reach 471 -> 450 B */
 #endif
 #define SF_NORM_SUB_FIRST 1 /* the shift count lives in cl: m32 mul -Os 102727 -> 101059 clk, -55 B in the -Os image */
 #define SF_CLZ32(x) ((int)__builtin_clz(x))
+#define SF_CMP_OUTLINE 1 /* compare entries call one core: f64 cmp.c -O2 1026 -> see tests/cmp_outline_size_test.sh */
 #define SF_WIDE_ABS_MASK 1 /* f64 compare: masks, not 64-bit shifts */
 #define SF_STICKY_MASK 1 /* f64 mul: mask test for the sticky bit */
 #endif

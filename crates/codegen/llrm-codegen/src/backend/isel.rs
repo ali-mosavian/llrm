@@ -389,8 +389,10 @@ fn passing(
                 return refuse(format!("calling convention {convention}"));
             };
             // `fastcc` is C's callee-pop twin unless the description states a
-            // `fastcc` of its own.
-            let twin = convention == llrm_mir::opcode::FAST && found.cc.as_deref() != Some("fast");
+            // `fastcc` of its own, or says C has no such twin (x86-64).
+            let twin = convention == llrm_mir::opcode::FAST
+                && found.cc.as_deref() != Some("fast")
+                && arch.calling().callee_pop(0) == Some(llrm_mir::opcode::FAST);
             let pops = twin || found.cleanup == Cleanup::Callee;
             Ok(Passing {
                 in_order: found.order == Order::LeftToRight,
@@ -1405,8 +1407,6 @@ pub fn selected_with<'c>(
     })
 }
 
-/// The alignment the frame keeps a local to without realigning the stack.
-pub(crate) const OVER_ALIGNED: i64 = 16;
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes
 /// them in.
@@ -2314,7 +2314,17 @@ impl Selector<'_, '_, '_> {
                 -self.depth
             };
             self.extents.push((disp, size));
-            if align > OVER_ALIGNED {
+            // The pin realigns where `MaxAlignment > StackAlignment`
+            // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineFrameInfo.h#L641),
+            // DEVIATE OA-1 (owner w2, exit: x86-m32's sysv32 stack_alignment
+            // = 16 lands, then the pin's threshold is this value): the
+            // threshold is the target's stack alignment, at least two slots.
+            // The m32 native alignment is 4, and the pin's rule would realign
+            // every 8-aligned double or i64 local the frame lays on its own
+            // alignment (the 486 clocks): +775 B in fcmp_all -O0.
+            if self.arch.can_realign_stack()
+                && align > self.arch.stack_alignment().max(2 * i64::from(self.arch.stack_slot_bytes()))
+            {
                 self.over_aligned.push((disp, align));
             }
             homes.insert(group, disp);
@@ -6407,7 +6417,7 @@ impl Selector<'_, '_, '_> {
         effects: llrm_mir::memory::Effects,
         disturbs: BTreeSet<RegId>,
     ) -> Arc<crate::model::lir::CallMemory> {
-        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs })
+        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs, block: false })
     }
 
     /// A direct call: its arguments pushed as its convention orders them,

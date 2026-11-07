@@ -6,9 +6,11 @@
 /* Rounding by compare: the 32-bit add of the add-3 form costs more than the compare chain here (add -Os +6 B, +1.9% cycles). */
 #define SF_ROUND_BRANCHY 1
 #define SF_FIX_NAN_UNDEF 1 /* NaN to int is undefined in C and poison in IR: -Os fix_si 230 -> 179 asm lines, fix_usi 176 -> 122 */
+#define SF_SHIFT_LOOP 1 /* shift by a per-bit loop: fix_si keeps the two-direction shift (single larger count: 6502 -Os +15% cycles) */
 #ifndef __OPTIMIZE_SIZE__
 #define SF_SHIFT_STEPS 1
 #endif
 /* mul and div come from config/6502/sf32_6502.c (add stays generic: its tight form is 415 B larger). */
 #define SF_EXT_MULDIV 1
+#define SF_MUL32X32_6502 1 /* f64 mul's 32x32 -> 64 is config/6502/mul32x32.s (hand asm, link it; static cells, not reentrant): -Os 41312 -> 11504 clk, 5592 -> 5115 B (llvm-mos 18270 / 5509) */
 #endif

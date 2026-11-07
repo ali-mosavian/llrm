@@ -7,6 +7,7 @@ pub mod call;
 pub mod ccmp;
 pub mod combine;
 pub mod emit;
+pub mod f128;
 pub mod function;
 pub mod globals;
 pub mod hooks;

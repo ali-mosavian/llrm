@@ -39,10 +39,7 @@ fn the_68000_never_compares_an_immediate_with_a_pc_relative_operand() {
 
 #[test]
 fn the_68000_output_assembles() {
-    let Some(root) = std::env::var("GCC_M68K").ok().filter(|root| !root.is_empty()) else {
-        assert!(std::env::var("M68K_ISA_SKIP_ORACLE").is_ok_and(|flag| flag == "1"), "GCC_M68K is not set");
-        return;
-    };
+    let Some(root) = support::oracle_root() else { return };
     let source = support::unique_path("cmpi-pc-s");
     let object = support::unique_path("cmpi-pc-o");
     std::fs::write(&source, format!(".text\n{}\n", text(Cpu::M68000))).unwrap();

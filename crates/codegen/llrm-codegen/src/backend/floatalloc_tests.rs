@@ -380,6 +380,7 @@ fn _sparing_the_frame(body: LirBody) -> LirBody {
         effects: llrm_mir::memory::Effects { reads: false, writes: true },
         private: vec![crate::model::lir::WHOLE_FRAME],
         disturbs: Default::default(),
+        block: false,
     });
     let blocks = body
         .blocks
@@ -677,7 +678,7 @@ fn test_x87_memory_operand_follows_the_selected_cpu_cost() {
     for (key, value) in [("x87_load", 1), ("x87_mul", 1), ("x87_mul_m", 99)] {
         costs.insert(key.to_owned(), value);
     }
-    let slow_memory = cpu::Profile { name: "test-x87".to_owned(), _costs: costs.into_iter().collect(), ..base.clone() };
+    let slow_memory = cpu::Profile { name: "test-x87".to_owned(), _costs: std::sync::Arc::new(costs.into_iter().collect()), ..base.clone() };
 
     let result = allocated(&body, None, None, true, &slow_memory).unwrap();
 

@@ -55,6 +55,11 @@ SIGS = {
     store="\tld\thl,#0x8010\n\tld\tde,(0x8000)\n\tld\tbc,#4\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
   # long long: the result through hl (0x8020), the first operand in de, bc and the stack, the second operand's four
   # words, or a count byte, on the stack after them (runtime/z80_rt.s)
+  # quotient and remainder: the remainder's address (0x8014) is the last argument, on the stack under the divisor's high word
+  "LL>QR": dict(isz=8, osz=8,
+    load="\tld\thl,#0x8014\n\tpush\thl\n\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n\tld\tc,4(ix)\n\tld\tb,5(ix)\n",
+    pre="\tpop\taf\n\tpop\taf\n\tld\t(0x8010),de\n\tld\t(0x8012),hl\n",
+    store="\tld\thl,#0x8010\n\tld\tde,(0x8000)\n\tld\tbc,#8\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
   "QQ>Q": dict(isz=16, osz=8,
     load="".join("\tld\tl,%d(ix)\n\tld\th,%d(ix)\n\tpush\thl\n" % (k + 8, k + 9) for k in (6, 4, 2, 0)) + "\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,4(ix)\n\tld\th,5(ix)\n\tpush\thl\n\tld\te,0(ix)\n\tld\td,1(ix)\n\tld\tc,2(ix)\n\tld\tb,3(ix)\n\tld\thl,#0x8020\n",
     pre="\tpop\taf\n" * 6,
@@ -63,6 +68,8 @@ SIGS = {
     load="\tld\tl,8(ix)\n\tld\th,#0\n\tpush\thl\n\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,4(ix)\n\tld\th,5(ix)\n\tpush\thl\n\tld\te,0(ix)\n\tld\td,1(ix)\n\tld\tc,2(ix)\n\tld\tb,3(ix)\n\tld\thl,#0x8020\n",
     pre="\tpop\taf\n" * 3,
     store="\tld\thl,#0x8020\n\tld\tde,(0x8000)\n\tld\tbc,#8\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
+  # a word pair: the quotient in de, the remainder in hl (answer: quotient, then remainder, a word each)
+  "HL,DE>DEHL": dict(isz=4, osz=4, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n", pre="\tld\t(0x8010),hl\n", store="\tld\t(hl),e\n\tinc\thl\n\tld\t(hl),d\n\tinc\thl\n\tld\tbc,(0x8010)\n\tld\t(hl),c\n\tinc\thl\n\tld\t(hl),b\n"),
   "HL,A>DE": dict(isz=3, osz=2, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\ta,2(ix)\n", store="\tld\t(hl),e\n\tinc\thl\n\tld\t(hl),d\n"),
 }
 
@@ -118,12 +125,12 @@ table:
     return ok
 
 def enc(sig, v):
-    if sig == "LL>L": return tuple((v[0] >> (8 * k)) & 255 for k in range(4)) + tuple((v[1] >> (8 * k)) & 255 for k in range(4))
+    if sig in ("LL>L", "LL>QR"): return tuple((v[0] >> (8 * k)) & 255 for k in range(4)) + tuple((v[1] >> (8 * k)) & 255 for k in range(4))
     if sig == "L,A>L": return (v[0] & 255, v[0] >> 8 & 255, v[0] >> 16 & 255, v[0] >> 24, v[1])
     if sig == "QQ>Q": return tuple((v[0] >> (8 * k)) & 255 for k in range(8)) + tuple((v[1] >> (8 * k)) & 255 for k in range(8))
     if sig == "QA>Q": return tuple((v[0] >> (8 * k)) & 255 for k in range(8)) + (v[1],)
     if sig == "A,L>A": return v
-    if sig == "HL,DE>DE": return (v[0] & 255, v[0] >> 8, v[1] & 255, v[1] >> 8)
+    if sig in ("HL,DE>DE", "HL,DE>DEHL"): return (v[0] & 255, v[0] >> 8, v[1] & 255, v[1] >> 8)
     return (v[0] & 255, v[0] >> 8, v[1])
 
 def decode(sig, v):
@@ -195,6 +202,11 @@ def main():
     sp = [p for p in pairs if p[1]]
     allok &= check("__divqi3", "A,L>A", lambda a, b: tdiv(s8(a), s8(b)) & 255, sp)
     allok &= check("__modqi3", "A,L>A", lambda a, b: (s8(a) - tdiv(s8(a), s8(b)) * s8(b)) & 255, sp)
+    # a word divide and remainder in one call: the quotient in de, the remainder in hl
+    pair = lambda a, b: a // b | (a % b) << 16
+    spair = lambda a, b: (tdiv(s16(a), s16(b)) & 0xFFFF) | ((s16(a) - tdiv(s16(a), s16(b)) * s16(b)) & 0xFFFF) << 16
+    allok &= check("__udivhi3", "HL,DE>DEHL", pair, wd)
+    allok &= check("__divremhi4", "HL,DE>DEHL", spair, wd)
     allok &= check("__divhi3", "HL,DE>DE", lambda a, b: tdiv(s16(a), s16(b)) & 0xFFFF, wd)
     allok &= check("__modhi3", "HL,DE>DE", lambda a, b: (s16(a) - tdiv(s16(a), s16(b)) * s16(b)) & 0xFFFF, wd)
     l32 = [0, 1, 255, 256, 65535, 65536, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF, 0x12345678] + [rnd.getrandbits(32) for _ in range(60)]
@@ -211,6 +223,24 @@ def main():
     allok &= check("__umodsi3", "LL>L", lambda a, b: a % b, lp)
     allok &= check("__divsi3", "LL>L", lambda a, b: tdiv32(s32c(a), s32c(b)) & 0xFFFFFFFF, lp)
     allok &= check("__modsi3", "LL>L", lambda a, b: (s32c(a) - tdiv32(s32c(a), s32c(b)) * s32c(b)) & 0xFFFFFFFF, lp)
+    # the size family: the same answers, over the edges (0, 1, 2^k, 2^k - 1, all ones, divisor above dividend), a divisor of
+    # zero giving all ones and the dividend
+    edge = sorted({0, 1, 2, 3, 0xFFFFFFFF, 0x80000000, 0x80000001, 0x7FFFFFFF} | {1 << k for k in range(32)} | {(1 << k) - 1 for k in range(1, 32)})
+    ep = [(a, b) for a in edge for b in edge if b]
+    for nm, f in (("__s_udivsi3", lambda a, b: a // b), ("__s_umodsi3", lambda a, b: a % b),
+                  ("__s_divsi3", lambda a, b: tdiv32(s32c(a), s32c(b)) & 0xFFFFFFFF),
+                  ("__s_modsi3", lambda a, b: (s32c(a) - tdiv32(s32c(a), s32c(b)) * s32c(b)) & 0xFFFFFFFF)):
+        allok &= check(nm, "LL>L", f, lp + ep)
+    allok &= check("__s_udivsi3", "LL>L", lambda a, b: 0xFFFFFFFF, [(a, 0) for a in edge])
+    allok &= check("__s_umodsi3", "LL>L", lambda a, b: a, [(a, 0) for a in edge])
+    # quotient and remainder in one call: the quotient returned, the remainder stored through the pointer argument
+    # (low word of the answer the quotient, the high word the remainder)
+    for nm, f in (("__udivremsi4", lambda a, b: a // b | (a % b) << 32), ("__s_udivremsi4", lambda a, b: a // b | (a % b) << 32),
+                  ("__s_divremsi4", lambda a, b: (tdiv32(s32c(a), s32c(b)) & 0xFFFFFFFF) | ((s32c(a) - tdiv32(s32c(a), s32c(b)) * s32c(b)) & 0xFFFFFFFF) << 32),
+                  ("__divremsi4", lambda a, b: (tdiv32(s32c(a), s32c(b)) & 0xFFFFFFFF) | ((s32c(a) - tdiv32(s32c(a), s32c(b)) * s32c(b)) & 0xFFFFFFFF) << 32)):
+        allok &= check(nm, "LL>QR", f, lp + ep)
+    for nm in ("__udivremsi4", "__s_udivremsi4"):
+        allok &= check(nm, "LL>QR", lambda a, b: 0xFFFFFFFF | a << 32, [(a, 0) for a in edge])
     q64 = [0, 1, 255, 256, 65535, 65536, 0xFFFFFFFF, 1 << 32, (1 << 63) - 1, 1 << 63, (1 << 64) - 1, 0x0123456789ABCDEF, 10, 1000000007]
     q64 += [rnd.getrandbits(64) for _ in range(12)] + [rnd.getrandbits(rnd.choice([5, 17, 33, 49])) for _ in range(8)]
     s64 = lambda x: x - (1 << 64) if x >> 63 else x

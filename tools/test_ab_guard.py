@@ -37,8 +37,12 @@ class AbGuard(unittest.TestCase):
         self.counts = os.path.join(r, "counts")
         open(self.counts, "w").write("1 2\n")
 
-    def run_guard(self, base, bins=None, counts=None):
-        env = dict(os.environ, AB_UPSTREAM="up")
+    def run_guard(self, base, bins=None, counts=None, base_argv="llc -O2 a.ll", head_argv="llc -O2 a.ll", extra=None):
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("LLRM_", "AB_ALLOW"))}
+        env.update(AB_UPSTREAM="up", AB_BASE_ARGV=base_argv, AB_HEAD_ARGV=head_argv, **(extra or {}))
+        for name in ("AB_BASE_ARGV", "AB_HEAD_ARGV"):
+            if env[name] is None:
+                del env[name]
         b, h = bins or self.bins
         return subprocess.run(
             [GUARD, self.repo, base, "head", b, h, counts or self.counts],
@@ -77,6 +81,43 @@ class AbGuard(unittest.TestCase):
         open(empty, "w").close()
         self.assertIn("empty", self.run_guard(self.c2, counts=empty).stderr)
 
+    def test_an_argv_without_an_explicit_O_level_is_refused(self):
+        """w12 compared llrm-wasm-llc (default -O0) with the pin's llc (-O2) on the same IR: 209268 vs 172620 B, a phantom gap."""
+        for base_argv, head_argv in (("llc a.ll", "llc -O2 a.ll"), ("llc -O2 a.ll", "llc a.ll")):
+            done = self.run_guard(self.c2, base_argv=base_argv, head_argv=head_argv)
+            self.assertEqual(done.returncode, 2, (base_argv, head_argv))
+            self.assertIn("explicit -O", done.stderr)
+
+    def test_a_run_given_no_argv_is_refused(self):
+        self.assertIn("argv", self.run_guard(self.c2, base_argv=None, head_argv=None).stderr)
+
+    def test_both_argv_lines_are_printed_in_the_header(self):
+        done = self.run_guard(self.c2, base_argv="llc -O2 a.ll", head_argv="llrm-wasm-llc -O2 a.ll")
+        self.assertEqual(done.returncode, 0)
+        self.assertIn("base argv: llc -O2 a.ll", done.stdout)
+        self.assertIn("head argv: llrm-wasm-llc -O2 a.ll", done.stdout)
+
+    def test_a_pipeline_switch_in_the_environment_is_refused(self):
+        """LLRM_WASM_BACKEND_ONLY skipped the mid-end on one side; 40 minutes went to a second cause that was not there."""
+        done = self.run_guard(self.c2, extra={"LLRM_WASM_BACKEND_ONLY": "1"})
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("LLRM_WASM_BACKEND_ONLY", done.stderr)
+
+    def test_a_tool_location_is_accepted_and_the_environment_is_printed(self):
+        done = self.run_guard(self.c2, extra={"LLRM_PIN_CLANG": "/x/clang"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("ab_env: env: LLRM_PIN_CLANG=/x/clang", done.stderr)
+
+    def test_a_switch_named_in_ab_allow_env_is_accepted_and_printed(self):
+        done = self.run_guard(self.c2, extra={"LLRM_NO_STACKS": "1", "AB_ALLOW_ENV": "LLRM_NO_STACKS"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("LLRM_NO_STACKS=1", done.stderr)
+
+
+    def test_print_only_debug_variables_are_accepted(self):
+        """LLRM_DEBUG=runs and LLRM_MIR_STAGES left the object md5 unchanged on 4 programs; refusing them blocked a diagnostic run."""
+        done = self.run_guard(self.c2, extra={"LLRM_DEBUG": "runs", "LLRM_MIR_STAGES": "/x"})
+        self.assertEqual(done.returncode, 0, done.stderr)
 
 if __name__ == "__main__":
     unittest.main()

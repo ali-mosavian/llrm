@@ -121,12 +121,41 @@ fn create_mem(
     Instruction::with1(code, memory).map_err(|error| error.to_string())
 }
 
+/// The form the pin writes for a register-to-register `op r, r`: the one whose
+/// ModRM `r/m` field is the destination (`MOV32rr` is `89 /r`, `ADD32rr` `01 /r`,
+/// X86InstrMisc.td and X86InstrArithmetic.td), not iced's `op r, r/m` (`8B`,
+/// `03`), the pin's `_REV` twin that only a disassembler reads. Same length,
+/// same operands, other bytes.
+fn pin_form(code: Code) -> Code {
+    static TWINS: LazyLock<std::collections::HashMap<Code, Code>> = LazyLock::new(|| {
+        let named: std::collections::HashMap<String, Code> =
+            Code::values().map(|one| (format!("{one:?}"), one)).collect();
+        let mut twins = std::collections::HashMap::new();
+        for one in Code::values() {
+            let name = format!("{one:?}");
+            let Some((mnemonic, forms)) = name.split_once('_') else { continue };
+            if !matches!(mnemonic, "Mov" | "Add" | "Or" | "Adc" | "Sbb" | "And" | "Sub" | "Xor" | "Cmp") {
+                continue;
+            }
+            let Some((register, memory)) = forms.split_once('_') else { continue };
+            let (Some(width), Some(other)) = (register.strip_prefix('r'), memory.strip_prefix("rm")) else { continue };
+            if width == other && matches!(width, "8" | "16" | "32" | "64") {
+                if let Some(twin) = named.get(&format!("{mnemonic}_rm{width}_r{width}")) {
+                    twins.insert(one, *twin);
+                }
+            }
+        }
+        twins
+    });
+    TWINS.get(&code).copied().unwrap_or(code)
+}
+
 fn create_reg_reg(
     code: Code,
     one: RegId,
     other: RegId,
 ) -> Result<Instruction, String> {
-    Instruction::with2(code, one.iced(), other.iced()).map_err(|error| error.to_string())
+    Instruction::with2(pin_form(code), one.iced(), other.iced()).map_err(|error| error.to_string())
 }
 
 fn create_reg_i32(
@@ -1265,6 +1294,7 @@ pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(
         // Windows 64-bit pads a function that ends in a call with it
         // (X86AvoidTrailingCall)
         ("int3", "INT3"),
+        ("ud2", "UD2"),
         ("std", "STD"),
         // a call of one: its flags pushed first, as the interrupt does
         ("pushf", "PUSHFW"),
@@ -1576,7 +1606,7 @@ pub fn bit_test_immediate(
     at: At,
 ) -> Option<Emitted> {
     let width = width_of(register)?;
-    if ![2, 4].contains(&width) {
+    if ![2, 4, 8].contains(&width) {
         return None;
     }
     let code = code_of!("BT_RM", width * 8, "_IMM8")?;
@@ -1590,7 +1620,7 @@ pub fn bit_test_memory(
     bit: i64,
     at: At,
 ) -> Option<Emitted> {
-    if ![2, 4].contains(&cell.width) {
+    if ![2, 4, 8].contains(&cell.width) {
         return None;
     }
     let (r#where, relocated) = operand_of(cell, at.bits)?;
