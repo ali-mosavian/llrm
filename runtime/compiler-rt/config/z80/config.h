@@ -4,6 +4,7 @@
 #include <stdint.h>
 /* One shared __clzsi2 (lib/int/clzsi2.c): llrm-z80-llc emits the inline clz as a global, so each module carried its own 204..216 B copy (mul -212 B, div -212, add_sub -203, float -167 at -Os). */
 #define SF_CLZ_CALL 1
+#define SF_SHIFT_LOOP 1 /* shift by a per-bit loop: fix_si keeps the two-direction shift (single larger count: 6502 -Os +15% cycles) */
 /* 32x32 -> 64 from four 16x16 -> 32 products (__umulhisi3, config/z80/int32.s): the generic form calls __mulsi3 four times per 32x32, each a full
  * 32-bit product whose cross terms are zero. */
 uint32_t __umulhisi3(uint16_t a, uint16_t b);

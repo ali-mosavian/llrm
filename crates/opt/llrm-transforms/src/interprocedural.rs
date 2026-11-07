@@ -694,9 +694,18 @@ pub fn optimized_with<E: From<String>>(
     // by-value slice parameters (#6140) pass the length as a
     // scalar the pin's own pipeline folds, promotion follows the pin's
     // conditions, and a sweep shows this call does nothing; then it goes.
-    // Owner w2, fix-by 2026-11-07: #6140 lands, then #6159 (the promotion
-    // refuses this descriptor) merges and this call goes; if #6140 cannot
-    // land by 2026-11-05 the alternative exit is reported on the 5th.
+    // 2026-11-07 sweep: it does something at m32 and m64. A function whose
+    // address `check_locals` took (`lr1`) is called directly only after
+    // inlining, so the first IPSCCP sees it address-taken and the second one
+    // folds `@check_locals.y`, `@src` into it. With the pass, against none:
+    // m32 memory_expansion -1332 B (-O2, -O3; -1204 at -O1), m32 -O2
+    // second_ipsccp.c -368 B, m64 memory_expansion +512 B (-O2, -O3; +96 at
+    // -O1), m64 -O2 second_ipsccp.c -64 B; no other cell moved (bench corpus
+    // x7 targets, 337 run sources x m16/m32/m64; -Os none). The pin
+    // keeps the arguments (wasm turns the pass off). Test:
+    // tests/x86_second_ipsccp.rs. Owner w2, fix-by 2026-11-15: decide
+    // keep-as-beneficial or the pin's order (a constant-argument pass after
+    // inlining, as gcc's IPA-CP) per target.
     // tests/nearcalls.rs holds the folded shape and, ignored, the pin's.
     let walk_promoted = crate::walk::take_walk_promotions(program, modules);
     if (promoted_any || walk_promoted) && program.target.second_ipsccp() {

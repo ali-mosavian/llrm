@@ -166,3 +166,33 @@ fn test_operand_kinds_have_their_known_bits() {
     assert_eq!(got[4], "0000????");
     assert_eq!(got[5], pointer("000"));
 }
+
+/// `and` of two plain adds (bit 0 unknown) looked for `x op (x +/- y)` through
+/// closure matchers that read each operand up to six times, 126 Ir a miss;
+/// `low_bit_partner` reads each once. Counts `instruction_of` calls for the
+/// whole query of `%c`.
+#[test]
+fn a_miss_of_the_low_bit_partner_reads_each_operand_once() {
+    let module = parse::module(
+        "define i32 @f(i32 %p, i32 %q, i32 %r, i32 %s) {\n  %a = add i32 %p, %q\n  %b = add i32 %r, %s\n  %c = and i32 %a, %b\n  ret i32 %c\n}\n",
+    )
+    .expect("parses");
+    let layout = DataLayout::default();
+    let function = module
+        .globals
+        .iter()
+        .find_map(|global| match &global.kind {
+            GlobalKind::Function(function) if !function.is_declaration() => Some(function),
+            _ => None,
+        })
+        .expect("a body");
+    let c = function.walk().filter_map(|(_, inst)| function.instruction(inst).result).last().expect("a result");
+    let query = Query::new(&module, function, &layout);
+    super::query::LOOKUPS.with(|count| count.set(0));
+    let known = super::known::compute_known_bits(&query, Operand::Value(c), 0);
+    let lookups = super::query::LOOKUPS.with(|count| count.get());
+    assert_eq!(known.width, 32);
+    assert!(lookups <= LOOKUPS_BOUND, "{lookups} operand lookups for a miss of the low-bit partner");
+}
+
+const LOOKUPS_BOUND: usize = 7;

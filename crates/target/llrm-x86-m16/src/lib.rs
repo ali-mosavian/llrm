@@ -103,14 +103,6 @@ impl llrm_target::Target for M16 {
         GENERAL.len() as i64
     }
 
-    // DEVIATE ML1-M16 (owner x86-m32, exit 2026-11-20): the pin's gate, on the
-    // x86 pressure sets, keeps a loop-invariant `lea` and load in the loop on
-    // 16-bit code, where the address registers are three of six (bintree -O1
-    // +6,579 clk, quicksort -O2 +2,838 clk); the count rule stays.
-    fn hoist_by_pressure(&self) -> bool {
-        false
-    }
-
     fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
         Some((
             &PRESSURE,
@@ -191,6 +183,14 @@ impl llrm_target::Target for M16 {
         _: u32,
     ) -> u32 {
         llrm_x86::X87_WIDTH
+    }
+
+    fn move_bytes(&self) -> Option<llrm_target::MoveBytes> {
+        Some(llrm_target::MoveBytes {
+            plain: 2,
+            copy: llrm_x86::encoding::copy_move_bytes,
+            literal: llrm_x86::encoding::literal_move_bytes,
+        })
     }
 
     fn register_op_bytes(
@@ -291,6 +291,10 @@ impl llrm_target::Target for M16 {
         layout()
     }
 
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
+    }
+
     fn conventions(&self) -> &'static [&'static str] {
         &CONVENTIONS
     }
@@ -333,6 +337,11 @@ impl llrm_target::Target for M16 {
     /// A byte is pushed as a word: `calling.toml`'s.
     fn stack_slot_bytes(&self) -> i64 {
         CALLING.native().slot_bytes
+    }
+
+    /// Real mode has no `and sp` frame the pin builds.
+    fn can_realign_stack(&self) -> bool {
+        false
     }
 
     fn frame_register(&self) -> RegId {
@@ -421,6 +430,18 @@ impl llrm_target::Target for M16 {
 
 #[cfg(test)]
 mod tests {
+    /// A value confined to bx, si, di (a word address) was counted against
+    /// all of GR32's registers (limit 12), so the MachineLICM gate kept a
+    /// loop-invariant `lea` in bintree -O1's loop (+6,579 clk). Its class holds
+    /// the three allocatable address registers: limit 8 - bp's 2 = 6.
+    #[test]
+    fn test_address_registers_are_their_own_pressure_class() {
+        let class = PRESSURE.class_holding(&["ebx", "esi", "edi"]).unwrap();
+        assert_eq!(class.name, "ADDR16");
+        let set = PRESSURE.sets.iter().position(|one| one.largest == "ADDR16").unwrap();
+        assert_eq!(M16::pressure_limit(set), 6);
+    }
+
     /// `object()` and the runtime tables are parsed once and kept; each must
     /// equal a fresh parse of its toml (35 parses of object.toml and 4 of the
     /// runtime table cost 3.3 M Ir of every compile).
@@ -635,6 +656,7 @@ mod tuning_tests {
                 size_milliclocks_per_byte: 0,
                 multiply_by_clocks: false,
                 price_pin_multiplies: false,
+                imul_at_size: false,
                 speed_milliclocks_per_byte: 0,
                 price_fills: false,
                 unroll_threshold: None,

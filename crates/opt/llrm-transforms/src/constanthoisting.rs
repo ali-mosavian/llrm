@@ -86,6 +86,9 @@ struct Candidate {
     bits: u128,
     uses: Vec<User>,
     cumulative_cost: u32,
+    /// Every use is a constant the target prices at one instruction where the
+    /// pin prices two (x86 ZIMM: a zero-extended 32-bit `mov r32, imm32`).
+    cheap_for_target: bool,
 }
 
 impl Candidate {
@@ -397,7 +400,30 @@ impl Hoister<'_> {
         {
             return self.tti().int_imm_cost_intrin(name, index as u32, value, width);
         }
-        self.tti().int_imm_cost_inst(imm_user(&instruction.opcode), index as u32, value, width)
+        self.tti().int_imm_cost_inst_for_size(
+            imm_user(&instruction.opcode),
+            index as u32,
+            value,
+            width,
+            self.opt_for_size,
+        )
+    }
+
+    /// `cost`, or the pin's price of the constant when the target's differs.
+    fn pin_cost_of(
+        &self,
+        function: &Function,
+        inst: InstId,
+        index: usize,
+        width: u32,
+        value: i128,
+        cost: Cost,
+    ) -> Cost {
+        let instruction = function.instruction(inst);
+        if self.opt_for_size || matches!(instruction.opcode, Opcode::Call(_)) {
+            return cost;
+        }
+        self.tti().int_imm_cost_inst_pin(imm_user(&instruction.opcode), index as u32, value, width)
     }
 
     /// `collectConstantCandidates(.., Inst, Idx, ConstInt)`
@@ -412,14 +438,23 @@ impl Hoister<'_> {
     ) {
         let (ty, width, bits) = constant;
         let cost = self.cost_of(function, inst, index, width, signed(bits, width));
-        // Ignore cheap integer constants.
-        if cost.value > Cost::BASIC.value {
+        let pin_cost = self.pin_cost_of(function, inst, index, width, signed(bits, width), cost);
+        // Ignore cheap integer constants, as the pin prices them.
+        if pin_cost.value > Cost::BASIC.value {
             let at = *map.entry((width, bits)).or_insert_with(|| {
-                self.candidates.push(Candidate { ty, width, bits, uses: Vec::new(), cumulative_cost: 0 });
+                self.candidates.push(Candidate {
+                    ty,
+                    width,
+                    bits,
+                    uses: Vec::new(),
+                    cumulative_cost: 0,
+                    cheap_for_target: true,
+                });
                 self.candidates.len() - 1
             });
             let candidate = &mut self.candidates[at];
-            candidate.cumulative_cost = candidate.cumulative_cost.wrapping_add(cost.value as u32);
+            candidate.cumulative_cost = candidate.cumulative_cost.wrapping_add(pin_cost.value as u32);
+            candidate.cheap_for_target &= cost.value <= Cost::BASIC.value;
             candidate.uses.push(User { inst, index });
         }
     }
@@ -486,7 +521,27 @@ impl Hoister<'_> {
             instruction.opcode,
             Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem)
         ) && matches!(instruction.operands[1], Operand::Constant(id) if matches!(self.context.get(id).kind, ConstantKind::Int(_)));
-        self.tti().prefer_to_keep_constants_attached(by_constant, self.min_size)
+        self.tti().prefer_to_keep_constants_attached(by_constant, self.min_size) || self.select_mask_kept(function, inst)
+    }
+
+    /// DEVIATE ZIMM (M64-ZIMM-CRC, owner m64, exit 2026-11-20): `select c, 0, K`
+    /// or `select c, K, 0` with `K` an immediate the target's mask `and` takes.
+    fn select_mask_kept(
+        &self,
+        function: &Function,
+        inst: InstId,
+    ) -> bool {
+        let instruction = function.instruction(inst);
+        if instruction.opcode != Opcode::Select || self.opt_for_size {
+            return false;
+        }
+        let int = |operand: Operand| self.int_constant(operand).map(|(_, _, width, bits)| (bits, width));
+        match (int(instruction.operands[1]), int(instruction.operands[2])) {
+            (Some((0, _)), Some((bits, width))) | (Some((bits, width)), Some((0, _))) => {
+                self.tti().keeps_select_mask_attached(bits, width)
+            }
+            _ => false,
+        }
     }
 
     /// `collectConstantCandidates(Function &)`
@@ -536,7 +591,16 @@ impl Hoister<'_> {
             uses += candidate.uses.len();
             for user in &candidate.uses {
                 let op = imm_user(&function.instruction(user.inst).opcode);
-                cost += self.tti().int_imm_cost_inst(op, user.index as u32, candidate.value(), candidate.width).value;
+                cost += self
+                    .tti()
+                    .int_imm_cost_inst_for_size(
+                        op,
+                        user.index as u32,
+                        candidate.value(),
+                        candidate.width,
+                        self.opt_for_size,
+                    )
+                    .value;
                 for other in &self.candidates[range.clone()] {
                     let diff = signed(other.bits.wrapping_sub(candidate.bits) & mask(candidate.width), candidate.width);
                     cost -= self.tti().int_imm_code_size_cost(op, user.index as u32, diff, candidate.width).value;
@@ -560,6 +624,12 @@ impl Hoister<'_> {
         let (uses, best) = self.maximize_constants_in_range(function, range.clone());
         // Don't hoist constants that have only one use.
         if uses <= 1 {
+            return;
+        }
+        // DEVIATE ZIMM (M64-ZIMM-DCL, owner m64, exit 2026-11-20): a lone
+        // constant the target materializes in one instruction stays where it is;
+        // beside a neighbour it is hoisted as the pin does, a base and an offset.
+        if range.len() == 1 && self.candidates[range.start].cheap_for_target {
             return;
         }
         let (ty, width, base_bits) =
@@ -811,6 +881,9 @@ impl FunctionPass for ConstantHoisting {
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
         let Some(tti) = outer.target().tti() else { return PreservedAnalyses::all() };
+        if !tti.constant_hoisting() {
+            return PreservedAnalyses::all();
+        }
         let Some(entry) = unit.function.entry() else { return PreservedAnalyses::all() };
         let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
         let freqs = analyses.get::<BlockFrequencies>(unit.context, unit.layout, unit.function);

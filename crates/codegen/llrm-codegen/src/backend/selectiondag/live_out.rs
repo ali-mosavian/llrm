@@ -4,10 +4,10 @@
 //! to a virtual register, for the blocks that read the register.
 //!
 //! [`compute_phi_live_out_reg_info`] is `ComputePHILiveOutRegInfo`: a phi's
-//! register knows what all its incoming values know. DEVIATE: x86 and arm64
-//! do not call it, so their phi registers carry nothing; the caller walks the
-//! blocks in layout order where the pin walks them in reverse post-order.
-//! Exit: x86 and arm64 judged, no later than 2026-11-20.
+//! register knows what all its incoming values know. DEVIATE: arm64
+//! does not call it, so its phi registers carry nothing; every caller but
+//! wasm's walks the blocks in layout order where the pin walks them in
+//! reverse post-order. Exit: arm64 judged, no later than 2026-11-20.
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{Function, InstId, Module, Operand};

@@ -5,7 +5,7 @@
 
 use std::process::Command;
 
-use llrm_m68k::callpush::push_of;
+use llrm_m68k::callpush::{push_of, push_of_sized};
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 use llrm_m68k::encode::encode;
 use llrm_m68k::mc::{Operand, print};
@@ -49,6 +49,22 @@ fn a_small_constant_pushes_as_pea_and_assembles_as_binutils_does() {
         let Some(want) = assembled(&text) else { return };
         assert_eq!(encoded, want, "{value}: {text}");
     }
+}
+
+/// A function built for size pushes zero as `clr.l -(%sp)`: 2 B where `pea 0:w`
+/// is 4; for speed it stays the `pea`, which is 6 clk faster on the 68000.
+#[test]
+fn zero_pushes_as_clr_for_size_and_as_pea_for_speed() {
+    let zero = Operand::Imm(0);
+    let inst = push_of_sized(&zero, true);
+    let text = print(&inst).unwrap();
+    assert_eq!(text, "clr.l\t-(%sp)");
+    let encoded = encode(&inst).unwrap().bytes;
+    assert_eq!(encoded.len(), 2);
+    if let Some(want) = assembled(&text) {
+        assert_eq!(encoded, want, "{text}");
+    }
+    assert!(print(&push_of_sized(&zero, false)).unwrap().starts_with("pea\t"));
 }
 
 #[test]

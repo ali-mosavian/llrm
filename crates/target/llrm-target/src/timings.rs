@@ -34,9 +34,18 @@ pub struct CpuTable {
     /// tail duplication (`TailDupPlacementThreshold`), where the target states
     /// a smaller bound than the pin's (2, 4 at -O3); `None`: the pin's.
     pub tail_dup_placement_threshold: Option<i64>,
+    /// Two-address commuting ties the operand the result goes back into (a
+    /// loop's back-edge copy) even where the operand was read earlier in the
+    /// block (DEVIATE TA-LC, owner anyisa, exit 2026-11-27): the pin's
+    /// `isProfitableToCommute` bails on that read before its
+    /// reversed-copy-chain test, and keeps a copy per iteration. Off: the
+    /// pin's order.
+    pub commute_loop_carried: bool,
     /// Clocks a mispredicted branch costs (`MCSchedModel::MispredictPenalty`);
     /// `None`: the target states none.
     pub mispredict_penalty: Option<i64>,
+    /// The same at -O1, -Os and -Oz; `None`: the plain penalty applies.
+    pub mispredict_penalty_size: Option<i64>,
     /// Form and clocks, in file order.
     pub clocks: Vec<(String, i64)>,
     pub latency: Vec<(String, i64)>,
@@ -174,10 +183,10 @@ impl Timings {
                     ("scalars", "cache_line") => table.cache_line = Some(number()?),
                     ("scalars", "speed_milliclocks_per_byte") => table.speed_milliclocks_per_byte = Some(number()?),
                     ("scalars", "line_fill_clocks") => table.line_fill_clocks = Some(number()?),
-                    ("scalars", "tail_dup_placement_threshold") => {
-                        table.tail_dup_placement_threshold = Some(number()?)
-                    }
+                    ("scalars", "tail_dup_placement_threshold") => table.tail_dup_placement_threshold = Some(number()?),
                     ("scalars", "mispredict_penalty") => table.mispredict_penalty = Some(number()?),
+                    ("scalars", "mispredict_penalty_size") => table.mispredict_penalty_size = Some(number()?),
+                    ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),
                     (_, form) => table.latency.push((form.to_owned(), number()?)),
