@@ -11,7 +11,7 @@
 
 	.globl __floatsisf
 	.globl __floatunsisf
-	.globl pack32
+	.globl rnd32
 	.globl done
 	.globl __floatsisf
 __floatsisf:
@@ -59,7 +59,7 @@ flent:	ld	iy,#-24
 	ld	c,a
 	jr	2$
 3$:	bit	7,d
-	jp	nz,pack32
+	jp	nz,rnd32
 	add	hl,hl
 	rl	e
 	rl	d

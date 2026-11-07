@@ -510,7 +510,7 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" | "canonfreeze" | "maskscale" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
@@ -1511,6 +1511,11 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // The pin runs canon-freeze with loop-reduce, before it.
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
         passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce { size: applied.options.prefers_size() }));
+        // `TargetPassConfig::addIRPasses` (pin l.875): LoopTermFold follows
+        // LSR; it does nothing for a target whose TTI does not enable it.
+        if applied.options.wanted("looptermfold") {
+            passes.push(Box::new(crate::looptermfold::LoopTermFold { size: applied.options.prefers_size() }));
+        }
         // What the counters it chose leave behind (a bound subtracted from a
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.

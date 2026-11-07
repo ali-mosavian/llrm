@@ -206,6 +206,21 @@ pub trait CombineHooks {
         false
     }
 
+    /// DEVIATE: [`Self::decompose_mul_by_constant`] with the multiplicand, for
+    /// a target whose multiply expansion gets cheaper with what is known of
+    /// it (the Z80's byte-lane multiply of a zero-extended byte). The pin's
+    /// hook sees the type and the constant only. Owner: llrm-target-z80.
+    /// Exit: 2026-11-30, when a second target needs it or the pin gains it.
+    fn decompose_mul_by_constant_of(
+        &self,
+        _dag: &SelectionDAG,
+        _x: SDValue,
+        vt: EVT,
+        c: u128,
+    ) -> bool {
+        self.decompose_mul_by_constant(vt, c)
+    }
+
     /// `ExtendSetCCUses`: the compares of a load against a constant, which
     /// `ExtendUsesToFormExtLoad` widens to compare its extension, of the type
     /// `wide`
@@ -3796,7 +3811,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // [pin]:
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5024
         if let (Some(c), false) = (c1, opaque) {
-            if self.hooks.decompose_mul_by_constant(vt, c) {
+            if self.hooks.decompose_mul_by_constant_of(self.dag, n0, vt, c) {
                 if let Some(decomposed) = self.decompose_mul(n0, vt, c) {
                     return Some(decomposed);
                 }

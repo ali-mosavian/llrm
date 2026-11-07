@@ -54,6 +54,9 @@ pub struct Tuning {
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
     pub unroll_never_grows_at_o1: bool,
+    /// Trips the -O1 no-growth rule above analyses for folds: the pin's
+    /// `-unroll-max-iteration-count-to-analyze` (10) when `None`.
+    pub unroll_o1_analyzed_trips: Option<u32>,
     /// A multiply by a constant is decomposed only where the chain's saved
     /// clocks pay for its extra bytes at `speed_milliclocks_per_byte`, the
     /// pin's own decompositions included (a tie keeps the `imul`); false:
@@ -258,6 +261,7 @@ impl Tuning {
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
         unroll_never_grows_at_o1: false,
+        unroll_o1_analyzed_trips: None,
         price_pin_multiplies: false,
         imul_at_size: false,
         unroll_threshold: None,

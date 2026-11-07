@@ -729,6 +729,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::unroll_o1_analyzed_trips`.
+    fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
+        None
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false
@@ -1440,6 +1445,17 @@ pub trait Tti {
     /// pointer that steps with it, where the address takes no scale. False
     /// keeps the pin's loops. Exit: none, a pass of its own.
     fn mirrors_conditional_counters(&self) -> bool {
+        false
+    }
+
+    /// Whether `LoopTermFold` runs after LSR for this target, for a function
+    /// built for size or not: the pin enables it for RISCV, AVR and Mips only
+    /// (`EnableLoopTermFold`,
+    /// [TargetPassConfig.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/TargetPassConfig.cpp#L875)).
+    fn enables_loop_term_fold(
+        &self,
+        _optsize: bool,
+    ) -> bool {
         false
     }
 
