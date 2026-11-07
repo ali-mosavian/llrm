@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Compile-cost ladder: instructions:u of LLVM's opt/llc and llrm-c on identical generated C.
+"""Compile-cost ladder: instructions:u of LLVM's opt/llc and llrm-cc on identical generated C.
 
-    ladder.py [--llvm DIR] [--llrm llrm-c] [--shapes a,b] [--sizes 25,50,...] [--runs 3] OUT.json
+    ladder.py [--llvm DIR] [--llrm llrm-cc] [--shapes a,b] [--sizes 25,50,...] [--runs 3] OUT.json
 
 Per (shape, N): IR instruction count before optimization, `opt -passes='default<O2>'`, `llc -O2`, clang end to end,
-llrm-c end to end, and llrm's optimizer/backend split from LLRM_DEBUG=time. Minimum of --runs, alternating sides.
+llrm-cc end to end, and llrm's optimizer/backend split from LLRM_DEBUG=time. Minimum of --runs, alternating sides.
 """
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
     ap.add_argument("--llvm", default=str(Path.home() / "scratch/llvm-build/bin"))
-    ap.add_argument("--llrm", default="llrm-c")
+    ap.add_argument("--llrm", default="llrm-cc")
     ap.add_argument("--shapes", default=",".join(SHAPES))
     ap.add_argument("--sizes", default="25,50,100,200,400,800,1600")
     ap.add_argument("--runs", type=int, default=3)

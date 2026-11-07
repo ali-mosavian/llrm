@@ -58,7 +58,7 @@ def total(table, pats, label=None):
         for sym, ir in table.items():
             if r.search(sym): seen[sym] = ir
     return sum(seen.values()), seen
-# Instrument check: `-o /dev/null` makes llrm-c skip the object write (emit 0, front end inflated);
+# Instrument check: `-o /dev/null` makes llrm-cc skip the object write (emit 0, front end inflated);
 # run with -o on a real file. 2026-10-22.
 assert total(ours, B["emit (object writer; pin: asm printer + MC encode)"][0])[0] > 0, "emit is 0: the compile did not write an object (-o /dev/null?)"
 _calling = os.environ.get("LEDGER_CALLING")

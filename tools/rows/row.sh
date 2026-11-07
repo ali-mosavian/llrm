@@ -1,8 +1,8 @@
 #!/bin/bash
 ulimit -v "${LLRM_MEMORY_LIMIT_KB:-8000000}"  # a runaway compile dies at 8 GB instead of taking the host (datetime.c grew to 50 GB)
 # rows/row.sh PROG VARIANT LLRM_C: one row of the rows table, the JSON line harness.py prints (clocks, ins, mem, code ...). VARIANT: llrmO1 llrm (-O2) llrmO3 llrmOs.
-#   tools/rows/row.sh x_life llrmOs /path/to/llrm-c      -> {"prog": "x_life", "variant": "llrmOs", ..., "clocks": N, "code": N}
-# The program is built with that llrm-c (its objects alone; the gcc/clang objects are copied from the rows dir main24d, as run.sh does) and run under the 486 model.
+#   tools/rows/row.sh x_life llrmOs /path/to/llrm-cc      -> {"prog": "x_life", "variant": "llrmOs", ..., "clocks": N, "code": N}
+# The program is built with that llrm-cc (its objects alone; the gcc/clang objects are copied from the rows dir main24d, as run.sh does) and run under the 486 model.
 set -eo pipefail
 R=$(cd "$(dirname "$0")/../.." && pwd); H=$(echo $R/crates/target/*/vsgcc)
 PROG=$1; VARIANT=$2; export LLRM=$3

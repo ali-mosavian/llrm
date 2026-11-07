@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compile the corpus with LLRM_CHECK_IVUSERS=1: every carried IvUsers is rebuilt and compared; a stale one panics.
 
-    tools/check-ivusers.py [llrm-c]     print the files that fail, exit 1 if any
+    tools/check-ivusers.py [llrm-cc]     print the files that fail, exit 1 if any
 
 Corpus and levels are compile-cost.py's (vsgcc programs, plus QCport when QCPORT and QCPORT_INC are set).
 """
@@ -37,7 +37,7 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "4")))
     parser.add_argument("compiler", nargs="?", type=Path)
     args = parser.parse_args()
-    compiler = args.compiler or llrmbin.bin_dir() / "llrm-c"
+    compiler = args.compiler or llrmbin.bin_dir() / "llrm-cc"
     with tempfile.TemporaryDirectory(dir=compile_cost.SCRATCH) as tmp:
         work = Path(tmp)
         files = enumerate(compile_cost.files(work).items())
