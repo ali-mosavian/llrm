@@ -65,3 +65,14 @@ fn a_reload_after_a_step_of_the_same_cell_is_dropped_when_a_is_dead() {
     drop_flag_reload(&mut asm);
     assert_eq!(asm.text(), live, "a is read after");
 }
+
+/// `scmp`'s second `ldy #0` sat after a label nothing names (`scmp_b4:`, kept
+/// by the emitter), and the walk forgot every register there: 2 bytes and 2
+/// clocks a byte.
+#[test]
+fn a_label_nothing_names_keeps_what_is_known() {
+    use llrm_6502::peephole::drop_known_loads;
+    let mut asm = Asm::parse("f:\n  ldy #0\n  inc rc2\nq:\n  ldy #0\n  lda (rc2),y\n  rts\n");
+    drop_known_loads(&mut asm);
+    assert_eq!(asm.text(), "f:\n  ldy #0\n  inc rc2\nq:\n  lda (rc2),y\n  rts\n");
+}
