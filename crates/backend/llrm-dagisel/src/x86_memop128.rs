@@ -1,5 +1,5 @@
-//! `X86ISD::LLRM_ZERO128` and `LLRM_COPY128`: sixteen bytes cleared or copied
-//! with one SSE move.
+//! `X86ISD::LLRM_ZERO128`, `LLRM_COPY128` and `LLRM_MOVE128`: sixteen bytes
+//! cleared or copied with one SSE move.
 //!
 //! # How it works
 //! The pin's `getOptimalMemOpType` makes a 16-byte piece of an inline
@@ -81,4 +81,69 @@ fn address_store<D: AddrDag>(
     chain: SDValue,
 ) -> u32 {
     dag.machine_node(store, &[mvt::Other], &[to.base, to.scale, to.index, to.disp, to.segment, value, chain])
+}
+
+/// Selects `LLRM_MOVE128` (`chain`, then `destination, source, width,
+/// alignment` per piece): every piece is loaded, then every piece is stored on
+/// the loads' joined chain (`getMemmoveLoadsAndStores`: the ranges may
+/// overlap). A 16-byte piece moves through `MOVUPS` (`MOVAPS` at 16-byte
+/// alignment), a narrower one through the general register of its width. False
+/// for an operand that is no address.
+pub fn select_move128<D: AddrDag>(
+    dag: &mut D,
+    hooks: &X86Hooks,
+    node: u32,
+) -> bool {
+    let chain = dag.operand(node, 0);
+    let count = (dag.num_operands(node) - 1) / 4;
+    let mut pieces = Vec::with_capacity(count);
+    for piece in 0..count {
+        let at = 1 + piece * 4;
+        let (destination, source) = (dag.operand(node, at), dag.operand(node, at + 1));
+        let (Some(width), Some(alignment)) =
+            (dag.constant(dag.operand(node, at + 2)), dag.constant(dag.operand(node, at + 3)))
+        else {
+            return false;
+        };
+        let find = |dag: &mut D, address: SDValue| {
+            Matcher {
+                dag,
+                pointer_type: hooks.options.pointer_type(),
+                mode: hooks.options.address_mode,
+                size: hooks.options.opt_for_size,
+            }
+            .select_addr(address)
+        };
+        let (Some(to), Some(from)) = (find(dag, destination), find(dag, source)) else { return false };
+        let (load, store, vt) = match (width, alignment >= 16) {
+            (16, true) => (x86::MOVAPSrm, x86::MOVAPSmr, mvt::v4i32),
+            (16, false) => (x86::MOVUPSrm, x86::MOVUPSmr, mvt::v4i32),
+            (8, _) => (x86::MOV64rm, x86::MOV64mr, mvt::i64),
+            (4, _) => (x86::MOV32rm, x86::MOV32mr, mvt::i32),
+            (2, _) => (x86::MOV16rm, x86::MOV16mr, mvt::i16),
+            (1, _) => (x86::MOV8rm, x86::MOV8mr, mvt::i8),
+            _ => return false,
+        };
+        pieces.push((to, from, load, store, vt));
+    }
+    let mut loaded = Vec::with_capacity(count);
+    let mut chains = Vec::with_capacity(count);
+    for (_, from, load, _, vt) in &pieces {
+        let read = dag.machine_node(
+            *load,
+            &[*vt, mvt::Other],
+            &[from.base, from.scale, from.index, from.disp, from.segment, chain],
+        );
+        loaded.push(SDValue::new(read, 0));
+        chains.push(SDValue::new(read, 1));
+    }
+    let joined = if chains.len() == 1 { chains[0] } else { dag.token_factor(&chains) };
+    let mut writes = Vec::with_capacity(count);
+    for ((to, _, _, store, _), value) in pieces.iter().zip(loaded) {
+        writes.push(SDValue::new(address_store(dag, *store, to, value, joined), 0));
+    }
+    let done = if writes.len() == 1 { writes[0] } else { dag.token_factor(&writes) };
+    dag.replace_uses(SDValue::new(node, 0), done);
+    dag.remove_dead_node(node);
+    true
 }

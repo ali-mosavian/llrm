@@ -166,6 +166,9 @@ pub struct Tuning {
     /// at (-O2, -O3), in `gcc_insns` (gcc's `max-inline-insns-recursive`, 450);
     /// none: `inline::MAX_INLINE_INSNS_RECURSIVE`.
     pub recursive_inlining_growth: Option<(i64, i64)>,
+    /// DEVIATE REC-7: the copies' depth at (-O2, -O3), where the target wants
+    /// a depth apart from `recursive_inlining`'s; none: that one's.
+    pub recursive_inlining_depth: Option<(u32, u32)>,
     /// DEVIATE REC-2: at (-O2, -O3) a tree recursion's tail calls are
     /// eliminated before it is copied into itself (gcc:
     /// `pass_tail_recursion` runs early, `passes.def` before
@@ -259,6 +262,7 @@ impl Tuning {
         recursive_inlining: None,
         recursive_edge_growth: None,
         recursive_inlining_growth: None,
+        recursive_inlining_depth: None,
         recursive_tre_first: (false, false),
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
@@ -277,6 +281,11 @@ pub struct GlobalMerge {
     pub max_offset: u64,
     /// `OnlyOptimizeForSize`: only uses in `minsize` functions count.
     pub size_only: bool,
+    /// DEVIATE ARM64-GM-OPTSIZE (owner w15, exit 2026-11-30): with `size_only`,
+    /// uses in `optsize` functions count too, not only `minsize` ones (the
+    /// pin's `-Os` merges nothing; gcc's section anchors do: stft_fixed -Os
+    /// 15 `adrp` against gcc's 5). False: the pin.
+    pub optsize_counts: bool,
     /// The object format is Mach-O: the merged struct is `internal`, not
     /// `private`.
     pub mach_o: bool,

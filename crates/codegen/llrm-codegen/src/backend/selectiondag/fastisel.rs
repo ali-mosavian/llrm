@@ -76,12 +76,29 @@ pub fn build_all(
     // every parameter is a 4-byte stack cell: fixed object -(n + 1)
     let int32 = |ty| word(&module.context.types, ty, m32);
     let (returns, parameters, _) = module.signature(function.ty);
+    // m32: a 4-byte stack cell; m64: one register
+    let arrives = |one: &crate::backend::isel::Parameter| match one {
+        crate::backend::isel::Parameter::Cell(_) => m32,
+        crate::backend::isel::Parameter::Registers(regs) => !m32 && regs.len() == 1,
+        _ => false,
+    };
     if parameters.iter().any(|&ty| !int32(ty))
         || convention.parameters.len() != parameters.len()
-        || convention.parameters.iter().any(|one| !matches!(one, crate::backend::isel::Parameter::Cell(_)))
+        || !convention.parameters.iter().all(arrives)
     {
-        return declined("a parameter that is not a 4-byte stack cell");
+        return declined("a parameter that is not a 4-byte stack cell or one register");
     }
+    let arg_regs: Vec<(llrm_lir::registers::RegId, u32)> = match m32 {
+        true => Vec::new(),
+        false => convention
+            .parameters
+            .iter()
+            .filter_map(|one| match one {
+                crate::backend::isel::Parameter::Registers(regs) => Some((regs[0], info.new_reg())),
+                _ => None,
+            })
+            .collect(),
+    };
     let returns_int = int32(returns);
     if !returns_int && !module.context.types.is_void(returns) {
         return declined("a result that is not an int, a pointer or void");
@@ -95,7 +112,7 @@ pub fn build_all(
         let dag = fresh_dag(module, function, target, info, block, None);
         let chain = dag.entry_node();
         let mut declined = String::new();
-        let dag = Fast { layout: data_layout, module, function, info: &*info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), edx: arch.registers().named(arch.register_named("edx"), 4), m32, dag, chain, values: Default::default(), next }
+        let dag = Fast { layout: data_layout, module, function, info: &*info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), arg_regs: &arg_regs, entry: layout[0] == block, edx: arch.registers().named(arch.register_named("edx"), 4), m32, dag, chain, values: Default::default(), next }
             .block(block, &mut declined);
         let Some(dag) = dag else {
             llrm_support::debug!("isel", "fast declined at {declined}");
@@ -103,7 +120,7 @@ pub fn build_all(
         };
         blocks.push((
             block,
-            BlockDag { dag, phi_updates: Vec::new(), live_ins: Vec::new(), extra: Vec::new(), tail_calls: Vec::new(), values: Vec::new() },
+            BlockDag { dag, phi_updates: Vec::new(), live_ins: if at == 0 { arg_regs.clone() } else { Vec::new() }, extra: Vec::new(), tail_calls: Vec::new(), values: Vec::new() },
         ));
     }
     Some(blocks)
@@ -125,14 +142,20 @@ struct Names {
     alu: [(u16, u16); 5],
     /// m32 only so far: calls and the signed divide.
     calls: Option<Calls>,
+    divide: Option<Divide>,
 }
 
 struct Calls {
     call_down: u16,
     call_up: u16,
     call: u16,
+}
+
+/// `cdq`, `idiv r`, `div r`.
+struct Divide {
     cdq: u16,
     idiv: u16,
+    div: u16,
 }
 
 impl Names {
@@ -159,10 +182,9 @@ impl Names {
                     call_down: opcode("ADJCALLSTACKDOWN32")?,
                     call_up: opcode("ADJCALLSTACKUP32")?,
                     call: opcode("CALLpcrel32")?,
-                    cdq: opcode("CDQ")?,
-                    idiv: opcode("IDIV32r")?,
                 })
             })(),
+            divide: (|| Some(Divide { cdq: opcode("CDQ")?, idiv: opcode("IDIV32r")?, div: opcode("DIV32r")? }))(),
         })
     }
 }
@@ -176,6 +198,9 @@ struct Fast<'a> {
     eax: Option<llrm_lir::registers::RegId>,
     any_eax: llrm_lir::registers::RegId,
     esp: llrm_lir::registers::RegId,
+    /// m64: the register each parameter arrives in and the virtual register it is copied to.
+    arg_regs: &'a [(llrm_lir::registers::RegId, u32)],
+    entry: bool,
     edx: llrm_lir::registers::RegId,
     /// Frame objects are addressed at m32 only so far (F3).
     m32: bool,
@@ -201,9 +226,6 @@ impl Fast<'_> {
 
     /// `[base, scale, index, disp, segment]` of a frame object, or of the pointer in a register.
     fn address(&mut self, pointer: Operand) -> Option<Vec<SDValue>> {
-        if !self.m32 {
-            return None;
-        }
         if let Operand::Value(value) = pointer
             && let Some(&object) = self.info.static_allocas.get(&value)
         {
@@ -213,6 +235,9 @@ impl Fast<'_> {
                 return None;
             }
             return Some(self.frame(object));
+        }
+        if !self.m32 {
+            return None;
         }
         let base = self.value(pointer)?;
         Some(vec![
@@ -229,10 +254,11 @@ impl Fast<'_> {
     }
 
     fn frame(&mut self, object: i32) -> Vec<SDValue> {
+        let pointer = if self.m32 { EVT::I32 } else { EVT::I64 };
         vec![
-            self.dag.get_target_frame_index(EVT::I32, object),
+            self.dag.get_target_frame_index(pointer, object),
             self.dag.get_constant_with(1, EVT::I8, true, false),
-            self.dag.get_register(EVT::I32, 0),
+            self.dag.get_register(pointer, 0),
             self.dag.get_constant_with(0, EVT::I32, true, false),
             self.dag.get_register(EVT::I16, 0),
         ]
@@ -253,7 +279,15 @@ impl Fast<'_> {
                 }
                 let ValueDef::Argument(n) = self.function.value(value).def else { return None };
                 if !self.m32 {
-                    return None;
+                    if !self.entry {
+                        return None;
+                    }
+                    let (_, vreg) = *self.arg_regs.get(n as usize)?;
+                    let copy = self.dag.get_copy_from_reg(self.chain, vreg, EVT::I32);
+                    self.chain = SDValue { node: copy.node, res: 1 };
+                    let copy = SDValue { node: copy.node, res: 0 };
+                    self.values.insert(value, copy);
+                    return Some(copy);
                 }
                 let mut ops = self.frame(-(n as i32) - 1);
                 ops.push(self.chain);
@@ -334,19 +368,26 @@ impl Fast<'_> {
                     let done = self.node(lea, &[EVT::I32], &ops);
                     self.values.insert(instruction.result?, done);
                 }
-                Opcode::Binary(op @ (llrm_mir::opcode::BinaryOp::SDiv | llrm_mir::opcode::BinaryOp::SRem)) => {
-                    // `cdq; idiv r`: the quotient in eax, the remainder in edx
-                    let calls = self.names.calls.as_ref()?;
-                    if !self.m32 || self.module.context.types.int_bits(instruction.ty) != Some(32) {
+                Opcode::Binary(op @ (llrm_mir::opcode::BinaryOp::SDiv | llrm_mir::opcode::BinaryOp::SRem | llrm_mir::opcode::BinaryOp::UDiv | llrm_mir::opcode::BinaryOp::URem)) => {
+                    // signed `cdq; idiv r`, unsigned `mov edx,0; div r`: quotient in eax, remainder in edx
+                    use llrm_mir::opcode::BinaryOp::*;
+                    let calls = self.names.divide.as_ref()?;
+                    if self.module.context.types.int_bits(instruction.ty) != Some(32) {
                         return None;
                     }
                     let (left, right) = (self.value(instruction.operands[0])?, self.value(instruction.operands[1])?);
                     let eax = self.eax_reg()?;
                     let copy = self.dag.get_copy_to_phys_reg(self.dag.entry_node(), eax, left, None);
                     let glue = SDValue { node: copy.node, res: 1 };
-                    let sign = self.node(calls.cdq, &[EVT::GLUE], &[glue]);
-                    let divided = self.node(calls.idiv, &[EVT::GLUE], &[right, sign]);
-                    let register = if matches!(op, llrm_mir::opcode::BinaryOp::SDiv) { eax } else { self.edx };
+                    let divided = if matches!(op, SDiv | SRem) {
+                        let sign = self.node(calls.cdq, &[EVT::GLUE], &[glue]);
+                        self.node(calls.idiv, &[EVT::GLUE], &[right, sign])
+                    } else {
+                        let zero = self.dag.get_constant_with(0, EVT::I32, true, false);
+                        let clear = self.dag.get_copy_to_phys_reg(self.dag.entry_node(), self.edx, zero, Some(glue));
+                        self.node(calls.div, &[EVT::GLUE], &[right, SDValue { node: clear.node, res: 1 }])
+                    };
+                    let register = if matches!(op, SDiv | UDiv) { eax } else { self.edx };
                     let result = self.dag.get_copy_from_phys_reg(self.dag.entry_node(), register, EVT::I32, divided);
                     self.values.insert(instruction.result?, SDValue { node: result.node, res: 0 });
                 }

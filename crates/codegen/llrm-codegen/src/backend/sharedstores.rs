@@ -98,7 +98,11 @@ fn literal(one: &Insn) -> Option<(u32, i64)> {
     else {
         return None;
     };
-    (cell.width == *width && [1, 2, 4].contains(width)).then_some((*width, *value))
+    // A qword zero is the longest of them (`mov qword ptr [rsp+8],0` is 9
+    // bytes, the register store 5) and shares the register of a narrower
+    // zero, as every zero does; any other qword literal would need a 64-bit
+    // load.
+    (cell.width == *width && ([1, 2, 4].contains(width) || (*width == 8 && *value == 0))).then_some((*width, *value))
 }
 
 fn bytes(

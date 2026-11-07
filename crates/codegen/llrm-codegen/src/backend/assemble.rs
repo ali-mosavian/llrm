@@ -462,7 +462,7 @@ pub fn assembled_by(
                         })
                     };
                     let body = timed("lir duplicated returns", || {
-                        jumps::duplicated_returns(procedure.body.clone(), &overhead)
+                        jumps::duplicated_returns(jumps::threaded_late(&procedure.body), &overhead)
                     });
                     if let Some(error) = unprintable.take() {
                         return Err(error);

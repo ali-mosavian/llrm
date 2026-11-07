@@ -91,6 +91,14 @@ impl SchedInfo for Info {
         self.source_order
     }
 
+    fn unfold_memory_operand(
+        &self,
+        dag: &mut super::SelectionDAG,
+        node: u32,
+    ) -> Option<[u32; 2]> {
+        super::x86_unfold::unfold_memory_operand(dag, node)
+    }
+
     fn has_cross_copy_class(
         &self,
         reg: u16,
@@ -950,8 +958,10 @@ fn selected_in(
     };
     let mut builder_target = builder_target;
     // Static code: every symbol is `dso_local`. A 64-bit PIE reaches a symbol
-    // defined elsewhere through the GOT (X86Subtarget::classifyGlobalReference).
+    // defined elsewhere through the GOT
+    // (X86Subtarget::classifyGlobalReference).
     builder_target.dag.dso_local_symbols = bitness != 64 || !module.position_independent();
+    builder_target.dag.defined_dso_local = !builder_target.dag.dso_local_symbols;
     builder_target.dag.absolute_symbols = !module.position_independent();
     let builder_target = builder_target
         .with_tuning(machine.tuning())

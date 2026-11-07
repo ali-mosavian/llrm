@@ -189,6 +189,10 @@ pub struct Profile {
     /// -O2 and -O3: the target's price of a code byte at speed counts
     /// (`Options::prices_bytes`); -O1, -Os and -Oz gate every metric alone.
     pub speed_rate: bool,
+    /// The target runs the pin's stand-alone tail duplication after
+    /// allocation (`TailDuplicator`, `PreRegAlloc` clear); on only where its
+    /// A/B has been made (`TailDuplicate` slot).
+    pub post_ra_tail_duplicate: bool,
     /// A spill of an x87 value keeps the register's 80 bits (`fstp tbyte`),
     /// as real BC keeps a temporary (BASIC). DEVIATE D-RFP5, exit: none, the
     /// pin rounds; QB follows real BC text.
@@ -394,6 +398,7 @@ impl Profile {
             stable_loads: true,
             min_size: false,
             speed_rate: true,
+            post_ra_tail_duplicate: false,
             spills_extended: false,
             exhaustive: false,
             model: arch.cost_model(),

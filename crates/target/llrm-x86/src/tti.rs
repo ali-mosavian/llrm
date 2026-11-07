@@ -755,6 +755,10 @@ impl Tti for X86 {
         self.tuning.recursive_inlining_growth
     }
 
+    fn recursive_inlining_depth(&self) -> Option<(u32, u32)> {
+        self.tuning.recursive_inlining_depth
+    }
+
     fn recursive_tre_first(&self) -> (bool, bool) {
         self.tuning.recursive_tre_first
     }

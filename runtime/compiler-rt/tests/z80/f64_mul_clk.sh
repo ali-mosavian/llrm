@@ -9,7 +9,7 @@ cc() { # src name defs
   $P --target=msp430 -O2 -Xclang -disable-llvm-passes -ffreestanding -I$R/include $INC $3 -S -emit-llvm $1 -o $2.raw.ll
   sed -E "s|^target datalayout = .*|target datalayout = \"$DL\"|; /^target triple/d" $2.raw.ll > $2.ll; $LLC -S -Os -o $2.s $2.ll; sed -i 's/___/__/g' $2.s; sdasz80 -g -o $2.rel $2.s; }
 mkdir lib; for m in fp/f64/mul fp/f64/pack int/clzsi2; do cc $R/lib/$m.c lib/$(basename $m) ""; done
-cp $R/../../crates/target/llrm-z80/runtime/z80_rt.s . ; sdasz80 -g -o lib/zrt.rel z80_rt.s; sdasz80 -g -o lib/int32.rel $R/config/z80/int32.s
+cp $R/../../crates/target/llrm-z80/runtime/z80_rt.s . ; sdasz80 -g -o lib/zrt.rel z80_rt.s; sdasz80 -g -o lib/int32.rel $R/config/z80/int32.s; sdasz80 -g -o lib/umulhisi3.rel $R/config/z80/umulhisi3.s
 (INC=; cc $R/lib/fp/f32/pack.c lib/f32pack "") ; ls lib/*.rel | xargs -n1 basename | sed 's/\.rel$//' | sort -r > lib/sf.lib   # zrt first: its shifts, not the per-bit ones of lib/int
 cc $R/tests/z80/f64_drv.c drv '-DOP=__muldf3'
 printf '\t.module crt0\n\t.globl _main\n\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n\tcall _main\n\thalt\n\t.area _CODE\n\t.area _DATA\n' > crt0.s; sdasz80 -o crt0.rel crt0.s

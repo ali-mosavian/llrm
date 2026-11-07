@@ -6,7 +6,7 @@
 use std::process::ExitCode;
 
 use llrm_dagisel::generated::ids::mvt;
-use llrm_dagisel_gen::{decode, emit, fastisel, features, flatten, ids_rs, inc, prune, target};
+use llrm_dagisel_gen::{decode, emit, fastisel, features, flatten, foldtables, ids_rs, inc, prune, target};
 
 const FEATURES: &str = include_str!("../features.toml");
 /// The pin's table, pruned for each of these.
@@ -18,8 +18,18 @@ const X64_CPUS: [&str; 1] = ["x64"];
 
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let (mut inc_path, mut ids_path, mut pin, mut out, mut extras, mut memflags, mut inc_m16, mut record, mut fast_inc) =
-        (None, None, None, None, None, None, None, None, None);
+    let (
+        mut inc_path,
+        mut ids_path,
+        mut pin,
+        mut out,
+        mut extras,
+        mut memflags,
+        mut inc_m16,
+        mut record,
+        mut fast_inc,
+        mut fold_inc,
+    ) = (None, None, None, None, None, None, None, None, None, None);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--inc" => inc_path = args.next(),
@@ -31,6 +41,7 @@ fn run() -> Result<(), String> {
             "--instrinfo" => memflags = args.next(),
             "--target" => record = args.next(),
             "--fastisel-inc" => fast_inc = args.next(),
+            "--fold-tables" => fold_inc = args.next(),
             other => return Err(format!("unknown argument `{other}`")),
         }
     }
@@ -128,6 +139,11 @@ fn run() -> Result<(), String> {
         extras.iter().filter(|n| (n.starts_with("X86::") || n.starts_with("TargetOpcode::")) && *n != "X86::EFLAGS")
     {
         emitted.insert(ids.get(name)? as u16);
+    }
+    // The pin's memory-fold tables, read backwards for the scheduler's unfold.
+    if let Some(path) = fold_inc {
+        write("foldtables.rs", foldtables::render(&read(Some(path), "--fold-tables")?, &ids, &mut emitted)?)?;
+        modules.push_str("pub mod foldtables;\n");
     }
     write("instrinfo.rs", emit::render_instr_info(&instrinfo, &ids, &emitted, &emit::Style::X86)?)?;
     write("mod.rs", modules)

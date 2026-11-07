@@ -19,8 +19,83 @@
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::reg;
 
+/// A copy of one virtual register into another of a class the source's meets, each
+/// defined once, is read through its source: the high word of a long added to
+/// itself (`x + x`) is copied after the low word's add, and the matcher
+/// takes only operands made before it.
+fn read_through_copies(function: &mut MFunction) -> bool {
+    let mut defs = std::collections::HashMap::<u32, usize>::new();
+    for block in &function.blocks {
+        for inst in &block.insts {
+            for operand in &inst.operands {
+                if let Operand::Def(Reg::Virt(v)) = operand {
+                    *defs.entry(*v).or_default() += 1;
+                }
+            }
+        }
+        for phi in &block.phis {
+            if let Reg::Virt(v) = phi.result {
+                *defs.entry(v).or_default() += 1;
+            }
+        }
+    }
+    let mut alias = std::collections::HashMap::<u32, u32>::new();
+    for block in &function.blocks {
+        for inst in &block.insts {
+            if let (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]) = (inst.kind, &inst.operands[..])
+                && defs.get(to) == Some(&1)
+                && defs.get(from) == Some(&1)
+                && <crate::regalloc::Z80Registers as llrm_spike_mf::Target>::meet(
+                    function.classes[*to as usize],
+                    function.classes[*from as usize],
+                ) == Some(function.classes[*from as usize])
+            {
+                alias.insert(*to, *from);
+            }
+        }
+    }
+    if alias.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for block in &mut function.blocks {
+        for phi in &mut block.phis {
+            for (_, incoming) in &mut phi.incoming {
+                if let Reg::Virt(v) = incoming
+                    && let Some(&from) = alias.get(v)
+                {
+                    *v = from;
+                    changed = true;
+                }
+            }
+        }
+        for inst in &mut block.insts {
+            if inst.kind == Kind::Copy && matches!(inst.operands[..], [Operand::Def(Reg::Virt(to)), _] if alias.contains_key(&to)) {
+                continue;
+            }
+            for operand in &mut inst.operands {
+                if let Operand::Use(Reg::Virt(v)) = operand
+                    && let Some(&from) = alias.get(v)
+                {
+                    *v = from;
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
 /// Fuses the long adds and subtracts of `function` into `adc` / `sbc`.
 pub fn use_the_carry(function: &mut MFunction) -> bool {
+    let carries = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .any(|inst| inst.kind == Kind::Op("SETCC8") && matches!(inst.operands[..], [_, Operand::Imm(3), _]));
+    if carries {
+        read_through_copies(function);
+    }
     // every read of a virtual register in the function: the byte and the sums
     // go with the instructions only if nothing outside them reads them (a
     // condition byte is carried across blocks by a copy)

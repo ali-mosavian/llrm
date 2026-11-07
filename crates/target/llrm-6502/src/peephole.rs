@@ -116,17 +116,21 @@ pub fn run_with(
     fold_known_cells(asm);
     hoist_common_successor_code(asm);
     branch_over_jump(asm);
+    duplicate_return_tail(asm);
     drop_reloads(asm);
     drop_flag_reload(asm);
+    drop_dead_repeat_load(asm);
     if known_loads {
         drop_known_loads(asm);
     }
     hoist_loop_constant(asm);
+    sink_step_to_compare(asm);
     drop_zero_compares(asm);
     step_in_place(asm);
     load_straight_into_a(asm);
     store_before_transfer(asm);
     drop_cancelling_transfers(asm);
+    crate::peephole_cells::fold_temp_operand(asm);
     crate::peephole_cells::arithmetic_chain_in_a(asm);
     crate::peephole_cells::chain_ends_in_a(asm);
     // the chain's load can follow the store it was loaded from
@@ -280,6 +284,32 @@ pub fn drop_flag_reload(asm: &mut Asm) {
                 && step.operand == load.operand
                 && dead_from(&asm.lines, at + 1, Registers::A, &mut HashSet::default(), exits);
             !reload
+        })
+        .collect();
+    retain(asm, &keep);
+}
+
+/// `ldx m; ldy m` (any two of `lda`, `ldx`, `ldy` of one cell) with the second
+/// register dead after: the second load only repeats the flags the first set,
+/// for a branch (`xs8`'s guard `n != 0` loaded the count twice).
+pub fn drop_dead_repeat_load(asm: &mut Asm) {
+    let exits = Exits::of(asm);
+    let keep: Vec<bool> = (0..asm.lines.len())
+        .map(|at| {
+            let (Some(Line::Inst(first)), Line::Inst(second)) = (at.checked_sub(1).map(|b| &asm.lines[b]), &asm.lines[at]) else {
+                return true;
+            };
+            let register = |op: Op| match op {
+                Op::Lda => Some(Registers::A),
+                Op::Ldx => Some(Registers::X),
+                Op::Ldy => Some(Registers::Y),
+                _ => None,
+            };
+            let repeat = matches!((register(first.op), register(second.op)), (Some(one), Some(two)) if one != two)
+                && first.operand.is_cell()
+                && first.operand == second.operand
+                && dead_from(&asm.lines, at + 1, register(second.op).unwrap(), &mut HashSet::default(), exits);
+            !repeat
         })
         .collect();
     retain(asm, &keep);
@@ -458,6 +488,79 @@ fn next_instruction(
         }
     }
     None
+}
+
+/// `dex` (likewise `inx`, `dey`, `iny`), then straight-line work that leaves
+/// the register alone, then `cpx #0; bne`: the step moves down to the compare,
+/// which its flags make redundant ([`drop_zero_compares`]). A count taken down
+/// at the top of a rotated loop is tested at the bottom without a compare.
+pub fn sink_step_to_compare(asm: &mut Asm) {
+    let mut at = 0;
+    while at < asm.lines.len() {
+        let Line::Inst(step) = &asm.lines[at] else {
+            at += 1;
+            continue;
+        };
+        let (index, compare) = match step.op {
+            Op::Dex | Op::Inx => (Index::X, Op::Cpx),
+            Op::Dey | Op::Iny => (Index::Y, Op::Cpy),
+            _ => {
+                at += 1;
+                continue;
+            }
+        };
+        let mut end = at + 1;
+        let found = loop {
+            match asm.lines.get(end) {
+                Some(Line::Inst(inst))
+                    if inst.op == compare && matches!(&inst.operand, Operand::Imm(v) if v == "0") =>
+                {
+                    break matches!(next_instruction(&asm.lines, end + 1), Some(next) if matches!(next.op, Op::Beq | Op::Bne | Op::Bmi | Op::Bpl));
+                }
+                Some(Line::Inst(inst)) if leaves_index_alone(inst, index) => end += 1,
+                _ => break false,
+            }
+        };
+        if found && end > at + 1 {
+            let step = asm.lines.remove(at);
+            asm.lines.insert(end - 1, step);
+        }
+        at += 1;
+    }
+}
+
+/// Whether `inst` is straight-line work that neither reads nor writes `index`.
+fn leaves_index_alone(
+    inst: &Inst,
+    index: Index,
+) -> bool {
+    let plain = matches!(
+        inst.op,
+        Op::Lda
+            | Op::Sta
+            | Op::Adc
+            | Op::Sbc
+            | Op::And
+            | Op::Ora
+            | Op::Eor
+            | Op::Asl
+            | Op::Lsr
+            | Op::Rol
+            | Op::Ror
+            | Op::Clc
+            | Op::Sec
+            | Op::Inc
+            | Op::Dec
+            | Op::Cmp
+            | Op::Nop
+    );
+    let addressed = match &inst.operand {
+        Operand::Indexed(_, used) => *used == index,
+        Operand::IndirectX(_) => index == Index::X,
+        Operand::IndirectY(_) => index == Index::Y,
+        _ => false,
+    };
+    plain && !addressed
 }
 
 /// `cmp #0` before a branch on zero or sign, after an instruction that set
@@ -1030,6 +1133,82 @@ pub fn drop_cancelling_transfers(asm: &mut Asm) {
     asm.lines = out;
 }
 
+/// `jmp l` where `l:` starts a block of straight-line loads, stores and
+/// transfers that ends in `rts`, no longer than the jump: the block itself. A
+/// zero-trip path that stored its result and jumped to the return that loads
+/// it returns the constant (`dotx`: `lda #0; sta rc7; jmp b3` and `b3: lda rc7;
+/// rts` become `lda #0; rts` once the load and the store are dropped). The
+/// pin's `TailDuplicator` copies a return block into its predecessors the
+/// same way ([TailDuplicator.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L545)).
+/// A block nothing reaches afterwards is dropped.
+pub fn duplicate_return_tail(asm: &mut Asm) {
+    let mut at = 0;
+    let mut changed = false;
+    while at < asm.lines.len() {
+        let Line::Inst(jump) = &asm.lines[at] else {
+            at += 1;
+            continue;
+        };
+        let Some(target) = jump.target().filter(|_| jump.op == Op::Jmp) else {
+            at += 1;
+            continue;
+        };
+        let Some(label) = asm.lines.iter().position(|line| matches!(line, Line::Label(name) if name == target)) else {
+            at += 1;
+            continue;
+        };
+        let mut tail = Vec::new();
+        let mut bytes = 0;
+        let mut returns = false;
+        for line in &asm.lines[label + 1..] {
+            let Line::Inst(inst) = line else { break };
+            let straight = matches!(
+                inst.op,
+                Op::Lda | Op::Ldx | Op::Ldy | Op::Sta | Op::Stx | Op::Sty | Op::Tax | Op::Tay | Op::Txa | Op::Tya | Op::Clc | Op::Sec
+            );
+            if inst.op == Op::Rts {
+                returns = true;
+                tail.push(line.clone());
+                break;
+            }
+            bytes += inst.bytes();
+            if !straight || bytes > jump.bytes() {
+                break;
+            }
+            tail.push(line.clone());
+        }
+        if returns {
+            asm.lines.splice(at..=at, tail.iter().cloned());
+            at += tail.len();
+            changed = true;
+        } else {
+            at += 1;
+        }
+    }
+    if changed {
+        drop_unreached_blocks(asm);
+    }
+}
+
+/// The lines after an unconditional `jmp`, `bra` or `rts` up to the next label
+/// that something names: nothing runs them.
+fn drop_unreached_blocks(asm: &mut Asm) {
+    let mut at = 1;
+    while at < asm.lines.len() {
+        let after_exit = matches!(&asm.lines[at - 1], Line::Inst(inst) if matches!(inst.op, Op::Jmp | Op::Bra | Op::Rts));
+        let unnamed = matches!(&asm.lines[at], Line::Label(name) if references(&asm.lines, name) == 0);
+        if after_exit && unnamed {
+            let mut end = at + 1;
+            while matches!(asm.lines.get(end), Some(Line::Inst(_))) {
+                end += 1;
+            }
+            asm.lines.drain(at..end);
+        } else {
+            at += 1;
+        }
+    }
+}
+
 /// `jmp l` where `l:` is directly followed by `rts` (past other labels): the
 /// `rts` itself, one byte and one jump shorter.
 pub fn jump_to_return(asm: &mut Asm) {
@@ -1152,6 +1331,8 @@ fn dead_from(
                 (stored == Some(bit) || indexed(if bit == Registers::X { Index::X } else { Index::Y }), false)
             }
             (Op::Cpx | Op::Inx | Op::Dex, Registers::X) | (Op::Cpy | Op::Iny | Op::Dey, Registers::Y) => (true, false),
+            // the other index register's own steps and compares leave it alone
+            (Op::Cpx | Op::Inx | Op::Dex, Registers::Y) | (Op::Cpy | Op::Iny | Op::Dey, Registers::X) => (false, false),
             (Op::Adc | Op::And | Op::Ora | Op::Eor | Op::Sbc | Op::Cmp | Op::Pha, Registers::A) => (true, false),
             (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, Registers::A) => {
                 (matches!(inst.operand, Operand::Acc | Operand::None), false)

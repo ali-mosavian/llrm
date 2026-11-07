@@ -654,8 +654,27 @@ impl Builder<'_> {
         dst_align: u64,
         src_align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        let widest = self.widest_mem_op(size);
+        let widest = self.widest_mem_op_sse(size, false);
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
+        if ops.contains(&16) {
+            // DEVIATE SD540 (see `LLRM_MOVE128`): the pin's `v4i32` pieces are
+            // loaded and stored by one node
+            let (mut off, mut left) = (0u64, size);
+            let mut operands = vec![chain];
+            for width in &ops {
+                if *width > left {
+                    off -= width - left;
+                }
+                let align = common_alignment(src_align, off).min(common_alignment(dst_align, off));
+                operands.push(self.dag.get_object_ptr_offset(dst, off as i64));
+                operands.push(self.dag.get_object_ptr_offset(src, off as i64));
+                operands.push(self.dag.get_constant(u128::from(*width), EVT::I32));
+                operands.push(self.dag.get_constant(u128::from(align), EVT::I32));
+                off += width;
+                left = left.saturating_sub(*width);
+            }
+            return Ok(Some(self.dag.get_node(x86isd::LLRM_MOVE128, EVT::OTHER, &operands)));
+        }
         let (mut off, mut left) = (0u64, size);
         let mut loads = Vec::new();
         let mut placed = Vec::new();
@@ -723,8 +742,9 @@ impl Builder<'_> {
             return self.sse_fill_is_longer(length, fill.unwrap_or(0));
         }
         if opt_size && let Some(costs) = self.target.tti.as_ref().and_then(|tti| tti.0.size_fill()) {
-            // `rep stosd` takes whole aligned dwords; a tail or an unaligned fill is
-            // `rep stosb` or stores again (rep_tails -Os grew a byte).
+            // `rep stosd` takes whole aligned dwords; a tail or an unaligned
+            // fill is `rep stosb` or stores again (rep_tails -Os
+            // grew a byte).
             if length % 4 != 0 || alignment < 4 {
                 return false;
             }
@@ -737,9 +757,10 @@ impl Builder<'_> {
             };
             let store = costs.store[place];
             let mut stores = length / 4 * store[0] + u64::from(length % 4 >= 2) * store[1] + length % 2 * store[2];
-            // DEVIATE X87-ZERO-FILL stores whole doubles of zero as `fldz` (2) and
-            // one `fst qword` each: its stores are the pin's to beat, so the fill
-            // is taken only where it beats those too.
+            // DEVIATE X87-ZERO-FILL stores whole doubles of zero as `fldz` (2)
+            // and one `fst qword` each: its stores are the pin's to
+            // beat, so the fill is taken only where it beats those
+            // too.
             if fill == Some(0) && length >= 8 && length % 8 == 0 && !self.volatile_memory && self.x87_zero_fill() {
                 stores = stores.min(2 + length / 8 * costs.fst[place]);
             }
@@ -840,12 +861,8 @@ impl Builder<'_> {
         // doubles only: a dword tail needs the integer zero register anyway,
         // and the mixed form moved x_jpeg_single -Os +5 B through the
         // allocation it changed.
-        let fpu_zero = zero
-            && size >= 8
-            && size % 8 == 0
-            && self.has_opt_size()
-            && !self.volatile_memory
-            && self.x87_zero_fill();
+        let fpu_zero =
+            zero && size >= 8 && size % 8 == 0 && self.has_opt_size() && !self.volatile_memory && self.x87_zero_fill();
         let ops = if fpu_zero { vec![8u64; (size / 8) as usize] } else { ops };
         let largest = ops.iter().copied().filter(|width| *width != 16).max().unwrap_or(8);
         let largest_vt = EVT::integer(largest as u32 * 8);
