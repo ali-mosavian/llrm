@@ -175,6 +175,8 @@ struct Wide {
     cmp_ri: u16,
     imul: u16,
     shl_ri: u16,
+    shr_ri: u16,
+    sar_ri: u16,
     imul_ri: u16,
     mem: Mem,
 }
@@ -197,6 +199,8 @@ struct Names {
     cmp_ri: u16,
     imul: u16,
     shl_ri: u16,
+    shr_ri: u16,
+    sar_ri: u16,
     imul_ri: u16,
     /// `setcc` and the `i1` to `i32` widening: `and r8, 1`, `movzx`.
     setcc: u16,
@@ -254,6 +258,8 @@ impl Names {
                 cmp_ri: opcode("CMP64ri32")?,
                 imul: opcode("IMUL64rr")?,
                 shl_ri: opcode("SHL64ri")?,
+                shr_ri: opcode("SHR64ri")?,
+                sar_ri: opcode("SAR64ri")?,
                 imul_ri: opcode("IMUL64rri32")?,
                 mem: mem("64")?,
             })
@@ -274,6 +280,8 @@ impl Names {
             cmp_ri: opcode("CMP32ri")?,
             imul: opcode("IMUL32rr")?,
             shl_ri: opcode("SHL32ri")?,
+            shr_ri: opcode("SHR32ri")?,
+            sar_ri: opcode("SAR32ri")?,
             imul_ri: opcode("IMUL32rri")?,
             setcc: opcode("SETCCr")?,
             and8: opcode("AND8ri")?,
@@ -768,6 +776,27 @@ impl Fast<'_> {
                     use llrm_mir::opcode::BinaryOp::*;
                     let wide = wide_kind(&self.module.context.types, instruction.ty, self.m32)?;
                     let (_, _, _, _, alu, _, _, imul, vt) = self.set(wide)?;
+                    if matches!(op, Shl | LShr | AShr) {
+                        // a constant count: `shl`/`shr`/`sar r, imm8` (a variable count is `cl`, not here yet)
+                        let bits: i128 = if wide { 64 } else { 32 };
+                        let count = self.int(instruction.operands[1]).filter(|count| (0..bits).contains(count))?;
+                        let (shl, shr, sar) = if wide {
+                            let w = self.names.wide.as_ref()?;
+                            (w.shl_ri, w.shr_ri, w.sar_ri)
+                        } else {
+                            (self.names.shl_ri, self.names.shr_ri, self.names.sar_ri)
+                        };
+                        let left = self.value(instruction.operands[0])?;
+                        let count = self.dag.get_constant_with(count as u128, EVT::I8, true, false);
+                        let opcode = match op {
+                            Shl => shl,
+                            LShr => shr,
+                            _ => sar,
+                        };
+                        let done = self.node(opcode, &[vt, EVT::I32], &[left, count]);
+                        self.values.insert(instruction.result?, done);
+                        continue;
+                    }
                     if matches!(op, Mul) {
                         // the pin's `fastEmit_ri_`: a power of two is `shl r, k`, any other constant
                         // `imul r, r, imm`; a constant on the left is swapped to the right
