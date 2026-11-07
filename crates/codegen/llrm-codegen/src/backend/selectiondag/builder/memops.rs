@@ -833,19 +833,18 @@ impl Builder<'_> {
         setup + wide * 5 + (ops.len() as u64 - wide) * 8 > fill
     }
 
-    /// DEVIATE MEM-OS (`Tuning::size_copy_vs_call`, x86-64 tuned for size): whether the load and store
-    /// pieces of a constant copy take more bytes than the call. A piece is a load and a store at a
-    /// `[reg+disp8]` address: `movups` 4 + 4, a qword 4 + 4, a dword 3 + 3, a word 4 + 4, a byte 3 + 3;
-    /// the call is `mov edx, n` 5 and `call`/`jmp` 5 (the pointers are in `rdi` and `rsi` for either).
+    /// DEVIATE MEM-OS (`Tuning::size_copy_price`, x86-64 tuned for size): whether the load and store
+    /// pieces of a constant copy take more bytes than the call, at the target's prices.
     /// A copy from a constant (stored as immediates) and a volatile one keep the pin's pieces.
     fn copy_is_longer_than_call(
         &self,
         length: u64,
         source: SDValue,
     ) -> bool {
-        const CALL: u64 = 14;
-        let priced = self.target.tti.as_ref().is_some_and(|tti| tti.0.copy_for_size_is_priced_against_call());
-        if !priced || self.volatile_memory || self.constant_slice(source).is_some() {
+        let Some(price) = self.target.tti.as_ref().and_then(|tti| tti.0.copy_price_for_size()) else {
+            return false;
+        };
+        if self.volatile_memory || self.constant_slice(source).is_some() {
             return false;
         }
         let Some(ops) = Self::mem_ops(length, self.widest_mem_op_sse(length, false), usize::MAX, false) else {
@@ -854,11 +853,11 @@ impl Builder<'_> {
         let pieces: u64 = ops
             .iter()
             .map(|width| match width {
-                16 | 8 => 8,
-                _ => 6,
+                16 | 8 => price.wide_piece,
+                _ => price.narrow_piece,
             })
             .sum();
-        pieces > CALL
+        pieces > price.call
     }
 
     /// `getMemsetStores`: the fill value splatted to the widest operation,

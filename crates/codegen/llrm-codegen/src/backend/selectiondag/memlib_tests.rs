@@ -243,7 +243,10 @@ fn a_64_byte_memmove_at_m64_moves_four_16_byte_pieces() {
 /// pieces take more bytes than the call is the call, and a 16-byte one (one pair, 8 B) stays inline.
 #[test]
 fn a_constant_copy_for_size_at_m64_is_a_call_where_the_pieces_take_more_bytes() {
-    let tuning = llrm_mir::target::Tuning { size_copy_vs_call: true, ..llrm_mir::target::Tuning::PIN };
+    let tuning = llrm_mir::target::Tuning {
+        size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
+        ..llrm_mir::target::Tuning::PIN
+    };
     let tti = llrm_x86::tti::X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
     let target = BuilderTarget::m64().with_libcalls(&["memcpy", "memmove"]).with_tti(Some(std::rc::Rc::new(tti)));
     let text = |bytes: u64, call: &str| {

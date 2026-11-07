@@ -1225,6 +1225,27 @@ define i32 @f(float %x) {
     assert!(!seen.iter().any(|n| n.starts_with("fld") || n.starts_with("fst")), "{seen:?}");
 }
 
+/// `bitcast (xor (bitcast double %x to i64), signbit) to double` (`__negdf2`) kept
+/// the integer xor: 20 B on wasm against the pin's `f64.neg`, 7 B. It is `fneg`
+/// (`fchs` on x87), as `foldBitcastedFPLogic` has it.
+#[test]
+fn a_sign_bit_xor_of_a_double_bits_is_fneg() {
+    let ir = "target datalayout = \"@m32-datalayout@\"
+define double @f(double %x) {
+  %i = bitcast double %x to i64
+  %n = xor i64 %i, -9223372036854775808
+  %d = bitcast i64 %n to double
+  ret double %d
+}
+";
+    let module = crate::testing::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(seen.iter().any(|n| n.starts_with("fchs")), "{seen:?}");
+}
+
 /// `(a[i] >> 8) & 255` was `mov; shr; movzx` (x_radix, +5.3% clk at -O3); the
 /// pin reads the byte at `a + 1` with one `movzx`.
 #[test]

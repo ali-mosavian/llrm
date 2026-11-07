@@ -780,9 +780,9 @@ pub trait Tti {
         false
     }
 
-    /// `Tuning::size_copy_vs_call`.
-    fn copy_for_size_is_priced_against_call(&self) -> bool {
-        false
+    /// `Tuning::size_copy_price`.
+    fn copy_price_for_size(&self) -> Option<crate::target::CopyPrice> {
+        None
     }
 
     /// DEVIATE LG3: the bytes of the instructions a loop's setup and exit test
