@@ -1273,6 +1273,13 @@ pub trait Tti {
         key(a) < key(b)
     }
 
+    /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): LSR ranks formulae
+    /// by their bytes first when the function is built for size; false is the
+    /// pin's order at every level.
+    fn lsr_size_order(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LU13 (owner z80, exit 2026-11-30: a per-class register model in
     /// the LSR cost): a call clobbers every register, so each register the
     /// loop keeps across one is a frame slot, reloaded each trip and, for a
