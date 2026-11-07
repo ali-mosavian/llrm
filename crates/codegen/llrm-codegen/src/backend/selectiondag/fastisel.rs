@@ -155,6 +155,8 @@ struct Wide {
     cmp_rr: u16,
     cmp_ri: u16,
     imul: u16,
+    shl_ri: u16,
+    imul_ri: u16,
 }
 
 /// The machine opcodes FastISel emits.
@@ -171,6 +173,8 @@ struct Names {
     cmp_rr: u16,
     cmp_ri: u16,
     imul: u16,
+    shl_ri: u16,
+    imul_ri: u16,
     /// `setcc` and the `i1` to `i32` widening: `and r8, 1`, `movzx`.
     setcc: u16,
     and8: u16,
@@ -222,6 +226,8 @@ impl Names {
                 cmp_rr: opcode("CMP64rr")?,
                 cmp_ri: opcode("CMP64ri32")?,
                 imul: opcode("IMUL64rr")?,
+                shl_ri: opcode("SHL64ri")?,
+                imul_ri: opcode("IMUL64rri32")?,
             })
         })();
         Some(Names {
@@ -237,6 +243,8 @@ impl Names {
             cmp_rr: opcode("CMP32rr")?,
             cmp_ri: opcode("CMP32ri")?,
             imul: opcode("IMUL32rr")?,
+            shl_ri: opcode("SHL32ri")?,
+            imul_ri: opcode("IMUL32rri")?,
             setcc: opcode("SETCCr")?,
             and8: opcode("AND8ri")?,
             movzx8: opcode("MOVZX32rr8")?,
@@ -681,9 +689,34 @@ impl Fast<'_> {
                     let wide = wide_kind(&self.module.context.types, instruction.ty, self.m32)?;
                     let (_, _, _, _, alu, _, _, imul, vt) = self.set(wide)?;
                     if matches!(op, Mul) {
-                        // `imul r, r`: both operands in registers, as the pin's X86SelectMul
-                        let (left, right) = (self.value(instruction.operands[0])?, self.value(instruction.operands[1])?);
-                        let done = self.node(imul, &[vt, EVT::I32], &[left, right]);
+                        // the pin's `fastEmit_ri_`: a power of two is `shl r, k`, any other constant
+                        // `imul r, r, imm`; a constant on the left is swapped to the right
+                        let constant = |this: &Self, one| if wide { this.int_signed(one) } else { this.int(one) };
+                        let (a, b) = (instruction.operands[0], instruction.operands[1]);
+                        let (register, imm) = match (constant(&self, a), constant(&self, b)) {
+                            (_, Some(imm)) => (a, Some(imm)),
+                            (Some(imm), None) => (b, Some(imm)),
+                            (None, None) => (a, None),
+                        };
+                        let done = if let Some(imm) = imm {
+                            let (shl_ri, imul_ri) = if wide {
+                                let w = self.names.wide.as_ref()?;
+                                (w.shl_ri, w.imul_ri)
+                            } else {
+                                (self.names.shl_ri, self.names.imul_ri)
+                            };
+                            let left = self.value(register)?;
+                            if imm > 0 && (imm & (imm - 1)) == 0 {
+                                let count = self.dag.get_constant_with(imm.trailing_zeros().into(), EVT::I8, true, false);
+                                self.node(shl_ri, &[vt, EVT::I32], &[left, count])
+                            } else {
+                                let imm = self.dag.get_constant_with(imm as u128, vt, true, false);
+                                self.node(imul_ri, &[vt, EVT::I32], &[left, imm])
+                            }
+                        } else {
+                            let (left, right) = (self.value(a)?, self.value(b)?);
+                            self.node(imul, &[vt, EVT::I32], &[left, right])
+                        };
                         self.values.insert(instruction.result?, done);
                         continue;
                     }
