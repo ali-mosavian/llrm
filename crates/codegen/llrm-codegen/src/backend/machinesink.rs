@@ -1137,6 +1137,13 @@ pub fn sunk_within(
     limit: usize,
     classes: Option<&crate::backend::classes::RegisterClasses>,
 ) -> LirBody {
+    // `ProcessBlock` (MachineSink.cpp#L959-L961) leaves a block with one
+    // successor or fewer, or none of its own, at once: a body with no other
+    // block has nothing to sink and no edge to split, and needs none of the
+    // analyses the round builds.
+    if !body.blocks.iter().any(|block| block.succ.len() > 1 && !block.insns.is_empty()) {
+        return body.clone();
+    }
     let mut body = body.clone();
     // Each round walks the blocks, then breaks the edges it marked; it ends
     // when nothing moved and nothing was marked.
@@ -1930,6 +1937,43 @@ mod tests {
         let _ = Sinker::new(&body, false, None);
         let built = crate::liveness::blockfrequency::GRAPH_BUILDS.with(std::cell::Cell::get) - before;
         assert_eq!(built, 1, "graphs built for one round");
+    }
+
+    /// A body without a block of two successors has nothing the sink can move
+    /// (`ProcessBlock` returns at once for each of its blocks), yet every
+    /// round built a graph, dominators, frequencies and liveness for it:
+    /// memory_expansion's `MachineSink` was 34.0 M against the pin's 3.9 M.
+    /// Counted, not timed.
+    #[test]
+    fn test_a_body_without_a_branch_builds_no_analyses() {
+        let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let body = |blocks: Vec<LirBlock>| {
+            let mut body = LirBody::new(
+                "f",
+                0,
+                blocks.into_iter().collect(),
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            body
+        };
+        let graphs = |body: &LirBody| {
+            let before = crate::liveness::blockfrequency::GRAPH_BUILDS.with(std::cell::Cell::get);
+            let _ = sunk(body, false);
+            crate::liveness::blockfrequency::GRAPH_BUILDS.with(std::cell::Cell::get) - before
+        };
+        let straight = body(vec![block(0, vec![1], vec![]), block(1, vec![], vec![ret(1)])]);
+        let branching = body(vec![
+            block(0, vec![1, 2], vec![jump(0)]),
+            block(1, vec![2], vec![]),
+            block(2, vec![], vec![ret(2)]),
+        ]);
+        assert_eq!(graphs(&straight), 0, "graphs built for a body that cannot sink");
+        assert!(graphs(&branching) > 0, "a body with a branch is still analysed");
     }
 
     /// x_bubble's inner loop: `j + 1` is computed in the header, read by the
