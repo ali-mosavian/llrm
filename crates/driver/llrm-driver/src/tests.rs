@@ -2074,6 +2074,32 @@ fn a_comdat_global_of_zeros_is_a_bss_comdat_section() {
     assert_eq!(selection(w), Some(llrm_object::Selection::Any), "{:?}", object.comdats);
 }
 
+/// A comdat of several members folded its globals into one section and gave
+/// its function a comdat of its own: the linker could keep one object's `k` and
+/// another's `g`. The pin writes the member named like the comdat as the comdat
+/// section, selection `any`, and every other member as its own section,
+/// associative with it.
+#[test]
+fn the_members_of_a_comdat_are_associative_with_its_named_member() {
+    let object = windows_object(
+        "$k = comdat any\n\
+         @k = linkonce_odr dso_local global i32 7, comdat, align 4\n\
+         @m = linkonce_odr dso_local global i32 9, comdat($k), align 4\n\
+         define linkonce_odr dso_local i32 @g(i32 %a) comdat($k) {\n  ret i32 %a\n}\n",
+    );
+    let section = |name: &str| match object.symbols.iter().find(|one| one.name == name).unwrap().definition {
+        llrm_object::Definition::Defined { section, .. } => section,
+        llrm_object::Definition::Undefined => unreachable!(),
+    };
+    let record = |section: usize| object.comdats.iter().find(|one| one.section == section).map(|one| (one.selection, one.associated));
+    let key = section("k");
+    assert_eq!(record(key), Some((llrm_object::Selection::Any, None)), "{:?}", object.comdats);
+    for member in ["m", "g"] {
+        assert_ne!(section(member), key, "{member} shares the key's section");
+        assert_eq!(record(section(member)), Some((llrm_object::Selection::Associative, Some(key))), "{member}: {:?}", object.comdats);
+    }
+}
+
 /// The symbol of a COMDAT function or global was written as a static
 /// (storage class 3): the linker saw a private name in each object and kept
 /// every copy. The pin writes it external (class 2).
