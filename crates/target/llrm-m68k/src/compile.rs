@@ -211,6 +211,7 @@ pub fn items_with(
         crate::shiftadd::shifts_to_adds(&mut function);
         crate::negadd::negative_adds_to_subq(&mut function);
         crate::addrarith::address_adds(&mut function, cpu, wants_size);
+        crate::addrarith::data_leas_to_adds(&mut function, cpu, wants_size);
         crate::foldload::fold_loads(&mut function);
         crate::divrem::remainders_from_quotients(&mut function);
         if wants_size {
@@ -250,9 +251,10 @@ pub fn items_with(
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
         crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
         crate::constreg::constant_into_destination(&mut function, &assignment);
-        crate::constreg::immediate_from_free_register(&mut function, &assignment);
+        // Narrowing first: `add.w #87` and `cmpi.b #10` need no register.
         crate::narrow_add::narrow_adds(&mut function, &assignment);
         crate::narrow_add::narrow_compares(&mut function, &assignment);
+        crate::constreg::immediate_from_free_register(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);

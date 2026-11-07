@@ -22,6 +22,16 @@
 //! its register allocator, which splits it with copies. Reason: this
 //! allocator does not split, and best of gcc and clang is the goal. Exit: none.
 //!
+//! DEVIATE SD257: [`data_leas_to_adds`]. The pin's address matcher turns an
+//! `or` of disjoint bits and a constant into `lea (n,An)` wherever the sum is
+//! selected, and leaves the sum in an address register whatever reads it. Here a
+//! `lea` whose sum only data reads is the data add before allocation, where
+//! the timing tables price the add below the `lea` and its two copies (the
+//! same prices as [`refine_lea_round_trips`], on the selection CPU). Replaces
+//! the pin's `lea` default for such sums. Reason: hex at the 68020 joined the
+//! `lea` with a data add through `%a1`, 68 B against gcc's 62. Owner m68k.
+//! Exit: 2026-11-28, when the allocator splits a class on a copy.
+//!
 //! # See also
 //! `M68kInstrInfo::copyPhysReg`, which is what the copies become.
 
@@ -288,6 +298,137 @@ fn rewrite_one(
     let insts = &mut function.blocks[b].insts;
     insts[at] = inst;
     insts.remove(copy);
+    Some(at)
+}
+
+/// Whether `v` is read as data only: nothing it reaches, through copies and
+/// phis, is an address register or an address operand.
+fn reaches_data_only(
+    function: &MFunction,
+    uses: &[Vec<Use>],
+    v: u32,
+    seen: &mut HashSet<u32>,
+) -> bool {
+    if !seen.insert(v) {
+        return true;
+    }
+    let own = &uses[v as usize];
+    !own.is_empty()
+        && own.iter().all(|one| match one {
+            Use::Copy(to) | Use::Phi(to) => match function.classes[*to as usize] {
+                Class::Ar32 => false,
+                Class::Xr32 => reaches_data_only(function, uses, *to, seen),
+                _ => true,
+            },
+            Use::Address => false,
+            Use::Other => true,
+        })
+}
+
+/// `lea (n,An)` of a data register, whose sum only data reads, is the data
+/// add (DEVIATE SD257 above), where the add prices below the `lea` and the
+/// copies a data sum needs around it. The add sets the codes the `lea`
+/// leaves: where a later instruction reads the codes of an earlier one, the
+/// add goes before that one, as long as its input is defined above it.
+pub fn data_leas_to_adds(
+    function: &mut MFunction,
+    cpu: Cpu,
+    size: bool,
+) {
+    // `LLRM_NO_DATA_LEA` turns it off, for an A/B of one build.
+    if llrm_support::env_flag!("LLRM_NO_DATA_LEA") {
+        return;
+    }
+    let uses = uses_by_register(function);
+    for b in 0..function.blocks.len() {
+        let mut at = 0;
+        while at < function.blocks[b].insts.len() {
+            match rewrite_data_lea(function, &uses, b, at, cpu, size) {
+                Some(done) => at = done,
+                None => at += 1,
+            }
+        }
+    }
+}
+
+fn rewrite_data_lea(
+    function: &mut MFunction,
+    uses: &[Vec<Use>],
+    b: usize,
+    at: usize,
+    cpu: Cpu,
+    size: bool,
+) -> Option<usize> {
+    let insts = &function.blocks[b].insts;
+    let (Kind::Op("LEA32p"), [Operand::Def(Reg::Virt(d)), Operand::Imm(value), Operand::Use(Reg::Virt(a))]) =
+        (&insts[at].kind, &insts[at].operands[..])
+    else {
+        return None;
+    };
+    let (d, value, a) = (*d, *value, *a);
+    // the base is a copy of a data register that only the `lea` reads, or a
+    // register that is not an address register already
+    let copy = insts[..at]
+        .iter()
+        .rposition(|one| matches!(&one.operands[..], [Operand::Def(Reg::Virt(def)), _] if *def == a))
+        .filter(|&copy| matches!(insts[copy].kind, Kind::Copy) && uses[a as usize].len() == 1);
+    let source = match copy {
+        Some(copy) => match insts[copy].operands[1] {
+            Operand::Use(source @ Reg::Virt(y)) if function.classes[y as usize] == Class::Dr32 => source,
+            _ => return None,
+        },
+        None if function.classes[a as usize] != Class::Ar32 => Reg::Virt(a),
+        None => return None,
+    };
+    if !reaches_data_only(function, uses, d, &mut HashSet::default()) {
+        return None;
+    }
+    // the add sets the codes the `lea` leaves: where a later instruction reads
+    // the codes of an earlier one, the add goes before that one
+    let hoist = if codes_unread(insts, at) {
+        None
+    } else {
+        let setter = insts[..at].iter().rposition(|one| one.sets_flags)?;
+        let source_defined_between = insts[setter..at]
+            .iter()
+            .any(|one| one.operands.iter().any(|operand| matches!(operand, Operand::Def(def) if *def == source)));
+        if insts[setter].reads_flags || insts[setter].call || source_defined_between {
+            return None;
+        }
+        Some(setter)
+    };
+    let (opcode, immediate) = match value {
+        1..=8 => ("ADDQ32di", value),
+        -8..=-1 => ("SUBQ32di", -value),
+        _ => ("ADD32di", value),
+    };
+    // priced as `refine_lea_round_trips` does: the add against the copy in, the
+    // `lea` and the copy out, on the CPU the selection is made for
+    let class = selection_class(cpu);
+    let lea = price(&Candidate { opcode: "LEA32p", operands: displaced, value }, class)?;
+    let (clocks, bytes) = data_add_price(opcode, immediate, class)?;
+    let old = (
+        copy_clocks(class, "move.l\t%d0, %a0")? + lea.0 + copy_clocks(class, "move.l\t%a0, %d0")?,
+        2 + lea.1 + 2,
+    );
+    if crate::timing::order(class, size, clocks, bytes) >= crate::timing::order(class, size, old.0, old.1) {
+        return None;
+    }
+    let desc = local::desc(local::code_of(opcode)?)?;
+    let add = op_inst(opcode, desc, tied(Reg::Virt(d), source, immediate));
+    function.classes[d as usize] = Class::Dr32;
+    let insts = &mut function.blocks[b].insts;
+    match hoist {
+        None => insts[at] = add,
+        Some(setter) => {
+            insts.remove(at);
+            insts.insert(setter, add);
+        }
+    }
+    if let Some(copy) = copy {
+        // the add went in before the copy when it went in above it
+        insts.remove(if hoist.is_some_and(|setter| copy >= setter) { copy + 1 } else { copy });
+    }
     Some(at)
 }
 
