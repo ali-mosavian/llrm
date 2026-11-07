@@ -1223,6 +1223,7 @@ impl Builder<'_> {
         // fixed object, which `va_start` stores the address of
         if self.module.signature(self.function.ty).2 {
             self.dag.var_args_frame_index = Some(-(fixed + 1));
+            self.info.vararg_frame_index = Some(-(fixed + 1));
             if self.target.dag.pointer == EVT::I64 {
                 self.save_variadic_registers(fixed)?;
             }

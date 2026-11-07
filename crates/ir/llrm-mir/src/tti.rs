@@ -754,6 +754,11 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE VASTART-PROMOTE: `Tuning::promote_va_list`.
+    fn promote_va_list(&self) -> bool {
+        false
+    }
+
     /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): `Tuning::sink_spares_ranges`.
     fn sink_spares_ranges(&self) -> bool {
         false
