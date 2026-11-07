@@ -27,7 +27,8 @@ static u32 branches(u32 a, u32 b)
 static u32 selects(u32 a, u32 b)
 {
     s32 x = (s32)a, y = (s32)b;
-    return (a < b ? 3u : 5u) + (a >= b ? 7u : 11u) * 16u + (x < y ? 13u : 17u) * 256u + (x >= y ? 19u : 23u) * 4096u;
+    return (a < b ? (u32)3 : (u32)5) + (a >= b ? (u32)7 : (u32)11) * 16 + (x < y ? (u32)13 : (u32)17) * 256 +
+           (x >= y ? (u32)19 : (u32)23) * 4096;
 }
 
 int main(void)
@@ -36,7 +37,7 @@ int main(void)
     for (i = 0; i < 14; ++i) {
         u32 h = 0;
         for (j = 0; j < 14; ++j)
-            h = h * 257u + branches(v[i], v[j]) + selects(v[i], v[j]) * 65599u;
+            h = h * 257u + branches(v[i], v[j]) + selects(v[i], v[j]) * (u32)65599;
         report((long)(s32)h);
     }
     return 0;
