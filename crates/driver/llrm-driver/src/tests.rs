@@ -3079,6 +3079,108 @@ fn a_row_on_the_same_line_as_the_row_before_is_not_a_statement() {
     }
 }
 
+/// Two read-modify-writes of one word with another in between (`counts[12]++;
+/// counts[14]++; counts[12]++`, split_loops -O3): the first store is dead once
+/// the second has the first's value, so the pin's DAG combiner drops it and
+/// the pair is one `add word ptr [counts+24], 2`. Ours kept both stores, the
+/// value in a register (`mov eax, dword ptr`, `lea ecx, [rax+1]`, `mov word
+/// ptr, cx`, ..., `add eax, 2`, `mov word ptr, ax`). The statement-level DSE
+/// is off here: it removes the first store before the DAG sees it.
+#[test]
+fn a_store_the_next_to_the_same_word_overwrites_is_dropped_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @c = internal global [64 x i16] zeroinitializer, align 16\n\
+                define void @f() {\n\
+                  %a = load i16, ptr getelementptr inbounds (i8, ptr @c, i64 24), align 8\n\
+                  %a1 = add i16 %a, 1\n\
+                  store i16 %a1, ptr getelementptr inbounds (i8, ptr @c, i64 24), align 8\n\
+                  %b = load i16, ptr getelementptr inbounds (i8, ptr @c, i64 28), align 4\n\
+                  %b1 = add i16 %b, 1\n\
+                  store i16 %b1, ptr getelementptr inbounds (i8, ptr @c, i64 28), align 4\n\
+                  %c = load i16, ptr getelementptr inbounds (i8, ptr @c, i64 24), align 8\n\
+                  %c1 = add i16 %c, 1\n\
+                  store i16 %c1, ptr getelementptr inbounds (i8, ptr @c, i64 24), align 8\n\
+                  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-fno-tree-dse"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let stores = listing.lines().filter(|line| line.trim().starts_with("mov word ptr")).count();
+    assert!(listing.lines().any(|line| line.trim().starts_with("add word ptr") && line.trim().ends_with(", 2")), "{listing}");
+    assert_eq!(stores, 0, "{listing}");
+}
+
+/// `select a, true, freeze b` of two compares is `(x^c)|(y^c) != 0` at x86: the
+/// freeze is pushed through the compare (`visitFREEZE`), where kept it hid the
+/// `or` of compares from `foldLogicOfSetCCs` and left two `setne`, an `or`, a
+/// `movzx` and an `and 1` (memcpy_runtime -O3 m32, 1084 -> 1101 B).
+#[test]
+fn an_or_of_two_compares_with_one_constant_is_one_setne_at_m32() {
+    let ir = "target datalayout = \"@m32-datalayout@\"\n\
+              target triple = \"i686-pc-linux-gnu\"\n\
+              @to = global [8 x i8] zeroinitializer\n\
+              define i32 @f(i32 %acc) {\n  %p = load i8, ptr @to\n  \
+              %q = load i8, ptr getelementptr (i8, ptr @to, i32 2)\n  \
+              %a = icmp ne i8 %p, -86\n  %b = icmp ne i8 %q, -86\n  \
+              %c = select i1 %a, i1 true, i1 %b\n  %z = zext i1 %c to i32\n  \
+              %r = add i32 %z, %acc\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486", "--isel=dag"]), ir, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert_eq!(listing.matches("setne").count(), 1, "{listing}");
+    assert!(!listing.contains("and ecx, 1"), "{listing}");
+}
+
+/// `br (select i1 %u, i1 %bit, i1 false)` is combined as the pin does: the
+/// `brcond` is visited first and `rebuildSetCC` makes `setne(select, -1)`
+/// before the select becomes an `and`. A select made an `and` ahead of the
+/// DAG left `xor(and, -1)`, which De Morgan turned into `setae` + `or`: a
+/// second flag in a spill slot (switch_table_holes -O2 m32, 122 -> 132 B).
+/// Runs at m64: the hook is off at m32, where it costs sieve -O3 3 B and 172 clk.
+#[test]
+fn a_branch_on_a_bool_select_is_an_and_and_a_compare_not_an_or_of_inverses_at_m64() {
+    let ir = "target datalayout = \"@m64-datalayout@\"\n\
+              target triple = \"x86_64-unknown-linux-gnu\"\n\
+              declare void @a()\ndeclare void @b()\n\
+              define void @f(i32 %x) {\n  %u = icmp ult i32 %x, 14\n  %t = trunc i32 %x to i16\n  \
+              %s = lshr i16 8707, %t\n  %bit = trunc i16 %s to i1\n  \
+              %c = select i1 %u, i1 %bit, i1 false\n  br i1 %c, label %t1, label %e\nt1:\n  \
+              call void @a()\n  ret void\ne:\n  call void @b()\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), ir, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("setae"), "the compare was inverted:\n{listing}");
+    assert!(!listing.lines().any(|l| l.trim().starts_with("or ")), "the and became an or:\n{listing}");
+}
+
+/// `icmp ult` before `icmp ne` joined by `and` and branched on: the pin keeps
+/// each compare's IR order through De Morgan (`SDLoc(N00)`, `SDLoc(N01)`), so
+/// the source-order scheduler emits `cmp ecx, 7` before `cmp eax, 204`. Ours
+/// gave both flipped compares the branch's order and emitted them the other
+/// way round (jpeg -O2, +59 B of spill in `bench_jpeg_fixed_`). `swapped`
+/// is the same with the compares in the other order.
+#[test]
+fn the_compares_of_a_negated_and_keep_their_ir_order_at_m32() {
+    let ir = |first: &str, second: &str| {
+        format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+             target triple = \"i686-pc-linux-gnu\"\n\
+             declare void @a()\ndeclare void @b()\n\
+             define void @f(i32 %x) {{\n  %s = add nsw i32 %x, -201\n  {first}\n  {second}\n  \
+             %c = and i1 %n, %u\n  br i1 %c, label %t, label %e\nt:\n  call void @a()\n  ret void\ne:\n  \
+             call void @b()\n  ret void\n}}\n"
+        )
+    };
+    let ult = "%u = icmp ult i32 %s, 7";
+    let ne = "%n = icmp ne i32 %x, 204";
+    let order = |text: String| -> Vec<&'static str> {
+        let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486", "--isel=dag"]), &text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let first = listing.lines().position(|l| l.trim().starts_with("cmp ecx, 7")).unwrap();
+        let second = listing.lines().position(|l| l.trim().starts_with("cmp eax, 204")).unwrap();
+        vec![if first < second { "ult first" } else { "ne first" }]
+    };
+    assert_eq!(order(ir(ult, ne)), ["ult first"]);
+    assert_eq!(order(ir(ne, ult)), ["ne first"]);
+}
+
 /// The copy that puts a call's argument in its register is of the call's line
 /// (the pin's `COPY` has the call's `DebugLoc`). Ours had none, so every case
 /// block of a switch began with a line-0 row: 5 of them in 8 cases.

@@ -298,6 +298,10 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    fn push_freeze_through_operands(&self) -> bool {
+        true
+    }
+
     fn fold_sext_in_reg_of_load(&self) -> bool {
         self.sext_load
     }
