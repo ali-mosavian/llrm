@@ -400,6 +400,19 @@ pub fn expand(
                 }
             }
         }
+        // one bit crosses between two words, through the carry of a shift
+        op::FSHL1 | op::FSHR1 => {
+            let ((dl, dh), (al, ah), (bl, bh)) = (word(&o[0])?, word(&o[1])?, word(&o[2])?);
+            if inst.opcode == op::FSHL1 {
+                copy_byte(&mut out, &dl, &al);
+                copy_byte(&mut out, &dh, &ah);
+                writeln!(out, "  lda {bh}\n  asl a\n  rol {dl}\n  rol {dh}").unwrap();
+            } else {
+                copy_byte(&mut out, &dl, &bl);
+                copy_byte(&mut out, &dh, &bh);
+                writeln!(out, "  lda {al}\n  lsr a\n  ror {dh}\n  ror {dl}").unwrap();
+            }
+        }
         // rs0 += n; the carry runs from the low byte to the high.
         op::ADJSP => {
             let n = imm(&o[0])? as u16;
@@ -530,6 +543,11 @@ pub fn expand(
         op::CMP16 => {
             let ((al, ah), (bl, bh)) = (word(&o[1])?, word(&o[2])?);
             writeln!(out, "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}").unwrap();
+        }
+        // the words' compare, then the high words subtract with its borrow
+        op::CMP32 => {
+            let ((al, ah), (bl, bh), (cl, ch), (dl, dh)) = (word(&o[1])?, word(&o[2])?, word(&o[3])?, word(&o[4])?);
+            writeln!(out, "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}\n  lda {cl}\n  sbc {dl}\n  lda {ch}\n  sbc {dh}").unwrap();
         }
         // Z only if both bytes are equal: the first mismatch leaves Z clear.
         op::CMPZ16 => {

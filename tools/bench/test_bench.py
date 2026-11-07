@@ -1477,3 +1477,17 @@ def test_watcom_links_error086_when_the_library_has_no_doserror(tmp_path, monkey
     built = bench.build_watcom(variant, "O2", work, "F000")
     assert not isinstance(built, str), built
     assert str(obj) not in links[0] and str(obj) in links[1]
+
+
+def test_references_skip_levels_they_are_not_built_at(tmp_path, monkeypatch):
+    """`bench.py --opt O1 O2 O3 Os --references` raised KeyError 'O1' in build_borland after 35 minutes and lost the whole run's JSON."""
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "C0M.OBJ").write_bytes(b"")
+    asked = []
+    monkeypatch.setattr(bench, "BORLAND", {"bcc": (tmp_path, "bcc", {"O1": "-O1", "O2": "", "Os": "-O1"})})
+    monkeypatch.setattr(bench, "reference_programs", lambda selected: [])
+    monkeypatch.setattr(bench, "with_startup", lambda selected, timing: selected)
+    monkeypatch.setattr(bench, "build_borland", lambda language, variants, opt, folder: asked.append(opt) or {})
+    monkeypatch.setattr(bench, "BASIC_REFERENCES", {})
+    bench.measure_references([], ["O1", "O2", "O3", "Os"], tmp_path)
+    assert asked == ["O1", "O2", "Os"]

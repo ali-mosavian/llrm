@@ -106,6 +106,11 @@ pub fn select_node<D: AddrDag>(
                 return Outcome::Selected;
             }
         }
+        x86isd::LLRM_MOVE128 => {
+            if crate::x86_memop128::select_move128(dag, hooks, node) {
+                return Outcome::Selected;
+            }
+        }
         x86isd::FAND | x86isd::FOR | x86isd::FXOR => {
             if select_fp_logic(dag, hooks, node) {
                 return Outcome::Selected;

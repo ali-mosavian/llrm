@@ -267,6 +267,30 @@ pub fn pressure_weighted(
     peak
 }
 
+/// `pressure_weighted` of each block of the function on its own, in layout
+/// order.
+pub fn pressure_by_block(
+    function: &Function,
+    weight: &dyn Fn(ValueId) -> usize,
+) -> Vec<(BlockId, usize)> {
+    let found = live_where(function, &|one| weight(one) > 0);
+    let size = |alive: &IdSet<ValueId>| alive.iter().map(|one| weight(one)).sum::<usize>();
+    let mut peaks = Vec::new();
+    for &block in function.layout() {
+        let mut alive = found.live_out[&id(block)].clone();
+        let mut peak = size(&alive);
+        for op in split(function, block).1.into_iter().rev() {
+            if let Some(one) = op.result {
+                alive.remove(&one);
+            }
+            alive.extend(reads(op));
+            peak = peak.max(size(&alive));
+        }
+        peaks.push((block, peak));
+    }
+    peaks
+}
+
 /// The weight of the `candidates` live into `header` that no block of `blocks`
 /// reads: they hold their registers (or spill) across the loop without using
 /// it.

@@ -178,7 +178,9 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
         let first_halves: Vec<usize> = pairs[at].values().copied().collect();
         for (index, op) in block.ops.iter().enumerate() {
             origin += 1;
-            if first_halves.contains(&index) {
+            // A debug note is no instruction to the allocator (`isDebugInstr`):
+            // `rebuild` puts it back after the operation that made its value.
+            if op.is_debug() || first_halves.contains(&index) {
                 continue;
             }
             let fused = pairs[at].contains_key(&index);
@@ -218,6 +220,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 Op::JumpTable { .. } => (Kind::Op("JumpTable"), true, true, false),
                 Op::Call { .. } => (Kind::Op("Call"), false, false, true),
                 Op::Return { .. } => (Kind::Op("Return"), true, true, false),
+                Op::DbgValue { .. } => unreachable!("a debug note is skipped above"),
             };
             let mut operands = Vec::new();
             let mut ties = Vec::new();
@@ -306,6 +309,17 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
 /// `function`, its registers the physical ones greedy chose in `lir`
 /// (`assignment` by virtual number) and the spills it wrote: each operation is
 /// the original one found by its [`content`], the spills and copies new.
+static NOTES_SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static NOTES_PLACED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The debug notes `rebuild` was given and the ones it put back after the
+/// operation that made their value, so far in the process: the rest said
+/// nothing, and a test that finds locations must also see how many were lost.
+pub fn note_counts() -> (u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (NOTES_SEEN.load(Relaxed), NOTES_PLACED.load(Relaxed))
+}
+
 pub fn rebuild(
     function: &mut MFunc,
     lir: &MFunction<Class>,
@@ -322,6 +336,59 @@ pub fn rebuild(
     for (block, pairs) in function.blocks.iter().zip(&pairs) {
         for &add in pairs.keys() {
             fused.entry(content(&block.ops[add]).wrapping_add(1)).or_insert_with(|| block.ops[add].clone());
+        }
+    }
+    // The debug notes, by the number `view` gave the operation that made their
+    // value, with the position of that value among the operation's registers
+    // (`registers` below): the note is put back after it, naming the register
+    // allocation left there. A note whose value the operation before it did not
+    // make says nothing.
+    let mut notes: HashMap<u32, Vec<(llrm_mir::MetadataId, usize, Option<Reg>)>> = HashMap::default();
+    let mut arrived: Vec<(llrm_mir::MetadataId, Reg)> = Vec::new();
+    // Variables with a note the converter cannot place (a value from another
+    // block, a float, nothing): the earlier notes would stay standing, saying
+    // more than the code does, so such a variable says nothing at all.
+    let mut lost: std::collections::HashSet<llrm_mir::MetadataId> = std::collections::HashSet::new();
+    let mut number = 0u32;
+    for (block_at, block) in function.blocks.iter().enumerate() {
+        let is_entry = block_at == 0;
+        // Where each register was last written in this block: the operation's
+        // number and the register's position among its registers.
+        let mut made: HashMap<Reg, (u32, usize, Option<Reg>)> = HashMap::default();
+        for op in block.ops.iter() {
+            number += 1;
+            if op.is_debug() {
+                NOTES_SEEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            if let Op::DbgValue { variable, reg } = op {
+                match reg.and_then(|reg| made.get(&reg)) {
+                    Some(&(anchor, position, comes_in)) => {
+                        notes.entry(anchor).or_default().push((*variable, position, comes_in));
+                    }
+                    None => {
+                        lost.insert(*variable);
+                    }
+                }
+                continue;
+            }
+            if op.is_debug() || is_zero_copy(op) {
+                continue;
+            }
+            // A copy of an argument register in the entry block: if allocation
+            // removes it, the value is in that register from the entry.
+            let comes_in = match op {
+                Op::Copy { dst, src: src @ Reg::Gpr(from) } if is_entry && !from.is_virtual() && *dst != *src => {
+                    Some(*src)
+                }
+                _ => None,
+            };
+            let mut position = 0usize;
+            op.clone().visit(&mut |register, role| {
+                if role.writes() {
+                    made.insert(register.key(), (number, position, comes_in));
+                }
+                position += if role == Role::UseDef { 2 } else { 1 };
+            });
         }
     }
     // The place of each operation, by the number `view` gave it.
@@ -344,9 +411,31 @@ pub fn rebuild(
         LirReg::Phys(id) if id.index() >= crate::reg::V0.index() => Class::Fpr,
         LirReg::Phys(_) => Class::Gpr,
     };
-    for (block, lir_block) in function.blocks.iter_mut().zip(&lir.blocks) {
+    // A note whose operation allocation removed (a copy of an argument register
+    // the value was coalesced with) stands at the entry, naming that register.
+    let present: std::collections::HashSet<u32> =
+        lir.blocks.iter().flat_map(|block| block.insts.iter().map(|inst| inst.origin)).collect();
+    for (anchor, list) in &notes {
+        if !present.contains(anchor) {
+            for &(variable, _, comes_in) in list {
+                match comes_in {
+                    Some(reg) => arrived.push((variable, reg)),
+                    None => {
+                        lost.insert(variable);
+                    }
+                }
+            }
+        }
+    }
+    for (block_at, (block, lir_block)) in function.blocks.iter_mut().zip(&lir.blocks).enumerate() {
         let mut ops = Vec::with_capacity(lir_block.insts.len());
         let mut locs = Vec::with_capacity(lir_block.insts.len());
+        if block_at == 0 {
+            for &(variable, reg) in &arrived {
+                ops.push(Op::DbgValue { variable, reg: Some(reg) });
+                locs.push(None);
+            }
+        }
         for inst in &lir_block.insts {
             let before = ops.len();
             let registers: Vec<(LirReg, Class)> = inst
@@ -419,6 +508,9 @@ pub fn rebuild(
                     ops.push(op);
                 }
             }
+            for &(variable, position, _) in notes.get(&inst.origin).map_or(&[][..], Vec::as_slice) {
+                ops.push(Op::DbgValue { variable, reg: Some(reg_at(position)) });
+            }
             for _ in before..ops.len() {
                 locs.push(if inst.origin == 0 { None } else { places[inst.origin as usize - 1] });
             }
@@ -439,7 +531,19 @@ pub fn rebuild(
                 None => *loc = last,
             }
         }
+        let kept: Vec<bool> =
+            ops.iter().map(|op| !matches!(op, Op::DbgValue { variable, .. } if lost.contains(variable))).collect();
+        let mut at = 0;
+        ops.retain(|_| (kept[at], at += 1).0);
+        at = 0;
+        locs.retain(|_| (kept[at], at += 1).0);
+        NOTES_PLACED
+            .fetch_add(ops.iter().filter(|op| op.is_debug()).count() as u64, std::sync::atomic::Ordering::Relaxed);
         block.ops = ops.into_iter().zip(locs).collect();
+    }
+    if llrm_support::env_var("LLRM_NOTE_COUNTS").is_some() {
+        let (seen, placed) = note_counts();
+        eprintln!("debug notes: {seen} seen, {placed} placed so far ({})", function.name);
     }
 }
 
@@ -587,6 +691,18 @@ impl AllocTarget for Arm64 {
         _size: bool,
     ) -> bool {
         literal.what.as_ref().is_none_or(|what| what.name.as_deref() != Some("AddPageOffset"))
+    }
+
+    /// Mirrors `RegisterCoalescer::reMaterializeDef`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L1298>):
+    /// the pin makes a trivially rematerializable def again for a copy with no
+    /// size guard. The zero register's `mov xd, xzr` is one four-byte
+    /// `orr`, the size of the copy it replaces. Another constant may take
+    /// several instructions (`mul_constants` -Os grew 124 B when every
+    /// constant was made again); its operand here is an identity, not the
+    /// value, so only the zero is known to be one.
+    fn literal_move_is_copy_sized(literal: &llrm_codegen::model::lir::Insn) -> bool {
+        literal.what.as_ref().and_then(|what| what.name.as_deref()).is_some_and(Self::is_zero_def)
     }
 
     fn candidates(class: Class) -> Vec<RegId> {

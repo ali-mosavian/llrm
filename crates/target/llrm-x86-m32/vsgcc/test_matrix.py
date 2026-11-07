@@ -14,3 +14,9 @@ def test_a_rows_bytes_count_the_constants_the_kernel_loads():
 
 def test_a_row_without_data_counts_its_code_alone():
     assert matrix.rows([r('p', 'clangO2', 100, 0)])[0][4] == '100'
+
+
+def test_the_eh_frame_is_a_column_of_its_own_and_not_in_the_bytes():
+    """The .eh_frame of float_bits (ours 84 B against the pin's 48) was seen only in a card: the matrix reports it and never adds it to `code`."""
+    row = matrix.rows([{**r('p', 'gccO2', 100, 8), 'eh_frame': 52}, {**r('p', 'llrm', 100, 8)}])
+    assert [(x[3], x[4], x[8]) for x in row] == [('gcc', '108', '52'), ('ours', '108', '')]

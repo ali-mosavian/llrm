@@ -348,6 +348,8 @@ struct Emitter<'a, 'd> {
     /// The machine nodes emitted: the scheduler's clone of a unit emits its
     /// node again.
     machine_emitted: llrm_support::hash::HashSet<u32>,
+    /// Nodes the scheduler emits in more than one unit (`IsCloned`).
+    cloned_nodes: llrm_support::hash::HashSet<u32>,
     /// The `CopyToReg EFLAGS` nodes emitted.
     flag_copies_done: llrm_support::hash::HashSet<u32>,
 }
@@ -485,6 +487,16 @@ pub fn emit_in(
         flag_insns: HashMap::default(),
         saved_carry: HashMap::default(),
         machine_emitted: Default::default(),
+        cloned_nodes: {
+            let mut seen = llrm_support::hash::HashSet::default();
+            let mut cloned = llrm_support::hash::HashSet::default();
+            for &node in units.iter().flat_map(|unit| &unit.nodes) {
+                if !seen.insert(node) {
+                    cloned.insert(node);
+                }
+            }
+            cloned
+        },
         flag_copies_done: Default::default(),
         pending_fcom: HashMap::default(),
         first_at: HashMap::default(),
@@ -527,6 +539,9 @@ pub fn emit_in(
             emitter.mark_pair(node, before);
             if dag.invariant_loads.contains(&node) {
                 emitter.mark_invariant_loads(before);
+            }
+            if dag.got_loads.contains(&node) {
+                emitter.make_got_loads(before);
             }
             if dag.volatile_accesses.contains(&node)
                 || matches!(
@@ -1180,6 +1195,35 @@ impl Emitter<'_, '_> {
         }
     }
 
+    /// A load of a GOT entry reads `[rip + sym]`; the encoder relocates an
+    /// External symbol's immediate as the entry's offset, so the load is that
+    /// immediate (`mov r, offset sym`, as `isel.rs` makes the legacy GOT load).
+    fn make_got_loads(
+        &mut self,
+        before: usize,
+    ) {
+        let Some(block) = self.blocks.last_mut() else { return };
+        for one in block.insns.iter_mut().skip(before) {
+            let Some(what) = one.what.as_ref() else { continue };
+            let ([Loc::Held(dest)], [Loc::Mem(mem)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+                continue;
+            };
+            let Some(address) = mem.addr else { continue };
+            if what.op != Operation::Move
+                || mem.base.is_some()
+                || mem.index.is_some()
+                || address.space != crate::model::ir::Space::External
+            {
+                continue;
+            }
+            let mut moved = (**one).clone();
+            if let Some(what) = moved.what.as_mut() {
+                what.sources = vec![Loc::Imm(Imm { value: 0, width: dest.width, address: Some(address) })];
+            }
+            *one = Arc::new(moved);
+        }
+    }
+
     fn mark_invariant_loads(
         &mut self,
         before: usize,
@@ -1194,11 +1238,14 @@ impl Emitter<'_, '_> {
                         && matches!(what.sources.as_slice(), [Loc::Mem(_)]),
                 );
             // A folded load: one memory source read into registers.
-            let folded = one.what.as_ref().is_some_and(|what| {
-                what.dests.iter().all(|dest| matches!(dest, Loc::Held(_)))
-                    && !what.dests.is_empty()
-                    && what.sources.iter().filter(|source| matches!(source, Loc::Mem(_))).count() == 1
-            });
+            let folded = one
+                .what
+                .as_ref()
+                .is_some_and(
+                    |what| what.dests.iter().all(|dest| matches!(dest, Loc::Held(_)))
+                        && !what.dests.is_empty()
+                        && what.sources.iter().filter(|source| matches!(source, Loc::Mem(_))).count() == 1,
+                );
             if (plain || folded) && !one.volatile() {
                 *one = Arc::new(Insn { invariant: true, ..(**one).clone() });
             }
@@ -1730,15 +1777,17 @@ impl Emitter<'_, '_> {
         let cloned = !self.machine_emitted.insert(n);
         let mut dests = Vec::new();
         for (i, vt) in node.values.iter().enumerate().take(usize::from(desc.num_defs)) {
-            let held = if cloned {
+            // `CreateVirtualRegisters`: neither a clone nor its original takes
+            // the register a `CopyToReg` names.
+            let held = if cloned || self.cloned_nodes.contains(&n) {
                 self.fresh(width(self.ctx.map.scalar_sse(), *vt))
             } else {
                 self.exported_register(SDValue { node: n, res: i as u8 })
                     .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), *vt)))
             };
-            if !cloned {
-                self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
-            }
+            // `CreateVirtualRegisters`: a clone erases the map entry, so what
+            // is emitted after it reads its result.
+            self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
             dests.push(Loc::Held(held));
         }
         let cell_width =
@@ -4233,8 +4282,11 @@ impl Emitter<'_, '_> {
             // A constant-pool entry is memory nothing writes
             // (`PseudoSourceValue::isConstant`: the pin's
             // `isDereferenceableInvariantLoad`): LICM may carry it (DEVIATE
-            // X1).
-            if pooled {
+            // X1). Not the loads the CPU's prices keep one per reader: the
+            // MachineCSE of invariant loads would make them one again and
+            // FloatFold could not fold them (x87_pool_per_use_486.c, red
+            // since #7592).
+            if pooled && (constant || self.dag.has_one_use(value.node)) {
                 self.mark_invariant_loads(before);
             }
             if constant {

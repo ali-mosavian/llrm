@@ -14,7 +14,7 @@ EXPORT = re.compile(r'^\.export (\S+)')
 def load(path):
     lines = open(path).read().split('\n')
     cuts = [i for i, l in enumerate(lines) if l == '.segment "BSS"']
-    first = next(i for i, l in enumerate(lines) if l and not re.match(r'^\w+ = ', l))
+    first = next((i for i, l in enumerate(lines) if l and not re.match(r"^\w+ = ", l)), len(lines))  # a module with no code (SF_*_SPLIT leaves some files empty) is empty, not a StopIteration
     bounds = sorted(set([first] + cuts)) + [len(lines)]
     head = lines[:first]
     chunks = [lines[a:b] for a, b in zip(bounds, bounds[1:])]
