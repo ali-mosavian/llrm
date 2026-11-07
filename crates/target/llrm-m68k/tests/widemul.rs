@@ -152,3 +152,86 @@ void _start(void){{ int r = main(); sys3(1, r > 255 ? 255 : r, 0, 0); for(;;); }
         assert_eq!(code, Some(0), "{extend}: pair number {code:?} differs:\n{out}");
     }
 }
+
+/// The product sets the codes, so a compare whose result is read after it is
+/// not left to the codes: `a < b` is decided, then the product is made, then
+/// the branch on `a < b` is taken. The row defines the codes like the pin's.
+const COMPARE_ACROSS: &str = "define i64 @f(i32 %a, i32 %b, i32 %c, i32 %d) {
+  %lt = icmp ult i32 %a, %b
+  %x = zext i32 %c to i64
+  %y = zext i32 %d to i64
+  %m = mul i64 %x, %y
+  %k = select i1 %lt, i64 1, i64 2
+  %r = add i64 %m, %k
+  ret i64 %r
+}
+";
+
+#[test]
+fn a_compare_read_after_the_product_survives_it_under_qemu() {
+    let Some(qemu) = support::qemu() else { return };
+    let out = text(COMPARE_ACROSS, "68020", Level::O2);
+    let (Some(mut assemble), Some(mut link)) = (binutils("as"), binutils("gcc")) else { return };
+    let main = "extern unsigned long long f(unsigned, unsigned, unsigned, unsigned);
+static long sys3(long n,long a,long b,long c){register long d0 __asm__(\"d0\")=n,d1 __asm__(\"d1\")=a,d2 __asm__(\"d2\")=b,d3 __asm__(\"d3\")=c;__asm__ volatile(\"trap #0\":\"+d\"(d0):\"d\"(d1),\"d\"(d2),\"d\"(d3):\"memory\");return d0;}
+int main(void){
+  static const unsigned v[] = { 0, 1, 2, 65536, 0x7fffffff, 0x80000000u, 0xffffffffu };
+  unsigned n = sizeof v / sizeof v[0];
+  for (unsigned i = 0; i < n; i++) for (unsigned j = 0; j < n; j++) for (unsigned k = 0; k < n; k++) for (unsigned l = 0; l < n; l++) {
+      unsigned long long want = (unsigned long long) v[k] * v[l] + (v[i] < v[j] ? 1 : 2);
+      if (f(v[i], v[j], v[k], v[l]) != want) return 1;
+  }
+  return 0;
+}
+void _start(void){ int r = main(); sys3(1, r, 0, 0); for(;;); }
+";
+    let source = support::unique_path("widemul-s");
+    let object = support::unique_path("widemul-o");
+    let c = support::unique_path("widemul-c");
+    let exe = support::unique_path("widemul-exe");
+    std::fs::write(&source, format!("{out}\n")).unwrap();
+    std::fs::write(&c, main).unwrap();
+    assert!(assemble.arg("-m68020").arg("-o").arg(&object).arg(&source).status().unwrap().success(), "{out}");
+    let linked = link
+        .args(["-msoft-float", "-m68020", "-O1", "-nostdlib", "-static", "-ffreestanding", "-x", "c"])
+        .arg(&c)
+        .args(["-x", "none"])
+        .arg(&object)
+        .arg("-o")
+        .arg(&exe)
+        .status()
+        .unwrap();
+    assert!(linked.success(), "{out}");
+    let code = support::run(&qemu, &["-cpu", "m68020"], &exe);
+    for path in [source, object, c, exe] {
+        std::fs::remove_file(path).ok();
+    }
+    assert_eq!(code, Some(0), "a compare read after the product differs:\n{out}");
+}
+
+/// The 64-bit product sets Z from all 64 bits: a `tst` of the low half is kept.
+#[test]
+fn a_test_of_the_low_half_is_not_dropped_for_the_products_codes() {
+    let out = text(
+        "declare void @g()
+define i32 @f(i32 %a, i32 %b) {
+  %x = zext i32 %a to i64
+  %y = zext i32 %b to i64
+  %m = mul i64 %x, %y
+  %lo = trunc i64 %m to i32
+  %h = lshr i64 %m, 32
+  %hi = trunc i64 %h to i32
+  %c = icmp ne i32 %lo, 0
+  br i1 %c, label %t, label %e
+t:
+  call void @g()
+  ret i32 %hi
+e:
+  ret i32 %hi
+}
+",
+        "68020",
+        Level::O2,
+    );
+    assert!(out.contains("mulu.l") && out.contains("tst.l"), "{out}");
+}

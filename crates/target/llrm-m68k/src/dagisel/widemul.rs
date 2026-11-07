@@ -15,7 +15,9 @@
 //! one `mulu.l ea, Dh:Dl`; ours was about 30 instructions. Selected by
 //! [`super::hooks::Cpu::has_wide_multiply`]: the 68020, 68030 and 68040 (the
 //! 68000 and 68010 have no long multiply, the 68060 traps on the 64-bit
-//! result). Owner m68k. Exit: 2026-11-27.
+//! result). The row keeps the pin's `Defs = [CCR]`: the product sets N, Z, V
+//! and C, and a pass must not carry the codes across it. Owner m68k. Exit:
+//! 2026-11-27.
 
 use std::sync::LazyLock;
 
@@ -67,15 +69,10 @@ static DESCS: LazyLock<Vec<&'static InstrDesc>> = LazyLock::new(|| {
             let mut operands = vec![dst, OperandDesc { tied_to: -1, ..dst }];
             operands.push(OperandDesc { tied_to: LOW as i8, ..base.operands[1] });
             operands.push(base.operands[2]);
-            // `Dh:Dl` sets the codes from the 64-bit result, which no reader of
-            // the pin's 32-bit row expects: the row says it sets none
-            let implicit_defs: Vec<_> =
-                base.implicit_defs.iter().copied().filter(|reg| *reg != super::generated::ids::reg::CCR).collect();
             &*Box::leak(Box::new(InstrDesc {
                 num_operands: 4,
                 num_defs: 2,
                 operands: Box::leak(operands.into_boxed_slice()),
-                implicit_defs: Box::leak(implicit_defs.into_boxed_slice()),
                 ..*base
             }))
         })
