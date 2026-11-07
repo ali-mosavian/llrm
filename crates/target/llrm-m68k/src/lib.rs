@@ -3,6 +3,7 @@
 
 pub mod abi;
 pub mod addrarith;
+pub mod addrcmp;
 pub mod addrroles;
 pub mod amiga;
 pub mod atari;
