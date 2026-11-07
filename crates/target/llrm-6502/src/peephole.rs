@@ -130,6 +130,7 @@ pub fn run_with(
     load_straight_into_a(asm);
     store_before_transfer(asm);
     drop_cancelling_transfers(asm);
+    crate::peephole_cells::carry_stays_in_the_flag(asm);
     crate::peephole_cells::fold_temp_operand(asm);
     crate::peephole_cells::arithmetic_chain_in_a(asm);
     crate::peephole_cells::chain_ends_in_a(asm);
@@ -1251,7 +1252,7 @@ fn writes_cell(
 /// it or call out. The default assumes nothing: a return reads the register and
 /// so does a call.
 #[derive(Clone, Copy, Default)]
-struct Exits<'a> {
+pub(crate) struct Exits<'a> {
     /// A return does not read `a`: the function leaves nothing there.
     no_a_result: bool,
     /// The routines called with an argument in `a`; a call to any other one
@@ -1269,7 +1270,7 @@ struct Exits<'a> {
 }
 
 impl<'a> Exits<'a> {
-    fn of(asm: &'a Asm) -> Exits<'a> {
+    pub(crate) fn of(asm: &'a Asm) -> Exits<'a> {
         Exits {
             no_a_result: asm.no_a_result,
             a_callees: Some(&asm.a_callees),
@@ -1284,7 +1285,7 @@ impl<'a> Exits<'a> {
 /// Whether register `bit` (A, X or Y) is written before it is read, along every
 /// path from `lines[from]`. An instruction not listed counts as a read; a call
 /// and a return do as `exits` says.
-fn dead_from(
+pub(crate) fn dead_from(
     lines: &[Line],
     from: usize,
     bit: Registers,

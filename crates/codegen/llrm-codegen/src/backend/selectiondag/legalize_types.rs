@@ -38,6 +38,7 @@
 //! ([L636](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeTypes.cpp#L636)).
 
 use llrm_mir::hash::HashSet;
+use llrm_sdag::actions::Action;
 use llrm_sdag::lowering::ShiftAmount;
 use llrm_support::hash::HashMap;
 
@@ -3329,7 +3330,15 @@ impl<'a> TypeLegalizer<'a> {
         // Lower with SETCCCARRY if the target supports it: the high halves
         // subtracted with the low halves' borrow; `>` and `<=` flip the
         // operands.
-        if self.tli.is_operation_legal_or_custom(ISD::SetCCCarry, self.dag.value_type(lh)) {
+        // DEVIATE SC1 (owner llrm-target-6502, exit 2026-12-05): a target that
+        // marks the node Custom on a half that is itself expanded gets the
+        // borrow chain across every piece (`ExpandIntOp_SETCCCARRY`
+        // below); the pin asks for a legal half, so a 64-bit compare on a
+        // byte machine was a select of two compares of 32-bit halves.
+        let half_vt = self.dag.value_type(lh);
+        let chain_by_expansion = !self.tli.types.is_type_legal(half_vt)
+            && self.tli.operation_action(ISD::SetCCCarry, half_vt) == Action::Custom;
+        if chain_by_expansion || self.tli.is_operation_legal_or_custom(ISD::SetCCCarry, half_vt) {
             let original = code;
             let (code, flip) = match code {
                 CondCode::SetGt => (CondCode::SetLt, true),
@@ -3486,6 +3495,18 @@ impl<'a> TypeLegalizer<'a> {
                 let zero = self.dag.get_constant(0, self.dag.value_type(hi));
                 let code = self.dag.operand(node, 2);
                 self.dag.get_node(ISD::SetCC, self.dag.value_type(node), &[hi, zero, code])
+            }
+            ISD::SetCCCarry if at < 2 => {
+                // `ExpandIntOp_SETCCCARRY`: the low halves' subtract takes the
+                // carry in, and the high halves compare with its borrow.
+                let (lhs, rhs, carry, cc) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2), self.dag.operand(node, 3));
+                let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
+                let half = self.dag.value_type(ll);
+                let carry_vt = self.dag.value_type(carry);
+                let low = self.dag.get_node_multi(ISD::USubOCarry, &[half, carry_vt], &[ll, rl, carry]);
+                let vt = self.dag.value_type(node);
+                self.dag.get_node(ISD::SetCCCarry, vt, &[lh, rh, SDValue { node: low.node, res: 1 }, cc])
             }
             ISD::SetCC => match self.setcc_code(node) {
                 Some(code) => self.expand_setcc(node, code),
