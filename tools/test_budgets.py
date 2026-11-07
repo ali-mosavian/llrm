@@ -149,8 +149,8 @@ def test_a_step_at_x2_read_three_percent_lower_on_another_tree_is_not_paid():
 
 
 CC_TARGETS = {"m32": ("x86_32-wat", ["-march=i486"]), "m16": ("x86_16-wat", ["-march=i386"])}
-# llrm-cc reads these from the environment, the first two with the tree's usual defaults.
-CC_ENV = ("LLRM_OW", "LLRM_PIN_CLANG", "LLRM_CLANG_M16")
+# llrm-cc reads these from the environment.
+CC_ENV = ("LLRM_PIN_CLANG", "LLRM_CLANG_M16")
 
 
 def compile_command(axis: str, source_path: Path, object_path: str) -> tuple[list[str], dict[str, str]]:
@@ -158,7 +158,6 @@ def compile_command(axis: str, source_path: Path, object_path: str) -> tuple[lis
     the IR of the compiler that stays), the 32-bit target at -march=i486 and the 16-bit at i386 (llrm-c rejects i286 at m16 and llrm-cc has no such flag)."""
     target, flags = CC_TARGETS["m16" if axis.endswith("-m16") else "m32"]
     env = {**{k: v for k, v in os.environ.items() if not k.startswith("LLRM_") or k in CC_ENV}, "LLRM_CC_TARGET": target}
-    env.setdefault("LLRM_OW", str(Path.home() / "scratch/ow-src"))
     return [str(llrmbin.bin_dir() / "llrm-cc"), *flags, "-O2", "-c", "-o", object_path, str(source_path)], env
 
 

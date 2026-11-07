@@ -65,7 +65,7 @@ def physical_defines() -> list[str]:
 
 
 # The module that defines `__doserror_`, which the shipped clibm.lib's creatdos/opendos ask for and its dictionary does not give (stft_single, which creates and opens files).
-DOSERROR_OBJ = Path(os.environ.get("LLRM_OW", Path.home() / "scratch/ow-src")) / "bld/clib/_dos/library/msdos.086/mm/error086.obj"
+DOSERROR_OBJ = llrmbin.ow_tree() / "bld/clib/_dos/library/msdos.086/mm/error086.obj"
 OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/build/binbuild"))
 # Open Watcom's own medium-model C library, 8087 maths library and start-up (an OW v2 release; the tree's build of them
 # needs its generated headers and 16-bit bootstrap, which this checkout lacks)

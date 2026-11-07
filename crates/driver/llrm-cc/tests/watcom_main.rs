@@ -1,5 +1,5 @@
 //! C semantics the Watcom targets keep. Needs the pinned clang
-//! (`LLRM_PIN_CLANG`) and the Open Watcom headers (`LLRM_OW`).
+//! (`LLRM_PIN_CLANG`) and the Open Watcom headers (`{ow}`, tools/ow-fetch.sh).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -11,8 +11,8 @@ use std::process::Command;
 /// leave the return value unset, so the program exited with a stack load.
 #[test]
 fn main_that_falls_off_its_end_returns_zero() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -41,8 +41,8 @@ fn main_that_falls_off_its_end_returns_zero() {
 /// unmarked function stays the register one, `name_`.
 #[test]
 fn cdecl_is_the_stack_convention_on_x86_32_wat() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -76,8 +76,8 @@ fn cdecl_is_the_stack_convention_on_x86_32_wat() {
 /// ten live floats here as a qword (12 `fstp qword`, no `fstp dword`).
 #[test]
 fn a_spilled_float_is_stored_in_a_dword_cell() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -115,8 +115,8 @@ fn a_spilled_float_is_stored_in_a_dword_cell() {
 /// not compile at x86_32-wat.
 #[test]
 fn the_address_of_a_library_builtin_fits_a_default_convention_pointer_at_m32() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -200,8 +200,8 @@ fn pragma_aux_link_name_is_the_symbol_at_m32() {
         eprintln!("skipped: LLRM_CLANG_M16 is not set");
         return;
     };
-    if std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_OW is not set");
+    if !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -239,8 +239,8 @@ fn pragma_aux_link_name_is_the_symbol_at_m32() {
 /// against a call of `sqrtf_`.
 #[test]
 fn a_program_links_whichever_target_directory_the_driver_is_in() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -274,8 +274,8 @@ fn a_program_links_whichever_target_directory_the_driver_is_in() {
 /// 29 debug-info tests could link (the float support calls `atan2`).
 #[test]
 fn library_calls_are_the_watcom_names_at_both_models() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -311,7 +311,7 @@ fn library_calls_are_the_watcom_names_at_both_models() {
 /// m16 program failed to link with `undefined symbol main_`.
 #[test]
 fn an_m16_program_links_against_watcoms_start_up() {
-    let ow = std::env::var_os("LLRM_OW").map(std::path::PathBuf::from);
+    let ow = Some(llrm_cc::ow_tree());
     if std::env::var_os("LLRM_PIN_CLANG").is_none()
         || std::env::var_os("LLRM_CLANG_M16").is_none()
         || !ow.as_ref().is_some_and(|ow| ow.join("bld/clib/library/msdos.086/mm/clibm.lib").exists())
@@ -345,8 +345,8 @@ fn an_m16_program_links_against_watcoms_start_up() {
 /// global", and the QB runtime's gfxdev.c did not build at x86_16-wat.
 #[test]
 fn a_far_pointer_initialised_from_an_integer_is_data() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -375,8 +375,8 @@ fn a_far_pointer_initialised_from_an_integer_is_data() {
 /// The same on the flat target, a near pointer (`(void *)(0xA000 << 4)`).
 #[test]
 fn a_near_pointer_initialised_from_an_integer_is_data() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -408,8 +408,8 @@ fn a_near_pointer_initialised_from_an_integer_is_data() {
 /// something calls keeps Watcom's contract.
 #[test]
 fn an_uncalled_main_keeps_no_register_and_a_called_one_keeps_watcoms() {
-    if std::env::var_os("LLRM_CLANG_M16").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -451,8 +451,8 @@ fn an_uncalled_main_keeps_no_register_and_a_called_one_keeps_watcoms() {
 /// modules).
 #[test]
 fn the_rp3_dos_row_is_regparm3_and_links() {
-    if std::env::var_os("LLRM_CLANG_M16").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -492,8 +492,8 @@ fn the_rp3_dos_row_is_regparm3_and_links() {
 /// by llrm-cc.
 #[test]
 fn a_struct_has_its_natural_layout_at_m32_and_is_byte_packed_at_m16() {
-    if std::env::var_os("LLRM_CLANG_M16").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -565,8 +565,8 @@ fn a_far_function_pointer_takes_a_far_function() {
 /// (DOS error -6 for 6 in os_files, os_find, bench_io).
 #[test]
 fn an_os_layer_call_pushes_its_arguments_at_x86_16_wat() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -600,8 +600,8 @@ fn an_os_layer_call_pushes_its_arguments_at_x86_16_wat() {
 /// `sqrt_`, `fabs_`), while the program's own functions stay `_name@3`.
 #[test]
 fn the_rp3_row_calls_the_library_by_its_c_names() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -635,8 +635,8 @@ fn the_rp3_row_calls_the_library_by_its_c_names() {
 /// 16-bit branch at x86_32-wat, and the torture limits.h gave `int` 32767.
 #[test]
 fn the_wat_rows_predefine_the_watcom_cpu_macro() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let dir = std::env::temp_dir().join(format!("llrm-cc-wat-cpu-{}", std::process::id()));
@@ -659,8 +659,8 @@ fn the_wat_rows_predefine_the_watcom_cpu_macro() {
 /// types (torture 930608-1); clang 16+ makes that an error by default.
 #[test]
 fn the_wat_rows_take_incompatible_function_pointer_assignments_as_warnings() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let dir = std::env::temp_dir().join(format!("llrm-cc-wat-fnptr-{}", std::process::id()));

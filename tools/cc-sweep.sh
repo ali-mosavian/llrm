@@ -1,5 +1,5 @@
 #!/bin/sh
-# Compile every example C file with llrm-cc for each target: tools/cc-sweep.sh [target...]  (x86_16-wat needs LLRM_CLANG_M16 and LLRM_OW: DOS sources see Watcom's libc headers, not the host's)
+# Compile every example C file with llrm-cc for each target: tools/cc-sweep.sh [target...]  (x86_16-wat needs LLRM_CLANG_M16 and the Open Watcom tree, tools/ow-fetch.sh: DOS sources see Watcom's libc headers, not the host's)
 # Red when a target compiled nothing, wrote no result, or failed more files than tools/cc-sweep.baseline allows (CC_SWEEP_BASELINE overrides the path).
 # The baseline is a ratchet: counts may only go down, by hand; the gate rewrites nothing. The failing names are printed so a swap of one FAIL for another shows.
 root=$(cd "$(dirname "$0")/.." && pwd)

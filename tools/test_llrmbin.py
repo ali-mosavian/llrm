@@ -248,7 +248,7 @@ class CleanEnvTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             llrmbin.assert_clean_env({"LLRM_WASM_BACKEND_ONLY": "1"})
         self.assertIn("LLRM_WASM_BACKEND_ONLY", str(caught.exception))
-        self.assertEqual(llrmbin.assert_clean_env({"LLRM_OW": "/ow", "PATH": "/bin"}), ["LLRM_OW=/ow"])
+        self.assertEqual(llrmbin.assert_clean_env({"LLRM_PIN_CLANG": "/c", "PATH": "/bin"}), ["LLRM_PIN_CLANG=/c"])
         self.assertEqual(llrmbin.assert_clean_env({"LLRM_NO_STACKS": "1", "AB_ALLOW_ENV": "LLRM_NO_STACKS"}), ["LLRM_NO_STACKS=1"])
 
 

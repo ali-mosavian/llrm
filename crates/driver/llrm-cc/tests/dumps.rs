@@ -1,5 +1,6 @@
 //! The debugging switches llrm-c had reach the backend through llrm-cc. Needs
-//! the pinned clang (`LLRM_PIN_CLANG`) and the Open Watcom headers (`LLRM_OW`).
+//! the pinned clang (`LLRM_PIN_CLANG`) and the Open Watcom headers (`{ow}`,
+//! tools/ow-fetch.sh).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -12,8 +13,8 @@ fn compile(
     env: &[(&str, &str)],
     flags: &[&str],
 ) -> Option<(Output, std::path::PathBuf)> {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return None;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");

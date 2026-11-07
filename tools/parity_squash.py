@@ -1361,7 +1361,7 @@ def pre_merge_behavioural(files: list[str], build=None, run=None) -> list[str]:
     started = time.time()
     (build or _build_release)()
     red = behavioural.red_programs((run or _run_behavioural)())
-    if red:  # one run is no proof: the same code was 0 wrong at 14:44 and 23 wrong at 14:46 (LLRM_OW missing) and refused #5785
+    if red:  # one run is no proof: the same code was 0 wrong at 14:44 and 23 wrong at 14:46 (Open Watcom tree missing) and refused #5785
         print(f"behavioural: {len(red)} wrong; running once more on the same tree{red_env_cause()}")
         red = [program for program in behavioural.red_programs((run or _run_behavioural)()) if program in red]
     print(f"behavioural: {len(behavioural.PROGRAMS)} programs, {len(red)} wrong, {time.time() - started:.0f}s{red_env_cause() if red else ''}")
@@ -1412,8 +1412,10 @@ def _run_stale() -> subprocess.CompletedProcess:
 
 def red_env_cause() -> str:
     """What a behavioural run needs from the environment and lacks, for the REFUSED line; empty when it has it."""
-    ow = os.environ.get("LLRM_OW")
-    return "" if ow and Path(ow).expanduser().is_dir() else " (LLRM_OW is unset or not a directory: a missing Open Watcom tree, not a miscompile)"
+    import llrmbin  # noqa: PLC0415
+
+    tree = llrmbin.ow_tree()
+    return "" if tree.is_dir() else f" ({tree} is missing: run tools/ow-fetch.sh; a missing Open Watcom tree, not a miscompile)"
 
 
 def _run_behavioural() -> str:

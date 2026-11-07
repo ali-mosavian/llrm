@@ -17,7 +17,7 @@ DIR holds a built llrm-cc (default target/release). One row per program and conf
 
 These are llrm-cc numbers: never mix them with llrm-c's (tools/compile-cost.py, tools/sizes.py). m16 has no pin
 column (the m16 pin is the separate clang build in LLRM_CLANG_M16) and no size column (OMF).
-Needs ~/scratch/ow-src (LLRM_OW), the pin in ~/scratch/llvm-build (LLRM_PIN_CLANG), perf. A failed compile stops the run.
+Needs the Open Watcom tree (tools/ow-fetch.sh), the pin in ~/scratch/llvm-build (LLRM_PIN_CLANG), perf. A failed compile stops the run.
 """
 from __future__ import annotations
 
@@ -36,7 +36,6 @@ ROOT = Path(__file__).resolve().parent.parent
 HOME = Path.home()
 PIN = Path(os.environ.get("LLRM_PIN_CLANG", HOME / "scratch/llvm-build/bin/clang"))
 DATALAYOUT = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"  # targets.toml [x86_32-linux]
-OW = os.environ.get("LLRM_OW", str(HOME / "scratch/ow-src"))
 
 # config -> (LLRM_CC_TARGET, -march, level)
 CONFIGS = {
@@ -109,7 +108,7 @@ def main() -> None:
             src = ROOT / "bench" / name / f"{name}.c"
             for config in args.configs.split(","):
                 target, march, level = CONFIGS[config]
-                env = dict(os.environ, LLRM_CC_TARGET=target, LLRM_OW=OW, LLRM_PIN_CLANG=str(PIN))
+                env = dict(os.environ, LLRM_CC_TARGET=target, LLRM_PIN_CLANG=str(PIN))
                 extra = ["-I", str(posix)]
                 ours_obj = Path(tmp) / f"{name}.{config}.ours.o"
                 ours = instructions(

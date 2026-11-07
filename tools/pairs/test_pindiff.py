@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+import llrmbin  # noqa: E402
 
 
 def load(name: str):
@@ -154,9 +156,9 @@ def test_no_row_of_the_corpus_shifts_by_the_width_of_its_type_at_m16():
     import os
 
     pindiff = load("pindiff")
-    if not (os.environ.get("LLRM_OW") and os.environ.get("LLRM_PIN_CLANG") and os.environ.get("LLRM_CLANG_M16")):
+    if not (llrmbin.ow_tree().is_dir() and os.environ.get("LLRM_PIN_CLANG") and os.environ.get("LLRM_CLANG_M16")):
         # The gate sets all three; where it requires the pin's tools (LLRM_REQUIRE_PINTOOLS) a missing one is red, not a skipped check.
-        (pytest.fail if os.environ.get("LLRM_REQUIRE_PINTOOLS") else pytest.skip)("needs LLRM_OW, LLRM_PIN_CLANG and LLRM_CLANG_M16")
+        (pytest.fail if os.environ.get("LLRM_REQUIRE_PINTOOLS") else pytest.skip)("needs the Open Watcom tree (tools/ow-fetch.sh), LLRM_PIN_CLANG and LLRM_CLANG_M16")
     import tempfile
 
     guard = load("irguard")
@@ -288,7 +290,6 @@ def test_m32_clang_flags_do_not_default_every_function_to_regcall(monkeypatch):
     """targets.toml gave m32 `-fdefault-calling-conv=regcall` for llrm-cc; pindiff ran ours with sysv, so all 71 m32 programs stopped at
     `llrm-llc: @___regcall3__f: calling convention 92` and the table was empty."""
     pindiff = load("pindiff")
-    monkeypatch.setenv("LLRM_OW", "/nonexistent")
     _, flags = pindiff.clang_flags("m32")
     assert "-fdefault-calling-conv=regcall" not in flags
 
@@ -300,8 +301,8 @@ def test_an_os_row_is_not_the_o2_row():
     import tempfile
 
     llc = os.environ.get("LLRM_LLC")
-    if not llc or "LLRM_OW" not in os.environ or "LLRM_PIN_CLANG" not in os.environ:
-        pytest.skip("needs LLRM_LLC, LLRM_OW and LLRM_PIN_CLANG")
+    if not llc or not llrmbin.ow_tree().is_dir() or "LLRM_PIN_CLANG" not in os.environ:
+        pytest.skip("needs LLRM_LLC, the Open Watcom tree and LLRM_PIN_CLANG")
     pindiff = load("pindiff")
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / "d7.c"
