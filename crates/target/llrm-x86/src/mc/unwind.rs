@@ -71,6 +71,7 @@ pub fn eh_target() -> EhTarget<'static> {
         return_saved: true,
         entry: FrameRow { offset: 0, cfa_register: "rsp".into(), cfa_offset: 8, saved: Vec::new() },
         register: &register,
+        def_cfa_on_register_change: false,
     }
 }
 
@@ -124,6 +125,7 @@ pub fn eh_target32() -> EhTarget<'static> {
         return_saved: true,
         entry: FrameRow { offset: 0, cfa_register: "esp".into(), cfa_offset: 4, saved: Vec::new() },
         register: &|name| register_in(32, name),
+        def_cfa_on_register_change: false,
     }
 }
 

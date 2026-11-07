@@ -43,6 +43,10 @@ pub struct EhTarget<'a> {
     pub entry: FrameRow,
     /// A register's DWARF number.
     pub register: &'a dyn Fn(&str) -> Option<u64>,
+    /// The target's prologue names the frame register with its offset
+    /// (`DW_CFA_def_cfa`; arm64: `.cfi_def_cfa w29, 16`) where the pin's x86
+    /// names the register alone (`DW_CFA_def_cfa_register`).
+    pub def_cfa_on_register_change: bool,
 }
 
 /// `object` with its `.eh_frame` added.
@@ -101,7 +105,7 @@ pub fn expanded_as(
         let mut state = &initial;
         for row in &frame.rows {
             advance(&mut buf, (row.offset - state.offset.min(row.offset)) / target.code_alignment as usize);
-            changes(&number, &mut buf, state, row, alignment)?;
+            changes(&number, &mut buf, state, row, alignment, target.def_cfa_on_register_change)?;
             state = row;
         }
         // The pin aligns an FDE to the size of its pointer encoding, the last
