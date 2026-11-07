@@ -244,6 +244,22 @@ fn a_comdat_declaration_and_its_marker_are_read() {
     assert_eq!(module.comdat_of["f"], "f");
 }
 
+/// The printer dropped `$c = comdat K` and every `comdat` marker, so a module
+/// printed and read back (every mid-end stage dump, `llrm-opt` output) lost its
+/// COMDAT sections. It prints them as LLVM does and reads them back equal.
+#[test]
+fn a_comdat_declaration_and_its_marker_survive_printing() {
+    let text = "$\"??_C@_02@ab\" = comdat any\n$f = comdat largest\n\n\
+        @\"??_C@_02@ab\" = linkonce_odr constant [3 x i8] c\"ab\\00\", comdat, align 1\n\
+        @g = linkonce_odr global i32 0, comdat($f)\n@plain = global i32 1\n\n\
+        define linkonce_odr void @f() comdat {\n  ret void\n}\n";
+    let module = parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    let printed = print::module(&module);
+    assert_eq!(printed, text);
+    let again = parse::module(&printed).unwrap();
+    assert_eq!((again.comdats, again.comdat_of), (module.comdats, module.comdat_of));
+}
+
 /// The pin refuses a comdat used and never declared, and one declared twice.
 #[test]
 fn an_undeclared_or_repeated_comdat_is_refused() {

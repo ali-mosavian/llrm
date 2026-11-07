@@ -23,7 +23,7 @@ use crate::types::{FloatKind, Type, TypeId, struct_text};
 
 pub fn module(module: &Module) -> String {
     let mut out = String::new();
-    let printer = Printer { context: &module.context, globals: global_names(module) };
+    let printer = Printer { context: &module.context, globals: global_names(module), comdats: comdat_markers(module) };
     if let Some(layout) = &module.datalayout {
         let _ = writeln!(out, "target datalayout = {}", string(layout.as_bytes()));
     }
@@ -45,6 +45,10 @@ pub fn module(module: &Module) -> String {
                     format!("%{} = type {text}\n", quoted(name))
                 },
             ),
+    );
+    section(
+        &mut out,
+        module.comdats.iter().map(|(name, kind)| format!("${} = comdat {kind}\n", quoted(name))),
     );
     section(
         &mut out,
@@ -113,7 +117,7 @@ pub fn body(
     context: &Context,
     function: &Function,
 ) -> String {
-    Printer { context, globals: Vec::new() }.blocks(function, &Slots::new(function))
+    Printer { context, globals: Vec::new(), comdats: Vec::new() }.blocks(function, &Slots::new(function))
 }
 
 /// A 128-bit digest (not a cryptographic one) of what `body` prints, without
@@ -320,6 +324,20 @@ fn string(bytes: &[u8]) -> String {
     out
 }
 
+/// Each global's `comdat` marker: bare when the comdat has the global's own
+/// name, else `comdat($name)`.
+fn comdat_markers(module: &Module) -> Vec<Option<String>> {
+    module
+        .globals
+        .iter()
+        .map(|one| {
+            let own = one.name.owned()?;
+            let comdat = module.comdat_of.get(&own)?;
+            Some(if *comdat == own { "comdat".to_owned() } else { format!("comdat(${})", quoted(comdat)) })
+        })
+        .collect()
+}
+
 /// `@name`, or `@N` for the unnamed, numbered in order.
 fn global_names(module: &Module) -> Vec<String> {
     let mut next = 0;
@@ -403,6 +421,7 @@ fn spaced(text: String) -> String {
 struct Printer<'a> {
     context: &'a Context,
     globals: Vec<String>,
+    comdats: Vec<Option<String>>,
 }
 
 /// A function's local names: named values as they are, the rest numbered.
@@ -546,10 +565,11 @@ impl Printer<'_> {
         words.push(self.ty(variable.ty));
         words.extend(variable.initializer.map(|one| self.constant(one)));
         let section = section.map(|one| format!(", section \"{one}\"")).unwrap_or_default();
+        let comdat = self.comdats.get(at).and_then(Option::as_ref).map(|one| format!(", {one}")).unwrap_or_default();
         let align = variable.align.map(|one| format!(", align {one}")).unwrap_or_default();
         let attached: String =
             attached.into_iter().flatten().map(|(kind, node)| format!(", !{kind} !{}", node.0)).collect();
-        format!("{} = {}{section}{align}{attached}\n", self.globals[at], words.join(" "))
+        format!("{} = {}{section}{comdat}{align}{attached}\n", self.globals[at], words.join(" "))
     }
 
     fn function(
@@ -598,6 +618,9 @@ impl Printer<'_> {
         let attrs = attributes(&self.context, &function.attrs);
         if !attrs.is_empty() {
             words.push(attrs);
+        }
+        if let Some(comdat) = self.comdats.get(at).and_then(Option::as_ref).filter(|_| !declaration) {
+            words.push(comdat.clone());
         }
         if let Some(personality) = function.personality {
             words.push(format!("personality {}", self.typed_constant(personality)));

@@ -685,7 +685,7 @@ impl Parser {
             | Token::Global(_) => !matches!(self.peek_at(1), Token::Punct('=')),
             Token::Punct('[' | '{' | '<') => true,
             Token::Word(word) => {
-                ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr"]
+                ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr", "splat"]
                     .contains(&word.as_str())
                     || spelled(&CAST, word).is_some()
                     || constant_binary(word)
@@ -1210,6 +1210,19 @@ impl Parser {
                     );
                 }
                 ConstantKind::Aggregate(members)
+            }
+            Token::Word(word) if word == "splat" => {
+                let Type::Vector { element, count } = shape else {
+                    return self.fail_on(line, "`splat` is a vector constant");
+                };
+                self.expect_punct('(')?;
+                let member_ty = self.ty()?;
+                if member_ty != element {
+                    return self.fail_on(line, "a splat's element is the vector's element type");
+                }
+                let member = self.constant(member_ty)?;
+                self.expect_punct(')')?;
+                ConstantKind::Aggregate(vec![member; count as usize])
             }
             Token::Word(word) if word == "getelementptr" => {
                 let mut flags = Flags::default();

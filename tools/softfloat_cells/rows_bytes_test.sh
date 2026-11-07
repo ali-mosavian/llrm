@@ -11,4 +11,7 @@ done || bad=1
 echo "$out" | awk '$1=="neg"' | head -1 | awk '{ if ($4 >= 34) { print "FAIL: libgcc neg " $4 " B is the x87 return"; exit 1 } }' || bad=1
 # like-for-like: ours + the x87 return shim (neg: 14 + 17, 10 + 15) in the last two columns
 echo "$out" | awk '$1=="neg"' | head -1 | awk '{ if ($(NF-1) != $2 + 17 || $NF != $6 + 15) { print "FAIL: neg ours+x87 columns " $(NF-1) " " $NF " (want ours64+17, ours32+15)"; exit 1 } }' || bad=1
+# compiler-rt's m32 int->float is x87 code (fild, fmul, fadd): 290 B read as a soft-float row ours lost by 22 B; libgcc's soft-fp (954 B) is the comparator
+out=$(ROWS_ONLY=float bash ./rows_bytes.sh m32) || exit 2
+echo "$out" | awk '$1=="float"' | head -1 | awk '{ if ($3 != "fpu" || $7 != "fpu") { print "FAIL: float compiler-rt cells " $3 " " $7 " are x87 code, not a rank"; exit 1 } }' || bad=1
 [ $bad = 0 ] && echo "rows_bytes ok"; exit $bad
