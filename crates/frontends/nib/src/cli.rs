@@ -398,6 +398,9 @@ mod tests {
         ) -> Result<llrm_target::routines::Divide, String> {
             self.0.divide_routine_used(signed, wide_divisor, used)
         }
+        fn small_divide_at_o1(&self) -> bool {
+            self.0.small_divide_at_o1()
+        }
         fn divide_routine_small(
             &self,
             signed: bool,

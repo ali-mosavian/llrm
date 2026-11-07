@@ -178,6 +178,10 @@ impl llrm_target::Target for M16 {
         llrm_x86::helpers::divide_used(signed, wide_divisor, 16, used).map_err(|refused| refused.message)
     }
 
+    fn small_divide_at_o1(&self) -> bool {
+        true
+    }
+
     fn divide_routine_small(
         &self,
         signed: bool,

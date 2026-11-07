@@ -131,3 +131,12 @@ fn an_i64_quotient_and_remainder_of_the_same_operands_are_one_call() {
         .count();
     assert_eq!(calls, 1, "one call makes the quotient and the remainder");
 }
+
+/// m32 -O1 took the 64-round divide too (clocks regress where both are strict):
+/// only m16 asks for the small routine at -O1.
+#[test]
+fn only_m16_takes_the_size_divide_at_o1() {
+    use llrm_target::Target;
+    assert!(llrm_x86_m16::M16.small_divide_at_o1());
+    assert!(!llrm_x86_m32::M32.small_divide_at_o1());
+}

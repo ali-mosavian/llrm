@@ -676,6 +676,12 @@ pub trait Target {
         Err("no size divide routine".into())
     }
 
+    /// Whether -O1 code (bytes and clocks both strict) takes the size divide
+    /// too: only where its clocks stay under the bar; -Os always does.
+    fn small_divide_at_o1(&self) -> bool {
+        false
+    }
+
     /// The width a float value of `bytes` bytes is held at: x87 holds every one
     /// as its stack register, a vector file as its own size.
     fn float_width(
