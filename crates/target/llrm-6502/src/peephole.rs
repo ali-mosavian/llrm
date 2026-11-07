@@ -110,9 +110,113 @@ pub fn run(asm: &mut Asm) {
     crate::peephole_cells::arithmetic_chain_in_a(asm);
     crate::peephole_cells::chain_ends_in_a(asm);
     crate::peephole_cells::drop_dead_stores(asm);
+    drop_dead_writes(asm);
     crate::peephole_cells::store_then_index_load(asm);
     branch_on_shift_carry(asm);
     jump_to_return(asm);
+}
+
+/// What a register-only instruction writes: a register, and which of the carry
+/// and the zero and sign flags.
+struct Writes {
+    register: Option<Registers>,
+    carry: bool,
+    nz: bool,
+}
+
+/// The writes of `inst` if it does nothing else: no memory, no call, no branch,
+/// no stack. A load reads a zero-page cell or an immediate, never a device.
+fn pure_writes(inst: &Inst) -> Option<Writes> {
+    use Op::*;
+    let plain = matches!(inst.operand, Operand::Imm(_)) || inst.operand.is_cell();
+    let (register, carry, nz) = match inst.op {
+        Lda | And | Ora | Eor if plain => (Some(Registers::A), false, true),
+        Ldx if plain => (Some(Registers::X), false, true),
+        Ldy if plain => (Some(Registers::Y), false, true),
+        Tax | Dex | Inx => (Some(Registers::X), false, true),
+        Tay | Dey | Iny => (Some(Registers::Y), false, true),
+        Txa | Tya => (Some(Registers::A), false, true),
+        Asl | Lsr | Rol | Ror if inst.operand == Operand::Acc => (Some(Registers::A), true, true),
+        Cmp | Cpx | Cpy if plain => (None, true, true),
+        Clc | Sec => (None, true, false),
+        _ => return None,
+    };
+    Some(Writes { register, carry, nz })
+}
+
+/// A register-only instruction all of whose results are dead goes: the register
+/// is written before it is read, the carry and the zero and sign flags too,
+/// along every path.
+///
+/// The pin's `DeadMachineInstructionElim`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/DeadMachineInstructionElim.cpp>)
+/// removes a def nothing reads while the value is a virtual register; here the
+/// last reader of a carry made into a byte (`lda #0; rol a; sta cell`) is the
+/// store that `drop_dead_stores` removes after allocation, so the def is dead
+/// only now. The pin has no post-allocation dead-def elimination:
+/// `DeadMachineInstructionElim` is added only in `addMachineSSAOptimization`
+/// ([TargetPassConfig.cpp#L1361](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetPassConfig.cpp#L1361),
+/// [#L1376](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetPassConfig.cpp#L1376)),
+/// and `addMachineLateOptimization`
+/// ([#L1560](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetPassConfig.cpp#L1560))
+/// runs `MachineLateInstrsCleanup`, `BranchFolder`, `TailDuplicate` and
+/// `MachineCopyPropagation` only.
+///
+/// DEVIATE 6502-DEAD-WRITE (owner llrm-target-6502, exit 2026-11-20; 6502 only,
+/// no other target runs this pass): the same rule over the registers and flags
+/// the instruction writes, in the asm; exit: a post-allocation dead-def
+/// elimination on machine IR.
+pub fn drop_dead_writes(asm: &mut Asm) {
+    let mut at = asm.lines.len();
+    while at > 0 {
+        at -= 1;
+        let Line::Inst(inst) = &asm.lines[at] else { continue };
+        let Some(writes) = pure_writes(inst) else { continue };
+        let exits = Exits::of(asm);
+        let dead = writes.register.is_none_or(|register| dead_from(&asm.lines, at + 1, register, &mut HashSet::default(), exits))
+            && (!writes.carry || carry_dead_from(&asm.lines, at + 1, &mut HashSet::default()))
+            && (!writes.nz || nz_dead_from(&asm.lines, at + 1, &mut HashSet::default()));
+        if dead {
+            asm.lines.remove(at);
+        }
+    }
+}
+
+/// Whether the zero and sign flags are written before they are read, along
+/// every path from `lines[from]`. A call or a return counts as a write.
+fn nz_dead_from(
+    lines: &[Line],
+    from: usize,
+    seen: &mut HashSet<usize>,
+) -> bool {
+    let to = |inst: &Inst| inst.target().and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())));
+    let mut at = from;
+    while let Some(line) = lines.get(at) {
+        if !seen.insert(at) {
+            return true;
+        }
+        at += 1;
+        let inst = match line {
+            Line::Inst(inst) => inst,
+            Line::Label(_) => continue,
+            Line::Raw(_) => return false,
+        };
+        match inst.op {
+            Op::Beq | Op::Bne | Op::Bmi | Op::Bpl => return false,
+            Op::Bcc | Op::Bcs | Op::Bvc | Op::Bvs => {
+                if !to(inst).is_some_and(|target| nz_dead_from(lines, target, seen)) {
+                    return false;
+                }
+            }
+            Op::Jmp | Op::Bra => return to(inst).is_some_and(|target| nz_dead_from(lines, target, seen)),
+            _ => match inst.flags() {
+                Flags::Keeps => {}
+                Flags::Of(_) | Flags::Sets => return true,
+                Flags::Reads => return false,
+            },
+        }
+    }
+    false
 }
 
 /// The first instruction at or after `lines[from]`, past labels.
