@@ -345,6 +345,10 @@ pub fn rebuild(
     // make says nothing.
     let mut notes: HashMap<u32, Vec<(llrm_mir::MetadataId, usize, Option<Reg>)>> = HashMap::default();
     let mut arrived: Vec<(llrm_mir::MetadataId, Reg)> = Vec::new();
+    // Variables with a note the converter cannot place (a value from another
+    // block, a float, nothing): the earlier notes would stay standing, saying
+    // more than the code does, so such a variable says nothing at all.
+    let mut lost: std::collections::HashSet<llrm_mir::MetadataId> = std::collections::HashSet::new();
     let mut number = 0u32;
     for (block_at, block) in function.blocks.iter().enumerate() {
         let is_entry = block_at == 0;
@@ -356,9 +360,14 @@ pub fn rebuild(
             if op.is_debug() {
                 NOTES_SEEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-            if let Op::DbgValue { variable, reg: Some(reg) } = op {
-                if let Some(&(anchor, position, comes_in)) = made.get(reg) {
-                    notes.entry(anchor).or_default().push((*variable, position, comes_in));
+            if let Op::DbgValue { variable, reg } = op {
+                match reg.and_then(|reg| made.get(&reg)) {
+                    Some(&(anchor, position, comes_in)) => {
+                        notes.entry(anchor).or_default().push((*variable, position, comes_in));
+                    }
+                    None => {
+                        lost.insert(*variable);
+                    }
                 }
                 continue;
             }
@@ -408,7 +417,14 @@ pub fn rebuild(
         lir.blocks.iter().flat_map(|block| block.insts.iter().map(|inst| inst.origin)).collect();
     for (anchor, list) in &notes {
         if !present.contains(anchor) {
-            arrived.extend(list.iter().filter_map(|&(variable, _, comes_in)| comes_in.map(|reg| (variable, reg))));
+            for &(variable, _, comes_in) in list {
+                match comes_in {
+                    Some(reg) => arrived.push((variable, reg)),
+                    None => {
+                        lost.insert(variable);
+                    }
+                }
+            }
         }
     }
     for (block_at, (block, lir_block)) in function.blocks.iter_mut().zip(&lir.blocks).enumerate() {
@@ -416,7 +432,6 @@ pub fn rebuild(
         let mut locs = Vec::with_capacity(lir_block.insts.len());
         if block_at == 0 {
             for &(variable, reg) in &arrived {
-                NOTES_PLACED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 ops.push(Op::DbgValue { variable, reg: Some(reg) });
                 locs.push(None);
             }
@@ -494,7 +509,6 @@ pub fn rebuild(
                 }
             }
             for &(variable, position, _) in notes.get(&inst.origin).map_or(&[][..], Vec::as_slice) {
-                NOTES_PLACED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 ops.push(Op::DbgValue { variable, reg: Some(reg_at(position)) });
             }
             for _ in before..ops.len() {
@@ -517,6 +531,16 @@ pub fn rebuild(
                 None => *loc = last,
             }
         }
+        let kept: Vec<bool> =
+            ops.iter().map(|op| !matches!(op, Op::DbgValue { variable, .. } if lost.contains(variable))).collect();
+        let mut at = 0;
+        ops.retain(|_| (kept[at], at += 1).0);
+        at = 0;
+        locs.retain(|_| (kept[at], at += 1).0);
+        NOTES_PLACED.fetch_add(
+            ops.iter().filter(|op| op.is_debug()).count() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         block.ops = ops.into_iter().zip(locs).collect();
     }
     if llrm_support::env_var("LLRM_NOTE_COUNTS").is_some() {

@@ -215,7 +215,11 @@ fn a_variable_in_a_register_has_a_location_from_dbg_value() {
     // No note may go unplaced here: a pass with most locations dropped would
     // still find some.
     let located = variables(&object);
-    assert_eq!((after.0 - before.0, after.1 - before.1), (2, 2), "notes seen and placed: {located:?}");
+    // Four notes: `n`, `m`, and `k` twice, the second one `poison`. `k` ends
+    // up with none: a note that says nothing takes the variable's earlier note
+    // with it, or its register would be named over code that no longer holds it.
+    assert_eq!((after.0 - before.0, after.1 - before.1), (4, 2), "notes seen and placed: {located:?}");
+    assert!(located.iter().all(|(name, _)| name != "k"), "{located:?}");
     let place = |name: &str| located.iter().find(|(one, _)| one == name).map(|(_, place)| place.clone());
     assert!(place("n").is_some_and(|place| place.contains("Register(")), "{located:?}");
     assert!(place("m").is_some_and(|place| place.contains("Register(")), "{located:?}");

@@ -7,7 +7,9 @@ define dso_local i64 @inc(i64 noundef %n, i64 noundef %m) #0 !dbg !9 {
 entry:
     #dbg_value(i64 %n, !15, !DIExpression(), !17)
     #dbg_value(i64 %m, !16, !DIExpression(), !17)
+    #dbg_value(i64 %n, !22, !DIExpression(), !17)
   %call = call i64 @id(i64 noundef %n), !dbg !19
+    #dbg_value(i64 poison, !22, !DIExpression(), !17)
   %s = xor i64 %call, %m, !dbg !20
   %r = add nsw i64 %s, %n, !dbg !20
   ret i64 %r, !dbg !21
@@ -29,7 +31,7 @@ attributes #0 = { nounwind uwtable "frame-pointer"="non-leaf" }
 !9 = distinct !DISubprogram(name: "inc", scope: !1, file: !1, line: 1, type: !10, scopeLine: 2, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0, retainedNodes: !14)
 !10 = !DISubroutineType(types: !11)
 !11 = !{!3, !3, !3}
-!14 = !{!15, !16}
+!14 = !{!15, !16, !22}
 !15 = !DILocalVariable(name: "n", arg: 1, scope: !9, file: !1, line: 1, type: !3)
 !16 = !DILocalVariable(name: "m", arg: 2, scope: !9, file: !1, line: 1, type: !3)
 !17 = !DILocation(line: 0, scope: !9)
@@ -37,3 +39,4 @@ attributes #0 = { nounwind uwtable "frame-pointer"="non-leaf" }
 !19 = !DILocation(line: 4, column: 12, scope: !9)
 !20 = !DILocation(line: 4, column: 21, scope: !9)
 !21 = !DILocation(line: 4, column: 5, scope: !9)
+!22 = !DILocalVariable(name: "k", scope: !9, file: !1, line: 2, type: !3)

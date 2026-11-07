@@ -1924,13 +1924,18 @@ pub fn emit(
             emitter.ops.push(Op::Copy { dst, src });
         }
         let mut places: Vec<Option<SrcLoc>> = Vec::new();
+        // The notes of nothing: where they stand does not matter.
+        for &(variable, _) in block.dbg_values.iter().filter(|(_, value)| value.is_none()) {
+            emitter.ops.push(Op::DbgValue { variable, reg: None });
+        }
         for unit in &block.units {
             for &node in unit.nodes.iter().rev() {
                 places.resize(emitter.ops.len(), None);
                 emitter.node(node)?;
                 // `InstrEmitter::EmitDbgValue`: after the node whose value a
                 // `llvm.dbg.value` names.
-                for &(variable, value) in block.dbg_values.iter().filter(|(_, value)| value.node == node) {
+                for &(variable, value) in block.dbg_values.iter().filter(|(_, value)| value.is_some_and(|v| v.node == node)) {
+                    let value = value.expect("filtered to a value");
                     let reg = emitter.values.get(&(value.node, value.res)).map(|&gpr| Reg::Gpr(gpr));
                     emitter.ops.push(Op::DbgValue { variable, reg });
                 }
