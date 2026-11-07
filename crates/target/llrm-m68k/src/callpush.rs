@@ -192,12 +192,20 @@ fn argument_store(
     (REGISTER_INFO.root(physical(*base, assignment)) == reg::SP).then_some((offset, source))
 }
 
-/// `move.l value, -(%sp)`: `value` is a register or an immediate; zero is
-/// `clr.l -(%sp)`, 2 B where `pea (0).w` is 4.
-pub fn push_of(value: &mc::Operand) -> mc::Inst {
-    if matches!(value, mc::Operand::Imm(0)) {
+/// [`push_of`], where a function built for size pushes zero as `clr.l
+/// -(%sp)`: 2 B against `pea (0).w`'s 4, and 6 clk slower on the 68000.
+pub fn push_of_sized(
+    value: &mc::Operand,
+    size: bool,
+) -> mc::Inst {
+    if size && matches!(value, mc::Operand::Imm(0)) {
         return mc::Inst { opcode: "CLR32e", operands: vec![mc::Operand::Reg(reg::SP)] };
     }
+    push_of(value)
+}
+
+/// `move.l value, -(%sp)`: `value` is a register or an immediate.
+pub fn push_of(value: &mc::Operand) -> mc::Inst {
     let opcode = match value {
         mc::Operand::Reg(src) if crate::expand::is_address(*src) => "MOV32ea",
         mc::Operand::Reg(_) => "MOV32ed",
@@ -437,7 +445,7 @@ fn sequences(
                         operands: vec![mc::Operand::Imm(offset), sp.clone(), value.clone()],
                     }
                 };
-                parts.push((i, offset, source, cost(&store, cpu)?, cost(&push_of(&value), cpu)?));
+                parts.push((i, offset, source, cost(&store, cpu)?, cost(&push_of_sized(&value, size), cpu)?));
             } else if names_sp(insts[i], assignment) || matches!(insts[i].kind, Kind::Op("ADJCALLSTACKDOWN")) {
                 convertible = false;
             }

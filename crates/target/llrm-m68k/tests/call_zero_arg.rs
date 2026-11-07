@@ -13,6 +13,16 @@ define i32 @g(i32 %x) {
   ret i32 %r
 }";
 
+/// At speed the zero is `pea 0:w`: 6 clk faster than `clr.l -(%sp)` on the 68000.
+#[test]
+fn a_zero_argument_is_pushed_as_pea_at_o2() {
+    for cpu in ["68000", "68020", "68040", "68060"] {
+        let out = assembly(ZERO_ARG, cpu_of(cpu).unwrap(), Level::O2).expect("compiles");
+        assert!(out.contains("pea\t0:w"), "{cpu}: the zero is not pushed with pea\n{out}");
+        assert!(!out.contains("lea\t(-8,%sp)"), "{cpu}: the call area is still reserved\n{out}");
+    }
+}
+
 #[test]
 fn a_zero_argument_is_pushed_like_any_other_constant() {
     for cpu in ["68000", "68020", "68040", "68060"] {
