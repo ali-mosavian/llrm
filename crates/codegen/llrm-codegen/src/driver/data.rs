@@ -470,6 +470,7 @@ mod tests {
             procedures: Vec::new(),
             private: Default::default(),
             far_bss: Default::default(),
+            weak: Default::default(),
             code_segments: Default::default(),
             comdats: Default::default(),
             padding: Default::default(),

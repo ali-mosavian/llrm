@@ -2131,6 +2131,83 @@ fn a_comdat_symbol_is_external_and_a_static_stays_static() {
     assert_ne!(class("s"), Some(2), "{classes:?}");
 }
 
+/// The object of `text` for `triple`, built as `windows_object` builds one.
+fn object_for(
+    triple: &str,
+    format: llrm_target::object::Format,
+    text: &str,
+) -> llrm_debug::Described {
+    let text = format!("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"{triple}\"\n{text}");
+    let (built, found) = compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
+    assert_eq!(found, format);
+    llrm_codegen::backend::objbuild::built_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap()
+}
+
+const WEAK_IR: &str = "@u = weak_odr dso_local global i32 7, align 4\n\
+     define weak_odr dso_local i32 @wf(i32 %a) {\n  ret i32 %a\n}\n\
+     define dso_local i32 @h() {\n  %v = load i32, ptr @u\n  ret i32 %v\n}\n";
+
+/// A `weak_odr` function and global were written local: `nm` showed `t` and
+/// `d` where the pin shows `W` and `V`, and the linker saw a private name.
+#[test]
+fn a_weak_definition_is_a_weak_symbol_in_an_elf_object() {
+    let object = object_for("x86_64-unknown-linux-gnu", llrm_target::object::Format::Elf, WEAK_IR);
+    let binding = |name: &str| object.symbols.iter().find(|one| one.name == name).map(|one| one.binding);
+    assert_eq!(
+        (binding("wf"), binding("u"), binding("h")),
+        (Some(llrm_object::Binding::Weak), Some(llrm_object::Binding::Weak), Some(llrm_object::Binding::Public)),
+    );
+}
+
+/// The pin writes a weak definition outside a COMDAT as a weak external
+/// (class 0x69, search-alias aux) that names a default symbol
+/// `.weak.NAME.default.UNIQUE` in the definition's section, UNIQUE the first
+/// strong external symbol of the object.
+#[test]
+fn a_weak_definition_is_a_weak_external_with_a_default_in_a_coff_object() {
+    let object = windows_object(WEAK_IR);
+    let bytes = llrm_x86::mc::coff64::write(&object).unwrap();
+    let table = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let count = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let strings = table + 18 * count;
+    let name = |row: &[u8]| {
+        if row[..4] == [0; 4] {
+            let at = strings + u32::from_le_bytes(row[4..8].try_into().unwrap()) as usize;
+            let end = bytes[at..].iter().position(|b| *b == 0).unwrap();
+            String::from_utf8_lossy(&bytes[at..at + end]).into_owned()
+        } else {
+            String::from_utf8_lossy(&row[..8]).trim_end_matches('\0').to_owned()
+        }
+    };
+    let mut rows = Vec::new();
+    let mut at = 0;
+    while at < count {
+        let row = &bytes[table + 18 * at..table + 18 * (at + 1)];
+        rows.push((at, name(row), u16::from_le_bytes([row[12], row[13]]), row[16], row[17]));
+        at += 1 + row[17] as usize;
+    }
+    let index = |wanted: &str| rows.iter().find(|one| one.1 == wanted).map(|one| one.0);
+    for weak in ["wf", "u"] {
+        let row = rows.iter().find(|one| one.1 == weak).unwrap_or_else(|| panic!("{weak} in {rows:?}"));
+        // section 0, class WEAK_EXTERNAL, one aux
+        assert_eq!((row.2, row.3, row.4), (0, 105, 1), "{weak}: {rows:?}");
+        let aux = &bytes[table + 18 * (row.0 + 1)..table + 18 * (row.0 + 2)];
+        let tag = u32::from_le_bytes(aux[..4].try_into().unwrap()) as usize;
+        assert_eq!(index(&format!(".weak.{weak}.default.h")), Some(tag), "{rows:?}");
+        assert_eq!(u32::from_le_bytes(aux[4..8].try_into().unwrap()), 3, "search alias");
+    }
+    // control: the strong function is a plain external
+    let strong = rows.iter().find(|one| one.1 == "h").unwrap();
+    assert_eq!((strong.2 != 0, strong.3), (true, 2));
+}
+
 /// A COMDAT function's `.pdata` row and `.xdata` were in the object's one
 /// `.pdata` and `.xdata`: where the linker kept another object's copy of the
 /// function and dropped this one's code, the row stayed and pointed into

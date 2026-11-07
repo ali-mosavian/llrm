@@ -1483,7 +1483,13 @@ pub fn object_of(
         .iter()
         .map(|(name, &(section, offset))| Symbol {
             name: name.clone(),
-            binding: if publics.contains(name) { Binding::Public } else { Binding::Local },
+            binding: if publics.contains(name) {
+                Binding::Public
+            } else if module.weak.contains(name) {
+                Binding::Weak
+            } else {
+                Binding::Local
+            },
             definition: Definition::Defined { section, offset },
             size: sizes.get(name).copied().unwrap_or(0),
             group: None,
@@ -1956,6 +1962,7 @@ mod tests {
             )],
             private: BTreeSet::new(),
             far_bss: BTreeSet::new(),
+            weak: BTreeSet::new(),
             code_segments: Default::default(),
             comdats: Default::default(),
             padding: Default::default(),
@@ -1997,6 +2004,7 @@ mod tests {
                 procedures: vec![],
                 private: BTreeSet::new(),
                 far_bss: BTreeSet::new(),
+                weak: BTreeSet::new(),
                 code_segments: Default::default(),
                 comdats: Default::default(),
                 padding: Default::default(),
@@ -2046,6 +2054,7 @@ mod tests {
             )],
             private: BTreeSet::new(),
             far_bss: BTreeSet::new(),
+            weak: BTreeSet::new(),
             code_segments: Default::default(),
             comdats: Default::default(),
             padding: Default::default(),
@@ -2084,6 +2093,7 @@ mod tests {
                 procedures: vec![],
                 private: BTreeSet::new(),
                 far_bss: BTreeSet::new(),
+                weak: BTreeSet::new(),
                 code_segments: Default::default(),
                 comdats: Default::default(),
                 padding: Default::default(),
@@ -2198,6 +2208,7 @@ mod tests {
             ],
             private: BTreeSet::from(["FAR_SEG".to_owned()]),
             far_bss: BTreeSet::new(),
+            weak: BTreeSet::new(),
             code_segments: Default::default(),
             comdats: Default::default(),
             padding: Default::default(),
@@ -2310,6 +2321,7 @@ mod tests {
                     .collect(),
                 private: BTreeSet::new(),
                 far_bss: BTreeSet::new(),
+                weak: BTreeSet::new(),
                 code_segments: Default::default(),
                 comdats: Default::default(),
                 padding: masm::Padding { function: 4, nop: 1 },
