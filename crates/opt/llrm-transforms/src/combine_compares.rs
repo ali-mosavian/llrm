@@ -28,10 +28,6 @@
 //! the lead). `(a & -4) == C` folds at C = 0 and signmin only
 //! (`a s< -32764` at i16); `((b + M) & M) u< b` is `b != 0` for M = 3, 7.
 //!
-//! DEVIATE 2 (temporary): `foldICmpUsingKnownBits` computes the known bits of
-//! the operands, where LLVM first runs `SimplifyDemandedBits` on them
-//! (InstCombineSimplifyDemanded.cpp, not translated): the same facts or fewer.
-//!
 //! # Used by
 //! `combine::visit`, once the compares slot is flipped.
 //!
@@ -951,9 +947,35 @@ fn ceil_log2(
     128 - temp.leading_zeros()
 }
 
-/// `foldICmpUsingKnownBits`
+/// `getDemandedBitsLHSMask`: the bits of the left side a compare against a
+/// constant reads.
+fn demanded_bits_lhs_mask(
+    c: &Combiner,
+    pred: IntPredicate,
+    op1: Operand,
+    width: u32,
+) -> u128 {
+    let all = mask(width);
+    let Some((value, _)) = query(c, None).int_constant(op1) else { return all };
+    if llrm_mir::valuetracking::fp::is_sign_bit_check(pred, value, width).is_some() {
+        return 1u128 << (width - 1);
+    }
+    match pred {
+        // The trailing ones of the comparand do not change an unsigned `>`.
+        IntPredicate::Ugt => all & !low_bits(value.trailing_ones().min(width)),
+        // Nor do its trailing zeros an unsigned `<`.
+        IntPredicate::Ult => all & !low_bits(value.trailing_zeros().min(width)),
+        _ => all,
+    }
+}
+
+/// The low `n` bits, `n` up to 128.
+fn low_bits(n: u32) -> u128 {
+    if n >= 128 { u128::MAX } else { (1u128 << n) - 1 }
+}
+
+/// `foldICmpUsingKnownBits`, with `SimplifyDemandedBits` on both operands first
 /// ([:7106](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L7106)).
-/// DEVIATE 2: no `SimplifyDemandedBits` first.
 fn fold_icmp_using_known_bits(
     c: &mut Combiner,
     inst: InstId,
@@ -966,10 +988,19 @@ fn fold_icmp_using_known_bits(
     // Don't use dominating conditions when folding icmp using known bits. This
     // may convert signed into unsigned predicates in ways that other passes
     // (especially IndVarSimplify) may not be able to reliably undo.
-    let (known0, known1) = {
-        let q = Query { dom_conditions: None, ..query(c, Some(inst)) };
-        (known::compute_known_bits(&q, op0, 0), known::compute_known_bits(&q, op1, 0))
-    };
+    // `SimplifyDemandedBits` on both operands, which also gives their known
+    // bits: the demanded-bits cases take a `sub nsw`'s sign from its operands,
+    // not from the branch that dominates the compare (ValueTracking's).
+    let mut known0 = KnownBits::unknown(width);
+    let mut known1 = KnownBits::unknown(width);
+    c.without_dom_conditions = true;
+    let lhs_mask = demanded_bits_lhs_mask(c, pred, op1, width);
+    let changed = c.simplify_demanded_bits(inst, inst, 0, lhs_mask, &mut known0, 0)
+        || c.simplify_demanded_bits(inst, inst, 1, mask(width), &mut known1, 0);
+    c.without_dom_conditions = false;
+    if changed {
+        return Some(Visit::Changed);
+    }
     let is_constant = |operand: Operand| matches!(operand, Operand::Constant(_));
     if !is_constant(op0) && known0.is_constant() {
         let value = c.int(ty, known0.constant_value());
