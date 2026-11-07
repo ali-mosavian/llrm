@@ -28,10 +28,10 @@
 //! `{0,+,1} < %n` is taken `(-1 + %n)` times.
 
 use llrm_mir::apint::Word;
-use super::ConstantRange;
 use llrm_mir::module::BlockId;
 use llrm_mir::opcode::{BinaryOp, IntPredicate};
 
+use super::ConstantRange;
 use super::ap::Ap;
 use super::expr::{Kind, Scev, Ty, Use, flags};
 use super::trip::ExitLimit;
@@ -1431,7 +1431,7 @@ impl ScalarEvolution {
         if let Some(start) = self.as_constant(operands[0].scev)
             && !start.is_zero()
         {
-            let mut shifted_operands = operands.clone();
+            let mut shifted_operands = operands.to_vec();
             shifted_operands[0] = Use::of(self.get_zero(cx, self.type_of(operands[0].scev)));
             let nw = self.get_no_wrap_flags(add_rec, flags::NW);
             let shifted = self.get_add_rec_expr(cx, shifted_operands, header, Flags::expr(nw)).scev;

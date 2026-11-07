@@ -19,6 +19,7 @@ use crate::opcode::{
     FLAG_ATTRIBUTES, FLOAT_PREDICATE, Flags, INT_ATTRIBUTES, INT_PREDICATE, Opcode, RMW_OPS, TARGET_FLAG_ATTRIBUTES,
     TYPE_ATTRIBUTES, Tail, spelled,
 };
+use crate::print::SCOPE_DECL_KIND;
 use crate::types::{FloatKind, StructBody, Type, TypeId};
 
 type Parsed<T> = Result<T, ParseError>;
@@ -1959,6 +1960,9 @@ impl Parser {
         let (void, bool) = (self.module.context.types.void(), self.module.context.types.int(1));
         let fast = ["fast", "reassoc", "nnan", "ninf", "nsz", "arcp", "contract", "afn"];
         let mut flags = Flags::default();
+        // `(metadata !N)` of a scope declaration: MIR keeps the node as an
+        // attachment.
+        let mut scope_decl: Option<MetadataId> = None;
         let (opcode, ty, operands) = if let Some(op) = spelled(&BINARY, &word) {
             flags = match op {
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl => self.flags(&["nuw", "nsw"]),
@@ -2130,6 +2134,64 @@ impl Parser {
                         Some(_) => return self.fail("the inserted value has the member's type"),
                     }
                 }
+                "extractelement" => {
+                    let (vector_ty, vector) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (_, index) = self.typed_value(local)?;
+                    let element = self
+                        .module
+                        .context
+                        .types
+                        .member(vector_ty, 0)
+                        .filter(|_| matches!(self.module.context.types.get(vector_ty), Type::Vector { .. }))
+                        .ok_or_else(|| self.error("extractelement takes a vector".to_owned()))?;
+                    (Opcode::ExtractElement, element, vec![vector, index])
+                }
+                "insertelement" => {
+                    let (vector_ty, vector) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (element_ty, element) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (_, index) = self.typed_value(local)?;
+                    if !matches!(self.module.context.types.get(vector_ty), Type::Vector { .. })
+                        || self.module.context.types.member(vector_ty, 0) != Some(element_ty)
+                    {
+                        return self.fail("insertelement takes a vector and one of its element type");
+                    }
+                    (Opcode::InsertElement, vector_ty, vec![vector, element, index])
+                }
+                "shufflevector" => {
+                    let (vector_ty, first) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (second_ty, second) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (mask_ty, mask) = self.typed_value(local)?;
+                    let (Type::Vector { element, .. }, Type::Vector { count, .. }) = (
+                        self.module.context.types.get(vector_ty).clone(),
+                        self.module.context.types.get(mask_ty).clone(),
+                    ) else {
+                        return self.fail("shufflevector takes vectors and a vector mask");
+                    };
+                    if second_ty != vector_ty {
+                        return self.fail("shufflevector's inputs have one type");
+                    }
+                    let Operand::Constant(mask) = mask else {
+                        return self.fail("shufflevector's mask is constant");
+                    };
+                    let lane = |context: &crate::context::Context, id| match context.get(id).kind {
+                        ConstantKind::Int(value) => i32::try_from(value).ok(),
+                        _ => Some(-1),
+                    };
+                    let lanes: Vec<i32> = match &self.module.context.get(mask).kind {
+                        ConstantKind::Aggregate(members) => {
+                            members.iter().map(|&one| lane(&self.module.context, one).unwrap_or(-1)).collect()
+                        }
+                        ConstantKind::Zero => vec![0; count as usize],
+                        _ => vec![-1; count as usize],
+                    };
+                    let result = self.module.context.types.intern(Type::Vector { element, count });
+                    (Opcode::ShuffleVector(lanes), result, vec![first, second])
+                }
                 "alloca" => {
                     let allocated = self.ty()?;
                     let mut operands = Vec::new();
@@ -2265,6 +2327,13 @@ impl Parser {
                             self.expect_punct(',')?;
                         }
                         let ty = self.ty()?;
+                        if matches!(self.module.context.types.get(ty), Type::Metadata)
+                            && let Token::MetadataId(number) = *self.peek()
+                        {
+                            self.next();
+                            scope_decl = Some(self.metadata_id(number));
+                            continue;
+                        }
                         argument_attrs.push(self.attributes(false)?);
                         operands.push(self.value(local, ty)?);
                         argument_types.push(ty);
@@ -2325,7 +2394,10 @@ impl Parser {
                 }
             }
         };
-        let metadata = self.attachments()?;
+        let mut metadata = self.attachments()?;
+        if let Some(node) = scope_decl {
+            metadata.insert(0, (SCOPE_DECL_KIND.to_owned(), node));
+        }
         let id = InstId(local.function.instructions.len() as u32);
         let result = if self.module.context.types.is_void(ty) {
             if result_name.is_some() {

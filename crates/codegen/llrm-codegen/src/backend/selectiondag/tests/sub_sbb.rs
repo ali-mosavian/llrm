@@ -40,6 +40,7 @@ fn a_negated_shifted_bit_is_a_bit_test_and_sbb() {
     let before: Vec<u32> = SAMPLES.iter().map(|&p| eval(&dag, root, p)).collect();
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let mut hooks = X86Lowering {
+        imul_if_smaller: false,
         share_products: false,
         cmov: false,
         sse2: false,

@@ -42,6 +42,9 @@ pub struct Tuning {
     /// pin's own decompositions included (a tie keeps the `imul`); false:
     /// the pin's `combineMul` decomposes unconditionally.
     pub price_pin_multiplies: bool,
+    /// At -Os a multiply by a constant stays an `imul` (the pin's `hasMinSize`
+    /// rule, which the pin applies at -Oz only): the chain is no smaller.
+    pub imul_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
@@ -99,6 +102,10 @@ pub struct Tuning {
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
+    /// An -Os caller's SZ2 trial also inlines the sites its splice brings, priced by the
+    /// ordinary rules, before it measures: `foo` into `main` and then `bar` into that copy
+    /// meet the constants together, as the pin's callee-first order gives. One round.
+    pub inline_chain_trial: bool,
     /// A full unroll's discount for a local array it makes constant-indexed
     /// (promoted to registers) holds only while the promoted elements fit the
     /// register file (UP1). false: every such access is free.
@@ -178,6 +185,7 @@ impl Tuning {
         price_fills: false,
         multiply_by_clocks: false,
         price_pin_multiplies: false,
+        imul_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
@@ -193,6 +201,7 @@ impl Tuning {
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
+        inline_chain_trial: false,
         unroll_promotion_fits_registers: false,
         rotation_guard_must_fold_at_size: false,
         rotation_header_priced_at_size: false,

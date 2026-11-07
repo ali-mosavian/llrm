@@ -270,8 +270,9 @@ fn a_fixed_register_with_no_id_is_a_register_of_the_pin_not_a_virtual_one() {
 
     let mut dag = SelectionDAG::new(DagConfig::default());
     let mut x86 = DagisAdapter::new(&mut dag);
-    let nine = x86.register(9, mvt::i32);
-    assert_eq!(x86.register_of(nine.node), None, "a target that says nothing has no fixed register");
+    let unmapped = (1u16..200).find(|&n| super::dagisel_adapter::phys_reg(n).is_none()).unwrap();
+    let number = x86.register(unmapped, mvt::i32);
+    assert_eq!(x86.register_of(number.node), None, "a target that says nothing has no fixed register");
 }
 
 /// The adapter said no store truncates, so a narrow store of a wide value
