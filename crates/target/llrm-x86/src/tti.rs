@@ -1229,10 +1229,15 @@ impl Tti for X86 {
             return false;
         }
         // Long mode, position independent (the PIE a default clang makes): a
-        // symbol is `[rip + symbol]`, which takes no displacement
-        // beside it and no index (the `isPositionIndependent() && is64Bit()`
-        // rule).
-        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale > 1) {
+        // symbol is `[rip + symbol]`, which takes no displacement, index or
+        // base register beside it.
+        // DEVIATE PIE64: the pin refuses only an offset or a scale above 1
+        // (`isPositionIndependent() && is64Bit()`), so `@sym + reg` is one
+        // address to it; the backend forms the symbol with a `lea` at every
+        // use, which the metric never saw (histo -O2 -80 B, jpeg_fixed -O1
+        // -832 B, objects of m32 and non-PIE unchanged). Owner w12, exit
+        // 2026-11-30.
+        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale != 0 || has_base_reg) {
             return false;
         }
         match scale {

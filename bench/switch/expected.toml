@@ -1,5 +1,5 @@
-reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
-blessed = "2026-11-05"
+reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
+blessed = "2026-11-07"
 corpus = "df75c82ce58a91c11ec1efd83242c334"
 
 [ow.O2]
@@ -57,3 +57,24 @@ memory_operands = 132228
 code_bytes = 572
 data_bytes = 0
 bss_bytes = 0
+
+[bc.O2]
+instructions = 1302550
+memory_operands = 386924
+code_bytes = 1128
+data_bytes = 7
+bss_bytes = 12
+
+[pds71.O2]
+instructions = 1253162
+memory_operands = 378925
+code_bytes = 1070
+data_bytes = 7
+bss_bytes = 12
+
+[vbdos.O2]
+instructions = 1321179
+memory_operands = 398930
+code_bytes = 1080
+data_bytes = 7
+bss_bytes = 12

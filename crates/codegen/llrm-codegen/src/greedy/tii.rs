@@ -98,6 +98,15 @@ pub trait TargetInstrInfo {
         BTreeSet::new()
     }
 
+    /// The cell `one` loads when it is a load `argument_load_defs` names: the
+    /// default is an incoming argument's.
+    fn remat_load_cell(
+        &self,
+        one: &Insn,
+    ) -> Option<(i64, u32)> {
+        super::remat::argument_load_cell(one)
+    }
+
     /// The registers each value `one` names may take there (the class of the
     /// operand, `MCInstrDesc`'s `RegClass`), as (value, registers in order). A
     /// target whose classes live on its virtual registers says it here, so a

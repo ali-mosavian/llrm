@@ -1,5 +1,6 @@
-reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
-blessed = "2026-10-15"
+reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
+blessed = "2026-11-07"
+corpus = "d2d9eb36921979af8c8191efcfc5735b"
 
 [ow.O2]
 instructions = 8130433
@@ -68,7 +69,7 @@ kernel_ms = 401.0748
 [bc.O2]
 instructions = 11180247
 memory_operands = 3440898
-code_bytes = 941
+code_bytes = 940
 data_bytes = 7
 bss_bytes = 122
 kernel_ms = 149.1425
@@ -76,7 +77,7 @@ kernel_ms = 149.1425
 [pds71.O2]
 instructions = 10595808
 memory_operands = 3266899
-code_bytes = 957
+code_bytes = 956
 data_bytes = 7
 bss_bytes = 122
 kernel_ms = 141.3453
@@ -84,7 +85,7 @@ kernel_ms = 141.3453
 [vbdos.O2]
 instructions = 10595825
 memory_operands = 3266904
-code_bytes = 961
+code_bytes = 960
 data_bytes = 7
 bss_bytes = 122
 kernel_ms = 141.3423

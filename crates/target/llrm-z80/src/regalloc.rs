@@ -230,6 +230,20 @@ impl Target for Z80Registers {
         true
     }
 
+    /// `LEAFI` puts the address of a frame object in a register.
+    fn frame_address(inst: &Inst) -> Option<i32> {
+        if inst.kind != Kind::Op("LEAFI") {
+            return None;
+        }
+        inst.operands.iter().find_map(|o| if let Operand::Frame(f) = o { Some(*f) } else { None })
+    }
+
+    /// A load of a frame object the call before it filled is made again where
+    /// it is read (`call_result_buffers`).
+    fn is_buffer_load(name: &str) -> bool {
+        matches!(name, "LD16rf" | "LD8rf")
+    }
+
     fn spill_store_lane(
         class: Class,
         register: Reg,
