@@ -1,7 +1,8 @@
 //! A divide by a constant in a loop at m16 -O2 stayed `idiv` (SD446 weighed its
 //! bytes against one execution's clocks; the block frequency never reached the
 //! comparator): recmany ran 292554 clocks against 229703 before. Needs the
-//! pinned clang (`LLRM_PIN_CLANG`) and the Open Watcom headers (`LLRM_OW`).
+//! pinned clang (`LLRM_PIN_CLANG`) and the Open Watcom headers (`{ow}`,
+//! tools/ow-fetch.sh).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -18,8 +19,8 @@ fn has(
 
 #[test]
 fn a_remainder_by_a_constant_in_a_loop_is_not_an_idiv_at_m16_o2() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");

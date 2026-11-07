@@ -1,6 +1,6 @@
 #!/bin/bash
 # usage: tests/size_m16.sh [OPT] -> code bytes at x86_16-wat (llrm-cc, -march=i486): ours (sf32.c + sf32_conv.c) and compiler-rt (the same symbols). Library bytes only.
-# Needs LLRM_CLANG_M16 (see crates/target/llrm-x86-m16), LLRM_OW; LLRM_CC_DIR holds llrm-cc and llrm-llc.
+# Needs LLRM_CLANG_M16 (see crates/target/llrm-x86-m16), the Open Watcom tree (tools/ow-fetch.sh); LLRM_CC_DIR holds llrm-cc and llrm-llc.
 set -e
 cd "$(dirname "$0")/.."
 OPT=${1:-Os}; D=${LLRM_CC_DIR:-$HOME/targets/gs-out/rbase}; CRT=${COMPILER_RT:-$HOME/scratch/llvm-src-m16/compiler-rt/lib/builtins}

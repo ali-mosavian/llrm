@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: LLRM_CC_DIR=dir-with-llrm-cc LLRM_OW=dir [CLANG_WASM=pin clang with wasm] tests/wasm_sidf_size_test.sh
+# usage: LLRM_CC_DIR=dir-with-llrm-cc [CLANG_WASM=pin clang with wasm] tests/wasm_sidf_size_test.sh
 # SF-WASM-SIDF: f64 __floatsidf / __floatunsidf linked alone (wasm-ld --gc-sections, one export, whole file). From the shared from_mag32 (SF_CONV_NOINLINE): sidf 366 B,
 # unsidf 346 (from_mag32 41 B + entry 37 / 13); the pin's compiler-rt (clang 24, wasm) 484 / 456. The earlier "+15" (475 vs 460) compared against system clang 20's compiler-rt, 107 B smaller than the pin's.
 # Bounds: from_mag32 45, sidf 380, unsidf 360, and ours <= the pin's compiler-rt when CLANG_WASM exists.

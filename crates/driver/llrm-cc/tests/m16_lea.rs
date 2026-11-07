@@ -1,6 +1,6 @@
 //! A `lea` of a base and a dword index at m16 is encoded with the shortest
 //! displacement. Needs the pinned clang (`LLRM_PIN_CLANG`) and the Open Watcom
-//! headers (`LLRM_OW`).
+//! headers (`{ow}`, tools/ow-fetch.sh).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -20,8 +20,8 @@ fn has(
 /// five, with disp8 and disp32 only where the value needs them.
 #[test]
 fn a_base_and_scaled_dword_index_takes_the_shortest_displacement() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
-        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+        eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");

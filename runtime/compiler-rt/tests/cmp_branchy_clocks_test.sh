@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: LLRM=path/to/llrm-cc LLRM_OW=dir PYTHONPATH=dir-with-unicorn tests/cmp_branchy_clocks_test.sh
+# usage: LLRM=path/to/llrm-cc PYTHONPATH=dir-with-unicorn tests/cmp_branchy_clocks_test.sh
 # x_sf_cmp64 (six f64 compares x 400 vectors, vsgcc 486 table) at -O2 took 95332 clk with the select-form compare core (gcc 88952);
 # SF_CMP_BRANCHY in config/x86_m32 brings it to 89898. Bound 91000. Regenerates the kernel from this tree.
 cd "$(dirname "$0")/.." || exit 2

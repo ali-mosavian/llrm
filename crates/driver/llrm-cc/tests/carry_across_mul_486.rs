@@ -1,7 +1,7 @@
 //! An `adc` takes the carry of the `add` before it, never the flags of a
 //! `mul` or `or` the scheduler hoisted in between (a 128-bit product lost
-//! carries at -O2: x_m64, softfloat). Needs `LLRM_OW` and the m16 clang
-//! (`LLRM_CLANG_M16`).
+//! carries at -O2: x_m64, softfloat). Needs the Open Watcom tree
+//! (tools/ow-fetch.sh) and the m16 clang (`LLRM_CLANG_M16`).
 
 use std::path::Path;
 use std::process::Command;
@@ -10,9 +10,14 @@ const SOURCE: &str = "typedef unsigned int u32; typedef unsigned long long u64;\
 
 #[test]
 fn an_adc_never_reads_the_flags_of_a_mul_or_logical_op() {
-    for name in ["LLRM_OW", "LLRM_CLANG_M16"] {
-        assert!(std::env::var_os(name).is_some(), "{name} is not set: this test needs it and does not skip");
-    }
+    assert!(
+        llrm_cc::ow_tree().is_dir(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
+    assert!(
+        std::env::var_os("LLRM_CLANG_M16").is_some(),
+        "LLRM_CLANG_M16 is not set: this test needs it and does not skip"
+    );
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("carrymul-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -30,11 +35,33 @@ fn an_adc_never_reads_the_flags_of_a_mul_or_logical_op() {
     for line in text.lines() {
         let Some(mnemonic) = line.split_whitespace().next() else { continue };
         if matches!(mnemonic, "adc" | "sbb") {
-            assert!(matches!(last, "" | "add" | "adc" | "sub" | "sbb" | "cmp" | "neg"), "{mnemonic} follows {last}:\n{text}");
+            assert!(
+                matches!(last, "" | "add" | "adc" | "sub" | "sbb" | "cmp" | "neg"),
+                "{mnemonic} follows {last}:\n{text}"
+            );
         }
         if matches!(
             mnemonic,
-            "add" | "adc" | "sub" | "sbb" | "cmp" | "neg" | "mul" | "imul" | "or" | "and" | "xor" | "test" | "shl" | "shr" | "sar" | "shld" | "shrd" | "lea" | "inc" | "dec"
+            "add"
+                | "adc"
+                | "sub"
+                | "sbb"
+                | "cmp"
+                | "neg"
+                | "mul"
+                | "imul"
+                | "or"
+                | "and"
+                | "xor"
+                | "test"
+                | "shl"
+                | "shr"
+                | "sar"
+                | "shld"
+                | "shrd"
+                | "lea"
+                | "inc"
+                | "dec"
         ) {
             last = mnemonic;
         }

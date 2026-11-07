@@ -13,13 +13,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import llrmbin  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-OW = Path(os.environ.get("LLRM_OW", Path.home() / "scratch/ow-src"))
+OW = llrmbin.ow_tree()
 
 
-@pytest.mark.skipif(not OW.is_dir(), reason="LLRM_OW (the Open Watcom headers) is not available")
+@pytest.mark.skipif(not OW.is_dir(), reason="the Open Watcom tree is missing (tools/ow-fetch.sh)")
 def test_an_indirect_call_through_every_volatile_register_compiles_under_dag_at_m32_wat():
     binary = llrmbin.bin_dir() / "llrm-cc"
-    env = {**os.environ, "LLRM_CC_TARGET": "x86_32-wat", "LLRM_OW": str(OW)}
+    env = {**os.environ, "LLRM_CC_TARGET": "x86_32-wat"}
     with tempfile.TemporaryDirectory() as work:
         done = subprocess.run(
             [str(binary), "-O2", "-fno-builtin", "--isel=dag", "-Dfar=", "-Dnear=", "-Dhuge=", str(ROOT / "tests/llc/fnptr.c"), "-c", "-o", f"{work}/x.obj"],

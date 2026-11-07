@@ -1571,7 +1571,7 @@ def test_a_change_to_llrm_cc_runs_qcport_measure_and_the_c_programs():
 
 def test_the_integration_step_waits_for_the_clang_trees_the_pins_name(tmp_path):
     """The llrm-cc tests need the pinned and the m16 clang. They were looked up in ~/scratch, so a host without them failed every test at once
-    ('the target needs LLRM_OW'); now a missing tree is a missing capability: skipped with a reason locally, red in CI."""
+    ('the Open Watcom tree is missing'); now a missing tree is a missing capability: skipped with a reason locally, red in CI."""
     env = {"HOME": str(tmp_path), "XDG_CACHE_HOME": str(tmp_path / "cache"), "GATE_ALLOW_MISSING": "1", "PATH": "/usr/bin:/bin"}
     missing = gate.missing_capabilities(env)
     assert "clang" in missing and "integration" in gate.skipped_steps(["integration"], missing)
