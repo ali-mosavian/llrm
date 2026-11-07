@@ -404,3 +404,30 @@ fn fast_isel_takes_widening_and_i64_divide_at_m64() {
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(asm.contains("div rcx") || asm.contains("div r"), "{asm}");
 }
+
+/// An `i64` argument or result left a caller to the DAG ("fast declined at
+/// Call"): `main` of `urem_eq.c` and `array.c` calls `printf("%ld")` and `report(long)`.
+#[test]
+fn fast_isel_takes_i64_call_arguments_and_results_at_m64() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "long next(long a);\nvoid report(long v);\nlong h(long a)\n{\n    report(a);\n    return next(a + 1);\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_DEBUG", "isel")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(asm.contains("mov rdi, rax") || asm.contains("mov rdi,"), "{asm}");
+}
