@@ -1140,15 +1140,29 @@ const STACK: usize = 2 << 20;
 /// local.
 #[test]
 fn an_increment_only_the_latch_reads_leaves_the_inner_loops_preheader() {
-    // `acc * 3 + j` is no closed form: the loops stay.
+    let (preheader, rest) = sunk_nested(true);
+    assert!(!preheader.contains("%i.next = add"), "{preheader}");
+    assert!(rest.contains("%i.next = add"), "{rest}");
+}
+
+/// The pin sinks on every target; ours does only where `Tti` asks (a default
+/// target grew 17 cells with it on). A default target keeps the increment in
+/// the inner loop's preheader.
+#[test]
+fn test_a_target_that_does_not_sink_invariants_keeps_the_increment_in_the_preheader() {
+    let (preheader, _) = sunk_nested(false);
+    assert!(preheader.contains("%i.next = add"), "{preheader}");
+}
+
+/// `acc * 3 + j` is no closed form: the loops stay.
+fn sunk_nested(sinks: bool) -> (String, String) {
     let text = crate::invariantsink::tests::nested("")
         .replace("%a2 = add i32 %a, %j", "%a3 = mul i32 %a, 3\n  %a2 = add i32 %a3, %j");
     let mut module = parsed(&text);
     let before = results(&module, &[&[1, 1], &[3, 2], &[4, 0]]);
-    managed(&mut module, IndVars { lftr: true, size: false });
-    let after = printed(&module);
+    let machine = crate::testing::Tuned { sinks_invariants: sinks, ..Default::default() };
+    let after = crate::testing::managed_on(&mut module, IndVars { lftr: true, size: false }, machine);
     assert_eq!(results(&module, &[&[1, 1], &[3, 2], &[4, 0]]), before, "{after}");
     let (preheader, rest) = after.split_once("inner:").expect("inner");
-    assert!(!preheader.contains("%i.next = add"), "{after}");
-    assert!(rest.contains("%i.next = add"), "{after}");
+    (preheader.to_string(), rest.to_string())
 }

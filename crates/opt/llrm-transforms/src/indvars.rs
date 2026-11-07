@@ -31,7 +31,8 @@
 //!    bound, which LFTR left.
 //! 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
 //!    `invariantsink::sunk` (`sinkUnusedInvariants`): a loop preheader's values
-//!    the loop does not read move to its exit.
+//!    the loop does not read move to its exit (wasm only:
+//!    `Tti::sinks_unused_invariants`).
 //!
 //! # Example
 //! Step 1, the widening, on `for (unsigned short i = 0; i < n; ++i) a[i] = 1`
@@ -318,9 +319,11 @@ impl FunctionPass for IndVars {
         let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
         let loops = cfg::natural(unit.function, &found);
         let sunk = crate::exitsink::sunk(unit.function, &loops);
-        // `sinkUnusedInvariants`, the last step of the pin's run.
-        let sunk =
-            crate::invariantsink::sunk(unit.context, outer.callees(), &outer.globals, unit.function, &loops) || sunk;
+        // `sinkUnusedInvariants`, the last step of the pin's run; opt-in per
+        // target (`Tti::sinks_unused_invariants`).
+        let sunk = outer.target().tti().is_some_and(|tti| tti.sinks_unused_invariants())
+            && crate::invariantsink::sunk(unit.context, outer.callees(), &outer.globals, unit.function, &loops)
+            || sunk;
         // The pin deletes what an edit stopped reading as it goes; a sweep of
         // the function (0.8 M Ir on d_faces' largest body) found the same.
         let dead = (floats
