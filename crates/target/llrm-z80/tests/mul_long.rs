@@ -27,3 +27,14 @@ fn a_long_times_three_is_shifts_and_adds() {
     let count = asm.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
     assert!(count <= 30 && asm.contains("adc hl"), "{count} instructions:\n{asm}");
 }
+
+/// #7940 decomposed `x * 2^n +- 1` before the size routine could be chosen: in a module with two long
+/// multiplies a function tuned for size called `__mulsi3` (14 B a site), and the shifts and adds
+/// grew 12 Os cells (mul_constants +227 B, int64_division +96, call_keeps +153 against 7cfc6eabbf~1).
+#[test]
+fn a_size_function_in_a_module_of_long_multiplies_calls_the_routine_for_x_times_three() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i32 @m(i32 %n, i32 %k) optsize {\n %r = mul i32 %n, 3\n %s = mul i32 %k, 5\n %t = add i32 %r, %s\n ret i32 %t\n}";
+    let asm = llrm_z80::compile::text(ir, "m", 0, &llrm_z80::driver::Request::new(llrm_z80::driver::Level::Os)).expect("compiles");
+    assert_eq!(asm.matches("call __mulsi3").count(), 2, "{asm}");
+}
