@@ -82,6 +82,11 @@ fn leaves_codes_of_test(
     let Kind::Op(name) = def.kind else { return false };
     // a writeback (`MOV8do_WB`) prints as its base row (`MOV8do`)
     let name = if writeback { name.strip_suffix("_WB").unwrap_or(name) } else { name };
+    // the 64-bit product sets Z and N from all 64 bits, not from the low half
+    // it defines first (`mulu.l` prints as the 32-bit row's mnemonic)
+    if crate::dagisel::widemul::code_of(name).is_some() {
+        return false;
+    }
     let Some((mnemonic, def_size)) = mnemonic(name) else { return false };
     let result = matches!(
         def.operands.first(),
@@ -171,11 +176,12 @@ fn with_producers(
         let wanted = (def + 1..at).find(|index| {
             !moved.contains(index)
                 && moved.iter().any(|&later| {
-                    *index < later
-                        && insts[*index].operands.iter().any(|one| {
-                            matches!(one, Operand::Def(Reg::Virt(d))
-                                if insts[later].operands.contains(&Operand::Use(Reg::Virt(*d))))
-                        })
+                    *index < later && insts[*index].operands.iter().any(|one| {
+                        matches!(
+                            one,
+                            Operand::Def(Reg::Virt(d)) if insts[later].operands.contains(&Operand::Use(Reg::Virt(*d)))
+                        )
+                    })
                 })
         });
         let Some(index) = wanted else { break };
@@ -185,9 +191,9 @@ fn with_producers(
     moved
 }
 
-/// Whether each of `setters` (indices in `def..at`) can move above `insts[def]`:
-/// nothing in the window reads the codes, and each is independent of every
-/// other instruction it passes.
+/// Whether each of `setters` (indices in `def..at`) can move above
+/// `insts[def]`: nothing in the window reads the codes, and each is independent
+/// of every other instruction it passes.
 fn hoistable(
     insts: &[Inst],
     def: usize,
@@ -227,7 +233,8 @@ fn independent(
         }
         Some((defs, uses))
     };
-    let (Some((later_defs, later_uses)), Some((earlier_defs, earlier_uses))) = (touched(later), touched(earlier)) else {
+    let (Some((later_defs, later_uses)), Some((earlier_defs, earlier_uses))) = (touched(later), touched(earlier))
+    else {
         return false;
     };
     later_defs.iter().all(|one| !earlier_defs.contains(one) && !earlier_uses.contains(one))
