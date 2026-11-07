@@ -507,6 +507,7 @@ impl Fact {
         self,
         attributes: &[Attribute],
     ) -> bool {
+        crate::counts::bump(crate::counts::Event::AttributeScans);
         match self.flag_key() {
             Some(key) => attributes.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == key)),
             None => attributes.iter().filter_map(Fact::of_attribute).any(|fact| fact == self),

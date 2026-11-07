@@ -561,6 +561,20 @@ pub trait Tti {
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around
     /// it).
+    /// Whether an -Os caller's SZ2 trial also inlines the sites its splice brings
+    /// (`Tuning::inline_chain_trial`).
+    fn opt_size_inline_chain_trial(&self) -> bool {
+        false
+    }
+
+    /// Whether an -Os caller's SZ2 trial prices the dying callee once and refuses copies that grow the
+    /// bytes where the callee's credit alone made the count accept. Only where `function_bytes` is
+    /// calibrated against objects (m68k, `size_calibration.rs`); the x86 model is not, and a truthful
+    /// credit refuses trials that shrink the build there.
+    fn opt_size_inline_byte_gate(&self) -> bool {
+        false
+    }
+
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
         1
     }
