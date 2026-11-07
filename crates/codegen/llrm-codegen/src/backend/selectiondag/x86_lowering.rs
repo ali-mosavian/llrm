@@ -304,6 +304,14 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `X86TargetLowering::hasAndNotCompare`: NOT+TEST for any scalar integer.
+    fn has_and_not_compare(
+        &self,
+        vt: EVT,
+    ) -> bool {
+        vt.is_integer()
+    }
+
     /// `X86TargetLowering::isTruncateFree`: any narrower integer.
     fn is_truncate_free(
         &self,
@@ -1682,9 +1690,43 @@ fn combine_uint_to_fp(
     non_neg.then(|| dag.get_node(ISD::SIntToFp, vt, &[value]))
 }
 
-/// `combineSub`: `combineAddOrSubToADCOrSBB` ([`super::x86_carry`]), then
-/// `combineSubSetcc`. (The `SUB(…, SBB)` and `~A - ~B` folds are not
-/// translated, SD219.)
+/// The folds of `combineSub` that sit between `combineSubABS` and
+/// `combineAddOrSubToADCOrSBB`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L60916>):
+/// `SUB(X, ADC(Y, 0, W))` is `SBB(X, Y, W)` (`a - umax(b, 1)` is `cmp b, 1;
+/// sbb`, not an `adc` into a register and a `sub`), `SUB(X, SBB(Y, Z, W))` is
+/// `SUB(ADC(X, Z, W), Y)`, and `SUB(~A, ~B)` is `SUB(B, A)`.
+fn combine_sub_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (op0, op1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let vt = dag.value_type(node);
+    let zero = |dag: &SelectionDAG, value: SDValue| dag.constant(value) == Some(0);
+    let one_use = |dag: &SelectionDAG, value: SDValue| dag.has_one_use(value.node);
+    if dag.opcode(op1) == x86isd::ADC && one_use(dag, op1) && zero(dag, dag.operand(op1, 1)) {
+        let (y, flags) = (dag.operand(op1, 0), dag.operand(op1, 2));
+        return Some(dag.get_node_multi(x86isd::SBB, &[vt, EVT::I32], &[op0, y, flags]));
+    }
+    if dag.opcode(op1) == x86isd::SBB && one_use(dag, op1) && !(zero(dag, op0) && zero(dag, dag.operand(op1, 1))) {
+        let (y, z, flags) = (dag.operand(op1, 0), dag.operand(op1, 1), dag.operand(op1, 2));
+        let adc = dag.get_node_multi(x86isd::ADC, &[vt, EVT::I32], &[op0, z, flags]);
+        return Some(dag.get_node(ISD::Sub, vt, &[adc, y]));
+    }
+    let not_of = |dag: &SelectionDAG, value: SDValue| -> Option<SDValue> {
+        let all_ones = super::fold::mask(dag.value_type(value).size_in_bits());
+        (dag.opcode(value) == ISD::Xor && dag.constant(dag.operand(value, 1)) == Some(all_ones) && one_use(dag, value))
+            .then(|| dag.operand(value, 0))
+    };
+    if let (Some(a), Some(b)) = (not_of(dag, op0), not_of(dag, op1)) {
+        return Some(dag.get_node(ISD::Sub, vt, &[b, a]));
+    }
+    None
+}
+
+/// `combineSub`: the `SUB(X, ADC(Y,0,W))`, `SUB(X, SBB(Y,Z,W))` and `~A - ~B`
+/// folds ([`combine_sub_carry`]), `combineAddOrSubToADCOrSBB`
+/// ([`super::x86_carry`]), then `combineSubSetcc`.
 ///
 /// DEVIATE SD448: then, where `lea_adds`, [`combine_masked_xor_difference`].
 fn combine_sub(
@@ -1692,7 +1734,8 @@ fn combine_sub(
     node: SDValue,
     lea_adds: bool,
 ) -> Option<SDValue> {
-    super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node)
+    combine_sub_carry(dag, node)
+        .or_else(|| super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node))
         .or_else(|| combine_sub_setcc(dag, node))
         .or_else(|| lea_adds.then(|| combine_masked_xor_difference(dag, node)).flatten())
 }

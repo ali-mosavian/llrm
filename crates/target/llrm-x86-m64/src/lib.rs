@@ -428,6 +428,11 @@ impl llrm_target::Target for M64 {
                             constant_hoisting: true,
                             // DEVIATE ZIMM (owner m64, exit 2026-11-27): see Tuning.
                             zext_imm_is_basic: true,
+                            // DEVIATE MEM-OS (owner anyisa, exit 2026-11-14): see Tuning.
+                            // A piece is a load and a store at `[reg+disp8]` (`movups` and a qword 4 + 4, a
+                            // dword and a byte 3 + 3, a word 4 + 4); the call is `mov edx, n` 5 and the
+                            // jump 5, 14 with the setup of a frame object's pointers.
+                            size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

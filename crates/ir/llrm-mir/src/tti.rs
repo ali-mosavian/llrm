@@ -780,6 +780,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::size_copy_price`.
+    fn copy_price_for_size(&self) -> Option<crate::target::CopyPrice> {
+        None
+    }
+
     /// DEVIATE LG3: the bytes of the instructions a loop's setup and exit test
     /// are made of, where the target's code size is what its cost is (wasm).
     /// LSR then breaks a tie between the end-biased solution and the pin's by
