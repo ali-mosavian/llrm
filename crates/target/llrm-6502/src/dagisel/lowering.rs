@@ -144,6 +144,11 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_operation_action(op, vt, Action::Custom);
         }
     }
+    // a compare of two words is the borrow of the low words into the high
+    // words' subtract (`IntegerExpandSetCCOperands`)
+    for vt in [MVT::I1, MVT::I8, MVT::I16] {
+        tl.set_operation_action(SetCCCarry, vt, Action::Custom);
+    }
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
     tl
@@ -161,6 +166,7 @@ impl Hooks for MosLowering {
         match dag.opcode(node) {
             ISD::Rotl | ISD::Rotr => Some(lower_rotate(dag, node)),
             ISD::SetCC => lower_setcc(dag, node),
+            ISD::SetCCCarry => lower_setcc_carry(dag, node),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
@@ -367,6 +373,11 @@ fn lower_extend(
     if dag.value_type(condition) != EVT::I1 {
         return node;
     }
+    let condition = if dag.opcode(condition) == ISD::SetCCCarry {
+        lower_setcc_carry(dag, condition).unwrap_or(condition)
+    } else {
+        condition
+    };
     // the flag of an overflow op is not a condition yet: its expansion makes
     // one, and the extension is lowered when that is done (`condition_byte` has
     // no byte for it and would widen the flag with this very node)
@@ -549,13 +560,59 @@ fn lower_setcc(
     Some(dag.get_node(mosisd::SETCC, EVT::I8, &[code, flags]))
 }
 
+/// `LowerSETCCCARRY`: the high words' subtract takes the borrow of the low
+/// words', and the order is the borrow it leaves. A signed order compares the
+/// high words with their sign bits flipped.
+///
+/// The pin's `IntegerExpandSetCCOperands` makes the node when the target has
+/// it ([LegalizeIntegerTypes.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp));
+/// ours is `legalize_types.rs`. Without it a compare of two words was a select
+/// of the compares of its halves, each a chain.
+fn lower_setcc_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    if dag.value_type(high) != EVT::I16 || dag.opcode(borrow) != ISD::USubO || borrow.res != 1 {
+        return None;
+    }
+    let cc = cond_of(dag, dag.operand(node, 3));
+    let (high, other) = match cc {
+        CondCode::SetULt | CondCode::SetUGe => (high, other),
+        CondCode::SetLt | CondCode::SetGe => (flip_sign(dag, high), flip_sign(dag, other)),
+        _ => return None,
+    };
+    // the flags are bits, as a subtract of words leaves them: `condition` reads
+    // the carry of the node itself, not of a truncation of it
+    let (low, below) = (dag.operand(borrow, 0), dag.operand(borrow, 1));
+    let low_borrow = dag.get_node_multi(ISD::USubO, &[EVT::I16, EVT::I1], &[low, below]);
+    let borrow = SDValue { node: low_borrow.node, res: 1 };
+    let pair = dag.get_node_multi(ISD::USubOCarry, &[EVT::I16, EVT::I1], &[high, other, borrow]);
+    let below = SDValue { node: pair.node, res: 1 };
+    let vt = dag.value_type(node);
+    match cc {
+        CondCode::SetULt | CondCode::SetLt if vt == EVT::I1 => Some(below),
+        CondCode::SetULt | CondCode::SetLt => Some(dag.get_node(ISD::ZeroExtend, vt, &[below])),
+        _ => {
+            // "not below" is a select of the borrow, as any condition is
+            let (zero, one) = (dag.get_constant(0, EVT::I8), dag.get_constant(1, EVT::I8));
+            let byte = dag.get_select(EVT::I8, below, zero, one);
+            Some(if vt == EVT::I8 { byte } else { dag.get_node(ISD::Truncate, vt, &[byte]) })
+        }
+    }
+}
+
 /// The code and flags a condition value branches on: a lowered compare, or the
 /// value tested against zero (`NE`).
 fn condition(
     dag: &mut SelectionDAG,
     value: SDValue,
 ) -> (SDValue, SDValue) {
-    let value = if dag.opcode(value) == ISD::SetCC { lower_setcc(dag, value).unwrap_or(value) } else { value };
+    let value = match dag.opcode(value) {
+        ISD::SetCC => lower_setcc(dag, value).unwrap_or(value),
+        ISD::SetCCCarry => lower_setcc_carry(dag, value).unwrap_or(value),
+        _ => value,
+    };
     if dag.opcode(value) == mosisd::SETCC {
         return (dag.operand(value, 0), dag.operand(value, 1));
     }
@@ -603,6 +660,10 @@ fn condition_byte(
             }
             ISD::SetCC => match lower_setcc(dag, value) {
                 Some(lowered) => lowered,
+                None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
+            },
+            ISD::SetCCCarry => match lower_setcc_carry(dag, value) {
+                Some(lowered) => condition_byte(dag, lowered),
                 None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
             },
             // a multi-result lowering's wrapper (`lower_bit_load`): the bit it

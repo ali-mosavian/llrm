@@ -1291,6 +1291,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         } else {
             self.dag.get_ext_load(super::actions::LoadExt::ExtLoad, vt, chain, index, info)
         };
+        // The pool is read-only memory (`PseudoSourceValue::isConstant`):
+        // `isDereferenceableInvariantLoad`.
+        self.dag.invariant_loads.insert(loaded.node);
         self.replace_node(node, loaded);
         Ok(())
     }
