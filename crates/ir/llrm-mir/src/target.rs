@@ -79,6 +79,11 @@ pub struct Tuning {
     /// the negated constant is made too, is made once: `a + v*(-C)` is
     /// `a - v*C`, exact in IEEE (DEVIATE X87-SHARE, x87 targets only).
     pub x87_share_negated_products: bool,
+    /// At `-Os` a zero fill of eight bytes or more is `fldz` and one `fst
+    /// qword` per double, not two `mov dword` zero stores: 4 bytes a double
+    /// at a short displacement against 8 (DEVIATE X87-ZERO-FILL, x87 targets
+    /// only; the pin's `getOptimalMemOpType` is `i32` without SSE).
+    pub x87_zero_fill_at_size: bool,
     /// A stack slot a loop holds in a register is shared only by what is as
     /// wide (`slots::width_rule_allows`); false: the pin's `ColorSlot`,
     /// which shares any two slots whose ranges do not overlap.
@@ -102,10 +107,19 @@ pub struct Tuning {
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
+    /// An -Os caller's SZ2 trial also inlines the sites its splice brings, priced by the
+    /// ordinary rules, before it measures: `foo` into `main` and then `bar` into that copy
+    /// meet the constants together, as the pin's callee-first order gives. One round.
+    pub inline_chain_trial: bool,
     /// A full unroll's discount for a local array it makes constant-indexed
     /// (promoted to registers) holds only while the promoted elements fit the
     /// register file (UP1). false: every such access is free.
     pub unroll_promotion_fits_registers: bool,
+    /// UP1 for the floats of an x87 target: the register file a promoted
+    /// float array's elements must fit is the x87 stack (`x87_stack_slots`,
+    /// 8), which holds nothing across the nest's inner loops. Ints keep the
+    /// rule above. false: floats are free (DEVIATE UP1-X87, owner x87).
+    pub unroll_promotion_fits_x87_stack: bool,
     /// A size build rotates a loop only when the header's exit test folds in
     /// the preheader (RS1): an unfolded copy is a compare and a branch, more
     /// than the loop-closing jump it removes. false: the pass's header limit
@@ -191,13 +205,16 @@ impl Tuning {
         zext_imm_is_basic: false,
         x87_stack_slots: None,
         x87_share_negated_products: false,
+        x87_zero_fill_at_size: false,
         slots_loop_width_rule: false,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
+        inline_chain_trial: false,
         unroll_promotion_fits_registers: false,
+        unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_header_priced_at_size: false,
         keep_constant_displacements: false,
@@ -1012,6 +1029,8 @@ mod tests {
         );
         assert_eq!(pin.x87_stack_slots, None);
         assert!(!pin.x87_share_negated_products);
+        assert!(!pin.unroll_promotion_fits_x87_stack);
+        assert!(!pin.x87_zero_fill_at_size);
         assert!(!pin.slots_loop_width_rule);
         assert_eq!(pin.inline_threshold, None);
     }

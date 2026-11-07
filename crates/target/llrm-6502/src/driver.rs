@@ -54,7 +54,7 @@ impl Level {
         }
     }
 
-    fn tuning(self) -> Tuning {
+    pub(crate) fn tuning(self) -> Tuning {
         match self {
             Self::Os | Self::Oz => Tuning::SIZE,
             _ => Tuning::SPEED,
@@ -255,9 +255,11 @@ pub fn assembly(
         .collect();
     let data = data_text(module, &program.layout)?;
     let mut selections = Vec::new();
+    let mut from_module = Vec::new();
     for name in &names {
         let mut selection = select_function(module, name, request.cpu)?;
         let mut as_called = true;
+        let mut paged_chosen = false;
         selection.zero_page = request.platform.zero_page;
         selection.tuning = request.level.tuning();
         if let Some(looped) = looped.as_ref().filter(|_| copies.contains(name)) {
@@ -275,10 +277,13 @@ pub fn assembly(
             other.tuning = request.level.tuning();
             if cheaper(module, name, &other, paged, &selection, request)? {
                 selection = other;
+                paged_chosen = true;
             }
         }
         selections.push(selection);
+        from_module.push(as_called && !paged_chosen);
     }
+    crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
     // Set once the selection is final: pricing the alternatives sees none.
     let file = request.debug.then(|| llrm_mir::dbgimport::unit_file(module)).flatten().map(|(name, _)| name);
     for (name, selection) in names.iter().zip(selections.iter_mut()) {

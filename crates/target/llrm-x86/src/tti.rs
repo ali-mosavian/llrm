@@ -704,6 +704,10 @@ impl Tti for X86 {
         self.tuning.x87_share_negated_products && !self.sse2
     }
 
+    fn x87_zero_fill_at_size(&self) -> bool {
+        self.tuning.x87_zero_fill_at_size && !self.sse2
+    }
+
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         self.tuning.unroll_partial_threshold
     }
@@ -775,6 +779,10 @@ impl Tti for X86 {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_at_size
     }
 
+    fn opt_size_inline_chain_trial(&self) -> bool {
+        self.tuning.inline_chain_trial
+    }
+
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
         if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
             || self.tuning.inline_size_guard_single_site
@@ -787,6 +795,10 @@ impl Tti for X86 {
 
     fn unroll_promotion_fits_registers(&self) -> bool {
         self.tuning.unroll_promotion_fits_registers
+    }
+
+    fn unroll_promotion_fits_x87_stack(&self) -> bool {
+        self.tuning.unroll_promotion_fits_x87_stack && !self.sse2
     }
 
     fn rotation_guard_must_fold_at_size(&self) -> bool {
@@ -1047,6 +1059,16 @@ impl Tti for X86 {
         self.imm_cost_inst(op, index, imm, bits, self.tuning.zext_imm_is_basic)
     }
 
+    fn int_imm_cost_inst_pin(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        self.imm_cost_inst(op, index, imm, bits, false)
+    }
+
     /// ZIMM does not apply to a function built for size: a hoisted constant
     /// costs a 2-3 byte register copy per use where `mov r32, imm32` is 5.
     fn int_imm_cost_inst_for_size(
@@ -1105,6 +1127,14 @@ impl Tti for X86 {
         min_size: bool,
     ) -> bool {
         div_rem_by_constant && !min_size
+    }
+
+    fn keeps_select_mask_attached(
+        &self,
+        bits: u128,
+        width: u32,
+    ) -> bool {
+        self.tuning.zext_imm_is_basic && width == 64 && bits <= u128::from(u32::MAX)
     }
 
     /// `X86TargetLowering::isTruncateFree`:
@@ -1244,8 +1274,14 @@ impl Tti for X86 {
 
     /// Real mode declares the registers the allocator has, and the live count
     /// LSR keeps is exact there: the six fill (PLASMA's loop, 4 + 2 live).
+    ///
+    /// DEVIATE LU3d: a target that states its allocatable registers
+    /// (`with_registers`: the frame and stack pointers are not among them)
+    /// keeps none back; the pin's one stands for the stack pointer its count
+    /// of eight includes. owner: w12, exit: 2026-11-20 (the m32/m64 A/B in the
+    /// PR; without it the line goes).
     fn lsr_reserved_registers(&self) -> u32 {
-        u32::from(self.real_mode.is_none())
+        u32::from(self.real_mode.is_none() && self.registers.is_none())
     }
 
     /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold

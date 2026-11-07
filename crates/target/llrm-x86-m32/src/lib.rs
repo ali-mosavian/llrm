@@ -88,6 +88,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         imul_at_size: true,
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
+        unroll_promotion_fits_x87_stack: true,
+        x87_zero_fill_at_size: true,
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a
         // callee whose copies grow the code stays a call (called_once_os:
@@ -96,6 +98,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called
         // callee whose copy grows the code (gcc does; the pin copies it).
         inline_size_guard_single_site: true,
+        // DEVIATE SZ3 (owner x86-m32, exit 2026-11-20): an -Os SZ2 trial also inlines the sites its
+        // splice brings. The pin inlines callee-first (`bar` into `foo`, cost 15 < 75, then `foo` into
+        // `main`); the size guard prices each edge alone and keeps both calls. byvalue_struct_address
+        // -Os 147 -> 39 B (clang 23), 176 m32 programs, no other cell moves.
+        inline_chain_trial: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
         // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
         recursive_inlining: Some((8, 450)),
@@ -255,6 +262,10 @@ impl llrm_target::Target for M32 {
 
     fn layout(&self) -> llrm_target::layout::Layout {
         LAYOUT.clone()
+    }
+
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
     }
 
     /// An argument takes a dword at least: `calling.toml`'s.

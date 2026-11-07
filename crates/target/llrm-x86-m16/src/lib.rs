@@ -283,6 +283,10 @@ impl llrm_target::Target for M16 {
         layout()
     }
 
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
+    }
+
     fn conventions(&self) -> &'static [&'static str] {
         &CONVENTIONS
     }
@@ -325,6 +329,11 @@ impl llrm_target::Target for M16 {
     /// A byte is pushed as a word: `calling.toml`'s.
     fn stack_slot_bytes(&self) -> i64 {
         CALLING.native().slot_bytes
+    }
+
+    /// Real mode has no `and sp` frame the pin builds.
+    fn can_realign_stack(&self) -> bool {
+        false
     }
 
     fn frame_register(&self) -> RegId {
