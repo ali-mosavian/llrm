@@ -134,17 +134,8 @@ fn solved_each(
         let outer = outer_of(program, at);
         let keeps_sign = program.target.tti().is_some_and(|tti| tti.ipsccp_widen_keeps_sign());
         let Program { modules, layout, .. } = &mut *program;
-        // DEVIATE IPSCCP-1: the range attributes a solve writes seed the next
-        // (`handleCallArguments` meets a call's value with its formal's
-        // range), and a bound such as `lo < hi` narrows a recursion's
-        // arguments only from there; the pin solves once. Twice more at most.
-        // owner: w12, exit: 2026-11-20 (A/B: keep or drop).
-        for _ in 0..3 {
-            let round = run_on_module(&mut modules[at], layout, &outer, &private, keeps_sign);
-            if round.is_empty() {
-                break;
-            }
-            changed.extend(round.into_iter().map(|id| (at, id)));
+        for id in run_on_module(&mut modules[at], layout, &outer, &private, keeps_sign) {
+            changed.insert((at, id));
         }
     }
     changed
