@@ -223,3 +223,28 @@ fn fast_isel_takes_an_unsigned_divide_and_remainder_at_m32() {
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(asm.matches("div").count() >= 2 && !asm.contains("idiv"), "{asm}");
 }
+
+/// At m64 FastISel declined every function ("a parameter that is not a 4-byte
+/// stack cell"): register parameters, frame addressing and `idiv` are taken.
+#[test]
+fn fast_isel_takes_the_integer_core_at_m64() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "int h(int a, int b)\n{\n    int c = a / b;\n    if (c > a)\n        return c - 1;\n    return c + a;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_DEBUG", "isel")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
+}
