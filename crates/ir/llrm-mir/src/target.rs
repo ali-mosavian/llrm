@@ -44,6 +44,12 @@ pub struct Tuning {
     /// sequence by clocks plus bytes at `speed_milliclocks_per_byte`
     /// (`hardware_divide_wins`); false: the clocks and margin alone.
     pub divide_by_bytes: bool,
+    /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24): at -Os a divide by a
+    /// constant of a type narrower than a word keeps its `div` (DIV-OPTSIZE-1)
+    /// only while at most this many values are live across it; 0: always. The
+    /// `div` pins eax, edx and the divisor's register, the narrow multiply
+    /// sequence none.
+    pub narrow_divide_live_limit: u32,
     /// At -O1 (`OptLevel` 1) a full unroll is made only where its cost after
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
@@ -250,6 +256,7 @@ impl Tuning {
         price_fills: false,
         multiply_by_clocks: false,
         divide_by_bytes: false,
+        narrow_divide_live_limit: 0,
         unroll_never_grows_at_o1: false,
         price_pin_multiplies: false,
         imul_at_size: false,

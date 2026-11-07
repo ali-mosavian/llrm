@@ -337,6 +337,13 @@ pub trait Target {
     ) -> Option<Inst> {
         None
     }
+    /// Whether a spill store or reload of a byte of a wider register names the
+    /// register of that lane, as every other instruction names the value. A
+    /// target whose byte registers are not halves of the wider one (z80's `e`
+    /// of `de`) numbers the value as before.
+    fn spills_named_by_lane() -> bool {
+        false
+    }
     /// Whether `spill_store_lane` is stated.
     fn spills_lanes() -> bool {
         false

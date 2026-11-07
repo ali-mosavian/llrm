@@ -1986,7 +1986,11 @@ pub fn from_lir<T: Target>(
                     Reg::Virt(v) => v as usize,
                     Reg::Phys(_) => 0,
                 }];
-                let register = lane_or_number(&named, &mut classes, &mut number);
+                let register = if T::spills_named_by_lane() {
+                    lane_or_number(&named, &mut classes, &mut number)
+                } else {
+                    numbered
+                };
                 let lane = cell.filter(|_| insn.spill_store).and_then(llrm_codegen::greedy::tii::lane_offset);
                 let made = if let Some(offset) = lane {
                     T::spill_store_lane(class, register, slot, offset)

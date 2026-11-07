@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/selectiondag.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/selectiondag.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/selectiondag.rs sha256:b15b29a5d898e600087fa5c2e2d6405a6e437155063fffb95310aadefc1f1e9c -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/selectiondag.rs sha256:fb28c6dabe83bca90a27807d97c77f55b2eb11d7b060ade6f28319a44a540942 -->
 
 # selectiondag
 
@@ -54,7 +54,7 @@ Exit: sdag-d adds them if the emitter needs line info. Owner sdag-a.
 Review 2026-11-13.
 
 DEVIATE SD11: no floating-point constant folding (`foldConstantFPMath`,
-`FP_TO_SINT` of a constant, `FoldSetCC` on FP constants), no FP constant
+`FP_TO_SINT` of a constant), no FP constant
 bitcasts; `ConstFp` holds raw bits. Reason: needs an `APFloat` (f80
 included); not on the integer path A1 builds. Exit: with the FP builder
 piece. Owner sdag-a. Review 2026-11-13.
