@@ -6,8 +6,8 @@
 //! - [`store_then_index_load`]: `sta m; lda n; ldx m` is `tax; lda n` when `m`
 //!   is dead after (likewise `ldy m`): the byte went through memory to leave
 //!   `a`.
-//! - [`chain_ends_in_a`]: `(asl m; rol n)*k; lda m` (also `lsr`/`ror`, and `lda
-//!   n`) is `lda m; (asl a; rol n)*k` when the loaded byte is dead after: the
+//! - [`chain_ends_in_a`]: `(asl m; rol n)*k; [clc]; lda m` (also `lsr`/`ror`,
+//!   and `lda n`) is `lda m; (asl a; rol n)*k` when the loaded byte is dead after: the
 //!   byte that is returned shifts in `a`, not in memory and then loaded.
 //!
 //! Runs from [`crate::peephole::run`].
@@ -223,11 +223,16 @@ fn chain_once(asm: &mut Asm) -> bool {
         while step(lines, end) == Some((first, second, m.clone(), n.clone())) {
             end += 2;
         }
-        let Some(Line::Inst(Inst { op: Op::Lda, operand: Operand::Direct(x), .. })) = lines.get(end) else { continue };
+        // a carry op between the chain and the load is kept after the chain
+        let mut load = end;
+        while matches!(lines.get(load), Some(Line::Inst(Inst { op: Op::Clc | Op::Sec, .. }))) {
+            load += 1;
+        }
+        let Some(Line::Inst(Inst { op: Op::Lda, operand: Operand::Direct(x), .. })) = lines.get(load) else { continue };
         if x != &m && x != &n {
             continue;
         }
-        if !cell_dead_from(lines, end + 1, x, &asm.result_cells, &mut BTreeSet::new()) || !flags_unread(lines, end + 1) {
+        if !cell_dead_from(lines, load + 1, x, &asm.result_cells, &mut BTreeSet::new()) || !flags_unread(lines, load + 1) {
             continue;
         }
         let in_a = |op: Op, cell: &String| {
@@ -235,12 +240,13 @@ fn chain_once(asm: &mut Asm) -> bool {
             Line::Inst(Inst { op, operand, place: 0 })
         };
         let mut out: Vec<Line> = lines[..s].to_vec();
-        out.push(lines[end].clone());
+        out.push(lines[load].clone());
         for _ in 0..(end - s) / 2 {
             out.push(in_a(first, &m));
             out.push(in_a(second, &n));
         }
-        out.extend_from_slice(&lines[end + 1..]);
+        out.extend_from_slice(&lines[end..load]);
+        out.extend_from_slice(&lines[load + 1..]);
         asm.lines = out;
         return true;
     }
