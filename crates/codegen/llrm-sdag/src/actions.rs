@@ -129,6 +129,8 @@ pub struct TargetLowering {
     /// times the bits beyond them reach `least` (each is a shift instruction
     /// per granule).
     size_shift_call: Option<(u128, u128)>,
+    /// The function is built for size: an `i64` divide calls the target's size routine.
+    small_divide: bool,
     /// The object spelling of a routine's name where the convention decorates
     /// it (`___addsf3@3`).
     libcall_symbols: HashMap<String, (String, u32)>,
@@ -158,6 +160,7 @@ impl TargetLowering {
             libcall_names: HashMap::default(),
             size_libcall_names: HashMap::default(),
             size_shift_call: None,
+            small_divide: false,
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
             sdiv_pow2_cmov: None,
@@ -407,6 +410,19 @@ impl TargetLowering {
         predicate: fn(MVT, u128, bool) -> bool,
     ) {
         self.fp_imm_predicate = Some(predicate);
+    }
+
+    /// The function selected next is built for size, so its `i64` divide is the
+    /// size routine where the target has one.
+    pub fn set_small_divide(
+        &mut self,
+        small: bool,
+    ) {
+        self.small_divide = small;
+    }
+
+    pub fn small_divide(&self) -> bool {
+        self.small_divide
     }
 
     /// `DAG.shouldOptForSize()` for the function selected next.

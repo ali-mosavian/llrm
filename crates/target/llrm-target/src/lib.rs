@@ -629,6 +629,16 @@ pub trait Target {
         self.divide_routine(signed, wide_divisor)
     }
 
+    /// `divide_routine_used` for code built for size: a target may have a
+    /// routine shorter than the speed one; it refuses where it has none.
+    fn divide_routine_small(
+        &self,
+        _signed: bool,
+        _wide_divisor: bool,
+    ) -> Result<routines::Divide, String> {
+        Err("no size divide routine".into())
+    }
+
     /// The width a float value of `bytes` bytes is held at: x87 holds every one
     /// as its stack register, a vector file as its own size.
     fn float_width(

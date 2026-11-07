@@ -878,6 +878,7 @@ fn selected_in(
         let features = Features { cmov, ..Features::default() };
         lowering_for(32, features, || TargetLowering::x86_32(features, MVT::I32))
     };
+    tli.set_small_divide(cpu.size);
     // The soft-float routines are spelled as the C compiler spelled their
     // definitions.
     for (name, number, symbol) in libcalls {
@@ -1602,6 +1603,11 @@ fn selected_in(
                         if routine.name == name.as_str() {
                             inline.insert(*at, routine.code);
                         }
+                    }
+                }
+                if let Ok(routine) = arch.divide_routine_small(signed, wide) {
+                    if routine.name == name.as_str() {
+                        inline.insert(*at, routine.code);
                     }
                 }
             }

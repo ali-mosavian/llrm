@@ -7,7 +7,16 @@ fn quotient_of(
     op: ISD,
     narrow: bool,
 ) -> (SelectionDAG, SDValue) {
-    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    quotient_sized(op, narrow, false)
+}
+
+fn quotient_sized(
+    op: ISD,
+    narrow: bool,
+    small: bool,
+) -> (SelectionDAG, SDValue) {
+    let mut tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    tli.set_small_divide(small);
     let mut dag = dag();
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
@@ -74,4 +83,14 @@ fn quotient_and_remainder_are_read_from_their_own_registers() {
     let (remainder, rroot) = quotient_of(ISD::URem, false);
     assert_eq!(register(&quotient, qroot), NodeData::PhysReg(routine.quotient[0]));
     assert_eq!(register(&remainder, rroot), NodeData::PhysReg(routine.remainder[0]));
+}
+
+/// nbody_fixed at m16 -O1 held a 313-byte inline `i64` divide: a function built
+/// for size called the speed routine, though the target has a shorter one.
+#[test]
+fn a_function_built_for_size_calls_the_size_divide() {
+    let (dag, _) = quotient_sized(ISD::UDiv, false, true);
+    assert_eq!(call_of(&dag).0, "div64_u_small");
+    let (dag, _) = quotient_sized(ISD::UDiv, true, true);
+    assert_eq!(call_of(&dag).0, "div64_u32", "a dword divisor keeps the speed routine, which is shorter");
 }
