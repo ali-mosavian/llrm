@@ -50,6 +50,15 @@ fn a_nest_whose_counters_only_index_memory_is_priced_not_bypassed() {
     assert!(insns < 190, "{insns} instructions");
 }
 
+/// matmul -O3: pricing the nest kept the multiply loop rolled, 4,148
+/// instructions run against 672 unrolled (clang 608), for 40 B. -O3 keeps the
+/// nest's decision: more instructions than the priced -O2 module.
+#[test]
+fn a_nest_is_not_priced_at_o3() {
+    let ir = include_str!("data/bench_matmul.ll");
+    assert!(instructions(ir, Level::O3) > instructions(ir, Level::O2));
+}
+
 /// nbody_single -O2: the 6-trip loops sit in a 1000-trip loop and were priced
 /// as if it ran 32 times: 17,408 clocks saved against 72,250 for the bytes,
 /// kept rolled: 737,170 instructions where unrolled they are 501,176. Rolled
