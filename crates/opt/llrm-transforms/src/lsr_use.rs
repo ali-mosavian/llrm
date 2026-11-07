@@ -512,6 +512,9 @@ pub struct Cost {
     /// DEVIATE LG3: the bytes of the setup and exit-test code, for a target
     /// that gives a byte model (`Tti::lsr_bytes`); 0 elsewhere.
     pub bytes: u32,
+    /// DEVIATE LSR-SIZE: x86 bytes of the displacements, adds and setup the
+    /// formulae need, where the target sizes by `Tti::lsr_size_order`.
+    pub size_bytes: u32,
 }
 
 impl Cost {
@@ -564,6 +567,26 @@ impl Cost {
             if fits.insns <= over.insns.saturating_add(spare) {
                 return theirs;
             }
+        }
+        // DEVIATE LSR-SIZE: sized for bytes, the bytes of the displacements,
+        // adds and setup come before the cost of the recurrences, the
+        // instructions and registers staying first.
+        if (self.size || other.size) && tti.lsr_size_order() {
+            let key = |x: &Cost| {
+                let c = &x.c;
+                (
+                    c.insns,
+                    c.num_regs,
+                    x.size_bytes,
+                    c.add_rec_cost,
+                    c.num_iv_muls,
+                    c.num_base_adds,
+                    c.scale_cost,
+                    c.imm_cost,
+                    c.setup_cost,
+                )
+            };
+            return key(self) < key(other);
         }
         tti.is_lsr_cost_less(&self.c, &other.c)
     }
@@ -663,6 +686,25 @@ impl Cost {
                     }
                 }
             }
+        }
+
+        if self.size && r.tti.lsr_size_order() {
+            if lu.kind == Kind::Address {
+                for fixup in &lu.fixups {
+                    let offset = fixup.offset.add_unsigned(f.base_offset).0;
+                    self.size_bytes += if f.base_gv.is_some() {
+                        4
+                    } else if offset == 0 {
+                        0
+                    } else if i8::try_from(offset).is_ok() {
+                        1
+                    } else {
+                        4
+                    };
+                }
+            }
+            // An add or lea for each register not folded, and its immediate.
+            self.size_bytes += 3 * (self.c.num_base_adds - prev_base_adds);
         }
 
         // Scaling amounts that are not free.
@@ -821,6 +863,9 @@ impl Cost {
                 loop_cost = 0;
             }
             self.c.add_rec_cost += loop_cost;
+            if loop_cost > 0 && self.size && r.tti.lsr_size_order() {
+                self.size_bytes += 3;
+            }
             if loop_cost > 0
                 && let Some(m) = r.tti.lsr_bytes()
             {
@@ -869,9 +914,14 @@ impl Cost {
         }
 
         // Favor registers that need no setup in the preheader.
+        let prev_setup = self.c.setup_cost;
         self.c.setup_cost += setup_cost(r.se, r.cx, r.tti, reg, SETUP_COST_DEPTH_LIMIT);
         // Even with the depth limit, the cost stays valid.
         self.c.setup_cost = self.c.setup_cost.min(1 << 16);
+        if self.size && r.tti.lsr_size_order() {
+            // A `mov` or `lea` of the register's start in the preheader.
+            self.size_bytes += 3 * (self.c.setup_cost - prev_setup).min(4);
+        }
         if let Some(m) = r.tti.lsr_bytes() {
             // A local set in the preheader, and a constant for each
             // immediate the setup makes.

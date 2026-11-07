@@ -105,3 +105,25 @@ fn a_load_before_a_label_is_dropped_when_the_flags_are_set_again_after_it() {
     drop_known_loads(&mut asm);
     assert_eq!(asm.text(), read, "a branch after the label reads the flags the load set");
 }
+
+/// `lz4`'s entry: `lda rc16; sta rc20; lda rc17; sta rc21` led both successors of
+/// `lda rc6; ora rc7; bne` (the loads write the flag the branch reads, so the copy
+/// stayed twice: 8 B). It runs before the loads that make the flag.
+#[test]
+fn a_copy_both_paths_start_with_goes_before_the_flag_setup() {
+    let before = "  lda rc6\n  ora rc7\n  bne b83\nb85:\n  lda rc16\n  sta rc20\n  lda rc17\n  sta rc21\n  lda rc20\n  rts\nb83:\n  lda rc16\n  sta rc20\n  lda rc17\n  sta rc21\nb2:\n  ldy #0\n  lda (rc2),y\n  rts\n";
+    let after = "  lda rc16\n  sta rc20\n  lda rc17\n  sta rc21\n  lda rc6\n  ora rc7\n  bne b83\nb85:\n  lda rc20\n  rts\nb83:\nb2:\n  ldy #0\n  lda (rc2),y\n  rts\n";
+    assert_eq!(run(before), after);
+}
+
+/// The copy cannot pass a setup that reads a cell it stores, and `a` or the flags
+/// must not be read after it.
+#[test]
+fn a_copy_stays_when_the_setup_reads_what_it_stores_or_a_successor_reads_a_or_the_flags() {
+    let reads_stored = "  lda rc6\n  ora rc20\n  bne b83\nb85:\n  lda rc16\n  sta rc20\n  lda rc20\n  rts\nb83:\n  lda rc16\n  sta rc20\n  lda rc20\n  rts\n";
+    assert_eq!(run(reads_stored), reads_stored);
+    let reads_a = "  lda rc6\n  ora rc7\n  bne b83\nb85:\n  lda rc16\n  sta rc20\n  sta rc21\n  rts\nb83:\n  lda rc16\n  sta rc20\n  lda #1\n  rts\n";
+    assert_eq!(run(reads_a), reads_a);
+    let reads_flags = "  lda rc6\n  ora rc7\n  bne b83\nb85:\n  lda rc16\n  sta rc20\n  beq b85\n  rts\nb83:\n  lda rc16\n  sta rc20\n  lda #1\n  rts\n";
+    assert_eq!(run(reads_flags), reads_flags);
+}

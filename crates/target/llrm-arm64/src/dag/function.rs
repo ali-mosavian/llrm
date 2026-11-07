@@ -181,7 +181,7 @@ pub fn select_function_in(
     let tti = crate::tti::AArch64::of_cpu(platform.cpu())
         .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>);
     // `isIntDivCheap` keeps a divide by a constant a divide where it is smaller
-    // than the multiply-high sequence. DEVIATE SD534 (exit: none, arm64 is
+    // than the multiply-high sequence. DEVIATE SD535 (exit: none, arm64 is
     // strict on bytes): the pin answers `minsize` only
     // ([L33827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L33827));
     // `-Os` is `optsize` and gcc's `-Os` divides there too (2 instructions

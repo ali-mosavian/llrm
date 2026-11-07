@@ -2024,7 +2024,15 @@ impl<'a> Analyzer<'a> {
             llrm_mir::tti::CostKind::CodeSize,
         )
         .value;
-        (size * tti.call_code_size_percent() + 50) / 100
+        (size * tti.call_code_size_percent() + 50) / 100 + self.byval_copy_size()
+    }
+
+    /// The by-value arguments' copy onto the stack, which the call's flat
+    /// price leaves out and inlining removes: a load and a store per word.
+    fn byval_copy_size(&self) -> i64 {
+        let Some(shape) = self.call_shape() else { return 0 };
+        let word = (i64::from(self.site.layout.pointer(0).bits) / 8).max(1);
+        shape.arguments.iter().filter_map(|argument| argument.byval_bytes).map(|bytes| 2 * ((bytes as i64 + word - 1) / word)).sum()
     }
 
     /// The call site as the target's call sequence sees it.

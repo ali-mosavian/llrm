@@ -27,6 +27,20 @@ git -c user.name=t -c user.email=t@t commit -q --allow-empty -m 2; echo 2 > tool
 rm -f "$d/ran"
 tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD >/dev/null || { echo "FAIL: a tooling-only tip was red"; exit 1; }
 [ ! -e "$d/ran" ] || { echo "FAIL: a tooling-only tip ran tests"; exit 1; }
+# the scanners: a stale generated page and a tracked .md naming ~/scratch each stop the runner, named (they were refused as batches, never blamed on the tip)
+mkdir -p "$d/repo/tools/docs/docsbuild"; printf 'print("generated docs are out of date; run it")\nprint("  docs/x.md")\n' > "$d/repo/tools/docs/docsbuild/build.py"
+stop=$(tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD) && { echo "FAIL: a tip with a stale page was green"; exit 1; }
+echo "$stop" | grep -q 'docs_in_sync.*docs/x.md' || { echo "FAIL: stale page not named: $stop"; exit 1; }
+printf 'pass\n' > "$d/repo/tools/docs/docsbuild/build.py"
+printf 'see ~/scratch/handoff/x.md\n' > "$d/repo/n.md"; git -C "$d/repo" add n.md
+stop=$(tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD) && { echo "FAIL: a tip naming ~/scratch was green"; exit 1; }
+echo "$stop" | grep -q 'no_local_paths.*n.md:1' || { echo "FAIL: path not named: $stop"; exit 1; }
+git -C "$d/repo" rm -qf n.md
+printf 'made by cla''ude\n' > "$d/repo/m.txt"; git -C "$d/repo" add m.txt
+stop=$(tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD) && { echo "FAIL: a tip with a file naming the assistant was green"; exit 1; }
+echo "$stop" | grep -q 'names the assistant.*m.txt' || { echo "FAIL: file not named: $stop"; exit 1; }
+git -C "$d/repo" rm -qf m.txt
+tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD >/dev/null || { echo "FAIL: a clean tip was red"; exit 1; }
 # the crash: tip_crates.py dies
 printf 'raise SystemExit("boom")\n' > "$d/tools/tip_crates.py"
 tip_crates HEAD~2 HEAD >/dev/null 2>&1 && { echo "FAIL: tip_crates returned 0 although tip_crates.py crashed"; exit 1; }

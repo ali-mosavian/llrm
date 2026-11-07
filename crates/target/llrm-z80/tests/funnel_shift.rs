@@ -33,3 +33,14 @@ fn a_global_indexed_by_a_variable_compiles() {
     let asm = text(include_str!("kernels/ir/index_wrapped_global.ll"), "f", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(asm.contains("_f::"), "{asm}");
 }
+
+/// The i16 `shl x, 1 -> add x, x` lowering that came with the long's funnel
+/// stayed after the combine replaced it: every multiply by a constant that
+/// decomposes into shifts (struct_odd_sizes `three`) went from 110 to 114
+/// instructions at -Os (123 to 127 through the llc binary), 17 of 74 programs larger (11-07, #7847).
+#[test]
+fn a_multiply_by_constants_is_no_larger_for_the_long_shift_combine() {
+    let asm = text(include_str!("kernels/ir/mul_by_constants_sum.ll"), "three", 0, &Request::new(Level::Os)).expect("compiles");
+    let count = instructions(&asm, "_three");
+    assert!(count <= 110, "{count} instructions:\n{asm}");
+}

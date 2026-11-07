@@ -1323,6 +1323,41 @@ x:
     assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
 }
 
+/// The pipeline gave `LoopFullUnroll` `opt_level` 2 at -O1, so the m32 rule
+/// "an -O1 unroll never grows" (`unroll_never_grows_at_o1`, which tests
+/// `opt_level == 1`) never ran: matmul -O1 grew 776 -> 2538 B. Its unit tests
+/// set the level by hand and passed.
+#[test]
+fn test_at_o1_the_pipeline_keeps_a_loop_rolled_whose_copies_grow() {
+    let text = "define i32 @f(ptr %p, i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi i32 [ 0, %b0 ], [ %s, %b1 ]
+  %q = getelementptr inbounds i32, ptr %p, i32 %i
+  %v = load i32, ptr %q
+  %m = mul i32 %v, %n
+  %s = add i32 %acc, %m
+  %next = add i32 %i, 1
+  %go = icmp slt i32 %next, 8
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i32 %s
+}
+";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let options = pipeline::Options { loop_unrolling: true, ..pipeline::Options::basic() };
+    Program::lend(&mut module, crate::indvars::tests::m32(), |program| {
+        pipeline::applied(program, &Applied { options, ..Applied::default() })
+    })
+    .and_then(|done| done)
+    .unwrap();
+    assert!(llrm_mir::print::module(&module).contains("phi i32"), "{}", llrm_mir::print::module(&module));
+}
+
 /// A compile has the four stages (early, cleanup, simplify, late), each run
 /// once.
 #[test]

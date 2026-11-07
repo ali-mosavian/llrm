@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lcssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lcssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:356e0d1aa559606dba9129aabdf4fa3e33a92139b1fc42c78206ec2d2f50bbfe -->
+<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:052686693266081d7b09c76746ec75df4583cb588e4de2b34461c5304dfad49d -->
 
 # lcssa
 
@@ -11,19 +11,19 @@ A value defined in a loop and read outside it is read through a phi in the
 loop's exit block. Later loop passes can then change the loop's body, copy
 it or move its exits without rewriting readers outside it.
 
-This is `LCSSA.cpp`. Loops are taken innermost first (`formLCSSARecursively`),
-so an inner exit phi is an ordinary definition of the enclosing loop. For one
-loop (`formLCSSA`):
+This is `LCSSA.cpp`. Loops are taken innermost first
+(`formLCSSARecursively`), so an inner exit phi is an ordinary definition of
+the enclosing loop. For one loop (`formLCSSA`):
 
-- The blocks that dominate an exit and sit directly in the loop are found
-  by walking immediate dominators up from the exits.
+- The blocks that dominate an exit and sit directly in the loop are found by
+  walking immediate dominators up from the exits.
 - Each value they define, with a use but not a lone one in its own block, is
   a candidate.
 - A candidate's uses outside the loop (a phi's counting at its incoming
   block) are rewritten. A use in an unreachable block becomes poison.
 - Each exit block its definition dominates gets a phi, named after the value
-  with `.lcssa`, placed first in the block, with one input per predecessor.
-  An input from a block outside the loop is itself rewritten.
+  with `.lcssa`, placed after the block's phis (L4), with one input per
+  predecessor. An input from a block outside the loop is itself rewritten.
 - A use in an exit block reads that block's phi, a lone new phi is read
   directly, and any other use goes through `SsaUpdater`, which places a phi
   where the exits' paths join.
@@ -90,6 +90,11 @@ something changed.
 - L2 No `ScalarEvolution` and no debug records: the pin caches the SCEV of a
   new phi and moves `dbg.value`s; neither is kept here (S1 of `ssaupdater`).
 - L3 A phi's inputs come in predecessor id order, not use-list order.
+- L4 An exit phi goes after the block's phis, in value-id order (2026-11-05,
+  w2, exit 2026-11-12, row QR-1): the pin puts it first. The register
+  allocator adds spills for some orders of an exit block's phis where the
+  pin's code size is constant; the old order is the one that does not (x86
+  jpeg Os, 6502 grep Os).
 
 ## See also
 LLVM's

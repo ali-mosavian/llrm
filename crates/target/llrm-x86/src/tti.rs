@@ -669,6 +669,10 @@ impl Tti for X86 {
         self.tuning.multiply_by_clocks
     }
 
+    fn narrow_divide_live_limit(&self) -> u32 {
+        self.tuning.narrow_divide_live_limit
+    }
+
     fn divide_by_bytes(&self) -> bool {
         self.tuning.divide_by_bytes
     }
@@ -775,8 +779,8 @@ impl Tti for X86 {
         self.tuning.inline_variable_memcpy
     }
 
-    fn copy_for_size_is_priced_against_call(&self) -> bool {
-        self.tuning.size_copy_vs_call
+    fn copy_price_for_size(&self) -> Option<llrm_mir::target::CopyPrice> {
+        self.tuning.size_copy_price
     }
 
     fn ipsccp_widen_keeps_sign(&self) -> bool {
@@ -815,6 +819,10 @@ impl Tti for X86 {
 
     fn unroll_promotion_fits_registers(&self) -> bool {
         self.tuning.unroll_promotion_fits_registers
+    }
+
+    fn lsr_size_order(&self) -> bool {
+        self.tuning.lsr_size_order
     }
 
     fn unroll_promotion_fits_x87_stack(&self) -> bool {
