@@ -309,18 +309,17 @@ fn carry_in(
     SDValue { node: sum.node, res: 1 }
 }
 
-/// `x * c` as a chain of `v = (v << k) +- v` steps, one for each factor
-/// `2^k +- 1` of the odd part of `c`, then a shift by its factors of two, negated
-/// for a negative `c`: `x * 40` is `(((x << 2) + x)) << 3`.
+/// `x * c` for `c = (2^k +- 1) * 2^z` as the pin's two runs of shift steps,
+/// `(x << k+z) +- (x << z)`, or as one run and a shift of the sum,
+/// `((x << k) +- x) << z`, whichever takes fewer steps; negated for a negative
+/// `c`. Every step of a wide shift is a pass over each byte of the word, so
+/// the steps are the cost; a shift of `x` the function already has is free
+/// (the pin's runs share it by CSE: `b[y * 20 + x]` beside `a[y * 16 + x]`).
 ///
-/// DEVIATE 6502-MUL-FACTOR: the pin shifts `x` twice, `(x << n+z) +- (x << z)`
-/// ([DAGCombiner.cpp#L5024](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5024)),
-/// two runs of shift steps over every byte of the word (`x * 40`: 5 and 3
-/// steps against 2 and 3). The factorisation with the lowest price in the
-/// shift and add classes of [`crate::opcosts`] is taken: clocks and 3 clocks a
-/// byte, bytes alone in a function tuned for size. Owner: llrm-target-6502.
-/// Exit: 2026-11-21, when the shared combine reads the decomposition from a
-/// target hook.
+/// DEVIATE 6502-MUL-FACTOR: the pin has only the first form
+/// ([DAGCombiner.cpp#L5024](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5024)).
+/// Owner: llrm-target-6502. Exit: 2026-11-21, when the shared combine reads the
+/// form from a target hook. The constants covered are the pin's.
 fn decompose_mul(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -334,119 +333,61 @@ fn decompose_mul(
     let raw = dag.constant(c).filter(|_| !dag.is_opaque(c))?;
     let width = vt.size_in_bits();
     let signed = if raw >> (width - 1) & 1 == 1 { raw as i128 - (1i128 << width) } else { raw as i128 };
-    let magnitude = signed.unsigned_abs();
+    let mut magnitude = signed.unsigned_abs();
     // a power of two is a shift, which `visitMUL` has already made
     if magnitude.is_power_of_two() {
         return None;
     }
     let zeros = magnitude.trailing_zeros();
-    let chain = cheapest_chain(magnitude >> zeros, zeros, width, sized || vt == EVT::I32, sized)?;
+    magnitude >>= zeros;
+    let (add, bits) = match (magnitude - 1, magnitude + 1) {
+        (below, _) if below.is_power_of_two() => (true, below),
+        (_, above) if above.is_power_of_two() => (false, above),
+        _ => return None,
+    };
+    let k = bits.trailing_zeros();
+    if k + zeros >= width {
+        return None;
+    }
     // A long multiply is a call of about 59 bytes with its arguments. In a
     // function tuned for size the expansion has to be no longer, and measured
     // (x * C at -Os) it is only where a shift is whole bytes (`2^8 +- 1`,
     // `2^16 +- 1`, `2^24 +- 1`, also `2^9 +- 1`); `x * 3` is 74 bytes. At
     // speed it saves ~2200 clocks a multiply for ~15 bytes.
-    if vt == EVT::I32 && sized {
-        let &[(by, _)] = chain.as_slice() else { return None };
-        let amount = by + zeros;
-        if !(amount >= 8 && amount % 8 <= 1 && zeros % 8 == 0) {
-            return None;
-        }
+    if vt == EVT::I32 && sized && !(k + zeros >= 8 && (k + zeros) % 8 <= 1 && zeros % 8 == 0) {
+        return None;
     }
-    let shift = |dag: &mut SelectionDAG, value: SDValue, by: u32| {
-        let by = dag.get_constant(u128::from(by), EVT::I8);
-        dag.get_node(ISD::Shl, vt, &[value, by])
-    };
-    // A shift of `x` the function already has is free to reuse: the pin's two
-    // runs share it, the chain does not (`b[y * 20 + x]` beside `a[y * 16 + x]`).
-    if let &[(by, add)] = chain.as_slice() {
-        let has = |dag: &SelectionDAG, by: u32| {
-            dag.users(x).any(|user| {
+    let has = |dag: &SelectionDAG, by: u32| {
+        by == 0
+            || dag.users(x).any(|user| {
                 let user = SDValue { node: user, res: 0 };
                 dag.opcode(user) == ISD::Shl
                     && dag.operand(user, 0) == x
                     && dag.constant(dag.operand(user, 1)) == Some(u128::from(by))
             })
+    };
+    let steps = |dag: &SelectionDAG, by: u32| if has(dag, by) { 0 } else { by };
+    let two_runs = steps(dag, k + zeros) + steps(dag, zeros);
+    let one_run = steps(dag, k) + zeros;
+    let shift = |dag: &mut SelectionDAG, value: SDValue, by: u32| {
+        let by = dag.get_constant(u128::from(by), EVT::I8);
+        dag.get_node(ISD::Shl, vt, &[value, by])
+    };
+    let op = if add { ISD::Add } else { ISD::Sub };
+    let mut result = if one_run < two_runs {
+        let sum = {
+            let high = shift(dag, x, k);
+            dag.get_node(op, vt, &[high, x])
         };
-        if has(dag, by + zeros) || (zeros != 0 && has(dag, zeros)) {
-            let high = shift(dag, x, by + zeros);
-            let low = if zeros == 0 { x } else { shift(dag, x, zeros) };
-            let mut result = dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[high, low]);
-            if signed < 0 {
-                let zero = dag.get_constant(0, vt);
-                result = dag.get_node(ISD::Sub, vt, &[zero, result]);
-            }
-            return Some(result);
-        }
-    }
-    let mut result = x;
-    for (by, add) in chain {
-        let high = shift(dag, result, by);
-        result = dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[high, result]);
-    }
-    if zeros != 0 {
-        result = shift(dag, result, zeros);
-    }
+        if zeros == 0 { sum } else { shift(dag, sum, zeros) }
+    } else {
+        let high = shift(dag, x, k + zeros);
+        let low = if zeros == 0 { x } else { shift(dag, x, zeros) };
+        dag.get_node(op, vt, &[high, low])
+    };
     if signed < 0 {
         let zero = dag.get_constant(0, vt);
         result = dag.get_node(ISD::Sub, vt, &[zero, result]);
     }
     Some(result)
-}
-
-/// The factors `(k, add)` of the odd `m`, each `2^k + 1` (`add`) or `2^k - 1`,
-/// two only unless `single` (a long, or a function tuned for size), with the lowest price; `zeros` is the shift after them.
-fn cheapest_chain(
-    m: u128,
-    zeros: u32,
-    width: u32,
-    single: bool,
-    sized: bool,
-) -> Option<Vec<(u32, bool)>> {
-    let mut chains = Vec::new();
-    for (k, add, factor) in factors(width) {
-        if m % factor != 0 {
-            continue;
-        }
-        let rest = m / factor;
-        if rest == 1 {
-            chains.push(vec![(k, add)]);
-        } else if !single {
-            for (j, add2, factor2) in factors(width) {
-                if rest == factor2 {
-                    chains.push(vec![(k, add), (j, add2)]);
-                }
-            }
-        }
-    }
-    let (shift, plus) = step_prices(sized);
-    let bytes = u64::from(width / 8);
-    chains
-        .into_iter()
-        .filter(|chain| chain.iter().all(|&(k, _)| k < width) && zeros < width)
-        .min_by_key(|chain| {
-            let steps = u64::from(chain.iter().map(|&(k, _)| k).sum::<u32>() + zeros);
-            bytes * (steps * shift + chain.len() as u64 * plus)
-        })
-}
-
-/// `(k, add, 2^k +- 1)` for the steps a chain is made of, `2^k - 1` from 4.
-fn factors(width: u32) -> impl Iterator<Item = (u32, bool, u128)> {
-    (1..width).flat_map(|k| {
-        let factor = 1u128 << k;
-        [(k, true, factor + 1), (k, false, factor - 1)]
-    })
-    .filter(|&(k, add, _)| add || k >= 2)
-}
-
-/// The price of one shift step and one add per byte: clocks and 3 clocks a
-/// byte, bytes alone when `sized`.
-fn step_prices(sized: bool) -> (u64, u64) {
-    use crate::dagisel::hooks::Cpu;
-    use crate::opcosts::snippet;
-    let price = |class| {
-        let (clocks, bytes) = snippet(Cpu::Mos6502, class);
-        if sized { bytes as u64 } else { clocks as u64 + 3 * bytes as u64 }
-    };
-    (price("shift"), price("add"))
 }

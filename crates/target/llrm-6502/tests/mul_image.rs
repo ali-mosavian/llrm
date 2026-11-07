@@ -55,3 +55,17 @@ fn a_constant_with_factors_of_two_shifts_the_sum_once() {
     let bytes = estimate(Cpu::Mos6502, body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
     assert!(bytes <= 43, "{bytes} B\n{body}");
 }
+
+/// `y * 20` beside `y * 16`: the pin's `(y << 4) + (y << 2)` shares the
+/// `y << 4`; the sum of `y * 5` shifted by two (two steps fewer alone) made it
+/// again, 8 shift steps against 6.
+#[test]
+fn a_shift_the_function_has_is_not_made_again_by_a_factored_multiply() {
+    let ir = "define i16 @k_pair(ptr %p, ptr %q, i8 %y) nounwind {\n  %w = zext i8 %y to i16\n  %a = mul i16 %w, 16\n  %b = mul i16 %w, 20\n  store i16 %a, ptr %p\n  store i16 %b, ptr %q\n  ret i16 0\n}\n";
+    let ir = format!("target datalayout = \"{}\"\n{ir}", datalayout());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let from = text.find("k_pair:").unwrap_or_else(|| panic!("{text}"));
+    let body = text[from..].split(".segment").next().unwrap();
+    let steps = body.matches("asl").count();
+    assert!(steps <= 6, "{steps} shift steps\n{body}");
+}
