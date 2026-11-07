@@ -45,7 +45,12 @@ pub(super) fn full_unroll_pays(
     // (jpeg_fixed -O2 +530 B). Such a loop is priced in the late pass, in the
     // context of each site.
     let inlinable = !run.options.target_unrolling
-        && run.this.is_some_and(|this| matches!(run.globals[this.0 as usize].linkage, Linkage::Internal | Linkage::Private));
+        && run.this.is_some_and(
+            |this| {
+                matches!(run.globals[this.0 as usize].linkage, Linkage::Internal | Linkage::Private)
+                    && super::has_one_live_use(run, this)
+            },
+        );
     if inlinable || rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
         return true;
     }

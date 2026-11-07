@@ -75,3 +75,12 @@ fn a_loop_in_a_known_thousand_trip_loop_is_priced_by_its_real_runs() {
 fn a_loop_whose_copies_make_data_constant_is_unrolled_with_its_nest() {
     assert!(labels(include_str!("data/bench_stft_fixed.ll")) <= 27);
 }
+
+/// jpeg_fixed -O2: `decode` (called twice, too big to inline at 250 clocks a
+/// byte) was unrolled by the early pass unpriced, 528 B against 192 rolled.
+/// The 16-trip helper here was 119 instructions unrolled, about 30 rolled.
+#[test]
+fn a_helper_the_inliner_keeps_is_priced_by_the_early_unroll() {
+    let insns = instructions(include_str!("data/early_unroll_helper.ll"), Level::O2);
+    assert!(insns < 60, "{insns} instructions");
+}
