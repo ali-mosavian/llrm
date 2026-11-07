@@ -23,6 +23,24 @@ pub enum Arg {
 use Arg::{Data, Func, Imm};
 
 /// `(kernel, arguments, the result worked out by hand)`.
+/// The rows of `rows` named in `only` (comma separated). A name no row has, or
+/// a list that names none, is an error: a filter that ran nothing must not
+/// read as a clean matrix.
+pub fn keep_named<T>(
+    rows: Vec<T>,
+    name: impl Fn(&T) -> &str,
+    only: &str,
+) -> Result<Vec<T>, String> {
+    let wanted: Vec<&str> = only.split(',').filter(|one| !one.is_empty()).collect();
+    if wanted.is_empty() {
+        return Err("no program named".to_owned());
+    }
+    if let Some(unknown) = wanted.iter().find(|one| !rows.iter().any(|row| name(row) == **one)) {
+        return Err(format!("no program named {unknown}"));
+    }
+    Ok(rows.into_iter().filter(|row| wanted.contains(&name(row))).collect())
+}
+
 pub fn table() -> Vec<(&'static str, Vec<Arg>, i32)> {
     vec![
         ("sum", vec![Imm(10)], 45),

@@ -14,4 +14,10 @@ echo "$out" | awk '$1=="neg"' | head -1 | awk '{ if ($(NF-1) != $2 + 17 || $NF !
 # compiler-rt's m32 int->float is x87 code (fild, fmul, fadd): 290 B read as a soft-float row ours lost by 22 B; libgcc's soft-fp (954 B) is the comparator
 out=$(ROWS_ONLY=float bash ./rows_bytes.sh m32) || exit 2
 echo "$out" | awk '$1=="float"' | head -1 | awk '{ if ($3 != "fpu" || $7 != "fpu") { print "FAIL: float compiler-rt cells " $3 " " $7 " are x87 code, not a rank"; exit 1 } }' || bad=1
+# wasm32: compiler-rt's f64 int64->float is f64.convert/mul/add (276 B read as a soft-float row ours "lost" 259 by 17); the f32 cell is bitwise and stays a rank
+out=$(ROWS_ONLY=float bash ./rows_bytes.sh wasm32) || exit 2
+echo "$out" | awk '$1=="float"' | head -1 | awk '{ if ($3 != "fpu" || $7 == "fpu") { print "FAIL: wasm32 float compiler-rt cells " $3 " " $7 " (want f64 fpu, f32 a number)"; exit 1 } }' || bad=1
+# cmp: compiler-rt's compare object holds __unord*f2 as well, so ours is cmp.c plus unord.c (wasm32 -Os f32: 185 B read as the whole set, 220 with unord)
+out=$(ROWS_ONLY=cmp bash ./rows_bytes.sh wasm32) || exit 2
+echo "$out" | awk '$1=="cmp"' | head -1 | awk '{ if ($6 < 200) { print "FAIL: wasm32 -Os f32 cmp ours " $6 " B leaves out unord.c"; exit 1 } }' || bad=1
 [ $bad = 0 ] && echo "rows_bytes ok"; exit $bad

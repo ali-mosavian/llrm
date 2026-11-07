@@ -37,6 +37,7 @@ line_fill_clocks    10
 pairing             =
 # DEVIATE TA-LC (owner anyisa, exit 2026-11-27): m64 A/B, 1984 cells.
 commute_loop_carried 1
+post_ra_tail_duplicate 1
 [clocks]
 alu_rr              =
 cmov                =

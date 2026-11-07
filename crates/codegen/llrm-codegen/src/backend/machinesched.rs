@@ -219,7 +219,7 @@ fn fpu_word(one: &Insn) -> bool {
 }
 
 /// A move of the constant zero into a value.
-fn zero_move(one: &Insn) -> bool {
+pub(crate) fn zero_move(one: &Insn) -> bool {
     one.what
         .as_ref()
         .is_some_and(

@@ -104,6 +104,13 @@ pub fn build_all(
         return declined("a result that is not an int, a pointer or void");
     }
     let eax = (returns_int && convention.returns.len() == 1).then(|| arch.registers().named(convention.returns[0], 4));
+    let view = |name: &str, bytes| arch.registers().named(arch.register_named(name), bytes);
+    let sysv: Vec<[llrm_lir::registers::RegId; 2]> =
+        [("edi", "rdi"), ("esi", "rsi"), ("edx", "rdx"), ("ecx", "rcx"), ("r8d", "r8"), ("r9d", "r9")]
+            .iter()
+            .map(|&(narrow, wide)| [view(narrow, 4), view(wide, 8)])
+            .collect();
+    let al = view("al", 1);
     let names = Names::new(opcode, if m32 { llrm_dagisel::fastisel::Table::I486 } else { llrm_dagisel::fastisel::Table::X64 })?;
     let mut blocks = Vec::new();
     let layout = function.layout();
@@ -112,7 +119,7 @@ pub fn build_all(
         let dag = fresh_dag(module, function, target, info, block, None);
         let chain = dag.entry_node();
         let mut declined = String::new();
-        let dag = Fast { layout: data_layout, module, function, info: &*info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), arg_regs: &arg_regs, entry: layout[0] == block, edx: arch.registers().named(arch.register_named("edx"), 4), m32, dag, chain, values: Default::default(), next }
+        let dag = Fast { layout: data_layout, module, function, info: &*info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), arg_regs: &arg_regs, entry: layout[0] == block, sysv: &sysv, al, edx: arch.registers().named(arch.register_named("edx"), 4), m32, dag, chain, values: Default::default(), next }
             .block(block, &mut declined);
         let Some(dag) = dag else {
             llrm_support::debug!("isel", "fast declined at {declined}");
@@ -147,6 +154,8 @@ struct Names {
     /// m32 only so far: calls and the signed divide.
     calls: Option<Calls>,
     divide: Option<Divide>,
+    /// m64: `ADJCALLSTACKDOWN64`, `ADJCALLSTACKUP64`, `CALL64pcrel32`, `MOV8ri`.
+    calls64: Option<(u16, u16, u16, u16)>,
 }
 
 struct Calls {
@@ -191,6 +200,7 @@ impl Names {
                     call: opcode("CALLpcrel32")?,
                 })
             })(),
+            calls64: (|| Some((opcode("ADJCALLSTACKDOWN64")?, opcode("ADJCALLSTACKUP64")?, opcode("CALL64pcrel32")?, opcode("MOV8ri")?)))(),
             divide: (|| Some(Divide { cdq: opcode("CDQ")?, idiv: opcode("IDIV32r")?, div: opcode("DIV32r")? }))(),
         })
     }
@@ -208,6 +218,9 @@ struct Fast<'a> {
     /// m64: the register each parameter arrives in and the virtual register it is copied to.
     arg_regs: &'a [(llrm_lir::registers::RegId, u32)],
     entry: bool,
+    /// m64: the argument registers (`edi`.. as 4-byte, `rdi`.. as 8-byte views), and `al`.
+    sysv: &'a [[llrm_lir::registers::RegId; 2]],
+    al: llrm_lir::registers::RegId,
     edx: llrm_lir::registers::RegId,
     /// Frame objects are addressed at m32 only so far (F3).
     m32: bool,
@@ -442,6 +455,69 @@ impl Fast<'_> {
                     let register = if matches!(op, SDiv | UDiv) { eax } else { self.edx };
                     let result = self.dag.get_copy_from_phys_reg(self.dag.entry_node(), register, EVT::I32, divided);
                     self.values.insert(instruction.result?, SDValue { node: result.node, res: 0 });
+                }
+                Opcode::Call(call) if !self.m32 && call.calling_convention == self.function.calling_convention => {
+                    // SysV: up to six integer or pointer arguments in registers; `al` = 0 for a variadic callee
+                    let (down, up, call_op, mov8) = self.names.calls64?;
+                    let (callee, arguments) = instruction.operands.split_last()?;
+                    let Operand::Constant(callee) = *callee else { return None };
+                    let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
+                    let (returns, parameters, variadic) = self.module.signature(call.function_type);
+                    if arguments.len() < parameters.len()
+                        || arguments.len() > self.sysv.len()
+                        || (!variadic && arguments.len() != parameters.len())
+                        || self.module.global(global).function().is_none_or(|callee| callee.calling_convention != call.calling_convention)
+                    {
+                        return None;
+                    }
+                    let types = &self.module.context.types;
+                    let void = types.is_void(returns);
+                    if !(void || types.int_bits(returns) == Some(32)) {
+                        return None;
+                    }
+                    let mut values = Vec::new();
+                    for &one in arguments {
+                        let ty = self.function.operand_type(&self.module.context, one)?;
+                        let wide = match types.int_bits(ty) {
+                            Some(32) => false,
+                            _ if matches!(types.get(ty), llrm_mir::types::Type::Pointer(0)) => true,
+                            _ => return None,
+                        };
+                        values.push((self.value(one)?, wide));
+                    }
+                    let zero = self.dag.get_constant_with(0, EVT::I32, true, false);
+                    let bytes = zero;
+                    let start = self.node(down, &[EVT::OTHER, EVT::GLUE], &[bytes, zero, self.chain]);
+                    let (mut chain, mut glue) = (SDValue { node: start.node, res: 0 }, SDValue { node: start.node, res: 1 });
+                    let mut regs = Vec::new();
+                    for (at, (value, wide)) in values.into_iter().enumerate() {
+                        let register = self.sysv[at][usize::from(wide)];
+                        let copy = self.dag.get_copy_to_phys_reg(chain, register, value, Some(glue));
+                        (chain, glue) = (SDValue { node: copy.node, res: 0 }, SDValue { node: copy.node, res: 1 });
+                        regs.push(self.dag.get_phys_register(if wide { EVT::I64 } else { EVT::I32 }, register));
+                    }
+                    if variadic {
+                        let none = self.dag.get_constant_with(0, EVT::I8, true, false);
+                        let set = self.node(mov8, &[EVT::I8], &[none]);
+                        let copy = self.dag.get_copy_to_phys_reg(chain, self.al, set, Some(glue));
+                        (chain, glue) = (SDValue { node: copy.node, res: 0 }, SDValue { node: copy.node, res: 1 });
+                        regs.push(self.dag.get_phys_register(EVT::I8, self.al));
+                    }
+                    let target = self.dag.get_target_global_address(EVT::I64, global.0, 0);
+                    let mask = self.dag.get_register_mask_clobbering(&super::dagisel_adapter::call_clobbered_flags());
+                    let mut ops = vec![target];
+                    ops.extend(regs);
+                    ops.extend([mask, chain, glue]);
+                    let called = self.node(call_op, &[EVT::OTHER, EVT::GLUE], &ops);
+                    let ended = self.node(up, &[EVT::OTHER, EVT::GLUE], &[zero, zero, SDValue { node: called.node, res: 0 }, SDValue { node: called.node, res: 1 }]);
+                    let mut chain = SDValue { node: ended.node, res: 0 };
+                    if !void {
+                        let eax = self.eax_reg()?;
+                        let result = self.dag.get_copy_from_phys_reg(chain, eax, EVT::I32, SDValue { node: ended.node, res: 1 });
+                        chain = SDValue { node: result.node, res: 1 };
+                        self.values.insert(instruction.result?, SDValue { node: result.node, res: 0 });
+                    }
+                    self.chain = chain;
                 }
                 Opcode::Call(call) if self.m32 && call.calling_convention == self.function.calling_convention => {
                     let calls = self.names.calls.as_ref()?;

@@ -112,6 +112,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TLI.hasAndNotCompare(Y)`: `(X & Y) == Y` is cheaper as `(~X & Y) == 0`
+    /// for a value of this type (x86: NOT+TEST for any scalar integer).
+    fn has_and_not_compare(
+        &self,
+        _vt: EVT,
+    ) -> bool {
+        false
+    }
+
     fn fold_xor_of_and_with_mask(&self) -> bool {
         false
     }
@@ -1235,8 +1244,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// `foldSetCCWithAnd`'s power-of-two mask arm
     /// ([TargetLowering.cpp#L4340][pin]): `(X & 2^k) == 0` is `(trunc X to
     /// k+1 bits) >= 0` and `!= 0` is `< 0`, when the truncate is free and
-    /// both types are legal. DEVIATE: the `(X & Y) == Y` and and-not arms are
-    /// not ported.
+    /// both types are legal; and the `(X & Y) == Y` arms for a constant Y.
+    /// DEVIATE: a variable Y is not ported.
     ///
     /// [pin]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L4340
@@ -1247,12 +1256,32 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         c1: u128,
         cond: CondCode,
     ) -> Option<SDValue> {
-        if c1 != 0 || !matches!(cond, CondCode::SetEq | CondCode::SetNe) || self.dag.opcode(n0) != ISD::And {
+        if !matches!(cond, CondCode::SetEq | CondCode::SetNe) || self.dag.opcode(n0) != ISD::And {
             return None;
         }
         let op_type = self.dag.value_type(n0);
         let mask = self.dag.constant(self.dag.operand(n0, 1))?;
         let mask = mask & super::fold::mask(op_type.size_in_bits());
+        if c1 != 0 {
+            // `(X & Y) == Y`, Y a constant: a single bit is `(X & Y) != 0`;
+            // else, where the target has and-not, `(~X & Y) == 0`.
+            if !op_type.is_integer() || mask == 0 || c1 & super::fold::mask(op_type.size_in_bits()) != mask {
+                return None;
+            }
+            if mask.is_power_of_two() {
+                let inverse = if cond == CondCode::SetEq { CondCode::SetNe } else { CondCode::SetEq };
+                let zero = self.dag.get_constant(0, op_type);
+                return Some(self.dag.get_setcc(vt, n0, zero, inverse));
+            }
+            if self.dag.has_one_use(n0.node) && self.hooks.has_and_not_compare(op_type) {
+                let not_x = self.dag.get_not(self.dag.operand(n0, 0), op_type);
+                let y = self.dag.operand(n0, 1);
+                let and = self.dag.get_node(ISD::And, op_type, &[not_x, y]);
+                let zero = self.dag.get_constant(0, op_type);
+                return Some(self.dag.get_setcc(vt, and, zero, cond));
+            }
+            return None;
+        }
         if !mask.is_power_of_two() || !self.dag.has_one_use(n0.node) {
             return None;
         }
@@ -2430,7 +2459,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let op = self.dag.opcode(value);
-        if !matches!(op, ISD::UAddOCarry | ISD::USubOCarry | ISD::UAddO | ISD::USubO) {
+        // DEVIATE (owner x86-m32, exit 2026-11-14): the pin also takes the
+        // borrow of USUBO and USUBO_CARRY. A target whose borrow is the inverted
+        // carry (the 6502's `sbc`) read it as the carry: `sub_overflow` returned
+        // 3 for 4 (#7850). Add only until the target states what its borrow is.
+        if !matches!(op, ISD::UAddOCarry | ISD::UAddO) {
             return None;
         }
         let vt = self.dag.node(value).values[0];

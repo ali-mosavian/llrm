@@ -780,6 +780,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::size_copy_price`.
+    fn copy_price_for_size(&self) -> Option<crate::target::CopyPrice> {
+        None
+    }
+
     /// DEVIATE LG3: the bytes of the instructions a loop's setup and exit test
     /// are made of, where the target's code size is what its cost is (wasm).
     /// LSR then breaks a tie between the end-biased solution and the pin's by
@@ -1266,6 +1271,13 @@ pub trait Tti {
             (c.num_regs, c.add_rec_cost, c.num_iv_muls, c.num_base_adds, c.scale_cost, c.imm_cost, c.setup_cost)
         };
         key(a) < key(b)
+    }
+
+    /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): LSR ranks formulae
+    /// by their bytes first when the function is built for size; false is the
+    /// pin's order at every level.
+    fn lsr_size_order(&self) -> bool {
+        false
     }
 
     /// DEVIATE LU13 (owner z80, exit 2026-11-30: a per-class register model in

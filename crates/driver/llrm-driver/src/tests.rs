@@ -780,6 +780,31 @@ fn a_select_of_two_constants_a_power_of_two_apart_is_a_shifted_setcc() {
     assert!(!listing.lines().any(|line| line.trim().starts_with("cmov")), "{listing}");
 }
 
+/// A compare folded a volatile load into its memory operand, and the flags made
+/// again for a later reader re-emitted it: `vv[j]` read once in the source was
+/// read three times (`cmp ecx, [rdx+rax*4]` each), word_compare_branches -Os.
+/// The cells must be read exactly twice, once per volatile load.
+#[test]
+fn a_volatile_load_folded_into_a_compare_is_read_once() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @vv = global [16 x i32] zeroinitializer, align 16\n\
+                define i32 @f(i32 %0, i32 %1) {\n\
+                  %3 = sext i32 %0 to i64\n  %4 = getelementptr inbounds [4 x i8], ptr @vv, i64 %3\n\
+                  %5 = load volatile i32, ptr %4, align 4\n  %6 = sext i32 %1 to i64\n\
+                  %7 = getelementptr inbounds [4 x i8], ptr @vv, i64 %6\n  %8 = load volatile i32, ptr %7, align 4\n\
+                  %9 = icmp ult i32 %5, %8\n  %10 = zext i1 %9 to i32\n  %11 = icmp ugt i32 %5, %8\n\
+                  %12 = select i1 %11, i32 4, i32 2\n  %13 = or disjoint i32 %12, %10\n  %14 = or disjoint i32 %13, 8\n\
+                  %15 = select i1 %9, i32 %13, i32 %14\n  %16 = icmp slt i32 %5, %8\n  %17 = icmp sgt i32 %5, %8\n\
+                  %18 = select i1 %16, i32 48, i32 32\n  %19 = select i1 %17, i32 0, i32 %18\n\
+                  %20 = or disjoint i32 %15, %19\n  %21 = or disjoint i32 %20, 64\n  %22 = select i1 %17, i32 %21, i32 %20\n\
+                  %23 = add nuw nsw i32 %22, 128\n  %24 = select i1 %16, i32 %20, i32 %23\n  ret i32 %24\n}\n";
+    let (built, _) = compiled(&flags(&["-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let reads = listing.lines().filter(|line| line.contains("ptr [")).count();
+    assert_eq!(reads, 2, "{listing}");
+}
+
 /// Setting a bit of an `i64` by a variable index stopped the emitter
 /// (`Unmapped("BTS64rr")`): the x86-64 file had `bt` and `btc` but not `bts`,
 /// which the table selects from `or` with a shifted bit.
@@ -4665,4 +4690,16 @@ fn a_single_bit_mask_test_at_m64_is_a_narrow_sign_test_not_cmp_adc() {
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("adc") && listing.contains("setns"), "{listing}");
+}
+
+/// The pin's `combineMul` covers i64 as well as i32: `x * 40` is `lea; shl`. Ours returned early for i64 and kept
+/// `imul r64, r64, imm`; 100+ products in mul_constants -O2 became `movabs` + `imul` (+450 B over the pin llc).
+#[test]
+fn an_i64_multiply_by_a_lea_constant_is_not_an_imul_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i64 %x) {\n  %r = mul i64 %x, 40\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("imul"), "{listing}");
 }
