@@ -12,4 +12,5 @@
 #endif
 /* mul and div come from config/6502/sf32_6502.c (add stays generic: its tight form is 415 B larger). */
 #define SF_EXT_MULDIV 1
+#define SF_MUL32X32_6502 1 /* f64 mul's 32x32 -> 64 is config/6502/mul32x32.s (hand asm, link it; static cells, not reentrant): -Os 41312 -> 11504 clk, 5592 -> 5115 B (llvm-mos 18270 / 5509) */
 #endif
