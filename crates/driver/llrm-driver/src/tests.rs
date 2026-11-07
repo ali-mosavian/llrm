@@ -4694,6 +4694,25 @@ fn a_single_bit_mask_test_at_m64_is_a_narrow_sign_test_not_cmp_adc() {
 
 /// The pin's `combineMul` covers i64 as well as i32: `x * 40` is `lea; shl`. Ours returned early for i64 and kept
 /// `imul r64, r64, imm`; 100+ products in mul_constants -O2 became `movabs` + `imul` (+450 B over the pin llc).
+/// `add(mul(add(A, CA), CM), CB)` folds only when `CA*CM + CB` is a legal add immediate (`isInt<32>` on x86). Ours
+/// had no check: the unrolled LCG chain of mul_constants became 64-bit `mov` constants and `imul r, r` (+875 B at -O2/-O3).
+#[test]
+fn a_mul_add_chain_is_not_folded_into_a_64_bit_immediate_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i64 %x0, i64 %t0, i64 %n) {\nentry:\n  br label %l\nl:\n  \
+                %v2 = phi i64 [ %x0, %entry ], [ %v11, %l ]\n  %v3 = phi i64 [ 0, %entry ], [ %v23, %l ]\n  \
+                %v4 = phi i64 [ %t0, %entry ], [ %r, %l ]\n  %v5 = mul i64 %v2, 1664525\n  \
+                %v6 = add i64 %v5, 1013904223\n  %v7 = mul i64 %v4, 961\n  %v8 = mul i64 %v6, 93\n  \
+                %v9 = add i64 %v8, %v7\n  %v10 = mul i64 %v6, 1664525\n  %v11 = add i64 %v10, 1013904223\n  \
+                %v12 = mul i64 %v11, 3\n  %r = add i64 %v12, %v9\n  %v23 = add nuw nsw i64 %v3, 2\n  \
+                %v24 = icmp eq i64 %v23, %n\n  br i1 %v24, label %out, label %l\nout:\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let wide = listing.split(|c: char| !c.is_ascii_digit()).filter(|n| n.len() >= 11).count();
+    assert_eq!(wide, 0, "{listing}");
+}
+
 #[test]
 fn an_i64_multiply_by_a_lea_constant_is_not_an_imul_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
