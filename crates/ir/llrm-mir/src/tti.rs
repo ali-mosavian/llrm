@@ -1418,6 +1418,17 @@ pub trait Tti {
         false
     }
 
+    /// Whether `LoopTermFold` runs after LSR for this target, for a function
+    /// built for size or not: the pin enables it for RISCV, AVR and Mips only
+    /// (`EnableLoopTermFold`,
+    /// [TargetPassConfig.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/TargetPassConfig.cpp#L875)).
+    fn enables_loop_term_fold(
+        &self,
+        _optsize: bool,
+    ) -> bool {
+        false
+    }
+
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.
     fn can_macro_fuse_cmp(&self) -> bool {
         false
