@@ -507,6 +507,7 @@ impl Fact {
         self,
         attributes: &[Attribute],
     ) -> bool {
+        crate::counts::bump(crate::counts::Event::AttributeScans);
         match self.flag_key() {
             Some(key) => attributes.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == key)),
             None => attributes.iter().filter_map(Fact::of_attribute).any(|fact| fact == self),
@@ -603,6 +604,7 @@ impl Facts {
 
     /// The facts `attributes` state; any other attribute is not a fact.
     pub fn of(attributes: &[Attribute]) -> Facts {
+        crate::counts::bump(crate::counts::Event::FactSets);
         let mut facts = Vec::with_capacity(attributes.len());
         for fact in attributes.iter().filter_map(Fact::of_attribute) {
             if !facts.contains(&fact) {

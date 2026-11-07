@@ -17,6 +17,7 @@ use llrm_support::hash::HashMap;
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
+use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, TtiHandle, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
@@ -103,6 +104,20 @@ pub struct Selection {
     pub source: Option<(String, Option<u32>)>,
 }
 
+impl Selection {
+    /// The calls of `__mulsi3` it makes.
+    pub fn mul_calls(&self) -> usize {
+        use super::generated::ids::opcode as op;
+        self.blocks
+            .iter()
+            .flat_map(|one| one.units.iter().flat_map(move |unit| unit.nodes.iter().map(move |&n| (one, n))))
+            .filter(|(one, node)| {
+                matches!(one.dag.nodes()[*node as usize].opcode, ISD::Machine(code) if code as u16 == op::MUL32)
+            })
+            .count()
+    }
+}
+
 /// Function `name` of `module`, block by block in layout order.
 ///
 /// DEVIATE: static allocas share no frame object (no stack coloring) and none
@@ -112,6 +127,22 @@ pub fn select_function(
     module: &Module,
     name: &str,
     cpu: Cpu,
+) -> Result<Selection, String> {
+    select_function_with(module, name, cpu, false)
+}
+
+/// Whether `function` is tuned for size (`optsize` or `minsize`).
+pub fn is_sized(function: &Function) -> bool {
+    ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name))
+}
+
+/// [`select_function`]; `inline_multiplies` expands every `x * c` that can be
+/// shifts and an add, as a function not tuned for size does.
+pub fn select_function_with(
+    module: &Module,
+    name: &str,
+    cpu: Cpu,
+    inline_multiplies: bool,
 ) -> Result<Selection, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
@@ -127,7 +158,7 @@ pub fn select_function(
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
-    let sized = ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name));
+    let sized = is_sized(function) && !inline_multiplies;
     for &block in function.layout() {
         let built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;

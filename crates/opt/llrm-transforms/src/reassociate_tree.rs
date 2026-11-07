@@ -403,8 +403,6 @@ impl Reassociator<'_> {
         &mut self,
         inst: InstId,
     ) {
-        let (a, b) = (self.operand(inst, 0), self.operand(inst, 1));
-        self.function.set_operand(inst, 0, b);
-        self.function.set_operand(inst, 1, a);
+        self.function.swap_operands(inst, 0, 1);
     }
 }

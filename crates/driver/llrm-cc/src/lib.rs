@@ -117,6 +117,13 @@ pub struct Target {
     /// clang does not: the driver gives the flag to the backend alone.
     #[serde(default)]
     pub llc_mcmodel: bool,
+    /// DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27): `-funroll-loops` is
+    /// the default at `-O1`. clang's `UnrollLoops` is off there, so it marks
+    /// every loop `llvm.loop.unroll.disable` (CGLoopInfo.cpp#L820) and the
+    /// pin's -O1 never unrolls; gcc does (x_life O1: 64k taken `jne` against
+    /// gcc's 16k).
+    #[serde(default)]
+    pub unroll_at_o1: bool,
     pub object: String,
     pub link: Vec<String>,
     /// The command that runs an executable of the target, the executable last;
@@ -498,7 +505,23 @@ pub fn clang_flags(
     target: &Target,
     build: &Build,
 ) -> Vec<String> {
-    build.clang.iter().filter(|flag| !(target.llc_mcmodel && flag.starts_with("-mcmodel="))).cloned().collect()
+    let mut flags: Vec<String> =
+        build.clang.iter().filter(|flag| !(target.llc_mcmodel && flag.starts_with("-mcmodel="))).cloned().collect();
+    if unrolls_at_o1(target, build) {
+        flags.push("-funroll-loops".into());
+    }
+    flags
+}
+
+/// Whether the target's `-O1` takes `-funroll-loops` as its default: unless the
+/// command line states either `-f[no-]unroll-loops`.
+fn unrolls_at_o1(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.unroll_at_o1
+        && build.level == "1"
+        && !build.clang.iter().any(|flag| flag == "-funroll-loops" || flag == "-fno-unroll-loops")
 }
 
 pub fn llc_args(
@@ -513,6 +536,9 @@ pub fn llc_args(
     }
     args.extend(target.llc.iter().cloned());
     args.extend(build.llc.iter().cloned());
+    if unrolls_at_o1(target, build) {
+        args.push("-funroll-loops".into());
+    }
     if target.llc_mcmodel {
         args.extend(build.clang.iter().filter(|flag| flag.starts_with("-mcmodel=")).cloned());
     }

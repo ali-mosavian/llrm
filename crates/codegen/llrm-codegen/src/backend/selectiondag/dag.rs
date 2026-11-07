@@ -139,6 +139,9 @@ pub enum MemBase {
     ConstantPool(u32),
     /// A jump table entry (`MachinePointerInfo::getJumpTable`).
     JumpTable,
+    /// A GOT entry (`MachinePointerInfo::getGOT`): the address of a symbol
+    /// another object defines, which the linker fills.
+    Got,
     /// The IR pointer the access reads or writes (`MachinePointerInfo::V`):
     /// an index into [`SelectionDAG::mem_locations`] (1-based). Only a target
     /// whose `useAA` is true records it.
@@ -450,6 +453,11 @@ pub struct SelectionDAG {
     /// it, so the set follows it into a machine node. A load a combine or the
     /// legalizer remakes is not in it.
     pub invariant_loads: HashSet<u32>,
+    /// The loads of a GOT entry (`MachinePointerInfo::getGOT`); like
+    /// `invariant_loads`, the number follows the node into a machine node. The
+    /// emitter makes such a load the symbol's External immediate, which the
+    /// encoder relocates as `R_X86_64_REX_GOTPCRELX`.
+    pub got_loads: HashSet<u32>,
     /// The offset from the incoming stack pointer of each fixed object (the
     /// negative frame indices the builder makes for stack arguments):
     /// `MachineFrameInfo::getObjectOffset`.
@@ -528,6 +536,7 @@ impl SelectionDAG {
             temporaries: Vec::new(),
             local_symbols: Default::default(),
             invariant_loads: HashSet::default(),
+            got_loads: HashSet::default(),
             fixed_offsets: Default::default(),
             volatile_accesses: HashSet::default(),
             direct_copies: HashSet::default(),
@@ -670,6 +679,7 @@ impl SelectionDAG {
                 self.deleted.resize(self.nodes.len(), false);
             }
             self.deleted[n as usize] = true;
+            self.drop_operand_uses(n);
             // A `SmallSetVector`: an operand already waiting is not added
             // twice.
             for i in 0..self.nodes[n as usize].ops.len() {
@@ -711,6 +721,7 @@ impl SelectionDAG {
             self.deleted.resize(self.nodes.len(), false);
         }
         self.deleted[node as usize] = true;
+        self.drop_operand_uses(node);
         let operands: Vec<u32> = self.nodes[node as usize].ops.iter().map(|op| op.node).collect();
         for op in operands {
             let results = self.nodes[op as usize].values.len() as u8;
@@ -718,6 +729,33 @@ impl SelectionDAG {
                 self.survivors.push(op);
             }
             self.delete_dead(op);
+        }
+    }
+
+    /// `SDNode::DropOperands`: a deleted node leaves the use lists of what it
+    /// read, so they hold no entry for it. Each operand slot pushed one entry;
+    /// they are looked for from the end, where a node made lately sits, and
+    /// the walk stops once the slots are accounted for (an entry an operand
+    /// rewrite left behind may remain, `users` filters it).
+    fn drop_operand_uses(
+        &mut self,
+        node: u32,
+    ) {
+        for at in 0..self.nodes[node as usize].ops.len() {
+            let operand = self.nodes[node as usize].ops[at].node;
+            if self.nodes[node as usize].ops[..at].iter().any(|op| op.node == operand) {
+                continue;
+            }
+            let mut slots = self.nodes[node as usize].ops[at..].iter().filter(|op| op.node == operand).count();
+            let list = &mut self.uses[operand as usize];
+            let mut end = list.len();
+            while slots > 0 && end > 0 {
+                end -= 1;
+                if list[end] == node {
+                    list.remove(end);
+                    slots -= 1;
+                }
+            }
         }
     }
 
@@ -1117,6 +1155,17 @@ impl SelectionDAG {
         value: SDValue,
     ) -> u32 {
         self.value_type(value).size_in_bits()
+    }
+
+    /// `FindNodeOrInsertPos` without the insertion: the node with these
+    /// operands and no data, if the DAG has one.
+    pub(super) fn find_node(
+        &self,
+        opcode: ISD,
+        vt: EVT,
+        ops: &[SDValue],
+    ) -> Option<SDValue> {
+        self.cse_find(opcode, &[vt], ops, &NodeData::None).map(|node| SDValue { node, res: 0 })
     }
 
     /// `lookupNode` then `newSDNode`: one node per (opcode, types, operands,

@@ -695,12 +695,14 @@ fn test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() {
     let source = parsed_as(&compat("pds71/pdlocal.bas"), "pds71", "pds71");
     let module = optimized_mir(&source);
     let procedure = function_text(&module, "MISSINGFILE");
-    // The ERL table holds 100 at every site (it was 0: ERL reported 0). How
-    // many `REPORTFAIL` calls remain is the inliner's choice, not the premise.
-    let table = module.lines().find(|line| line.starts_with("@$QB$ERL$MISSINGFILE")).expect("the ERL table");
+    // The ERL table holds 100 at every site (it was 0: ERL reported 0). It is
+    // read as emitted: with ERROR 53 the only raise, the optimizer folds `erl`
+    // to 100 and the table and its compare go (the executed case,
+    // conformance pds71 pds-local-error, prints PASS).
+    let emitted = emitted_mir(&source);
+    let table = emitted.lines().find(|line| line.starts_with("@$QB$ERL$MISSINGFILE")).expect("the ERL table");
     let entries = table.matches("i16 ").count();
     assert!(entries > 0 && table.matches("i16 100").count() == entries, "{table}");
-    assert!(procedure.contains("icmp eq i16 %erl, 100"), "{procedure}");
     let errnum = module
         .lines()
         .find(|line| line.contains("c\"errnum\""))
@@ -3693,9 +3695,11 @@ fn test_clear_calls_the_runtime_clear() {
     assert!(main[..call].trim_end().ends_with("pushd 0"), "two zero words: {main}");
 }
 
-/// On the llrm runtime at m16, CLEAR called `B$SCLR(stack, given)` without the table of module variables its C
-/// body reads as the third argument: `table->main_module` came from a stray register and the program stopped
-/// with "Illegal function call" (clear_variables.bas). The call carries the table's near address, as the C body takes it.
+/// On the llrm runtime at m16, CLEAR called `B$SCLR(stack, given)` without the
+/// table of module variables its C body reads as the third argument:
+/// `table->main_module` came from a stray register and the program stopped with
+/// "Illegal function call" (clear_variables.bas). The call carries the table's
+/// near address, as the C body takes it.
 #[test]
 fn test_clear_passes_its_table_on_the_llrm_runtime_at_m16() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -3705,7 +3709,10 @@ fn test_clear_passes_its_table_on_the_llrm_runtime_at_m16() {
     let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
     let call = main.find("call far ptr B$SCLR").expect("the call");
     let before = &main[..call];
-    assert!(before.trim_end().ends_with("push offset CLEARM16$D3"), "the table's near address is the third argument: {main}");
+    assert!(
+        before.trim_end().ends_with("push offset CLEARM16$D3"),
+        "the table's near address is the third argument: {main}"
+    );
     assert!(!before.contains("pushw DGROUP"), "and not a far pointer on the stack: {main}");
 }
 

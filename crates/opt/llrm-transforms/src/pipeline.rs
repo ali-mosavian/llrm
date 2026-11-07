@@ -510,7 +510,7 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" | "canonfreeze" | "maskscale" | "hardwareloops" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" | "maskscale" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
@@ -656,7 +656,7 @@ impl FunctionPass for Slot {
         let count = |unit: &Unit| -> i64 {
             unit.function.layout().iter().map(|&b| unit.function.iter_block(b).count() as i64).sum()
         };
-        if std::env::var_os("W2_SLOT_COUNT").is_none() {
+        if !llrm_support::env_flag!("W2_SLOT_COUNT") {
             return self.inner.run(unit, analyses);
         }
         let before = count(unit);
@@ -1413,8 +1413,8 @@ pub fn recorded(
         manager.add(cgpaddr::CgpAddr);
     }
     // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
-    if applied.options.prices_bytes() && applied.options.wanted("cgpselectarms") {
-        manager.add(crate::cgpselect::SelectArms);
+    if (applied.options.prices_bytes() || applied.options.for_size) && applied.options.wanted("cgpselectarms") {
+        manager.add(crate::cgpselect::SelectArms { size: applied.options.for_size });
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
@@ -1515,6 +1515,12 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         if applied.options.wanted("hardwareloops") {
             passes.push(Box::new(crate::hardwareloops::HardwareLoops));
         }
+        // `TargetPassConfig::addIRPasses` (pin l.874): ConstantHoisting
+        // follows LSR; it hoists nothing for a target whose constants all
+        // cost the basic one.
+        if applied.options.wanted("constanthoisting") {
+            passes.push(Box::new(crate::constanthoisting::ConstantHoisting));
+        }
     }
     passes
 }
@@ -1542,6 +1548,7 @@ fn rerun(
     if fixed.wants_sizes() {
         declared.count_referenced(module);
     }
+    llrm_mir::passes::snapshot_for_audit(module);
     let Module { context, globals, metadata, .. } = &mut *module;
     llrm_mir::passes::set_running_function(globals[id.0 as usize].name.as_deref().unwrap_or_default());
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {

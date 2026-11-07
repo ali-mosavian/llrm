@@ -94,11 +94,14 @@ pub fn module_tables(
             module
                 .globals
                 .iter()
-                .map(|global| {
+                .enumerate()
+                .map(|(at, global)| {
+                    // clang -fPIE marks what it defines `dso_local`, not what it declares.
                     matches!(
                         global.linkage,
                         llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                    )
+                    ) || crate::backend::globals::space(module, llrm_mir::GlobalId(at as u32))
+                        == crate::model::ir::Space::Segment
                 })
                 .collect()
         }),

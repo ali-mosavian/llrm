@@ -8,6 +8,7 @@ use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Uns
 const SCN_CNT_CODE: u32 = 0x20;
 const SCN_CNT_INITIALIZED_DATA: u32 = 0x40;
 const SCN_CNT_UNINITIALIZED_DATA: u32 = 0x80;
+const SCN_LNK_COMDAT: u32 = 0x0000_1000;
 const SCN_LNK_NRELOC_OVFL: u32 = 0x0100_0000;
 const SCN_MEM_DISCARDABLE: u32 = 0x0200_0000;
 const SCN_MEM_EXECUTE: u32 = 0x2000_0000;
@@ -16,6 +17,9 @@ const SCN_MEM_WRITE: u32 = 0x8000_0000;
 const SYM_CLASS_EXTERNAL: u8 = 2;
 const SYM_CLASS_STATIC: u8 = 3;
 const SYM_CLASS_FILE: u8 = 103;
+const SYM_CLASS_WEAK_EXTERNAL: u8 = 105;
+/// The linker falls back to the default symbol where no strong definition exists.
+const IMAGE_WEAK_EXTERN_SEARCH_ALIAS: u32 = 3;
 const SYM_TYPE_FUNCTION: u16 = 0x20;
 const SYM_ABSOLUTE: i16 = -1;
 const SYM_DEBUG: i16 = -2;
@@ -137,6 +141,7 @@ fn symbol(
 fn spelling(
     section: &Section,
     taken: bool,
+    comdat: bool,
 ) -> Result<(String, u32), Unsupported> {
     if !section.near {
         return Err(unsupported(format!(
@@ -165,17 +170,32 @@ fn spelling(
         )));
     }
     let align = (section.align.trailing_zeros() + 1) << 20;
-    let name = if taken && !matches!(section.role, Role::Debug(_)) && !unwind_data(section) {
+    // A COMDAT section keeps the plain name: the linker picks among them by
+    // their leader symbol, not by name.
+    let name = if taken && !comdat && !matches!(section.role, Role::Debug(_)) && !unwind_data(section) {
         format!("{base}${}", section.name)
     } else {
         base.to_owned()
     };
-    Ok((name, flags | align))
+    Ok((name, flags | align | if comdat { SCN_LNK_COMDAT } else { 0 }))
 }
 
 /// x64 unwind data (`.pdata`, `.xdata`), which the linker finds by name.
 fn unwind_data(section: &Section) -> bool {
     section.role == Role::ROData && matches!(section.name.as_str(), ".pdata" | ".xdata")
+}
+
+/// `JamCRC` as the COFF writer applies it to a COMDAT section: initial value
+/// 0 (not the specified all ones), no final inversion.
+pub fn jam_crc(bytes: &[u8]) -> u32 {
+    let mut crc = 0u32;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ if crc & 1 == 1 { 0xEDB8_8320 } else { 0 };
+        }
+    }
+    crc
 }
 
 fn pad(
@@ -208,7 +228,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let mut spelled: Vec<(String, u32)> = Vec::new();
     for (index, section) in object.sections.iter().enumerate() {
         let taken = object.sections[..index].iter().any(|other| other.role == section.role);
-        spelled.push(spelling(section, taken)?);
+        let comdat = object.comdats.iter().any(|one| one.section == index);
+        spelled.push(spelling(section, taken, comdat)?);
     }
 
     // Symbols: `.file`, one symbol per section, then the object's, each local
@@ -233,9 +254,33 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         count += 1;
     }
     count += 2 * object.sections.len() as u32;
-    // Each object symbol's index in the table.
-    let coff_symbol: Vec<u32> = (count..count + object.symbols.len() as u32).collect();
-    count += object.symbols.len() as u32;
+    // Each object symbol's index in the table: a weak definition outside a
+    // COMDAT is three entries, the weak external, its aux and its default.
+    let in_comdat = |one: &llrm_object::Symbol| {
+        matches!(one.definition, Definition::Defined { section, .. }
+            if object.comdats.iter().any(|comdat| comdat.section == section))
+    };
+    let weak_alone = |one: &llrm_object::Symbol| {
+        one.binding == Binding::Weak && matches!(one.definition, Definition::Defined { .. }) && !in_comdat(one)
+    };
+    let mut coff_symbol: Vec<u32> = Vec::new();
+    for one in &object.symbols {
+        coff_symbol.push(count);
+        count += if weak_alone(one) { 3 } else { 1 };
+    }
+    // The name the defaults of weak externals end with: the first strong
+    // external symbol in a section, else the first in a COMDAT.
+    let unique: Option<&str> = [false, true].into_iter().find_map(|comdat| {
+        object
+            .symbols
+            .iter()
+            .find(|one| {
+                matches!(one.definition, Definition::Defined { .. })
+                    && (one.binding == Binding::Public || (in_comdat(one) && one.binding == Binding::Weak))
+                    && in_comdat(one) == comdat
+            })
+            .map(|one| one.name.as_str())
+    });
 
     // Sections' bytes and relocation entries.
     let mut images: Vec<Vec<u8>> = Vec::new();
@@ -269,13 +314,48 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         put32(&mut table, section.image.len() as u32);
         put16(&mut table, reloc_counts[index].min(0xFFFF) as u16);
         put16(&mut table, 0);
-        put32(&mut table, 0);
-        put16(&mut table, 0);
-        table.extend([0u8; 4]);
+        // A COMDAT section's checksum, its number and the selection; the rest
+        // are zeros.
+        let comdat = object.comdats.iter().find(|one| one.section == index);
+        put32(&mut table, comdat.map_or(0, |_| jam_crc(&images[index])));
+        // As the pin's writer: the section's own number, or the associated one's.
+        put16(&mut table, comdat.and_then(|one| one.associated).unwrap_or(index) as u16 + 1);
+        table.extend([comdat.map_or(0, |one| one.selection as u8), 0, 0, 0]);
     }
     for one in &object.symbols {
         let name = symbol_name(&one.name, &mut strings);
-        let class = if one.binding == Binding::Public { SYM_CLASS_EXTERNAL } else { SYM_CLASS_STATIC };
+        // A symbol in a COMDAT section is external, so the linker keeps one of
+        // the copies of the name.
+        let comdat = in_comdat(one);
+        let class = if one.binding == Binding::Public || comdat { SYM_CLASS_EXTERNAL } else { SYM_CLASS_STATIC };
+        if weak_alone(one) {
+            // As the pin: a weak external (search alias) naming a default
+            // `.weak.NAME.default.UNIQUE` that has the definition.
+            let Definition::Defined { section, offset } = one.definition else { unreachable!() };
+            let default = coff_symbol[object.symbols.iter().position(|other| std::ptr::eq(other, one)).unwrap()] + 2;
+            symbol(&mut table, Entry { name, value: 0, section: 0, kind: 0, class: SYM_CLASS_WEAK_EXTERNAL, aux: 1 });
+            put32(&mut table, default);
+            put32(&mut table, IMAGE_WEAK_EXTERN_SEARCH_ALIAS);
+            table.extend([0u8; 10]);
+            let kind = if object.sections[section].role == Role::Text { SYM_TYPE_FUNCTION } else { 0 };
+            let default_name = match unique {
+                Some(unique) => format!(".weak.{}.default.{unique}", one.name),
+                None => format!(".weak.{}.default", one.name),
+            };
+            let default_name = symbol_name(&default_name, &mut strings);
+            symbol(
+                &mut table,
+                Entry {
+                    name: default_name,
+                    value: offset as u32,
+                    section: section as i16 + 1,
+                    kind,
+                    class: SYM_CLASS_EXTERNAL,
+                    aux: 0,
+                },
+            );
+            continue;
+        }
         match one.definition {
             Definition::Defined { section, offset } => {
                 let kind = if object.sections[section].role == Role::Text { SYM_TYPE_FUNCTION } else { 0 };
@@ -338,4 +418,19 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     out.extend(headers);
     out.extend(body);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::jam_crc;
+
+    /// The checksums the pin writes for two COMDAT sections (llc d1106deb71,
+    /// `x86_64-pc-windows-msvc`): `mov eax, ecx; ret` and `mov eax, [rip+0]; ret`.
+    /// A CRC started from all ones, as JamCRC is specified, gave 0xef14c8ae
+    /// for the first and the linker saw two definitions as different.
+    #[test]
+    fn a_comdat_checksum_starts_from_zero_as_the_pin_writes_it() {
+        assert_eq!(jam_crc(&[0x89, 0xC8, 0xC3]), 0xEFAA_EE43);
+        assert_eq!(jam_crc(&[0x8B, 0x05, 0, 0, 0, 0, 0xC3]), 0xD8B1_BCB1);
+    }
 }

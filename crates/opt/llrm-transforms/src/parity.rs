@@ -350,6 +350,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("canonfreeze", Module, "canon-freeze", Translated, ""),
     // Runs in the strength slot, after `lsr`: `hardwareloops::HardwareLoops`.
     entry("hardwareloops", Module, "hardware-loops", Translated, ""),
+    // Runs in the strength slot, after `hardwareloops`: `constanthoisting::ConstantHoisting`.
+    entry("constanthoisting", Module, "consthoist (ConstantHoisting.cpp)", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     partial(
         "indvars@753",
@@ -402,6 +404,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("leaopt@5", Backend, "x86-optimize-leas (X86OptimizeLEAs.cpp)", Translated, ""),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
     entry("floatsink@6", Backend, "x86 float load sinking (target; DEVIATE SD-SINK, no pin pass)", Old, ""),
+    entry("floatunhoist@6", Backend, "x86 hoisted float load made again in the loop (target; DEVIATE M16-NBODY-O2, no pin pass)", Old, ""),
     partial(
         "pushfold@6",
         Backend,

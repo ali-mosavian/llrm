@@ -38,7 +38,7 @@ use llrm_mir::types::{FloatKind, Type};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_muldivrem::simplify_first;
-use crate::combine_shared::simplify_associative_or_commutative;
+use crate::combine_shared::{query, simplify_associative_or_commutative};
 
 /// `visitFAdd` and `visitFMul`, as far as translated: `simplify*Inst`, then
 /// `SimplifyAssociativeOrCommutative` (constants to the right; `(X op C1) op
