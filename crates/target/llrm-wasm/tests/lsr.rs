@@ -115,3 +115,18 @@ fn a_tie_of_instructions_and_setup_keeps_the_pin_counting_up() {
     let exit = text.lines().find(|line| line.contains("icmp eq")).expect("an exit test");
     assert!(!exit.trim_end().ends_with(", 0"), "{exit}\n{text}");
 }
+
+/// bench/dot's loop: the end-biased solution and the pin's tie on bytes too
+/// (61 against 61 in the first loop of dot -O2); the tie went to the pin and
+/// dot -O2 grew 786 -> 812 B. A tie of bytes goes to the end-biased one.
+#[test]
+fn a_tie_of_bytes_keeps_the_end_biased_solution() {
+    let mut module = llrm_mir::parse::module(include_str!("lsr/dot_loop.ll")).expect("parses");
+    let mut manager = PassManager::default();
+    let elements = llrm_transforms::pipeline_text::parse("loop-reduce").expect("pipeline");
+    llrm_transforms::pipeline_text::build(&elements, &mut manager).ok().expect("builds");
+    manager.run_module(&mut module, Rc::new(WasmMachine)).expect("runs");
+    let text = llrm_mir::print::module(&module);
+    let exit = text.lines().find(|line| line.contains("icmp eq")).expect("an exit test");
+    assert!(exit.trim_end().ends_with(", 0"), "{exit}\n{text}");
+}
