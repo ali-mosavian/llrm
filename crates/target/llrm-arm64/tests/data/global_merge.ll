@@ -5,6 +5,8 @@ target triple = "aarch64-unknown-linux-gnu"
 @b = internal global i32 2, align 4
 @c = internal global i32 3, align 4
 @lone = internal global i32 4, align 4
+@d = internal global i32 5, align 4
+@e = internal global i32 6, align 4
 @big = internal global [2000 x i32] zeroinitializer, align 4
 
 define i32 @three(i32 %x) {
@@ -40,6 +42,15 @@ define i32 @small(i32 %x) minsize {
   %q = load volatile i32, ptr @c
   store volatile i32 %x, ptr @b
   store volatile i32 %x, ptr @c
+  %s = add i32 %p, %q
+  ret i32 %s
+}
+
+define i32 @sized(i32 %x) optsize {
+  %p = load volatile i32, ptr @d
+  %q = load volatile i32, ptr @e
+  store volatile i32 %x, ptr @d
+  store volatile i32 %x, ptr @e
   %s = add i32 %p, %q
   ret i32 %s
 }
