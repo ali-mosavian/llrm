@@ -304,6 +304,14 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `X86TargetLowering::isLegalICmpImmediate`: `isInt<32>`.
+    fn is_legal_icmp_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
     /// `X86TargetLowering::hasAndNotCompare`: NOT+TEST for any scalar integer.
     fn has_and_not_compare(
         &self,

@@ -484,6 +484,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// `isLegalICmpImmediate`: the default accepts every constant, so no
+    /// compare is rewritten to fit one.
+    fn is_legal_icmp_immediate(
+        &self,
+        _imm: i64,
+    ) -> bool {
+        true
+    }
+
     /// `isTypeDesirableForOp(ISD::SETCC, VT)` for the narrower type
     /// `SimplifySetCC` compares a zero-extended or masked value in
     /// ([TargetLowering.cpp#L4950](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L4950)).
@@ -1012,6 +1021,55 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         Some(SDValue { node: node.node, res: 0 })
     }
 
+    /// `SimplifySetCC` ([L5578][pin]): an unsigned compare with a constant that
+    /// is no compare immediate but is a multiple of a power of two is a
+    /// compare of the shifted value (`x <u 2^41` is `(x >> 41) <u 1`).
+    /// DEVIATE: the `(X & -256) == 256` arm before it and the offset-range
+    /// `add` arm are not ported. Owner greedy-subreg, exit 2026-11-21.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5578
+    fn unsigned_compare_as_shift(
+        &mut self,
+        vt: EVT,
+        n0: SDValue,
+        c1: u128,
+        cond: CondCode,
+    ) -> Option<SDValue> {
+        if !matches!(cond, CondCode::SetULt | CondCode::SetUGe | CondCode::SetULe | CondCode::SetUGt) {
+            return None;
+        }
+        let op_type = self.dag.value_type(n0);
+        let bits = op_type.size_in_bits();
+        if bits > 64 {
+            return None;
+        }
+        let sext = |value: u128| (((value << (128 - bits)) as i128) >> (128 - bits)) as i64;
+        if self.hooks.is_legal_icmp_immediate(sext(c1)) {
+            return None;
+        }
+        let (shift_bits, new_c, new_cond) = match cond {
+            CondCode::SetULe | CondCode::SetUGt => {
+                let new_c = c1.wrapping_add(1) & super::fold::mask(bits);
+                let ones = (!c1 & super::fold::mask(bits)).trailing_zeros().min(bits);
+                let new_cond = if cond == CondCode::SetULe { CondCode::SetULt } else { CondCode::SetUGe };
+                (ones, new_c, new_cond)
+            }
+            _ => (c1.trailing_zeros().min(bits), c1, cond),
+        };
+        if shift_bits == 0 || shift_bits >= bits {
+            return None;
+        }
+        let new_c = new_c >> shift_bits;
+        if !self.hooks.is_legal_icmp_immediate(sext(new_c)) {
+            return None;
+        }
+        let amount = self.shift_amount(op_type, shift_bits);
+        let shifted = self.dag.get_node(ISD::Srl, op_type, &[n0, amount]);
+        let rhs = self.dag.get_constant(new_c, op_type);
+        Some(self.dag.get_setcc(vt, shifted, rhs, new_cond))
+    }
+
     /// `visitSETCC` through `SimplifySetCC` ([TargetLowering.cpp L4831][pin]),
     /// the integer folds after `FoldSetCC` (which `get_node` already ran): a
     /// constant on the left moves right, and an equality of an extension (or
@@ -1155,6 +1213,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(folded);
         }
         if let Some(folded) = super::setcc_extreme::fold_against_an_extreme(self.dag, vt, n0, c1, cond) {
+            return Some(folded);
+        }
+        if let Some(folded) = self.unsigned_compare_as_shift(vt, n0, c1, cond) {
             return Some(folded);
         }
         // `SimplifySetCC`, "Canonicalize GE/LE comparisons to use GT/LT": `x >=
