@@ -110,7 +110,7 @@ impl ScalarEvolution {
             if let Kind::Mul(factors) = se.node(s).kind.clone() {
                 let mut has_add_rec = false;
                 let mut operands = Vec::new();
-                for factor in factors {
+                for factor in factors.iter().copied() {
                     match se.node(factor.scev).kind.clone() {
                         Kind::Unknown(value) if !se.unknown_is_call(cx, value) => operands.push(factor),
                         Kind::Unknown(_) => has_add_rec = true,
@@ -167,7 +167,8 @@ impl ScalarEvolution {
         if last == 0 {
             if let Kind::Mul(factors) = self.node(step).kind.clone() {
                 let non_constant: Vec<Use> = factors
-                    .into_iter()
+                    .iter()
+                    .copied()
                     .filter(|factor| !matches!(self.node(factor.scev).kind, Kind::Constant(_)))
                     .collect();
                 step = self.get_mul_expr(cx, non_constant, Flags::default(), 0).scev;
@@ -229,7 +230,8 @@ impl ScalarEvolution {
             Kind::Unknown(_) => Some(t),
             Kind::Mul(factors) => {
                 let rest: Vec<Use> = factors
-                    .into_iter()
+                    .iter()
+                    .copied()
                     .filter(|factor| !matches!(self.node(factor.scev).kind, Kind::Constant(_)))
                     .collect();
                 Some(self.get_mul_expr(cx, rest, Flags::default(), 0).scev)
