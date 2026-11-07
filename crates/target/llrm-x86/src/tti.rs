@@ -829,6 +829,13 @@ impl Tti for X86 {
         !self.tuning.keep_constant_displacements
     }
 
+    fn constant_arith_phi_is_cheap(
+        &self,
+        optsize: bool,
+    ) -> bool {
+        optsize || !self.tuning.keep_constant_arith_operands
+    }
+
     /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
     /// an ALU instruction. With 100 the 28 calls of `_savegame_read_block`
     /// stayed (+408 bytes of the module); 150 inlines them and still keeps the
