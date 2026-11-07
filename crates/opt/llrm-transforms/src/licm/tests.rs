@@ -410,7 +410,8 @@ fn block_of(
     text: &str,
     name: &str,
 ) -> Vec<String> {
-    let f = &text[text.find("define i16 @f(").expect("@f")..];
+    // Any return type: the function is the one named `@f`.
+    let f = &text[text.find(" @f(").expect("@f")..];
     let start = f.find(&format!("\n{name}:\n")).unwrap_or_else(|| panic!("no {name} in\n{text}")) + name.len() + 3;
     f[start..].lines().take_while(|line| line.starts_with("  ")).map(|line| line.trim().to_owned()).collect()
 }
@@ -2172,9 +2173,7 @@ b2:
 }
 ";
     let after = licm_printed(text);
-    let f = &after[after.find("define i64 @f(").expect("@f")..];
-    let start = f.find("\nb1:\n").expect("b1") + 5;
-    let body: Vec<&str> = f[start..].lines().take_while(|line| line.starts_with("  ")).collect();
+    let body = block_of(&after, "b1");
     let left: Vec<_> = body.iter().filter(|line| line.contains("= mul i64 ") && line.trim_end().ends_with(", 31")).collect();
     assert!(left.is_empty(), "{left:?}\n{after}");
 }
