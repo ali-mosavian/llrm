@@ -4,7 +4,9 @@
 mod common;
 
 use common::pipeline::datalayout;
+use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{Level, Request, assembly};
+use llrm_6502::timing::estimate;
 
 fn asm(functions: &str) -> String {
     let ir = format!("target datalayout = \"{}\"\n{functions}", datalayout());
@@ -39,4 +41,17 @@ fn a_routine_is_priced_from_the_runtime() {
     assert!((100..=120).contains(&price("__mulsi3")), "{}", price("__mulsi3"));
     assert!(price("__udivsi3") > price("__mulsi3"), "{} {}", price("__udivsi3"), price("__mulsi3"));
     assert!(price("__ashlsi3") > 0);
+}
+
+/// `(unsigned)x * 40` was `(x << 5) + (x << 3)`, eight two-byte shift steps
+/// (53 B at -O2); the sum `x * 5` shifted by three is five (43 B).
+#[test]
+fn a_constant_with_factors_of_two_shifts_the_sum_once() {
+    let ir = "define i16 @k_mul40(i8 %x) nounwind {\n  %w = zext i8 %x to i16\n  %r = mul i16 %w, 40\n  ret i16 %r\n}\n";
+    let ir = format!("target datalayout = \"{}\"\n{ir}", datalayout());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let from = text.find("k_mul40:").unwrap_or_else(|| panic!("{text}"));
+    let body = text[from..].split(".segment").next().unwrap();
+    let bytes = estimate(Cpu::Mos6502, body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
+    assert!(bytes <= 43, "{bytes} B\n{body}");
 }
