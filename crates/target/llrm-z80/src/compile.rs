@@ -471,6 +471,7 @@ fn allocate_once(
     let mut framed = function.clone();
     spills_first(&mut framed, &assignment);
     narrow_reload_for_byte_shift(&mut framed, &assignment);
+    drop_repeated_slot_accesses(&mut framed, &assignment, &slots);
     let framed = (framed, assignment.clone(), slots.clone(), reads.clone());
     // Pushes and pops are 1 B and 10-11 T where a slot through IX is 3 B and
     // 19 T a byte, but they change what the printer and the later choices
@@ -518,6 +519,7 @@ fn allocate_once(
         if !slots.is_empty() {
             spills_first(&mut candidate, &assignment);
             narrow_reload_for_byte_shift(&mut candidate, &assignment);
+            drop_repeated_slot_accesses(&mut candidate, &assignment, &slots);
         }
         let stacked = (candidate, assignment.clone(), slots, reads.clone());
         let now = priced_in_loops(&stacked, level);
@@ -536,6 +538,22 @@ fn allocate_once(
         return_conditionally(&mut best.0);
     }
     Ok((best, held))
+}
+
+/// The slots left in the frame lose the stores and reloads that repeat what a
+/// register holds (`remove_redundant_slot_accesses`). Not the slots made a
+/// stack: a `pop` and `push` that peeks is one byte each, and dropping the
+/// `push` leaves the slot no stack.
+fn drop_repeated_slot_accesses(
+    function: &mut MFunction,
+    assignment: &Assignment,
+    slots: &[(i32, usize)],
+) {
+    if std::env::var("LLRM_NO_Z80_SLOTS").is_ok() {
+        return;
+    }
+    let ids: Vec<i32> = slots.iter().map(|&(slot, _)| slot).collect();
+    llrm_spike_mf::spill::remove_redundant_slot_accesses::<Z80Registers>(function, assignment, &REGISTER_INFO, &ids);
 }
 
 /// Whether the push and pop form of a function stays: where it prices lower

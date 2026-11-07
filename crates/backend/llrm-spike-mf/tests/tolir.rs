@@ -1978,3 +1978,26 @@ fn test_a_copy_whose_value_is_spilled_is_folded_into_the_store() {
     assert_eq!(copies, 0, "the copy is the store: {insts:?}");
     assert!(insts.iter().any(|inst| inst.kind == Kind::Op("st")), "{insts:?}");
 }
+
+/// Remaking an argument load per value number (`argument_load_defs`) is the
+/// x86 TII's alone: the spike targets (6502, z80, m68k) read no cell as
+/// invariant by this rule, so their greedy keeps the path the parent had.
+/// A body with an unwritten incoming-argument load is one the x86 rule takes.
+#[test]
+fn test_a_spike_target_takes_no_argument_load_to_remake_per_value_number() {
+    use llrm_codegen::greedy::remat::argument_load_insns;
+    use llrm_codegen::model::ir::{Addr, Held, Mem, Semantics, Space};
+    use llrm_codegen::model::lir::Insn;
+    let converted = to_lir::<Flat>(&lowered(across_a_call(1)), regs()).expect("converts");
+    let mut body = converted.body.clone();
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Held(Held { value: 900, width: 4, offset: 0 })],
+        sources: vec![Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, 8)), 4))],
+        ..Semantics::new(Operation::Move)
+    };
+    let load = std::sync::Arc::new(Insn::new(9000, None, Some(what), vec![900], vec![]));
+    body.blocks[0].insns.edit(|insns| insns.insert(0, load));
+    assert_eq!(argument_load_insns(&body).len(), 1, "the x86 rule takes this load");
+    assert!(converted.tii.argument_load_defs(&body).is_empty(), "the spike TII takes none");
+}

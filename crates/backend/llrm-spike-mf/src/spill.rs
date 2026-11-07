@@ -2,6 +2,7 @@
 //! frame slot, stored after each definition and loaded before each use into a
 //! short-lived register of its own.
 
+use llrm_lir::registers::RegId;
 use llrm_support::hash::HashSet;
 
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
@@ -837,6 +838,97 @@ pub fn remove_dead_slot_stores<T: Target>(
     let removed = drop.len();
     for (b, i) in drop.into_iter().rev() {
         function.blocks[b].insts.remove(i);
+    }
+    removed
+}
+
+/// A spill-slot store of a register that still holds the slot's value, and a
+/// reload into a register that already does, are dropped.
+///
+/// DEVIATE R-SSC1 (owner greedy-subreg, exit 2026-12-05): the pin's
+/// `StackSlotColoring::RemoveDeadStores` ([StackSlotColoring.cpp#L460]) takes
+/// only a store that follows its load at once; here the pair may be apart.
+/// A sibling copy of a reload (`COPY dst <- reload`) folds to a store of it
+/// ([InlineSpiller.cpp#L1058]), and a use sits between the two when the pair
+/// is not adjacent (z80 `div_constants_long`: 95 of them, 570 B). Exit: the
+/// split that leaves no such copy, or a pass of the pin that removes them.
+///
+/// The scan is per block: a register holds a slot's value from a reload or a
+/// store until one of its lanes is written, a call clobbers it, or the slot
+/// is stored from another register. Returns the instructions removed.
+///
+/// [StackSlotColoring.cpp#L460]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/StackSlotColoring.cpp#L460
+/// [InlineSpiller.cpp#L1058]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/InlineSpiller.cpp#L1058
+pub fn remove_redundant_slot_accesses<T: Target>(
+    function: &mut MFunction<T::Class>,
+    assignment: &Assignment,
+    info: &llrm_lir::registers::Info,
+    slots: &[i32],
+) -> usize {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let overlap = |a: RegId, b: RegId| info.root(a) == info.root(b) && info.lanes(a) & info.lanes(b) != 0;
+    let caller_saved = T::caller_saved();
+    let access = |inst: &Inst| -> Option<(i32, Reg, bool)> {
+        let mut frame = None;
+        let mut reg = None;
+        let mut loads = false;
+        for (at, operand) in inst.operands.iter().enumerate() {
+            match operand {
+                Operand::Frame(slot) if frame.is_none() => frame = Some(*slot),
+                Operand::Def(r) if at == 0 && reg.is_none() => {
+                    reg = Some(*r);
+                    loads = true;
+                }
+                Operand::Use(r) if reg.is_none() => reg = Some(*r),
+                Operand::Imm(0) => {}
+                _ => return None,
+            }
+        }
+        let slot = frame.filter(|slot| slots.contains(slot))?;
+        Some((slot, reg?, loads))
+    };
+    let mut removed = 0;
+    for block in &mut function.blocks {
+        // (register, slot): the register holds the slot's value.
+        let mut held: Vec<(RegId, i32)> = Vec::new();
+        let mut kept: Vec<Inst> = Vec::with_capacity(block.insts.len());
+        for inst in std::mem::take(&mut block.insts) {
+            if let Some((slot, reg, loads)) = access(&inst) {
+                let reg = register(reg);
+                if held.contains(&(reg, slot)) {
+                    removed += 1;
+                    continue;
+                }
+                if loads {
+                    held.retain(|&(held, _)| !overlap(held, reg));
+                } else {
+                    held.retain(|&(_, at)| at != slot);
+                }
+                held.push((reg, slot));
+                kept.push(inst);
+                continue;
+            }
+            for operand in &inst.operands {
+                match operand {
+                    Operand::Def(reg) => {
+                        let reg = register(*reg);
+                        held.retain(|&(held, _)| !overlap(held, reg));
+                    }
+                    Operand::Frame(slot) => held.retain(|&(_, at)| at != *slot),
+                    _ => {}
+                }
+            }
+            if inst.call {
+                held.retain(|&(held, _)| !caller_saved.iter().any(|&root| overlap(held, root)));
+            }
+            kept.push(inst);
+        }
+        block.insts = kept;
     }
     removed
 }
