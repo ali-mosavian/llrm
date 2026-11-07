@@ -582,11 +582,19 @@ fn profitable(
     earlier: Reg,
     register: Reg,
     op: &Op,
+    earlier_block: usize,
+    block: usize,
+    successors: &[Vec<usize>],
 ) -> bool {
     let reads = |one: Reg| readers.get(&one).map_or(&[][..], Vec::as_slice);
     let seen = reads(earlier);
     if reads(register).iter().all(|reader| seen.contains(reader)) {
         return true;
+    }
+    // Heuristic 1: a cheap operation is not shared past the block after the
+    // one that made it.
+    if as_cheap_as_a_move(op) && earlier_block != block && !successors[earlier_block].contains(&block) {
+        return false;
     }
     let no_register_operand = !op.defs_and_uses().1.iter().any(|used| used.is_virtual());
     // A copy chain that ends in a register written in several places is a
@@ -614,12 +622,29 @@ fn profitable(
         .iter()
         .all(|&(block, index)| matches!(blocks[block].ops[index], Op::Copy { .. }))
         && !phi_input(register);
-    !(no_register_operand && only_copied)
+    if no_register_operand && only_copied {
+        return false;
+    }
+    // Heuristic 3: a value a phi reads is not reused unless it is read in
+    // this block already.
+    reads(earlier).iter().any(|&(reader, _)| reader == block) || !phi_input(earlier)
+}
+
+/// AArch64 `isAsCheapAsAMove`: one move-immediate-like instruction.
+fn as_cheap_as_a_move(op: &Op) -> bool {
+    match op {
+        Op::Imm { .. } => true,
+        Op::I(inst) => matches!(
+            inst,
+            Inst::MoveWide { .. } | Inst::LogicImm { .. } | Inst::AddSubImm { .. } | Inst::FpMoveImm { .. }
+        ),
+        _ => false,
+    }
 }
 
 fn cse(
     function: &mut MFunc,
-    optsize: bool,
+    _optsize: bool,
 ) {
     let cfg = cfg(function);
     let definitions = definitions(function);
@@ -658,7 +683,7 @@ fn cse(
                     // (`MachineCSE`, `PhysRegDefsReach`).
                     Some(&earlier)
                         if (!setter || flags_dead(&function.blocks[*block].ops, index))
-                            && (optsize || home.get(&earlier) == Some(block) || profitable(&readers, &definitions, &function.blocks, earlier, register, op)) =>
+                            && (home.get(&earlier) == Some(block) || profitable(&readers, &definitions, &function.blocks, earlier, register, op, home[&earlier], *block, &cfg.successors)) =>
                     {
                         rename.insert(register, earlier);
                         removed.insert((*block, index));
@@ -1252,6 +1277,27 @@ mod tests {
         run(&mut function, false);
         let reads = function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::AddSubImm { .. }))).count();
         assert_eq!(reads, 2, "{function:#?}");
+    }
+
+    /// A constant made two blocks away was shared: it lived in a callee-saved
+    /// register and cost a `mov` at every use (jpeg_single -Os: seven
+    /// `mov x0, x25` for fd 1, +42 reg-reg over the pin).
+    #[test]
+    fn a_cheap_constant_two_blocks_away_is_remade() {
+        let mut function = function();
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(64, 1), branch_to("mid")].into() },
+            MBlock { label: "mid".into(), ops: vec![branch_to("far")].into() },
+            MBlock {
+                label: "far".into(),
+                ops: vec![movz(66, 1), add(67, 65, 66), Op::Return { uses: vec![], tail: None }].into(),
+            },
+        ];
+        run(&mut function, false);
+        let movzs = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!((movzs(0), movzs(2)), (1, 1), "{function:#?}");
     }
 
     /// A constant only the loop makes goes to the preheader.
