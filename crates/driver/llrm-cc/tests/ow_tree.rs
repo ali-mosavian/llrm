@@ -43,7 +43,20 @@ fn a_missing_open_watcom_tree_names_the_command_that_makes_it() {
 #[test]
 fn the_tree_under_cache_is_found_with_no_environment_variable() {
     let home = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("ow-home-present-{}", std::process::id()));
-    std::fs::create_dir_all(home.join(format!(".cache/llrm/ow-src-{}", commit()))).unwrap();
+    let tree = home.join(format!(".cache/llrm/ow-src-{}", commit()));
+    std::fs::create_dir_all(&tree).unwrap();
+    std::fs::write(tree.join(".complete"), "").unwrap();
     let text = stderr_with(&home);
     assert!(!text.contains("ow-fetch.sh") && !text.contains("LLRM_OW"), "{text}");
+}
+
+/// An interrupted `tools/ow-fetch.sh` leaves the directory without `.complete`;
+/// `{ow}` resolved to it and the compile failed on a missing library instead of
+/// naming the command that makes the tree.
+#[test]
+fn a_tree_without_its_complete_mark_is_missing() {
+    let home = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("ow-home-partial-{}", std::process::id()));
+    std::fs::create_dir_all(home.join(format!(".cache/llrm/ow-src-{}", commit()))).unwrap();
+    let first = stderr_with(&home).lines().next().unwrap_or_default().to_owned();
+    assert!(first.contains("tools/ow-fetch.sh"), "{first}");
 }
