@@ -109,11 +109,9 @@ impl FunctionPass for Mem2Reg {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        if promote_memory_to_register(unit.context, unit.layout, outer.callees(), unit.function) {
-            PreservedAnalyses::none()
-        } else {
-            PreservedAnalyses::all()
-        }
+        let before = unit.function.mark();
+        let changed = promote_memory_to_register(unit.context, unit.layout, outer.callees(), unit.function);
+        llrm_mir::depends::kept_after(unit.context, unit.function, before, changed)
     }
 }
 
