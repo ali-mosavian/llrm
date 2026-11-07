@@ -327,6 +327,11 @@ impl llrm_target::Target for M16 {
         CALLING.native().slot_bytes
     }
 
+    /// Real mode has no `and sp` frame the pin builds.
+    fn can_realign_stack(&self) -> bool {
+        false
+    }
+
     fn frame_register(&self) -> RegId {
         llrm_x86::calling::frame(CALLING.native())
     }

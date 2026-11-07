@@ -495,6 +495,19 @@ pub trait Target {
         self.stack_slot_bytes()
     }
 
+    /// Whether a frame can realign the stack pointer for a local above the
+    /// stack alignment (the pin's `X86RegisterInfo::canRealignStack`,
+    /// [X86RegisterInfo.cpp#L823](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86RegisterInfo.cpp#L823)).
+    /// Where it cannot, no local is over-aligned: the pin clamps the object's
+    /// alignment to the stack alignment
+    /// (`MachineFrameInfo::clampStackAlignment`, MachineFrameInfo.cpp#L40);
+    /// here the cell keeps its alignment and the stack is left as the
+    /// caller made it (DEVIATE OA-2, owner w2, exit: m16 states its own
+    /// stack alignment).
+    fn can_realign_stack(&self) -> bool {
+        true
+    }
+
     /// Whether every call finds the stack a multiple of `stack_alignment`
     /// (`calling.toml`'s `aligned_calls`), not only those of a function
     /// that holds a double.
