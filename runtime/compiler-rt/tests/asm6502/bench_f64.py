@@ -44,7 +44,7 @@ _srcs = subprocess.check_output([f'{here}/../fp_sources.sh', 'f64'], text=True).
 LIBPATH = {os.path.dirname(p).split('/')[-1] + '_' + os.path.basename(p)[:-2]: p for p in _srcs}
 LIBS = tuple(LIBPATH)
 def compile_libs(opt):
-    for f in LIBS: sh(CC, '--target=6502-sim65', f'-{opt}', '-S', '-DSF_INTABI', *os.environ.get('SF_EXTRA', '').split(), '-Iinclude', LIBPATH[f], '-o', f'{T}/{opt}_{f}.s')
+    for f in LIBS: sh(CC, '--target=6502-sim65', f'-{opt}', '-S', '-DSF_INTABI', *os.environ.get('SF_EXTRA', '-DSF_MUL32X32_6502').split(), '-Iinclude', LIBPATH[f], '-o', f'{T}/{opt}_{f}.s')
 
 def strip_exports(path):  # llrm-cc exports statics, which collide across objects
     s = open(path).read()
@@ -95,7 +95,10 @@ def ours(op, opt):
     for f in LIBS:
         p = f'{d}/r/{opt}_{f}.s'; strip_exports(p)
         sh('ca65', '-t', 'sim6502', '-U', p, '-o', p[:-2] + '.o'); objs.append(p[:-2] + '.o')
-    for a in os.environ.get('SF_ASM', '').split():  # extra hand-written library sources (e.g. config/6502/di64.s), linked into the library build only
+    libtext = ''.join(open(f'{d}/r/{opt}_{f}.s').read() for f in LIBS)
+    for a in os.environ.get('SF_ASM', f'{here}/../../config/6502/mul32x32.s').split():  # extra hand-written library sources, linked into the library build only; default: f64 mul's hand 32x32 (not reentrant, static cells; 41312 -> 11504 clk). SF_EXTRA= SF_ASM= (set, empty) builds the C.
+        # an extra counts for an operation only if its code calls it: add, sub and div were charged mul32x32.s's 153 B
+        if not any(re.search(r'\b%s\b' % re.escape(n), libtext) for n in re.findall(r'^\s*\.(?:export|globl)\s+(\w+)', open(a).read(), re.M)): continue
         r_ = sh('ca65', '-t', 'sim6502', '-I', f'{here}/../../config/6502', a, '-o', f'{d}/{os.path.basename(a)}.o'); assert r_.returncode == 0, r_.stderr; objs.append(f'{d}/{os.path.basename(a)}.o')
     open(f'{d}/stub.s', 'w').write('rc2 = 130\n' + ''.join('rc%d = %d\n' % (i, 128 + i) for i in range(3, 8)) + f'.export {SYM[op]}\n{SYM[op]}:\n lda #0\n ldx #0\n' + ''.join(f' sta rc{i}\n' for i in range(2, 8)) + ' rts\n')
     bss = sum(int(m.group(1)) for o in objs for m in [re.search(r'BSS:\s+(\d+)', sh('od65', '--dump-segsize', o).stdout)] if m)
