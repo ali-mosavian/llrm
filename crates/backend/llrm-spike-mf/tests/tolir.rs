@@ -2000,6 +2000,8 @@ fn test_a_spike_target_takes_no_argument_load_to_remake_per_value_number() {
     body.blocks[0].insns.edit(|insns| insns.insert(0, load));
     assert_eq!(argument_load_insns(&body).len(), 1, "the x86 rule takes this load");
     assert!(converted.tii.argument_load_defs(&body).is_empty(), "the spike TII takes none");
+}
+
 /// A block that branches three ways, each way returning.
 fn three_ways() -> MFunction<()> {
     let mut f = MFunction::<()>::new("three");

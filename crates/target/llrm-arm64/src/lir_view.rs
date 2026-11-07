@@ -843,6 +843,19 @@ mod tests {
         function
     }
 
+    /// The allocator's function carried no branch odds on arm64, so greedy
+    /// weighed every branch but a loop's even: the zero-compare 20:12 the pin
+    /// uses was 16:16, and idioms `main` -O1 ranked its loop counter below an
+    /// address constant (block frequencies 16/512 against the pin's 20/640).
+    #[test]
+    fn the_irs_branch_odds_reach_the_allocators_function() {
+        use llrm_spike_mf::placement::Odds;
+        let mut function = sample();
+        let odds: Odds = [((0, 1), (llrm_mir::blockfrequency::BranchProbability::new(5, 8), 0))].into_iter().collect();
+        function.alloc_odds = Some(odds.clone());
+        assert_eq!(view(&function).odds, Some(odds));
+    }
+
     /// `movk` reads and writes its register: the view needs a def, a use and a
     /// tie, or the allocator may give the two different registers.
     #[test]
