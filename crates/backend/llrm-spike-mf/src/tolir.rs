@@ -1449,6 +1449,7 @@ fn buffer_loads<T: Target>(
 /// Worse row (owner greedy-subreg, exit 2026-11-28): z80 `float_in_memory_loop`
 /// -Os 326 -> 332 B. A remade load splits one value into two pieces and the
 /// allocation after it shifts; no single defect.
+/// z80 `fcmp_all` -O2 23661 -> 23670 B, clocks unpriced.
 fn call_result_buffers<T: Target>(function: &MFunction<T::Class>) -> BTreeSet<i64> {
     let mut found = BTreeSet::new();
     let mut frames: BTreeSet<i32> = BTreeSet::new();
