@@ -377,7 +377,7 @@ fn test_a_register_s_units_are_worked_out_once_for_a_body() {
 fn test_the_mask_of_lanes_is_the_units_of_each_lane() {
     let at = body(vec![mov(0, rl(RegId::BX, 2), rl(RegId::AX, 2))], &[RegId::BX]);
     let machine = super::Machine::new(&at);
-    let old = |lanes: &crate::backend::lanes::Lanes| -> u64 {
+    let old = |lanes: &crate::backend::lanes::Lanes| -> u128 {
         lanes.iter().filter_map(|lane| machine.unit(lane)).fold(0, |mask, unit| mask | 1 << unit)
     };
     let mut state = 0x9e37_79b9_7f4a_7c15_u128;
@@ -446,4 +446,26 @@ fn test_a_forwarded_read_names_the_value_of_the_source_not_of_the_dead_copy() {
     ));
     assert_eq!(lines(&got)[2], "cmp DX,imm");
     assert_eq!(first(&got)[2].uses, [90], "the cmp still reads the value of the deleted copy");
+}
+
+/// `r15d = esi; ebx = edx; cmp r15d, ebx`: both reads are forwarded, so the
+/// copies die in the block and a post-RA sink can move them past the branch.
+/// sort() in bench/quicksort kept `cmp r15d, edx` (the first operand not
+/// forwarded) and pushed five registers before its early return.
+#[test]
+fn test_a_compare_of_two_copies_reads_both_sources() {
+    let cmp = Arc::new(Insn::new(
+        2,
+        Some((2, 2)),
+        Some(semantics(Operation::Compare, "cmp", vec![], vec![rl(RegId::R15D, 4), rl(RegId::EBX, 4)])),
+        vec![],
+        vec![],
+    ));
+    let mut wide = body(
+        vec![mov(0, rl(RegId::R15D, 4), rl(RegId::ESI, 4)), mov(1, rl(RegId::EBX, 4), rl(RegId::EDX, 4)), cmp],
+        &[RegId::R15D, RegId::EBX],
+    );
+    wide.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+    let got = propagated(&wide);
+    assert_eq!(lines(&got)[2], "cmp ESI,EDX");
 }

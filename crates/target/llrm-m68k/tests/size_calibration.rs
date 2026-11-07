@@ -1,5 +1,5 @@
 //! `function_bytes`, the estimate every byte-priced decision reads, counted about half of what the assembled functions
-//! are (median 1.9 times short over tests/run/c, `~/scratch/handoff/m68k-operation-costs-card-2026-11-05.md`).
+//! are (median 1.9 times short over tests/run/c, the operation-costs card of 2026-11-05).
 //!
 //! Two populations, two statements:
 //! - the programs the factor was fit on (tests/data_size: the last IR stage of 22 tests/run/c programs, chosen by

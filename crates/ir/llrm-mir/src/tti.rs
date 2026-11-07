@@ -123,10 +123,14 @@ pub struct OperandInfo {
     pub constant: bool,
     pub power_of_two: bool,
     pub negated_power_of_two: bool,
+    /// The constant, sign-extended from its width, where a target prices the
+    /// size of an immediate by it; the pin's `OperandValueInfo` has none, and
+    /// no target but the m68k reads it.
+    pub value: Option<i128>,
 }
 
 impl OperandInfo {
-    pub const ANY: OperandInfo = OperandInfo { constant: false, power_of_two: false, negated_power_of_two: false };
+    pub const ANY: OperandInfo = OperandInfo { constant: false, power_of_two: false, negated_power_of_two: false, value: None };
 
     /// A constant operand of this value at `width` bits.
     pub fn constant(
@@ -143,6 +147,12 @@ impl OperandInfo {
             constant: true,
             power_of_two: bits != 0 && bits & (bits - 1) == 0,
             negated_power_of_two: negated != 0 && negated & (negated - 1) == 0,
+            value: Some(if width >= 128 || width == 0 {
+                value
+            } else {
+                let shift = 128 - width;
+                (((value as u128) << shift) as i128) >> shift
+            }),
         }
     }
 }
@@ -244,6 +254,19 @@ pub enum ImmUser {
     Unknown,
 }
 
+/// The bytes of the instructions LSR's setup and exit test are made of.
+#[derive(Clone, Copy, Debug)]
+pub struct LsrBytes {
+    /// A constant's opcode, before its LEB128.
+    pub constant: u32,
+    /// Reading a local.
+    pub local_get: u32,
+    /// Writing a local.
+    pub local_set: u32,
+    /// An add or a compare.
+    pub op: u32,
+}
+
 /// `TTI::LSRCost`: what loop strength reduction compares formulas by.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LsrCost {
@@ -255,6 +278,9 @@ pub struct LsrCost {
     pub imm_cost: u32,
     pub setup_cost: u32,
     pub scale_cost: u32,
+    /// DEVIATE LU13: frame words a trip reloads or stores for the registers
+    /// kept across a call that clobbers them (0 unless the target says so).
+    pub spills: u32,
 }
 
 /// `TTI::MemIndexedMode`.
@@ -550,6 +576,11 @@ pub trait Tti {
         false
     }
 
+    /// The same for the floats of an x87 target, against the stack's slots.
+    fn unroll_promotion_fits_x87_stack(&self) -> bool {
+        false
+    }
+
     /// Whether a size build's loop rotation copies a header only when its
     /// exit test folds in the preheader (RS1). False: the pass's header limit
     /// alone.
@@ -666,6 +697,11 @@ pub trait Tti {
         0
     }
 
+    /// `Tuning::unroll_never_grows_at_o1`.
+    fn unroll_never_grows_at_o1(&self) -> bool {
+        false
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false
@@ -703,9 +739,23 @@ pub trait Tti {
         false
     }
 
+    /// Whether `sinks_select_arms` also holds in a size build: the branch form
+    /// leaves out the copy of the other arm, so it is not longer.
+    fn sinks_select_arms_for_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::inline_variable_memcpy`.
     fn inlines_variable_memcpy(&self) -> bool {
         false
+    }
+
+    /// DEVIATE LG3: the bytes of the instructions a loop's setup and exit test
+    /// are made of, where the target's code size is what its cost is (wasm).
+    /// LSR then breaks a tie between the end-biased solution and the pin's by
+    /// bytes. None: the pin's order stands. owner: w12, exit: 2026-11-20.
+    fn lsr_bytes(&self) -> Option<LsrBytes> {
+        None
     }
 
     /// `Tuning::ipsccp_widen_keeps_sign`.
@@ -786,6 +836,12 @@ pub trait Tti {
     /// Whether a product by a constant and one by its negation are made once
     /// on the x87 stack (`Tuning::x87_share_negated_products`).
     fn x87_share_negated_products(&self) -> bool {
+        false
+    }
+
+    /// Whether a zero fill is stored as zero doubles through the FPU at `-Os`
+    /// (`Tuning::x87_zero_fill_at_size`).
+    fn x87_zero_fill_at_size(&self) -> bool {
         false
     }
 
@@ -1169,6 +1225,17 @@ pub trait Tti {
             (c.num_regs, c.add_rec_cost, c.num_iv_muls, c.num_base_adds, c.scale_cost, c.imm_cost, c.setup_cost)
         };
         key(a) < key(b)
+    }
+
+    /// DEVIATE LU13 (owner z80, exit 2026-11-30: a per-class register model in
+    /// the LSR cost): a call clobbers every register, so each register the
+    /// loop keeps across one is a frame slot, reloaded each trip and, for a
+    /// recurrence, stored each trip. The pin has no call term in
+    /// `LoopStrengthReduce.cpp` (it reads `getNumberOfRegisters` at L1613,
+    /// `isLSRCostLess` at L1663 and `isNumRegsMajorCostOfLSR` at L6385 only).
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1613
+    fn lsr_call_clobbers_registers(&self) -> bool {
+        false
     }
 
     /// `getPreferredAddressingMode`: which indexed addressing LSR favors.

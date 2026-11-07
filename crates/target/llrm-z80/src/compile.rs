@@ -104,7 +104,10 @@ fn cached_selections(
         std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
     environment.sort();
     TEXT_COMPARES.with(|one| one.set(one.get() + 1));
-    let key = (format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8)), environment);
+    let key = (
+        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips)),
+        environment,
+    );
     let held = SELECTED.with(|held| {
         held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(_, _, one)| one.clone())
     });
@@ -205,6 +208,8 @@ fn allocated_with(
     request: &Request,
     duplicate: bool,
 ) -> Result<Allocated, String> {
+    SLOT_BY_CONFLICTS.with(|one| one.set(request.slot_by_conflicts));
+    expand::set_frequencies(&frequencies_of(selected, name));
     let mut function = machine_function_with(selected, name, duplicate)?;
     eliminate_phis_with(&mut function, false);
     let mut hoisted = function.clone();
@@ -239,7 +244,7 @@ fn priced_in_loops(
     expand::PRICING.with(|one| one.set(priced_before_peepholes(level)));
     let lines = finish(function, assignment, 0, slots, reads.clone());
     expand::PRICING.with(|one| one.set(false));
-    lines.ok().map(|lines| expand::price_in_loops(&lines))
+    lines.ok().map(|lines| expand::price_emitted(&lines, !matches!(level, Level::Os | Level::Oz)))
 }
 
 /// Whether a variant is priced before the printer's peepholes. At the speed
@@ -384,6 +389,8 @@ fn improved(
 thread_local! {
     /// Full allocations run since the last [`take_allocations`].
     static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The request's `slot_by_conflicts`, for the allocation on this thread.
+    static SLOT_BY_CONFLICTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 thread_local! {
@@ -482,10 +489,16 @@ fn allocate_once(
         best = (frameless, assignment.clone(), Vec::new(), reads.clone());
         best_price = priced_in_loops(&best, level);
     }
-    for peek in [false, true] {
+    // Z80-SLOT-CONFLICT is one more candidate, kept only where it prices
+    // lower than the others
+    let mut choices = vec![(false, false), (true, false)];
+    if SLOT_BY_CONFLICTS.with(std::cell::Cell::get) {
+        choices.push((true, true));
+    }
+    for (peek, by_conflicts) in choices {
         let mut candidate = function.clone();
-        let report = stack_slot_report(&mut candidate, &assignment, peek);
-        if peek {
+        let report = stack_slot_report_by(&mut candidate, &assignment, peek, by_conflicts);
+        if peek && !by_conflicts {
             if std::env::var_os("LLRM_Z80_STACK_WHY").is_some() {
                 for (slot, (stores, loads)) in &report.accesses {
                     let verdict = match report.refused.iter().find(|(one, _)| one == slot) {
@@ -510,7 +523,9 @@ fn allocate_once(
         let stacked = (candidate, assignment.clone(), slots, reads.clone());
         let now = priced_in_loops(&stacked, level);
         if std::env::var_os("LLRM_Z80_STACK_PRICE").is_some() {
-            eprintln!("stack-price {name} {level:?} peek {peek} best {best_price:?} stacked {now:?}");
+            eprintln!(
+                "stack-price {name} {level:?} peek {peek} conflicts {by_conflicts} best {best_price:?} stacked {now:?}"
+            );
         }
         if keeps_stacked(level, best_price, now) {
             best = stacked;
@@ -887,6 +902,18 @@ pub fn stack_slot_report(
     assignment: &Assignment,
     peek: bool,
 ) -> StackReport {
+    stack_slot_report_by(function, assignment, peek, false)
+}
+
+/// [`stack_slot_report`] with the choice of the slot sent back to the frame:
+/// `by_conflicts` false drops the slot a load found under others (the first
+/// violation); true drops the slot in the most such conflicts.
+pub fn stack_slot_report_by(
+    function: &mut MFunction,
+    assignment: &Assignment,
+    peek: bool,
+    by_conflicts: bool,
+) -> StackReport {
     use llrm_spike_mf::livephys::PhysLiveness;
     let register = |reg: Reg| match reg {
         Reg::Virt(v) => assignment.0[v as usize],
@@ -993,11 +1020,16 @@ pub fn stack_slot_report(
             })
             .collect()
     };
+    // DEVIATE Z80-SLOT-CONFLICT: on a load with other slots on top the pin has
+    // no counterpart (StackSlotColoring.cpp only shares frame slots, by weight,
+    // first fit); here the slot in the most such conflicts goes back to the
+    // frame, not the slot loaded. Owner z80, exit 2026-11-20.
     let violation = |function: &MFunction,
                      chosen: &std::collections::BTreeSet<i32>,
                      peeks: &mut std::collections::BTreeSet<(usize, usize)>|
      -> Option<(i32, StackRefusal)> {
         peeks.clear();
+        let mut conflicts: std::collections::BTreeMap<i32, usize> = std::collections::BTreeMap::new();
         let again = read_again(function, chosen);
         let mut entry: Vec<Option<Vec<i32>>> = vec![None; function.blocks.len()];
         entry[0] = Some(Vec::new());
@@ -1014,7 +1046,20 @@ pub fn stack_slot_report(
                     }
                     Some((false, slot, _)) if chosen.contains(&slot) => {
                         if stack.last() != Some(&slot) {
-                            return Some((slot, StackRefusal::LoadNotOnTop));
+                            if !by_conflicts {
+                                return Some((slot, StackRefusal::LoadNotOnTop));
+                            }
+                            // count the slots in the way, and go on as if the
+                            // load had found its slot on top
+                            *conflicts.entry(slot).or_default() += 1;
+                            match stack.iter().rposition(|held| *held == slot) {
+                                Some(below) => {
+                                    for blocker in stack.drain(below + 1..) {
+                                        *conflicts.entry(blocker).or_default() += 1;
+                                    }
+                                }
+                                None => continue,
+                            }
                         }
                         // read again later: `pop` then `push` leaves it on top
                         if peek && again[b][at] {
@@ -1043,6 +1088,9 @@ pub fn stack_slot_report(
                     }
                 }
             }
+        }
+        if let Some((&slot, _)) = conflicts.iter().max_by_key(|(slot, count)| (**count, std::cmp::Reverse(**slot))) {
+            return Some((slot, StackRefusal::LoadNotOnTop));
         }
         // the other half of a pair a byte slot saves is dead once the pair is
         // restored
@@ -1809,6 +1857,32 @@ pub fn lines(
     lines_in(&cached_selections(ir, request)?, name, number, request)
 }
 
+/// The block frequencies of function `name`, relative to its entry.
+fn frequencies_of(
+    selected: &Selections,
+    name: &str,
+) -> Vec<(u32, f64)> {
+    selected
+        .iter()
+        .find(|(one, ..)| one == name)
+        .and_then(|(_, source, _)| source.as_ref().ok())
+        .map(|selection| selection.frequencies.clone())
+        .unwrap_or_default()
+}
+
+/// The lines of function `name` as [`lines`] gives them, each with the weight
+/// its price counts its clocks by: the frequency of its block.
+pub fn weighted_lines(
+    ir: &str,
+    name: &str,
+    request: &Request,
+) -> Result<Vec<(Line, f64)>, String> {
+    let selected = cached_selections(ir, request)?;
+    let lines = lines_in(&selected, name, 0, request)?;
+    let frequencies = frequencies_of(&selected, name).into_iter().collect();
+    Ok(expand::weighted(&lines, &frequencies))
+}
+
 fn lines_in(
     selected: &Selections,
     name: &str,
@@ -1849,7 +1923,7 @@ fn lines_in(
     crate::dagisel::pipeline::ILP.with(|one| one.set(false));
     match (source, ilp) {
         (Ok(source), Ok(ilp)) => {
-            let price = |lines: &[Line]| expand::price_in_loops(lines);
+            let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
             Ok(if cheaper(request.level, price(&ilp), price(&source)) { ilp } else { source })
         }
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),

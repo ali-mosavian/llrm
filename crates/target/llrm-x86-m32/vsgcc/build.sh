@@ -50,6 +50,9 @@ NV_GCC=; NV_CLANG=; [ -z "${VSGCC_NOVEC:-}" ] || { NV_GCC="-fno-tree-vectorize -
 for o in O1 O2 O3 Os; do
   gcc $F $NV_GCC -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || echo "FAIL gcc$o $P"
   $CLANG $F $NV_CLANG -mstack-alignment=4 -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || echo "FAIL clang$o $P"
+  # the objects above carry no unwind tables, as the other columns need; the .eh_frame column reads these (llrm always writes one)
+  gcc ${F/-fno-asynchronous-unwind-tables/-fasynchronous-unwind-tables} $NV_GCC -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.eh.o $S 2>/dev/null || echo "FAIL gcc$o eh $P"
+  $CLANG ${F/-fno-asynchronous-unwind-tables/-fasynchronous-unwind-tables} $NV_CLANG -mstack-alignment=4 -$o -c -o $P.clang$o.eh.o $S 2>/dev/null || echo "FAIL clang$o eh $P"
   CS="gcc clang"
   if [ $o = O2 ] || [ $o = Os ]; then  # the ELF build of llrm is for loops.py
     $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -$o -march=i486 -fobject-format=elf -c -o $P.llrmElf$o.o $S 2>$P.llrmElf$o.err || echo "FAIL llrmElf$o $P"
