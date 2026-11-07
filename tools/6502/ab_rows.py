@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Per-row A/B of two ours_cr tsv files (name, ours, bytes, clocks): failing rows first, then the table.
-ab_rows.py BASE.tsv NEW.tsv --level O1|O2|O3|Os [--noise F] [--allow-worse N]: exit 1 when more rows fail than N (default 0).
+ab_rows.py BASE.tsv NEW.tsv --level O1|O2|O3|Os [--clocks mean|min] [--noise F] [--allow-worse N]: exit 1 when more rows fail than N (default 0).
 clocks that grew by no more than the fraction F of the row (default 0, strict) are layout noise: the same binary moves ~0.5% between
 the 16 pads, a mean of 16 layouts still moves 0.03% on a code shift of one byte.
 The verdict is the level's rule, asserted and not only printed (oversight 2026-11-07):
@@ -9,12 +9,19 @@ The verdict is the level's rule, asserted and not only printed (oversight 2026-1
   O2, O3   3 clocks to the byte: bytes saved x 3 must cover the clocks added (bytes added cost 3 clocks each)."""
 import sys
 
-def rows(path):
+def rows(path, clocks="mean"):
+    """name -> (bytes, clocks). "min" takes the fastest of the layouts in PATH.json (ours_cr writes it beside the tsv):
+    the same binary moves ~0.5% between pads, the fastest layout is the one no page crossing touched."""
     out = {}
     for line in open(path):
         parts = line.split()
         if len(parts) == 4:
             out[parts[0]] = (int(parts[2]), int(parts[3]))
+    if clocks == "min":
+        import json
+        for name, verdict, data in json.load(open(path + ".json")):
+            if verdict == "PASS" and name in out:
+                out[name] = (out[name][0], min(data["layouts"]))
     return out
 
 CLOCKS_PER_BYTE = 3
@@ -42,8 +49,9 @@ def compare(base, new, level="O1", noise=0.0):
 def main(argv):
     allowed = int(argv[argv.index("--allow-worse") + 1]) if "--allow-worse" in argv else 0
     level = argv[argv.index("--level") + 1] if "--level" in argv else sys.exit("ab_rows: --level O1|O2|O3|Os is required")
+    clocks = argv[argv.index("--clocks") + 1] if "--clocks" in argv else "mean"
     noise = float(argv[argv.index("--noise") + 1]) if "--noise" in argv else 0.0
-    worse, better, same, missing = compare(rows(argv[1]), rows(argv[2]), level, noise)
+    worse, better, same, missing = compare(rows(argv[1], clocks), rows(argv[2], clocks), level, noise)
     print(f"{level}: failing {len(worse)} better {len(better)} same {len(same)} missing {len(missing)}")
     for tag, group in (("FAIL", worse), ("better", better)):
         for name, (bb, bc), (nb, nc) in group:

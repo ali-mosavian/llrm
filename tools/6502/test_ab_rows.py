@@ -41,5 +41,16 @@ class Rows(unittest.TestCase):
         self.assertEqual(run("O1", [("p", 100, 10000)], [("p", 90, 10011)], "--noise", "0.001"), 1)
         self.assertEqual(run("O1", [("p", 100, 10000)], [("p", 101, 10000)], "--noise", "0.001"), 1)
 
+    def test_min_clocks_read_the_fastest_layout_beside_the_tsv(self):
+        import json
+        def with_layouts(rows):
+            path = tsv([(n, b, c) for n, b, c, _ in rows])
+            json.dump([[n, "PASS", {"layouts": l}] for n, _, _, l in rows], open(path + ".json", "w"))
+            return path
+        a = with_layouts([("p", 100, 1050, [1000, 1100])])
+        b = with_layouts([("p", 100, 1100, [1000, 1200])])
+        self.assertEqual(ab_rows.main(["x", a, b, "--level", "O1"]), 1)
+        self.assertEqual(ab_rows.main(["x", a, b, "--level", "O1", "--clocks", "min"]), 0)
+
 if __name__ == "__main__":
     unittest.main()
