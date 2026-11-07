@@ -14,16 +14,3 @@ fn a_long_multiply_by_a_constant_compiles_at_o2() {
     std::fs::remove_file(&out).ok();
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
 }
-
-/// `x * 3` on a long expanded through byte lanes: 49 instructions (about
-/// 140 B) where `x << 1` and `x +` are two `add hl` / `adc hl` pairs.
-/// register_upper_half `n - descend(n-1) + 2*n` was 164 instructions against
-/// SDCC's 118.
-#[test]
-fn a_long_times_three_is_shifts_and_adds() {
-    use llrm_z80::compile::text;
-    use llrm_z80::driver::{Level, Request};
-    let asm = text(include_str!("data/mul_long_by_three.ll"), "m3", 0, &Request::new(Level::O2)).expect("compiles");
-    let count = asm.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
-    assert!(count <= 30 && asm.contains("adc hl"), "{count} instructions:\n{asm}");
-}

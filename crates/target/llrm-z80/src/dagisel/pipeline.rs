@@ -168,21 +168,12 @@ impl CombineHooks for Z80Combines {
     /// A byte or word multiply by a constant is a library call (`__mulhi3`, a
     /// loop over the constant's bits, tens of T-states a bit); `2^n +- 1` as
     /// shifts and one add is a `add hl, hl` and a copy per shifted bit.
-    ///
-    /// A long multiplied by `2^k +- 1` (k up to 8) is `k` long shifts and an
-    /// add (each a `add hl, hl` / `adc` pair); the multiply expands through
-    /// byte lanes instead: 49 instructions for `x * 3`, 58 for `x * 7`.
     fn decompose_mul_by_constant(
         &self,
         vt: EVT,
-        c: u128,
+        _c: u128,
     ) -> bool {
-        let near_power = |n: u128| n.is_power_of_two() && n <= 256;
-        match vt {
-            EVT::I8 | EVT::I16 => true,
-            EVT::I32 => c >= 3 && (near_power(c - 1) || near_power(c + 1)),
-            _ => false,
-        }
+        matches!(vt, EVT::I8 | EVT::I16)
     }
 
     /// The pin's default: a compare of a masked or zero-extended value against

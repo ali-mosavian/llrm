@@ -162,8 +162,6 @@ pub struct Tuned {
     pub no_global_base: bool,
     /// `Tti::prefers_exit_ne`.
     pub exit_ne: bool,
-    /// `Tti::sinks_unused_invariants`.
-    pub sinks_invariants: bool,
     /// `ctlz` costs one unit, as on a target with a count-leading-zeros
     /// instruction.
     pub cheap_ctlz: bool,
@@ -181,7 +179,6 @@ use llrm_mir::tti;
 #[derive(Default)]
 pub struct Flagged {
     pub exit_ne: bool,
-    pub sinks_invariants: bool,
     /// `ctlz` costs one unit, as on a target with a count-leading-zeros
     /// instruction.
     pub cheap_ctlz: bool,
@@ -200,10 +197,6 @@ impl llrm_mir::tti::Tti for Flagged {
 
     fn prefers_exit_ne(&self) -> bool {
         self.exit_ne
-    }
-
-    fn sinks_unused_invariants(&self) -> bool {
-        self.sinks_invariants
     }
 
     fn has_cmov(&self) -> bool {
@@ -332,10 +325,9 @@ impl llrm_mir::target::Machine for Tuned {
     }
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        (self.exit_ne || self.sinks_invariants || self.no_global_base || self.cheap_ctlz || self.fast_sqrt).then(|| {
+        (self.exit_ne || self.no_global_base || self.cheap_ctlz || self.fast_sqrt).then(|| {
             std::rc::Rc::new(Flagged {
                 exit_ne: self.exit_ne,
-                sinks_invariants: self.sinks_invariants,
                 no_cmov: false,
                 no_global_base: self.no_global_base,
                 cheap_ctlz: self.cheap_ctlz,

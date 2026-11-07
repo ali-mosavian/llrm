@@ -224,7 +224,6 @@ pub mod exitne;
 pub mod exitopt;
 pub mod exitpredicate;
 pub mod exitsink;
-pub mod invariantsink;
 pub mod exitvalues;
 pub mod expand;
 pub mod expandmemcmp;

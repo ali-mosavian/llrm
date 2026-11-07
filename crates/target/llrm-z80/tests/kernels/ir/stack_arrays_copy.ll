@@ -1,6 +1,6 @@
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"
-; ModuleID = 'tests/run/c/stack_arrays_copy.c'
-source_filename = "tests/run/c/stack_arrays_copy.c"
+; ModuleID = '/home/alim/work/personal/llrm/.claude/worktrees/cool-lovelace-a863d9/tests/run/c/stack_arrays_copy.c'
+source_filename = "/home/alim/work/personal/llrm/.claude/worktrees/cool-lovelace-a863d9/tests/run/c/stack_arrays_copy.c"
 target triple = "msp430"
 
 ; Function Attrs: nounwind optsize

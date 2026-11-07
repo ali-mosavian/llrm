@@ -574,14 +574,18 @@ impl Fast<'_> {
                     }
                     let types = &self.module.context.types;
                     let void = types.is_void(returns);
-                    if !(void || types.int_bits(returns) == Some(32)) {
-                        return None;
-                    }
+                    let wide_result = match types.int_bits(returns) {
+                        _ if void => false,
+                        Some(32) => false,
+                        Some(64) => true,
+                        _ => return None,
+                    };
                     let mut values = Vec::new();
                     for &one in arguments {
                         let ty = self.function.operand_type(&self.module.context, one)?;
                         let wide = match types.int_bits(ty) {
                             Some(32) => false,
+                            Some(64) => true,
                             _ if matches!(types.get(ty), llrm_mir::types::Type::Pointer(0)) => true,
                             _ => return None,
                         };
@@ -614,8 +618,8 @@ impl Fast<'_> {
                     let ended = self.node(up, &[EVT::OTHER, EVT::GLUE], &[zero, zero, SDValue { node: called.node, res: 0 }, SDValue { node: called.node, res: 1 }]);
                     let mut chain = SDValue { node: ended.node, res: 0 };
                     if !void {
-                        let eax = self.eax_reg()?;
-                        let result = self.dag.get_copy_from_phys_reg(chain, eax, EVT::I32, SDValue { node: ended.node, res: 1 });
+                        let (register, vt) = if wide_result { (self.rax, EVT::I64) } else { (self.eax_reg()?, EVT::I32) };
+                        let result = self.dag.get_copy_from_phys_reg(chain, register, vt, SDValue { node: ended.node, res: 1 });
                         chain = SDValue { node: result.node, res: 1 };
                         self.values.insert(instruction.result?, SDValue { node: result.node, res: 0 });
                     }

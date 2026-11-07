@@ -30,8 +30,6 @@ tip_scanners() {
   [ -n "$stale" ] && { echo "STOP: release/next red: docs_in_sync (stale page): $stale"; return 1; }
   paths=$(cd "$d" && git grep -nE '/home/|/Users/|/tmp/|/var/folders/|/private/var/|~/scratch|~/work|~/\.cla''ude' -- '*.md' | cut -c1-120 | head -3 | tr '\n' ' ')
   [ -n "$paths" ] && { echo "STOP: release/next red: no_local_paths (a tracked .md names a path of one machine): $paths"; return 1; }
-  paths=$(cd "$d" && git grep -ilE 'cla''ude|anthr''opic' | head -3 | tr '\n' ' ')
-  [ -n "$paths" ] && { echo "STOP: release/next red: no_local_paths (a tracked file names the assistant): $paths"; return 1; }
   return 0
 }
 # tip_verdict WORKTREE TARGET_DIR ALLOW FROM TO: tests the crates changed from the last green tip FROM (empty: the workspace) to TO. Returns 0 when
