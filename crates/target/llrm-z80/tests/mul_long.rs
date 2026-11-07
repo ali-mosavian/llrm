@@ -55,3 +55,15 @@ fn a_long_times_three_of_a_zero_extended_byte_keeps_the_byte_lane_multiply() {
     assert!(count(8) <= 16, "byte: {} instructions", count(8));
     assert!(count(16) <= 30, "word: {} instructions", count(16));
 }
+
+/// The size gate took the speed levels too: in a module of two long multiplies, -O2 no longer
+/// decomposed `x * 3` and expanded it through byte lanes (108 instructions for two sites, 71 decomposed; div_constants_long
+/// -O2 +808 B, 10 cells worse). Only a function tuned for size takes the routine.
+#[test]
+fn a_function_at_o2_in_a_module_of_long_multiplies_keeps_the_decomposition() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i32 @m(i32 %n, i32 %k) {\n %r = mul i32 %n, 3\n %s = mul i32 %k, 5\n %t = add i32 %r, %s\n ret i32 %t\n}";
+    let asm = llrm_z80::compile::text(ir, "m", 0, &llrm_z80::driver::Request::new(llrm_z80::driver::Level::O2)).expect("compiles");
+    let count = asm.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
+    assert!(count <= 85, "{count} instructions:\n{asm}");
+}

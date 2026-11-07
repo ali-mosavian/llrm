@@ -282,7 +282,7 @@ pub fn select_block(
         tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
     }
     let mut lowering = Z80Lowering { sized };
-    let mut combines = Z80Combines { long_multiply };
+    let mut combines = Z80Combines { long_multiply: sized && long_multiply };
     let arch = Z80;
     if optimize {
         live_out::assert_live_out_copies(dag, info);
