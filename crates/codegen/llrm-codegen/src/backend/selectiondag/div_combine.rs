@@ -156,6 +156,41 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         self.dag.config().int_div_cheap && vt != EVT::I8
     }
 
+    /// DEVIATE DIV-LIVE: the divide stays (`isIntDivCheap`) unless a narrow
+    /// unsigned one has more values live across it than the registers it leaves
+    /// and its reciprocal is the plain multiply and shift: the `div` pins eax,
+    /// edx and a divisor register, the sequence none.
+    fn divide_stays(
+        &self,
+        vt: EVT,
+        n0: SDValue,
+        n1: SDValue,
+        signed: bool,
+    ) -> bool {
+        let config = self.dag.config();
+        if !self.int_div_cheap(vt) {
+            return false;
+        }
+        let bits = vt.size_in_bits();
+        if config.div_live_limit == 0 || bits >= 32 || config.div_live <= config.div_live_limit {
+            return true;
+        }
+        let Some(d) = self.dag.constant(n1).map(|c| c & super::fold::mask(bits)) else { return true };
+        if d <= 1 || signed && d == super::fold::mask(bits) {
+            return true;
+        }
+        // The plain unsigned reciprocal: one widening multiply and a shift,
+        // no add fixup and no pre-shift (the sheet's byte prices overstate
+        // the longer sequences, and a signed one carries a sign fixup).
+        if signed {
+            return true;
+        }
+        let known = super::known_bits::known_bits(self.dag, n0);
+        let zeros = (0..bits).rev().take_while(|&bit| known.zero >> bit & 1 == 1).count() as u32;
+        let found = unsigned_magic(d, bits, zeros.min(bits - (128 - d.leading_zeros())), true, false);
+        found.is_add || found.pre_shift != 0
+    }
+
     /// `isIntDivCheap(VT)` priced per divisor: whether the target's
     /// `div`/`idiv` of a `vt` value costs fewer clocks than `BuildSDIV`/
     /// `BuildUDIV`'s multiply-high sequence for the constant `n1` (and, for a
@@ -320,7 +355,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         if self.dag.constant(n1).is_some()
-            && !self.int_div_cheap(vt)
+            && !self.divide_stays(vt, n0, n1, true)
             && !self.hardware_divide_wins(vt, n0, n1, true, false)
         {
             return self.build_sdiv(n0, n1, node);
@@ -419,7 +454,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         if self.dag.constant(n1).is_some()
-            && !self.int_div_cheap(vt)
+            && !self.divide_stays(vt, n0, n1, false)
             && !self.hardware_divide_wins(vt, n0, n1, false, false)
         {
             return self.build_udiv(n0, n1, node);
@@ -526,7 +561,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         // "Checking cheapness here makes sense since the simplification
         // results in fatter code."
-        if self.int_div_cheap(vt) || self.hardware_divide_wins(vt, n0, n1, signed, true) {
+        if self.divide_stays(vt, n0, n1, signed) || self.hardware_divide_wins(vt, n0, n1, signed, true) {
             return None;
         }
         let quotient = if signed { self.visit_sdiv_like(n0, n1, node) } else { self.visit_udiv_like(n0, n1, node) };

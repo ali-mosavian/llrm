@@ -669,6 +669,10 @@ impl Tti for X86 {
         self.tuning.multiply_by_clocks
     }
 
+    fn narrow_divide_live_limit(&self) -> u32 {
+        self.tuning.narrow_divide_live_limit
+    }
+
     fn divide_by_bytes(&self) -> bool {
         self.tuning.divide_by_bytes
     }

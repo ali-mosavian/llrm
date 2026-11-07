@@ -804,6 +804,49 @@ impl super::emit::ConstantCells for PoolCells<'_> {
     }
 }
 
+/// DEVIATE DIV-LIVE: for each block with a divide by a constant of a type
+/// narrower than a word, the most values live across one (a value of more
+/// than a word counts its words). O(function) once, and only when the function
+/// has such a divide.
+fn narrow_divide_live(
+    module: &llrm_mir::module::Module,
+    function: &llrm_mir::module::Function,
+) -> HashMap<BlockId, u32> {
+    use llrm_mir::opcode::{BinaryOp, Opcode};
+    let narrow = |inst: llrm_mir::module::InstId| {
+        let op = function.instruction(inst);
+        matches!(op.opcode, Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem))
+            && matches!(op.operands.get(1), Some(llrm_mir::module::Operand::Constant(_)))
+            && op.result.and_then(|r| module.context.types.int_bits(function.value(r).ty)).is_some_and(|bits| bits < 32)
+    };
+    let blocks: Vec<BlockId> =
+        function.layout().iter().copied().filter(|&block| function.iter_block(block).any(narrow)).collect();
+    let mut live = HashMap::default();
+    if blocks.is_empty() {
+        return live;
+    }
+    let weight = |value: llrm_mir::module::ValueId| {
+        module.context.types.int_bits(function.value(value).ty).map_or(0, |bits| bits.div_ceil(32) as usize)
+    };
+    let found = llrm_analysis::liveness::live_where(function, &|value| weight(value) > 0);
+    for block in blocks {
+        let mut peak = 0;
+        llrm_analysis::liveness::each_across(function, &found, block, &mut |inst, across| {
+            if narrow(inst) {
+                let count: usize = function
+                    .walk()
+                    .filter_map(|(_, one)| function.instruction(one).result)
+                    .filter(|&value| across(value))
+                    .map(weight)
+                    .sum();
+                peak = peak.max(count);
+            }
+        });
+        live.insert(block, peak as u32);
+    }
+    live
+}
+
 /// The prices `isIntDivCheap` weighs per divisor (`DivPrices`): none for a
 /// target that does not price a divide above a multiply, which then keeps the
 /// pin's rule.
@@ -979,6 +1022,7 @@ fn selected_in(
         // +763 B over 309 programs (2026-10-27). Cost: an idiv is ~40 clocks
         // on a 486 where the multiply is ~13.
         .with_int_div_cheap(cpu.size || cpu.min_size)
+        .with_div_live_limit(if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 })
         .with_div_prices(div_prices(cpu, &*machine, bitness))
         .with_jump_tables(
             machine.costs().jump_table != 0
@@ -1275,6 +1319,8 @@ fn selected_in(
             );
         llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
     });
+    let div_live = if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 };
+    let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { HashMap::default() };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
         if cpu.optimized && !fast && block == parent {
@@ -1309,6 +1355,7 @@ fn selected_in(
         if let Some(frequencies) = &frequencies {
             built.dag.set_divide_frequency(frequencies.relative_to_entry(parent));
         }
+        built.dag.set_divide_live(div_live.get(&parent).copied().unwrap_or(0));
         built.dag.live_in_phys = built.live_ins.iter().map(|&(register, vreg)| (vreg, register)).collect();
         let arrived = arrival_widths(&built.dag, &built.live_ins);
         let done = if fast {
