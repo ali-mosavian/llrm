@@ -708,6 +708,10 @@ impl Tti for X86 {
         self.tuning.x87_zero_fill_at_size && !self.sse2
     }
 
+    fn size_fill(&self) -> Option<llrm_mir::target::SizeFill> {
+        self.tuning.size_fill
+    }
+
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         self.tuning.unroll_partial_threshold
     }
