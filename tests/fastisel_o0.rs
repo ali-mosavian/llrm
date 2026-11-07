@@ -325,3 +325,27 @@ fn fast_isel_takes_a_global_array_element_at_m64() {
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(asm.contains("movsx"), "{asm}");
 }
+
+/// A compare whose result is a value (`x == c`, widened) sent every such
+/// function to the DAG ("fast declined at ICmp"); `urem_eq.c` is made of them.
+#[test]
+fn fast_isel_takes_a_compare_as_a_value() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(unsigned x)\n{\n    return x % 5 == 0;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(asm.contains("div") && !asm.contains("imul") && !asm.contains("ror"), "{target}: {asm}");
+    }
+}
