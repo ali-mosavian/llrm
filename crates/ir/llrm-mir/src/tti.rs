@@ -744,6 +744,11 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE INL-O1: `Tuning::inline_never_grows_without_rate`.
+    fn inline_never_grows_without_rate(&self) -> bool {
+        false
+    }
+
     /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): `Tuning::sink_spares_ranges`.
     fn sink_spares_ranges(&self) -> bool {
         false

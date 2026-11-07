@@ -677,6 +677,10 @@ impl Tti for X86 {
         self.tuning.narrow_divide_live_limit
     }
 
+    fn inline_never_grows_without_rate(&self) -> bool {
+        self.tuning.inline_never_grows_without_rate
+    }
+
     fn sink_spares_ranges(&self) -> bool {
         self.tuning.sink_spares_ranges
     }
