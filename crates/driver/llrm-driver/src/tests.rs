@@ -4088,3 +4088,22 @@ fn a_zero_extended_select_mask_stays_an_immediate_in_the_loop_at_m64() {
     assert!(!listing.contains("306674911"), "{listing}");
 }
 
+
+/// Position-independent m64: a symbol defined elsewhere is reached through
+/// the GOT, as the pin does (`X86Subtarget::classifyGlobalReference` is
+/// `MO_GOTPCREL` for a declaration that is not `dso_local`): the address is
+/// one `mov r64, [rip + g@GOTPCREL]` and the value a second load. Every symbol
+/// was assumed `dso_local` (`dag_function.rs`), so the read was the single
+/// `mov eax, [rip + g]` of a static link and the extern read flattered every
+/// cell by one load.
+#[test]
+fn an_extern_global_read_at_m64_pie_is_loaded_through_the_got() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @g = external global i32\n\
+                define i32 @f() {\n  %v = load i32, ptr @g\n  ret i32 %v\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let loads = listing.lines().map(str::trim).filter(|line| line.starts_with("mov") && line.contains('[')).count();
+    assert_eq!(loads, 2, "{listing}");
+}
