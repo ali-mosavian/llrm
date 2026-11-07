@@ -344,17 +344,17 @@ fn a_xor_compared_with_its_operand_is_decided_by_the_other_operand() {
         "  %y = or i32 %y0, 1\n  %a = xor i32 %x, %y\n  %r = icmp sle i32 %x, %a\n  ret i1 %r\n",
         "  %y = or i32 %y0, 1\n  %a = xor i32 %x, %y\n  %0 = icmp sgt i32 %a, %x\n  ret i1 %0\n",
     );
-    // The pin goes on to `icmp slt i32 %x, 0` (`foldICmpBinOpWithConstant`,
-    // OWED).
+    // The sign-bit compare demands only the sign bit, which the xor leaves:
+    // `icmp slt i32 %x, 0`, as the pin (`SimplifyDemandedBits`).
     check(
         "i32 %x",
         "  %a = xor i32 %x, -8\n  %r = icmp ult i32 %a, %x\n  ret i1 %r\n",
-        "  %a = xor i32 %x, -8\n  %0 = icmp sgt i32 %a, -1\n  ret i1 %0\n",
+        "  %0 = icmp slt i32 %x, 0\n  ret i1 %0\n",
     );
     check(
         "i32 %x",
         "  %a = xor i32 %x, -8\n  %r = icmp sgt i32 %x, %a\n  ret i1 %r\n",
-        "  %a = xor i32 %x, -8\n  %0 = icmp slt i32 %a, 0\n  ret i1 %0\n",
+        "  %0 = icmp sgt i32 %x, -1\n  ret i1 %0\n",
     );
 }
 
@@ -679,8 +679,10 @@ fn test_an_offset_and_mask_overflow_check_is_a_zero_test() {
         &format!("{m}  %r = icmp ule i16 %b, %m\n  ret i1 %r\n"),
         &format!("  %0 = icmp eq i16 %b, 0\n  ret i1 %0\n"),
     );
+    // Not a zero test; the mask shrinks the add's constant (`opt`: `add i16 %b,
+    // 1`).
     let other = "  %s = add i16 %b, 5\n  %m = and i16 %s, 3\n  %r = icmp ult i16 %m, %b\n  ret i1 %r\n";
-    check("i16 %b", other, other);
+    check("i16 %b", other, &other.replace("%b, 5", "%b, 1"));
 }
 
 /// `foldICmpMulConstant`; every shape pinned by `opt -passes=instcombine`

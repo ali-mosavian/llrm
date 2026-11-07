@@ -962,11 +962,16 @@ fn demanded_bits_lhs_mask(
     }
     match pred {
         // The trailing ones of the comparand do not change an unsigned `>`.
-        IntPredicate::Ugt => all & !((1u128 << value.trailing_ones().min(width)) - 1),
+        IntPredicate::Ugt => all & !low_bits(value.trailing_ones().min(width)),
         // Nor do its trailing zeros an unsigned `<`.
-        IntPredicate::Ult => all & !((1u128 << value.trailing_zeros().min(width)) - 1),
+        IntPredicate::Ult => all & !low_bits(value.trailing_zeros().min(width)),
         _ => all,
     }
+}
+
+/// The low `n` bits, `n` up to 128.
+fn low_bits(n: u32) -> u128 {
+    if n >= 128 { u128::MAX } else { (1u128 << n) - 1 }
 }
 
 /// `foldICmpUsingKnownBits`, with `SimplifyDemandedBits` on both operands first

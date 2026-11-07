@@ -14,5 +14,5 @@ fn test_a_sub_nsw_guard_folds_to_a_signed_compare_of_its_operand() {
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
     let after = llrm_mir::print::module(&module);
     assert!(!after.contains("samesign ugt i32 %30, 31"), "{after}");
-    assert!(after.contains("icmp slt i32 %26, -26") || !after.contains("%30, 31"), "{after}");
+    assert!(after.contains("icmp slt i32 %26, -26") && !after.contains("%30, 31"), "{after}");
 }
