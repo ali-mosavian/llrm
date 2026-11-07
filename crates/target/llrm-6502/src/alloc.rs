@@ -198,10 +198,6 @@ impl<const STACK: bool> Target for Mos<STACK> {
         crate::timing::estimate(Cpu::Mos6502, "ldx rc2").map_or(1, |priced| priced.bytes + priced.cycles as u32)
     }
 
-    /// A byte class the compare class narrowed has `any` as its larger class.
-    fn larger_order(order: &[RegId]) -> Option<Vec<RegId>> {
-    const PRICES_LITERAL_MOVE: bool = true;
-
     /// `isAsCheapAsAMove` against the copy it replaces. In a register a literal
     /// is `lda #n` (2 B, 2 clocks) against `tax`/`txa`/`tay`/`tya` (1 B, 2
     /// clocks): the copy stays, as does a tie in clocks; there is no `xor a`.
@@ -235,6 +231,8 @@ impl<const STACK: bool> Target for Mos<STACK> {
         if size { remat.0 <= copy.0 } else { remat.1 < copy.1 }
     }
 
+    /// A byte class the compare class narrowed has `any` as its larger class.
+    fn larger_order(order: &[RegId]) -> Option<Vec<RegId>> {
         if !order.iter().all(|register| matches!(*register, reg::A | reg::X | reg::Y) || is_cell(*register))
             || is_pair_order(order)
         {

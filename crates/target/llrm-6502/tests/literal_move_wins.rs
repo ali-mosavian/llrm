@@ -40,3 +40,17 @@ fn a_zero_in_a_cell_is_made_again_only_against_a_cell_to_cell_copy() {
     );
     assert!(Mos::<false>::literal_move_wins(&zero, &other, &cell, false), "6 clocks against 5");
 }
+
+/// arm64 `mul_constants` -Os grew 124 B when the coalescer asked only the target's
+/// price: a constant that stays read is kept as a copy at -Os (DEVIATE C10), which
+/// the price of a cell-to-cell copy (it says remake) does not know.
+#[test]
+fn a_constant_that_stays_read_is_kept_as_a_copy_at_size_whatever_the_price_says() {
+    use llrm_spike_mf::tolir::literal_remat_wins;
+    let (cell, other) = ([reg::RC2], [reg::RC3]);
+    let zero = zero();
+    assert!(Mos::<false>::literal_move_wins(&zero, &other, &cell, true), "the price alone says remake");
+    assert!(!literal_remat_wins::<Mos<false>>(&zero, &other, &cell, true, false), "it stays read");
+    assert!(literal_remat_wins::<Mos<false>>(&zero, &other, &cell, true, true), "its own move goes");
+    assert!(literal_remat_wins::<Mos<false>>(&zero, &other, &cell, false, false), "at speed the price decides");
+}

@@ -577,8 +577,6 @@ impl AllocTarget for Arm64 {
         true
     }
 
-    const PRICES_LITERAL_MOVE: bool = true;
-
     /// The coalescer makes a definition again for a copy only if it is
     /// `isAsCheapAsAMove`; `MOVaddr` is not (the pair is two instructions),
     /// so a copy of an address stays a `mov`. The spiller takes it still.
