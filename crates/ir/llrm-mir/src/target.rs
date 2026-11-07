@@ -286,6 +286,11 @@ pub struct GlobalMerge {
     /// pin's `-Os` merges nothing; gcc's section anchors do: stft_fixed -Os
     /// 15 `adrp` against gcc's 5). False: the pin.
     pub optsize_counts: bool,
+    /// DEVIATE ARM64-GM-O2 (owner w15, exit 2026-11-28): the target also
+    /// merges at `-O2` for every function, not only below `-O3` for `minsize`
+    /// ones (gcc's section anchors: nbody_fixed -O2 8 `adrp` against gcc's 2).
+    /// False: the pin.
+    pub merge_at_o2: bool,
     /// The object format is Mach-O: the merged struct is `internal`, not
     /// `private`.
     pub mach_o: bool,

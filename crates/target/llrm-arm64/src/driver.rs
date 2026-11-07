@@ -162,7 +162,8 @@ pub fn optimized_at(
     // intrinsic.
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
     // `addIRPasses`: GlobalMerge, after the mid-end, before selection.
-    if let Some(merge) = program.target.global_merge(level == Level::O3) {
+    if let Some(mut merge) = program.target.global_merge(level == Level::O3) {
+        merge.size_only &= !(merge.merge_at_o2 && level == Level::O2);
         for module in &mut program.modules {
             llrm_transforms::globalmerge::merged(module, &program.layout, &merge)?;
         }

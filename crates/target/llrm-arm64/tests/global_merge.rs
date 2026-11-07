@@ -39,12 +39,19 @@ fn a_global_past_the_reach_is_not_merged() {
     assert_eq!(pages(&text), 2, "{text}");
 }
 
-/// Below -O3 only `minsize` functions count: `small` is the one that uses
-/// `b` and `c` together, so `three` gets them merged but `a` apart.
+/// At -O1 only `minsize` functions count: `small` is the one that uses `b`
+/// and `c` together, so `three` gets them merged but `a` apart.
 #[test]
-fn below_o3_only_minsize_functions_count() {
-    assert_eq!(pages(&body(Level::O2, "three")), 2);
-    assert_eq!(pages(&body(Level::O2, "small")), 1);
+fn below_o2_only_minsize_functions_count() {
+    assert_eq!(pages(&body(Level::O1, "three")), 2);
+    assert_eq!(pages(&body(Level::O1, "small")), 1);
+}
+
+/// -O2 merges for every function, as gcc's section anchors do (nbody_fixed
+/// -O2: 8 `adrp` against gcc's 2): `three` takes one page address.
+#[test]
+fn o2_merges_for_speed_functions() {
+    assert_eq!(pages(&body(Level::O2, "three")), 1);
 }
 
 /// At -Os (`optsize`, not `minsize`) the pin merged nothing: stft_fixed -Os
