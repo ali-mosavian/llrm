@@ -88,6 +88,17 @@ pub trait CombineHooks {
     /// `visitXOR`'s `(xor (and x, y), y)` is `(and (not x), y)`. DEVIATE: off
     /// by default so x86's rows stay as they are until the judge has seen
     /// them. Exit: x86 judged.
+    /// `TLI.hasAndNot(Y)`: the target has an and-not instruction for a value of
+    /// this type (`constant`: a non-opaque constant). Off: the pin's x86
+    /// without BMI.
+    fn has_and_not(
+        &self,
+        _vt: EVT,
+        _constant: bool,
+    ) -> bool {
+        false
+    }
+
     fn fold_xor_of_and_with_mask(&self) -> bool {
         false
     }
@@ -1572,6 +1583,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let not_one = self.dag.get_constant(ones - 1, vt);
             return Some(self.dag.get_node(ISD::Rotl, vt, &[not_one, amount]));
         }
+        if let Some(merged) = self.unfold_masked_merge(node) {
+            return Some(merged);
+        }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
             return self.reassociate_ops(ISD::Xor, n0, n1, self.dag.node(node).flags);
         }
@@ -2000,6 +2014,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         if let Some(reassociated) = self.reassociate_ops(ISD::And, n0, n1, self.dag.node(node).flags) {
             return Some(reassociated);
+        }
+        if let Some(folded) = self.fold_bitwise_op_with_neg(node) {
+            return Some(folded);
         }
         if let (Some(c1), true) = (self.dag.constant(n1), !self.dag.is_opaque(n1)) {
             // `(and (or x, C), D)` is `D` when `D` is a subset of `C`.
