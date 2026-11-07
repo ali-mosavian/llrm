@@ -2131,7 +2131,13 @@ impl<'a> Analyzer<'a> {
     /// not trade bytes for clocks.
     fn grows_more_than_it_saves(&self) -> bool {
         let Some(tti) = self.site.tti else { return false };
-        let rate = tti.inline_policy().by_rate;
+        self.grows_more_than_it_saves_at(tti.inline_policy().by_rate)
+    }
+
+    /// [`Self::grows_more_than_it_saves`] at a byte rate of the caller's
+    /// choosing, in thousandths of a clock.
+    fn grows_more_than_it_saves_at(&self, rate: i64) -> bool {
+        let Some(tti) = self.site.tti else { return false };
         let growth = self.growth_per_site();
         // Growth under one call's size is inside the estimate's resolution: the
         // sites of a dying callee fold differently and must not split.
@@ -2179,6 +2185,15 @@ impl<'a> Analyzer<'a> {
             && self.site.tti.is_some_and(|tti| tti.inline_policy().by_rate == 0 && tti.inline_never_grows_without_rate());
         let grows = if self.site.caller_size == CallerSize::Speed && !unpriced {
             self.grows_more_than_it_saves()
+        } else if unpriced {
+            // INL-O1: a growing inline stays only where its call sits in a
+            // loop and the call's clocks pay for the bytes at the target's
+            // rate (`speed_milliclocks_per_byte`).
+            let in_loop = self.site.relative_frequency.is_some_and(|frequency| frequency > 1.0);
+            let rate = self.site.tti.map_or(0, |tti| tti.speed_milliclocks_per_byte());
+            !self.site.sole_call_to_local
+                && self.grows_the_code()
+                && !(in_loop && rate > 0 && !self.grows_more_than_it_saves_at(rate))
         } else {
             !self.site.sole_call_to_local
                 && self.site.tti.is_some_and(|tti| {
