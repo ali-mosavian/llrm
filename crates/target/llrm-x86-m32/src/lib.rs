@@ -96,6 +96,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called
         // callee whose copy grows the code (gcc does; the pin copies it).
         inline_size_guard_single_site: true,
+        // DEVIATE SZ3 (owner x86-m32, exit 2026-11-20): an -Os SZ2 trial also inlines the sites its
+        // splice brings. The pin inlines callee-first (`bar` into `foo`, cost 15 < 75, then `foo` into
+        // `main`); the size guard prices each edge alone and keeps both calls. byvalue_struct_address
+        // -Os 147 -> 39 B (clang 23), 176 m32 programs, no other cell moves.
+        inline_chain_trial: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
         // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
         recursive_inlining: Some((8, 450)),

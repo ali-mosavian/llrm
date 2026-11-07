@@ -1017,11 +1017,16 @@ fn selected_in(
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
     let objects = crate::backend::stackcoloring::share_frame(module, function, &mut info, &sizes);
     let alloca_count = objects.len() as i32;
+    // A local above the alignment the stack keeps realigns it: the pin's
+    // `MaxAlignment > StackAlignment`
+    // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineFrameInfo.h#L641).
+    // DEVIATE OA-1: at least two slots, see `isel.rs`.
+    let kept = arch.stack_alignment().max(2 * arch.stack_slot_bytes());
     let mut over_aligned: Vec<(i64, i64)> = Vec::new();
     for (index, (size, align)) in objects.into_iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
         debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
-        if align > crate::backend::isel::OVER_ALIGNED {
+        if align > kept {
             over_aligned.push((frame.locals.borrow()[index].0, align));
         }
     }
