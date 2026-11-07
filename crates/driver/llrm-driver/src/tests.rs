@@ -736,7 +736,8 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
 
 /// A `select` of a loaded value stopped the matcher at m64 ("node transform
 /// `GetOppositeBranchCondition` is not translated"): the table folds the load
-/// into `cmov` with the condition inverted (`inv_cond_XFORM`). At -O0: from
+/// into `cmov` with the condition inverted (`inv_cond_XFORM`). Pins the
+/// matcher's memory-cmov selection at -O0 only, not an -O2 expectation: from
 /// -O1 the pin's CmovConversion turns a cmov with a memory operand into a
 /// branch (`-x86-cmov-converter-force-mem-operand`, #6867), as its `llc` does.
 #[test]
