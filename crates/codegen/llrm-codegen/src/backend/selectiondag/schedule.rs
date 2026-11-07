@@ -182,6 +182,16 @@ pub trait SchedInfo {
     ) -> Option<u16> {
         None
     }
+    /// `TII->unfoldMemoryOperand`: the load and the node on registers a node
+    /// with a folded load is made of, built in `dag`; None where the node has
+    /// no such form.
+    fn unfold_memory_operand(
+        &self,
+        _dag: &mut SelectionDAG,
+        _node: u32,
+    ) -> Option<[u32; 2]> {
+        None
+    }
     /// `TRI->regsOverlap`.
     fn regs_overlap(
         &self,
@@ -340,7 +350,7 @@ fn is_passive(opcode: ISD) -> bool {
 /// The units of `dag` reachable from `root` in schedule order, the pin's
 /// `ScheduleDAGSDNodes::Run` with the BURR queue.
 pub fn schedule(
-    dag: &SelectionDAG,
+    dag: &mut SelectionDAG,
     root: SDValue,
     info: &dyn SchedInfo,
 ) -> Vec<Unit> {
@@ -354,7 +364,9 @@ pub fn schedule(
 }
 
 struct Graph<'a> {
-    dag: &'a SelectionDAG,
+    dag: &'a mut SelectionDAG,
+    /// The root the units are reachable from.
+    root: SDValue,
     info: &'a dyn SchedInfo,
     sus: Vec<SUnit>,
     /// `SDNode::getNodeId`: the unit a node is in; -1 for none.
@@ -480,16 +492,18 @@ impl<'a> Graph<'a> {
 
     /// `BuildSchedGraph`.
     fn build(
-        dag: &'a SelectionDAG,
+        dag: &'a mut SelectionDAG,
         root: SDValue,
         info: &'a dyn SchedInfo,
     ) -> Graph<'a> {
         let (user_start, user_list) = Self::live_users(dag, root);
+        let node_id = vec![-1; dag.node_count()];
         let mut graph = Graph {
             dag,
+            root,
             info,
             sus: Vec::new(),
-            node_id: vec![-1; dag.node_count()],
+            node_id,
             user_start,
             user_list,
             cur_cycle: 0,
@@ -516,7 +530,7 @@ impl<'a> Graph<'a> {
         visited[root.node as usize] = true;
         let mut calls = Vec::new();
         while let Some(ni) = work.pop() {
-            let dag = self.dag;
+            let dag = &*self.dag;
             for op in &dag.node(SDValue { node: ni, res: 0 }).ops {
                 if !std::mem::replace(&mut visited[op.node as usize], true) {
                     work.push(op.node);
@@ -1024,19 +1038,176 @@ impl<'a> Graph<'a> {
         Some(su)
     }
 
-    /// `CopyAndMoveSuccessors`: a clone of `su` with the same predecessors
-    /// that takes over the successors already scheduled. None for a unit of
-    /// several nodes or one with a chain or glue result (the pin unfolds a
-    /// load there, which is not translated).
-    fn copy_and_move_successors(
+    /// A unit for `node`, as `BuildSchedUnits` makes it for a node of its own.
+    fn new_sched_unit(
+        &mut self,
+        node: u32,
+    ) -> usize {
+        let num = self.sus.len();
+        let mut su = SUnit::new(node);
+        self.node_id[node as usize] = num as i32;
+        su.latency = 1;
+        su.reg_defs = self.count_reg_defs(&su.nodes) as u32;
+        su.num_reg_defs_left = su.reg_defs;
+        self.sus.push(su);
+        num
+    }
+
+    /// Whether `su` holds a node that `node` reads (`isOperandOf`).
+    fn is_operand_of(
+        &self,
+        su: usize,
+        node: u32,
+    ) -> bool {
+        self.sus[su].nodes.iter().any(|&n| self.ops(node).iter().any(|op| op.node == n))
+    }
+
+    /// `TryUnfoldSU` ([L975][pin]): the unit of a node with a folded load is
+    /// replaced by a unit for the load and one for the node on registers. The
+    /// new unit, or None where the target cannot unfold the node. When a
+    /// scheduled unit is already one of the two nodes, `su` itself.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGRRList.cpp#L975
+    fn try_unfold_su(
         &mut self,
         su: usize,
         queue: &mut Queue,
     ) -> Option<usize> {
-        if self.sus[su].nodes.len() != 1
-            || self.values(self.sus[su].node()).iter().any(|vt| *vt == EVT::GLUE || *vt == EVT::OTHER)
-        {
+        let node = self.sus[su].node();
+        let info = self.info;
+        let [load_node, new_node] = info.unfold_memory_operand(self.dag, node)?;
+        // The nodes made are not in the user lists the graph was built with.
+        let (start, list) = Self::live_users(self.dag, self.root);
+        self.user_start = start;
+        self.user_list = list;
+        self.node_id.resize(self.dag.node_count(), -1);
+        let num_vals = self.values(new_node).len();
+        let old_num_vals = self.values(node).len();
+
+        // "LoadNode may already exist": another load of the same cell.
+        let (load_su, is_new_load) = if self.node_id[load_node as usize] != -1 {
+            let load_su = self.node_id[load_node as usize] as usize;
+            // "If LoadSU has already been scheduled, we should clone it but
+            // this would negate the benefit to unfolding so just return SU."
+            if self.sus[load_su].is_scheduled {
+                return Some(su);
+            }
+            (load_su, false)
+        } else {
+            (self.new_sched_unit(load_node), true)
+        };
+        let (new_su, is_new_n) = if self.node_id[new_node as usize] != -1 {
+            let new_su = self.node_id[new_node as usize] as usize;
+            if self.sus[new_su].is_scheduled {
+                return Some(su);
+            }
+            (new_su, false)
+        } else {
+            (self.new_sched_unit(new_node), true)
+        };
+
+        // "Now that we are committed to unfolding replace DAG Uses."
+        for i in 0..num_vals {
+            self.dag.replace_all_uses_with(SDValue { node, res: i as u8 }, SDValue { node: new_node, res: i as u8 });
+        }
+        self.dag.replace_all_uses_with(
+            SDValue { node, res: (old_num_vals - 1) as u8 },
+            SDValue { node: load_node, res: 1 },
+        );
+        let (start, list) = Self::live_users(self.dag, self.root);
+        self.user_start = start;
+        self.user_list = list;
+
+        // "Record all the edges to and from the old SU, by category."
+        let (mut chain_preds, mut chain_succs, mut load_preds, mut node_preds, mut node_succs) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for pred in self.sus[su].preds.clone() {
+            if pred.is_ctrl() {
+                chain_preds.push(pred);
+            } else if self.is_operand_of(pred.su, load_node) {
+                load_preds.push(pred);
+            } else {
+                node_preds.push(pred);
+            }
+        }
+        for succ in self.sus[su].succs.clone() {
+            if succ.is_ctrl() {
+                chain_succs.push(succ);
+            } else {
+                node_succs.push(succ);
+            }
+        }
+
+        // "Now assign edges to the newly-created nodes."
+        for pred in chain_preds {
+            self.remove_pred(su, pred);
+            if is_new_load {
+                self.add_pred(load_su, pred);
+            }
+        }
+        for pred in load_preds {
+            self.remove_pred(su, pred);
+            if is_new_load {
+                self.add_pred(load_su, pred);
+            }
+        }
+        for pred in node_preds {
+            self.remove_pred(su, pred);
+            self.add_pred(new_su, pred);
+        }
+        for dep in node_succs {
+            let succ = dep.su;
+            self.remove_pred(succ, Dep { su, ..dep });
+            self.add_pred(succ, Dep { su: new_su, ..dep });
+        }
+        for dep in chain_succs {
+            let succ = dep.su;
+            self.remove_pred(succ, Dep { su, ..dep });
+            if is_new_load {
+                self.add_pred(succ, Dep { su: load_su, ..dep });
+            }
+        }
+
+        // "Add a data dependency to reflect that NewSU reads the value defined
+        // by LoadSU."
+        let latency = self.sus[load_su].latency;
+        self.add_pred(new_su, Dep { su: load_su, kind: Kind::Data, latency, reg: None });
+
+        // `AvailableQueue->addNode`.
+        queue.sethi_ullman.resize(self.sus.len(), 0);
+        if is_new_load {
+            queue.calc_sethi_ullman(&self.sus, load_su);
+        }
+        if is_new_n {
+            queue.calc_sethi_ullman(&self.sus, new_su);
+        }
+        if self.sus[new_su].num_succs_left == 0 {
+            self.sus[new_su].is_available = true;
+        }
+        Some(new_su)
+    }
+
+    /// `CopyAndMoveSuccessors`: a clone of `su` with the same predecessors
+    /// that takes over the successors already scheduled. None for a unit of
+    /// several nodes or one with a glue result; a node with a chain result is
+    /// unfolded first (`TryUnfoldSU`) and None where it cannot be.
+    fn copy_and_move_successors(
+        &mut self,
+        mut su: usize,
+        queue: &mut Queue,
+    ) -> Option<usize> {
+        if self.sus[su].nodes.len() != 1 || self.values(self.sus[su].node()).iter().any(|vt| *vt == EVT::GLUE) {
             return None;
+        }
+        // "If possible unfold instruction."
+        if self.values(self.sus[su].node()).iter().any(|vt| *vt == EVT::OTHER) {
+            su = self.try_unfold_su(su, queue)?;
+            // "If this can be scheduled don't bother duplicating and just
+            // return"
+            if self.sus[su].num_succs_left == 0 {
+                return Some(su);
+            }
         }
         let new = self.sus.len();
         let mut clone = self.sus[su].clone();

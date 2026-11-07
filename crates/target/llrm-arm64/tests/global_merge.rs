@@ -46,3 +46,10 @@ fn below_o3_only_minsize_functions_count() {
     assert_eq!(pages(&body(Level::O2, "three")), 2);
     assert_eq!(pages(&body(Level::O2, "small")), 1);
 }
+
+/// At -Os (`optsize`, not `minsize`) the pin merged nothing: stft_fixed -Os
+/// made one `adrp` per static array, 15 against gcc's 5 anchored ones.
+#[test]
+fn optsize_functions_count_below_o3() {
+    assert_eq!(pages(&body(Level::O2, "sized")), 1);
+}
