@@ -800,8 +800,8 @@ pub mod x86 {
     pub const INC8m: u16 = 1933;
     pub const MOV16mr: u16 = 2561;
     pub const MOV16rm: u16 = 2568;
-    pub const MOV32r0: u16 = 386;
     pub const MOV32mr: u16 = 2580;
+    pub const MOV32r0: u16 = 386;
     pub const MOV32rm: u16 = 2588;
     pub const MOV64mr: u16 = 2598;
     pub const MOV64rm: u16 = 2605;
