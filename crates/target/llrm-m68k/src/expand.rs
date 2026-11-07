@@ -490,6 +490,13 @@ pub fn finish_with(
         if inst.origin != 0 {
             last_origin = inst.origin;
         }
+        if pushes.flushes(index) {
+            waiting.sort_by(|a, b| b.0.cmp(&a.0));
+            for (_, store) in waiting.drain(..) {
+                out.push(push_for(store, pushed)?);
+                pushed += 4;
+            }
+        }
         let operands = convert(inst, pushed)?;
         if pushes.is_dropped(index) {
             continue;
@@ -497,13 +504,6 @@ pub fn finish_with(
         if let Some(offset) = pushes.deferred_offset(index) {
             waiting.push((offset, index));
             continue;
-        }
-        if inst.call && !waiting.is_empty() {
-            waiting.sort_by(|a, b| b.0.cmp(&a.0));
-            for (_, store) in waiting.drain(..) {
-                out.push(push_for(store, pushed)?);
-                pushed += 4;
-            }
         }
         if pushes.is_push(index) {
             out.push(push_for(index, pushed)?);
