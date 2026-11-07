@@ -214,7 +214,7 @@ def output_args(kind: str, directory: Path) -> tuple[list[str], list[str]]:
 
 
 def build_map(args) -> dict:
-    llrm = llrmbin.bin_dir() / "llrm-c"
+    llrm = llrmbin.bin_dir() / "llrm-cc"
     source = args.source if args.source.is_absolute() else QCPORT / args.source
     outdir = Path(tempfile.mkdtemp(prefix="compile_map_out"))
     import atexit, shutil

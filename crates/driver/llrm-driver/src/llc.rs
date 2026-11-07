@@ -405,7 +405,7 @@ pub fn compiled(
     compiled_dumping(flags, text, name, None)
 }
 
-/// `compiled`, writing each stage to `dump` (llrm-c's `--dump DIR`) or where
+/// `compiled`, writing each stage to `dump` (llrm-cc's `--dump DIR`) or where
 /// `LLRM_MIR_STAGES` names.
 pub fn compiled_dumping(
     flags: &Flags,

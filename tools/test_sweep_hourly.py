@@ -44,10 +44,10 @@ def test_qbrt_notpass_and_compile_fail_are_red_and_the_result_line_is_the_count(
 def test_a_new_qcport_kind_is_red_and_a_known_one_is_not():
     text = (
         "QCport sweep of abc: 65 modules x 4 levels + 466 front-end compiles (39 m16-only), 3 failed compiles, 2 kinds, 1 new\n"
-        "  KNOWN #2454: x -- menu -O2\n  NEW: llrm-c: a byte division -- vid -Os\n  NEW: panic x.rs:N:N: lsr added a memory operation -- matrix.bas -m32 -O1, idioms.bas -m16 -O2\n"
+        "  KNOWN #2454: x -- menu -O2\n  NEW: llrm-cc: a byte division -- vid -Os\n  NEW: panic x.rs:N:N: lsr added a memory operation -- matrix.bas -m32 -O1, idioms.bas -m16 -O2\n"
     )
     reds, count = s.parse_qcport(text)
-    assert [one.name for one in reds][0] == "qcport:llrm-c: a byte division -- vid -Os"
+    assert [one.name for one in reds][0] == "qcport:llrm-cc: a byte division -- vid -Os"
     assert reds[0].probe == [], "a QCport C module is a file outside the tree: it cannot be asked at another build"
     assert reds[1].probe == ["qcport_probe.py", "matrix.bas", "-m32", "-O1", "panic x.rs:N:N: lsr added a memory operation"]
     assert count == "3 failed/726"
@@ -115,8 +115,8 @@ def test_a_single_merge_in_the_range_is_the_one_that_made_the_red():
 
 def test_the_line_names_a_new_wrong_output_before_the_other_reds_and_prints_the_stamp():
     new = [s.Red("qcport:k", s.COMPILE), s.Red("run:p", s.WRONG)]
-    out = s.line("a" * 40, "b" * 40, "llrm-c=12345678", {"run": "10/10"}, new, new, {"run:p": "#9", "qcport:k": "#8"})
-    assert out.startswith("sweep aaaaaaaaa RED 2 stamp=bbbbbbbbb md5 llrm-c=12345678 | run 10/10 | new: WRONG OUTPUT run:p (#9), qcport:k (#8)")
+    out = s.line("a" * 40, "b" * 40, "llrm-cc=12345678", {"run": "10/10"}, new, new, {"run:p": "#9", "qcport:k": "#8"})
+    assert out.startswith("sweep aaaaaaaaa RED 2 stamp=bbbbbbbbb md5 llrm-cc=12345678 | run 10/10 | new: WRONG OUTPUT run:p (#9), qcport:k (#8)")
 
 
 def test_a_clean_run_is_pass_with_nothing_new():
@@ -202,7 +202,7 @@ def test_a_program_that_did_not_link_is_a_build_failure_not_a_wrong_output():
     text = "[c] 430 programs: 429 pass, 0 known, 1 fail\nFAIL  c/bench_io.c [-O2 -march=i486]: link: jwlink: Error! E2028: _llrm_os_close@3 is an undefined reference\n"
     reds, _ = s.parse_groups(text)
     assert [(one.name, one.kind) for one in reds] == [("run:c/bench_io.c", s.BUILD)]
-    reds, _ = s.parse_groups("[c] 1 programs: 0 pass, 0 known, 1 fail\nFAIL  c/x.c [-O2]: compile: llrm-c: boom\n")
+    reds, _ = s.parse_groups("[c] 1 programs: 0 pass, 0 known, 1 fail\nFAIL  c/x.c [-O2]: compile: llrm-cc: boom\n")
     assert reds[0].kind == s.BUILD
     reds, _ = s.parse_groups("[c] 1 programs: 0 pass, 0 known, 1 fail\nFAIL  c/x.c [-O2]: output differs at line 3\n")
     assert reds[0].kind == s.WRONG

@@ -225,7 +225,7 @@ none:
     return NULL;
 }
 
-void str_release(SD *owner)
+static inline __attribute__((always_inline)) void release(SD *owner)
 {
     StrEntry *entry;
     uword bytes;
@@ -236,6 +236,11 @@ void str_release(SD *owner)
     CHECK_OWNER(entry, owner);
     bytes = WORD + EVEN(owner->len);
     MAKE_FREE(entry, bytes);
+}
+
+void str_release(SD *owner)
+{
+    release(owner);
 }
 
 void str_owner_moved(SD *owner, int delta)
@@ -286,7 +291,7 @@ void str_adopt(SD *to, SD *from)
 void str_tmp_free(SD *sd)
 {
     if (str_is_tmp(sd)) {
-        str_release(sd);
+        release(sd);
         tmp_release(as_tmp(sd));
     }
 }

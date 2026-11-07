@@ -1,5 +1,5 @@
 #!/bin/bash
-# A setjmp/longjmp program built by llrm-c and run under dosrun, at -O2 and -Os:
+# A setjmp/longjmp program built by llrm-cc and run under dosrun, at -O2 and -Os:
 # the second return from setjmp must find every local nothing changed.
 #   tools/returns_twice/run.sh WORK
 set -euo pipefail
@@ -18,7 +18,7 @@ for h in "$BC"/include/*.[Hh]; do ln -s "$h" "inc/$(basename "$h" | tr 'A-Z' 'a-
 jobs=""
 for level in O2 Os; do
     dos="$(tr a-z A-Z <<< "$level")"
-    "$BIN/llrm-c" -$level -I inc twice.c -o "twice$level.obj"
+    "$BIN/llrm-cc" -$level -I inc twice.c -o "twice$level.obj"
     { python3 "$ROOT/tools/linkrecipe.py" x86-m16 format; echo "option quiet"; echo "name T$dos.EXE"; echo "file '$BC/lib/C0M.OBJ'"
       echo "file 'twice$level.obj'"; for l in MATHM CM; do echo "library '$BC/lib/$l.LIB'"; done; } > "$level.lnk"
     "$BIN/jwlink" "@$level.lnk" > "$level.link" 2>&1

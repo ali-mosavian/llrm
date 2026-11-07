@@ -57,6 +57,7 @@ const SOURCE_ORDER: Options = Options {
     code_model: llrm_m68k::compile::CodeModel::Small,
     mid_end: true,
     size: false,
+    strict: false,
     source_order: true,
     indexed: false,
     push_frame: false,

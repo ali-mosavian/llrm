@@ -215,7 +215,7 @@ fn the_flat_header_empties_every_segment_keyword() {
     }
 }
 
-/// The tests that spawned llrm-c pass `-fobject-format=elf` and `-Omax`; clang
+/// The tests that spawned llrm-cc pass `-fobject-format=elf` and `-Omax`; clang
 /// refused both ("unknown argument", "invalid integral value 'max'").
 #[test]
 fn the_object_format_goes_to_the_backend_and_omax_is_clangs_o3() {
@@ -262,7 +262,7 @@ fn og_reaches_the_backend_as_o1_like_clang() {
 
 #[test]
 fn os_layer_answers_without_llrm_c_or_clang() {
-    // dosbatch asked `llrm-c --os-layer`, which a build without llrm-c lacks:
+    // dosbatch asked `llrm-cc --os-layer`, which a build without llrm-cc lacks:
     // every C program of the behavioural stage failed to link.
     let said = os_layer(&words("--os-layer start -m32")).unwrap();
     assert_eq!(said.unwrap().trim(), "start.asm");

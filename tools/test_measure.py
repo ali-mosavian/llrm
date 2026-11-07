@@ -153,7 +153,7 @@ def test_a_commit_that_is_the_reference_itself_is_compared_with_its_parent():
 
 
 def test_a_base_is_built_the_way_the_gate_builds(tmp_path, monkeypatch):
-    """`cargo build --bins` alone makes a different llrm-c from the gate's build (md5 and, for one step, 3.93 against 4.18 at 2N/N): a
+    """`cargo build --bins` alone makes a different llrm-cc from the gate's build (md5 and, for one step, 3.93 against 4.18 at 2N/N): a
     base built the other way would be measured with another compiler than the branch."""
     ran = []
     monkeypatch.setattr(measure, "PROFILE", "release")
@@ -336,7 +336,7 @@ def test_check_names_the_binary_it_measured_on_a_pass_as_on_a_failure(monkeypatc
 
 
 def test_the_cost_step_does_not_build_a_base_that_has_no_llrm_cc(monkeypatch):
-    """Gate run 3's cost step: the base was main (llrm-c only) and `cargo build --bin llrm-cc` died with "no bin target named llrm-cc"; the
+    """Gate run 3's cost step: the base was main (llrm-cc only) and `cargo build --bin llrm-cc` died with "no bin target named llrm-cc"; the
     base is now the nearest first-parent ancestor that has llrm-cc, and none is a named skip, not a build failure."""
     with_cc = {"c" * 40, "d" * 40}
     monkeypatch.setattr(measure, "has_cc", lambda sha: sha in with_cc)
@@ -685,9 +685,9 @@ def test_a_base_is_measured_from_a_snapshot_that_the_next_build_in_the_shared_tr
 
     def build(command, **kw):
         release.mkdir(parents=True, exist_ok=True)
-        (release / "llrm-c").unlink(missing_ok=True)  # cargo links a new file, not the old inode
-        (release / "llrm-c").write_text(kw["env"]["WHO"])
-        (release / "llrm-c.d").write_text("llrm-c: src/lib.rs\n")
+        (release / "llrm-cc").unlink(missing_ok=True)  # cargo links a new file, not the old inode
+        (release / "llrm-cc").write_text(kw["env"]["WHO"])
+        (release / "llrm-cc.d").write_text("llrm-cc: src/lib.rs\n")
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(measure.subprocess, "run", build)
@@ -695,7 +695,7 @@ def test_a_base_is_measured_from_a_snapshot_that_the_next_build_in_the_shared_tr
     first = measure.built("a" * 40)
     monkeypatch.setenv("WHO", "second")
     second = measure.built("b" * 40)
-    assert (first / "llrm-c").read_text() == "first" and (second / "llrm-c").read_text() == "second" and first != second
+    assert (first / "llrm-cc").read_text() == "first" and (second / "llrm-cc").read_text() == "second" and first != second
     assert not list(first.glob("*.d")), "dep-info is not linked: nothing is compared with a tree that has moved on"
 
 
@@ -723,7 +723,7 @@ def test_the_build_lock_is_held_for_the_build_and_not_for_the_measurement(tmp_pa
 
 def test_the_gate_measures_the_dist_build_and_refuses_a_binary_of_another_profile(tmp_path, monkeypatch):
     """#1977's pair read +0.46..0.61% on its gate shapes in release (16 codegen units: an edit re-partitions and flips unrelated inlining) and
-    +0.01..0.04% in dist: the compiler under measurement is the dist one, and a release llrm-c in a dist run is an error, not a number."""
+    +0.01..0.04% in dist: the compiler under measurement is the dist one, and a release llrm-cc in a dist run is an error, not a number."""
     assert measure.PROFILE == "dist"
     with pytest.raises(SystemExit, match="not a dist build"):
         measure.measured_dir({"LLRM_BIN": str(tmp_path / "release")})
@@ -732,7 +732,7 @@ def test_the_gate_measures_the_dist_build_and_refuses_a_binary_of_another_profil
 
 
 def test_a_base_built_beside_the_head_is_used_as_it_is(monkeypatch, tmp_path):
-    """CI builds the base's llrm-c in a job of its own (hosted, parallel with the head's) and hands it over: measure does not build it again on a runner with six."""
+    """CI builds the base's llrm-cc in a job of its own (hosted, parallel with the head's) and hands it over: measure does not build it again on a runner with six."""
     monkeypatch.setenv("LLRM_MEASURE_BASE_BIN", str(tmp_path / "dist-base"))
     monkeypatch.setattr(measure.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("built the base")))
     assert measure.built("0" * 40) == tmp_path / "dist-base"
@@ -771,7 +771,7 @@ def test_the_base_is_built_beside_the_head_not_after_it(monkeypatch):
 
 
 def test_the_bench_base_is_built_the_release_way_whatever_the_measurement_profile_is(tmp_path, monkeypatch):
-    """#2013's bench shards: 'FAIL BASE: the base could not be measured': the bench's base needs every tool of the release build, and `built` gave it llrm-c
+    """#2013's bench shards: 'FAIL BASE: the base could not be measured': the bench's base needs every tool of the release build, and `built` gave it llrm-cc
     of the dist profile alone."""
     ran = []
     monkeypatch.setattr(measure, "PROFILE", "dist")
@@ -854,7 +854,7 @@ def test_a_hosted_runner_is_not_refused_for_its_78_gb(monkeypatch, tmp_path):
 
 
 def test_the_build_the_bench_takes_its_base_from_makes_every_tool_the_bench_runs():
-    """#2082's bench-1: 'FileNotFoundError: .../snapshots/distc2f125dc7d60/llrm-qb': the dist snapshot is llrm-c alone. Whichever profile the bench's base is
+    """#2082's bench-1: 'FileNotFoundError: .../snapshots/distc2f125dc7d60/llrm-qb': the dist snapshot is llrm-cc alone. Whichever profile the bench's base is
     built in builds all the binaries (`--bins`), or names every tool the bench runs."""
     import re
 

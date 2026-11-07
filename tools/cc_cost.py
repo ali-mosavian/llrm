@@ -15,7 +15,7 @@ DIR holds a built llrm-cc (default target/release). One row per program and conf
     ratio        - ours / pin
     ours B, pin B - `.text` bytes of the two objects (m32 ELF via `size -A`), alignment padding included
 
-These are llrm-cc numbers: never mix them with llrm-c's (tools/compile-cost.py, tools/sizes.py). m16 has no pin
+These are llrm-cc numbers: never mix them with llrm-cc's (tools/compile-cost.py, tools/sizes.py). m16 has no pin
 column (the m16 pin is the separate clang build in LLRM_CLANG_M16) and no size column (OMF).
 Needs ~/scratch/ow-src (LLRM_OW), the pin in ~/scratch/llvm-build (LLRM_PIN_CLANG), perf. A failed compile stops the run.
 """

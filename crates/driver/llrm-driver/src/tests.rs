@@ -97,7 +97,7 @@ fn a_targets_operations_are_priced_from_its_own_timings_and_mapping() {
     assert!(flat.cost("pop_seg").is_err() && real.cost("call_near").is_err());
 }
 
-/// The CPU a compile is priced for with none asked is the target's: llrm-c took
+/// The CPU a compile is priced for with none asked is the target's: llrm-cc took
 /// the 386 for every target, so a flat compile with no `-march` died on a CPU
 /// its tables do not have. Asking for another names the target's own.
 #[test]
@@ -1496,7 +1496,7 @@ fn stdcall_is_refused_by_name() {
 }
 
 /// At m16 an unmarked function takes the register-size convention (`_f@3`,
-/// callee clobbers CX and DX), as llrm-c's did, and `main` is Watcom's `main_`.
+/// callee clobbers CX and DX), as llrm-cc's did, and `main` is Watcom's `main_`.
 /// `-mabi=watcom` forced on the Watcom row made every function save BX, CX and
 /// DX and call `main_`: the m16 -Os programs came out 16% larger.
 #[test]
@@ -1542,7 +1542,7 @@ fn m16_library_calls_are_the_watcom_register_convention() {
 }
 
 /// A C `static` function at m16 stayed a far procedure (`call far ptr`,
-/// `retf`) where llrm-c entered it by a near call: 3 bytes a call site, 1 a
+/// `retf`) where llrm-cc entered it by a near call: 3 bytes a call site, 1 a
 /// return, the growth of the programs that call a static helper often. One
 /// whose address is taken stays far.
 #[test]
@@ -1770,7 +1770,7 @@ fn no_inline_takes_the_source_name_under_every_abi() {
 }
 
 /// `-fsanitize=stack` reached llrm-llc from llrm-cc and did nothing for IR:
-/// llrm-c marked the functions it compiled, an IR module's were never marked,
+/// llrm-cc marked the functions it compiled, an IR module's were never marked,
 /// so `stackover.c` ran off the stack instead of ending in "Stack Overflow!".
 #[test]
 fn fsanitize_stack_makes_every_function_compare_sp_on_entry() {
