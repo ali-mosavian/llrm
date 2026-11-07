@@ -16,8 +16,9 @@
 //! def `definePhysReg`/`freePhysReg`. An instruction's `clobbers` are its
 //! register mask.
 //!
-//! DEVIATE R1 (no number, exit 2026-11-13): no copy hints (`traceCopies`, the
-//! hint of a copy into a pinned value): they only save a `mov`.
+//! DEVIATE R1 (no number, exit 2026-11-13): the copy hints are one level deep:
+//! `traceCopies` follows no chain of copies (the pin follows three), and a
+//! hint comes from an argument's arrival or a copy out of a pinned value.
 //!
 //! DEVIATE R2 (no number, exit 2026-11-13): a body this does not cover is left
 //! to the greedy allocator (`Fallback`): x87 or SSE values, segment registers,
@@ -49,6 +50,7 @@ pub struct Fallback(pub String);
 
 const SPILL_CLEAN: u32 = 50;
 const SPILL_DIRTY: u32 = 100;
+const SPILL_PREF_BONUS: u32 = 20;
 const SPILL_IMPOSSIBLE: u32 = u32::MAX;
 /// `mayLiveOut` and `mayLiveIn`: the uses or defs looked at.
 const LIMIT: usize = 8;
@@ -95,6 +97,9 @@ struct Fast<'a> {
     across: HashSet<u32>,
     stored: HashSet<u32>,
     orders: HashMap<u32, Vec<usize>>,
+    /// `traceCopies`: the register a value is copied from, where that is a
+    /// physical one (an argument's arrival, a copy out of a pinned value).
+    hints: HashMap<u32, usize>,
     confined: crate::backend::regclass::Classes,
     block: usize,
     successors: Vec<Vec<usize>>,
@@ -167,6 +172,7 @@ fn run(
         across: HashSet::default(),
         stored: HashSet::default(),
         orders: HashMap::default(),
+        hints: HashMap::default(),
         confined,
         block: 0,
         successors,
@@ -250,6 +256,19 @@ impl Fast<'_> {
                 for (value, width) in crate::backend::widths::_named_widths(one) {
                     let sites = self.sites.entry(value).or_default();
                     sites.width = sites.width.max(width);
+                }
+                for (held, register) in &one.delivers {
+                    if let Some(&at) = self.index.get(&ir::root(*register)) {
+                        self.hints.entry(held.value).or_insert(at);
+                    }
+                }
+                if what.op == ir::Operation::Move
+                    && let ([value], [source]) = (&one.defines[..], &one.uses[..])
+                    && !self.pins.contains_key(value)
+                    && let Some(register) = self.pins.get(source)
+                    && let Some(&at) = self.index.get(&ir::root(*register))
+                {
+                    self.hints.entry(*value).or_insert(at);
                 }
                 let mut defs: Vec<u32> = one.defines.clone();
                 defs.extend(one.delivers.iter().map(|(held, _)| held.value));
@@ -561,18 +580,35 @@ impl Fast<'_> {
         one: &Insn,
         slot: usize,
         look_at_phys_uses: bool,
+        hint0: Option<usize>,
     ) -> Result<(), Fallback> {
         let value = self.live[slot].value;
         let order = self.order_of(value)?;
+        // Take a hint when its register is free: the one this value is copied
+        // into (`hint0`, a use), else the one it is copied from.
+        let mut preferred = [None, None];
+        for (n, hint) in [hint0, self.hints.get(&value).copied()].into_iter().enumerate() {
+            let Some(at) = hint else { continue };
+            if order.contains(&at) && !self.is_used(at, look_at_phys_uses) {
+                if matches!(self.state[at], State::Free) {
+                    self.assign(slot, at);
+                    return Ok(());
+                }
+                preferred[n] = Some(at);
+            }
+        }
         let (mut best, mut cost) = (None, SPILL_IMPOSSIBLE);
         for at in order {
             if self.is_used(at, look_at_phys_uses) {
                 continue;
             }
-            let price = self.calc_spill_cost(at);
+            let mut price = self.calc_spill_cost(at);
             if price == 0 {
                 self.assign(slot, at);
                 return Ok(());
+            }
+            if preferred.contains(&Some(at)) {
+                price = price.saturating_sub(SPILL_PREF_BONUS);
             }
             if price < cost {
                 (best, cost) = (Some(at), price);
@@ -605,7 +641,7 @@ impl Fast<'_> {
             self.live[slot].live_out = true;
         }
         if self.live[slot].phys.is_none() {
-            self.alloc(one, slot, look_at_phys_uses)?;
+            self.alloc(one, slot, look_at_phys_uses, None)?;
         }
         let at = self.live[slot].phys.expect("assigned above");
         if self.live[slot].reloaded || self.live[slot].live_out {
@@ -630,7 +666,15 @@ impl Fast<'_> {
             self.live[slot].live_out = true;
         }
         if self.live[slot].phys.is_none() {
-            self.alloc(one, slot, false)?;
+            // a copy into a pinned value hints that register (`useVirtReg`)
+            let mut hint0 = None;
+            if one.what.as_ref().is_some_and(|what| what.op == ir::Operation::Move)
+                && let ([def], [_]) = (&one.defines[..], &one.uses[..])
+                && let Some(register) = self.pins.get(def)
+            {
+                hint0 = self.index.get(&ir::root(*register)).copied();
+            }
+            self.alloc(one, slot, false, hint0)?;
         }
         let at = self.live[slot].phys.expect("assigned above");
         self.mark_used(at);
@@ -710,7 +754,7 @@ impl Fast<'_> {
         }
         self.free(prev);
         self.live[slot].phys = None;
-        self.alloc(one, slot, true)?;
+        self.alloc(one, slot, true, None)?;
         let now = self.live[slot].phys.expect("assigned above");
         let width = i64::from(self.sites.get(&value).map_or(4, |sites| sites.width));
         let regs = self.classes.registers;
