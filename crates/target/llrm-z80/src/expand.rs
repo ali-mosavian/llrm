@@ -430,6 +430,15 @@ impl Printer<'_> {
                 self.push("add a, a");
                 self.push("sbc a, a");
             }
+            // the same in another register, through `a` where nothing reads
+            // it or the flags afterwards: 4 B against 14
+            "SRA8" if shift_count(inst)? == 7 && self.dead_after(reg::A, rest) && self.flags_dead(rest) => {
+                let to = name_of(self, 0)?;
+                self.push(format!("ld a, {to}"));
+                self.push("add a, a");
+                self.push("sbc a, a");
+                self.push(format!("ld {to}, a"));
+            }
             "SHL8" | "SRL8" | "SRA8" => {
                 let to = name_of(self, 0)?;
                 let mnemonic = match op {
