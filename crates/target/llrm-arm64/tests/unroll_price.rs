@@ -34,3 +34,18 @@ fn init_loops_whose_stores_merge_when_unrolled_are_unrolled() {
 fn a_nest_loop_that_uses_no_outer_counter_is_priced_not_bypassed() {
     assert_eq!(labels(include_str!("data/bench_crc.ll")), 6);
 }
+
+fn instructions(source: &str, level: Level) -> usize {
+    let asm = driver::assembly(source, Platform::Linux, level).expect("lowers");
+    asm.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count()
+}
+
+/// matmul -O2: the 8 x 8 x 8 nest reads its counters only to index memory,
+/// and the nest bypass unrolled it anyway: 202 instructions where gcc's rolled
+/// nest is 89 (+452 B over gcc). An index sum folds into the copies' own
+/// offsets, not into work saved, so the loops are priced: 99 instructions.
+#[test]
+fn a_nest_whose_counters_only_index_memory_is_priced_not_bypassed() {
+    let insns = instructions(include_str!("data/bench_matmul.ll"), Level::O2);
+    assert!(insns < 130, "{insns} instructions");
+}

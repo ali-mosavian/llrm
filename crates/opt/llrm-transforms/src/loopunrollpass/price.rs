@@ -5,6 +5,7 @@
 //! 232 -> 755 bytes at m32 -O2 for a few clocks).
 
 use llrm_mir::module::{Linkage, ValueDef, ValueId};
+use llrm_mir::opcode::BinaryOp;
 
 use super::*;
 use crate::loopidioms::{trip_clocks, trip_cost};
@@ -679,11 +680,56 @@ fn reads_outer_counter(
         }
     }
     let _ = analyzed;
-    inside.iter().any(|&block| {
-        function.iter_block(block).any(|inst| {
-            function.instruction(inst).operands.iter().any(|&operand| matches!(operand, Operand::Value(value) if known.contains(&value)))
-        })
-    })
+    // What the nest's unroll turns into a constant inside `lp`: a division, a
+    // float operation, a select or an element of a constant table whose
+    // operands are all counters or constants. A counter that only indexes
+    // memory folds into an address, which the copies' own offsets already
+    // are (matmul -O2, nbody_single, tile: 8 x 8 x 8 copies of an index sum).
+    let mut folds = false;
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for &block in inside.iter() {
+            for inst in function.iter_block(block) {
+                let one = function.instruction(inst);
+                let Some(result) = one.result else { continue };
+                if known.contains(&result) {
+                    continue;
+                }
+                let element = matches!(one.opcode, Opcode::Load { volatile: false, .. })
+                    && matches!(local_array_at(run, one.operands[0], &known), Some(Base::Table));
+                let real = element
+                    || matches!(
+                        one.opcode,
+                        Opcode::Binary(
+                            BinaryOp::UDiv
+                                | BinaryOp::SDiv
+                                | BinaryOp::URem
+                                | BinaryOp::SRem
+                                | BinaryOp::FAdd
+                                | BinaryOp::FSub
+                                | BinaryOp::FMul
+                                | BinaryOp::FDiv
+                                | BinaryOp::FRem
+                        ) | Opcode::Select
+                            | Opcode::FCmp(_)
+                    );
+                let address = matches!(
+                    one.opcode,
+                    Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::GetElementPtr { .. }
+                );
+                if (real || address)
+                    && one.operands.iter().all(|&operand| constant(operand, &known))
+                    && one.operands.iter().any(|&operand| matches!(operand, Operand::Value(_)))
+                {
+                    known.insert(result);
+                    folds |= real;
+                    grew = true;
+                }
+            }
+        }
+    }
+    folds
 }
 
 /// Whether `lp` holds a loop whose trip count follows a counter of `lp` (a
