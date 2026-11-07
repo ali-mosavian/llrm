@@ -78,7 +78,7 @@
 //!
 //! # Example
 //! No honest example: the pipeline is the order of the passes, not one rewrite,
-//! and no one function shows it. `llrm-c --dump DIR` writes the module after
+//! and no one function shows it. `llrm-cc --dump DIR` writes the module after
 //! each stage (`NN-stage.ll`) and, for each body, each changed step of the
 //! fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 //!
@@ -154,7 +154,7 @@ pub struct Options {
     /// The library routines the compile states the program links (the pin's
     /// `TargetLibraryInfo`, which it reads from the triple: here the front
     /// end's profile states them, as the ABI chosen by `-mabi` spells and
-    /// calls them). DEVIATE D11: llrm-c states `strlen` for `-m32` under the
+    /// calls them). DEVIATE D11: llrm-cc states `strlen` for `-m32` under the
     /// System V convention only, llrm-qb and llrm-nib none, so no other
     /// compile forms a call of a library routine. Exit: a `Target::library`
     /// of each target that states its routines. Owner w-6, exit 2026-11-30.
@@ -827,6 +827,8 @@ pub(crate) fn llvm_order(
                         },
                     }),
                 ),
+                // DEVIATE VASTART-PROMOTE: a one-pointer `va_list` is a slot SROA can promote.
+                slot("vastart@1178", Box::new(crate::vastart::VaStart)),
                 sroa("sroa@1179"),
                 earlycse("earlycse@1180", false),
             ]

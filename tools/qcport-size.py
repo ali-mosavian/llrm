@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""QCport's 65 modules at -Os: code bytes through llrm-c and through llrm-cc, per module and in total.
+"""QCport's 65 modules at -Os: code bytes through llrm-cc and through llrm-cc, per module and in total.
 
     QCPORT=.../src QCPORT_INC=... LLRM_BORLAND_INC=... LLRM_CLANG_M16=... \\
         tools/qcport-size.py [--row x86_16-dos-rp3] [--isel dag] [--top 12]
 
---row is the llrm-cc target row (default x86_16-dos-rp3, the register convention llrm-c has at m16, so the two columns compare like
+--row is the llrm-cc target row (default x86_16-dos-rp3, the register convention llrm-cc has at m16, so the two columns compare like
 with like; x86_16-dos is cdecl, the Borland-link row). --isel is given to both compilers. Prints the totals and the modules where
 llrm-cc is larger by most; a module either side cannot compile is left out of the totals and named.
 """
@@ -51,7 +51,7 @@ def main() -> int:
 
         def one(source: Path):
             c, cc = work / f"{source.stem}.c.o", work / f"{source.stem}.cc.o"
-            subprocess.run([str(bin_dir / "llrm-c"), "-Os", *extra, *dirs, "-I", include, str(source), "-o", str(c)], capture_output=True)
+            subprocess.run([str(bin_dir / "llrm-cc"), "-Os", *extra, *dirs, "-I", include, str(source), "-o", str(c)], capture_output=True)
             env = {**os.environ, "LLRM_CC_TARGET": args.row}
             subprocess.run(
                 [str(bin_dir / "llrm-cc"), "-Os", "-c", *extra, "-fasm-blocks", "-D_asm=__asm", "-nostdinc", "-isystem", borland, *dirs, str(source), "-o", str(cc)],
@@ -63,7 +63,7 @@ def main() -> int:
     both = [row for row in rows if row[1] is not None and row[2] is not None]
     skipped = [row[0] for row in rows if row not in both]
     c, cc = sum(row[1] for row in both), sum(row[2] for row in both)
-    print(f"row {args.row}{' --isel=' + args.isel if args.isel else ''}: {len(both)} modules, llrm-c {c} B, llrm-cc {cc} B, {cc - c:+d} ({(cc - c) * 100 / c:+.2f}%)")
+    print(f"row {args.row}{' --isel=' + args.isel if args.isel else ''}: {len(both)} modules, llrm-cc {c} B, llrm-cc {cc} B, {cc - c:+d} ({(cc - c) * 100 / c:+.2f}%)")
     if skipped:
         print("left out (one side did not compile):", *skipped)
     for name, a, b in sorted(both, key=lambda row: row[1] - row[2])[: args.top]:

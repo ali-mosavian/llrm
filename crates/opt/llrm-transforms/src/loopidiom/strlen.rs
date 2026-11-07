@@ -18,7 +18,7 @@
 //!   and the call copies that declaration's type and calling convention. The
 //!   pin forms it on the triple's `TargetLibraryInfo` alone; no target here
 //!   implements `Target::library`, and the decoration and the convention are
-//!   frontend facts. llrm-c declares it for the targets whose C link resolves
+//!   frontend facts. llrm-cc declares it for the targets whose C link resolves
 //!   it; llrm-qb and llrm-nib declare nothing and never form it. Exit: a
 //!   `Target::library` with the name and convention for the C targets. Owner
 //!   w-6, review 2026-11-30. A function with `"no-builtins"` forms none

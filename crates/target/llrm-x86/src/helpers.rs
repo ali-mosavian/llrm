@@ -15,6 +15,7 @@ const CHECK: &str = include_str!("helpers/check.asm");
 const NARROW: &str = include_str!("helpers/narrow.asm");
 const WIDE: &str = include_str!("helpers/wide.asm");
 const WIDE_BSR: &str = include_str!("helpers/wide_bsr.asm");
+const SMALL: &str = include_str!("helpers/small.asm");
 const SIGNS: &str = include_str!("helpers/signs.asm");
 const UNSIGNS: &str = include_str!("helpers/unsigns.asm");
 const SIGNS32: &str = include_str!("helpers/signs32.asm");
@@ -31,6 +32,51 @@ pub fn divide(
     bits: u32,
 ) -> Result<Divide, Refusal> {
     divide_used(signed, wide_divisor, bits, Used::Both)
+}
+
+/// The size routine: a bit of the quotient a round, one body for either divisor
+/// width, shorter than `divide_used`'s by about two thirds and some 600 instructions slower.
+pub fn divide_small(
+    signed: bool,
+    wide_divisor: bool,
+    bits: u32,
+) -> Result<Divide, Refusal> {
+    static CACHE: LazyLock<Mutex<HashMap<(bool, bool, u32), Result<Divide, Refusal>>>> =
+        LazyLock::new(Default::default);
+    memoized(&CACHE, (signed, wide_divisor, bits), || {
+        let mode = if bits == 32 {
+            Mode { bits: 32, segmented: false, address_bytes: 4, wide: true }
+        } else {
+            Mode { bits: 16, segmented: true, address_bytes: 2, wide: true }
+        };
+        let narrow = if wide_divisor { "" } else { "    xor ecx, ecx\n" };
+        let source = if signed {
+            [narrow, SIGNS, SMALL, UNSIGNS].concat()
+        } else {
+            [narrow, SMALL].concat()
+        };
+        let lines: Vec<&str> = source.lines().collect();
+        let small = Divide {
+            name: match (signed, wide_divisor) {
+                (false, true) => "div64_u_small",
+                (true, true) => "div64_s_small",
+                (false, false) => "div64_u32_small",
+                (true, false) => "div64_s32_small",
+            },
+            code: asm::assembled(&lines, mode)?,
+            dividend: [RegId::EAX, RegId::EDX],
+            divisor: [RegId::EBX, RegId::ECX],
+            wide_divisor,
+            quotient: [RegId::EAX, RegId::EDX],
+            remainder: [RegId::EBX, RegId::ECX],
+            clobbers: [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX],
+        };
+        // a dword divisor's speed routine can be the shorter (two `div`s)
+        if small.code.len() >= divide(signed, wide_divisor, bits)?.code.len() {
+            return Err(Refusal { line: 0, message: "the speed divide is no longer than the size one".into() });
+        }
+        Ok(small)
+    })
 }
 
 /// `divide` for a caller that reads only `used`: the signed routine by a dword

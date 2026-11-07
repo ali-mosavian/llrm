@@ -677,6 +677,18 @@ impl Tti for X86 {
         self.tuning.narrow_divide_live_limit
     }
 
+    fn inline_never_grows_without_rate(&self) -> bool {
+        self.tuning.inline_never_grows_without_rate
+    }
+
+    fn inline_o1_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.inline_o1_milliclocks_per_byte
+    }
+
+    fn promote_va_list(&self) -> bool {
+        self.tuning.promote_va_list
+    }
+
     fn sink_spares_ranges(&self) -> bool {
         self.tuning.sink_spares_ranges
     }
@@ -1369,6 +1381,14 @@ impl Tti for X86 {
 
     fn mirrors_conditional_counters(&self) -> bool {
         self.real_mode.is_some()
+    }
+
+    /// DEVIATE LS1: real mode keeps every formula of the first use in play
+    /// (A/B 2026-11-07: the pin's rule is +1..+8 B in 41 of 192 m16 cells, in
+    /// none better; m32 -37 B net, m64 0). owner: w12, exit: 2026-11-30, when
+    /// the m16 cause cards close.
+    fn lsr_visited_registers_lose(&self) -> bool {
+        self.real_mode.is_none()
     }
 
     /// Real mode forms a scaled index with an address-size prefix.

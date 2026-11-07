@@ -105,6 +105,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         lsr_size_order: true,
         narrow_divide_live_limit: 4,
         sink_spares_ranges: true,
+        promote_va_list: true,
+        inline_never_grows_without_rate: true,
+        inline_o1_milliclocks_per_byte: per_byte / 2,
         x87_zero_fill_at_size: true,
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant
@@ -451,6 +454,14 @@ impl llrm_target::Target for M32 {
         used: llrm_target::routines::Used,
     ) -> Result<llrm_target::routines::Divide, String> {
         llrm_x86::helpers::divide_used(signed, wide_divisor, 32, used).map_err(|refused| refused.message)
+    }
+
+    fn divide_routine_small(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+    ) -> Result<llrm_target::routines::Divide, String> {
+        llrm_x86::helpers::divide_small(signed, wide_divisor, 32).map_err(|refused| refused.message)
     }
 
     fn float_width(

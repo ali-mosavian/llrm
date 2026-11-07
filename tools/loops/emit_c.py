@@ -1,5 +1,5 @@
 """
-A case as C, for llrm-c, Open Watcom and gcc-ia16 (16-bit int), and for the
+A case as C, for llrm-cc, Open Watcom and gcc-ia16 (16-bit int), and for the
 host's clang, which validates the oracle (`host=True`: fixed-width types).
 
 Arithmetic narrower than int, and u16's, is cast back to its type where it

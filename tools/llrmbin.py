@@ -80,8 +80,8 @@ def stamped(found: Path) -> None:
 
 
 def declared(repo: Path) -> set[str]:
-    """The binaries a plain `cargo build --bins` builds: the root package's [[bin]] names whose `required-features` the default features enable (others in target/ are leftovers: llrm-c
-    needs `c-legacy`, so the runner's rebuild left a day-old llrm-c in place and refused every PR as "binaries still older than the merged tree after a rebuild")."""
+    """The binaries a plain `cargo build --bins` builds: the root package's [[bin]] names whose `required-features` the default features enable (others in target/ are leftovers: llrm-cc
+    needs `c-legacy`, so the runner's rebuild left a day-old llrm-cc in place and refused every PR as "binaries still older than the merged tree after a rebuild")."""
     import tomllib
 
     manifest = repo / "Cargo.toml"

@@ -122,7 +122,7 @@ def test_the_test_that_writes_into_the_tree_runs_alone_after_the_run_test_could_
 
 
 def test_a_scoped_lib_run_includes_the_root_crate_that_turns_on_the_features_the_crate_needs():
-    """`cargo test -p llrm-c --lib` alone built llrm-c without its toolchain feature: 16 tests failed 'llrm was built without the toolchain feature'."""
+    """`cargo test -p llrm-cc --lib` alone built llrm-cc without its toolchain feature: 16 tests failed 'llrm was built without the toolchain feature'."""
     cfg, pkgs = gate.load(), gate.packages()
     p = gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
     assert "-p llrm " in gate.commands(p, cfg, pkgs)["lib"] + " "
@@ -550,7 +550,7 @@ def test_a_failed_step_keeps_its_log_past_the_next_run_of_the_step(tmp_path, mon
 
 
 def test_the_lib_step_runs_tests_in_a_random_order_that_a_seed_repeats(monkeypatch):
-    """llrm-c's m16 tests failed at random (29 of 136) when an m32 test bound the register file first: the plain order never
+    """llrm-cc's m16 tests failed at random (29 of 136) when an m32 test bound the register file first: the plain order never
     showed it. The lib step shuffles, each binary prints its seed, and LLRM_SHUFFLE_SEED repeats one."""
     cfg, pkgs = gate.load(), gate.packages()
     p = gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
@@ -562,7 +562,7 @@ def test_the_lib_step_runs_tests_in_a_random_order_that_a_seed_repeats(monkeypat
 
 
 def test_every_step_runs_with_the_flags_the_build_used_and_the_base_build_with_none():
-    """`integration` (`cargo test --test X`) without the build step's RUSTFLAGS rebuilt llrm-c and replaced target/release/llrm-c while
+    """`integration` (`cargo test --test X`) without the build step's RUSTFLAGS rebuilt llrm-cc and replaced target/release/llrm-cc while
     `torture` was starting it ("No such file or directory"): the steps share one set of flags, and the base the measure builds, which
     is historical, has none."""
     assert gate.STEP_ENV == {"RUSTFLAGS": gate.WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1", "CARGO_INCREMENTAL": "0"}
@@ -601,24 +601,24 @@ def test_a_dirty_tree_is_refused_unless_it_is_allowed_and_a_verdict_names_its_co
 
 
 def test_the_steps_run_the_binaries_cargo_linked_before_them_not_the_path_cargo_relinks(tmp_path):
-    """Torture died on `No such file .../release/llrm-c`: a `cargo test --release --test X` in another step removes the file and links
+    """Torture died on `No such file .../release/llrm-cc`: a `cargo test --release --test X` in another step removes the file and links
     its own binary there, even when nothing was rebuilt. The steps get links to the build's files, which a later link does not touch."""
     release = tmp_path / "release"
     release.mkdir()
     (release / "deps").mkdir()
-    for name, text in (("llrm-c", "built"), ("jwlink", "tool"), ("llrm-c.d", "dep-info")):
+    for name, text in (("llrm-cc", "built"), ("jwlink", "tool"), ("llrm-cc.d", "dep-info")):
         (release / name).write_text(text)
         (release / name).chmod(0o755)
     shared = gate.snapshot_binaries(release, tmp_path / "gate-bins")
-    assert sorted(one.name for one in shared.iterdir()) == ["jwlink", "llrm-c"], "the dep-info or a directory was taken"
+    assert sorted(one.name for one in shared.iterdir()) == ["jwlink", "llrm-cc"], "the dep-info or a directory was taken"
     # What cargo does for the next invocation: remove, then link another file.
-    (release / "llrm-c").unlink()
-    assert not (release / "llrm-c").exists() and (shared / "llrm-c").read_text() == "built"
-    (release / "llrm-c").write_text("relinked")
-    assert (shared / "llrm-c").read_text() == "built"
+    (release / "llrm-cc").unlink()
+    assert not (release / "llrm-cc").exists() and (shared / "llrm-cc").read_text() == "built"
+    (release / "llrm-cc").write_text("relinked")
+    assert (shared / "llrm-cc").read_text() == "built"
     # A second snapshot (another group of the gate) replaces the links.
-    (release / "llrm-c").chmod(0o755)
-    assert (gate.snapshot_binaries(release, tmp_path / "gate-bins") / "llrm-c").read_text() == "relinked"
+    (release / "llrm-cc").chmod(0o755)
+    assert (gate.snapshot_binaries(release, tmp_path / "gate-bins") / "llrm-cc").read_text() == "relinked"
 
 
 def test_a_steps_cpu_time_is_its_process_trees_and_not_the_waiting_in_it(tmp_path):
@@ -685,7 +685,7 @@ def test_an_indented_block_in_a_doc_comment_is_a_doctest_the_doc_step_must_run(t
 
 
 def test_the_build_makes_one_set_of_crates_for_the_binaries_and_the_tests():
-    """`cargo build --bins` and `cargo test --no-run` each built every crate (238 and 136 CPU-s) and the second linked its llrm-c over
+    """`cargo build --bins` and `cargo test --no-run` each built every crate (238 and 136 CPU-s) and the second linked its llrm-cc over
     the first's: the steps ran the test build's binary and the plain build was waste."""
     assert "cargo build" not in gate.BUILD and "cargo test --release -q --workspace --no-run" in gate.BUILD
 
@@ -801,7 +801,7 @@ def test_every_failing_pytest_file_shows_its_failure_and_a_log_without_tests_sho
     names = [f"tools/test_{c}.py" for c in "abcdefghi"]
     shown = gate.failure_text("\n".join(line for name in names for line in section(name)))
     assert all(f"line 0 of {name}" in shown for name in names)
-    head = gate.log_head("QCport built by llrm-c draws differently from the Borland build:\n  a run drew nothing\n" + "\n".join(f"tail {i}" for i in range(100)))
+    head = gate.log_head("QCport built by llrm-cc draws differently from the Borland build:\n  a run drew nothing\n" + "\n".join(f"tail {i}" for i in range(100)))
     assert "a run drew nothing" in head and "tail 99" not in head
 
 
@@ -1562,7 +1562,7 @@ def test_a_tracked_symlink_out_of_the_tree_or_a_build_dir_is_named(tmp_path, cap
 
 
 def test_a_change_to_llrm_cc_runs_qcport_measure_and_the_c_programs():
-    """Only crates/frontends/llrm-c/** owned the C steps: a llrm-cc change gated without qcport, measure and the C programs."""
+    """Only crates/frontends/llrm-cc/** owned the C steps: a llrm-cc change gated without qcport, measure and the C programs."""
     plan = gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
     for step in ("qcport", "oracle-qcport", "measure"):
         assert step in plan.steps, (step, plan.steps)
@@ -1654,7 +1654,7 @@ def test_the_steps_that_wait_on_one_dist_build_get_it_built_once_before_them():
 
 
 def test_the_gate_builds_llrm_c_and_makes_a_skipped_missing_binary_a_failure():
-    """llrm-c is behind `c-legacy`; the gate stopped building it, tests/test_readme.py's C case skipped "llrm-c is not built" and examples/dot regressed at
+    """llrm-cc is behind `c-legacy`; the gate stopped building it, tests/test_readme.py's C case skipped "llrm-cc is not built" and examples/dot regressed at
     m16 with every step green."""
     assert "cargo test --release -q --workspace --no-run --features c-legacy" in gate.BUILD
     assert "pytest_strict_bins" in inspect.getsource(gate).split("def cfg_pytest")[1]

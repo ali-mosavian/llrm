@@ -501,7 +501,7 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
         } else if let Some(list) = flag.strip_prefix("-fsanitize=").or_else(|| flag.strip_prefix("-fno-sanitize="))
             && list.split(',').all(|name| matches!(name, "bounds" | "stack"))
         {
-            // The checks are the backend's (gcc's names, as llrm-c took them):
+            // The checks are the backend's (gcc's names, as llrm-cc took them):
             // `stack` checks SP on entry; `bounds` checks nothing in IR, which
             // carries no subscripts.
             build.llc.push(flag.to_owned());
@@ -556,7 +556,7 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
         } else if LLC_FLAGS.contains(&flag) || LLC_PREFIXES.iter().any(|one| flag.starts_with(one)) {
             build.llc.push(flag.to_owned());
         } else if flag == "--dump" {
-            // llrm-c's switch: each backend stage written to the directory.
+            // llrm-cc's switch: each backend stage written to the directory.
             build.llc.push(flag.to_owned());
             build.llc.push(value(&mut at)?);
         } else if flag.starts_with("--dump=") {

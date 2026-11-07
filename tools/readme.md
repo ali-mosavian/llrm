@@ -14,8 +14,8 @@ Open Watcom's `wccq`, `jwasm`, `jwlink` and DOSBox-X.
 
 ```sh
 tools/identity.sh nib  BASE/llrm-nib target/release/llrm-nib
-tools/identity.sh c    BASE/llrm-c   target/release/llrm-c [-m32]
-QCPORT=... QCPORT_INC=... tools/identity.sh qcport BASE/llrm-c target/release/llrm-c
+tools/identity.sh c    BASE/llrm-cc   target/release/llrm-cc [-m32]
+QCPORT=... QCPORT_INC=... tools/identity.sh qcport BASE/llrm-cc target/release/llrm-cc
 ```
 
 It prints how many programs came out SAME, and each one that is not: `DIFF` (the objects differ),

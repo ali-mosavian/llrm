@@ -41,7 +41,7 @@ def measure(sha: str, source: Path, flags: list[str], done: set[str]) -> None:
     if s9 in done:
         return
     built = subprocess.run(["bash", str(HERE / "pair_build.sh"), str(SCRATCH), s9], cwd=WORKTREE, capture_output=True, text=True)
-    binary = SCRATCH / f"sbp-{s9}" / "dist" / "llrm-c"
+    binary = SCRATCH / f"sbp-{s9}" / "dist" / "llrm-cc"
     if built.returncode or not binary.exists():
         record = {"sha": s9, "error": "build failed", "tail": built.stderr[-200:]}
     else:

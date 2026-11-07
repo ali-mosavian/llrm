@@ -1,4 +1,4 @@
-//! The debugging switches llrm-c had reach the backend through llrm-cc. Needs
+//! The debugging switches llrm-cc had reach the backend through llrm-cc. Needs
 //! the pinned clang (`LLRM_PIN_CLANG`) and the Open Watcom headers (`{ow}`,
 //! tools/ow-fetch.sh).
 
@@ -58,7 +58,7 @@ fn dump_and_dump_inputs_reach_the_backend() {
     assert!(manifest, "no input dumped under LLRM_DUMP_INPUTS");
 }
 
-/// `LLRM_DEBUG=counts` printed nothing from llrm-llc: llrm-c printed the
+/// `LLRM_DEBUG=counts` printed nothing from llrm-llc: llrm-cc printed the
 /// counts at its end, llrm-cc ran with none.
 #[test]
 fn debug_counts_are_printed() {
