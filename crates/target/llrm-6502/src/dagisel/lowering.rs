@@ -152,6 +152,9 @@ pub fn target_lowering() -> TargetLowering {
     for vt in [MVT::I1, MVT::I8, MVT::I16] {
         tl.set_operation_action(SetCCCarry, vt, Action::Custom);
     }
+    // a compare of two longs is one borrow chain over every byte: the node on
+    // the halves is expanded into the chain (DEVIATE SC1)
+    tl.set_operation_action(SetCCCarry, MVT::I32, Action::Custom);
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
     tl
@@ -603,7 +606,10 @@ fn lower_setcc_carry(
     node: SDValue,
 ) -> Option<SDValue> {
     let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
-    if dag.value_type(high) != EVT::I16 || dag.opcode(borrow) != ISD::USubO || borrow.res != 1 {
+    if dag.value_type(high) != EVT::I16
+        || !matches!(dag.opcode(borrow), ISD::USubO | ISD::USubOCarry)
+        || borrow.res != 1
+    {
         return None;
     }
     if let Some(sign) = sign_compare(dag, node) {
@@ -619,7 +625,13 @@ fn lower_setcc_carry(
     // the flags are bits, as a subtract of words leaves them: `condition` reads
     // the carry of the node itself, not of a truncation of it
     let (low, below) = (dag.operand(borrow, 0), dag.operand(borrow, 1));
-    let low_borrow = dag.get_node_multi(ISD::USubO, &[EVT::I16, EVT::I1], &[low, below]);
+    let low_borrow = if dag.opcode(borrow) == ISD::USubOCarry {
+        // the chain's earlier borrow stays the bit it was
+        let earlier = dag.operand(borrow, 2);
+        dag.get_node_multi(ISD::USubOCarry, &[EVT::I16, EVT::I1], &[low, below, earlier])
+    } else {
+        dag.get_node_multi(ISD::USubO, &[EVT::I16, EVT::I1], &[low, below])
+    };
     let borrow = SDValue { node: low_borrow.node, res: 1 };
     let pair = dag.get_node_multi(ISD::USubOCarry, &[EVT::I16, EVT::I1], &[high, other, borrow]);
     let below = SDValue { node: pair.node, res: 1 };
