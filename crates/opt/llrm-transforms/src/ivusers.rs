@@ -108,7 +108,7 @@ fn is_interesting(
         // An add is interesting if exactly one operand is.
         Kind::Add(operands) => {
             let mut any = false;
-            for op in operands {
+            for op in operands.iter().copied() {
                 if is_interesting(se, cx, op.scev, inst, l) {
                     if any {
                         return false;
@@ -198,7 +198,8 @@ impl IvUsers {
     ) -> Self {
         #[cfg(test)]
         BUILDS.with(|made| made.set(made.get() + 1));
-        let mut users = Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), ordered: 0 };
+        let mut users =
+            Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), ordered: 0 };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {

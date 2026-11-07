@@ -465,10 +465,14 @@ pub trait Tti {
     /// those or return a policy of its own.
     fn inline_policy(&self) -> InlinePolicy {
         InlinePolicy {
-            by_size: self.opt_size_inline_by_code_size().then(|| SizeRule {
-                min_sites: self.opt_size_inline_guard_min_sites(),
-                yields_to_negative_cost: self.opt_size_inline_guard_yields_to_negative_cost(),
-            }),
+            by_size: self
+                .opt_size_inline_by_code_size()
+                .then(
+                    || SizeRule {
+                        min_sites: self.opt_size_inline_guard_min_sites(),
+                        yields_to_negative_cost: self.opt_size_inline_guard_yields_to_negative_cost(),
+                    },
+                ),
             by_rate: self.speed_inline_milliclocks_per_byte(),
         }
     }
@@ -658,6 +662,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::imul_at_size`.
+    fn imul_at_size(&self) -> bool {
+        false
+    }
+
     /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
     fn has_cmov(&self) -> bool {
         true
@@ -732,8 +741,8 @@ pub trait Tti {
         None
     }
 
-    /// DEVIATE REC-2: whether, at (-O2, -O3), a tree recursion's tail calls are eliminated
-    /// before its copies of itself are made.
+    /// DEVIATE REC-2: whether, at (-O2, -O3), a tree recursion's tail calls are
+    /// eliminated before its copies of itself are made.
     fn recursive_tre_first(&self) -> (bool, bool) {
         (false, false)
     }
@@ -758,6 +767,12 @@ pub trait Tti {
     /// pressure rule need not count.
     fn x87_stack_slots(&self) -> Option<u32> {
         None
+    }
+
+    /// Whether a product by a constant and one by its negation are made once
+    /// on the x87 stack (`Tuning::x87_share_negated_products`).
+    fn x87_share_negated_products(&self) -> bool {
+        false
     }
 
     /// The target's `PartialThreshold` (its tuning table); none: the pass's
@@ -899,6 +914,19 @@ pub trait Tti {
         imm: i128,
         bits: u32,
         _for_size: bool,
+    ) -> Cost {
+        self.int_imm_cost_inst(op, index, imm, bits)
+    }
+
+    /// `int_imm_cost_inst` as the pin prices it, before any DEVIATE of the
+    /// target's own (x86 ZIMM): what `ConstantHoisting` asks to keep a
+    /// constant a candidate.
+    fn int_imm_cost_inst_pin(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
     ) -> Cost {
         self.int_imm_cost_inst(op, index, imm, bits)
     }
@@ -1067,6 +1095,19 @@ pub trait Tti {
     ) -> bool {
         let _ = min_size;
         div_rem_by_constant
+    }
+
+    /// DEVIATE ZIMM (M64-ZIMM-CRC): a zero-extended 32-bit constant that is
+    /// one arm of a `select` beside zero. The target turns it into a mask
+    /// `and` with the constant as an immediate, so hoisting it only holds a
+    /// register. The pin's `preferToKeepConstantsAttached` has no such case.
+    fn keeps_select_mask_attached(
+        &self,
+        bits: u128,
+        width: u32,
+    ) -> bool {
+        let _ = (bits, width);
+        false
     }
 
     /// `TargetTransformInfoImplBase::isLegalAddImmediate`: none.
@@ -1723,6 +1764,16 @@ mod access_tests {
                 for_size: bool,
             ) -> Cost {
                 self.0.int_imm_cost_inst_for_size(op, index, imm, bits, for_size)
+            }
+
+            fn int_imm_cost_inst_pin(
+                &self,
+                op: ImmUser,
+                index: u32,
+                imm: i128,
+                bits: u32,
+            ) -> Cost {
+                self.0.int_imm_cost_inst_pin(op, index, imm, bits)
             }
 
             fn is_truncate_free(

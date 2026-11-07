@@ -60,7 +60,11 @@ fn select_indirect<D: AddrDag>(
     value: SDValue,
     results: &mut Vec<(SDValue, Option<u32>)>,
 ) {
-    let (base, offset) = match (dag.opcode(value.node) == isd::ADD).then(|| dag.constant(dag.operand(value.node, 1))) {
+    // A sum that is also wanted as a value (the pointer a loop steps) is the
+    // address as it is: folding its constant instead keeps the old pointer
+    // alive beside the new one, a copy of the pair each trip.
+    let folds = dag.opcode(value.node) == isd::ADD && !dag.has_materializing_use(value);
+    let (base, offset) = match folds.then(|| dag.constant(dag.operand(value.node, 1))) {
         Some(Some(c)) if (0..256).contains(&c) => (dag.operand(value.node, 0), c),
         _ => (value, 0),
     };
