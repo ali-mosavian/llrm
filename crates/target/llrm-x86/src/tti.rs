@@ -673,6 +673,10 @@ impl Tti for X86 {
         self.tuning.narrow_divide_live_limit
     }
 
+    fn sink_spares_ranges(&self) -> bool {
+        self.tuning.sink_spares_ranges
+    }
+
     fn divide_by_bytes(&self) -> bool {
         self.tuning.divide_by_bytes
     }

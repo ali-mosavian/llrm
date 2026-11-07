@@ -50,6 +50,11 @@ pub struct Tuning {
     /// `div` pins eax, edx and the divisor's register, the narrow multiply
     /// sequence none.
     pub narrow_divide_live_limit: u32,
+    /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): at size, MachineSink
+    /// leaves an instruction where it is when moving it would replace its one
+    /// result by more operands that die at it, across a later instruction that
+    /// clobbers registers (more values spilled). false: the pin's sink.
+    pub sink_spares_ranges: bool,
     /// At -O1 (`OptLevel` 1) a full unroll is made only where its cost after
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
@@ -257,6 +262,7 @@ impl Tuning {
         multiply_by_clocks: false,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
+        sink_spares_ranges: false,
         unroll_never_grows_at_o1: false,
         price_pin_multiplies: false,
         imul_at_size: false,

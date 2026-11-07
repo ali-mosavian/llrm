@@ -739,6 +739,11 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): `Tuning::sink_spares_ranges`.
+    fn sink_spares_ranges(&self) -> bool {
+        false
+    }
+
     /// `Tuning::divide_by_bytes`.
     fn divide_by_bytes(&self) -> bool {
         false
