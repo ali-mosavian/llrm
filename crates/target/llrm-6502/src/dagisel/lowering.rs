@@ -561,6 +561,33 @@ fn lower_setcc(
     Some(dag.get_node(mosisd::SETCC, EVT::I8, &[code, flags]))
 }
 
+/// `x >= 0` and `-1 >= x` (`x <= -1`) of a long are the sign of its high word:
+/// the pin's `IntegerExpandSetCCOperands` takes that for `x < 0` and `x > -1`
+/// only, and the other two reach the chain as a compare against a constant of
+/// zero or of all ones. The word's compare, as a `SETCC` of the high word.
+fn sign_compare(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    if dag.opcode(borrow) != ISD::USubO || borrow.res != 1 || cond_of(dag, dag.operand(node, 3)) != CondCode::SetGe {
+        return None;
+    }
+    let (low, below) = (dag.operand(borrow, 0), dag.operand(borrow, 1));
+    let zero = dag.get_constant(0, EVT::I16);
+    if dag.constant(other) == Some(0) && dag.constant(below) == Some(0) {
+        // x >= 0
+        let ge = dag.get_cond_code(CondCode::SetGe);
+        return Some(dag.get_node(ISD::SetCC, EVT::I1, &[high, zero, ge]));
+    }
+    if dag.constant(high) == Some(0xFFFF) && dag.constant(low) == Some(0xFFFF) {
+        // -1 >= x
+        let lt = dag.get_cond_code(CondCode::SetLt);
+        return Some(dag.get_node(ISD::SetCC, EVT::I1, &[other, zero, lt]));
+    }
+    None
+}
+
 /// `LowerSETCCCARRY`: the high words' subtract takes the borrow of the low
 /// words', and the order is the borrow it leaves. A signed order compares the
 /// high words with their sign bits flipped.
@@ -576,6 +603,10 @@ fn lower_setcc_carry(
     let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     if dag.value_type(high) != EVT::I16 || dag.opcode(borrow) != ISD::USubO || borrow.res != 1 {
         return None;
+    }
+    if let Some(sign) = sign_compare(dag, node) {
+        let vt = dag.value_type(node);
+        return Some(if vt == EVT::I1 { sign } else { dag.get_node(ISD::ZeroExtend, vt, &[sign]) });
     }
     let cc = cond_of(dag, dag.operand(node, 3));
     let (high, other) = match cc {
@@ -615,6 +646,10 @@ fn lower_setcc_carry_flags(
     let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     if dag.value_type(high) != EVT::I16 || dag.opcode(borrow) != ISD::USubO || borrow.res != 1 {
         return None;
+    }
+    if let Some(sign) = sign_compare(dag, node) {
+        let lowered = lower_setcc(dag, sign)?;
+        return Some((dag.operand(lowered, 0), dag.operand(lowered, 1)));
     }
     // Flags are made again where they are read: a chain that two orders share
     // (`a < b` and `a >= b`) is made once as a borrow and kept in a byte.

@@ -131,3 +131,33 @@ fn an_unsigned_greater_or_equal_of_two_words_as_a_value_is_straight_line() {
     let bytes = estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
     assert!(bytes <= 81, "k_valuege: {bytes} B\n{body}");
 }
+
+/// `k_sign`: a branch on `x >= 0` of an `i32` (`x <= -1` is the same sign).
+fn sign_ir() -> String {
+    "declare void @one()
+declare void @two()
+define void @k_sign(ptr %a) {
+  %x = load i32, ptr %a
+  %c = icmp sge i32 %x, 0
+  br i1 %c, label %t, label %f
+t:
+  call void @one()
+  ret void
+f:
+  call void @two()
+  ret void
+}
+"
+    .to_owned()
+}
+
+/// `x >= 0` went through the four-limb chain with the sign bits flipped (`lda #255; cmp; sbc ...; sbc rc6`), where
+/// the sign of the high word is `bpl`: `__fixunssfsi` and `__fixunsdfdi` grew by 20 B and ran slower.
+#[test]
+fn a_long_at_or_above_zero_is_the_sign_of_its_high_word() {
+    let ir = format!("target datalayout = \"{}\"\n{}", datalayout(), sign_ir());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let from = text.find("k_sign:").unwrap_or_else(|| panic!("no k_sign in\n{text}"));
+    let body: String = text[from..].split(".segment").next().unwrap().to_owned();
+    assert!(!body.contains("sbc"), "a chain for a sign:\n{body}");
+}
