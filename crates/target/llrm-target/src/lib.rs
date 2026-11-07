@@ -536,6 +536,12 @@ pub trait Target {
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 
+    /// A `mov imm; jmp` block with one predecessor is folded into it at -Os
+    /// (LEAF-FOLD-OS).
+    fn leaf_fold_at_size(&self) -> bool {
+        false
+    }
+
     /// The pressure sets of the register classes and each set's limit, for a
     /// target that has them (the pre-RA scheduler tracks pressure per set).
     fn pressure(&self) -> Option<(&'static pressure::PressureSets, Vec<u32>)> {
