@@ -704,6 +704,10 @@ impl Tti for X86 {
         self.tuning.x87_share_negated_products && !self.sse2
     }
 
+    fn x87_zero_fill_at_size(&self) -> bool {
+        self.tuning.x87_zero_fill_at_size && !self.sse2
+    }
+
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         self.tuning.unroll_partial_threshold
     }
@@ -1266,8 +1270,14 @@ impl Tti for X86 {
 
     /// Real mode declares the registers the allocator has, and the live count
     /// LSR keeps is exact there: the six fill (PLASMA's loop, 4 + 2 live).
+    ///
+    /// DEVIATE LU3d: a target that states its allocatable registers
+    /// (`with_registers`: the frame and stack pointers are not among them)
+    /// keeps none back; the pin's one stands for the stack pointer its count
+    /// of eight includes. owner: w12, exit: 2026-11-20 (the m32/m64 A/B in the
+    /// PR; without it the line goes).
     fn lsr_reserved_registers(&self) -> u32 {
-        u32::from(self.real_mode.is_none())
+        u32::from(self.real_mode.is_none() && self.registers.is_none())
     }
 
     /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold

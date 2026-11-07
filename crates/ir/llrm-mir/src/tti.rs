@@ -805,6 +805,12 @@ pub trait Tti {
         false
     }
 
+    /// Whether a zero fill is stored as zero doubles through the FPU at `-Os`
+    /// (`Tuning::x87_zero_fill_at_size`).
+    fn x87_zero_fill_at_size(&self) -> bool {
+        false
+    }
+
     /// The target's `PartialThreshold` (its tuning table); none: the pass's
     /// own.
     fn unroll_partial_threshold_override(&self) -> Option<u32> {

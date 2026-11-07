@@ -168,7 +168,9 @@ fn x86_runs_the_pin_combines_the_corpus_judged_better() {
         profile: None,
     };
     assert!(hooks.fold_bin_op_into_select() && hooks.fold_xor_of_and_with_mask() && hooks.canonicalize_ge_le());
-    assert!(!hooks.rebuild_brcond_condition() && hooks.fold_mul_of_add_with_constant());
+    assert!(hooks.rebuild_brcond_condition() && hooks.fold_mul_of_add_with_constant());
+    let m16 = X86Lowering { i16_mul_chains: true, ..hooks };
+    assert!(!m16.rebuild_brcond_condition() && !m16.fold_and_of_extload() && hooks.fold_and_of_extload());
     let m64 = X86Lowering { share_products: false, zext_free: true, ..hooks };
     assert!(m64.rebuild_brcond_condition() && m64.fold_and_of_extload());
 }

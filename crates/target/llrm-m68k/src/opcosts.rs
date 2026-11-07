@@ -111,6 +111,9 @@ pub fn forms(cpu: Cpu) -> Vec<(&'static str, Vec<Inst>)> {
 pub const AT_DEFAULT: &[(&str, &str)] = &[
     ("argument", "2: a register push, which is what the default says; also a form"),
     ("prefix", "m68k has no operand-size prefix"),
+    ("native_bits", "0: a price is for the operation as the type has it, as on every target but the 6502"),
+    ("address_dword", "m68k states no address-size prefix; the price is `address` alone"),
+    ("address_third", "same"),
     ("return_pops", "the caller pops its arguments"),
     ("carry", "no segmented or huge pointers"),
     ("carry_step", "no segmented or huge pointers"),

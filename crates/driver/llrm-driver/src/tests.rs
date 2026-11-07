@@ -1268,7 +1268,9 @@ fn the_trap_intrinsics_select_or_are_refused_by_name() {
         );
         compiled(&flags(&["-m32"]), &text, "f")
     };
-    for (name, call, wanted) in [("llvm.trap()", "llvm.trap()", "ud2"), ("llvm.debugtrap()", "llvm.debugtrap()", "int3")] {
+    for (name, call, wanted) in
+        [("llvm.trap()", "llvm.trap()", "ud2"), ("llvm.debugtrap()", "llvm.debugtrap()", "int3")]
+    {
         let (built, _) = one(name, call).unwrap_or_else(|why| panic!("{name}: {why}"));
         let listing = llrm_codegen::backend::masm::text(&built).unwrap();
         assert!(listing.contains(wanted), "{name}: {listing}");
@@ -2030,14 +2032,23 @@ fn a_comdat_function_and_global_are_comdat_sections() {
          define linkonce_odr dso_local i32 @f(i32 %a) comdat {\n  ret i32 %a\n}\n\
          define dso_local i32 @h(i32 %a) {\n  ret i32 %a\n}\n",
     );
-    let at = |name: &str| object.symbols.iter().find(|one| one.name == name).and_then(|one| match one.definition {
-        llrm_object::Definition::Defined { section, .. } => Some(section),
-        llrm_object::Definition::Undefined => None,
-    });
+    let at = |name: &str| {
+        object
+            .symbols
+            .iter()
+            .find(|one| one.name == name)
+            .and_then(
+                |one| match one.definition {
+                    llrm_object::Definition::Defined { section, .. } => Some(section),
+                    llrm_object::Definition::Undefined => None,
+                },
+            )
+    };
     let selection = |section: usize| object.comdats.iter().find(|one| one.section == section).map(|one| one.selection);
     assert_eq!(selection(at("f").unwrap()), Some(llrm_object::Selection::Any), "{:?}", object.comdats);
     assert_eq!(selection(at("v").unwrap()), Some(llrm_object::Selection::Largest), "{:?}", object.comdats);
-    // controls: a function with no comdat stays in the plain code section, apart from f's
+    // controls: a function with no comdat stays in the plain code section,
+    // apart from f's
     assert_eq!(selection(at("h").unwrap()), None);
     assert_ne!(at("h"), at("f"));
     let bytes = llrm_x86::mc::coff64::write(&object).unwrap();
@@ -2091,12 +2102,19 @@ fn the_members_of_a_comdat_are_associative_with_its_named_member() {
         llrm_object::Definition::Defined { section, .. } => section,
         llrm_object::Definition::Undefined => unreachable!(),
     };
-    let record = |section: usize| object.comdats.iter().find(|one| one.section == section).map(|one| (one.selection, one.associated));
+    let record = |section: usize| {
+        object.comdats.iter().find(|one| one.section == section).map(|one| (one.selection, one.associated))
+    };
     let key = section("k");
     assert_eq!(record(key), Some((llrm_object::Selection::Any, None)), "{:?}", object.comdats);
     for member in ["m", "g"] {
         assert_ne!(section(member), key, "{member} shares the key's section");
-        assert_eq!(record(section(member)), Some((llrm_object::Selection::Associative, Some(key))), "{member}: {:?}", object.comdats);
+        assert_eq!(
+            record(section(member)),
+            Some((llrm_object::Selection::Associative, Some(key))),
+            "{member}: {:?}",
+            object.comdats
+        );
     }
 }
 
@@ -2127,7 +2145,8 @@ fn a_comdat_symbol_is_external_and_a_static_stays_static() {
     }
     let class = |name: &str| classes.get(name).copied();
     assert_eq!((class("g"), class("v"), class("h")), (Some(2), Some(2), Some(2)), "{classes:?}");
-    // control: an internal function stays a static (class 3), if it is kept at all
+    // control: an internal function stays a static (class 3), if it is kept at
+    // all
     assert_ne!(class("s"), Some(2), "{classes:?}");
 }
 
@@ -2249,7 +2268,8 @@ fn a_frameless_leaf_gets_no_unwind_data_as_the_pin_writes_none() {
     );
     let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
     let size = |name: &str| object.sections.iter().find(|one| one.name == name).map_or(0, |one| one.image.len());
-    // one row for `framed`; control: that row is there, so the leaf's absence is not an empty table
+    // one row for `framed`; control: that row is there, so the leaf's absence
+    // is not an empty table
     assert_eq!(size(".pdata"), 12, "{:?}", object.sections.iter().map(|one| &one.name).collect::<Vec<_>>());
     assert!(size(".xdata") >= 4);
     let rows = object.sections.iter().find(|one| one.name == ".pdata").unwrap().relocs.len();
@@ -2266,7 +2286,11 @@ fn an_object_of_leaves_has_no_unwind_sections() {
 }
 
 /// The listing of `tail call @g(...)` then `ret`, built with `abi` at -O2.
-fn tail_call_listing(abi: &str, signature: &str, arguments: &str) -> String {
+fn tail_call_listing(
+    abi: &str,
+    signature: &str,
+    arguments: &str,
+) -> String {
     // a variadic call names its callee's type: `i32 (i32, ...) @g`
     let text = format!(
         "{SYSV}declare i32 @g{signature}\ndefine i32 @f(i32 %x) {{\n  %r = tail call i32 {} @g({arguments})\n  ret i32 %r\n}}\n",
@@ -2278,7 +2302,8 @@ fn tail_call_listing(abi: &str, signature: &str, arguments: &str) -> String {
 
 /// A variadic tail call under Win64 became `jmp g`; the pin keeps `call g`
 /// then `ret` (`isEligibleForSiblingCallOpt`: no variadic sibling call when
-/// either side is Win64). SysV, and a Win64 call of a fixed signature, still jump.
+/// either side is Win64). SysV, and a Win64 call of a fixed signature, still
+/// jump.
 #[test]
 fn a_win64_variadic_tail_call_stays_a_call() {
     let jumps = |listing: &str| listing.lines().any(|line| line.trim().starts_with("jmp g"));
@@ -3437,6 +3462,39 @@ fn a_branch_on_a_negated_bool_global_is_one_compare_at_m64() {
     assert!(listing.contains("cmp byte ptr bad, 1"), "{listing}");
 }
 
+/// The exit flag of a probe loop (`phi i1` from a compare) read by a branch
+/// whose true successor follows was `not cl; test cl, 1; je`, and `and cl, 1;
+/// cmp cl, 1` once rebuilt (x_hash `-Os` m32, +5 B on the pin): the phi
+/// register knew nothing of its bits. The pin's `ComputePHILiveOutRegInfo`
+/// tells it `i1`.
+#[test]
+fn a_branch_on_an_inverted_bool_phi_is_not_negated_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @keys = global [256 x i32] zeroinitializer\n\
+                @vals = global [256 x i32] zeroinitializer\n\
+                define void @f(i32 %n, i32 %k, i32 %s0) {\n\
+                e:\n  %p = getelementptr [4 x i8], ptr @keys, i32 %s0\n  %v = load i32, ptr %p\n\
+                \x20 %c0 = icmp eq i32 %v, -1\n  %m0 = icmp eq i32 %v, %k\n  %o0 = or i1 %c0, %m0\n\
+                \x20 br i1 %o0, label %j, label %h\n\
+                h:\n  br label %lp\n\
+                lp:\n  %s = phi i32 [ %s1, %lp ], [ %s0, %h ]\n  %a = add i32 %s, 1\n  %s1 = and i32 %a, 255\n\
+                \x20 %q = getelementptr [4 x i8], ptr @keys, i32 %s1\n  %w = load i32, ptr %q\n\
+                \x20 %c1 = icmp eq i32 %w, -1\n  %m1 = icmp eq i32 %w, %k\n  %o1 = or i1 %c1, %m1\n\
+                \x20 br i1 %o1, label %j, label %lp\n\
+                j:\n  %i = phi i32 [ %s0, %e ], [ %s1, %lp ]\n  %fl = phi i1 [ %c0, %e ], [ %c1, %lp ]\n\
+                \x20 br i1 %fl, label %ins, label %upd\n\
+                ins:\n  %pk = getelementptr [4 x i8], ptr @keys, i32 %i\n  store i32 %k, ptr %pk\n\
+                \x20 %pv = getelementptr [4 x i8], ptr @vals, i32 %i\n  store i32 %n, ptr %pv\n  br label %x\n\
+                upd:\n  %pu = getelementptr [4 x i8], ptr @vals, i32 %i\n  %o = load i32, ptr %pu\n\
+                \x20 %t = add i32 %o, %n\n  store i32 %t, ptr %pu\n  br label %x\n\
+                x:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("not ") && !listing.contains("and cl, 1"), "{listing}");
+    assert!(listing.contains("test cl, cl"), "{listing}");
+}
+
 /// The locals' base was aligned to the stack's 16 below the pushed registers
 /// (the pin aligns each object to its own and only the total to the stack):
 /// a function with one int local and two saved registers had `sub rsp, 24`
@@ -3497,19 +3555,22 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
     let (built, _) = compiled(&flags(&["-m64", "-O3", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     // Jammed by three: `px += 3 * vx` is `lea r, [v+v]` then `add r, v`.
-    let tripled = listing.lines().map(str::trim).filter(|line| {
-        line.strip_prefix("lea ")
-            .and_then(|rest| rest.split_once('['))
-            .and_then(|(_, inside)| inside.strip_suffix(']'))
-            .and_then(|inside| inside.split_once('+'))
-            .is_some_and(|(a, b)| a == b)
-    });
+    let tripled = listing
+        .lines()
+        .map(str::trim)
+        .filter(
+            |line| line.strip_prefix("lea ")
+                .and_then(|rest| rest.split_once('['))
+                .and_then(|(_, inside)| inside.strip_suffix(']'))
+                .and_then(|inside| inside.split_once('+'))
+                .is_some_and(|(a, b)| a == b),
+        );
     assert!(tripled.count() >= 2, "{listing}");
 }
 
-/// fib at m64 -O2 was copied into itself to the 150 `gcc_insns` the pass allowed
-/// (25941 clocks, 556 B) where gcc's cap is 450 (10793 clocks, 1028 B); -O3 keeps 150
-/// (m32's rectwo and bintree are worse with 450 there).
+/// fib at m64 -O2 was copied into itself to the 150 `gcc_insns` the pass
+/// allowed (25941 clocks, 556 B) where gcc's cap is 450 (10793 clocks, 1028 B);
+/// -O3 keeps 150 (m32's rectwo and bintree are worse with 450 there).
 #[test]
 fn fib_is_copied_into_itself_to_gccs_growth_cap_at_o2_only_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -4115,7 +4176,8 @@ fn a_win64_function_saves_the_xmm_registers_it_keeps_across_a_call() {
         rest.split(']').next()?.parse().ok()
     };
     let saves: Vec<i64> = lines.iter().filter_map(offset).collect();
-    let reloads = lines.iter().filter(|line| line.starts_with("movaps xmm") && line.contains(", xmmword ptr [rsp+")).count();
+    let reloads =
+        lines.iter().filter(|line| line.starts_with("movaps xmm") && line.contains(", xmmword ptr [rsp+")).count();
     assert!(saves.len() >= 2 && reloads == saves.len(), "{win}");
     assert!(saves.iter().all(|at| at % 16 == 0), "movaps faults off a 16-byte boundary: {win}");
     let sysv = listing_of("-mabi=sysv");
@@ -4132,7 +4194,11 @@ fn a_win64_function_with_alloca_reloads_its_xmm_saves_through_the_frame_register
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     // The frame register lies the pushes and the `sub` above the stack pointer.
-    let pushes = lines.iter().take_while(|l| !l.starts_with("sub rsp")).filter(|l| l.starts_with("push") && **l != "push rbp").count() as i64;
+    let pushes = lines
+        .iter()
+        .take_while(|l| !l.starts_with("sub rsp"))
+        .filter(|l| l.starts_with("push") && **l != "push rbp")
+        .count() as i64;
     let sub: i64 = lines.iter().find_map(|l| l.strip_prefix("sub rsp, ")?.parse().ok()).unwrap();
     let distance = 8 * pushes + sub;
     let number = |l: &str, open: &str| -> i64 {
@@ -4141,8 +4207,11 @@ fn a_win64_function_with_alloca_reloads_its_xmm_saves_through_the_frame_register
     };
     let saves: Vec<i64> =
         lines.iter().filter(|l| l.starts_with("movaps xmmword ptr [rsp+")).map(|l| number(l, "[rsp")).collect();
-    let reloads: Vec<i64> =
-        lines.iter().filter(|l| l.starts_with("movaps xmm") && l.contains(", xmmword ptr [rbp")).map(|l| number(l, "[rbp")).collect();
+    let reloads: Vec<i64> = lines
+        .iter()
+        .filter(|l| l.starts_with("movaps xmm") && l.contains(", xmmword ptr [rbp"))
+        .map(|l| number(l, "[rbp"))
+        .collect();
     assert!(!saves.is_empty(), "{listing}");
     assert_eq!(reloads, saves.iter().map(|at| at - distance).collect::<Vec<_>>(), "{listing}");
 }
@@ -4179,7 +4248,10 @@ fn a_win64_variadic_function_homes_its_register_arguments_for_va_start() {
     let below: i64 = lines.iter().find_map(|l| l.strip_prefix("sub rsp, ")?.parse().ok()).unwrap_or(0);
     for (at, register) in [(16, "rdx"), (24, "r8"), (32, "r9")] {
         let home = format!("mov qword ptr [rsp+{}], ", at + below);
-        assert!(lines.iter().any(|l| l.starts_with(&home)), "{register} not homed {at} above the return address: {listing}");
+        assert!(
+            lines.iter().any(|l| l.starts_with(&home)),
+            "{register} not homed {at} above the return address: {listing}"
+        );
     }
     assert!(!listing.contains("test al"), "SysV register save area: {listing}");
     // Win64 has no red zone: nothing is written below the stack pointer.
@@ -4247,9 +4319,8 @@ fn a_win64_function_with_an_unprobed_shape_is_refused() {
 #[test]
 fn a_64_bit_compare_with_a_shifted_mask_is_a_shift_and_a_narrow_test() {
     let listing_of = |mask: u64| {
-        let body = format!(
-            "define i1 @f(i64 %x) {{\n  %a = and i64 %x, {mask}\n  %c = icmp eq i64 %a, 0\n  ret i1 %c\n}}\n"
-        );
+        let body =
+            format!("define i1 @f(i64 %x) {{\n  %a = and i64 %x, {mask}\n  %c = icmp eq i64 %a, 0\n  ret i1 %c\n}}\n");
         let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &format!("{SYSV}{body}"), "f").unwrap();
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
@@ -4350,4 +4421,3 @@ fn a_zero_extended_select_mask_stays_an_immediate_in_the_loop_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("306674911"), "{listing}");
 }
-
