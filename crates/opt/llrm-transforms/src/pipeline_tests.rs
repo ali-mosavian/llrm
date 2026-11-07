@@ -510,7 +510,7 @@ b2:
 
 /// `int a = *p; *q = 1; return a + *p` with `q` a `char *`: C lets the char
 /// store write `*p`, so the second load stays. TypeBasedAA's `omnipotent char`
-/// was not read as the parent of `int2`, and llrm-c's -O2 added `*p` to itself.
+/// was not read as the parent of `int2`, and llrm-cc's -O2 added `*p` to itself.
 #[test]
 fn a_char_store_between_two_int_loads_leaves_the_second_load() {
     let text = "define i16 @f(ptr %p, ptr %q) {
