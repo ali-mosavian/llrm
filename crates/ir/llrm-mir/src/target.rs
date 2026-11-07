@@ -195,6 +195,12 @@ pub struct Tuning {
     /// Linux x86-64 stays false: glibc's `memcpy` of 0-32 bytes is 6.4 TSC
     /// ticks a call, `rep movsb` 8.2 (Ryzen 9 9950X3D, fsrm; 2026-11-05).
     pub inline_variable_memcpy: bool,
+    /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541: tuned for size, a constant
+    /// `memcpy`/`memmove` whose load and store pieces take more bytes than the call of the library
+    /// routine (`mov edx, n` and the call, 10 B) is the call. The pin counts pieces
+    /// (`MaxStoresPerMemcpyOptSize`). gcc -Os calls from 32 B (mv64 10 B against the pin's 31).
+    /// false: the pin's pieces.
+    pub size_copy_vs_call: bool,
     /// DEVIATE REC5-1 (owner w2, exit 2026-11-20): IPSCCP widens a range that
     /// keeps growing to its half-line, keeping the sign, not to overdefined
     /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
@@ -268,6 +274,7 @@ impl Tuning {
         unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,
         inline_variable_memcpy: false,
+        size_copy_vs_call: false,
         ipsccp_widen_keeps_sign: false,
     };
 }
