@@ -2910,35 +2910,6 @@ fn stack_addressed(
     procedure: &Procedure,
     number: usize,
 ) -> Option<Vec<Item>> {
-    // The answer is a function of the procedure and `number` alone, and the
-    // frame is asked about the same procedure up to three times (the listing,
-    // the exits, the layout). The last answer per name is kept with the
-    // procedure it was made for and used only for an equal one.
-    ASKED.with(|asked| {
-        if let Some((kept, answer)) = asked.borrow().get(&(procedure.name.clone(), number))
-            && kept == procedure
-        {
-            return answer.clone();
-        }
-        let answer = stack_addressed_trial(procedure, number);
-        asked.borrow_mut().insert((procedure.name.clone(), number), (procedure.clone(), answer.clone()));
-        answer
-    })
-}
-
-type Answers = std::collections::HashMap<(String, usize), (Procedure, Option<Vec<Item>>)>;
-
-thread_local! {
-    static ASKED: std::cell::RefCell<Answers> = std::cell::RefCell::new(Answers::new());
-    /// How many times the trial ran on this thread (a test counts it).
-    static TRIALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-fn stack_addressed_trial(
-    procedure: &Procedure,
-    number: usize,
-) -> Option<Vec<Item>> {
-    TRIALS.with(|trials| trials.set(trials.get() + 1));
     let registers = &procedure.registers;
     if !registers.optional
         || procedure.far
@@ -4304,47 +4275,6 @@ mod tests {
     /// A sibling call in a body whose frame register was omitted: the exits
     /// inserted ahead of the return (`frame_exit` set) must still end in the
     /// jump to the callee, not a `ret`.
-    /// The frame was asked about a procedure three times (listing, exits,
-    /// layout) and each ask rebuilt the whole listing: ~22 M instructions a
-    /// file. An equal procedure now answers from the first ask; a changed one
-    /// (the exits inserted, a different `number`) is asked again.
-    #[test]
-    fn an_equal_procedure_is_asked_about_its_frame_once() {
-        let bx = Loc::Reg(ir::Reg { register: RegId::EBX, width: 4 });
-        let si = Loc::Reg(ir::Reg { register: RegId::ESI, width: 4 });
-        let r#move = insn(0, semantics(Operation::Move, "mov", vec![si], vec![bx]));
-        let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
-        let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
-        let body = lir::LirBody {
-            bits: 32,
-            ..lir::LirBody::new("get", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default())
-        };
-        let procedure = Procedure {
-            name: "_memo_get".into(),
-            public: true,
-            far: false,
-            body,
-            reserve: 0,
-            callees: IndexMap::default(),
-            interrupt: None,
-            size: false,
-            entry: 0,
-            stack_check: None,
-            probe_stack: None,
-            registers: llrm_target::Target::frame_registers(&llrm_x86_m32::M32),
-        };
-        let trials = || TRIALS.with(std::cell::Cell::get);
-        let before = trials();
-        let first = stack_addressed(&procedure, 0);
-        assert!(first.is_some(), "premise: the frame register is omitted");
-        assert_eq!(stack_addressed(&procedure.clone(), 0), first);
-        assert_eq!(trials() - before, 1, "an equal procedure is not asked again");
-        // controls: another number, and a procedure that differs, are asked
-        stack_addressed(&procedure, 1);
-        stack_addressed(&Procedure { reserve: 8, ..procedure.clone() }, 0);
-        assert_eq!(trials() - before, 3);
-    }
-
     #[test]
     fn a_sibling_call_in_an_omitted_frame_still_jumps() {
         let bx = Loc::Reg(ir::Reg { register: RegId::EBX, width: 4 });
