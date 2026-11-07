@@ -114,10 +114,23 @@ pub fn take_handed_over(body: &LirBody) -> Option<LiveIntervals> {
 /// between only added, removed or rewrote instructions (the pin keeps one
 /// analysis from the coalescer to the allocator): taken if no other body was
 /// numbered since and the edit applies.
-pub fn take_handed_over_edited_to(body: &LirBody) -> Option<LiveIntervals> {
+///
+/// `carry` (`Tuning::carry_slot_indexes`) also takes them across the
+/// instructions the pre-RA scheduler moved and across another body's
+/// numbering, as the pin's `SlotIndexes` live on (`handleMove` leaves the
+/// entry a move empties). Off, a function the scheduler touched is numbered
+/// afresh.
+pub fn take_handed_over_edited_to(
+    body: &LirBody,
+    carry: bool,
+) -> Option<LiveIntervals> {
     HANDED_OVER.with(|slot| {
         let mut held = slot.borrow_mut().take()?;
-        held.lis.take()?.edited_to(body)
+        if !carry && held.analysed != super::slotindex::analysed() {
+            return None;
+        }
+        let lis = held.lis.take()?;
+        if carry { lis.edited_to_moving(body) } else { lis.edited_to(body) }
     })
 }
 
@@ -457,8 +470,27 @@ impl LiveIntervals {
     /// the blocks, the inputs or the order of the instructions both bodies keep
     /// differ.
     pub fn edited_to(
+        self,
+        body: &LirBody,
+    ) -> Option<Self> {
+        self.edited(body, false)
+    }
+
+    /// [`LiveIntervals::edited_to`], where the instructions both bodies keep
+    /// may also run in another order: each one out of place goes out of the
+    /// maps and in again (`handleMove`, LiveIntervals.cpp#L1513), and the
+    /// entry it leaves stays, empty.
+    pub fn edited_to_moving(
+        self,
+        body: &LirBody,
+    ) -> Option<Self> {
+        self.edited(body, true)
+    }
+
+    fn edited(
         mut self,
         body: &LirBody,
+        moving: bool,
     ) -> Option<Self> {
         if body.blocks.len() != self.blocks.len() || body.inputs != self.inputs {
             return None;
@@ -491,10 +523,12 @@ impl LiveIntervals {
                 }
                 previous = Some(one.id());
             }
-            // What is left is a reordering: the pre-RA scheduler's moves. Each
-            // instruction not already where the new order wants it goes out
-            // and in again, `handleMove` (LiveIntervals.cpp#L1513): the entry
-            // it leaves stays, empty, as the pin's does.
+            if !moving {
+                if !self.blocks[n].iter().map(|one| one.id()).eq(block.insns.iter().map(|one| one.id())) {
+                    return None;
+                }
+                continue;
+            }
             let target: Vec<InstrKey> = block.insns.iter().map(|one| one.id()).collect();
             if self.blocks[n].len() != target.len() {
                 return None;

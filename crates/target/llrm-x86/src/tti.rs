@@ -787,6 +787,10 @@ impl Tti for X86 {
         self.tuning.peel_folded_entry
     }
 
+    fn carries_slot_indexes(&self) -> bool {
+        self.tuning.carry_slot_indexes
+    }
+
     fn sinks_select_arms(&self) -> bool {
         self.tuning.sink_select_arms
     }

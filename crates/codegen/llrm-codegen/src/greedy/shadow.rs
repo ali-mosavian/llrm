@@ -77,6 +77,10 @@ pub struct ShadowInputs<'a> {
     /// register units say. x86 holds the whole root (`_whole`): its pins are
     /// roots, and its output depends on it.
     pub lane_pins: bool,
+    /// `Tuning::carry_slot_indexes`: the coalescer's slot indexes, with the
+    /// entries erased and moved instructions left empty, reach the allocator
+    /// through the scheduler, as the pin's do.
+    pub carry_slot_indexes: bool,
 }
 
 /// What the shadow allocator decided.
@@ -1192,9 +1196,12 @@ pub fn decide_with(
 /// copies leave gaps that inflate range sizes, and the dequeue priority is the
 /// size.
 /// https://github.com/llvm/llvm-project/blob/main/llvm/lib/CodeGen/RegAllocGreedy.cpp#L3074
-fn intervals_to_allocate(body: &LirBody) -> LiveIntervals {
+fn intervals_to_allocate(
+    body: &LirBody,
+    carry: bool,
+) -> LiveIntervals {
     let mut lis =
-        crate::liveness::liveintervals::take_handed_over_edited_to(body).unwrap_or_else(|| LiveIntervals::new(body));
+        crate::liveness::liveintervals::take_handed_over_edited_to(body, carry).unwrap_or_else(|| LiveIntervals::new(body));
     if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") {
         // The premise: the intervals the edits left are the ones made afresh.
         lis.assert_intervals_cover_afresh(body);
@@ -1234,7 +1241,7 @@ pub fn decide_with_split(
             }
         }
     }
-    let lis = intervals_to_allocate(body);
+    let lis = intervals_to_allocate(body, inputs.carry_slot_indexes);
     // The environment: orders, frequencies, loop exits.
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq: Vec<f32> =
@@ -1709,6 +1716,7 @@ mod tests {
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             lane_pins: false,
+            carry_slot_indexes: true,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
         let rfp = Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers().to_vec();
@@ -1741,7 +1749,7 @@ mod tests {
         grown.push(Arc::clone(&old[1]));
         let after = body_of(grown);
         crate::liveness::liveintervals::hand_over(LiveIntervals::new(&before), &before);
-        let lis = intervals_to_allocate(&after);
+        let lis = intervals_to_allocate(&after, true);
         let at: Vec<u32> =
             after.blocks[0].insns.iter().map(|one| lis.indexes.get_instruction_index(one.id()).get_index()).collect();
         let steps: Vec<u32> = at.windows(2).map(|pair| pair[1] - pair[0]).collect();
@@ -1769,11 +1777,16 @@ mod tests {
         drop(LiveIntervals::new(&body_of(make(100, 3))));
         // Erased `1`, and `2` moved to the front.
         let after = body_of(vec![Arc::clone(&all[2]), Arc::clone(&all[0]), Arc::clone(&all[3])]);
-        let lis = intervals_to_allocate(&after);
+        let lis = intervals_to_allocate(&after, true);
         let entries = lis.indexes.get_last_index().get_index() / SlotIndex::INSTR_DIST + 1;
         // Start, 4 instructions, the end of the block, and the move's new entry;
         // numbered afresh the body has 5.
         assert_eq!(entries, 7, "the entries of the coalescer's list, not a fresh one");
+        // A target that does not carry them (x86, until priced) numbers afresh.
+        crate::liveness::liveintervals::hand_over(LiveIntervals::new(&before), &before);
+        drop(LiveIntervals::new(&body_of(make(100, 3))));
+        let fresh = intervals_to_allocate(&after, false);
+        assert_eq!(fresh.indexes.get_last_index().get_index() / SlotIndex::INSTR_DIST + 1, 5);
     }
 
     /// Greedy's spill weights read `MachineBlockFrequencyInfo`
@@ -1811,6 +1824,7 @@ mod tests {
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             lane_pins: false,
+            carry_slot_indexes: true,
         };
         let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
         assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
@@ -1995,6 +2009,7 @@ mod tests {
                 tri: &crate::greedy::targetinfo::X86RegisterInfo,
                 size: false,
                 lane_pins: false,
+                carry_slot_indexes: true,
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
             decided
@@ -2062,6 +2077,7 @@ mod tests {
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             lane_pins: false,
+            carry_slot_indexes: true,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
         assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
@@ -2216,6 +2232,7 @@ mod tests {
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             lane_pins: false,
+            carry_slot_indexes: true,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -2290,6 +2307,7 @@ mod tests {
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             lane_pins: false,
+            carry_slot_indexes: true,
         };
         let in_ecx = |decided: &Decided| decided.placed.iter().filter(|(v, reg)| *reg == RegId::ECX && *v > 4).count();
         // At -Os the pin skips the split: the premise, v1 whole in another
@@ -2340,6 +2358,7 @@ mod tests {
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             lane_pins: false,
+            carry_slot_indexes: true,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");

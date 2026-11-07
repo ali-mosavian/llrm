@@ -633,6 +633,7 @@ mod tuning_tests {
         assert_eq!(table.unroll_partial_threshold, Some(0));
         assert_eq!(table.x87_stack_slots, Some(8));
         assert!(table.slots_loop_width_rule, "m16 keeps a word out of a loop-held wider stack slot (SLOTS-LOOPWIDTH)");
+        assert!(!table.carry_slot_indexes, "DEVIATE CARRY-SI: x86 numbers the function afresh after the scheduler until priced");
         assert_eq!(table.unswitch_threshold, Some(0));
         assert_eq!(
             Tuning {
@@ -654,6 +655,7 @@ mod tuning_tests {
                 unroll_partial_threshold: None,
                 x87_stack_slots: None,
                 slots_loop_width_rule: false,
+                carry_slot_indexes: true,
                 rotation_header_priced_at_size: false,
                 unswitch_threshold: None,
                 inline_threshold: None,
