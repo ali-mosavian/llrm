@@ -179,16 +179,18 @@ fn defines(
 
 /// What a call-area store writes.
 #[derive(Clone, Copy)]
-enum Source {
+enum Source<'a> {
     Register(llrm_lir::registers::RegId),
     Immediate(i64),
+    /// The address of a symbol, plus an addend.
+    Symbol(&'a str, i64),
 }
 
 /// The call-area store `inst` is: its offset and what it stores.
-fn argument_store(
-    inst: &Inst,
+fn argument_store<'a>(
+    inst: &'a Inst,
     assignment: &Assignment,
-) -> Option<(i64, Source)> {
+) -> Option<(i64, Source<'a>)> {
     let (offset, base, source) = match (inst.kind, &inst.operands[..]) {
         (Kind::Op("MOV32pr"), [Operand::Imm(k), Operand::Use(base), Operand::Use(src)]) => {
             (*k, base, Source::Register(physical(*src, assignment)))
@@ -200,6 +202,12 @@ fn argument_store(
             (*k, base, Source::Immediate(*v))
         }
         (Kind::Op("MOV32ji"), [Operand::Use(base), Operand::Imm(v)]) => (0, base, Source::Immediate(*v)),
+        (Kind::Op("MOV32pi"), [Operand::Imm(k), Operand::Use(base), Operand::Symbol(name, addend)]) => {
+            (*k, base, Source::Symbol(name, *addend))
+        }
+        (Kind::Op("MOV32ji"), [Operand::Use(base), Operand::Symbol(name, addend)]) => {
+            (0, base, Source::Symbol(name, *addend))
+        }
         // a store of zero selects `clr.l`
         (Kind::Op("CLR32p"), [Operand::Imm(k), Operand::Use(base)]) => (*k, base, Source::Immediate(0)),
         (Kind::Op("CLR32j"), [Operand::Use(base)]) => (0, base, Source::Immediate(0)),
@@ -457,6 +465,9 @@ fn sequences(
                 let (value, store_rows) = match source {
                     Source::Register(src) => (mc::Operand::Reg(src), ("MOV32jr", "MOV32pr")),
                     Source::Immediate(v) => (mc::Operand::Imm(v), ("MOV32ji", "MOV32pi")),
+                    Source::Symbol(name, addend) => {
+                        (mc::Operand::Symbol(name.to_owned(), addend), ("MOV32ji", "MOV32pi"))
+                    }
                 };
                 let store = if matches!(source, Source::Immediate(0)) {
                     // the `clr.l` the selector chose, priced as it is
