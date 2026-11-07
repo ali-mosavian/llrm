@@ -168,6 +168,11 @@ impl Tti for Wasm {
         "WebAssembly"
     }
 
+    /// The pin's `sinkUnusedInvariants` (grep -O2, stft_fixed -O1).
+    fn sinks_unused_invariants(&self) -> bool {
+        true
+    }
+
     /// Wasm locals are virtual: the engine allocates the registers, and the
     /// pin's LICM promotes without a cap (bench nbody_fixed -O2).
     fn licm_register_limit(&self) -> Option<u32> {

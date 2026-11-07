@@ -36,6 +36,10 @@ printf 'see ~/scratch/handoff/x.md\n' > "$d/repo/n.md"; git -C "$d/repo" add n.m
 stop=$(tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD) && { echo "FAIL: a tip naming ~/scratch was green"; exit 1; }
 echo "$stop" | grep -q 'no_local_paths.*n.md:1' || { echo "FAIL: path not named: $stop"; exit 1; }
 git -C "$d/repo" rm -qf n.md
+printf 'made by cla''ude\n' > "$d/repo/m.txt"; git -C "$d/repo" add m.txt
+stop=$(tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD) && { echo "FAIL: a tip with a file naming the assistant was green"; exit 1; }
+echo "$stop" | grep -q 'names the assistant.*m.txt' || { echo "FAIL: file not named: $stop"; exit 1; }
+git -C "$d/repo" rm -qf m.txt
 tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD >/dev/null || { echo "FAIL: a clean tip was red"; exit 1; }
 # the crash: tip_crates.py dies
 printf 'raise SystemExit("boom")\n' > "$d/tools/tip_crates.py"

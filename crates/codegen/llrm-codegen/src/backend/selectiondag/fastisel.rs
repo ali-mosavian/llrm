@@ -131,7 +131,7 @@ pub fn build_all(
         let dag = fresh_dag(module, function, target, info, block, None);
         let chain = dag.entry_node();
         let mut declined = String::new();
-        let dag = Fast { layout: data_layout, module, function, info: &*info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), arg_regs: &arg_regs, entry: layout[0] == block, sysv: &sysv, al, edx: arch.registers().named(arch.register_named("edx"), 4), m32, dag, chain, values: Default::default(), next }
+        let dag = Fast { layout: data_layout, module, function, info: &*info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), arg_regs: &arg_regs, entry: layout[0] == block, sysv: &sysv, al, edx: arch.registers().named(arch.register_named("edx"), 4), rax: view("rax", 8), rdx: view("rdx", 8), m32, dag, chain, values: Default::default(), next }
             .block(block, &mut declined);
         let Some(dag) = dag else {
             llrm_support::debug!("isel", "fast declined at {declined}");
@@ -155,6 +155,8 @@ struct Wide {
     cmp_rr: u16,
     cmp_ri: u16,
     imul: u16,
+    shl_ri: u16,
+    imul_ri: u16,
 }
 
 /// The machine opcodes FastISel emits.
@@ -171,6 +173,8 @@ struct Names {
     cmp_rr: u16,
     cmp_ri: u16,
     imul: u16,
+    shl_ri: u16,
+    imul_ri: u16,
     /// `setcc` and the `i1` to `i32` widening: `and r8, 1`, `movzx`.
     setcc: u16,
     and8: u16,
@@ -183,6 +187,8 @@ struct Names {
     /// m32 only so far: calls and the signed divide.
     calls: Option<Calls>,
     divide: Option<Divide>,
+    /// `SUBREG_TO_REG` and `EXTRACT_SUBREG`: widening and narrowing between `r32` and `r64`.
+    subreg: Option<(u16, u16)>,
     /// m64: `ADJCALLSTACKDOWN64`, `ADJCALLSTACKUP64`, `CALL64pcrel32`, `MOV8ri`.
     calls64: Option<(u16, u16, u16, u16)>,
 }
@@ -198,6 +204,8 @@ struct Divide {
     cdq: u16,
     idiv: u16,
     div: u16,
+    /// m64: `cqo`, `idiv r64`, `div r64`.
+    wide: Option<(u16, u16, u16)>,
 }
 
 impl Names {
@@ -218,6 +226,8 @@ impl Names {
                 cmp_rr: opcode("CMP64rr")?,
                 cmp_ri: opcode("CMP64ri32")?,
                 imul: opcode("IMUL64rr")?,
+                shl_ri: opcode("SHL64ri")?,
+                imul_ri: opcode("IMUL64rri32")?,
             })
         })();
         Some(Names {
@@ -233,6 +243,8 @@ impl Names {
             cmp_rr: opcode("CMP32rr")?,
             cmp_ri: opcode("CMP32ri")?,
             imul: opcode("IMUL32rr")?,
+            shl_ri: opcode("SHL32ri")?,
+            imul_ri: opcode("IMUL32rri")?,
             setcc: opcode("SETCCr")?,
             and8: opcode("AND8ri")?,
             movzx8: opcode("MOVZX32rr8")?,
@@ -247,7 +259,15 @@ impl Names {
                 })
             })(),
             calls64: (|| Some((opcode("ADJCALLSTACKDOWN64")?, opcode("ADJCALLSTACKUP64")?, opcode("CALL64pcrel32")?, opcode("MOV8ri")?)))(),
-            divide: (|| Some(Divide { cdq: opcode("CDQ")?, idiv: opcode("IDIV32r")?, div: opcode("DIV32r")? }))(),
+            divide: (|| {
+                Some(Divide {
+                    cdq: opcode("CDQ")?,
+                    idiv: opcode("IDIV32r")?,
+                    div: opcode("DIV32r")?,
+                    wide: (|| Some((opcode("CQO")?, opcode("IDIV64r")?, opcode("DIV64r")?)))(),
+                })
+            })(),
+            subreg: (|| Some((opcode("SUBREG_TO_REG")?, opcode("EXTRACT_SUBREG")?)))(),
         })
     }
 }
@@ -268,6 +288,8 @@ struct Fast<'a> {
     sysv: &'a [[llrm_lir::registers::RegId; 2]],
     al: llrm_lir::registers::RegId,
     edx: llrm_lir::registers::RegId,
+    rax: llrm_lir::registers::RegId,
+    rdx: llrm_lir::registers::RegId,
     /// Frame objects are addressed at m32 only so far (F3).
     m32: bool,
     dag: SelectionDAG,
@@ -516,26 +538,32 @@ impl Fast<'_> {
                     self.values.insert(instruction.result?, done);
                 }
                 Opcode::Binary(op @ (llrm_mir::opcode::BinaryOp::SDiv | llrm_mir::opcode::BinaryOp::SRem | llrm_mir::opcode::BinaryOp::UDiv | llrm_mir::opcode::BinaryOp::URem)) => {
-                    // signed `cdq; idiv r`, unsigned `mov edx,0; div r`: quotient in eax, remainder in edx
+                    // signed `cdq; idiv r` (`cqo` at 64 bits), unsigned `mov edx,0; div r`: quotient in eax, remainder in edx
                     use llrm_mir::opcode::BinaryOp::*;
                     let calls = self.names.divide.as_ref()?;
-                    if self.module.context.types.int_bits(instruction.ty) != Some(32) {
-                        return None;
-                    }
+                    let wide = match self.module.context.types.int_bits(instruction.ty) {
+                        Some(32) => false,
+                        Some(64) if !self.m32 => true,
+                        _ => return None,
+                    };
+                    let (sign, idiv, div, vt, accumulator, remainder) = match (wide, calls.wide) {
+                        (false, _) => (calls.cdq, calls.idiv, calls.div, EVT::I32, self.eax_reg()?, self.edx),
+                        (true, Some((cqo, idiv, div))) => (cqo, idiv, div, EVT::I64, self.rax, self.rdx),
+                        (true, None) => return None,
+                    };
                     let (left, right) = (self.value(instruction.operands[0])?, self.value(instruction.operands[1])?);
-                    let eax = self.eax_reg()?;
-                    let copy = self.dag.get_copy_to_phys_reg(self.dag.entry_node(), eax, left, None);
+                    let copy = self.dag.get_copy_to_phys_reg(self.dag.entry_node(), accumulator, left, None);
                     let glue = SDValue { node: copy.node, res: 1 };
                     let divided = if matches!(op, SDiv | SRem) {
-                        let sign = self.node(calls.cdq, &[EVT::GLUE], &[glue]);
-                        self.node(calls.idiv, &[EVT::GLUE], &[right, sign])
+                        let sign = self.node(sign, &[EVT::GLUE], &[glue]);
+                        self.node(idiv, &[EVT::GLUE], &[right, sign])
                     } else {
-                        let zero = self.dag.get_constant_with(0, EVT::I32, true, false);
-                        let clear = self.dag.get_copy_to_phys_reg(self.dag.entry_node(), self.edx, zero, Some(glue));
-                        self.node(calls.div, &[EVT::GLUE], &[right, SDValue { node: clear.node, res: 1 }])
+                        let zero = self.dag.get_constant_with(0, vt, true, false);
+                        let clear = self.dag.get_copy_to_phys_reg(self.dag.entry_node(), remainder, zero, Some(glue));
+                        self.node(div, &[EVT::GLUE], &[right, SDValue { node: clear.node, res: 1 }])
                     };
-                    let register = if matches!(op, SDiv | UDiv) { eax } else { self.edx };
-                    let result = self.dag.get_copy_from_phys_reg(self.dag.entry_node(), register, EVT::I32, divided);
+                    let register = if matches!(op, SDiv | UDiv) { accumulator } else { remainder };
+                    let result = self.dag.get_copy_from_phys_reg(self.dag.entry_node(), register, vt, divided);
                     self.values.insert(instruction.result?, SDValue { node: result.node, res: 0 });
                 }
                 Opcode::Call(call) if !self.m32 && call.calling_convention == self.function.calling_convention => {
@@ -554,14 +582,18 @@ impl Fast<'_> {
                     }
                     let types = &self.module.context.types;
                     let void = types.is_void(returns);
-                    if !(void || types.int_bits(returns) == Some(32)) {
-                        return None;
-                    }
+                    let wide_result = match types.int_bits(returns) {
+                        _ if void => false,
+                        Some(32) => false,
+                        Some(64) => true,
+                        _ => return None,
+                    };
                     let mut values = Vec::new();
                     for &one in arguments {
                         let ty = self.function.operand_type(&self.module.context, one)?;
                         let wide = match types.int_bits(ty) {
                             Some(32) => false,
+                            Some(64) => true,
                             _ if matches!(types.get(ty), llrm_mir::types::Type::Pointer(0)) => true,
                             _ => return None,
                         };
@@ -594,8 +626,8 @@ impl Fast<'_> {
                     let ended = self.node(up, &[EVT::OTHER, EVT::GLUE], &[zero, zero, SDValue { node: called.node, res: 0 }, SDValue { node: called.node, res: 1 }]);
                     let mut chain = SDValue { node: ended.node, res: 0 };
                     if !void {
-                        let eax = self.eax_reg()?;
-                        let result = self.dag.get_copy_from_phys_reg(chain, eax, EVT::I32, SDValue { node: ended.node, res: 1 });
+                        let (register, vt) = if wide_result { (self.rax, EVT::I64) } else { (self.eax_reg()?, EVT::I32) };
+                        let result = self.dag.get_copy_from_phys_reg(chain, register, vt, SDValue { node: ended.node, res: 1 });
                         chain = SDValue { node: result.node, res: 1 };
                         self.values.insert(instruction.result?, SDValue { node: result.node, res: 0 });
                     }
@@ -657,9 +689,34 @@ impl Fast<'_> {
                     let wide = wide_kind(&self.module.context.types, instruction.ty, self.m32)?;
                     let (_, _, _, _, alu, _, _, imul, vt) = self.set(wide)?;
                     if matches!(op, Mul) {
-                        // `imul r, r`: both operands in registers, as the pin's X86SelectMul
-                        let (left, right) = (self.value(instruction.operands[0])?, self.value(instruction.operands[1])?);
-                        let done = self.node(imul, &[vt, EVT::I32], &[left, right]);
+                        // the pin's `fastEmit_ri_`: a power of two is `shl r, k`, any other constant
+                        // `imul r, r, imm`; a constant on the left is swapped to the right
+                        let constant = |this: &Self, one| if wide { this.int_signed(one) } else { this.int(one) };
+                        let (a, b) = (instruction.operands[0], instruction.operands[1]);
+                        let (register, imm) = match (constant(&self, a), constant(&self, b)) {
+                            (_, Some(imm)) => (a, Some(imm)),
+                            (Some(imm), None) => (b, Some(imm)),
+                            (None, None) => (a, None),
+                        };
+                        let done = if let Some(imm) = imm {
+                            let (shl_ri, imul_ri) = if wide {
+                                let w = self.names.wide.as_ref()?;
+                                (w.shl_ri, w.imul_ri)
+                            } else {
+                                (self.names.shl_ri, self.names.imul_ri)
+                            };
+                            let left = self.value(register)?;
+                            if imm > 0 && (imm & (imm - 1)) == 0 {
+                                let count = self.dag.get_constant_with(imm.trailing_zeros().into(), EVT::I8, true, false);
+                                self.node(shl_ri, &[vt, EVT::I32], &[left, count])
+                            } else {
+                                let imm = self.dag.get_constant_with(imm as u128, vt, true, false);
+                                self.node(imul_ri, &[vt, EVT::I32], &[left, imm])
+                            }
+                        } else {
+                            let (left, right) = (self.value(a)?, self.value(b)?);
+                            self.node(imul, &[vt, EVT::I32], &[left, right])
+                        };
                         self.values.insert(instruction.result?, done);
                         continue;
                     }
@@ -745,6 +802,25 @@ impl Fast<'_> {
                     let jmp = self.node(self.names.jmp, &[EVT::OTHER], &[fall, jcc]);
                     self.chain = jmp;
                     at += 1;
+                }
+                Opcode::Cast(llrm_mir::opcode::CastOp::ZExt) if !self.m32 && self.is_wide(instruction.operands[0]) == Some(false) && self.module.context.types.int_bits(instruction.ty) == Some(64) => {
+                    // i32 -> i64: `SUBREG_TO_REG` (a dword write zeroes the high half)
+                    let (to_reg, _) = self.names.subreg?;
+                    let value = self.value(instruction.operands[0])?;
+                    let index = self.dag.get_constant_with(6, EVT::I32, true, false);
+                    let done = self.node(to_reg, &[EVT::I64], &[value, index]);
+                    self.values.insert(instruction.result?, done);
+                }
+                Opcode::Cast(llrm_mir::opcode::CastOp::Trunc) if !self.m32 => {
+                    // i64 -> i32: the low dword, `EXTRACT_SUBREG`
+                    let (_, extract) = self.names.subreg?;
+                    if self.is_wide(instruction.operands[0]) != Some(true) || self.module.context.types.int_bits(instruction.ty) != Some(32) {
+                        return None;
+                    }
+                    let value = self.value(instruction.operands[0])?;
+                    let index = self.dag.get_constant_with(6, EVT::I32, true, false);
+                    let done = self.node(extract, &[EVT::I32], &[value, index]);
+                    self.values.insert(instruction.result?, done);
                 }
                 Opcode::Cast(llrm_mir::opcode::CastOp::ZExt) => {
                     // i1 -> i32: `and r8, 1; movzx`

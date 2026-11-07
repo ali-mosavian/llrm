@@ -12,7 +12,7 @@ use llrm_spike_mf::tolir::allocate_greedy;
 use llrm_support::hash::HashMap;
 
 use crate::flagcse::writes_flags;
-use crate::mc::inst::{Gpr, Inst, Target, Vreg, Wide};
+use crate::mc::inst::{Gpr, Inst, Shift, Target, Vreg, Wide};
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{MFunc, Op};
 use crate::regalloc::{Allocation, spill_access};
@@ -94,6 +94,19 @@ fn label_of(inst: &Inst) -> Option<&str> {
 /// `mov xd, xzr`: the register-31 source of a copy is the zero register.
 /// The name of the definition of zero (`mov xd, xzr`).
 const ZERO: &str = "Zero";
+
+/// `isReMaterializable && isAsCheapAsAMove` for an `ADD`/`SUB`: the pin flags every
+/// form of `AddSub` (AArch64InstrFormats.td#L3098), and `isAsCheapAsAMove` keeps the
+/// immediate and the unshifted register forms (`SUBWrs`/`ADDWrs` only with
+/// `hasALULSLFast`, the extended forms not). A flag-setting form has an
+/// `$nzcv` def and is not.
+fn cheap_alu(op: &Op) -> bool {
+    match op {
+        Op::I(Inst::AddSubImm { op, .. }) => !op.set_flags,
+        Op::I(Inst::AddSubShifted { op, shift: Shift::Lsl, amount: 0, .. }) => !op.set_flags,
+        _ => false,
+    }
+}
 /// A constant one instruction makes (`movz`, `movn` or a logical immediate): the size of the copy it replaces.
 const ONE_INSN_IMM: &str = "Imm1";
 
@@ -295,6 +308,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             inst.early_clobber = matches!(op, Op::I(Inst::Atomic { .. }) | Op::JumpTable { .. });
             inst.rematerializable = fused
                 || zero
+                || cheap_alu(&op)
                 || matches!(
                     op,
                     Op::Imm { .. }
@@ -305,7 +319,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 &op,
                 Op::I(Inst::Load { mmo, .. }) if mmo.object == crate::mc::inst::MemObject::ConstantPool
             );
-            inst.cheap_as_move = zero || matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
+            inst.cheap_as_move = zero || cheap_alu(&op) || matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
             insts.push(inst);
         }
         lir.blocks.push(Block { id: at as u32, insts, phis: Vec::new() });
@@ -714,7 +728,11 @@ impl AllocTarget for Arm64 {
             .what
             .as_ref()
             .and_then(|what| what.name.as_deref())
-            .is_some_and(|name| Self::is_zero_def(name) || name == ONE_INSN_IMM)
+            .is_some_and(|name| Self::is_zero_def(name) || name == ONE_INSN_IMM || name.starts_with("AddSub"))
+    }
+
+    fn remat_reads_registers() -> bool {
+        true
     }
 
     fn candidates(class: Class) -> Vec<RegId> {

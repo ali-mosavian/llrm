@@ -377,3 +377,82 @@ fn fast_isel_takes_the_i64_core_at_m64() {
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(asm.contains("qword ptr [rbp-") && asm.contains("imul rax"), "{asm}");
 }
+
+/// At m64 `zext`/`trunc` between `i32` and `i64` and an `i64` divide left the
+/// function to the DAG ("fast declined at Cast"); `urem_eq.c`'s `main` mixes them.
+#[test]
+fn fast_isel_takes_widening_and_i64_divide_at_m64() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "unsigned long h(unsigned a, unsigned long b)\n{\n    unsigned long w = a;\n    unsigned t = (unsigned)(b / w);\n    return t + b % 10;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_DEBUG", "isel")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(asm.contains("div rcx") || asm.contains("div r"), "{asm}");
+}
+
+/// An `i64` argument or result left a caller to the DAG ("fast declined at
+/// Call"): `main` of `urem_eq.c` and `array.c` calls `printf("%ld")` and `report(long)`.
+#[test]
+fn fast_isel_takes_i64_call_arguments_and_results_at_m64() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "long next(long a);\nvoid report(long v);\nlong h(long a)\n{\n    report(a);\n    return next(a + 1);\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_DEBUG", "isel")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(asm.contains("mov rdi, rax") || asm.contains("mov rdi,"), "{asm}");
+}
+
+/// A multiply by a constant put the constant in a register (`mov eax, 3;
+/// imul eax, ecx`), 5 bytes dearer than the pin's `imul r, r, imm` or `shl`
+/// (`llrm_mixed`, `llrm_six` of `wc_mixed.c`).
+#[test]
+fn fast_isel_multiplies_by_a_constant_with_an_immediate() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(int a)\n{\n    return a * 3 + a * 8;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(asm.contains("shl") && asm.lines().any(|line| line.contains("imul") && line.trim_end().ends_with(", 3")), "{target}: {asm}");
+    }
+}

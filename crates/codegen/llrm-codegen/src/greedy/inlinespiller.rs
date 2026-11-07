@@ -153,6 +153,11 @@ pub fn remat_shape(one: &Insn) -> bool {
                     [Loc::Held(held)] if held.value == one.defines[0]
                 )
                 && (w.sources.len() == 1
+                    // a cheap operation on registers: the registers it reads, then the identity of
+                    // the operation (`isReMaterializable` with `allUsesAvailableAt`)
+                    || (w.op == Operation::Move
+                        && matches!(w.sources.split_last(), Some((Loc::Imm(_), reads))
+                            if reads.iter().all(|loc| matches!(loc, Loc::Held(_)))))
                     || (w.op == Operation::FloatLoad
                         && w.sources.is_empty()
                         && matches!(w.name.as_deref(), Some("fld1" | "fldz"))))
@@ -529,7 +534,7 @@ impl<'a> InlineSpiller<'a> {
             let value = lis.interval_rc(from).query(&index).value_in()?;
             let site = lis.indexes.get_instruction_from_index(&value.def())?;
             let found = Arc::clone(lis.instr(site));
-            if let Some(cell) = super::remat::argument_load_cell(&found)
+            if let Some(cell) = self.tii.remat_load_cell(&found)
                 && self.tables.remat_cells.borrow().contains(&cell)
                 && self.tii.is_trivially_re_materializable(&found, true)
             {

@@ -837,3 +837,4 @@ int main(void)
     }
     return 0;
 }
+// x86-widths: the .out hashes 32-bit ints

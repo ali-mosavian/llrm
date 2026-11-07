@@ -1365,6 +1365,16 @@ pub trait Tti {
         false
     }
 
+    /// Whether `IndVarSimplify` runs `sinkUnusedInvariants`. The pin runs it
+    /// on every target.
+    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-21): off by default;
+    /// on, 17 other-target cells grew (6502 jpeg, arm64 jpeg, x86_32 grep).
+    /// Flip the default when those are fixed.
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp)
+    fn sinks_unused_invariants(&self) -> bool {
+        false
+    }
+
     /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
     /// (default 4), for a function built for size or not: the operations
     /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
