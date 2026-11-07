@@ -670,6 +670,7 @@ impl SelectionDAG {
                 self.deleted.resize(self.nodes.len(), false);
             }
             self.deleted[n as usize] = true;
+            self.drop_operand_uses(n);
             // A `SmallSetVector`: an operand already waiting is not added
             // twice.
             for i in 0..self.nodes[n as usize].ops.len() {
@@ -711,6 +712,7 @@ impl SelectionDAG {
             self.deleted.resize(self.nodes.len(), false);
         }
         self.deleted[node as usize] = true;
+        self.drop_operand_uses(node);
         let operands: Vec<u32> = self.nodes[node as usize].ops.iter().map(|op| op.node).collect();
         for op in operands {
             let results = self.nodes[op as usize].values.len() as u8;
@@ -718,6 +720,33 @@ impl SelectionDAG {
                 self.survivors.push(op);
             }
             self.delete_dead(op);
+        }
+    }
+
+    /// `SDNode::DropOperands`: a deleted node leaves the use lists of what it
+    /// read, so they hold no entry for it. Each operand slot pushed one entry;
+    /// they are looked for from the end, where a node made lately sits, and
+    /// the walk stops once the slots are accounted for (an entry an operand
+    /// rewrite left behind may remain, `users` filters it).
+    fn drop_operand_uses(
+        &mut self,
+        node: u32,
+    ) {
+        for at in 0..self.nodes[node as usize].ops.len() {
+            let operand = self.nodes[node as usize].ops[at].node;
+            if self.nodes[node as usize].ops[..at].iter().any(|op| op.node == operand) {
+                continue;
+            }
+            let mut slots = self.nodes[node as usize].ops[at..].iter().filter(|op| op.node == operand).count();
+            let list = &mut self.uses[operand as usize];
+            let mut end = list.len();
+            while slots > 0 && end > 0 {
+                end -= 1;
+                if list[end] == node {
+                    list.remove(end);
+                    slots -= 1;
+                }
+            }
         }
     }
 
@@ -1117,6 +1146,17 @@ impl SelectionDAG {
         value: SDValue,
     ) -> u32 {
         self.value_type(value).size_in_bits()
+    }
+
+    /// `FindNodeOrInsertPos` without the insertion: the node with these
+    /// operands and no data, if the DAG has one.
+    pub(super) fn find_node(
+        &self,
+        opcode: ISD,
+        vt: EVT,
+        ops: &[SDValue],
+    ) -> Option<SDValue> {
+        self.cse_find(opcode, &[vt], ops, &NodeData::None).map(|node| SDValue { node, res: 0 })
     }
 
     /// `lookupNode` then `newSDNode`: one node per (opcode, types, operands,

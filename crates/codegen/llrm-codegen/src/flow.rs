@@ -59,6 +59,7 @@ pub fn machine<'a>(
 
 /// The phases -O0 leaves out: each only makes code better.
 const UNOPTIMIZED: &[&str] = &[
+    "EarlyTailDuplicate",
     "Peephole",
     "LoopSlots",
     "Scheduler",
@@ -115,6 +116,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("ReserveCallFrame", "callframe@5"),
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
+    ("FloatUnhoist", "floatunhoist@6"),
     ("FloatFold", "floatfold@6"),
     ("FloatSink", "floatsink@6"),
     ("PushFold", "pushfold@6"),
@@ -200,7 +202,8 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::ivshare::IvShare { classes: Rc::clone(classes) }),
         // A counted loop's index ends at zero (DEVIATE LSR3).
         Box::new(crate::backend::ivzero::IvZero { classes: Rc::clone(classes) }),
-        // Where the block runs often enough, `and d,s,mask` for `movzx d,s.low` (DEVIATE MA1).
+        // Where the block runs often enough, `and d,s,mask` for `movzx d,s.low`
+        // (DEVIATE MA1).
         Box::new(crate::backend::maskbyand::MaskByAnd {
             clocks_saved: target.cost("movzx")? - target.cost("alu_ri")?,
             milliclocks_per_byte: target.speed_milliclocks_per_byte(),
@@ -249,6 +252,9 @@ pub fn machine_with<'a>(
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
+        // A float load a loop only reads is made again where it is read (so
+        // the next step can fold it).
+        Box::new(crate::backend::floatunhoist::FloatUnhoist { cpu: target, basic_semantics }),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target, registers: classes.available.len() }),
@@ -262,7 +268,10 @@ pub fn machine_with<'a>(
             status_word: classes.status_word(),
         }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target) }),
-        Box::new(twoaddr::TwoAddress { lea: target.three_address_for(target.size || target.min_size) }),
+        Box::new(twoaddr::TwoAddress {
+            lea: target.three_address_for(target.size || target.min_size),
+            loop_carried: target.commutes_loop_carried(),
+        }),
         Box::new(Coalescer { size: target.size, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.

@@ -2387,8 +2387,13 @@ fn a_long_multiply_by_a_near_power_of_two_is_shifts_where_clocks_count() {
     let linked = format!("{fast}\n{}", common::pipeline::reachable_runtime(&fast));
     assert_eq!(exit_code_of(&linked, "t3"), 0x09, "{fast}");
     assert_eq!(exit_code_of(&linked, "t257"), 0x07, "{fast}");
-    // tuned for size: the call stays for 3, not for 257
-    let ir = ir.replace("noinline {", "noinline optsize {");
+    // tuned for size: the call stays for 3, not for 257, while a variable
+    // multiply keeps the routine linked (alone, `by3` is shifts: mul_image.rs)
+    let ir = format!(
+        "{}\n{}",
+        ir.replace("noinline {", "noinline optsize {"),
+        "define i32 @prod(i32 %a, i32 %b) noinline optsize {\n  %r = mul i32 %a, %b\n  ret i32 %r\n}"
+    );
     let small = assembly(&ir, &Request::new(Level::Os)).unwrap();
     let (by3, by257) = (function_text(&small, "by3"), function_text(&small, "by257"));
     assert!(by3.contains("__mulsi3"), "{by3}");
@@ -2754,4 +2759,22 @@ fn a_carry_branch_on_the_old_down_counter_runs_the_same_trips() {
         let text = assembly(&ir, &Request::new(level)).unwrap();
         assert_eq!(exit_code_of(&text, "t"), 5, "{text}");
     }
+}
+
+/// `select i16 -1, 1` left `lda #255; sta rc4; sta rc5` in front of the `bcs`
+/// over its second arm: two stores to argument cells nothing reads, 6 B in
+/// stricmp (84 against llvm-mos's 70).
+#[test]
+fn a_constant_pair_select_leaves_no_store_to_a_cell_nothing_reads() {
+    let ir = module(
+        "define i16 @f(ptr %p, i8 %b) {\n  %a = load i8, ptr %p\n  %c = icmp ult i8 %a, %b\n  %r = select i1 %c, i16 -1, i16 1\n  ret i16 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let body: String = text[text.find("__r_f:").unwrap()..].split(".segment").next().unwrap().to_owned();
+    let stores: Vec<&str> = body.lines().filter(|l| l.trim_start().starts_with("st") && l.contains("rc")).collect();
+    // `sta rc5` (the loaded byte kept for the compare) is read; the 255 stores are not
+    assert!(
+        !body.lines().any(|l| l.trim() == "stx rc2" || l.trim() == "stx rc3"),
+        "stores {stores:?}\n{body}"
+    );
 }

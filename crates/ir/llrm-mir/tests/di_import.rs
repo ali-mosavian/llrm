@@ -88,3 +88,36 @@ fn test_declared_callees_are_declarations_and_all_calls_described_is_kept() {
     let functions = debuginfo::functions(&module);
     assert_eq!(functions.iter().map(|one| (one.function.as_str(), one.all_calls)).collect::<Vec<_>>(), [("f", true)]);
 }
+
+/// A variable of an inlined callee (its `!DILocalVariable` scopes another
+/// `!DISubprogram`) was imported as the caller's: `scope` was the importing
+/// function's name for every variable its records name, so the writers'
+/// `variable.scope != name` checks never filtered one. On arm64 `add_bits`
+/// listed `x`, `r` and a second `a` of its callees.
+#[test]
+fn test_a_variable_of_an_inlined_callee_is_not_the_importing_functions() {
+    let mut module = parse::module(include_str!("clang/dbg_inlined.ll")).unwrap_or_else(|why| panic!("{why:?}"));
+    dbgimport::types_and_globals(&mut module);
+    let (_, function) = module
+        .functions()
+        .find(|(_, global, _)| global.name.as_deref() == Some("inc"))
+        .map(|(i, _, f)| (i, f))
+        .unwrap();
+    let mut variables: Vec<_> = function
+        .debug_records()
+        .iter()
+        .filter_map(|one| debuginfo::read_variable(&module, one.variable))
+        .map(|one| (one.name, one.scope))
+        .collect();
+    variables.sort();
+    variables.dedup();
+    assert_eq!(
+        variables,
+        [
+            ("k".to_owned(), "inc".to_owned()),
+            ("m".to_owned(), "inc".to_owned()),
+            ("n".to_owned(), "inc".to_owned()),
+            ("x".to_owned(), "helper inlined into inc".to_owned())
+        ]
+    );
+}

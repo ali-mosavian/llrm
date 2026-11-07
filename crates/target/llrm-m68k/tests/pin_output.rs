@@ -62,6 +62,9 @@ const SOURCE_ORDER: Options = Options {
     push_frame: false,
     push_arguments: false,
     short: false,
+    hoist_flag_setters: false,
+    reuse_shift_flags: false,
+    post_inc_across_blocks: false,
     debug: false,
 };
 

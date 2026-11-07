@@ -280,3 +280,26 @@ fn a_dead_token_factor_no_longer_counts_as_a_user_of_its_operand() {
     dag.delete_dead(dead.node);
     assert!(dag.has_one_use(inner.node), "the dead one let go of it");
 }
+
+/// A deleted node stayed in the use list of each operand, so `delete_dead` and
+/// `has_users` walked it again for every later query (memory_expansion: 5.6
+/// scans and 1.8 stale entries per created node). It leaves them at deletion
+/// (`DropOperands`); an operand it read twice loses both entries.
+#[test]
+fn a_deleted_node_leaves_the_use_lists_of_its_operands() {
+    let mut dag = dag();
+    let x = arg(&mut dag, EVT::I32, 1);
+    let y = arg(&mut dag, EVT::I32, 2);
+    let kept = dag.get_node(ISD::Add, EVT::I32, &[x, y]);
+    let twice = dag.get_node(ISD::Mul, EVT::I32, &[x, x]);
+    let dead = dag.get_node(ISD::Sub, EVT::I32, &[twice, y]);
+    assert_eq!(dag.use_candidates(x.node).iter().filter(|&&u| u == twice.node).count(), 2);
+    dag.delete_dead(dead.node);
+    assert!(dag.is_deleted(dead.node) && dag.is_deleted(twice.node));
+    for operand in [x.node, y.node, twice.node] {
+        let stale: Vec<u32> =
+            dag.use_candidates(operand).iter().copied().filter(|&user| dag.is_deleted(user)).collect();
+        assert!(stale.is_empty(), "node {operand} still lists deleted users {stale:?}");
+    }
+    assert_eq!(dag.use_candidates(x.node), &[kept.node]);
+}

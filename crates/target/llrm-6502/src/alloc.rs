@@ -457,7 +457,8 @@ struct Builder {
     block_of: HashMap<String, u32>,
     /// How many times each cell or register has been defined so far.
     versions: HashMap<String, u32>,
-    /// High halves of pointer cells written as plain bytes: the pair never sees them.
+    /// High halves of pointer cells written as plain bytes: the pair never sees
+    /// them.
     lost_halves: HashSet<String>,
     /// The compare whose flags the next branch reads, and the ones saved to
     /// cells for later.
@@ -483,6 +484,8 @@ struct Compare {
     /// (`cmp g; sbc g+1`); `b` names nothing. Kept only when no store, call
     /// or saved flags lie between the compare and the end of its block.
     memory: Option<String>,
+    /// Over two words: the high pair, subtracted with the borrow of the first.
+    wide: Option<((String, u32), (String, u32))>,
 }
 
 impl Builder {
@@ -811,7 +814,7 @@ impl Builder {
             self.copy(d, acc);
         }
         let version = self.version(&cell);
-        self.pending = Some(Compare { a, b: (cell, version), word, zero: false, memory: None });
+        self.pending = Some(Compare { a, b: (cell, version), word, zero: false, memory: None, wide: None });
         Ok(())
     }
 
@@ -826,7 +829,7 @@ impl Builder {
         code: i64,
         branch: bool,
     ) -> Result<(), Unsupported> {
-        let Compare { a, b, word, zero, memory } =
+        let Compare { a, b, word, zero, memory, wide } =
             self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
         if self.version(&a.0) != a.1 || memory.is_none() && self.version(&b.0) != b.1 {
             return Err(Unsupported("a compare's operand changed before its branch".into()));
@@ -929,6 +932,31 @@ impl Builder {
             );
             sbc.sets_flags = true;
             self.push(sbc);
+        }
+        if let Some((a1, b1)) = wide {
+            if self.version(&a1.0) != a1.1 || self.version(&b1.0) != b1.1 {
+                return Err(Unsupported("a compare's operand changed before its branch".into()));
+            }
+            let (al, ah) = self.read_word(&a1.0)?;
+            let rhs = match self.word_constant(&b1.0) {
+                Some(bytes) => bytes.map(Operand::Imm),
+                None => {
+                    let (bl, bh) = self.read_word(&b1.0)?;
+                    for r in [bl, bh] {
+                        self.require(r, Class::MEM)?;
+                    }
+                    [Operand::Use(bl), Operand::Use(bh)]
+                }
+            };
+            for (lhs, rhs) in [al, ah].into_iter().zip(rhs) {
+                self.copy(acc, lhs);
+                let mut sbc = Inst::new(
+                    Kind::Op("SBC"),
+                    vec![Operand::Def(acc), Operand::Use(acc), rhs, Operand::Def(Reg::Phys(reg::FLAGS))],
+                );
+                sbc.sets_flags = true;
+                self.push(sbc);
+            }
         }
         Ok(())
     }
@@ -1788,6 +1816,7 @@ pub fn build_with_places(
                     word: false,
                     zero: false,
                     memory: None,
+                    wide: None,
                 });
             }
             // a global on the right of a compare: read at the compare, kept
@@ -1801,6 +1830,7 @@ pub fn build_with_places(
                     word: inst.opcode == op::CMP16M,
                     zero: false,
                     memory: Some(symbol),
+                    wide: None,
                 });
                 if !memory_holds_until_flags_are_read(items, at) {
                     b.load_compared_global(at)?;
@@ -1814,6 +1844,7 @@ pub fn build_with_places(
                     word: true,
                     zero: true,
                     memory: None,
+                    wide: None,
                 });
             }
             // the carry out of the first goes into the next: the instructions
@@ -1983,6 +2014,18 @@ pub fn build_with_places(
                     b.copy(to, acc);
                 }
             }
+            op::CMP32 => {
+                let (a, c) = (name(&o[1])?, name(&o[2])?);
+                let (a1, c1) = (name(&o[3])?, name(&o[4])?);
+                b.pending = Some(Compare {
+                    a: (a.to_owned(), b.version(a)),
+                    b: (c.to_owned(), b.version(c)),
+                    word: true,
+                    zero: false,
+                    memory: None,
+                    wide: Some(((a1.to_owned(), b.version(a1)), (c1.to_owned(), b.version(c1)))),
+                });
+            }
             op::CMP16 => {
                 let (a, c) = (name(&o[1])?, name(&o[2])?);
                 b.pending = Some(Compare {
@@ -1991,6 +2034,7 @@ pub fn build_with_places(
                     word: true,
                     zero: false,
                     memory: None,
+                    wide: None,
                 });
             }
             spill_op if spill_op == spill::SAVE_FLAGS => {
@@ -3873,6 +3917,24 @@ fn emit_with<const STACK: bool>(
             y_callees.insert(format!("{callee}_fast"));
         }
     }
+    // the cells a return reads: the bytes of a long result
+    let mut result_cells = std::collections::BTreeSet::new();
+    for operand in function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| inst.kind == Kind::Op("RTS"))
+        .flat_map(|inst| &inst.operands)
+    {
+        if let Operand::Use(Reg::Phys(r)) = operand {
+            if is_pair(*r) {
+                result_cells.insert(register_name(lane(*r, 0)));
+                result_cells.insert(register_name(lane(*r, 1)));
+            } else {
+                result_cells.insert(register_name(*r));
+            }
+        }
+    }
     Ok((
         own_labels(
             &finish(
@@ -3881,6 +3943,7 @@ fn emit_with<const STACK: bool>(
                 (!returns_a, a_callees),
                 (!returns_x, x_callees),
                 (!returns_y, y_callees),
+                result_cells,
             ),
             &function.name,
         ),
@@ -3934,6 +3997,7 @@ fn finish(
     (no_a_result, a_callees): (bool, std::collections::BTreeSet<String>),
     (no_x_result, x_callees): (bool, std::collections::BTreeSet<String>),
     (no_y_result, y_callees): (bool, std::collections::BTreeSet<String>),
+    result_cells: std::collections::BTreeSet<String>,
 ) -> String {
     code.no_a_result = no_a_result;
     code.a_callees = a_callees;
@@ -3941,6 +4005,7 @@ fn finish(
     code.x_callees = x_callees;
     code.no_y_result = no_y_result;
     code.y_callees = y_callees;
+    code.result_cells = result_cells;
     crate::peephole::run(&mut code);
     crate::relax::relax(&mut code);
     if let Some((file, scope, places)) = lines_of {

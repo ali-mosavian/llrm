@@ -100,6 +100,32 @@ pub fn info(
                 location: Location::Frame { disp },
             });
         }
+        // A variable the code keeps in a register for a stretch.
+        for (node, ranges) in register_variables(function, start) {
+            if function.variables.iter().any(|&(framed, _)| framed == node) {
+                continue;
+            }
+            let Some(one) = di::read_variable(module, node) else { continue };
+            // A variable of an inlined callee is that callee's, not this
+            // function's: the writer has no inlined-subroutine scopes to put it in.
+            if one.scope != procedure.name {
+                continue;
+            }
+            let Some(&r#type) = debug.nodes.get(&one.r#type) else { continue };
+            variables.push(Variable {
+                name: one.name,
+                r#type,
+                kind: if one.parameter { Kind::Parameter } else { Kind::Local },
+                location: Location::List(
+                    ranges
+                        .into_iter()
+                        .map(|(gpr, begin, end)| {
+                            (Range { section: 0, offset: begin, length: end - begin }, Location::Register(format!("x{}", gpr.0)))
+                        })
+                        .collect(),
+                ),
+            });
+        }
         // Parameters first, in the order the source declares them.
         let order = |name: &str| procedure.parameters.iter().position(|one| one == name).unwrap_or(usize::MAX);
         variables.sort_by_key(|one| (one.kind != Kind::Parameter, order(&one.name)));
@@ -206,4 +232,80 @@ fn lines(
     }
     let length = at - start;
     (out, body_start.map(|first| (first, body_end.unwrap_or(length))), not_stmt)
+}
+
+/// Where the code keeps each source variable in a register (`llvm.dbg.value`):
+/// from its note to the register's next write, a call, the variable's next note
+/// or the block's end, as `(register, begin, end)` offsets in the section.
+/// Less than the pin's lists (`VarLocBasedImpl` carries a value across blocks
+/// and through copies) but never more: nothing is said where the register no
+/// longer holds the value.
+fn register_variables(
+    function: &emit::Function,
+    start: usize,
+) -> Vec<(llrm_mir::MetadataId, Vec<(crate::mc::inst::Gpr, usize, usize)>)> {
+    use crate::mc::inst::{FrameMark, Gpr, Inst};
+    let mut found: Vec<(llrm_mir::MetadataId, Vec<(Gpr, usize, usize)>)> = Vec::new();
+    let mut at = start;
+    let mut close = |open: &mut Vec<(llrm_mir::MetadataId, Gpr, usize)>,
+                     keep: &dyn Fn(&(llrm_mir::MetadataId, Gpr, usize)) -> bool,
+                     end: usize| {
+        open.retain(|one| {
+            if keep(one) {
+                return true;
+            }
+            if end > one.2 {
+                match found.iter_mut().find(|(variable, _)| *variable == one.0) {
+                    Some((_, ranges)) => ranges.push((one.1, one.2, end)),
+                    None => found.push((one.0, vec![(one.1, one.2, end)])),
+                }
+            }
+            false
+        });
+    };
+    for block in &function.blocks {
+        let mut open: Vec<(llrm_mir::MetadataId, Gpr, usize)> = Vec::new();
+        for inst in &block.insts {
+            if let Inst::Mark(FrameMark::Value { variable, reg }) = inst {
+                close(&mut open, &|one| one.0 != *variable, at);
+                open.extend(reg.map(|gpr| (*variable, gpr, at)));
+            }
+            if inst.is_directive() {
+                continue;
+            }
+            // A move follows the value: the variable is in the copy from after it
+            // (`VarLoc`'s transfer on a copy), and in the source no more.
+            if let Inst::LogicShifted {
+                op: crate::mc::inst::Logic::Orr,
+                invert: false,
+                rd,
+                rn: Gpr(31),
+                rm,
+                shift: crate::mc::inst::Shift::Lsl,
+                amount: 0,
+                ..
+            } = inst
+            {
+                let moved: Vec<llrm_mir::MetadataId> =
+                    open.iter().filter(|one| one.1 == *rm).map(|one| one.0).collect();
+                close(&mut open, &|one| one.1 != *rd && one.1 != *rm, at);
+                close(&mut open, &|one| one.1 != *rm, at + 4);
+                open.extend(moved.into_iter().map(|variable| (variable, *rd, at + 4)));
+            } else if matches!(inst, Inst::Branch { link: true, .. } | Inst::BranchReg { link: true, .. }) {
+                // AAPCS64: x0-x18 and the link register do not survive a call.
+                close(&mut open, &|one| one.1.0 > 18 && one.1.0 != 30, at);
+            } else {
+                let mut written = Vec::new();
+                inst.clone().visit(&mut |register, role| {
+                    if let (crate::mc::visit::RegRef::Gpr(gpr), true) = (&register, role.writes()) {
+                        written.push(**gpr);
+                    }
+                });
+                close(&mut open, &|one| !written.contains(&one.1), at);
+            }
+            at += 4;
+        }
+        close(&mut open, &|_| false, at);
+    }
+    found
 }
