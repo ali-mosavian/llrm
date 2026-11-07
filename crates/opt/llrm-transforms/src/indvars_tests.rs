@@ -1133,3 +1133,17 @@ fn many_loops_on_one_bound_do_not_nest_their_trip_count_queries() {
 }
 
 const STACK: usize = 2 << 20;
+
+/// grep -Os (+2 B at wasm32): the pin's `indvars` sinks the outer counter's
+/// increment from the inner loop's preheader to the latch that reads it; ours
+/// left it there and the old value lived across the inner loop in a second
+/// local.
+#[test]
+fn an_increment_only_the_latch_reads_leaves_the_inner_loops_preheader() {
+    let mut module = parsed(&crate::invariantsink::tests::nested(""));
+    managed(&mut module, IndVars { lftr: true, size: false });
+    let after = printed(&module);
+    let (preheader, rest) = after.split_once("inner:").expect("inner");
+    assert!(!preheader.contains("%i.next = add"), "{after}");
+    assert!(rest.contains("%i.next = add"), "{after}");
+}
