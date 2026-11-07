@@ -616,7 +616,7 @@ fn jumps(op: Op) -> bool {
 
 /// The labels only branches in this text reach (a function's entry, anything
 /// called, exported or named by a directive is not): a branch's target.
-fn branch_targets(lines: &[Line]) -> Vec<&str> {
+fn branch_targets(lines: &[Line]) -> (Vec<&str>, Vec<&str>) {
     let mut branched: Vec<&str> = Vec::new();
     let mut other: Vec<&str> = Vec::new();
     for line in lines {
@@ -628,16 +628,19 @@ fn branch_targets(lines: &[Line]) -> Vec<&str> {
     }
     let mut seen_label = false;
     let mut targets = Vec::new();
+    let mut quiet = Vec::new();
     for line in lines {
         if let Line::Label(name) = line {
             let entry = !std::mem::replace(&mut seen_label, true);
             let named = lines.iter().any(|l| matches!(l, Line::Raw(text) if text.contains(name.as_str())));
             if !entry && !named && branched.contains(&name.as_str()) && !other.contains(&name.as_str()) {
                 targets.push(name.as_str());
+            } else if !entry && !named && !branched.contains(&name.as_str()) && !other.contains(&name.as_str()) {
+                quiet.push(name.as_str());
             }
         }
     }
-    targets
+    (targets, quiet)
 }
 
 /// One walk over `lines` with the values known at each label in `at_label`
@@ -646,6 +649,7 @@ fn branch_targets(lines: &[Line]) -> Vec<&str> {
 fn walk<'a>(
     lines: &'a [Line],
     targets: &[&str],
+    quiet: &[&str],
     at_label: &HashMap<&'a str, Known<'a>>,
 ) -> (Vec<bool>, Vec<(usize, Op)>, Vec<(usize, Inst)>, HashMap<&'a str, Known<'a>>) {
     let mut known: Option<Known<'a>> = Some([None; 3]);
@@ -668,6 +672,8 @@ fn walk<'a>(
                     }
                     here.or(known).unwrap_or([None; 3])
                 }
+                // nothing names it: control only falls into it
+                Line::Label(name) if quiet.contains(&name.as_str()) => known.unwrap_or([None; 3]),
                 _ => [None; 3],
             });
             continue;
@@ -773,10 +779,10 @@ pub fn drop_known_loads(asm: &mut Asm) {
 /// The loads to keep and to turn into transfers, once the values at the labels
 /// hold; none if eight walks do not settle them.
 fn decide_known_loads(lines: &[Line]) -> Option<(Vec<bool>, Vec<(usize, Op)>, Vec<(usize, Inst)>)> {
-    let targets = branch_targets(lines);
+    let (targets, quiet) = branch_targets(lines);
     let mut at_label: HashMap<&str, Known> = HashMap::default();
     for _ in 0..8 {
-        let (keep, transfers, stores, carried) = walk(lines, &targets, &at_label);
+        let (keep, transfers, stores, carried) = walk(lines, &targets, &quiet, &at_label);
         if carried == at_label {
             return Some((keep, transfers, stores));
         }
