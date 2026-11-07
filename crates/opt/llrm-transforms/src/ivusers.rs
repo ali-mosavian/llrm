@@ -98,7 +98,7 @@ fn is_interesting(
         // An add is interesting if exactly one operand is.
         Kind::Add(operands) => {
             let mut any = false;
-            for op in operands {
+            for op in operands.iter().copied() {
                 if is_interesting(se, cx, op.scev, inst, l) {
                     if any {
                         return false;

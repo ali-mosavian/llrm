@@ -669,6 +669,10 @@ impl Tti for X86 {
         self.tuning.price_pin_multiplies
     }
 
+    fn imul_at_size(&self) -> bool {
+        self.tuning.imul_at_size
+    }
+
     fn has_cmov(&self) -> bool {
         self.cmov
     }
@@ -694,6 +698,10 @@ impl Tti for X86 {
 
     fn x87_stack_slots(&self) -> Option<u32> {
         self.tuning.x87_stack_slots.filter(|_| !self.sse2)
+    }
+
+    fn x87_share_negated_products(&self) -> bool {
+        self.tuning.x87_share_negated_products && !self.sse2
     }
 
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
@@ -768,7 +776,9 @@ impl Tti for X86 {
     }
 
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
-        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_single_site {
+        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+            || self.tuning.inline_size_guard_single_site
+        {
             1
         } else {
             2
@@ -1037,6 +1047,16 @@ impl Tti for X86 {
         self.imm_cost_inst(op, index, imm, bits, self.tuning.zext_imm_is_basic)
     }
 
+    fn int_imm_cost_inst_pin(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        self.imm_cost_inst(op, index, imm, bits, false)
+    }
+
     /// ZIMM does not apply to a function built for size: a hoisted constant
     /// costs a 2-3 byte register copy per use where `mov r32, imm32` is 5.
     fn int_imm_cost_inst_for_size(
@@ -1095,6 +1115,14 @@ impl Tti for X86 {
         min_size: bool,
     ) -> bool {
         div_rem_by_constant && !min_size
+    }
+
+    fn keeps_select_mask_attached(
+        &self,
+        bits: u128,
+        width: u32,
+    ) -> bool {
+        self.tuning.zext_imm_is_basic && width == 64 && bits <= u128::from(u32::MAX)
     }
 
     /// `X86TargetLowering::isTruncateFree`:
