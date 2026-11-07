@@ -81,6 +81,14 @@ impl llrm_target::Target for M64 {
         bytes
     }
 
+    fn move_bytes(&self) -> Option<llrm_target::MoveBytes> {
+        Some(llrm_target::MoveBytes {
+            plain: 4,
+            copy: llrm_x86::encoding::copy_move_bytes,
+            literal: llrm_x86::encoding::literal_move_bytes,
+        })
+    }
+
     fn register_op_bytes(
         &self,
         width: i64,
@@ -182,6 +190,10 @@ impl llrm_target::Target for M64 {
 
     fn layout(&self) -> llrm_target::layout::Layout {
         LAYOUT.clone()
+    }
+
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
     }
 
     /// An argument takes a dword at least: `calling.toml`'s.

@@ -11,7 +11,7 @@
 //! `visit_mul`.
 
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
-use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{LoadExt, NodeData, SDValue, SelectionDAG};
@@ -27,6 +27,17 @@ pub struct MosCombines {
 pub struct MosLateCombines;
 
 impl CombineHooks for MosLateCombines {
+    /// DEVIATE 6502-SHL-COMMUTE: as [`MosCombines`]; every run of the
+    /// combiner must give alike.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
     fn fold_shift_of_shared_shift(
         &self,
         vt: EVT,
@@ -47,11 +58,25 @@ fn folds_shared_shift(
 }
 
 impl CombineHooks for MosCombines {
+    /// DEVIATE 6502-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the shift
+    /// runs on the zero-page cells (`asl rc17; rol rc18`) where the add went
+    /// through Y and X (bintree -O2 +20 B). The pin's default is true
+    /// (@ d1106deb71). Owner: llrm-target-6502. Exit: 2026-11-14, when the
+    /// select-shift fold re-fires here.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
     fn has_target_combine(
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Mul | ISD::Add | ISD::Srl | ISD::Truncate)
+        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate)
     }
 
     /// DEVIATE 6502-SHARED-SHIFT: a word shift is one instruction whose two
@@ -73,11 +98,70 @@ impl CombineHooks for MosCombines {
         _level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Add => widened_add_with_carry(dag, node),
+            ISD::Add => borrow_of_ult(dag, node).or_else(|| widened_add_with_carry(dag, node)),
+            ISD::Sub => borrow_of_ult(dag, node),
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
             _ => decompose_mul(dag, node, self.sized),
         }
     }
+}
+
+/// `x + sext(a <u b)` and `x - zext(a <u b)` in a word of two or more bytes: the
+/// borrow of `a - b`, subtracted from `x` by a subtract with borrow. A split
+/// 64-bit subtract is `lo = a - b`, `hi = (ah - bh) + sext(a <u b)`; the
+/// compare was a chain of its own and its result a byte.
+///
+/// The pin's analogue is the target's `combineAddOrSubToADCOrSBB`
+/// ([X86ISelLowering.cpp#L53776](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L53776),
+/// `X +- setcc(B)` to `ADC`/`SBB`), the compare and the subtract sharing the
+/// flags by CSE. The generic combiner only reads a carry off an existing
+/// `usubo` (`getAsCarry`,
+/// [DAGCombiner.cpp#L3404](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3404)).
+/// Here the `usubo` replaces the subtract `a - b` and gives the borrow.
+fn borrow_of_ult(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if !matches!(vt, EVT::I32 | EVT::I64) {
+        return None;
+    }
+    let (x, extended) = match dag.opcode(node) {
+        ISD::Add => [(0, 1), (1, 0)]
+            .into_iter()
+            .map(|(x, e)| (dag.operand(node, x), dag.operand(node, e)))
+            .find(|&(_, e)| dag.opcode(e) == ISD::SignExtend)?,
+        ISD::Sub if dag.opcode(dag.operand(node, 1)) == ISD::ZeroExtend => {
+            (dag.operand(node, 0), dag.operand(node, 1))
+        }
+        _ => return None,
+    };
+    let compare = dag.operand(extended, 0);
+    if dag.opcode(compare) != ISD::SetCC
+        || !matches!(dag.node(dag.operand(compare, 2)).data, NodeData::CondCode(CondCode::SetULt))
+    {
+        return None;
+    }
+    let (a, b) = (dag.operand(compare, 0), dag.operand(compare, 1));
+    if dag.value_type(a) != vt {
+        return None;
+    }
+    let difference = dag.get_node_multi(ISD::USubO, &[vt, EVT::I1], &[a, b]);
+    // the subtract of the same operands is the difference of the `usubo`
+    let plain: Vec<u32> = dag.users(a).filter(|&user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::Sub).collect();
+    for user in plain {
+        if dag.operand(SDValue { node: user, res: 0 }, 1) == b && dag.operand(SDValue { node: user, res: 0 }, 0) == a {
+            dag.replace_all_uses_with(SDValue { node: user, res: 0 }, SDValue { node: difference.node, res: 0 });
+        }
+    }
+    let borrow = SDValue { node: difference.node, res: 1 };
+    let (p, q) = if dag.opcode(x) == ISD::Sub && dag.has_one_use(x.node) {
+        (dag.operand(x, 0), dag.operand(x, 1))
+    } else {
+        (x, dag.get_constant(0, vt))
+    };
+    let result = dag.get_node_multi(ISD::USubOCarry, &[vt, EVT::I1], &[p, q, borrow]);
+    Some(SDValue { node: result.node, res: 0 })
 }
 
 /// `zext a + zext b + c` in a word, `c` a bit (the carry of the byte add
@@ -225,8 +309,17 @@ fn carry_in(
     SDValue { node: sum.node, res: 1 }
 }
 
-/// `x * c` as `(x << n) +- x`, shifted by the factors of two in `c` and negated
-/// for a negative `c`.
+/// `x * c` for `c = (2^k +- 1) * 2^z` as the pin's two runs of shift steps,
+/// `(x << k+z) +- (x << z)`, or as one run and a shift of the sum,
+/// `((x << k) +- x) << z`, whichever takes fewer steps; negated for a negative
+/// `c`. Every step of a wide shift is a pass over each byte of the word, so
+/// the steps are the cost; a shift of `x` the function already has is free
+/// (the pin's runs share it by CSE: `b[y * 20 + x]` beside `a[y * 16 + x]`).
+///
+/// DEVIATE 6502-MUL-FACTOR: the pin has only the first form
+/// ([DAGCombiner.cpp#L5024](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5024)).
+/// Owner: llrm-target-6502. Exit: 2026-11-21, when the shared combine reads the
+/// form from a target hook. The constants covered are the pin's.
 fn decompose_mul(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -252,8 +345,8 @@ fn decompose_mul(
         (_, above) if above.is_power_of_two() => (false, above),
         _ => return None,
     };
-    let amount = bits.trailing_zeros() + zeros;
-    if amount >= width {
+    let k = bits.trailing_zeros();
+    if k + zeros >= width {
         return None;
     }
     // A long multiply is a call of about 59 bytes with its arguments. In a
@@ -261,16 +354,37 @@ fn decompose_mul(
     // (x * C at -Os) it is only where a shift is whole bytes (`2^8 +- 1`,
     // `2^16 +- 1`, `2^24 +- 1`, also `2^9 +- 1`); `x * 3` is 74 bytes. At
     // speed it saves ~2200 clocks a multiply for ~15 bytes.
-    if vt == EVT::I32 && sized && !(amount >= 8 && amount % 8 <= 1 && zeros % 8 == 0) {
+    if vt == EVT::I32 && sized && !(k + zeros >= 8 && (k + zeros) % 8 <= 1 && zeros % 8 == 0) {
         return None;
     }
+    let has = |dag: &SelectionDAG, by: u32| {
+        by == 0
+            || dag.users(x).any(|user| {
+                let user = SDValue { node: user, res: 0 };
+                dag.opcode(user) == ISD::Shl
+                    && dag.operand(user, 0) == x
+                    && dag.constant(dag.operand(user, 1)) == Some(u128::from(by))
+            })
+    };
+    let steps = |dag: &SelectionDAG, by: u32| if has(dag, by) { 0 } else { by };
+    let two_runs = steps(dag, k + zeros) + steps(dag, zeros);
+    let one_run = steps(dag, k) + zeros;
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: u32| {
         let by = dag.get_constant(u128::from(by), EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])
     };
-    let high = shift(dag, x, amount);
-    let low = if zeros == 0 { x } else { shift(dag, x, zeros) };
-    let mut result = dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[high, low]);
+    let op = if add { ISD::Add } else { ISD::Sub };
+    let mut result = if one_run < two_runs {
+        let sum = {
+            let high = shift(dag, x, k);
+            dag.get_node(op, vt, &[high, x])
+        };
+        if zeros == 0 { sum } else { shift(dag, sum, zeros) }
+    } else {
+        let high = shift(dag, x, k + zeros);
+        let low = if zeros == 0 { x } else { shift(dag, x, zeros) };
+        dag.get_node(op, vt, &[high, low])
+    };
     if signed < 0 {
         let zero = dag.get_constant(0, vt);
         result = dag.get_node(ISD::Sub, vt, &[zero, result]);

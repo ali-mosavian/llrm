@@ -101,6 +101,9 @@ pub struct Options {
     /// `cmpi.l #(2^s-1)` after the `lsr.l #s` of the same value is dropped
     /// ([`crate::cmpshift`]).
     pub reuse_shift_flags: bool,
+    /// A load and the step of its pointer in another block are one `(An)+`
+    /// ([`crate::loopinc`]).
+    pub post_inc_across_blocks: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -119,6 +122,7 @@ impl Options {
         short: false,
         hoist_flag_setters: false,
         reuse_shift_flags: false,
+        post_inc_across_blocks: false,
         debug: false,
     };
 }
@@ -136,6 +140,7 @@ impl Default for Options {
             short: true,
             hoist_flag_setters: true,
             reuse_shift_flags: true,
+            post_inc_across_blocks: true,
             debug: false,
         }
     }
@@ -178,6 +183,7 @@ pub fn items_with(
         options.indexed,
         options.short,
         options.code_model.absolute_data(cpu),
+        wants_size,
     )?;
     let mut function = emit(name, &blocks)?;
     function.returns_twice =
@@ -198,6 +204,9 @@ pub fn items_with(
         crate::addrroles::address_roles(&mut function);
         if cpu.at_least(Cpu::M68020) {
             crate::scaledindex::scale_indexes(&mut function);
+        }
+        if options.indexed && options.post_inc_across_blocks {
+            crate::loopinc::post_increment_across_blocks(&mut function);
         }
     }
     expand_cmov(&mut function)?;

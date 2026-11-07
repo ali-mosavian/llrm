@@ -545,9 +545,9 @@ impl Flags {
 /// A function, parameter, return or call-site attribute.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Attribute {
-    Flag(String),
-    Int(String, u64),
-    Type(String, TypeId),
+    Flag(AttrName),
+    Int(AttrName, u64),
+    Type(AttrName, TypeId),
     /// `memory(...)`: each location, or none for the default, and its access.
     Memory(Vec<(Option<String>, String)>),
     /// `range(iN lower, upper)`: the half-open range of values, as bits.
@@ -560,7 +560,101 @@ pub enum Attribute {
     /// pointer parameter's memory the function writes before reading, on
     /// every path to a return.
     Initializes(Vec<(i64, i64)>),
-    Str(String, Option<String>),
+    Str(AttrName, Option<String>),
+}
+
+/// An attribute's name. The fact a flag name states is resolved once, when the
+/// name is made, so asking whether attributes state a fact compares ids, not
+/// text (the pin's `Attribute::AttrKind`).
+#[derive(Clone, Debug, Eq)]
+pub struct AttrName {
+    text: String,
+    fact: Option<crate::facts::Fact>,
+}
+
+impl AttrName {
+    pub fn new(text: impl Into<String>) -> Self {
+        let text = text.into();
+        let fact = crate::facts::Fact::flag(&text);
+        Self { text, fact }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// The flag fact the name spells, resolved when the name was made.
+    #[inline]
+    pub fn fact(&self) -> Option<crate::facts::Fact> {
+        self.fact
+    }
+}
+
+impl std::ops::Deref for AttrName {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
+impl std::hash::Hash for AttrName {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.text.hash(state)
+    }
+}
+
+impl PartialEq for AttrName {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+    }
+}
+
+impl PartialEq<str> for AttrName {
+    fn eq(&self, other: &str) -> bool {
+        self.text == other
+    }
+}
+
+impl PartialEq<&str> for AttrName {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
+
+impl PartialEq<String> for AttrName {
+    fn eq(&self, other: &String) -> bool {
+        &self.text == other
+    }
+}
+
+impl PartialEq<AttrName> for str {
+    fn eq(&self, other: &AttrName) -> bool {
+        self == other.text
+    }
+}
+
+impl PartialEq<AttrName> for &str {
+    fn eq(&self, other: &AttrName) -> bool {
+        *self == other.text
+    }
+}
+
+impl From<&str> for AttrName {
+    fn from(text: &str) -> Self {
+        Self::new(text)
+    }
+}
+
+impl From<String> for AttrName {
+    fn from(text: String) -> Self {
+        Self::new(text)
+    }
+}
+
+impl std::fmt::Display for AttrName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
 }
 
 impl Attribute {

@@ -496,6 +496,13 @@ fn rewrite(
     for block in &mut function.blocks {
         let mut out: Vec<(Op, Option<SrcLoc>)> = Vec::with_capacity(block.ops.len());
         for (mut op, loc) in std::mem::take(&mut block.ops) {
+            // A debug value names the register the value was given; one the
+            // allocator spilled, made again at its uses or dropped has none.
+            if let Op::DbgValue { reg, .. } = &mut op {
+                *reg = reg.and_then(|virtual_reg| assigned.get(&virtual_reg).copied());
+                out.push((op, loc));
+                continue;
+            }
             // The one definition of a value made at each use.
             if op
                 .defs_and_uses()

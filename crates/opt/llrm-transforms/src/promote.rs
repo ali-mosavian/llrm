@@ -180,12 +180,14 @@ pub fn _leaf(
     // One access is either the dense byte range `[low, low + width)` or one
     // start whose own width is the access's, whatever its stride.
     let width = i64::from(reference.width);
-    let contiguous = (span.width == 1 && span.stride == 1 && span.high - span.low == width)
-        || (span.high - span.low == 1 && span.width == width);
+    // A range with an unbounded end (a dynamic alloca's) is no byte range: the
+    // difference overflows, and it is no leaf.
+    let length = span.high.checked_sub(span.low)?;
+    let contiguous = (span.width == 1 && span.stride == 1 && length == width) || (length == 1 && span.width == width);
     if !contiguous {
         return None;
     }
-    let high = span.low + width;
+    let high = span.low.checked_add(width)?;
     if span.object.extent.is_some_and(|extent| !(0 <= span.low && span.low < high && high <= extent)) {
         return None;
     }
