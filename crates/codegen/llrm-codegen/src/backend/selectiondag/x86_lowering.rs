@@ -1826,6 +1826,26 @@ fn combine_cmov(
         let simpler = cond_code(dag, simpler);
         return Some(dag.get_node(x86isd::CMOV, vt, &[false_op, true_op, simpler, flags]));
     }
+    // `(cmov 1, T, uge, (sub T, 2))` is `T + (T < 1)`: `adc T, 0` on the carry
+    // of `sub T, 1` (X86ISelLowering.cpp#L50411, the `umax(x, 1)` the soft-float
+    // runtime builds its exponents with).
+    if code == cond::AE
+        && dag.constant(false_op) == Some(1)
+        && dag.opcode(flags) == x86isd::SUB
+        && dag.has_one_use(flags.node)
+    {
+        let mut tested = dag.operand(flags, 0);
+        if dag.opcode(tested) == ISD::Truncate {
+            tested = dag.operand(tested, 0);
+        }
+        if tested == true_op && dag.constant(dag.operand(flags, 1)) == Some(2) {
+            let cond_vt = dag.value_type(dag.operand(flags, 0));
+            let one = dag.get_constant(1, cond_vt);
+            let sub = dag.get_node_multi(x86isd::SUB, &[cond_vt, EVT::I32], &[dag.operand(flags, 0), one]);
+            let zero = dag.get_constant(0, vt);
+            return Some(dag.get_node_multi(x86isd::ADC, &[vt, EVT::I32], &[true_op, zero, SDValue { node: sub.node, res: 1 }]));
+        }
+    }
     let (Some(mut true_c), Some(mut false_c)) = (dag.constant(true_op), dag.constant(false_op)) else { return None };
     if !vt.is_integer() {
         return None;
