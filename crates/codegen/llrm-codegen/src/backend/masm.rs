@@ -1728,8 +1728,10 @@ fn parts(
 /// The bytes of a leaf function's frame that live in the red zone, below the
 /// stack pointer, with no `sub` for them: `X86FrameLowering::emitPrologue`
 /// takes `has128ByteRedZone` bytes off `StackSize` where the function makes no
-/// call, keeps no frame register, realigns nothing and has no variable-sized
-/// object. `omit` is whether the frame register is left out. The registers
+/// call, realigns nothing and has no variable-sized object; a frame register
+/// does not forbid it (`HasFP` only adds its slot to `MinSize`), and the
+/// locals then sit at negative offsets from it with no `sub`. `omit` is
+/// whether the frame register is left out. The registers
 /// are pushed above the locals (`saved_first`) or there are none. A push in
 /// the body would write over the zone, so a body with one has none (its pops
 /// are not asked: `exits_inserted` puts the saved registers' there, and the
@@ -1740,8 +1742,7 @@ fn red_zone(
 ) -> i64 {
     let slot = procedure.registers.slot;
     let rounded = (procedure.reserve + slot - 1) / slot * slot;
-    if !omit
-        || procedure.registers.red_zone == 0
+    if procedure.registers.red_zone == 0
         || rounded == 0
         || procedure.stack_check.is_some()
         || procedure.probe_stack.is_some()
@@ -1753,8 +1754,12 @@ fn red_zone(
     if procedure.body.insns().iter().any(|one| one.what.as_ref().is_some_and(in_zone)) {
         return 0;
     }
-    let total = if procedure.body.slot_dropped { rounded } else { rounded + slot };
+    let total = if procedure.body.slot_dropped || !omit { rounded } else { rounded + slot };
     let zone = procedure.registers.red_zone.min(total);
+    if !omit {
+        // frame cells are addressed from the frame register: no displacement moves
+        return zone;
+    }
     // The zone must pay in bytes: it moves every local's displacement down by
     // `zone`, which can cost a disp8 where there was none, against the
     // `sub`/`add` (or `push`/`pop`) it removes, which is about a clock.
