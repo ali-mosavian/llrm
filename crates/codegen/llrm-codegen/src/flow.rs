@@ -341,7 +341,12 @@ pub fn machine_with<'a>(
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
         // The pin's TailDuplicatePass: after allocation, before placement.
-        Box::new(crate::backend::latetaildup::TailDuplicate { size: target.size || target.min_size }),
+        Box::new(crate::backend::latetaildup::TailDuplicate {
+            size: target.size || target.min_size,
+            saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+            free: registers.free,
+            pointer: registers.pointer,
+        }),
         // Last: this physical order decides which explicit edge is now
         // fall-through.
         Box::new(jumps::ControlFlow { cpu: target, calls: calls.cloned() }),
