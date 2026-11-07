@@ -40,6 +40,15 @@ pub struct Aarch64Lowering {
 }
 
 impl CombineHooks for Aarch64Lowering {
+    fn has_and_not(
+        &self,
+        vt: EVT,
+        _constant: bool,
+    ) -> bool {
+        // `AArch64TargetLowering::hasAndNot`: `bic` takes any scalar integer.
+        vt.is_integer()
+    }
+
     fn is_indexed_legal(
         &self,
         _is_load: bool,
