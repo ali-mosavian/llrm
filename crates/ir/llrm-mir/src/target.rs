@@ -37,6 +37,10 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// At -O1 (`OptLevel` 1) a full unroll is made only where its cost after
+    /// the folding the analysis simulates does not exceed the rolled loop's
+    /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
+    pub unroll_never_grows_at_o1: bool,
     /// A multiply by a constant is decomposed only where the chain's saved
     /// clocks pay for its extra bytes at `speed_milliclocks_per_byte`, the
     /// pin's own decompositions included (a tie keeps the `imul`); false:
@@ -184,6 +188,7 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        unroll_never_grows_at_o1: false,
         price_pin_multiplies: false,
         imul_at_size: false,
         unroll_threshold: None,

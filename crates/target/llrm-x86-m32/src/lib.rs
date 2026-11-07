@@ -82,6 +82,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27, with `unroll_at_o1`): at -O1
+        // a full unroll is made only where its simulated cost does not exceed the rolled loop's
+        // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.
+        unroll_never_grows_at_o1: true,
         // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
