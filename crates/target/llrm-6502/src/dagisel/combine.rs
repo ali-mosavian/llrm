@@ -27,6 +27,17 @@ pub struct MosCombines {
 pub struct MosLateCombines;
 
 impl CombineHooks for MosLateCombines {
+    /// DEVIATE 6502-SHL-COMMUTE: as [`MosCombines`]; every run of the
+    /// combiner must give alike.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
     fn fold_shift_of_shared_shift(
         &self,
         vt: EVT,
@@ -47,6 +58,20 @@ fn folds_shared_shift(
 }
 
 impl CombineHooks for MosCombines {
+    /// DEVIATE 6502-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the shift
+    /// runs on the zero-page cells (`asl rc17; rol rc18`) where the add went
+    /// through Y and X (bintree -O2 +20 B). The pin's default is true
+    /// (@ d1106deb71). Owner: llrm-target-6502. Exit: 2026-11-14, when the
+    /// select-shift fold re-fires here.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
     fn has_target_combine(
         &self,
         op: ISD,
