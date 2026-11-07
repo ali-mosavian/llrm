@@ -1047,7 +1047,7 @@ fn selected_in(
     for (index, (size, align)) in objects.into_iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
         debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
-        if align > kept {
+        if arch.can_realign_stack() && align > kept {
             over_aligned.push((frame.locals.borrow()[index].0, align));
         }
     }

@@ -1010,3 +1010,61 @@ fn a_default_target_folds_the_shift_of_a_shared_shift() {
     let high = dag.operand(dag.get_root(), 1);
     assert_ne!(dag.operand(dag.operand(high, 0), 0), inner);
 }
+
+struct RefusesToCommute;
+
+impl CombineHooks for RefusesToCommute {
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+}
+
+/// `(x - 1) << 1`, the add read once. A wasm address `p + ((x - 1) << 1)` next
+/// to `p + (x << 1)` was rebuilt per use (dot -O2: +32 B on the pin's own IR).
+fn shifted_add_of_a_register(dag: &mut SelectionDAG) -> SDValue {
+    let x = dag.get_register(EVT::I32, 5);
+    let (minus_one, one) = (dag.get_constant(u128::from(u32::MAX), EVT::I32), dag.get_constant(1, EVT::I32));
+    let add = dag.get_node(ISD::Add, EVT::I32, &[x, minus_one]);
+    let shl = dag.get_node(ISD::Shl, EVT::I32, &[add, one]);
+    dag.set_root(shl);
+    add
+}
+
+#[test]
+fn a_shift_of_a_one_use_add_commutes_into_an_add_of_a_shift() {
+    let mut dag = dag();
+    shifted_add_of_a_register(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Add, "(x << 1) + (-1 << 1)");
+    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Shl);
+    assert_eq!(dag.constant(dag.operand(root, 1)), Some(u128::from(u32::MAX - 1)));
+}
+
+#[test]
+fn a_shift_of_an_add_with_another_reader_keeps_its_add() {
+    let mut dag = dag();
+    let add = shifted_add_of_a_register(&mut dag);
+    let shl = dag.get_root();
+    let both = dag.get_node(ISD::Xor, EVT::I32, &[shl, add]);
+    dag.set_root(both);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let shl = dag.operand(dag.get_root(), 0);
+    assert_eq!(dag.opcode(shl), ISD::Shl);
+    assert_eq!(dag.opcode(dag.operand(shl, 0)), ISD::Add, "the add has two readers: the target's default says no");
+}
+
+#[test]
+fn a_target_that_refuses_keeps_the_shift_of_the_add() {
+    let mut dag = dag();
+    shifted_add_of_a_register(&mut dag);
+    DagCombiner::new(&mut dag, &mut RefusesToCommute, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Shl);
+    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Add);
+}
