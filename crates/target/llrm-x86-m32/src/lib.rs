@@ -142,6 +142,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // worse with 450; their O3 card is open). Owner x86-m32, exit
         // 2026-11-20.
         recursive_inlining_growth: Some((450, 150)),
+        // DEVIATE REC-7 (owner m32, exit 2026-11-27): depth 2 at -O2, gcc's 8
+        // at -O3. rectwo -O2 1449397 -> 347314 clk (1965 -> 277 B), fib
+        // 99618 -> 19993 (962 -> 215 B), frames 5035113 -> 4585856;
+        // depth 8 stays where it wins (-O3 rectwo 466986, x_hanoi2 155672).
+        recursive_inlining_depth: Some((2, 8)),
         // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion
         // (passes.def:97, then pass_ipa_inline :164). At -O3 the copies of the
         // loop beat the tree's (rectwo 1230664 -> 466986 clk, recchop,

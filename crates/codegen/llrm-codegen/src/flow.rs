@@ -86,6 +86,7 @@ const UNOPTIMIZED: &[&str] = &[
     "FixupLEAs",
     "CmpAsSub",
     "CallFrameOpt",
+    "TailDuplicate",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
@@ -135,6 +136,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("FixupLEAs", "fixupleas@14"),
     ("LoopSlots", "loopslots@15"),
     ("Scheduler", "schedule@16"),
+    ("TailDuplicate", "jumps@17"),
     ("ControlFlow", "jumps@17"),
     ("CopyPropagation", "copyprop@18"),
 ];
@@ -276,11 +278,7 @@ pub fn machine_with<'a>(
             lea: target.three_address_for(target.size || target.min_size),
             loop_carried: target.commutes_loop_carried(),
         }),
-        Box::new(Coalescer {
-            size: target.size,
-            moves: target.move_bytes,
-            ..Coalescer::new(None, segments, classes)
-        }),
+        Box::new(Coalescer { size: target.size, moves: target.move_bytes, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
         Box::new(crate::backend::machinesched::MachineScheduler {
@@ -342,12 +340,17 @@ pub fn machine_with<'a>(
         Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
+        // The pin's TailDuplicatePass: after allocation, before placement.
+        Box::new(crate::backend::latetaildup::TailDuplicate { size: target.size || target.min_size }),
         // Last: this physical order decides which explicit edge is now
         // fall-through.
         Box::new(jumps::ControlFlow { cpu: target, calls: calls.cloned() }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
     ];
+    if !target.post_ra_tail_duplicate {
+        phases.retain(|phase| phase.class_name() != "TailDuplicate");
+    }
     // -O0: gcc and clang improve nothing after selection and allocation.
     if !target.optimized {
         phases.retain(|phase| !UNOPTIMIZED.contains(&phase.class_name()));

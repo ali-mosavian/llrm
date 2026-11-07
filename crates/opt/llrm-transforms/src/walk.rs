@@ -208,10 +208,16 @@ impl Recursion {
         flag: bool,
         single: bool,
         inlining: bool,
+        o3: bool,
         tti: Option<&dyn llrm_mir::tti::Tti>,
     ) -> Option<Self> {
         match tti.and_then(|tti| tti.recursive_inlining()) {
-            Some((depth, callee)) if !single && inlining => Some(Self { depth: depth as usize, callee }),
+            Some((depth, callee)) if !single && inlining => {
+                let depth = tti
+                    .and_then(|tti| tti.recursive_inlining_depth())
+                    .map_or(depth, |(o2, o3_depth)| if o3 { o3_depth } else { o2 });
+                Some(Self { depth: depth as usize, callee })
+            }
             _ => flag.then_some(Self { depth: crate::inline::MAX_INLINE_RECURSIVE_DEPTH, callee: i64::MAX }),
         }
     }
@@ -254,6 +260,7 @@ impl ProgramPass for Walk {
             self.inline.recursive,
             self.inline.single,
             self.inline.limit != 0 && self.speed_rate,
+            self.inline.cp_clone,
             program.target.tti().as_deref(),
         );
         let mut params = crate::inlinecost::InlineParams {
@@ -1042,7 +1049,7 @@ impl SelfInline {
                 )
         };
         let Some(recursion) =
-            Recursion::of(self.flag, self.for_size, self.inlining && self.speed_rate, program.target.tti().as_deref())
+            Recursion::of(self.flag, self.for_size, self.inlining && self.speed_rate, self.o3, program.target.tti().as_deref())
         else {
             return Ok(());
         };
