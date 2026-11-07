@@ -1146,11 +1146,12 @@ pub fn header_limit(
     duplicate_headers: bool,
     size: bool,
     target: &dyn llrm_mir::target::Machine,
+    tti: &dyn llrm_mir::tti::Tti,
 ) -> u32 {
     if !duplicate_headers {
         0
     } else if size {
-        target.size_rotation_header_limit().unwrap_or(16)
+        target.size_rotation_header_limit().or_else(|| tti.size_rotation_header_limit()).unwrap_or(16)
     } else {
         16
     }
@@ -1185,7 +1186,7 @@ impl FunctionPass for LoopRotate {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = target_tti(outer.target());
         let options = Options {
-            max_header_size: header_limit(self.duplicate_headers, self.size, outer.target()),
+            max_header_size: header_limit(self.duplicate_headers, self.size, outer.target(), &*tti),
             priced_at_size: self.size && tti.rotation_header_priced_at_size(),
             guard_must_fold: self.size && tti.rotation_guard_must_fold_at_size(),
             rotation_only: false,

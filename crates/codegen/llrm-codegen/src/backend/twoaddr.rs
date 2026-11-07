@@ -80,6 +80,8 @@ pub const _TIED: [Operation; 5] =
 #[derive(Default)]
 pub struct TwoAddress {
     pub lea: crate::twoaddress::ThreeAddress,
+    /// DEVIATE TA-LC (`Profile::commute_loop_carried`).
+    pub loop_carried: bool,
 }
 
 impl TwoAddress {
@@ -99,7 +101,7 @@ impl LIRTransform for TwoAddress {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(tied(&body, self.lea))
+        Ok(tied_with(&body, self.lea, self.loop_carried))
     }
 }
 
@@ -107,6 +109,15 @@ impl LIRTransform for TwoAddress {
 pub fn tied(
     body: &LirBody,
     lea: crate::twoaddress::ThreeAddress,
+) -> LirBody {
+    tied_with(body, lea, false)
+}
+
+/// [`tied`], with DEVIATE TA-LC on or off.
+pub fn tied_with(
+    body: &LirBody,
+    lea: crate::twoaddress::ThreeAddress,
+    loop_carried: bool,
 ) -> LirBody {
     let reused = _reused(body);
     let body = &reused;
@@ -133,7 +144,8 @@ pub fn tied(
                 .get(&block.at)
                 .is_some_and(crate::backend::lanes::Lanes::is_empty)
         };
-        let mut walk = crate::twoaddress::Commuter::sized(&facts, at, block.insns.len());
+        let mut walk =
+            crate::twoaddress::Commuter::sized(&facts, at, block.insns.len()).with_loop_carried(loop_carried);
         let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len() + block.insns.len() / 4);
         let mut work: Vec<Arc<Insn>> = block.insns.to_vec();
         let mut place = 0;
@@ -708,7 +720,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{_untied, tied};
+    use super::{_untied, tied, tied_with};
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
@@ -1247,6 +1259,57 @@ mod tests {
         let facts = crate::twoaddress::BodyFacts::of(&body);
         let walk = Commuter::new(&facts, 1);
         assert!(walk.is_rev_copy_chain(3, 5, 10));
+    }
+
+    /// `x &= x - 1` in a loop (x_popcount's pop loop): `v8` made from `v7`
+    /// (here a read of `v7` and a fresh `v8`, a `lea` in the asm), then `v6
+    /// = v8 & v7`, copied back into `v7`. The pin's `isProfitableToCommute`
+    /// bails on the earlier read of `v7` before its reversed-copy-chain test,
+    /// ties `v8` and copies `v7` first: one `mov` per iteration that gcc does
+    /// not have (m32 -O2 x_popcount 299861 clk against gcc's 285881). DEVIATE
+    /// TA-LC ties `v7`, so the copy is of the register the result goes back to
+    /// and the coalescer drops it (1 -> 0); off, the pin's order.
+    #[test]
+    fn test_a_result_copied_back_into_a_source_read_earlier_ties_that_source_when_on() {
+        let loop_body = || {
+            LirBody::new(
+                "t",
+                0,
+                vec![
+                    LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![imm_def(0, 7)]) }.into(),
+                    LirBlock {
+                        succ: vec![1, 2].into(),
+                        ..LirBlock::new(1, vec![imm_def(1, 8), read(2, 7), sum_into(3, 6, 8, 7), copy_insn(4, 7, 6)])
+                    }
+                    .into(),
+                    LirBlock::new(2, vec![read(5, 7)]).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            )
+        };
+        // The copy the tied `and` needs is made from the operand the result
+        // ties to: `v8` (the pin) or `v7`, which the back-edge copy takes the
+        // result into, so the coalescer then drops it (1 -> 0 `mov`s in the
+        // loop).
+        let copied_from = |body: &LirBody| {
+            body.iter_insns()
+                .find(|one| {
+                    one.what
+                        .as_ref()
+                        .is_some_and(
+                            |what| what.name.as_deref() == Some("mov")
+                                && matches!(what.dests.first(), Some(Loc::Held(into)) if into.value == 6),
+                        )
+                })
+                .and_then(|one| match one.what.as_ref()?.sources.first()? {
+                    Loc::Held(from) => Some(from.value),
+                    _ => None,
+                })
+        };
+        assert_eq!(copied_from(&tied_with(&loop_body(), Off, false)), Some(8), "off is the pin's order");
+        assert_eq!(copied_from(&tied(&loop_body(), Off)), Some(8), "the default is off");
+        assert_eq!(copied_from(&tied_with(&loop_body(), Off, true)), Some(7), "on ties the loop-carried source");
     }
 
     /// `v8 := add v7, k` with `v7` read again by the `and` that follows (so the

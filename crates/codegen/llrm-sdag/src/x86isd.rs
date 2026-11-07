@@ -66,6 +66,12 @@ pub const LLRM_COPY128: ISD = ISD::Target(24592);
 /// `divl`). Exit 2026-11-12: none planned; m68k `divu.l` takes the same
 /// shape. Owner m32.
 pub const LLRM_UDIV64BY32: ISD = ISD::Target(24593);
+/// Inline `memmove` with 16-byte pieces: `chain`, then per piece `destination,
+/// source, width, alignment`; every piece is loaded before any is stored, a
+/// 16-byte one with `MOVUPS`, giving the chain. DEVIATE SD540, as
+/// [`LLRM_COPY128`]: the pin loads `v4i32`. Exit: vector `MVT`s land. Owner
+/// m64.
+pub const LLRM_MOVE128: ISD = ISD::Target(24594);
 /// `X86ISD::VASTART_SAVE_XMM_REGS` (the pin's number): `chain, al, frame index
 /// of the register save area, offset of the first vector register's slot`,
 /// the vector argument registers not taken by named parameters stored there
@@ -102,6 +108,7 @@ pub fn private_name(code: u16) -> Option<&'static str> {
         24591 => "X86ISD::LLRM_ZERO128",
         24592 => "X86ISD::LLRM_COPY128",
         24593 => "X86ISD::LLRM_UDIV64BY32",
+        24594 => "X86ISD::LLRM_MOVE128",
         _ => return None,
     })
 }

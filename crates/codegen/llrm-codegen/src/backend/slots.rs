@@ -75,6 +75,22 @@ pub(crate) fn heaviest_first(
     sorted
 }
 
+/// DEVIATE SLOTS-LOOPWIDTH (owner greedy-subreg, exit 2026-11-20: keep with
+/// the bench rows in `Tuning`, or drop): whether the slot at hand may hold `home`. A slot
+/// shares with a slot of its own kind (scratch or spill); with the width rule
+/// on, only with one as wide, or where neither is held in a register through a
+/// loop (`loopslots`: a word shares no slot a double word is read from).
+/// `ColorSlot` has no such rule.
+fn width_rule_allows(
+    same_kind: bool,
+    same_capacity: bool,
+    slot_looped: bool,
+    home_in_loop: bool,
+    width_rule: bool,
+) -> bool {
+    same_kind && (!width_rule || same_capacity || (!slot_looped && !home_in_loop))
+}
+
 /// Whether nothing in `color` is live over `interval`
 /// (`LiveIntervalUnion::overlaps` of `ColorSlot`): the slot grows to hold the
 /// bigger.
@@ -238,19 +254,21 @@ pub(crate) fn _stacked_colors(frame: &Frame) -> Option<Vec<(i64, u32, Vec<Interv
 /// every spill the intervals of every home (`intervals homes`, 5% of a large
 /// function's compile) for allocations that were then thrown away.
 ///
-/// The homes are coloured most-named first, as LLVM colours by decreasing
-/// weight, and in the order they were made too; the colouring with fewer bytes
-/// is kept (the first where they tie). A home goes to the slot of a home it is
-/// copied to or from, where that fits (`slots::choose`: the copy vanishes),
-/// else the first that fits. The slots are laid out again, the most named where
-/// a one-byte displacement reaches: from BP the top of the frame, the first
-/// slot made, as 16-bit code reaches it; from SP the bottom, where 32-bit code,
-/// which omits the frame register, reaches it. Every cell moves with its home.
-/// The frame and the body are returned changed; a body with no two homes that
-/// can share is returned as it is.
+/// The homes are coloured once, heaviest first, as LLVM colours by decreasing
+/// weight (`IntervalSorter`), the homes' own order between equals. A home goes
+/// to the slot of a home it is copied to or from, where that fits
+/// (`slots::choose`: the copy vanishes), else the first that fits. The slots
+/// are laid out again, the most named where a one-byte displacement reaches:
+/// from BP the top of the frame, the first slot made, as 16-bit code reaches
+/// it; from SP the bottom, where 32-bit code, which omits the frame register,
+/// reaches it. Every cell moves with its home. The frame and the body are
+/// returned changed; a body with no two homes that can share is returned as it
+/// is.
+/// `width_rule` (`Tuning::slots_loop_width_rule`): see `width_rule_allows`.
 pub(crate) fn slots_colored(
     body: &LirBody,
     frame: &mut Frame,
+    width_rule: bool,
 ) -> LirBody {
     if body.returns_twice || frame.native.is_some() || frame.slots.is_empty() {
         return body.clone();
@@ -342,8 +360,13 @@ pub(crate) fn slots_colored(
             // slot a double word is read from, which no register stands in for
             // (`loopslots`).
             let same = |at: &usize| {
-                frame.scratch.contains(&shared[*at].0) == frame.scratch.contains(home)
-                    && (shared[*at].1 == *capacity || (!looped[*at] && !in_loop.contains(home)))
+                width_rule_allows(
+                    frame.scratch.contains(&shared[*at].0) == frame.scratch.contains(home),
+                    shared[*at].1 == *capacity,
+                    looped[*at],
+                    in_loop.contains(home),
+                    width_rule,
+                )
             };
             // `ColorSlot`: the first slot in use that nothing overlaps.
             let chosen =
@@ -1561,13 +1584,62 @@ mod tests {
             Default::default(),
             Default::default(),
         );
-        let out = slots_colored(&body, &mut frame);
+        let out = slots_colored(&body, &mut frame, true);
         assert_eq!(out.insns().len(), 2, "fistp converts, it is no store back");
     }
 
     /// The colouring tried four orders of the homes and kept the fewest bytes;
     /// the pin colours once, the heaviest slot first (`IntervalSorter`), the
     /// homes' own order between equals.
+    /// Two spill slots that are never live together, a double word held in a
+    /// register through a loop and a word outside it: the width rule keeps
+    /// the word out of the wider slot (`slots_colored` leaves two slots);
+    /// `ColorSlot` shares them, which the rule switched off does (one slot,
+    /// SLOTS-LOOPWIDTH).
+    #[test]
+    fn test_the_width_rule_keeps_a_word_out_of_a_loop_held_wider_slot_and_off_it_shares() {
+        let cell_at = |home: i64, width: u32| {
+            Loc::Mem(Mem {
+                through: llrm_lir::registers::RegId::BP,
+                disp_width: 4,
+                ..Mem::new(Some(Addr::new(Space::Frame, home).in_slot(home)), width)
+            })
+        };
+        let build = || {
+            let mut frame = Frame::new(0);
+            let wide = frame.slot(1i64, 8).expect("slot");
+            let word = frame.slot(2i64, 4).expect("slot");
+            frame.stacks.insert(wide, vec![(0, 10)]);
+            frame.stacks.insert(word, vec![(20, 30)]);
+            let held = |value: u32, width: u32| Loc::Held(Held { value, width, offset: 0 });
+            // b0 -> b1 (loops on itself, names the wide slot) -> b2 (names the
+            // word slot).
+            let body = LirBody::new(
+                "f",
+                0,
+                vec![
+                    LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![]) }.into(),
+                    LirBlock {
+                        succ: vec![1, 2].into(),
+                        ..LirBlock::new(1, vec![mov(1, cell_at(wide, 4), held(7, 4), vec![], vec![7])])
+                    }
+                    .into(),
+                    LirBlock::new(2, vec![mov(2, cell_at(word, 4), held(8, 4), vec![], vec![8])]).into(),
+                ],
+                Default::default(),
+                Default::default(),
+            );
+            (body, frame)
+        };
+        let homes = |frame: &Frame| frame.slots.values().copied().collect::<std::collections::BTreeSet<i64>>().len();
+        let (body, mut frame) = build();
+        super::slots_colored(&body, &mut frame, true);
+        assert_eq!(homes(&frame), 2, "the rule keeps a word out of a loop-held wider slot");
+        let (body, mut frame) = build();
+        super::slots_colored(&body, &mut frame, false);
+        assert_eq!(homes(&frame), 1, "ColorSlot shares the two, nothing live together");
+    }
+
     #[test]
     fn test_slots_are_coloured_heaviest_first_and_in_their_own_order_between_equals() {
         let weight: crate::support::hash::IndexMap<i64, f64> =
@@ -1600,7 +1672,7 @@ mod tests {
             Default::default(),
             Default::default(),
         );
-        let out = slots_colored(&body, &mut frame);
+        let out = slots_colored(&body, &mut frame, true);
         assert_eq!(out.insns().len(), 0, "a reload stored straight back is a no-op");
     }
 }

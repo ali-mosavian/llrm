@@ -255,7 +255,7 @@ fn without_jump_tables(program: &mut Program) {
             if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
                 && !function.is_declaration()
             {
-                function.attrs.push(llrm_mir::Attribute::Str("no-jump-tables".to_owned(), Some("true".to_owned())));
+                function.attrs.push(llrm_mir::Attribute::Str("no-jump-tables".into(), Some("true".to_owned())));
             }
         }
     }
@@ -747,6 +747,7 @@ pub fn statement_table(
     registers: llrm_target::FrameRegisters,
     word: usize,
     regs: Regs,
+    listed: bool,
 ) -> masm::Procedure {
     // A row is two words: where the statement is, and its line; the table ends
     // with a word of 0. The word is the target's near pointer.
@@ -756,6 +757,12 @@ pub fn statement_table(
         code.push(masm::InlinePart::Bytes((*line as u32).to_le_bytes()[..word].to_vec()));
     }
     code.push(masm::InlinePart::Bytes(vec![0; word]));
+    // BC /O leaves OF_STA 0 for a module with no row; BC /D (here
+    // -fsanitize=stack) points it at a table all the same. An empty part ahead
+    // of the end word marks a table the header names (`written_basic_inner`).
+    if listed && rows.is_empty() {
+        code.insert(0, masm::InlinePart::Bytes(Vec::new()));
+    }
     let what = Semantics { name: Some("statement-table".into()), ..Semantics::new(Operation::Call) };
     let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
     let mut body = lir::LirBody::new(
@@ -821,6 +828,7 @@ mod location_ranges_tests {
             llrm_x86_m16::M16.frame_registers(),
             2,
             llrm_lir::registers::Regs(llrm_x86_m32::M32.registers()),
+            false,
         );
         // m32's file, which a body made with no target (m16's, in tests) is
         // not.

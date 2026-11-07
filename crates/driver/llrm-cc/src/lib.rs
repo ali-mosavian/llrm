@@ -117,6 +117,13 @@ pub struct Target {
     /// clang does not: the driver gives the flag to the backend alone.
     #[serde(default)]
     pub llc_mcmodel: bool,
+    /// DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27): `-funroll-loops` is
+    /// the default at `-O1`. clang's `UnrollLoops` is off there, so it marks
+    /// every loop `llvm.loop.unroll.disable` (CGLoopInfo.cpp#L820) and the
+    /// pin's -O1 never unrolls; gcc does (x_life O1: 64k taken `jne` against
+    /// gcc's 16k).
+    #[serde(default)]
+    pub unroll_at_o1: bool,
     pub object: String,
     pub link: Vec<String>,
     /// The command that runs an executable of the target, the executable last;
@@ -155,12 +162,88 @@ fn expanded(text: &str) -> Result<String, String> {
         let end = start + out[start..].find('}').ok_or("targets.toml: unclosed {datalayout:")?;
         let name = &out[start + "{datalayout:".len()..end];
         let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
-        let description = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
+        let description = description_text(name, None, &path)?;
         let table: toml::Table = description.parse().map_err(|error| format!("{path}: {error}"))?;
         let layout = table.get("datalayout").and_then(toml::Value::as_str).ok_or(format!("{path}: no datalayout"))?;
         out.replace_range(start..=end, layout);
     }
     Ok(out)
+}
+
+/// The description files targets.toml names, embedded: a dist read them from
+/// the checkout it was built in, so deleting or moving that checkout failed
+/// every compile ("No such file", 2345 of 3911 A/B cells void on 2026-11-07).
+const DESCRIPTIONS: &[(&str, &str, &str)] = &[
+    ("6502", "datalayout.toml", include_str!("../../../target/llrm-6502/src/machines/datalayout.toml")),
+    ("arm64", "datalayout.toml", include_str!("../../../target/llrm-arm64/src/machines/datalayout.toml")),
+    ("arm64", "datalayout-darwin.toml", include_str!("../../../target/llrm-arm64/src/machines/datalayout-darwin.toml")),
+    ("m68k", "datalayout.toml", include_str!("../../../target/llrm-m68k/src/machines/datalayout.toml")),
+    ("wasm", "datalayout32.toml", include_str!("../../../target/llrm-wasm/src/machines/datalayout32.toml")),
+    ("wasm", "datalayout64.toml", include_str!("../../../target/llrm-wasm/src/machines/datalayout64.toml")),
+    ("x86-m16", "datalayout.toml", include_str!("../../../target/llrm-x86-m16/src/machines/datalayout.toml")),
+    ("x86-m32", "datalayout.toml", include_str!("../../../target/llrm-x86-m32/src/machines/datalayout.toml")),
+    ("x86-m64", "datalayout.toml", include_str!("../../../target/llrm-x86-m64/src/machines/datalayout.toml")),
+    ("z80", "datalayout.toml", include_str!("../../../target/llrm-z80/src/machines/datalayout.toml")),
+];
+
+/// The text of crate `llrm-NAME`'s description `file` (default
+/// `datalayout.toml`): the embedded copy, else `path` on disk.
+fn description_text(
+    name: &str,
+    file: Option<&str>,
+    path: &str,
+) -> Result<String, String> {
+    let file = file.unwrap_or("datalayout.toml");
+    match DESCRIPTIONS.iter().find(|(crate_name, one, _)| *crate_name == name && *one == file) {
+        Some((_, _, text)) => Ok((*text).to_owned()),
+        None => std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}")),
+    }
+}
+
+include!(concat!(env!("OUT_DIR"), "/toolchain.rs"));
+
+/// toolchain/clang as the recipes' `{root}/toolchain/clang`: the checkout's own
+/// where it still exists, else the embedded copy written once under the temp
+/// directory (named by its contents, so a changed header makes a new
+/// directory).
+fn toolchain_dir() -> String {
+    let own = format!("{ROOT}/toolchain/clang");
+    if std::path::Path::new(&own).is_dir() {
+        return own;
+    }
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for (name, bytes) in TOOLCHAIN_FILES {
+        for byte in name.bytes().chain(bytes.iter().copied()) {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("llrm-cc-toolchain-{hash:016x}"));
+    if !dir.join(".done").exists() {
+        for (name, bytes) in TOOLCHAIN_FILES {
+            let path = dir.join(name);
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            // written beside and renamed: two drivers starting together never
+            // read a half-written header
+            let part = path.with_extension(format!("part{}", std::process::id()));
+            if std::fs::write(&part, bytes).is_ok() {
+                let _ = std::fs::rename(&part, &path);
+            }
+        }
+        let _ = std::fs::write(dir.join(".done"), "");
+    }
+    dir.display().to_string()
+}
+
+/// `word` with `{root}/toolchain/clang` and `{root}` replaced.
+fn with_root(word: &str) -> String {
+    let word = if word.contains("{root}/toolchain/clang") {
+        word.replace("{root}/toolchain/clang", &toolchain_dir())
+    } else {
+        word.to_owned()
+    };
+    word.replace("{root}", ROOT)
 }
 
 /// The description file of crate `llrm-NAME`: `file`, else `datalayout.toml`.
@@ -174,7 +257,7 @@ fn description_path(
 fn c_abi_of(target: &Target) -> Result<Option<CAbi>, String> {
     let Some(name) = &target.description else { return Ok(None) };
     let path = description_path(name, target.description_file.as_deref());
-    let text = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
+    let text = description_text(name, target.description_file.as_deref(), &path)?;
     let table: toml::Table = text.parse().map_err(|error| format!("{path}: {error}"))?;
     let c = table.get("c").and_then(toml::Value::as_table).ok_or(format!("{path}: no [c]"))?;
     let size = |key: &str| -> Result<u32, String> {
@@ -208,7 +291,7 @@ pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
         target.c_abi = c_abi_of(target)?;
         target.clang_datalayout = target.clang_datalayout.take().map(|one| expanded(&one)).transpose()?;
         for word in target.clang.iter_mut().chain(&mut target.llc) {
-            *word = word.replace("{root}", ROOT);
+            *word = with_root(word);
         }
         for word in target.clang.iter_mut().chain(&mut target.llc).chain(&mut target.link) {
             *word = with_environment(word);
@@ -498,7 +581,23 @@ pub fn clang_flags(
     target: &Target,
     build: &Build,
 ) -> Vec<String> {
-    build.clang.iter().filter(|flag| !(target.llc_mcmodel && flag.starts_with("-mcmodel="))).cloned().collect()
+    let mut flags: Vec<String> =
+        build.clang.iter().filter(|flag| !(target.llc_mcmodel && flag.starts_with("-mcmodel="))).cloned().collect();
+    if unrolls_at_o1(target, build) {
+        flags.push("-funroll-loops".into());
+    }
+    flags
+}
+
+/// Whether the target's `-O1` takes `-funroll-loops` as its default: unless the
+/// command line states either `-f[no-]unroll-loops`.
+fn unrolls_at_o1(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.unroll_at_o1
+        && build.level == "1"
+        && !build.clang.iter().any(|flag| flag == "-funroll-loops" || flag == "-fno-unroll-loops")
 }
 
 pub fn llc_args(
@@ -513,6 +612,9 @@ pub fn llc_args(
     }
     args.extend(target.llc.iter().cloned());
     args.extend(build.llc.iter().cloned());
+    if unrolls_at_o1(target, build) {
+        args.push("-funroll-loops".into());
+    }
     if target.llc_mcmodel {
         args.extend(build.clang.iter().filter(|flag| flag.starts_with("-mcmodel=")).cloned());
     }
@@ -554,7 +656,7 @@ pub fn link_command(
             "{objects}" => command.extend(objects.iter().cloned()),
             "{flags}" => command.extend(flags.iter().cloned()),
             "{output}" => command.push(output.to_owned()),
-            other if other.contains("{root}") => command.push(other.replace("{root}", ROOT)),
+            other if other.contains("{root}") => command.push(with_root(other)),
             other => command.push(other.to_owned()),
         }
     }

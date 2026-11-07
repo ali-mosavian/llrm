@@ -70,7 +70,33 @@ fn frame_op(
     let mask = |registers: &[RegId]| {
         registers.iter().filter_map(|one| mask_bit(REGISTER_INFO.root(*one))).fold(0i64, |all, bit| all | 1 << bit)
     };
+    // one `move.l` a register, in `movem`'s memory order: the registers of the
+    // highest address are pushed first, and popped last
+    let order = |registers: &[RegId]| {
+        let mut ranked: Vec<(u32, RegId)> =
+            registers.iter().filter_map(|one| mask_bit(REGISTER_INFO.root(*one)).map(|bit| (bit, *one))).collect();
+        ranked.sort_by_key(|(bit, _)| *bit);
+        ranked
+    };
+    match op {
+        FrameOp::PushEach { registers } => {
+            for (_, one) in order(registers).into_iter().rev() {
+                let opcode = if is_address(one) { "MOV32ea" } else { "MOV32ed" };
+                out.push(mc::Inst { opcode, operands: vec![R(reg::SP), R(one)] });
+            }
+            return;
+        }
+        FrameOp::PopEach { registers } => {
+            for (_, one) in order(registers) {
+                let opcode = if is_address(one) { "MOV32ao" } else { "MOV32do" };
+                out.push(mc::Inst { opcode, operands: vec![R(one), R(reg::SP)] });
+            }
+            return;
+        }
+        _ => {}
+    }
     out.push(match op {
+        FrameOp::PushEach { .. } | FrameOp::PopEach { .. } => unreachable!("handled above"),
         FrameOp::Link { bytes } => mc::Inst { opcode: "LINK16", operands: vec![R(reg::A6), Imm(-bytes)] },
         FrameOp::Unlink => mc::Inst { opcode: "UNLK", operands: vec![R(reg::A6)] },
         FrameOp::SubSp(bytes) => sp_adjust(-bytes, short),
@@ -132,8 +158,15 @@ fn frame_ops(
     cpu: crate::dagisel::hooks::Cpu,
     push_frame: bool,
     short: bool,
+    size: bool,
 ) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
-    frame_ops_priced(layout, push_frame, |ops| frame_cost_with(ops, cpu, short))
+    frame_ops_choosing(
+        layout,
+        push_frame,
+        true,
+        |ops| frame_cost_with(ops, cpu, short),
+        |bytes, clocks| crate::timing::order(cpu, size, clocks, bytes as u32),
+    )
 }
 
 /// [`frame_ops`] with the price of a sequence, `(bytes, clocks)`, given: a test
@@ -143,20 +176,57 @@ pub fn frame_ops_priced(
     push_frame: bool,
     cost: impl Fn(&[FrameOp]) -> Result<(usize, u32), String>,
 ) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
+    frame_ops_choosing(layout, push_frame, false, cost, |_, clocks| (0, i64::from(clocks)))
+}
+
+/// [`frame_ops_priced`] that also weighs a `move.l` a register (`each`) beside
+/// the one `movem`: of the frames no larger and no slower than the pin's, the
+/// one `key(bytes, clocks)` of its two halves ranks lowest, the `movem` push
+/// on a tie.
+///
+/// DEVIATE from the pin, which has neither: gcc pushes each register. At two
+/// registers the bytes are equal and the clocks lower from the 68020 on
+/// (68020: `movem` pair 34, four `move.l` 22; 68040 9 against 4). From three
+/// registers `movem` is smaller and stays (fnptr +4 B, partition 040 +8 B in
+/// the first A/B). Exit: none.
+pub fn frame_ops_choosing(
+    layout: &frame::Layout,
+    push_frame: bool,
+    each: bool,
+    cost: impl Fn(&[FrameOp]) -> Result<(usize, u32), String>,
+    key: impl Fn(usize, u32) -> (i64, i64),
+) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
     let (pin_opening, pin_closing) = (layout.prologue(), layout.epilogue());
-    let pushed = if push_frame { layout.push_prologue().zip(layout.push_epilogue()) } else { None };
-    let Some((opening, closing)) = pushed else {
-        return Ok((pin_opening, pin_closing));
-    };
+    let mut pushed = Vec::new();
+    if push_frame {
+        pushed.extend(layout.push_prologue().zip(layout.push_epilogue()));
+        if each {
+            pushed.extend(layout.push_each_prologue().zip(layout.push_each_epilogue()));
+        }
+    }
     let no_worse = |ours: &[FrameOp], pin: &[FrameOp]| -> Result<bool, String> {
         let ((ours_bytes, ours_clocks), (pin_bytes, pin_clocks)) = (cost(ours)?, cost(pin)?);
         Ok(ours_bytes <= pin_bytes && ours_clocks <= pin_clocks)
     };
-    if no_worse(&opening, &pin_opening)? && no_worse(&closing, &pin_closing)? {
-        Ok((opening, closing))
-    } else {
-        Ok((pin_opening, pin_closing))
+    let mut best: Option<((i64, i64), (Vec<FrameOp>, Vec<FrameOp>))> = None;
+    // the first candidate that passes is the `movem` push; a later one must not
+    // be larger than it (strict on bytes: no m68k byte rate is derived)
+    let mut bytes_limit = usize::MAX;
+    for (opening, closing) in pushed {
+        if !(no_worse(&opening, &pin_opening)? && no_worse(&closing, &pin_closing)?) {
+            continue;
+        }
+        let ((ob, oc), (cb, cc)) = (cost(&opening)?, cost(&closing)?);
+        if ob + cb > bytes_limit {
+            continue;
+        }
+        bytes_limit = bytes_limit.min(ob + cb);
+        let ranked = key(ob + cb, oc + cc);
+        if best.as_ref().is_none_or(|(held, _)| ranked < *held) {
+            best = Some((ranked, (opening, closing)));
+        }
     }
+    Ok(best.map_or((pin_opening, pin_closing), |(_, frame)| frame))
 }
 
 /// A line of the function: a block's label (its layout index) or an
@@ -315,22 +385,25 @@ pub fn finish_with(
             ..Function::default()
         })
     };
+    let wants_size = pushes.unwrap_or(false);
     let pushes = match pushes {
         Some(size) => crate::callpush::plan(&insts, &blocks, assignment, cpu, size, short, |max_call_frame| {
-            let (opening, closing) = frame_ops(&frame_of(max_call_frame), cpu, push_frame, short)?;
+            let (opening, closing) = frame_ops(&frame_of(max_call_frame), cpu, push_frame, short, wants_size)?;
             frame_cost_with(&[opening, closing].concat(), cpu, short)
         })?,
         None => crate::callpush::Plan::default(),
     };
     let layout = frame_of(call_area(&|at| pushes.keeps_frame(at)));
     let mut out = Vec::new();
-    let (opening, closing) = frame_ops(&layout, cpu, push_frame, short)?;
+    let (opening, closing) = frame_ops(&layout, cpu, push_frame, short, wants_size)?;
     opening.iter().for_each(|op| frame_op(op, &mut out, short));
     let mut lines = Vec::new();
     // Where each place starts in `out`: only when it changes.
     let mut marks: Vec<(usize, Row)> = Vec::new();
-    // The frame is made by the opening ops: the next row ends the prologue.
-    let mut frame_made = !opening.is_empty();
+    // The first row with a line ends the prologue, whether or not the opening
+    // ops made a frame (the pin flags a frameless function's too; #7199 made
+    // this one frameless).
+    let mut frame_made = true;
     let mut last_origin = 0u32;
     let mut block_top = false;
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
@@ -381,9 +454,13 @@ pub fn finish_with(
                 let opcode = crate::callpush::memory_push(name).ok_or("a folded load has a push")?;
                 Ok(mc::Inst { opcode, operands })
             }
+            None if matches!(insts[store].kind, Kind::Op("CLR32p" | "CLR32j")) => {
+                // a `clr.l` store has no value operand: it stores zero
+                Ok(crate::callpush::push_of_sized(&mc::Operand::Imm(0), wants_size))
+            }
             None => {
                 let operands = convert(insts[store], pushed)?;
-                Ok(crate::callpush::push_of(operands.last().ok_or("a push of nothing")?))
+                Ok(crate::callpush::push_of_sized(operands.last().ok_or("a push of nothing")?, wants_size))
             }
         }
     };

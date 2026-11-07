@@ -75,3 +75,39 @@ fn quotient_and_remainder_are_read_from_their_own_registers() {
     assert_eq!(register(&quotient, qroot), NodeData::PhysReg(routine.quotient[0]));
     assert_eq!(register(&remainder, rroot), NodeData::PhysReg(routine.remainder[0]));
 }
+
+/// `a / d + a % d` on `i64` called the routine twice, once per op, and the
+/// pipeline's remainder was `a - q * d` (a 64-bit multiply per site, x_ll_div
+/// +9,534 clk over gcc). The pair is one call that returns both.
+#[test]
+fn an_i64_quotient_and_remainder_of_the_same_operands_are_one_call() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let mut dag = dag();
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let mut dword = |slot: i32| {
+        let info = MemInfo {
+            mem_vt: EVT::I32,
+            align: 4,
+            volatile: false,
+            base: MemBase::Stack(slot),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        dag.get_load(EVT::I32, chain, ptr, info)
+    };
+    let (a, b, c, d) = (dword(1), dword(2), dword(3), dword(4));
+    let x = dag.get_node(ISD::BuildPair, EVT::I64, &[a, b]);
+    let y = dag.get_node(ISD::BuildPair, EVT::I64, &[c, d]);
+    let quotient = dag.get_node(ISD::UDiv, EVT::I64, &[x, y]);
+    let remainder = dag.get_node(ISD::URem, EVT::I64, &[x, y]);
+    let sum = dag.get_node(ISD::Add, EVT::I64, &[quotient, remainder]);
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[sum]);
+    dag.set_root(low);
+    TypeLegalizer::new(&mut dag, &tli).with_target(&llrm_x86_m32::M32).run().unwrap();
+    let calls = (0..dag.node_count() as u32)
+        .filter(|&node| dag.opcode(SDValue { node, res: 0 }) == x86isd::CALL)
+        .count();
+    assert_eq!(calls, 1, "one call makes the quotient and the remainder");
+}

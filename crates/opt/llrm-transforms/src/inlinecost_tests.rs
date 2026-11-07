@@ -1011,3 +1011,16 @@ fn the_default_inline_policy_is_made_from_the_hooks_a_target_states() {
     assert_eq!(x86(false).inline_policy().by_size, None);
     assert!(x86(true).inline_policy().by_size.is_some());
 }
+
+/// `LLRM_DEBUG=inline` was documented and printed nothing (jpeg_single -O1:
+/// `emit` cost 90 against threshold 90, not the pin's 225, was invisible). The
+/// line it prints for a verdict reads as clang's `-Rpass=inline` does.
+#[test]
+fn a_verdict_is_described_with_its_cost_and_threshold() {
+    use crate::inlinecost::describe;
+    let cost = InlineCost::Cost { cost: 90, threshold: 225, static_bonus: 0, blocked: false };
+    assert_eq!(describe(&cost), "cost=90 threshold=225 inline");
+    let over = InlineCost::Cost { cost: 90, threshold: 90, static_bonus: 0, blocked: false };
+    assert_eq!(describe(&over), "cost=90 threshold=90 no");
+    assert_eq!(describe(&InlineCost::Never("recursive".into())), "never (recursive)");
+}

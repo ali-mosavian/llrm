@@ -58,6 +58,19 @@ pub fn table() -> Vec<(&'static str, Vec<Arg>, i32)> {
     ]
 }
 
+/// More argument sets for a kernel whose branch goes either way: with one
+/// input the code that skips the work looks faster than the code that runs it,
+/// and the mirrored layout reverses with the input (`max(7, 42)` made a
+/// mirrored branch cost a move on one side). The matrix averages the runs.
+pub fn extra_runs(name: &str) -> Vec<(Vec<Arg>, i32)> {
+    match name {
+        "max" => vec![(vec![Imm(42), Imm(7)], 42)],
+        "absdiff" => vec![(vec![Imm(52), Imm(10)], 42)],
+        "clamp" => vec![(vec![Imm(-5), Imm(0), Imm(42)], 0), (vec![Imm(20), Imm(0), Imm(42)], 20)],
+        _ => Vec::new(),
+    }
+}
+
 /// `(routine, arguments, the result worked out by hand, leaf)`: the second
 /// set, library-style routines written after the first set was tuned
 /// (`bench/library`). A routine that is not a leaf calls the runtime, which

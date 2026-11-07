@@ -6,6 +6,11 @@
 //! `cycles` does. Prints the competitor-matrix rows: `target prog level
 //! compiler code_bytes clocks instrs note`, tab separated. An empty field means
 //! the instrument has no number; `note` says why.
+//!
+//! `clang` is the pin's result for the program: its own front end and mid-end
+//! to IR, then its `llc`, so its LSR runs once on its own IR. `ours-ir` and
+//! the `llc` columns of `examples/bench` take the committed `bench/*.ll`, which
+//! is not that IR: those compare backends on one IR only.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,7 +19,7 @@ use llrm_m68k::compile::{Item, Options, items, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::isa::Cpu as Model;
 use llrm_m68k::kernels::{
-    Arg, data, keep_named, library_data, library_table, program_with_data, source_in, table,
+    Arg, data, extra_runs, keep_named, library_data, library_table, program_with_data, source_in, table,
 };
 use llrm_m68k::object::{assemble, executable, write_executable};
 
@@ -36,8 +41,37 @@ fn data_sections(listing: &str) -> Vec<String> {
         .collect()
 }
 
+/// The code sections of an `objdump -h` listing other than `.text` with a size
+/// above zero (`.text.startup` for `main`, `.text.unlikely` and `.text.hot`
+/// for gcc's cold and hot parts): the line after a section's carries its
+/// flags.
+fn other_code_sections(listing: &str) -> Vec<String> {
+    let lines: Vec<&str> = listing.lines().collect();
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| {
+            let mut fields = line.split_whitespace();
+            let (_, name, size) = (fields.next()?, fields.next()?, fields.next()?);
+            let flags = lines.get(at + 1)?;
+            let code = flags.split([',', ' ']).any(|flag| flag == "CODE");
+            (code && name != ".text" && u64::from_str_radix(size, 16).is_ok_and(|size| size > 0))
+                .then(|| name.to_owned())
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    /// gcc puts `main` in `.text.startup` and cold parts in `.text.unlikely`;
+    /// a column that read `.text` alone undercounted those bytes (softfloat's
+    /// finding for the ELF feeds; this corpus had none, so no cell moved).
+    #[test]
+    fn code_outside_text_is_not_counted_by_text_alone() {
+        let listing = "Idx Name          Size      VMA\n  0 .text         00000010  00000000\n                  CONTENTS, ALLOC, LOAD, READONLY, CODE\n  1 .text.startup 00000008  00000000\n                  CONTENTS, ALLOC, LOAD, READONLY, CODE\n  2 .comment      00000026  00000000\n                  CONTENTS, READONLY\n";
+        assert_eq!(super::other_code_sections(listing), vec![".text.startup".to_owned()]);
+    }
+
     /// A kernel that loads a constant from `.rodata` counted only its `.text`
     /// for every column (arm64's instrument hid up to 24 B that way).
     #[test]
@@ -52,14 +86,27 @@ fn leaf_text(
     objdump: &Path,
     object: &Path,
 ) -> Result<Vec<u8>, String> {
+    text_bytes(objdump, object, false)
+}
+
+/// The text of `object`; with `calls` a relocation to a runtime routine is
+/// allowed (the bytes alone are compared, nothing runs).
+fn text_bytes(
+    objdump: &Path,
+    object: &Path,
+    calls: bool,
+) -> Result<Vec<u8>, String> {
     let headers = Command::new(objdump).arg("-h").arg(object).output().map_err(|e| e.to_string())?;
     if let Some(section) = data_sections(&String::from_utf8_lossy(&headers.stdout)).first() {
         return Err(format!("loads data from {section}: bytes of .text alone would undercount"));
     }
+    if let Some(section) = other_code_sections(&String::from_utf8_lossy(&headers.stdout)).first() {
+        return Err(format!("code in {section}: bytes of .text alone would undercount"));
+    }
     let relocations = Command::new(objdump).arg("-r").arg(object).output().map_err(|e| e.to_string())?;
     let listing = String::from_utf8_lossy(&relocations.stdout).to_string();
     let in_text = listing.split("RELOCATION RECORDS FOR").find(|part| part.trim_start().starts_with("[.text]"));
-    if in_text.is_some_and(|part| part.contains("R_68K")) {
+    if !calls && in_text.is_some_and(|part| part.contains("R_68K")) {
         return Err("calls a runtime routine (relocation in .text)".to_owned());
     }
     let out = Command::new(objdump).args(["-s", "-j", ".text"]).arg(object).output().map_err(|e| e.to_string())?;
@@ -258,27 +305,42 @@ fn main() {
                     let mut code = code;
                     code.extend(helper.clone().unwrap_or_default());
                     code.extend(runtime.clone());
-                    let exe = dir.join(format!("{name}_{cpu_name}_{level}_{id}.elf"));
-                    write_executable(&exe, &executable(&program_with_data(args, code, &block)).unwrap()).unwrap();
-                    let status = Command::new("timeout")
-                        .args(["10", "qemu-m68k", "-cpu", &format!("m{cpu_name}")])
-                        .arg(&exe)
-                        .status()
-                        .ok()
-                        .and_then(|s| s.code());
-                    if status != Some(*expected) {
-                        return (None, None, format!("wrong result: {status:?}, want {expected}"));
+                    // the first input, then the others that make the branches go the other way
+                    let mut runs: Vec<(&[Arg], i32)> = vec![(args.as_slice(), *expected)];
+                    let more = extra_runs(name);
+                    runs.extend(more.iter().map(|(args, expected)| (args.as_slice(), *expected)));
+                    let (mut clocks, mut insns, mut notes) = (0u64, 0usize, String::new());
+                    for (at, (args, expected)) in runs.iter().enumerate() {
+                        let exe = dir.join(format!("{name}_{cpu_name}_{level}_{id}_{at}.elf"));
+                        write_executable(&exe, &executable(&program_with_data(args, code.clone(), &block)).unwrap())
+                            .unwrap();
+                        let status = Command::new("timeout")
+                            .args(["10", "qemu-m68k", "-cpu", &format!("m{cpu_name}")])
+                            .arg(&exe)
+                            .status()
+                            .ok()
+                            .and_then(|s| s.code());
+                        if status != Some(*expected) {
+                            return (None, None, format!("wrong result: {status:?}, want {expected}"));
+                        }
+                        let total = cycles::price(&gcc_root, &exe, &[model], false);
+                        if total.insns == 0 {
+                            return (None, None, "priced no instruction".to_owned());
+                        }
+                        if total.unknown > 0 {
+                            notes = format!("{} executed instructions unpriced", total.unknown);
+                        } else if total.partial && notes.is_empty() {
+                            notes = "data-dependent term at its bound".to_owned();
+                        }
+                        clocks += total.clocks[0];
+                        insns += total.insns;
                     }
-                    let total = cycles::price(&gcc_root, &exe, &[model], false);
-                    if total.insns == 0 {
-                        return (None, None, "priced no instruction".to_owned());
-                    }
-                    let note = match (total.partial, total.unknown) {
-                        (_, unknown) if unknown > 0 => format!("{unknown} executed instructions unpriced"),
-                        (true, _) => "data-dependent term at its bound".to_owned(),
-                        _ => String::new(),
-                    };
-                    (Some(total.clocks[0]), Some(total.insns), note)
+                    // the mean of the runs, rounded
+                    let n = runs.len() as u64;
+                    let mean = |sum: u64| (sum + n / 2) / n;
+                    let inputs = if n > 1 { format!("inputs {n}") } else { String::new() };
+                    let note = [notes, inputs].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("; ");
+                    (Some(mean(clocks)), Some(mean(insns as u64) as usize), note)
                 };
 
                 let options = Options { size: level == "Os", ..Options::default() };
@@ -301,10 +363,6 @@ fn main() {
                 }
 
                 for compiler in ["ours", "gcc", "clang"] {
-                    if !leaf {
-                        row(compiler, None, None, None, "n/a: calls the runtime, not linked (ours-ir: bytes only)");
-                        continue;
-                    }
                     let source = kernel_dir.join(format!("{name}.c"));
                     let object = dir.join(format!("{name}_{cpu_name}_{level}_{compiler}.o"));
                     let built = if compiler == "ours" {
@@ -314,6 +372,14 @@ fn main() {
                     } else {
                         clang_object(&clang, &llc, cpu_name, level_flag(level), &source, &object)
                     };
+                    if !leaf {
+                        // the runtime is not linked into these objects: bytes only, from every column
+                        match built.and_then(|()| text_bytes(&objdump, &object, true)) {
+                            Ok(bytes) => row(compiler, Some(bytes.len()), None, None, "calls the runtime: bytes only"),
+                            Err(error) => row(compiler, None, None, None, &format!("n/a: {error}")),
+                        }
+                        continue;
+                    }
                     match built.and_then(|()| leaf_text(&objdump, &object)) {
                         Ok(bytes) => {
                             let size = bytes.len();

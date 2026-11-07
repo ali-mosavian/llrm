@@ -13,6 +13,7 @@ llrm-target = { workspace = true }
 llrm-object = { workspace = true }
 llrm-debug = { workspace = true }
 llrm-lir = { workspace = true }
+llrm-analysis = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-spike-mf = { workspace = true }
 llrm-transforms = { workspace = true }

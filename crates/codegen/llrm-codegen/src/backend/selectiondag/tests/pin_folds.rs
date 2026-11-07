@@ -316,7 +316,7 @@ fn a_target_that_does_not_ask_keeps_the_or_of_the_and() {
     assert_eq!(dag.opcode(dag.get_root()), ISD::Or);
 }
 
-fn masked_frozen_extload(dag: &mut SelectionDAG) {
+pub(super) fn masked_frozen_extload(dag: &mut SelectionDAG) {
     // a pointer that may be poison, so the freeze is not dropped
     let (base, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
     let one = dag.get_constant(1, EVT::I32);
@@ -963,4 +963,176 @@ fn an_and_of_a_select_of_zero_and_all_ones_takes_the_operand_into_the_select() {
     assert_eq!(dag.opcode(root), ISD::Select);
     assert_eq!(dag.constant(dag.operand(root, 1)), Some(0));
     assert_eq!(dag.operand(root, 2), x);
+}
+
+/// Declines the fold of a shift of a shared shift.
+struct KeepsSharedShift;
+
+impl CombineHooks for KeepsSharedShift {
+    fn fold_shift_of_shared_shift(
+        &self,
+        _vt: EVT,
+        _inner: u32,
+    ) -> bool {
+        false
+    }
+}
+
+/// `(x >> 3) >> 8` where `x >> 3` has another reader: a word shift that is
+/// one instruction for both halves was shifted a second time, as `x >> 11`.
+fn shift_of_shift_with_a_second_reader(dag: &mut SelectionDAG) -> SDValue {
+    let x = dag.get_register(EVT::I16, 5);
+    let (three, eight) = (dag.get_constant(3, EVT::I8), dag.get_constant(8, EVT::I8));
+    let inner = dag.get_node(ISD::Srl, EVT::I16, &[x, three]);
+    let outer = dag.get_node(ISD::Srl, EVT::I16, &[inner, eight]);
+    let low = dag.get_node(ISD::Truncate, EVT::I8, &[inner]);
+    let high = dag.get_node(ISD::Truncate, EVT::I8, &[outer]);
+    let root = dag.get_node(ISD::BuildPair, EVT::I16, &[low, high]);
+    dag.set_root(root);
+    inner
+}
+
+#[test]
+fn a_target_that_declines_keeps_the_shift_of_a_shared_shift() {
+    let mut dag = dag();
+    let inner = shift_of_shift_with_a_second_reader(&mut dag);
+    DagCombiner::new(&mut dag, &mut KeepsSharedShift, CombineLevel::BeforeLegalizeTypes).run();
+    let high = dag.operand(dag.get_root(), 1);
+    let outer = dag.operand(high, 0);
+    assert_eq!(dag.operand(outer, 0), inner, "the high half reads the shift the low half has");
+}
+
+#[test]
+fn a_default_target_folds_the_shift_of_a_shared_shift() {
+    let mut dag = dag();
+    let inner = shift_of_shift_with_a_second_reader(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let high = dag.operand(dag.get_root(), 1);
+    assert_ne!(dag.operand(dag.operand(high, 0), 0), inner);
+}
+
+struct RefusesToCommute;
+
+impl CombineHooks for RefusesToCommute {
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+}
+
+/// `(x - 1) << 1`, the add read once. A wasm address `p + ((x - 1) << 1)` next
+/// to `p + (x << 1)` was rebuilt per use (dot -O2: +32 B on the pin's own IR).
+fn shifted_add_of_a_register(dag: &mut SelectionDAG) -> SDValue {
+    let x = dag.get_register(EVT::I32, 5);
+    let (minus_one, one) = (dag.get_constant(u128::from(u32::MAX), EVT::I32), dag.get_constant(1, EVT::I32));
+    let add = dag.get_node(ISD::Add, EVT::I32, &[x, minus_one]);
+    let shl = dag.get_node(ISD::Shl, EVT::I32, &[add, one]);
+    dag.set_root(shl);
+    add
+}
+
+#[test]
+fn a_shift_of_a_one_use_add_commutes_into_an_add_of_a_shift() {
+    let mut dag = dag();
+    shifted_add_of_a_register(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Add, "(x << 1) + (-1 << 1)");
+    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Shl);
+    assert_eq!(dag.constant(dag.operand(root, 1)), Some(u128::from(u32::MAX - 1)));
+}
+
+#[test]
+fn a_shift_of_an_add_with_another_reader_keeps_its_add() {
+    let mut dag = dag();
+    let add = shifted_add_of_a_register(&mut dag);
+    let shl = dag.get_root();
+    let both = dag.get_node(ISD::Xor, EVT::I32, &[shl, add]);
+    dag.set_root(both);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let shl = dag.operand(dag.get_root(), 0);
+    assert_eq!(dag.opcode(shl), ISD::Shl);
+    assert_eq!(dag.opcode(dag.operand(shl, 0)), ISD::Add, "the add has two readers: the target's default says no");
+}
+
+#[test]
+fn a_target_that_refuses_keeps_the_shift_of_the_add() {
+    let mut dag = dag();
+    shifted_add_of_a_register(&mut dag);
+    DagCombiner::new(&mut dag, &mut RefusesToCommute, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Shl);
+    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Add);
+}
+
+/// A target with an and-not instruction for every non-constant `i32`, as
+/// AArch64's `bic`.
+struct AndNot;
+
+impl CombineHooks for AndNot {
+    fn has_and_not(
+        &self,
+        vt: EVT,
+        constant: bool,
+    ) -> bool {
+        vt == EVT::I32 && !constant
+    }
+}
+
+fn masked_merge(dag: &mut SelectionDAG) {
+    let (x, y, m) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6), dag.get_register(EVT::I32, 7));
+    let diff = dag.get_node(ISD::Xor, EVT::I32, &[x, y]);
+    let masked = dag.get_node(ISD::And, EVT::I32, &[diff, m]);
+    let root = dag.get_node(ISD::Xor, EVT::I32, &[masked, y]);
+    dag.set_root(root);
+}
+
+/// `((x ^ y) & m) ^ y` stayed three operations; with an and-not it is `(x & m)
+/// | (y & ~m)`.
+#[test]
+fn a_masked_merge_is_unfolded_where_the_target_has_and_not() {
+    let mut dag = dag();
+    masked_merge(&mut dag);
+    DagCombiner::new(&mut dag, &mut AndNot, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Or);
+}
+
+#[test]
+fn a_masked_merge_stays_where_the_target_has_no_and_not() {
+    let mut dag = dag();
+    masked_merge(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Xor);
+}
+
+fn and_with_not_plus(dag: &mut SelectionDAG) {
+    let (x, y, z) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6), dag.get_register(EVT::I32, 7));
+    let not_y = dag.get_not(y, EVT::I32);
+    let sum = dag.get_node(ISD::Add, EVT::I32, &[not_y, z]);
+    let root = dag.get_node(ISD::And, EVT::I32, &[x, sum]);
+    dag.set_root(root);
+}
+
+/// `x & (~y + z)` is `x & ~(y - z)`: the `not` moves out so `bic` takes it.
+#[test]
+fn an_and_with_a_sum_of_a_not_takes_the_not_out_where_the_target_has_and_not() {
+    let mut dag = dag();
+    and_with_not_plus(&mut dag);
+    DagCombiner::new(&mut dag, &mut AndNot, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    let rhs = dag.operand(root, 1);
+    assert_eq!((dag.opcode(root), dag.opcode(rhs)), (ISD::And, ISD::Xor), "{rhs:?}");
+    assert_eq!(dag.opcode(dag.operand(rhs, 0)), ISD::Sub);
+}
+
+#[test]
+fn an_and_with_a_sum_of_a_not_stays_where_the_target_has_no_and_not() {
+    let mut dag = dag();
+    and_with_not_plus(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.operand(dag.get_root(), 1)), ISD::Add);
 }
