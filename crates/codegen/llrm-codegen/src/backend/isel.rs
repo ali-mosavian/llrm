@@ -2322,7 +2322,9 @@ impl Selector<'_, '_, '_> {
             // The m32 native alignment is 4, and the pin's rule would realign
             // every 8-aligned double or i64 local the frame lays on its own
             // alignment (the 486 clocks): +775 B in fcmp_all -O0.
-            if align > self.arch.stack_alignment().max(2 * i64::from(self.arch.stack_slot_bytes())) {
+            if self.arch.can_realign_stack()
+                && align > self.arch.stack_alignment().max(2 * i64::from(self.arch.stack_slot_bytes()))
+            {
                 self.over_aligned.push((disp, align));
             }
             homes.insert(group, disp);
