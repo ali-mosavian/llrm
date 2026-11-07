@@ -1,5 +1,5 @@
-//! `f(dst + 5, src + 1, 1)` kept its three argument stores at `-Os`: a store of a
-//! symbol's address was not an argument store, so the call stayed 22 B of
+//! `f(dst + 5, src + 1, 1)` kept its three argument stores at `-Os`: a store of
+//! a symbol's address was not an argument store, so the call stayed 22 B of
 //! `move.l #k, (d,%sp)` where three pushes and the cleanup are 20 B
 //! (memory_expansion, 900 calls, ~800 B of its +7.9 KB against gcc).
 
