@@ -209,6 +209,45 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TLI.isDesirableToCommuteWithShift`
+    /// ([TargetLowering.h#L4763][pin]): whether the constant shift `shift`
+    /// may move through its operand (`shl (add x, c1), c2` is `add (shl x,
+    /// c2), c1 << c2`). The pin's default, which x86, m68k and wasm use: not
+    /// when the operand has other users, nor when it is a sign extension whose
+    /// source has other users. AArch64 and ARM override it; no in-tree target
+    /// here does.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L4763
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        dag: &SelectionDAG,
+        shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        let operand = dag.operand(shift, 0);
+        if !dag.has_one_use(operand.node) {
+            return false;
+        }
+        !(dag.opcode(operand) == ISD::SignExtend && !dag.has_one_use(dag.operand(operand, 0).node))
+    }
+
+    /// `visitSRL`'s `shift (shift x, c1), c2` as one shift by the sum, and
+    /// `SimplifyDemandedBits`' `srl (shl x, c1), c2` (and the reverse) as the
+    /// one shift by the difference, where the inner shift has other users (the
+    /// pin has no use test). DEVIATE: a
+    /// target whose word shift is one instruction for both halves says no, so
+    /// that the other half is read from the shift it already has, not made by a
+    /// second one. Exit: none; the pin's word shifts are pieces by then and
+    /// node CSE shares them. Default true, the pin's.
+    fn fold_shift_of_shared_shift(
+        &self,
+        _vt: EVT,
+        _inner: u32,
+    ) -> bool {
+        true
+    }
+
     /// `visitORCommutative`'s absorption folds, `(or (and x, y), x)` is `x`.
     /// Default false until x86 is judged.
     fn fold_or_absorption(&self) -> bool {
@@ -916,6 +955,22 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let NodeData::CondCode(cond) = self.dag.node(self.dag.operand(node, 2)).data else { return None };
         let op_type = self.dag.value_type(n0);
+        // `SimplifySetCC` ([L5632][pin]): `setuo|seto x, C` of a constant that
+        // is no NaN is `setuo|seto x, x`, which needs no 0.0 materialized.
+        // DEVIATE: the `setcc (fneg x), C` arm after it is not ported.
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5632
+        if op_type.is_floating_point() {
+            if matches!(cond, CondCode::SetO | CondCode::SetUo)
+                && self.dag.opcode(n0) != ISD::ConstantFP
+                && self.fp_const(n1).is_some_and(|class| !class.nan)
+            {
+                let vt = self.dag.value_type(node);
+                return Some(self.dag.get_setcc(vt, n0, n0, cond));
+            }
+            return None;
+        }
         if !op_type.is_integer() {
             return None;
         }
@@ -2286,6 +2341,26 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::And, vt, &[self.dag.operand(n0, 0), mask]));
             }
         }
+        // `shl (add x, c1), c2` is `add (shl x, c2), c1 << c2`, and the same
+        // for `or` ([L11252][pin]): `x << c2` is shared by the address uses
+        // and the constant folds into an offset. DEVIATE: scalar constants
+        // only (the pin also folds splat vectors). Exit: none planned.
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11252
+        if op == ISD::Shl
+            && matches!(self.dag.opcode(n0), ISD::Add | ISD::Or)
+            && self.hooks.is_desirable_to_commute_with_shift(self.dag, node, self.level)
+        {
+            let n01 = self.dag.operand(n0, 1);
+            if let Some(shl1) = self.dag.fold_constant_arithmetic(ISD::Shl, vt, &[n01, n1]) {
+                let shl0 = self.dag.get_node(ISD::Shl, vt, &[self.dag.operand(n0, 0), n1]);
+                self.add_to_worklist(shl0.node);
+                let disjoint = self.dag.opcode(n0) == ISD::Or && self.dag.node(n0).flags.0 & SDNodeFlags::DISJOINT.0 != 0;
+                let flags = if disjoint { SDNodeFlags::DISJOINT } else { SDNodeFlags::default() };
+                return Some(self.dag.get_node_flags(self.dag.opcode(n0), vt, &[shl0, shl1], flags));
+            }
+        }
         // `srl (sra x, y), w-1` is `srl x, w-1`: the sign bit is the one `sra`
         // leaves alone ([L11886][pin]).
         //
@@ -2301,6 +2376,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let (c2, inner) = (self.dag.constant(n1)?, self.dag.constant(self.dag.operand(n0, 1))?);
+        if !self.dag.has_one_use(n0.node) && !self.hooks.fold_shift_of_shared_shift(vt, inner as u32) {
+            return None;
+        }
         let (x, sum) = (self.dag.operand(n0, 0), c2 + inner);
         if sum < width {
             let amount = self.dag.get_constant(sum, self.dag.value_type(n1));
@@ -3061,7 +3139,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let tli = self.tli?;
         let int_info = |mem_vt: EVT, align: u32, base| MemInfo { mem_vt, align, base, ..info };
         match self.dag.value_type(value) {
-            EVT::Simple(MVT::F32) => {
+            // `(isTypeLegal(i32) && !LegalOperations && isSimple) ||
+            // legalOrCustom(STORE, i32)` (DAGCombiner.cpp#L24427).
+            EVT::Simple(MVT::F32)
+                if (tli.types.is_type_legal(EVT::I32) && !self.legal_operations() && !info.volatile)
+                    || tli.is_operation_legal_or_custom(ISD::Store, EVT::I32) =>
+            {
                 let constant = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
                 Some(self.dag.get_store(chain, constant, ptr, int_info(EVT::I32, info.align, info.base)))
             }
@@ -3075,11 +3158,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 let constant = self.dag.get_constant(bits & 0xFFFF_FFFF_FFFF_FFFF, EVT::I64);
                 Some(self.dag.get_store(chain, constant, ptr, int_info(EVT::I64, info.align, info.base)))
             }
-            // `ST->isSimple()`: a volatile store is not split, as the pin
-            // leaves it. (The pin also asks `isOperationLegalOrCustom(STORE,
-            // i32)`; not asked here, which would change targets whose i32
-            // store is illegal.)
-            EVT::Simple(MVT::F64) if !info.volatile && !tli.is_fp_imm_legal(MVT::F64, bits) => {
+            // `ST->isSimple() && legalOrCustom(STORE, i32) && !isFPImmLegal`
+            // (DAGCombiner.cpp#L24446): a volatile store is not split.
+            EVT::Simple(MVT::F64)
+                if !info.volatile
+                    && tli.is_operation_legal_or_custom(ISD::Store, EVT::I32)
+                    && !tli.is_fp_imm_legal(MVT::F64, bits) =>
+            {
                 let lo = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
                 let hi = self.dag.get_constant((bits >> 32) & 0xFFFF_FFFF, EVT::I32);
                 // the high word comes first on a big-endian target

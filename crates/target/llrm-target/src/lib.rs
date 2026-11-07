@@ -367,7 +367,7 @@ impl<T: Target> BuilderArch for T {
         Target::stack_alignment(self)
     }
     fn roles(&self) -> llrm_mir::spaces::Spaces {
-        Target::layout(self).spaces.roles
+        Target::address_roles(self)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(self)
@@ -391,7 +391,7 @@ impl BuilderArch for &dyn Target {
         Target::stack_alignment(*self)
     }
     fn roles(&self) -> llrm_mir::spaces::Spaces {
-        Target::layout(*self).spaces.roles
+        Target::address_roles(*self)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(*self)
@@ -485,6 +485,11 @@ pub trait Target {
     /// frontend's addresses are.
     fn layout(&self) -> layout::Layout;
 
+    /// `layout().spaces.roles`, without cloning the layout: asked per function.
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        self.layout().spaces.roles
+    }
+
     /// The bytes an argument of `width` takes on the stack, and the least a
     /// stack cell holds.
     fn stack_slot_bytes(&self) -> i64;
@@ -493,6 +498,19 @@ pub trait Target {
     /// `stack_alignment`): a slot's worth unless it says more.
     fn stack_alignment(&self) -> i64 {
         self.stack_slot_bytes()
+    }
+
+    /// Whether a frame can realign the stack pointer for a local above the
+    /// stack alignment (the pin's `X86RegisterInfo::canRealignStack`,
+    /// [X86RegisterInfo.cpp#L823](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86RegisterInfo.cpp#L823)).
+    /// Where it cannot, no local is over-aligned: the pin clamps the object's
+    /// alignment to the stack alignment
+    /// (`MachineFrameInfo::clampStackAlignment`, MachineFrameInfo.cpp#L40);
+    /// here the cell keeps its alignment and the stack is left as the
+    /// caller made it (DEVIATE OA-2, owner w2, exit: m16 states its own
+    /// stack alignment).
+    fn can_realign_stack(&self) -> bool {
+        true
     }
 
     /// Whether every call finds the stack a multiple of `stack_alignment`

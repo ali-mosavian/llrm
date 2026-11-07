@@ -184,6 +184,10 @@ impl llrm_target::Target for M64 {
         LAYOUT.clone()
     }
 
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
+    }
+
     /// An argument takes a dword at least: `calling.toml`'s.
     fn stack_slot_bytes(&self) -> i64 {
         CALLING.native().slot_bytes
@@ -414,6 +418,8 @@ impl llrm_target::Target for M64 {
                             // CH-STAGED (owner m64, exit 2026-11-20): the pin hoists
                             // constants after LSR on every target; m64 first.
                             constant_hoisting: true,
+                            // DEVIATE ZIMM (owner m64, exit 2026-11-27): see Tuning.
+                            zext_imm_is_basic: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

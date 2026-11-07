@@ -423,7 +423,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 // demanded is one shift by the difference (likewise `srl`).
                 let outside = if is_shl { mask(amount) } else { all & !(all >> amount) };
                 if self.dag.opcode(op0) == inner_op && demanded & outside == 0 {
-                    if let Some(c1) = self.dag.constant(self.dag.operand(op0, 1)).filter(|&c| c < u128::from(width)) {
+                    if let Some(c1) = self.dag.constant(self.dag.operand(op0, 1)).filter(|&c| c < u128::from(width))
+                        && (self.dag.has_one_use(op0.node) || self.hooks.fold_shift_of_shared_shift(vt, c1 as u32))
+                    {
                         let diff = i64::from(amount) - c1 as i64;
                         let shifted = if is_shl { diff >= 0 } else { diff >= 0 };
                         let (new_op, by) = if shifted { (opcode, diff as u128) } else { (inner_op, (-diff) as u128) };

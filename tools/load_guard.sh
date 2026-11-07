@@ -16,7 +16,7 @@
 file=${LG_LOAD_FILE:-/proc/loadavg}; poll=${LG_POLL:-5}
 stop5=${LG_STOP_5M:-28}; stop1=${LG_STOP_1M:-38}; resume5=${LG_RESUME_5M:-26}; resume1=${LG_RESUME_1M:-20}; start1=${LG_START_1M:-25}
 [ "${LG_QUIET:-}" = 1 ] && start1=${LG_QUIET_1M:-20}
-base=${LG_SLOTS:-3}; high=${LG_SLOTS_HIGH:-5}; wide=${LG_SLOTS_MAX:-7}; widest=${LG_SLOTS_WIDEST:-10}; widest1=${LG_WIDEST_1M:-14}; widen1=${LG_WIDEN_1M:-20}; narrow1=${LG_NARROW_1M:-22}
+base=${LG_SLOTS:-3}; high=${LG_SLOTS_HIGH:-5}; wide=${LG_SLOTS_MAX:-7}; widest=${LG_SLOTS_WIDEST:-10}; widest1=${LG_WIDEST_1M:-17}; widen1=${LG_WIDEN_1M:-20}; narrow1=${LG_NARROW_1M:-22}
 slot_dir=${LG_SLOT_DIR:-/tmp/buildslots/load_guard}
 prio=${LG_PRIO_FILE:-$slot_dir/prio}; tier=${LG_TIER:-4}
 log() { echo "load_guard: $(date -u +%H:%MZ) $*" >&2; }
@@ -50,7 +50,11 @@ slot_count() {  # slot_count L1: prints the count
 
 # ---- order: one line "tier start pid start_line" per waiter in $prio, edited under the same lock discipline ----
 prio_edit() {  # prio_edit add|del|first: first prints ok when no live waiter precedes this one
-  local fd out=""; exec {fd}>"$slot_dir/prio.lock"; flock "$fd"
+  # A TERM that lands inside this function runs the EXIT trap (prio_edit del) in the same shell: a second flock on a new descriptor
+  # waits for the lock this shell already holds. The wait is bounded (LG_LOCK_WAIT, 2 s); a waiter's line that was not removed is
+  # pruned by the next editor, which drops pids that are gone.
+  local fd out=""; exec {fd}>"$slot_dir/prio.lock"
+  flock -w "${LG_LOCK_WAIT:-2}" "$fd" || { exec {fd}>&-; return 1; }
   touch "$prio"
   # drop waiters whose process is gone
   while read -r t st pid q; do kill -0 "$pid" 2>/dev/null && echo "$t $st $pid $q"; done < "$prio" > "$prio.new"

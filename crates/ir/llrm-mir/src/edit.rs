@@ -578,6 +578,33 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// LLVM's `Op<a>().swap(Op<b>())` (`BinaryOperator::swapOperands`,
+    /// `Use::swap`): the operands trade places and each use keeps its place in
+    /// its value's list, which two `set_operand`s would not (they put both
+    /// uses first).
+    pub fn swap_operands(
+        &mut self,
+        inst: InstId,
+        a: usize,
+        b: usize,
+    ) {
+        let (x, y) = (self.instructions[inst.0 as usize].operands[a], self.instructions[inst.0 as usize].operands[b]);
+        if x == y {
+            return;
+        }
+        let phi = self.instructions[inst.0 as usize].opcode == Opcode::Phi;
+        self.instructions[inst.0 as usize].operands.swap(a, b);
+        let (at_a, at_b) = (Use { user: inst, index: a as u32 }, Use { user: inst, index: b as u32 });
+        if let (Some(hx), Some(hy)) = (Held::of(x, phi), Held::of(y, phi)) {
+            if hx != hy {
+                self.uses.swap(hx, at_a, hy, at_b);
+            }
+        }
+        self.log(Change::Operand { inst, index: a as u32, was: x });
+        self.log(Change::Operand { inst, index: b as u32, was: y });
+        self.log(Change::Rewritten(inst));
+    }
+
     /// Replaces all of an instruction's operands, as LLVM's
     /// `removeIncomingValue` and `addIncoming` change a phi's.
     pub fn set_operands(

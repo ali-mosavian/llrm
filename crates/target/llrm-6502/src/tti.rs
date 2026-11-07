@@ -247,6 +247,12 @@ impl Tti for Mos6502 {
         false
     }
 
+    /// A select is a branch around a copy: an arm only it reads (`x - 32` of
+    /// `c - 97 < 26 ? c - 32 : c`) is made on its own path (`cgpselectarms`).
+    fn sinks_select_arms(&self) -> bool {
+        true
+    }
+
     fn memory_op_cost(
         &self,
         _: MemoryOp,
