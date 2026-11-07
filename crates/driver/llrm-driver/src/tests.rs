@@ -3635,7 +3635,7 @@ fn the_call_pad_lies_above_the_locals_at_m64() {
 /// -O3 unroll-and-jam never fired on x86-64: the outer loop's size (28) was
 /// held to `BasicTTIImpl`'s 28-micro-op loop buffer, so the count was 0
 /// (particle: 15850 cycles; gcc's jam of two outer trips, 10262). Jammed, the
-/// copies of `px += vx` share one load of `vx`: `px += 3 * vx`.
+/// copies of `px += vx` share one load of `vx`.
 #[test]
 fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -3654,20 +3654,30 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
                 \x20 %i1 = add nuw nsw i64 %i, 1\n  %e = icmp eq i64 %i1, 101\n  br i1 %e, label %next, label %inner\n\
                 next:\n  %t1 = add nuw nsw i16 %t, 1\n  %f = icmp eq i16 %t1, 101\n  br i1 %f, label %done, label %outer\n\
                 done:\n  ret void\n}\n";
-    let (built, _) = compiled(&flags(&["-m64", "-O3", "--isel=dag"]), text, "f").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    // Jammed by three: `px += 3 * vx` is `lea r, [v+v]` then `add r, v`.
-    let tripled = listing
-        .lines()
-        .map(str::trim)
-        .filter(
-            |line| line.strip_prefix("lea ")
-                .and_then(|rest| rest.split_once('['))
-                .and_then(|(_, inside)| inside.strip_suffix(']'))
-                .and_then(|inside| inside.split_once('+'))
-                .is_some_and(|(a, b)| a == b),
-        );
-    assert!(tripled.count() >= 2, "{listing}");
+    // The symptom, not the factor: the copies of `px += vx` share one load of
+    // `vx` and add it to itself (`add r, r`: x2 for two copies, UJ3's divisor
+    // of the 100 outer trips), where an unjammed nest loads `vx` and `vy` once
+    // per trip and doubles nothing.
+    let shape = |level: &str| {
+        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let lines = listing.lines().map(str::trim);
+        let doubled = lines
+            .clone()
+            .filter(|line| {
+                line.strip_prefix("add ")
+                    .and_then(|rest| rest.split_once(", "))
+                    .is_some_and(|(a, b)| a == b && !a.starts_with("word"))
+            })
+            .count();
+        let loads = lines.filter(|line| line.starts_with("movzx") && line.contains("ptr [")).count();
+        (doubled, loads, listing)
+    };
+    let (doubled, loads, listing) = shape("-O3");
+    assert!(doubled >= 2 && loads == 2, "{listing}");
+    // Control: without the jam (-O2) nothing is doubled.
+    let (doubled, _, listing) = shape("-O2");
+    assert_eq!(doubled, 0, "{listing}");
 }
 
 /// fib at m64 -O2 was copied into itself to the 150 `gcc_insns` the pass
