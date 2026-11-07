@@ -270,3 +270,30 @@ fn fast_isel_takes_a_multiply_at_m32_and_m64() {
         assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
     }
 }
+
+/// At m64 a global array element (`sext` index, `gep`, `lea` of the global)
+/// left `h` to the DAG; `array.c` stores and loads exactly this.
+#[test]
+fn fast_isel_takes_a_global_array_element_at_m64() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "int a[64];\nint h(int i)\n{\n    a[i] = i;\n    return a[i];\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_DEBUG", "isel")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(asm.contains("movslq") || asm.contains("movsxd"), "{asm}");
+}
