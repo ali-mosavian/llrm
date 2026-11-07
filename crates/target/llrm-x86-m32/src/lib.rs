@@ -88,6 +88,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         imul_at_size: true,
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
+        x87_zero_fill_at_size: true,
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant
         // fill is `rep stos` where its stores take more bytes (gcc -Os; the pin

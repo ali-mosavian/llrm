@@ -456,6 +456,11 @@ impl Builder<'_> {
         if sse2 && !integer_only && !self.volatile_memory && size >= 16 { 16 } else { self.widest_mem_op(size) }
     }
 
+    /// `Tuning::x87_zero_fill_at_size` of this target's cost model.
+    fn x87_zero_fill(&self) -> bool {
+        self.target.tti.as_ref().is_some_and(|tti| tti.0.x87_zero_fill_at_size())
+    }
+
     /// The alignment of a frame object a copy of `size` bytes fills, when the
     /// copy is expanded inline: the ABI alignment of the first piece's type if
     /// that is more, up to the natural stack alignment
@@ -783,6 +788,25 @@ impl Builder<'_> {
         // value held in a register has no 16-byte form here.
         let widest = self.widest_mem_op_sse(size, self.dag.constant(value).is_none());
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
+        // DEVIATE X87-ZERO-FILL (owner x87, exit 2026-11-27): at `-Os` on a
+        // target whose floats are on the x87 stack, a zero fill of whole
+        // doubles is `fldz` and one `fst qword` per double (4 bytes at a short
+        // displacement), not two `mov dword` zero stores (8): nbody m32 -Os,
+        // 127 bytes of fills against gcc's 92. The pin's
+        // `getOptimalMemOpType` is `i32` without SSE (clang stores dwords;
+        // `X86TargetLowering::getOptimalMemOpType`, X86ISelLoweringCall.cpp at
+        // d1106deb71cc, line not read here). `Tuning::x87_zero_fill_at_size`
+        // gates it per target (and not with SSE2, in the Tti getter). Whole
+        // doubles only: a dword tail needs the integer zero register anyway,
+        // and the mixed form moved x_jpeg_single -Os +5 B through the
+        // allocation it changed.
+        let fpu_zero = zero
+            && size >= 8
+            && size % 8 == 0
+            && self.has_opt_size()
+            && !self.volatile_memory
+            && self.x87_zero_fill();
+        let ops = if fpu_zero { vec![8u64; (size / 8) as usize] } else { ops };
         let largest = ops.iter().copied().filter(|width| *width != 16).max().unwrap_or(8);
         let largest_vt = EVT::integer(largest as u32 * 8);
         let splat = self.memset_value(value, largest_vt);
@@ -791,6 +815,23 @@ impl Builder<'_> {
         for width in ops {
             if width > left {
                 off -= width - left;
+            }
+            if fpu_zero && width == 8 {
+                let to = self.dag.get_object_ptr_offset(dst, off as i64);
+                let info = MemInfo {
+                    mem_vt: EVT::Simple(MVT::F64),
+                    align: common_alignment(align, off) as u32,
+                    volatile: false,
+                    base: MemBase::Unknown,
+                    ext: None,
+                    space: self.space_of(dst),
+                    ordering: None,
+                };
+                let zero_double = self.dag.get_constant_fp(0, EVT::Simple(MVT::F64));
+                chains.push(self.dag.get_store(chain, zero_double, to, info));
+                off += width;
+                left = left.saturating_sub(width);
+                continue;
             }
             if width == 16 {
                 let align = self.dag.get_constant(u128::from(common_alignment(align, off)), EVT::I32);
