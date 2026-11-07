@@ -138,6 +138,7 @@ struct Names {
     jcc: u16,
     cmp_rr: u16,
     cmp_ri: u16,
+    imul: u16,
     /// `add`, `sub`, `and`, `or`, `xor` with a register and with an immediate.
     alu: [(u16, u16); 5],
     /// m32 only so far: calls and the signed divide.
@@ -176,6 +177,7 @@ impl Names {
             jcc: opcode("JCC_1")?,
             cmp_rr: opcode("CMP32rr")?,
             cmp_ri: opcode("CMP32ri")?,
+            imul: opcode("IMUL32rr")?,
             alu: [pair("ADD")?, pair("SUB")?, pair("AND")?, pair("OR")?, pair("XOR")?],
             calls: (|| {
                 Some(Calls {
@@ -446,6 +448,13 @@ impl Fast<'_> {
                     use llrm_mir::opcode::BinaryOp::*;
                     if self.module.context.types.int_bits(instruction.ty) != Some(32) {
                         return None;
+                    }
+                    if matches!(op, Mul) {
+                        // `imul r, r`: both operands in registers, as the pin's X86SelectMul
+                        let (left, right) = (self.value(instruction.operands[0])?, self.value(instruction.operands[1])?);
+                        let done = self.node(self.names.imul, &[EVT::I32, EVT::I32], &[left, right]);
+                        self.values.insert(instruction.result?, done);
+                        continue;
                     }
                     let (rr, ri) = self.names.alu[match op {
                         Add => 0,
