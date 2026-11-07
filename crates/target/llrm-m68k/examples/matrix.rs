@@ -256,7 +256,8 @@ fn main() {
     } else {
         (table().into_iter().map(|(name, args, expected)| (name, args, expected, true)).collect(), data())
     };
-    // `MATRIX_PROGS=partition,hex` keeps the named programs; an unknown name stops the run
+    // `MATRIX_PROGS=partition,hex` keeps the named programs; an unknown name
+    // stops the run
     let rows = match std::env::var("MATRIX_PROGS") {
         Ok(only) => keep_named(rows, |row| row.0, &only).unwrap_or_else(|why| panic!("MATRIX_PROGS: {why}")),
         Err(_) => rows,
@@ -305,7 +306,8 @@ fn main() {
                     let mut code = code;
                     code.extend(helper.clone().unwrap_or_default());
                     code.extend(runtime.clone());
-                    // the first input, then the others that make the branches go the other way
+                    // the first input, then the others that make the branches
+                    // go the other way
                     let mut runs: Vec<(&[Arg], i32)> = vec![(args.as_slice(), *expected)];
                     let more = extra_runs(name);
                     runs.extend(more.iter().map(|(args, expected)| (args.as_slice(), *expected)));
@@ -339,11 +341,12 @@ fn main() {
                     let n = runs.len() as u64;
                     let mean = |sum: u64| (sum + n / 2) / n;
                     let inputs = if n > 1 { format!("inputs {n}") } else { String::new() };
-                    let note = [notes, inputs].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("; ");
+                    let note =
+                        [notes, inputs].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("; ");
                     (Some(mean(clocks)), Some(mean(insns as u64) as usize), note)
                 };
 
-                let options = Options { size: level == "Os", ..Options::default() };
+                let options = Options { size: level == "Os", strict: level == "O1", ..Options::default() };
                 match items_with(&module, "k", cpu, options) {
                     Ok(code) => {
                         let size = {
@@ -373,7 +376,8 @@ fn main() {
                         clang_object(&clang, &llc, cpu_name, level_flag(level), &source, &object)
                     };
                     if !leaf {
-                        // the runtime is not linked into these objects: bytes only, from every column
+                        // the runtime is not linked into these objects: bytes
+                        // only, from every column
                         match built.and_then(|()| text_bytes(&objdump, &object, true)) {
                             Ok(bytes) => row(compiler, Some(bytes.len()), None, None, "calls the runtime: bytes only"),
                             Err(error) => row(compiler, None, None, None, &format!("n/a: {error}")),
