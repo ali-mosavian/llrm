@@ -76,6 +76,34 @@ impl Table {
         self.rows.get(&key).cloned().unwrap_or_default()
     }
 
+    /// The arm each row takes on `cpu`: the first whose condition the CPU
+    /// states true, as in the pin's `fastEmit_*` bodies. A row whose arms are
+    /// all false is absent; one whose arm needs a run-time answer is an error.
+    pub fn resolve(
+        &self,
+        cpu: &crate::features::Cpu,
+    ) -> Result<Chosen, String> {
+        use crate::predicate::{self, Decided};
+        let mut picked = BTreeMap::new();
+        for (key, rows) in &self.rows {
+            for arm in &rows.arms {
+                let take = match &arm.cond {
+                    None => true,
+                    Some(text) => match predicate::parse(text)?.decide(&|atom| cpu.verdict(atom))? {
+                        Decided::Yes => true,
+                        Decided::No => false,
+                        Decided::Open(_) => return Err(format!("{key:?}: `{text}` is decided at run time")),
+                    },
+                };
+                if take {
+                    picked.insert(key.clone(), arm.clone());
+                    break;
+                }
+            }
+        }
+        Ok(Chosen { picked })
+    }
+
     pub fn parsed(&self) -> usize {
         self.rows.len()
     }
@@ -226,4 +254,30 @@ pub fn parse(text: &str) -> Result<Table, String> {
         }
     }
     Ok(table)
+}
+
+/// The arm of each row a CPU takes.
+pub struct Chosen {
+    picked: BTreeMap<Key, Arm>,
+}
+
+impl Chosen {
+    /// The rows that have an arm on this CPU.
+    pub fn len(&self) -> usize {
+        self.picked.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.picked.is_empty()
+    }
+
+    pub fn pick(
+        &self,
+        namespace: &str,
+        op: &str,
+        vt: &str,
+        shape: Shape,
+    ) -> Option<&Arm> {
+        self.picked.get(&(namespace.to_owned(), op.to_owned(), vt.to_owned(), String::new(), shape))
+    }
 }

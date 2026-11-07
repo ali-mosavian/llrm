@@ -73,3 +73,30 @@ fn the_whole_pin_file_is_accounted_for() {
         assert!(!table.rows("ISD", op, "i32", shape).arms.is_empty(), "no i32 {op} {shape:?} row");
     }
 }
+
+const FEATURES: &str = include_str!("../features.toml");
+
+/// Choosing an arm took the first listed, so an i486 asked for the NDD form
+/// (`ADD32rr_ND`, an APX instruction). The first arm whose condition the CPU
+/// states true wins, as in the pin's `fastEmit_*` bodies.
+#[test]
+fn an_i486_gets_the_plain_add_not_the_ndd_form() {
+    let cpu = llrm_dagisel_gen::features::Cpu::load(FEATURES, "i486").unwrap();
+    let table = fastisel::parse(EXCERPT).unwrap();
+    let chosen = table.resolve(&cpu).unwrap();
+    let add = chosen.pick("ISD", "ADD", "i32", Shape::Rr).unwrap();
+    assert_eq!((add.opcode.as_str(), add.class.as_str()), ("ADD32rr", "GR32"));
+    let imm = chosen.pick("ISD", "ADD", "i32", Shape::Ri).unwrap();
+    assert_eq!(imm.opcode, "ADD32ri");
+}
+
+/// An arm no CPU feature allows is no row: `PABSB` needs SSSE3, which an i486
+/// lacks, so `ABS v16i8` is absent rather than the first arm.
+#[test]
+fn a_row_with_no_arm_the_cpu_allows_is_absent() {
+    let cpu = llrm_dagisel_gen::features::Cpu::load(FEATURES, "i486").unwrap();
+    let chosen = fastisel::parse(EXCERPT).unwrap().resolve(&cpu).unwrap();
+    assert!(chosen.pick("ISD", "ABS", "v16i8", Shape::R).is_none());
+    // Of the six rows in the excerpt only ABS has no arm an i486 allows.
+    assert_eq!(chosen.len(), 5);
+}
