@@ -1,7 +1,7 @@
 //! `hex`'s digit byte was stored through a copy of its wide value into a second
-//! register (`move.l %d1,%d3; move.b %d3,(7,%a0,%d0)`) with `d3` saved around the
-//! function: C13 switched off every join between widths, including this one,
-//! where the byte's range lies inside the wide value's. 4 B and 24 clk.
+//! register (`move.l %d1,%d3; move.b %d3,(7,%a0,%d0)`) with `d3` saved around
+//! the function: C13 switched off every join between widths, including this
+//! one, where the byte's range lies inside the wide value's. 4 B and 24 clk.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
