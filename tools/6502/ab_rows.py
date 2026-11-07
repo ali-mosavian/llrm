@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Per-row A/B of two ours_cr tsv files (name, ours, bytes, clocks): worse rows first, then the table.
-ab_rows.py BASE.tsv NEW.tsv [--allow-worse N]: exit 1 when more rows are worse than N (default 0).
-A row is worse when its bytes or its clocks grew; the count is asserted, not only printed."""
+"""Per-row A/B of two ours_cr tsv files (name, ours, bytes, clocks): failing rows first, then the table.
+ab_rows.py BASE.tsv NEW.tsv --level O1|O2|O3|Os [--allow-worse N]: exit 1 when more rows fail than N (default 0).
+The verdict is the level's rule, asserted and not only printed (oversight 2026-11-07):
+  O1       strict: bytes and clocks both must not grow;
+  Os       bytes only, clocks are free;
+  O2, O3   3 clocks to the byte: bytes saved x 3 must cover the clocks added (bytes added cost 3 clocks each)."""
 import sys
 
 def rows(path):
@@ -12,19 +15,32 @@ def rows(path):
             out[parts[0]] = (int(parts[2]), int(parts[3]))
     return out
 
-def compare(base, new):
-    """(worse, better, same, missing): rows by name; a row only one side has is missing, never silently same."""
+CLOCKS_PER_BYTE = 3
+
+def fails(level, base, new):
+    """Whether a row breaks the level's rule."""
+    (bb, bc), (nb, nc) = base, new
+    if level == "O1":
+        return nb > bb or nc > bc
+    if level == "Os":
+        return nb > bb
+    return (nc - bc) + CLOCKS_PER_BYTE * (nb - bb) > 0
+
+def compare(base, new, level="O1"):
+    """(worse, better, same, missing): rows by name; a row only one side has is missing, never silently same.
+    `worse` holds the rows that fail the level's rule; `better` those that do not and moved."""
     worse, better, same = [], [], []
     for name in sorted(base.keys() & new.keys()):
-        (bb, bc), (nb, nc) = base[name], new[name]
-        (worse if nb > bb or nc > bc else better if nb < bb or nc < bc else same).append((name, base[name], new[name]))
+        row = (name, base[name], new[name])
+        (worse if fails(level, base[name], new[name]) else better if base[name] != new[name] else same).append(row)
     return worse, better, same, sorted(base.keys() ^ new.keys())
 
 def main(argv):
     allowed = int(argv[argv.index("--allow-worse") + 1]) if "--allow-worse" in argv else 0
-    worse, better, same, missing = compare(rows(argv[1]), rows(argv[2]))
-    print(f"worse {len(worse)} better {len(better)} same {len(same)} missing {len(missing)}")
-    for tag, group in (("WORSE", worse), ("better", better)):
+    level = argv[argv.index("--level") + 1] if "--level" in argv else sys.exit("ab_rows: --level O1|O2|O3|Os is required")
+    worse, better, same, missing = compare(rows(argv[1]), rows(argv[2]), level)
+    print(f"{level}: failing {len(worse)} better {len(better)} same {len(same)} missing {len(missing)}")
+    for tag, group in (("FAIL", worse), ("better", better)):
         for name, (bb, bc), (nb, nc) in group:
             print(f"{tag:6} {name:34} {bb:6} -> {nb:6} B ({nb - bb:+d})  {bc:10} -> {nc:10} cy ({nc - bc:+d})")
     for name in missing:
