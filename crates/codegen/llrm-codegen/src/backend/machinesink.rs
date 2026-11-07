@@ -362,6 +362,9 @@ struct Sinker {
     /// `GetAllSortedSuccessors` of each block, made once: it asks nothing of
     /// the instruction.
     sorted: Vec<Vec<usize>>,
+    /// The order the selector added each edge in (`addSuccessor`), which the
+    /// pin's equal-depth successors keep; an edge it did not state has none.
+    stated: HashMap<(usize, usize), usize>,
     merged: HashMap<(u32, usize), usize>,
     /// `HasStoreCache`.
     has_store_cache: HashMap<(usize, usize), bool>,
@@ -475,6 +478,13 @@ impl Sinker {
             }
         }
         let depths = crate::analysis::intervals::depths_shared(body);
+        let stated = body
+            .odds
+            .taken
+            .keys()
+            .enumerate()
+            .filter_map(|(rank, (from, to))| Some(((*position.get(from)?, *position.get(to)?), rank)))
+            .collect();
         let mut sinker = Self {
             size,
             arguments: crate::greedy::remat::argument_loads(body),
@@ -497,6 +507,7 @@ impl Sinker {
             cycle,
             considered: HashSet::default(),
             sorted: Vec::new(),
+            stated,
             merged: HashMap::default(),
             to_split: Vec::new(),
             has_store_cache: HashMap::default(),
@@ -729,6 +740,7 @@ impl Sinker {
         let sorted = (0..n)
             .map(|block| {
                 let mut all = self.cfg.succs[block].clone();
+                all.sort_by_key(|&succ| self.stated.get(&(block, succ)).copied().unwrap_or(usize::MAX));
                 for &child in &children[block] {
                     if !all.contains(&child) {
                         all.push(child);
@@ -2014,6 +2026,54 @@ mod tests {
         // against the latch's pressure: room for it, and none.
         assert_eq!(names(&sunk_within(&bubble(12), false, 7, None), 3), ["add", "cmp", "jne"], "room");
         assert_eq!(names(&sunk_within(&bubble(12), false, 3, None), 1), ["mov", "add", "cmp", "jle"], "full");
+    }
+
+    /// A loop block that branches back to its header or on to the next block
+    /// of a condition chain: the selector adds the chain edge first, and the
+    /// pin's sort keeps that order among blocks of one depth, so a load used
+    /// down the chain sinks one block along (os_execute m32 -Os: eight byte
+    /// loads stayed in the block above, `mov r8, [esp+k]` held across the
+    /// branches, +22 B over the unrotated loop's `cmp [slot], imm`). Sorted
+    /// by the block's `succ` order the header came first, and took the load.
+    #[test]
+    fn test_successors_of_one_depth_keep_the_order_the_selector_added_them_in() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem { through: llrm_lir::registers::RegId::BP, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 4) };
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let ret = |at: i64| insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+        let mut body = LirBody::new(
+            "chain",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(10)]).into(),
+                block(1, vec![2], vec![jump(11)]).into(),
+                block(
+                    2,
+                    vec![1, 3],
+                    vec![insn(12, Operation::Move, "mov", vec![held(3)], vec![Loc::Mem(cell)], vec![3], vec![]), jump(13)],
+                )
+                .into(),
+                block(
+                    3,
+                    vec![1, 4],
+                    vec![insn(14, Operation::Move, "mov", vec![held(5)], vec![held(3)], vec![5], vec![3]), jump(15)],
+                )
+                .into(),
+                block(4, vec![], vec![ret(16)]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        body.odds.taken.insert((2, 3), crate::model::lir::BlockOdds::CERTAIN as u32 - 1000);
+        body.odds.taken.insert((2, 1), 1000);
+        body.odds.taken.insert((3, 4), 1000);
+        body.odds.taken.insert((3, 1), crate::model::lir::BlockOdds::CERTAIN as u32 - 1000);
+        let sinker = Sinker::new(&body, true, None);
+        assert_eq!(sinker.sorted_successors(2).first(), Some(&3), "{:?}", sinker.sorted_successors(2));
+        assert_eq!(sinker.sorted_successors(3).first(), Some(&4), "{:?}", sinker.sorted_successors(3));
     }
 
     /// A byte load of a local buffer, compared in only one arm, stayed in the
