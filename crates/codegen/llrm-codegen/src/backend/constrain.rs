@@ -177,12 +177,8 @@ pub fn constrained(
         let constants = constants.get_or_init(|| {
             #[cfg(test)]
             CONSTANTS_WORKED.with(|n| n.set(n.get() + 1));
-            let defined: BTreeSet<u32> = body
-                .blocks
-                .iter()
-                .flat_map(|block| &block.insns)
-                .flat_map(|one| one.defines.iter().copied())
-                .collect();
+            let defined: BTreeSet<u32> =
+                body.blocks.iter().flat_map(|block| &block.insns).flat_map(|one| one.defines.iter().copied()).collect();
             crate::backend::bodyfacts::_constants(body, &defined)
         });
         match constants.get(&value) {
