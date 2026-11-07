@@ -1191,6 +1191,16 @@ pub struct SpikeInstrInfo<T: Target> {
 }
 
 impl<T: Target> SpikeInstrInfo<T> {
+    /// A load of one of `buffers`: any other load of a frame slot is a local
+    /// variable that other instructions write.
+    fn is_known_buffer_load(
+        &self,
+        one: &Insn,
+    ) -> bool {
+        is_buffer_load::<T>(one)
+            && one.what.as_ref().and_then(frame_cell).is_some_and(|addr| self.buffers.contains(&addr.disp))
+    }
+
     fn operands_of(
         &self,
         one: &Insn,
@@ -1601,7 +1611,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         &self,
         one: &Insn,
     ) -> bool {
-        is_cheap_move::<T>(one) || is_frame_load::<T>(one) || is_buffer_load::<T>(one)
+        is_cheap_move::<T>(one) || is_frame_load::<T>(one) || self.is_known_buffer_load(one)
     }
 
     fn is_trivially_re_materializable(
@@ -1609,7 +1619,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         def: &Insn,
         invariant: bool,
     ) -> bool {
-        let r = is_cheap_move::<T>(def) || (invariant && (is_frame_load::<T>(def) || is_buffer_load::<T>(def)));
+        let r = is_cheap_move::<T>(def) || (invariant && (is_frame_load::<T>(def) || self.is_known_buffer_load(def)));
         r
     }
 
@@ -1634,7 +1644,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         one: &Insn,
     ) -> Option<(i64, u32)> {
         let addr = frame_cell(one.what.as_ref()?).filter(|addr| self.buffers.contains(&addr.disp))?;
-        (is_buffer_load::<T>(one)).then(|| {
+        self.is_known_buffer_load(one).then(|| {
             (
                 addr.disp,
                 one.what.as_ref().and_then(|w| w.dests.first()).map_or(0, |d| match d {
