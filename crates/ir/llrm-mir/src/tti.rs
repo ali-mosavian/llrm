@@ -123,10 +123,14 @@ pub struct OperandInfo {
     pub constant: bool,
     pub power_of_two: bool,
     pub negated_power_of_two: bool,
+    /// The constant, sign-extended from its width, where a target prices the
+    /// size of an immediate by it; the pin's `OperandValueInfo` has none, and
+    /// no target but the m68k reads it.
+    pub value: Option<i128>,
 }
 
 impl OperandInfo {
-    pub const ANY: OperandInfo = OperandInfo { constant: false, power_of_two: false, negated_power_of_two: false };
+    pub const ANY: OperandInfo = OperandInfo { constant: false, power_of_two: false, negated_power_of_two: false, value: None };
 
     /// A constant operand of this value at `width` bits.
     pub fn constant(
@@ -143,6 +147,12 @@ impl OperandInfo {
             constant: true,
             power_of_two: bits != 0 && bits & (bits - 1) == 0,
             negated_power_of_two: negated != 0 && negated & (negated - 1) == 0,
+            value: Some(if width >= 128 || width == 0 {
+                value
+            } else {
+                let shift = 128 - width;
+                (((value as u128) << shift) as i128) >> shift
+            }),
         }
     }
 }
