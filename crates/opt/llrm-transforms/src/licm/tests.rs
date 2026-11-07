@@ -2128,6 +2128,55 @@ b2:
     assert!(body.iter().any(|line| line.contains("%x.reass = mul i16 %factor.op.mul1, %i")), "{after}");
 }
 
+/// mul_constants m64 -O2: `sum = sum * 31 + x * K` unrolled four times is a chain of
+/// products of sums. The pin reassociates the instruction it has just made, in the
+/// same walk, until one multiply of `sum` is left (31, 961, 29791, 923521); llrm
+/// left alone whatever an earlier reassociation of the loop had replaced, so
+/// two `mul 31` of the chain stayed in the body (+931 B over the pin's whole file).
+#[test]
+fn test_a_chain_of_products_of_sums_is_reassociated_until_no_multiply_by_the_factor_is_left() {
+    let text = "define i64 @f() {
+b0:
+  br label %b1
+
+b1:
+  %p = phi i64 [ 2654435769, %b0 ], [ %x4, %b1 ]
+  %c = phi i64 [ 0, %b0 ], [ %n, %b1 ]
+  %s = phi i64 [ 47235554646, %b0 ], [ %s4, %b1 ]
+  %m1 = mul i64 %p, 1664525
+  %x1 = add i64 %m1, 1013904223
+  %t1 = mul i64 %s, 31
+  %u1 = mul i64 %x1, 7
+  %s1 = add i64 %u1, %t1
+  %m2 = mul i64 %x1, 1664525
+  %x2 = add i64 %m2, 1013904223
+  %t2 = mul i64 %s1, 31
+  %u2 = mul i64 %x2, 7
+  %s2 = add i64 %u2, %t2
+  %m3 = mul i64 %x2, 1664525
+  %x3 = add i64 %m3, 1013904223
+  %t3 = mul i64 %s2, 31
+  %u3 = mul i64 %x3, 7
+  %s3 = add i64 %u3, %t3
+  %m4 = mul i64 %x3, 1664525
+  %x4 = add i64 %m4, 1013904223
+  %t4 = mul i64 %s3, 31
+  %u4 = mul i64 %x4, 7
+  %s4 = add i64 %u4, %t4
+  %n = add nuw nsw i64 %c, 4
+  %e = icmp eq i64 %n, 200
+  br i1 %e, label %b2, label %b1
+
+b2:
+  ret i64 %s4
+}
+";
+    let after = licm_printed(text);
+    let body = block_of(&after, "b1");
+    let left: Vec<_> = body.iter().filter(|line| line.contains("= mul i64 ") && line.trim_end().ends_with(", 31")).collect();
+    assert!(left.is_empty(), "{left:?}\n{after}");
+}
+
 /// `Instruction::mayHaveSideEffects` of a call was the list of every location
 /// it writes (a `Vec` of `MemRef`s, `memory::stated` read three times over)
 /// asked for a yes: 1 M Ir of a jpeg_fixed -O2 compile in `sink_region` alone.
