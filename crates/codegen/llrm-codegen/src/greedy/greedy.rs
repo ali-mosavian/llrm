@@ -1042,8 +1042,10 @@ impl<'a> RAGreedy<'a> {
         Some(self.try_evict(virt, order, new_vregs, cost, fixed).unwrap_or(phys))
     }
 
-    /// DEVIATE C5 (no number yet; exit: re-evaluated against the pin at
-    /// 2026-11-20 with the other numbered DEVIATEs). Pin: `tryAssign` takes the
+    /// DEVIATE C5 (owner greedy-subreg; exit 2026-12-05: replaced by a general
+    /// rule or kept with a new number). Without it the m32+m64 bench has 17
+    /// rows worse, +299 B (grep O2 +48, matmul +32, nbody_fixed +32); it costs
+    /// 30.9 M Ir on memory_expansion O2 (0.3%). Pin: `tryAssign` takes the
     /// first free register of the allocation order
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L532>),
     /// whatever its encoding costs. Evidence: m64 O2 frames 243 B against
