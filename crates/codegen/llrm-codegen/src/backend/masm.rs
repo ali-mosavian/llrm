@@ -424,6 +424,18 @@ pub struct Alias {
     pub binding: llrm_object::Binding,
 }
 
+/// A function or global's COMDAT.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Comdat {
+    pub name: String,
+    pub selection: llrm_object::Selection,
+    /// A global: where its items are in `Module::data`, the segment and the
+    /// range of its items there.
+    pub extent: Option<(String, std::ops::Range<usize>)>,
+    /// A global that is never written (`constant`): COFF's `.rdata`.
+    pub constant: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
     /// The register file of the target the module is for.
@@ -447,9 +459,16 @@ pub struct Module {
     /// Of those, the segments of uninitialised data: class FAR_BSS, which an
     /// image does not store.
     pub far_bss: BTreeSet<String>,
+    /// The defined functions and globals of weak linkage (`weak`, `weak_odr`,
+    /// `linkonce`, `linkonce_odr`), by their names in the object.
+    pub weak: BTreeSet<String>,
     /// The code segment of a procedure that is not in `code` (`#pragma
     /// code_seg`), by its name.
     pub code_segments: std::collections::BTreeMap<String, String>,
+    /// The COMDAT each function or global of the module is in (`$f = comdat
+    /// any`, `comdat($f)`), by the symbol's name. COFF writes each as a
+    /// section of its own; the other formats ignore them.
+    pub comdats: std::collections::BTreeMap<String, Comdat>,
     /// Externs nothing references, declared so LINK pulls in their module.
     pub requests: BTreeSet<String>,
     /// `-g`'s debug information.
@@ -4637,7 +4656,9 @@ mod tests {
             procedures: Vec::new(),
             private: BTreeSet::new(),
             far_bss: BTreeSet::new(),
+            weak: BTreeSet::new(),
             code_segments: Default::default(),
+            comdats: Default::default(),
             padding: Default::default(),
             requests: BTreeSet::new(),
             debug: None,

@@ -579,6 +579,13 @@ pub fn lower(
                     _ => return Err("a copy between register classes".into()),
                 },
                 Op::Imm { dst, bits, value } => emitter.insts.extend(crate::expand_imm::mov_imm(*value, *bits, *dst)),
+                Op::DbgValue { variable, reg } => {
+                    let reg = match reg {
+                        Some(Reg::Gpr(gpr)) => Some(*gpr),
+                        _ => None,
+                    };
+                    emitter.insts.push(Inst::Mark(FrameMark::Value { variable: *variable, reg }));
+                }
                 Op::Call { callee, .. } => emitter.insts.push(match callee {
                     Callee::Symbol(name) => {
                         Inst::Branch { link: true, target: Target::Symbol { name: name.clone(), addend: 0 } }

@@ -572,6 +572,16 @@ def data_bytes(prog, variant):
     return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith((".data", ".rodata")))
 
 
+def eh_frame_bytes(prog, variant):
+    """The `.eh_frame` of the kernel's object, reported and never priced or added to the code bytes: llrm's own ELF object, and for gcc
+    and clang the object built with unwind tables (build.sh `.eh.o`; their code objects have none). None for OMF, which has no such section."""
+    if variant in OMF_VARIANTS:
+        return None
+    name = f"{prog}.{variant}.o" if variant.startswith("llrm") else f"{prog}.{variant}.eh.o"
+    out = subprocess.run(["size", "-A", str(OUT / "b" / name)], capture_output=True, text=True).stdout
+    return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith(".eh_frame"))
+
+
 def code_size(prog, variant):
     """(code bytes without alignment padding, the padding) of the kernel's object: the executable sections as tools/sizes.py reads them
     (the gate's definition: a loop aligned by nops is not growth). For gcc and clang `code_bytes` adds the runtime members they pulled in."""
@@ -608,7 +618,7 @@ def main():
         for name, (count, clk) in sorted(r["by_op"].items(), key=lambda row: -row[1][1])[:16]:
             print(f"HIST {name:8} {count:8} {clk:9}", file=sys.stderr)
     expect = [int(x) for x in (source_dir(prog) / f"{prog}.out").read_text().split()]
-    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), cc=built_cc(prog), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
+    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), cc=built_cc(prog), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), eh_frame=eh_frame_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
 
 
 if __name__ == "__main__":
