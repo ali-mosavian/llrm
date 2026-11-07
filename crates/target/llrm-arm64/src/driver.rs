@@ -333,8 +333,8 @@ pub fn functions_with(
         crate::copyprop::run(&mut machine);
         crate::postrasink::run(&mut machine);
         dump("PostRaSink", &machine);
-        let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin);
-        let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
+        let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin, true);
+        let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin, true)
             .map_err(|why| format!("@{name}: {why}"))?;
         let mut tables = crate::jumptable::tables_of(&machine);
         let blocks = crate::layout::fold(

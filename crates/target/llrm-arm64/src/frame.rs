@@ -339,12 +339,28 @@ fn pairs_at(
     count
 }
 
+/// DEVIATE ARM64-FRAME-LOW (owner w15, exit 2026-11-30): the frame record and
+/// the saved registers at the lowest addresses and the frame objects above
+/// them, for a frame of at most 512 bytes with no outgoing arguments and a
+/// stack pointer that stays. The first save is then `stp [sp, #-N]!` and the
+/// last restore `ldp [sp], #N`, where the pin's layout (locals below the saves)
+/// takes a `sub sp` / `add sp` besides (queens -Os: 11 instructions, gcc 9).
+/// Off: the pin's layout.
+fn saves_low_applies(
+    function: &MFunc,
+    locals_end: u64,
+    area: u64,
+) -> bool {
+    !function.dynamic && function.outgoing == 0 && locals_end > 0 && area > 0 && locals_end + area <= 512
+}
+
 fn layout(
     function: &MFunc,
     allocation: &Allocation,
     darwin: bool,
+    saves_low: bool,
 ) -> Layout {
-    let (slots, locals_end) = place_objects(function);
+    let (mut slots, locals_end) = place_objects(function);
     // `AArch64FrameLowering::hasFP`: `disableFramePointerElim` (the attribute)
     // or a variable-sized object keeps the frame record; so does a call, which
     // saves the link register beside it.
@@ -357,6 +373,10 @@ fn layout(
     // Filled from the top; where the area has a spare word, the first single
     // register that would leave a half pair below takes the gap under it.
     let mut gap = area != 8 * registers;
+    let low = saves_low && saves_low_applies(function, locals_end, area);
+    if low {
+        slots.iter_mut().for_each(|slot| *slot += area);
+    }
     let mut top = area;
     let mut saves = Vec::new();
     let mut frame_record = None;
@@ -366,7 +386,7 @@ fn layout(
             top -= 8;
             gap = false;
         }
-        let at = locals_end + top;
+        let at = if low { top } else { locals_end + top };
         // The register at the higher number goes at the lower address.
         let save = match (first, second) {
             (Csr::Lr, Some(Csr::Fp)) => {
@@ -382,7 +402,8 @@ fn layout(
         saves.push((save, at));
     }
     saves.reverse();
-    Layout { size: locals_end + area, dynamic: function.dynamic, slots, saves, frame_record, locals: locals_end }
+    let locals = if low { 0 } else { locals_end };
+    Layout { size: locals_end + area, dynamic: function.dynamic, slots, saves, frame_record, locals }
 }
 
 impl Layout {
@@ -522,8 +543,9 @@ pub fn variable_offsets(
     function: &MFunc,
     allocation: &Allocation,
     darwin: bool,
+    saves_low: bool,
 ) -> Vec<(llrm_mir::MetadataId, i64)> {
-    let frame = layout(function, allocation, darwin);
+    let frame = layout(function, allocation, darwin, saves_low);
     if frame.dynamic {
         return Vec::new();
     }
@@ -538,8 +560,9 @@ pub fn lower(
     function: &MFunc,
     allocation: &Allocation,
     darwin: bool,
+    saves_low: bool,
 ) -> Result<Vec<Lowered>, String> {
-    let frame = layout(function, allocation, darwin);
+    let frame = layout(function, allocation, darwin, saves_low);
     let wrapped = crate::shrinkwrap::place(function).filter(|_| frame.size > 0);
     let save = wrapped.as_ref().map_or(0, |one| one.save);
     let mut out = Vec::new();
