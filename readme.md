@@ -39,16 +39,12 @@ The default feature `toolchain` bootstraps what the compilers and tests need:
 
 | Feature | Builds |
 |---|---|
-| `wccq` | Open Watcom's front end for `llrm-c` (`toolchain/owshim/`) |
 | `jw` | `jwasm` and `jwlink` |
 | `dosrun` | the headless DOSBox-X the DOS tests run on |
 
 Their binaries land in `target/<profile>`. Sources are cloned under `$XDG_CACHE_HOME/llrm` (`~/.cache/llrm` when
 unset), one tree per pinned commit, made whole or not at all, so worktrees and parallel builds share them safely.
 `$OWROOT` names an existing Open Watcom tree to use instead of cloning one. The scripts need a Unix host.
-
-`--no-default-features --features wccq` builds only the front end the library tests need. Without any feature the
-build bootstraps nothing; `llrm-c` then has no Open Watcom front end.
 
 On Debian or Ubuntu the toolchain needs:
 

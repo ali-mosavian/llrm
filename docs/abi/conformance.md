@@ -34,7 +34,6 @@ The matrix's listings are read as facts, one per line with the listing line it c
 
 | Test | Pins |
 |---|---|
-| `cargo test --release -p llrm-c --features toolchain callconv` | llrm-c's lowering of each call boundary equals BCC's (`reference.txt`); `known.txt` lists where it differs; `test_the_reference_table_is_what_bcc_listed` keeps the table current, `LLRM_BLESS=1` rewrites it |
 | `cargo test --release -p llrm-qb callconv` | the same for BASIC against BC's listings |
 
 ## Per-convention tests
