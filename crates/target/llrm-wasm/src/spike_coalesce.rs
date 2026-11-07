@@ -178,9 +178,16 @@ pub fn coalesce(f: &mut Function) -> usize {
     }
     let map = converted.joined();
     let rename = |r: VReg| -> VReg { map.survivor(r + 1) - 1 };
+    let constants = constant_defs(f);
     let mut joined = 0;
     for block in f.blocks.iter_mut() {
         for inst in block.iter_mut() {
+            // `reMaterializeTrivialDef` reads the copy's source value, which a
+            // later join may give a second definition: take it before renaming.
+            let remade = match (is_copy(inst.opcode), inst.operands.get(1)) {
+                (true, Some(Operand::Use(from))) => constants.get(from).copied(),
+                _ => None,
+            };
             for operand in inst.operands.iter_mut() {
                 match operand {
                     Operand::Def(r) | Operand::Use(r) => {
@@ -189,6 +196,12 @@ pub fn coalesce(f: &mut Function) -> usize {
                         *r = new;
                     }
                     _ => {}
+                }
+            }
+            if let (Some((opcode, value)), Some(&Operand::Def(to))) = (remade, inst.operands.first()) {
+                if matches!(inst.operands.get(1), Some(&Operand::Use(from)) if from != to) {
+                    inst.opcode = opcode;
+                    inst.operands = vec![Operand::Def(to), value];
                 }
             }
         }
@@ -200,10 +213,47 @@ pub fn coalesce(f: &mut Function) -> usize {
                 ))
         });
     }
+    drop_unread_constants(f);
     if std::env::var_os("LLRM_WASM_MIR").is_some() {
         eprintln!("after:\n{}", dump(f));
     }
     joined
+}
+
+fn is_constant(opcode: u16) -> bool {
+    use crate::dagisel::generated::ids::opcode as op;
+    [op::CONST_I32, op::CONST_I64, op::CONST_F32, op::CONST_F64].contains(&opcode)
+}
+
+/// The registers defined once, by a constant: their opcode and value.
+fn constant_defs(f: &Function) -> std::collections::HashMap<VReg, (u16, Operand)> {
+    let mut defs: std::collections::HashMap<VReg, (u32, Option<(u16, Operand)>)> = Default::default();
+    for inst in f.blocks.iter().flatten() {
+        if let Some(Operand::Def(r)) = inst.operands.first() {
+            let entry = defs.entry(*r).or_default();
+            entry.0 += 1;
+            entry.1 = (is_constant(inst.opcode) && inst.operands.len() == 2).then(|| (inst.opcode, inst.operands[1]));
+        }
+    }
+    defs.into_iter().filter_map(|(r, (count, value))| value.filter(|_| count == 1).map(|value| (r, value))).collect()
+}
+
+/// A constant nothing reads goes: `RegisterCoalescer::reMaterializeTrivialDef`
+/// erases the source's definition once its last copy is remade.
+fn drop_unread_constants(f: &mut Function) {
+    let mut read = std::collections::HashSet::new();
+    for inst in f.blocks.iter().flatten() {
+        read.extend(inst.operands.iter().filter_map(|o| if let Operand::Use(r) = o { Some(*r) } else { None }));
+    }
+    for block in f.blocks.iter_mut() {
+        block.retain(|inst| {
+            !(is_constant(inst.opcode)
+                && matches!(
+                    inst.operands.first(),
+                    Some(Operand::Def(r)) if !read.contains(r)
+                ))
+        });
+    }
 }
 
 /// The function's blocks as text, for `LLRM_WASM_MIR`.
@@ -277,5 +327,34 @@ mod tests {
         let mut f = function(true);
         coalesce(&mut f);
         assert!(f.blocks[0].iter().all(|inst| !is_copy(inst.opcode)), "{:?}", f.blocks[0]);
+    }
+
+    /// Five loop-carried zeros made `local.get` copies of one `CONST`
+    /// (grep -Os, one local and 2 B over the pin, whose coalescer remakes the
+    /// constant): a copy of a constant must come out as that constant.
+    #[test]
+    fn a_copy_of_a_constant_that_cannot_join_is_the_constant() {
+        let mut f = Function::default();
+        for _ in 0..4 {
+            f.new_vreg(ValType::I32);
+        }
+        let (zero, one, two, sum) = (0, 1, 2, 3);
+        f.blocks = vec![
+            vec![
+                Inst::new(op::CONST_I32, &[Operand::Def(zero), Operand::Imm(0)]),
+                Inst::new(ValType::I32.copy(), &[Operand::Def(one), Operand::Use(zero)]),
+                Inst::new(ValType::I32.copy(), &[Operand::Def(two), Operand::Use(zero)]),
+            ],
+            vec![
+                Inst::new(op::ADD_I32, &[Operand::Def(sum), Operand::Use(one), Operand::Use(two)]),
+                Inst::new(op::ADD_I32, &[Operand::Def(one), Operand::Use(one), Operand::Use(sum)]),
+                Inst::new(op::ADD_I32, &[Operand::Def(two), Operand::Use(two), Operand::Use(sum)]),
+                Inst::new(op::RETURN, &[Operand::Use(one)]),
+            ],
+        ];
+        f.succs = vec![vec![1], vec![]];
+        coalesce(&mut f);
+        let copies = f.blocks.iter().flatten().filter(|inst| is_copy(inst.opcode)).count();
+        assert_eq!(copies, 0, "{}", dump(&f));
     }
 }
