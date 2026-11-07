@@ -749,6 +749,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE INL-O1: `Tuning::inline_o1_milliclocks_per_byte`.
+    fn inline_o1_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
     /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): `Tuning::sink_spares_ranges`.
     fn sink_spares_ranges(&self) -> bool {
         false
