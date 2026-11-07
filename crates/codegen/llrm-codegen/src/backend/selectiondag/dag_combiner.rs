@@ -2302,6 +2302,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(folded);
             }
         }
+        if op == ISD::Shl && matches!(self.dag.opcode(n0), ISD::Srl | ISD::Sra) {
+            if let Some(folded) = self.shl_of_exact_shift(node) {
+                return Some(folded);
+            }
+        }
         if op == ISD::Shl && self.dag.opcode(n0) == ISD::Srl {
             if let Some(folded) = self.shl_of_srl(node) {
                 return Some(folded);
@@ -2419,6 +2424,37 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let shifted_x = self.dag.get_node(op, vt, &[x, sum]);
         let shifted_y = self.dag.get_node(op, vt, &[y, c1]);
         Some(self.dag.get_node(logic_op, vt, &[shifted_x, shifted_y]))
+    }
+
+    /// `visitSHL`'s exact fold ([L11196][pin]): `shl (sr[la] exact x, c1), c2`
+    /// is `shl x, c2 - c1` when `c1 <= c2` and `sr[la] x, c1 - c2` otherwise.
+    /// The bits shifted out are zero, so no mask is left, and the inner
+    /// shift's other uses do not matter.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11196
+    fn shl_of_exact_shift(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (inner, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if self.dag.node(inner).flags.0 & SDNodeFlags::EXACT.0 == 0 {
+            return None;
+        }
+        let (c2, c1) = (self.dag.constant(n1)?, self.dag.constant(self.dag.operand(inner, 1))?);
+        let vt = self.dag.value_type(node);
+        let width = u128::from(vt.size_in_bits());
+        if c1 >= width || c2 >= width {
+            return None;
+        }
+        let x = self.dag.operand(inner, 0);
+        let amount_vt = self.dag.value_type(n1);
+        if c1 <= c2 {
+            let by = self.dag.get_constant(c2 - c1, amount_vt);
+            return Some(self.dag.get_node(ISD::Shl, vt, &[x, by]));
+        }
+        let by = self.dag.get_constant(c1 - c2, amount_vt);
+        Some(self.dag.get_node(self.dag.opcode(inner), vt, &[x, by]))
     }
 
     /// `visitSHL`: `shl (srl x, c1), c2` is `and (srl x, c1 - c2), (-1 << c1
