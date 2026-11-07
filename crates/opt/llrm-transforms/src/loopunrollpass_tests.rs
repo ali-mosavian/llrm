@@ -866,3 +866,28 @@ fn test_unrolling_inner_loops_makes_the_loop_analyses_at_most_twice_per_loop() {
     let made = get(Event::LoopAnalyses) - before;
     assert!(made <= 2 * 8 + 3, "{made} analyses made for 8 inner loops");
 }
+
+/// A loop of unknown trips that nothing unrolls: the pass made the dominator
+/// tree and loop info again (449 of memory_expansion's 983 calls were this
+/// entry rebuild, 0.8 M Ir each) where the pin takes both from the analysis
+/// manager.
+#[test]
+fn test_a_function_the_unroll_leaves_alone_makes_no_loop_analyses() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {\nb0:\n  br label %l\n\nl:\n  %i = phi i16 [ 0, %b0 ], [ %j, %l ]\n  %j = add i16 %i, 1\n  %g = icmp slt i16 %j, %n\n  br i1 %g, label %l, label %x\n\nx:\n  %r = phi i16 [ %j, %l ]\n  ret i16 %r\n}\n",
+    );
+    let before = get(Event::LoopAnalyses);
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            created: Default::default(),
+        },
+    );
+    let made = get(Event::LoopAnalyses) - before;
+    assert_eq!(made, 0, "{made} rebuilds of the tree and nest for a function nothing was unrolled in");
+}

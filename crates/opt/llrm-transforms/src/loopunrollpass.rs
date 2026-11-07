@@ -141,6 +141,10 @@ pub struct Run<'a> {
     /// The expressions of the passes before (`Scevs`), current while the
     /// function is as they left it: dropped at the first change.
     pub scev: ScalarEvolution,
+    /// The manager's tree and nest of the function as it came in, used when
+    /// loop-simplify and LCSSA change nothing (the pin's pass gets both from
+    /// the analysis manager).
+    pub cached: Option<(std::rc::Rc<DomTree>, std::rc::Rc<LoopInfo>)>,
 }
 
 /// `TransformationMode`.
@@ -375,8 +379,8 @@ struct EstimatedUnrollCost {
 
 /// The analyses of one state of the function, made again after a change.
 pub(crate) struct Analyzed {
-    pub(crate) tree: DomTree,
-    pub(crate) loops: LoopInfo,
+    pub(crate) tree: std::rc::Rc<DomTree>,
+    pub(crate) loops: std::rc::Rc<LoopInfo>,
     pub(crate) assumptions: AssumptionCache,
 }
 
@@ -392,7 +396,23 @@ impl Analyzed {
             run.function,
             run.outer.assume_declared(),
         );
-        Self { tree, loops, assumptions }
+        Self { tree: tree.into(), loops: loops.into(), assumptions }
+    }
+
+    fn entry(run: &mut Run, unchanged: bool) -> Self {
+        match run.cached.take() {
+            Some((tree, loops)) if unchanged => {
+                let assumptions = AssumptionCache::of_declared(
+                    run.context,
+                    run.globals,
+                    run.metadata,
+                    run.function,
+                    run.outer.assume_declared(),
+                );
+                Self { tree, loops, assumptions }
+            }
+            _ => Self::of(run),
+        }
     }
 }
 
@@ -2128,7 +2148,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     // LCSSA first, whether or not anything is unrolled.
     let simplified = crate::loopsimplify::simplified(run.function);
     let closed = crate::lcssa::closed(run.context, run.layout, run.function).unwrap_or(false);
-    let mut analyzed = Analyzed::of(run);
+    let mut analyzed = Analyzed::entry(run, !simplified && !closed);
     let at_first: IdSet<BlockId> = analyzed.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
     run.first = at_first.clone();
     // The worklist is popped from the back (`appendReversedLoopsToWorklist`):
@@ -2359,6 +2379,10 @@ impl FunctionPass for LoopFullUnroll {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = crate::looprotate::target_tti(outer.target());
         let held = analyses.get::<llrm_analysis::scev::analysis::Scevs>(unit.context, unit.layout, unit.function);
+        let cached = (
+            analyses.get::<llrm_mir::passes::Dominators>(unit.context, unit.layout, unit.function),
+            analyses.get::<llrm_mir::passes::Loops>(unit.context, unit.layout, unit.function),
+        );
         let mut run = Run {
             context: unit.context,
             layout: unit.layout,
@@ -2376,6 +2400,7 @@ impl FunctionPass for LoopFullUnroll {
             created: Vec::new(),
             first: Default::default(),
             scev: held.take(),
+            cached: Some(cached),
             options: Options {
                 opt_level: self.opt_level,
                 opt_size: self.opt_size,
@@ -2438,6 +2463,7 @@ pub fn unroll_function(
         created: Vec::new(),
         first: Default::default(),
         scev: ScalarEvolution::new(),
+        cached: None,
     };
     let unrolled = unroll_loops(&mut run);
     declared.place(module)?;
