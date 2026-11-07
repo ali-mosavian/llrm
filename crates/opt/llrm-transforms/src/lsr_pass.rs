@@ -335,8 +335,8 @@ fn plan_loop(
                 || (!folds_base_and_counter
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
                         || spent > saved
-                        || (spent == saved && tti.lsr_pin_wins_setup_tie()))));
-        llrm_support::debug!("lsr", "  pin's space solved: kept {kept}");
+                        || (spent == saved && tti.lsr_bytes().is_some() && cost.bytes >= pin_cost.bytes))));
+        llrm_support::debug!("lsr", "  pin's space solved: kept {kept} (bytes {} against the pin's {})", cost.bytes, pin_cost.bytes);
         if kept {
             lsr = pin;
             solution = pin_solution;

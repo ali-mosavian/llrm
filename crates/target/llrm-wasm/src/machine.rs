@@ -174,11 +174,13 @@ impl Tti for Wasm {
         None
     }
 
-    /// DEVIATE LG3: a tie of instructions plus setup keeps the pin's solution:
-    /// the base and counter constants the end-biased form sets up are bytes the
-    /// saved compare immediate does not repay (quicksort -O2, +10 B).
-    fn lsr_pin_wins_setup_tie(&self) -> bool {
-        true
+    /// DEVIATE LG3: a tie of instructions plus setup between the end-biased
+    /// solution and the pin's goes by bytes: `i32.const` is one byte before its
+    /// LEB128, `local.get` and `local.set` two, an add or a compare one. A
+    /// branch on a zero compare is free; a compare against a constant is
+    /// `i32.const; i32.ne` (quicksort -O2 +10 B, tile -O1 -3 B).
+    fn lsr_bytes(&self) -> Option<llrm_mir::tti::LsrBytes> {
+        Some(llrm_mir::tti::LsrBytes { constant: 1, local_get: 2, local_set: 2, op: 1 })
     }
 
     /// `WebAssemblyTargetLowering::isLegalAddressingMode`: offsets add as

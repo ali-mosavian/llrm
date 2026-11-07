@@ -244,6 +244,19 @@ pub enum ImmUser {
     Unknown,
 }
 
+/// The bytes of the instructions LSR's setup and exit test are made of.
+#[derive(Clone, Copy, Debug)]
+pub struct LsrBytes {
+    /// A constant's opcode, before its LEB128.
+    pub constant: u32,
+    /// Reading a local.
+    pub local_get: u32,
+    /// Writing a local.
+    pub local_set: u32,
+    /// An add or a compare.
+    pub op: u32,
+}
+
 /// `TTI::LSRCost`: what loop strength reduction compares formulas by.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LsrCost {
@@ -694,11 +707,12 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE LG3: whether the pin's solution is kept where the end-biased
-    /// formulae save no instruction net of the code they add outside the loop
-    /// (a tie of instructions plus setup). By default a tie goes to them.
-    fn lsr_pin_wins_setup_tie(&self) -> bool {
-        false
+    /// DEVIATE LG3: the bytes of the instructions a loop's setup and exit test
+    /// are made of, where the target's code size is what its cost is (wasm).
+    /// LSR then breaks a tie between the end-biased solution and the pin's by
+    /// bytes. None: the pin's order stands. owner: w12, exit: 2026-11-20.
+    fn lsr_bytes(&self) -> Option<LsrBytes> {
+        None
     }
 
     /// `Tuning::ipsccp_widen_keeps_sign`.
