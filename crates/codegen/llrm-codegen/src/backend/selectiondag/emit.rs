@@ -4233,8 +4233,11 @@ impl Emitter<'_, '_> {
             // A constant-pool entry is memory nothing writes
             // (`PseudoSourceValue::isConstant`: the pin's
             // `isDereferenceableInvariantLoad`): LICM may carry it (DEVIATE
-            // X1).
-            if pooled {
+            // X1). Not the loads the CPU's prices keep one per reader: the
+            // MachineCSE of invariant loads would make them one again and
+            // FloatFold could not fold them (x87_pool_per_use_486.c, red
+            // since #7592).
+            if pooled && (constant || self.dag.has_one_use(value.node)) {
                 self.mark_invariant_loads(before);
             }
             if constant {

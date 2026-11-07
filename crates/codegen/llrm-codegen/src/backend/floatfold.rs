@@ -1010,8 +1010,8 @@ mod tests {
     fn priced_memory_form(memory: i64) -> crate::backend::cpu::Profile {
         let mut cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a profile").clone();
         for (key, price) in [("x87_load", 6), ("x87_add", 6), ("x87_add_m", memory)] {
-            cpu._costs.retain(|(name, _)| name != key);
-            cpu._costs.push((key.to_owned(), price));
+            std::sync::Arc::make_mut(&mut cpu._costs).retain(|(name, _)| name != key);
+            std::sync::Arc::make_mut(&mut cpu._costs).push((key.to_owned(), price));
         }
         cpu
     }

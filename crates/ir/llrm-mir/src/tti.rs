@@ -561,6 +561,12 @@ pub trait Tti {
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around
     /// it).
+    /// Whether an -Os caller's SZ2 trial also inlines the sites its splice brings
+    /// (`Tuning::inline_chain_trial`).
+    fn opt_size_inline_chain_trial(&self) -> bool {
+        false
+    }
+
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
         1
     }
