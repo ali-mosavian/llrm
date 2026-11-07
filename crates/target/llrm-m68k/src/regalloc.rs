@@ -242,12 +242,17 @@ pub fn branch_fold(
 
 /// `MachineBlockPlacement` over the m68k function. M68kPassConfig does not
 /// override `addBlockPlacement`, so the pin runs it at every `-O` above 0.
+///
+/// DEVIATE M68K-TOP (with `top_saves_jumps`): a fall-through gains only where
+/// it removes a jump, from a block with one successor; see
+/// `llrm_spike_mf::placement` (`fall_through_gains`). Off for the pin's order.
 pub fn place_blocks(
     function: &mut MFunction,
     odds: &llrm_spike_mf::placement::Odds,
     size: bool,
+    top_saves_jumps: bool,
 ) -> bool {
-    llrm_spike_mf::placement::place_blocks::<_, M68kRegisters>(function, odds, size)
+    llrm_spike_mf::placement::place_blocks_priced::<_, M68kRegisters>(function, odds, size, false, top_saves_jumps)
 }
 
 pub fn remove_identity_copies(

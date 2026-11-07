@@ -4635,3 +4635,20 @@ fn a_call_and_a_defined_global_at_m64_pie_stay_direct() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("ptr d") && listing.contains("call ext"), "{listing}");
 }
+
+/// `zext(icmp eq (and i64 x, 0x80000000), 0) + y` (the last step of `__clzsi2`)
+/// compiled to `and edi, 0x80000000; cmp rdi, 1; adc eax, 0` (13 B); the pin
+/// tests the narrow sign bit (`(and X, 2^k) == 0` is `(trunc X) >= 0`,
+/// `foldSetCCWithAnd`) and shifts it down: `not; shr 31; add` (7 B, -8 B at
+/// sfm16_float_cmp -Os).
+#[test]
+fn a_single_bit_mask_test_at_m64_is_a_narrow_sign_test_not_cmp_adc() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(i64 %x, i32 %y) optsize {\n\
+                \x20 %a = and i64 %x, 2147483648\n  %c = icmp eq i64 %a, 0\n  %z = zext i1 %c to i32\n\
+                \x20 %r = add nuw nsw i32 %y, %z\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("adc") && listing.contains("setns"), "{listing}");
+}

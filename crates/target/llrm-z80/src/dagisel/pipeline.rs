@@ -196,6 +196,33 @@ impl CombineHooks for Z80Combines {
         true
     }
 
+    /// X86InstrCompiler.td: `shl x, 1` is `add x, x`. A long shifted by one is
+    /// then a long add, whose carry is `adc hl, rr` (`carry.rs`); expanded as a
+    /// shift it was the funnel of two words, 24 instructions.
+    fn has_target_combine(
+        &self,
+        op: ISD,
+    ) -> bool {
+        op == ISD::Shl
+    }
+
+    fn perform_dag_combine(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+        level: CombineLevel,
+    ) -> Option<SDValue> {
+        // Also called for every target node, whatever its operands.
+        if dag.opcode(node) != ISD::Shl {
+            return None;
+        }
+        let (value, amount) = (dag.operand(node, 0), dag.operand(node, 1));
+        (level == CombineLevel::BeforeLegalizeTypes
+            && dag.value_type(node) == EVT::I32
+            && dag.constant(amount) == Some(1))
+        .then(|| dag.get_node(ISD::Add, EVT::I32, &[value, value]))
+    }
+
     /// A word compare against a constant is two byte compares and a branch
     /// between them; the compare of the loaded byte is one `cp`.
     ///

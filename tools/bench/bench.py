@@ -99,12 +99,12 @@ BCC = Path(os.environ.get("TOOLCHAINS", Path.home() / "work/other/d32x/toolchain
 TURBO = Path(os.environ.get("TURBO", Path.home() / "scratch/toolchains"))
 # Borland-family references: language -> (toolchain folder, compiler, switches per level). All medium model, 8087,
 # linked with the toolchain's own C0M, CM, FP87 and MATHM. BCC's switches (-3 -Ox, -O1) are added by bcc.sh.
-REFERENCE_OPTS = ("O2", "Os")  # the levels the reference compilers are built at (BORLAND's level maps, build_watcom's flags)
+REFERENCE_OPTS = ("O1", "O2", "Os")  # the levels the reference compilers are built at (BORLAND's level maps, build_watcom's flags); O1 is their size level, the nearest to a light -O1: none has a separate one
 BORLAND = {
-    "bcc": (BCC, "bcc", {"O2": "", "Os": "-O1"}),
+    "bcc": (BCC, "bcc", {"O1": "-O1", "O2": "", "Os": "-O1"}),
     # TC 2.01: -G speed, -O jumps, -Z registers; `huge` is its spelling of __huge
-    "tc": (TURBO / "tc201", "tcc", {"O2": "-G -O -Z -r -1 -D__huge=huge", "Os": "-O -Z -r -1 -D__huge=huge"}),
-    "tcpp": (TURBO / "tcpp30", "tcc", {"O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
+    "tc": (TURBO / "tc201", "tcc", {"O1": "-O -Z -r -1 -D__huge=huge", "O2": "-G -O -Z -r -1 -D__huge=huge", "Os": "-O -Z -r -1 -D__huge=huge"}),
+    "tcpp": (TURBO / "tcpp30", "tcc", {"O1": "-2 -O -Z -r", "O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
 }
 STARTUP = Path(__file__).with_name("startup")  # an empty kernel per language: what a toolchain's start-up costs
 REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos"), "bq16": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
@@ -504,7 +504,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
     """The reference compilers on the same programs: Open Watcom and BCC 3.1 for C (languages `ow`, `bcc`, at each level)
     and QuickBASIC 4.5's BC for BASIC (language `bc`, one level: /O). With --time each also gets its kernel time."""
     out: dict[tuple[str, str, str], dict] = {}
-    opts = [opt for opt in opts if opt in REFERENCE_OPTS]  # a reference has no O1 or O3: `--opt O1 ...` raised KeyError after 35 minutes and dropped the run's JSON
+    opts = [opt for opt in opts if opt in REFERENCE_OPTS]  # a reference has no O3: `--opt O1 O3` raised KeyError after 35 minutes and dropped the run's JSON
     folder = work / "reference"
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)

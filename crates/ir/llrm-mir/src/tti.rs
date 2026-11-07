@@ -835,6 +835,12 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-7: the depth of the copies at (-O2, -O3); none: the depth
+    /// of `recursive_inlining`.
+    fn recursive_inlining_depth(&self) -> Option<(u32, u32)> {
+        None
+    }
+
     /// DEVIATE REC-2: whether, at (-O2, -O3), a tree recursion's tail calls are
     /// eliminated before its copies of itself are made.
     fn recursive_tre_first(&self) -> (bool, bool) {
