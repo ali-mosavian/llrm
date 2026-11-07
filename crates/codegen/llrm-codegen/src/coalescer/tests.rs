@@ -1787,6 +1787,7 @@ fn constant_of(
 /// word (66h) or a qword (REX.W), a zero is `xor` (two), any other constant five.
 fn flat_bytes() -> llrm_target::MoveBytes {
     llrm_target::MoveBytes {
+        plain: 4,
         copy: |width, _| if width == 4 { 2 } else { 3 },
         literal: |number, _, _, _| if number == 0 { 2 } else { 5 },
     }
@@ -1863,7 +1864,7 @@ fn size_copy_of_def_is_remade_after(
 /// 9 B `movq $0, slot` (jpeg_fixed m64 -Os +42 B, over_aligned_local_after_even_pushes +9).
 #[test]
 fn test_for_size_a_zero_that_stays_read_is_made_again_where_the_target_prices_it() {
-    let price = || Some(super::pass::remat_priced(flat_bytes(), 4));
+    let price = || Some(super::pass::remat_priced(flat_bytes()));
     assert!(size_copy_of_constant_is_remade(0, 2, price()), "xor 2 B against a 3 B copy");
     assert!(!size_copy_of_constant_is_remade(0, 4, price()), "a tie keeps the copy");
     assert!(!size_copy_of_constant_is_remade(7, 2, price()), "5 B against a 3 B copy");
@@ -1890,6 +1891,6 @@ fn test_for_size_an_lea_of_a_register_that_stays_read_stays_a_copy() {
         ..Semantics::new(Operation::Move)
     };
     let lea = Arc::new(Insn::new(0, None, Some(what), vec![1], vec![9]));
-    let price = Some(super::pass::remat_priced(flat_bytes(), 4));
+    let price = Some(super::pass::remat_priced(flat_bytes()));
     assert!(!size_copy_of_def_is_remade_after(vec![def(9)], vec![read(9)], lea, 4, price));
 }

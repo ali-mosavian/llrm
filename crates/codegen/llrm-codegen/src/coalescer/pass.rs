@@ -91,7 +91,7 @@ pub struct Coalescer {
     /// The target's encoded sizes of a copy and a constant load, with its
     /// default operand size: at size a constant is remade where that is
     /// shorter than the copy it replaces, or leaves no second copy of it.
-    pub moves: Option<(llrm_target::MoveBytes, i64)>,
+    pub moves: Option<llrm_target::MoveBytes>,
 }
 
 impl Coalescer {
@@ -138,10 +138,7 @@ impl LIRTransform for Coalescer {
 /// register's REX byte is unknown, and a remade zero stored to a spill slot is
 /// dearer than a register stored), or any, where the source's own definition goes. At speed the
 /// pin's choice stands: always.
-pub(super) fn remat_priced(
-    bytes: llrm_target::MoveBytes,
-    operand: i64,
-) -> crate::coalescer::env::RematWins {
+pub(super) fn remat_priced(bytes: llrm_target::MoveBytes) -> crate::coalescer::env::RematWins {
     Box::new(move |def, _, _, size, alone| {
         if !size || alone {
             return true;
@@ -155,10 +152,10 @@ pub(super) fn remat_priced(
         // spilled zero as the pin's does): a value wider than the operand size
         // often spills, and its remade zero is a 9 B `movq $0, slot` for a 5 B
         // store of the shared one (jpeg_fixed m64 -Os +42 B).
-        if width > operand {
+        if width > bytes.plain {
             return false;
         }
-        (bytes.literal)(literal.value, literal.address.is_some(), width, operand) < (bytes.copy)(width, operand)
+        (bytes.literal)(literal.value, literal.address.is_some(), width, bytes.plain) < (bytes.copy)(width, bytes.plain)
     })
 }
 
@@ -228,7 +225,7 @@ impl Coalescer {
                 should_join: None,
                 freq: Vec::new(),
                 remat: None,
-                remat_wins: self.moves.map(|(bytes, operand)| remat_priced(bytes, operand)),
+                remat_wins: self.moves.map(remat_priced),
                 regs: None,
                 kind_of: None,
                 kinds: Default::default(),

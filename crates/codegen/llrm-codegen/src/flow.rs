@@ -269,7 +269,7 @@ pub fn machine_with<'a>(
         }),
         Box::new(Coalescer {
             size: target.size,
-            moves: target.move_bytes.map(|bytes| (bytes, target.operand_bytes)),
+            moves: target.move_bytes,
             ..Coalescer::new(None, segments, classes)
         }),
         // After TwoAddress and the coalescer, before any value is placed: the

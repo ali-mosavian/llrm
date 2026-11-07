@@ -28,8 +28,10 @@ use machine::Machine;
 /// The encoded sizes a target states of a register copy and a constant load.
 #[derive(Clone, Copy, Debug)]
 pub struct MoveBytes {
-    /// Bytes of a copy between two `width`-byte registers, `operand` the size
-    /// an instruction has without a prefix.
+    /// The widest operand an instruction takes without a size prefix (a REX.W
+    /// qword at m64 has one), in bytes; the `operand` the functions below take.
+    pub plain: i64,
+    /// Bytes of a copy between two `width`-byte registers.
     pub copy: fn(width: i64, operand: i64) -> i64,
     /// Bytes of loading `number` into a `width`-byte register; `address`: it
     /// is a symbol's address, whose bytes the immediate takes whole.

@@ -237,6 +237,14 @@ pub mod encoding {
         prefix_bytes(width, operand) + 2
     }
 
+    /// Bytes of a register copy: `mov r, r'`, no prefix on a byte.
+    pub fn copy_move_bytes(
+        width: i64,
+        operand: i64,
+    ) -> i64 {
+        if width == 1 { 2 } else { register_bytes(width, operand) }
+    }
+
     /// Bytes of loading `number` into a `width`-byte register: `xor r32, r32`
     /// for zero (the pin's `MOV32r0`; a dword in real mode takes the prefix),
     /// `mov r8, imm8` for a byte, else the opcode and an immediate of the
@@ -295,6 +303,7 @@ pub mod encoding {
                 (2, 3, 3, 2)
             );
             assert_eq!((shift_bytes(1, 4, 4), shift_bytes(3, 2, 4), imul_immediate_bytes(446, 4, 4)), (2, 4, 6));
+            assert_eq!((copy_move_bytes(1, 4), copy_move_bytes(8, 4), copy_move_bytes(4, 4)), (2, 3, 2));
             // recgcd -Os m64: a zero is the 2-byte `xor`, not a copy's REX
             // byte.
             assert_eq!((literal_move_bytes(0, false, 8, 4), register_bytes(8, 4)), (2, 3));
