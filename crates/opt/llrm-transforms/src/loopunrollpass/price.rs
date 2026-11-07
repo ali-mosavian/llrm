@@ -65,7 +65,9 @@ pub(super) fn full_unroll_pays(
     // then the nest's unroll folds nothing here and the loop is priced as any
     // other (crc -O2: the bit loop reads the running value and constants only,
     // 64 B added for 232 instructions saved).
-    if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count) && reads_outer_counter(run, analyzed, lp) {
+    if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count)
+        && (!run.tti.unroll_prices_nest_loops_without_outer_counter() || reads_outer_counter(run, analyzed, lp))
+    {
         return true;
     }
     // The same for a loop around loops that all run few trips: the pin unrolls
