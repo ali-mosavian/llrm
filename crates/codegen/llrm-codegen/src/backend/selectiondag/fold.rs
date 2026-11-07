@@ -535,7 +535,7 @@ impl SelectionDAG {
 
     /// `FoldConstantArithmetic`: operands that are constants, a symbol plus
     /// an offset, or a division by zero.
-    fn fold_constant_arithmetic(
+    pub(super) fn fold_constant_arithmetic(
         &mut self,
         opcode: ISD,
         vt: EVT,
