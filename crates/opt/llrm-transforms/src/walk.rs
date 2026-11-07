@@ -468,6 +468,14 @@ impl ProgramPass for Walk {
                             continue;
                         }
                         if spliced || self.rerun_unchanged {
+                            if spliced {
+                                // DEVIATE IPSCCP-1 (SD443 extended; owner w12, exit 2026-11-20): the pin solves once, before
+                                // its inliner. The calls this body now makes carry the inlined values; IPSCCP reads them again.
+                                function_mut(module, id)
+                                    .1
+                                    .attrs
+                                    .push(llrm_mir::opcode::Attribute::Flag(PROMOTED_IN_WALK.into()));
+                            }
                             (self.simplify)(module, &mut modules[at], id, "walk.");
                         } else if let Some(tti) = tti.as_deref() {
                             let kept = function_mut(module, id).1.clone();
