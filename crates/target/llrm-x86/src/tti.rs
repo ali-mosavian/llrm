@@ -661,6 +661,10 @@ impl Tti for X86 {
         self.tuning.unroll_milliclocks_per_byte
     }
 
+    fn unroll_never_grows_at_o1(&self) -> bool {
+        self.tuning.unroll_never_grows_at_o1
+    }
+
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
     }
@@ -702,6 +706,10 @@ impl Tti for X86 {
 
     fn x87_share_negated_products(&self) -> bool {
         self.tuning.x87_share_negated_products && !self.sse2
+    }
+
+    fn x87_zero_fill_at_size(&self) -> bool {
+        self.tuning.x87_zero_fill_at_size && !self.sse2
     }
 
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
@@ -791,6 +799,10 @@ impl Tti for X86 {
 
     fn unroll_promotion_fits_registers(&self) -> bool {
         self.tuning.unroll_promotion_fits_registers
+    }
+
+    fn unroll_promotion_fits_x87_stack(&self) -> bool {
+        self.tuning.unroll_promotion_fits_x87_stack && !self.sse2
     }
 
     fn rotation_guard_must_fold_at_size(&self) -> bool {

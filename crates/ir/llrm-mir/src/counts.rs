@@ -121,11 +121,13 @@ pub enum Event {
     /// A flag name matched against the facts' names (`Fact::flag`): once per
     /// attribute made, never while attributes are read.
     FlagNamesResolved,
+    /// A `Facts` set built from a list of attributes (`Facts::of`).
+    FactSets,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 44] = [
+const NAMES: [&str; 45] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -170,6 +172,8 @@ const NAMES: [&str; 44] = [
     "machine_models",
     "attribute_scans",
     "flag_names_resolved",
+
+    "fact_sets",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -186,7 +190,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 44] = const { [const { Cell::new(0) }; 44] };
+    static EVENTS: [Cell<u64>; 45] = const { [const { Cell::new(0) }; 45] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };

@@ -760,7 +760,7 @@ impl InlineSpiller<'_> {
     /// spills at 10 bytes (`spills_extended`, D-RFP5). Exit: the
     /// class width once the classes are split.
     ///
-    /// OPEN D-RFP3 (RFP-5, owner w-1, 2026-10-31): where the qword is kept (Nib
+    /// OPEN D-RFP3 (RFP-5, owner: greedy-subreg, exit: 2026-11-20): where the qword is kept (Nib
     /// fast), a promoted float phi lives unrounded in a register or cell next
     /// to the f32 memory copy a store wrote, so which one a read sees
     /// follows the spill choice (nbody_single.bas printed 86015 or 86016
