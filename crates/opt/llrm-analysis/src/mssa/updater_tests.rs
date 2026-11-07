@@ -449,3 +449,51 @@ b2:
     assert_eq!(mssa.access(copy_store).kind, Kind::Def);
     let _ = (copy_load, b0);
 }
+
+/// Two of three predecessors of a join are sent through a new block: the join's
+/// phi reads a phi of the new block for them (`wireOldPredecessors...`), as a
+/// fresh graph of the split body does. Without the call the join's phi names
+/// predecessors it no longer has.
+#[test]
+fn test_two_predecessors_sent_through_a_new_block_get_a_phi_of_their_own() {
+    let mut body = Body::new(
+        "define void @f(i2 %s) {
+b0:
+  switch i2 %s, label %b4 [ i2 0, label %b1 i2 1, label %b2 ]
+
+b1:
+  store i16 1, ptr @ga
+  br label %b3
+
+b2:
+  store i16 2, ptr @ga
+  br label %b3
+
+b4:
+  store i16 3, ptr @ga
+  br label %b3
+
+b3:
+  %x = load i16, ptr @ga
+  ret void
+}
+",
+    );
+    let mut mssa = body.fresh();
+    let (b1, b2, b3) = (body.block("b1"), body.block("b2"), body.block("b3"));
+    // b1 and b2 now branch to a new block that branches to b3.
+    let (t1, t2) = (body.function().terminator(b1).unwrap(), body.function().terminator(b2).unwrap());
+    let new = body.mutate(|function| {
+        let branch = function.clone_instruction(t1);
+        let new = function.create_block(Some("split"));
+        function.insert_block(new, Some(b2)).expect("placed");
+        function.insert(branch, Position::End(new)).expect("inserted");
+        function.set_operand(t1, 0, Operand::Block(new));
+        function.set_operand(t2, 0, Operand::Block(new));
+        new
+    });
+    mssa.set_dominance(Shape::of(body.function()).dominance);
+    let mut updater = MemorySsaUpdater::new();
+    updater.wire_old_predecessors_to_new_immediate_predecessor(&mut mssa, body.function(), b3, new, &[b1, b2], false);
+    body.check(&mut mssa, "splitting two predecessors of b3");
+}

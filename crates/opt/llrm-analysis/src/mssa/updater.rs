@@ -1,8 +1,10 @@
 //! `MemorySSAUpdater` (`MemorySSAUpdater.cpp`, `d1106deb71cc`): keeps the graph
 //! right as instructions are inserted, moved and erased, in place of making it
 //! again. The edits of the instruction level, the ones LICM and DSE make;
-//! Of the CFG edits, `remove_edge`, `move_all_after_merge_blocks` and
-//! `update_for_cloned_block_into_pred` are here; the rest are not yet.
+//! Of the CFG edits, `remove_edge`, `move_all_after_merge_blocks`,
+//! `update_for_cloned_block_into_pred` and
+//! `wire_old_predecessors_to_new_immediate_predecessor` are here;
+//! `apply_updates` is not yet.
 //!
 //! The updater carries three sets between its calls
 //! (`VisitedBlocks`, `InsertedPHIs`, `NonOptPhis`); the graph and the function
@@ -1007,6 +1009,50 @@ impl MemorySsaUpdater {
                 mssa.set_incoming_block(phi, at, to);
             }
         }
+    }
+
+    /// [`wireOldPredecessorsToNewImmediatePredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSAUpdater.cpp#L1364):
+    /// `preds` of `old` now reach it through the new block `new` (a split
+    /// edge, `SplitBlockPredecessors`). `old`'s phi moves to `new` if `new`
+    /// took all the predecessors, else `new` gets a phi of the values that
+    /// came from `preds` and `old`'s phi reads that one.
+    pub fn wire_old_predecessors_to_new_immediate_predecessor(
+        &mut self,
+        mssa: &mut Mssa,
+        function: &Function,
+        old: BlockId,
+        new: BlockId,
+        preds: &[BlockId],
+        identical_edges_were_merged: bool,
+    ) {
+        assert!(mssa.get_block_accesses(new).is_none(), "access list should be null for a new block");
+        let Some(phi) = mssa.get_memory_phi(old) else { return };
+        if function.predecessors(old).len() == 1 {
+            assert_eq!(function.predecessors(new).len(), preds.len(), "should have moved all predecessors");
+            mssa.move_to_place(phi, new, Place::Beginning);
+            return;
+        }
+        assert!(!preds.is_empty(), "must be moving at least one predecessor to the new immediate predecessor");
+        let new_phi = mssa.create_memory_phi(new);
+        let mut remaining: Vec<BlockId> = preds.to_vec();
+        if !identical_edges_were_merged {
+            let distinct: BTreeSet<BlockId> = preds.iter().copied().collect();
+            assert_eq!(distinct.len(), preds.len(), "without merged edges there are no duplicate predecessors");
+        }
+        let mut moved: Vec<(AccessId, BlockId)> = Vec::new();
+        mssa.unordered_delete_incoming_if(phi, |value, block| {
+            let Some(at) = remaining.iter().position(|&one| one == block) else { return false };
+            moved.push((value, block));
+            if !identical_edges_were_merged {
+                remaining.swap_remove(at);
+            }
+            true
+        });
+        for (value, block) in moved {
+            mssa.add_incoming(new_phi, value, block);
+        }
+        mssa.add_incoming(phi, new_phi, new);
+        self.try_remove_trivial_phi(mssa, function, new_phi);
     }
 
     /// [`getNewDefiningAccessForClone`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSAUpdater.cpp#L674).
