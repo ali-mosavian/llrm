@@ -82,13 +82,36 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // DEVIATE SZ4 (owner x86-m32, exit 2026-11-27): -Os copies a loop header of
+        // at most 4 instructions, not the pin's 16 (the copy is a compare and a
+        // branch, more than the jump rotation removes). m32 -Os kernels (73): x_hash -29 B,
+        // x_rle -8 B, none larger; limits 1..3 grow x_insertion/x_jpeg_single, 1 grows 60 cells.
+        size_rotation_header_limit: Some(4),
+        // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27, with `unroll_at_o1`): at -O1
+        // a full unroll is made only where its simulated cost does not exceed the rolled loop's
+        // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.
+        unroll_never_grows_at_o1: true,
         // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
         imul_at_size: true,
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
+        unroll_promotion_fits_x87_stack: true,
+        x87_zero_fill_at_size: true,
         speed_milliclocks_per_byte: per_byte,
+        // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant
+        // fill is `rep stos` where its stores take more bytes (gcc -Os; the pin
+        // keeps up to MaxStoresPerMemsetOptSize stores). `mov dword/word/byte
+        // [esp+d8], imm` 8/7/5 B, at an absolute address 10/9/7; `xor eax, eax` 2,
+        // `or eax, -1` 3, `mov eax, imm32` 5; `lea edi, [esp+d8]` (4) or `mov
+        // edi, imm32` (5), `mov ecx, imm32` 5, `rep stos` 2; `fst qword` 4 / 6.
+        size_fill: Some(llrm_mir::target::SizeFill {
+            store: [[8, 7, 5], [10, 9, 7]],
+            value: [2, 3, 5],
+            setup: [11, 12],
+            fst: [4, 6],
+        }),
         // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a
         // callee whose copies grow the code stays a call (called_once_os:
         // gcc -Os does; the pin inlines it).
@@ -96,6 +119,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called
         // callee whose copy grows the code (gcc does; the pin copies it).
         inline_size_guard_single_site: true,
+        // DEVIATE SZ3 (owner x86-m32, exit 2026-11-20): an -Os SZ2 trial also inlines the sites its
+        // splice brings. The pin inlines callee-first (`bar` into `foo`, cost 15 < 75, then `foo` into
+        // `main`); the size guard prices each edge alone and keeps both calls. byvalue_struct_address
+        // -Os 147 -> 39 B (clang 23), 176 m32 programs, no other cell moves.
+        inline_chain_trial: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
         // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
         recursive_inlining: Some((8, 450)),
@@ -257,6 +285,10 @@ impl llrm_target::Target for M32 {
         LAYOUT.clone()
     }
 
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
+    }
+
     /// An argument takes a dword at least: `calling.toml`'s.
     fn stack_slot_bytes(&self) -> i64 {
         CALLING.native().slot_bytes
@@ -400,6 +432,14 @@ impl llrm_target::Target for M32 {
         _: u32,
     ) -> u32 {
         llrm_x86::X87_WIDTH
+    }
+
+    fn move_bytes(&self) -> Option<llrm_target::MoveBytes> {
+        Some(llrm_target::MoveBytes {
+            plain: 4,
+            copy: llrm_x86::encoding::copy_move_bytes,
+            literal: llrm_x86::encoding::literal_move_bytes,
+        })
     }
 
     fn register_op_bytes(

@@ -528,6 +528,9 @@ pub fn emit_in(
             if dag.invariant_loads.contains(&node) {
                 emitter.mark_invariant_loads(before);
             }
+            if dag.got_loads.contains(&node) {
+                emitter.make_got_loads(before);
+            }
             if dag.volatile_accesses.contains(&node)
                 || matches!(
                     dag.node(SDValue { node, res: 0 }).data,
@@ -1177,6 +1180,35 @@ impl Emitter<'_, '_> {
             && let Some(last) = block.insns.last_mut()
         {
             *last = Arc::new(Insn { pair: Some(kind), ..(**last).clone() });
+        }
+    }
+
+    /// A load of a GOT entry reads `[rip + sym]`; the encoder relocates an
+    /// External symbol's immediate as the entry's offset, so the load is that
+    /// immediate (`mov r, offset sym`, as `isel.rs` makes the legacy GOT load).
+    fn make_got_loads(
+        &mut self,
+        before: usize,
+    ) {
+        let Some(block) = self.blocks.last_mut() else { return };
+        for one in block.insns.iter_mut().skip(before) {
+            let Some(what) = one.what.as_ref() else { continue };
+            let ([Loc::Held(dest)], [Loc::Mem(mem)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+                continue;
+            };
+            let Some(address) = mem.addr else { continue };
+            if what.op != Operation::Move
+                || mem.base.is_some()
+                || mem.index.is_some()
+                || address.space != crate::model::ir::Space::External
+            {
+                continue;
+            }
+            let mut moved = (**one).clone();
+            if let Some(what) = moved.what.as_mut() {
+                what.sources = vec![Loc::Imm(Imm { value: 0, width: dest.width, address: Some(address) })];
+            }
+            *one = Arc::new(moved);
         }
     }
 
@@ -4233,8 +4265,11 @@ impl Emitter<'_, '_> {
             // A constant-pool entry is memory nothing writes
             // (`PseudoSourceValue::isConstant`: the pin's
             // `isDereferenceableInvariantLoad`): LICM may carry it (DEVIATE
-            // X1).
-            if pooled {
+            // X1). Not the loads the CPU's prices keep one per reader: the
+            // MachineCSE of invariant loads would make them one again and
+            // FloatFold could not fold them (x87_pool_per_use_486.c, red
+            // since #7592).
+            if pooled && (constant || self.dag.has_one_use(value.node)) {
                 self.mark_invariant_loads(before);
             }
             if constant {

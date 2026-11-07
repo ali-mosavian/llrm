@@ -5,7 +5,9 @@
 //! of its loop nest, each a header phi the allocator then spills to the frame
 //! (m16 -Os 1983 B on main, 2568 B with the promotions, 2096 B with this).
 //! Exit: none while a spilled promoted value is not stored back where the
-//! allocator wants it.
+//! allocator wants it. A location the loop only stores to takes no room: its
+//! value crosses no back edge, so the second pass that sinks the stores of
+//! locations the first pass loaded is not charged for them again.
 //! A target with no registers to spill into (wasm) states no limit
 //! (`Tti::licm_register_limit`).
 //!
