@@ -157,10 +157,14 @@ fn tail_duplicate(
                 .cloned()
                 .or_else(|| old.insns.last().cloned())
                 .expect("a block with an instruction");
+            // A predecessor that falls into the tail has no jump to drop: its last
+            // instruction stays (it was lost, `add eax, 32` of __clzdi2).
+            let jumps = operation(&jump) == Some(Operation::Jump)
+                && jump.what.as_ref().is_some_and(|what| what.target == Some(tail.at));
             let mut insns: Vec<Arc<Insn>> = old
                 .insns
                 .iter()
-                .map(|one| if Arc::ptr_eq(one, &jump) { lir::bytes_only(one) } else { Arc::clone(one) })
+                .map(|one| if jumps && Arc::ptr_eq(one, &jump) { lir::bytes_only(one) } else { Arc::clone(one) })
                 .collect();
             insns.extend(work.iter().map(|one| super::jumps::_unowned(one, &jump)));
             let mut new = LirBlock::clone(old);

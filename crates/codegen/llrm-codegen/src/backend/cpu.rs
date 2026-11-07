@@ -616,6 +616,7 @@ fn _profile(
         address_prefix_stall: table.lcp_stall,
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
         commute_loop_carried: table.commute_loop_carried,
+        post_ra_tail_duplicate: table.post_ra_tail_duplicate,
         mispredict_penalty: table.mispredict_penalty,
         mispredict_penalty_size: table.mispredict_penalty_size,
         ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
