@@ -106,6 +106,11 @@ pub fn info(
                 continue;
             }
             let Some(one) = di::read_variable(module, node) else { continue };
+            // A variable of an inlined callee is that callee's, not this
+            // function's: the writer has no inlined-subroutine scopes to put it in.
+            if one.scope != procedure.name {
+                continue;
+            }
             let Some(&r#type) = debug.nodes.get(&one.r#type) else { continue };
             variables.push(Variable {
                 name: one.name,

@@ -8,6 +8,7 @@ entry:
     #dbg_value(i64 %n, !15, !DIExpression(), !17)
     #dbg_value(i64 %m, !16, !DIExpression(), !17)
     #dbg_value(i64 %n, !22, !DIExpression(), !17)
+    #dbg_value(i64 %m, !24, !DIExpression(), !17)
   %call = call i64 @id(i64 noundef %n), !dbg !19
     #dbg_value(i64 poison, !22, !DIExpression(), !17)
   %s = xor i64 %call, %m, !dbg !20
@@ -40,3 +41,5 @@ attributes #0 = { nounwind uwtable "frame-pointer"="non-leaf" }
 !20 = !DILocation(line: 4, column: 21, scope: !9)
 !21 = !DILocation(line: 4, column: 5, scope: !9)
 !22 = !DILocalVariable(name: "k", scope: !9, file: !1, line: 2, type: !3)
+!23 = distinct !DISubprogram(name: "helper", scope: !1, file: !1, line: 9, type: !10, scopeLine: 9, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!24 = !DILocalVariable(name: "x", scope: !23, file: !1, line: 9, type: !3)
