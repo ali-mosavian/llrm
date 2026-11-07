@@ -257,6 +257,15 @@ impl BuilderTarget {
         self
     }
 
+    /// DEVIATE DIV-LIVE: see `Tuning::narrow_divide_live_limit`.
+    pub fn with_div_live_limit(
+        mut self,
+        limit: u32,
+    ) -> BuilderTarget {
+        self.dag.div_live_limit = limit;
+        self
+    }
+
     /// This target with a divide by a constant kept where its priced clocks
     /// beat the multiply-high sequence's.
     pub fn with_div_prices(

@@ -271,6 +271,10 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// DEVIATE DIV-LIVE: see `Tuning::narrow_divide_live_limit`; 0 is off.
+    pub div_live_limit: u32,
+    /// The values live across the narrow divides of the block this DAG is of.
+    pub div_live: u32,
     /// Prices that decide `isIntDivCheap` per divisor and width; see
     /// [`DivPrices`].
     pub div_prices: Option<DivPrices>,
@@ -334,6 +338,8 @@ impl Default for DagConfig {
             absolute_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            div_live_limit: 0,
+            div_live: 0,
             div_prices: None,
             sdiv_pow2_stays: false,
             fp_extended: false,
@@ -612,6 +618,15 @@ impl SelectionDAG {
         if let Some(bytes) = self.config.div_prices.as_mut().and_then(|prices| prices.bytes.as_mut()) {
             bytes.frequency = frequency;
         }
+    }
+
+    /// DEVIATE DIV-LIVE: the most values live across a narrow divide of this
+    /// block.
+    pub fn set_divide_live(
+        &mut self,
+        live: u32,
+    ) {
+        self.config.div_live = live;
     }
 
     /// The jump table is position independent (`EK_LabelDifference32`, its

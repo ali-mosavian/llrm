@@ -732,6 +732,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24): `Tuning::narrow_divide_live_limit`.
+    fn narrow_divide_live_limit(&self) -> u32 {
+        0
+    }
+
     /// `Tuning::divide_by_bytes`.
     fn divide_by_bytes(&self) -> bool {
         false
@@ -1355,6 +1360,16 @@ pub trait Tti {
     /// free anyway (x86: the rewrite moved `bq32` rows the wrong way). Off by
     /// default; a target opts in where it measured a win.
     fn prefers_exit_ne(&self) -> bool {
+        false
+    }
+
+    /// Whether `IndVarSimplify` runs `sinkUnusedInvariants`. The pin runs it
+    /// on every target.
+    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-21): off by default;
+    /// on, 17 other-target cells grew (6502 jpeg, arm64 jpeg, x86_32 grep).
+    /// Flip the default when those are fixed.
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp)
+    fn sinks_unused_invariants(&self) -> bool {
         false
     }
 
