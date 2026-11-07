@@ -46,6 +46,24 @@ impl CombineHooks for MosLateCombines {
     ) -> bool {
         folds_shared_shift(vt, inner)
     }
+
+    /// The pieces of a wide shift by one are made by type legalization, after
+    /// the first run: [`funnel_by_one`] reads them here.
+    fn has_target_combine(
+        &self,
+        op: ISD,
+    ) -> bool {
+        matches!(op, ISD::Or | ISD::Add)
+    }
+
+    fn perform_dag_combine(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+        _level: CombineLevel,
+    ) -> Option<SDValue> {
+        funnel_by_one(dag, node)
+    }
 }
 
 /// A word shift by 1 to 4 is a chain of that many steps for both bytes, and
