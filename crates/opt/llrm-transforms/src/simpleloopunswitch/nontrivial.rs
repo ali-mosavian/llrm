@@ -122,7 +122,7 @@ pub(super) fn turn_select_into_branch(
 }
 
 /// A `Query` at `cxt`, with the dominator tree and assumptions of `analyzed`.
-fn query_at<'a>(
+pub(super) fn query_at<'a>(
     run: &'a Run,
     analyzed: &'a Analyzed,
     cxt: Option<InstId>,
@@ -164,6 +164,21 @@ pub(super) fn should_insert_freeze(
     ti: InstId,
 ) -> bool {
     !is_guaranteed_to_execute(run, analyzed, lp, ti) && should_insert_freeze_of_select(run, analyzed, lp, cond)
+}
+
+/// `isGuaranteedToTransferExecutionToSuccessor(Header->begin(), terminator)`:
+/// nothing in the header before its branch may leave without reaching it.
+pub(super) fn header_reaches_branch(
+    run: &Run,
+    analyzed: &Analyzed,
+    header: BlockId,
+    term: InstId,
+) -> bool {
+    let q = query_at(run, analyzed, None);
+    run.function
+        .iter_block(header)
+        .take_while(|&one| one != term)
+        .all(|inst| is_guaranteed_to_transfer_execution_to_successor(&q, inst))
 }
 
 /// `ICFLoopSafetyInfo::isGuaranteedToExecute`: nothing before `inst` in its
@@ -511,7 +526,8 @@ pub(super) fn unswitch_nontrivial_invariants(
     // We can only unswitch switches, and conditional branches with an
     // invariant condition, or combining invariant conditions with an
     // instruction.
-    let full_unswitch = is_switch || cond == invariants[0];
+    let partially_invariant = candidate.partial.is_some();
+    let full_unswitch = is_switch || (cond == invariants[0] && !partially_invariant);
 
     // When we are unswitching a set of invariants combined with `and` or `or`,
     // the combining operation determines the best direction to unswitch: we
@@ -520,7 +536,9 @@ pub(super) fn unswitch_nontrivial_invariants(
     let mut cloned_succ = 0usize;
     if !full_unswitch {
         let root = def_of(run, cond).expect("a partial unswitch has an instruction as the condition");
-        if logical(run, root, false).is_none() && logical(run, root, true).is_some() {
+        let cond_is_or = logical(run, root, false).is_some();
+        let cond_is_and = logical(run, root, true).is_some();
+        if !cond_is_or && (cond_is_and || candidate.partial.as_ref().is_some_and(|info| !info.known_value)) {
             direction = false;
             cloned_succ = 1;
         }
@@ -635,6 +653,15 @@ pub(super) fn unswitch_nontrivial_invariants(
             .function
             .create_instruction(Opcode::Br, void, vec![Operand::Block(retained_succ)], Flags::default(), None);
         run.function.insert(jump, Position::End(parent_bb)).expect("a block without a terminator");
+    } else if let Some(info) = &candidate.partial {
+        super::partial::build_partial_invariant_unswitch_conditional_branch(
+            run,
+            split_bb,
+            &info.to_duplicate,
+            direction,
+            cloned_phs[&unswitched_succs[0]],
+            loop_ph,
+        );
     } else {
         super::build_partial_unswitch_conditional_branch(
             run,
@@ -683,7 +710,7 @@ pub(super) fn unswitch_nontrivial_invariants(
     }
     erase_dead_blocks(run, &dead);
 
-    if !is_switch {
+    if !is_switch && !partially_invariant {
         // If we unswitched a branch which collapses the condition to a known
         // constant we want to replace all the uses of the invariants within
         // both the original and cloned blocks.
@@ -715,7 +742,7 @@ pub(super) fn unswitch_nontrivial_invariants(
     // We can change which blocks are exit blocks of all the cloned sibling
     // loops, the current loop, and any parent loops which shared exit blocks
     // with the current loop: re-form LCSSA, then dedicated exits (SU8).
-    let _ = crate::lcssa::formed(run.function);
+    let _ = crate::lcssa::closed(run.context, run.layout, run.function);
     crate::loopsimplify::simplified(run.function);
 
     let cloned_headers = vmaps.iter().filter_map(|vmap| vmap.blocks.get(&header).copied()).collect();

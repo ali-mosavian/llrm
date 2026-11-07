@@ -57,6 +57,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+use llrm_lir::valuelanes::ValueLanes;
 use llrm_mir::blockfrequency::frequency::BlockFrequency;
 use llrm_support::hash::{HashMap, HashSet};
 
@@ -1410,20 +1411,27 @@ impl<'d> SplitEditor<'d> {
         // flagged undef reads nothing and goes where the def does (`<undef>`
         // operands "don't really read the register ... When the use operand is
         // tied to a def, we must use the same register as the def").
-        let mut seen: Vec<(InstrKey, bool, bool)> = Vec::new();
+        let mut seen: Vec<(InstrKey, bool, bool, ValueLanes)> = Vec::new();
         for op in cx.lis.operands(parent_reg) {
             let (read, define) = (op.reads_reg, op.is_def || !op.reads_reg);
+            // A def that keeps the rest of the value reads the lanes it does not name.
+            let lanes = match (read, op.is_def) {
+                (false, _) => ValueLanes(0),
+                (true, true) => ValueLanes(!op.lanes.0),
+                (true, false) => op.lanes,
+            };
             match seen.iter_mut().find(|(k, ..)| *k == op.instr) {
                 Some(entry) => {
                     entry.1 |= read;
                     entry.2 |= define;
+                    entry.3 = entry.3.union(lanes);
                 }
-                None => seen.push((op.instr, read, define)),
+                None => seen.push((op.instr, read, define, lanes)),
             }
         }
 
         let mut extend: Vec<(usize, SlotIndex)> = Vec::new();
-        for (key, reads, defines) in seen {
+        for (key, reads, defines, read_lanes) in seen {
             let base = cx.lis.indexes.get_instruction_index(key);
             let block = cx.lis.indexes.get_mbb_from_index(&base);
             // Reads look up at the instruction, defs at its register slot.
@@ -1435,12 +1443,27 @@ impl<'d> SplitEditor<'d> {
             let reg_idx = read_idx.or(def_idx).expect("an operand");
             let new_reg = self.edit().get(reg_idx);
 
+            // A read of a lane the parent has not defined here is undef (the
+            // pin's `<read-undef>`): a partial def keeping nothing reads
+            // nothing, and a read has nothing to extend to.
+            let at = base;
+            let parent = self.parent();
+            let live = parent.live_at(&at)
+                && (!parent.has_sub_ranges()
+                    || parent.sub_ranges().iter().any(|sr| sr.lanes.overlaps(read_lanes) && sr.range.live_at(&at)));
+
             let old = std::sync::Arc::clone(cx.lis.instr(key));
-            let new = old.renamed(&|v| if v == parent_reg { new_reg } else { v });
+            let mut new = old.renamed(&|v| if v == parent_reg { new_reg } else { v });
+            if reads && !live && new.partial_defs.contains(&new_reg) {
+                let mut kept = (*new).clone();
+                kept.partial_defs.retain(|&v| v != new_reg);
+                new = std::sync::Arc::new(kept);
+            }
             cx.lis.rewrite_instr(block, key, new);
 
             // Extend liveness to the instruction if it reads the register.
-            if extend_ranges && reads {
+
+            if extend_ranges && reads && live {
                 extend.push((reg_idx, base.get_reg_slot(false)));
             }
         }
@@ -1717,8 +1740,8 @@ mod tests {
         ) -> Arc<Insn> {
             let what = Semantics {
                 name: Some("mov".into()),
-                dests: vec![Loc::Held(Held { value: to, width: 2 })],
-                sources: vec![Loc::Held(Held { value: from, width: 2 })],
+                dests: vec![Loc::Held(Held { value: to, width: 2, offset: 0 })],
+                sources: vec![Loc::Held(Held { value: from, width: 2, offset: 0 })],
                 ..Semantics::new(Operation::Move)
             };
             Arc::new(Insn::new(0, None, Some(what), vec![to], vec![from]))
@@ -1939,7 +1962,7 @@ mod tests {
         let literal = |value: i64| {
             let what = Semantics {
                 name: Some("mov".into()),
-                dests: vec![Loc::Held(Held { value: 2, width: 2 })],
+                dests: vec![Loc::Held(Held { value: 2, width: 2, offset: 0 })],
                 sources: vec![Loc::Imm(Imm { value, width: 2, address: None })],
                 ..Semantics::new(Operation::Move)
             };

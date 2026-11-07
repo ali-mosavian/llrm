@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import llrmbin  # noqa: E402
+import elfsize  # noqa: E402
 import benchlist  # noqa: E402
 DEMOS = Path(environ.get("QBDEMOS", Path.home() / "work/qbdemos/orig"))
 
@@ -88,7 +89,12 @@ class Segment:
     loaded: int  # bytes an LEDATA or LIDATA record carries; the rest of the segment is uninitialised
     bits: int = 16
     pieces: tuple = ()  # (offset, bytes) of each LEDATA record and COMDAT: the segment's content, to tell padding from code
+    library: int = 0  # bytes of the segment's COMDATs that are library code (see LIBRARY)
 
+
+# A function the compiler named for the object keeps its source name, cleaned (`G$7$std$io$File$open`): one whose source name starts in
+# the standard library is the library's, not the program's.
+LIBRARY = re.compile(r"^G\$\d+\$_?std\$")
 
 # Classes the program does not contribute: the linker's stack, and the debugger's symbol and type records.
 NOT_THE_PROGRAMS = {"STACK", "DEBSYM", "DEBTYP"}
@@ -147,7 +153,7 @@ def segments(obj: Path) -> list[Segment]:
                 size = 1 << 16  # the 'big' bit: a full segment
             name, i = omf_index(body, i)
             klass, i = omf_index(body, i)
-            found.append([names[name - 1], names[klass - 1], size, 0, 32 if attributes & 1 else 16, []])
+            found.append([names[name - 1], names[klass - 1], size, 0, 32 if attributes & 1 else 16, [], 0])
         elif kind in (0xA0, 0xA1, 0xA2, 0xA3):  # LEDATA, LIDATA
             wide = kind & 1 == 1
             segment, i = omf_index(body, 0)
@@ -164,13 +170,45 @@ def segments(obj: Path) -> list[Segment]:
             _, i = omf_index(body, 3 + (4 if wide else 2))  # the type index
             _, i = omf_index(body, i)  # the group
             segment, i = omf_index(body, i)
-            _, i = omf_index(body, i)  # the name
+            function, i = omf_index(body, i)  # the name
             length = expanded(body, i, wide) if flags & 2 else len(body) - i
             found[segment - 1][2] += length
+            if LIBRARY.match(names[function - 1]):
+                found[segment - 1][6] += length
             found[segment - 1][3] += length
             if not flags & 2:
                 found[segment - 1][5].append((None, bytes(body[i:])))  # a function of its own: aligned at 0 within itself
-    return [Segment(name, klass, size, min(loaded, size), bits, tuple(pieces)) for name, klass, size, loaded, bits, pieces in found]
+    return [Segment(name, klass, size, min(loaded, size), bits, tuple(pieces), library) for name, klass, size, loaded, bits, pieces, library in found]
+
+
+def externs(obj: Path) -> list[str]:
+    """Names the OMF object leaves to the linker (EXTDEF): the library helpers it calls are among them, and their bytes are in no `code_bytes`."""
+    data = Path(obj).read_bytes()
+    found, defined, at = [], set(), 0
+    while at + 3 <= len(data):
+        kind, length = data[at], int.from_bytes(data[at + 1 : at + 3], "little")
+        body = data[at + 3 : at + 2 + length]
+        at += 3 + length
+        i = 0
+        while kind == 0x96 and i < len(body):  # LNAMES: a function the object defines as a COMDAT is named here
+            defined.add(body[i + 1 : i + 1 + body[i]].decode("latin-1"))
+            i += 1 + body[i]
+        if kind in (0x90, 0x91):  # PUBDEF: the names the object defines
+            _, j = omf_index(body, 0)
+            segment, j = omf_index(body, j)
+            j += 2 if segment == 0 else 0
+            while j < len(body):
+                defined.add(body[j + 1 : j + 1 + body[j]].decode("latin-1"))
+                _, j = omf_index(body, j + 1 + body[j] + (4 if kind == 0x91 else 2))
+        while kind == 0x8C and i < len(body):  # EXTDEF: length-prefixed name, type index
+            found.append(body[i + 1 : i + 1 + body[i]].decode("latin-1"))
+            _, i = omf_index(body, i + 1 + body[i])
+    return sorted(set(found) - defined)
+
+
+def is_elf(obj: Path) -> bool:
+    with open(obj, "rb") as file:
+        return file.read(4) == b"\x7fELF"
 
 
 def is_code(segment: Segment) -> bool:
@@ -182,27 +220,31 @@ class CodeSize:
     code: int  # bytes of the code segments, without alignment padding
     align: int  # the padding left out
     unread: int = 0  # bytes that start no instruction (data inside code), counted as code
+    library: int = 0  # bytes of library functions (LIBRARY), which are not in `code`
 
 
 def code_size(obj: Path) -> CodeSize:
     """The object's code bytes without alignment padding (a layout move of a few bytes before an aligned loop is not growth), and the padding
     apart. `unread`: bytes the decoder skipped as no instruction; they stay in `code`."""
-    code = align = unread = 0
+    if is_elf(obj):
+        return CodeSize(*elfsize.code_size(obj, padding))
+    code = align = unread = library = 0
     for one in segments(obj):
         if not is_code(one):
             continue
+        library += one.library
         whole = bytearray(one.size - sum(len(data) for at, data in one.pieces if at is None))
         for at, data in one.pieces:
             if at is not None:
                 whole[at : at + len(data)] = data
         parts = ([bytes(whole)] if whole else []) + [data for at, data in one.pieces if at is None]
-        code += one.size
+        code += one.size - one.library
         for part in parts:
             found, skipped = padding(part, one.bits)
             code -= found
             align += found
             unread += skipped
-    return CodeSize(code, align, unread)
+    return CodeSize(code, align, unread, library)
 
 
 def code_bytes(obj: Path) -> int:
@@ -211,9 +253,17 @@ def code_bytes(obj: Path) -> int:
     return code_size(obj).code
 
 
+def lib_bytes(obj: Path) -> int | None:
+    """Bytes of the object's library functions (LIBRARY: the standard library's instantiations in a Nib program), which `code_bytes` leaves out.
+    None where the object does not say (an ELF one): blank is not zero."""
+    return None if is_elf(obj) else code_size(obj).library
+
+
 def data_bytes(obj: Path) -> tuple[int, int]:
     """(initialised, uninitialised) bytes of the object's data segments, whatever their class (DATA, CONST, FAR_BSS, BC_VARS,
     BC_SEGS): the bytes its LEDATA and LIDATA records carry, and the rest of each SEGDEF. Not the stack, nor debug records."""
+    if is_elf(obj):
+        return elfsize.data_bytes(obj)
     kept = [one for one in segments(obj) if not is_code(one) and one.klass.upper() not in NOT_THE_PROGRAMS]
     return sum(one.loaded for one in kept), sum(one.size - one.loaded for one in kept)
 

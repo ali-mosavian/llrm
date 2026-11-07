@@ -1188,6 +1188,7 @@ entry:
     let module = crate::testing::module(IR).expect("parses");
     let (facts, _) = crate::backend::calleefacts::CalleeFacts::of(&module);
     let frame = llrm_target::FrameRegisters {
+        vector_saved: Vec::new(),
         pointer: RegId::BP,
         stack: RegId::SP,
         saved: vec![],
@@ -1196,7 +1197,11 @@ entry:
         optional: false,
         enter: false,
         free: false,
+        kept: false,
+        exit_cfi: true,
+        saved_first: false,
         wrap_split_size: false,
+        red_zone: 0,
         slot_scratch: None,
     };
     let leaf = selected(&module, "leaf", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])

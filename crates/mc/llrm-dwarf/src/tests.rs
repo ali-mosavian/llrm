@@ -39,6 +39,7 @@ fn object(
         blocks: Vec::new(),
         frame: Vec::new(),
         all_calls: false,
+        frame_base: None,
         calls: Vec::new(),
     };
     let register = |name: &str, dwarf| Register { name: name.into(), bits: 32, dwarf, codeview: None };
@@ -72,6 +73,7 @@ fn object(
                 definition: Definition::Defined { section: 0, offset: 0 },
                 size: 0,
                 group: None,
+                visibility: Default::default(),
             }],
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
@@ -391,6 +393,34 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
             );
         }
     }
+}
+
+/// GNU objdump numbers a version 5 file table from 1, as a sequence starts at
+/// file 1: a table of the one file at entry 0 was "mangled line number section
+/// (bad file number)" to `objdump -dl`, and no source line was shown. Entry 0
+/// repeats the primary file, as the pin's does.
+#[test]
+fn gnu_objdump_reads_the_line_table_of_a_version_5_object() {
+    let Ok(objdump) = which_objdump() else {
+        skipped("objdump is not installed");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    for version in [4u16, 5] {
+        let made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version });
+        let path = scratch.path().join(format!("v{version}.o"));
+        std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
+        let said = std::process::Command::new(&objdump).arg("-dl").arg(&path).output().unwrap();
+        let text = format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
+        assert!(!text.contains("bad file number") && text.contains("f.c:"), "DWARF {version}:\n{text}");
+    }
+}
+
+fn which_objdump() -> Result<std::path::PathBuf, ()> {
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).map(|dir| dir.join("objdump")).find(|path| path.exists()))
+        .flatten()
+        .ok_or(())
 }
 
 /// A variable the optimiser removed (a list of no entry) is a DIE with a name
@@ -802,4 +832,101 @@ fn a_row_that_is_not_a_statement_is_written_without_the_flag() {
     let rows: Vec<&str> = shown.lines().filter(|one| one.starts_with("0x")).collect();
     assert!(rows[0].contains("is_stmt"), "{rows:?}");
     assert!(rows.iter().any(|one| one.contains(" 4 ") && !one.contains("is_stmt")), "{rows:?}");
+}
+
+/// Two functions in one section got one sequence, addressed by the section's
+/// first symbol: a format with no such symbol (WebAssembly's function offsets)
+/// could not relocate it. Per function, each sequence is addressed by its own
+/// function's symbol.
+#[test]
+fn a_sequence_per_function_is_addressed_by_its_own_symbol() {
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Default);
+    let mut info = made.debug.take().unwrap();
+    let mut second = info.functions[0].clone();
+    second.name = "g".into();
+    second.symbol = 1;
+    second.ranges = vec![Range { section: 0, offset: 8, length: 8 }];
+    second.body = None;
+    info.functions[0].ranges = vec![Range { section: 0, offset: 0, length: 8 }];
+    info.functions[0].body = None;
+    info.functions.push(second);
+    let mut symbol = made.object.symbols[0].clone();
+    symbol.name = "_g".into();
+    symbol.definition = Definition::Defined { section: 0, offset: 8 };
+    made.object.symbols.push(symbol);
+    let targets = |written: &Object| -> Vec<usize> {
+        let (_, line) = named(written, ".debug_line");
+        line.relocs
+            .iter()
+            .filter_map(|one| match one.target {
+                Target::Symbol(symbol) => Some(symbol),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(targets(&expanded(&made.object, &info).unwrap()), [0]);
+    assert_eq!(targets(&expanded_per_function(&made.object, &info).unwrap()), [0, 1]);
+}
+
+/// WebAssembly keeps a variable in a local and the frame address in another:
+/// the writer refused both, so no wasm variable could be described.
+#[test]
+fn a_wasm_local_is_a_wasm_location_and_a_frame_base() {
+    let mut made = object(
+        vec![
+            frame("x", 8),
+            Variable { name: "y".into(), r#type: 0, kind: Kind::Local, location: Location::WasmLocal(5) },
+        ],
+        vec![int()],
+        Format::Default,
+    );
+    made.debug.as_mut().unwrap().frame_base = llrm_debug::FrameBase::WasmLocal(3);
+    let written = expanded(&made.object, made.debug.as_ref().unwrap()).unwrap();
+    let (_, info) = named(&written, ".debug_info");
+    let has = |needle: &[u8]| info.image.windows(needle.len()).any(|window| window == needle);
+    assert!(has(&[0xED, 0x00, 3, 0x9F]), "the frame base, local 3");
+    assert!(has(&[0xED, 0x00, 5, 0x9F]), "y, local 5");
+    // x is still an offset from the frame base: DW_OP_fbreg 8.
+    assert!(has(&[0x91, 8]), "x");
+}
+
+/// A stackified wasm value has no local; the writer refused it, so `-O2` locals
+/// in the operand stack had no description.
+#[test]
+fn a_wasm_stack_slot_is_a_wasm_location_of_kind_two() {
+    let made = object(
+        vec![Variable { name: "t".into(), r#type: 0, kind: Kind::Local, location: Location::WasmStack(4) }],
+        vec![int()],
+        Format::Default,
+    );
+    let written = expanded(&made.object, made.debug.as_ref().unwrap()).unwrap();
+    let (_, info) = named(&written, ".debug_info");
+    assert!(info.image.windows(4).any(|window| window == [0xED, 0x02, 4, 0x9F]), "t, stack slot 4");
+}
+
+/// WebAssembly's frame pointer is a local of its own in each function:
+/// `Info::frame_base` alone gave every subprogram the same one.
+#[test]
+fn a_function_states_its_own_frame_base() {
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Default);
+    let mut info = made.debug.take().unwrap();
+    let mut second = info.functions[0].clone();
+    second.name = "g".into();
+    second.symbol = 1;
+    second.ranges = vec![Range { section: 0, offset: 8, length: 8 }];
+    second.body = None;
+    info.functions[0].ranges = vec![Range { section: 0, offset: 0, length: 8 }];
+    info.functions[0].body = None;
+    info.functions[0].frame_base = Some(llrm_debug::FrameBase::WasmLocal(1));
+    second.frame_base = Some(llrm_debug::FrameBase::WasmLocal(3));
+    info.functions.push(second);
+    let mut symbol = made.object.symbols[0].clone();
+    symbol.name = "_g".into();
+    symbol.definition = Definition::Defined { section: 0, offset: 8 };
+    made.object.symbols.push(symbol);
+    let written = expanded(&made.object, &info).unwrap();
+    let (_, debug) = named(&written, ".debug_info");
+    let has = |needle: &[u8]| debug.image.windows(needle.len()).any(|window| window == needle);
+    assert!(has(&[0xED, 0x00, 1, 0x9F]), "f's frame base, local 1");
+    assert!(has(&[0xED, 0x00, 3, 0x9F]), "g's frame base, local 3");
 }

@@ -66,7 +66,18 @@ fn selected(text: &str) -> BTreeMap<String, Result<Counts, String>> {
             if let Err(why) = legalized(
                 dag,
                 &tli,
-                &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+                &mut X86Lowering {
+                    imul_if_smaller: false,
+                    share_products: false,
+                    cmov: false,
+                    sse2: false,
+                    min_size: false,
+                    three_address_adds: false,
+                    i16_mul_chains: false,
+                    sext_load: false,
+                    zext_free: false,
+                    profile: None,
+                },
                 &machine,
             )
             .and_then(|()| do_instruction_selection(dag, &selector, &mut hooks))

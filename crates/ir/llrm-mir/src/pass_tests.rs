@@ -697,6 +697,24 @@ fn module_analyses_of_the_declarations_stand_until_a_declaration_changes() {
     );
 }
 
+/// `LLRM_CHECK_MODULES` ran every compile into a panic, "declarations: brought up to date, it is not
+/// what working it out afresh gives", then the same for callee-effects: the afresh run took the patch
+/// path on the result the first run left behind, from before `stamp` gave `f` its attributes.
+#[test]
+fn analyses_worked_out_afresh_ignore_the_result_the_first_run_left() {
+    use crate::passes::{CalleeEffects, Declarations};
+    let mut module = module();
+    let program = crate::program::ProgramProxy::of(&module, Rc::new(Neutral));
+    let mut analyses = ModuleAnalyses::new(program);
+    analyses.get::<Declarations>(&module);
+    analyses.get::<CalleeEffects>(&module);
+    let (_, function) = module.function_mut("f").unwrap();
+    function.attrs.push(Attribute::Flag("readnone".to_owned()));
+    analyses.invalidate(&PreservedAnalyses::none());
+    assert!(analyses.run_agrees_afresh::<Declarations>(&module), "declarations kept the listing from before the attribute");
+    assert!(analyses.run_agrees_afresh::<CalleeEffects>(&module), "callee effects kept the map from before the attribute");
+}
+
 /// A pass that named nothing loses the result though the body did not move:
 /// the rerun is told `same-untouched` (383 of the 2,248 results dropped at one
 /// d_faces -O2 compile were of that kind on main, which kept them).
@@ -910,7 +928,7 @@ impl FunctionPass for Tabulate {
         _: &mut Analyses,
     ) -> PreservedAnalyses {
         let ty = unit.context.types.int(16);
-        unit.declared.table("t", ty, unit.context.int(ty, 0));
+        unit.declared.table("t", ty, unit.context.int(ty, 0), crate::module::UnnamedAddr::None);
         PreservedAnalyses::none()
     }
 }
@@ -1631,4 +1649,29 @@ fn a_function_the_inliner_deleted_is_not_run_over() {
     passes.add(RunsOver(std::rc::Rc::clone(&runs)));
     passes.run_module(&mut module, std::rc::Rc::new(crate::target::Neutral)).expect("a run");
     assert_eq!(runs.get(), 1, "only @kept is run over");
+}
+
+/// A manager handed the declarations of a module carried, accepted as they
+/// stand, has made no listing (0), and a carried `CalleeEffects` was taken as
+/// current by `Seen == Some(0) == 0` whatever the module was: after the QB
+/// runtime inline declared `llvm.smin.i16`, the map lacked it while the
+/// declarations held it, BDCE called the call dead and erased the `add` it
+/// still read (llrm-qb `chr_inlines_whatever_the_size_model_says`).
+#[test]
+fn a_carried_callee_map_is_not_taken_for_current_by_listing_zero() {
+    let one = module();
+    let two = parse::module(&format!("{TEXT}declare void @h()\n")).unwrap_or_else(|error| panic!("{error}"));
+    let proxy = || -> ModuleAnalyses { ModuleAnalyses::of(&one, Rc::new(Neutral)) };
+    // The map is worked out for `one` by a manager that made no listing.
+    let mut first = proxy();
+    first.outer(&one);
+    let mut second = ModuleAnalyses::of(&one, Rc::new(Neutral)).carrying(first.carried());
+    second.outer(&one);
+    second.invalidate(&PreservedAnalyses::none());
+    // The declarations alone are brought to the module that has `@h`.
+    second.get::<crate::passes::Declarations>(&two);
+    let mut third = ModuleAnalyses::of(&two, Rc::new(Neutral)).carrying(second.carried());
+    let outer = third.outer(&two);
+    let h = two.globals.iter().position(|global| global.name.as_deref() == Some("h")).expect("@h");
+    assert!(outer.callees().contains_key(&GlobalId(h as u32)), "the carried map lacks @h: {}", outer.callees().len());
 }

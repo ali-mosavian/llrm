@@ -34,6 +34,9 @@ use super::ids::Aarch64Ids;
 pub struct Aarch64Lowering {
     pub custom: Option<String>,
     globals: Globals,
+    /// AAPCS64 of Linux rather than Darwin's: where a library call's
+    /// arguments go.
+    linux: bool,
 }
 
 impl CombineHooks for Aarch64Lowering {
@@ -125,6 +128,21 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    fn sub_algebra_folds(&self) -> bool {
+        true
+    }
+
+    fn widened_unsigned_divide_type(
+        &self,
+        vt: EVT,
+    ) -> Option<EVT> {
+        (vt == EVT::I32).then_some(EVT::I64)
+    }
+
+    fn zero_extend_i32_to_i64_free(&self) -> bool {
+        true
+    }
+
     fn fold_xor_of_and_with_mask(&self) -> bool {
         true
     }
@@ -169,8 +187,26 @@ impl CombineHooks for Aarch64Lowering {
         vt.is_integer() && ok(vt.size_in_bits()) && ok(kept_bits)
     }
 
-    fn simplify_demanded_add_sub_mul(&self) -> bool {
-        true
+    /// `AArch64TargetLowering::isTruncateFree(EVT, EVT)` (an integer narrowing)
+    /// and `isZExtFree(EVT, EVT)` (32 to 64 bits only, as a `w` write clears
+    /// the upper half):
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L17540>
+    fn free_narrowing(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        narrow.is_integer() && wide.is_integer() && narrow.size_in_bits() == 32 && wide.size_in_bits() == 64
+    }
+
+    /// `AArch64TargetLowering::isNarrowingProfitable`: `isTypeLegal(DestVT) &&
+    /// DestVT.isVector()`. Vectors are deferred, so no scalar narrows.
+    fn narrowing_profitable(
+        &self,
+        _wide: EVT,
+        _narrow: EVT,
+    ) -> bool {
+        false
     }
 
     fn reassociate_compare_pairs(&self) -> bool {
@@ -227,7 +263,17 @@ impl CombineHooks for Aarch64Lowering {
     ) -> bool {
         matches!(
             op,
-            ISD::Mul | ISD::Sub | ISD::And | ISD::Or | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr
+            ISD::Mul
+                | ISD::Add
+                | ISD::Sub
+                | ISD::And
+                | ISD::Or
+                | ISD::SetCC
+                | ISD::GlobalAddress
+                | ISD::Shl
+                | ISD::Srl
+                | ISD::Sra
+                | ISD::Rotr
         )
     }
 
@@ -250,7 +296,9 @@ impl CombineHooks for Aarch64Lowering {
         match dag.opcode(node) {
             ISD::Mul => super::combine::combine_mul(dag, node, level),
             ISD::GlobalAddress => self.global_address_combine(dag, node),
+            ISD::Add => super::combine::add_combine_for_shifted_operands(dag, node),
             ISD::Sub => super::combine::conditional_sub(dag, node),
+            ISD::SetCC => super::combine::or_xor_chain(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr if level == CombineLevel::AfterLegalizeDag => {
                 super::combine::shift_amount_mod(dag, node)
             }
@@ -267,11 +315,60 @@ impl LegalizeHooks for Aarch64Lowering {
         Some((crate::reg::SP, 16))
     }
 
+    /// `makeLibCall` through `LowerCall`: the routine is a target external
+    /// symbol, the chain the entry node (the result is the value; nothing
+    /// orders the call after a store).
+    fn make_lib_call(
+        &mut self,
+        dag: &mut SelectionDAG,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        signed: bool,
+    ) -> Option<SDValue> {
+        use llrm_codegen::backend::selectiondag::target_calling::{Ext, In, Out, TargetCalling};
+        let ext = if signed { Ext::Sign } else { Ext::Zero };
+        let outs: Vec<Out> = args
+            .iter()
+            .map(|&value| Out {
+                value,
+                ext,
+                pointer: false,
+                arg_vt: dag.value_type(value),
+                split: false,
+                variadic: false,
+                sret: false,
+                byval: None,
+            })
+            .collect();
+        let ins = [In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any, byval: None }];
+        let calling = super::call::Aarch64Calling { linux: self.linux };
+        calling.accepts(dag, llrm_codegen::backend::selectiondag::target_calling::Site::Call, &outs, &ins).ok()?;
+        let callee = dag.get_external_symbol(EVT::I64, name);
+        let root = dag.entry_node();
+        let (_chain, values) = calling.lower_call(dag, root, callee, &outs, &ins);
+        values.first().copied()
+    }
+
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
         node: SDValue,
     ) -> Option<SDValue> {
+        // `f128`: the routine of its conversion or compare (`LowerF128Call`)
+        {
+            let mut call = |dag: &mut SelectionDAG, name: &'static str, args: &[SDValue], ret: EVT| {
+                self.make_lib_call(dag, name, args, ret, false)
+            };
+            let handled =
+                super::f128::convert(dag, node, &mut call).or_else(|| super::f128::compare(dag, node, &mut call));
+            if let Some(result) = handled {
+                if result.is_none() {
+                    self.custom.get_or_insert_with(|| format!("custom lowering of f128 {:?}", dag.node(node).opcode));
+                }
+                return result;
+            }
+        }
         let lowered = match dag.opcode(node) {
             ISD::GlobalAddress => self.global_address(dag, node),
             ISD::ConstantPool => super::lowering::lower_constant_pool(dag, node),
@@ -286,6 +383,9 @@ impl LegalizeHooks for Aarch64Lowering {
                 super::lowering::lower_xalu(dag, node)
             }
             ISD::Abs | ISD::AbsMinPoison => super::lowering::lower_abs(dag, node),
+            ISD::VAArg => super::lowering::lower_vaarg(dag, node),
+            // Declined: the legalizer expands it, as the pin's `SDValue()`.
+            ISD::FShl | ISD::FShr => return super::lowering::lower_funnel_shift(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => super::lowering::lower_int_to_fp(dag, node),
@@ -399,6 +499,14 @@ impl SchedInfo for Aarch64Sched {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(u32::from(aarch64_ids::ADJCALLSTACKDOWN))
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(u32::from(aarch64_ids::ADJCALLSTACKUP))
+    }
+
     fn source_order(&self) -> bool {
         true
     }
@@ -422,12 +530,13 @@ pub fn select_block(
     globals: &Globals,
     info: &mut llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo,
     opt_for_size: bool,
+    linux: bool,
 ) -> Result<Vec<Unit>, Refusal> {
     let mut tli = TargetLowering::aarch64(APPLE_M1);
     tli.set_opt_for_size(opt_for_size);
     tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
     llrm_codegen::backend::selectiondag::live_out::assert_live_out_copies(dag, info);
-    let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone() };
+    let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone(), linux };
     let legal = legalized_with(dag, &tli, &mut lowering, None);
     // The reason the legalizer stopped is the Custom operation it could not
     // lower.
@@ -437,12 +546,12 @@ pub fn select_block(
     legal?;
     // `ComputeLiveOutVRegInfo`: after the legalizer, before the assertions go.
     llrm_codegen::backend::selectiondag::live_out::compute_live_out_vreg_info(dag, info);
-    llrm_codegen::backend::selectiondag::dag_select::remove_assertions(dag);
     let selector = Selector::new(table::TABLE);
-    let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone());
+    let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone(), opt_for_size);
     do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {
         select_frame_index(adapter, node)
             .or_else(|| select_indexed_load(adapter, node))
+            .or_else(|| super::bitfield::select_bitfield_extract(adapter, node))
             .or_else(|| super::bitfield::select_bitfield_insert_in_zero(adapter, node))
             .or_else(|| super::bitfield::select_bitfield_insert(adapter, node))
             .or_else(|| select_zero(adapter, node))

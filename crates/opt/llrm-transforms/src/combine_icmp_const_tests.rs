@@ -178,6 +178,28 @@ fn on_i386(
     }
 }
 
+/// `foldICmpShrConstConst`: a constant shifted right by a variable amount and
+/// compared for equality was left as a shift and a compare; the pin tests the
+/// amount directly (`(lshr 40, %x) == 5` is `%x == 3`).
+#[test]
+fn an_equality_of_a_constant_shifted_by_a_variable_tests_the_amount() {
+    let eq = |op: &str, pred: &str, shifted: i32, c: i32| {
+        format!("  %s = {op} i32 {shifted}, %x\n  %r = icmp {pred} i32 %s, {c}\n")
+    };
+    on_i386(&eq("lshr", "eq", 40, 5), &["icmp eq i32 %x, 3"]);
+    on_i386(&eq("lshr", "ne", 40, 5), &["icmp ne i32 %x, 3"]);
+    // Zero: the amount must shift out the highest set bit (log2 40 = 5).
+    on_i386(&eq("lshr", "eq", 40, 0), &["icmp ugt i32 %x, 5"]);
+    on_i386(&eq("lshr", "ne", 40, 0), &["icmp ult i32 %x, 6"]);
+    on_i386(&eq("lshr", "eq", 40, 40), &["icmp eq i32 %x, 0"]);
+    // 40 >> 3 = 5, never 7.
+    on_i386(&eq("lshr", "eq", 40, 7), &["ret i1 false"]);
+    on_i386(&eq("lshr", "ne", 40, 7), &["ret i1 true"]);
+    // Several solutions when comparing against -1: any amount of 4 or more.
+    on_i386(&eq("ashr", "eq", -16, -1), &["icmp ugt i32 %x, 3"]);
+    on_i386(&eq("ashr", "eq", -16, -4), &["icmp eq i32 %x, 2"]);
+}
+
 /// shellsort's gap-32 copy kept `icmp ult (trunc nuw i32 %x to i16), 32`: the
 /// compare stayed narrow, SCEV found no exit count and the one-trip inner loop
 /// stayed (3 blocks the pin deletes). `foldICmpTruncConstant`'s nuw/nsw arm was
@@ -189,4 +211,63 @@ fn a_compare_of_a_nuw_or_nsw_trunc_with_a_constant_is_the_wide_compare() {
     on_i386("  %t = trunc nsw i32 %x to i16\n  %r = icmp slt i16 %t, -5\n", &["icmp slt i32 %x, -5"]);
     // nuw alone cannot widen a signed compare.
     on_i386("  %t = trunc nuw i32 %x to i16\n  %r = icmp slt i16 %t, 32\n", &["icmp slt i16 %t, 32"]);
+}
+
+/// volatile_bitfield: `icmp ugt (lshr i32 %x, 18), 300` stayed a shift and a
+/// compare (+33 B at m16 -Os); the pin compares `%x` with `((300 + 1) << 18) -
+/// 1`. `foldICmpShrConstant` was not translated.
+#[test]
+fn a_compare_of_a_shift_right_with_a_constant_is_the_compare_of_the_value() {
+    let shr = |op: &str, pred: &str, amount: u32, c: i32| {
+        format!("  %s = {op} i32 %x, {amount}\n  %r = icmp {pred} i32 %s, {c}\n")
+    };
+    on_i386(&shr("lshr", "ugt", 18, 300), &["icmp ugt i32 %x, 78905343"]);
+    on_i386(&shr("lshr", "ult", 3, 100), &["icmp ult i32 %x, 800"]);
+    on_i386(&shr("ashr", "slt", 3, 5), &["icmp slt i32 %x, 40"]);
+    on_i386(&shr("ashr", "ugt", 3, 5), &["icmp ugt i32 %x, 47"]);
+    on_i386(&shr("ashr", "sgt", 3, 5), &["icmp sgt i32 %x, 47"]);
+    // Equality: the shift becomes a mask of the high bits.
+    on_i386(&shr("lshr", "eq", 3, 5), &["and i32 %x, -8", "icmp eq i32 %0, 40"]);
+}
+/// A zero-extended offset compare is made in the narrow type (`opt`: `add i32
+/// %n, -1` then `icmp ult`); the wide add and zext stayed.
+#[test]
+fn an_offset_compare_of_a_zero_extension_is_made_in_the_narrow_type() {
+    let out = run_visit_icmp(
+        "define i1 @f(i32 %n) {
+b0:
+  %w = zext i32 %n to i64
+  %a = add i64 %w, -1
+  %c = icmp ult i64 %a, 7
+  ret i1 %c
+}
+",
+    );
+    assert!(out.contains("add i32 %n, -1") && !out.contains("i64"), "{out}");
+}
+
+/// A range check on `hi + ~lo` is a compare of `lo - hi` (wasm32 recchop:
+/// +11 instructions, +414 executed); `opt` drops the `xor` and the `add`.
+#[test]
+fn a_range_check_on_a_sum_with_a_complement_is_a_compare_of_the_difference() {
+    let out = run_visit_icmp(
+        "define i1 @f(i32 %lo, i32 %hi) {
+b0:
+  %n = xor i32 %lo, -1
+  %b = add i32 %hi, %n
+  %g = icmp ult i32 %b, 3
+  ret i1 %g
+}
+",
+    );
+    assert!(out.contains("sub i32 %lo, %hi") && out.contains(", -4") && !out.contains("xor"), "{out}");
+}
+
+fn run_visit_icmp(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    printed(&module)
 }

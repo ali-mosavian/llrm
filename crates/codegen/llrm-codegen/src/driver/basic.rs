@@ -578,7 +578,13 @@ fn written_basic_inner(
         4 => objbuild::OFFSET32,
         _ => objbuild::OFFSET,
     };
-    code.fixups = [objbuild::Fixup::new(words.statements, offset_kind, statement_data)]
+    // A module with no row in its table states no line: BC /O leaves OF_STA 0,
+    // and B$STOP then reports "at address" where a non-zero word reports a
+    // line.
+    let has_rows =
+        module.procedures.last().is_some_and(|table| table.callees.values().any(|callee| callee.code.len() > 1));
+    code.fixups = has_rows
+        .then(|| objbuild::Fixup::new(words.statements, offset_kind, statement_data))
         .into_iter()
         .chain(
             NAMED
@@ -629,6 +635,7 @@ fn written_basic_inner(
                     definition: llrm_object::Definition::Defined { section: code, offset: 0 },
                     size: header_size,
                     group: None,
+                    visibility: Default::default(),
                 },
             );
         return objbuild::serialized(objects, &object, format).map_err(|error| error.to_string());
@@ -1030,6 +1037,7 @@ pub fn assembled(
         options.arch.frame_registers(),
         word,
         Regs(options.arch.registers()),
+        object.stack_check.is_some(),
     ));
     let mut data = Vec::new();
     for segment in &object.segments {
@@ -1117,6 +1125,8 @@ pub fn assembled(
         names,
         externs,
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).collect(),
+        visibility: Default::default(),
+        aliases: Vec::new(),
         data,
         procedures,
         private: object.private.clone(),

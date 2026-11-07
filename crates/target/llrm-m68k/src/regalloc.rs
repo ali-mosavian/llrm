@@ -35,6 +35,12 @@ impl Target for M68kRegisters {
         Class::Xr32
     }
 
+    /// DEVIATE C13 (coalescer/mod.rs): the joins raised `movem` 71 -> 89 in
+    /// div_constants_short and made 15 of 90 cell-CPU rows worse.
+    fn joins_sub_registers() -> bool {
+        false
+    }
+
     fn candidates(class: Class) -> Vec<RegId> {
         match class {
             Class::Dr8 | Class::Dr16 | Class::Dr32 => DATA.to_vec(),
@@ -79,8 +85,16 @@ impl Target for M68kRegisters {
         root == reg::SP || root == reg::A6
     }
 
+    fn hoist_window() -> usize {
+        4
+    }
+
     fn caller_saved() -> Vec<RegId> {
         CALLER_SAVED.to_vec()
+    }
+
+    fn greedy_early_clobber() -> bool {
+        true
     }
 
     /// `copyPhysReg`: a copy into a data register is a `move`, which sets the

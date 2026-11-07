@@ -590,7 +590,7 @@ fn folded_use(
 /// to fold.
 ///
 /// Not translated: the other instructions `foldMemoryOperand` knows (`imul`,
-/// the extends, the x87 forms), a load whose result is read twice.
+/// the extends, the x87 forms, `test r, imm`), a load whose result is read twice.
 pub fn loads_folded(body: &LirBody) -> LirBody {
     let mut reads: HashMap<u32, usize> = HashMap::default();
     for block in &body.blocks {
@@ -684,6 +684,29 @@ fn load_folded(
         let mut folded = one.clone();
         folded.what =
             Some(Semantics { name: Some("cmp".into()), sources: vec![Loc::Mem(cell.clone()), zero], ..what.clone() });
+        folded.uses.retain(|&used| used != load);
+        folded.uses.extend(def.uses.iter().copied());
+        folded.widths.retain(|&(used, _)| used != load);
+        folded.widths.extend(def.widths.iter().copied());
+        return Some((folded, load));
+    }
+    // `cmp r, imm` of a waiting load is `cmp [m], imm` (`foldMemoryOperandImpl`:
+    // CMP*ri becomes CMP*mi).
+    if (what.op, name) == (Operation::Compare, "cmp")
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && !what.indirect
+        && let [Loc::Held(first), Loc::Imm(imm)] = &what.sources[..]
+        && imm.address.is_none()
+        && let Some(&at) = loads.get(&first.value)
+        && let Some(Loc::Mem(cell)) = insns[at].what.as_ref().and_then(|w| w.sources.first())
+        && first.width == cell.width
+    {
+        let load = first.value;
+        let def = &insns[at];
+        let mut folded = one.clone();
+        folded.what = Some(Semantics { sources: vec![Loc::Mem(cell.clone()), Loc::Imm(imm.clone())], ..what.clone() });
         folded.uses.retain(|&used| used != load);
         folded.uses.extend(def.uses.iter().copied());
         folded.widths.retain(|&(used, _)| used != load);
@@ -869,7 +892,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn insn(
@@ -1036,7 +1059,7 @@ mod tests {
         value: u32,
         width: u32,
     ) -> Loc {
-        Loc::Held(Held { value, width })
+        Loc::Held(Held { value, width, offset: 0 })
     }
 
     /// `v2 := shr v1, 2` (a dword) read as a word by `test v2w, v2w`: the
@@ -1217,7 +1240,11 @@ mod tests {
     }
 
     fn load_of(value: u32) -> Arc<Insn> {
-        let cell = llrm_lir::Mem { index: Some(Held { value: 7, width: 4 }), scale: 4, ..llrm_lir::Mem::new(None, 4) };
+        let cell = llrm_lir::Mem {
+            index: Some(Held { value: 7, width: 4, offset: 0 }),
+            scale: 4,
+            ..llrm_lir::Mem::new(None, 4)
+        };
         insn(0, Operation::Move, "mov", vec![held(value)], vec![Loc::Mem(cell)], vec![value], vec![7])
     }
 
@@ -1237,6 +1264,25 @@ mod tests {
         assert!(load.defines.is_empty() && load.uses.is_empty());
         assert!(matches!(cmp.what.as_ref().unwrap().sources[..], [Loc::Mem(_), Loc::Held(_)]));
         assert_eq!(cmp.uses, [7, 3]);
+    }
+
+    /// `mov cl, [rsp+k]; cmp cl, 0x43` stayed two instructions and a register,
+    /// the pin's `cmp byte ptr [rsp+k], 0x43` (os_execute m64 -Os, eight of
+    /// them, +23 B).
+    #[test]
+    fn test_a_load_read_once_by_a_compare_with_an_immediate_is_its_operand() {
+        let cell = llrm_lir::Mem::new(None, 1);
+        let byte = |value| Loc::Held(Held { value, width: 1, offset: 0 });
+        let load = insn(0, Operation::Move, "mov", vec![byte(8)], vec![Loc::Mem(cell)], vec![8], vec![]);
+        let imm = Loc::Imm(Imm { value: 0x43, width: 1, address: None });
+        let body = body_of(vec![
+            load,
+            insn(1, Operation::Compare, "cmp", vec![], vec![byte(8), imm], vec![], vec![8]),
+            insn(2, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
+        ]);
+        let done = loads_folded(&body);
+        assert!(matches!(done.blocks[0].insns[1].what.as_ref().unwrap().sources[..], [Loc::Mem(_), Loc::Imm(_)]));
+        assert!(done.blocks[0].insns[1].uses.is_empty());
     }
 
     /// A load read twice, or with a store between it and its reader, stays.
@@ -1269,12 +1315,12 @@ mod tests {
             0,
             Operation::Move,
             "mov",
-            vec![Loc::Held(Held { value: 8, width: 2 })],
+            vec![Loc::Held(Held { value: 8, width: 2, offset: 0 })],
             vec![Loc::Mem(cell)],
             vec![8],
             vec![],
         );
-        let byte = |value| Loc::Held(Held { value, width: 1 });
+        let byte = |value| Loc::Held(Held { value, width: 1, offset: 0 });
         let body = body_of(vec![
             load,
             insn(1, Operation::Binary, "add", vec![byte(4)], vec![byte(3), byte(8)], vec![4], vec![3, 8]),

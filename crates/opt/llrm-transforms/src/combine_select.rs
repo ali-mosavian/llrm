@@ -75,7 +75,7 @@ impl Combiner<'_> {
     }
 
     /// The definition of `v`, if an instruction defines it.
-    fn definition(
+    pub(crate) fn definition(
         &self,
         v: Operand,
     ) -> Option<InstId> {
@@ -167,10 +167,14 @@ impl Combiner<'_> {
         for index in 0..2 {
             let Some(def) = self.definition(operands[index]) else { continue };
             let other_is_constant = is_constant(operands[1 - index]);
-            match self.function.instruction(def).opcode {
-                Opcode::Select => return self.fold_op_into_select(inst, def, false, !other_is_constant),
-                Opcode::Phi => return self.fold_op_into_phi(inst, def, false),
-                _ => {}
+            let found = match self.function.instruction(def).opcode {
+                Opcode::Select => self.fold_op_into_select(inst, def, false, !other_is_constant),
+                Opcode::Phi => self.fold_op_into_phi(inst, def, false),
+                _ => continue,
+            };
+            // `TryFoldOperand(0)` that finds nothing leaves operand 1 its turn.
+            if !matches!(found, Visit::None) {
+                return found;
             }
         }
         Visit::None

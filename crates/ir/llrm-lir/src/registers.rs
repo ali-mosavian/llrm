@@ -321,6 +321,10 @@ pub struct Info {
     /// Worked out on first ask.
     pub cache: Cache,
     pub views: [[Option<RegId>; 8]; 256],
+    /// The file states `@lanes bytes`: its lanes are the bytes of each root,
+    /// from each entry's `lane` and `bits`, not x86's table (the 6502's pairs
+    /// and cells).
+    pub byte_lanes: bool,
 }
 
 impl Info {
@@ -330,6 +334,23 @@ impl Info {
         register: RegId,
     ) -> Option<&Entry> {
         self.table.get(register.index()).and_then(Option::as_ref)
+    }
+
+    /// The register of `wide`'s root that is the `bytes` bytes `offset` above
+    /// `wide`'s own lowest.
+    pub fn lane_register(
+        &self,
+        wide: RegId,
+        offset: u32,
+        bytes: u32,
+    ) -> Option<RegId> {
+        let want = ((1_i64 << bytes) - 1) << (self.lanes(wide).trailing_zeros() + offset);
+        (0..256).map(RegId::from_index).find(|&register| {
+            self.known(register)
+                && self.root(register) == self.root(wide)
+                && self.lanes(register) == want
+                && self.bytes(register) == Some(i64::from(bytes))
+        })
     }
 
     /// Whether the description lists `register`.

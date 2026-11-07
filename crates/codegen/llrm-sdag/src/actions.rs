@@ -40,6 +40,7 @@
 use llrm_support::hash::HashMap;
 
 use super::isd::{CondCode, ISD};
+use super::libcalls::{self, Libcall};
 use super::lowering::TargetLoweringInfo;
 use super::mvt::{EVT, MVT};
 
@@ -64,6 +65,9 @@ pub struct Features {
     pub shld_slow: bool,
     /// `hasSSE2()`: f32 and f64 live in xmm registers (m64; D64-4).
     pub sse2: bool,
+    /// `useSoftFloat()`: `f32` and `f64` have no register class; their
+    /// arithmetic is a call (m16).
+    pub soft_float: bool,
 }
 
 /// The CPU features the AArch64 constructor's scalar arms test.
@@ -93,6 +97,7 @@ const FLOATS: [MVT; 3] = [MVT::F32, MVT::F64, MVT::F80];
 const ALL: [MVT; 10] =
     [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128, MVT::F32, MVT::F64, MVT::F80, MVT::Other];
 
+#[derive(Clone)]
 pub struct TargetLowering {
     pub types: TargetLoweringInfo,
     operations: HashMap<(ISD, MVT), Action>,
@@ -116,12 +121,29 @@ pub struct TargetLowering {
     /// like): the runtime routine a `LibCall` action calls. Empty unless the
     /// target fills it.
     libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// The routine a function tuned for size calls where it differs from
+    /// `libcall_names`'.
+    size_libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// `(granule, least)`: in a function tuned for size a shift by a constant
+    /// is the routine's call where the granules left after the whole moves
+    /// times the bits beyond them reach `least` (each is a shift instruction
+    /// per granule).
+    size_shift_call: Option<(u128, u128)>,
+    /// The object spelling of a routine's name where the convention decorates
+    /// it (`___addsf3@3`).
+    libcall_symbols: HashMap<String, (String, u32)>,
+    /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
+    /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
+    sext_cheaper_i32_i64: bool,
+    /// `X86TargetLowering::BuildSDIVPow2` builds the `cmov` form of a signed
+    /// divide by a power of two: `Some(is64)`, `i64` too where `is64`.
+    sdiv_pow2_cmov: Option<bool>,
 }
 
 impl TargetLowering {
     /// Every action `Legal`: a table nothing has been set in.
     pub fn empty(types: TargetLoweringInfo) -> TargetLowering {
-        TargetLowering {
+        let mut table = TargetLowering {
             types,
             operations: HashMap::default(),
             promoted_to: HashMap::default(),
@@ -134,6 +156,55 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             libcall_names: HashMap::default(),
+            size_libcall_names: HashMap::default(),
+            size_shift_call: None,
+            libcall_symbols: HashMap::default(),
+            sext_cheaper_i32_i64: false,
+            sdiv_pow2_cmov: None,
+        };
+        table.set_default_integer_libcalls();
+        // `TargetLoweringBase`: `VAARG` is expanded unless the target says
+        // otherwise.
+        table.set_operation_action(ISD::VAArg, MVT::Other, Action::Expand);
+        table
+    }
+
+    /// The pin's `RuntimeLibcalls` defaults for the wide integers: libgcc's
+    /// names for `SHL_I64`, `MUL_I128` and the others, on every target; a
+    /// target's own `set_libcall_name` replaces them.
+    fn set_default_integer_libcalls(&mut self) {
+        use ISD::*;
+        let rows: [(MVT, [&'static str; 8]); 2] = [
+            (
+                MVT::I64,
+                ["__ashldi3", "__lshrdi3", "__ashrdi3", "__muldi3", "__divdi3", "__udivdi3", "__moddi3", "__umoddi3"],
+            ),
+            (
+                MVT::I128,
+                ["__ashlti3", "__lshrti3", "__ashrti3", "__multi3", "__divti3", "__udivti3", "__modti3", "__umodti3"],
+            ),
+        ];
+        for (vt, names) in rows {
+            for (op, name) in [Shl, Srl, Sra, Mul, SDiv, UDiv, SRem, URem].into_iter().zip(names) {
+                self.set_libcall_name(op, vt, name);
+            }
+        }
+    }
+
+    /// `RTLIB::ADD_F32` and the rest: compiler-rt's names for the `f32` and
+    /// `f64` arithmetic a soft-float target calls.
+    pub fn set_soft_float_libcall_names(&mut self) {
+        let arithmetic: [(ISD, fn(MVT) -> Libcall); 4] = [
+            (ISD::FAdd, Libcall::Add),
+            (ISD::FSub, Libcall::Sub),
+            (ISD::FMul, Libcall::Mul),
+            (ISD::FDiv, Libcall::Div),
+        ];
+        for (op, call) in arithmetic {
+            for vt in [MVT::F32, MVT::F64] {
+                let name = libcalls::name(call(vt)).expect("the pin names f32 and f64 arithmetic");
+                self.set_libcall_name(op, vt, name);
+            }
         }
     }
 
@@ -147,6 +218,80 @@ impl TargetLowering {
         self.libcall_names.insert((op, vt), name);
     }
 
+    /// The routine `op` of `vt` calls in a function tuned for size, where a
+    /// smaller one than [`Self::set_libcall_name`]'s exists.
+    pub fn set_size_libcall_name(
+        &mut self,
+        op: ISD,
+        vt: MVT,
+        name: &'static str,
+    ) {
+        self.size_libcall_names.insert((op, vt), name);
+    }
+
+    /// A shift by a constant of a `bits`-wide value is a call to the shift
+    /// routine in a function tuned for size where the granules still shifted
+    /// times the bits beyond whole granules reach `least`.
+    pub fn set_size_shift_call(
+        &mut self,
+        granule: u128,
+        least: u128,
+    ) {
+        self.size_shift_call = Some((granule, least));
+    }
+
+    /// Whether the shift of a `bits`-wide value by the constant `amount` is
+    /// the routine's call here.
+    pub fn calls_for_size_shift(
+        &self,
+        amount: u128,
+        bits: u128,
+    ) -> bool {
+        self.opt_for_size
+            && self.size_shift_call.is_some_and(|(granule, least)| {
+                (bits / granule).saturating_sub(amount / granule) * (amount % granule) >= least
+            })
+    }
+
+    /// Whether `op` of `vt` has a routine for functions tuned for size.
+    pub fn has_size_libcall_name(
+        &self,
+        op: ISD,
+        vt: EVT,
+    ) -> bool {
+        matches!(
+            vt,
+            EVT::Simple(vt) if self.size_libcall_names.contains_key(&(op, vt))
+        )
+    }
+
+    /// The routine `name` is spelled `symbol` in the object.
+    pub fn set_libcall_symbol(
+        &mut self,
+        name: &str,
+        symbol: String,
+        convention: u32,
+    ) {
+        self.libcall_symbols.insert(name.to_owned(), (symbol, convention));
+    }
+
+    /// The calling convention number the routine `name` was defined under.
+    pub fn libcall_convention(
+        &self,
+        name: &str,
+    ) -> Option<u32> {
+        self.libcall_symbols.get(name).map(|(_, number)| *number)
+    }
+
+    /// How a call to the routine `name` spells it: as the C compiler spelled
+    /// the definition, else the name.
+    pub fn libcall_symbol(
+        &self,
+        name: &str,
+    ) -> String {
+        self.libcall_symbols.get(name).map_or_else(|| name.to_owned(), |(symbol, _)| symbol.clone())
+    }
+
     /// `getLibcallName` of the routine `op` of `vt` calls, if the target has
     /// one.
     pub fn libcall_name(
@@ -155,7 +300,19 @@ impl TargetLowering {
         vt: EVT,
     ) -> Option<&'static str> {
         let EVT::Simple(vt) = vt else { return None };
-        self.libcall_names.get(&(op, vt)).copied()
+        if vt == MVT::F128 {
+            // `RTLIB::ADD_F128` and the rest: every target calls the
+            // compiler-rt routine
+            return match op {
+                ISD::FAdd => libcalls::name(Libcall::Add(vt)),
+                ISD::FSub => libcalls::name(Libcall::Sub(vt)),
+                ISD::FMul => libcalls::name(Libcall::Mul(vt)),
+                ISD::FDiv => libcalls::name(Libcall::Div(vt)),
+                _ => None,
+            };
+        }
+        let sized = self.opt_for_size.then(|| self.size_libcall_names.get(&(op, vt)).copied()).flatten();
+        sized.or_else(|| self.libcall_names.get(&(op, vt)).copied())
     }
 
     pub fn set_operation_action(
@@ -315,9 +472,35 @@ impl TargetLowering {
         self.cond_code.get(&(cc, vt)).copied().unwrap_or(Action::Legal)
     }
 
+    /// `TargetLowering::isSExtCheaperThanZExt(FromTy, ToTy)`.
+    pub fn is_sext_cheaper_than_zext(
+        &self,
+        from: EVT,
+        to: EVT,
+    ) -> bool {
+        self.sext_cheaper_i32_i64 && from == EVT::Simple(MVT::I32) && to == EVT::Simple(MVT::I64)
+    }
+
     /// `Subtarget.canUseCMOV()`.
     pub fn can_use_cmov(&self) -> bool {
         self.cmov
+    }
+
+    /// Whether `X86TargetLowering::BuildSDIVPow2` makes the `cmov` form for
+    /// `vt`: `canUseCMOV`, and `i16`, `i32` or (`is64Bit`) `i64` (no `i8`).
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24348>
+    pub fn sdiv_pow2_with_cmov(
+        &self,
+        vt: EVT,
+    ) -> bool {
+        let Some(is64) = self.sdiv_pow2_cmov else {
+            return false;
+        };
+        match vt {
+            EVT::Simple(MVT::I16 | MVT::I32) => true,
+            EVT::Simple(MVT::I64) => is64,
+            _ => false,
+        }
     }
 
     /// `isOperationLegal`.
@@ -335,6 +518,19 @@ impl TargetLowering {
         vt: EVT,
     ) -> bool {
         self.types.is_type_legal(vt) && matches!(self.operation_action(op, vt), Action::Legal | Action::Custom)
+    }
+
+    /// `isOperationLegalOrCustomOrPromote`.
+    pub fn is_operation_legal_or_custom_or_promote(
+        &self,
+        op: ISD,
+        vt: EVT,
+    ) -> bool {
+        self.types.is_type_legal(vt)
+            && matches!(
+                self.operation_action(op, vt),
+                Action::Legal | Action::Custom | Action::Promote
+            )
     }
 
     /// `getTypeToPromoteTo`: the recorded type, else the next wider integer
@@ -380,6 +576,8 @@ impl TargetLowering {
                     UMulFixSat,
                     SShlSat,
                     UShlSat,
+                    SCmp,
+                    UCmp,
                 ],
                 &[vt],
                 Action::Expand,
@@ -392,6 +590,7 @@ impl TargetLowering {
             self.set_ops(&[BuildPair], &[vt], Action::Expand);
         }
         self.set_operation_action(Trap, MVT::Other, Action::Expand);
+        self.set_operation_action(DebugTrap, MVT::Other, Action::Expand);
         self.set_ops(&[ConstantFP], &FLOATS, Action::Expand);
     }
 
@@ -428,7 +627,31 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
-        Self::x86(TargetLoweringInfo::x86_16(), features, ptr, false)
+        use ISD::*;
+        let info = TargetLoweringInfo::x86_16();
+        let mut t = if features.soft_float {
+            Self::x86(info.with_soft_float(), features, ptr, false)
+        } else {
+            Self::x86(info, features, ptr, false)
+        };
+        // DEVIATE SD542: the pin promotes an `i16` trailing count to `i32` to
+        // avoid the 0x66 prefix; at m16 `i16` is the native width and the
+        // promoted form is a dword scan plus a dword spill. Owner m16.
+        // Exit 2026-11-20.
+        if !features.bmi {
+            t.set_ops(&[CtTz], &[MVT::I16], Action::Custom);
+            t.set_ops(&[CtTzZeroPoison], &[MVT::I16], Action::Legal);
+        }
+        if !features.soft_float {
+            return t;
+        }
+        // The x87 lowerings of a compare, a select and an extension have no
+        // registers to work in: the type legalizer softens them first.
+        t.set_ops(&[Select, SetCC, FpExtend], &[MVT::F32, MVT::F64], Action::Expand);
+        t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &[MVT::I8, MVT::I16, MVT::I32, MVT::I64], Action::Expand);
+        // `RTLIB::ADD_F32` and the rest: compiler-rt's names.
+        t.set_soft_float_libcall_names();
+        t
     }
 
     /// AArch64: `initActions`, then the scalar integer arms of
@@ -443,6 +666,7 @@ impl TargetLowering {
         use Action::*;
         use ISD::*;
         let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
+        t.sext_cheaper_i32_i64 = true;
         t.init_actions();
         let words = [MVT::I32, MVT::I64];
         // Custom lowerings (`LowerOperation`).
@@ -454,7 +678,7 @@ impl TargetLowering {
         t.set_ops(&[BitReverse, CtLs], &words, Legal);
         t.set_ops(&[BuildPair], &[MVT::I64], Expand);
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
-        t.set_ops(&[VAStart, VACopy], &[MVT::Other], Custom);
+        t.set_ops(&[VAStart, VACopy, VAArg], &[MVT::Other], Custom);
         t.set_ops(&[VAEnd, StackSave, StackRestore], &[MVT::Other], Expand);
         // The pin asks for `STACKSAVE` at `MVT::Other`; here the node's value
         // type is asked.
@@ -468,7 +692,13 @@ impl TargetLowering {
             t.set_ops(&[CtPop, Parity], &[MVT::I128], Expand);
             t.set_ops(&[CtTz], &[MVT::I128], Expand);
         } else {
-            t.set_ops(&[CtPop, Abs], &words, Custom);
+            // DEVIATE SD533 (exit: NEON `cnt` + `addv` when vector MIR lands):
+            // the pin's `LowerCTPOP` is `Custom` (v8i8 `cnt`, `uaddlv`); with
+            // no vector MIR the population count is the scalar
+            // bit-twiddle (`expandCTPOP`), so that the node is
+            // expanded, not refused.
+            t.set_ops(&[CtPop], &words, Expand);
+            t.set_ops(&[Abs], &words, Custom);
             t.set_ops(&[CtPop, Parity], &[MVT::I128], Custom);
             t.set_ops(&[Parity], &[MVT::I64], Custom);
         }
@@ -500,6 +730,15 @@ impl TargetLowering {
         }
         t.set_trunc_store_action(MVT::F64, MVT::F32, Expand);
 
+        // `f128` is a legal type (`FPR128`) without arithmetic: the operations
+        // are RTLIB calls, the compares and selects and the conversions to and
+        // from it are `Custom` (`LowerF128Call`).
+        let quad = [MVT::F128];
+        t.set_ops(&[FAdd, FSub, FMul, FDiv], &quad, LibCall);
+        t.set_ops(&[ConstantFP], &quad, Expand);
+        t.set_ops(&[SetCC, BrCC, Select, SelectCC], &quad, Custom);
+        t.set_ops(&[FpExtend], &quad, Custom);
+
         // Atomics.
         let narrow = [MVT::I8, MVT::I16, MVT::I32, MVT::I64];
         // `TargetLoweringBase`: the success flag is a compare of the old value.
@@ -529,6 +768,7 @@ impl TargetLowering {
         use ISD::*;
         let mut t = TargetLowering::empty(types);
         t.cmov = features.cmov;
+        t.sdiv_pow2_cmov = features.cmov.then_some(is64);
         t.init_actions();
         let ints = [MVT::I8, MVT::I16, MVT::I32];
         // `if (VT == MVT::i64 && !Subtarget.is64Bit()) continue;`
@@ -594,6 +834,12 @@ impl TargetLowering {
         // (BuildSDIV finds neither MULHS nor SMUL_LOHI there); only i32
         // has the two-result multiply (`MUL32r`).
         t.set_ops(&[SMulLoHi, UMulLoHi], &[MVT::I8, MVT::I16], Expand);
+        // At 64 bits BuildSDIV/BuildUDIV find no two-result multiply for an
+        // `i32` either and widen it (`imul rax, rcx, 0xCCCCCCCD; shr rax,
+        // 35`), where ours took the one-operand `mul ecx` (edx:eax).
+        if is64 {
+            t.set_ops(&[SMulLoHi, UMulLoHi], &[MVT::I32], Expand);
+        }
         // fixed-point multiply is expanded by `expandFixedPointMul` (the base
         // default)
         t.set_ops(&[SMulFix], &[MVT::I8, MVT::I16, MVT::I32], Expand);
@@ -639,6 +885,7 @@ impl TargetLowering {
             t.set_ops(&[ConstantPool, GlobalAddress, ExternalSymbol, JumpTable], words, Custom);
         }
         t.set_operation_action(Trap, MVT::Other, Legal);
+        t.set_operation_action(DebugTrap, MVT::Other, Legal);
         t.set_operation_action(DynamicStackAlloc, ptr, Custom);
         // The pin expands these to a stack pointer copy; the same, as Custom.
         t.set_operation_action(StackSave, ptr, Custom);
@@ -698,6 +945,20 @@ mod tests {
         TargetLowering::aarch64(Aarch64Features::default())
     }
 
+    /// A function tuned for size called the speed routine of a divide: a
+    /// target's smaller one was never asked for.
+    #[test]
+    fn a_function_tuned_for_size_calls_the_size_routine() {
+        let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
+        t.set_libcall_name(ISD::UDiv, MVT::I64, "__fast");
+        t.set_size_libcall_name(ISD::UDiv, MVT::I64, "__small");
+        t.set_libcall_name(ISD::SDiv, MVT::I64, "__only");
+        assert_eq!(t.libcall_name(ISD::UDiv, EVT::I64), Some("__fast"));
+        t.set_opt_for_size(true);
+        assert_eq!(t.libcall_name(ISD::UDiv, EVT::I64), Some("__small"));
+        assert_eq!(t.libcall_name(ISD::SDiv, EVT::I64), Some("__only"), "no size routine: the one routine");
+    }
+
     /// An x86 table's `i8` set-cc result and `i8` register class were the
     /// only ones: AArch64 compares into an `i32` and has no `i8` register.
     #[test]
@@ -754,10 +1015,11 @@ mod tests {
         assert_eq!(t.operation_action(ISD::FpExtend, EVT::Simple(MVT::F64)), Action::Custom);
     }
 
-    /// CSSC turns scalar `ctpop` from a vector sequence into one instruction.
+    /// CSSC turns scalar `ctpop` into one instruction; without it the node
+    /// is expanded until vector MIR lands (DEVIATE SD533), not `Custom`.
     #[test]
     fn aarch64_ctpop_follows_cssc() {
-        assert_eq!(a64().operation_action(ISD::CtPop, EVT::I32), Action::Custom);
+        assert_eq!(a64().operation_action(ISD::CtPop, EVT::I32), Action::Expand);
         let cssc = TargetLowering::aarch64(Aarch64Features { cssc: true, ..Default::default() });
         assert_eq!(cssc.operation_action(ISD::CtPop, EVT::I32), Action::Legal);
     }

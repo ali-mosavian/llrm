@@ -67,6 +67,15 @@ pub trait Target {
     fn root(register: RegId) -> RegId;
     /// A root no allocator hands out (the frame and stack pointers).
     fn reserved(root: RegId) -> bool;
+    /// DEVIATE HC1: how many independent instructions `HoistCommonCodeInSuccs`
+    /// may look past for an identical one in the other successor. The pin
+    /// compares heads only, an intended rule
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L2043>). Reason: a constant both successors need, one of
+    /// them behind a load, stays twice (crc16: `move.l #65535,%d0` on both
+    /// sides of a guard). Exit: 2026-11-12, or when the pin hoists past them.
+    fn hoist_window() -> usize {
+        0
+    }
     /// The roots a call leaves unspecified.
     fn caller_saved() -> Vec<RegId>;
     /// Whether two allocatable registers share storage (a pair and its
@@ -99,6 +108,29 @@ pub trait Target {
         false
     }
 
+    /// Where `inst` builds or splits a register from its lanes (a
+    /// `REG_SEQUENCE`, the z80's `PACK`, the 6502's `PACK` and `UNPACK`):
+    /// `(whole, [(part, byte offset, bytes)])`, as operand positions.
+    /// DEVIATE: the pin places the lanes by coalescing the copies
+    /// `eliminateRegSequence` makes; until the lane model lands (exit
+    /// 2026-11-30) each part is hinted the lane of the register its whole is
+    /// copied to or from.
+    fn lane_moves(_inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
+        None
+    }
+
+    /// The part of `register` that `inst` reads through its use operand
+    /// `operand`, where it reads less than the whole (the Z80's sign test of a
+    /// pair reads the high byte). The pin writes the part as a subregister
+    /// index on the operand.
+    fn read_part(
+        _inst: &Inst,
+        _operand: usize,
+        register: RegId,
+    ) -> RegId {
+        register
+    }
+
     /// Whether `inst` reads the status flags set by the instruction before
     /// it, where a copy, spill or reload overwrites them: the two are one
     /// instruction to the allocator, which puts nothing between them.
@@ -126,6 +158,48 @@ pub trait Target {
         true
     }
 
+    /// DEVIATE C13: whether a copy between widths is joined (the pin always
+    /// does). Exit for a target that says false: its profitability rule.
+    fn joins_sub_registers() -> bool {
+        true
+    }
+
+    /// The bytes of a use operand `inst` reads, where it reads less than the
+    /// whole: `(operand, byte offset, bytes)`. The sign test of a pair reads
+    /// its high byte; liveness takes the rest of the pair as not read there.
+    fn read_lanes(_inst: &Inst) -> Option<(usize, u32, u32)> {
+        None
+    }
+
+    /// Whether `lane_moves`' building instruction (a `PACK`) is converted to
+    /// one copy per part into its lane of the whole (`eliminateRegSequence`),
+    /// which the coalescer then joins. False: it stays one instruction and the
+    /// parts are hinted.
+    fn lowers_lanes() -> bool {
+        false
+    }
+
+    /// Whether a copy into or out of a byte above the low one of a wider value
+    /// is joined (`CoalescerPair` with a `SubIdx`). False: such a copy stays.
+    fn joins_lanes() -> bool {
+        false
+    }
+
+    /// `canJoinPhys`: whether a copy between an ordinary value and a pinned
+    /// one (an argument register, not reserved) is joined. The pin joins only
+    /// reserved registers, so a target that states false leaves the copy to
+    /// the allocator, as the pin does. Here true, as before.
+    fn joins_pinned_copies() -> bool {
+        true
+    }
+
+    /// Whether the pre-RA machine scheduler (`MachineScheduler`, run after the
+    /// register coalescer in the pin) orders the function before allocation.
+    /// Here false: a target opts in once its numbers say so.
+    fn schedules_before_allocation() -> bool {
+        false
+    }
+
     /// Whether a value is spilled, not given a callee-saved register, when
     /// its spill costs less than the register's first use.
     fn csr_spill_first() -> bool {
@@ -144,6 +218,19 @@ pub trait Target {
     /// narrows both for good, and the allocator cannot widen the survivor.
     fn should_coalesce(join: &Join) -> bool {
         join.extra_cost() <= join.copy_frequency * Self::copy_cost() as f32
+    }
+
+    /// `isAsCheapAsAMove` against the copy it replaces: whether making the
+    /// literal move `literal` again for a copy from a value that may take
+    /// `source` to one that may take `destination` costs no more than the
+    /// copy. The pin asks no price, so the default always remats.
+    fn literal_move_wins(
+        _literal: &llrm_codegen::model::lir::Insn,
+        _source: &[RegId],
+        _destination: &[RegId],
+        _size: bool,
+    ) -> bool {
+        true
     }
 
     /// What one register-to-register copy costs, in the unit of
@@ -199,6 +286,14 @@ pub trait Target {
         Vec::new()
     }
 
+    /// Whether greedy allocation keeps an `early_clobber` instruction's defs
+    /// out of the registers it reads. The spike allocator always does; a target
+    /// opts in here where its expansion writes a result before it has read an
+    /// address (m68k's zero-extending load).
+    fn greedy_early_clobber() -> bool {
+        false
+    }
+
     /// The class the instruction `name` names for operand `index`, where it
     /// does (`MCInstrDesc::operands`).
     fn operand_class(
@@ -216,12 +311,39 @@ pub trait Target {
     ) -> Option<Inst> {
         None
     }
+    /// Whether `spill_store_lane` is stated.
+    fn spills_lanes() -> bool {
+        false
+    }
+    /// The instruction that stores `register`, one lane of a spilled value of
+    /// `offset` bytes up, to frame `slot`.
+    fn spill_store_lane(
+        _class: Self::Class,
+        _register: Reg,
+        _slot: i32,
+        _offset: u32,
+    ) -> Option<Inst> {
+        None
+    }
     /// `foldMemoryOperand`: `inst` with its only read of the spilled `register`
     /// taken straight from frame `slot`, where the target has an
     /// instruction form for that; the reload then goes.
     fn fold_spill(
         _inst: &Inst,
         _register: Reg,
+        _slot: i32,
+    ) -> Option<Inst> {
+        None
+    }
+    /// Whether an instruction named `name` only defines zero, so that spilling
+    /// its value is a store of the zero register (`foldMemoryOperandImpl` of a
+    /// `COPY` from a physical register).
+    fn is_zero_def(_name: &str) -> bool {
+        false
+    }
+    /// The instruction that stores the zero register to frame `slot`.
+    fn zero_store(
+        _class: Self::Class,
         _slot: i32,
     ) -> Option<Inst> {
         None
@@ -316,9 +438,19 @@ fn hoisted_point(
 pub fn split_flag_edges<T: Jump, C>(function: &mut MFunction<C>) {
     'again: loop {
         let succs = successors(function);
+        // how many distinct blocks leave for each block
+        let mut preds = vec![0usize; function.blocks.len()];
+        let mut last = vec![usize::MAX; function.blocks.len()];
+        for (from, out) in succs.iter().enumerate() {
+            for &to in out {
+                if last[to] != from {
+                    last[to] = from;
+                    preds[to] += 1;
+                }
+            }
+        }
         for to in 0..function.blocks.len() {
-            let preds: Vec<usize> = (0..function.blocks.len()).filter(|p| succs[*p].contains(&to)).collect();
-            if preds.len() < 2 {
+            if preds[to] < 2 {
                 continue;
             }
             for phi in function.blocks[to].phis.clone() {
@@ -368,7 +500,10 @@ pub fn eliminate_phis_with<C: Copy>(
                 let insts = &mut function.blocks[pred].insts;
                 let point = copy_point(insts, incoming);
                 let point = if hoist { hoisted_point(insts, incoming, point) } else { point };
-                insts.insert(point, Inst::copy(temporary, incoming));
+                // The copy stands under the instruction it is placed before.
+                let mut copy = Inst::copy(temporary, incoming);
+                copy.origin = insts.get(point).or(insts.last()).map_or(0, |beside| beside.origin);
+                insts.insert(point, copy);
             }
             heads.push(Inst::copy(phi.result, temporary));
         }
@@ -379,6 +514,12 @@ pub fn eliminate_phis_with<C: Copy>(
 /// The blocks control can go to from each block: the targets its branches
 /// name, and the next block unless the last instruction never falls through.
 pub fn successors<C>(function: &MFunction<C>) -> Vec<Vec<usize>> {
+    // block id to position, once: a branch names its target by id
+    let size = function.blocks.iter().map(|block| block.id as usize + 1).max().unwrap_or(0);
+    let mut position = vec![usize::MAX; size];
+    for (at, block) in function.blocks.iter().enumerate() {
+        position[block.id as usize] = at;
+    }
     function
         .blocks
         .iter()
@@ -389,7 +530,7 @@ pub fn successors<C>(function: &MFunction<C>) -> Vec<Vec<usize>> {
                 .iter()
                 .flat_map(|inst| &inst.operands)
                 .filter_map(|operand| match operand {
-                    Operand::Block(id) => function.blocks.iter().position(|other| other.id == *id),
+                    Operand::Block(id) => position.get(*id as usize).copied().filter(|&at| at != usize::MAX),
                     _ => None,
                 })
                 .collect();
@@ -419,8 +560,22 @@ pub fn two_address<C>(function: &mut MFunction<C>) {
                 if destination == source {
                     continue;
                 }
-                out.push(Inst::copy(destination, source));
+                let mut copy = Inst::copy(destination, source);
+                copy.origin = inst.origin;
+                out.push(copy);
                 inst.operands[used] = Operand::Use(destination);
+                // The other uses of the source read the copy too
+                // (`processTiedPairs`, TwoAddressInstructionPass.cpp#L1722):
+                // `x = add y, y` is `x = y; x = add x, x`, so `y` can die here
+                // and share x's register. Not under early clobber, where x is
+                // written before the uses read.
+                if !inst.early_clobber {
+                    for (at, operand) in inst.operands.iter_mut().enumerate() {
+                        if at != used && matches!(operand, Operand::Use(other) if *other == source) {
+                            *operand = Operand::Use(destination);
+                        }
+                    }
+                }
             }
             out.push(inst);
         }

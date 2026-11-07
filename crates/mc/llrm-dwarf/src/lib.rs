@@ -85,6 +85,26 @@ pub fn expanded_for(
     info: &Info,
     relocs_across_sections: bool,
 ) -> Result<Object, Unsupported> {
+    expanded_with(object, info, relocs_across_sections, false)
+}
+
+/// [`expanded`] with one line sequence per function, each addressed by the
+/// function's own symbol and offset (`Out::sequence_per_function`): for an
+/// object format whose code has no section symbol to address by, where the
+/// writer turns each such address field into its own relocation.
+pub fn expanded_per_function(
+    object: &Object,
+    info: &Info,
+) -> Result<Object, Unsupported> {
+    expanded_with(object, info, true, true)
+}
+
+fn expanded_with(
+    object: &Object,
+    info: &Info,
+    relocs_across_sections: bool,
+    sequence_per_function: bool,
+) -> Result<Object, Unsupported> {
     let version = match info.options.format {
         Format::Default => DEFAULT_VERSION,
         Format::Dwarf { version } if matches!(version, 2..=5) => version,
@@ -136,6 +156,7 @@ pub fn expanded_for(
     };
     let mut out = die::Out::new(version, address as u8, places);
     out.segment = info.target_of(object.bits).segment_base;
+    out.sequence_per_function = sequence_per_function;
     let line = line::program(object, info, &mut out)?;
     let (info_part, abbrev, locations, ranges) = die::unit(object, info, &mut out)?;
     let aranges = die::aranges(object, info, &out)?;

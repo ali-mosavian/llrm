@@ -22,11 +22,7 @@ fn module(ir: &str) -> llrm_mir::module::Module {
 }
 
 fn binutils(tool: &str) -> Option<Command> {
-    let root = std::env::var("GCC_M68K").ok().filter(|root| !root.is_empty());
-    let Some(root) = root else {
-        assert!(std::env::var("M68K_ISA_SKIP_ORACLE").is_ok_and(|flag| flag == "1"), "GCC_M68K is not set");
-        return None;
-    };
+    let root = support::oracle_root()?;
     let mut command = Command::new(format!("{root}/usr/bin/m68k-linux-gnu-{tool}"));
     command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));
     Some(command)
@@ -81,6 +77,7 @@ fn every_move_from_post_increment_to_memory_encodes_as_binutils_does() {
     for name in indexed::memory_move_rows() {
         let operands = match name.as_bytes()[name.len() - 2] {
             b'p' => vec![Operand::Imm(6), Operand::Reg(reg::A1), Operand::Reg(reg::A2)],
+            b'f' => vec![Operand::Imm(6), Operand::Reg(reg::A1), Operand::Reg(reg::D1), Operand::Reg(reg::A2)],
             _ => vec![Operand::Reg(reg::A1), Operand::Reg(reg::A2)],
         };
         let inst = Inst { opcode: name, operands };
@@ -90,7 +87,7 @@ fn every_move_from_post_increment_to_memory_encodes_as_binutils_does() {
         assert_eq!(encode(&inst).unwrap().bytes, want, "{name}: {text}");
         checked += 1;
     }
-    assert_eq!(checked, 9);
+    assert_eq!(checked, 12);
 }
 
 /// Folds `n` longs read through a post-incremented pointer into `acc` by `op`.

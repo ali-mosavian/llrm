@@ -90,11 +90,23 @@ pub fn expanded(
     module: &mut Module,
     convention: u32,
     symbol: &str,
+    inline_variable: bool,
 ) -> Result<(), String> {
     let needs = |intrinsic: Intrinsic| matches!(intrinsic, Intrinsic::MemCpy).then_some(());
+    // SSE2 is x86-64's baseline, so its pieces are 16 bytes
+    // ([`getOptimalMemOpType`][pieces]); the 32 and 16-bit targets stay at
+    // the dword (their SSE depends on the CPU).
+    //
+    // [pieces]:
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLoweringCall.cpp#L296
+    let widest = module
+        .datalayout
+        .as_deref()
+        .and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok())
+        .map_or(4, |layout| if layout.pointer(0).bits == 64 { 16 } else { 4 });
     let mut any = false;
     expansion::expand_calls(module, needs, |context, function, call, ()| {
-        any |= calls(context, function, call);
+        any |= calls(context, function, call, widest, inline_variable);
         Ok(())
     })?;
     if !any {
@@ -120,7 +132,7 @@ pub fn expanded(
     };
     let reference = module.reference(id);
     expansion::expand_calls(module, needs, |context, function, call, ()| {
-        if !calls(context, function, call) {
+        if !calls(context, function, call, widest, inline_variable) {
             return Ok(());
         }
         let instruction = function.instruction(call).clone();
@@ -163,6 +175,8 @@ fn calls(
     context: &llrm_mir::context::Context,
     function: &llrm_mir::module::Function,
     call: llrm_mir::module::InstId,
+    widest: u64,
+    inline_variable: bool,
 ) -> bool {
     let instruction = function.instruction(call);
     let Opcode::Call(info) = &instruction.opcode else { return false };
@@ -193,9 +207,16 @@ fn calls(
             } else {
                 8
             };
-        if u64::try_from(bytes).is_ok_and(|bytes| inline_widths(bytes, 4, limit, volatile).is_some()) {
+        if u64::try_from(bytes).is_ok_and(|bytes| inline_widths(bytes, widest, limit, volatile).is_some()) {
             return false;
         }
+    }
+    // DEVIATE MEM-1 (`Tuning::inline_variable_memcpy`, exit 2026-11-20): at
+    // speed a length known only at run time is left to the selector's `rep
+    // movs`.
+    let sized = llrm_mir::memory::has(&function.attrs, "optsize") || llrm_mir::memory::has(&function.attrs, "minsize");
+    if inline_variable && !sized && !matches!(instruction.operands[2], Operand::Constant(_)) {
+        return false;
     }
     if align(0) < 4 || align(1) < 4 {
         return true;

@@ -695,12 +695,14 @@ fn test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() {
     let source = parsed_as(&compat("pds71/pdlocal.bas"), "pds71", "pds71");
     let module = optimized_mir(&source);
     let procedure = function_text(&module, "MISSINGFILE");
-    // The ERL table holds 100 at every site (it was 0: ERL reported 0). How
-    // many `REPORTFAIL` calls remain is the inliner's choice, not the premise.
-    let table = module.lines().find(|line| line.starts_with("@$QB$ERL$MISSINGFILE")).expect("the ERL table");
+    // The ERL table holds 100 at every site (it was 0: ERL reported 0). It is
+    // read as emitted: with ERROR 53 the only raise, the optimizer folds `erl`
+    // to 100 and the table and its compare go (the executed case,
+    // conformance pds71 pds-local-error, prints PASS).
+    let emitted = emitted_mir(&source);
+    let table = emitted.lines().find(|line| line.starts_with("@$QB$ERL$MISSINGFILE")).expect("the ERL table");
     let entries = table.matches("i16 ").count();
     assert!(entries > 0 && table.matches("i16 100").count() == entries, "{table}");
-    assert!(procedure.contains("icmp eq i16 %erl, 100"), "{procedure}");
     let errnum = module
         .lines()
         .find(|line| line.contains("c\"errnum\""))
@@ -1035,6 +1037,36 @@ fn test_whole_program_procedures_are_not_public() {
     };
     assert!(public(false));
     assert!(!public(true));
+}
+
+/// The bench kernel must stay linkable under `--whole-program` (BenchFib is
+/// found by name in the map), while the recursion behind it is the module's
+/// own: fib was a far, by-reference, memory-argument call (3.4x C's clocks)
+/// because every SUB was public; with the kernel the only export it is C's
+/// register-call loop, near.
+#[test]
+fn test_whole_program_export_keeps_the_kernel_public_and_the_rest_near() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(
+        &directory,
+        "FIB.BAS",
+        b"DEFINT A-Z\nDECLARE FUNCTION Fib% (n AS INTEGER)\nDECLARE FUNCTION BenchFib& (n AS INTEGER)\nPRINT BenchFib&(20)\n\
+FUNCTION Fib% (n AS INTEGER)\n IF n < 2 THEN\n Fib% = n\n ELSE\n Fib% = Fib%(n - 1) + Fib%(n - 2)\n END IF\nEND FUNCTION\n\
+FUNCTION BenchFib& (n AS INTEGER)\n BenchFib& = Fib%(n)\nEND FUNCTION\n",
+    );
+    let listed = |exports: &[&str]| {
+        let frontend = qb_driver::Frontend {
+            whole_program: true,
+            exports: exports.iter().map(|one| one.to_string()).collect(),
+            ..qb_driver::Frontend::new("qb45", "llrm")
+        };
+        listing(&qb_driver::parsed(&source, &frontend, None).expect("parses"))
+    };
+    let none = listed(&[]);
+    assert!(!none.contains("public BENCHFIB"));
+    let kept = listed(&["benchfib"]);
+    assert!(kept.contains("public BENCHFIB\n") && !kept.contains("public FIB\n"));
+    assert!(kept.contains("FIB proc near") && !kept.contains("call far ptr FIB"));
 }
 
 /// `1 <= n` lowered to `cmp 1, bx`, which x86 cannot encode; UBOUND made it on
@@ -2073,7 +2105,8 @@ fn test_a_counter_stepped_before_other_work_is_tested_against_its_end() {
     // is no longer than the pin's i486 loop (8 instructions). The pin's
     // loop-reduce keeps one counter and addresses by `2 * x`; the 16-bit
     // address has no scale, so ours steps the byte offset (`cmp bx, 674`)
-    // beside the counter, for the same length (DEVIATE LU1).
+    // beside the counter, for the same length (DEVIATE LU1); counting the
+    // offset up to zero (`add bx, 2; jne`, one instruction fewer) is as good.
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/rcflip.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
@@ -2090,7 +2123,11 @@ fn test_a_counter_stepped_before_other_work_is_tested_against_its_end() {
         .expect("the multiplying loop");
     let instructions = body.lines().filter(|line| line.starts_with("    ")).count();
     assert!(
-        (body.contains("cmp ax, 357") || body.contains(", 674")) && !body.contains("or ax, ax") && instructions <= 8,
+        (body.contains("cmp ax, 357")
+            || body.contains(", 674")
+            || regex::Regex::new(r"add bx, 2\n\s+jne \w+\s*$").unwrap().is_match(&body))
+            && !body.contains("or ax, ax")
+            && instructions <= 8,
         "{body}"
     );
 }
@@ -3658,6 +3695,27 @@ fn test_clear_calls_the_runtime_clear() {
     assert!(main[..call].trim_end().ends_with("pushd 0"), "two zero words: {main}");
 }
 
+/// On the llrm runtime at m16, CLEAR called `B$SCLR(stack, given)` without the
+/// table of module variables its C body reads as the third argument:
+/// `table->main_module` came from a stray register and the program stopped with
+/// "Illegal function call" (clear_variables.bas). The call carries the table's
+/// near address, as the C body takes it.
+#[test]
+fn test_clear_passes_its_table_on_the_llrm_runtime_at_m16() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "CLEARM16.BAS", b"x% = 5\r\nCLEAR\r\nPRINT x%\r\nEND\r\n");
+    let frontend = qb_driver::Frontend::new("qb45", "llrm");
+    let text = listing(&qb_driver::parsed(&source, &frontend, None).expect("parses"));
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$SCLR").expect("the call");
+    let before = &main[..call];
+    assert!(
+        before.trim_end().ends_with("push offset CLEARM16$D3"),
+        "the table's near address is the third argument: {main}"
+    );
+    assert!(!before.contains("pushw DGROUP"), "and not a far pointer on the stack: {main}");
+}
+
 /// A variable set before CLEAR and printed after it was folded to its old
 /// value: the call zeroes BC_DATA behind the optimiser's back.
 #[test]
@@ -4122,6 +4180,37 @@ fn test_noalias_is_stated_only_for_distinct_locals() {
     assert_eq!(count("Add p, p", true), 0, "one variable passed twice");
     assert_eq!(count("Add p, g", true), 1, "only the local; the SHARED one is also the callee's name for it");
     assert_eq!(count("Add p, q", false), 0, "an exported callee has callers this module does not see");
+}
+
+/// An expression handed by reference is a copy in a slot made for the call:
+/// nothing else names it. A recursive `Place q(), row + 1, n` kept `row` a
+/// pointer reloaded after every call (queens, bq16: 2.0x C clocks) because the
+/// copy was never proven exclusive.
+#[test]
+fn test_noalias_holds_of_a_slot_made_for_the_call() {
+    let counted = |calls: &str, inner: &str| {
+        let directory = tempfile::TempDir::new().unwrap();
+        let basic = format!(
+            "DECLARE SUB Add (a AS INTEGER, b AS INTEGER)\nDECLARE SUB Caller ()\nDECLARE SUB Outer (r AS INTEGER)\nDIM SHARED g AS INTEGER\nCaller\nSUB Caller\nDIM p AS INTEGER, q AS INTEGER\n{calls}\nEND SUB\nSUB Outer (r AS INTEGER)\n{inner}\nEND SUB\nSUB Add (a AS INTEGER, b AS INTEGER)\na = a + 1\nb = 2\nEND SUB\n"
+        );
+        let source = written(&directory, "na.bas", basic.as_bytes());
+        let frontend = qb_driver::Frontend { whole_program: true, ..qb_driver::Frontend::new("qb45", "qb45") };
+        let program = qb_driver::parsed(&source, &frontend, None).expect("parses");
+        let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+        let text = llrm_mir::print::module(&emitted.module);
+        text.lines()
+            .find(|line| line.starts_with("define") && line.contains("ADD"))
+            .unwrap_or_else(|| panic!("{text}"))
+            .matches("noalias")
+            .count()
+    };
+    let count = |calls: &str| counted(calls, "");
+    assert_eq!(count("Add p + 1, q"), 2, "a copy and a local");
+    assert_eq!(count("Add p + 1, p"), 2, "the copy is not the variable");
+    assert_eq!(count("Add p + 1, q\nAdd p, q"), 2, "a call that passes locals too");
+    assert_eq!(count("Add p + 1, q\nAdd p, p"), 0, "one variable passed twice still refuses");
+    assert_eq!(counted("Outer p", "Add r + 1, r"), 2, "a copy beside a parameter only a local reaches");
+    assert_eq!(counted("Outer g", "Add r + 1, r"), 1, "a copy beside a parameter a SHARED variable reaches");
 }
 
 /// The `!invariant.load` marks in `WORK` of `body`, a procedure of a program

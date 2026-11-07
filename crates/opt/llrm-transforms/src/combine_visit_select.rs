@@ -14,7 +14,7 @@
 //! DEVIATE 2 (temporary): the folds that call a helper not yet translated are
 //! left out, each named where it stood: `foldSelectOfBools`,
 //! `foldSelectNegNot`, `foldSelectAndOrPowerOfTwo`, the floating-point folds
-//! (`fabs`, `minnum`, `canonicalize`...: need #2209),
+//! (`minnum`, `canonicalize`...: need #2209; `fabs` is `combine_select_fabs`),
 //! `foldSelectValueEquivalence`, the rest of `foldSelectInstWithICmp`
 //! (its `canonicalizeSPF` step is `combine_select_spf`),
 //! `foldAddSubSelect`,
@@ -48,9 +48,11 @@ use crate::combine_phi::UB_IMPLYING;
 use crate::combine_select_bit_test::{select_bit_test, select_icmp_and_and};
 use crate::combine_select_bools::select_of_bools;
 use crate::combine_select_ext_const::select_ext_const;
+use crate::combine_select_fabs::select_fcmp_to_fabs;
 use crate::combine_select_into_op::select_into_op;
 use crate::combine_select_op_op::select_op_op;
 use crate::combine_select_spf::select_with_icmp;
+use crate::combine_select_tail::{nested_selects, select_of_symmetric_select};
 use crate::combine_shared::{has_one_use, query, replace_operand};
 
 /// The parts of a `select`.
@@ -69,6 +71,7 @@ const FOLDS: &[Fold] = &[
     cond_known_in_arms,
     select_of_bools,
     bool_to_extension,
+    select_fcmp_to_fabs,
     select_with_icmp,
     select_icmp_and_and,
     select_bit_test,
@@ -81,6 +84,8 @@ const FOLDS: &[Fold] = &[
     nested_select_merged,
     binop_between_selects,
     absorb_not_condition,
+    select_of_symmetric_select,
+    nested_selects,
 ];
 
 impl Combiner<'_> {

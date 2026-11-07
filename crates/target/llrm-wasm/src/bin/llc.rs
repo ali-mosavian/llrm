@@ -17,8 +17,10 @@ fn run() -> i32 {
     let mut assembly = false;
     let mut object = false;
     let mut triple = "wasm32".to_owned();
-    let mut options = Options::default();
+    // The pin's `llc` defaults to -O2; the library default (-O0) is for the tests that pin it.
+    let mut options = Options { level: driver::Level::O2, ..Options::default() };
     let mut handling = false;
+    let mut debug = false;
     let mut output = None;
     let mut input = None;
     let mut arguments = std::env::args().skip(1);
@@ -28,6 +30,7 @@ fn run() -> i32 {
             "-filetype=obj" => object = true,
             "-o" => output = arguments.next(),
             "-no-stackify" => options.stackify = false,
+            "-g" => debug = true,
             other if other.starts_with("-O") => match driver::Level::parse(&other[2..]) {
                 Ok(level) => options.level = level,
                 Err(why) => {
@@ -40,6 +43,17 @@ fn run() -> i32 {
             "-mattr=+exception-handling" => handling = true,
             other if other.starts_with("-mtriple=") => triple = other["-mtriple=".len()..].to_owned(),
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
+            // `bounds` checks nothing in IR (llrm-cc); `stack` needs a C
+            // runtime this target lacks.
+            "-fsanitize=bounds" | "-fno-sanitize=bounds" | "-fno-sanitize=stack" => {}
+            "-fsanitize=stack" => {
+                eprintln!("llrm-wasm-llc: -fsanitize=stack: wasm has no C runtime stack check yet");
+                return 2;
+            }
+            other if llrm_debug::is_debug_flag(other) => {
+                eprintln!("{}", llrm_debug::no_writer("llrm-wasm-llc", other, "wasm"));
+                return 2;
+            }
             other => {
                 eprintln!("llrm-wasm-llc: unrecognized argument {other}");
                 return 2;
@@ -48,7 +62,7 @@ fn run() -> i32 {
     }
     let Some(input) = input.filter(|_| assembly || object) else {
         eprintln!(
-            "usage: llrm-wasm-llc (-S | -filetype=obj) [-mtriple=wasm32|wasm64] [-no-stackify] [-exception-model=wasm -mattr=+exception-handling] [-o OUT] FILE.ll"
+            "usage: llrm-wasm-llc (-S | -filetype=obj) [-mtriple=wasm32|wasm64] [-no-stackify] [-g] [-exception-model=wasm -mattr=+exception-handling] [-o OUT] FILE.ll"
         );
         return 2;
     };
@@ -65,7 +79,9 @@ fn run() -> i32 {
         }
     };
     let built = driver::width_of(&triple).and_then(|width| {
-        if object {
+        if object && debug {
+            driver::object_g(&text, width, options, &input)
+        } else if object {
             driver::object(&text, width, options)
         } else {
             driver::assembly(&text, width, options).map(String::into_bytes)

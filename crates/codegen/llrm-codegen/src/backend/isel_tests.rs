@@ -191,9 +191,9 @@ done:
 }
 ";
     let got = listing(text, "sum");
-    // The comparison stays flags beside its branch; the phis' zeros are made in
-    // the entry, which runs a copy of the test and falls into the loop (the
-    // likelier way) rather than copy the return over it. The scheduler may put
+    // The comparison stays flags beside its branch. m16's tail-duplication
+    // threshold is 1 (#6827), so the test is not copied into the loop: it
+    // closes with `jmp` (the mid-end rotates real loops first). The scheduler may put
     // the load of n and the two zeros in any order and register names, so the
     // test pins the shape: three entry instructions (the load and two zeros),
     // the test, and the loop with the registers its instructions name.
@@ -213,13 +213,13 @@ done:
     assert_eq!(
         &got[6..],
         [
+            "L0_1:".to_owned(),
             format!("cmp {i}, {n}"),
             "jge L0_8".to_owned(),
             "L0_5:".to_owned(),
             format!("add {sum}, {i}"),
             format!("inc {i}"),
-            format!("cmp {i}, {n}"),
-            "jl L0_5".to_owned(),
+            "jmp L0_1".to_owned(),
             "L0_8:".to_owned(),
             "pop bp".to_owned(),
             "retf".to_owned(),
@@ -1348,7 +1348,9 @@ b1:
 
 /// A call names its callee as the procedure is defined: runtime.nib's
 /// `buffers.allocate`, no assembler symbol, was defined as `G$0` but called
-/// as `_buffers.allocate`, and the runtime did not link.
+/// as `_buffers.allocate`, and the runtime did not link. The private name keeps
+/// the source name, cleaned (`G$0$buffers$allocate`), so an object says where a
+/// function came from.
 #[test]
 fn test_a_call_names_an_internal_callee_as_it_is_defined() {
     let text = "define internal i16 @buffers.allocate() addrspace(1) {
@@ -1360,8 +1362,26 @@ define i16 @f() addrspace(1) {
 }
 ";
     let text = assembled(text);
-    assert!(text.contains("G$0 proc far"), "{text}");
-    assert!(text.lines().any(|line| line.trim() == "call far ptr G$0"), "{text}");
+    assert!(text.contains("G$0$buffers$allocate proc far"), "{text}");
+    assert!(text.lines().any(|line| line.trim() == "call far ptr G$0$buffers$allocate"), "{text}");
+}
+
+/// A library function's private name starts with the library it came from:
+/// `std.io.File.open` is `G$0$std$io$File$open`. The size tool counts a Nib
+/// object's standard-library instantiations apart from the program's own by it;
+/// they were `G$n` alone, and stft_fixed read 560 library bytes as its code.
+#[test]
+fn test_a_library_function_keeps_its_origin_in_its_private_name() {
+    let text = "define internal i16 @std.io.File.open() addrspace(1) {
+  ret i16 1
+}
+define i16 @f() addrspace(1) {
+  %v = call addrspace(1) i16 @std.io.File.open()
+  ret i16 %v
+}
+";
+    let text = assembled(text);
+    assert!(text.contains("G$0$std$io$File$open proc far"), "{text}");
 }
 
 /// Constant folding leaves `br i1 true` and a float constant as an operand,
@@ -1392,7 +1412,7 @@ b3:
             "L0_0:",
             "fnstcw word ptr [bp-4]",
             "fnstcw word ptr [bp-6]",
-            "or word ptr [bp-6], 3072",
+            "or byte ptr [bp-5], 12",
             "fld dword ptr $K1",
             "fadd dword ptr $K2",
             "fldcw word ptr [bp-6]",
@@ -1648,7 +1668,7 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
             "L0_0:",
             "fnstcw word ptr [bp-6]",
             "fnstcw word ptr [bp-8]",
-            "or word ptr [bp-8], 3072",
+            "or byte ptr [bp-7], 12",
             "fld qword ptr [bp+6]",
             "fldcw word ptr [bp-8]",
             "fist word ptr [bp-2]",
@@ -2229,7 +2249,7 @@ define void @f(double %x) addrspace(1) {
             "L0_0:",
             "fnstcw word ptr [bp-2]",
             "fnstcw word ptr [bp-4]",
-            "or word ptr [bp-4], 3072",
+            "or byte ptr [bp-3], 12",
             "fld qword ptr [bp+6]",
             "fldcw word ptr [bp-4]",
             "fist word ptr b",
@@ -5902,6 +5922,7 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
             r#type: int,
             parameters,
             all_calls: false,
+            scope_line: None,
         },
     );
     // a in a cell, b in AX, c in DX:AX; d is past the three the function has.

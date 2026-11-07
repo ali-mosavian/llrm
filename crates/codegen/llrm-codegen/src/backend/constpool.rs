@@ -71,13 +71,18 @@ pub struct Pool {
     /// Ids handed out: the data' and the jump tables'.
     count: i64,
     entries: IndexMap<Vec<u8>, i64>,
+    /// The module's global names and locality, made by the first function
+    /// and shared by the rest (a table per function was quadratic).
+    pub symbols: Option<Symbols>,
 }
+
+pub type Symbols = (std::rc::Rc<Vec<String>>, std::rc::Rc<Vec<bool>>);
 
 impl Pool {
     /// Data object ids from `first` on are the pool's.
     #[must_use]
     pub fn new(first: i64) -> Self {
-        Self { first, count: 0, entries: IndexMap::default() }
+        Self { first, count: 0, entries: IndexMap::default(), symbols: None }
     }
 
     /// The readonly cell holding `bytes`.
@@ -139,6 +144,46 @@ pub fn wide_first<'a>(entries: impl Iterator<Item = (&'a [u8], i64)>) -> Vec<(&'
     all
 }
 
+/// [`wide_first`] with the narrow entries that fit the gap before the first
+/// 8-byte one put in it, `at` being where the pool starts. DEVIATE KP1 (owner
+/// x87, exit 2026-11-20): the pin's `emitConstantPool` puts the pool in its own
+/// section (ELF: one mergeable `.rodata.cstN` a size), aligned once to its
+/// widest entry, so no writable object sits before the first constant and
+/// there is no gap to fill (entries keep pool-index order, padded to their own
+/// alignment: no sort either). Ours shares the data segment with the globals,
+/// so an 8-aligned double after a dword global padded 4 bytes (x_horner -Os
+/// m32: data 84 B against gcc's 80, code +2, 208 vs 202 B). The rest keep
+/// their order.
+pub fn gap_filled<'a>(
+    entries: impl Iterator<Item = (&'a [u8], i64)>,
+    at: i64,
+) -> Vec<(&'a [u8], i64)> {
+    let mut all = wide_first(entries);
+    let wide = all.iter().take_while(|(bytes, _)| bytes.len() >= 8).count();
+    if wide == 0 {
+        return all;
+    }
+    let mut narrow = all.split_off(wide);
+    let mut at = at;
+    let mut filled = Vec::new();
+    loop {
+        let fits = [4_usize, 2, 1]
+            .into_iter()
+            .find_map(
+                |size| {
+                    let room = (8 - at % 8) % 8;
+                    let one = (size as i64) <= room && at % size as i64 == 0;
+                    one.then(|| narrow.iter().position(|(bytes, _)| bytes.len() == size)).flatten()
+                },
+            );
+        let Some(found) = fits else { break };
+        let one = narrow.remove(found);
+        at += one.0.len() as i64;
+        filled.push(one);
+    }
+    filled.into_iter().chain(all).chain(narrow).collect()
+}
+
 /// Whether `name` is a label assembly made for the pool: `$K` a constant, `$J`
 /// a jump table.
 pub fn is_pool(name: &str) -> bool {
@@ -183,5 +228,37 @@ pub fn narrowest(value: f64) -> Vec<u8> {
         single.to_le_bytes().to_vec()
     } else {
         value.to_le_bytes().to_vec()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gap_filled;
+
+    fn order(
+        entries: &[(&[u8], i64)],
+        at: i64,
+    ) -> Vec<i64> {
+        gap_filled(entries.iter().copied(), at).into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// x_horner -Os m32: a dword global ends the data at 4 mod 8, the double
+    /// pads 4 bytes and the float follows it; the float belongs in the pad.
+    #[test]
+    fn a_dword_fills_the_pad_before_a_double() {
+        let (double, float) = ([0_u8; 8], [0_u8; 4]);
+        assert_eq!(order(&[(&double, 8), (&float, 9)], 68), vec![9, 8]);
+    }
+
+    #[test]
+    fn an_aligned_start_keeps_the_wide_first_order() {
+        let (double, float) = ([0_u8; 8], [0_u8; 4]);
+        assert_eq!(order(&[(&float, 9), (&double, 8)], 64), vec![8, 9]);
+    }
+
+    #[test]
+    fn a_word_and_a_byte_fill_a_three_byte_gap_after_an_odd_start() {
+        let (double, word, byte) = ([0_u8; 8], [0_u8; 2], [0_u8; 1]);
+        assert_eq!(order(&[(&double, 1), (&byte, 2), (&word, 3)], 5), vec![2, 3, 1]);
     }
 }

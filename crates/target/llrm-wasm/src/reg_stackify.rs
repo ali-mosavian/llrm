@@ -42,7 +42,7 @@
 //! `rematerializeCheapDef` (L605), `moveAndTeeForMultiUse` (L669),
 //! `TreeWalkerState` (L725), `CommutingState` (L793).
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::HashMap;
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::generated::instrinfo::{desc, flag};
@@ -252,7 +252,11 @@ fn query(
 ) -> Effects {
     let mut found = Effects::default();
     let Some(info) = desc(inst.opcode) else {
-        // A marker: it does nothing to memory.
+        // `CALL` and `CALL_INDIRECT` are in no table (variadic defs): a call.
+        if crate::branch::is_call(inst) {
+            query_callee(f, inst, &mut found);
+        }
+        // Otherwise a marker: it does nothing to memory.
         return found;
     };
     if info.has(flag::TERMINATOR) {
@@ -315,7 +319,7 @@ fn is_catch(opcode: u16) -> bool {
 /// each has, where its first definition is, and the liveness of the blocks.
 struct Registers {
     optimize: bool,
-    live_out: Vec<HashSet<VReg>>,
+    live_out: Vec<llrm_mir::dense::IdSet<VReg>>,
     defs: Vec<u32>,
     uses: Vec<u32>,
     /// The block and opcode of the first definition.
@@ -348,7 +352,7 @@ impl Registers {
             }
         }
         let live_out = if optimize { crate::liveness::liveness(f).1 } else { Vec::new() };
-        Registers { optimize, live_out, defs, uses, first_def, positions: HashMap::new() }
+        Registers { optimize, live_out, defs, uses, first_def, positions: HashMap::default() }
     }
 
     /// `MRI.createVirtualRegister` with one definition and one use.
@@ -386,7 +390,7 @@ impl Registers {
             .entry(block)
             .or_insert_with(
                 || {
-                    let mut found = HashMap::new();
+                    let mut found = HashMap::default();
                     for (i, inst) in f.blocks[block].iter().enumerate() {
                         for r in inst.defs() {
                             found.entry(r).or_insert(i);

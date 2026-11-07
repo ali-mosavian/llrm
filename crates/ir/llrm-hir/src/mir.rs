@@ -445,6 +445,19 @@ fn class_tags(
     Ok(tags)
 }
 
+/// The `!prof` nodes `branch_weights` for a conditional branch whose first
+/// target never runs, and for one whose second does not.
+fn never_taken(module: &mut Module) -> [MetadataId; 2] {
+    let word = module.context.types.int(32);
+    let mut node = |weights: [u32; 2]| {
+        let mut operands = vec![MetadataOperand::String("branch_weights".to_owned())];
+        operands.extend(weights.map(|one| MetadataOperand::Constant(module.context.int(word, i128::from(one)))));
+        module.metadata.push(MetadataNode { distinct: false, operands });
+        MetadataId(module.metadata.len() as u32 - 1)
+    };
+    [node([1, NEVER_TAKEN_WEIGHT]), node([NEVER_TAKEN_WEIGHT, 1])]
+}
+
 struct Tables<'h> {
     /// The target's address spaces: what the HIR's near, far, segment, huge and
     /// fixed addresses are.
@@ -507,7 +520,19 @@ struct Tables<'h> {
     field_facts: HashMap<(i64, i64), Vec<Fact>>,
     /// Each frame variable's `!var` node, by its function and place.
     variables: HashMap<(i64, i64), MetadataId>,
+    /// `!prof` for a branch whose first target never runs, and whose second.
+    never_taken: [MetadataId; 2],
 }
+
+/// The weight of an edge a program practically never takes, against 1 for the
+/// other: a panic path ending `unreachable` (a failed bounds, shift, conversion,
+/// division or key check). Clang's `EmitCheck` states `(1 << 20) - 1` for a
+/// check (`CGExpr.cpp:4367` `createLikelyBranchWeights`, `MDBuilder.h:46`
+/// `kLikelyBranchWeight`), the same ratio the pin's unreachable heuristic gives
+/// the edge without a `!prof`. Branch odds are 2^31sts (pin
+/// `BranchProbability.h:37`), so the edge keeps 2048 units. A larger ratio is a
+/// DEVIATE (see the 2^26-1 change).
+pub const NEVER_TAKEN_WEIGHT: u32 = (1 << 20) - 1;
 
 /// The `!dbg` metadata kind: the source line an instruction came from.
 pub const DEBUG_LINE: &str = "dbg";
@@ -718,6 +743,7 @@ fn emit_module<'h>(
         place_facts,
         field_facts,
         variables: HashMap::default(),
+        never_taken: [MetadataId(0); 2],
     };
     tables.tags.arrays(&mut module, hir);
     match fact_nodes(&mut module, &tables.spaces, hir, &tables.types) {
@@ -730,6 +756,8 @@ fn emit_module<'h>(
         Ok(classes) => tables.classes = classes,
         Err(why) => refused.push((hir.name.clone(), why)),
     }
+    // After the nodes the language states, so theirs keep their numbers.
+    tables.never_taken = never_taken(&mut module);
     let objects: HashMap<i64, &model::DataObject> = hir.data.iter().map(|one| (one.id, one)).collect();
     let sizes = sizes(hir, &tables.types);
     let mut defined = Vec::new();
@@ -2675,6 +2703,24 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     self.b.function.annotate(inst, kind, node);
                 }
             }
+            if let TerminatorKind::Branch = block.terminator.kind
+                && let Some(inst) = self.b.function.terminator(self.b.current().expect("a placed block"))
+            {
+                let ends = |target: &i64| {
+                    self.function
+                        .blocks
+                        .iter()
+                        .any(|one| one.id == *target && matches!(one.terminator.kind, TerminatorKind::Unreachable))
+                };
+                if let [first, second] = block.terminator.targets[..] {
+                    // Both targets unreachable states nothing.
+                    match (ends(&first), ends(&second)) {
+                        (true, false) => self.b.function.annotate(inst, "prof", self.tables.never_taken[0]),
+                        (false, true) => self.b.function.annotate(inst, "prof", self.tables.never_taken[1]),
+                        _ => {}
+                    }
+                }
+            }
         }
         if block.cold {
             mark_cold(self.b.function, self.blocks[&block.id]);
@@ -2788,7 +2834,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         for (group, object) in groups.iter().zip(self.objects.clone()) {
             let kind = match self.b.context.types.get(group.ty) {
                 Type::Int(_) => ConstantKind::Int(0),
-                Type::Float(_) => ConstantKind::Float(0),
+                Type::Float(kind) => ConstantKind::float_zero(*kind),
                 Type::Pointer(_) => ConstantKind::Null,
                 _ => {
                     let callee = Value::Constant(self.tables.callees[MEMSET]);

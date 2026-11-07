@@ -409,7 +409,7 @@ fn reclass_by_operands(
                 continue;
             }
             for (value, order) in tii.operand_orders(lis.instr(op.instr)) {
-                if value != reg {
+                if value != reg || reads_a_lane(tables, lis.instr(op.instr), reg) {
                     continue;
                 }
                 allowed = Some(match allowed {
@@ -425,6 +425,24 @@ fn reclass_by_operands(
             _ => {}
         }
     }
+}
+
+/// An operand naming a byte of `reg` (a lane of a wider value) asks the class
+/// of the byte, not of `reg`: `add a, h` reading a pair's high byte does not
+/// make the pair a byte register.
+fn reads_a_lane(
+    tables: &Tables,
+    one: &Insn,
+    reg: u32,
+) -> bool {
+    let Some(whole) = tables.widths.borrow().get(&reg).copied() else { return false };
+    let Some(what) = &one.what else { return false };
+    what.dests
+        .iter()
+        .chain(&what.sources)
+        .flat_map(crate::model::ir::values)
+        .filter(|place| place.value == reg)
+        .all(|place| place.width < whole)
 }
 
 impl super::splitkit::SplitEnv for BodySplitEnv<'_> {
@@ -568,7 +586,10 @@ impl super::splitkit::SplitEnv for BodySplitEnv<'_> {
             at,
             covers,
             defines: vec![to],
-            what: Some(Semantics { dests: vec![Loc::Held(Held { value: to, width: defined.width })], ..what }),
+            what: Some(Semantics {
+                dests: vec![Loc::Held(Held { value: to, width: defined.width, offset: 0 })],
+                ..what
+            }),
             spill_reload: true,
             rematerialized: true,
             ..def.clone()
@@ -629,8 +650,10 @@ struct CallMasks {
     /// The blocks' successors (by position), where a call can lose a high half
     /// only if a wide read can follow it: set by `with_flow`.
     flow: Option<Vec<Vec<usize>>>,
-    /// Each block's blocks reachable by one edge or more, as bits.
-    reach: std::cell::OnceCell<Vec<Vec<u64>>>,
+    /// Each block's blocks reachable by one edge or more, as bits, worked out
+    /// for a block when it is first asked of: only the blocks that hold a call
+    /// are, and a row for every block was 140 M Ir of memory_expansion -O2.
+    reach: std::cell::RefCell<Vec<Option<Vec<u64>>>>,
     /// The value a split is tried for (`PhysInterference::set_lane`).
     lane: std::cell::Cell<Option<u32>>,
     /// The registers some call keeps the low half of only.
@@ -722,28 +745,26 @@ impl CallMasks {
         from: usize,
         to: usize,
     ) -> bool {
-        let reach = self
-            .reach
-            .get_or_init(
-                || {
-                    let succ = self.flow.as_deref().unwrap_or_default();
-                    let words = succ.len().div_ceil(64);
-                    (0..succ.len())
-                        .map(|start| {
-                            let mut seen = vec![0u64; words];
-                            let mut work: Vec<usize> = succ[start].clone();
-                            while let Some(block) = work.pop() {
-                                if seen[block / 64] >> (block % 64) & 1 == 0 {
-                                    seen[block / 64] |= 1 << (block % 64);
-                                    work.extend(succ[block].iter().copied());
-                                }
-                            }
-                            seen
-                        })
-                        .collect()
-                },
-            );
-        reach.get(from).is_some_and(|row| row[to / 64] >> (to % 64) & 1 == 1)
+        let succ = self.flow.as_deref().unwrap_or_default();
+        if from >= succ.len() {
+            return false;
+        }
+        let mut rows = self.reach.borrow_mut();
+        if rows.is_empty() {
+            rows.resize(succ.len(), None);
+        }
+        let row = rows[from].get_or_insert_with(|| {
+            let mut seen = vec![0u64; succ.len().div_ceil(64)];
+            let mut work: Vec<usize> = succ[from].clone();
+            while let Some(block) = work.pop() {
+                if seen[block / 64] >> (block % 64) & 1 == 0 {
+                    seen[block / 64] |= 1 << (block % 64);
+                    work.extend(succ[block].iter().copied());
+                }
+            }
+            seen
+        });
+        row[to / 64] >> (to % 64) & 1 == 1
     }
 
     /// Whether a read of more than 2 bytes of a value of `reg`'s family can
@@ -1156,33 +1177,6 @@ pub fn decide_with(
     decide_with_split(inputs, mode, !llrm_support::env_flag!("LLRM_NO_SPLIT"))
 }
 
-/// `decide_with`, with live range splitting (`trySplit`) chosen.
-/// The blocks an x87 value is live into and out of, as (in, out) by block.
-fn float_live_blocks(
-    lis: &mut LiveIntervals,
-    floats: &crate::support::hash::HashSet<u32>,
-    count: usize,
-) -> (Vec<bool>, Vec<bool>) {
-    let mut live_in = vec![false; count];
-    let mut live_out = vec![false; count];
-    if floats.is_empty() {
-        return (live_in, live_out);
-    }
-    let starts: Vec<SlotIndex> = (0..count).map(|at| lis.indexes.get_mbb_start_idx(at)).collect();
-    let ends: Vec<SlotIndex> = (0..count).map(|at| lis.indexes.get_mbb_end_idx(at)).collect();
-    for &reg in floats {
-        for segment in &lis.interval(reg).segments {
-            let mut at = starts.partition_point(|start| *start <= segment.start).saturating_sub(1);
-            while at < count && starts[at] < segment.end {
-                live_in[at] |= segment.start <= starts[at];
-                live_out[at] |= segment.end >= ends[at];
-                at += 1;
-            }
-        }
-    }
-    (live_in, live_out)
-}
-
 /// The intervals the allocator starts from: the coalescer's, edited to `body`,
 /// else new ones.
 ///
@@ -1198,6 +1192,7 @@ fn intervals_to_allocate(body: &LirBody) -> LiveIntervals {
     lis
 }
 
+/// `decide_with`, with live range splitting (`trySplit`) chosen.
 pub fn decide_with_split(
     inputs: &ShadowInputs,
     mode: Mode<'_>,
@@ -1228,7 +1223,7 @@ pub fn decide_with_split(
             }
         }
     }
-    let mut lis = intervals_to_allocate(body);
+    let lis = intervals_to_allocate(body);
     // The environment: orders, frequencies, loop exits.
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq: Vec<f32> =
@@ -1236,19 +1231,7 @@ pub fn decide_with_split(
     if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
         eprintln!("block frequencies {:?}", freq);
     }
-    let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
-    let exiting: Vec<bool> = body
-        .blocks
-        .iter()
-        .map(|block| {
-            // The innermost loop holding the block (loops come innermost
-            // first).
-            loops
-                .iter()
-                .find(|one| one.body.contains(&block.at))
-                .is_some_and(|one| block.succ.iter().any(|to| !one.body.contains(to)))
-        })
-        .collect();
+    let exiting = exiting_blocks(body);
     let tables = Rc::new(Tables::default());
     // Under RFP the x87 values take FP0..FP6 (LLVM's RFP
     // classes); a stack position an instruction names is the stackifier's.
@@ -1293,7 +1276,7 @@ pub fn decide_with_split(
     // keeps it wide.
     let lanes = body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| !one.clobbers_high.is_empty());
     let read_widths = if lanes { crate::backend::widths::_widest_read(body) } else { Default::default() };
-    for (value, width) in crate::backend::widths::_widest(body) {
+    for (&value, &width) in &widest {
         let width = if lanes && width > 2 && read_widths.get(&value).copied().unwrap_or(0) <= 2 { 2 } else { width };
         tables.widths.borrow_mut().insert(value, width);
     }
@@ -1358,22 +1341,15 @@ pub fn decide_with_split(
     // The calls.
     let mut calls = Vec::new();
     let mut blocks = Vec::with_capacity(body.blocks.len());
-    let (float_in, float_out) = float_live_blocks(&mut lis, &floats, body.blocks.len());
     for (at, block) in body.blocks.iter().enumerate() {
         let first = calls.len();
-        let last = block.insns.len().saturating_sub(1);
-        for (n, one) in block.insns.iter().enumerate() {
-            // DEVIATE D-DS1 (exit: a spill or split tells the masks): the
-            // masks are made once, before allocation. A split or a spill of an
-            // x87 value that lives through a block stores or reloads it
-            // (`fstp`, `fld`) at the block's ends, where no instruction of the
-            // body names it; those need the data group (`needs_data_group`),
-            // and `datagroup` then loads `ds` from `ss` there. A selector
-            // placed in `ds` over such an end is lost.
-            let at_edge = (n == 0 && float_in[at]) || (n == last && float_out[at]);
+        for one in block.insns.iter() {
+            // `needs_data_group` is what a selector in `ds` cannot cross: x87
+            // spills are frame cells (`ss`), so no block edge needs the data
+            // group, only an instruction that reads `ds` by default.
             let read: RegSet = inputs
                 .data
-                .filter(|_| at_edge || inputs.tii.needs_data_group(one))
+                .filter(|_| inputs.tii.needs_data_group(one))
                 .map(|one| inputs.registers.root(one))
                 .into_iter()
                 .collect();
@@ -1495,6 +1471,8 @@ pub fn decide_with_split(
             .map(|(unit, mut list)| {
                 list.sort();
                 let mut merged: Vec<(SlotIndex, SlotIndex)> = Vec::new();
+                // where the segment that reaches the merged range's end began
+                let mut tail = None;
                 for (start, end) in list {
                     match merged.last_mut() {
                         Some(last) if start <= last.1 => {
@@ -1508,11 +1486,17 @@ pub fn decide_with_split(
                             // and a register it only clobbers (a call returning
                             // `bd0` that clobbers `wd0`): the clobber holds
                             // nothing.
-                            let clobber = last.0 == start && last.1 == start.get_dead_slot();
+                            let clobber = tail.as_ref() == Some(&start) && last.1 == start.get_dead_slot();
                             conflict |= start < last.1 && !copies.contains_key(&start) && !both_dead && !clobber;
+                            if end > last.1 {
+                                tail = Some(start.clone());
+                            }
                             last.1 = std::cmp::max(last.1.clone(), end)
                         }
-                        _ => merged.push((start, end)),
+                        _ => {
+                            tail = Some(start.clone());
+                            merged.push((start, end))
+                        }
                     }
                 }
                 let range = crate::liveness::liverange::LiveRange {
@@ -1620,6 +1604,20 @@ pub fn decide_with_split(
     Some(Decided { report, placed, spilled, edited, spill_failed: greedy.spill_failed(), parents })
 }
 
+/// Per block: whether an edge of it leaves the innermost loop holding it. One
+/// forest lookup per block, not a scan of every loop.
+fn exiting_blocks(body: &LirBody) -> Vec<bool> {
+    let forest = crate::analysis::loops::forest_of(&body.blocks, Some(body.entry));
+    body.blocks
+        .iter()
+        .map(|block| {
+            forest
+                .innermost(block.at)
+                .is_some_and(|inner| block.succ.iter().any(|to| !forest.contains(inner, *to)))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1650,7 +1648,7 @@ mod tests {
     #[test]
     fn test_x87_values_take_fp0_to_fp6_and_the_rest_spill() {
         use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
-        let float = |value: u32| Loc::Held(Held { value, width: 10 });
+        let float = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
         let cell = |disp: i64| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8));
         let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
             name: Some(name.into()),
@@ -1879,13 +1877,16 @@ mod tests {
         assert!(masks.reg_mask_clobbered(&live(4)).is_none_or(|roots| roots.is_empty()), "ends before it");
     }
 
-    /// A selector placed in `ds` over a block an x87 value lives through was
-    /// clobbered: a split or spill stores the value (`fstp`) at the block's
-    /// edge, an instruction that needs the data group, and `datagroup` put
-    /// `mov ds, ss` there. nbody.bas at -O2 (m16) wrote an array through the
-    /// stack segment and printed 4849201 for 4774160.
+    /// A selector was kept out of `ds` over every block an x87 value lives
+    /// through, on the ground that a spill's `fstp` at the block's edge needs
+    /// the data group and `datagroup` puts `mov ds, ss` there (nbody.bas at
+    /// -O2 (m16) wrote an array through the stack segment and printed 4849201
+    /// for 4774160). A spill is a frame cell, read through `ss`, so it needs
+    /// no data group; fpbench -Os (m16) then had three selector registers for
+    /// four far arrays and 21 segment loads, 14 without the rule. Only an x87
+    /// instruction whose operand takes its segment from `ds` reads it.
     #[test]
-    fn test_a_selector_is_not_placed_in_ds_across_a_block_an_x87_value_lives_through() {
+    fn test_a_selector_is_placed_in_ds_across_a_block_an_x87_value_lives_through() {
         use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
         let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
             name: Some(name.into()),
@@ -1896,9 +1897,10 @@ mod tests {
         let insn = |at: i64, what: Semantics, defines: &[u32], uses: &[u32]| {
             Arc::new(Insn::new(at, None, Some(what), defines.to_vec(), uses.to_vec()))
         };
-        let float = Loc::Held(Held { value: 1, width: 10 });
-        let selector = Loc::Held(Held { value: 2, width: 2 });
+        let float = Loc::Held(Held { value: 1, width: 10, offset: 0 });
+        let selector = Loc::Held(Held { value: 2, width: 2, offset: 0 });
         let cell = |disp: i64| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8));
+        let data = |_: i64| Loc::Mem(Mem { through: RegId::SI, ..Mem::new(None, 8) });
         let load = || insn(1, what(Operation::FloatLoad, "fld", vec![float.clone()], vec![cell(-8)]), &[1], &[]);
         let store = || insn(2, what(Operation::FloatStore, "fstp", vec![cell(-16)], vec![float.clone()]), &[], &[1]);
         let make = || {
@@ -1962,9 +1964,14 @@ mod tests {
         // `ds`.
         let apart = body(vec![vec![make(), jump(5)], vec![jump(6)], vec![read(), load(), store()]]);
         assert!(placed_in_ds(&apart), "premise: the selector is placed in ds");
-        // The x87 value lives through the middle block.
+        // The x87 value lives through the middle block: its spill is a frame
+        // cell, which reads `ss`.
         let through = body(vec![vec![load(), make(), jump(5)], vec![jump(6)], vec![read(), store()]]);
-        assert!(!placed_in_ds(&through), "the selector was placed in ds over a block the x87 value lives through");
+        assert!(placed_in_ds(&through), "the selector was kept out of ds over a block the x87 value lives through");
+        // An x87 store to a cell with no address (`[si]`) reads `ds`.
+        let to_data = || insn(7, what(Operation::FloatStore, "fstp", vec![data(8)], vec![float.clone()]), &[], &[1]);
+        let reads_ds = body(vec![vec![load(), make(), jump(5)], vec![to_data(), jump(6)], vec![read()]]);
+        assert!(!placed_in_ds(&reads_ds), "the selector was placed in ds across an x87 store that reads ds");
     }
 
     /// A local range may take the register of a cheaper local one when that one
@@ -2045,6 +2052,21 @@ mod tests {
         assert!(masks.reg_mask_clobbered(&li).is_none_or(|roots| roots.is_empty()));
         let visited = calls_visited() - before;
         assert!(visited <= 10, "{visited} calls looked at for a range with no call in it");
+    }
+
+    /// A row of block reachability was made for every block of the body the
+    /// first time one was asked: 140 M Ir of memory_expansion -O2 (221
+    /// functions), for a handful of blocks that hold a call. A row is made for
+    /// the block asked of.
+    #[test]
+    fn reachability_is_worked_out_for_the_blocks_asked_of() {
+        let blocks = 300;
+        let flow: Vec<Vec<usize>> = (0..blocks).map(|at| if at + 1 < blocks { vec![at + 1] } else { vec![] }).collect();
+        let masks = CallMasks::of(Regs(&llrm_x86_m16::REGISTER_INFO), Vec::new(), Vec::new(), widths(&[])).with_flow(flow);
+        assert!(masks.reaches(0, 299) && masks.reaches(10, 11) && !masks.reaches(11, 10));
+        assert!(!masks.reaches(299, 299), "a block does not reach itself without a loop");
+        let made = masks.reach.borrow().iter().filter(|row| row.is_some()).count();
+        assert_eq!(made, 4, "a row for each block asked of, not for the {blocks} blocks");
     }
 
     /// `checkRegMaskInterference` looks at the calls inside the segments and
@@ -2177,8 +2199,8 @@ mod tests {
         let copy = {
             let what = Semantics {
                 name: Some("mov".into()),
-                dests: vec![Loc::Held(Held { value: 1, width: 2 })],
-                sources: vec![Loc::Held(Held { value: 2, width: 2 })],
+                dests: vec![Loc::Held(Held { value: 1, width: 2, offset: 0 })],
+                sources: vec![Loc::Held(Held { value: 2, width: 2, offset: 0 })],
                 ..Semantics::new(Operation::Move)
             };
             Arc::new(Insn::new(0, None, Some(what), vec![1], vec![2]))
@@ -2295,8 +2317,8 @@ mod tests {
         use crate::model::ir::{Held, Loc, Operation, Semantics};
         let what = Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
-            sources: vec![Loc::Held(Held { value: 2, width: 4 })],
+            dests: vec![Loc::Held(Held { value: 1, width: 4, offset: 0 })],
+            sources: vec![Loc::Held(Held { value: 2, width: 4, offset: 0 })],
             ..Semantics::new(Operation::Move)
         };
         let insns = vec![Arc::new(Insn::new(0, None, Some(what), vec![1], vec![2]))];
@@ -2334,8 +2356,8 @@ mod tests {
         use crate::model::ir::{Held, Loc, Operation, Semantics};
         let what = Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 2 })],
-            sources: vec![Loc::Held(Held { value: 2, width: 2 })],
+            dests: vec![Loc::Held(Held { value: 1, width: 2, offset: 0 })],
+            sources: vec![Loc::Held(Held { value: 2, width: 2, offset: 0 })],
             ..Semantics::new(Operation::Move)
         };
         let insns = vec![Arc::new(Insn::new(0, None, Some(what), vec![1], vec![2]))];
@@ -2361,7 +2383,11 @@ mod tests {
         );
         let copy = env.build_copy(&lis, 7, 1, None);
         let width = copy.what.as_ref().map(|what| what.dests.clone());
-        assert_eq!(width, Some(vec![Loc::Held(Held { value: 7, width: 4 })]), "the table says 4, the operands say 2");
+        assert_eq!(
+            width,
+            Some(vec![Loc::Held(Held { value: 7, width: 4, offset: 0 })]),
+            "the table says 4, the operands say 2"
+        );
     }
 
     /// A phi value defined by a literal on one edge and an add on the other
@@ -2372,7 +2398,7 @@ mod tests {
     fn test_a_split_remakes_a_literal_definition_of_a_register_defined_twice() {
         use crate::greedy::splitkit::SplitEnv as _;
         use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Semantics};
-        let held = |value| Loc::Held(Held { value, width: 4 });
+        let held = |value| Loc::Held(Held { value, width: 4, offset: 0 });
         let literal = Semantics {
             name: Some("mov".into()),
             dests: vec![held(1)],
@@ -2443,7 +2469,7 @@ mod tests {
     fn test_a_spilled_values_stored_word_takes_the_class_its_instructions_give() {
         use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Semantics};
         let (base, word) = (1u32, 2u32);
-        let held = |value| Loc::Held(Held { value, width: 2 });
+        let held = |value| Loc::Held(Held { value, width: 2, offset: 0 });
         let what = |op, name: &str, dests, sources| Semantics {
             name: Some(name.into()),
             dests,
@@ -2452,7 +2478,7 @@ mod tests {
         };
         let imm = |value| Loc::Imm(Imm { value, width: 2, address: None });
         let make = |at, defines: Vec<u32>, uses: Vec<u32>, w| Arc::new(Insn::new(at, None, Some(w), defines, uses));
-        let cell = Mem { base: Some(Held { value: base, width: 2 }), ..Mem::new(None, 2) };
+        let cell = Mem { base: Some(Held { value: base, width: 2, offset: 0 }), ..Mem::new(None, 2) };
         let insns = vec![
             make(1, vec![base], vec![], what(Operation::Move, "mov", vec![held(base)], vec![imm(2)])),
             make(2, vec![word], vec![], what(Operation::Move, "mov", vec![held(word)], vec![imm(3)])),
@@ -2609,5 +2635,34 @@ mod tests {
         assert!(!pins.interferes(&span(1, 11, 12, &at), RegId::ECX), "between two");
         assert_eq!(PINS_EXAMINED.with(std::cell::Cell::get), 0, "no pin walked for a range that meets none");
         assert!(pins.interferes(&span(1, 12, 13, &at), RegId::ECX), "over one");
+    }
+}
+
+#[cfg(test)]
+mod exiting_tests {
+    use super::exiting_blocks;
+    use crate::model::lir::{LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
+
+    /// `decide_with_split` scanned every loop for every block (654k
+    /// `Body::contains` calls, 41 M of memory_expansion's compile); one forest
+    /// lookup per block gives the same answer: 1 -> 2 <-> 3 (inner), 2 -> 4 -> 1.
+    #[test]
+    fn test_the_exiting_blocks_of_nested_loops_are_those_with_an_edge_out_of_their_innermost_loop() {
+        let block = |at: i64, succ: &[i64]| LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at, Vec::new()) };
+        let body = LirBody::new(
+            "n",
+            1,
+            vec![
+                block(1, &[2]).into(),
+                block(2, &[3, 4]).into(),
+                block(3, &[2]).into(),
+                block(4, &[1, 5]).into(),
+                block(5, &[]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        assert_eq!(exiting_blocks(&body), [false, true, false, true, false]);
     }
 }

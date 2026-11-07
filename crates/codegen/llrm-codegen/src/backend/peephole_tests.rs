@@ -214,7 +214,7 @@ fn test_argument_materialization_does_not_cross_observable_boundaries() {
             "group" => moved.group = Some(1),
             "symbol" => moved.symbol = Some(true),
             "clobber" => push.clobbers = [RegId::AX].into(),
-            "requires" => push.requires = vec![(Held { value: 5, width: 2 }, RegId::AX)],
+            "requires" => push.requires = vec![(Held { value: 5, width: 2, offset: 0 }, RegId::AX)],
             _ => {}
         }
         let (push, moved) = (Arc::new(push), Arc::new(moved));
@@ -1273,7 +1273,7 @@ fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
 fn test_the_lea_of_a_pair_keeps_the_value_the_last_part_made_for_the_debugger() {
     let ax = rl(RegId::AX, 2);
     let first = Insn {
-        debug: crate::model::lir::DebugTags { defines: vec![5], before: vec![0] },
+        debug: crate::model::lir::DebugTags { defines: vec![5], before: vec![0], slot: None },
         ..insn(
             0,
             Some((0, 0)),
@@ -1283,7 +1283,7 @@ fn test_the_lea_of_a_pair_keeps_the_value_the_last_part_made_for_the_debugger() 
         )
     };
     let last = Insn {
-        debug: crate::model::lir::DebugTags { defines: vec![7], before: vec![1] },
+        debug: crate::model::lir::DebugTags { defines: vec![7], before: vec![1], slot: None },
         ..insn(
             1,
             Some((1, 1)),
@@ -1617,6 +1617,41 @@ fn test_zeroing_before_a_jump_asks_what_the_target_reads() {
         ];
         let result = zeroes(&body("zero", 0, crate::model::lir::shared(blocks))).insns()[0].clone();
         assert_eq!(result.what.as_ref().unwrap().name.as_deref(), Some(if zeroed { "xor" } else { "mov" }));
+    }
+}
+
+/// `mov eax, -1` is five bytes and `or eax, -1` three, one clock each: -Os kept
+/// the `mov` on every dead-flags site (18 in the m32 corpus, 36 B).
+#[test]
+fn test_minus_one_is_or_at_size_when_flags_are_dead() {
+    // (successor's first instruction, ones, rewritten)
+    for (successor, ones, orred) in
+        [("cmp", true, true), ("cmp", false, false), ("jb", true, false), ("cmp-low", true, false)]
+    {
+        let eax = rl(RegId::EAX, 4);
+        let value = if successor == "cmp-low" { 5 } else { -1 };
+        let set = insn(
+            0,
+            Some((0, 5)),
+            Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![im(value, 4)])),
+            vec![],
+            vec![],
+        );
+        let jump = insn(5, Some((5, 7)), Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(7))), vec![], vec![]);
+        let first = match successor {
+            "jb" => Some(semt(Operation::Branch, "jb", vec![], vec![], Some(9))),
+            _ => Some(sem(Operation::Compare, "cmp", vec![], vec![eax.clone(), im(1, 4)])),
+        };
+        let blocks = vec![
+            block(0, vec![Arc::new(set), Arc::new(jump)], vec![7]),
+            block(7, vec![Arc::new(insn(7, Some((7, 9)), first, vec![], vec![]))], vec![]),
+        ];
+        let result = cleared(&body("ones", 0, crate::model::lir::shared(blocks)), ones).insns()[0].clone();
+        let what = result.what.as_ref().unwrap();
+        assert_eq!(what.name.as_deref(), Some(if orred { "or" } else { "mov" }), "{successor} {ones}");
+        if orred {
+            assert_eq!(what.sources, [eax, im(-1, 4)]);
+        }
     }
 }
 
@@ -2059,7 +2094,7 @@ fn test_far_pointer_loaded_in_one_instruction() {
         if variant.starts_with("override") {
             // As lowered and allocated: the offset value placed in si.
             let far = |disp: i64| Mem {
-                base: Some(Held { value: 1, width: 2 }),
+                base: Some(Held { value: 1, width: 2, offset: 0 }),
                 ..mem(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, disp) }), 2, RegId::SI, 0, 2)
             };
             (low, high) = (far(16), far(18));
@@ -2712,7 +2747,7 @@ fn test_a_far_load_whose_selector_is_required_in_es_still_folds_into_its_widenin
     // fold.
     let (cell, narrow, wide) = narrow_load_parts();
     let mut far = (*narrow).clone();
-    far.requires = vec![(Held { value: 9, width: 2 }, RegId::ES)];
+    far.requires = vec![(Held { value: 9, width: 2, offset: 0 }, RegId::ES)];
     let used =
         plain(2, Operation::Binary, "add", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4), rl(RegId::EDX, 4)], None);
     let input = body("far-load-extend", 0, vec![block(0, vec![Arc::new(far), wide, used], vec![]).into()]);
@@ -2722,7 +2757,11 @@ fn test_a_far_load_whose_selector_is_required_in_es_still_folds_into_its_widenin
         result.insns().into_iter().filter(|one| one.what.as_ref().unwrap().op != Operation::Nothing).collect();
 
     assert_eq!(emitted[0].what, Some(sem(Operation::Extend, "movsx", vec![rl(RegId::EDX, 4)], vec![Loc::Mem(cell)])));
-    assert_eq!(emitted[0].requires, [(Held { value: 9, width: 2 }, RegId::ES)], "the selector stays required");
+    assert_eq!(
+        emitted[0].requires,
+        [(Held { value: 9, width: 2, offset: 0 }, RegId::ES)],
+        "the selector stays required"
+    );
     assert_eq!(emitted.len(), 2);
 }
 
@@ -3164,7 +3203,7 @@ fn test_dword_constant_is_narrowed_when_the_abi_reads_only_its_low_word() {
         vec![],
     );
     let finish = Insn {
-        requires: vec![(Held { value: value, width: 2 }, RegId::AX)],
+        requires: vec![(Held { value: value, width: 2, offset: 0 }, RegId::AX)],
         reads_complete: true,
         ..insn(2, Some((2, 2)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![value])
     };
@@ -3215,7 +3254,7 @@ fn test_dword_fixed_register_argument_keeps_all_value_lanes_live() {
     );
     let call = Insn {
         clobbers: [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX].into(),
-        requires: vec![(Held { value: 1, width: 4 }, RegId::BX)],
+        requires: vec![(Held { value: 1, width: 4, offset: 0 }, RegId::BX)],
         ..insn(2, Some((2, 2)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![1])
     };
     let input = body("wide-fixed-argument", 1, vec![block(1, vec![Arc::new(source), Arc::new(call)], vec![]).into()]);
@@ -3245,7 +3284,7 @@ fn test_dword_copy_read_after_a_call_that_may_clobber_its_upper_half_stays_wide(
         vec![2, 4],
     );
     let finish = Insn {
-        requires: vec![(Held { value: 3, width: 4 }, RegId::EAX)],
+        requires: vec![(Held { value: 3, width: 4, offset: 0 }, RegId::EAX)],
         reads_complete: true,
         ..insn(4, Some((4, 4)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![3])
     };
@@ -3342,7 +3381,10 @@ fn test_selected_move_shift_high_extract_uses_the_same_double_shift() {
         )),
         Arc::new(Insn {
             reads_complete: true,
-            requires: vec![(Held { value: 4, width: 2 }, RegId::AX), (Held { value: 3, width: 2 }, RegId::DX)],
+            requires: vec![
+                (Held { value: 4, width: 2, offset: 0 }, RegId::AX),
+                (Held { value: 3, width: 2, offset: 0 }, RegId::DX),
+            ],
             ..insn(
                 12,
                 Some((12, 12)),
@@ -3392,7 +3434,10 @@ fn test_a_move_shift_high_extract_is_found_past_an_unrelated_instruction() {
         )),
         Arc::new(Insn {
             reads_complete: true,
-            requires: vec![(Held { value: 4, width: 2 }, RegId::AX), (Held { value: 3, width: 2 }, RegId::DX)],
+            requires: vec![
+                (Held { value: 4, width: 2, offset: 0 }, RegId::AX),
+                (Held { value: 3, width: 2, offset: 0 }, RegId::DX),
+            ],
             ..insn(
                 13,
                 Some((13, 13)),
@@ -3438,7 +3483,10 @@ fn test_a_move_shift_high_extract_is_found_through_a_coalescing_anchor() {
         )),
         Arc::new(Insn {
             reads_complete: true,
-            requires: vec![(Held { value: 4, width: 2 }, RegId::AX), (Held { value: 3, width: 2 }, RegId::DX)],
+            requires: vec![
+                (Held { value: 4, width: 2, offset: 0 }, RegId::AX),
+                (Held { value: 3, width: 2, offset: 0 }, RegId::DX),
+            ],
             ..insn(
                 13,
                 Some((13, 13)),
@@ -3557,7 +3605,10 @@ fn test_return_high_extraction_drops_redundant_low_word_shuttle() {
             ..insn(4, Some((4, 4)), Some(sem(Operation::Nothing, "", vec![], vec![])), vec![], vec![])
         }),
         Arc::new(Insn {
-            requires: vec![(Held { value: 5, width: 2 }, RegId::AX), (Held { value: 4, width: 2 }, RegId::DX)],
+            requires: vec![
+                (Held { value: 5, width: 2, offset: 0 }, RegId::AX),
+                (Held { value: 4, width: 2, offset: 0 }, RegId::DX),
+            ],
             ..insn(5, Some((5, 5)), Some(sem(Operation::Return, "retf", vec![], vec![ax, dx])), vec![], vec![5, 4])
         }),
     ];
@@ -3753,7 +3804,7 @@ fn lea_alu_body_at(
     )));
     // The return reads only eax: everything else is dead after it.
     insns.push(Arc::new(Insn {
-        requires: vec![(Held { value: 7, width: 4 }, RegId::EAX)],
+        requires: vec![(Held { value: 7, width: 4, offset: 0 }, RegId::EAX)],
         reads_complete: true,
         ..insn(5, Some((5, 5)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![7])
     }));
@@ -3827,7 +3878,7 @@ fn test_a_word_lea_of_dword_registers_is_not_split_into_word_adds() {
     // The return reads only eax: everything else is dead after it, as in
     // `lea_alu_body_at`.
     let ret = Arc::new(Insn {
-        requires: vec![(Held { value: 7, width: 4 }, RegId::EAX)],
+        requires: vec![(Held { value: 7, width: 4, offset: 0 }, RegId::EAX)],
         reads_complete: true,
         ..insn(5, Some((5, 5)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![7])
     });
@@ -4077,6 +4128,7 @@ fn _high_extract_body(tail: Vec<Arc<Insn>>) -> LirBody {
         effects: llrm_mir::memory::Effects::NONE,
         private: vec![],
         disturbs: Default::default(),
+        block: false,
     };
     let load = Insn {
         symbol: Some(false),
@@ -4096,7 +4148,7 @@ fn _high_extract_body(tail: Vec<Arc<Insn>>) -> LirBody {
 fn _return_high() -> Arc<Insn> {
     Arc::new(Insn {
         reads_complete: true,
-        requires: vec![(Held { value: 1, width: 2 }, RegId::DX)],
+        requires: vec![(Held { value: 1, width: 2, offset: 0 }, RegId::DX)],
         ..insn(2, Some((2, 3)), Some(sem(Operation::Return, "retf", vec![], vec![])), vec![], vec![1])
     })
 }
@@ -4168,11 +4220,11 @@ fn test_high_extract_keeps_observable_wide_load_or_shift_effects() {
 
 fn procedure() -> LirBody {
     let instruction = |at: i64, what: Semantics| insn(at, Some((at, at + 1)), Some(what), vec![], vec![]);
-    let held = Loc::Held(Held { value: 1, width: 2 });
+    let held = Loc::Held(Held { value: 1, width: 2, offset: 0 });
     let insns = vec![
         Arc::new(instruction(0, sem(Operation::Move, "mov", vec![held.clone()], vec![im(6, 2)]))),
         Arc::new(Insn {
-            requires: vec![(Held { value: 1, width: 2 }, RegId::CX)],
+            requires: vec![(Held { value: 1, width: 2, offset: 0 }, RegId::CX)],
             ..instruction(1, sem(Operation::Call, "call", vec![], vec![held]))
         }),
         Arc::new(instruction(2, sem(Operation::Call, "call", vec![], vec![]))),
@@ -4233,8 +4285,9 @@ fn test_a_repeated_address_copy_does_not_hide_a_read_modify_write() {
     // DRAWBOB's counter took a load, an add and a store once allocation
     // copied its pointer into SI again, as a new value, before the store.
     let (si, ax, dx) = (rl(RegId::SI, 2), rl(RegId::AX, 2), rl(RegId::DX, 2));
-    let cell =
-        |base: u32| Loc::Mem(Mem { base: Some(Held { value: base, width: 2 }), ..mem(None, 2, RegId::SI, 0, 0) });
+    let cell = |base: u32| {
+        Loc::Mem(Mem { base: Some(Held { value: base, width: 2, offset: 0 }), ..mem(None, 2, RegId::SI, 0, 0) })
+    };
     let copy = |at, into: u32| {
         Arc::new(insn(
             at,
@@ -4287,7 +4340,7 @@ fn test_a_repeated_address_copy_does_not_hide_a_read_modify_write() {
 fn test_a_store_through_another_register_is_not_fused() {
     let (dx, ax) = (rl(RegId::DX, 2), rl(RegId::AX, 2));
     let through = |value: u32, register: RegId| {
-        Loc::Mem(Mem { base: Some(Held { value, width: 2 }), through: register, ..Mem::new(None, 2) })
+        Loc::Mem(Mem { base: Some(Held { value, width: 2, offset: 0 }), through: register, ..Mem::new(None, 2) })
     };
     let head: Vec<Arc<Insn>> = vec![
         Arc::new(insn(
@@ -4613,7 +4666,7 @@ fn test_a_copy_is_forwarded_into_the_address_that_reads_it() {
     ));
     let cell = Mem {
         index_through: RegId::ESI,
-        index: Some(Held { value: 32, width: 4 }),
+        index: Some(Held { value: 32, width: 4, offset: 0 }),
         ..mem(Some(Addr { segment: (RegId::SS).iced(), ..Addr::new(Space::Literal, -1032) }), 1, RegId::EBP, 0, 2)
     };
     let store = Arc::new(insn(
@@ -4649,7 +4702,7 @@ fn test_a_copy_is_not_forwarded_past_a_write_of_its_source() {
     ));
     let cell = Mem {
         index_through: RegId::ESI,
-        index: Some(Held { value: 32, width: 4 }),
+        index: Some(Held { value: 32, width: 4, offset: 0 }),
         ..mem(Some(Addr { segment: (RegId::SS).iced(), ..Addr::new(Space::Literal, -1032) }), 1, RegId::EBP, 0, 2)
     };
     let store = Arc::new(insn(
@@ -4789,7 +4842,12 @@ fn test_an_instruction_with_a_row_is_answered_from_the_table_and_one_without_is_
 fn test_two_cells_equal_but_spelled_through_other_registers_have_their_own_effects() {
     let regs = crate::backend::registerinfo::test_regs();
     let through = |register| {
-        let cell = Mem { through: register, offset: 2, base: Some(Held { value: 1, width: 2 }), ..Mem::new(None, 2) };
+        let cell = Mem {
+            through: register,
+            offset: 2,
+            base: Some(Held { value: 1, width: 2, offset: 0 }),
+            ..Mem::new(None, 2)
+        };
         sem(Operation::Move, "mov", vec![rl(RegId::ES, 2)], vec![Loc::Mem(cell)])
     };
     // One place in memory, the second instruction put where the first was (as a
@@ -4896,6 +4954,44 @@ fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
         first,
         "another instruction was given this one's answer"
     );
+}
+
+/// Both hashes of an ask walked its operands, each its own time: 26M Ir of
+/// memory_expansion -O2 in `EffectKey::hashes`. One walk feeds both.
+#[test]
+fn test_the_operands_of_an_ask_are_walked_once_for_both_hashes() {
+    let regs = crate::backend::registerinfo::test_regs();
+    let add = insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::AX, 2)], vec![rl(RegId::AX, 2), rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    );
+    let before = shapes_walked();
+    _register_effects(regs, 16, &add, false, true);
+    assert_eq!(shapes_walked() - before, 1, "the operands were walked once for each hash");
+}
+
+/// The flags an instruction reads and writes were picked out of its lanes one
+/// lane at a time, a copy of each set first: `_flag_effect` was 27M Ir of
+/// memory_expansion -O2. The flag lanes are the low bits of the set.
+#[test]
+fn test_the_flags_of_an_effect_are_taken_without_walking_its_lanes() {
+    let regs = crate::backend::registerinfo::test_regs();
+    let add = insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::AX, 2)], vec![rl(RegId::AX, 2), rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    );
+    let _ = liveness::effect(regs, 16, &add);
+    let before = crate::backend::lanes::WALKS.with(std::cell::Cell::get);
+    let (reads, writes) = _flag_effect(regs, 16, &add);
+    assert_eq!(crate::backend::lanes::WALKS.with(std::cell::Cell::get), before, "the lanes were walked");
+    assert!(reads.is_empty(), "add reads no flag");
+    assert_eq!(writes, _flag_lanes(_ARITHMETIC), "add writes every arithmetic flag");
 }
 
 /// `dead_at_exit` was worked out for the body ten passes in a row, though all
@@ -5387,10 +5483,11 @@ fn test_a_repeated_frame_address_after_allocation_is_made_again() {
 /// -Os m16 that main did not have.
 #[test]
 fn test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it() {
-    for (label, size, flags_read, expected) in [
-        ("speed, flags dead", false, false, true),
-        ("size, flags dead", true, false, false),
-        ("speed, flags read", false, true, false),
+    for (label, size, flags_read, prefix, expected) in [
+        ("speed, flags dead", false, false, true, true),
+        ("size, flags dead", true, false, true, false),
+        ("speed, flags read", false, true, true, false),
+        ("speed, flags dead, no tzcnt on the target", false, false, false, false),
     ] {
         let scan = sem(Operation::Binary, "bsf", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4), rl(RegId::ECX, 4)]);
         let first = Arc::new(insn(10, Some((10, 11)), Some(scan), vec![], vec![]));
@@ -5401,8 +5498,7 @@ fn test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it() {
         };
         let second = Arc::new(insn(11, Some((11, 12)), Some(next), vec![], vec![]));
         let input = body("scan", 0, vec![block(0, vec![first], vec![1]).into(), block(1, vec![second], vec![]).into()]);
-        let cpu = crate::backend::cpu::tuned("486", size).unwrap();
-        let result = crate::backend::repbsf::marked(&input, &cpu);
+        let result = crate::backend::repbsf::mark(&input, size, prefix);
         let got = result.blocks[0].insns[0].what.as_ref().unwrap().repeat;
         assert_eq!(got, expected, "{label}");
     }
@@ -5429,6 +5525,30 @@ fn store_then_reload(between: Vec<Insn>) -> usize {
     )));
     let done = forwarded_reloads(rules(), &body("forwarded-reload", 0, vec![block(0, insns, vec![]).into()]));
     whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("mov")).count()
+}
+
+/// nbody -O3 at m64: `movsd [rsp-0x20], xmm13 ; movsd xmm13, [rsp-0x20]` stood
+/// in the loop four times a trip (800 of 27.6k instructions); the pin's code has
+/// no such pair, and the rule that drops it knew `mov` and nothing wider than a
+/// dword.
+#[test]
+fn test_a_float_reload_of_the_register_that_filled_the_cell_is_dropped_at_m64() {
+    let cell = || Loc::Mem(mem(frame(-16), 8, RegId::RSP, -16, 1));
+    let movsd = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "movsd_x", dests, sources)), vec![], vec![])
+    };
+    let insns = vec![
+        Arc::new(movsd(0, vec![cell()], vec![rl(RegId::XMM13, 8)])),
+        Arc::new(movsd(100, vec![rl(RegId::XMM13, 8)], vec![cell()])),
+        Arc::new(insn(200, Some((200, 200)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])),
+    ];
+    let done = forwarded_float_reloads(
+        &crate::backend::targets::x86_m64::RULES,
+        &body("forwarded-float-reload", 0, vec![block(0, insns, vec![]).into()]),
+    );
+    let moves = whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("movsd_x")).count();
+    assert_eq!(moves, 1, "the store stays, the reload goes");
 }
 
 /// huge_copy.c at m16 -Os: the forwarding dropped the reload `mov bl, [bp-2]`
@@ -5739,7 +5859,7 @@ fn a_relocated_dword_immediate_is_not_narrowed_to_a_word_without_its_relocation(
     let symbol = Loc::Imm(Imm { value: 0, width: 4, address: Some(address) });
     let source = point(1, sem(Operation::Move, "mov", vec![rl(RegId::EAX, 4)], vec![symbol]), vec![1], vec![]);
     let finish = Insn {
-        requires: vec![(Held { value: 1, width: 2 }, RegId::AX)],
+        requires: vec![(Held { value: 1, width: 2, offset: 0 }, RegId::AX)],
         reads_complete: true,
         ..insn(2, Some((2, 2)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![1])
     };

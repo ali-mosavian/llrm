@@ -134,6 +134,30 @@ fn new_icmp(
     c.replace_with_new(inst, Opcode::ICmp(pred), i1, vec![a, b], Flags::default())
 }
 
+/// `Op0 pred Op1 -> ~Op1 pred ~Op0, if this allows us to drop an instruction`
+/// ([:8205](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L8205)):
+/// both sides are free to invert and one of the inversions eats an
+/// instruction.
+fn fold_icmp_of_inverted_operands(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    c.context.types.int_bits(c.type_of(op0))?;
+    let (mut consumes0, mut consumes1) = (false, false);
+    let (one0, one1) = (has_one_use(c, op0), has_one_use(c, op1));
+    c.get_freely_inverted(inst, op0, one0, false, &mut consumes0)?;
+    c.get_freely_inverted(inst, op1, one1, false, &mut consumes1)?;
+    if !(consumes0 || consumes1) {
+        return None;
+    }
+    let inv0 = c.get_freely_inverted(inst, op0, one0, true, &mut consumes0)?;
+    let inv1 = c.get_freely_inverted(inst, op1, one1, true, &mut consumes1)?;
+    Some(new_icmp(c, inst, pred.swapped(), inv0, inv1))
+}
+
 /// `visitICmpInst`.
 pub fn visit_icmp(
     c: &mut Combiner,
@@ -231,6 +255,9 @@ pub fn visit_icmp(
         return r;
     }
     if let Some(r) = fold_icmp_with_pointer_cast(c, inst, pred, op0, op1) {
+        return r;
+    }
+    if let Some(r) = fold_icmp_of_inverted_operands(c, inst, pred, op0, op1) {
         return r;
     }
     for operand in [op0, op1] {
@@ -356,7 +383,7 @@ fn fold_gep_icmp(
     let index_ty = c.index_type(lhs_gep.ty);
     if base.ptr == Some(rhs) && can_fold(base.lhs_flags) && !c.is_expensive(&base) {
         // ((gep Ptr, OFFSET) cmp Ptr) ---> (OFFSET cmp 0)
-        let offset = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty);
+        let offset = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty, true);
         let zero = c.int(c.type_of(offset), 0);
         return Some(new_icmp_of(c, base.lhs_flags, offset, zero));
     }
@@ -415,8 +442,8 @@ fn fold_gep_icmp(
             }
         }
         if fold {
-            let l = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty);
-            let r = c.emit_gep_offsets(inst, &base.rhs_geps, base.rhs_flags, index_ty);
+            let l = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty, true);
+            let r = c.emit_gep_offsets(inst, &base.rhs_geps, base.rhs_flags, index_ty, true);
             return Some(new_icmp_of(c, base.lhs_flags.and(base.rhs_flags), l, r));
         }
     }

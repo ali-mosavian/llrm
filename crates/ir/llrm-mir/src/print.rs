@@ -339,6 +339,7 @@ fn float(
     let value = match kind {
         FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
         FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
+        FloatKind::F128 => unreachable!("an fp128 constant is Float128, printed in hex"),
     };
     if value.is_finite() {
         let text = format!("{value:.6e}");
@@ -779,6 +780,15 @@ impl Printer<'_> {
                 let indices: Vec<String> = indices.iter().map(u32::to_string).collect();
                 format!("{} {}, {}", inst.opcode.mnemonic(), values.join(", "), indices.join(", "))
             }
+            Opcode::ExtractElement | Opcode::InsertElement => {
+                let values: Vec<String> = (0..ops.len()).map(typed).collect();
+                format!("{} {}", inst.opcode.mnemonic(), values.join(", "))
+            }
+            Opcode::ShuffleVector(mask) => {
+                let lanes: Vec<String> =
+                    mask.iter().map(|&lane| if lane < 0 { "i32 poison".to_owned() } else { format!("i32 {lane}") }).collect();
+                format!("shufflevector {}, {}, <{} x i32> <{}>", typed(0), typed(1), mask.len(), lanes.join(", "))
+            }
             Opcode::Alloca { allocated, align, address_space } => {
                 let mut text = format!("alloca {}", self.ty(*allocated));
                 if !ops.is_empty() {
@@ -792,6 +802,7 @@ impl Printer<'_> {
                 }
                 text
             }
+            Opcode::VaArg => format!("va_arg {}, {}", typed(0), self.ty(inst.ty)),
             Opcode::Load { align, volatile } => {
                 let align = align.map(|one| format!(", align {one}")).unwrap_or_default();
                 format!("load {}{}, {}{align}", if *volatile { "volatile " } else { "" }, self.ty(inst.ty), typed(0))
@@ -921,6 +932,7 @@ impl Printer<'_> {
                 _ => unreachable!("a floating constant has a floating type"),
             },
             ConstantKind::Float80(bits) => format!("0xK{bits:020X}"),
+            ConstantKind::Float128(bits) => format!("0xL{:016X}{:016X}", *bits as u64, (*bits >> 64) as u64),
             ConstantKind::Null => "null".to_owned(),
             ConstantKind::Poison => "poison".to_owned(),
             ConstantKind::Undef => "undef".to_owned(),

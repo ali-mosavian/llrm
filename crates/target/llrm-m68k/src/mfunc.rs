@@ -20,7 +20,7 @@
 //! # See also
 //! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`, pin d1106deb71cc.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
@@ -110,8 +110,20 @@ pub fn op_inst(
         cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
         commutable: desc.has(flag::COMMUTABLE),
         rematerializable: desc.has(flag::REMATERIALIZABLE),
+        early_clobber: clears_before_it_reads(name),
         ..Inst::new(Kind::Op(name), operands)
     }
+}
+
+/// Whether `name` writes its result before it has read its address: a zero
+/// extending load into a register is `moveq #0` then `move.b`
+/// (`ExpandMOVSZX_RM`), so the result may not be a register the address names.
+///
+/// DEVIATE: the pin's description leaves the result free to share the
+/// address's register, and its expansion falls back to `move.b; and.l #255`
+/// (10 bytes against 6). Reason: best of gcc and clang is the goal. Exit: none.
+fn clears_before_it_reads(name: &str) -> bool {
+    crate::expand::extension(name).is_some_and(|(signed, _, mode, _)| !signed && mode != 'd')
 }
 
 /// The machine function over m68k's classes.
@@ -169,7 +181,7 @@ struct Emitter<'a> {
     /// again, and cannot be run again (they have a result besides the
     /// codes, or touch memory): the codes are copied to a register right
     /// after them (`InsertCopiesAndMoveSuccs`).
-    save: std::collections::HashSet<u32>,
+    save: llrm_support::hash::HashSet<u32>,
     /// The register the codes of a node in `save` were copied to.
     saved: HashMap<u32, Reg>,
 }
@@ -315,9 +327,9 @@ impl Emitter<'_> {
     fn nodes_to_save(
         &self,
         block: &Selected,
-    ) -> std::collections::HashSet<u32> {
+    ) -> llrm_support::hash::HashSet<u32> {
         let mut flags_from: Option<u32> = None;
-        let mut save = std::collections::HashSet::new();
+        let mut save = llrm_support::hash::HashSet::default();
         for unit in &block.units {
             for &node in unit.nodes.iter().rev() {
                 let value = SDValue { node, res: 0 };
@@ -412,6 +424,26 @@ impl Emitter<'_> {
                 };
                 into.push(Inst::copy(dst, src));
             }
+            // `TargetOpcode::IMPLICIT_DEF` (10), which has no name in the pin's
+            // instruction table: an undefined value, a zero until MIR has
+            // `undef` (the pin's ProcessImplicitDefs drops it)
+            ISD::Machine(10) => {
+                let name = match n.values[0].size_in_bits() {
+                    8 => "MOVI8di",
+                    16 => "MOVI16di",
+                    _ => "MOVI32ri",
+                };
+                let desc =
+                    local::code_of(name).and_then(local::desc).ok_or_else(|| format!("{name}: no description"))?;
+                let class = desc
+                    .operands
+                    .first()
+                    .and_then(|one| Class::of_pin(one.reg_class))
+                    .unwrap_or_else(|| Class::of_type(n.values[0]));
+                let dst = self.new_reg(class);
+                self.values.insert((node, 0), dst);
+                into.push(op_inst(name, desc, vec![Operand::Def(dst), Operand::Imm(0)]));
+            }
             ISD::Machine(code) => {
                 let name = opcode_name(code).ok_or_else(|| {
                     let ops: Vec<String> = n
@@ -495,13 +527,14 @@ pub fn emit(
     let mut emitter = Emitter {
         dag: &first.dag,
         function: MFunction::new(name),
-        values: HashMap::new(),
-        builder: HashMap::new(),
+        values: HashMap::default(),
+        builder: HashMap::default(),
         flags_from: None,
         save: Default::default(),
-        saved: HashMap::new(),
+        saved: HashMap::default(),
     };
     emitter.function.locals.extend(first.locals.iter().copied());
+    let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::default();
     for one in blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();
@@ -512,14 +545,45 @@ pub fn emit(
         // A unit lists its glued nodes last first.
         for unit in &one.units {
             for &node in unit.nodes.iter().rev() {
+                let before = insts.len();
                 emitter.emit(node, &mut insts)?;
+                // `SDLoc` to `DebugLoc`: what the node emitted is of its IR
+                // instruction's place.
+                let order = one.dag.node(SDValue { node, res: 0 }).order as usize;
+                if let Some(&Some(place)) = one.dag.lines.get(order) {
+                    let places = &mut emitter.function.places;
+                    let number = *place_numbers
+                        .entry(place)
+                        .or_insert_with(
+                            || {
+                                places.push(place);
+                                places.len()
+                            },
+                        );
+                    for made in &mut insts[before..] {
+                        if made.origin == 0 {
+                            made.origin = number as u32;
+                        }
+                    }
+                }
             }
         }
         emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
-        emitter.function.blocks.push(Block { id: one.block.0, insts, phis: Vec::new() });
+        if one.ends_unreachable {
+            let mut end = Inst::new(Kind::Op("UNREACHABLE"), Vec::new());
+            end.terminator = true;
+            end.barrier = true;
+            insts.push(end);
+        }
+        let mut block = Block { id: one.block.0, insts, phis: Vec::new() };
+        block.place_unlocated();
+        emitter.function.blocks.push(block);
     }
     // `HandlePHINodesInSuccessorBlocks`: each export is an input of a phi in
-    // the block the phi is in.
+    // the block the phi is in, from every block made for the exporting IR
+    // block that leaves for it (`FinishBasicBlock` gives the phi an input for
+    // each block a lowering split off).
+    let leaves = llrm_spike_mf::regalloc::successors(&emitter.function);
     for (pred, one) in blocks.iter().enumerate() {
         for update in &one.phis {
             let at = blocks.iter().position(|other| other.block == update.phi_block).ok_or("a phi in no block")?;
@@ -540,10 +604,19 @@ pub fn emit(
             };
             let result = register(&mut emitter, update.result);
             let incoming = register(&mut emitter, update.incoming);
-            let phis = &mut emitter.function.blocks[at].phis;
-            match phis.iter_mut().find(|phi| phi.result == result) {
-                Some(phi) => phi.incoming.push((pred, incoming)),
-                None => phis.push(Phi { result, incoming: vec![(pred, incoming)] }),
+            let mut edges: Vec<usize> = (0..blocks.len())
+                .filter(|&from| blocks[from].parent == one.block && leaves[from].contains(&at))
+                .collect();
+            if edges.is_empty() {
+                edges.push(pred);
+            }
+            for from in edges {
+                let phis = &mut emitter.function.blocks[at].phis;
+                match phis.iter_mut().find(|phi| phi.result == result) {
+                    Some(phi) if phi.incoming.iter().any(|(edge, _)| *edge == from) => {}
+                    Some(phi) => phi.incoming.push((from, incoming)),
+                    None => phis.push(Phi { result, incoming: vec![(from, incoming)] }),
+                }
             }
         }
     }
@@ -711,8 +784,8 @@ pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
             restore.sets_flags = true;
             tail.insert(second, restore);
         }
-        let mut head_value: HashMap<Reg, Reg> = HashMap::new();
-        let mut other_value: HashMap<Reg, Reg> = HashMap::new();
+        let mut head_value: HashMap<Reg, Reg> = HashMap::default();
+        let mut other_value: HashMap<Reg, Reg> = HashMap::default();
         let mut phis = Vec::new();
         for cmov in &cmovs {
             let (result, on_false, on_true, cond) = cmov_parts(cmov)?;

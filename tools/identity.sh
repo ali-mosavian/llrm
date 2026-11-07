@@ -12,13 +12,18 @@ ulimit -v "${LLRM_MEMORY_LIMIT_KB:-8000000}"  # a runaway compile dies at 8 GB i
 #       qcport llrm-c over QCport's modules at -O2 and -Os; QCPORT names its src/ and QCPORT_INC the
 #              Borland headers it builds with (neither is in this repository)
 # IDENTITY_SAME_SOURCE=1 allows BASE_BIN and NEW_BIN to be one binary (a build against itself).
+# c, qcport: the llrm-llc beside each llrm-cc must differ too (IDENTITY_SAME_LLC=1 for a frontend-only change).
 # The -m flag is passed to the compiler (default: its own, m16).
 #
 # Prints a count of each outcome and the programs that are not SAME; exit 1 if any DIFF or STATUS.
 export LLRM_VERIFY=${LLRM_VERIFY:-1}  # the gate checks each pass and phase
 set -u
+export AB_ALLOW_ENV="${AB_ALLOW_ENV:-} LLRM_VERIFY"  # set above, for both sides
+. "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
 kind=${1:?kind: nib, c or qcport}; base=${2:?base compiler}; new=${3:?new compiler}; shift 3
 python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; print(llrmbin.assert_distinct(sys.argv[1], sys.argv[2], bool(sys.argv[3])))" "$base" "$new" "${IDENTITY_SAME_SOURCE:-}" || exit 2
+case $kind in c|qcport) python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; llrmbin.assert_distinct_llc(sys.argv[1], sys.argv[2], bool(sys.argv[3]))" "$base" "$new" "${IDENTITY_SAME_LLC:-}" || exit 2 ;; esac
+. "$(dirname "$0")/fresh_compile.sh"
 target=()
 case "${1:-}" in -m[0-9]*) target=("$1") ;; esac
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -32,14 +37,14 @@ case $kind in c|qcport) export compile_flags="-c"; export target_flags=""; expor
 one() {
     source=$1; shift
     key=$(echo "$source $*" | tr '/ ' '__')
-    "$base" "$source" "$@" $target_flags $compile_flags -o "$out/a_$key.obj" >/dev/null 2>&1; first=$?
-    "$new" "$source" "$@" $target_flags $compile_flags -o "$out/b_$key.obj" >/dev/null 2>&1; second=$?
+    fresh_compile "$out/a_$key.obj" "$base" "$source" "$@" $target_flags $compile_flags -o "$out/a_$key.obj" >/dev/null 2>&1; first=$?
+    fresh_compile "$out/b_$key.obj" "$new" "$source" "$@" $target_flags $compile_flags -o "$out/b_$key.obj" >/dev/null 2>&1; second=$?
     if [ $first != $second ]; then echo "STATUS $source $* ($first, $second)"
     elif [ $first != 0 ]; then echo "REFUSED $source $*"
     elif cmp -s "$out/a_$key.obj" "$out/b_$key.obj"; then echo "SAME $source $*"
     else echo "DIFF $source $*"; fi
 }
-export -f one
+export -f fresh_compile one
 
 cd "$root" || exit 2
 case $kind in
@@ -57,4 +62,6 @@ qcport)
 esac | xargs -P 8 -L1 bash -c 'one $0 "$@"' | sort > "$out/results"
 cut -d' ' -f1 "$out/results" | uniq -c
 grep -v '^SAME' "$out/results"
+# Rows that all REFUSED compared nothing: two builds that fail alike must not pass.
+grep -q '^SAME' "$out/results" || { echo "identity: no program was compared SAME (every row REFUSED, or none ran)" >&2; exit 1; }
 ! grep -q '^\(DIFF\|STATUS\)' "$out/results"

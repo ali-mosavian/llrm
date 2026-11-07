@@ -78,7 +78,7 @@ pub fn info(
     let declared = |symbol: &str| {
         module.functions().find_map(|(_, global, body)| {
             let name = global.name.owned()?;
-            (crate::data::symbol_name(platform, &name) == symbol).then(|| subprogram_line(module, body)).flatten()
+            (crate::data::symbol_name(platform, &name) == symbol).then(|| module.subprogram_line(body)).flatten()
         })
     };
     for function in functions {
@@ -115,28 +115,13 @@ pub fn info(
             blocks: Vec::new(),
             frame: Vec::new(),
             all_calls: false,
+            frame_base: None,
             calls: Vec::new(),
         });
     }
     info.code = vec![Range { section: 0, offset: 0, length: at }];
     let _ = Language::default();
     Ok(Some(info))
-}
-
-/// The line a function's `!DISubprogram` says it starts at.
-fn subprogram_line(
-    module: &llrm_mir::Module,
-    function: &llrm_mir::Function,
-) -> Option<u32> {
-    let (_, node) = function.metadata.iter().find(|(kind, _)| kind == "dbg")?;
-    let at = module.special.get(node)?.fields.iter().position(|one| one == "line")?;
-    match module.metadata.get(node.0 as usize)?.operands.get(at)? {
-        llrm_mir::MetadataOperand::Constant(value) => match module.context.get(*value).kind {
-            llrm_mir::ConstantKind::Int(number) => u32::try_from(number).ok(),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 /// The line table rows of `function`, whose code starts at `start`: one where
@@ -204,10 +189,20 @@ fn lines(
             at += 4;
         }
     }
-    if let Some(line) = declared
-        && out.first().is_none_or(|first| first.offset > start)
-    {
-        out.insert(0, row(start, (line, 0)));
+    if let Some(line) = declared {
+        match (out.first().copied(), body_start) {
+            // The first instruction's row moves to where the body starts.
+            (Some(first), Some(body))
+                if first.offset == start && body > 0 && out.iter().all(|one| one.offset != start + body) =>
+            {
+                out[0] = row(start, (line, 0));
+                let at = out.iter().position(|one| one.offset > start + body).unwrap_or(out.len());
+                out.insert(at, model::Line { offset: start + body, ..first });
+            }
+            // A frameless function: the scope line's row and the first
+            // statement's share the first byte, as the pin's do.
+            _ => out.insert(0, row(start, (line, 0))),
+        }
     }
     let length = at - start;
     (out, body_start.map(|first| (first, body_end.unwrap_or(length))), not_stmt)

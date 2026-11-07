@@ -32,40 +32,6 @@ pub fn without_triple(text: &str) -> (Option<String>, String) {
     (triple, kept)
 }
 
-/// `text` with each `va_arg` instruction written out, as the backend lowers it
-/// for Apple's arm64: the list is a pointer to the next 8-byte slot of unnamed
-/// arguments.
-///
-/// DEVIATE 2: MIR's subset has no `va_arg` instruction, which clang emits for
-/// this ABI (AAPCS64 gets its list walked in the IR clang writes). Until MIR
-/// has it the driver expands the instruction in the text: a load of the
-/// pointer, the value read from it, the pointer advanced by one slot. Exit: MIR
-/// reads `va_arg` and the selector lowers it
-/// (`AArch64TargetLowering::LowerVAARG`).
-pub fn without_va_arg(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for (number, line) in text.lines().enumerate() {
-        let trimmed = line.trim_start();
-        let Some((result, rest)) = trimmed.split_once(" = va_arg ptr ") else {
-            out.push_str(line);
-            out.push('\n');
-            continue;
-        };
-        let Some((list, ty)) = rest.split_once(", ") else {
-            out.push_str(line);
-            out.push('\n');
-            continue;
-        };
-        let ty = ty.split(',').next().unwrap_or(ty).trim();
-        let slot = format!("%va.{number}");
-        out.push_str(&format!("  {slot}.cur = load ptr, ptr {list}, align 8\n"));
-        out.push_str(&format!("  {slot}.next = getelementptr inbounds i8, ptr {slot}.cur, i64 8\n"));
-        out.push_str(&format!("  store ptr {slot}.next, ptr {list}, align 8\n"));
-        out.push_str(&format!("  {result} = load {ty}, ptr {slot}.cur, align 8\n"));
-    }
-    out
-}
-
 /// The platform whose triple `triple` is.
 pub fn platform_of(triple: &str) -> Option<Platform> {
     if triple.starts_with("arm64-apple-") || triple.starts_with("aarch64-apple-") {
@@ -89,9 +55,7 @@ pub fn program(
     platform: Platform,
 ) -> Result<Program, String> {
     let (_, text) = without_triple(text);
-    let text = if platform == Platform::Darwin { without_va_arg(&text) } else { text };
     let mut module = llrm_mir::parse::module(&text).map_err(|error| error.to_string())?;
-    module.refuse_aliases("arm64")?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     // Atomics are calls the mid-end moves nothing across; the selector makes
     // them instructions.
@@ -196,16 +160,21 @@ pub fn optimized_at(
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
     // The pin's PreISelIntrinsicLowering: the selector never sees the
     // intrinsic.
-    program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)
+    program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+    // `addIRPasses`: GlobalMerge, after the mid-end, before selection.
+    if let Some(merge) = program.target.global_merge(level == Level::O3) {
+        for module in &mut program.modules {
+            llrm_transforms::globalmerge::merged(module, &program.layout, &merge)?;
+        }
+    }
+    Ok(())
 }
 
 /// The routines the C link of this target resolves, by their IR names (the
 /// object writer decorates them): what `SimplifyLibCalls` may form.
 fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
-    ["puts", "putchar", "fwrite", "fputc", "fputs"]
-        .into_iter()
-        .map(|name| llrm_mir::libfunc::Routine { standard: name, symbol: name.to_owned(), calling_convention: 0 })
-        .collect()
+    let names = ["puts", "putchar", "fwrite", "fputc", "fputs"].into_iter().chain(llrm_mir::libfunc::HOSTED_COMPARE);
+    llrm_mir::libfunc::Routine::stated(names, str::to_owned, 0)
 }
 
 /// Which instruction selector makes the machine function (`--isel=`).
@@ -267,6 +236,7 @@ pub fn functions_with(
 ) -> Result<Vec<crate::emit::Function>, String> {
     let module = &program.modules[0];
     let platform = platform_of_machine(program);
+    crate::lir_view::set_darwin(platform == Platform::Darwin);
     let mut out = Vec::new();
     for (id, global, function) in module.functions() {
         if function.is_declaration() {
@@ -291,45 +261,89 @@ pub fn functions_with(
                 return Err(format!("@{name}: read before written: {undefined:?}"));
             }
         }
-        crate::prepass::run(&mut machine);
+        machine.frame_pointer =
+            llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
+        let optsize = function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+                ),
+            );
+        crate::prepass::run(&mut machine, optsize);
         dump("Prepass", &machine);
         if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
-            let size = function
-                .attrs
-                .iter()
-                .any(
-                    |attr| matches!(
-                        attr,
-                        llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-                    ),
-                );
-            crate::combine::run(&mut machine, size);
+            crate::combine::run(&mut machine, optsize);
             dump("Combine", &machine);
         }
+        crate::cmpzero::run(&mut machine);
+        dump("CmpZero", &machine);
         crate::flagcse::run(&mut machine);
         dump("FlagCse", &machine);
-        crate::storecluster::run(&mut machine);
-        dump("StoreCluster", &machine);
+        crate::memcluster::run(&mut machine);
+        dump("MemCluster", &machine);
         crate::sibcall::run(&mut machine);
         dump("SibCall", &machine);
         crate::prepass::order_copies(&mut machine);
         dump("OrderCopies", &machine);
         // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
         // linear scan; a function greedy refuses goes to the scan, reported.
-        let greedy = (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine));
-        let allocation = match greedy {
-            Some(Ok(allocation)) => allocation,
-            Some(Err(why)) => {
-                eprintln!("greedy: @{name}: {why}");
-                crate::regalloc::allocate(&mut machine)
+        // `x16`/`x17` are the lowerer's scratch pair where an offset does not
+        // encode; they are the allocator's while the frame stays small. A
+        // spill slot is at most 16 B, a register mostly 8: between the two
+        // bounds the allocation is kept only if the frame came out small.
+        let (tight, loose) = crate::frame::scratch_estimate(&machine);
+        let snapshot = (tight && !loose).then(|| machine.clone());
+        crate::lir_view::set_frame_pointer_free(
+            platform != Platform::Darwin
+                && !(machine.calls
+                    || machine.dynamic
+                    || llrm_codegen::backend::framefree::keeps_frame_pointer(
+                        machine.frame_pointer.as_deref(),
+                        machine.calls,
+                    )),
+        );
+        let allocate = |machine: &mut crate::mfunc::MFunc, scratch: bool| {
+            crate::lir_view::set_scratch_free(scratch);
+            // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for
+            // the linear scan; a function greedy refuses goes to the scan,
+            // reported.
+            let greedy =
+                (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(machine, optsize));
+            match greedy {
+                Some(Ok(allocation)) => allocation,
+                Some(Err(why)) => {
+                    eprintln!("greedy: @{name}: {why}");
+                    GREEDY_FALLBACKS.with(|count| count.set(count.get() + 1));
+                    crate::regalloc::allocate(machine)
+                }
+                None => crate::regalloc::allocate(machine),
             }
-            None => crate::regalloc::allocate(&mut machine),
         };
+        let mut allocation = allocate(&mut machine, tight);
+        if let Some(before) = snapshot
+            && crate::frame::frame_bound(&machine, 0) >= crate::frame::SCRATCH_FREE_BELOW
+        {
+            machine = before;
+            allocation = allocate(&mut machine, false);
+        }
         dump("RegAlloc", &machine);
-        let variables = crate::frame::variable_offsets(&machine, &allocation);
-        let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
+        crate::copyprop::run(&mut machine);
+        crate::postrasink::run(&mut machine);
+        dump("PostRaSink", &machine);
+        let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin);
+        let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
+            .map_err(|why| format!("@{name}: {why}"))?;
         let mut tables = crate::jumptable::tables_of(&machine);
-        let blocks = crate::layout::fold(blocks, &mut tables);
+        let blocks = crate::layout::fold(
+            blocks,
+            &mut tables,
+            &crate::layout::edge_odds(module, function, &program.layout, &machine),
+            optsize,
+            &crate::mfunc::returned_registers(&machine),
+        );
         let blocks = crate::pairs::fold(blocks);
         let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
         crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
@@ -406,12 +420,23 @@ pub fn object_with(
 }
 
 /// The assembly of the lowered functions, one instruction a line.
+thread_local! {
+    static GREEDY_FALLBACKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many functions this thread has sent from greedy to the linear scan.
+pub fn greedy_fallbacks() -> usize {
+    GREEDY_FALLBACKS.with(std::cell::Cell::get)
+}
+
 pub fn assembly(
     text: &str,
     platform: Platform,
     level: impl Into<Level>,
 ) -> Result<String, String> {
     let mut program = program(text, platform)?;
+    // The text carries no alias: refuse it rather than drop the symbol.
+    program.modules[0].refuse_aliases("arm64")?;
     let level = level.into();
     if level != Level::O0 {
         optimized_at(&mut program, level)?;
@@ -485,23 +510,10 @@ pub fn object_file_with(
 mod tests {
     use super::*;
 
-    /// Clang writes Apple's variadic reads as `va_arg`, which MIR does not read
-    /// ("`va_arg` is not an instruction of MIR's subset"): each becomes the
-    /// load of the pointer, the value, and the pointer advanced by a slot.
     #[test]
     fn ptrtoaddr_is_read_as_ptrtoint() {
         let (_, text) = without_triple("  %a = ptrtoaddr ptr %p to i64\n");
         assert_eq!(text, "  %a = ptrtoint ptr %p to i64\n");
-    }
-
-    #[test]
-    fn va_arg_is_written_out_as_loads_and_a_slot_step() {
-        let text = "  %12 = va_arg ptr %3, i32\n  ret i32 %12\n";
-        let out = without_va_arg(text);
-        assert!(!out.contains("va_arg"), "{out}");
-        assert!(out.contains("%12 = load i32, ptr %va.0.cur"), "{out}");
-        assert!(out.contains("getelementptr inbounds i8, ptr %va.0.cur, i64 8"), "{out}");
-        assert!(out.ends_with("  ret i32 %12\n"), "{out}");
     }
 
     #[test]

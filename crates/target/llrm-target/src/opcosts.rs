@@ -25,7 +25,11 @@ pub struct Description {
     operations: Vec<(String, Cost)>,
     bytes: Vec<(String, i64)>,
     sizes: Vec<(String, Cost)>,
+    sized: std::sync::OnceLock<OperationCosts>,
 }
+
+#[cfg(test)]
+thread_local!(static EVALUATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
 
 fn cost(
     text: &str,
@@ -75,19 +79,23 @@ fn cost(
     Ok(Cost::Sum(terms))
 }
 
-const OPERATIONS: [&str; 38] = [
+const OPERATIONS: [&str; 45] = [
     "add",
     "multiply",
     "divide",
     "multiply_long",
+    "multiply_high",
     "divide_long",
     "divide_margin",
     "shift",
     "address",
+    "address_dword",
+    "address_third",
     "carry",
     "carry_step",
     "load",
     "store",
+    "store_immediate",
     "memory_update",
     "branch",
     "prefix",
@@ -105,10 +113,13 @@ const OPERATIONS: [&str; 38] = [
     "float_load_folded",
     "float_store",
     "float_release",
+    "float_to_int",
+    "float_compare",
     "extend",
     "set",
     "fill",
     "fill_cell",
+    "fill_segment",
     "copy",
     "copy_cell",
     "copy_variable",
@@ -162,7 +173,7 @@ impl Description {
                 return Err(format!("opcosts.txt: operation `{name}` has no cost"));
             }
         }
-        Ok(Self { operations, bytes, sizes })
+        Ok(Self { operations, bytes, sizes, sized: Default::default() })
     }
 
     /// The operations priced by `price` (a form's cost), `prefix` the CPU's
@@ -178,6 +189,10 @@ impl Description {
     /// The operations in code bytes: the same sums over the forms' bytes, but
     /// where `[size]` says otherwise.
     pub fn size_costs(&self) -> OperationCosts {
+        self.sized.get_or_init(|| self.sized_costs()).clone()
+    }
+
+    fn sized_costs(&self) -> OperationCosts {
         let price = |form: &str| {
             self.bytes
                 .iter()
@@ -202,6 +217,8 @@ impl Description {
         price: &dyn Fn(&str) -> i64,
         prefix: i64,
     ) -> OperationCosts {
+        #[cfg(test)]
+        EVALUATIONS.with(|count| count.set(count.get() + 1));
         let value = |cost: &Cost| match cost {
             Cost::Prefix => prefix,
             Cost::Sum(terms) => terms.iter().map(|(count, form)| count * form.as_deref().map_or(1, price)).sum(),
@@ -219,14 +236,18 @@ impl Description {
                 "multiply" => out.multiply = value,
                 "divide" => out.divide = value,
                 "multiply_long" => out.multiply_long = value,
+                "multiply_high" => out.multiply_high = value,
                 "divide_long" => out.divide_long = value,
                 "divide_margin" => out.divide_margin = value,
                 "shift" => out.shift = value,
                 "address" => out.address = value,
+                "address_dword" => out.address_dword = value,
+                "address_third" => out.address_third = value,
                 "carry" => out.carry = value,
                 "carry_step" => out.carry_step = value,
                 "load" => out.load = value,
                 "store" => out.store = value,
+                "store_immediate" => out.store_immediate = value,
                 "memory_update" => out.memory_update = value,
                 "branch" => out.branch = value,
                 "prefix" => out.prefix = value,
@@ -244,10 +265,13 @@ impl Description {
                 "float_load_folded" => out.float_load_folded = value,
                 "float_store" => out.float_store = value,
                 "float_release" => out.float_release = value,
+                "float_to_int" => out.float_to_int = value,
+                "float_compare" => out.float_compare = value,
                 "extend" => out.extend = value,
                 "set" => out.set = value,
                 "fill" => out.fill = value,
                 "fill_cell" => out.fill_cell = value,
+                "fill_segment" => out.fill_segment = value,
                 "copy" => out.copy = value,
                 "copy_cell" => out.copy_cell = value,
                 "copy_variable" => out.copy_variable = value,
@@ -264,7 +288,7 @@ impl Description {
 mod tests {
     use super::*;
 
-    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nmultiply_long = m\ndivide_long = d\ndivide_margin = 25\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_load_folded = flf\nfloat_store = fs\nfloat_release = fr\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\ncopy = cp\ncopy_cell = cc\ncopy_variable = cv\ndirection = 2*a\nunroll_budget = 7\n";
+    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nmultiply_long = m\nmultiply_high = m\ndivide_long = d\ndivide_margin = 25\nshift = s\naddress = l\naddress_dword = 0\naddress_third = 0\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nstore_immediate = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_load_folded = flf\nfloat_store = fs\nfloat_release = fr\nfloat_to_int = fi\nfloat_compare = fcp\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\nfill_segment = 2*p\ncopy = cp\ncopy_cell = cc\ncopy_variable = cv\ndirection = 2*a\nunroll_budget = 7\n";
 
     #[test]
     fn a_sum_is_terms_with_counts_and_signs() {
@@ -292,7 +316,7 @@ mod tests {
             "{ALL}[bytes]\n{}\n[size]\nprefix = 1\nargument = 2\n",
             [
                 "a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd",
-                "fl", "flf", "fs", "fr", "f", "fc", "cp", "cc", "cv"
+                "fl", "flf", "fs", "fr", "fi", "fcp", "f", "fc", "cp", "cc", "cv"
             ]
             .iter()
             .map(|one| format!("{one} = 4"))
@@ -301,6 +325,19 @@ mod tests {
         );
         let costs = Description::parse(&text).unwrap().size_costs();
         assert_eq!((costs.prefix, costs.argument, costs.add, costs.fill), (1, 2, 4, 4 + 8 + 3));
+    }
+
+    /// Every `target()` of a profile asked for the byte costs again: 5402
+    /// evaluations, 66 M of tiny600's 4 236 M instructions. One per table.
+    #[test]
+    fn test_the_byte_costs_of_a_table_are_evaluated_once() {
+        let text = format!("{ALL}[bytes]\n{}\n", ["a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd", "fl", "flf", "fs", "fr", "fi", "fcp", "f", "fc", "cp", "cc", "cv"].iter().map(|one| format!("{one} = 4")).collect::<Vec<_>>().join("\n"));
+        let description = Description::parse(&text).unwrap();
+        let before = EVALUATIONS.with(|count| count.get());
+        for _ in 0..50 {
+            description.size_costs();
+        }
+        assert_eq!(EVALUATIONS.with(|count| count.get()) - before, 1);
     }
 
     #[test]

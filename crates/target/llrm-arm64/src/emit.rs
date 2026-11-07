@@ -91,6 +91,7 @@ impl Symbols {
             definition: Definition::Defined { section, offset },
             size,
             group: None,
+            visibility: Default::default(),
         });
     }
 
@@ -109,6 +110,7 @@ impl Symbols {
             definition: Definition::Undefined,
             size: 0,
             group: None,
+            visibility: Default::default(),
         });
         self.list.len() - 1
     }
@@ -222,6 +224,24 @@ pub fn object(
         for (offset, one) in members.iter().filter(|(_, one)| !one.init_functions) {
             symbols.defined(&one.name, one.binding, 1 + offset_of_section, *offset, one.bytes.len());
         }
+    }
+    // An alias is a second name at its aliasee's place (`globals::exports`).
+    for alias in &module.aliases {
+        let target = data::symbol_name(platform, &module.global(alias.aliasee).name.owned().unwrap_or_default());
+        let Some(&found) = symbols.index.get(&target) else {
+            return Err(format!("@{} aliases @{}, which this object does not define", alias.name, target));
+        };
+        let Definition::Defined { section, offset } = symbols.list[found].definition else {
+            return Err(format!("@{} aliases @{}, which this object does not define", alias.name, target));
+        };
+        let size = symbols.list[found].size;
+        symbols.defined(
+            &data::symbol_name(platform, &alias.name),
+            data::binding_of(alias.linkage),
+            section,
+            offset,
+            size,
+        );
     }
     // The code.
     let mut text = Vec::with_capacity(text_size);

@@ -43,8 +43,8 @@
 //! DEVIATE 3: an object is invisible after the function returns when it is
 //! a stack or frame object (`isa<AllocaInst>`) whose address is not captured
 //! (`alias::captured`, a `ret` and a store of it included); `dead_on_return`
-//! and byval arguments (stage 3), and non-alloca objects with no capture
-//! (malloc) are absent. Exit: stage 3.
+//! arguments and non-alloca objects with no capture (malloc) are absent.
+//! Exit: stage 3. A byval or inalloca argument is invisible, as the pin has it.
 //! DEVIATE 4: `free` as a memory terminator (`lifetime.end` is in),
 //! `tryFoldIntoCalloc` and
 //! `eliminateRedundantStoresViaDominatingConditions` are stage 2 and 3. Partial
@@ -132,12 +132,20 @@ pub fn steps() -> usize {
 
 thread_local! {
     static LOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Instructions `is_read_clobber` has put to the alias analysis.
+    static CLOBBERS_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The locations this thread's walks have worked out, for a test that an
 /// instruction's place is worked out once, not once for each ask.
 pub fn locations() -> usize {
     LOCATIONS.with(std::cell::Cell::get)
+}
+
+/// The instructions asked of the alias analysis as read clobbers, for a test
+/// that a walk past an intrinsic asks none (the pin's `isa<IntrinsicInst>`).
+pub fn clobbers_asked() -> usize {
+    CLOBBERS_ASKED.with(std::cell::Cell::get)
 }
 
 pub struct DeadStoreElimination;
@@ -302,6 +310,10 @@ struct Dse<'a> {
     /// `loc_for_write` per instruction; a memset's is dropped when it is
     /// shortened.
     written: std::cell::RefCell<IdMap<InstId, Option<Rc<Location>>>>,
+    /// `mayReadFromMemory` and `mayWriteToMemory` per instruction that is not a
+    /// plain load or store: the walks ask again for each killing def, and a
+    /// lazy `Accesses` derives them from the call's attributes every time.
+    touches: std::cell::RefCell<IdMap<InstId, (Option<bool>, Option<bool>)>>,
 }
 
 impl<'a> Dse<'a> {
@@ -340,6 +352,7 @@ impl<'a> Dse<'a> {
             captured: Default::default(),
             leaves: Default::default(),
             written: Default::default(),
+            touches: Default::default(),
         };
         // Post-order numbers, and the defs that could kill.
         for (number, block) in post_order_of(function).into_iter().enumerate() {
@@ -383,7 +396,12 @@ impl<'a> Dse<'a> {
         if let Some(own) = llrm_analysis::memory::own_bytes(&self.function.instruction(inst).opcode) {
             return own.writes;
         }
-        self.accesses.writes_in(self.aa.unit(), inst).is_none_or(|writes| !writes.is_empty())
+        if let Some(&(_, Some(writes))) = self.touches.borrow().get(&inst) {
+            return writes;
+        }
+        let writes = self.accesses.writes_any_in(self.aa.unit(), inst);
+        self.touches.borrow_mut().get_or_insert_with(inst, Default::default).1 = Some(writes);
+        writes
     }
 
     /// `mayReadFromMemory`.
@@ -394,7 +412,12 @@ impl<'a> Dse<'a> {
         if let Some(own) = llrm_analysis::memory::own_bytes(&self.function.instruction(inst).opcode) {
             return own.reads;
         }
-        self.accesses.reads_in(self.aa.unit(), inst).is_none_or(|reads| !reads.is_empty())
+        if let Some(&(Some(reads), _)) = self.touches.borrow().get(&inst) {
+            return reads;
+        }
+        let reads = self.accesses.reads_any_in(self.aa.unit(), inst);
+        self.touches.borrow_mut().get_or_insert_with(inst, Default::default).0 = Some(reads);
+        reads
     }
 
     fn is_store(
@@ -690,6 +713,16 @@ impl<'a> Dse<'a> {
         &self,
         loc: &Location,
     ) -> bool {
+        // A byval or inalloca argument is treated as an alloca: its stores are
+        // dead at the end of the function (DSEState's constructor).
+        if let Some(Operand::Value(value)) = loc.reference.root
+            && let ValueDef::Argument(index) = self.function.value(value).def
+        {
+            let attrs = self.function.parameter_attrs.get(index as usize).map_or(&[][..], Vec::as_slice);
+            return attrs.iter().any(|attr| {
+                matches!(attr, llrm_mir::opcode::Attribute::Type(name, _) if matches!(name.as_str(), "byval" | "inalloca"))
+            });
+        }
         let Some(object) = self.object_of(loc) else { return false };
         if !matches!(object.kind, MemoryKind::Stack | MemoryKind::Frame) {
             return false;
@@ -870,6 +903,7 @@ impl<'a> Dse<'a> {
         if !self.may_read(use_inst) {
             return false;
         }
+        CLOBBERS_ASKED.with(|count| count.set(count.get() + 1));
         self.aa.get_mod_ref_info(use_inst, def_loc).is_ref()
     }
 
@@ -994,8 +1028,11 @@ impl<'a> Dse<'a> {
                 return None;
             }
             // A read clobber on the path ends it (intrinsic calls are
-            // understood by the caller).
-            if self.may_read(current_inst) && self.is_read_clobber(killing_loc, current_inst) {
+            // understood by the caller: `!isa<IntrinsicInst>(CurrentI)`).
+            if self.aa.unit().intrinsic(current_inst).is_none()
+                && self.may_read(current_inst)
+                && self.is_read_clobber(killing_loc, current_inst)
+            {
                 return None;
             }
             // Quick check for direct uses that are read clobbers.

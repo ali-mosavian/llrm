@@ -177,7 +177,7 @@ pub fn optimized(
     calls: Option<&IndexMap<i64, String>>,
 ) -> Result<LirBody, masm::Unprintable> {
     let size = cpu.size;
-    let mut placed = threaded(&_placed(&_hoisted(body), size, cpu.aggressive)?);
+    let mut placed = threaded(&_placed(&_hoisted(body), size, cpu.aggressive, cpu.tail_dup_threshold)?);
     // Tail duplication before the merge, as LLVM places with it: after, the
     // merge would give back what the copy gained.
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
@@ -189,7 +189,7 @@ pub fn optimized(
         // `MachineBlockPlacement::runOnMachineFunction`: "Redo the layout if
         // tail merging creates/removes/moves blocks."
         let explicit = placed.with_blocks(_explicit(&placed)?);
-        placed = threaded(&_placed(&explicit, size, cpu.aggressive)?);
+        placed = threaded(&_placed(&explicit, size, cpu.aggressive, cpu.tail_dup_threshold)?);
     }
     let done = aligned(&inverted(&placed, size), cpu);
     // Every block leaves by a way the printer can read.
@@ -278,7 +278,7 @@ fn aligned(
         let before = &blocks[place - 1];
         let enters = before.succ.contains(&at);
         if !enters || busy.edge(before.at, at) <= here * COLD {
-            blocks[place] = LirBlock { align: cpu.loop_alignment, ..blocks[place].clone().into_inner() }.into();
+            blocks[place] = LirBlock { align: cpu.loop_alignment, max_skip: cpu.loop_max_skip, ..blocks[place].clone().into_inner() }.into();
         }
     }
     body.with_blocks(blocks)
@@ -448,7 +448,7 @@ fn _without_jumps_to_next(order: Vec<Block>) -> Vec<Block> {
 /// drops the jumps the order made redundant and turns the test into one
 /// branch back to the body.
 pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
-    _placed(body, false, false)
+    _placed(body, false, false, None)
 }
 
 /// The blocks in the order `MachineBlockPlacement` lays them out (see
@@ -457,6 +457,7 @@ fn _placed(
     body: &LirBody,
     size: bool,
     aggressive: bool,
+    tail_dup: Option<usize>,
 ) -> Result<LirBody, masm::Unprintable> {
     let explicit = _explicit(body)?;
     if body.source_order {
@@ -464,7 +465,7 @@ fn _placed(
     }
     let natural = loopy::loops(&explicit, Some(body.entry));
     let busy = Frequency::of(body);
-    let (blocks, odds) = placement::order(&explicit, body.entry, &body.odds, &busy, &natural, size, aggressive);
+    let (blocks, odds) = placement::order(&explicit, body.entry, &body.odds, &busy, &natural, size, aggressive, tail_dup);
     Ok(_reachable(&LirBody { odds, ..body.clone() }, blocks))
 }
 

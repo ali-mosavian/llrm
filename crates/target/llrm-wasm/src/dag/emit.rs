@@ -18,7 +18,8 @@
 //! # See also
 //! `InstrEmitter::EmitMachineNode`, pin d1106deb71cc.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
@@ -123,7 +124,7 @@ impl Emitter<'_> {
         // `CreateVirtualRegisters` takes the first matching user of the result,
         // and a node's users list the newest first: the latest
         // `CopyToReg` wins.
-        let mut copied: HashMap<(u32, u8), (u32, u32)> = HashMap::new();
+        let mut copied: HashMap<(u32, u8), (u32, u32)> = HashMap::default();
         for &node in selected.units.iter().flat_map(|unit| &unit.nodes) {
             let data = dag.node(SDValue { node, res: 0 });
             if data.opcode != ISD::CopyToReg {
@@ -145,8 +146,15 @@ impl Emitter<'_> {
         let mut out: Vec<Inst> = Vec::new();
         // A unit lists its bottom-most node first; `EmitSchedule` emits the
         // glued ones top-down.
+        // What the instructions made so far came from: the `!dbg` of the
+        // node's `SDNodeOrder`.
+        let mut line = 0;
+        let mut stamped = 0;
         for &node in selected.units.iter().flat_map(|unit| unit.nodes.iter().rev()) {
+            out[stamped..].iter_mut().for_each(|inst| inst.line = line);
+            stamped = out.len();
             let data = dag.node(SDValue { node, res: 0 });
+            line = dag.lines.get(data.order as usize).copied().flatten().map_or(0, |at| at.line);
             match data.opcode {
                 ISD::CopyFromReg => {
                     let NodeData::Register(number) = dag.node(data.ops[1]).data else { continue };
@@ -256,7 +264,7 @@ impl Emitter<'_> {
                         }
                         (code, _) => code,
                     };
-                    let mut inst = Inst { opcode: code, operands, mem: None, tag: 0 };
+                    let mut inst = Inst { opcode: code, operands, mem: None, tag: 0, line: 0 };
                     if let Some(access) = selected.mem_refs.get(&node).and_then(|nodes| nodes.first()) {
                         let info = &selected.accesses[access];
                         let ordered = info.volatile
@@ -278,6 +286,7 @@ impl Emitter<'_> {
                 _ => {}
             }
         }
+        out[stamped..].iter_mut().for_each(|inst| inst.line = line);
         let at = self.position[&selected.id];
         if selected.landing {
             // `SelectAllBasicBlocks`: a label at the head of every EH pad.
@@ -331,7 +340,7 @@ pub fn emit(
     f.blocks = vec![Vec::new(); layout.len().max(1)];
     f.succs = vec![Vec::new(); f.blocks.len()];
     let position = layout.iter().enumerate().map(|(at, &id)| (id, at)).collect();
-    let mut emitter = Emitter { f, results: HashMap::new(), builder: BTreeMap::new(), names, position, labels: 0 };
+    let mut emitter = Emitter { f, results: HashMap::default(), builder: BTreeMap::new(), names, position, labels: 0 };
     for selected in blocks {
         emitter.block(selected);
     }
@@ -350,7 +359,7 @@ pub fn emit(
             entry.1.extend(blocks.iter().filter(reaches).map(|pred| (src, pred.id)));
         }
     }
-    let mut starts: HashMap<usize, Vec<Inst>> = HashMap::new();
+    let mut starts: HashMap<usize, Vec<Inst>> = HashMap::default();
     for ((to, dst), (ty, incoming)) in phis {
         if incoming.is_empty() {
             continue;

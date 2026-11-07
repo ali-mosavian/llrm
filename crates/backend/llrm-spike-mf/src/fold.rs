@@ -19,11 +19,9 @@
 //! `HoistCommonCodeInSuccs`: the instructions both ways of a conditional
 //! branch begin with run ahead of it.
 //!
-//! DEVIATE: `TailMergeBlocks`, tail calls, EH pads, jump tables and debug
-//! instructions are not translated. Reason: tail merging is its own pass of
-//! about 700 lines (`ProfitableToMerge`, `SplitBlockAt`, the block
-//! frequencies), and the spike has no other three. Exit: the neutral-LIR task,
-//! where `llrm-codegen`'s port takes over.
+//! DEVIATE: tail calls, EH pads, jump tables and debug instructions are not
+//! translated; `TailMergeBlocks` is [`crate::tailmerge`]. Exit: the neutral-LIR
+//! task, where `llrm-codegen`'s port takes over.
 //! DEVIATE: `HoistCommonCodeInSuccs` knows no `dead` marks, so an instruction
 //! that defines a register the compare or branch also defines is not hoisted
 //! (the pin hoists it where the def is dead), and flags are dead at a block's
@@ -242,6 +240,8 @@ struct Folder<'a, C, J> {
     assignment: Option<&'a Assignment>,
     /// `getNumber` of each block, by id, as the sweep began.
     number: HashMap<u32, usize>,
+    /// Tail merging may join blocks of different loops.
+    across_loops: bool,
     jump: std::marker::PhantomData<J>,
 }
 
@@ -547,7 +547,7 @@ impl Effects {
     }
 }
 
-fn resolve(
+pub(crate) fn resolve(
     reg: Reg,
     assignment: &Assignment,
 ) -> RegId {
@@ -570,7 +570,7 @@ fn touches<T: Target>(
 }
 
 /// `isIdenticalTo`: the same instruction on the same registers, as allocated.
-fn identical(
+pub(crate) fn identical(
     one: &Inst,
     other: &Inst,
     assignment: &Assignment,
@@ -625,6 +625,66 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
         Some((loc - 1, effects))
     }
 
+    /// HC1: moves the instruction of `two` (else of `one`) identical to the
+    /// other block's instruction at `run` up to `run`, past instructions that
+    /// neither read what it writes, write what it reads or writes, nor touch
+    /// the flags (the moved instruction touches no memory), within
+    /// [`Target::hoist_window`]. Whether it moved.
+    fn bring_twin_up(
+        &mut self,
+        one: usize,
+        two: usize,
+        run: usize,
+        assignment: &Assignment,
+    ) -> bool {
+        for (keep, move_in) in [(one, two), (two, one)] {
+            let Some(head) = self.function.blocks[keep].insts.get(run) else { continue };
+            if head.terminator
+                || head.call
+                || !safe_to_move(&self.function.fixed, head, &mut true)
+                || head.may_load
+                || head.may_store
+            {
+                continue;
+            }
+            let own = Effects::of::<T>(head, assignment);
+            let insts = &self.function.blocks[move_in].insts;
+            let end = insts.len().min(run + 1 + T::hoist_window());
+            let mut twin = None;
+            // an instruction that sets the flags is passed only where nothing
+            // reads what the twin set
+            let mut crossed_flags = false;
+            for at in run..end {
+                let inst = &insts[at];
+                if identical(head, inst, assignment) {
+                    twin = Some(at).filter(|&at| !(crossed_flags && flags_live_after(insts, at)));
+                    break;
+                }
+                let theirs = Effects::of::<T>(inst, assignment);
+                let apart = !inst.terminator
+                    && !inst.call
+                    && !inst.barrier
+                    && !inst.side_effects
+                    && !inst.reads_flags
+                    && !(inst.sets_flags && head.reads_flags)
+                    && theirs.defs.iter().all(|place| {
+                        *place == Place::Flags || !touches::<T>(&own.uses, *place) && !touches::<T>(&own.defs, *place)
+                    })
+                    && theirs.uses.iter().all(|place| !touches::<T>(&own.defs, *place));
+                if !apart {
+                    break;
+                }
+                crossed_flags |= inst.sets_flags;
+            }
+            if let Some(at) = twin.filter(|&at| at > run) {
+                let inst = self.function.blocks[move_in].insts.remove(at);
+                self.function.blocks[move_in].insts.insert(run, inst);
+                return true;
+            }
+        }
+        false
+    }
+
     /// `HoistCommonCodeInSuccs`.
     fn hoist_common(
         &mut self,
@@ -647,12 +707,23 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
         }
         let Some((loc, effects)) = self.hoisting_position(at, assignment) else { return false };
         let (one, two) = (position(self.function, taken), position(self.function, other));
-        let (first, second) = (&self.function.blocks[one].insts, &self.function.blocks[two].insts);
         let mut run = 0;
-        while let (Some(head), Some(tail)) = (first.get(run), second.get(run)) {
-            if !identical(head, tail, assignment) || !safe_to_move(&self.function.fixed, head, &mut true) {
+        loop {
+            let same = {
+                let (first, second) = (&self.function.blocks[one].insts, &self.function.blocks[two].insts);
+                let (Some(head), Some(tail)) = (first.get(run), second.get(run)) else { break };
+                identical(head, tail, assignment) && safe_to_move(&self.function.fixed, head, &mut true)
+            };
+            if !same {
+                // HC1: the twin of one head may sit a few independent
+                // instructions down the other block
+                if T::hoist_window() > 0 && self.bring_twin_up(one, two, run, assignment) {
+                    continue;
+                }
                 break;
             }
+            let (first, second) = (&self.function.blocks[one].insts, &self.function.blocks[two].insts);
+            let head = &first[run];
             let own = Effects::of::<T>(head, assignment);
             let defs_flags = own.defs.contains(&Place::Flags);
             // the flags it sets are nobody's: the compare sets them again
@@ -691,7 +762,7 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
 /// `BranchFolder::OptimizeFunction` without tail merging or hoisting: true
 /// when anything changed.
 pub fn branch_fold<T: Target + Jump>(function: &mut MFunction<T::Class>) -> bool {
-    fold::<T>(function, None)
+    fold::<T>(function, None, false)
 }
 
 /// [`branch_fold`] with `HoistCommonCodeInSuccs`, which needs to know which
@@ -700,18 +771,35 @@ pub fn branch_fold_hoisting<T: Target + Jump>(
     function: &mut MFunction<T::Class>,
     assignment: &Assignment,
 ) -> bool {
-    fold::<T>(function, Some(assignment))
+    fold::<T>(function, Some(assignment), false)
+}
+
+/// [`branch_fold_hoisting`] whose tail merging also joins blocks of different
+/// loops ([`crate::tailmerge::merge_tails_across_loops`]).
+pub fn branch_fold_hoisting_across_loops<T: Target + Jump>(
+    function: &mut MFunction<T::Class>,
+    assignment: &Assignment,
+) -> bool {
+    fold::<T>(function, Some(assignment), true)
 }
 
 fn fold<T: Target + Jump>(
     function: &mut MFunction<T::Class>,
     assignment: Option<&Assignment>,
+    across_loops: bool,
 ) -> bool {
-    let mut folder =
-        Folder::<T::Class, T> { function, assignment, number: HashMap::default(), jump: std::marker::PhantomData };
+    let mut folder = Folder::<T::Class, T> {
+        function,
+        assignment,
+        number: HashMap::default(),
+        across_loops,
+        jump: std::marker::PhantomData,
+    };
     let mut ever = false;
     loop {
-        let mut changed = folder.optimize_branches();
+        let mut changed =
+            crate::tailmerge::merge_tails_across_loops::<T, _>(folder.function, folder.assignment, folder.across_loops);
+        changed |= folder.optimize_branches();
         changed |= folder.hoist_common_code();
         if !changed {
             break;

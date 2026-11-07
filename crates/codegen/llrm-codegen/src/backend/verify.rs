@@ -215,8 +215,38 @@ pub fn physical(
                         .iter()
                         .filter(|&&(register, _)| !_lanes(regs, register).is_disjoint(&defined))
                         .fold(Lanes::new(), |all, &(register, _)| all.or(&whole(register)));
-                    *complaint = complaint.or(&effect.reads.minus(&defined).minus(&touched));
-                    defined = defined.or(&effect.writes);
+                    // A tied source flagged undef (`TwoAddressInstruction`: the
+                    // pass-through of a `bsr`, its destination read as undef)
+                    // is no read: the pin's MachineVerifier skips it. After
+                    // allocation the flag stays on the value the instruction
+                    // defines, at the destination of the same position.
+                    let mut undef = Lanes::new();
+                    if let Some(what) = one.what.as_ref().filter(|what| what.dests.len() == one.defines.len()) {
+                        for (value, dest) in one.defines.iter().zip(&what.dests) {
+                            if let (true, Loc::Reg(reg)) = (one.undefs.contains(value), dest) {
+                                undef = undef.or(&_lanes(regs, regs.named(reg.register, i64::from(reg.width))));
+                            }
+                        }
+                    }
+                    // An address component read as undef (a store through an undefined pointer) names the register it
+                    // was given and reads nothing; the placed cell still holds the value.
+                    if let Some(what) = one.what.as_ref() {
+                        for place in what.dests.iter().chain(&what.sources) {
+                            if let Loc::Mem(cell) = place {
+                                if let Some(base) = cell.base.filter(|base| one.undefs.contains(&base.value)) {
+                                    undef = undef.or(&_lanes(regs, regs.named(cell.through, i64::from(base.width))));
+                                }
+                                if let Some(index) = cell.index.filter(|index| one.undefs.contains(&index.value)) {
+                                    undef = undef.or(&_lanes(regs, regs.named(cell.index_through, i64::from(index.width))));
+                                }
+                            }
+                        }
+                    }
+                    *complaint = complaint.or(&effect.reads.minus(&defined).minus(&touched).minus(&undef));
+                    // The destination it defines is defined, though the table
+                    // calls the write of a `bsr` conditional (a zero source
+                    // leaves it): the value is the pin's `BSR32rr` def.
+                    defined = defined.or(&effect.writes).or(&undef);
                 }
             }
         }
@@ -579,7 +609,7 @@ mod tests {
         value: u32,
         width: u32,
     ) -> Loc {
-        Loc::Held(ir::Held { value, width })
+        Loc::Held(ir::Held { value, width, offset: 0 })
     }
 
     fn semantics(
@@ -719,7 +749,7 @@ mod tests {
             body
         };
         let selected = Loc::Mem(ir::Mem {
-            selector: Some(ir::Held { value: 1, width: 2 }),
+            selector: Some(ir::Held { value: 1, width: 2, offset: 0 }),
             ..ir::Mem::new(Some(ir::Addr::new(ir::Space::Segment, 0)), 2)
         });
         let flat = llrm_target::Target::layout(&llrm_x86_m32::M32).spaces.roles;
@@ -857,6 +887,59 @@ mod tests {
         assert!(physical(&physical_body(vec![widen.clone(), writes]), &none).is_empty());
         let said = physical(&physical_body(vec![widen, reads]), &none);
         assert!(said.iter().any(|complaint| complaint.contains("reads ebx before any path writes it")), "{said:?}");
+    }
+
+    /// `bsr eax, ecx` whose pass-through (the tied EAX) is flagged undef, as
+    /// `__builtin_clz` makes it: `LLRM_VERIFY=1` refused "reads eax before any
+    /// path writes it" for every `ctlz` of a word (the `xor` after it read EAX
+    /// as unwritten, the table calling a `bsr`'s write conditional). Only EAX
+    /// is exempt: ECX, the real source, is still a read.
+    #[test]
+    fn test_an_undef_pass_through_is_not_a_read() {
+        let scan = |undef: bool| {
+            let mut one = Insn::new(
+                1,
+                Some((1, 1)),
+                Some(semantics(
+                    Operation::Binary,
+                    "bsr",
+                    vec![register(RegId::EAX, 4)],
+                    vec![register(RegId::EAX, 4), register(RegId::ECX, 4)],
+                )),
+                vec![],
+                vec![],
+            );
+            one.defines = vec![7];
+            if undef {
+                one.undefs = vec![7];
+            }
+            let load = Insn::new(
+                0,
+                Some((0, 0)),
+                Some(semantics(
+                    Operation::Move,
+                    "mov",
+                    vec![register(RegId::ECX, 4)],
+                    vec![Loc::Imm(ir::Imm { value: 1, width: 4, address: None })],
+                )),
+                vec![],
+                vec![],
+            );
+            let after = Insn::new(
+                2,
+                Some((2, 2)),
+                Some(semantics(Operation::Move, "mov", vec![register(RegId::EDX, 4)], vec![register(RegId::EAX, 4)])),
+                vec![],
+                vec![],
+            );
+            physical(&physical_body(vec![load, one, after]), &BTreeSet::new())
+        };
+        assert!(scan(true).is_empty(), "{:?}", scan(true));
+        assert!(
+            scan(false).iter().any(|said| said.contains("reads eax before any path writes it")),
+            "{:?}",
+            scan(false)
+        );
     }
 
     /// The same read is fine where the function preserves BX (its epilogue

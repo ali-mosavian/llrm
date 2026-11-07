@@ -50,7 +50,8 @@ fn test_a_word_load_read_wider_by_a_loop_stays_where_the_extension_is_slower() {
 /// Pentium keep the partial load.
 #[test]
 fn test_a_byte_load_stays_on_a_cpu_where_the_extension_is_slower() {
-    let source = "char buf[64]; int f(char *d) { char c; int i = 0; do { c = buf[i]; d[i++] = c; } while (c); return i; }\n";
+    let source =
+        "char buf[64]; int f(char *d) { char c; int i = 0; do { c = buf[i]; d[i++] = c; } while (c); return i; }\n";
     for march in ["i486", "pentium"] {
         let text = asm(source, &["-m32", "-mabi=sysv", &format!("-march={march}"), "-O2"]);
         assert!(!text.iter().any(|one| one.starts_with("movzx e") && one.contains("byte ptr")), "{march}: {text:?}");

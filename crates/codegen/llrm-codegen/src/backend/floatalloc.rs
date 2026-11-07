@@ -284,7 +284,7 @@ pub fn allocated<'a>(
     _basic_semantics: bool,
     _cpu: impl Into<ProfileOrName<'a>>,
 ) -> Result<LirBody, Raised> {
-    _truncating(&crate::backend::fpstack::converted(body, &RegisterClasses::of(&llrm_x86_m16::M16))?, frame)
+    _truncating(&crate::backend::fpstack::converted(body, &RegisterClasses::of(&llrm_x86_m16::M16), None)?, frame)
 }
 
 /// The control word an x87 instruction needs: the one place the fact lives.
@@ -451,6 +451,15 @@ pub(super) fn _truncating(
     };
     // Python keys these slots by the 1-tuples ("control",) and ("chop",).
     let (saved, chop) = (frame.cell(("control", 0), 2)?, frame.cell(("chop", 0), 2)?);
+    // The rounding-control bits 10-11 live in the word's high byte: a byte `or`
+    // is shorter than the word one by its immediate (and the operand-size
+    // prefix).
+    let chop_high = Mem {
+        addr: chop.addr.map(|addr| addr.plus(1)),
+        offset: if chop.addr.is_some() { chop.offset } else { chop.offset + 1 },
+        width: 1,
+        ..chop.clone()
+    };
     // The registers are allocated by now: no value is left to hold the word, so
     // it goes through memory alone.
     let insn = |what: Semantics, at: i64| -> Arc<Insn> {
@@ -492,8 +501,8 @@ pub(super) fn _truncating(
                     semantics(
                         Operation::Binary,
                         "or",
-                        vec![Loc::Mem(chop.clone())],
-                        vec![Loc::Mem(chop.clone()), Loc::Imm(Imm { value: 0x0C00, width: 2, address: None })],
+                        vec![Loc::Mem(chop_high.clone())],
+                        vec![Loc::Mem(chop_high.clone()), Loc::Imm(Imm { value: 0x0C, width: 1, address: None })],
                     ),
                     at,
                 ),
@@ -583,11 +592,18 @@ fn _exact(one: &Insn) -> bool {
         | Operation::Call
         | Operation::Return
         | Operation::Escape
-        | Operation::Barrier
         | Operation::Restore
         | Operation::Data => false,
+        // The status word is read as it is: a compare's answer.
+        Operation::Barrier => name == "fnstsw",
         Operation::FloatLoad => !matches!(name, "fldpi" | "fldl2e" | "fldl2t" | "fldlg2" | "fldln2"),
-        Operation::FloatStore => false,
+        // A store into a stack register (`fstp st(1)`, a release) is an 80-bit
+        // value into an 80-bit register and rounds nothing; one to memory
+        // rounds to the memory's width. Counted as rounding, each compare and
+        // release in a loop of conversions put the caller's word back
+        // (x_ldcmp -Os: 6 `fldcw`, now 2; 345 -> 327 B, 207247 -> 195735
+        // clocks).
+        Operation::FloatStore => what.dests.iter().all(|place| matches!(place, Loc::Reg(_))),
         Operation::FloatArith | Operation::FloatArithPop | Operation::FloatUnary => {
             matches!(
                 name,
@@ -599,12 +615,13 @@ fn _exact(one: &Insn) -> bool {
 }
 
 /// The post-allocation x87 phase: stack form, then `fisttp` mode switching.
-pub struct FloatAlloc {
+pub struct FloatAlloc<'a> {
     pub frame: Option<Rc<RefCell<Frame>>>,
     pub classes: Rc<RegisterClasses>,
+    pub cpu: Option<&'a crate::backend::cpu::Profile>,
 }
 
-impl LIRTransform for FloatAlloc {
+impl LIRTransform for FloatAlloc<'_> {
     fn class_name(&self) -> &'static str {
         "FloatAlloc"
     }
@@ -619,7 +636,7 @@ impl LIRTransform for FloatAlloc {
     ) -> Result<LirBody, String> {
         let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
         let propagated = crate::backend::fpcopyprop::propagated(&body);
-        crate::backend::fpstack::converted(propagated.as_ref().unwrap_or(&body), &self.classes)
+        crate::backend::fpstack::converted(propagated.as_ref().unwrap_or(&body), &self.classes, self.cpu)
             .and_then(|converted| _truncating(&converted, frame.as_deref_mut()))
             .map_err(|error| error.to_string())
     }

@@ -1047,6 +1047,73 @@ done:
     );
 }
 
+/// The jammed copies of a sweep are cleaned once (DEVIATE D8 of the jam): the
+/// copies read and write the same cells under three counters that count
+/// alike, so with the counters one and the repeats forwarded, a jammed trip
+/// stores each array once. Before, every copy kept its own load and store.
+#[test]
+fn a_jammed_sweep_is_one_add_of_the_repeated_cell() {
+    let cells = |base: i32| (0..100).map(|at| format!("i16 {}", base + at % 7)).collect::<Vec<_>>().join(", ");
+    let text = m16_ir(&format!(
+        "target datalayout = \"@m16-datalayout@\"
+@p = global [100 x i16] [{}]
+@v = global [100 x i16] [{}]
+
+define i16 @main() {{
+b0:
+  br label %outer
+
+outer:
+  %t = phi i16 [ 0, %b0 ], [ %tn, %outerlatch ]
+  %go = icmp slt i16 %t, 60
+  br i1 %go, label %pre, label %done
+
+pre:
+  br label %inner
+
+inner:
+  %j = phi i16 [ 0, %pre ], [ %jn, %body ]
+  %more = icmp slt i16 %j, 100
+  br i1 %more, label %body, label %outerlatch
+
+body:
+  %o = mul i16 %j, 2
+  %pp = getelementptr i8, ptr @p, i16 %o
+  %pv = getelementptr i8, ptr @v, i16 %o
+  %a = load i16, ptr %pp
+  %b = load i16, ptr %pv
+  %s = add i16 %a, %b
+  store i16 %s, ptr %pp
+  %jn = add i16 %j, 1
+  br label %inner
+
+outerlatch:
+  %tn = add i16 %t, 1
+  br label %outer
+
+done:
+  %q = getelementptr i8, ptr @p, i16 40
+  %w = load i16, ptr %q
+  ret i16 %w
+}}
+",
+        cells(1),
+        cells(3)
+    ));
+    let mut module = llrm_analysis::testing::parsed(&text);
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
+        pipeline::applied(program, &Applied { options: pipeline::Options::speed(), ..Applied::default() })
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let after = llrm_mir::print::module(&module);
+    // The eight sweeps of the jammed trip are one add of eight times the
+    // cell: `p += 8 * v`, one load and one store of each array's cell.
+    let body = after.split("\nbody:").nth(1).and_then(|rest| rest.split("\n\n").next()).unwrap_or_default();
+    assert!(body.contains("shl i16 %b, 3"), "{after}");
+    assert_eq!(body.matches("store i16").count(), 1, "{after}");
+}
+
 /// Reads what the module says each function does to memory, and finds nothing
 /// to do; counts how often it was asked.
 struct ReadsCallees {
@@ -1322,9 +1389,12 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
     assert_eq!(
         late,
         [
+            "drop-unnecessary-assumes@1577",
             "float2int@1594",
             "lower-constant-intrinsics@1597",
+            "rotate@1621",
             "loop-interchange@1631",
+            "drop-unnecessary-assumes@1360",
             "infer-alignment@1362",
             "loop-load-elim@1400",
             "combine@1403",
@@ -1338,6 +1408,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "licm@1508",
             "instsimplify@1662",
             "divrempairs@1667",
+            "expandmemcmp@1673",
             "tailrec@1677",
             "simplifycfg@1682"
         ]
@@ -2148,9 +2219,12 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
     assert_eq!(
         late,
         [
+            "drop-unnecessary-assumes@1577",
             "float2int@1594",
             "lower-constant-intrinsics@1597",
+            "rotate@1621",
             "loop-interchange@1631",
+            "drop-unnecessary-assumes@1360",
             "infer-alignment@1362",
             "loop-load-elim@1400",
             "combine@1403",
@@ -2164,6 +2238,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "licm@1508",
             "instsimplify@1662",
             "divrempairs@1667",
+            "expandmemcmp@1673",
             "tailrec@1677",
             "simplifycfg@1682"
         ]
@@ -2230,6 +2305,31 @@ fn test_the_write_through_promote_runs_after_sroa_only_where_gvn_has_no_pre() {
     let o1 = Applied { options: pipeline::Options { pre: false, ..Default::default() }, ..Applied::default() };
     for (slot, parts) in &parts(&o1) {
         assert!(parts.contains(&"promote"), "{slot} {parts:?}");
+    }
+}
+
+/// `write_through: false` leaves the write-through `Promote` out at -O1 too:
+/// wasm32 jpeg_fixed -O1 forwarded 29 `@inpos` loads across blocks, which the
+/// pin's -O1 (no GVN) does not, and was 259 B over.
+#[test]
+fn test_the_write_through_promote_is_left_out_at_o1_when_the_option_is_off() {
+    let parts = |applied: &Applied| {
+        let mut slots = Vec::new();
+        for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
+            for one in pipeline::llvm_order(applied, phase) {
+                if matches!(one.name(), "sroa@1179" | "promote@1241" | "sroa@646" | "sroa@776") {
+                    slots.push((one.name(), one.parts()));
+                }
+            }
+        }
+        slots
+    };
+    let options = |write_through| pipeline::Options { pre: false, write_through, ..Default::default() };
+    let on = Applied { options: options(true), ..Applied::default() };
+    let off = Applied { options: options(false), ..Applied::default() };
+    assert!(parts(&on).iter().all(|(_, parts)| parts.contains(&"promote")));
+    for (slot, parts) in &parts(&off) {
+        assert!(!parts.contains(&"promote") && !parts.contains(&"deadslots"), "{slot} {parts:?}");
     }
 }
 
@@ -2810,4 +2910,53 @@ fn the_byte_price_at_speed_counts_at_o2_and_o3_only() {
     use pipeline::Options;
     assert!(Options::standard().prices_bytes() && Options::aggressive().prices_bytes());
     assert!(!Options::basic().prices_bytes() && !Options::size().prices_bytes());
+}
+
+/// The pin's O1 function pipeline (PassBuilderPipelines.cpp L495) has no
+/// CorrelatedValuePropagation: recpow -O1 kept `srem i64 (mul nsw a, b), 30011`
+/// there, and ours narrowed it to i32 (arm64 -O1 recpow differed from the pin).
+#[test]
+fn test_o1_has_no_correlated_value_propagation() {
+    let text = "define i64 @f(i64 range(i64 -30010, 30011) %a, i64 range(i64 -30010, 30011) %b) {
+b:
+  %m = mul nsw i64 %a, %b
+  %r = srem i64 %m, 30011
+  ret i64 %r
+}
+";
+    let narrowed = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
+            pipeline::applied(program, &applied)
+        })
+        .and_then(|done| done)
+        .unwrap();
+        crate::testing::printed(&module).contains("srem i32")
+    };
+    assert!(narrowed(pipeline::Options::standard()), "premise: -O2 narrows it");
+    assert!(!narrowed(pipeline::Options::basic()), "-O1 narrowed with CVP, which the pin's O1 lacks");
+}
+
+/// The pin's early `SimplifyCFGPass()` (L1178) has `ConvertSwitchRangeToICmp`
+/// off (`opt -print-pipeline-passes`: `simplifycfg<...no-switch-range-to-icmp...>`);
+/// ours turned a two-way switch over a case range into an `icmp` there, ahead of
+/// the passes that read the switch. The slots that name the option (L1245, ...)
+/// keep it.
+#[test]
+fn test_the_early_simplifycfg_slot_leaves_a_switch_range_alone() {
+    let text = "define i32 @f(i32 %x) {\nb0:\n  switch i32 %x, label %d [\n    i32 0, label %a\n    i32 1, label %a\n    i32 2, label %a\n  ]\na:\n  ret i32 1\nd:\n  ret i32 2\n}\n";
+    let run = |slot: &str| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied { only: Some(slot.to_owned()), options: pipeline::Options::standard(), ..Applied::default() };
+        assert!(pipeline::slot_built(&applied, slot), "no slot {slot}");
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the slot runs");
+        llrm_mir::print::module(&module)
+    };
+    let early = run("decide@1178");
+    assert!(early.contains("switch i32"), "the early slot made the range an icmp:\n{early}");
+    let later = run("decide@1244");
+    assert!(!later.contains("switch i32"), "premise: the later slot folds the range:\n{later}");
 }

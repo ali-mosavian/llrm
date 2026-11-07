@@ -31,8 +31,7 @@ pub fn module(text: &str) -> Parsed<Module> {
 }
 
 /// Constructs llrm has no producer for, named so the refusal says why.
-const OUTSIDE_SUBSET: [&str; 8] =
-    ["fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
+const OUTSIDE_SUBSET: [&str; 7] = ["ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
 
 struct Parser {
     tokens: Vec<(Token, usize)>,
@@ -44,6 +43,8 @@ struct Parser {
     /// Each alias the pre-scan found, with what an operand naming it is: its
     /// aliasee, or none where the alias may be interposed.
     alias_names: HashMap<Name, Option<Name>>,
+    /// The comdats named by a global or function, which must be declared.
+    comdat_uses: Vec<(String, usize)>,
     /// Global values referred to, with the pointer type each use gave them.
     global_uses: Vec<(GlobalId, TypeId, usize)>,
     defined_globals: HashSet<GlobalId>,
@@ -74,6 +75,7 @@ impl Parser {
             module: Module::default(),
             globals: HashMap::default(),
             alias_names: HashMap::default(),
+            comdat_uses: Vec::new(),
             global_uses: Vec::new(),
             defined_globals: HashSet::default(),
             groups: HashMap::default(),
@@ -336,12 +338,63 @@ impl Parser {
                 Token::Word(word) if word == "declare" || word == "define" => self.function(word == "define")?,
                 Token::MetadataName(name) => self.named_metadata(name)?,
                 Token::MetadataId(number) => self.metadata_definition(number)?,
+                Token::Comdat(name) => self.comdat_definition(name)?,
                 _ => return self.fail(format!("unexpected {} at the top level", self.describe())),
             }
         }
     }
 
+    /// `$name = comdat KIND` (`LLParser::parseComdat`).
+    fn comdat_definition(
+        &mut self,
+        name: String,
+    ) -> Parsed<()> {
+        self.next();
+        self.expect_punct('=')?;
+        if !self.eat_word("comdat") {
+            return self.fail("expected comdat keyword");
+        }
+        let kind = self.word()?;
+        if !["any", "exactmatch", "largest", "nodeduplicate", "samesize"].contains(&kind.as_str()) {
+            return self.fail(format!("unknown selection kind `{kind}`"));
+        }
+        if self.module.comdats.insert(name.clone(), kind).is_some() {
+            return self.fail(format!("redefinition of comdat '${name}'"));
+        }
+        Ok(())
+    }
+
+    /// `comdat` or `comdat($name)` after `own`'s declaration: the comdat of
+    /// the same name, or the one named (`LLParser::parseOptionalComdat`).
+    fn comdat_of(
+        &mut self,
+        own: Option<String>,
+    ) -> Parsed<()> {
+        let line = self.line();
+        let name = if self.eat_punct('(') {
+            let Token::Comdat(name) = self.peek().clone() else {
+                return self.fail("expected a comdat name after `comdat(`");
+            };
+            self.next();
+            self.expect_punct(')')?;
+            name
+        } else {
+            let Some(own) = own.clone() else { return self.fail("a comdat marker needs a named global") };
+            own
+        };
+        self.comdat_uses.push((name.clone(), line));
+        if let Some(own) = own {
+            self.module.comdat_of.insert(own, name);
+        }
+        Ok(())
+    }
+
     fn finish(mut self) -> Parsed<Module> {
+        for (name, line) in std::mem::take(&mut self.comdat_uses) {
+            if !self.module.comdats.contains_key(&name) {
+                return Err(ParseError { line, message: format!("use of undefined comdat '${name}'") });
+            }
+        }
         for (name, id) in &self.globals {
             if !self.defined_globals.contains(id) {
                 return Err(ParseError { line: 0, message: format!("@{} is used but never defined", display(name)) });
@@ -599,6 +652,9 @@ impl Parser {
                 if let Some(name) = self.module.globals[id.0 as usize].name.owned() {
                     self.module.sections.insert(name, section);
                 }
+            } else if self.eat_word("comdat") {
+                let own = self.module.globals[id.0 as usize].name.owned();
+                self.comdat_of(own)?;
             } else {
                 return self.fail(format!("unexpected {} after a global", self.describe()));
             }
@@ -623,6 +679,7 @@ impl Parser {
             | Token::FloatBits { .. }
             | Token::HexFloat(_)
             | Token::Float80(_)
+            | Token::Float128(_)
             | Token::Bytes(_)
             | Token::Global(_) => !matches!(self.peek_at(1), Token::Punct('=')),
             Token::Punct('[' | '{' | '<') => true,
@@ -712,6 +769,10 @@ impl Parser {
             if let Some(name) = self.module.globals[id.0 as usize].name.owned() {
                 self.module.sections.insert(name, section);
             }
+        }
+        if self.eat_word("comdat") {
+            let own = self.module.globals[id.0 as usize].name.owned();
+            self.comdat_of(own)?;
         }
         if self.eat_word("personality") {
             let ty = self.ty()?;
@@ -906,6 +967,7 @@ impl Parser {
                 "float" => Type::Float(FloatKind::Float),
                 "double" => Type::Float(FloatKind::Double),
                 "x86_fp80" => Type::Float(FloatKind::X86Fp80),
+                "fp128" => Type::Float(FloatKind::F128),
                 "ptr" => Type::Pointer(self.address_space()?),
                 _ => match word.strip_prefix('i').and_then(|bits| bits.parse::<u32>().ok()) {
                     Some(bits) if (1..=128).contains(&bits) => Type::Int(bits),
@@ -1048,8 +1110,12 @@ impl Parser {
                 }
                 ConstantKind::Int(u128::from(word == "true"))
             }
-            Token::Float(value, narrow) => match shape {
+            Token::Float(value, narrow, wide, quad) => match shape {
                 Type::Float(FloatKind::Float) => ConstantKind::Float(u64::from(narrow.to_bits())),
+                Type::Float(FloatKind::F128) => ConstantKind::Float128(quad),
+                Type::Float(FloatKind::X86Fp80) => {
+                    crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, wide))
+                }
                 _ => self.float(&shape, value, line)?,
             },
             Token::FloatBits { bits, digits } => match shape {
@@ -1058,11 +1124,13 @@ impl Parser {
                 Type::Float(FloatKind::X86Fp80) if digits == 20 => {
                     crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, bits))
                 }
+                Type::Float(FloatKind::F128) if digits == 32 => ConstantKind::Float128(bits),
                 Type::Float(kind) => {
                     let (name, width) = match kind {
                         FloatKind::Float => ("float", 8),
                         FloatKind::Double => ("double", 16),
                         FloatKind::X86Fp80 => ("x86_fp80", 20),
+                        FloatKind::F128 => ("fp128", 32),
                     };
                     return self.fail_on(line, format!("f0x{bits:0digits$X} is not a {name}'s {width} hex digits"));
                 }
@@ -1073,6 +1141,10 @@ impl Parser {
                     crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, bits))
                 }
                 _ => return self.fail_on(line, "`0xK` is an x86_fp80"),
+            },
+            Token::Float128(bits) => match shape {
+                Type::Float(FloatKind::F128) => ConstantKind::Float128(bits),
+                _ => return self.fail_on(line, "`0xL` is an fp128"),
             },
             Token::HexFloat(bits) => self.float(&shape, f64::from_bits(bits), line)?,
             Token::Word(word) if word == "null" => {
@@ -1204,6 +1276,18 @@ impl Parser {
         line: usize,
     ) -> Parsed<ConstantKind> {
         match shape {
+            // `+inf`, `-inf` and the default quiet NaN, widened; a NaN with a
+            // payload would land in the wrong bits.
+            Type::Float(FloatKind::F128) => {
+                let canonical = value.is_nan() && value.to_bits() & !(1 << 63) == 0x7FF8_0000_0000_0000;
+                if value.is_nan() && !canonical || value.is_finite() {
+                    return self.fail_on(line, "an fp128 given as a 0x double literal");
+                }
+                let mut wide =
+                    crate::apfloat::ApFloat::from_bits(crate::apfloat::IEEE_DOUBLE, u128::from(value.to_bits()));
+                wide.convert(crate::apfloat::IEEE_QUAD, crate::fpclass::RoundingMode::NearestTiesToEven);
+                Ok(ConstantKind::Float128(wide.to_bits()))
+            }
             Type::Float(FloatKind::Double | FloatKind::X86Fp80) => Ok(ConstantKind::Float(value.to_bits())),
             Type::Float(FloatKind::Float) => {
                 let narrow = value as f32;
@@ -2046,6 +2130,64 @@ impl Parser {
                         Some(_) => return self.fail("the inserted value has the member's type"),
                     }
                 }
+                "extractelement" => {
+                    let (vector_ty, vector) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (_, index) = self.typed_value(local)?;
+                    let element = self
+                        .module
+                        .context
+                        .types
+                        .member(vector_ty, 0)
+                        .filter(|_| matches!(self.module.context.types.get(vector_ty), Type::Vector { .. }))
+                        .ok_or_else(|| self.error("extractelement takes a vector".to_owned()))?;
+                    (Opcode::ExtractElement, element, vec![vector, index])
+                }
+                "insertelement" => {
+                    let (vector_ty, vector) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (element_ty, element) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (_, index) = self.typed_value(local)?;
+                    if !matches!(self.module.context.types.get(vector_ty), Type::Vector { .. })
+                        || self.module.context.types.member(vector_ty, 0) != Some(element_ty)
+                    {
+                        return self.fail("insertelement takes a vector and one of its element type");
+                    }
+                    (Opcode::InsertElement, vector_ty, vec![vector, element, index])
+                }
+                "shufflevector" => {
+                    let (vector_ty, first) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (second_ty, second) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (mask_ty, mask) = self.typed_value(local)?;
+                    let (Type::Vector { element, .. }, Type::Vector { count, .. }) = (
+                        self.module.context.types.get(vector_ty).clone(),
+                        self.module.context.types.get(mask_ty).clone(),
+                    ) else {
+                        return self.fail("shufflevector takes vectors and a vector mask");
+                    };
+                    if second_ty != vector_ty {
+                        return self.fail("shufflevector's inputs have one type");
+                    }
+                    let Operand::Constant(mask) = mask else {
+                        return self.fail("shufflevector's mask is constant");
+                    };
+                    let lane = |context: &crate::context::Context, id| match context.get(id).kind {
+                        ConstantKind::Int(value) => i32::try_from(value).ok(),
+                        _ => Some(-1),
+                    };
+                    let lanes: Vec<i32> = match &self.module.context.get(mask).kind {
+                        ConstantKind::Aggregate(members) => {
+                            members.iter().map(|&one| lane(&self.module.context, one).unwrap_or(-1)).collect()
+                        }
+                        ConstantKind::Zero => vec![0; count as usize],
+                        _ => vec![-1; count as usize],
+                    };
+                    let result = self.module.context.types.intern(Type::Vector { element, count });
+                    (Opcode::ShuffleVector(lanes), result, vec![first, second])
+                }
                 "alloca" => {
                     let allocated = self.ty()?;
                     let mut operands = Vec::new();
@@ -2067,6 +2209,12 @@ impl Parser {
                     }
                     let ty = self.module.context.types.ptr(address_space);
                     (Opcode::Alloca { allocated, align, address_space }, ty, operands)
+                }
+                "va_arg" => {
+                    let (_, list) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let ty = self.ty()?;
+                    (Opcode::VaArg, ty, vec![list])
                 }
                 "load" => {
                     let atomic = self.eat_word("atomic");

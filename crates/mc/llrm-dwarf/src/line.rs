@@ -120,12 +120,23 @@ pub fn program(
             buf.uleb(u64::from(LNCT_MD5));
             buf.uleb(u64::from(FORM_DATA16));
         }
-        buf.uleb(files.len() as u64);
-        for index in 0..files.len() {
+        // Entry 0 is the primary file, as `info.files[0]` is entry 1: a
+        // sequence starts at file 1 whatever the version, and GNU readers
+        // number a version 5 table from 1 (LLVM's MCDwarf duplicates the
+        // root file the same way).
+        let primary = usize::from(!files.is_empty());
+        buf.uleb((files.len() + primary) as u64);
+        for (position, index) in (0..primary).chain(0..files.len()).enumerate() {
             let (dir, name) = &files[index];
-            let at = out.line_strings.add(name);
+            // Entry 0 spells the path in full from the current directory, so
+            // that entry 1 is not taken for a duplicate of it.
+            let (dir, name) = match position {
+                0 if primary == 1 => (0, if *dir == 0 { format!("./{name}") } else { info.files[0].name.clone() }),
+                _ => (*dir, name.clone()),
+            };
+            let at = out.line_strings.add(&name);
             buf.section_offset(strings, at);
-            buf.uleb(*dir as u64);
+            buf.uleb(dir as u64);
             if md5 {
                 if let Some((_, sum)) = &info.files[index].checksum {
                     buf.bytes.extend(sum);
@@ -148,9 +159,9 @@ pub fn program(
     let length = (buf.at() - header_length - 4) as u32;
     buf.patch32(header_length, length);
 
-    // The file number of file `index` in the table above: 0-based in 5, 1-based
-    // before. A sequence starts at file 1, so one in file 0 sets it.
-    let number = |index: usize| -> u64 { index as u64 + u64::from(out.version < 5) };
+    // The file number of file `index` in the table above: 1-based in every
+    // version (version 5 repeats the primary file as entry 0).
+    let number = |index: usize| -> u64 { index as u64 + 1 };
     let mut sections: Vec<usize> = Vec::new();
     for one in &info.lines {
         if one.file >= info.files.len() {
@@ -161,7 +172,18 @@ pub fn program(
         }
     }
     let address = usize::from(out.address);
+    // A sequence per section, or per function with a range in it.
+    let mut units: Vec<(usize, Option<&llrm_debug::Function>)> = Vec::new();
     for section in sections {
+        if out.sequence_per_function {
+            let own =
+                info.functions.iter().filter(|one| one.ranges.first().is_some_and(|range| range.section == section));
+            units.extend(own.map(|function| (section, Some(function))));
+        } else {
+            units.push((section, None));
+        }
+    }
+    for (section, only) in units {
         let mut rows: Vec<Row> = info
             .lines
             .iter()
@@ -203,7 +225,20 @@ pub fn program(
                 }
             }
         }
-        let (symbol, base) = crate::anchor(object, section)?;
+        let (symbol, base) = match only {
+            Some(function) => {
+                let range = function.ranges[0];
+                rows.retain(|one| (range.offset..range.offset + range.length).contains(&one.offset));
+                let llrm_object::Definition::Defined { offset, .. } = object.symbols[function.symbol].definition else {
+                    return refused(format!("function {} has no defined symbol", function.name));
+                };
+                (function.symbol, offset)
+            }
+            None => crate::anchor(object, section)?,
+        };
+        if rows.is_empty() {
+            continue;
+        }
         let start = rows[0].offset;
         if address == 2 {
             // Open Watcom's extended opcode 4: the segment the addresses are
@@ -255,7 +290,7 @@ pub fn program(
         let end = info
             .code
             .iter()
-            .filter(|range| range.section == section)
+            .filter(|range| range.section == section && only.is_none_or(|one| one.ranges[0].offset == range.offset))
             .map(|range| range.offset + range.length)
             .max()
             .unwrap_or(object.sections[section].image.len());

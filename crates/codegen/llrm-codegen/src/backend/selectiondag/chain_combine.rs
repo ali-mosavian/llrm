@@ -10,10 +10,12 @@
 //! proves disjoint, and the aliases it gathers are joined by a token factor.
 //! `visitTokenFactor` is `combine_token_factor.rs`.
 //!
-//! DEVIATE CC2: `mayAlias` has no `MachineMemOperand` offset, base alignment
-//! or IR value: the relatively-aligned-offsets test and the alias analysis
-//! (`useAA`, false for x86) are not run; and there are no atomics or
-//! lifetime nodes. A pair the address analysis cannot decide is a may-alias.
+//! DEVIATE CC2: `mayAlias` has no `MachineMemOperand` offset or base
+//! alignment: the relatively-aligned-offsets test is not run. The alias
+//! analysis (`useAA`) runs only where the builder records the IR pointer
+//! ([`MemBase::Value`], wasm), on whole accesses; there are no atomics; and a lifetime marker is the whole
+//! frame object of unknown size (it aliases an access of that object, none of
+//! another). A pair the address analysis cannot decide is a may-alias.
 //! Exit: `MemInfo` carrying the pointer info. Owner: w12.
 //!
 //! DEVIATE CC1: the pin skips all of this when optimising nothing
@@ -26,9 +28,19 @@
 use llrm_support::hash::HashSet;
 
 use super::address_analysis::{BaseIndexOffset, compute_aliasing};
-use super::dag::{NodeData, Rauw, SDValue};
+use super::dag::{MemBase, MemLocation, NodeData, Rauw, SDValue};
 use super::dag_combiner::{CombineHooks, DagCombiner};
 use super::isd::ISD;
+
+/// `BatchAA`: whether two accesses cannot touch the same bytes, from their IR
+/// pointers and `!tbaa` tags.
+pub trait AliasOracle {
+    fn no_alias(
+        &self,
+        a: MemLocation,
+        b: MemLocation,
+    ) -> bool;
+}
 
 /// `GatherAllAliasesMaxDepth`: 18, `TargetLoweringBase`; x86 does not set its
 /// own.
@@ -55,6 +67,21 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         op0: SDValue,
         op1: SDValue,
     ) -> bool {
+        // A lifetime marker is the whole frame object, its size not known here
+        // (`getCharacteristics`' `MFI.getObjectSize`): it aliases an access of
+        // the same object, and none of another.
+        let lifetime = |op: SDValue| matches!(self.dag.opcode(op), ISD::LifetimeStart | ISD::LifetimeEnd);
+        if lifetime(op0) || lifetime(op1) {
+            let pointer = |op: SDValue| match self.dag.opcode(op) {
+                ISD::LifetimeStart | ISD::LifetimeEnd => Some(self.dag.operand(op, 1)),
+                _ => self.access(op).map(|(ptr, ..)| ptr),
+            };
+            let (Some(ptr0), Some(ptr1)) = (pointer(op0), pointer(op1)) else { return true };
+            if ptr0 == ptr1 {
+                return true;
+            }
+            return compute_aliasing(self.dag, op0, None, op1, None).unwrap_or(true);
+        }
         let (Some((ptr0, size0, info0)), Some((ptr1, size1, info1))) = (self.access(op0), self.access(op1)) else {
             return true;
         };
@@ -72,7 +99,19 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if (invariant(op0) && is_store(op1)) || (invariant(op1) && is_store(op0)) {
             return false;
         }
-        compute_aliasing(self.dag, op0, Some(size0), op1, Some(size1)).unwrap_or(true)
+        if let Some(alias) = compute_aliasing(self.dag, op0, Some(size0), op1, Some(size1)) {
+            return alias;
+        }
+        // `UseAA`: alias analysis on the IR pointers and `!tbaa` tags.
+        if let (Some(oracle), MemBase::Value(a), MemBase::Value(b)) = (self.alias, info0.base, info1.base) {
+            let (a, b) = (self.dag.mem_locations[a.get() as usize - 1], self.dag.mem_locations[b.get() as usize - 1]);
+            // A location describes the access as built: a narrowed or merged
+            // one is not.
+            if u64::from(a.bytes) == size0 && u64::from(b.bytes) == size1 && oracle.no_alias(a, b) {
+                return false;
+            }
+        }
+        true
     }
 
     /// `GatherAllAliases`: walk up the chain from `original` past the nodes
@@ -119,6 +158,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 }
                 // Always forward past a CopyFromReg.
                 ISD::CopyFromReg => Some(Some(self.dag.operand(chain, 0))),
+                // Forward past a lifetime marker proven not to alias the access.
+                ISD::LifetimeStart | ISD::LifetimeEnd => {
+                    (!self.may_alias(node, chain)).then(|| Some(self.dag.operand(chain, 0)))
+                }
                 _ => None,
             };
             match improved {
@@ -302,7 +345,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let replacement = self.dag.get_store(better, value, ptr, info);
         let token = self.dag.get_token_factor(&[chain, replacement]);
         self.add_to_worklist(token.node);
-        Some(token)
+        // `CombineTo(ST, Token, false)`: the users of the store are not put on
+        // the worklist, and `visitSTORE` returns the store itself, so `Run`
+        // adds nothing either.
+        let operands: Vec<u32> = self.dag.node(store).ops.iter().map(|op| op.node).collect();
+        let _ = self.dag.replace_all_uses_with(store, token);
+        self.dag.delete_replaced(store.node);
+        for operand in operands {
+            self.add_to_worklist(operand);
+        }
+        Some(store)
     }
 }
 

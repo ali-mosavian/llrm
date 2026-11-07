@@ -206,6 +206,25 @@ impl LIRTransform for ProcessImplicitDefs {
 
 /// `body` with every `implicit_def` processed.
 pub fn processed(body: &LirBody) -> LirBody {
+    processed_keeping(body, false)
+}
+
+/// [`processed`] before allocation, on a body whose registers have several
+/// definitions (after phi elimination). An `implicit_def` of a register
+/// something else writes too stays: it is the definition the register's
+/// other readers reach, as the pin's allocator sees it. Dropped, the register
+/// is live into the function from its first read: `v := cmove v, x` in a
+/// loop whose `v` the entry path never set made an interval from the entry
+/// and `SplitEditor::finish_values` panicked "Cannot overlap different
+/// values".
+pub fn processed_before_allocation(body: &LirBody) -> LirBody {
+    processed_keeping(body, true)
+}
+
+fn processed_keeping(
+    body: &LirBody,
+    keep_written: bool,
+) -> LirBody {
     let mut current = body.clone();
     loop {
         let defined: HashSet<u32> =
@@ -311,7 +330,9 @@ pub fn processed(body: &LirBody) -> LirBody {
                     .insns
                     .iter()
                     .filter(|one| {
-                        implicit_def_of(one).is_none_or(|value| phi_read.contains(&value) || !defined.contains(&value))
+                        implicit_def_of(one).is_none_or(|value| {
+                            phi_read.contains(&value) || !defined.contains(&value) || (keep_written && written.contains(&value))
+                        })
                     })
                     .cloned()
                     .collect();
@@ -347,7 +368,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn def(value: u32) -> Arc<Insn> {
@@ -510,6 +531,21 @@ mod tests {
         assert_eq!(names(&got), ["add"]);
         let add = &got.insns()[0];
         assert_eq!((add.uses.clone(), add.undefs.clone()), (vec![4], vec![1]));
+    }
+
+    /// bench/jpeg_fixed at -O2 (raw -O0 IR) panicked in the allocator:
+    /// `v := implicit_def` before a loop, `v := cmove v, x` in it. The
+    /// definition went and the read stayed, so `v` was live from the function's
+    /// entry. Before allocation the definition of a register something else
+    /// writes stays; after it, it goes.
+    #[test]
+    fn test_the_implicit_def_of_a_register_written_again_stays_for_the_allocator() {
+        let tied = || add(1, 1, 5);
+        let kept = processed_before_allocation(&body(vec![def(1), tied()], Vec::new()));
+        assert_eq!(names(&kept), ["implicit_def", "add"]);
+        assert_eq!((kept.insns()[1].uses.clone(), kept.insns()[1].undefs.clone()), (vec![1, 5], vec![]));
+        let after = processed(&body(vec![def(1), tied()], Vec::new()));
+        assert_eq!(names(&after), ["add"]);
     }
 
     /// A copy that reads only undef is an implicit def, worked in turn: `v2 :=

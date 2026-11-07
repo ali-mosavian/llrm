@@ -90,6 +90,8 @@ impl BaseIndexOffset {
         let ptr = match dag.opcode(node) {
             ISD::Load => dag.operand(node, 1),
             ISD::Store => dag.operand(node, 2),
+            // `BaseIndexOffset::match(LifetimeSDNode)`: the frame index.
+            ISD::LifetimeStart | ISD::LifetimeEnd => dag.operand(node, 1),
             _ => return Self::NONE,
         };
         // (((B + I*M) + c)) + c ...

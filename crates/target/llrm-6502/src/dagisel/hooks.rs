@@ -55,16 +55,27 @@ impl MosHooks {
 }
 
 /// `SelectIndirect`: the pointer and the byte offset.
-fn select_indirect<D: Dag>(
+fn select_indirect<D: AddrDag>(
     dag: &mut D,
     value: SDValue,
     results: &mut Vec<(SDValue, Option<u32>)>,
 ) {
-    let (base, offset) = match (dag.opcode(value.node) == isd::ADD).then(|| dag.constant(dag.operand(value.node, 1))) {
+    // A sum that is also wanted as a value (the pointer a loop steps) is the
+    // address as it is: folding its constant instead keeps the old pointer
+    // alive beside the new one, a copy of the pair each trip.
+    let folds = dag.opcode(value.node) == isd::ADD && !dag.has_materializing_use(value);
+    let (base, offset) = match folds.then(|| dag.constant(dag.operand(value.node, 1))) {
         Some(Some(c)) if (0..256).contains(&c) => (dag.operand(value.node, 0), c),
         _ => (value, 0),
     };
     let offset = dag.target_constant(offset, mvt::i8);
+    // A frame object stays an object (`rc0` plus its offset once the frame is
+    // laid out), not a pointer value built by `LEASP16`: the address becomes a
+    // `TargetFrameIndex`, as x86's `getAddressOperands` makes it.
+    let base = match dag.frame_index(base) {
+        Some(index) => dag.target_frame_index(index, mvt::i16),
+        None => base,
+    };
     results.push((base, None));
     results.push((offset, None));
 }
@@ -86,8 +97,9 @@ fn select_plain<D: AddrDag>(
 
 /// `SelectIndexed`: `(add pointer, (zext i8 index))` as the pointer and the
 /// byte index, either operand order; a global's address is left to
-/// `SelectAbsX`.
-fn select_indexed<D: Dag>(
+/// `SelectAbsX`. A word whose high byte is known zero is the same index: its
+/// low half (`MaskedValueIsZero`, as the pin's address complex patterns ask).
+fn select_indexed<D: AddrDag>(
     dag: &mut D,
     value: SDValue,
     results: &mut Vec<(SDValue, Option<u32>)>,
@@ -97,11 +109,20 @@ fn select_indexed<D: Dag>(
     }
     let operands = [dag.operand(value.node, 0), dag.operand(value.node, 1)];
     for (base, extend) in [(operands[0], operands[1]), (operands[1], operands[0])] {
-        if dag.opcode(extend.node) != isd::ZERO_EXTEND || dag.opcode(base.node) == own::WRAPPER {
+        if dag.opcode(base.node) == own::WRAPPER || dag.value_type(base) != mvt::i16 {
             continue;
         }
-        let index = dag.operand(extend.node, 0);
-        if dag.value_type(index) == mvt::i8 && dag.value_type(base) == mvt::i16 {
+        let index = if dag.opcode(extend.node) == isd::ZERO_EXTEND {
+            dag.operand(extend.node, 0)
+        } else if dag.value_type(extend) == mvt::i16
+            && dag.constant(extend).is_none()
+            && dag.masked_value_is_zero(extend, 0xFF00)
+        {
+            dag.get_node(isd::TRUNCATE, mvt::i8, &[extend])
+        } else {
+            continue;
+        };
+        if dag.value_type(index) == mvt::i8 {
             results.push((base, None));
             results.push((index, None));
             return true;
@@ -110,8 +131,25 @@ fn select_indexed<D: Dag>(
     false
 }
 
-/// `SelectAbsX`: `(add (wrapper global), (zext i8 index))` as the symbol and
-/// the byte index, either operand order.
+/// The leaves of the adds below `value`: a node that is not an `add`, or
+/// whose operands the caller does not follow, is one leaf.
+fn add_leaves<D: Dag>(
+    dag: &D,
+    value: SDValue,
+    leaves: &mut Vec<SDValue>,
+) {
+    if dag.opcode(value.node) == isd::ADD {
+        add_leaves(dag, dag.operand(value.node, 0), leaves);
+        add_leaves(dag, dag.operand(value.node, 1), leaves);
+    } else {
+        leaves.push(value);
+    }
+}
+
+/// `SelectAbsX`: a global, a byte index and constants added in any order and
+/// grouping, `(add (wrapper global), (zext i8 index))` with `+ k` anywhere, as
+/// the symbol, the constant (mod 2^16: the access wraps there too) and the
+/// byte index.
 fn select_absx<D: Dag>(
     dag: &mut D,
     value: SDValue,
@@ -120,20 +158,33 @@ fn select_absx<D: Dag>(
     if dag.opcode(value.node) != isd::ADD {
         return false;
     }
-    let operands = [dag.operand(value.node, 0), dag.operand(value.node, 1)];
-    for (wrapper, extend) in [(operands[0], operands[1]), (operands[1], operands[0])] {
-        if dag.opcode(wrapper.node) != own::WRAPPER || dag.opcode(extend.node) != isd::ZERO_EXTEND {
-            continue;
-        }
-        let symbol = dag.operand(wrapper.node, 0);
-        let index = dag.operand(extend.node, 0);
-        if dag.opcode(symbol.node) == isd::TargetGlobalAddress && dag.value_type(index) == mvt::i8 {
-            results.push((symbol, None));
-            results.push((index, None));
-            return true;
+    let mut leaves = Vec::new();
+    add_leaves(dag, value, &mut leaves);
+    let (mut symbol, mut index, mut offset) = (None, None, 0u64);
+    for leaf in leaves {
+        if let Some(c) = dag.constant(leaf) {
+            offset = offset.wrapping_add(c as u64);
+        } else if dag.opcode(leaf.node) == own::WRAPPER && symbol.is_none() {
+            let target = dag.operand(leaf.node, 0);
+            if dag.opcode(target.node) != isd::TargetGlobalAddress {
+                return false;
+            }
+            symbol = Some(target);
+        } else if dag.opcode(leaf.node) == isd::ZERO_EXTEND && index.is_none() {
+            let byte = dag.operand(leaf.node, 0);
+            if dag.value_type(byte) != mvt::i8 {
+                return false;
+            }
+            index = Some(byte);
+        } else {
+            return false;
         }
     }
-    false
+    let (Some(symbol), Some(index)) = (symbol, index) else { return false };
+    results.push((symbol, None));
+    results.push((dag.target_constant((offset & 0xFFFF) as i64, mvt::i16), None));
+    results.push((index, None));
+    true
 }
 
 /// `SelectAbs`: `(wrapper global)` or `(add (wrapper global), c)` as the symbol

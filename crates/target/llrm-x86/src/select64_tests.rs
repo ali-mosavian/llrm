@@ -29,10 +29,10 @@ fn ret_is_a_near_return_without_an_operand_size_prefix() {
 
 #[test]
 fn a_quadword_move_takes_rex_w() {
-    // mov %rax,%rbx (the 8b form, as for dwords); mov $0x2a,%eax; mov %r8,%r9
+    // mov %rax,%rbx (the 89 form, as for dwords); mov $0x2a,%eax; mov %r8,%r9
     let mov = |into, from| sem(Operation::Move, Some("mov"), vec![rg(into, 8)], vec![rg(from, 8)], None, false);
-    assert_eq!(bytes(&mov(RegId::RBX, RegId::RAX)), [0x48, 0x8b, 0xd8]);
-    assert_eq!(bytes(&mov(RegId::R9, RegId::R8)), [0x4d, 0x8b, 0xc8]);
+    assert_eq!(bytes(&mov(RegId::RBX, RegId::RAX)), [0x48, 0x89, 0xc3]);
+    assert_eq!(bytes(&mov(RegId::R9, RegId::R8)), [0x4d, 0x89, 0xc1]);
     let load = sem(Operation::Move, Some("mov"), vec![rg(RegId::EAX, 4)], vec![im(42, 4, None)], None, false);
     assert_eq!(bytes(&load), [0xb8, 0x2a, 0, 0, 0]);
 }
@@ -91,7 +91,7 @@ fn a_dword_widens_to_a_quadword() {
         |name, into, from| sem(Operation::Extend, Some(name), vec![rg(into, 8)], vec![rg(from, 4)], None, false);
     // movslq %ecx,%rax; mov %ecx,%eax (zero extension); movslq %r9d,%r10
     assert_eq!(bytes(&extend("movsx", RegId::RAX, RegId::ECX)), [0x48, 0x63, 0xc1]);
-    assert_eq!(bytes(&extend("movzx", RegId::RAX, RegId::ECX)), [0x8b, 0xc1]);
+    assert_eq!(bytes(&extend("movzx", RegId::RAX, RegId::ECX)), [0x89, 0xc8]);
     assert_eq!(bytes(&extend("movsx", RegId::R10, RegId::R9D)), [0x4d, 0x63, 0xd1]);
 }
 
@@ -169,7 +169,7 @@ fn a_quadword_divide_and_negate_take_a_memory_operand() {
 fn a_frame_cell_with_a_wide_index_is_not_encodable_before_the_frame_is_named() {
     let cell = ir::Mem {
         through: RegId::BP,
-        index: Some(llrm_lir::Held { value: 1, width: 8 }),
+        index: Some(llrm_lir::Held { value: 1, width: 8, offset: 0 }),
         index_through: RegId::RDX,
         scale: 1,
         disp_width: 2,
@@ -354,4 +354,34 @@ fn lea_of_a_symbol_beside_a_register_keeps_the_register() {
     let lea = sem(Operation::Address, Some("lea"), vec![rg(RegId::RAX, 8)], vec![Loc::Address(place)], None, false);
     // lea sym(%rcx), %rax
     assert_eq!(bytes(&lea), [0x48, 0x8d, 0x81, 0, 0, 0, 0]);
+}
+
+/// `mov eax, ecx` was `8B C1` and `sub eax, ecx` `2B C1`, the `op r, r/m` form of
+/// iced; the pin writes every register-to-register `mov`, `add`, `or`, `and`,
+/// `sub`, `xor` and `cmp` as `op r/m, r` (`89 C8`, `29 C8`, ... `MOV32rr`,
+/// `SUB32rr`): same length, other bytes, so no object matched the pin's and
+/// every COMDAT checksum differed. Opcodes read from llc d1106deb71 output.
+#[test]
+fn a_register_to_register_alu_op_is_the_pins_destination_in_rm_form() {
+    let binary = |name: &str, width| {
+        sem(
+            Operation::Binary,
+            Some(name),
+            vec![rg(RegId::EAX, width)],
+            vec![rg(RegId::EAX, width), rg(RegId::ECX, width)],
+            None,
+            false,
+        )
+    };
+    for (name, opcode) in [("add", 0x01), ("or", 0x09), ("and", 0x21), ("sub", 0x29), ("xor", 0x31)] {
+        assert_eq!(bytes(&binary(name, 4)), [opcode, 0xc8], "{name}");
+    }
+    let compare = sem(Operation::Compare, Some("cmp"), vec![], vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)], None, false);
+    assert_eq!(bytes(&compare), [0x39, 0xc8]);
+    let mov = |into, from, width| sem(Operation::Move, Some("mov"), vec![rg(into, width)], vec![rg(from, width)], None, false);
+    assert_eq!(bytes(&mov(RegId::EAX, RegId::ECX, 4)), [0x89, 0xc8]);
+    assert_eq!(bytes(&mov(RegId::AL, RegId::CL, 1)), [0x88, 0xc8]);
+    // control: a load keeps the `op r, r/m` form, the only one it has
+    let load = sem(Operation::Move, Some("mov"), vec![rg(RegId::EAX, 4)], vec![frame(-4, 4)], None, false);
+    assert_eq!(bytes(&load), [0x8b, 0x45, 0xfc]);
 }

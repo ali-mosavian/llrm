@@ -22,13 +22,12 @@
 //! # See also
 //! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`.
 
-use std::collections::{HashMap, HashSet};
-
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
 use llrm_dagisel::instr::OperandDesc;
 pub use llrm_spike_mf::{Block, Inst, Kind, Operand, Phi, Reg};
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::dagisel::function::Selection;
 use crate::dagisel::generated::ids::reg as pin;
@@ -45,6 +44,8 @@ impl Class {
             pin::ACCRegClassID => Class::Acc,
             pin::GR16RegClassID => Class::Gr16,
             pin::HLRRegClassID => Class::Hlr,
+            pin::DERRegClassID => Class::Der,
+            pin::BCRRegClassID => Class::Bcr,
             _ => return None,
         })
     }
@@ -58,7 +59,8 @@ impl Class {
     }
 }
 
-/// The register of a class that has only one: `ACC` is `a`, `HLR` is `hl`.
+/// The register of a class that has only one: `ACC` is `a`, `HLR` is `hl`,
+/// `DER` is `de`, `BCR` is `bc`.
 ///
 /// An operand in such a class is that physical register, with a copy in or out
 /// around the instruction, as x86's fixed-register operands are. Left as a
@@ -69,6 +71,9 @@ fn fixed_register(id: i16) -> Option<llrm_lir::registers::RegId> {
     match u16::try_from(id).ok()? {
         pin::ACCRegClassID => Some(crate::reg::A),
         pin::HLRRegClassID => Some(crate::reg::HL),
+        pin::DERRegClassID => Some(crate::reg::DE),
+        pin::BCRRegClassID => Some(crate::reg::BC),
+        pin::IYRRegClassID => Some(crate::reg::IY),
         _ => None,
     }
 }
@@ -138,7 +143,7 @@ struct Emitter<'a> {
     /// For the block being emitted: the nodes that read each value.
     users: HashMap<(u32, u8), Vec<u32>>,
     /// The values known to be in `a` when they are made.
-    in_acc: std::collections::HashSet<(u32, u8)>,
+    in_acc: llrm_support::hash::HashSet<(u32, u8)>,
 }
 
 impl Emitter<'_> {
@@ -225,7 +230,7 @@ impl Emitter<'_> {
                 let name = self.dag.global_names.get(symbol as usize).ok_or("a global with no name")?;
                 // C symbols take SDCC's underscore; the runtime's own routines
                 // are named as they are
-                Operand::Symbol(format!("_{name}"), offset)
+                Operand::Symbol(crate::data::symbol(name), offset)
             }
             (ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, NodeData::Symbol(id)) => {
                 let name = self.dag.symbol_names.get(id as usize).ok_or("an external symbol with no name")?;
@@ -272,6 +277,14 @@ impl Emitter<'_> {
                 }
                 into.push(Inst::copy(dst, src));
             }
+            // `TargetOpcode::COPY`: what a `freeze` is selected to
+            // (`Select_FREEZE`)
+            ISD::Machine(20) => {
+                let src = self.used(n.ops[0], "COPY")?;
+                let dst = self.new_reg(Class::of_type(n.values[0]));
+                self.values.insert((node, 0), dst);
+                into.push(Inst::copy(dst, src));
+            }
             ISD::Machine(code) => {
                 let name = opcode_name(code).ok_or_else(|| format!("a machine node with no name: {code}"))?;
                 match name {
@@ -310,9 +323,14 @@ impl Emitter<'_> {
                 }
                 let mut reads_flags = false;
                 // flags another instruction overwrote since their compare:
-                // compare again
+                // compare again. A compare that takes the carry of another
+                // is compared again with it.
+                let mut carried: Vec<Inst> = Vec::new();
                 for op in &n.ops {
                     let key = (op.node, op.res);
+                    if let Some(group) = self.flag_groups.get(&key) {
+                        carried.extend(group.clone());
+                    }
                     if self.flags_now != Some(key) {
                         if let Some(group) = self.flag_groups.get(&key) {
                             into.extend(group.clone());
@@ -384,7 +402,7 @@ impl Emitter<'_> {
                     reads_flags: reads_flags || desc.implicit_uses.contains(&pin::F),
                     may_load: desc.has(flag::MAY_LOAD),
                     may_store: desc.has(flag::MAY_STORE),
-                    side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS),
+                    side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS) || self.dag.volatile_accesses.contains(&node),
                     cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
                     commutable: desc.has(flag::COMMUTABLE),
                     rematerializable: desc.has(flag::REMATERIALIZABLE),
@@ -392,7 +410,8 @@ impl Emitter<'_> {
                 });
                 match flags_key {
                     Some(key) => {
-                        self.flag_groups.insert(key, into[group_start..].to_vec());
+                        self.flag_groups
+                            .insert(key, carried.into_iter().chain(into[group_start..].iter().cloned()).collect());
                         self.flags_now = Some(key);
                     }
                     None if desc.implicit_defs.contains(&pin::F) || desc.has(flag::CALL) => self.flags_now = None,
@@ -608,19 +627,20 @@ pub fn emit(
     let mut emitter = Emitter {
         dag: &first.dag,
         function: MFunction::new(name),
-        values: HashMap::new(),
-        builder: HashMap::new(),
-        arrives_in: HashMap::new(),
-        made: HashSet::new(),
-        widened: HashMap::new(),
-        flag_groups: HashMap::new(),
+        values: HashMap::default(),
+        builder: HashMap::default(),
+        arrives_in: HashMap::default(),
+        made: HashSet::default(),
+        widened: HashMap::default(),
+        flag_groups: HashMap::default(),
         flags_now: None,
-        users: HashMap::new(),
+        users: HashMap::default(),
         in_acc: Default::default(),
     };
     // the frame objects the selector made; the allocas came first, at their
     // index
     emitter.function.locals.extend(selection.locals.iter().enumerate().map(|(at, size)| (at as i32, *size, 1)));
+    let mut place_numbers = HashMap::default();
     let width_class = |bits: u32| if bits > 8 { Class::Gr16 } else { Class::Gr8 };
     for one in &selection.blocks {
         emitter.dag = &one.dag;
@@ -645,11 +665,39 @@ pub fn emit(
         // A unit lists its glued nodes last first.
         for unit in &one.units {
             for &node in unit.nodes.iter().rev() {
+                let before = insts.len();
                 emitter.emit(node, &mut insts)?;
+                // `SDLoc` to `DebugLoc`: what the node emitted is of its IR
+                // instruction's place.
+                let order = one.dag.node(SDValue { node, res: 0 }).order as usize;
+                if let Some(&Some(place)) = one.dag.lines.get(order) {
+                    let places = &mut emitter.function.places;
+                    let number = *place_numbers
+                        .entry(place)
+                        .or_insert_with(
+                            || {
+                                places.push(place);
+                                places.len()
+                            },
+                        );
+                    for made in &mut insts[before..] {
+                        if made.origin == 0 {
+                            made.origin = number as u32;
+                        }
+                    }
+                }
             }
         }
         emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
-        emitter.function.blocks.push(Block { id: one.block.0, insts, phis: Vec::new() });
+        if selection.unreachable.contains(&one.block) {
+            let mut end = Inst::new(Kind::Op("UNREACHABLE"), Vec::new());
+            end.terminator = true;
+            end.barrier = true;
+            insts.push(end);
+        }
+        let mut block = Block { id: one.block.0, insts, phis: Vec::new() };
+        block.place_unlocated();
+        emitter.function.blocks.push(block);
     }
     phis(&mut emitter, selection, width_class)?;
     Ok(emitter.function)
@@ -674,7 +722,7 @@ fn phis(
             };
             let at = emitter.function.blocks.iter().position(|block| block.id == to).ok_or("a phi in no block")?;
             for &(input, result) in &edge.copies {
-                let class = width_class(selection.widths.get(&result).copied().unwrap_or(16));
+                let class = width_class(selection.widths.get(result as usize).copied().filter(|width| *width != 0).unwrap_or(16));
                 let result = emitter.numbered(result, class);
                 let incoming = emitter.numbered(input, class);
                 let phis = &mut emitter.function.blocks[at].phis;

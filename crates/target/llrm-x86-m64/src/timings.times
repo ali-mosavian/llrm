@@ -15,6 +15,10 @@ issue                   =
 in_order                =
 prefix                  =
 partial_stall           =
+# DEVIATE CMC3 (owner m64, exit 2026-11-20): the pin's SandyBridge penalty (16) converts
+# register cmovs to branches; on Zen 5 that costs jpeg_fixed -Os +2.6% (pin llc with
+# -x86-cmov-converter=false is faster). 1000: only memory-operand groups convert.
+mispredict_penalty      1000
 lcp_stall               =
 set_ratio           =
 clear_ratio         =
@@ -24,7 +28,13 @@ clear_ratio_size    =
 # position-independent form (a table of offsets from its own address) is not selected yet.
 jump_table          5
 cache_line          = 
+# M64-RATE (owner m64, exit 2026-11-20): clocks to fill a 64 B line from L2, measured on Zen 5 (Ryzen 9 9950X3D),
+# L2 chase 14.0 minus L1 chase 4.0 clk (card ~/scratch/m64idwork/fill/RESULT.txt). Derives 156 mclk/B; the unroll rate
+# in lib.rs stays 312, borrowed from x86-m32: no consumer reads this row at m64 yet.
+line_fill_clocks    10
 pairing             =
+# DEVIATE TA-LC (owner anyisa, exit 2026-11-27): m64 A/B, 1984 cells.
+commute_loop_carried 1
 [clocks]
 alu_rr              =
 cmov                =
@@ -65,6 +75,7 @@ rep_movs            =
 rep_movs_cell       =
 x87_load            =
 x87_exchange        =
+x87_copy            =
 x87_store           =
 x87_release         =
 sse_arith           =
@@ -143,6 +154,7 @@ rep_movs            =
 rep_movs_cell       =
 x87_load            =
 x87_exchange        =
+x87_copy            =
 x87_store           =
 x87_release         =
 sse_arith           =

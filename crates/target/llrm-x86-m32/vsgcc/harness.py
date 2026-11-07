@@ -1,6 +1,6 @@
 """One emulator for every compiler's m32 object: link, run main, count the kernel's work.
 
-    harness.py PROG VARIANT      VARIANT: llrm (-O2) llrmO1 llrmO3 llrmOs llrmElfO2 llrmElfOs, and gcc and clang each at O1 O2 O3 Os
+    harness.py PROG VARIANT [--hist]      --hist: stderr gets the 16 costliest mnemonics, executions and clocks.  VARIANT: llrm (-O2) llrmO1 llrmO3 llrmOs llrmElfO2 llrmElfOs, and gcc and clang each at O1 O2 O3 Os
 
 llrm's OMF is linked here (segments by class, fixups resolved); ELF, llrm's (llrmElf*) and gcc/clang's, is linked by ld.
 Both resolve report/memset/memcpy to stub.elf, loaded at STUB. The region counted is bench_PROG
@@ -32,6 +32,7 @@ def source_dir(prog):
     return KERNELS / prog if (KERNELS / prog).is_dir() else BENCH / prog
 sys.path.insert(0, str(REPO / "tools"))
 import llrmbin  # noqa: E402
+import sizes  # noqa: E402
 
 LLRM = llrmbin.bin_dir() / "llrm-cc"   # where cargo put it; build.sh and ctime.py use the same
 
@@ -257,7 +258,8 @@ def cost(ins, taken, first_rep, mem, multiplier=None, prefixes=0):
     """The 486's clocks of `ins`, each from the compiler's own `timings.times` (clocks.py), and `prefixes` operand- and address-size
     prefixes (clocks.prefixes of its bytes) at the table's clock each. A branch is `taken` or not; a string instruction is the
     `first_rep` of its repeat or one more; `multiplier` is the operand a MUL reads."""
-    return _form_clocks(ins, taken, first_rep, multiplier) + prefixes * clocks.PREFIX
+    # The prefix is decoded once: a repeated string instruction pays it with its first iteration, not each.
+    return _form_clocks(ins, taken, first_rep, multiplier) + (prefixes * clocks.PREFIX if first_rep else 0)
 
 
 def _form_clocks(ins, taken, first_rep, multiplier):
@@ -337,9 +339,15 @@ def _form_clocks(ins, taken, first_rep, multiplier):
     if m in (Mnemonic.LODSB, Mnemonic.LODSW, Mnemonic.LODSD):
         return clocks.UNTABLED["loads"]
     if m in (Mnemonic.FLD, Mnemonic.FLD1, Mnemonic.FLDZ):
-        return clocks.clocks("x87_load") if m == Mnemonic.FLD and dst_mem else clocks.UNTABLED["fld_reg"]
+        if m == Mnemonic.FLD and dst_mem:
+            return clocks.UNTABLED["fld_m80"] if ins.memory_size == MemorySize.FLOAT80 else clocks.clocks("x87_load")
+        return clocks.UNTABLED["fld_reg"]
     if m in (Mnemonic.FST, Mnemonic.FSTP):
-        return clocks.clocks("x87_store") if dst_mem else clocks.UNTABLED["fst_reg"]
+        if not dst_mem:
+            return clocks.UNTABLED["fst_reg"]
+        if ins.memory_size == MemorySize.FLOAT80:
+            return clocks.UNTABLED["fstp_m80"]
+        return clocks.UNTABLED["fst_m32"] if ins.memory_size == MemorySize.FLOAT32 else clocks.clocks("x87_store")
     if m in (Mnemonic.FADD, Mnemonic.FSUB, Mnemonic.FSUBR, Mnemonic.FADDP, Mnemonic.FSUBP, Mnemonic.FSUBRP):
         return clocks.clocks("x87_add_m" if dst_mem else "x87_add")
     if m in (Mnemonic.FMUL, Mnemonic.FMULP):
@@ -384,6 +392,19 @@ def built_abi():
     """The convention build.sh compiled llrm's side in, as it recorded it: a work directory of an earlier build says so too."""
     record = OUT / "abi"
     return record.read_text().strip() if record.exists() else "watcom"
+
+
+def built_ld():
+    """The long double width, 80 or 64 bits, build.sh compiled both sides at, as it recorded it (a directory of an earlier build has 8
+    bytes in llrm and 12 in gcc: the 64 of Watcom's side was beside the 80 of the reference)."""
+    record = OUT / "ld"
+    return int(record.read_text()) if record.exists() else 64
+
+
+def built_cc(prog):
+    """The compiler stamp build.sh recorded beside PROG's objects: md5 of llrm-cc + llrm-llc. A dist that carried only llrm-cc measured the old backend."""
+    record = OUT / "o" / f"{prog}.cc"
+    return record.read_text() if record.exists() else None
 
 
 def stub_digest():
@@ -432,6 +453,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
     in_eax = variant.startswith("llrm") and built_abi() == "watcom"
     st = dict(active=False, sp=0, prev=None, prev_ins=None, cnt=0)
     total = Counter()   # instructions, mem, clocks
+    by_op = {}          # mnemonic name -> [executions, clocks]: --hist
     hits = Counter()
     edges = Counter()   # (from, to) taken edges in region
     cache = {}
@@ -480,7 +502,9 @@ def run(prog, variant, hot=False, limit=300_000_000):
             taken = False
         # clocks of the previous instruction need to know taken; charge it now
         if prev is not None and pins[0].mnemonic != Mnemonic.NOP:
-            total["clocks"] += cost(pins[0], taken, st.get("firstrep", True), pins[1], st.get("multiplier"), pins[4])
+            clk = cost(pins[0], taken, st.get("firstrep", True), pins[1], st.get("multiplier"), pins[4])
+            total["clocks"] += clk
+            tally(by_op, pins[0], clk)
         st["firstrep"] = not (rep and prev == address)
         if ins.mnemonic == Mnemonic.NOP:   # alignment padding (clang): counted apart, not work
             total["nops"] += 1
@@ -498,7 +522,9 @@ def run(prog, variant, hot=False, limit=300_000_000):
         # Read before it runs: the 486's multiply costs what its multiplier is.
         st["multiplier"] = multiplier_of(uc, ins) if ins.mnemonic in (Mnemonic.MUL, Mnemonic.IMUL) else None
         if ret and uc.reg_read(UC_X86_REG_ESP) == st["sp"]:
-            total["clocks"] += cost(ins, True, True, mem)
+            clk = cost(ins, True, True, mem)
+            total["clocks"] += clk
+            tally(by_op, ins, clk)
             st["active"] = False
 
     uc.hook_add(UC_HOOK_CODE, hook)
@@ -507,7 +533,17 @@ def run(prog, variant, hot=False, limit=300_000_000):
     eax = uc.reg_read(UC_X86_REG_EAX)
     code = b"".join(bytes(uc.mem_read(a, 1)) for a in ())
     return dict(prog=prog, variant=variant, ins=total["ins"], mem=total["mem"], misaligned=total["misaligned"], nops=total["nops"], clocks=total["clocks"], reports=reports,
-                hits=hits, edges=edges, kern=kern, main=main, code_end=code_end, uc=uc, cache=cache, syms=syms)
+                hits=hits, edges=edges, by_op=by_op, kern=kern, main=main, code_end=code_end, uc=uc, cache=cache, syms=syms)
+
+
+_MNEMONIC_NAMES = {int(v): k for k, v in vars(Mnemonic).items() if k.isupper() and isinstance(v, int)}
+
+
+def tally(by_op, ins, clk):
+    """Adds one execution of `ins` and its clocks to `by_op`, keyed by mnemonic name."""
+    row = by_op.setdefault(_MNEMONIC_NAMES.get(int(ins.mnemonic), str(int(ins.mnemonic))), [0, 0])
+    row[0] += 1
+    row[1] += clk
 
 
 def omf_segments(prog, variant):
@@ -536,13 +572,19 @@ def data_bytes(prog, variant):
     return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith((".data", ".rodata")))
 
 
+def code_size(prog, variant):
+    """(code bytes without alignment padding, the padding) of the kernel's object: the executable sections as tools/sizes.py reads them
+    (the gate's definition: a loop aligned by nops is not growth). For gcc and clang `code_bytes` adds the runtime members they pulled in."""
+    obj = OUT / "o" / f"{prog}.{variant}.obj" if variant in OMF_VARIANTS else OUT / "b" / f"{prog}.{variant}.o"
+    size = sizes.code_size(obj)
+    return size.code, size.align
+
+
 def code_bytes(prog, variant):
-    """Size of the kernel's code: the CODE-class segments (OMF) or .text (ELF) of its object, like tools/sizes.py, and for
-    gcc and clang the runtime members they pulled in, so that a divide they send to libgcc is counted and not left out."""
-    if variant in OMF_VARIANTS:
-        return sum(s for s, c in omf_segments(prog, variant) if c.endswith("CODE"))
-    out = subprocess.run(["size", "-A", str(OUT / "b" / f"{prog}.{variant}.o")], capture_output=True, text=True).stdout
-    return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith(".text")) + archive_code(prog, variant)
+    """Size of the kernel's code without alignment padding (`code_size`), and for gcc and clang the runtime members they pulled in, so
+    that a divide they send to libgcc is counted and not left out."""
+    code = code_size(prog, variant)[0]
+    return code if variant in OMF_VARIANTS else code + archive_code(prog, variant)
 
 
 def archive_code(prog, variant):
@@ -559,10 +601,14 @@ def archive_code(prog, variant):
 
 
 def main():
-    prog, variant = sys.argv[1], sys.argv[2]
+    args = [a for a in sys.argv[1:] if a != "--hist"]
+    prog, variant = args[0], args[1]
     r = run(prog, variant)
+    if "--hist" in sys.argv:   # to stderr, so the JSON line stays the one thing on stdout
+        for name, (count, clk) in sorted(r["by_op"].items(), key=lambda row: -row[1][1])[:16]:
+            print(f"HIST {name:8} {count:8} {clk:9}", file=sys.stderr)
     expect = [int(x) for x in (source_dir(prog) / f"{prog}.out").read_text().split()]
-    print(json.dumps(dict(prog=prog, variant=variant, ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), data=data_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
+    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), cc=built_cc(prog), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
 
 
 if __name__ == "__main__":

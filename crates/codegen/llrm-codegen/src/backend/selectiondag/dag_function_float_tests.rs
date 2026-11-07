@@ -385,7 +385,11 @@ fn long_double_constant_width(constant: &str) -> u32 {
 #[test]
 fn a_long_double_constant_is_read_at_the_narrowest_exact_width() {
     assert_eq!(long_double_constant_width("10000.0"), 4);
-    assert_eq!(long_double_constant_width("0.00005"), 8);
+    // 2^24 + 1 is a double and not a float.
+    assert_eq!(long_double_constant_width("16777217.0"), 8);
+    // A decimal x86_fp80 literal is read at 64 bits, not through a double:
+    // 0.00005 is no double's value.
+    assert_eq!(long_double_constant_width("0.00005"), 10);
 }
 
 const LONG_DOUBLE_SUM: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -608,6 +612,52 @@ fn a_float_spill_keeps_the_width_the_language_asks_for() {
     c.rounds_float_spills = true;
     let done = selected(&module, "f", &llrm_x86_m32::M32, &c, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     assert!(done.body.float_bytes.values().any(|bytes| *bytes == 8), "{:?}", done.body.float_bytes);
+}
+
+const F32_LOAD_ACROSS_A_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-f80:32-n8:16:32\"
+declare void @g()
+define float @f(ptr %p) {
+entry:
+  %x = load float, ptr %p
+  call void @g()
+  %y = fadd float %x, %x
+  ret float %y
+}
+";
+
+const F32_TEMP_ACROSS_A_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-f80:32-n8:16:32\"
+declare void @g()
+define float @f(ptr %p, ptr %q) {
+entry:
+  %a = load float, ptr %p
+  %b = load float, ptr %q
+  %t = fmul float %a, %b
+  call void @g()
+  %y = fadd float %t, %t
+  ret float %y
+}
+";
+
+/// Where the language keeps wider temporaries (Nib), every float spilled as a
+/// qword, an f32 loaded from memory too (`fst qword` after `fld dword`:
+/// stft_single's butterfly, 4 clocks more a spill on a 486). An f32 that is a
+/// load is exact and spills as a dword; a product of two stays unrounded and
+/// keeps the qword.
+#[test]
+fn an_exact_f32_spills_as_a_dword_and_an_unrounded_temporary_keeps_the_qword() {
+    let nib = crate::backend::cpu::profile("486").expect("a cpu");
+    let table = |text: &str| {
+        let module = llrm_mir::parse::module(text).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, nib, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.float_bytes.values().copied().collect::<Vec<u32>>()
+    };
+    let load = table(F32_LOAD_ACROSS_A_CALL);
+    assert!(load.contains(&4), "a loaded f32 is a dword: {load:?}");
+    let temp = table(F32_TEMP_ACROSS_A_CALL);
+    assert!(temp.iter().filter(|bytes| **bytes == 8).count() >= 1, "a product stays a qword: {temp:?}");
+    // The multiply reads one load from memory: one load is left a value.
+    assert!(temp.contains(&4), "the load is a dword: {temp:?}");
+    assert!(temp.iter().all(|bytes| *bytes != 4) || temp.contains(&8), "{temp:?}");
 }
 
 const UINT32_TO_DOUBLE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"

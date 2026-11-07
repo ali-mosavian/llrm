@@ -120,6 +120,9 @@ impl<'m> Machine<'m> {
             Some(text) => DataLayout::parse(text).map_err(Trap::Unsupported)?,
             None => DataLayout::default(),
         };
+        if module.context.types.contains(&Type::Float(FloatKind::F128)) {
+            return unsupported("an fp128: the interpreter evaluates floats as doubles");
+        }
         // Address 0 is null; nothing is allocated there.
         let end = NEAR_END as usize;
         let mut machine = Self {
@@ -236,6 +239,7 @@ impl<'m> Machine<'m> {
                 Type::Float(kind) => Val::Float(*kind, *bits),
                 _ => unreachable!("a floating constant"),
             },
+            ConstantKind::Float128(_) => unreachable!("Machine::new refuses a module with an fp128"),
             // The interpreter evaluates an x87 value as a double.
             ConstantKind::Float80(bits) => match types.get(constant.ty) {
                 Type::Float(kind) => Val::Float(*kind, crate::fp80::to_double_bits(*bits)),
@@ -578,6 +582,7 @@ impl<'m> Machine<'m> {
                 let x = match kind {
                     FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
                     FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
+                    FloatKind::F128 => unreachable!("Machine::new refuses a module with an fp128"),
                 }
                 .round_ties_even();
                 let width = self.types().int_bits(returns).expect("an integer result");
@@ -604,6 +609,7 @@ impl<'m> Machine<'m> {
                 self.poison[range].fill(poison);
                 void
             }
+            Intrinsic::Trap | Intrinsic::DebugTrap | Intrinsic::UbsanTrap => return unsupported("a trap: the program stops"),
             Intrinsic::MemSetPattern => {
                 let (Val::Ptr(address), Val::Int { bits: count, .. }) = (argument(0), argument(2)) else {
                     return undefined("a pattern fill of a poison address or count");
@@ -644,8 +650,22 @@ impl<'m> Machine<'m> {
             | Intrinsic::InvariantEnd
             | Intrinsic::Assume
             | Intrinsic::Prefetch
-            | Intrinsic::FakeUse => void,
+            | Intrinsic::FakeUse
+            | Intrinsic::NoAliasScopeDecl
+            | Intrinsic::SetLoopIterations => void,
             Intrinsic::Expect => argument(0),
+            Intrinsic::TestSetLoopIterations => match argument(0) {
+                Val::Int { bits, .. } => Val::Int { bits: u128::from(bits != 0), width: 1 },
+                _ => Val::Poison,
+            },
+            Intrinsic::StartLoopIterations => argument(0),
+            Intrinsic::LoopDecrementReg => match (argument(0), argument(1)) {
+                (Val::Int { bits: a, width }, Val::Int { bits: b, .. }) => {
+                    Val::Int { bits: a.wrapping_sub(b) & mask(width), width }
+                }
+                _ => Val::Poison,
+            },
+            Intrinsic::LoopDecrement => return unsupported("a hardware loop counter"),
             // The scope is a token no code reads: the address it covers.
             Intrinsic::InvariantStart => argument(1),
             // Flat memory: the address difference, wrapped to the result.
@@ -911,6 +931,7 @@ impl<'m> Machine<'m> {
                     }
                     Opcode::Unreachable => return undefined("unreachable was reached"),
                     Opcode::Resume | Opcode::LandingPad { .. } => return unsupported("unwinding"),
+                    Opcode::VaArg => return unsupported("va_arg"),
                     Opcode::Call(_) | Opcode::Invoke(_) => {
                         let invoke = matches!(instruction.opcode, Opcode::Invoke(_));
                         let count = ops.len() - if invoke { 3 } else { 1 };
@@ -972,6 +993,44 @@ impl<'m> Machine<'m> {
                         Some(at)
                     }
                     Opcode::InsertValue(indices) => Some(insert(value(self, 0)?, indices, value(self, 1)?)),
+                    Opcode::ExtractElement => {
+                        let index = match value(self, 1)? {
+                            Val::Int { bits, .. } => usize::try_from(bits).ok(),
+                            _ => None,
+                        };
+                        Some(match (value(self, 0)?, index) {
+                            (Val::Aggregate(mut lanes), Some(index)) if index < lanes.len() => lanes.swap_remove(index),
+                            _ => Val::Poison,
+                        })
+                    }
+                    Opcode::InsertElement => {
+                        let index = match value(self, 2)? {
+                            Val::Int { bits, .. } => usize::try_from(bits).ok(),
+                            _ => None,
+                        };
+                        let element = value(self, 1)?;
+                        Some(match (value(self, 0)?, index) {
+                            (Val::Aggregate(mut lanes), Some(index)) if index < lanes.len() => {
+                                lanes[index] = element;
+                                Val::Aggregate(lanes)
+                            }
+                            _ => Val::Poison,
+                        })
+                    }
+                    Opcode::ShuffleVector(mask) => {
+                        let (Val::Aggregate(first), Val::Aggregate(second)) = (value(self, 0)?, value(self, 1)?) else {
+                            return undefined("a shuffle of non-vectors");
+                        };
+                        let lanes = mask
+                            .iter()
+                            .map(|&lane| match usize::try_from(lane) {
+                                Ok(lane) if lane < first.len() => first[lane].clone(),
+                                Ok(lane) => second.get(lane - first.len()).cloned().unwrap_or(Val::Poison),
+                                Err(_) => Val::Poison,
+                            })
+                            .collect();
+                        Some(Val::Aggregate(lanes))
+                    }
                     Opcode::Alloca { allocated, align, .. } => {
                         let count = match ops.first() {
                             Some(&one) => match self.operand(&values, one)? {
@@ -1366,6 +1425,7 @@ fn to_f64(
     match kind {
         FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
         FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
+        FloatKind::F128 => unreachable!("Machine::new refuses a module with an fp128"),
     }
 }
 
@@ -1376,6 +1436,7 @@ fn from_f64(
     match kind {
         FloatKind::Float => Val::Float(kind, u64::from((value as f32).to_bits())),
         FloatKind::Double | FloatKind::X86Fp80 => Val::Float(kind, value.to_bits()),
+        FloatKind::F128 => unreachable!("Machine::new refuses a module with an fp128"),
     }
 }
 
@@ -1409,6 +1470,7 @@ fn float_binary(
             };
             Val::Float(kind, value.to_bits())
         }
+        FloatKind::F128 => unreachable!("Machine::new refuses a module with an fp128"),
     }
 }
 

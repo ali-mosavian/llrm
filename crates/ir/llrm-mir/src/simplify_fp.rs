@@ -17,10 +17,6 @@
 //! even): MIR has no constrained intrinsics, so `canIgnoreSNaN` is true and
 //! `canRoundingModeBe(TowardNegative)` false.
 //!
-//! DEVIATE 2: `cannotBeNegativeZero` of a value (#2209) is answered for
-//! constants alone; the `fadd X, 0.0` fold therefore finds less than LLVM,
-//! never more.
-//!
 //! DEVIATE 3: `frem` of two constants is folded with the host's `fmod` (exact)
 //! where neither is a NaN: `APFloat` has no `mod` here.
 //!
@@ -32,7 +28,7 @@
 
 use super::*;
 use crate::apfloat::{ApFloat, IEEE_DOUBLE, IEEE_SINGLE, Sem};
-use crate::fpclass::{FC_INF, FC_NAN, RoundingMode};
+use crate::fpclass::{FC_INF, FC_NAN, FC_NEG_ZERO, RoundingMode};
 use crate::types::{FloatKind, Type};
 use crate::valuetracking::fp::compute_known_fp_class;
 
@@ -47,6 +43,11 @@ fn value(
     let Type::Float(kind) = *q.context.types.get(constant.ty) else { return None };
     if kind == FloatKind::X86Fp80 {
         return crate::fp80::value(&constant.kind);
+    }
+    // An fp128 is not folded: ApFloat's quad arithmetic is not checked
+    // against the pin.
+    if kind == FloatKind::F128 {
+        return None;
     }
     let (sem, bits): (Sem, u64) = match (kind, &constant.kind) {
         (FloatKind::Float, ConstantKind::Float(bits)) => (IEEE_SINGLE, *bits),
@@ -65,6 +66,7 @@ fn sem_of(
     match q.context.types.get(ty) {
         Type::Float(FloatKind::Float) => IEEE_SINGLE,
         Type::Float(FloatKind::X86Fp80) => crate::apfloat::X87_DOUBLE_EXTENDED,
+        Type::Float(FloatKind::F128) => crate::apfloat::IEEE_QUAD,
         _ => IEEE_DOUBLE,
     }
 }
@@ -85,6 +87,9 @@ fn constant_of(
 ) -> Operand {
     if matches!(q.context.types.get(ty), Type::Float(FloatKind::X86Fp80)) {
         return Operand::Constant(crate::fp80::constant(q.context, ty, value));
+    }
+    if matches!(q.context.types.get(ty), Type::Float(FloatKind::F128)) {
+        return Operand::Constant(q.context.constant(Constant { ty, kind: ConstantKind::Float128(value.to_bits()) }));
     }
     Operand::Constant(q.context.constant(Constant { ty, kind: ConstantKind::Float(value.to_bits() as u64) }))
 }
@@ -191,12 +196,12 @@ fn fneg_of(
     pattern::fneg(&q.tracking(), v)
 }
 
-/// `cannotBeNegativeZero(V, Q)`, for a constant (DEVIATE 2).
+/// `cannotBeNegativeZero(V, Q)`: `computeKnownFPClass` asked for `fcNegZero`.
 fn cannot_be_negative_zero(
     q: &Query,
     v: Operand,
 ) -> bool {
-    value(q, v).is_some_and(|a| !a.is_neg_zero())
+    compute_known_fp_class(&q.tracking(), v, FC_NEG_ZERO, 0).is_known_never_neg_zero()
 }
 
 /// `ConstantFoldUnaryOpOperand(FNeg, ..)`.

@@ -29,6 +29,13 @@
 //! A source that is not a value (an immediate) is copied the same way. The
 //! inserted copies own no bytes of the input.
 //!
+//! DEVIATE TA-9 (owner x87, exit 2026-11-20): an x87 load that kills the source
+//! of a tied add goes above it before the `lea` is made
+//! (`rescheduleKillAboveMI` tried first for that kill only). The pin makes the
+//! `lea` and its pre-RA scheduler puts the load above it; the loads are in
+//! stack form here, which the scheduler treats as a boundary. A horner loop's
+//! `p -= 12` was `lea; fld [p]; mov p, q` a trip, now `fld [p]; add p, -12`.
+//!
 //! # Example
 //! The body of a counted loop, before and after. Update in place made `v4 :=
 //! add v5, v7; v5 := mov v4` into `v5 := add v5, v7`, leaving self-moves for
@@ -73,6 +80,8 @@ pub const _TIED: [Operation; 5] =
 #[derive(Default)]
 pub struct TwoAddress {
     pub lea: crate::twoaddress::ThreeAddress,
+    /// DEVIATE TA-LC (`Profile::commute_loop_carried`).
+    pub loop_carried: bool,
 }
 
 impl TwoAddress {
@@ -92,7 +101,7 @@ impl LIRTransform for TwoAddress {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(tied(&body, self.lea))
+        Ok(tied_with(&body, self.lea, self.loop_carried))
     }
 }
 
@@ -100,6 +109,15 @@ impl LIRTransform for TwoAddress {
 pub fn tied(
     body: &LirBody,
     lea: crate::twoaddress::ThreeAddress,
+) -> LirBody {
+    tied_with(body, lea, false)
+}
+
+/// [`tied`], with DEVIATE TA-LC on or off.
+pub fn tied_with(
+    body: &LirBody,
+    lea: crate::twoaddress::ThreeAddress,
+    loop_carried: bool,
 ) -> LirBody {
     let reused = _reused(body);
     let body = &reused;
@@ -126,7 +144,8 @@ pub fn tied(
                 .get(&block.at)
                 .is_some_and(crate::backend::lanes::Lanes::is_empty)
         };
-        let mut walk = crate::twoaddress::Commuter::sized(&facts, at, block.insns.len());
+        let mut walk =
+            crate::twoaddress::Commuter::sized(&facts, at, block.insns.len()).with_loop_carried(loop_carried);
         let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len() + block.insns.len() / 4);
         let mut work: Vec<Arc<Insn>> = block.insns.to_vec();
         let mut place = 0;
@@ -150,7 +169,17 @@ pub fn tied(
             }
             // `rescheduleMIBelowKill`: a tied instruction whose source dies in
             // a later reader goes below it.
-            if commuted.is_none() && walk.reschedule_mi_below_kill(&mut work, place, body.regs(), body.bits) {
+            if commuted.is_none()
+                && walk.reschedule_mi_below_kill(&mut work, place, body.regs(), body.bits, &flags_dead_out)
+            {
+                continue;
+            }
+            // DEVIATE TA-9 (exit 2026-11-20): an x87 load that kills the
+            // source goes above the tied instruction before the `lea` is made.
+            // The pin makes the `lea` too, and its pre-RA scheduler then puts
+            // the load above it (`LD_Fp80m` is a pseudo there); the x87 loads
+            // are in stack form here, which the scheduler treats as a boundary.
+            if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits, true) {
                 continue;
             }
             // `convertInstTo3Addr`: a tied add whose source lives on and whose
@@ -168,7 +197,7 @@ pub fn tied(
                 && crate::twoaddress::flags_dead_after(&work, place, body.regs(), body.bits, flags_dead_out)
             {
                 if let Some(what) = one.what.as_ref()
-                    && what.name.as_deref() == Some("add")
+                    && crate::twoaddress::adds_as(&one) == Some("add")
                     && matches!(what.sources.get(1), Some(Loc::Held(_)))
                     && let Some(Loc::Held(into)) = what.dests.first()
                 {
@@ -188,7 +217,7 @@ pub fn tied(
             }
             // `rescheduleKillAboveMI`: the reader that kills the source goes
             // above the tied instruction.
-            if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits) {
+            if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits, false) {
                 continue;
             }
             // An instruction with a load folded into it whose first source
@@ -278,7 +307,7 @@ fn _unfolded(
     if into.value == first.value || into.width != first.width || cell.width != first.width {
         return None;
     }
-    let loaded = Held { value: mint(), width: first.width };
+    let loaded = Held { value: mint(), width: first.width, offset: 0 };
     let reads: Vec<u32> = ir::values(&Loc::Mem(cell.clone())).iter().map(|held| held.value).collect();
     let load = _inserted(one, _move(Loc::Held(loaded), Loc::Mem(cell.clone())), vec![loaded.value], reads);
     let mut add = one.clone();
@@ -651,7 +680,7 @@ fn _through_register(
     {
         return None;
     }
-    let held = Held { value: mint(), width: into.width };
+    let held = Held { value: mint(), width: into.width, offset: 0 };
     let first = &what.sources[0];
     let load = _inserted(
         one,
@@ -691,7 +720,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{_untied, tied};
+    use super::{_untied, tied, tied_with};
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
@@ -702,7 +731,7 @@ mod tests {
         value: u32,
         width: u32,
     ) -> Loc {
-        Loc::Held(Held { value, width })
+        Loc::Held(Held { value, width, offset: 0 })
     }
 
     fn addition(name: &str) -> Insn {
@@ -820,12 +849,12 @@ mod tests {
         let mut arrival = nothing(0);
         arrival.defines = vec![1, 2, 3];
         arrival.delivers = vec![
-            (Held { value: 1, width: 4 }, RegId::EAX),
-            (Held { value: 2, width: 4 }, RegId::EDX),
-            (Held { value: 3, width: 4 }, RegId::EBX),
+            (Held { value: 1, width: 4, offset: 0 }, RegId::EAX),
+            (Held { value: 2, width: 4, offset: 0 }, RegId::EDX),
+            (Held { value: 3, width: 4, offset: 0 }, RegId::EBX),
         ];
         let mut ret = nothing(3);
-        ret.requires = vec![(Held { value: 5, width: 4 }, RegId::EAX)];
+        ret.requires = vec![(Held { value: 5, width: 4, offset: 0 }, RegId::EAX)];
         ret.uses = vec![5];
         let input = LirBody::new(
             "six",
@@ -872,13 +901,13 @@ mod tests {
         let mut arrival = nothing(0);
         arrival.defines = vec![1, 2, 3, 4];
         arrival.delivers = vec![
-            (Held { value: 1, width: 4 }, RegId::EAX),
-            (Held { value: 2, width: 4 }, RegId::EDX),
-            (Held { value: 3, width: 4 }, RegId::EBX),
-            (Held { value: 4, width: 4 }, RegId::ECX),
+            (Held { value: 1, width: 4, offset: 0 }, RegId::EAX),
+            (Held { value: 2, width: 4, offset: 0 }, RegId::EDX),
+            (Held { value: 3, width: 4, offset: 0 }, RegId::EBX),
+            (Held { value: 4, width: 4, offset: 0 }, RegId::ECX),
         ];
         let mut ret = nothing(4);
-        ret.requires = vec![(Held { value: 9, width: 4 }, RegId::EAX)];
+        ret.requires = vec![(Held { value: 9, width: 4, offset: 0 }, RegId::EAX)];
         ret.uses = vec![9];
         let input = LirBody::new(
             "six",
@@ -916,6 +945,68 @@ mod tests {
             .collect();
         let last = adds.last().expect("an add");
         assert_eq!(last.sources, vec![held(9, 4), held(12, 4)], "the lea stays second: the sum is tied to (a+b)");
+    }
+
+    /// A `dec` of `n` with an `add` that kills `n` after it: both write the
+    /// flags and nothing reads them, so the pin moves the `dec` below the
+    /// `add` (`rescheduleMIBelowKill` crosses a dead EFLAGS def) and `n`
+    /// dies at the `dec`. Refusing any flags traffic made the `dec` an `lea`
+    /// and the `add` a commuted add: countdown at m64 grew 45 -> 48 B once
+    /// its `lea` was shared.
+    #[test]
+    fn test_a_dec_moves_below_the_add_that_kills_its_source_across_dead_flags() {
+        use llrm_lir::registers::RegId;
+        let nothing = |at: i64| {
+            let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
+            Insn::new(at, Some((at, at)), Some(what), vec![], vec![])
+        };
+        let mut arrival = nothing(0);
+        arrival.defines = vec![1, 3];
+        arrival.delivers = vec![
+            (Held { value: 1, width: 4, offset: 0 }, RegId::EAX),
+            (Held { value: 3, width: 4, offset: 0 }, RegId::EDX),
+        ];
+        let dec = {
+            let what = Semantics {
+                name: Some("dec".into()),
+                dests: vec![held(4, 4)],
+                sources: vec![held(1, 4)],
+                ..Semantics::new(Operation::Unary)
+            };
+            Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![4], vec![1]))
+        };
+        let mut ret = nothing(5);
+        ret.requires = vec![(Held { value: 9, width: 4, offset: 0 }, RegId::EAX)];
+        ret.uses = vec![9];
+        let input = LirBody::new(
+            "countdown",
+            0,
+            vec![
+                LirBlock::new(
+                    0,
+                    vec![
+                        Arc::new(arrival),
+                        dec,
+                        sum_into(2, 5, 3, 1),
+                        sum_into(3, 8, 5, 3),
+                        sum_into(4, 9, 8, 4),
+                        Arc::new(ret),
+                    ],
+                )
+                .into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let got = tied(&input, All);
+        let named = |name: &str| {
+            got.insns()
+                .iter()
+                .filter_map(|one| one.what.as_ref())
+                .filter(|what| what.name.as_deref() == Some(name))
+                .count()
+        };
+        assert_eq!(named("dec"), 1, "the dec stays a dec, after the add");
     }
 
     /// LNGMXX copied its accumulator out and back each iteration to preserve
@@ -1170,6 +1261,57 @@ mod tests {
         assert!(walk.is_rev_copy_chain(3, 5, 10));
     }
 
+    /// `x &= x - 1` in a loop (x_popcount's pop loop): `v8` made from `v7`
+    /// (here a read of `v7` and a fresh `v8`, a `lea` in the asm), then `v6
+    /// = v8 & v7`, copied back into `v7`. The pin's `isProfitableToCommute`
+    /// bails on the earlier read of `v7` before its reversed-copy-chain test,
+    /// ties `v8` and copies `v7` first: one `mov` per iteration that gcc does
+    /// not have (m32 -O2 x_popcount 299861 clk against gcc's 285881). DEVIATE
+    /// TA-LC ties `v7`, so the copy is of the register the result goes back to
+    /// and the coalescer drops it (1 -> 0); off, the pin's order.
+    #[test]
+    fn test_a_result_copied_back_into_a_source_read_earlier_ties_that_source_when_on() {
+        let loop_body = || {
+            LirBody::new(
+                "t",
+                0,
+                vec![
+                    LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![imm_def(0, 7)]) }.into(),
+                    LirBlock {
+                        succ: vec![1, 2].into(),
+                        ..LirBlock::new(1, vec![imm_def(1, 8), read(2, 7), sum_into(3, 6, 8, 7), copy_insn(4, 7, 6)])
+                    }
+                    .into(),
+                    LirBlock::new(2, vec![read(5, 7)]).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            )
+        };
+        // The copy the tied `and` needs is made from the operand the result
+        // ties to: `v8` (the pin) or `v7`, which the back-edge copy takes the
+        // result into, so the coalescer then drops it (1 -> 0 `mov`s in the
+        // loop).
+        let copied_from = |body: &LirBody| {
+            body.iter_insns()
+                .find(|one| {
+                    one.what
+                        .as_ref()
+                        .is_some_and(
+                            |what| what.name.as_deref() == Some("mov")
+                                && matches!(what.dests.first(), Some(Loc::Held(into)) if into.value == 6),
+                        )
+                })
+                .and_then(|one| match one.what.as_ref()?.sources.first()? {
+                    Loc::Held(from) => Some(from.value),
+                    _ => None,
+                })
+        };
+        assert_eq!(copied_from(&tied_with(&loop_body(), Off, false)), Some(8), "off is the pin's order");
+        assert_eq!(copied_from(&tied(&loop_body(), Off)), Some(8), "the default is off");
+        assert_eq!(copied_from(&tied_with(&loop_body(), Off, true)), Some(7), "on ties the loop-carried source");
+    }
+
     /// `v8 := add v7, k` with `v7` read again by the `and` that follows (so the
     /// add's flags are dead and `v7` lives on).
     fn live_source_add(
@@ -1322,6 +1464,21 @@ mod tests {
         assert!(names_of(&got).contains(&"add".to_owned()) || names_of(&got).contains(&"lea".to_owned()));
     }
 
+    /// pack_ref's `__divsf3` (m64 -O1): `or disjoint x, 0x800000` with `x`
+    /// still live was `mov t, x; or t, 0x800000`; the pin selects the
+    /// `ADD64ri32_DB` pseudo and makes it `lea t, [x + 0x800000]`. The
+    /// `ADDnn_DB` pseudos were lowered straight to `or`, so the
+    /// conversion never saw an add.
+    #[test]
+    fn test_an_or_of_disjoint_bits_of_a_live_source_is_a_lea_and_another_or_is_not() {
+        let mut insns = live_source_add(0x80_0000, "or");
+        let plain = names_of(&tied(&of(insns.clone()), All));
+        assert!(!plain.contains(&"lea".to_owned()), "{plain:?}");
+        insns[1] = Arc::new(Insn { disjoint: true, ..(*insns[1]).clone() });
+        let marked = names_of(&tied(&of(insns), All));
+        assert!(marked.contains(&"lea".to_owned()) && !marked.contains(&"or".to_owned()), "{marked:?}");
+    }
+
     /// A target that reads addresses through a prefix (m16) converts adds and
     /// subs and leaves a shift to the peephole, which fuses it with the add
     /// after it: `c*3` was `lea eax, [ecx+ecx*2]` and became
@@ -1358,7 +1515,7 @@ mod tests {
         base: u32,
     ) -> Arc<Insn> {
         use crate::model::ir::Mem;
-        let cell = Mem { base: Some(Held { value: base, width: 4 }), offset: 4, ..Mem::new(None, 4) };
+        let cell = Mem { base: Some(Held { value: base, width: 4, offset: 0 }), offset: 4, ..Mem::new(None, 4) };
         let what = Semantics {
             name: Some("lea".into()),
             dests: vec![held(into, 4)],
@@ -1385,6 +1542,56 @@ mod tests {
         // `live_source_add` reads v7 and defines v8.
         let got = tied(&of(insns), Off);
         assert!(position(&got, "lea") < position(&got, "add"), "{:?}", names_of(&got));
+    }
+
+    /// `fld [v7]`: an x87 load whose pointer `v7` dies there.
+    fn fld_of(
+        at: i64,
+        base: u32,
+    ) -> Arc<Insn> {
+        use crate::model::ir::Mem;
+        let cell = Mem { base: Some(Held { value: base, width: 4, offset: 0 }), ..Mem::new(None, 10) };
+        let what = Semantics {
+            name: Some("fld".into()),
+            dests: vec![Loc::Held(Held { value: 16, width: 10, offset: 0 })],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::FloatLoad)
+        };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![base]))
+    }
+
+    /// x_ldmath's horner loop: `p' := p - 12; i' := i - 1; fld [p]` ran `add;
+    /// dec; fld; faddp; mov p, p'`, a copy a trip, because the `fld` that
+    /// kills `p` was no instruction the pass moved. It goes above the step
+    /// (the pin: `fld [ecx]; add ecx, -12; dec eax`), so the step is in place.
+    #[test]
+    fn test_an_x87_load_that_kills_the_pointer_of_a_tied_add_goes_above_it() {
+        let add = live_source_add(5, "add")[1].clone();
+        let insns = vec![imm_def(0, 7), add, imm_def(2, 9), fld_of(3, 7), read(4, 8), read(5, 9)];
+        let got = tied(&of(insns), Off);
+        assert!(position(&got, "fld") < position(&got, "add"), "{:?}", names_of(&got));
+    }
+
+    /// An x87 instruction between keeps the load in place: the stack order is
+    /// not the pass's to change.
+    #[test]
+    fn test_an_x87_load_stays_below_an_x87_instruction_between() {
+        let add = live_source_add(5, "add")[1].clone();
+        let fmul = Arc::new(Insn::new(
+            2,
+            Some((2, 2)),
+            Some(Semantics {
+                name: Some("fmul".into()),
+                dests: vec![Loc::st(0)],
+                sources: vec![Loc::st(0), Loc::st(1)],
+                ..Semantics::new(Operation::FloatArith)
+            }),
+            vec![],
+            vec![],
+        ));
+        let insns = vec![imm_def(0, 7), add, fmul, fld_of(3, 7), read(4, 8)];
+        let got = tied(&of(insns), Off);
+        assert!(position(&got, "add") < position(&got, "fld"), "{:?}", names_of(&got));
     }
 
     /// `rescheduleKillAboveMI`: an add with a memory operand cannot move down
@@ -1757,7 +1964,8 @@ mod tests {
         let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
         let mut one =
             Insn::new(at, Some((at, at)), Some(what), arrives.iter().map(|(value, _)| *value).collect(), vec![]);
-        one.delivers = arrives.iter().map(|(value, register)| (Held { value: *value, width: 4 }, *register)).collect();
+        one.delivers =
+            arrives.iter().map(|(value, register)| (Held { value: *value, width: 4, offset: 0 }, *register)).collect();
         Arc::new(one)
     }
 
@@ -1768,7 +1976,7 @@ mod tests {
     ) -> Arc<Insn> {
         let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
         let mut one = Insn::new(at, Some((at, at)), Some(what), vec![], vec![value]);
-        one.requires = vec![(Held { value, width: 4 }, register)];
+        one.requires = vec![(Held { value, width: 4, offset: 0 }, register)];
         Arc::new(one)
     }
 

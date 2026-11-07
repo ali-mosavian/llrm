@@ -28,12 +28,19 @@ fn unrolled(
     count: u32,
     exits: &[(&str, u32)],
 ) -> Unrolled {
-    let function = f(module);
+    let (context, function) = module.function_mut("f").expect("@f");
     let shape = cfg::Shape::of(function);
     let at = cfg::id(named(function, header));
     let loop_ = shape.loops.iter().find(|one| one.header == at).expect("the loop").clone();
     let exits = exits.iter().map(|&(name, trip_count)| Exit { block: named(function, name), trip_count }).collect();
-    unroll_loop(function, &loop_, &Options { count, max_trip_count: count, max_or_zero: false, exits }).unwrap()
+    unroll_loop(
+        context,
+        &crate::testing::layout(),
+        function,
+        &loop_,
+        &Options { count, max_trip_count: count, max_or_zero: false, exits },
+    )
+    .unwrap()
 }
 
 fn loops_left(module: &mut Module) -> usize {
@@ -214,14 +221,58 @@ b5:
     assert_eq!(results(&module, inputs), before, "{text}");
 }
 
+/// The back edge stays: the copies run `count` iterations per trip, the header
+/// keeps its phis, and the exits known not to be taken in the inner copies are
+/// folded (`BreakoutTrip`, `TripMultiple`).
 #[test]
-fn test_a_count_below_the_maximum_trip_count_is_refused() {
+fn test_a_count_below_the_trip_count_unrolls_partially_and_computes_the_same() {
+    for count in [2, 4] {
+        let mut module = parsed(&ROTATED.replace("slt i16 %next, 4", "slt i16 %next, 8"));
+        let before = results(&module, INPUTS);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let shape = cfg::Shape::of(function);
+        let at = cfg::id(named(function, "b1"));
+        let loop_ = shape.loops.iter().find(|one| one.header == at).expect("the loop").clone();
+        let exits = vec![Exit { block: named(function, "b2"), trip_count: 8 }];
+        let options = Options { count, max_trip_count: 8, max_or_zero: false, exits };
+        assert_eq!(
+            unroll_loop(context, &crate::testing::layout(), function, &loop_, &options).unwrap(),
+            Unrolled::Partially
+        );
+        let text = printed(&module);
+        assert_eq!(loops_left(&mut module), 1, "{text}");
+        assert_eq!(text.matches("mul i16").count(), count as usize, "{text}");
+        assert_eq!(results(&module, INPUTS), before, "{text}");
+    }
+}
+
+/// A count that does not divide the trip count keeps the exit test of the copy
+/// the loop leaves from (`BreakoutTrip` is `trips % count`).
+#[test]
+fn test_a_count_that_does_not_divide_the_trip_count_keeps_the_breakout_test() {
     let mut module = parsed(ROTATED);
-    let function = f(&mut module);
+    let before = results(&module, INPUTS);
+    let (context, function) = module.function_mut("f").expect("@f");
     let shape = cfg::Shape::of(function);
     let loop_ = shape.loops[0].clone();
-    let partial = Options { count: 2, max_trip_count: 4, max_or_zero: false, exits: Vec::new() };
-    assert!(unroll_loop(function, &loop_, &partial).is_err());
+    let exits = vec![Exit { block: named(function, "b2"), trip_count: 4 }];
+    let options = Options { count: 3, max_trip_count: 4, max_or_zero: false, exits };
+    assert_eq!(
+        unroll_loop(context, &crate::testing::layout(), function, &loop_, &options).unwrap(),
+        Unrolled::Partially
+    );
+    let text = printed(&module);
+    assert_eq!(results(&module, INPUTS), before, "{text}");
+}
+
+#[test]
+fn test_a_count_above_the_maximum_trip_count_is_refused() {
+    let mut module = parsed(ROTATED);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let shape = cfg::Shape::of(function);
+    let loop_ = shape.loops[0].clone();
+    let above = Options { count: 5, max_trip_count: 4, max_or_zero: false, exits: Vec::new() };
+    assert!(unroll_loop(context, &crate::testing::layout(), function, &loop_, &above).is_err());
 }
 
 fn rotated_with(trips: u32) -> String {

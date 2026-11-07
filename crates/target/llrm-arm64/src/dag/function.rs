@@ -41,6 +41,7 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
         },
         shift_amount: EVT::I64,
         legal_ints: vec![32, 64],
+        soft_float: false,
         stack_align: Some(16),
         // The inline expansion has no `q` type (SD13): the calling hook makes
         // every constant copy and fill within the pin's limits.
@@ -64,6 +65,7 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
             big_endian: false,
             calling: Some(if platform == Platform::Linux { &*LINUX } else { &*DARWIN }),
         }),
+        legal_f128: true,
         ..BuilderTarget::m64()
     }
 }
@@ -124,6 +126,8 @@ pub struct Selected {
     /// The frame object each source variable lives in (`llvm.dbg.declare` of a
     /// static `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
+    /// The probabilities the builder kept for the edges of merged conditions.
+    pub edge_probs: Vec<(u32, u32, u32)>,
 }
 
 /// `PHI result, [incoming, from this block]` of the successor `to`: registers
@@ -173,7 +177,26 @@ pub fn select_function_in(
     };
     let tti = crate::tti::AArch64::of_cpu(platform.cpu())
         .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>);
-    let target = builder_target(platform)
+    // `isIntDivCheap` keeps a divide by a constant a divide where it is smaller
+    // than the multiply-high sequence. DEVIATE SD534 (exit: none, arm64 is
+    // strict on bytes): the pin answers `minsize` only
+    // ([L33827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L33827));
+    // `-Os` is `optsize` and gcc's `-Os` divides there too (2 instructions
+    // against 7).
+    let opt_for_size = function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            ),
+        );
+    let mut target = builder_target(platform).with_int_div_cheap(opt_for_size);
+    // `AArch64TargetLowering::BuildSDIVPow2`: where a divide is cheap, a divide
+    // by a power of two stays one.
+    target.dag.sdiv_pow2_stays = opt_for_size;
+    let target = target
         .with_tti(tti)
         .with_tail_calls(llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0"))
         .with_zext_free(is_zext_free);
@@ -192,15 +215,6 @@ pub fn select_function_in(
     // reads what the blocks before it knew of a register. The blocks a
     // lowering makes (the case blocks of a split `br (or a, b)`) follow the
     // block that made them in the layout.
-    let opt_for_size = function
-        .attrs
-        .iter()
-        .any(
-            |attr| matches!(
-                attr,
-                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-            ),
-        );
     let mut work = Vec::new();
     for &block in function.layout() {
         let mut built = build_block(module, function, layout, &target, &Aarch64Arch, &convention, &mut info, block)
@@ -210,8 +224,8 @@ pub fn select_function_in(
         let parent_updates = built.phi_updates.clone();
         // The branches are read before selection turns them into machine nodes.
         let exits = (branch_targets(&built.dag), ends_in_jump(&built.dag));
-        let units =
-            select_block(&mut built.dag, &globals, &mut info, opt_for_size).map_err(|why| format!("{why:?}"))?;
+        let units = select_block(&mut built.dag, &globals, &mut info, opt_for_size, platform == Platform::Linux)
+            .map_err(|why| format!("{why:?}"))?;
         work.push((block.0, made, built, units, exits));
         for (id, mut extra) in extras {
             // `FinishBasicBlock`: a block the lowering made is a predecessor
@@ -219,8 +233,8 @@ pub fn select_function_in(
             // that made it does.
             extra.phi_updates = parent_updates.clone();
             let exits = (branch_targets(&extra.dag), ends_in_jump(&extra.dag));
-            let units =
-                select_block(&mut extra.dag, &globals, &mut info, opt_for_size).map_err(|why| format!("{why:?}"))?;
+            let units = select_block(&mut extra.dag, &globals, &mut info, opt_for_size, platform == Platform::Linux)
+                .map_err(|why| format!("{why:?}"))?;
             work.push((id.0, true, extra, units, exits));
         }
     }
@@ -268,6 +282,7 @@ pub fn select_function_in(
             phis,
             tables: info.jump_tables.clone(),
             declared: declared.clone(),
+            edge_probs: info.edge_probs.iter().map(|(from, to, p)| (from.0, to.0, *p)).collect(),
         });
     }
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));

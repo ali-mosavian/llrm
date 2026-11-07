@@ -46,7 +46,7 @@ use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::valuetracking::{Query, nonzero, pattern};
 
 /// `Query` over `function` with no analyses.
-fn query<'a>(
+pub(crate) fn query<'a>(
     context: &'a Context,
     globals: &'a [GlobalValue],
     layout: &'a DataLayout,
@@ -150,6 +150,9 @@ fn power_of_two_unfolded(
 
 /// `foldICmpWithDominatingICmp(cmp)`.
 fn dominating_compare_folded(
+    context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+    declared: &mut llrm_mir::passes::Declared,
     lowering: &dyn Lowering,
     function: &mut Function,
     cmp: InstId,
@@ -195,10 +198,8 @@ fn dominating_compare_folded(
         return false;
     }
     for user in users {
-        let mut operands = function.instruction(user).operands.clone();
-        // A branch's successors, a select's values.
-        operands.swap(1, 2);
-        function.set_operands(user, operands);
+        // A branch's successors, a select's values, with their weights.
+        crate::profswap::swap_arms(context, metadata, declared, function, user);
     }
     function.set_icmp_predicate(cmp, dom_pred.swapped());
     true
@@ -246,6 +247,8 @@ fn operands_swapped(
 /// Whether any acted.
 pub fn compares_optimized(
     context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+    declared: &mut llrm_mir::passes::Declared,
     globals: &[GlobalValue],
     layout: &DataLayout,
     lowering: &dyn Lowering,
@@ -259,7 +262,7 @@ pub fn compares_optimized(
             continue;
         }
         changed |= power_of_two_unfolded(context, globals, layout, lowering, function, cmp)
-            || dominating_compare_folded(lowering, function, cmp)
+            || dominating_compare_folded(context, metadata, declared, lowering, function, cmp)
             || operands_swapped(context, function, cmp);
     }
     changed

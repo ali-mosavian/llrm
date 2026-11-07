@@ -64,6 +64,7 @@ fn object(fix: Fix) -> Object {
             definition: Definition::Undefined,
             size: 0,
             group: None,
+            visibility: Default::default(),
         }],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),

@@ -92,11 +92,12 @@ impl ModulePass for GlobalOpt {
                 variable.constant = true;
             }
         }
+        let shrunk = crate::globalbool::shrink(module);
         let unnamed = address_not_significant(module);
         for &id in &unnamed {
             module.globals[id.0 as usize].unnamed_addr = UnnamedAddr::Global;
         }
-        if found.is_empty() && unnamed.is_empty() {
+        if found.is_empty() && unnamed.is_empty() && shrunk.is_empty() {
             Vec::new()
         } else {
             module.functions().filter(|(_, _, one)| !one.is_declaration()).map(|(id, _, _)| id).collect()

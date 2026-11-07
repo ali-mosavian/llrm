@@ -23,7 +23,7 @@ use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{Action, LoadExt, SDNodeFlags, SDValue, SelectionDAG, TargetLowering};
-use llrm_codegen::backend::selectiondag::{NodeData, TargetLoweringInfo};
+use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, TargetLoweringInfo};
 
 use super::generated::ids::isd as ids;
 use super::hooks::Cpu;
@@ -39,6 +39,7 @@ pub mod m68kisd {
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
     pub const ADD: ISD = ISD::Target(ids::ADD);
     pub const SUB: ISD = ISD::Target(ids::SUB);
+    pub const SUBX: ISD = ISD::Target(ids::SUBX);
     pub const UMUL: ISD = ISD::Target(ids::UMUL);
     pub const SMUL: ISD = ISD::Target(ids::SMUL);
     pub const AND: ISD = ISD::Target(ids::AND);
@@ -46,6 +47,7 @@ pub mod m68kisd {
     pub const XOR: ISD = ISD::Target(ids::XOR);
     pub const CALL: ISD = ISD::Target(ids::CALL);
     pub const RET: ISD = ISD::Target(ids::RET);
+    pub const TC_RETURN: ISD = ISD::Target(ids::TC_RETURN);
     pub const WRAPPER: ISD = ISD::Target(ids::Wrapper);
     pub const WRAPPER_PC: ISD = ISD::Target(ids::WrapperPC);
 }
@@ -78,9 +80,12 @@ pub mod cond {
 pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     use ISD::*;
     let int = [MVT::I8, MVT::I16, MVT::I32];
-    let m68020 = cpu == Cpu::M68020;
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&int, false).with_shift_by_value_type());
+    let m68020 = cpu.at_least(Cpu::M68020);
+    let mut tl =
+        TargetLowering::empty(TargetLoweringInfo::new(&int, false).with_shift_by_value_type().with_soft_float());
     tl.init_actions();
+    // no FPU at any CPU: every float operation is a compiler-rt call
+    tl.set_soft_float_libcall_names();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
@@ -114,7 +119,12 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
         set(&[op], &[MVT::I32], Action::LibCall);
     }
     set(&[UMulLoHi, SMulLoHi], &[MVT::I8, MVT::I16], Action::Expand);
-    set(&[SMulO, UMulO], &int, Action::Custom);
+    // DEVIATE: `mulu.l` and `muls.l`, which `lower_xalu` selects for an `i32`
+    // multiply with overflow, exist from the 68020; the 68000 expands it
+    // (`expandMULO`) through the 64-bit product. The pin keeps `Custom` on
+    // every CPU. Exit: never, while the pin does.
+    set(&[SMulO, UMulO], &[MVT::I8, MVT::I16], Action::Custom);
+    set(&[SMulO, UMulO], &[MVT::I32], if m68020 { Action::Custom } else { Action::Expand });
     set(&[ShlParts, SraParts, SrlParts], &[MVT::I32], Action::Custom);
     set(&[AddC, AddE, SubC, SubE, SAddO, UAddO, SSubO, USubO], &int, Action::Custom);
     set(&[BrCond], &[MVT::Other], Action::Custom);
@@ -133,6 +143,13 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     {
         tl.set_libcall_name(op, MVT::I32, name);
     }
+    // `RTLIB::MUL_I64`: what `forceExpandWideMUL` calls for the product of two
+    // `i32`s (a `smul.fix` with no `MULHS`, as the 68000's and the pin's)
+    tl.set_libcall_name(Mul, MVT::I64, "__muldi3");
+    // `RTLIB::SDIV_I64` and the others: no CPU divides 64 bits
+    for (op, name) in [(SDiv, "__divdi3"), (UDiv, "__udivdi3"), (SRem, "__moddi3"), (URem, "__umoddi3")] {
+        tl.set_libcall_name(op, MVT::I64, name);
+    }
     tl
 }
 
@@ -141,9 +158,23 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
 pub struct M68kLowering {
     /// Form `(An)+` and `-(An)` accesses; the pin sets no indexed action.
     pub indexed: bool,
+    /// The beyond-pin size rewrites (`addq`, `extb.l`, `sub` of a sign-extended
+    /// compare).
+    pub short: bool,
+    /// A global's address is an absolute one, not PC-relative (the medium
+    /// model on the 68000 and 68010, the large model).
+    pub absolute_data: bool,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
+    fn little_endian(&self) -> bool {
+        false
+    }
+
+    fn sub_of_sign_extended_bool(&self) -> bool {
+        self.short
+    }
+
     fn is_indexed_legal(
         &self,
         _is_load: bool,
@@ -190,9 +221,14 @@ impl Hooks for M68kLowering {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::SetCC => lower_setcc(dag, node),
+            ISD::SetCCCarry => Some(lower_setcc_carry(dag, node)),
+            ISD::ShlParts => Some(lower_shift_left_parts(dag, node)),
+            ISD::SrlParts => Some(lower_shift_right_parts(dag, node, false)),
+            ISD::SraParts => Some(lower_shift_right_parts(dag, node, true)),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
-            ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node)),
+            ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node, self.absolute_data)),
+            ISD::VAStart => lower_vastart(dag, node),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
             _ => None,
         }
@@ -209,31 +245,100 @@ impl Hooks for M68kLowering {
         ret: EVT,
         signed: bool,
     ) -> Option<SDValue> {
+        self.make_lib_call_parts(dag, name, args, &[ret], signed)?.first().copied()
+    }
+
+    fn make_lib_call_parts(
+        &mut self,
+        dag: &mut SelectionDAG,
+        name: &'static str,
+        args: &[SDValue],
+        rets: &[EVT],
+        signed: bool,
+    ) -> Option<Vec<SDValue>> {
         use super::call::{Ext, In, Out};
         let ext = if signed { Ext::Sign } else { Ext::Zero };
-        let outs: Vec<Out> = args
-            .iter()
-            .map(|&value| Out {
-                value,
-                ext,
-                pointer: false,
-                arg_vt: dag.value_type(value),
-                split: false,
-                variadic: false,
-                sret: false,
-            })
-            .collect();
+        let out = |value: SDValue, dag: &SelectionDAG| Out {
+            value,
+            ext,
+            pointer: false,
+            arg_vt: dag.value_type(value),
+            split: false,
+            variadic: false,
+            sret: false,
+            byval: None,
+        };
+        // `getCopyToParts`: a 64-bit argument is two words, the high one first
+        // on a big-endian target.
+        let mut outs: Vec<Out> = Vec::new();
+        for &value in args {
+            if dag.value_type(value) == EVT::I64 {
+                let [low, high] = split_words(dag, value);
+                outs.push(out(high, dag));
+                outs.push(out(low, dag));
+            } else {
+                outs.push(out(value, dag));
+            }
+        }
+        let word = In {
+            vt: EVT::I32,
+            pointer: false,
+            arg_vt: EVT::I32,
+            split: false,
+            sret: false,
+            ext: Ext::Any,
+            byval: None,
+        };
+        let mut ins: Vec<In> = Vec::new();
+        for &ret in rets {
+            if ret == EVT::I64 {
+                ins.extend([word, word]);
+            } else {
+                ins.push(In {
+                    vt: ret,
+                    pointer: false,
+                    arg_vt: ret,
+                    split: false,
+                    sret: false,
+                    ext: Ext::Any,
+                    byval: None,
+                });
+            }
+        }
         let callee = dag.get_target_external_symbol(EVT::I32, name);
         let root = dag.entry_node();
-        let (_chain, values) = super::call::M68kCalling::default().lower_call(
-            dag,
-            root,
-            callee,
-            &outs,
-            &[In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any }],
-        );
-        values.first().copied()
+        let (_chain, values) = super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &ins);
+        if values.len() != ins.len() {
+            return None;
+        }
+        // a 64-bit result: the high word in `d0`, the low in `d1`
+        let mut joined = Vec::new();
+        let mut next = values.into_iter();
+        for &ret in rets {
+            if ret == EVT::I64 {
+                let (high, low) = (next.next()?, next.next()?);
+                joined.push(dag.get_node(ISD::BuildPair, EVT::I64, &[low, high]));
+            } else {
+                joined.push(next.next()?);
+            }
+        }
+        Some(joined)
     }
+
+    fn little_endian(&self) -> bool {
+        false
+    }
+}
+
+/// The low and the high word of a 64-bit value.
+fn split_words(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+) -> [SDValue; 2] {
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[value]);
+    let by = dag.get_constant(32, EVT::I32);
+    let upper = dag.get_node(ISD::Srl, EVT::I64, &[value, by]);
+    [low, dag.get_node(ISD::Truncate, EVT::I32, &[upper])]
 }
 
 /// `LowerXALUO` (with `lowerOverflowArithmetic`): the arithmetic as one node
@@ -519,6 +624,82 @@ fn lower_setcc(
     Some(dag.get_node(m68kisd::SETCC, EVT::I8, &[code, flags]))
 }
 
+/// `LowerSETCCCARRY`: the comparison of `lhs` and `rhs` with a borrow in, as
+/// `subx` over the carry turned into the extend flag (`carry + -1`).
+fn lower_setcc_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (lhs, rhs, carry) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let cc = cond_of(dag, dag.operand(node, 3));
+    let mut unchanged = rhs;
+    let code = translate_cc(dag, cc, &mut unchanged);
+    let carry_vt = dag.value_type(carry);
+    let minus_one = dag.get_constant(u128::MAX >> (128 - carry_vt.size_in_bits()), carry_vt);
+    let carry = dag.get_node_multi(m68kisd::ADD, &[carry_vt, EVT::I8], &[carry, minus_one]);
+    let compared = dag.get_node_multi(
+        m68kisd::SUBX,
+        &[dag.value_type(lhs), EVT::I8],
+        &[lhs, rhs, SDValue { node: carry.node, res: 1 }],
+    );
+    let code = cc_operand(dag, code);
+    dag.get_node(m68kisd::SETCC, EVT::I8, &[code, SDValue { node: compared.node, res: 1 }])
+}
+
+/// `LowerShiftLeftParts`: a 64-bit shift left of `(lo, hi)` by `shamt` in
+/// 32-bit registers, as a select on `shamt < 32`.
+fn lower_shift_left_parts(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (lo, hi, shamt) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let vt = dag.value_type(lo);
+    let zero = dag.get_constant(0, vt);
+    let one = dag.get_constant(1, vt);
+    let minus_size = dag.get_constant(0xFFFF_FFE0, vt);
+    let size_minus_1 = dag.get_constant(31, vt);
+    let shamt_minus_size = dag.get_node(ISD::Add, vt, &[shamt, minus_size]);
+    let size_minus_1_shamt = dag.get_node(ISD::Xor, vt, &[size_minus_1, shamt]);
+    let lo_true = dag.get_node(ISD::Shl, vt, &[lo, shamt]);
+    let right_1 = dag.get_node(ISD::Srl, vt, &[lo, one]);
+    let right = dag.get_node(ISD::Srl, vt, &[right_1, size_minus_1_shamt]);
+    let left_hi = dag.get_node(ISD::Shl, vt, &[hi, shamt]);
+    let hi_true = dag.get_node(ISD::Or, vt, &[left_hi, right]);
+    let hi_false = dag.get_node(ISD::Shl, vt, &[lo, shamt_minus_size]);
+    let below = dag.get_setcc(EVT::I8, shamt_minus_size, zero, CondCode::SetLt);
+    let lo = dag.get_node(ISD::Select, vt, &[below, lo_true, zero]);
+    let hi = dag.get_node(ISD::Select, vt, &[below, hi_true, hi_false]);
+    dag.get_node_multi(ISD::MergeValues, &[vt, vt], &[lo, hi])
+}
+
+/// `LowerShiftRightParts`: the same for a shift right, arithmetic or logical.
+fn lower_shift_right_parts(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    arithmetic: bool,
+) -> SDValue {
+    let (lo, hi, shamt) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let vt = dag.value_type(lo);
+    let right = if arithmetic { ISD::Sra } else { ISD::Srl };
+    let zero = dag.get_constant(0, vt);
+    let one = dag.get_constant(1, vt);
+    let minus_size = dag.get_constant(0xFFFF_FFE0, vt);
+    let size_minus_1 = dag.get_constant(31, vt);
+    let shamt_minus_size = dag.get_node(ISD::Add, vt, &[shamt, minus_size]);
+    let size_minus_1_shamt = dag.get_node(ISD::Xor, vt, &[size_minus_1, shamt]);
+    let right_lo = dag.get_node(ISD::Srl, vt, &[lo, shamt]);
+    let left_hi_1 = dag.get_node(ISD::Shl, vt, &[hi, one]);
+    let left_hi = dag.get_node(ISD::Shl, vt, &[left_hi_1, size_minus_1_shamt]);
+    let lo_true = dag.get_node(ISD::Or, vt, &[right_lo, left_hi]);
+    let hi_true = dag.get_node(right, vt, &[hi, shamt]);
+    let lo_false = dag.get_node(right, vt, &[hi, shamt_minus_size]);
+    let hi_false = if arithmetic { dag.get_node(ISD::Sra, vt, &[hi, size_minus_1]) } else { zero };
+    let below = dag.get_setcc(EVT::I8, shamt_minus_size, zero, CondCode::SetLt);
+    let lo = dag.get_node(ISD::Select, vt, &[below, lo_true, lo_false]);
+    let hi = dag.get_node(ISD::Select, vt, &[below, hi_true, hi_false]);
+    dag.get_node_multi(ISD::MergeValues, &[vt, vt], &[lo, hi])
+}
+
 /// `M68k::GetOppositeBranchCondition`: the codes pair up as `(2n, 2n + 1)`:
 /// `HI`/`LS`, `CC`/`CS`, `NE`/`EQ`, ...
 fn opposite(code: u128) -> u128 {
@@ -571,4 +752,21 @@ fn lower_brcond(
         (code, emit_test(dag, cond_value, cond::NE))
     };
     dag.get_node(m68kisd::BRCOND, EVT::OTHER, &[chain, dest, code, flags])
+}
+
+/// `M68kTargetLowering::LowerVASTART`: `va_start` stores the address of the
+/// first variadic argument's slot (`VarArgsFrameIndex`) through the list.
+fn lower_vastart(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let index = dag.var_args_frame_index?;
+    let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
+    let first = dag.get_frame_index(EVT::I32, index);
+    let base = match dag.node(list).data {
+        NodeData::FrameIndex(slot) => MemBase::Stack(slot),
+        _ => MemBase::Unknown,
+    };
+    let info = MemInfo { mem_vt: EVT::I32, align: 2, volatile: false, base, ext: None, space: 0, ordering: None };
+    Some(dag.get_store(chain, first, list, info))
 }

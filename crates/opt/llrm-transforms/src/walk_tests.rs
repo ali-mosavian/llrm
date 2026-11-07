@@ -1,20 +1,27 @@
 use crate::testing::parsed;
 
-const UNUSED_PARAMETER: &str = "define internal i16 @f(i16 %a, i16 %unused) noinline {
+/// A recursive function reading a slice descriptor's length: argument
+/// promotion takes the length in the descriptor's place (`promote.`), then the
+/// descriptor's unused data pointer goes (`ipa-deadargs.`).
+const DESCRIPTOR: &str =
+    "define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(6) nocapture %d, i16 %n) noinline {
 b0:
-  %done = icmp sle i16 %a, 0
+  %at = getelementptr i8, ptr addrspace(1) %d, i16 4
+  %len = load i16, ptr addrspace(1) %at
+  %done = icmp sle i16 %n, 0
   br i1 %done, label %out, label %again
 again:
-  %m = sub i16 %a, 1
-  %r = call i16 @f(i16 %m, i16 %unused)
-  ret i16 %r
+  %m = sub i16 %n, 1
+  %r = call i16 @sum(ptr addrspace(1) %d, i16 %m)
+  %s = add i16 %r, %len
+  ret i16 %s
 out:
-  ret i16 %a
+  ret i16 %len
 }
 
-define i16 @top(i16 %x) {
+define i16 @top(ptr addrspace(1) %p) {
 b0:
-  %r = call i16 @f(i16 %x, i16 12)
+  %r = call i16 @sum(ptr addrspace(1) %p, i16 3)
   ret i16 %r
 }
 ";
@@ -29,7 +36,12 @@ fn pipeline_runs(
         llrm_mir::program::Program::lend(
             &mut module,
             std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
-            |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, applied),
+            |program: &mut llrm_mir::program::Program| {
+                // Without an entry nothing is reachable, and no stage of the
+                // interprocedural step has a body to rerun.
+                program.exports.entries.insert("top".to_owned());
+                crate::pipeline::applied(program, applied)
+            },
         )
         .and_then(|done| done)
         .expect("the pipeline runs");
@@ -38,11 +50,15 @@ fn pipeline_runs(
 }
 
 /// The passes a body ran, per `LLRM_DEBUG=runs` line, for the lines of a run
-/// that a stage of the interprocedural step (`ipa-...`) asked for.
+/// that a stage of the interprocedural step (`ipa-...`, `ipsccp.`) asked for.
+/// `promote.` keeps the full list on purpose (the minimal one left Nib
+/// quicksort's far sort arguments unfolded; `recorded`).
 fn passes_run_by_ipa_stages(lines: &[String]) -> Vec<(String, usize)> {
     lines
         .iter()
-        .filter(|line| line.starts_with("body ") && line.contains("trigger \"ipa-"))
+        .filter(|line| {
+            line.starts_with("body ") && ["trigger \"ipa-", "trigger \"ipsccp."].iter().any(|one| line.contains(one))
+        })
         .map(|line| {
             let runs = line.split(" pass runs").next().and_then(|head| head.rsplit(' ').next());
             let name = line.rsplit("name ").next().unwrap_or_default();
@@ -58,9 +74,172 @@ fn passes_run_by_ipa_stages(lines: &[String]) -> Vec<(String, usize)> {
 /// (446, 293 and 287 M instructions).
 #[test]
 fn test_a_body_changed_by_an_interprocedural_stage_does_not_rerun_the_list() {
-    let lines = pipeline_runs(UNUSED_PARAMETER, &crate::pipeline::Applied::default());
+    let lines = pipeline_runs(
+        &format!("{}{DESCRIPTOR}", llrm_analysis::testing::DOS),
+        &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+    );
     let reruns = passes_run_by_ipa_stages(&lines);
     assert!(reruns.iter().all(|(_, runs)| *runs < 10), "the list ran again: {reruns:?}");
+}
+
+/// The late list (loop-load-elim, slp, the late unroll) ran before the
+/// interprocedural stages, which then ran the simplification list again over
+/// the bodies it had grown: `main` of memory_expansion entered GVN at 6051,
+/// 6052 and 6058 instructions, and the whole module summed 30,988 at GVN
+/// where the pin's 8,332. The late list is a body's last run.
+#[test]
+fn test_the_late_list_is_a_bodys_last_run() {
+    let lines = pipeline_runs(
+        &format!("{}{DESCRIPTOR}", llrm_analysis::testing::DOS),
+        &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+    );
+    // A run's steps come before its `body` line; the late list has the
+    // late unroll's slot.
+    let mut late: Vec<String> = Vec::new();
+    let mut steps_late = false;
+    let mut after_late: Vec<String> = Vec::new();
+    for line in &lines {
+        if line.starts_with("step ") {
+            steps_late |= line.contains("unroll@1476");
+        } else if line.starts_with("body ") {
+            let name = line.rsplit("name ").next().unwrap_or_default().to_owned();
+            if late.contains(&name) {
+                after_late.push(name.clone());
+            }
+            if steps_late {
+                late.push(name);
+            }
+            steps_late = false;
+        }
+    }
+    assert!(!late.is_empty(), "no body ran the late list: {lines:?}");
+    assert!(after_late.is_empty(), "bodies run again after the late list: {after_late:?}");
+}
+
+/// `check_locals` calls the two functions it is handed through its own
+/// stack slots: inlined into `main` the calls become direct only after the
+/// simplification, so a second round inlines them (`DevirtSCCRepeatedPass`).
+const APPLY_TWO: &str = "@x = internal global [700 x i8] zeroinitializer
+@y = internal global [700 x i8] zeroinitializer
+@src = internal global [700 x i8] zeroinitializer
+declare i16 @memcmp(ptr, ptr, i16)
+
+define internal void @lc(ptr %d, ptr %s) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i1, %loop ]
+  %sp = getelementptr inbounds i8, ptr %s, i16 %i
+  %v = load i8, ptr %sp
+  %dp = getelementptr inbounds i8, ptr %d, i16 %i
+  store i8 %v, ptr %dp
+  %i1 = add nuw nsw i16 %i, 1
+  %c = icmp slt i16 %i1, 700
+  br i1 %c, label %loop, label %done
+done:
+  ret void
+}
+
+define internal void @lr(ptr %d, ptr %s) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i1, %loop ]
+  %sp = getelementptr inbounds i8, ptr %s, i16 %i
+  %v = load i8, ptr %sp
+  %dp = getelementptr inbounds i8, ptr %d, i16 %i
+  store i8 %v, ptr %dp
+  %i1 = add nuw nsw i16 %i, 1
+  %c = icmp slt i16 %i1, 700
+  br i1 %c, label %loop, label %done
+done:
+  ret void
+}
+
+define internal i16 @differ(ptr %a, ptr %b, i16 %n) noinline {
+  %c = call i16 @memcmp(ptr %a, ptr %b, i16 %n)
+  ret i16 %c
+}
+
+define internal i16 @check_locals(ptr %f, ptr %g) {
+  %f.addr = alloca ptr
+  %g.addr = alloca ptr
+  store ptr %f, ptr %f.addr
+  store ptr %g, ptr %g.addr
+  %f1 = load ptr, ptr %f.addr
+  call void %f1(ptr @x, ptr @src)
+  %g1 = load ptr, ptr %g.addr
+  call void %g1(ptr @y, ptr @src)
+  %d = call i16 @differ(ptr @x, ptr @y, i16 700)
+  ret i16 %d
+}
+
+define i16 @top() {
+  %r = call i16 @check_locals(ptr @lc, ptr @lr)
+  ret i16 %r
+}
+";
+
+/// A body took the inliner's calls and then the function passes twice when the
+/// callee's calls became direct only after the simplification: `main` of
+/// memory_expansion ran the list twice where the pin's inliner worklist takes
+/// the new calls before the function passes run once.
+#[test]
+fn test_calls_that_a_splice_exposes_are_inlined_before_the_list_runs() {
+    let lines = pipeline_runs(
+        &format!("{}{APPLY_TWO}", llrm_analysis::testing::DOS),
+        &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+    );
+    let walks = |name: &str| {
+        lines
+            .iter()
+            .filter(|line| {
+                line.starts_with("body ")
+                    && line.contains("trigger \"walk.\"")
+                    && line.ends_with(&format!("name {name}"))
+            })
+            .count()
+    };
+    assert_eq!(walks("top"), 1, "the list ran again over top: {lines:?}");
+}
+
+/// A promotion edited the caller's call site after the caller had run the
+/// list, and `promote.` ran the list over it again (`main` of
+/// memory_expansion: three runs, 833M instructions in the last). The pin runs
+/// ArgumentPromotion per component before its callers are visited.
+#[test]
+fn test_a_caller_of_a_promoted_function_runs_the_list_once() {
+    let lines = pipeline_runs(
+        &format!("{}{DESCRIPTOR}", llrm_analysis::testing::DOS),
+        &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+    );
+    let again: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.starts_with("body ") && line.contains("trigger \"promote.\"") && line.ends_with("name top"))
+        .collect();
+    assert!(again.is_empty(), "the caller ran the list again after the promotion: {again:?}");
+}
+
+/// The mark that tells the module-wide step the walk promoted a body is read
+/// and removed there: it must not reach the module a later stage prints.
+#[test]
+fn test_the_walks_promotion_mark_does_not_reach_the_printed_module() {
+    let mut module = parsed(&format!("{}{DESCRIPTOR}", llrm_analysis::testing::DOS));
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
+        |program: &mut llrm_mir::program::Program| {
+            program.exports.entries.insert("top".to_owned());
+            crate::pipeline::applied(
+                program,
+                &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+            )
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = crate::testing::printed(&module);
+    assert!(!text.contains("llrm-promoted-in-walk"), "the mark stayed on a body:\n{text}");
 }
 
 const TWO_CONSTANTS: &str = "define internal i16 @g(i16 %k, i16 %x) noinline {
@@ -256,6 +435,8 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
             |program: &mut llrm_mir::program::Program| {
                 let mut analyses = Default::default();
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -267,6 +448,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
                     simplify: Box::new(move |_, _, _, _| counted.set(counted.get() + 1)),
                     for_size: false,
                     flag: true,
+                    o3: false,
                     inlining: true,
                 };
                 late.apply(program, &mut modules)
@@ -318,6 +500,8 @@ fn test_a_caller_of_a_peeled_recursion_is_a_body_with_self_copies() {
             |program: &mut llrm_mir::program::Program| {
                 let mut analyses = Default::default();
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -467,6 +651,8 @@ b0:
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut walk = crate::walk::Walk {
+                promote_rate: None,
+                rerun_unchanged: true,
                 speed_rate: true,
                 inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
@@ -688,6 +874,8 @@ fn test_only_a_tree_recursion_waits_for_its_tail_call_elimination() {
             std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -789,6 +977,8 @@ b0:
             std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -843,6 +1033,8 @@ fn walked_top_with(
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut walk = crate::walk::Walk {
+                promote_rate: None,
+                rerun_unchanged: true,
                 speed_rate: true,
                 inline: crate::inline::Threshold { recursive, ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
@@ -1068,6 +1260,96 @@ fn test_an_os_call_whose_stack_arguments_are_unknown_stays_a_call() {
     assert!(top.contains("call i32 @parity"), "parity was inlined for nothing:\n{top}");
 }
 
+/// `sum_three(&a, &b, &c)` on three stack records with far data pointers: the
+/// callee leaves `capacity` alone, so its stores go and the kept call counted
+/// 10 units against 15 inlined. The call pushes three far pointers and the
+/// records need a frame, 114 bytes against 75: parity/sum_three/c -Os, +38 B.
+#[test]
+fn test_an_os_call_on_stack_records_is_inlined_where_the_bytes_say_so() {
+    let top = sized(
+        r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
+
+%struct.Slice = type { i16, i16, ptr addrspace(1) }
+
+@first = internal global [4 x i16] [i16 1, i16 2, i16 3, i16 4], align 2
+@second_data = internal global [4 x i16] [i16 10, i16 20, i16 30, i16 40], align 2
+@third_data = internal global [4 x i16] [i16 100, i16 200, i16 300, i16 400], align 2
+
+define signext i16 @sum(ptr addrspace(1) noundef %0, ptr addrspace(1) noundef %1, ptr addrspace(1) noundef %2) addrspace(1) nounwind optsize memory(read, inaccessiblemem: none) nofree nosync norecurse {
+  br label %4
+
+4:
+  %5 = phi i16 [ 0, %3 ], [ %25, %9 ]
+  %6 = phi i16 [ 0, %3 ], [ %24, %9 ]
+  %7 = load i16, ptr addrspace(1) %0, align 1
+  %8 = icmp ult i16 %5, %7
+  br i1 %8, label %9, label %26
+
+9:
+  %10 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 4
+  %11 = load ptr addrspace(1), ptr addrspace(1) %10, align 1
+  %12 = getelementptr inbounds nuw [2 x i8], ptr addrspace(1) %11, i16 %5
+  %13 = load i16, ptr addrspace(1) %12, align 2
+  %14 = add nsw i16 %6, %13
+  %15 = getelementptr inbounds nuw i8, ptr addrspace(1) %1, i16 4
+  %16 = load ptr addrspace(1), ptr addrspace(1) %15, align 1
+  %17 = getelementptr inbounds nuw [2 x i8], ptr addrspace(1) %16, i16 %5
+  %18 = load i16, ptr addrspace(1) %17, align 2
+  %19 = add nsw i16 %14, %18
+  %20 = getelementptr inbounds nuw i8, ptr addrspace(1) %2, i16 4
+  %21 = load ptr addrspace(1), ptr addrspace(1) %20, align 1
+  %22 = getelementptr inbounds nuw [2 x i8], ptr addrspace(1) %21, i16 %5
+  %23 = load i16, ptr addrspace(1) %22, align 2
+  %24 = add nsw i16 %19, %23
+  %25 = add i16 %5, 1
+  br label %4
+
+26:
+  ret i16 %6
+}
+
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) addrspace(1) nocallback nofree nosync nounwind
+
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) addrspace(1) nocallback nofree nosync nounwind
+
+define i32 @top() addrspace(1) nounwind optsize {
+  %1 = alloca %struct.Slice, align 1
+  %2 = alloca %struct.Slice, align 1
+  %3 = alloca %struct.Slice, align 1
+  call addrspace(1) void @llvm.lifetime.start.p0(i64 -1, ptr %1) nounwind
+  call addrspace(1) void @llvm.lifetime.start.p0(i64 -1, ptr %2) nounwind
+  call addrspace(1) void @llvm.lifetime.start.p0(i64 -1, ptr %3) nounwind
+  store i16 4, ptr %1, align 1
+  %4 = getelementptr inbounds nuw i8, ptr %1, i16 2
+  store i16 4, ptr %4, align 1
+  %5 = getelementptr inbounds nuw i8, ptr %1, i16 4
+  store ptr addrspace(1) addrspacecast (ptr @first to ptr addrspace(1)), ptr %5, align 1
+  store i16 4, ptr %2, align 1
+  %6 = getelementptr inbounds nuw i8, ptr %2, i16 2
+  store i16 4, ptr %6, align 1
+  %7 = getelementptr inbounds nuw i8, ptr %2, i16 4
+  store ptr addrspace(1) addrspacecast (ptr @second_data to ptr addrspace(1)), ptr %7, align 1
+  store i16 4, ptr %3, align 1
+  %8 = getelementptr inbounds nuw i8, ptr %3, i16 2
+  store i16 4, ptr %8, align 1
+  %9 = getelementptr inbounds nuw i8, ptr %3, i16 4
+  store ptr addrspace(1) addrspacecast (ptr @third_data to ptr addrspace(1)), ptr %9, align 1
+  %10 = addrspacecast ptr %1 to ptr addrspace(1)
+  %11 = addrspacecast ptr %2 to ptr addrspace(1)
+  %12 = addrspacecast ptr %3 to ptr addrspace(1)
+  %13 = call signext addrspace(1) i16 @sum(ptr addrspace(1) noundef %10, ptr addrspace(1) noundef %11, ptr addrspace(1) noundef %12) nobuiltin optsize
+  %14 = sext i16 %13 to i32
+  call addrspace(1) void @llvm.lifetime.end.p0(i64 -1, ptr %3) nounwind
+  call addrspace(1) void @llvm.lifetime.end.p0(i64 -1, ptr %2) nounwind
+  call addrspace(1) void @llvm.lifetime.end.p0(i64 -1, ptr %1) nounwind
+  ret i32 %14
+}
+"#,
+        "@top(",
+    );
+    assert!(!top.contains("@sum("), "sum stayed a call:\n{top}");
+}
+
 /// `@top` after the pipeline sized for bytes over `text`.
 fn sized(
     text: &str,
@@ -1227,6 +1509,8 @@ b0:
         move |program: &mut llrm_mir::program::Program| {
             let seen = std::rc::Rc::clone(&seen);
             let mut walk = crate::walk::Walk {
+                promote_rate: None,
+                rerun_unchanged: true,
                 speed_rate: true,
                 inline: crate::inline::Threshold { limit: 0, ..Default::default() },
                 simplify: Box::new(move |module, analyses, _, _| {
@@ -1418,16 +1702,33 @@ b0:
 }
 ";
 
-/// qlight c at m16 -O2 inlined a 30-instruction `ls_scale_byte` four times,
-/// 211 -> 376 bytes. The pin's bar (50) allows it; the m16 description holds
-/// a speed caller to the callee's code size too (`inline_size_guard_at_speed`).
+/// A speed caller at m16 follows the pin's threshold, as main does: a callee
+/// that grows the code is copied. A guard that held it to the callee's size
+/// kept qlight's four `ls_scale_byte` calls at -O2 (472 clocks against main's
+/// 463, and a size bound that priced the copy at 1.4 to 1.8 times its bytes).
 #[test]
-fn test_an_o2_call_of_a_callee_that_stays_and_grows_the_code_stays_a_call_at_m16() {
-    let text = format!("{GROWS}\ndefine i32 @top(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n");
+fn test_an_o2_call_of_a_callee_that_grows_the_code_is_inlined_at_m16_as_the_pin_does() {
+    let mut big = String::from("@g = global i32 0\n\ndefine i32 @callee(i32 %x) {\nb0:\n");
+    let steps = 10;
+    for step in 0..steps {
+        let before = if step == 0 { "%x".to_owned() } else { format!("%w{}", step - 1) };
+        big.push_str(&format!("  %v{step} = load volatile i32, ptr @g\n  %w{step} = add i32 {before}, %v{step}\n"));
+    }
+    big.push_str(&format!("  ret i32 %w{}\n}}\n", steps - 1));
+    let text = format!("{big}\ndefine i32 @top(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n");
     let pin = at_o2_on(llrm_x86_m16::Dos::pin_tuned(), &text, "@top(");
     let m16 = at_o2_on(llrm_x86_m16::Dos::default(), &text, "@top(");
     assert!(!pin.contains("call i32 @callee"), "premise: the pin inlines it:\n{pin}");
-    assert!(m16.contains("call i32 @callee"), "m16 copied it:\n{m16}");
+    assert!(!m16.contains("call i32 @callee"), "m16 kept the call:\n{m16}");
+}
+
+/// A callee that grows the code a little is copied into a speed caller at m16
+/// (the 13-operation `GROWS`).
+#[test]
+fn test_an_o2_call_of_a_callee_whose_clocks_pay_for_its_growth_is_inlined_at_m16() {
+    let text = format!("{GROWS}\ndefine i32 @top(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n");
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), &text, "@top(");
+    assert!(!m16.contains("call i32 @callee"), "the call stayed:\n{m16}");
 }
 
 /// The same callee with a constant argument folds in the caller once inlined
@@ -1532,12 +1833,10 @@ b0:
 }
 
 /// qlight c at m16 -O2: `ls_scale_byte` (a clamped multiply and a divide by
-/// 255, the multiply-high sequence in the code) inlined four times is 191
-/// bytes more for 91 clocks less: the `CodeSize` units said +8 a site where the
-/// code grows by ~50 bytes, and priced in clocks that took the copy. The byte
-/// prices of the opcode table see the sequence, and the call stays.
+/// 255) four times. Kept as calls it ran 472 clocks, above main's 463 (main
+/// inlines it); inlined it ran 388 clocks.
 #[test]
-fn test_an_o2_call_of_a_clamped_divide_by_a_constant_stays_a_call_at_m16() {
+fn test_an_o2_call_of_a_clamped_divide_by_a_constant_is_inlined_at_m16_where_main_inlines_it() {
     let text = "@raw = global i16 200
 @low = global i16 -20
 @s1 = global i16 120
@@ -1585,7 +1884,7 @@ b0:
 }
 ";
     let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
-    assert_eq!(m16.matches("call i16 @scale").count(), 4, "a copy was made:\n{m16}");
+    assert_eq!(m16.matches("call i16 @scale").count(), 0, "the calls stayed:\n{m16}");
 }
 
 /// qbsp/loop/branch at m16 -O2: a call in a loop that saves a few clocks and
@@ -2149,6 +2448,8 @@ fn test_a_recursion_the_cap_refuses_keeps_its_tail_call_elimination_slot() {
             std::rc::Rc::new(llrm_x86_m16::Dos { recursive_inlining: REC_1, ..llrm_x86_m16::Dos::default() }),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold::new(225),
                     simplify: Box::new(|_, _, _, _| {}),
@@ -2265,4 +2566,433 @@ fn test_a_recursion_with_a_loop_in_it_is_not_copied_for_its_calls() {
   %acc1 = add i32 %z, %v",
     ));
     assert!(heavy == 2, "the loop-bodied recursion was copied: {heavy} calls");
+}
+
+const CALL_BOUND: &str = "define i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+";
+
+const LOOP_BODIED: &str = "define i32 @walk(i32 %n, ptr %p) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %scan
+
+base:
+  ret i32 %n
+
+scan:
+  %i = phi i32 [ 0, %b0 ], [ %next, %scan ]
+  %acc = phi i32 [ 0, %b0 ], [ %sum, %scan ]
+  %slot = getelementptr i32, ptr %p, i32 %i
+  %v = load i32, ptr %slot
+  %sum = add i32 %acc, %v
+  %next = add i32 %i, 1
+  %more = icmp slt i32 %next, %n
+  br i1 %more, label %scan, label %rec
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @walk(i32 %a, ptr %p)
+  %y = call i32 @walk(i32 %b, ptr %p)
+  %s = add i32 %x, %y
+  %t = add i32 %s, %sum
+  ret i32 %t
+}
+";
+
+/// The depth of copies `priced_copy_depth` gives `name` in `text`, at m16's
+/// sheet and the ceilings (3, 150).
+fn priced_depth(
+    text: &str,
+    name: &str,
+) -> usize {
+    let mut module = parsed(text);
+    let mut depth = 0;
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let module = &program.modules[0];
+            let id = module
+                .functions()
+                .find(|(_, global, _)| global.name.as_deref() == Some(name))
+                .map(|(id, _, _)| id)
+                .unwrap();
+            let frequencies = crate::walk::self_calls(module, &program.layout, id, false).expect("a tree");
+            let tti = program.target.tti().expect("a cost model");
+            depth = crate::walk::priced_copy_depth(
+                module,
+                &program.layout,
+                &*program.target,
+                &*tti,
+                id,
+                &frequencies,
+                (3, 150),
+            );
+            Ok::<(), String>(())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the program lends");
+    depth
+}
+
+/// The first level of copies is made where its clocks are worth `COPY_MARGIN`
+/// times its bytes: a call-bound tree (fib) takes copies, a body whose time is
+/// a loop (the call overhead is a small share of it) takes none.
+#[test]
+fn test_the_priced_depth_copies_a_call_bound_tree_and_not_a_loop_bodied_one() {
+    let (bound, looped) = (priced_depth(CALL_BOUND, "fib"), priced_depth(LOOP_BODIED, "walk"));
+    assert!(bound >= 1, "a call-bound tree got {bound} levels");
+    assert_eq!(looped, 0, "a loop-bodied tree got {looped} levels");
+}
+
+/// parity/branch and parity/loop c at m16 -O2 kept a static scratch variable
+/// (`demo_value`, 2 and 4 bytes of .bss against 0 in main) because the call
+/// that took its address stayed a call; inlined, the variable is promoted and
+/// the global is gone.
+#[test]
+fn test_an_o2_inline_at_m16_leaves_no_global_for_a_scratch_variable_whose_address_was_passed() {
+    let text = "@demo = internal global i16 0
+@low = internal global i16 -13
+@high = internal global i16 21
+
+define i32 @kernel(ptr %p) {
+b0:
+  %v = load i16, ptr %p
+  %neg = icmp slt i16 %v, 0
+  %w = sext i16 %v to i32
+  br i1 %neg, label %n, label %q
+n:
+  %a = mul i32 %w, 7
+  %r1 = add i32 %a, 3
+  ret i32 %r1
+q:
+  %b = mul i32 %w, 5
+  %r2 = sub i32 %b, 9
+  ret i32 %r2
+}
+
+define i32 @top() {
+b0:
+  %x = load volatile i16, ptr @low
+  store i16 %x, ptr @demo
+  %first = call i32 @kernel(ptr @demo)
+  %y = load volatile i16, ptr @high
+  store i16 %y, ptr @demo
+  %second = call i32 @kernel(ptr @demo)
+  %m = mul i32 %first, 1000
+  %s = add i32 %m, %second
+  ret i32 %s
+}
+";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert!(!m16.contains("call i32 @kernel"), "the calls stayed:\n{m16}");
+    let mut module = parsed(text);
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut options = crate::pipeline::Options::default();
+            options.inline.recursive = false;
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    assert!(!llrm_mir::print::module(&module).contains("@demo"), "demo is still a global");
+}
+
+/// Calls of `@fib` after the default pipeline on x86-m32 with `options`.
+fn m32_fib_calls(options: crate::pipeline::Options) -> usize {
+    m32_tree_calls(0, options)
+}
+
+fn m32_tree_calls(
+    extra: usize,
+    options: crate::pipeline::Options,
+) -> usize {
+    let mut module =
+        parsed(&tree_recursion(extra).replace("@tree", "@fib").replace("define internal i32 @fib", "define i32 @fib"));
+    llrm_mir::program::Program::lend(
+        &mut module,
+        crate::indvars::tests::m32(),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    llrm_mir::print::module(&module).matches("call i32 @fib").count()
+}
+
+/// bench fib at m32 -O2 was 334151 clocks against gcc's 210636: the pin's
+/// inliner copies no recursive callee, gcc's `recursive_inlining` copies fib
+/// into itself to depth 8 (REC-2).
+#[test]
+fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
+    let calls = m32_fib_calls(crate::pipeline::Options::default());
+    assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
+}
+
+/// Calls of `@paths` after the default pipeline on x86-m32: bench rectwo's
+/// lattice-path count, `paths(n-1, m) + paths(n, m-1)` with two ways out.
+fn m32_paths_calls(options: crate::pipeline::Options) -> usize {
+    let mut module = parsed(
+        "define i32 @paths(i32 %n, i32 %m) {
+b0:
+  %zn = icmp eq i32 %n, 0
+  %zm = icmp eq i32 %m, 0
+  %done = or i1 %zn, %zm
+  br i1 %done, label %base, label %rec
+
+base:
+  ret i32 1
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %m, 1
+  %x = call i32 @paths(i32 %a, i32 %m)
+  %y = call i32 @paths(i32 %n, i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @main() {
+b0:
+  %r = call i32 @paths(i32 9, i32 9)
+  ret i32 %r
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        crate::indvars::tests::m32(),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    llrm_mir::print::module(&module).matches("call i32 @paths").count()
+}
+
+/// bench rectwo at m32 -O3 ran 1230664 clocks against gcc's 555904: the copies were made of the
+/// two-call body and kept 43 calls; gcc eliminates the tail call first and nests the loop it
+/// leaves (466986 clocks that way). The body here is the same shape. -O2 keeps the tree's copies
+/// (fib's pure calls merge across them: 99618 clocks against 228901).
+#[test]
+fn test_m32_o3_paths_is_copied_as_nested_loops_not_as_a_tree_of_calls() {
+    let calls = m32_paths_calls(crate::pipeline::Options::speed());
+    assert!(calls <= 8, "paths kept {calls} calls of itself");
+}
+
+/// fib at m32 -O2 was copied into itself to the 150 `gcc_insns` the pass
+/// allowed and ran 240256 clocks against gcc's 210636 (gcc's cap is 450; -O2
+/// now takes it, 99687 clocks); -O3 keeps 150 (rectwo and bintree are worse
+/// with 450 there).
+#[test]
+fn test_m32_o2_copies_fib_to_gccs_growth_cap_and_o3_to_the_old_one() {
+    let o2 = m32_fib_calls(crate::pipeline::Options::default());
+    let o3 = m32_fib_calls(crate::pipeline::Options::speed());
+    assert!(o2 > o3, "-O2 made {o2} calls of fib, -O3 {o3}");
+}
+
+/// fib at -O1 was copied into itself (334152 -> 424014 clocks, 69 -> 649 B):
+/// gcc inlines no function at -O1, recursive ones included.
+#[test]
+fn test_m32_copies_no_recursion_at_o1() {
+    let calls = m32_fib_calls(crate::pipeline::Options::basic());
+    assert!(calls <= 3, "fib was copied into itself at -O1, {calls} calls of it");
+}
+
+/// -Os is strict bytes: quicksort, bintree and hanoi are the same object with
+/// D10 on or off at m32 and x86_64 -Os (247, 229, 47 B), so no recursive copy
+/// is made there (the rate levels' 1261 B shape never reaches -Os).
+#[test]
+fn test_m32_copies_no_recursion_at_os() {
+    let calls = m32_tree_calls(6, crate::pipeline::Options::size());
+    assert!(calls <= 3, "a recursion was copied into itself at -Os, {calls} calls of it");
+}
+
+/// gcc rejects the recursive edge of quicksort and bintree at -O2
+/// ("max-inline-insns-auto limit reached", growth 25-28 and 15-22 against 15)
+/// and takes it at -O3 (30): a body that grows past 15 is copied at -O3 only.
+#[test]
+fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
+    let o2 = m32_tree_calls(6, crate::pipeline::Options::default());
+    let o3 = m32_tree_calls(6, crate::pipeline::Options::speed());
+    assert!(o2 <= 3, "copied at -O2, {o2} calls");
+    assert!(o3 > 8, "not copied at -O3, {o3} calls");
+}
+
+/// gcc's dump sizes fib at 12 (edge growth 6; 13 and 7 here, before the
+/// pipeline merges its returns): the bar of the recursive edge
+/// is read in those units, not in `gcc_insns` (fib 8, quicksort 18 against
+/// gcc's 34, which let quicksort and bintree grow 490 -> 1218 and 449 -> 1464
+/// bytes at m32 -O2).
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_gcc_size_counts_a_branch_a_call_and_its_arguments_as_gcc_does() {
+    let module = parsed(&tree_recursion(0).replace("@tree", "@fib"));
+    let (_, _, fib) =
+        module.functions().find(|(_, _, f)| !f.is_declaration() && f.parameters().len() == 1).expect("fib");
+    assert_eq!((llrm_gpl_gcc::gcc_size(fib), llrm_gpl_gcc::recursive_edge_growth(fib)), (13, 7));
+}
+
+/// bench bintree's `insert` (three parameters, gcc size 22, edge growth 16 by
+/// gcc's dump) was peeled into its caller at m32 -O2 (code 257 -> 299 bytes)
+/// where gcc rejects it ("max-inline-insns-auto limit reached"): the call
+/// term of the bar scaled with the parameters, 10 for three, which gave it
+/// growth 12.
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_the_edge_growth_of_a_three_parameter_recursion_is_its_size_less_the_call() {
+    let module = parsed(
+        "define void @insert(ptr %t, i32 %at, i32 %node) {
+b0:
+  %n3 = mul i32 %node, 3
+  %p = getelementptr i32, ptr %t, i32 %n3
+  %k = load i32, ptr %p
+  %a3 = mul i32 %at, 3
+  %q = getelementptr i32, ptr %t, i32 %a3
+  %k2 = load i32, ptr %q
+  %lt = icmp slt i32 %k, %k2
+  %side = select i1 %lt, i32 1, i32 2
+  %i = add i32 %a3, %side
+  %s = getelementptr i32, ptr %t, i32 %i
+  %c = load i32, ptr %s
+  %z = icmp eq i32 %c, 0
+  br i1 %z, label %put, label %rec
+
+put:
+  store i32 %node, ptr %s
+  ret void
+
+rec:
+  call void @insert(ptr %t, i32 %c, i32 %node)
+  ret void
+}
+",
+    );
+    let (_, _, insert) = module.functions().next().expect("insert");
+    let size = llrm_gpl_gcc::gcc_size(insert);
+    assert_eq!(llrm_gpl_gcc::recursive_edge_growth(insert), size - 6);
+    assert!(size - llrm_gpl_gcc::recursive_edge_growth(insert) == 6, "the call term scales with parameters");
+}
+
+/// gcc-derived code (`llrm-gpl-gcc`, GPL-3.0-or-later) is optional and off: a
+/// default build must link none of it. Reads the manifests: the dependency is
+/// `optional`, no `default` feature set names `gcc-gpl`, and no other crate
+/// depends on the crate.
+#[test]
+fn test_the_default_build_links_no_gcc_derived_crate() {
+    let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = here.join("../../..");
+    let transforms = std::fs::read_to_string(here.join("Cargo.toml")).unwrap();
+    let workspace = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let dependency =
+        transforms.lines().find(|line| line.starts_with("llrm-gpl-gcc = ")).expect("the optional dependency");
+    assert!(dependency.contains("optional = true"), "llrm-gpl-gcc is a plain dependency: {dependency}");
+    for (name, text) in [("llrm-transforms", &transforms), ("the workspace root", &workspace)] {
+        let default = text.lines().find(|line| line.trim_start().starts_with("default = ")).unwrap_or("");
+        assert!(!default.contains("gcc-gpl"), "{name} enables gcc-gpl by default: {default}");
+    }
+    for entry in std::fs::read_dir(root.join("crates"))
+        .unwrap()
+        .flatten()
+        .flat_map(|group| std::fs::read_dir(group.path()).unwrap().flatten())
+    {
+        let manifest = entry.path().join("Cargo.toml");
+        let Ok(text) = std::fs::read_to_string(&manifest) else { continue };
+        let owner = entry.file_name();
+        if owner == "llrm-gpl-gcc" || owner == "llrm-transforms" {
+            continue;
+        }
+        assert!(!text.contains("llrm-gpl-gcc"), "{} depends on the GPL crate", manifest.display());
+    }
+}
+
+/// The bar of the recursive edge (DEVIATE REC-2) as the 12 self-recursive
+/// functions of the corpus meet it: gcc 15 copies fib, hanoi, recpow and
+/// rectwo into themselves at -O2 (edge growth <= 15) and at -O3 (<= 30) also
+/// bintree `walk`, recchop `chop`, x_hanoi2 `mv`, quicksort `sort` and queens
+/// `place`, never x_mergesort `msort` (growth 67). Fitted on these, `gcc_insns`
+/// of queens 22 sits on the m32 O3 edge.
+#[test]
+fn test_the_m32_edge_bar_makes_gccs_decision_for_every_corpus_recursion() {
+    // (module, function, copied at -O2, copied at -O3)
+    let table: [(&str, &str, &str, bool, bool); 10] = [
+        ("fib", include_str!("testdata/rec2/fib.ll"), "fib_", true, true),
+        ("hanoi", include_str!("testdata/rec2/hanoi.ll"), "hanoi_", true, true),
+        ("recpow", include_str!("testdata/rec2/recpow.ll"), "power_", true, true),
+        ("rectwo", include_str!("testdata/rec2/rectwo.ll"), "paths_", true, true),
+        ("bintree", include_str!("testdata/rec2/bintree.ll"), "walk_", false, true),
+        ("recchop", include_str!("testdata/rec2/recchop.ll"), "chop_", false, true),
+        ("x_hanoi2", include_str!("testdata/rec2/x_hanoi2.ll"), "mv_", false, true),
+        ("quicksort", include_str!("testdata/rec2/quicksort.ll"), "sort_", false, true),
+        ("queens", include_str!("testdata/rec2/queens.ll"), "place_", false, true),
+        ("x_mergesort", include_str!("testdata/rec2/x_mergesort.ll"), "msort_", false, false),
+    ];
+    let m32 = crate::indvars::tests::m32();
+    let (o2_bar, o3_bar) = m32.tti().and_then(|tti| tti.recursive_edge_growth()).expect("m32 states the bar");
+    for (name, text, function, o2, o3) in table {
+        let module = parsed(text);
+        let (_, _, body) = module
+            .functions()
+            .find(|(_, global, _)| global.name.as_deref() == Some(function))
+            .unwrap_or_else(|| panic!("{name}: no {function}"));
+        let insns = crate::inline::recursive_edge_growth(body);
+        assert_eq!(
+            (insns <= o2_bar, insns <= o3_bar),
+            (o2, o3),
+            "{name} {function}: gcc_insns {insns}, bars {o2_bar}/{o3_bar}"
+        );
+    }
+}
+
+/// A speed trial of three calls to one dying callee credited the callee's bytes
+/// three times (the sum ran over the sites): 7 calls to a 139-byte callee
+/// counted 973 bytes gone, the trial read -338 B of growth where the built
+/// code grew 496, and the priced m68k rule lost 22 KB at -O2.
+#[test]
+fn test_a_trial_credits_a_dying_callee_once_however_many_sites_it_inlines() {
+    let module = parsed(
+        "define internal i32 @h(i32 %x) {
+b1:
+  %a = add i32 %x, 1
+  %b = mul i32 %a, 3
+  ret i32 %b
+}
+
+define i32 @f(i32 %x) {
+b1:
+  %p = call i32 @h(i32 %x)
+  %q = call i32 @h(i32 %p)
+  %r = call i32 @h(i32 %q)
+  ret i32 %r
+}
+",
+    );
+    let h = module.globals.iter().position(|global| global.name.as_deref() == Some("h")).expect("h");
+    let h = llrm_mir::context::GlobalId(h as u32);
+    let one = super::dying_callees_bytes(&module, &[h], |body| body.walk().count() as i64);
+    let three = super::dying_callees_bytes(&module, &[h, h, h], |body| body.walk().count() as i64);
+    assert_eq!(one, 3);
+    assert_eq!(three, one, "the callee goes once");
 }

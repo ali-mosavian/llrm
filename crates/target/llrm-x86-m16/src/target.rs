@@ -185,6 +185,7 @@ impl Machine for Dos {
             registers: self.registers as u32,
             scaled_index_insns: scaled_index_insns as u32,
             huge_space: crate::spaces().huge,
+            address_registers: native_address_registers(&self.address_forms),
             inline_size_guard: true,
             float_code_size_percent: 200,
             unroll_size_few_trips: (3, 30),
@@ -264,6 +265,9 @@ impl Machine for Dos {
             return llrm_mir::target::Tuning::PIN;
         }
         llrm_mir::target::Tuning {
+            // Trial: arm64's -Os unrotate rule (header priced against the
+            // branches removed).
+            rotation_header_priced_at_size: true,
             max_stores_per_memset: 4,
             max_stores_per_memcpy: 2,
             max_stores_per_memmove: 2,
@@ -281,6 +285,7 @@ impl Machine for Dos {
             // The user's rate for m16 at speed (one clock is two bytes): the
             // `timings.times` row the judge reads too.
             speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
+            price_fills: true,
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,
@@ -289,6 +294,14 @@ impl Machine for Dos {
             unroll_threshold: Some(0),
             unroll_max_percent_threshold_boost: Some(100),
             x87_stack_slots: Some(8),
+            x87_share_negated_products: true,
+            // DEVIATE SLOTS-LOOPWIDTH (owner greedy-subreg, exit 2026-11-20):
+            // the pin's ColorSlot shares any two slots whose ranges do not
+            // overlap. Here a word shares no slot a double word holds through a
+            // loop: stft_fixed -O2 -523266 clk and -3 B, jpeg_fixed -Os -2 B;
+            // open rows (oversight rules): jpeg_single C -Os +1 B (-217 clk),
+            // jpeg_fixed and jpeg_single nib -O2 +1 B each (-1 clk).
+            slots_loop_width_rule: true,
             // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
             // (partial and runtime on) copied matmul's outer body, 455 code
             // bytes against 297, past Borland C's 298.
@@ -312,7 +325,6 @@ impl Machine for Dos {
             // it), and frame reloads in sum_three. Exit 2026-11-30: the
             // bytes those rows hold above main recovered by the register
             // allocator, then re-price the chain.
-            inline_size_guard_at_speed: true,
             // DEVIATE: a constant offset is a displacement of the access at
             // m16; behind a sunk phi it costs an add and a register
             // (qbsp `r_point_leaf`: two `[bx+si+2|4]` loads became an index
@@ -363,6 +375,22 @@ impl Machine for Dos {
 
     fn segment_registers(&self) -> i64 {
         SEGMENT_REGISTERS
+    }
+
+    /// DEVIATE: under `-Os` a header is copied only when it has four
+    /// instructions or fewer (`RotationMaxHeaderSize` is 16 in the pin,
+    /// `hasMinSize` alone lowers it; LoopRotation.cpp#L80-L85). Fitted,
+    /// sweep-confirmed: code bytes m16 -Os, QCport 65 modules + 71 vsgcc
+    /// programs, by limit: 16 = 262435 + 14831, 4 = 262098 + 14745 (-337 B,
+    /// -86 B) with no object larger than at 16; 3 and 2 save more (261979,
+    /// 260491) but x_mergesort +21 and, at 2, x_base64 +23 and d_alias +20.
+    /// Not derived from the sheet: a copied header (cmp + jcc, 4 B or more)
+    /// outweighs the 2-3 B jmp rotation removes, so the gain is the follow-on
+    /// (an unrotated counted loop loses its SCEV trip count, a `div` appears;
+    /// sum loop: 21 B rotated, 23 B with -fno-tree-ch). Exit 2026-11-20: a
+    /// priced follow-on replaces the 4, or the pin's 16 returns.
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        Some(4)
     }
 
     fn two_address(&self) -> bool {
@@ -424,6 +452,14 @@ pub fn address_forms(
     ]
 }
 
+/// The registers the cheapest address form names: its base class and its
+/// index class (the frame's register is in neither); none where the form has
+/// no classes.
+fn native_address_registers(forms: &[AddressForm]) -> Option<u32> {
+    let native = forms.iter().filter(|form| !form.secondary).min_by_key(|form| form.use_cost)?;
+    Some((native.bases? + native.indices?) as u32)
+}
+
 /// `arch`'s (one of `timings::ARCHS`) price of each operation, as the
 /// instructions lowering picks for it.
 pub fn costs(arch: &str) -> OperationCosts {
@@ -468,6 +504,28 @@ mod tests {
 
     use super::Dos;
 
+    /// The x87 byte rows were a flat 6: a register `faddp` (2 B encoded) priced
+    /// at 3x, and the memory operand of `fadd m` at 0 (`x87_add_m` =
+    /// `x87_add`), so folding a load looked free at -Os. A register form is
+    /// the integer register row.
+    #[test]
+    fn m16_x87_byte_rows_split_register_and_memory_forms() {
+        let sizes = super::DESCRIPTION.size_costs();
+        // Mean encoded bytes of the 16 float bench programs at -Os, per form.
+        for (form, estimate, measured) in [
+            ("register add", sizes.float_add, 2.00),
+            ("fld m", sizes.float_load, 3.28),
+            ("fstp m", sizes.float_store, 2.92),
+            ("add m", sizes.float_add + sizes.float_load_folded, 3.69),
+            ("fstp st", sizes.float_release, 2.00),
+        ] {
+            let ratio = estimate as f64 / measured;
+            assert!((0.85..=2.15).contains(&ratio), "{form}: {estimate} B estimated, {measured} B encoded");
+        }
+        assert_eq!(sizes.float_add, sizes.add, "a register x87 add is the integer register row");
+        assert!(sizes.float_load_folded > 0, "a memory operand costs bytes over the register form");
+    }
+
     /// BASIC's convention (MIR's cc 1000, `pascal far`) had no row in
     /// calling.toml, so the DAG path took a call of it to destroy every
     /// register, SI and DI too, and spilled the pointer it kept in SI (the
@@ -479,6 +537,17 @@ mod tests {
         assert_eq!(found.cc.as_deref(), Some("basic"));
         assert!(found.clobbered.iter().all(|name| !matches!(name.as_str(), "si" | "di")), "{:?}", found.clobbered);
         assert!(found.clobbered.iter().any(|name| name == "bx"), "{:?}", found.clobbered);
+    }
+
+    /// An address in real mode is a base (bx) and an index (si or di), the
+    /// frame's bp in neither: three registers, where six hold values. LSR's
+    /// pressure on the address class read the six.
+    #[test]
+    fn the_cheapest_address_form_names_three_registers_of_six() {
+        let costs = super::costs("486");
+        let dos = Dos { address_forms: super::address_forms(&costs, 1), costs, ..Dos::default() };
+        let tti = dos.tti().expect("m16 states its cost model");
+        assert_eq!((tti.address_registers(), tti.number_of_gpr_registers()), (3, 6));
     }
 
     /// LSR reads the addressing hooks of the model: real mode's `[bx+si]` is
@@ -579,6 +648,31 @@ mod encoding_tests {
         );
         let clocks = dos.costs();
         assert_eq!(clocks.argument, clocks.load + clocks.store);
+    }
+
+    /// `lea` in real mode is 3 bytes in words (`8D 40 07`), 5 as dwords behind
+    /// both prefixes (`67 66 8D 40 07`) and 6 with a base, an index and a
+    /// displacement (`67 66 8D 44 01 07`; jwasm). The table priced every dword
+    /// form at the word form plus the prefixes, 8 of its unit (twice the
+    /// bytes): inc + add (5 bytes) lost to the six-byte `lea`.
+    #[test]
+    fn a_lea_is_priced_at_its_encoding_by_width_and_parts() {
+        use llrm_mir::target::{Machine, three_operand, three_operand_of};
+        let sized = super::Dos::default().size_costs();
+        let forms = super::address_forms(&sized, 0);
+        let price = |width, word| three_operand(&sized, &forms, width, 2, 1, word).expect("a form");
+        let three = three_operand_of(&sized, &forms, 4, 2, 1, false, 3).expect("a form");
+        assert_eq!((price(2, true), price(4, false), three), (2 * 3, 2 * 5, 2 * 6));
+    }
+
+    /// A fill's bytes are the instructions it becomes as encoded: `rep stos`
+    /// 2, `push es` and `pop es` 1 each, two 3-byte loads of a word. The
+    /// doubled `mov_ri` estimate made it 18, which the loop-idiom pass then
+    /// cut by a fitted three quarters.
+    #[test]
+    fn a_fill_is_priced_at_its_encoded_bytes() {
+        use llrm_mir::target::Machine;
+        assert_eq!(super::Dos::default().size_costs().fill, 2 + 2 + 2 + 3 + 3);
     }
 
     /// The shared call price is read off the 486 table and the byte table:

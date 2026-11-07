@@ -237,10 +237,11 @@ fn a_pointer_used_as_an_integer_and_as_a_base_gets_an_address_register() {
 
 /// Loop strength reduction prices addressing modes through the target's
 /// `Tti`. With the m68k one the array walk gets a pointer induction variable
-/// (a `phi ptr`, an `(An)+` access); with a scaled index (the 68020's, and
-/// x86's) it stays indexed.
+/// (a `phi ptr`, an `(An)+` access); a scaled index (the 68020's) does not
+/// change that since the m68k prefers post-indexed addressing: `(An)+` is free.
+/// It used to keep the walk indexed, until the postinc preference (row 29).
 #[test]
-fn the_m68k_tti_strength_reduces_an_array_walk_and_a_scaled_index_does_not() {
+fn the_m68k_tti_strength_reduces_an_array_walk_with_or_without_a_scaled_index() {
     let ir = "define i32 @k(ptr %p, i32 %n) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  %s1 = add i32 %s, %v\n  %i1 = add i32 %i, 1\n  %e = icmp slt i32 %i1, %n\n  br i1 %e, label %l, label %x\nx:\n  ret i32 %s1\n}";
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).unwrap();
     let ours = llrm_mir::print::module(&llrm_m68k::compile::mid_end(&module).unwrap());
@@ -253,7 +254,7 @@ fn the_m68k_tti_strength_reduces_an_array_walk_and_a_scaled_index_does_not() {
         .unwrap(),
     );
     assert!(ours.contains("phi ptr"), "{ours}");
-    assert!(!default.contains("phi ptr"), "{default}");
+    assert!(default.contains("phi ptr"), "{default}");
 }
 
 /// A guard that returns early over a loop branches forward to the cold

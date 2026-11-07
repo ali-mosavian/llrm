@@ -19,14 +19,13 @@
 //! instruction yet`), which `--isel=shadow` falls back on. Rows added
 //! to [`build`] each carry an encoder byte check. Exit: C2..Cn.
 
-use std::collections::HashMap;
-
 use llrm_codegen::backend::selectiondag::isd::ISD;
-use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
 use llrm_codegen::model::lir::SrcLoc;
 use llrm_dagisel::generated::aarch64::aarch64_apple_m1::MACHINE_OPCODES;
 use llrm_lir::registers::RegId;
+use llrm_support::hash::HashMap;
 
 use super::function::Selected;
 use super::globals::Globals;
@@ -277,7 +276,15 @@ fn memory_form(name: &str) -> Option<MemoryForm> {
     };
     let (width, bytes, sign) = match element {
         // `LDRSui` and `LDRDui` move a float
-        "S" | "D" => (Width::W, if element == "S" { 4 } else { 8 }, false),
+        "S" | "D" | "Q" => (
+            Width::W,
+            match element {
+                "S" => 4,
+                "D" => 8,
+                _ => 16,
+            },
+            false,
+        ),
         "BB" => (Width::W, 1, false),
         "HH" => (Width::W, 2, false),
         "W" => (Width::W, 4, false),
@@ -289,7 +296,7 @@ fn memory_form(name: &str) -> Option<MemoryForm> {
         "SW" => (Width::X, 4, true),
         _ => return None,
     };
-    Some(MemoryForm { width, bytes, sign, store, form, fp: matches!(element, "S" | "D") })
+    Some(MemoryForm { width, bytes, sign, store, form, fp: matches!(element, "S" | "D" | "Q") })
 }
 
 /// `CSELWr`, `CSINCXr` and the rest: the select and its width.
@@ -446,6 +453,15 @@ fn build(
     }
     let width = |suffix: &str| if suffix.starts_with('W') { Width::W } else { Width::X };
     // `SMADDLrrr`, `UMULHrr`: a 64-bit result, no width letter.
+    // `EXTRWrri`: the stem has an `X` in it.
+    if let Some(rest) = name.strip_prefix("EXTR") {
+        return match operands {
+            [Operand::Reg(rn), Operand::Reg(rm), Operand::Imm(lsb)] if matches!(rest, "Wrri" | "Xrri") => {
+                Ok(Inst::Extract { width: width(rest), rd, rn: *rn, rm: *rm, lsb: *lsb as u8 })
+            }
+            _ => Err(format!("{name}: operands are not those of its form")),
+        };
+    }
     let long = ["SMADDL", "SMSUBL", "UMADDL", "UMSUBL"]
         .iter()
         .find_map(|stem| name.strip_prefix(stem).map(|rest| (*stem, rest)));
@@ -703,6 +719,9 @@ struct Emitter<'a> {
     ops: Vec<Op>,
     /// The constant pool entries the function has used so far.
     pool: std::cell::RefCell<Vec<PoolEntry>>,
+    /// The register each phi's edges copy into, by the phi's register
+    /// (`PHIElimination`'s `IncomingReg`): the block's first copies read it.
+    incoming: HashMap<u32, Reg>,
 }
 
 impl Emitter<'_> {
@@ -715,6 +734,19 @@ impl Emitter<'_> {
         }
         let one = self.mf.gpr();
         self.vregs.insert(number, one);
+        one
+    }
+
+    /// The register the edges of `phi` copy into, made on first use.
+    fn incoming_of(
+        &mut self,
+        phi: &super::function::PhiCopy,
+    ) -> Reg {
+        if let Some(&one) = self.incoming.get(&phi.dst) {
+            return one;
+        }
+        let one = if phi.float { Reg::Fpr(self.mf.fpr()) } else { Reg::Gpr(self.mf.gpr()) };
+        self.incoming.insert(phi.dst, one);
         one
     }
 
@@ -960,11 +992,8 @@ impl Emitter<'_> {
                 .iter()
                 .filter(|p| p.to == to)
                 .map(|p| {
-                    if p.float {
-                        (Reg::Fpr(this.fvreg(p.dst)), Reg::Fpr(this.fvreg(p.src)))
-                    } else {
-                        (Reg::Gpr(this.vreg(p.dst)), Reg::Gpr(this.vreg(p.src)))
-                    }
+                    let src = if p.float { Reg::Fpr(this.fvreg(p.src)) } else { Reg::Gpr(this.vreg(p.src)) };
+                    (this.incoming_of(p), src)
                 })
                 .filter(|(dst, src)| dst != src)
                 .collect();
@@ -1107,6 +1136,44 @@ impl Emitter<'_> {
         }
     }
 
+    /// `pointer_at` for an access of `bytes`: an offset the instruction cannot
+    /// encode (scaled unsigned 12 bits, or unscaled signed 9) is added to the
+    /// base first, as selecting the access at `ptr + offset` does.
+    fn access_at(
+        &mut self,
+        value: SDValue,
+        offset: u64,
+        bytes: u8,
+    ) -> Result<Addr, String> {
+        let legal = |imm: i64| {
+            let size = i64::from(bytes);
+            (imm >= 0 && imm % size == 0 && imm / size <= 4095) || (-256..=255).contains(&imm)
+        };
+        let Addr::Offset { base, imm } = self.pointer_at(value, offset)? else { return self.pointer_at(value, offset) };
+        if legal(imm) {
+            return Ok(Addr::Offset { base, imm });
+        }
+        let (mut base, mut rest) = (base, imm);
+        // The high part first (`add rd, rn, #hi, lsl #12`), then the low.
+        for (part, shift12) in [(rest >> 12, true), (rest & 0xfff, false)] {
+            if part == 0 || (!shift12 && legal(part)) {
+                continue;
+            }
+            let rd = self.mf.gpr();
+            self.ops.push(Op::I(Inst::AddSubImm {
+                op: AddSub { subtract: false, set_flags: false },
+                width: Width::X,
+                rd,
+                rn: base,
+                imm12: part as u16,
+                shift12,
+            }));
+            base = rd;
+            rest -= if shift12 { part << 12 } else { part };
+        }
+        Ok(Addr::Offset { base, imm: rest })
+    }
+
     /// `str q<n>, [slot, #offset]`: an unnamed `q` argument register saved
     /// whole.
     fn save_q(
@@ -1187,7 +1254,7 @@ impl Emitter<'_> {
                         reg: scalar,
                     },
                 };
-                let addr = self.pointer_at(operand(1), offset)?;
+                let addr = self.access_at(operand(1), offset, bytes)?;
                 self.ops.push(Op::I(Inst::Store { mem, addr, mmo: mmo.clone() }));
             }
             return Ok(());
@@ -1199,12 +1266,12 @@ impl Emitter<'_> {
             let mut loaded = Vec::new();
             for &(bytes, offset) in chunk {
                 let mem = self.piece(bytes);
-                let addr = self.pointer_at(operand(2), offset)?;
+                let addr = self.access_at(operand(2), offset, bytes)?;
                 self.ops.push(Op::I(Inst::Load { mem, addr, mmo: mmo.clone() }));
                 loaded.push(mem);
             }
-            for (&(_, offset), mem) in chunk.iter().zip(loaded) {
-                let addr = self.pointer_at(operand(1), offset)?;
+            for (&(bytes, offset), mem) in chunk.iter().zip(loaded) {
+                let addr = self.access_at(operand(1), offset, bytes)?;
                 self.ops.push(Op::I(Inst::Store { mem, addr, mmo: mmo.clone() }));
             }
         }
@@ -1239,17 +1306,50 @@ impl Emitter<'_> {
         }
     }
 
-    /// The memory operand of the load or store `id`: its volatile flag and
-    /// the object its address names.
+    /// How far `value`, an address, is into the object `object_of` names: the
+    /// constants the nodes that made it add (the offset of a
+    /// `MachineMemOperand`'s pointer).
+    fn displacement_of(
+        &self,
+        value: SDValue,
+        depth: u32,
+    ) -> Option<i64> {
+        if depth > 6 {
+            return None;
+        }
+        let node = self.dag.node(value);
+        match (&node.data, node.opcode) {
+            (NodeData::Global { offset, .. }, ISD::TargetGlobalAddress) => Some(*offset),
+            (NodeData::FrameIndex(index), ISD::TargetFrameIndex | ISD::FrameIndex) if *index >= 0 => Some(0),
+            (_, ISD::Machine(code)) if matches!(opcode_name(code), Some("ADRP" | "MOVaddr")) => {
+                self.displacement_of(*node.ops.first()?, depth + 1)
+            }
+            (_, ISD::Machine(code)) if opcode_name(code) == Some("ADDXri") => {
+                let (base, added, shift) = (*node.ops.first()?, *node.ops.get(1)?, node.ops.get(2).copied());
+                if shift.is_some_and(|shift| self.dag.constant(shift) != Some(0)) {
+                    return None;
+                }
+                Some(self.displacement_of(base, depth + 1)? + i64::try_from(self.dag.constant(added)?).ok()?)
+            }
+            _ => None,
+        }
+    }
+
+    /// The memory operand of the load or store `id`: its volatile flag, the
+    /// object its address names and, where `at` (the offset from the address
+    /// node, `None` for a form that is not a plain offset) and the node say,
+    /// how far into it.
     fn memory_operand(
         &self,
         id: u32,
         store: bool,
+        at: Option<i64>,
     ) -> MemOperand {
         let node = self.dag.node(SDValue { node: id, res: 0 });
         let base = node.ops.get(usize::from(store)).copied();
         let object = base.and_then(|base| self.object_of(base, 0)).unwrap_or_default();
-        MemOperand { object, volatile: self.dag.volatile_accesses.contains(&id), ..MemOperand::default() }
+        let offset = base.and_then(|base| Some(self.displacement_of(base, 0)? + at?));
+        MemOperand { object, offset, volatile: self.dag.volatile_accesses.contains(&id) }
     }
 
     fn memory(
@@ -1314,7 +1414,12 @@ impl Emitter<'_> {
         };
         // A selected node keeps the flag of the access it folded
         // (`set_node_mem_refs`).
-        let mmo = self.memory_operand(id, access.store);
+        let at = match &addr {
+            Addr::Offset { imm, .. } | Addr::Pre { imm, .. } => Some(*imm),
+            Addr::Post { .. } => Some(0),
+            _ => None,
+        };
+        let mmo = self.memory_operand(id, access.store, at);
         if access.fp {
             let reg = match fvalue {
                 Some(reg) => reg,
@@ -1376,9 +1481,18 @@ impl Emitter<'_> {
                     NodeData::PhysReg(id) => {
                         let (dst, src) = (self.mf.fpr(), fpr_of(id)?);
                         self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(src) });
+                        if node.values[0] == EVT::Simple(MVT::F128) {
+                            self.mf.wide.push(Reg::Fpr(dst));
+                        }
                         dst
                     }
-                    NodeData::Register(number) => self.fvreg(number),
+                    NodeData::Register(number) => {
+                        let one = self.fvreg(number);
+                        if node.values[0] == EVT::Simple(MVT::F128) {
+                            self.mf.wide.push(Reg::Fpr(one));
+                        }
+                        one
+                    }
                     other => return Err(format!("a register operand that is {other:?}")),
                 };
                 self.fvalues.insert((id, 0), value);
@@ -1433,6 +1547,9 @@ impl Emitter<'_> {
                 let Operand::Fpr(src) = self.operand(node.ops[2])? else {
                     return Err("a float copy of a constant".into());
                 };
+                if self.dag.value_type(node.ops[2]) == EVT::Simple(MVT::F128) {
+                    self.mf.wide.extend([Reg::Fpr(dst), Reg::Fpr(src)]);
+                }
                 self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(src) });
                 Ok(())
             }
@@ -1773,12 +1890,13 @@ pub fn emit(
         tables: &first.tables,
         edges_made: 0,
         mf: MFunc::new(name),
-        values: HashMap::new(),
-        vregs: HashMap::new(),
-        fvregs: HashMap::new(),
-        fvalues: HashMap::new(),
+        values: HashMap::default(),
+        vregs: HashMap::default(),
+        fvregs: HashMap::default(),
+        fvalues: HashMap::default(),
         ops: Vec::new(),
         pool: std::cell::RefCell::new(Vec::new()),
+        incoming: HashMap::default(),
     };
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
@@ -1792,6 +1910,18 @@ pub fn emit(
         for &(reg, vreg) in &block.live_ins {
             let dst = if is_fpr(reg) { Reg::Fpr(emitter.fvreg(vreg)) } else { Reg::Gpr(emitter.vreg(vreg)) };
             emitter.ops.push(Op::Copy { dst, src: reg_of(reg)? });
+        }
+        // `PHIElimination`: each phi of this block reads the register its edges
+        // copied into.
+        let mut headed: Vec<u32> = Vec::new();
+        for phi in blocks.iter().flat_map(|one| one.phis.iter()).filter(|phi| Some(&phi.to) == block.layout.get(at)) {
+            if headed.contains(&phi.dst) {
+                continue;
+            }
+            headed.push(phi.dst);
+            let src = emitter.incoming_of(phi);
+            let dst = if phi.float { Reg::Fpr(emitter.fvreg(phi.dst)) } else { Reg::Gpr(emitter.vreg(phi.dst)) };
+            emitter.ops.push(Op::Copy { dst, src });
         }
         let mut places: Vec<Option<SrcLoc>> = Vec::new();
         for unit in &block.units {
@@ -1814,5 +1944,7 @@ pub fn emit(
     // The blocks made for critical edges lie after the function's own.
     emitter.mf.blocks.extend(edges);
     emitter.mf.pool = emitter.pool.take();
+    emitter.mf.block_ids = first.layout.clone();
+    emitter.mf.edge_probs = first.edge_probs.clone();
     Ok(emitter.mf)
 }

@@ -44,9 +44,14 @@ use llrm_support::hash::HashMap;
 use super::actions::TargetLowering;
 use super::dag::{BooleanContents, NodeData, Rauw, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
+use super::libcalls::{self, Cmp3, Libcall};
 use super::lowering::TypeAction;
 use super::mvt::{EVT, MVT};
 use super::x86_lowering::{ES, x86isd};
+
+/// The width of the C `int` the soft-float routines take for a conversion: a
+/// 32-bit integer is passed as is, a narrower one is extended to it.
+const INT_BITS: u32 = 32;
 
 /// A node's place in the walk (the pin's `NodeIdFlags` and its counts).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,6 +79,9 @@ pub struct TypeLegalizer<'a> {
     replaced: HashMap<SDValue, SDValue>,
     promoted: HashMap<SDValue, SDValue>,
     expanded: HashMap<SDValue, (SDValue, SDValue)>,
+    /// A float value and the integer of its width that stands for it
+    /// (`SoftenedFloats`).
+    softened: HashMap<SDValue, SDValue>,
     /// The target whose routines a division calls (`None`: no library calls).
     target: Option<&'a dyn llrm_target::Target>,
     /// The target's custom lowerings, asked before a node with an illegal type
@@ -93,6 +101,18 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// `getShiftAmountTy` for a shift of `vt` (`i8` on x86).
+    /// The type a library shift takes its amount in: `EVT::getIntegerVT(
+    /// getIntSize())`.
+    fn libcall_shift_amount_type(
+        &self,
+        vt: EVT,
+    ) -> EVT {
+        if self.tli.types.narrow_library_shift() {
+            return self.shift_amount_type(vt);
+        }
+        EVT::integer(self.tli.types.int_size())
+    }
+
     fn shift_amount_type(
         &self,
         vt: EVT,
@@ -116,6 +136,7 @@ impl<'a> TypeLegalizer<'a> {
             replaced: HashMap::default(),
             promoted: HashMap::default(),
             expanded: HashMap::default(),
+            softened: HashMap::default(),
             target: None,
             hooks: None,
         }
@@ -236,6 +257,10 @@ impl<'a> TypeLegalizer<'a> {
                     }
                     return Ok(true);
                 }
+                TypeAction::SoftenFloat => {
+                    self.soften_float_result(value)?;
+                    return Ok(true);
+                }
             }
         }
         Ok(false)
@@ -258,6 +283,7 @@ impl<'a> TypeLegalizer<'a> {
                 _ if self.custom_lower_node(n, operand_vt) => return Ok(true),
                 TypeAction::PromoteInteger => self.promote_integer_operand(n, at)?,
                 TypeAction::ExpandInteger => self.expand_integer_operand(n, at)?,
+                TypeAction::SoftenFloat => self.soften_float_operand(n, at)?,
             };
             if reanalyze {
                 self.set_id(n, NodeId::New);
@@ -441,6 +467,293 @@ impl<'a> TypeLegalizer<'a> {
         self.shift_const(u128::from(count), shifted)
     }
 
+    /// `GetSoftenedFloat`.
+    fn softened_float(
+        &self,
+        value: SDValue,
+    ) -> SDValue {
+        let value = self.remap(value);
+        *self.softened.get(&value).expect("operand softened before its user")
+    }
+
+    /// `SetSoftenedFloat`.
+    fn set_softened_float(
+        &mut self,
+        value: SDValue,
+        result: SDValue,
+    ) {
+        let value = self.remap(value);
+        let result = self.analyze_new_value(result);
+        self.softened.insert(value, result);
+    }
+
+    /// `SoftenFloatResult`: a float result becomes the integer of its width,
+    /// the operation a call to the routine the target names for it.
+    fn soften_float_result(
+        &mut self,
+        value: SDValue,
+    ) -> Result<(), LegalizeError> {
+        let vt = self.dag.value_type(value);
+        let (_, int) = self.tli.types.type_conversion(vt);
+        let result = match self.dag.opcode(value) {
+            op @ (ISD::FAdd | ISD::FSub | ISD::FMul | ISD::FDiv) => {
+                // `SoftenFloatRes_Binary`: `makeLibCall` of the softened
+                // operands.
+                let args =
+                    [self.softened_float(self.dag.operand(value, 0)), self.softened_float(self.dag.operand(value, 1))];
+                let call = self.tli.libcall_name(op, vt).and_then(|name| self.soft_call(name, &args, int));
+                call.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften: the target names no routine" })?
+            }
+            ISD::Load => {
+                // `SoftenFloatRes_LOAD`: the same load as an integer.
+                let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let NodeData::Mem(info) = self.dag.node(value).data else {
+                    unreachable!("a load has a memory operand")
+                };
+                let load = self.dag.get_load(int, chain, ptr, super::dag::MemInfo { mem_vt: int, ..info });
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: load.node, res: 1 });
+                load
+            }
+            ISD::VAArg => {
+                // `SoftenFloatRes_VAARG`: the same read as an integer.
+                let ops: Vec<SDValue> = (0..4).map(|at| self.dag.operand(value, at)).collect();
+                let read = self.dag.get_node_multi(ISD::VAArg, &[int, EVT::OTHER], &ops);
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: read.node, res: 1 });
+                SDValue { node: read.node, res: 0 }
+            }
+            op @ (ISD::SIntToFp | ISD::UIntToFp | ISD::FpExtend | ISD::FpRound) => {
+                // `SoftenFloatRes_XINT_TO_FP`, `_FP_EXTEND`, `_FP_ROUND`: the
+                // conversion routine over the operand as the integer that
+                // stands for it.
+                let operand = self.dag.operand(value, 0);
+                let from = self.dag.value_type(operand);
+                let unsupported = |what| LegalizeError::Unsupported { op, ty: vt, what };
+                let (arg, call) = if from.is_floating_point() {
+                    let (EVT::Simple(from), EVT::Simple(to)) = (from, vt) else {
+                        return Err(unsupported("soften a conversion between these floats"));
+                    };
+                    (
+                        self.softened_float(operand),
+                        if op == ISD::FpExtend { Libcall::FpExt(from, to) } else { Libcall::FpRound(from, to) },
+                    )
+                } else {
+                    let bits = from.size_in_bits();
+                    let extension = if op == ISD::SIntToFp { ISD::SignExtend } else { ISD::ZeroExtend };
+                    let arg =
+                        if bits < INT_BITS { self.dag.get_node(extension, EVT::I32, &[operand]) } else { operand };
+                    let (EVT::Simple(to), true) = (vt, op != ISD::FpExtend) else {
+                        return Err(unsupported("soften a conversion to this float"));
+                    };
+                    let int = if bits <= INT_BITS { MVT::I32 } else { MVT::I64 };
+                    (arg, if op == ISD::SIntToFp { Libcall::SIntToFp(int, to) } else { Libcall::UIntToFp(int, to) })
+                };
+                let name = libcalls::name(call).ok_or(unsupported("soften a conversion between these types"))?;
+                self.soft_c_call(name, &[arg], int, op, vt)?
+            }
+            ISD::FNeg => {
+                // `SoftenFloatRes_FNEG`: the sign bit flipped.
+                let sign = self.dag.get_constant(1u128 << (int.size_in_bits() - 1), int);
+                self.dag.get_node(ISD::Xor, int, &[self.softened_float(self.dag.operand(value, 0)), sign])
+            }
+            ISD::FAbs => {
+                // `SoftenFloatRes_FABS`: the sign bit cleared.
+                let mask = self.dag.get_constant((1u128 << (int.size_in_bits() - 1)) - 1, int);
+                self.dag.get_node(ISD::And, int, &[self.softened_float(self.dag.operand(value, 0)), mask])
+            }
+            ISD::Select => {
+                // `SoftenFloatRes_SELECT`: a select of the integers.
+                let (cond, a, b) = (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
+                self.dag.get_node(ISD::Select, int, &[cond, self.softened_float(a), self.softened_float(b)])
+            }
+            ISD::ConstantFP => {
+                // `SoftenFloatRes_ConstantFP`: the constant's bits.
+                let NodeData::ConstFp { bits } = self.dag.node(value).data else {
+                    unreachable!("a float constant has bits")
+                };
+                self.dag.get_constant(bits, int)
+            }
+            // `SoftenFloatRes_UNDEF`
+            ISD::Undef => self.dag.get_undef(int),
+            ISD::BitCast if !self.dag.value_type(self.dag.operand(value, 0)).is_floating_point() => {
+                // `SoftenFloatRes_BITCAST`: the integer it was cast from.
+                self.dag.operand(value, 0)
+            }
+            op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "soften a float result" }),
+        };
+        self.set_softened_float(value, result);
+        Ok(())
+    }
+
+    /// `SoftenFloatOperand`: a float operand read as the integer that
+    /// stands for it. True if `n` is to be looked at again.
+    fn soften_float_operand(
+        &mut self,
+        n: u32,
+        at: usize,
+    ) -> Result<bool, LegalizeError> {
+        let node = SDValue { node: n, res: 0 };
+        let result = match self.dag.opcode(node) {
+            ISD::Store if at == 1 => {
+                // `SoftenFloatOp_STORE`: the integer stored in its place.
+                let (chain, value, ptr) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let NodeData::Mem(info) = self.dag.node(node).data else {
+                    unreachable!("a store has a memory operand")
+                };
+                let bits = self.softened_float(value);
+                let int = self.dag.value_type(bits);
+                self.dag.get_store(chain, bits, ptr, super::dag::MemInfo { mem_vt: int, ..info })
+            }
+            ISD::BitCast => self.softened_float(self.dag.operand(node, 0)),
+            ISD::SetCC if at < 2 => self.soften_setcc(node)?,
+            op @ (ISD::FpToSInt | ISD::FpToUInt) => {
+                // `SoftenFloatOp_FP_TO_XINT`: the routine over the integer
+                // that stands for the float.
+                let to = self.dag.value_type(node);
+                let arg = self.softened_float(self.dag.operand(node, 0));
+                let wide = to.size_in_bits() > 32;
+                let name = self
+                    .fp_to_xint_name(op == ISD::FpToSInt, wide, self.dag.value_type(self.dag.operand(node, 0)))
+                    .ok_or(LegalizeError::Unsupported {
+                        op,
+                        ty: to,
+                        what: "soften a conversion between these types",
+                    })?;
+                let call = self.soft_c_call(name, &[arg], if wide { to } else { EVT::I32 }, op, to)?;
+                if to.size_in_bits() < 32 { self.dag.get_node(ISD::Truncate, to, &[call]) } else { call }
+            }
+            ISD::CopyToReg if at == 2 => {
+                // `SoftenFloatOp_COPY_TO_REG`'s effect: the integer is copied.
+                let mut ops = self.dag.node(node).ops.clone();
+                ops[2] = self.softened_float(ops[2]);
+                let updated = self.dag.update_node_operands(n, &ops);
+                SDValue { node: updated, res: 0 }
+            }
+            op => {
+                return Err(LegalizeError::Unsupported {
+                    op,
+                    ty: self.dag.value_type(self.dag.operand(node, at)),
+                    what: "soften operand",
+                });
+            }
+        };
+        // Updated in place (`UpdateNodeOperands` found no twin): look at it
+        // again.
+        if result.node == n {
+            return Ok(true);
+        }
+        self.replace_value_with(node, result);
+        Ok(false)
+    }
+
+    /// compiler-rt's float-to-integer routine (`RTLIB::getFPTOSINT`).
+    fn fp_to_xint_name(
+        &self,
+        signed: bool,
+        wide: bool,
+        from: EVT,
+    ) -> Option<&'static str> {
+        let EVT::Simple(from) = from else { return None };
+        let int = if wide { MVT::I64 } else { MVT::I32 };
+        libcalls::name(if signed { Libcall::FpToSInt(from, int) } else { Libcall::FpToUInt(from, int) })
+    }
+
+    /// `makeLibCall` of the C routine `name` over `args`, its result of type
+    /// `ret`.
+    fn soft_c_call(
+        &mut self,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        op: ISD,
+        vt: EVT,
+    ) -> Result<SDValue, LegalizeError> {
+        self.soft_call(name, args, ret).ok_or(LegalizeError::Unsupported {
+            op,
+            ty: vt,
+            what: "the routine cannot be called",
+        })
+    }
+
+    /// `makeLibCall` of a softened float's routine: the target's own call
+    /// lowering when it has one (`Hooks::make_lib_call`), else the C
+    /// convention over the target's calling description.
+    fn soft_call(
+        &mut self,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+    ) -> Option<SDValue> {
+        if let Some(hooks) = self.hooks.as_mut() {
+            if let Some(call) = hooks.make_lib_call(self.dag, name, args, ret, false) {
+                return Some(call);
+            }
+        }
+        let arch = self.target?;
+        let env = super::libcall::CallEnv { arch, pointer: self.dag.config().pointer };
+        super::libcall::c_lib_call(
+            self.dag,
+            &env,
+            &self.tli.libcall_symbol(name),
+            self.tli.libcall_convention(name),
+            args,
+            ret,
+        )
+    }
+
+    /// `SoftenFloatOp_SETCC` over `softenSetCCOperands`: the compare as
+    /// compiler-rt's three-way routine and a compare of its result with zero.
+    /// An unordered-or-less code is the inverse of an ordered one; the two that
+    /// no routine answers alone (`one`, `ueq`) are two calls joined.
+    fn soften_setcc(
+        &mut self,
+        node: SDValue,
+    ) -> Result<SDValue, LegalizeError> {
+        let (lhs, rhs) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let float_vt = self.dag.value_type(lhs);
+        let unsupported = |what| LegalizeError::Unsupported { op: ISD::SetCC, ty: float_vt, what };
+        let Some(code) = self.setcc_code(node) else { return Err(unsupported("soften a compare with no code")) };
+        let (a, b) = (self.softened_float(lhs), self.softened_float(rhs));
+        let vt = self.dag.value_type(node);
+        let EVT::Simple(float_mvt) = float_vt else { return Err(unsupported("soften a compare of this float")) };
+        let pick = |cmp: Cmp3| libcalls::name(Libcall::Fcmp3(cmp, float_mvt));
+        let compare = |this: &mut Self, cmp: Cmp3, cc: CondCode| -> Result<SDValue, LegalizeError> {
+            // The routines return a C `int`: the pointer's width up to a long
+            // (16 at m16, 32 above).
+            let int = EVT::integer(this.dag.config().pointer.size_in_bits().min(32));
+            let result = pick(cmp)
+                .and_then(|name| this.soft_call(name, &[a, b], int))
+                .ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+            let zero = this.dag.get_constant(0, int);
+            Ok(this.dag.get_setcc(vt, result, zero, cc))
+        };
+        use CondCode::*;
+        Ok(match code {
+            SetOEq | SetEq => compare(self, Cmp3::Oeq, SetEq)?,
+            SetUNe | SetNe => compare(self, Cmp3::Une, SetNe)?,
+            SetOGe | SetGe => compare(self, Cmp3::Oge, SetGe)?,
+            SetOLt | SetLt => compare(self, Cmp3::Olt, SetLt)?,
+            SetOLe | SetLe => compare(self, Cmp3::Ole, SetLe)?,
+            SetOGt | SetGt => compare(self, Cmp3::Ogt, SetGt)?,
+            SetO => compare(self, Cmp3::Uo, SetEq)?,
+            SetUo => compare(self, Cmp3::Uo, SetNe)?,
+            // unordered or less: not (ordered and greater or equal)
+            SetULt => compare(self, Cmp3::Oge, SetLt)?,
+            SetULe => compare(self, Cmp3::Ogt, SetLe)?,
+            SetUGt => compare(self, Cmp3::Ole, SetGt)?,
+            SetUGe => compare(self, Cmp3::Olt, SetGe)?,
+            SetONe => {
+                let (lt, gt) = (compare(self, Cmp3::Olt, SetLt)?, compare(self, Cmp3::Ogt, SetGt)?);
+                self.dag.get_node(ISD::Or, vt, &[lt, gt])
+            }
+            SetUEq => {
+                let (unord, eq) = (compare(self, Cmp3::Uo, SetNe)?, compare(self, Cmp3::Oeq, SetEq)?);
+                self.dag.get_node(ISD::Or, vt, &[unord, eq])
+            }
+            _ => return Err(unsupported("soften a compare with a constant or integer code")),
+        })
+    }
+
     /// `GetPromotedInteger`.
     fn promoted_integer(
         &self,
@@ -491,9 +804,8 @@ impl<'a> TypeLegalizer<'a> {
                     let promoted = legalizer.promoted_integer(operand);
                     let wide = legalizer.dag.value_type(promoted);
                     if signed {
-                        let by = legalizer.shift_amount(wide, wide.size_in_bits() - bits);
-                        let high = legalizer.dag.get_node(ISD::Shl, wide, &[promoted, by]);
-                        legalizer.dag.get_node(ISD::Sra, wide, &[high, by])
+                        let ty = legalizer.dag.get_value_type_node(legalizer.dag.value_type(operand));
+                        legalizer.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
                     } else {
                         let mask = legalizer.dag.get_constant(super::fold::mask(bits), wide);
                         legalizer.dag.get_node(ISD::And, wide, &[promoted, mask])
@@ -541,9 +853,8 @@ impl<'a> TypeLegalizer<'a> {
                         self.dag.get_node(ISD::And, wide, &[promoted, mask])
                     }
                     _ => {
-                        let by = self.shift_amount(wide, wide.size_in_bits() - bits);
-                        let high = self.dag.get_node(ISD::Shl, wide, &[promoted, by]);
-                        self.dag.get_node(ISD::Sra, wide, &[high, by])
+                        let ty = self.dag.get_value_type_node(self.dag.value_type(value));
+                        self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
                     }
                 };
                 let amount = match self.action(self.dag.value_type(amount)) {
@@ -870,13 +1181,59 @@ impl<'a> TypeLegalizer<'a> {
                     &[converted, ty],
                 )
             }
+            op @ (ISD::CtPop | ISD::CtLz | ISD::CtLzZeroPoison) => {
+                // `PromoteIntRes_CTLZ` and `PromoteIntRes_CTPOP`: the count of
+                // the zero-extended value in the wider type, less the bits
+                // added above the narrow one (none for a population count).
+                let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                let mask = self.dag.get_constant(super::fold::mask(vt.size_in_bits()), to);
+                let extended = self.dag.get_node(ISD::And, to, &[promoted, mask]);
+                let count = self.dag.get_node(op, to, &[extended]);
+                if op == ISD::CtPop {
+                    count
+                } else {
+                    let added = self.dag.get_constant(u128::from(to.size_in_bits() - vt.size_in_bits()), to);
+                    self.dag.get_node(ISD::Sub, to, &[count, added])
+                }
+            }
+            op @ (ISD::CtTz | ISD::CtTzZeroPoison) => {
+                // `PromoteIntRes_CTTZ`: the count is the same in the wider
+                // type except for zero, which setting the bit just above the
+                // narrow type makes the narrow width.
+                let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                let wide = if op == ISD::CtTz {
+                    let top = self.dag.get_constant(1u128 << vt.size_in_bits(), to);
+                    self.dag.get_node(ISD::Or, to, &[promoted, top])
+                } else {
+                    promoted
+                };
+                self.dag.get_node(op, to, &[wide])
+            }
             op @ (ISD::BitReverse | ISD::BSwap) => {
                 // `PromoteIntRes_BSWAP` and `PromoteIntRes_BITREVERSE`: the
                 // wider reversal, shifted down by the bits added.
                 let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                // "If the larger BITREVERSE isn't supported by the target, try
+                // to expand now": the narrow type keeps the work small.
+                if op == ISD::BitReverse && !self.tli.is_operation_legal_or_custom_or_promote(op, to) {
+                    if let Some(expanded) = super::legalize_dag::expand_bitreverse(self.dag, value) {
+                        let wide = self.dag.get_node(ISD::AnyExtend, to, &[expanded]);
+                        self.set_promoted_integer(value, wide);
+                        return Ok(());
+                    }
+                }
                 let reversed = self.dag.get_node(op, to, &[promoted]);
                 let added = self.shift_const(u128::from(to.size_in_bits() - vt.size_in_bits()), to);
                 self.dag.get_node(ISD::Srl, to, &[reversed, added])
+            }
+            ISD::BitCast => {
+                // `PromoteIntRes_BITCAST`: through a stack slot, the value
+                // stored as its own type and loaded as the narrow integer.
+                let src = self.dag.operand(value, 0);
+                let (slot, store, cell) = self.store_to_slot(src);
+                let info = super::dag::MemInfo { mem_vt: vt, ..self.slot_info(src, cell) };
+                let load = self.dag.get_load(vt, store, slot, info);
+                self.dag.get_node(ISD::AnyExtend, to, &[load])
             }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
@@ -1016,9 +1373,8 @@ impl<'a> TypeLegalizer<'a> {
                     if as_is {
                         promoted
                     } else if code.is_signed_int() {
-                        let by = legalizer.shift_amount(wide, wide.size_in_bits() - bits);
-                        let high = legalizer.dag.get_node(ISD::Shl, wide, &[promoted, by]);
-                        legalizer.dag.get_node(ISD::Sra, wide, &[high, by])
+                        let ty = legalizer.dag.get_value_type_node(legalizer.dag.value_type(value));
+                        legalizer.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
                     } else {
                         let mask = legalizer.dag.get_constant(super::fold::mask(bits), wide);
                         legalizer.dag.get_node(ISD::And, wide, &[promoted, mask])
@@ -1211,6 +1567,8 @@ impl<'a> TypeLegalizer<'a> {
                 let hi = self.dag.get_constant_with(bits >> width, half, false, self.dag.is_opaque(value));
                 (lo, hi)
             }
+            // `ExpandRes_MERGE_VALUES`: each result is its operand, expanded.
+            ISD::MergeValues => self.expanded_integer(self.dag.operand(value, value.res as usize)),
             op @ (ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend) => self.expand_extend(value, op, half),
             ISD::SignExtendInReg => {
                 // `ExpandIntRes_SIGN_EXTEND_INREG`: within the low half, extend
@@ -1283,7 +1641,11 @@ impl<'a> TypeLegalizer<'a> {
                 let pointer = self.dag.value_type(slot);
                 let offset = self.dag.get_constant(step, pointer);
                 let high_slot = self.dag.get_node(ISD::Add, pointer, &[slot, offset]);
-                (self.dag.get_load(half, store, slot, info), self.dag.get_load(half, store, high_slot, info))
+                let (lo, hi) =
+                    (self.dag.get_load(half, store, slot, info), self.dag.get_load(half, store, high_slot, info));
+                // `hasBigEndianPartOrdering`: the word at the slot is the high
+                // one
+                if self.dag.config().big_endian { (hi, lo) } else { (lo, hi) }
             }
             ISD::BitCast if self.tli.types.is_type_legal(self.dag.value_type(self.dag.operand(value, 0))) => {
                 // `ExpandIntRes_BITCAST` from a same-size integer: its low
@@ -1317,6 +1679,7 @@ impl<'a> TypeLegalizer<'a> {
                 let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
                 (self.dag.get_node(ISD::Freeze, half, &[lo]), self.dag.get_node(ISD::Freeze, half, &[hi]))
             }
+            ISD::AssertSext | ISD::AssertZext => self.expand_assert_ext(value, half),
             ISD::Abs | ISD::AbsMinPoison => self.expand_abs(value, half),
             ISD::CtPop => self.expand_ctpop(value, half),
             // `ExpandIntRes_BITREVERSE`: each half reversed, and swapped.
@@ -1328,6 +1691,7 @@ impl<'a> TypeLegalizer<'a> {
             op @ (ISD::CtTz | ISD::CtTzZeroPoison) => self.expand_cttz(value, op, half),
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
             op @ (ISD::UAddO | ISD::USubO) => self.expand_addsub_overflow(value, op, half)?,
+            op @ (ISD::UAddOCarry | ISD::USubOCarry) => self.expand_addsub_carry(value, op, half),
             op @ (ISD::SAddO | ISD::SSubO) => self.expand_signed_addsub_overflow(value, op, half),
             ISD::SMulFix | ISD::UMulFix | ISD::SMulFixSat | ISD::UMulFixSat => self.expand_mulfix(value, half),
             ISD::SShlSat | ISD::UShlSat => {
@@ -1363,6 +1727,28 @@ impl<'a> TypeLegalizer<'a> {
                 (self.dag.get_select(half, equal, min_max, winner), hi)
             }
             ISD::Mul => self.expand_mul(value, half)?,
+            op @ (ISD::FpToSInt | ISD::FpToUInt)
+                if self.tli.types.type_action(self.dag.value_type(self.dag.operand(value, 0)))
+                    == TypeAction::SoftenFloat =>
+            {
+                // `ExpandIntRes_FP_TO_XINT` over a softened operand: the
+                // routine of the original result type, its registers the
+                // halves.
+                let name = self
+                    .fp_to_xint_name(
+                        op == ISD::FpToSInt,
+                        vt.size_in_bits() > 32,
+                        self.dag.value_type(self.dag.operand(value, 0)),
+                    )
+                    .ok_or(LegalizeError::Unsupported {
+                        op,
+                        ty: vt,
+                        what: "soften a conversion between these types",
+                    })?;
+                let arg = self.softened_float(self.dag.operand(value, 0));
+                let call = self.soft_c_call(name, &[arg], vt, op, vt)?;
+                self.split_integer(call, half)
+            }
             op @ (ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem) => {
                 let by_constant = (matches!(op, ISD::UDiv | ISD::URem)
                     && self.dag.constant(self.dag.operand(value, 1)).is_some())
@@ -1405,10 +1791,96 @@ impl<'a> TypeLegalizer<'a> {
                     self.dag.get_node(ISD::ExtractElement, half, &[part, one]),
                 )
             }
+            ISD::FShl | ISD::FShr => self.expand_funnel_shift(value, half),
+            // `ExpandIntRes_Rotate`: delegate to the funnel shift of the value
+            // with itself.
+            op @ (ISD::Rotl | ISD::Rotr) => {
+                let funnel = if op == ISD::Rotl { ISD::FShl } else { ISD::FShr };
+                let x = self.dag.operand(value, 0);
+                let by = self.dag.operand(value, 1);
+                let whole = self.dag.get_node(funnel, vt, &[x, x, by]);
+                self.split_integer(whole, half)
+            }
+            ISD::VAArg => {
+                // `ExpandRes_VAARG`: two reads of the half type, the first
+                // with the type's alignment, the second with none; the chain
+                // of the second replaces the node's.
+                let (chain, list, source) =
+                    (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
+                let align = self.dag.operand(value, 3);
+                let first = self.dag.get_node_multi(ISD::VAArg, &[half, EVT::OTHER], &[chain, list, source, align]);
+                let none = self.dag.get_constant_with(0, EVT::I32, true, false);
+                let chain = SDValue { node: first.node, res: 1 };
+                let second = self.dag.get_node_multi(ISD::VAArg, &[half, EVT::OTHER], &[chain, list, source, none]);
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: second.node, res: 1 });
+                let (first, second) = (SDValue { node: first.node, res: 0 }, SDValue { node: second.node, res: 0 });
+                if self.dag.config().big_endian { (second, first) } else { (first, second) }
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand result" }),
         };
         self.set_expanded_integer(value, lo, hi);
         Ok(())
+    }
+
+    /// `ExpandIntRes_AssertSext`
+    /// ([L4048](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L4048))
+    /// and `ExpandIntRes_AssertZext`
+    /// ([L4069](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L4069)):
+    /// an assertion wider than a half goes to the high half, one inside the low
+    /// half asserts the low half and the high is its sign (or zero).
+    fn expand_assert_ext(
+        &mut self,
+        value: SDValue,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let code = self.dag.opcode(value);
+        let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
+        let NodeData::ValueType(asserted) = self.dag.node(self.dag.operand(value, 1)).data else {
+            unreachable!("an assertion names a value type")
+        };
+        let (half_bits, asserted_bits) = (half.size_in_bits(), asserted.size_in_bits());
+        if half_bits < asserted_bits {
+            let rest = self.dag.get_value_type_node(EVT::integer(asserted_bits - half_bits));
+            return (lo, self.dag.get_node(code, half, &[hi, rest]));
+        }
+        let narrow = self.dag.get_value_type_node(asserted);
+        let lo = self.dag.get_node(code, half, &[lo, narrow]);
+        let hi = if code == ISD::AssertSext {
+            let sign = self.shift_const(u128::from(half_bits - 1), half);
+            self.dag.get_node(ISD::Sra, half, &[lo, sign])
+        } else {
+            self.dag.get_constant(0, half)
+        };
+        (lo, hi)
+    }
+
+    /// `ExpandIntRes_FunnelShift`: the four halves `y.lo, y.hi, x.lo, x.hi`
+    /// (least significant first) and the pair of half-width funnel shifts
+    /// that is the result, over the window the amount's half-width bit
+    /// picks: set moves it down one half for `FSHL` and up one for `FSHR`.
+    fn expand_funnel_shift(
+        &mut self,
+        value: SDValue,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let op = self.dag.opcode(value);
+        let (x, y, amount) = (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
+        let ((in3, in4), (in1, in2)) = (self.expanded_integer(x), self.expanded_integer(y));
+        let amount_vt = self.dag.value_type(amount);
+        let bit = self.dag.get_constant(u128::from(half.size_in_bits()), amount_vt);
+        let masked = self.dag.get_node(ISD::And, amount_vt, &[amount, bit]);
+        let zero = self.dag.get_constant(0, amount_vt);
+        let cc_vt = self.tli.types.set_cc_result_type(amount_vt);
+        let cond = self.dag.get_setcc(cc_vt, masked, zero, CondCode::SetNe);
+        let shift_vt = self.shift_amount_type(half);
+        let amount = self.dag.get_any_ext_or_trunc(amount, shift_vt);
+        // the amount's bit set moves the window up one half for FSHR and down
+        // one for FSHL
+        let (lower, upper) =
+            if op == ISD::FShr { ([in1, in2, in3], [in2, in3, in4]) } else { ([in2, in3, in4], [in1, in2, in3]) };
+        let [s1, s2, s3] = [0, 1, 2].map(|i| self.dag.get_select(half, cond, upper[i], lower[i]));
+        let (lo, hi) = (self.dag.get_node(op, half, &[s2, s1, amount]), self.dag.get_node(op, half, &[s3, s2, amount]));
+        (lo, hi)
     }
 
     /// `ExpandIntRes_Shift`: by a constant, or as the target's double-width
@@ -1422,6 +1894,18 @@ impl<'a> TypeLegalizer<'a> {
     ) -> Result<(SDValue, SDValue), LegalizeError> {
         let (input, amount) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         if let Some(amt) = self.dag.constant(amount) {
+            // DEVIATE: the pin shifts by a constant inline. A function tuned
+            // for size calls the shift routine where the shifts beyond whole
+            // moves cost more than the call (z80 lshl5: 60 B, the call 5).
+            // Exit: none; a size policy the pin lacks.
+            if self.tli.has_size_libcall_name(op, vt)
+                && self.tli.calls_for_size_shift(amt, u128::from(vt.size_in_bits()))
+            {
+                let amount = self.dag.get_constant(amt, self.libcall_shift_amount_type(half));
+                if let Some(pair) = self.expand_by_libcall(value, op, half, op == ISD::Sra, [input, amount]) {
+                    return Ok(pair);
+                }
+            }
             return Ok(self.expand_shift_by_constant(op, input, amt, vt, half));
         }
         let parts = match op {
@@ -1446,6 +1930,8 @@ impl<'a> TypeLegalizer<'a> {
             if let Some(pair) = self.expand_shift_with_known_amount_bit(op, (lo, hi), amount, half) {
                 return Ok(pair);
             }
+            // the pin passes the amount as the library's `int`
+            let amount = self.dag.get_zext_or_trunc(amount, self.libcall_shift_amount_type(half));
             return self
                 .expand_by_libcall(value, op, half, op == ISD::Sra, [input, amount])
                 .ok_or(LegalizeError::Unsupported { op, ty: vt, what: "expand shift to a library call" });
@@ -1649,14 +2135,29 @@ impl<'a> TypeLegalizer<'a> {
         } else {
             (ISD::USubO, ISD::USubOCarry, ISD::Sub)
         };
-        if !self.tli.is_operation_legal_or_custom(carry_op, half) {
+        if !self.tli.is_operation_legal_or_custom(carry_op, self.tli.types.type_to_expand_to(half)) {
             // Without a carry operation: the plain halves, the carry (a borrow
             // for a subtract) a compare of the low result with its operand.
             let lo = self.dag.get_node(plain, half, &[ll, rl]);
-            let (compared, with, cc) =
-                if op == ISD::Add { (lo, ll, CondCode::SetULt) } else { (ll, rl, CondCode::SetULt) };
-            let cmp = self.dag.get_setcc(self.tli.types.set_cc_result_type(half), compared, with, cc);
+            let cc_vt = self.tli.types.set_cc_result_type(half);
+            let all_ones = super::fold::mask(half.size_in_bits());
+            let zero = self.dag.get_constant(0, half);
+            let (cmp, minus_one) = if op == ISD::Sub {
+                (self.dag.get_setcc(cc_vt, ll, rl, CondCode::SetULt), false)
+            } else if self.dag.constant(rl) == Some(1) {
+                // X+1 has a carry out if X+1==0
+                (self.dag.get_setcc(cc_vt, lo, zero, CondCode::SetEq), false)
+            } else if self.dag.constant(rl) == Some(all_ones) {
+                // X-1 carries unless X is 0, and X-1 with -1 above is a borrow
+                let both = self.dag.constant(rh) == Some(all_ones);
+                (self.dag.get_setcc(cc_vt, ll, zero, if both { CondCode::SetEq } else { CondCode::SetNe }), both)
+            } else {
+                (self.dag.get_setcc(cc_vt, lo, ll, CondCode::SetULt), false)
+            };
             let carry = self.dag.get_bool_as_bit(cmp, half);
+            if minus_one {
+                return Ok((lo, self.dag.get_node(ISD::Sub, half, &[lh, carry])));
+            }
             let hi = self.dag.get_node(plain, half, &[lh, rh]);
             return Ok((lo, self.dag.get_node(plain, half, &[hi, carry])));
         }
@@ -1691,7 +2192,10 @@ impl<'a> TypeLegalizer<'a> {
             (ISD::USubOCarry, ISD::Sub, CondCode::SetUGt)
         };
         let overflow_vt = self.dag.node(value).values[1];
-        let (lo, hi, overflow) = if self.tli.is_operation_legal_or_custom(carry_op, half) {
+        let (lo, hi, overflow) = if self
+            .tli
+            .is_operation_legal_or_custom(carry_op, self.tli.types.type_to_expand_to(half))
+        {
             let lo = self.dag.get_node_multi(op, &[half, overflow_vt], &[ll, rl]);
             let hi =
                 self.dag.get_node_multi(carry_op, &[half, overflow_vt], &[lh, rh, SDValue { node: lo.node, res: 1 }]);
@@ -1704,6 +2208,24 @@ impl<'a> TypeLegalizer<'a> {
         };
         self.replace_value_with(SDValue { node: value.node, res: 1 }, overflow);
         Ok((lo, hi))
+    }
+
+    /// `ExpandIntRes_UADDSUBO_CARRY`: the low halves with the carry in, the
+    /// high halves with the low ones' carry out, whose overflow is the
+    /// whole one.
+    fn expand_addsub_carry(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let (lhs, rhs, carry) = (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
+        let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
+        let overflow_vt = self.dag.node(value).values[1];
+        let lo = self.dag.get_node_multi(op, &[half, overflow_vt], &[ll, rl, carry]);
+        let hi = self.dag.get_node_multi(op, &[half, overflow_vt], &[lh, rh, SDValue { node: lo.node, res: 1 }]);
+        self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: hi.node, res: 1 });
+        (SDValue { node: lo.node, res: 0 }, SDValue { node: hi.node, res: 0 })
     }
 
     /// `ExpandIntRes_SADDSUBO` without a signed carry operation: the plain sum
@@ -1997,11 +2519,35 @@ impl<'a> TypeLegalizer<'a> {
         (lo, self.dag.get_node(ISD::Truncate, half, &[upper]))
     }
 
+    /// Whether the product of `lhs` and `rhs` is known to fit `bits`: the
+    /// significant bits of the two (`computeKnownBits` leading zeros) add up to
+    /// no more.
+    fn product_fits(
+        &self,
+        lhs: SDValue,
+        rhs: SDValue,
+        bits: u32,
+    ) -> bool {
+        let active = |value: SDValue| {
+            let known = super::known_bits::known_bits(self.dag, value);
+            let leading = (0..known.width).rev().take_while(|bit| known.zero >> bit & 1 == 1).count() as u32;
+            known.width - leading
+        };
+        active(lhs) + active(rhs) <= bits
+    }
+
     /// `ExpandIntRes_MUL` through `expandMUL_LOHI`: the full product of the low
     /// halves, plus the two cross products in the high half. Two operands that
     /// are both zero-extended or both sign-extended (by their known bits) need
-    /// no cross products. No library call is made: the pin has none for the
-    /// types that come here, and `force_expand_multiply` is its fallback.
+    /// no cross products. Without a widening multiply the library call
+    /// (`RTLIB::MUL_I32`) is made, else `force_expand_multiply`.
+    ///
+    /// DEVIATE: the call is made only where the target names a routine for
+    /// functions tuned for size. The pin calls any named routine; m68k, 6502
+    /// and wasm name one and expanded inline until now, and their output stays
+    /// as it was until their owners measure the call. Exit: those targets
+    /// measured. Nor is it made where the product fits a half: a byte times
+    /// a constant is a few instructions, less than the call and the routine.
     fn expand_mul(
         &mut self,
         value: SDValue,
@@ -2041,6 +2587,11 @@ impl<'a> TypeLegalizer<'a> {
             (both, SDValue { node: both.node, res: 1 })
         } else if self.tli.is_operation_legal_or_custom(ISD::MulHU, half) {
             (self.dag.get_node(ISD::Mul, half, &[ll, rl]), self.dag.get_node(ISD::MulHU, half, &[ll, rl]))
+        } else if self.tli.has_size_libcall_name(ISD::Mul, self.dag.value_type(value))
+            && !self.product_fits(lhs, rhs, bits)
+            && let Some(pair) = self.expand_by_libcall(value, ISD::Mul, half, false, [lhs, rhs])
+        {
+            return Ok(pair);
         } else {
             return Ok(self.force_expand_multiply(ll, rl, lh, rh));
         };
@@ -2252,7 +2803,7 @@ impl<'a> TypeLegalizer<'a> {
         let callee = self.dag.get_target_external_symbol(pointer, routine.name);
         let root = self.dag.entry_node();
         let env = CallEnv { arch, pointer };
-        let (_chain, results) = lib_call(self.dag, &env, root, callee, &args, 0, 0, &returns);
+        let (_chain, results) = lib_call(self.dag, &env, root, callee, &args, 0, 0, &returns, &super::dagisel_adapter::call_clobbered_flags());
         Ok(if wants_quotient { (results[0], results[1]) } else { (results[2], results[3]) })
     }
 
@@ -2273,8 +2824,16 @@ impl<'a> TypeLegalizer<'a> {
             return false;
         }
         let results = self.dag.node(node).values.len();
+        // a `MERGE_VALUES` is the pin's list of replacement values
+        let merged = self.dag.opcode(result) == ISD::MergeValues && self.dag.node(result).ops.len() == results;
         for res in 0..results as u8 {
-            let new = if results == 1 { result } else { SDValue { node: result.node, res } };
+            let new = if merged {
+                self.dag.operand(result, res as usize)
+            } else if results == 1 {
+                result
+            } else {
+                SDValue { node: result.node, res }
+            };
             self.replace_value_with(SDValue { node: n, res }, new);
         }
         true
@@ -2360,8 +2919,9 @@ impl<'a> TypeLegalizer<'a> {
                 .dag
                 .get_node_flags(ISD::BuildPair, pointer, &[moved, selector], super::dag::SDNodeFlags::PAIR_FAR);
         }
-        let offset = self.dag.get_constant(step, pointer);
-        self.dag.get_node(ISD::Add, pointer, &[ptr, offset])
+        // `getObjectPtrOffset`: the offset stays inside the object, so the add
+        // cannot wrap.
+        self.dag.get_object_ptr_offset(ptr, step as i64)
     }
 
     /// `ExpandIntOp_STORE`, a plain store: the low dword, then the high at +4
@@ -2688,7 +3248,38 @@ impl<'a> TypeLegalizer<'a> {
             CondCode::SetGe => CondCode::SetUGe,
             unsigned => unsigned,
         };
-        let low = self.dag.get_setcc(vt, ll, rl, low_code);
+        // A comparison of the sign bit looks at the top part.
+        let sign_test = match self.dag.constant(self.dag.operand(setcc, 1)) {
+            Some(c) => {
+                let width = self.dag.value_type(self.dag.operand(setcc, 1)).size_in_bits();
+                (code == CondCode::SetLt && c == 0) || (code == CondCode::SetGt && c == super::fold::mask(width))
+            }
+            None => false,
+        };
+        if sign_test {
+            return self.dag.get_setcc(vt, lh, rh, code);
+        }
+        // `SimplifySetCC` of each half: against an extreme value it folds.
+        let half_compare = |this: &mut Self, a: SDValue, b: SDValue, code: CondCode| {
+            let folded = this
+                .dag
+                .constant(b)
+                .and_then(|c| super::setcc_extreme::fold_against_an_extreme(this.dag, vt, a, c, code));
+            folded.unwrap_or_else(|| this.dag.get_setcc(vt, a, b, code))
+        };
+        let low = half_compare(self, ll, rl, low_code);
+        let high = half_compare(self, lh, rh, code);
+        // For LE / GE, a high part known false ignores the low part. For LT /
+        // GT, a low part known false is the high part, and so is a high part
+        // known true.
+        let eq_allowed = matches!(
+            code,
+            CondCode::SetLe | CondCode::SetULe | CondCode::SetGe | CondCode::SetUGe
+        );
+        let (low_known, high_known) = (self.dag.constant(low), self.dag.constant(high));
+        if (eq_allowed && high_known == Some(0)) || (!eq_allowed && (high_known == Some(1) || low_known == Some(0))) {
+            return high;
+        }
         // Comparing the low bits is enough.
         if lh == rh {
             return low;
@@ -2711,7 +3302,6 @@ impl<'a> TypeLegalizer<'a> {
             let cc = self.dag.get_cond_code(code);
             return self.dag.get_node(ISD::SetCCCarry, vt, &[lh, rh, borrow, cc]);
         }
-        let high = self.dag.get_setcc(vt, lh, rh, code);
         let same = self.dag.get_setcc(vt, lh, rh, CondCode::SetEq);
         self.dag.get_select(vt, same, low, high)
     }

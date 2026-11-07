@@ -52,7 +52,9 @@
 //! (`simplifyUsers`, `eliminateIVComparison`).
 
 use llrm_analysis::num::Num as BigInt;
+use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::analysis::ScevSession;
+use llrm_analysis::scev::expander::Env;
 use llrm_analysis::scev::expr::Kind;
 use llrm_analysis::scev::expr::Ty;
 use llrm_analysis::scev::expr::Use;
@@ -170,16 +172,21 @@ fn nearest_common_dominator(
 /// `header`: the users of each of its header phis simplified, without widening;
 /// whether any was. What the unroller runs after a peel, where the residual
 /// loop's steps and exit test get the no-wrap flags SCEV proves.
+///
+/// `se` and `env` are the caller's expressions and analyses (the pin runs it
+/// on the SE and LoopInfo it holds): valid for `function` as it stands, whose
+/// blocks and edges the edits leave as they are.
+#[allow(clippy::too_many_arguments)]
 pub fn simplified_loop_ivs(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
     declared: &mut llrm_mir::passes::Declared,
     outer: &Outer,
+    se: &mut ScalarEvolution,
+    env: Env,
     header: BlockId,
 ) -> bool {
-    let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
-    let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let mut rewriter = llrm_analysis::scev::expander::Expander::new("indvars");
     rewriter.set_canonical_mode(false);
     let mut dead: Vec<InstId> = Vec::new();
@@ -226,8 +233,7 @@ pub fn simplified_and_extended_in(
 ) -> bool {
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let headers: Vec<BlockId> = {
-        let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
-        headers.reverse();
+        let mut headers: Vec<BlockId> = env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
         crate::loopfilter::retain(&mut headers);
         headers
     };
@@ -1107,7 +1113,7 @@ fn strengthen_right_shift(
     let iv_range = {
         let cx = e.env.cx(&*e.context, &*e.function);
         let s = e.se.get_scev(&cx, iv_op);
-        e.se.get_unsigned_range(&cx, s)
+        e.se.get_unsigned_range(&cx, s).to_word::<u128>()
     };
     let mut changed = false;
     let bo_op = value_op(e, bo);

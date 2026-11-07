@@ -7,16 +7,19 @@ add = alu_rr
 multiply = imul_r32
 divide = idiv_r32
 multiply_long = imul_r32
+multiply_high = smul_min_w4
 divide_long = idiv_r32
-# A quarter: the 486 sheet's `imul r32` is the midpoint of 13..42, so a smaller win is inside its spread (a two-clock win
-# lost 0.9% on switch and recmany).
-divide_margin = 25
+# None: the multiply-high is priced at the 486's shortest multiply (`multiply_high`), the dividend being the multiplier.
+divide_margin = 0
 shift = shift_ri
 address = lea
+address_dword = 0
+address_third = 0
 carry = carry(movzx, alu_rr, shift_ri, mov_rr)
 carry_step = step(alu_rr)
 load = mov_rm
 store = mov_mr
+store_immediate = mov_mr
 memory_update = alu_mr
 branch = jcc
 prefix = prefix
@@ -35,10 +38,14 @@ float_load = x87_load
 float_load_folded = x87_add_m - x87_add
 float_store = x87_store
 float_release = x87_release
+# SSE converts in one instruction; the long double that uses x87 never reaches a select of conversions.
+float_to_int = 0
+float_compare = 0
 extend = movzx
 set = setcc
 fill = rep_stos + 2*mov_ri
 fill_cell = rep_stos_cell
+fill_segment = 0
 copy = rep_movs + 3*mov_ri
 copy_cell = rep_movs_cell
 copy_variable = 0
@@ -57,6 +64,7 @@ unroll_budget = 150
 alu_rr = 4
 xchg_rr = 4
 imul_r32 = 6
+smul_min_w4 = 6
 idiv_r32 = 6
 shift_ri = 6
 lea = 6
@@ -65,6 +73,7 @@ setcc = 3
 mov_rr = 4
 mov_rm = 6
 mov_mr = 6
+mov_mi = 10
 alu_mr = 6
 jcc = 2
 call_near = 5
@@ -95,4 +104,5 @@ rep_movs_cell = 0
 # x86-m16's: not measured on flat code.
 [size]
 prefix = 1
+store_immediate = mov_mi
 argument = 2

@@ -6,12 +6,14 @@ rust-version.workspace = true
 description = "The 6502 target: its descriptions and DAG selector tables, generated from mos6502.td"
 
 [dependencies]
+llrm-support = { workspace = true }
 llrm-dagisel = { path = "../../backend/llrm-dagisel" }
 llrm-codegen = { workspace = true }
 llrm-target = { workspace = true }
 llrm-object = { workspace = true }
 llrm-debug = { workspace = true }
 llrm-lir = { workspace = true }
+llrm-analysis = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-spike-mf = { workspace = true }
 llrm-elf = { workspace = true }

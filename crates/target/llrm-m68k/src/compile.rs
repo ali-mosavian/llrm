@@ -8,7 +8,7 @@ use llrm_mir::module::Module;
 
 use crate::dagisel::function::select_function_with;
 use crate::dagisel::hooks::Cpu;
-use crate::expand::{Line, finish};
+use crate::expand::{Line, finish_with};
 use crate::flags::preserve_flags;
 use crate::machine::{M68k, M68kMachine};
 use crate::mc;
@@ -25,11 +25,55 @@ pub enum Item {
     Inst(mc::Inst),
     /// Bytes placed as they are: code assembled elsewhere, or data.
     Bytes(Vec<u8>),
+    /// The source place of the instructions that follow (`.loc`): printed only
+    /// for `-g`.
+    Loc(crate::expand::Row),
+}
+
+/// The pin's code model (`-mcmodel`), which decides how a global is reached
+/// (`M68kSubtarget::classifyGlobalReference`, without PIC): small, PC-relative
+/// with a 16-bit displacement; medium, absolute on the 68000 and 68010 and
+/// PC-relative from the 68020; large, absolute. The assembler relaxes only
+/// branches, so data farther than 32 KiB from the code needs medium on the
+/// 68000 or large.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CodeModel {
+    #[default]
+    Small,
+    Medium,
+    Large,
+}
+
+impl CodeModel {
+    /// `-mcmodel=NAME`: `small`, `medium` or `large`.
+    pub fn parse(name: &str) -> Result<CodeModel, String> {
+        match name {
+            "small" => Ok(CodeModel::Small),
+            "medium" => Ok(CodeModel::Medium),
+            "large" => Ok(CodeModel::Large),
+            other => Err(format!("`{other}` is not a code model (small, medium, large)")),
+        }
+    }
+
+    /// Whether a global's address is an absolute one on `cpu`.
+    pub fn absolute_data(
+        self,
+        cpu: Cpu,
+    ) -> bool {
+        match self {
+            CodeModel::Small => false,
+            CodeModel::Medium => !cpu.at_least(Cpu::M68020),
+            CodeModel::Large => true,
+        }
+    }
 }
 
 /// What the compiler may do beyond the pin's output.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
+    /// The pin's code model: how a global's address is formed
+    /// ([`CodeModel::absolute_data`]).
+    pub code_model: CodeModel,
     /// Run the shared IR mid-end (`-O2`) first, as `llc -O2` is given
     /// optimized IR by `opt`.
     pub mid_end: bool,
@@ -44,21 +88,56 @@ pub struct Options {
     /// Push and pop the saved registers where that is no larger and no
     /// slower than the pin's `suba.l` and `movem` into slots.
     pub push_frame: bool,
+    /// Outgoing arguments as pushes where that is cheaper than stores into the
+    /// reserved call area ([`crate::callpush`]).
+    pub push_arguments: bool,
     /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
     /// instruction for.
     pub short: bool,
+    /// A `tst` is dropped past instructions that set the codes between it and
+    /// the definition of its register, which move above the definition
+    /// ([`crate::cmpelim`]).
+    pub hoist_flag_setters: bool,
+    /// `cmpi.l #(2^s-1)` after the `lsr.l #s` of the same value is dropped
+    /// ([`crate::cmpshift`]).
+    pub reuse_shift_flags: bool,
+    /// Print the source places (`.loc`) of the instructions (`-g`).
+    pub debug: bool,
 }
 
 impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
-    pub const PINNED: Options =
-        Options { mid_end: false, size: false, source_order: false, indexed: false, push_frame: false, short: false };
+    pub const PINNED: Options = Options {
+        code_model: CodeModel::Small,
+        mid_end: false,
+        size: false,
+        source_order: false,
+        indexed: false,
+        push_frame: false,
+        push_arguments: false,
+        short: false,
+        hoist_flag_setters: false,
+        reuse_shift_flags: false,
+        debug: false,
+    };
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { mid_end: true, size: false, source_order: false, indexed: true, push_frame: true, short: true }
+        Options {
+            code_model: CodeModel::Small,
+            mid_end: true,
+            size: false,
+            source_order: false,
+            indexed: true,
+            push_frame: true,
+            push_arguments: true,
+            short: true,
+            hoist_flag_setters: true,
+            reuse_shift_flags: true,
+            debug: false,
+        }
     }
 }
 
@@ -81,7 +160,7 @@ pub fn items_with(
 ) -> Result<Vec<Item>, String> {
     let optimized;
     let module = if options.mid_end {
-        optimized = mid_end_described_by(module, &M68k::default(), Some(Rc::new(M68kMachine)))?;
+        optimized = mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))?;
         &optimized
     } else {
         module
@@ -91,19 +170,44 @@ pub fn items_with(
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
-    let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed, options.short)?;
+    let blocks = select_function_with(
+        module,
+        name,
+        cpu,
+        options.source_order,
+        options.indexed,
+        options.short,
+        options.code_model.absolute_data(cpu),
+    )?;
     let mut function = emit(name, &blocks)?;
+    function.returns_twice =
+        module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
-        crate::cmpelim::eliminate_tests(&mut function);
+        crate::cmpelim::eliminate_tests(&mut function, options.hoist_flag_setters);
+        if options.reuse_shift_flags {
+            crate::cmpshift::reuse_shift_flags(&mut function);
+        }
+        crate::shiftadd::shifts_to_adds(&mut function);
         crate::negadd::negative_adds_to_subq(&mut function);
         crate::addrarith::address_adds(&mut function, cpu, wants_size);
         crate::foldload::fold_loads(&mut function);
+        crate::divrem::remainders_from_quotients(&mut function);
+        if wants_size {
+            crate::foldarg::fold_argument_loads(&mut function);
+        }
+        crate::addrroles::address_roles(&mut function);
+        if cpu.at_least(Cpu::M68020) {
+            crate::scaledindex::scale_indexes(&mut function);
+        }
     }
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
     crate::regalloc::split_flag_edges(&mut function);
     eliminate_phis_with(&mut function, false);
     fold_reserved_copies(&mut function);
+    if options.short {
+        crate::commutative::mark_commutative(&mut function, wants_size);
+    }
     commute_tied(&mut function);
     two_address(&mut function);
     // spill slots are numbered after the static allocas
@@ -115,19 +219,56 @@ pub fn items_with(
     };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     if options.short {
+        crate::addrarith::refine_lea_round_trips(&mut function, &assignment, cpu, wants_size);
+        crate::addrarith::refine_address_adds(&mut function, &assignment, cpu, wants_size);
         crate::chain::post_increment_chains(&mut function, &assignment, cpu, wants_size);
+        crate::narrow::merge_logic_immediates(&mut function, &assignment);
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
+        crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
+        crate::constreg::constant_into_destination(&mut function, &assignment);
+        crate::constreg::immediate_from_free_register(&mut function, &assignment);
+        crate::narrow_add::narrow_adds(&mut function, &assignment);
+        crate::narrow_add::narrow_compares(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
+    llrm_spike_mf::spill::remove_dead_slot_stores::<crate::regalloc::M68kRegisters>(
+        &mut function,
+        &assignment,
+        &crate::REGISTER_INFO,
+        &slots,
+    );
+    if options.short {
+        crate::cmpdup::drop_repeated_compares(&mut function, &assignment);
+    }
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
     let mut out = vec![Item::Label(name.to_owned())];
-    for line in finish(&function, &assignment, number, &slots, cpu, options.push_frame)? {
+    // The line the function is declared at starts its rows (the prologue is
+    // from no instruction).
+    if let Some(line) = module.subprogram_line(module.global(id).function().ok_or("not a function")?) {
+        out.push(Item::Loc(crate::expand::Row {
+            place: llrm_codegen::model::lir::SrcLoc::line(line),
+            block_top: false,
+            prologue_end: false,
+            epilogue_begin: false,
+        }));
+    }
+    for line in finish_with(
+        &function,
+        &assignment,
+        number,
+        &slots,
+        cpu,
+        options.push_frame,
+        options.short,
+        options.push_arguments.then_some(wants_size),
+    )? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),
+            Line::Loc(place) => Item::Loc(place),
         });
     }
     Ok(out)
@@ -183,21 +324,57 @@ pub fn text_with(
     options: Options,
 ) -> Result<String, String> {
     let mut out = String::new();
+    let mut previous = None;
     for item in items_with(module, name, cpu, options)? {
         match item {
             Item::Label(label) => out.push_str(&format!("{label}:\n")),
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
             Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
+            Item::Loc(row) if options.debug => {
+                // A row on the line the one before it was on does not start a
+                // statement.
+                let flags = format!(
+                    "{}{}{}",
+                    if row.prologue_end { " prologue_end" } else { "" },
+                    if row.epilogue_begin { " epilogue_begin" } else { "" },
+                    if row.place.line == 0 || (previous == Some(row.place.line) && !row.block_top) {
+                        " is_stmt 0"
+                    } else {
+                        ""
+                    },
+                );
+                previous = (row.place.line != 0).then_some(row.place.line);
+                out.push_str(&format!("\t.loc\t0 {} {}{flags}\n", row.place.line, row.place.column));
+            }
+            Item::Loc(_) => {}
         }
     }
     Ok(out)
+}
+
+thread_local! {
+    static MID_ENDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has run the mid-end over a module, for a test
+/// that a driver runs it once per module and not once per function.
+pub fn mid_end_runs() -> usize {
+    MID_ENDS.with(std::cell::Cell::get)
 }
 
 /// `module` through the IR pass `llc` runs before selection that matters here,
 /// loop strength reduction, priced by [`M68k`]. (`llc` runs no `opt` pipeline;
 /// the bench's reference does not either.)
 pub fn mid_end(module: &Module) -> Result<Module, String> {
-    mid_end_described_by(module, &M68k::default(), Some(Rc::new(M68kMachine)))
+    mid_end_for(module, Cpu::default())
+}
+
+/// [`mid_end`] for `cpu`.
+pub fn mid_end_for(
+    module: &Module,
+    cpu: Cpu,
+) -> Result<Module, String> {
+    mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))
 }
 
 /// [`mid_end`] with another target description: what a test compares the
@@ -207,6 +384,7 @@ pub fn mid_end_described_by(
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
 ) -> Result<Module, String> {
+    MID_ENDS.with(|runs| runs.set(runs.get() + 1));
     use llrm_mir::datalayout::DataLayout;
     use llrm_mir::passes::{Declared, Outer};
     let mut module = module.clone();

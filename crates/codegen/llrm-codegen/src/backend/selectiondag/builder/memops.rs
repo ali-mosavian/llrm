@@ -11,7 +11,7 @@ use llrm_mir::opcode::{Attribute, CallInfo};
 
 use super::super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue};
 use super::super::isd::ISD;
-use super::super::mvt::EVT;
+use super::super::mvt::{EVT, MVT};
 use super::super::target_calling::TargetCalling;
 use super::super::x86isd;
 use super::{Builder, Refused, convention_for};
@@ -83,7 +83,25 @@ impl Builder<'_> {
                 }
                 Ok(())
             }
-            Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse => Ok(()),
+            // `case Intrinsic::trap`: a `TRAP` node on the chain (selected as `ud2`).
+            Intrinsic::Trap => {
+                let root = self.root();
+                let trap = self.dag.get_node(ISD::Trap, EVT::OTHER, &[root]);
+                self.dag.set_root(trap);
+                Ok(())
+            }
+            // `case Intrinsic::debugtrap`: a `DEBUGTRAP` node (selected as `int3`).
+            Intrinsic::DebugTrap => {
+                let root = self.root();
+                let trap = self.dag.get_node(ISD::DebugTrap, EVT::OTHER, &[root]);
+                self.dag.set_root(trap);
+                Ok(())
+            }
+            // `case Intrinsic::ubsantrap`: `UBSAN_UD1` (a `ud1` with the kind as its
+            // displacement) is not translated: a named refusal, not a panic.
+            Intrinsic::UbsanTrap => Err(Refused("llvm.ubsantrap: M16-UBSANTRAP, not translated")),
+            // `case Intrinsic::experimental_noalias_scope_decl: return;`
+            Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse | Intrinsic::NoAliasScopeDecl => Ok(()),
             // `SelectionDAGBuilder.cpp#L7680`: the region information is
             // discarded; the scope is an undefined pointer.
             Intrinsic::InvariantEnd => Ok(()),
@@ -96,7 +114,7 @@ impl Builder<'_> {
                 Ok(())
             }
             // a hint the passes read: its value is its argument
-            Intrinsic::Expect | Intrinsic::Restrict => {
+            Intrinsic::Expect | Intrinsic::Restrict | Intrinsic::StartLoopIterations => {
                 let value = self.get_value(instruction.operands[0])?;
                 self.set_value(instruction.result.ok_or(Refused("a hint without a result"))?, value);
                 Ok(())
@@ -133,8 +151,48 @@ impl Builder<'_> {
             | Intrinsic::LRint
             | Intrinsic::LLRint
             | Intrinsic::Unary(_) => self.visit_math(instruction, intrinsic),
+            // the counter a phi carries, less what an iteration takes off
+            Intrinsic::LoopDecrementReg => {
+                let (left, right) =
+                    (self.get_value(instruction.operands[0])?, self.get_value(instruction.operands[1])?);
+                let vt = self.type_of(instruction.ty)?;
+                let node = self.dag.get_node(ISD::Sub, vt, &[left, right]);
+                self.set_value(instruction.result.ok_or(Refused("a decrement without a result"))?, node);
+                Ok(())
+            }
             _ => Err(Refused("intrinsic call")),
         }
+    }
+
+    /// `getSrcValue` of the IR pointer `operand`.
+    fn src_value_of(
+        &mut self,
+        operand: Operand,
+    ) -> SDValue {
+        let key = match operand {
+            Operand::Value(value) => value.0,
+            Operand::Constant(id) => 1 << 31 | id.index() as u32,
+            _ => 0,
+        };
+        self.dag.get_src_value(key)
+    }
+
+    /// `visitVAArg`: `VAARG` of the list at the root, the type's ABI
+    /// alignment as the last operand; the chain it returns is the new root.
+    pub(super) fn visit_va_arg(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), Refused> {
+        let vt = self.type_of(instruction.ty)?;
+        let align = self.layout.align(&self.module.context.types, instruction.ty);
+        let root = self.root();
+        let list = self.get_value(instruction.operands[0])?;
+        let source = self.src_value_of(instruction.operands[0]);
+        let align = self.dag.get_constant_with(align as u128, EVT::I32, true, false);
+        let node = self.dag.get_node_multi(ISD::VAArg, &[vt, EVT::OTHER], &[root, list, source, align]);
+        self.dag.set_root(SDValue { node: node.node, res: 1 });
+        self.set_value(instruction.result.ok_or(Refused("a va_arg without a result"))?, node);
+        Ok(())
     }
 
     /// `visitVAStart`, `visitVAEnd`, `visitVACopy`: the node on the root with
@@ -153,6 +211,7 @@ impl Builder<'_> {
         if self.target.dag.pointer == EVT::I64
             && matches!(intrinsic, Intrinsic::VaStart)
             && self.dag.var_args_save.is_none()
+            && !self.win64_va
         {
             return Err(Refused("va_start at m64 outside the entry block"));
         }
@@ -165,12 +224,7 @@ impl Builder<'_> {
             ops.push(self.get_value(*operand)?);
         }
         for operand in &instruction.operands[..ops.len() - 1] {
-            let key = match operand {
-                Operand::Value(value) => value.0,
-                Operand::Constant(id) => 1 << 31 | id.index() as u32,
-                _ => 0,
-            };
-            ops.push(self.dag.get_src_value(key));
+            ops.push(self.src_value_of(*operand));
         }
         let code = match intrinsic {
             Intrinsic::VaStart => ISD::VAStart,
@@ -387,6 +441,21 @@ impl Builder<'_> {
         if self.target.dag.pointer.size_in_bits() == 64 && size >= 8 { 8 } else { Self::WIDEST_MEM_OP }
     }
 
+    /// `getOptimalMemOpType` with SSE2: 16 bytes (`v4i32`, a `movups`/`movaps`
+    /// pair; a zero is `xorps`) for a piece of 16 or more bytes, else
+    /// [`Self::widest_mem_op`]. `integer_only` keeps the integer width: a
+    /// fill that is no zero, a volatile access or a constant source (stored as
+    /// immediates). x86-64 has SSE2 in its baseline; the 32-bit targets follow
+    /// with their CPU's feature set.
+    fn widest_mem_op_sse(
+        &self,
+        size: u64,
+        integer_only: bool,
+    ) -> u64 {
+        let sse2 = self.target.dag.pointer.size_in_bits() == 64 && self.target.target_nodes.is_none();
+        if sse2 && !integer_only && !self.volatile_memory && size >= 16 { 16 } else { self.widest_mem_op(size) }
+    }
+
     /// The alignment of a frame object a copy of `size` bytes fills, when the
     /// copy is expanded inline: the ABI alignment of the first piece's type if
     /// that is more, up to the natural stack alignment
@@ -401,7 +470,7 @@ impl Builder<'_> {
     ) -> u64 {
         let tuning = &self.target.tuning;
         let limit = if opt_size { tuning.max_stores_per_memcpy_opt_size } else { tuning.max_stores_per_memcpy };
-        let Some(first) = Self::mem_ops(size, self.widest_mem_op(size), limit, self.volatile_memory)
+        let Some(first) = Self::mem_ops(size, self.widest_mem_op_sse(size, false), limit, self.volatile_memory)
             .and_then(|ops| ops.first().copied())
         else {
             return align;
@@ -456,7 +525,7 @@ impl Builder<'_> {
         src_align: u64,
     ) -> Result<Option<SDValue>, Refused> {
         let slice = if self.volatile_memory { None } else { self.constant_slice(src) };
-        let widest = self.widest_mem_op(size);
+        let widest = self.widest_mem_op_sse(size, slice.is_some());
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
         let (mut src_off, mut dst_off, mut left) = (0u64, 0u64, size);
         let mut chains = Vec::new();
@@ -466,6 +535,21 @@ impl Builder<'_> {
                 src_off -= width - left;
                 dst_off -= width - left;
             }
+            if width == 16 {
+                let align = common_alignment(src_align, src_off).min(common_alignment(dst_align, dst_off));
+                let align = self.dag.get_constant(u128::from(align), EVT::I32);
+                let from = self.dag.get_object_ptr_offset(src, src_off as i64);
+                let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
+                let copy = self.dag.get_node(x86isd::LLRM_COPY128, EVT::OTHER, &[order, to, from, align]);
+                if self.target.ordered_copies {
+                    order = copy;
+                }
+                chains.push(copy);
+                src_off += width;
+                dst_off += width;
+                left = left.saturating_sub(width);
+                continue;
+            }
             let vt = EVT::integer(width as u32 * 8);
             // `getMemsetStringVal`: the bytes from the source's offset, zero
             // past the end, as an immediate stored on the root
@@ -473,7 +557,9 @@ impl Builder<'_> {
                 let mut value = 0u128;
                 for at in 0..width {
                     let byte = bytes.as_ref().and_then(|bytes| bytes.get((base + src_off + at) as usize)).copied();
-                    value |= u128::from(byte.unwrap_or(0)) << (8 * at);
+                    // the first byte is the low bits on a little-endian target
+                    let place = if self.dag.config().big_endian { width - at - 1 } else { at };
+                    value |= u128::from(byte.unwrap_or(0)) << (8 * place);
                 }
                 let value = self.dag.get_constant(value, vt);
                 let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
@@ -594,25 +680,31 @@ impl Builder<'_> {
         &self,
         length: u64,
         opt_size: bool,
-        zero: bool,
+        fill: Option<u128>,
     ) -> bool {
+        let zero = fill == Some(0);
+        if opt_size
+            && fill.is_some()
+            && self.target.dag.pointer.size_in_bits() == 64
+            && self.target.target_nodes.is_none()
+        {
+            return self.sse_fill_is_longer(length, fill.unwrap_or(0));
+        }
         if self.target.dag.pointer.size_in_bits() != 16 {
             return false;
         }
         let dwords = length / 4;
         let words = u64::from(length % 4 >= 2);
         let bytes = u64::from(length % 2 == 1);
-        // From two dwords on a register holds the value (`xor ecx, ecx` 3 B,
-        // `mov ecx, imm32` 6) and each store is that register's 4, 3 or 3
-        // bytes; a lone dword is `mov dword ptr [m], imm32`. A 10-byte clear
-        // is 14 bytes of stores against 16 of fill (the object's, measured).
-        let shared = dwords > 1;
-        let (each, setup, word, byte) = match (shared, zero) {
-            (true, true) => (4, 3, 3, 3),
-            (true, false) => (4, 6, 3, 3),
-            (false, _) => (8, 0, 5, 4),
-        };
-        let stored = setup + dwords * each + words * word + bytes * byte;
+        // The value in a register (`xor ecx, ecx` 3 B, `mov ecx, imm32` 6; each
+        // store 4, 3, 3 B) or as immediates (`mov dword ptr [m], imm32` 8, a
+        // word 5, a byte 4): whichever is fewer. A 10-byte clear is 14 bytes
+        // of stores against 16 of fill (the object's, measured), a 7-byte one
+        // 13.
+        let setup = if zero { 3 } else { 6 };
+        let register = setup + dwords * 4 + words * 3 + bytes * 3;
+        let immediates = dwords * 8 + words * 5 + bytes * 4;
+        let stored = register.min(immediates);
         if stored <= FILL_BYTES {
             return false;
         }
@@ -627,6 +719,44 @@ impl Builder<'_> {
         (stored - FILL_BYTES) as i64 * trade.milliclocks_per_byte >= (fill - stores) * 1000
     }
 
+    /// DEVIATE SD541 (x86-64, tuned for size): a constant fill whose 16-byte
+    /// stores (and the `xorps`, or the pool load of the splat) take more bytes
+    /// than a `rep stosq` fill is the fill. The pin counts stores
+    /// (`MaxStoresPerMemsetOptSize`), so a 128-byte clear is eight `movaps`
+    /// there (pattern_fill -Os +50 B, huffman_decode +12 B over the `rep stosq`
+    /// this port had). The sizes are the encodings at a `[rsp+disp8]` address:
+    /// `xorps` 3, the splat's `movaps` load 7, `movaps` store 5, `mov qword
+    /// [m], 0` 8, and the fill: the value in `rax` (`xor eax, eax` 2, `mov
+    /// rax, -1` 7, `movabs` 10), `lea rdi`, `mov ecx` and `rep stosq` 13.
+    /// Owner m64. Exit 2026-11-20: a store-cost hook on the target
+    /// description, as for SD223. The pin: [`getMemset`][memset] tries the
+    /// stores first, within [`MaxStoresPerMemsetOptSize = 8`][limit].
+    ///
+    /// [memset]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L10376
+    /// [limit]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L2937
+    fn sse_fill_is_longer(
+        &self,
+        length: u64,
+        byte: u128,
+    ) -> bool {
+        let value = match byte {
+            0 => 2,
+            0xff => 7,
+            _ => 10,
+        };
+        let fill = value + 5 + 5 + 3;
+        let Some(ops) = Self::mem_ops(length, 16, usize::MAX, self.volatile_memory) else { return false };
+        let wide = ops.iter().filter(|width| **width == 16).count() as u64;
+        let setup = match (wide, byte) {
+            (0, _) => 0,
+            (_, 0) => 3,
+            _ => 7,
+        };
+        setup + wide * 5 + (ops.len() as u64 - wide) * 8 > fill
+    }
+
     /// `getMemsetStores`: the fill value splatted to the widest operation,
     /// truncated for the narrower ones.
     fn inline_memset(
@@ -638,9 +768,12 @@ impl Builder<'_> {
         limit: usize,
         align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        let widest = self.widest_mem_op(size);
+        let zero = self.dag.constant(value) == Some(0);
+        // A constant byte is a splat in the pool (`v4i32` of the pin); only a
+        // value held in a register has no 16-byte form here.
+        let widest = self.widest_mem_op_sse(size, self.dag.constant(value).is_none());
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
-        let largest = ops.iter().copied().max().expect("a store");
+        let largest = ops.iter().copied().filter(|width| *width != 16).max().unwrap_or(8);
         let largest_vt = EVT::integer(largest as u32 * 8);
         let splat = self.memset_value(value, largest_vt);
         let (mut off, mut left) = (0u64, size);
@@ -648,6 +781,26 @@ impl Builder<'_> {
         for width in ops {
             if width > left {
                 off -= width - left;
+            }
+            if width == 16 {
+                let align = self.dag.get_constant(u128::from(common_alignment(align, off)), EVT::I32);
+                let to = self.dag.get_object_ptr_offset(dst, off as i64);
+                let node = if zero {
+                    self.dag.get_node(x86isd::LLRM_ZERO128, EVT::OTHER, &[chain, to, align])
+                } else {
+                    let byte = self.dag.constant(value).unwrap_or(0) & 0xff;
+                    let splat = (0..16).fold(0u128, |all, at| all | byte << (at * 8));
+                    let pointer = self.dag.config().pointer;
+                    let pool = self.dag.get_constant_pool(pointer, splat, EVT::Simple(MVT::I128), true);
+                    let from = self
+                        .dag
+                        .get_node(super::super::x86_lowering::wrapper_kind(&self.dag, pointer), pointer, &[pool]);
+                    self.dag.get_node(x86isd::LLRM_COPY128, EVT::OTHER, &[chain, to, from, align])
+                };
+                chains.push(node);
+                off += width;
+                left = left.saturating_sub(width);
+                continue;
             }
             let vt = EVT::integer(width as u32 * 8);
             let fill = if width < largest { self.dag.get_node(ISD::Truncate, vt, &[splat]) } else { splat };
@@ -723,6 +876,19 @@ impl Builder<'_> {
         Some((Some(bytes), from))
     }
 
+    /// The low `count` bytes of `bits` as the target lays them in memory.
+    fn memory_bytes(
+        &self,
+        bits: u128,
+        count: usize,
+    ) -> Vec<u8> {
+        if self.dag.config().big_endian {
+            bits.to_be_bytes()[16 - count..].to_vec()
+        } else {
+            bits.to_le_bytes()[..count].to_vec()
+        }
+    }
+
     /// `ReadDataFromGlobal`: the constant's bytes at `at`, where the layout
     /// puts them; `None` for anything but integers, floats and aggregates of
     /// them.
@@ -740,12 +906,12 @@ impl Builder<'_> {
                 let width = types.int_bits(constant.ty)?;
                 (width % 8 == 0).then_some(())?;
                 let count = (width / 8) as usize;
-                bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+                bytes.get_mut(at..at + count)?.copy_from_slice(&self.memory_bytes(*bits, count));
             }
             ConstantKind::Float(bits) => match types.get(constant.ty) {
                 Type::Float(kind @ (FloatKind::Float | FloatKind::Double)) => {
                     let count = kind.value_bytes() as usize;
-                    bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+                    bytes.get_mut(at..at + count)?.copy_from_slice(&self.memory_bytes(u128::from(*bits), count));
                 }
                 _ => return None,
             },
@@ -832,7 +998,7 @@ impl Builder<'_> {
         let callee = self.dag.get_target_external_symbol(word, routine.name);
         let root = self.memory_root();
         let env = CallEnv { arch: self.full_arch()?, pointer: word };
-        let (chain, _) = lib_call(&mut self.dag, &env, root, callee, &args, 0, 0, &[]);
+        let (chain, _) = lib_call(&mut self.dag, &env, root, callee, &args, 0, 0, &[], &super::super::dagisel_adapter::call_clobbered_flags());
         self.dag.set_root(chain);
         Ok(())
     }
@@ -929,8 +1095,19 @@ impl Builder<'_> {
                     Some(bytes) => self.inline_memmove(root, dst, other, bytes, limit, dst_align, src_align)?,
                     _ => None,
                 };
+                // a target with string instructions of its own
+                // (`EmitTargetCodeForMemcpy`) copies what is
+                // left past the inline limit with them, where the pin would
+                // call `memcpy`
+                let hooked = match (&inline, which) {
+                    (None, Intrinsic::MemCpy) if !strings_exist => self
+                        .calling()
+                        .and_then(|calling| calling.emit_memcpy_sized(&mut self.dag, root, dst, other, size, opt_size)),
+                    _ => None,
+                };
                 match (inline, which, constant) {
                     (Some(chain), _, _) => chain,
+                    (None, Intrinsic::MemCpy, _) if hooked.is_some() => hooked.expect("checked"),
                     (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.has_min_size() => {
                         self.rep_movs(root, dst, other, bytes, 1, dst_align, src_align)?
                     }
@@ -954,6 +1131,17 @@ impl Builder<'_> {
                         self.rep_movs(root, dst, other, bytes, 4, dst_align, src_align)?
                     }
                     _ if strings_exist && matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
+                        self.rep_movs_dwords(root, dst, other, size)
+                    }
+                    // DEVIATE MEM-1: a length known at run time is `rep movsd`
+                    // inline at speed where the target's tuning says so (the
+                    // pin calls `memcpy`)
+                    _ if strings_exist
+                        && matches!(which, Intrinsic::MemCpy)
+                        && constant.is_none()
+                        && !opt_size
+                        && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy()) =>
+                    {
                         self.rep_movs_dwords(root, dst, other, size)
                     }
                     // a move a pass proved forward, past the inline limit: `rep
@@ -1001,7 +1189,9 @@ impl Builder<'_> {
                     self.target.tuning.max_stores_per_memset
                 };
                 let inline = match constant {
-                    Some(bytes) if !self.fill_is_smaller(bytes, opt_size, self.dag.constant(other) == Some(0)) => {
+                    Some(bytes)
+                        if !self.fill_is_smaller(bytes, opt_size, self.dag.constant(other).map(|byte| byte & 0xff)) =>
+                    {
                         self.inline_memset(root, dst, other, bytes, limit, alignment)?
                     }
                     _ => None,
@@ -1027,6 +1217,17 @@ impl Builder<'_> {
                             && (bytes % 4 == 0 || (bytes % 2 == 0 && alignment >= 2)) =>
                     {
                         self.rep_stos(root, dst, other, bytes, if bytes % 4 == 0 { 4 } else { 2 })?
+                    }
+                    // for size, whole pointer-width units at that alignment: a
+                    // `rep stosb` runs a clock per byte (matmul.nib -Os +669)
+                    (None, Some(bytes))
+                        if strings_exist
+                            && opt_size
+                            && !self.runtime_has("memset")
+                            && alignment >= self.pointer_bytes()
+                            && bytes % self.pointer_bytes() == 0 =>
+                    {
+                        self.rep_stos(root, dst, other, bytes, self.pointer_bytes())?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
@@ -1079,7 +1280,7 @@ impl Builder<'_> {
                 };
                 let hooked = |dag: &mut _| {
                     if copy {
-                        calling.emit_memcpy(dag, root, dst, other, size)
+                        calling.emit_memcpy_sized(dag, root, dst, other, size, opt_size)
                     } else {
                         calling.emit_memmove(dag, root, dst, other, size)
                     }
@@ -1157,27 +1358,31 @@ impl Builder<'_> {
         }
         let dword = self.dag.get_value_type_node(EVT::I32);
         let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, dword, glue]);
-        if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0) {
+        // DEVIATE MEM-1: where the target inlines variable copies, a length
+        // whose low two bits are known zero (`n << 2`) has no byte tail
+        let inlines = self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy());
+        if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0)
+            || inlines && super::super::known_bits::masked_value_is_zero(&self.dag, count, 3)
+        {
             return SDValue { node: rep.node, res: 0 };
         }
+        // The tail starts where the dword copy ended: `dst + (n - n % 4)`.
+        // Leaving di/si out reloaded the copy's start (the tail rewrote the
+        // first bytes and left the last ones uncopied).
         let three = self.dag.get_constant(3, pointer);
         let bytes = self.dag.get_node(ISD::And, pointer, &[count, three]);
-        let copy = self
-            .dag
-            .get_copy_to_phys_reg(
-                SDValue { node: rep.node, res: 0 },
-                cx,
-                bytes,
-                Some(SDValue { node: rep.node, res: 1 }),
-            );
+        let whole = self.dag.get_node(ISD::Sub, pointer, &[count, bytes]);
+        let next_dst = self.dag.get_node(ISD::Add, pointer, &[dst, whole]);
+        let next_src = self.dag.get_node(ISD::Add, pointer, &[src, whole]);
+        let mut chain = SDValue { node: rep.node, res: 0 };
+        let mut glue = SDValue { node: rep.node, res: 1 };
+        for (reg, value) in [(cx, bytes), (di, next_dst), (si, next_src)] {
+            let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, Some(glue));
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = SDValue { node: copy.node, res: 1 };
+        }
         let byte = self.dag.get_value_type_node(EVT::I8);
-        let rep = self
-            .dag
-            .get_node_multi(
-                x86isd::REP_MOVS,
-                &[EVT::OTHER, EVT::GLUE],
-                &[SDValue { node: copy.node, res: 0 }, byte, SDValue { node: copy.node, res: 1 }],
-            );
+        let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, byte, glue]);
         SDValue { node: rep.node, res: 0 }
     }
 
@@ -1260,7 +1465,7 @@ impl Builder<'_> {
         if flat && tail {
             return self.backward_rep_movsb(chain, dst, src, size);
         }
-        let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5] };
+        let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0xFD, 0xF3, 0x66, 0xA5] };
         if tail {
             code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
         }
@@ -1279,6 +1484,14 @@ impl Builder<'_> {
             names.push(name_of(strings.expect("a flat move has no tail").tail));
             values.push(rest);
         }
+        // ES is an input the emit step requires (`feeds_call`): the block
+        // leaves it as the selector it was given, so late cleanup keeps one
+        // load for every string move and drops it after a far access.
+        let segment = strings.map(|strings| (name_of(strings.destination_segment), self.segment_of(None)));
+        if let Some((name, selector)) = segment {
+            names.push(name);
+            values.push(selector);
+        }
         let block = llrm_mir::intrinsics::AsmBlock {
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
@@ -1286,7 +1499,7 @@ impl Builder<'_> {
             clobbers: names
                 .iter()
                 .copied()
-                .chain(strings.map(|strings| name_of(strings.destination_segment)))
+                .filter(|name| Some(*name) != segment.map(|(es, _)| es))
                 .map(Into::into)
                 .collect(),
             memory: true,
@@ -1326,6 +1539,7 @@ impl Builder<'_> {
         let name_of = |register| self.arch.registers().name(register).expect("a described register");
         // A flat target names no string registers: `cx`, `si` and `di` are
         // its operands, and ES already holds what `pop es` loads.
+        let segment = strings.map(|strings| (name_of(strings.destination_segment), self.segment_of(None)));
         let operands = match strings {
             Some(strings) => {
                 [(name_of(strings.count), count), (name_of(strings.source), from), (name_of(strings.destination), to)]
@@ -1336,23 +1550,19 @@ impl Builder<'_> {
             }
         };
         let block = llrm_mir::intrinsics::AsmBlock {
-            // `push ds; pop es`: both pointers are near, in DS; ES holds
-            // whatever the last far access left
-            code: vec![0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC],
-            inputs: operands.iter().map(|(name, _)| (*name).into()).collect(),
+            code: vec![0xFD, 0xF3, 0xA4, 0xFC],
+            inputs: operands.iter().map(|(name, _)| *name).chain(segment.map(|(es, _)| es)).map(Into::into).collect(),
             outputs: Vec::new(),
-            clobbers: operands
-                .iter()
-                .map(|(name, _)| *name)
-                .chain(strings.map(|strings| name_of(strings.destination_segment)))
-                .map(Into::into)
-                .collect(),
+            clobbers: operands.iter().map(|(name, _)| (*name).into()).collect(),
             memory: true,
             fixups: Vec::new(),
         };
         let name = llrm_mir::intrinsics::asm_name(&block);
-        let registers =
-            operands.map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value));
+        let registers: Vec<_> = operands
+            .into_iter()
+            .chain(segment)
+            .map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value))
+            .collect();
         let (chain, _) = lower_asm(&mut self.dag, chain, &name, &[], &registers, &[]);
         chain
     }
@@ -1678,6 +1888,10 @@ impl Builder<'_> {
     /// (`emitConstantSizeRepmovs` takes `i64` at 8-byte alignment on x86-64).
     fn string_block(&self) -> u64 {
         u64::from(self.target.dag.pointer.size_in_bits() / 8).max(4)
+    }
+
+    fn pointer_bytes(&self) -> u64 {
+        u64::from(self.target.dag.pointer.size_in_bits() / 8)
     }
 
     /// `emitConstantSizeRepstos`.

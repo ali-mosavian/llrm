@@ -420,6 +420,26 @@ fn asking_whether_a_load_or_store_writes_derives_no_list() {
     assert_eq!(llrm_analysis::memoryssa::lazy_lists(), before, "lists derived for loads and stores");
 }
 
+/// A store walked past every call between it and the next store and asked the
+/// call's attributes again each time (`memory::stated` 1.5 M calls, half of
+/// DSE's 1.5 G Ir on 600 memcpy/memset/store triples). Each call is asked about
+/// once, however many stores walk past it.
+#[test]
+fn a_call_walked_past_by_many_stores_is_asked_about_once() {
+    const CALLS: usize = 12;
+    let mut body = String::new();
+    for i in 0..CALLS {
+        body.push_str(&format!("  store i16 {i}, ptr @g\n  call void @h(ptr @o)\n"));
+    }
+    let text = format!(
+        "@g = global i16 0\n@o = global i16 0\n\ndeclare void @h(ptr)\n\ndefine void @f() {{\nb0:\n{body}  store i16 99, ptr @g\n  ret void\n}}\n"
+    );
+    let before = llrm_analysis::memoryssa::lazy_lists();
+    eliminated(&text, &[]);
+    let derived = llrm_analysis::memoryssa::lazy_lists() - before;
+    assert!(derived <= 2 * CALLS, "{derived} lists derived for {CALLS} calls");
+}
+
 /// A store's place was worked out again at every ask (603 times for about a
 /// hundred stores on d_faces). A chain of n stores works out at most one place
 /// for each of its instructions.
@@ -475,4 +495,44 @@ fn an_overwritten_store_goes_past_invariant_end() {
         &[&[7]],
     );
     assert!(!after.contains("store i16 1"), "{after}");
+}
+
+/// A walk back past a memcpy asked the alias analysis whether the memcpy reads
+/// the killing store's bytes, as it does a plain call; the pin skips an
+/// intrinsic there (`!isa<IntrinsicInst>(CurrentI)`, DSE.cpp:1737) and leaves
+/// it to the memcpy handling. 600 memcpy/memset/store triples asked 48.7 k
+/// times, four times the pin's 12.2 k. Each memcpy is a killing def too and
+/// its walk asks its direct users once each (pin :1744): n(n+1)/2 asks, 72
+/// with the clobber check as well.
+#[test]
+fn a_walk_past_intrinsics_does_not_ask_each_as_a_read_clobber() {
+    const COPIES: usize = 8;
+    let copies: String =
+        (0..COPIES).map(|_| "  call void @llvm.memcpy.p0.p0.i16(ptr @o, ptr @p, i16 2, i1 false)\n").collect();
+    let text = format!(
+        "@g = global i16 0\n@o = global i16 0\n@p = global i16 0\n\ndeclare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\n\ndefine void @f() {{\nb0:\n  store i16 1, ptr @g\n{copies}  store i16 2, ptr @g\n  ret void\n}}\n"
+    );
+    let before = super::clobbers_asked();
+    eliminated(&text, &[]);
+    let asked = super::clobbers_asked() - before;
+    assert!(asked <= COPIES * (COPIES + 1) / 2, "{asked} read clobbers asked for {COPIES} memcpys");
+}
+
+/// `may_write` and `may_read` of a call derived its read and write lists and
+/// copied one to learn it is not empty (6.5 K Ir a call, 387 calls in LICM,
+/// 9.2 K `unmodeled_write` in DSE on memory_expansion): stores walking past
+/// calls derive no list.
+#[test]
+fn asking_whether_a_call_writes_derives_no_list() {
+    const CALLS: usize = 12;
+    let mut body = String::new();
+    for i in 0..CALLS {
+        body.push_str(&format!("  store i16 {i}, ptr @g\n  call void @h(ptr @o)\n"));
+    }
+    let text = format!(
+        "@g = global i16 0\n@o = global i16 0\n\ndeclare void @h(ptr)\n\ndefine void @f() {{\nb0:\n{body}  store i16 99, ptr @g\n  ret void\n}}\n"
+    );
+    let before = llrm_analysis::memoryssa::lazy_lists();
+    eliminated(&text, &[]);
+    assert_eq!(llrm_analysis::memoryssa::lazy_lists(), before, "lists derived for calls");
 }

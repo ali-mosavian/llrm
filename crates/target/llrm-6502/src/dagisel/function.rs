@@ -12,11 +12,12 @@
 //! calls) needs none. Reason: frame objects wait for the 6502 machine function.
 //! Exit: M4.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
+use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, TtiHandle, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
@@ -39,6 +40,7 @@ pub fn builder_target() -> BuilderTarget {
     BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
+        soft_float: true,
         jump_tables: false,
         string_instructions: false,
         // the runtime's own routines (runtime/mos_rt.s), called by the name the
@@ -57,6 +59,7 @@ pub fn builder_target() -> BuilderTarget {
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
         ..BuilderTarget::m16()
     }
+    .with_narrow_divrem(EVT::I16, true)
 }
 
 /// One block, selected and scheduled.
@@ -96,6 +99,23 @@ pub struct Selection {
     pub zero_page: u8,
     /// The level's price of a byte against a clock.
     pub tuning: crate::alloc::Tuning,
+    /// The source file `-g` names the lines of, and the line the function
+    /// starts at (its scope line); none prints no `.dbg line`.
+    pub source: Option<(String, Option<u32>)>,
+}
+
+impl Selection {
+    /// The calls of `__mulsi3` it makes.
+    pub fn mul_calls(&self) -> usize {
+        use super::generated::ids::opcode as op;
+        self.blocks
+            .iter()
+            .flat_map(|one| one.units.iter().flat_map(move |unit| unit.nodes.iter().map(move |&n| (one, n))))
+            .filter(|(one, node)| {
+                matches!(one.dag.nodes()[*node as usize].opcode, ISD::Machine(code) if code as u16 == op::MUL32)
+            })
+            .count()
+    }
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -107,6 +127,22 @@ pub fn select_function(
     module: &Module,
     name: &str,
     cpu: Cpu,
+) -> Result<Selection, String> {
+    select_function_with(module, name, cpu, false)
+}
+
+/// Whether `function` is tuned for size (`optsize` or `minsize`).
+pub fn is_sized(function: &Function) -> bool {
+    ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name))
+}
+
+/// [`select_function`]; `inline_multiplies` expands every `x * c` that can be
+/// shifts and an add, as a function not tuned for size does.
+pub fn select_function_with(
+    module: &Module,
+    name: &str,
+    cpu: Cpu,
+    inline_multiplies: bool,
 ) -> Result<Selection, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
@@ -122,10 +158,11 @@ pub fn select_function(
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
+    let sized = is_sized(function) && !inline_multiplies;
     for &block in function.layout() {
         let built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
-        select_built(Some((function, block)), block, built, cpu, &mut info, &mut selected)?;
+        select_built(Some((function, block)), block, built, (cpu, sized), &mut info, &mut selected)?;
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
@@ -145,7 +182,15 @@ pub fn select_function(
     for (reg, parts) in wide {
         widths.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
     }
-    Ok(Selection { blocks: selected, locals, cpu, widths, zero_page: 16, tuning: crate::alloc::Tuning::SPEED })
+    Ok(Selection {
+        blocks: selected,
+        locals,
+        cpu,
+        widths,
+        zero_page: 16,
+        tuning: crate::alloc::Tuning::SPEED,
+        source: None,
+    })
 }
 
 /// The size of each static alloca, by the frame index `FunctionLoweringInfo`
@@ -185,11 +230,11 @@ fn select_built(
     top: Option<(&Function, BlockId)>,
     block: BlockId,
     mut built: BlockDag,
-    cpu: Cpu,
+    (cpu, sized): (Cpu, bool),
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
-    let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
+    let units = select_block(&mut built.dag, cpu, sized).map_err(|why| format!("{why:?}"))?;
     // DEVIATE: refused. A `switch` made of several blocks puts one copy list on
     // all its edges, and a phi read on another edge is lost. Reason: the
     // edges leave blocks the builder made. Exit: split the critical edges
@@ -226,7 +271,7 @@ fn select_built(
     }
     selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
     for (extra, made) in built.extra {
-        select_built(None, extra, made, cpu, info, selected)?;
+        select_built(None, extra, made, (cpu, sized), info, selected)?;
     }
     Ok(())
 }

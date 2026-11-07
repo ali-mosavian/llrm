@@ -64,6 +64,7 @@ use std::fmt;
 use llrm_debug::{DebugObjectTarget, Described};
 use llrm_lir::registers::Regs;
 use llrm_object::assembler::AsmBackend;
+use llrm_support::hash::HashSet;
 use llrm_object::{Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target};
 use llrm_target::object::{CodeModel, Format};
 use llrm_x86::mc::backend::X86Backend;
@@ -115,6 +116,8 @@ fn data_role(
         "_DATA" => Role::Data,
         "_BSS" | "BSSB" => Role::Bss,
         "CONST" => Role::ROData,
+        // The pin's mergeable constant sections (`.rodata.cst4`...).
+        _ if name.starts_with(".rodata.cst") => Role::ROData,
         crate::backend::globals::INIT_SEGMENT => Role::InitFunctions,
         _ if far_bss => Role::Bss,
         _ => Role::Data,
@@ -323,6 +326,8 @@ pub struct Segment {
     pub fixups: Vec<Fixup>,
     /// (source line, offset) of each line's first code, in order.
     pub lines: Vec<(SrcLoc, usize)>,
+    /// Where a line row is a statement whatever the row before it says.
+    pub forced: Vec<usize>,
     /// Each procedure body's bounds, in order.
     pub bodies: Vec<(masm::Mark, usize)>,
     /// The declared call frame information and where it stands.
@@ -349,6 +354,7 @@ impl Segment {
             spans: Vec::new(),
             fixups: Vec::new(),
             lines: Vec::new(),
+            forced: Vec::new(),
             bodies: Vec::new(),
             cfi: Vec::new(),
             seh: Vec::new(),
@@ -364,6 +370,7 @@ impl Segment {
     ) {
         match mark {
             masm::Mark::Line { line, .. } => self.line(line),
+            masm::Mark::ForceStmt => self.forced.push(self.image.len()),
             masm::Mark::Declared => self.declared.push(self.image.len()),
             bound => self.bodies.push((bound, self.image.len())),
         }
@@ -460,7 +467,8 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
     if !module.data.iter().any(|(_, items)| items.iter().any(|item| matches!(item, masm::Datum::Object(_)))) {
         return Ok(module.clone());
     }
-    let mut reached: BTreeSet<String> = module.publics.iter().cloned().collect();
+    let mut reached: BTreeSet<String> =
+        module.publics.iter().cloned().chain(module.aliases.iter().map(|alias| alias.target.clone())).collect();
     for (number, procedure) in module.procedures.iter().enumerate() {
         reached.insert(procedure.name.clone());
         for item in masm::listing(procedure, number)? {
@@ -633,15 +641,32 @@ pub fn built_in(
 /// does for LLVM. Only a target whose description names the probe's scratch
 /// register has the probe.
 fn stack_probed(
-    mut module: masm::Module,
+    module: &mut masm::Module,
     format: Format,
-) -> masm::Module {
+) {
     if format == Format::Coff {
         for procedure in module.procedures.iter_mut().filter(|one| one.registers.slot_scratch.is_some()) {
             procedure.probe_stack = Some("__chkstk".to_owned());
         }
+        // Win64 has no red zone.
+        for procedure in module.procedures.iter_mut() {
+            procedure.registers.red_zone = 0;
+        }
     }
-    module
+}
+
+/// The pin states no frame address at an exit on Darwin or Windows
+/// (`X86FrameLowering::emitEpilogue`: `NeedsDwarfCFI` is off for them); the
+/// format decides, as the triple does.
+fn exits_unstated(
+    module: &mut masm::Module,
+    format: Format,
+) {
+    if matches!(format, Format::MachO | Format::Coff) {
+        for procedure in &mut module.procedures {
+            procedure.registers.exit_cfi = false;
+        }
+    }
 }
 
 /// [`built`] for the writer of `format`: what that format's object holds.
@@ -655,6 +680,18 @@ pub fn built_for(
     built_inner(module, source, layout, format, objects)
 }
 
+/// Whether `format` drops the data no code reaches: an OMF object does; the
+/// jump tables of the others are read by the procedure that has them.
+fn drops_unreached_data(format: Format) -> bool {
+    format == Format::Omf
+}
+
+/// Whether `format` rewrites the procedures before they are encoded
+/// (`stack_probed`, `exits_unstated`).
+fn changes_procedures(format: Format) -> bool {
+    matches!(format, Format::Coff | Format::MachO)
+}
+
 fn built_inner(
     module: &masm::Module,
     source: &str,
@@ -662,7 +699,18 @@ fn built_inner(
     format: Format,
     objects: &dyn DebugObjectTarget,
 ) -> Result<Described, Error> {
-    let module = &stack_probed(live(module)?, format);
+    // Only an OMF object drops data no code reaches (a jump table is always
+    // read by the procedure that has it), and only COFF and Mach-O change the
+    // procedures: the module is copied for those alone.
+    let mut adjusted = std::borrow::Cow::Borrowed(module);
+    if drops_unreached_data(format) {
+        adjusted = std::borrow::Cow::Owned(live(module)?);
+    }
+    if changes_procedures(format) {
+        stack_probed(adjusted.to_mut(), format);
+        exits_unstated(adjusted.to_mut(), format);
+    }
+    let module = &*adjusted;
     // A procedure the program put in a segment of its own naming (`code_seg`)
     // is in that one, the rest in `code`.
     let segment_of = |procedure: usize| -> &str {
@@ -1028,6 +1076,7 @@ pub fn _encoded(
     };
     let mut code = made.code.clone();
     let mut fixups: IndexMap<usize, Fixup> = IndexMap::default();
+    let beside_memory = what.dests.iter().chain(&what.sources).any(|one| matches!(one, Loc::Mem(_)));
     for one in what.dests.iter().chain(&what.sources) {
         let (at, loc, addend, addr) = match one {
             Loc::Mem(ir::Mem { addr: Some(addr), through, index_through, .. })
@@ -1046,6 +1095,15 @@ pub fn _encoded(
             }
             // Long mode loads a symbol's address with `lea` from the
             // instruction pointer.
+            // Static code loads it with `mov r32, imm32`: an absolute field.
+            Loc::Imm(ir::Imm { address: Some(addr), value, width: 4, .. }) if model == CodeModel::Flat64 => {
+                (made.immediate_at, near, addr.disp + value, addr)
+            }
+            // Beside a memory operand the displacement is the memory's: the
+            // symbol is the sign-extended imm32 (`mov qword ptr [m], offset a`).
+            Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if model == CodeModel::Flat64 && beside_memory => {
+                (made.immediate_at, near, addr.disp + value, addr)
+            }
             Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if model == CodeModel::Flat64 => {
                 (made.displacement_at, near, addr.disp + value, addr)
             }
@@ -1067,7 +1125,9 @@ pub fn _encoded(
         // Long mode reaches a symbol from the instruction pointer: the field is
         // relative to the instruction's end, and an address loaded for
         // a symbol defined elsewhere is its table entry's.
-        let loc = if model == CodeModel::Flat64 && based {
+        let loc = if model == CodeModel::Flat64 && matches!(one, Loc::Imm(ir::Imm { width: 4, .. })) {
+            loc
+        } else if model == CodeModel::Flat64 && (based || (beside_memory && matches!(one, Loc::Imm(_)))) {
             llrm_x86::mc::fixup::abs_signed_4()
         } else if model == CodeModel::Flat64 {
             let from = code.len() - at;
@@ -1336,16 +1396,36 @@ pub fn object_of(
         segments.iter().enumerate().filter(|(_, segment)| grouped(segment)).map(|(index, _)| index).collect();
     let omf_groups = if members.is_empty() { Vec::new() } else { vec![OmfGroup { name: "DGROUP".into(), members }] };
 
+    let publics: HashSet<&String> = module.publics.iter().collect();
     let mut table: Vec<Symbol> = symbols
         .iter()
         .map(|(name, &(section, offset))| Symbol {
             name: name.clone(),
-            binding: if module.publics.contains(name) { Binding::Public } else { Binding::Local },
+            binding: if publics.contains(name) { Binding::Public } else { Binding::Local },
             definition: Definition::Defined { section, offset },
             size: sizes.get(name).copied().unwrap_or(0),
             group: None,
+            visibility: module.visibility.get(name).copied().unwrap_or_default(),
         })
         .collect();
+    // An alias is the address of what it names, under its own name.
+    for alias in &module.aliases {
+        let Some(&(section, offset)) = symbols.get(&alias.target) else {
+            return Err(Unencodable(format!(
+                "alias {} names {}, which this object does not define",
+                alias.name, alias.target
+            ))
+            .into());
+        };
+        table.push(Symbol {
+            name: alias.name.clone(),
+            binding: alias.binding,
+            definition: Definition::Defined { section, offset },
+            size: sizes.get(&alias.target).copied().unwrap_or(0),
+            group: None,
+            visibility: module.visibility.get(&alias.name).copied().unwrap_or_default(),
+        });
+    }
     // Data an object does not define is addressed in the group as its own data
     // is.
     table.extend(order.iter().map(|name| Symbol {
@@ -1354,6 +1434,7 @@ pub fn object_of(
         definition: Definition::Undefined,
         size: 0,
         group: (externs[*name] == "byte").then_some(0),
+        visibility: Default::default(),
     }));
     let index: IndexMap<String, usize> =
         table.iter().enumerate().map(|(at, symbol)| (symbol.name.clone(), at)).collect();
@@ -1361,7 +1442,7 @@ pub fn object_of(
     let debug = module
         .debug
         .as_ref()
-        .map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, &index))
+        .map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, sizes, &index))
         .transpose()
         .map_err(Unencodable)?;
     let frames = if model == CodeModel::Segmented16 {
@@ -1429,15 +1510,15 @@ fn declared_frames(
     for (section, segment) in segments.iter().enumerate() {
         for (symbol, &(home, start)) in symbols {
             let Some(&length) = sizes.get(symbol).filter(|_| home == section) else { continue };
-            let within = |at: &usize| (start..start + length).contains(at);
-            if !segment.declared.iter().any(within) {
+            let range = start..start + length;
+            if within(&segment.declared, |at| *at, &range).is_empty() {
                 continue;
             }
             let entry = llrm_x86::mc::unwind::entry_row(bits);
             let mut state = entry.clone();
             let mut rows: Vec<FrameRow> = Vec::new();
             let mut ops = Vec::new();
-            for &(cfi, at) in segment.cfi.iter().filter(|(_, at)| within(at)) {
+            for &(cfi, at) in within(&segment.cfi, |one| one.1, &range) {
                 ops.push(cfi);
                 match cfi {
                     Cfi::DefCfa { register, offset } => {
@@ -1466,11 +1547,19 @@ fn declared_frames(
                     kept.push(row);
                 }
             }
-            let seh = segment.seh.iter().filter(|(_, at)| within(at)).map(|&(seh, at)| (at - start, seh)).collect();
+            let seh = within(&segment.seh, |one| one.1, &range).iter().map(|&(seh, at)| (at - start, seh)).collect();
             frames.push(llrm_object::Frame { section, offset: start, length, rows: kept, cfi: ops, seh });
         }
     }
     frames
+}
+
+/// The items whose offset lies in `range`. Items are pushed at the image's
+/// length, so they are sorted by offset: a search per function, not a scan.
+fn within<'a, T>(items: &'a [T], at: impl Fn(&T) -> usize, range: &std::ops::Range<usize>) -> &'a [T] {
+    let from = items.partition_point(|item| at(item) < range.start);
+    let to = items.partition_point(|item| at(item) < range.end);
+    &items[from..to]
 }
 
 pub fn _target(name: &str) -> &str {
@@ -1645,7 +1734,7 @@ mod tests {
     /// a `KeyError` at print. A jump through a cell keeps pointer-wide entries.
     #[test]
     fn test_a_register_table_jump_gets_a_table_of_differences() {
-        let held = Loc::Held(llrm_lir::Held { value: 1, width: 8 });
+        let held = Loc::Held(llrm_lir::Held { value: 1, width: 8, offset: 0 });
         let jump = Semantics {
             indirect: true,
             table: vec![1, 2],
@@ -1772,6 +1861,8 @@ mod tests {
             names: IndexMap::from_iter([((Space::External, 7), "_d".to_owned())]),
             externs: vec![("_f".into(), "far".into()), ("_d".into(), "byte".into())],
             publics: strings(&["_get"]),
+            visibility: Default::default(),
+            aliases: Vec::new(),
             data: vec![("_DATA".into(), vec![])],
             procedures: vec![procedure(
                 "_get",
@@ -1801,6 +1892,89 @@ mod tests {
         );
     }
 
+    /// `object_of` looked each symbol up in the module's public list, a
+    /// `Vec`: 4x the symbols cost about 16x the work (2400 tiny functions
+    /// spent 27% of the object write there). Counted in work (instructions, or
+    /// thread CPU time), not wall clock: at load 17 a preempted 0.6 ms run
+    /// read 5.5 ms and failed a linear table.
+    #[test]
+    fn test_the_symbol_table_is_linear_in_the_symbols() {
+        let work = |count: usize| -> u64 {
+            let names: Vec<String> = (0..count).map(|at| format!("f{at}")).collect();
+            let module = masm::Module {
+                registers: crate::backend::registerinfo::test_regs(),
+                code: "M_TEXT".into(),
+                names: IndexMap::default(),
+                externs: vec![],
+                publics: names.clone(),
+                visibility: Default::default(),
+                aliases: vec![],
+                data: vec![],
+                procedures: vec![],
+                private: BTreeSet::new(),
+                far_bss: BTreeSet::new(),
+                code_segments: Default::default(),
+                padding: Default::default(),
+                object: llrm_target::Target::object(&llrm_x86_m16::M16),
+                requests: BTreeSet::new(),
+                stack: 0,
+                debug: None,
+            };
+            let symbols: IndexMap<String, (usize, usize)> = names.into_iter().map(|name| (name, (0, 0))).collect();
+            (0..3)
+                .map(|_| {
+                    llrm_support::debug::work_of(|| {
+                        object_of(&module, "t.c", Vec::new(), &symbols, &IndexMap::default(), &IndexMap::default())
+                            .unwrap();
+                    })
+                    .1
+                })
+                .min()
+                .unwrap()
+        };
+        let (small, large) = (work(8000), work(32000));
+        assert!(large < small * 8, "4x the symbols took {large} work against {small}");
+    }
+
+    /// A second name and a hidden export reach the object's symbol table: the
+    /// writers dropped an alias's symbol (another unit naming it failed to
+    /// link) and wrote every export with default visibility.
+    #[test]
+    fn an_alias_is_a_symbol_at_its_targets_address_and_a_hidden_export_is_hidden() {
+        let leave = semantics(Operation::Return, "retf", vec![], vec![]);
+        let module = masm::Module {
+            debug: None,
+            registers: crate::backend::registerinfo::test_regs(),
+            code: "GET_TEXT".into(),
+            names: IndexMap::default(),
+            externs: vec![],
+            publics: strings(&["_get"]),
+            visibility: std::collections::BTreeMap::from([("_get".to_owned(), llrm_object::Visibility::Hidden)]),
+            aliases: vec![masm::Alias { name: "_other".into(), target: "_get".into(), binding: Binding::Weak }],
+            data: vec![("_DATA".into(), vec![])],
+            procedures: vec![procedure(
+                "_get",
+                true,
+                body("get", vec![lir::LirBlock::new(1, vec![insn(1, leave)]).into()]),
+                0,
+                vec![],
+            )],
+            private: BTreeSet::new(),
+            far_bss: BTreeSet::new(),
+            code_segments: Default::default(),
+            padding: Default::default(),
+            object: llrm_target::Target::object(&llrm_x86_m16::M16),
+            requests: BTreeSet::new(),
+            stack: 0,
+        };
+        let described =
+            built(&module, "get.c", CodeLayout::OneSegment, llrm_target::Target::objects(&llrm_x86_m32::M32)).unwrap();
+        let symbol = |name: &str| described.object.symbols.iter().find(|one| one.name == name).unwrap();
+        let (get, other) = (symbol("_get"), symbol("_other"));
+        assert_eq!((get.visibility, get.binding), (llrm_object::Visibility::Hidden, Binding::Public));
+        assert_eq!((other.definition, other.binding), (get.definition, Binding::Weak));
+    }
+
     /// `align 4` in a data segment pads to an offset, and an offset is an
     /// address only where the segment starts aligned: the segment was word
     /// aligned whatever its items asked, so a dword the data placed at 4 was
@@ -1818,6 +1992,8 @@ mod tests {
                 names: IndexMap::default(),
                 externs: vec![],
                 publics: strings(&["_a"]),
+                visibility: Default::default(),
+                aliases: Vec::new(),
                 data: vec![("_DATA".into(), items)],
                 procedures: vec![],
                 private: BTreeSet::new(),
@@ -1899,6 +2075,8 @@ mod tests {
                 ("_b".into(), "byte".into()),
             ],
             publics: strings(&["_f", "_table"]),
+            visibility: Default::default(),
+            aliases: Vec::new(),
             data: vec![
                 (
                     "_DATA".into(),
@@ -1959,7 +2137,7 @@ mod tests {
                  425353084641525f44415441074641525f534547044441544106534841524544064447524f555033980700482a0003\
                  0201e9980700a80d00050401a298070048050007060106980700681500090801d29807004802000b0a01019a08000c\
                  ff02ff03ff054b8c0500025f6200ac9009000001025f660500009a900d000102065f7461626c65000000f3a02e0001\
-                 0000568bf05ec3558bec83ec048b460683f803740ba30200bb0400e8e4ffebed90900200000068000007c9cb009c18\
+                 00005689c65ec35589e583ec048b460683f803740ba30200bb0400e8e4ffebed90900200000068000007c9cb359c18\
                  00c414140102c417140102c420140102c8225404c8255501eba0110002000001020300070707020000000000309c0a\
                  00c407140102cc0956014ca0190004000078797a78797a78797a78797a78797a78797a78797a56a006000500000100\
                  549c0500c4005404438a02000074")
@@ -1973,7 +2151,7 @@ mod tests {
         let regs = crate::backend::registerinfo::test_regs();
         let cell = ir::Mem {
             addr: Some(Addr { index: 3, ..Addr::new(Space::Segment, 1280) }),
-            index: Some(ir::Held { value: 1, width: 4 }),
+            index: Some(ir::Held { value: 1, width: 4, offset: 0 }),
             index_through: RegId::ESI,
             scale: 2,
             ..ir::Mem::new(None, 2)
@@ -1995,6 +2173,30 @@ mod tests {
         );
     }
 
+    /// `store ptr @a, ptr @sink` at -O2 -fno-pic encoded `mov [rip+disp], imm`
+    /// with one fixup: the immediate's symbol took the displacement's field, so
+    /// the store wrote 0 over the function `a` (sfm16 c64 -O2 segfaulted).
+    #[test]
+    fn test_a_store_of_a_symbol_to_a_symbol_has_a_fixup_for_each() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let cell = ir::Mem {
+            addr: Some(Addr { index: 3, ..Addr::new(Space::External, 0) }),
+            ..ir::Mem::new(None, 8)
+        };
+        let value = ir::Imm { value: 0, width: 8, address: Some(Addr { index: 4, ..Addr::new(Space::External, 0) }) };
+        let what = semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![Loc::Imm(value)]);
+        let names = IndexMap::from_iter([((Space::External, 3), "sink".to_owned()), ((Space::External, 4), "a".to_owned())]);
+
+        let piece = _encoded(regs, &what, &names, CodeModel::Flat64).unwrap();
+
+        let mut named: Vec<_> = piece.fixups.iter().map(|one| (one.name.as_str(), one.at)).collect();
+        named.sort_unstable();
+        assert_eq!(named.len(), 2, "{named:?}");
+        assert_eq!(named[0].0, "a");
+        assert_eq!(named[1].0, "sink");
+        assert_ne!(named[0].1, named[1].1, "both fixups on one field: {named:?}");
+    }
+
     /// Code was never aligned: every function began where the last ended.
     /// `emitFunctionHeader` aligns to 16 (`.p2align 4`, OMF and COFF); ELF's
     /// `.prefalign` aligns to no more than the body fills, so a 3-byte
@@ -2009,6 +2211,8 @@ mod tests {
                 names: IndexMap::default(),
                 externs: vec![],
                 publics: vec![],
+                visibility: Default::default(),
+                aliases: Vec::new(),
                 data: vec![],
                 procedures: (0..3)
                     .map(|n| masm::Procedure {
@@ -2101,5 +2305,52 @@ mod tests {
             frames.iter().map(|frame| (frame.offset, frame.seh.clone())).collect::<Vec<_>>(),
             vec![(8, vec![(1, llrm_object::Seh::PushReg(6)), (5, llrm_object::Seh::StackAlloc(32))])]
         );
+    }
+
+    /// `declared_frames` scanned every declared mark, CFI and SEH entry of a
+    /// segment for each function: four times the functions cost sixteen
+    /// times the work (object write 1.08/1.16 per doubling at 600/2400).
+    #[test]
+    fn the_frames_of_a_segment_are_linear_in_its_functions() {
+        let frames_of = |functions: usize| {
+            let mut segment = Segment::new("A_TEXT", Role::Text, true);
+            let mut symbols = IndexMap::default();
+            let mut sizes = IndexMap::default();
+            for at in 0..functions {
+                let name = format!("f{at}");
+                segment.declared.push(16 * at);
+                segment.cfi.push((llrm_object::assembler::Cfi::DefCfaOffset { offset: 16 }, 16 * at + 1));
+                symbols.insert(name.clone(), (0, 16 * at));
+                sizes.insert(name, 16);
+            }
+            let segments = [segment];
+            let best = (0..3)
+                .map(|_| {
+                    let started = std::time::Instant::now();
+                    let frames = declared_frames(64, &segments, &symbols, &sizes);
+                    assert_eq!(frames.len(), functions);
+                    started.elapsed()
+                })
+                .min()
+                .unwrap();
+            best
+        };
+        let (small, large) = (frames_of(4_000), frames_of(16_000));
+        assert!(large < small * 8, "4x the functions cost {:?} against {:?}", large, small);
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    /// An ELF x86-64 object ran `live`, which encoded every procedure and
+    /// cloned the module, to find no table dead: 13 M of jpeg_fixed's 27 M
+    /// instructions in `object write`. Only OMF reads a module that way.
+    #[test]
+    fn test_only_an_omf_object_looks_for_unreached_data_and_only_two_formats_change_procedures() {
+        let formats = [Format::Omf, Format::Coff, Format::MachO, Format::Elf];
+        assert_eq!(formats.map(drops_unreached_data), [true, false, false, false]);
+        assert_eq!(formats.map(changes_procedures), [false, true, true, false]);
     }
 }

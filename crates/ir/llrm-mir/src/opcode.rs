@@ -581,7 +581,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 46] = [
+pub const FLAG_ATTRIBUTES: [&str; 51] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -593,6 +593,9 @@ pub const FLAG_ATTRIBUTES: [&str; 46] = [
     "immarg",
     "inlinehint",
     "inreg",
+    "llrm-mulsi3",
+    "llrm-promoted-in-walk",
+    "llrm-self-copied",
     "minsize",
     "mustprogress",
     "naked",
@@ -608,6 +611,7 @@ pub const FLAG_ATTRIBUTES: [&str; 46] = [
     "nomerge",
     "nonnull",
     "norecurse",
+    "noredzone",
     "noretain",
     "noreturn",
     "nosync",
@@ -624,6 +628,7 @@ pub const FLAG_ATTRIBUTES: [&str; 46] = [
     "signext",
     "speculatable",
     "threeway",
+    "tre-deferred",
     "willreturn",
     "writable",
     "writeonly",
@@ -633,12 +638,13 @@ pub const FLAG_ATTRIBUTES: [&str; 46] = [
 /// Attributes the pin's clang states that no pass here reads (stack protection,
 /// unwind tables, `dead_on_return`...), kept as flags; `uwtable` may carry its
 /// kind in parentheses (`uwtable(sync)`).
-pub const TARGET_FLAG_ATTRIBUTES: [&str; 9] = [
+pub const TARGET_FLAG_ATTRIBUTES: [&str; 10] = [
     "allockind",
     "allocsize",
     "dead_on_return",
     "nocreateundeforpoison",
     "nofreeobj",
+    "noimplicitfloat",
     "ssp",
     "sspreq",
     "sspstrong",
@@ -671,12 +677,13 @@ pub struct CallInfo {
 }
 
 /// The calling conventions LLVM names, by number; any other is `ccN`.
-pub const CONVENTIONS: [(&str, u32); 12] = [
+pub const CONVENTIONS: [(&str, u32); 13] = [
     ("ccc", 0),
     ("fastcc", 8),
     ("coldcc", 9),
     ("x86_stdcallcc", 64),
     ("x86_fastcallcc", 65),
+    ("win64cc", WIN64),
     ("x86_intrcc", 83),
     ("x86_regcallcc", REGCALL),
     ("watcallcc", WATCALL),
@@ -716,6 +723,9 @@ pub const REGPARM3: u32 = 1005;
 
 /// `regparm3popcc`: `regparm3cc` whose callee removes the stack arguments.
 pub const REGPARM3POP: u32 = 1006;
+
+/// LLVM's `win64cc`: the Microsoft x64 convention.
+pub const WIN64: u32 = 79;
 
 /// `ia16cc`: gcc-ia16's convention.
 pub const IA16: u32 = 1004;
@@ -761,6 +771,14 @@ pub enum Opcode {
     Cast(CastOp),
     ExtractValue(Vec<u32>),
     InsertValue(Vec<u32>),
+    /// `extractelement`: operands (vector, index); the element, or poison for
+    /// an index past the end.
+    ExtractElement,
+    /// `insertelement`: operands (vector, element, index).
+    InsertElement,
+    /// `shufflevector`: operands (first, second); lane `i` of the result is
+    /// the mask's `i`th entry counted over both inputs' lanes, -1 for poison.
+    ShuffleVector(Vec<i32>),
     Alloca {
         allocated: TypeId,
         align: Option<u64>,
@@ -792,6 +810,10 @@ pub enum Opcode {
     FCmp(FloatPredicate),
     Phi,
     Select,
+    /// `VAArgInst`: the next variadic argument of type `ty` read through the
+    /// `va_list` pointer (operand 0), which it advances. Reads and writes that
+    /// list; the target's `VAARG` legalization says how.
+    VaArg,
     Freeze,
     Call(Box<CallInfo>),
     LandingPad {
@@ -837,6 +859,7 @@ impl Opcode {
                 | Self::Call(_)
                 | Self::ExtractValue(_)
                 | Self::InsertValue(_)
+                | Self::ShuffleVector(_)
                 | Self::Alloca { .. }
                 | Self::Load { .. }
                 | Self::Store { .. }
@@ -855,6 +878,7 @@ impl Opcode {
         match (self, other) {
             (Self::Invoke(a), Self::Invoke(b)) | (Self::Call(a), Self::Call(b)) => a == b,
             (Self::ExtractValue(a), Self::ExtractValue(b)) | (Self::InsertValue(a), Self::InsertValue(b)) => a == b,
+            (Self::ShuffleVector(a), Self::ShuffleVector(b)) => a == b,
             (
                 Self::Alloca { allocated: a, align: b, address_space: c },
                 Self::Alloca { allocated: d, align: e, address_space: f },
@@ -889,8 +913,12 @@ impl Opcode {
             Self::Binary(op) => spelling(&BINARY, *op),
             Self::Cast(op) => spelling(&CAST, *op),
             Self::ExtractValue(_) => "extractvalue",
+            Self::ExtractElement => "extractelement",
+            Self::InsertElement => "insertelement",
+            Self::ShuffleVector(_) => "shufflevector",
             Self::InsertValue(_) => "insertvalue",
             Self::Alloca { .. } => "alloca",
+            Self::VaArg => "va_arg",
             Self::Load { .. } => "load",
             Self::Store { .. } => "store",
             Self::Atomic(info) => match info.kind {
@@ -954,6 +982,10 @@ mod tests {
             Opcode::ExtractValue(vec![0]),
             Opcode::ExtractValue(vec![1]),
             Opcode::InsertValue(vec![0]),
+            Opcode::ExtractElement,
+            Opcode::InsertElement,
+            Opcode::ShuffleVector(vec![0, 1]),
+            Opcode::ShuffleVector(vec![1, 0]),
             Opcode::Call(info()),
             Opcode::Invoke(info()),
             Opcode::LandingPad { cleanup: false, clauses: vec![] },

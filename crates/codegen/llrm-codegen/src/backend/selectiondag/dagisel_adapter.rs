@@ -190,6 +190,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,
         Trap => pin::TRAP,
+        DebugTrap => pin::DEBUGTRAP,
         IntrinsicWoChain => pin::INTRINSIC_WO_CHAIN,
         IntrinsicWChain => pin::INTRINSIC_W_CHAIN,
         IntrinsicVoid => pin::INTRINSIC_VOID,
@@ -201,6 +202,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         VAStart => pin::VASTART,
         VAEnd => pin::VAEND,
         VACopy => pin::VACOPY,
+        // `ISD::VAARG` is 335, one below `VACOPY`; no pattern names it.
+        VAArg => 335,
         SrcValue => pin::SRCVALUE,
         // sdag-a's codes are private and named (`x86isd::name`), the pin's
         // number comes from the name; sdag-b's lowering writes the pin's
@@ -225,6 +228,10 @@ pub fn pin_vt(vt: EVT) -> Vt {
         EVT::Simple(MVT::F32) => mvt::f32,
         EVT::Simple(MVT::F64) => mvt::f64,
         EVT::Simple(MVT::F80) => mvt::f80,
+        EVT::Simple(MVT::F128) => mvt::f128,
+        // The opaque 16 bytes of an SSE move (`LLRM_ZERO128`, `LLRM_COPY128`);
+        // no pattern asks for it (SD540).
+        EVT::Simple(MVT::I128) => mvt::v4i32,
         EVT::Simple(MVT::Other) => mvt::Other,
         EVT::Simple(MVT::Glue) => mvt::Glue,
         _ => Vt(u16::MAX),
@@ -242,6 +249,8 @@ fn our_vt(vt: Vt) -> EVT {
         (mvt::f32, EVT::Simple(MVT::F32)),
         (mvt::f64, EVT::Simple(MVT::F64)),
         (mvt::f80, EVT::Simple(MVT::F80)),
+        (mvt::f128, EVT::Simple(MVT::F128)),
+        (mvt::v4i32, EVT::Simple(MVT::I128)),
         (mvt::Other, EVT::OTHER),
         (mvt::Glue, EVT::GLUE),
     ]
@@ -255,6 +264,35 @@ fn our_vt(vt: Vt) -> EVT {
 /// raw id.
 pub const EFLAGS_ID: llrm_lir::registers::RegId = llrm_lir::registers::RegId::from_raw(255);
 
+/// The flags every x86 call clobbers, the one register a `RegisterMask` always
+/// names. A call lowered with a convention adds that convention's clobbered
+/// registers (`SelectionDAGBuilder::clobbered_by`), as the pin's `RegisterMask`
+/// lists its caller-saved set. A call to a runtime routine, whose contract
+/// names what it disturbs, keeps the flags alone.
+pub fn call_clobbered_flags() -> Vec<u16> {
+    pin_register(EFLAGS_ID).into_iter().collect()
+}
+
+/// `X86TargetLowering::LowerCall`'s `RegisterMask`: what the call's convention
+/// does not preserve, in the pin's numbers (the flags are always in it). A
+/// register the pin has no number for cannot be a live physical definition, so
+/// it is left out.
+pub fn clobbered_by(
+    arch: &dyn llrm_target::Target,
+    found: Option<&llrm_target::calling::Convention>,
+) -> Vec<u16> {
+    let mut out = call_clobbered_flags();
+    for name in found.map(|found| found.clobbered.as_slice()).unwrap_or_default() {
+        if name == "flags" || name.starts_with("st") {
+            continue;
+        }
+        out.extend(pin_register(arch.registers().root(arch.register_named(name))));
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// The register of the pin's register number `register` that the builder names
 /// as a physical register (`NodeData::PhysReg`); `None` for `$noreg` (0) and
 /// the ones with no id.
@@ -262,8 +300,8 @@ pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
     use llrm_dagisel::generated::ids::x86;
     use llrm_lir::registers::RegId;
     // The pin's register numbers, in its X86 enum order (alphabetical: AH 1,
-    // AL 2, AX 3, ... EDX 27, ES 31); the ids
-    // module only names the ones some pattern mentions.
+    // AL 2, AX 3, ... EDX 27, ES 31); the ids module names the ones
+    // tools/dagisel/extra_symbols.txt asks for.
     const AL: u16 = 2;
     Some(match register {
         AL => RegId::AL,
@@ -283,6 +321,44 @@ pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
         x86::FS => RegId::FS,
         x86::GS => RegId::GS,
         x86::SS => RegId::SS,
+        x86::BH => RegId::BH,
+        x86::BL => RegId::BL,
+        x86::BP => RegId::BP,
+        x86::BX => RegId::BX,
+        x86::CH => RegId::CH,
+        x86::DH => RegId::DH,
+        x86::DI => RegId::DI,
+        x86::DL => RegId::DL,
+        x86::EBP => RegId::EBP,
+        x86::EBX => RegId::EBX,
+        x86::ECX => RegId::ECX,
+        x86::EDI => RegId::EDI,
+        x86::ESI => RegId::ESI,
+        x86::ESP => RegId::ESP,
+        x86::RBP => RegId::RBP,
+        x86::RBX => RegId::RBX,
+        x86::RCX => RegId::RCX,
+        x86::RDI => RegId::RDI,
+        x86::RSI => RegId::RSI,
+        x86::RSP => RegId::RSP,
+        x86::SI => RegId::SI,
+        x86::SP => RegId::SP,
+        x86::R8 => RegId::R8,
+        x86::R9 => RegId::R9,
+        x86::R10 => RegId::R10,
+        x86::R11 => RegId::R11,
+        x86::R12 => RegId::R12,
+        x86::R13 => RegId::R13,
+        x86::R14 => RegId::R14,
+        x86::R15 => RegId::R15,
+        x86::R8D => RegId::R8D,
+        x86::R9D => RegId::R9D,
+        x86::R10D => RegId::R10D,
+        x86::R11D => RegId::R11D,
+        x86::R12D => RegId::R12D,
+        x86::R13D => RegId::R13D,
+        x86::R14D => RegId::R14D,
+        x86::R15D => RegId::R15D,
         x86::EFLAGS => EFLAGS_ID,
         _ => return None,
     })
@@ -372,11 +448,38 @@ fn theirs(v: SDValue) -> PinValue {
     PinValue::new(v.node, v.res)
 }
 
+/// The nodes selection removed, by node id: a flag each, as node ids are dense
+/// (a `BTreeSet` was 22 M Ir of `has_live_users` on memory_expansion -O2
+/// x86-64).
+#[derive(Default)]
+pub(super) struct DeadNodes(Vec<bool>);
+
+impl DeadNodes {
+    pub(super) fn contains(
+        &self,
+        node: &u32,
+    ) -> bool {
+        self.0.get(*node as usize).copied().unwrap_or(false)
+    }
+
+    /// True if `node` was not dead before.
+    pub(super) fn insert(
+        &mut self,
+        node: u32,
+    ) -> bool {
+        let at = node as usize;
+        if self.0.len() <= at {
+            self.0.resize(at + 1, false);
+        }
+        !std::mem::replace(&mut self.0[at], true)
+    }
+}
+
 /// A [`SelectionDAG`] under selection.
 pub struct DagisAdapter<'a> {
     pub dag: &'a mut SelectionDAG,
     /// Nodes selection removed; the arena keeps them, no query sees them.
-    dead: BTreeSet<u32>,
+    dead: DeadNodes,
     /// The memory operands each machine node got (`setNodeMemRefs`), as
     /// load/store node ids.
     pub mem_refs: BTreeMap<u32, Vec<u32>>,
@@ -411,8 +514,9 @@ impl<'a> DagisAdapter<'a> {
             }
             work.extend(dag.nodes()[node as usize].ops.iter().map(|op| op.node));
         }
-        let dead =
-            (0..dag.nodes().len() as u32).filter(|&node| dag.is_deleted(node) || !reached[node as usize]).collect();
+        let dead = DeadNodes(
+            (0..dag.nodes().len() as u32).map(|node| dag.is_deleted(node) || !reached[node as usize]).collect(),
+        );
         let mut node_id = vec![-1; dag.nodes().len()];
         for (position, node) in super::dag_select::users_first(dag).into_iter().rev().enumerate() {
             node_id[node as usize] = position as i32;
@@ -478,6 +582,20 @@ impl<'a> DagisAdapter<'a> {
         self.dag.use_candidates(node).iter().any(|user| {
             !self.dead.contains(user) && self.dag.nodes()[*user as usize].ops.iter().any(|op| op.node == node)
         })
+    }
+
+    /// Whether a live user of `node` is still to be selected: not a machine
+    /// node and not marked selected.
+    pub(super) fn has_pending_user(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.live_user_nodes(node)
+            .into_iter()
+            .any(
+                |user| !matches!(self.dag.nodes()[user as usize].opcode, ISD::Machine(_))
+                    && self.node_id.get(user as usize).is_none_or(|id| *id != -1),
+            )
     }
 
     /// The live nodes that read a result of `node`, in creation order, once
@@ -546,6 +664,18 @@ impl<'a> DagisAdapter<'a> {
             }
         }
         out
+    }
+
+    /// `ReplaceUses` of an `AssertSext` or `AssertZext` by its operand, the
+    /// assertion and what only it read gone.
+    pub fn drop_assertion(
+        &mut self,
+        node: u32,
+    ) {
+        let asserted = SDValue { node, res: 0 };
+        let operand = self.dag.operand(asserted, 0);
+        self.dag.replace_all_uses_with(asserted, operand);
+        self.remove(node);
     }
 
     fn remove(
@@ -925,6 +1055,11 @@ impl Dag for DagisAdapter<'_> {
         // carry the flag): the LIR instruction keeps it.
         if mems.iter().any(|mem| self.dag.volatile_accesses.contains(mem)) {
             self.dag.volatile_accesses.insert(node);
+        }
+        // So is one that folded only invariant loads
+        // (`isDereferenceableInvariantLoad` asks every memory operand).
+        if !mems.is_empty() && mems.iter().all(|mem| self.dag.invariant_loads.contains(mem)) {
+            self.dag.invariant_loads.insert(node);
         }
         self.mem_refs.insert(node, mems.to_vec());
     }
@@ -1308,7 +1443,7 @@ impl AddrDag for DagisAdapter<'_> {
 
 /// `SelectionDAG::haveNoCommonBitsSet`, by the known bits: every bit is known
 /// zero in one of the two.
-fn no_common_bits(
+pub(super) fn no_common_bits(
     dag: &SelectionDAG,
     a: SDValue,
     b: SDValue,

@@ -87,7 +87,10 @@ fn unnamed_values_count_the_entry_block() {
 
 #[test]
 fn constructs_outside_the_subset_are_refused() {
-    assert_eq!(refusal("@x = global fp128 zeroinitializer\n"), "line 1: `fp128` is outside MIR's subset of LLVM");
+    assert_eq!(
+        refusal("@x = global ppc_fp128 zeroinitializer\n"),
+        "line 1: `ppc_fp128` is outside MIR's subset of LLVM"
+    );
     assert_eq!(refusal("target triple = \"i386\"\n"), "line 1: `triple` is outside MIR's subset of LLVM");
 }
 
@@ -124,6 +127,26 @@ fn a_float_decimal_is_read_as_a_float_and_f0x_takes_the_types_width() {
         refusal("@a = global float f0x3FF0040000000000\n"),
         "line 1: f0x3FF0040000000000 is not a float's 8 hex digits"
     );
+}
+
+/// The pin writes `0.1L` as `x86_fp80 1.000000e-01`; the reader rounded that to
+/// a double, so `0.1L` was the double 0.1 widened (`0x3FFBCCCCCCCCCCCCD000`,
+/// the low 11 bits zero) in every x87 target's code. `f0x` is the form it
+/// writes for the values that decimal does not read back.
+#[test]
+fn an_x86_fp80_decimal_is_rounded_at_64_bits_not_through_a_double() {
+    for (decimal, hex) in [
+        ("1.000000e-01", "3FFBCCCCCCCCCCCCCCCD"),
+        ("1.100000e+00", "3FFF8CCCCCCCCCCCCCCD"),
+        ("2.500000e+00", "4000A0000000000000000"),
+    ] {
+        let hex = &hex[..20];
+        assert_eq!(
+            round(&format!("@a = global x86_fp80 {decimal}\n")),
+            round(&format!("@a = global x86_fp80 f0x{hex}\n")),
+            "{decimal}"
+        );
+    }
 }
 
 /// The pin writes a `long double` as `f0x` and the 20 digits of x87's format
@@ -203,6 +226,32 @@ fn appending_linkage_is_read_and_printed_as_llvm_spells_it() {
 
 /// `@llvm.used`'s `section "llvm.metadata"` was read and then dropped by the
 /// printer, so a printed module lost it (the pipeline's text round trips).
+/// A COFF string literal is `linkonce_odr ... comdat` under a `$name = comdat
+/// any` line; the reader stopped at the `$` ("unexpected `$` at the top
+/// level"), so `llrm-llc` refused `static_pointers` and `strlen_idiom` from
+/// tests/run/c compiled for Windows (`LLParser::parseComdat`).
+#[test]
+fn a_comdat_declaration_and_its_marker_are_read() {
+    let text = "$\"??_C@_02@ab\" = comdat any\n$f = comdat largest\n\
+        @\"??_C@_02@ab\" = linkonce_odr constant [3 x i8] c\"ab\\00\", comdat, align 1\n\
+        @g = linkonce_odr global i32 0, comdat($f)\n\
+        define linkonce_odr void @f() comdat {\n  ret void\n}\n";
+    let module = parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    assert_eq!(module.comdats["??_C@_02@ab"], "any");
+    assert_eq!(module.comdats["f"], "largest");
+    assert_eq!(module.comdat_of["??_C@_02@ab"], "??_C@_02@ab");
+    assert_eq!(module.comdat_of["g"], "f");
+    assert_eq!(module.comdat_of["f"], "f");
+}
+
+/// The pin refuses a comdat used and never declared, and one declared twice.
+#[test]
+fn an_undeclared_or_repeated_comdat_is_refused() {
+    assert!(refusal("@g = global i32 0, comdat($c)\n").contains("undefined comdat '$c'"));
+    assert!(refusal("$c = comdat any\n$c = comdat any\n").contains("redefinition of comdat '$c'"));
+    assert!(refusal("$c = comdat sometimes\n").contains("unknown selection kind"));
+}
+
 #[test]
 fn a_global_section_survives_printing() {
     let text = "@llvm.used = appending global [1 x ptr] [ptr @f], section \"llvm.metadata\"\n\ndefine void @f() {\n  ret void\n}\n";
@@ -699,6 +748,124 @@ fn nearcode_is_a_function_attribute_that_round_trips() {
     assert!(once.contains("nearcode"), "{once}");
     assert_eq!(round(&once), once);
     assert!(crate::opcode::FLAG_ATTRIBUTES.contains(&crate::callgraph::NEAR_CODE));
+}
+
+/// The walk marks a body it made self-copies of with `llrm-self-copied`
+/// (walk::SELF_COPIED, a flag MIR does not name); the parser refused it
+/// ("expected `{`, found `llrm-self-copied`"), so llrm-qb's text of a
+/// recursive program at -O2 never reached the wasm backend
+/// (qb_wasm32 `unbounded_recursion_ends_with_out_of_stack_space`).
+#[test]
+fn llrm_self_copied_is_a_function_attribute_that_round_trips() {
+    let text = format!("{DATALAYOUT}\ndefine i16 @f(i16 %a) llrm-self-copied {{\nb0:\n  ret i16 %a\n}}\n");
+    let once = round(&text);
+    assert!(once.contains("llrm-self-copied"), "{once}");
+    assert_eq!(round(&once), once);
+}
+
+/// The sources of every non-test file under `crates`.
+fn crate_sources() -> Vec<(String, String)> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let mut sources = Vec::new();
+    let mut stack = vec![root.join("crates")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("a directory reads").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let name = path.strip_prefix(&root).expect("under the root").to_string_lossy().into_owned();
+            if !name.ends_with(".rs")
+                || name.ends_with("_tests.rs")
+                || name.ends_with("/tests.rs")
+                || name.contains("/tests/")
+            {
+                continue;
+            }
+            sources.push((name, std::fs::read_to_string(&path).expect("a source reads")));
+        }
+    }
+    sources
+}
+
+/// Every flag word a pass writes with `Attribute::Flag("word".to_owned())` or
+/// `Attribute::Flag(PATH::CONST.to_owned())` (a `const CONST: &str = "word"`
+/// anywhere), with a file that writes it. A flag made from a variable is not
+/// seen.
+fn written_flag_words(sources: &[(String, String)]) -> std::collections::BTreeMap<String, String> {
+    let mut constants = std::collections::BTreeMap::new();
+    for (_, text) in sources {
+        for line in text.lines() {
+            let line = line.trim_start();
+            let line = line.strip_prefix("pub(crate) ").or_else(|| line.strip_prefix("pub ")).unwrap_or(line);
+            if let Some(rest) = line.strip_prefix("const ")
+                && let Some((name, value)) = rest.split_once(": &str = \"")
+                && let Some((word, _)) = value.split_once("\";")
+            {
+                constants.insert(name.to_owned(), word.to_owned());
+            }
+        }
+    }
+    let mut words = std::collections::BTreeMap::new();
+    for (file, text) in sources {
+        for (at, _) in text.match_indices("Attribute::Flag(") {
+            // The pattern inside a string literal (a scanner's own text) is not
+            // a write.
+            if text[..at].ends_with('"') {
+                continue;
+            }
+            let argument = &text[at + "Attribute::Flag(".len()..];
+            let word = if let Some(literal) = argument.strip_prefix('"') {
+                literal.split('"').next().map(str::to_owned)
+            } else {
+                let path: String =
+                    argument.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':').collect();
+                let last = path.rsplit("::").next().unwrap_or("");
+                (last.len() > 1 && last.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
+                    .then(|| constants.get(last).cloned())
+                    .flatten()
+            };
+            if let Some(word) = word {
+                words.entry(word).or_insert_with(|| file.clone());
+            }
+        }
+    }
+    words
+}
+
+/// A pass that writes a flag the reader does not know makes every module that
+/// carries it unreadable (`nearcode`, `llrm-self-copied`, `llrm-mulsi3`,
+/// `tre-deferred`): each word written as a bare function flag is one the parser
+/// knows.
+#[test]
+fn every_flag_word_a_pass_writes_is_one_mir_reads() {
+    use crate::opcode::{FLAG_ATTRIBUTES, TARGET_FLAG_ATTRIBUTES};
+    let words = written_flag_words(&crate_sources());
+    assert!(words.len() > 5, "the scan found {} words: {words:?}", words.len());
+    let unread: Vec<String> = words
+        .iter()
+        .filter(|(word, _)| {
+            !FLAG_ATTRIBUTES.contains(&word.as_str()) && !TARGET_FLAG_ATTRIBUTES.contains(&word.as_str())
+        })
+        .map(|(word, file)| format!("`{word}` ({file})"))
+        .collect();
+    assert!(unread.is_empty(), "flag words the parser refuses: {}", unread.join(", "));
+}
+
+/// The scan sees a constant-named flag and a literal one: a word missing from
+/// the reader's list is reported by name.
+#[test]
+fn the_flag_scan_reads_literals_and_constants() {
+    let sources = vec![(
+        "x.rs".to_owned(),
+        "const KEPT: &str = \"kept-word\";\nfn f() { a.push(Attribute::Flag(\"lit-word\".to_owned())); \
+         b.push(llrm::Attribute::Flag(crate::m::KEPT.to_owned())); c.push(Attribute::Flag(name)); \
+         d.push(line.contains(\"Attribute::Flag(\") || line.contains(\"has(\")); }\n"
+            .to_owned(),
+    )];
+    let words = written_flag_words(&sources);
+    assert_eq!(words.keys().map(String::as_str).collect::<Vec<_>>(), ["kept-word", "lit-word"]);
 }
 
 /// `null_pointer_is_valid` is the attribute `null_pointer_is_defined` reads;
@@ -1349,4 +1516,120 @@ fn a_packed_named_struct_initializer_prints_packed() {
     let text = "%s = type <{ i8, i16 }>\n@g = global %s <{ i8 1, i16 2 }>\n";
     let printed = round(text);
     assert!(printed.contains("global %s <{ i8 1, i16 2 }>"), "{printed}");
+}
+
+fn module_of_functions(count: usize) -> crate::module::Module {
+    let mut text = String::new();
+    for at in 0..count {
+        text += &format!("declare void @f{at}()\n");
+    }
+    parse::module(&text).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// `Module::named` scanned every global per lookup: the assembler, the
+/// selection-DAG lowering and the atomic expansion each asked it of every
+/// function, 90 M excess Ir over a 2400-function compile (x14 for x4 the
+/// functions). A thousand lookups cost one table.
+#[test]
+fn test_a_module_makes_one_symbol_table_for_all_its_lookups() {
+    let module = module_of_functions(600);
+    let (builds, names) = (crate::module::symbol_builds(), crate::module::names_made());
+    for round in 0..2 {
+        for at in 0..600 {
+            assert_eq!(module.named(&format!("f{at}")), Some(crate::context::GlobalId(at as u32)), "round {round}");
+        }
+    }
+    assert_eq!(module.named("missing"), None);
+    // A name made on any thread (a parallel test parsing text) stales every
+    // table once, so the tables are one and one per name made meanwhile; a
+    // table per lookup would be 1201, and a scan of the globals (the 90 M Ir
+    // bug) makes none.
+    let made = crate::module::names_made() - names;
+    let tables = crate::module::symbol_builds() - builds;
+    assert!((1..=1 + made).contains(&tables), "{tables} tables, {made} names made");
+}
+
+/// A name made on another thread between two lookups staled the table, and
+/// the guard above asked for exactly one table: red in 3 of 3 full runs of the
+/// suite at the tip, green alone. The table is made again, once.
+#[test]
+fn a_name_made_on_another_thread_costs_one_table() {
+    let module = module_of_functions(600);
+    let (builds, names) = (crate::module::symbol_builds(), crate::module::names_made());
+    assert_eq!(module.named("f0"), Some(crate::context::GlobalId(0)));
+    std::thread::spawn(|| drop(crate::module::GlobalName::from("elsewhere".to_owned()))).join().unwrap();
+    for at in 0..600 {
+        assert_eq!(module.named(&format!("f{at}")), Some(crate::context::GlobalId(at as u32)));
+    }
+    // Another test parsing beside this one may stale it again: bounded by the
+    // names made, never by the lookups.
+    let made = crate::module::names_made() - names;
+    let tables = crate::module::symbol_builds() - builds;
+    assert!((2..=1 + made).contains(&tables), "{tables} tables, {made} names made");
+}
+
+/// The count of tables made was one for the whole process: a test that made
+/// a module's table beside `test_a_module_makes_one_symbol_table_for_all_its_lookups`
+/// failed it (5 of 40 runs red at the tip). A table made on another thread is
+/// not this thread's.
+#[test]
+fn a_table_made_on_another_thread_is_not_counted() {
+    let module = module_of_functions(3);
+    let before = crate::module::symbol_builds();
+    std::thread::spawn(|| {
+        let other = module_of_functions(3);
+        assert_eq!(other.named("f1"), Some(crate::context::GlobalId(1)));
+        assert_eq!(crate::module::symbol_builds(), 1);
+    })
+    .join()
+    .unwrap();
+    assert_eq!(crate::module::symbol_builds(), before);
+    assert_eq!(module.named("f2"), Some(crate::context::GlobalId(2)));
+    assert_eq!(crate::module::symbol_builds() - before, 1);
+}
+
+/// The table must not outlive a rename or a new global: a lookup after either
+/// finds what the globals now say.
+#[test]
+fn test_the_symbol_table_follows_a_rename_and_a_new_global() {
+    let mut module = module_of_functions(3);
+    assert_eq!(module.named("f1"), Some(crate::context::GlobalId(1)));
+    module.globals[1].name = crate::module::GlobalName::from("renamed".to_owned());
+    assert_eq!(module.named("f1"), None, "the old name");
+    assert_eq!(module.named("renamed"), Some(crate::context::GlobalId(1)));
+    let copy = module.globals[2].clone();
+    module
+        .globals
+        .push(crate::module::GlobalValue { name: crate::module::GlobalName::from("fresh".to_owned()), ..copy });
+    assert_eq!(module.named("fresh"), Some(crate::context::GlobalId(3)));
+    module.globals.swap(0, 2);
+    assert_eq!(module.named("f2"), Some(crate::context::GlobalId(0)), "a moved global");
+}
+
+/// wasm `memory_expansion` lr9: an alloca captured by a later call made BasicAA
+/// answer "may alias" against a pointer parameter, so the pin's byte-copy
+/// merge never happened in ours (18 load/store ops where the pin made 9). The
+/// pin: a parameter cannot point to a slot of this activation, captured or
+/// not; a pointer loaded from memory still can, once the slot is captured.
+#[test]
+fn a_captured_slot_does_not_alias_a_pointer_parameter_but_a_loaded_pointer_may() {
+    use crate::alias::{Alias, Location, alias};
+    use crate::{datalayout::DataLayout, memory::callees, module::Operand};
+    let module = parse::module(
+        "declare void @esc(ptr)\n\
+         define void @f(ptr %p, ptr %pp) {\n  %a = alloca [8 x i8], align 1\n  call void @esc(ptr %a)\n  \
+         %q = load ptr, ptr %pp, align 4\n  ret void\n}\n",
+    )
+    .unwrap();
+    let (_, _, function) = module.functions().find(|(_, _, f)| f.parameters().len() == 2).unwrap();
+    let results: Vec<_> = function.instructions.iter().filter_map(|i| i.result).collect();
+    let (slot, loaded) = (results[0], results[1]);
+    let at = |pointer| Location { pointer, bytes: 1, tbaa: None };
+    let verdict = |one: Operand, other: Operand| {
+        alias(&module.context, &DataLayout::default(), &callees(&module), &module.metadata, function, at(one), at(other))
+    };
+    let parameter = Operand::Value(function.parameters()[0]);
+    assert_eq!(verdict(parameter, Operand::Value(slot)), Alias::No);
+    assert_eq!(verdict(Operand::Value(slot), parameter), Alias::No);
+    assert_eq!(verdict(Operand::Value(loaded), Operand::Value(slot)), Alias::May);
 }

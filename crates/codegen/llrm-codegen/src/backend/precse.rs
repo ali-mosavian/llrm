@@ -56,8 +56,8 @@
 //! DEVIATE CSE3 (owner w-1, exit 2026-11-08): both selectors mark a load
 //! invariant when it reads a constant global or says so (`!invariant.load`, a
 //! `noalias readonly` argument), and the DAG selector the load of an incoming
-//! stack argument (an immutable fixed object). The pin also takes GOT and
-//! constant-pool loads, which ours lacks; the old selector reads an incoming
+//! stack argument (an immutable fixed object) and of a constant-pool entry. The
+//! pin also takes GOT loads, which ours lacks; the old selector reads an incoming
 //! argument as a memory operand of its reader, not a load of its own.
 //!
 //! Row CSE5 (was DEVIATE CSE5, retired 2026-10-25): `machinecse.rs`, the same
@@ -145,9 +145,16 @@ fn candidate(
     if what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Held(_)]) {
         return false;
     }
-    // A symbol's address stays out: it is a load of memory the pin shares and
-    // ours cannot make again (CSE2).
+    // A qword symbol address is a candidate: the pin shares `lea sym(%rip)`
+    // (CSE2 keeps the narrower ones out).
+    let remade = matches!(&what.dests[..], [Loc::Held(into)] if into.width == 8)
+        && (what.op == Operation::Address || matches!(&what.sources[..], [Loc::Imm(imm)] if imm.address.is_some()));
+    let loads =
+        matches!(what.op, Operation::Move | Operation::FloatLoad) && matches!(what.sources.as_slice(), [Loc::Mem(_)]);
+    let loads_invariant = loads && one.invariant();
     if one.uses.is_empty()
+        && !remade
+        && !loads_invariant
         && !matches!(
             what.sources.as_slice(),
             [Loc::Imm(imm)] if imm.address.is_none()
@@ -157,15 +164,16 @@ fn candidate(
     }
     let held = |place: &Loc| matches!(place, Loc::Held(_) | Loc::Imm(_) | Loc::Address(_));
     // `MI->mayLoad()` is a candidate only if `isDereferenceableInvariantLoad`.
-    let loads =
-        matches!(what.op, Operation::Move | Operation::FloatLoad) && matches!(what.sources.as_slice(), [Loc::Mem(_)]);
-    let loads_invariant = loads && one.invariant();
     let pure = pure && !loads || loads_invariant;
     pure && what.target.is_none()
         && !what.indirect
         && one.defines.len() == 1
         && matches!(what.dests.as_slice(), [Loc::Held(_)])
-        && (loads_invariant || what.sources.iter().all(held))
+        && (loads_invariant
+            || what
+                .sources
+                .iter()
+                .all(|place| held(place) || (what.op == Operation::Address && matches!(place, Loc::Mem(_)))))
         && one.call.is_none()
         && one.group.is_none()
         && !one.volatile()
@@ -183,9 +191,21 @@ fn candidate(
 fn expression(what: &Semantics) -> Semantics {
     let mut key = what.clone();
     if let Some(Loc::Held(dest)) = key.dests.first_mut() {
-        *dest = Held { value: 0, width: dest.width };
+        *dest = Held { value: 0, width: dest.width, offset: 0 };
     }
     key
+}
+
+/// A qword symbol address, a `LEA64r` in the pin: no def as cheap as a move.
+fn qword_address(one: &Insn) -> bool {
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| matches!(
+                (what.dests.as_slice(), what.sources.as_slice()),
+                ([Loc::Held(held)], [Loc::Imm(llrm_lir::Imm { address: Some(_), .. })]) if held.width == 8
+            ),
+        )
 }
 
 /// `TII->isAsCheapAsAMove`.
@@ -231,6 +251,10 @@ struct Walk<'a> {
     regs: llrm_lir::registers::Regs,
     /// Each block's predecessors, as block numbers.
     preds: Vec<Vec<usize>>,
+    /// Each block's frequency relative to the entry.
+    freq: Vec<f64>,
+    /// Whether each block holds a call.
+    calls: Vec<bool>,
 }
 
 impl Walk<'_> {
@@ -311,6 +335,7 @@ impl Walk<'_> {
         shared_block: usize,
         one: &Insn,
         block: usize,
+        index: usize,
     ) -> bool {
         let none = HashSet::default();
         let shared_readers = self.readers.get(&shared).unwrap_or(&none);
@@ -322,19 +347,45 @@ impl Walk<'_> {
         }
         // Heuristic 1: a cheap computation is shared only when the definition
         // is local or in an immediate predecessor (`CSBB->isSuccessor(BB)`).
-        if cheap(one)
+        // DEVIATE CSE7 (owner anyisa, exit 2026-11-20): a `lea` counts as cheap
+        // here. The pin's `LEA32r` is not `isAsCheapAsAMove`, so it shares one
+        // at any distance and its allocator splits the long range; ours spilled
+        // (x_life -O3 +2.6% clk: `lea eax, _g[ecx]` shared across a loop held a
+        // register and reloaded the bound each trip; x_transpose +14 B).
+        if (cheap(one) || one.what.as_ref().is_some_and(|what| what.op == Operation::Address))
             && shared_block != block
             && !self.body.blocks[shared_block].succ.contains(&self.body.blocks[block].at)
         {
             return false;
         }
         // Heuristic 2: no register operand and only copies read it: no use.
+        // DEVIATE CSE5: a call's argument reads a cheap constant as a copy in
+        // the pin, which then makes it twice; sharing it costs nothing the
+        // callee-saved pricing below does not count (sieve m64 -O2 made a
+        // zero twice, 4 bytes and 6 instructions over release/next). Exit
+        // 2026-11-20 with CSE4.
         let reads_value = !one.uses.is_empty();
         if !reads_value
             && old_readers.iter().all(|reader| match reader {
-                Reader::Insn(id) => self.copies(*id),
+                Reader::Insn(id) => self.copies(*id) || (!cheap(one) && self.pinned_read(*id, old)),
                 Reader::Phi(_) => false,
             })
+        {
+            return false;
+        }
+        // DEVIATE CSE4: a constant with no register operand that a call
+        // separates from its definition lives on in a callee-saved register
+        // if shared, and its push and pop (2 executed per entry) cost more
+        // than the one instruction sharing removes unless that runs often
+        // enough. The pin shares it (heuristic 2 asks only for a register use
+        // or a non-copy reader). Not a qword symbol address (`LEA64r`): the
+        // pin's allocator holds it in a register it pushes for the other
+        // addresses too, and a later loop reads it from there. Exit
+        // 2026-11-20.
+        if !qword_address(one)
+            && !reads_value
+            && self.freq[block] <= 2.0
+            && self.crosses_call(shared, shared_block, block, index)
         {
             return false;
         }
@@ -350,6 +401,74 @@ impl Walk<'_> {
                 },
             );
         local || !phi
+    }
+
+    /// Whether a call lies on a path from the definition of `shared` in
+    /// block `from` to the instruction `index` of block `to`: after the
+    /// definition, before the use, or in a block that `from` reaches and that
+    /// reaches `to`.
+    fn crosses_call(
+        &self,
+        shared: u32,
+        from: usize,
+        to: usize,
+        index: usize,
+    ) -> bool {
+        let is_call =
+            |one: &Arc<Insn>| one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call);
+        let defined = self.body.blocks[from].insns.iter().position(|one| one.defines.contains(&shared)).unwrap_or(0);
+        if from == to {
+            return self.body.blocks[from].insns[defined..index.max(defined)].iter().any(is_call);
+        }
+        if self.body.blocks[from].insns[defined..].iter().any(is_call)
+            || self.body.blocks[to].insns[..index].iter().any(is_call)
+        {
+            return true;
+        }
+        let blocks = self.body.blocks.len();
+        let mut forward = vec![false; blocks];
+        let mut stack = vec![from];
+        forward[from] = true;
+        while let Some(one) = stack.pop() {
+            for at in &self.body.blocks[one].succ {
+                if let Some(&next) = self.by_at.get(at)
+                    && !forward[next]
+                {
+                    forward[next] = true;
+                    stack.push(next);
+                }
+            }
+        }
+        let mut backward = vec![false; blocks];
+        let mut stack = vec![to];
+        backward[to] = true;
+        while let Some(one) = stack.pop() {
+            for &before in &self.preds[one] {
+                if !backward[before] {
+                    backward[before] = true;
+                    stack.push(before);
+                }
+            }
+        }
+        (0..blocks).any(|one| one != from && one != to && forward[one] && backward[one] && self.calls[one])
+    }
+
+    /// The pin reads a value a call needs in a particular register through a
+    /// `COPY` into it (a call's argument). A return or another fixed-register
+    /// reader is not one: a constant it reads is still shared (sieve m64 -O2
+    /// made a returned zero twice).
+    fn pinned_read(
+        &self,
+        id: u64,
+        value: u32,
+    ) -> bool {
+        self.block_of
+            .get(&id)
+            .and_then(|&block| self.body.blocks[block].insns.iter().find(|one| one.id() == id))
+            .is_some_and(|one| {
+                (one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call))
+                    && one.requires.iter().any(|(held, _)| held.value == value)
+            })
     }
 
     fn copies(
@@ -419,14 +538,12 @@ impl Walk<'_> {
 }
 
 /// The flag lanes of `lanes`, but AF: nothing emitted reads it. An x87
-/// instruction names lanes past the six of EFLAGS (its status word, which
-/// `fnstsw; sahf` moves there): it counts as reading and writing all six.
+/// instruction also names lanes past the six of EFLAGS (its status word, which
+/// `fnstsw; sahf` moves there): those are not flags, so `fmul` leaves a `dec`'s
+/// flags alone, as `fcomi` and `sahf` name the six themselves.
 pub(crate) fn flag_lanes(lanes: &crate::backend::lanes::Lanes) -> crate::backend::lanes::Lanes {
     use llrm_lir::flag::Flag;
-    let six = Flag::READ.bits();
-    let mask = lanes.mask() as u32;
-    let beyond = mask & !(six | Flag::AF.bits()) != 0;
-    crate::backend::lanes::Lanes::flags(if beyond { six } else { mask & six })
+    crate::backend::lanes::Lanes::flags(lanes.mask() as u32 & Flag::READ.bits())
 }
 
 /// What becomes of the flags `insns[index]` sets, walking `insns` after it.
@@ -564,6 +681,12 @@ fn pre_candidate(
         && !sets_flags(regs, bits, one)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Steps of the nearest-common-dominator climbs `hoisted` made.
+    static CLIMBS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `PerformSimplePRE`
 /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCSE.cpp#L901>),
 /// with `ProcessBlockPRE`
@@ -607,9 +730,15 @@ fn hoisted(
                 continue;
             };
             let (other_at, here) = (body.blocks[other].at, body.blocks[number].at);
-            // The nearest common dominator.
+            // The nearest common dominator. When the earlier block dominates
+            // this one it is that block, which hoists nothing: no climb.
+            if dominance.dominates(other_at, here) {
+                continue;
+            }
             let (mut up, mut down) = (other_at, here);
             while up != down {
+                #[cfg(test)]
+                CLIMBS.with(|climbs| climbs.set(climbs.get() + 1));
                 let order = |at: i64| dominance.preorder(at);
                 let climbing = if order(up) > order(down) { &mut up } else { &mut down };
                 let Some(parent) = dominance.immediate(*climbing) else { break };
@@ -761,6 +890,20 @@ pub fn shared(
         moved: HashMap::default(),
         table: HashMap::default(),
         regs,
+        freq: {
+            let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
+            (0..body.blocks.len()).map(|index| mbfi.get_block_freq_relative_to_entry_block(index)).collect()
+        },
+        calls: body
+            .blocks
+            .iter()
+            .map(|block| {
+                block
+                    .insns
+                    .iter()
+                    .any(|one| one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call))
+            })
+            .collect(),
     };
     // Depth first over the dominator tree; an entry is `(block, keys to drop)`
     // once its subtree is done.
@@ -786,6 +929,7 @@ pub fn shared(
                     *place = llrm_lir::mapped(place, |held| Held {
                         value: walk.read_as(one.id(), held.value),
                         width: held.width,
+                        offset: held.offset,
                     });
                 }
                 expression(&named)
@@ -793,7 +937,16 @@ pub fn shared(
             let mut key = keyed(&walk);
             let mut found = walk.table.get(&key).copied();
             // Copy propagation finds more of them (`ProcessBlockCSE`).
-            if found.is_none() && walk.propagate_copies(one) {
+            // DEVIATE CSE6 (owner anyisa, exit 2026-11-20): not into a `lea`.
+            // Its base and index then read the copy's source while the copy
+            // lives on for its other readers, two values where there was one
+            // (m32 quicksort -O3: 201611 -> 221218 clk, 1261 -> 1359 B, 45
+            // more frame references in `sort`). The pin's loop does it for
+            // every candidate.
+            if found.is_none()
+                && !one.what.as_ref().is_some_and(|what| what.op == Operation::Address)
+                && walk.propagate_copies(one)
+            {
                 key = keyed(&walk);
                 found = walk.table.get(&key).copied();
             }
@@ -814,7 +967,7 @@ pub fn shared(
                 continue;
             }
             let old = one.defines[0];
-            if !walk.profitable(shared_value, old, shared_block, one, number) {
+            if !walk.profitable(shared_value, old, shared_block, one, number, index) {
                 walk.table.insert(key.clone(), (old, number));
                 mine.push(key);
                 continue;
@@ -872,11 +1025,13 @@ pub fn shared(
 
 #[cfg(test)]
 mod tests {
+    use llrm_lir::Mem;
+
     use super::*;
     use crate::model::lir::LirBlock;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn insn(
@@ -890,6 +1045,142 @@ mod tests {
     ) -> Arc<Insn> {
         let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+    }
+
+    /// `lea v10, [v1+v1*2]` made again in the next block was not a candidate
+    /// (its source is a memory operand), so a loop's `3*acc` was recomputed
+    /// after the loop: countdown +3 B at m32.
+    #[test]
+    fn test_a_lea_of_the_same_base_and_index_is_made_once() {
+        let lea = |at, into, from| {
+            let memory = Mem {
+                base: Some(Held { value: from, width: 4, offset: 0 }),
+                index: Some(Held { value: from, width: 4, offset: 0 }),
+                scale: 2,
+                ..Mem::new(None, 4)
+            };
+            insn(at, Operation::Address, "lea", vec![held(into)], vec![Loc::Mem(memory)], vec![into], vec![from, from])
+        };
+        let entry = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![lea(0, 10, 1)]) };
+        let next = LirBlock::new(1, vec![lea(1, 11, 1)]);
+        let mut body =
+            LirBody::new("lea", 0, vec![entry.into(), next.into()], IndexMap::default(), IndexMap::default());
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let count = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("lea"))
+                .count()
+        };
+        assert_eq!(count(&body), 2, "the premise: two leas");
+        assert_eq!(count(&shared(&body, &RegisterClasses::m16())), 1);
+    }
+
+    /// CSE7. x_life -O3 (#7261): the `lea` of a global and a register, shared
+    /// with a block two away, stayed live across the loop between them and
+    /// spilled (+2.6% clk). One block away it is shared (the test above).
+    #[test]
+    fn test_a_lea_two_blocks_away_is_not_shared() {
+        let lea = |at, into| {
+            let memory = Mem {
+                base: Some(Held { value: 1, width: 4, offset: 0 }),
+                index: Some(Held { value: 1, width: 4, offset: 0 }),
+                scale: 2,
+                ..Mem::new(None, 4)
+            };
+            insn(at, Operation::Address, "lea", vec![held(into)], vec![Loc::Mem(memory)], vec![into], vec![1, 1])
+        };
+        let entry = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![lea(0, 10)]) };
+        let middle = LirBlock { succ: vec![2].into(), ..LirBlock::new(1, vec![]) };
+        let far = LirBlock::new(
+            2,
+            vec![
+                lea(2, 11),
+                insn(3, Operation::Binary, "add", vec![held(12)], vec![held(11), held(1)], vec![12], vec![11, 1]),
+            ],
+        );
+        let mut body = LirBody::new(
+            "lea",
+            0,
+            vec![entry.into(), middle.into(), far.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let count = |body: &LirBody| {
+            body.iter_insns()
+                .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("lea"))
+                .count()
+        };
+        assert_eq!(count(&shared(&body, &RegisterClasses::m16())), 2);
+    }
+
+    /// m32 quicksort -O3 (#7261): `lea [c + i*2]` with `c = mov s` and another
+    /// reader of `c` read `s` instead, so `s` and `c` both stayed live
+    /// through the inlined recursion's calls (+9.7% clk, +98 B). A `lea`
+    /// keeps the copy.
+    #[test]
+    fn test_a_lea_of_a_copy_that_has_another_reader_keeps_reading_the_copy() {
+        let memory = Mem {
+            base: Some(Held { value: 10, width: 4, offset: 0 }),
+            index: Some(Held { value: 2, width: 4, offset: 0 }),
+            scale: 2,
+            ..Mem::new(None, 4)
+        };
+        let entry = LirBlock::new(
+            0,
+            vec![
+                insn(0, Operation::Move, "mov", vec![held(10)], vec![held(1)], vec![10], vec![1]),
+                insn(1, Operation::Address, "lea", vec![held(11)], vec![Loc::Mem(memory)], vec![11], vec![10, 2]),
+                insn(2, Operation::Binary, "add", vec![held(12)], vec![held(10), held(3)], vec![12], vec![10, 3]),
+                insn(3, Operation::Binary, "add", vec![held(13)], vec![held(11), held(12)], vec![13], vec![11, 12]),
+            ],
+        );
+        let mut body = LirBody::new("lea", 0, vec![entry.into()], IndexMap::default(), IndexMap::default());
+        body.inputs = [1, 2, 3].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let shared = shared(&body, &RegisterClasses::m16());
+        let reads = |name: &str| -> Vec<u32> {
+            let one =
+                shared.iter_insns().find(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some(name));
+            one.map(|one| one.uses.clone()).unwrap_or_default()
+        };
+        assert!(reads("lea").contains(&10), "the lea reads the copy: {:?}", reads("lea"));
+        assert!(!reads("lea").contains(&1), "{:?}", reads("lea"));
+    }
+
+    /// The guard of the test above: a `lea` of another index or another scale
+    /// is another value and both stay.
+    #[test]
+    fn test_a_lea_of_another_index_or_scale_is_not_shared() {
+        let lea = |at, into, index, scale| {
+            let memory = Mem {
+                base: Some(Held { value: 1, width: 4, offset: 0 }),
+                index: Some(Held { value: index, width: 4, offset: 0 }),
+                scale,
+                ..Mem::new(None, 4)
+            };
+            insn(at, Operation::Address, "lea", vec![held(into)], vec![Loc::Mem(memory)], vec![into], vec![1, index])
+        };
+        let count = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("lea"))
+                .count()
+        };
+        for (index, scale) in [(2, 2), (1, 1)] {
+            let entry = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![lea(0, 10, 1, 2)]) };
+            let next = LirBlock::new(1, vec![lea(1, 11, index, scale)]);
+            let mut body =
+                LirBody::new("lea", 0, vec![entry.into(), next.into()], IndexMap::default(), IndexMap::default());
+            body.inputs = [1, 2].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            assert_eq!(count(&shared(&body, &RegisterClasses::m16())), 2, "index v{index}, scale {scale}");
+        }
     }
 
     /// `v12 = add v10, v2` where `v10 = mov v1` read `add v10, v2` as a new
@@ -930,6 +1221,81 @@ mod tests {
         assert_eq!(count(&shared, "add"), 1);
         let copy_of_v1 = shared.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| one.defines == [10]);
         assert!(!copy_of_v1, "the copy nothing reads is erased");
+    }
+
+    /// A symbol's address a call takes as an argument is read by a `COPY` in
+    /// the pin (heuristic 2: no register operand, only copies read it, so no
+    /// CSE). Ours read it in the call itself and shared it, so the address
+    /// lived across the function and `getbit` made `offset inbuf` five times
+    /// where the pin made it four.
+    #[test]
+    fn test_a_symbol_address_only_a_call_argument_reads_is_not_shared() {
+        let wide = |value: u32| Loc::Held(Held { value, width: 8, offset: 0 });
+        let symbol = || {
+            Loc::Imm(llrm_lir::Imm {
+                value: 0,
+                width: 8,
+                address: Some(crate::model::ir::Addr::new(crate::model::ir::Space::External, 0)),
+            })
+        };
+        let build = |call_reads: bool, fixed_reader: bool, zero: bool| {
+            let make = |at: i64, value: u32| {
+                let source =
+                    if zero { Loc::Imm(llrm_lir::Imm { value: 0, width: 8, address: None }) } else { symbol() };
+                insn(at, Operation::Move, "mov", vec![wide(value)], vec![source], vec![value], vec![])
+            };
+            let mut reader = if call_reads {
+                insn(3, Operation::Call, "call", vec![], vec![], vec![], vec![11])
+            } else {
+                insn(3, Operation::Binary, "add", vec![wide(12)], vec![wide(11), wide(1)], vec![12], vec![11, 1])
+            };
+            if call_reads || fixed_reader {
+                Arc::get_mut(&mut reader).unwrap().requires =
+                    vec![(Held { value: 11, width: 8, offset: 0 }, llrm_lir::registers::RegId::EAX)];
+            }
+            let entry = LirBlock {
+                succ: vec![1].into(),
+                ..LirBlock::new(
+                    0,
+                    vec![
+                        make(0, 10),
+                        insn(
+                            1,
+                            Operation::Binary,
+                            "add",
+                            vec![wide(13)],
+                            vec![wide(10), wide(1)],
+                            vec![13],
+                            vec![10, 1],
+                        ),
+                    ],
+                )
+            };
+            let next = LirBlock::new(1, vec![make(2, 11), reader]);
+            let mut body =
+                LirBody::new("symbol", 0, vec![entry.into(), next.into()], IndexMap::default(), IndexMap::default());
+            body.inputs = [1].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            body
+        };
+        let made = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().is_some_and(|what| matches!(what.sources.as_slice(), [Loc::Imm(_)])))
+                .count()
+        };
+        let read = shared(&build(false, false, false), &RegisterClasses::m16());
+        assert_eq!(made(&read), 1, "the premise: an address an add reads is shared");
+        let argument = shared(&build(true, false, false), &RegisterClasses::m16());
+        assert_eq!(made(&argument), 2, "{argument:?}");
+        // A reader that is not a call but needs the value in a fixed register
+        // (the return value) is not a copy: the shared constant stays shared.
+        let returned = shared(&build(false, true, false), &RegisterClasses::m16());
+        assert_eq!(made(&returned), 1, "{returned:?}");
+        // A cheap constant a call argument reads is shared all the same (CSE5).
+        let zero = shared(&build(true, false, true), &RegisterClasses::m16());
+        assert_eq!(made(&zero), 1, "{zero:?}");
     }
 
     /// `PerformSimplePRE` hoisted an expression into a block that ends in `ret`
@@ -986,6 +1352,37 @@ mod tests {
             "{returning:?}"
         );
         assert_eq!(adds(&returning), 2);
+    }
+
+    /// An expression computed again in a block its first block dominates hoists
+    /// nothing (the nearest common dominator is the first block), yet each
+    /// repeat climbed the dominator tree from the later block: a chain of
+    /// 300 repeats made 44850 steps, and memory_expansion's `lir precse`
+    /// went from 54M to 421M instructions once symbol addresses became
+    /// candidates.
+    #[test]
+    fn test_a_repeat_in_a_dominated_block_does_not_climb_the_tree() {
+        let blocks = 300usize;
+        let not = |at: i64, result: u32| {
+            insn(at, Operation::Unary, "not", vec![held(result)], vec![held(1)], vec![result], vec![1])
+        };
+        let read = |at: i64, value: u32| {
+            insn(at, Operation::Compare, "cmp", vec![], vec![held(value), held(value)], vec![], vec![value])
+        };
+        let chain: Vec<Block> = (0..blocks)
+            .map(|number| {
+                let at = number as i64;
+                let work = vec![not(at * 2, 10 + number as u32), read(at * 2 + 1, 10 + number as u32)];
+                let succ = if number + 1 < blocks { vec![at + 1] } else { vec![] };
+                Block::from(LirBlock { succ: succ.into(), ..LirBlock::new(at, work) })
+            })
+            .collect();
+        let mut body = LirBody::new("chain", 0, chain, IndexMap::default(), IndexMap::default());
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        CLIMBS.with(|climbs| climbs.set(0));
+        let _ = shared(&body, &RegisterClasses::m16());
+        assert_eq!(CLIMBS.with(|climbs| climbs.get()), 0);
     }
 
     /// `isProfitableToHoistInto` answers yes at once under `hasMinSize`
@@ -1124,6 +1521,62 @@ mod tests {
         assert_eq!(zeros(&shared(&next, &RegisterClasses::m16())), 1, "the next block reads the first");
         let far = build(2);
         assert_eq!(zeros(&shared(&far, &RegisterClasses::m16())), 2, "two edges away stays two");
+    }
+
+    /// A load of a constant-pool entry (`isDereferenceableInvariantLoad`) with
+    /// no register operand was never a candidate, so the six `movss xmm,
+    /// [1.0f]` of nbody_single stayed six through allocation where the pin
+    /// keeps one (+3 reloads, +24 B at -O3 m64). Two edges away is shared too:
+    /// a load is not as cheap as a move.
+    #[test]
+    fn test_an_invariant_pool_load_is_made_once_across_blocks() {
+        let load = |at: i64, result: u32| {
+            let mut one = insn(
+                at,
+                Operation::Move,
+                "movss",
+                vec![held(result)],
+                vec![Loc::Mem(llrm_lir::Mem::new(None, 4))],
+                vec![result],
+                vec![],
+            );
+            Arc::make_mut(&mut one).invariant = true;
+            one
+        };
+        let read = |at: i64, value: u32, result: u32| {
+            insn(
+                at,
+                Operation::Binary,
+                "addss",
+                vec![held(result)],
+                vec![held(value), held(1)],
+                vec![result],
+                vec![value, 1],
+            )
+        };
+        let blocks = vec![
+            LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![load(0, 10), read(1, 10, 11)]) },
+            LirBlock { succ: vec![2].into(), ..LirBlock::new(1, vec![]) },
+            LirBlock { succ: vec![].into(), ..LirBlock::new(2, vec![load(20, 20), read(21, 20, 21)]) },
+        ];
+        let mut body = LirBody::new(
+            "pool",
+            0,
+            blocks.into_iter().map(Into::<Block>::into).collect::<Vec<Block>>(),
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let loads = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("movss"))
+                .count()
+        };
+        assert_eq!(loads(&body), 2, "the premise: two loads");
+        assert_eq!(loads(&shared(&body, &RegisterClasses::of(&llrm_x86_m64::M64))), 1);
     }
 
     /// A store of a constant is not a copy: heuristic 2 took any `mov` that

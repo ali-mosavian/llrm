@@ -252,7 +252,11 @@ fn move_clocks(
 /// The operand whose addressing mode picks the row: the memory one of two, else
 /// the first.
 fn effective(operands: &[Operand]) -> Option<Mode> {
-    let modes: Vec<Mode> = operands.iter().filter_map(mode).collect();
+    // a bare number or symbol is an absolute address in an <ea> position
+    let modes: Vec<Mode> = operands
+        .iter()
+        .filter_map(|operand| if *operand == Operand::Target { Some(Mode::AbsL) } else { mode(operand) })
+        .collect();
     modes
         .iter()
         .copied()
@@ -278,8 +282,10 @@ pub(super) fn clocks(
         ("move", [Operand::Usp, _]) => miscellaneous("MOVE USP", "USP,An"),
         ("movec", [Operand::Control, _]) => miscellaneous("MOVEC", "Rc,Rn"),
         ("movec", [_, Operand::Control]) => miscellaneous("MOVEC", "Rn,Rc"),
+        // a `move.l` into an address register is `movea.l`: the printer writes
+        // the pop of a saved address register (`move.l (%sp)+, %a2`) that way
+        ("move" | "movea", [source, Operand::Mode(Mode::An, _)]) => by_mode("MOVEA.L", mode(source)?),
         ("move", [source, destination]) => move_clocks(mode(source)?, mode(destination)?),
-        ("movea", [source, _]) => by_mode("MOVEA.L", mode(source)?),
         ("moveq", _) => miscellaneous("MOVEQ", ""),
         ("add" | "sub" | "and" | "or" | "eor" | "cmp", [source, destination])
             if mode(source)? == Mode::Imm && base != "cmp" =>

@@ -1,17 +1,22 @@
-//! A pointer moved by a constant is added to in an address register: `addq`,
-//! `lea` or `adda`, whichever costs least on the CPU, in place of `move %a0,
-//! %d2; addq #6, %d2; move %d2, %a0`.
+//! A pointer moved by a constant is added to in an address register: `lea`,
+//! then `addq` or `adda` where that costs less on the CPU, in place of `move
+//! %a0, %d2; addq #6, %d2; move %d2, %a0`. The opposite round trip, a data
+//! value added to through an address register, is [`refine_lea_round_trips`].
 //!
 //! # How it works
 //! The pin's add of an immediate takes and gives a data register, so a pointer
 //! that loads from its base goes through two copies around it. [`address_adds`]
 //! finds an add whose input is a copy of an address register (used only by the
 //! add) and whose result reaches nothing but address registers, through copies
-//! and phis, and makes it an address-register instruction priced from
-//! the timing tables: `addq`/`subq` for 1 to 8, `lea (d16,An)` for a
-//! displacement that fits 16 bits, `adda` otherwise. On a smaller size they
-//! are ordered by bytes first. None of the three change the codes, so the add
-//! must not be one whose codes a branch reads.
+//! and phis, and makes it `lea (d16,An)` for a displacement that fits 16 bits,
+//! `adda` otherwise. Before allocation the form must not depend on the CPU:
+//! `addq` and `adda` take their result in the base's register and `lea` does
+//! not, so choosing them early moved the allocation (the 040 seeds s6, s242,
+//! s256, s277 grew in bytes and clocks). [`refine_address_adds`] runs after
+//! allocation and turns a `lea` whose result is its base into `addq`/`subq`
+//! for 1 to 8 or `adda`, whichever the timing tables price lower; on a smaller
+//! size they are ordered by bytes first. None of the three change the codes,
+//! so the add must not be one whose codes a branch reads.
 //!
 //! DEVIATE: the pin keeps the add in a data register and leaves the class to
 //! its register allocator, which splits it with copies. Reason: this
@@ -20,15 +25,17 @@
 //! # See also
 //! `M68kInstrInfo::copyPhysReg`, which is what the copies become.
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
+use crate::REGISTER_INFO;
 use crate::dagisel::hooks::Cpu;
-use crate::dagisel::local;
+use crate::dagisel::{indexed, local};
 use crate::mc;
 use crate::mfunc::{Class, MFunction, op_inst, operand_class};
 use crate::reg;
+use crate::regalloc::Assignment;
 
 /// A use of a virtual register: an instruction operand, or a phi's incoming.
 enum Use {
@@ -63,6 +70,9 @@ fn uses_by_register(function: &MFunction) -> Vec<Vec<Use>> {
                     all[*v as usize].push(match (&inst.kind, &inst.operands[..]) {
                         (Kind::Copy, [Operand::Def(Reg::Virt(dst)), _]) => Use::Copy(*dst),
                         (Kind::Op(name), _) if operand_class(name, index) == Some(Class::Ar32) => Use::Address,
+                        (Kind::Op(name), operands) if indexed::is_base_operand(name, index, operands.len()) => {
+                            Use::Address
+                        }
                         _ => Use::Other,
                     });
                 }
@@ -171,11 +181,52 @@ fn cheapest(
 ) -> Option<Candidate> {
     candidates(value)
         .into_iter()
-        .filter_map(|one| {
-            price(&one, cpu).map(|(clocks, bytes)| (if size { (bytes, clocks) } else { (clocks, bytes) }, one))
-        })
+        .filter_map(|one| price(&one, cpu).map(|(clocks, bytes)| (crate::timing::order(cpu, size, clocks, bytes), one)))
         .min_by_key(|(key, _)| *key)
         .map(|(_, one)| one)
+}
+
+/// The base of the add at `at` that reads `x`: `x` is a copy of an address
+/// register (or of one of either class whose other uses are all addresses
+/// too), read by the add alone. The copy's place and its source.
+fn address_copy(
+    function: &MFunction,
+    uses: &[Vec<Use>],
+    b: usize,
+    at: usize,
+    x: u32,
+) -> Option<(usize, Reg)> {
+    let insts = &function.blocks[b].insts;
+    let copy = insts[..at]
+        .iter()
+        .rposition(|one| matches!(&one.operands[..], [Operand::Def(Reg::Virt(def)), _] if *def == x))?;
+    let Kind::Copy = insts[copy].kind else { return None };
+    let Operand::Use(base @ Reg::Virt(y)) = insts[copy].operands[1] else { return None };
+    if uses[x as usize].len() != 1 {
+        return None;
+    }
+    match function.classes[y as usize] {
+        Class::Ar32 => {}
+        Class::Xr32 if reaches_addresses_only(function, uses, y, Some(x), &mut HashSet::default()) => {}
+        _ => return None,
+    }
+    Some((copy, base))
+}
+
+/// Whether no instruction reads the codes of the one at `at`.
+fn codes_unread(
+    insts: &[Inst],
+    at: usize,
+) -> bool {
+    for after in &insts[at + 1..] {
+        if after.sets_flags || after.call {
+            break;
+        }
+        if after.reads_flags {
+            return false;
+        }
+    }
+    true
 }
 
 /// Makes each pointer add that qualifies an address-register instruction.
@@ -211,53 +262,244 @@ fn rewrite_one(
     let sign = match name {
         "ADD32di" | "ADDQ32di" => 1,
         "SUB32di" | "SUBQ32di" => -1,
+        "ADD32dr" | "ADD32dd" => return rewrite_indexed(function, uses, b, at),
         _ => return None,
     };
     let [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(x)), Operand::Imm(value)] = insts[at].operands[..] else {
         return None;
     };
-    // the base: a copy of an address register, read by this add alone
-    let copy = insts[..at]
-        .iter()
-        .rposition(
-            |one| matches!(
-                &one.operands[..],
-                [Operand::Def(Reg::Virt(def)), _] if *def == x
-            ),
-        )?;
-    let Kind::Copy = insts[copy].kind else { return None };
-    let Operand::Use(base @ Reg::Virt(y)) = insts[copy].operands[1] else { return None };
-    if uses[x as usize].len() != 1 {
+    let (copy, base) = address_copy(function, uses, b, at, x)?;
+    if !codes_unread(&function.blocks[b].insts, at)
+        || !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::default())
+    {
         return None;
     }
-    // either an address register, or one of either class (a loop's pointer)
-    // whose other uses are all addresses too
-    match function.classes[y as usize] {
-        Class::Ar32 => {}
-        Class::Xr32 if reaches_addresses_only(function, uses, y, Some(x), &mut HashSet::new()) => {}
-        _ => return None,
-    }
-    // the add's codes are read by nobody
-    for after in &insts[at + 1..] {
-        if after.sets_flags || after.call {
-            break;
-        }
-        if after.reads_flags {
-            return None;
-        }
-    }
-    if !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::new()) {
-        return None;
-    }
-    let one = cheapest(sign * value, cpu, size)?;
+    // the form, priced on the CPU's selection class so that the allocation
+    // does not depend on the CPU; `refine_address_adds` prices the real one
+    let one = cheapest(sign * value, selection_class(cpu), size)?;
     let desc = local::desc(local::code_of(one.opcode)?)?;
     let mut inst: Inst = op_inst(one.opcode, desc, (one.operands)(Reg::Virt(d), base, one.value));
     // none of the three changes the codes; the pin's `adda` says it does
     inst.sets_flags = false;
     function.classes[d as usize] = Class::Ar32;
-    function.classes[y as usize] = Class::Ar32;
+    if let Reg::Virt(y) = base {
+        function.classes[y as usize] = Class::Ar32;
+    }
     let insts = &mut function.blocks[b].insts;
     insts[at] = inst;
     insts.remove(copy);
     Some(at)
+}
+
+/// A pointer plus a register, used only as an address, is `lea (0,An,Dn)`:
+/// `move.l %a0, %d0; add.l %d2, %d0; move.l %d0, %a1` has the same bytes and
+/// no copy to an address register after it.
+fn rewrite_indexed(
+    function: &mut MFunction,
+    uses: &[Vec<Use>],
+    b: usize,
+    at: usize,
+) -> Option<usize> {
+    let insts = &function.blocks[b].insts;
+    let [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(first)), Operand::Use(Reg::Virt(second))] =
+        insts[at].operands[..]
+    else {
+        return None;
+    };
+    let (copy, base, x, index) = [(first, second), (second, first)]
+        .into_iter()
+        .find_map(|(x, index)| address_copy(function, uses, b, at, x).map(|(copy, base)| (copy, base, x, index)))?;
+    if !codes_unread(insts, at) || !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::default()) {
+        return None;
+    }
+    let desc = local::desc(local::code_of("LEA32f")?)?;
+    let operands = vec![Operand::Def(Reg::Virt(d)), Operand::Imm(0), Operand::Use(base), Operand::Use(Reg::Virt(index))];
+    let mut inst: Inst = op_inst("LEA32f", desc, operands);
+    inst.sets_flags = false;
+    function.classes[d as usize] = Class::Ar32;
+    if let Reg::Virt(y) = base {
+        function.classes[y as usize] = Class::Ar32;
+    }
+    let insts = &mut function.blocks[b].insts;
+    insts[at] = inst;
+    insts.remove(copy);
+    Some(at)
+}
+
+fn is_data(register: llrm_lir::registers::RegId) -> bool {
+    [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7].contains(&register)
+}
+
+/// The clocks and bytes of the data-register add `opcode` of `value` on `cpu`.
+fn data_add_price(
+    opcode: &'static str,
+    value: i64,
+    cpu: Cpu,
+) -> Option<(u32, u32)> {
+    let d0 = mc::Operand::Reg(llrm_lir::registers::RegId::from(reg::D0));
+    let inst = mc::Inst { opcode, operands: vec![d0.clone(), d0, mc::Operand::Imm(value)] };
+    let bytes = crate::encode::encode(&inst).ok()?.bytes.len() as u32;
+    let clocks = crate::timing::cost(cpu, &mc::print(&inst).ok()?, bytes, false).ok()?.clocks;
+    Some((clocks, bytes))
+}
+
+/// The clocks of the two-byte register copy `text` on `cpu`.
+fn copy_clocks(
+    cpu: Cpu,
+    text: &str,
+) -> Option<u32> {
+    Some(crate::timing::cost(cpu, text, 2, false).ok()?.clocks)
+}
+
+/// DEVIATE: the pin keeps the `lea` its selector makes for an add of an
+/// immediate to a data value, and its allocator leaves the copies around it:
+/// `move.l %d0,%a0; lea (48,%a0),%a0; move.l %a0,%d0`. This is X86's
+/// LEA-to-ADD (`FixupLEAs`), after allocation so that the registers stay as
+/// allocated (making the add before allocation moved values from address
+/// registers into the scarcer data registers: 14 of 300 seeds grew). Exit:
+/// none.
+///
+/// Three adjacent instructions that copy a data register to an address
+/// register, `lea` from it, and copy the result to a data register, those
+/// two address registers read nowhere else, are `addq`/`subq`/`add` on the
+/// data register (with a copy when the two data registers differ), where the
+/// timing tables price that lower on `cpu` (bytes first at a smaller size).
+/// The add sets the codes the `lea` leaves, so one whose codes a later
+/// instruction would read stays.
+pub fn refine_lea_round_trips(
+    function: &mut MFunction,
+    assignment: &Assignment,
+    cpu: Cpu,
+    size: bool,
+) {
+    let uses = uses_by_register(function);
+    let single = |v: u32| uses[v as usize].len() == 1;
+    let phys = |r: &Reg| match r {
+        Reg::Virt(v) => assignment.0[*v as usize],
+        Reg::Phys(p) => *p,
+    };
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at + 2 < block.insts.len() {
+            let rewrite = (|| {
+                let insts = &block.insts[at..at + 3];
+                let ([Operand::Def(Reg::Virt(base)), Operand::Use(x)], Kind::Copy) =
+                    (&insts[0].operands[..], &insts[0].kind)
+                else {
+                    return None;
+                };
+                let (Kind::Op("LEA32p"), [Operand::Def(Reg::Virt(d)), Operand::Imm(value), Operand::Use(Reg::Virt(b))]) =
+                    (&insts[1].kind, &insts[1].operands[..])
+                else {
+                    return None;
+                };
+                let ([Operand::Def(w), Operand::Use(Reg::Virt(c))], Kind::Copy) =
+                    (&insts[2].operands[..], &insts[2].kind)
+                else {
+                    return None;
+                };
+                if b != base || c != d || !single(*base) || !single(*d) || !is_data(phys(x)) || !is_data(phys(w)) {
+                    return None;
+                }
+                if is_data(phys(&Reg::Virt(*base))) || is_data(phys(&Reg::Virt(*d))) {
+                    return None;
+                }
+                for after in &block.insts[at + 3..] {
+                    if after.sets_flags || after.call {
+                        break;
+                    }
+                    if after.reads_flags {
+                        return None;
+                    }
+                }
+                let (opcode, immediate) = match *value {
+                    1..=8 => ("ADDQ32di", *value),
+                    -8..=-1 => ("SUBQ32di", -*value),
+                    _ => ("ADD32di", *value),
+                };
+                // the three as they are, against the add (and a copy)
+                let same = phys(x) == phys(w);
+                let lea = price(&Candidate { opcode: "LEA32p", operands: displaced, value: *value }, cpu)?;
+                let (clocks, bytes) = data_add_price(opcode, immediate, cpu)?;
+                let old = (
+                    copy_clocks(cpu, "move.l\t%d0, %a0")? + lea.0 + copy_clocks(cpu, "move.l\t%a0, %d0")?,
+                    2 + lea.1 + 2,
+                );
+                let copy_cost = if same { 0 } else { copy_clocks(cpu, "move.l\t%d0, %d1")? };
+                let new = (clocks + copy_cost, bytes + if same { 0 } else { 2 });
+                if crate::timing::order(cpu, size, new.0, new.1) >= crate::timing::order(cpu, size, old.0, old.1) {
+                    return None;
+                }
+                let desc = local::desc(local::code_of(opcode)?)?;
+                let add = |source: Reg| op_inst(opcode, desc, tied(*w, source, immediate));
+                Some(if same {
+                    vec![add(*x)]
+                } else {
+                    let mut copy = insts[2].clone();
+                    copy.operands = vec![Operand::Def(*w), Operand::Use(*x)];
+                    vec![copy, add(*w)]
+                })
+            })();
+            match rewrite {
+                Some(new) => {
+                    let count = new.len();
+                    block.insts.splice(at..at + 3, new);
+                    at += count;
+                }
+                None => at += 1,
+            }
+        }
+    }
+}
+
+/// The CPU whose tables the pin selects from: the 68000 for it and the 68010,
+/// the 68020 for the rest.
+fn selection_class(cpu: Cpu) -> Cpu {
+    if cpu.at_least(Cpu::M68020) { Cpu::M68020 } else { Cpu::M68000 }
+}
+
+/// DEVIATE: the pin has no such pass on m68k; this is X86FixupLEAs's `lea` to
+/// `add` (and back) for a result that is its base, priced on the CPU's tables.
+/// Exit: none.
+///
+/// After allocation, an add of a constant to an address register that stays in
+/// it (`lea (d,An), An`, `addq`/`subq`, `adda`) is the cheapest of the three on
+/// `cpu`. One whose result is another register stays `lea`, for the tied forms
+/// would need a copy.
+pub fn refine_address_adds(
+    function: &mut MFunction,
+    assignment: &Assignment,
+    cpu: Cpu,
+    size: bool,
+) {
+    for block in &mut function.blocks {
+        for inst in &mut block.insts {
+            let Kind::Op(name) = inst.kind else { continue };
+            let (d, b, value) = match (name, &inst.operands[..]) {
+                ("LEA32p", [Operand::Def(Reg::Virt(d)), Operand::Imm(value), Operand::Use(Reg::Virt(b))]) => {
+                    (*d, *b, *value)
+                }
+                (
+                    "ADDQ32ai" | "ADD32ai",
+                    [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(b)), Operand::Imm(value)],
+                ) => (*d, *b, *value),
+                ("SUBQ32ai", [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(b)), Operand::Imm(value)]) => {
+                    (*d, *b, -*value)
+                }
+                _ => continue,
+            };
+            if REGISTER_INFO.root(assignment.0[d as usize]) != REGISTER_INFO.root(assignment.0[b as usize]) {
+                continue;
+            }
+            let Some(one) = cheapest(value, cpu, size) else { continue };
+            if one.opcode == name {
+                continue;
+            }
+            let Some(desc) = local::code_of(one.opcode).and_then(local::desc) else { continue };
+            let mut new: Inst = op_inst(one.opcode, desc, (one.operands)(Reg::Virt(d), Reg::Virt(b), one.value));
+            // none of the three change the codes; the pin's `adda` says it does
+            new.sets_flags = false;
+            *inst = new;
+        }
+    }
 }

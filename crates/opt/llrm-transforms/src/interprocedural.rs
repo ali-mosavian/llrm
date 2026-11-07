@@ -153,7 +153,7 @@ use llrm_mir::context::GlobalId;
 use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::module::{GlobalKind, Linkage, Module};
 use llrm_mir::opcode::Opcode;
-use llrm_mir::passes::{Declarations, Declared, ModuleAnalyses, PreservedAnalyses};
+use llrm_mir::passes::{AssumeDeclared, Declarations, Declared, GlobalNames, ModuleAnalyses, PreservedAnalyses};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 use llrm_mir::types::Type;
 
@@ -219,14 +219,14 @@ pub(crate) fn declared(
     modules: &mut ModuleAnalyses,
     module: &Module,
 ) -> Declared {
-    let held = modules.get::<Declarations>(module);
+    let named = modules.get::<GlobalNames>(module);
     if checking() {
         assert!(
-            *held == module.declarations(),
-            "the declarations held by the module's analyses differ from a fresh listing"
+            named.iter().zip(&module.globals).all(|(name, global)| global.name.as_deref() == name.as_deref()),
+            "the names held by the module's analyses differ from the module's"
         );
     }
-    Declared::over(held, module.metadata.len())
+    Declared::over_names(named, module.metadata.len()).with_assume_declared(*modules.get::<AssumeDeclared>(module))
 }
 
 fn checking() -> bool {
@@ -276,7 +276,7 @@ impl ProgramPass for Interprocedural {
         analyses: &mut ProgramAnalyses,
     ) -> Result<(), String> {
         let pipeline = &mut self.pipeline;
-        let costs = if self.rate.is_some() { program.target.size_costs() } else { program.target.costs() };
+        let costs = if self.rate.is_some() { program.target.byte_costs() } else { program.target.costs() };
         let clocks = program.target.costs();
         let loose = self.rate.map(|_| &clocks);
         let rate = self.rate.unwrap_or(0);
@@ -652,6 +652,21 @@ pub fn optimized_with<E: From<String>>(
         bare_the_unreached(module, &mut modules[at], &private[at], &addressed, &roots_here(roots, at));
     }
 
+    // A by-reference copy-out the callee cannot change goes first: it is what
+    // made a body that only reads its arguments write memory, and the memory
+    // effects are stated again for `promote.` below.
+    let mut copied_out = false;
+    for at in 0..count {
+        for id in reporting(&mut program.modules[at], &mut modules[at], crate::copyback::elided) {
+            copied_out = true;
+            edited(&mut modules[at], &[id]);
+            reoptimised(&mut program.modules[at], &mut modules[at], id, "copyback.")?;
+        }
+    }
+    if copied_out {
+        stamped_all(program, modules).map_err(E::from)?;
+    }
+
     // A pointer a body only reads through is given as the fields it reads,
     // before what its callers pass is propagated: a length or a segment now
     // crosses the call as a value.
@@ -683,9 +698,16 @@ pub fn optimized_with<E: From<String>>(
     // refuses this descriptor) merges and this call goes; if #6140 cannot
     // land by 2026-11-05 the alternative exit is reported on the 5th.
     // tests/nearcalls.rs holds the folded shape and, ignored, the pin's.
-    if promoted_any {
-        for (at, id) in crate::ipsccp::run_ipsccp_with(program, modules) {
+    let walk_promoted = crate::walk::take_walk_promotions(program, modules);
+    if (promoted_any || walk_promoted) && program.target.second_ipsccp() {
+        // Every body is told changed before the first runs again: the solver has
+        // already restated the attributes of all of them, and a pipeline that
+        // asks the declarations meanwhile must not find the others' standing.
+        let solved = crate::ipsccp::run_ipsccp_with(program, modules);
+        for &(at, id) in &solved {
             edited(&mut modules[at], &[id]);
+        }
+        for (at, id) in solved {
             reoptimised(&mut program.modules[at], &mut modules[at], id, "ipsccp.")?;
         }
     }
@@ -922,8 +944,17 @@ pub fn stamped(
     let graph = analyses.get::<CallGraphAnalysis>(module);
     let mut changed: Vec<GlobalId> = Vec::new();
     let mut seen: BTreeSet<GlobalId> = BTreeSet::new();
+    // What each function does to memory, kept as the components state it.
+    let mut callees = llrm_mir::memory::callees(module);
     for (members, _) in graph.bottom_up_components() {
-        for id in functionattrs::post_order(module, layout, spaces, &members) {
+        let stated = functionattrs::post_order_with(module, layout, spaces, &callees, &members);
+        for &id in &stated {
+            let global = module.global(id);
+            if let Some(function) = global.function() {
+                callees.insert(id, llrm_mir::memory::global_summary(global.name.as_deref(), function));
+            }
+        }
+        for id in stated {
             if seen.insert(id) {
                 changed.push(id);
             }

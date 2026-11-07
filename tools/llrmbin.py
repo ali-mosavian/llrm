@@ -200,17 +200,56 @@ def pinned(binary: Path) -> Path:
     return link
 
 
+def fresh(path) -> None:
+    """Remove the file a compile is about to write: a compile that fails or writes nothing must not leave the previous one to be read as its output."""
+    Path(path).unlink(missing_ok=True)
+
+
+def produced(done, path) -> bool:
+    """The compile `done` succeeded and wrote a non-empty `path` (call `fresh(path)` first)."""
+    return done.returncode == 0 and Path(path).is_file() and Path(path).stat().st_size > 0
+
+
 def md5(path) -> str:
     return hashlib.md5(Path(path).read_bytes()).hexdigest()
+
+
+def assert_clean_env(environ=None) -> list[str]:
+    """SystemExit on an LLRM_* variable `envguard.stray` finds (outside ab_env.sh's list, not named in `AB_ALLOW_ENV`); else the `LLRM_*=value` lines to print.
+    LLRM_WASM_BACKEND_ONLY on one side skipped the mid-end and a false second cause was chased for 40 minutes."""
+    import envguard
+
+    environ = os.environ if environ is None else environ
+    if found := envguard.stray(environ, environ.get("AB_ALLOW_ENV", "").split()):
+        raise SystemExit(f"{found[0]} changes the pipeline; unset it, or name it in AB_ALLOW_ENV if both sides are meant to run it")
+    return [f"{k}={environ[k]}" for k in sorted(environ) if k.startswith("LLRM_")]
 
 
 def assert_distinct(base, new, same_source: bool = False) -> str:
     """The header line of an A/B table: both binaries' md5. SystemExit when they are equal and the sources are not known to be: `cargo build -p X` does not
     relink target/release/X, so two builds of different commits were the same binary and a pair read "0 differ" (lir-cleanup-port's identity run)."""
+    assert_clean_env()
     a, b = md5(base), md5(new)
     if a == b and not same_source:
         raise SystemExit(f"same binary: base {base} and new {new} both have md5 {a}; the new commit was not built into it (`cargo build --bin X`, not `-p`). Refusing to print a diff.")
     return f"binaries: base {a[:12]} {base} | new {b[:12]} {new}" + (" (same binary, same source)" if a == b else "")
+
+
+def assert_distinct_llc(base, new, same_llc: bool = False, names=("llrm-llc",), required: bool = False) -> None:
+    """SystemExit when a backend named in `names` beside `base` and the one beside `new` are the same bytes: llrm-cc only drives, so two dists sharing one backend read SAME on every
+    row. A name missing from either is skipped, or refused when `required` (wasm32 runs llrm-wasm-llc: a pair sharing one gave a 0-DIFF identity run where nbody -O2 moves 939 -> 910 B).
+    `same_llc` allows a head that changes only the frontend."""
+    assert_clean_env()
+    if same_llc:
+        return
+    for name in names:
+        a, b = Path(base).parent / name, Path(new).parent / name
+        if not (a.is_file() and b.is_file()):
+            if required:
+                raise SystemExit(f"missing {name}: {a} or {b} does not exist")
+            continue
+        if md5(a) == md5(b):
+            raise SystemExit(f"same {name}: {a} and {b} both have md5 {md5(a)}; every row would read SAME whatever llrm-cc is (IDENTITY_SAME_LLC=1 for a frontend-only change).")
 
 
 OBJECT = "<object>"

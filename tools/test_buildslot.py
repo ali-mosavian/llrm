@@ -56,11 +56,26 @@ def test_the_landing_runs_cargo_unslotted_with_no_bypass_in_the_callers_env_and_
     monkeypatch.delenv(bs.LANDING, raising=False)
     monkeypatch.setattr(bs, "tool", lambda: "/x/buildslot")
     assert bs.slotted(["cargo", "build"]) == ["/x/buildslot", "cargo", "build"]
+    monkeypatch.delenv("CARGO_BUILD_JOBS", raising=False)
+    cap = ["taskset", "-c", "0-15", "nice", "-n", "5", "env", "CARGO_BUILD_JOBS=8"]
     with bs.landing():
-        assert bs.slotted(["cargo", "build"]) == ["cargo", "build"]
-        assert bs.slotted("cargo test && cargo check") == "cargo test && cargo check"
+        assert bs.slotted(["cargo", "build"]) == [*cap, "cargo", "build"]
+        assert bs.slotted("cargo test && cargo check") == " ".join(cap) + " cargo test && " + " ".join(cap) + " cargo check"
+        assert bs.slotted(["rustfmt", "x"]) == ["rustfmt", "x"]  # not cargo: untouched
         assert os.environ[bs.LANDING] == "1"  # the smoke it starts inherits it
+        monkeypatch.setenv("CARGO_BUILD_JOBS", "3")
+        assert bs.slotted(["cargo", "build"]) == [*cap[:-2], "cargo", "build"]  # the caller's own job count stays
     assert bs.slotted(["cargo", "build"]) == ["/x/buildslot", "cargo", "build"]
+
+
+def test_the_landing_cargo_is_capped_to_half_the_cores_at_nice_5_so_a_batch_cannot_take_all_32(monkeypatch):
+    """The landing's `cargo test --release --no-fail-fast -p llrm --test ...` ran at nice 0 on cpus 0-31 (one rustc at 1354% CPU): 1m load 34 with no admission, the guard's queue stalled (2026-11-06 10:32)."""
+    monkeypatch.delenv("BUILDSLOT_BYPASS", raising=False)
+    monkeypatch.delenv("CARGO_BUILD_JOBS", raising=False)
+    with bs.landing():
+        argv = bs.slotted(["cargo", "test", "--release"])
+    assert argv[:3] == ["taskset", "-c", "0-15"] and "nice" in argv and argv[argv.index("-n") + 1] == "5"
+    assert "CARGO_BUILD_JOBS=8" in argv
 
 
 def test_parity_squash_main_runs_every_command_inside_the_landing(monkeypatch):
@@ -197,6 +212,12 @@ def test_a_non_cargo_command_under_a_slot_dies_alone_past_the_memory_cap(tmp_pat
     assert over.returncode != 0 and "ok" not in over.stdout and "MemoryError" in over.stderr, (over.returncode, over.stderr[-200:])
 
 
+def test_a_non_cargo_command_under_a_slot_gets_a_cap_big_enough_for_a_dosbox_jit(tmp_path):
+    """The 16 GB cap broke every bench.py DOSBox leg ("Could not allocate dynamic translator buffer", BrokenProcessPool) from 21:55: a script gets 96 GB, still far below the 190 GB runaways."""
+    done = _slot(tmp_path, ["sh", "-c", "ulimit -d"], TEST_MEM_CAP_GB="")
+    assert done.stdout.strip() == str(96 << 20), done.stdout
+
+
 def test_a_non_cargo_command_under_a_slot_is_killed_at_the_timeout(tmp_path):
     done = _slot(tmp_path, ["sleep", "30"], BUILDSLOT_TIMEOUT="1")
     assert done.returncode == 124, done.returncode
@@ -210,3 +231,13 @@ def test_cargo_under_a_slot_keeps_no_cap_and_no_timeout_of_its_own(tmp_path):
     (fake / "cargo").chmod(0o755)
     done = _slot(tmp_path, ["cargo"], PATH=f"{fake}:{os.environ['PATH']}", TEST_MEM_CAP_GB="1", BUILDSLOT_TIMEOUT="1")
     assert done.stdout.strip() == "unlimited", (done.stdout, done.stderr[-200:])
+
+
+def test_the_landing_cap_applies_when_the_runner_exports_bypass(monkeypatch):
+    """queue-runner.sh and land.sh export BUILDSLOT_BYPASS=1, which was read first: every landing cargo ran at nice 0 on cores 0-31 (1m load 33.8 on batch 7515)."""
+    monkeypatch.setenv("BUILDSLOT_BYPASS", "1")
+    monkeypatch.delenv("CARGO_BUILD_JOBS", raising=False)
+    cap = ["taskset", "-c", "0-15", "nice", "-n", "5", "env", "CARGO_BUILD_JOBS=8"]
+    assert bs.slotted(["cargo", "build"]) == ["cargo", "build"]  # outside the landing the bypass still leaves it alone
+    with bs.landing():
+        assert bs.slotted(["cargo", "build"]) == [*cap, "cargo", "build"]

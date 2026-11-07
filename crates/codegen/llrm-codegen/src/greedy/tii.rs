@@ -184,6 +184,13 @@ pub trait TargetInstrInfo {
         cell: &Mem,
     ) -> Arc<Insn>;
 
+    /// Whether the target stores one lane of a spilled register on its own: a
+    /// store whose cell has an `offset` into the register's slot. The pin
+    /// stores a sub-register with `storeRegToStackSlot(.., SubIdx)`.
+    fn stores_lanes(&self) -> bool {
+        false
+    }
+
     /// Whether `one` reads the register every unprefixed access reads, so a
     /// split puts a reload of it ahead of `one`.
     fn needs_data_group(
@@ -216,8 +223,8 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
     ) -> Semantics {
         Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: to, width })],
-            sources: vec![Loc::Held(Held { value: from, width })],
+            dests: vec![Loc::Held(Held { value: to, width, offset: 0 })],
+            sources: vec![Loc::Held(Held { value: from, width, offset: 0 })],
             ..Semantics::new(Operation::Move)
         }
     }
@@ -364,14 +371,37 @@ pub fn fold_memory_operand(
     if narrow && !(what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Imm(_)])) {
         return None;
     }
+    // A dword write in long mode also zeroes the register's upper half, which
+    // a dword store into a qword cell leaves stale for the qword reload. A
+    // constant is stored zero-extended at the cell's width; any other def is
+    // not folded.
+    let zeroes_upper = bits == 64
+        && what.dests.iter().any(|loc| {
+            matches!(
+                loc,
+                Loc::Held(held) if held.value == reg && held.width == 4 && cell.width == 8
+            )
+        });
+    let constant_move = what.op == Operation::Move
+        && matches!(
+            what.sources.as_slice(),
+            [Loc::Imm(imm)] if imm.address.is_none()
+        );
+    if zeroes_upper && !constant_move {
+        return None;
+    }
     let swap = |loc: &Loc| match loc {
         Loc::Held(held) if held.value == reg => {
-            Loc::Mem(Mem { width: (held.width as u32).min(cell.width), ..cell.clone() })
+            let width = if zeroes_upper { cell.width } else { (held.width as u32).min(cell.width) };
+            Loc::Mem(Mem { width, ..cell.clone() })
         }
         _ => loc.clone(),
     };
     let narrow_imm = |loc: &Loc| match loc {
         Loc::Imm(imm) if narrow => Loc::Imm(Imm { width: imm.width.min(cell.width), ..imm.clone() }),
+        Loc::Imm(imm) if zeroes_upper => {
+            Loc::Imm(Imm { value: imm.value as u32 as i64, width: cell.width, ..imm.clone() })
+        }
         _ => loc.clone(),
     };
     let made = Semantics {
@@ -379,6 +409,15 @@ pub fn fold_memory_operand(
         sources: what.sources.iter().map(swap).map(|loc| narrow_imm(&loc)).collect(),
         ..what.clone()
     };
+    // Long mode builds an address with a rip-relative `lea`; a store of the
+    // address to a cell has no encoding (the object writer dropped the
+    // displacement and used a PC32 fixup, or refused the instruction).
+    if bits == 64
+        && made.dests.iter().any(|loc| matches!(loc, Loc::Mem(_)))
+        && made.sources.iter().any(|loc| matches!(loc, Loc::Imm(imm) if imm.address.is_some()))
+    {
+        return None;
+    }
     if !is_encodable(bits, &made, classes).ok()? {
         return None;
     }
@@ -450,11 +489,28 @@ pub fn load_reg_from_stack_slot(
 ) -> Arc<Insn> {
     let inserted = _inserted(
         beside,
-        _mov(Loc::Held(Held { value: into, width: cell.width }), Loc::Mem(cell.clone())),
+        _mov(Loc::Held(Held { value: into, width: cell.width, offset: 0 }), Loc::Mem(cell.clone())),
         vec![into],
         Vec::new(),
     );
     _with(&inserted, |made| made.spill_reload = true)
+}
+
+/// The cell of the `width` bytes `offset` up in a spill slot: the same slot,
+/// its `offset` one more than the lane's so that no lane has the offset a
+/// whole cell has (0). [`lane_offset`] reads it back.
+pub fn lane_cell(
+    cell: &Mem,
+    offset: u32,
+    width: u32,
+) -> Mem {
+    Mem { offset: i64::from(offset) + 1, width, ..cell.clone() }
+}
+
+/// The bytes above the start of the slot a [`lane_cell`] names; None for a
+/// cell that is a whole slot.
+pub fn lane_offset(cell: &Mem) -> Option<u32> {
+    (cell.addr.is_some() && cell.offset > 0).then(|| (cell.offset - 1) as u32)
 }
 
 /// `X86InstrInfo::storeRegToStackSlot`, as `InlineSpiller::insertSpill` calls
@@ -467,7 +523,7 @@ pub fn store_reg_to_stack_slot(
 ) -> Arc<Insn> {
     let inserted = _inserted(
         beside,
-        _mov(Loc::Mem(cell.clone()), Loc::Held(Held { value: out_of, width: cell.width })),
+        _mov(Loc::Mem(cell.clone()), Loc::Held(Held { value: out_of, width: cell.width, offset: 0 })),
         Vec::new(),
         vec![out_of],
     );
@@ -545,41 +601,26 @@ pub(crate) fn is_encodable(
     classes: &RegisterClasses,
 ) -> Result<bool, Error> {
     let regs = classes.registers;
-    let mut taken: IndexMap<u32, RegId> = IndexMap::default();
-    let rows: IndexMap<u32, Vec<RegId>> = [1_u32, 2, 4]
-        .into_iter()
-        .map(|width| {
-            (
-                width,
-                classes
-                    .available
-                    .iter()
-                    .copied()
-                    .filter(|one| {
-                        regs.width_of(regs.named(*one, i64::from(width)))
-                            .filter(|_| regs.integer(regs.named(*one, i64::from(width))))
-                            == Some(i64::from(width))
-                    })
-                    .collect(),
-            )
-        })
-        .collect();
-
-    let mut placed = |operand: &Loc| -> Loc {
-        let Loc::Held(held) = operand else {
-            return operand.clone();
-        };
-        if !taken.contains_key(&held.value) {
-            let row = rows.get(&held.width).cloned().unwrap_or_default();
-            if taken.len() >= row.len() {
-                // refuses below, which is the safe answer
-                return operand.clone();
-            }
-            taken.insert(held.value, row[taken.len()]);
+    // A scalar float operand (4 or 8 bytes) is an xmm register: the probe is
+    // priced with every operand in the integer registers first, then in the
+    // xmm ones. Vector widths are not probed (a legacy SSE memory operand
+    // must be 16-byte aligned, which a spill cell is not).
+    let pool = |xmm: bool, width: u32| -> Vec<RegId> {
+        if xmm {
+            if width == 4 || width == 8 { classes.xmm.clone() } else { Vec::new() }
+        } else {
+            classes
+                .available
+                .iter()
+                .copied()
+                .filter(|one| {
+                    regs.width_of(regs.named(*one, i64::from(width)))
+                        .filter(|_| regs.integer(regs.named(*one, i64::from(width))))
+                        == Some(i64::from(width))
+                })
+                .collect()
         }
-        Loc::Reg(Reg { register: regs.named(taken[&held.value], i64::from(held.width)), width: held.width })
     };
-
     // A spill cell is made through the 16-bit frame register; a target whose
     // frame register is wider addresses it through its own.
     let wide_frame = regs.width_of(classes.frame).is_some_and(|width| width > 2);
@@ -589,12 +630,30 @@ pub(crate) fn is_encodable(
         }
         other => other,
     };
-    let probe = Semantics {
-        dests: what.dests.iter().map(&mut placed).map(framed).collect(),
-        sources: what.sources.iter().map(&mut placed).map(framed).collect(),
-        ..what.clone()
+    let priced = |xmm: bool| -> bool {
+        let mut taken: IndexMap<u32, RegId> = IndexMap::default();
+        let mut placed = |operand: &Loc| -> Loc {
+            let Loc::Held(held) = operand else {
+                return operand.clone();
+            };
+            if !taken.contains_key(&held.value) {
+                let row = pool(xmm, u32::from(held.width));
+                if taken.len() >= row.len() {
+                    // refuses below, which is the safe answer
+                    return operand.clone();
+                }
+                taken.insert(held.value, row[taken.len()]);
+            }
+            Loc::Reg(Reg { register: regs.named(taken[&held.value], i64::from(held.width)), width: held.width })
+        };
+        let probe = Semantics {
+            dests: what.dests.iter().map(&mut placed).map(framed).collect(),
+            sources: what.sources.iter().map(&mut placed).map(framed).collect(),
+            ..what.clone()
+        };
+        crate::backend::select::priced_in(bits, &probe, 0, None, false, false, None).is_some()
     };
-    Ok(crate::backend::select::priced_in(bits, &probe, 0, None, false, false, None).is_some())
+    Ok(priced(false) || (!classes.xmm.is_empty() && priced(true)))
 }
 
 /// DEVIATE D-RFP4 (beyond LLVM: gcc's `REG_EQUIV`, 854's `floatassign`): the
@@ -632,7 +691,7 @@ mod tests {
     /// spilled register as undef.
     #[test]
     fn test_a_fold_drops_the_spilled_register_from_the_undefs() {
-        let held = |value: u32| Loc::Held(Held { value, width: 2 });
+        let held = |value: u32| Loc::Held(Held { value, width: 2, offset: 0 });
         let what = Semantics {
             name: Some("add".into()),
             dests: vec![held(1)],
@@ -644,6 +703,26 @@ mod tests {
         let cell = Mem::new(Some(Addr::new(Space::Frame, -2)), 2);
         let folded = fold_memory_operand(&Arc::new(add), 1, &cell, 16, &RegisterClasses::m16()).expect("folds");
         assert!(folded.undefs.is_empty(), "the folded add still names v1: {folded:?}");
+    }
+
+    /// nbody -O3 m64: the probe placed every operand in an integer register, so
+    /// no float arithmetic priced and a spilled double was reloaded with a
+    /// `movsd` of its own (146 instructions a trip against the pin's 132 on the
+    /// same IR); `mulsd xmm, [cell]` is the pin's fold.
+    #[test]
+    fn test_a_spilled_double_folds_into_the_scalar_float_arithmetic_that_reads_it() {
+        let held = |value: u32| Loc::Held(Held { value, width: 8, offset: 0 });
+        let what = Semantics {
+            name: Some("mulsd".into()),
+            dests: vec![held(1)],
+            sources: vec![held(1), held(2)],
+            ..Semantics::new(Operation::Binary)
+        };
+        let mulsd = Arc::new(Insn::new(0, None, Some(what), vec![1], vec![1, 2]));
+        let cell = Mem { through: RegId::RBP, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 8) };
+        let classes = RegisterClasses::of(&llrm_x86_m64::M64);
+        let folded = fold_memory_operand(&mulsd, 2, &cell, 64, &classes).expect("folds");
+        assert!(matches!(folded.what.as_ref().unwrap().sources.as_slice(), [Loc::Held(_), Loc::Mem(_)]), "{folded:?}");
     }
 
     fn x87_body(insns: Vec<Arc<Insn>>) -> crate::model::lir::LirBody {
@@ -663,7 +742,7 @@ mod tests {
     ) -> Arc<Insn> {
         let what = Semantics {
             name: Some("fld".into()),
-            dests: vec![Loc::Held(Held { value, width: 10 })],
+            dests: vec![Loc::Held(Held { value, width: 10, offset: 0 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::FloatLoad)
         };
@@ -678,7 +757,7 @@ mod tests {
         let what = Semantics {
             name: Some("fstp".into()),
             dests: vec![Loc::Mem(cell)],
-            sources: vec![Loc::Held(Held { value, width: 10 })],
+            sources: vec![Loc::Held(Held { value, width: 10, offset: 0 })],
             ..Semantics::new(Operation::FloatStore)
         };
         Arc::new(Insn::new(at, None, Some(what), vec![], vec![value]))

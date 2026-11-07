@@ -41,6 +41,14 @@ impl Ext {
     }
 }
 
+/// `ISD::ArgFlagsTy`'s `ByValSize` and `ByValAlign`: an aggregate passed by
+/// value, in the bytes of the argument area.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ByVal {
+    pub size: u32,
+    pub align: u32,
+}
+
 /// An `ISD::OutputArg` with its value: a part of an argument of a call or of
 /// a returned value.
 #[derive(Clone, Copy, Debug)]
@@ -58,6 +66,9 @@ pub struct Out {
     /// The argument is one of a call's variadic ones
     /// (`CallLoweringInfo::IsVarArg` past `NumFixedArgs`).
     pub variadic: bool,
+    /// `ArgFlags.isByVal()`: `value` is the address of the bytes to copy into
+    /// the argument area (a target whose `byval_in_area` says so).
+    pub byval: Option<ByVal>,
 }
 
 /// An `ISD::InputArg`: a part of a formal argument or of a call's result.
@@ -74,6 +85,9 @@ pub struct In {
     /// `ArgFlags.isSExt()` / `isZExt()`: how a part narrower than its register
     /// is extended.
     pub ext: Ext,
+    /// `ArgFlags.isByVal()`: the part is the address of the bytes the caller
+    /// copied into the argument area (a target whose `byval_in_area` says so).
+    pub byval: Option<ByVal>,
 }
 
 /// `MachineFrameInfo::CreateFixedObject`: size, offset from the first
@@ -143,6 +157,13 @@ pub trait TargetCalling: Debug + Sync {
         false
     }
 
+    /// Whether a `byval` argument's bytes are copied into the argument area
+    /// (`CCPassByVal`), the callee reading them from there; a `byval` part
+    /// then carries its [`ByVal`] and the hook places and copies it.
+    fn byval_in_area(&self) -> bool {
+        false
+    }
+
     /// Whether the hook places a call in calling convention `cc` (LLVM's
     /// numbers: 0 `ccc`, 8 `fastcc`, 9 `coldcc`): a call in another is refused,
     /// as the pin's `CCAssignFnForCall` rejects what it has no table for.
@@ -151,6 +172,23 @@ pub trait TargetCalling: Debug + Sync {
         _cc: u32,
     ) -> bool {
         true
+    }
+
+    /// `CanLowerReturn`: whether a result of these parts leaves in registers.
+    /// When not, the function returns it through a hidden pointer, the first
+    /// parameter (`sret` demotion).
+    fn can_lower_return(
+        &self,
+        _parts: &[EVT],
+    ) -> bool {
+        true
+    }
+
+    /// Whether a function with an `sret` parameter returns that pointer in the
+    /// result register as well (the pin's `SRetReturnReg`; M68k copies it to
+    /// `d0`), as an extra integer part of `lower_return`'s `outs`.
+    fn returns_sret_pointer(&self) -> bool {
+        false
     }
 
     /// Whether the target places these parts (`outs` the values sent, `ins` the
@@ -253,6 +291,17 @@ pub trait TargetCalling: Debug + Sync {
         None
     }
 
+    /// `LowerFormalArguments` of a variadic function: the offset in the stack
+    /// arguments of the first variadic one (`CreateFixedObject(1, StackSize,
+    /// true)`), which `va_start` stores the address of; none for a target that
+    /// keeps them elsewhere.
+    fn variadic_frame_offset(
+        &self,
+        _fixed: &[In],
+    ) -> Option<i64> {
+        None
+    }
+
     /// `SelectionDAGTargetInfo::EmitTargetCodeForMemcpy` (and `Memmove`, which
     /// the pin routes to it on wasm): the node that copies `size` bytes, or
     /// none to leave it to the inline expansion and the library call.
@@ -265,6 +314,22 @@ pub trait TargetCalling: Debug + Sync {
         _size: SDValue,
     ) -> Option<SDValue> {
         None
+    }
+
+    /// [`Self::emit_memcpy`] for a function tuned for size or not
+    /// (`hasOptSize`, which the pin's hook reads off the function): a
+    /// target that prices the two apart overrides this.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_memcpy_sized(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+        _opt_size: bool,
+    ) -> Option<SDValue> {
+        self.emit_memcpy(dag, chain, dst, src, size)
     }
 
     /// `SelectionDAGTargetInfo::EmitTargetCodeForMemmove`; a target that has
