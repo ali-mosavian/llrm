@@ -19,13 +19,6 @@
 //! 6. Every instruction that names the absorbed value names the surviving one
 //!    (`updateRegDefsUses`), and the absorbed interval goes.
 //!
-//! DEVIATE C10 (no number): `reMaterializeDef` in a build for size makes a copy
-//! of a constant again only where the source has no other reader, so its own
-//! move goes. Fact: elsewhere it replaced a 2-byte copy with a 3 to 5 byte
-//! move and cost 40 of 813 sources +1,383 bytes (`regparm3_matrix_*` up to
-//! +89) for -0.8% executed instructions. Exit: the allocator gives the constant
-//! back as a copy where its register is wanted.
-//!
 //! DEVIATE C6 (no number): `updateRegDefsUses` sets no `undef` flags: an
 //! instruction here has none, and a read of no live value is a bug of the
 //! caller that `shrink_to_uses` skips.
@@ -601,11 +594,6 @@ fn re_materialize_def(
         li.get_vn_info_at(&def_use)
             .is_none_or(|read| li.get_vn_info_at(&copy_use).is_some_and(|now| Rc::ptr_eq(&read, &now)))
     }) {
-        return false;
-    }
-    // DEVIATE C10: in a build for size the copy (2 bytes) becomes the move
-    // (3 to 5) and pays for itself only where the source's own move goes.
-    if env.tuned_for_size() && lis.operands(src.value).len() > 2 {
         return false;
     }
     if !env.remat_wins(&def_insn, src.value, dst.value) {

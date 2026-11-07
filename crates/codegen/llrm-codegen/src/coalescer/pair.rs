@@ -154,12 +154,6 @@ pub trait CoalescerEnv {
         Vec::new()
     }
 
-    /// A build for size: a copy of a constant is made again only where that
-    /// leaves no second copy of the constant (DEVIATE C10).
-    fn tuned_for_size(&self) -> bool {
-        false
-    }
-
     /// `MachineInstr::isTerminator`: the instruction ends its block.
     fn is_terminator(
         &self,

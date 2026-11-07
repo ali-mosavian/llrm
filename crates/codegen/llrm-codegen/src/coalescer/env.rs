@@ -294,10 +294,6 @@ impl CoalescerEnv for TargetEnv {
         self.joins_sub_registers
     }
 
-    fn tuned_for_size(&self) -> bool {
-        self.size
-    }
-
     fn rematerializable(
         &self,
         insn: &Insn,
@@ -534,8 +530,8 @@ pub fn joined_with_map(
         lis.track_changes();
     }
     // `RegisterCoalescer::runOnMachineFunction` returns at once for a function
-    // that exposes `returns_twice`: after `longjmp` a joined variable would hold
-    // a value the first return never set
+    // that exposes `returns_twice`: after `longjmp` a joined variable would
+    // hold a value the first return never set
     // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L4338>).
     let stats = if body.returns_twice { driver::Stats::default() } else { driver::run(&mut lis, env, depth) };
     let after = lis.body_like(body);
