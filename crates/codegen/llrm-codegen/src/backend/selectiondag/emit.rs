@@ -1193,7 +1193,13 @@ impl Emitter<'_, '_> {
                     |what| matches!(what.op, Operation::Move | Operation::FloatLoad)
                         && matches!(what.sources.as_slice(), [Loc::Mem(_)]),
                 );
-            if plain && !one.volatile() {
+            // A folded load: one memory source read into registers.
+            let folded = one.what.as_ref().is_some_and(|what| {
+                what.dests.iter().all(|dest| matches!(dest, Loc::Held(_)))
+                    && !what.dests.is_empty()
+                    && what.sources.iter().filter(|source| matches!(source, Loc::Mem(_))).count() == 1
+            });
+            if (plain || folded) && !one.volatile() {
                 *one = Arc::new(Insn { invariant: true, ..(**one).clone() });
             }
         }
