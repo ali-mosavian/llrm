@@ -102,6 +102,10 @@ pub struct Tuning {
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
+    /// An -Os caller's SZ2 trial also inlines the sites its splice brings, priced by the
+    /// ordinary rules, before it measures: `foo` into `main` and then `bar` into that copy
+    /// meet the constants together, as the pin's callee-first order gives. One round.
+    pub inline_chain_trial: bool,
     /// A full unroll's discount for a local array it makes constant-indexed
     /// (promoted to registers) holds only while the promoted elements fit the
     /// register file (UP1). false: every such access is free.
@@ -202,6 +206,7 @@ impl Tuning {
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
+        inline_chain_trial: false,
         unroll_promotion_fits_registers: false,
         unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,

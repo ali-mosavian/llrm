@@ -2387,8 +2387,13 @@ fn a_long_multiply_by_a_near_power_of_two_is_shifts_where_clocks_count() {
     let linked = format!("{fast}\n{}", common::pipeline::reachable_runtime(&fast));
     assert_eq!(exit_code_of(&linked, "t3"), 0x09, "{fast}");
     assert_eq!(exit_code_of(&linked, "t257"), 0x07, "{fast}");
-    // tuned for size: the call stays for 3, not for 257
-    let ir = ir.replace("noinline {", "noinline optsize {");
+    // tuned for size: the call stays for 3, not for 257, while a variable
+    // multiply keeps the routine linked (alone, `by3` is shifts: mul_image.rs)
+    let ir = format!(
+        "{}\n{}",
+        ir.replace("noinline {", "noinline optsize {"),
+        "define i32 @prod(i32 %a, i32 %b) noinline optsize {\n  %r = mul i32 %a, %b\n  ret i32 %r\n}"
+    );
     let small = assembly(&ir, &Request::new(Level::Os)).unwrap();
     let (by3, by257) = (function_text(&small, "by3"), function_text(&small, "by257"));
     assert!(by3.contains("__mulsi3"), "{by3}");

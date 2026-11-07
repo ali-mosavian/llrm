@@ -821,3 +821,25 @@ mod operand_map_footprint {
         assert!(LARGEST.with(Cell::get) < 4096);
     }
 }
+
+/// `swapOperands` is `Use::swap`: each use keeps its place in its value's
+/// list. Two `set_operand`s put both first, so the use of `%a` by `%x` moved
+/// ahead of `%p`'s (recchop's `chop`: `add`/`call` of `%.tr` swapped, which
+/// LSR later read as another IV order).
+#[test]
+fn canonicalizing_an_add_keeps_the_use_order_of_its_operand() {
+    let mut module = parsed(
+        "define i32 @f(i32 %a) {\nb0:\n  %x = add i32 5, %a\n  %p = mul i32 %a, 7\n  %r = xor i32 %x, %p\n  ret i32 %r\n}\n",
+    );
+    assert!(reassociated(&mut module));
+    let (_, _, function) = module.functions().next().expect("@f");
+    assert!(printed(&module).contains("%x = add i32 %a, 5"), "{}", printed(&module));
+    // `%a`'s users newest first, as (instruction number, operand).
+    let a = llrm_mir::module::ValueId(0);
+    let users: Vec<_> = function
+        .users(a)
+        .iter()
+        .map(|one| (function.walk().position(|(_, inst)| inst == one.user).expect("placed"), one.index))
+        .collect();
+    assert_eq!(users, [(1, 0), (0, 0)]);
+}
