@@ -1148,18 +1148,17 @@ entry:
 fn memset_shape_m32(length: u32, value: i32, size: bool) -> (usize, usize) {
     let text = format!(
         "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
-@g = global [64 x i8] zeroinitializer
+@g = global [64 x i8] zeroinitializer, align 4
 declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
 define void @f() {{
-  call void @llvm.memset.p0.i32(ptr @g, i8 {value}, i32 {length}, i1 false)
+  call void @llvm.memset.p0.i32(ptr align 4 @g, i8 {value}, i32 {length}, i1 false)
   ret void
 }}
 "
     );
     let module = llrm_mir::parse::module(&text).expect("parses");
-    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
-    cpu.size = size;
-    let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", size).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let whats = || insns.iter().filter_map(|i| i.what.as_ref());
     let fills = whats().filter(|w| w.op == crate::model::ir::Operation::Fill).count();
