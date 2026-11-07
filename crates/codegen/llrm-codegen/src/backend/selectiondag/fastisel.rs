@@ -146,6 +146,9 @@ struct Names {
     cmp_rr: u16,
     cmp_ri: u16,
     imul: u16,
+    /// m64 only: `movsxd`, and the 64-bit `lea` that adds a scaled index to a base.
+    movsx64: Option<u16>,
+    lea64: Option<u16>,
     /// `add`, `sub`, `and`, `or`, `xor` with a register and with an immediate.
     alu: [(u16, u16); 5],
     /// m32 only so far: calls and the signed divide.
@@ -187,6 +190,8 @@ impl Names {
             cmp_rr: opcode("CMP32rr")?,
             cmp_ri: opcode("CMP32ri")?,
             imul: opcode("IMUL32rr")?,
+            movsx64: opcode("MOVSX64rr32"),
+            lea64: opcode("LEA64r"),
             alu: [pair("ADD")?, pair("SUB")?, pair("AND")?, pair("OR")?, pair("XOR")?],
             calls: (|| {
                 Some(Calls {
@@ -251,14 +256,12 @@ impl Fast<'_> {
             }
             return Some(self.frame(object));
         }
-        if !self.m32 {
-            return None;
-        }
         let base = self.value(pointer)?;
+        let pointer = if self.m32 { EVT::I32 } else { EVT::I64 };
         Some(vec![
             base,
             self.dag.get_constant_with(1, EVT::I8, true, false),
-            self.dag.get_register(EVT::I32, 0),
+            self.dag.get_register(pointer, 0),
             self.dag.get_constant_with(0, EVT::I32, true, false),
             self.dag.get_register(EVT::I16, 0),
         ])
@@ -282,6 +285,16 @@ impl Fast<'_> {
     /// The value of `operand` in a register: a computed one, a constant, or a parameter loaded from its cell.
     fn value(&mut self, operand: Operand) -> Option<SDValue> {
         match operand {
+            Operand::Constant(id) if !self.m32 && matches!(self.module.context.get(id).kind, ConstantKind::Global(_)) => {
+                // the address of a global: `lea r, [rip + g]`
+                let ConstantKind::Global(global) = self.module.context.get(id).kind else { return None };
+                let target = self.dag.get_target_global_address(EVT::I64, global.0, 0);
+                let rip = self.dag.get_phys_register(EVT::I64, llrm_lir::registers::RegId::RIP);
+                let one = self.dag.get_constant_with(1, EVT::I8, true, false);
+                let noreg = self.dag.get_register(EVT::I64, 0);
+                let segment = self.dag.get_register(EVT::I16, 0);
+                Some(self.node(self.names.lea64?, &[EVT::I64], &[rip, one, noreg, target, segment]))
+            }
             Operand::Constant(_) => {
                 // DEVIATE F4: the pin (X86MaterializeInt) makes 0 with `MOV32r0` (xor) and a 64-bit
                 // constant with `getMOVriOpcode`; here every constant is `MOV32ri`. Exit 2026-11-27 with F1.
@@ -355,6 +368,43 @@ impl Fast<'_> {
                     ops.push(self.chain);
                     let store = self.node(op, &[EVT::OTHER], &ops);
                     self.chain = store;
+                }
+                Opcode::GetElementPtr { source } if !self.m32 => {
+                    // `lea base + index * size` with the index already 64-bit (a `sext`):
+                    // `gep T, p, i` or `gep [n x T], p, 0, i`
+                    let (base, index, element) = match instruction.operands[..] {
+                        [base, index] => (base, index, *source),
+                        [base, zero, index] if self.int(zero) == Some(0) => {
+                            let llrm_mir::types::Type::Array { element, .. } = self.module.context.types.get(*source) else { return None };
+                            (base, index, *element)
+                        }
+                        _ => return None,
+                    };
+                    let size = self.layout.alloc_size(&self.module.context.types, element) as u128;
+                    if !matches!(size, 1 | 2 | 4 | 8) || self.int(index).is_some() {
+                        return None;
+                    }
+                    let Operand::Value(index) = index else { return None };
+                    let index = *self.values.get(&index)?;
+                    if self.dag.value_type(index) != EVT::I64 {
+                        return None;
+                    }
+                    let base = self.value(base)?;
+                    let scale = self.dag.get_constant_with(size, EVT::I8, true, false);
+                    let zero = self.dag.get_constant_with(0, EVT::I32, true, false);
+                    let segment = self.dag.get_register(EVT::I16, 0);
+                    let done = self.node(self.names.lea64?, &[EVT::I64], &[base, scale, index, zero, segment]);
+                    self.values.insert(instruction.result?, done);
+                }
+                Opcode::Cast(llrm_mir::opcode::CastOp::SExt) if !self.m32 => {
+                    // i32 -> i64: `movsxd`
+                    let from = self.function.operand_type(&self.module.context, instruction.operands[0])?;
+                    if self.module.context.types.int_bits(from) != Some(32) || self.module.context.types.int_bits(instruction.ty) != Some(64) {
+                        return None;
+                    }
+                    let value = self.value(instruction.operands[0])?;
+                    let done = self.node(self.names.movsx64?, &[EVT::I64], &[value]);
+                    self.values.insert(instruction.result?, done);
                 }
                 Opcode::GetElementPtr { source } if self.m32 => {
                     // one index: base + index * size(source), `lea`
