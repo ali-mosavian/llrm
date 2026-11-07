@@ -88,3 +88,24 @@ b0:
     );
     assert!(after.contains("-0.000000e+00"), "{after}");
 }
+
+/// `fcmp uno` of two integer conversions (never NaN) left a constant
+/// `fcmp uno 0.0, 0.0` to the backend (wasm sfm16_float -Os: `f32.ne` of two
+/// zeros). The pin folds it to false.
+#[test]
+fn test_uno_of_two_never_nan_values_folds_to_false() {
+    let after = combined(
+        "define i1 @f(i32 %a, i32 %b) {\nb0:\n  %x = sitofp i32 %a to float\n  %y = sitofp i32 %b to float\n  \
+         %c = fcmp uno float %x, %y\n  ret i1 %c\n}\n",
+    );
+    assert!(!after.contains("fcmp"), "{after}");
+}
+
+/// The same, through `une x, x` of a conversion.
+#[test]
+fn test_une_of_a_never_nan_value_with_itself_folds_to_false() {
+    let after = combined(
+        "define i1 @f(i32 %a) {\nb0:\n  %x = sitofp i32 %a to float\n  %c = fcmp une float %x, %x\n  ret i1 %c\n}\n",
+    );
+    assert!(!after.contains("fcmp"), "{after}");
+}
