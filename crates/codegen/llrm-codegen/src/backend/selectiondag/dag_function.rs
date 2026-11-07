@@ -1174,7 +1174,11 @@ fn selected_in(
     let price_pin = speed_goal && cpu.target().tti().is_some_and(|tti| tti.price_pin_multiplies());
     // The function's one `BranchProbabilityInfo`: the builder's edge
     // probabilities read the same one (the pin has it as an analysis).
-    let frequencies = ((mul_rate > 0 || price_pin) && !mul_by_clocks).then(|| {
+    // The divide weighs its bytes by the block's frequency too (SD446), whether
+    // or not the multiplies are priced by clocks alone (m16): without it
+    // every divide was priced as run once.
+    let divide_bytes = mul_rate > 0 && cpu.target().tti().is_some_and(|tti| tti.divide_by_bytes());
+    let frequencies = (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes).then(|| {
         let bpi = info
             .bpi
             .get_or_insert_with(
@@ -1193,6 +1197,9 @@ fn selected_in(
     for (block, parent, mut built) in work {
         if !built.live_ins.is_empty() && block != function.layout()[0] {
             return refuse("register arguments outside the entry block");
+        }
+        if let Some(frequencies) = &frequencies {
+            built.dag.set_divide_frequency(frequencies.relative_to_entry(parent));
         }
         built.dag.live_in_phys = built.live_ins.iter().map(|&(register, vreg)| (vreg, register)).collect();
         let arrived = arrival_widths(&built.dag, &built.live_ins);
@@ -1226,6 +1233,7 @@ fn selected_in(
                 } else {
                     frequencies
                         .as_ref()
+                        .filter(|_| mul_rate > 0 || price_pin)
                         .map(
                             |frequencies| super::x86_lowering::MulPricing {
                                 cpu,
