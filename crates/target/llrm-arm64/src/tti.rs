@@ -316,6 +316,10 @@ impl Tti for AArch64 {
     /// while the clocks a level saves repay its bytes at the rate above, as the
     /// m16 table does. gcc's recursion inlining runs rectwo -O2 at 266k
     /// instructions against 778k. Pin: none.
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        Some((3, 150))
+    }
+
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
         Some((3, 150))
     }
