@@ -197,10 +197,10 @@ pub struct Tuning {
     pub inline_variable_memcpy: bool,
     /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541: tuned for size, a constant
     /// `memcpy`/`memmove` whose load and store pieces take more bytes than the call of the library
-    /// routine (`mov edx, n` and the call, 10 B) is the call. The pin counts pieces
+    /// routine (`mov edx, n` and the call) is the call, at the target's `CopyPrice`. The pin counts pieces
     /// (`MaxStoresPerMemcpyOptSize`). gcc -Os calls from 32 B (mv64 10 B against the pin's 31).
-    /// false: the pin's pieces.
-    pub size_copy_vs_call: bool,
+    /// None: the pin's pieces.
+    pub size_copy_price: Option<CopyPrice>,
     /// DEVIATE REC5-1 (owner w2, exit 2026-11-20): IPSCCP widens a range that
     /// keeps growing to its half-line, keeping the sign, not to overdefined
     /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
@@ -211,6 +211,15 @@ pub struct Tuning {
 /// Encoded bytes of a constant fill, stores against `rep stos`. Each pair or
 /// triple is [frame object, global]: a short displacement against an absolute
 /// address.
+/// The bytes a constant copy tuned for size is priced in (`Tuning::size_copy_price`): the library call
+/// (`mov edx, n` and the call) against the load and store pieces, a wide one (16 or 8 bytes) or a narrower one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CopyPrice {
+    pub call: u64,
+    pub wide_piece: u64,
+    pub narrow_piece: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SizeFill {
     /// A dword, word and byte store of an immediate.
@@ -274,7 +283,7 @@ impl Tuning {
         unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,
         inline_variable_memcpy: false,
-        size_copy_vs_call: false,
+        size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
     };
 }
