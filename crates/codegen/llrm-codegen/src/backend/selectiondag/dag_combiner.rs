@@ -2430,7 +2430,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let op = self.dag.opcode(value);
-        if !matches!(op, ISD::UAddOCarry | ISD::USubOCarry | ISD::UAddO | ISD::USubO) {
+        // DEVIATE (owner x86-m32, exit 2026-11-14): the pin also takes the
+        // borrow of USUBO and USUBO_CARRY. A target whose borrow is the inverted
+        // carry (the 6502's `sbc`) read it as the carry: `sub_overflow` returned
+        // 3 for 4 (#7850). Add only until the target states what its borrow is.
+        if !matches!(op, ISD::UAddOCarry | ISD::UAddO) {
             return None;
         }
         let vt = self.dag.node(value).values[0];
