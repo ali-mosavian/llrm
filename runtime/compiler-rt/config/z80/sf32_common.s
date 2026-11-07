@@ -1,22 +1,23 @@
-; binary32 helpers shared by the sf32 members: round and pack, exponent bytes, NaN and the frame exit.
+; binary32 helpers shared by the sf32 members: the range checks before the round (pack32), inf, exponent bytes, NaN. The round and the frame exit are sf32_round.s: int->float needs only those.
 	.module sf32_common
 	.area _CODE
 
 	.globl pack32
 	.globl done
-	.globl retnan
 	.globl inf
 	.globl exps
+	.globl retlo0
+	.globl rnd32
 pack32:	bit	7,b
 	jr	nz,low32
 	ld	a,b
 	or	a,a
-	jp	nz,inf
+	jr	nz,inf
 	ld	a,c
 	inc	a
-	jp	z,inf
+	jr	z,inf
 	dec	a
-	jr	nz,rnd32
+	jp	nz,rnd32
 low32:	ld	a,b		; e <= 0: shift right by 1 - e, folding the lost bits into bit 0
 	or	a,a
 	jr	z,11$
@@ -69,39 +70,12 @@ low32:	ld	a,b		; e <= 0: shift right by 1 - e, folding the lost bits into bit 0
 	jr	z,5$
 	set	0,l
 5$:	ld	c,#1
-rnd32:	ld	a,l
-	cp	a,#0x80
-	jr	c,nou32
-	jr	nz,9$
-	bit	0,h
-	jr	z,nou32
-9$:	inc	h
-	jr	nz,nou32
-	inc	e
-	jr	nz,nou32
-	inc	d
-	jr	nz,nou32
-	ld	d,#0x80		; the mantissa wrapped: 1.0 at the next exponent (255 packs as inf)
-	inc	c
-nou32:	ld	l,h
-	ld	h,e
-	ld	a,d
-	add	a,a		; carry: the leading one (normal)
-	ld	e,a
-	ld	a,c
-	jr	c,10$
-	xor	a,a		; denormal: exponent field 0
-10$:	srl	a
-	rr	e
-	or	a,10(iy)
-	ld	d,a
-	jp	done
+	jp	rnd32
 inf:	ld	a,10(iy)
 	or	a,#0x7f
 	ld	d,a
 	ld	e,#0x80
-	ld	hl,#0
-	jp	done
+	jp	retlo0		; hl = 0, then the frame exit
 
 ; exponent bytes of a and b
 exps:	ld	a,2(iy)
@@ -114,13 +88,5 @@ exps:	ld	a,2(iy)
 	ld	a,7(iy)
 	adc	a,a
 	ld	9(iy),a
-	ret
-
-retnan:	ld	hl,#0
-	ld	de,#0x7fc0
-done:	ex	de,hl		; the long result: low word in de, high word in hl
-	ld	iy,#24
-	add	iy,sp
-	ld	sp,iy
 	ret
 

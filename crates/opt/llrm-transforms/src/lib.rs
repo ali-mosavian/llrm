@@ -321,6 +321,7 @@ pub mod lsr_generate;
 mod lsr_generate_tests;
 pub mod lsr_implement;
 pub mod lsr_narrow;
+pub mod looptermfold;
 pub mod lsr_pass;
 #[cfg(test)]
 mod lsr_pass_tests;
