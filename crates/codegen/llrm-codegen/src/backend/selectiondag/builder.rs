@@ -58,6 +58,12 @@ impl std::fmt::Debug for TtiHandle {
     }
 }
 
+/// Nodes a block's DAG is given room for per IR instruction, and per block
+/// (the entry, the root, the register copies): jpeg_fixed makes 7.7 per
+/// instruction, memory_expansion 17. A block that needs more grows as before.
+pub(super) const NODES_PER_INSTRUCTION: usize = 8;
+pub(super) const NODES_PER_BLOCK: usize = 16;
+
 impl BuilderTarget {
     /// `getScalarShiftAmountTy(vt)`.
     pub fn shift_amount_for(
@@ -605,6 +611,9 @@ impl<'a> Builder<'a> {
                 ),
             );
         let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag.clone() });
+        // A split condition's block is synthetic: no IR block, sized as an empty one.
+        let instructions = if (block.0 as usize) < function.layout().len() { function.block(block).len() } else { 0 };
+        dag.reserve_nodes(instructions * NODES_PER_INSTRUCTION + NODES_PER_BLOCK);
         let module_tables = info.module_tables.clone();
         let tables = info
             .tables

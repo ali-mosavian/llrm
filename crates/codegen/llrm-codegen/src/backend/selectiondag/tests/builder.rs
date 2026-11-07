@@ -456,3 +456,34 @@ fn a_target_with_no_full_description_refuses_a_call_instead_of_panicking() {
     .expect("a call needs the x86-style description");
     assert!(refused.0.contains("no x86-style description"), "{}", refused.0);
 }
+
+/// A block's DAG started empty and doubled its arena as nodes came (memory_expansion:
+/// 4.9 regrowths of `nodes` per DAG, 2468 DAGs). The builder reserves from the block's
+/// instruction count; `reserve_nodes` keeps the arena in place while it fills.
+#[test]
+fn a_block_dag_is_given_room_for_its_nodes_before_they_are_made() {
+    use super::super::builder::{NODES_PER_BLOCK, NODES_PER_INSTRUCTION};
+    use crate::backend::selectiondag::{DagConfig, SelectionDAG};
+
+    let text = "target datalayout = \"e-m:e-p:32:32-i64:32-f80:32-n8:16:32-S128\"\n\
+                define i32 @f(i32 %a, i32 %b) {\n  %x = add i32 %a, %b\n  %y = mul i32 %x, %b\n  %z = sub i32 %y, %a\n  ret i32 %z\n}\n";
+    let module = llrm_mir::parse::module(text).unwrap();
+    let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let target = BuilderTarget::m32();
+    let (id, _, function) = module.functions().next().unwrap();
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).unwrap();
+    let mut info = FunctionLoweringInfo::new(function);
+    let block = function.layout()[0];
+    let done =
+        build_block(&module, function, &layout, &target, &llrm_x86_m32::M32, &convention, &mut info, block).unwrap();
+    let wanted = function.block(block).len() * NODES_PER_INSTRUCTION + NODES_PER_BLOCK;
+    assert!(done.dag.node_capacity() >= wanted, "room for {} nodes, wanted {wanted}", done.dag.node_capacity());
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    dag.reserve_nodes(64);
+    let (at, room) = (dag.nodes().as_ptr(), dag.node_capacity());
+    for value in 0..48u128 {
+        dag.get_constant(value, crate::backend::selectiondag::mvt::EVT::I32);
+    }
+    assert_eq!((dag.nodes().as_ptr(), dag.node_capacity()), (at, room), "the arena moved while it filled");
+}
