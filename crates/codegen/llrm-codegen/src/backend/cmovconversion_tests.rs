@@ -138,13 +138,15 @@ fn a_carried_register_cmov_is_a_branch_at_the_sandybridge_latencies() {
     assert_eq!(converted(&before, &profile), before);
 }
 
-/// The table the test above reads.
+/// The table the test above reads. A register `imul` is 3 (SandyBridge `WriteIMul32Reg`, load 5 more
+/// for the memory form), not the one-operand form's 4: at 4 every `imul` in a cmov loop
+/// deepened the chain by one more clock than the pin's model.
 #[test]
 fn the_x86_64_table_states_the_sandybridge_latencies() {
     let profile = cpu();
     assert_eq!(
         ["cmov", "mov_rm", "alu_rm", "imul_r32", "imul_m32"].map(|form| profile.latency(form).unwrap()),
-        [2, 5, 6, 4, 9]
+        [2, 5, 6, 3, 8]
     );
 }
 
