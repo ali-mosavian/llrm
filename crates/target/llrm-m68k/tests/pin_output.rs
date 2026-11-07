@@ -65,6 +65,7 @@ const SOURCE_ORDER: Options = Options {
     hoist_flag_setters: false,
     reuse_shift_flags: false,
     post_inc_across_blocks: false,
+    tail_duplicate: false,
     debug: false,
 };
 

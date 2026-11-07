@@ -26,7 +26,7 @@ pub fn tracked(module: &mut Module) -> Result<bool, String> {
     let layout = DataLayout::parse(&text)?;
     let ids: Vec<GlobalId> = module
         .functions()
-        .filter(|(_, _, function)| !function.attrs.contains(&Attribute::Flag("optnone".to_owned())))
+        .filter(|(_, _, function)| !function.attrs.contains(&Attribute::Flag("optnone".into())))
         .map(|(id, ..)| id)
         .collect();
     let mut expressions = Expressions::default();

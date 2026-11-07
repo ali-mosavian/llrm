@@ -1477,7 +1477,7 @@ fn mark_for_size(
             }
             for name in ["optsize"].into_iter().chain(min_size.then_some("minsize")) {
                 if !function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == name)) {
-                    function.attrs.push(Attribute::Flag(name.to_owned()));
+                    function.attrs.push(Attribute::Flag(name.into()));
                 }
             }
         }

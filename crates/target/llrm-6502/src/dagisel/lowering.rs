@@ -39,6 +39,8 @@ pub mod mosisd {
     pub const SHL32: ISD = ISD::Target(ids::SHL32);
     pub const SRL32: ISD = ISD::Target(ids::SRL32);
     pub const SRA32: ISD = ISD::Target(ids::SRA32);
+    pub const FSHL1: ISD = ISD::Target(ids::FSHL1);
+    pub const FSHR1: ISD = ISD::Target(ids::FSHR1);
     pub const CMPZ: ISD = ISD::Target(ids::CMPZ);
     pub const CMP32: ISD = ISD::Target(ids::CMP32);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);

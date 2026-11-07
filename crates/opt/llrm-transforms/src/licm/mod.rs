@@ -756,7 +756,10 @@ fn promotion_round(
             &candidate.pointers,
             candidate.has_reads_outside_set,
         ) {
+            // A location the loop only stores to is held by no phi: its value
+            // is live to the exit from the store, not across the back edge.
             if let Some(room) = room.as_mut()
+                && found.found_load_to_promote
                 && pressure::counts_type(unit, found.access_ty)
             {
                 if !promote::frees_addresses(unit, ctx, &candidate.pointers) {
