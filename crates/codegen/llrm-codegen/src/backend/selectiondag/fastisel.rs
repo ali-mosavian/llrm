@@ -146,6 +146,10 @@ struct Names {
     cmp_rr: u16,
     cmp_ri: u16,
     imul: u16,
+    /// `setcc` and the `i1` to `i32` widening: `and r8, 1`, `movzx`.
+    setcc: u16,
+    and8: u16,
+    movzx8: u16,
     /// m64 only: `movsxd`, and the 64-bit `lea` that adds a scaled index to a base.
     movsx64: Option<u16>,
     lea64: Option<u16>,
@@ -190,6 +194,9 @@ impl Names {
             cmp_rr: opcode("CMP32rr")?,
             cmp_ri: opcode("CMP32ri")?,
             imul: opcode("IMUL32rr")?,
+            setcc: opcode("SETCCr")?,
+            and8: opcode("AND8ri")?,
+            movzx8: opcode("MOVZX32rr8")?,
             movsx64: opcode("MOVSX64rr32"),
             lea64: opcode("LEA64r"),
             alu: [pair("ADD")?, pair("SUB")?, pair("AND")?, pair("OR")?, pair("XOR")?],
@@ -265,6 +272,12 @@ impl Fast<'_> {
             self.dag.get_constant_with(0, EVT::I32, true, false),
             self.dag.get_register(EVT::I16, 0),
         ])
+    }
+
+    /// The byte register an `i1` lives in: only a `setcc` computed in this block.
+    fn value_byte(&self, operand: Operand) -> Option<SDValue> {
+        let Operand::Value(value) = operand else { return None };
+        self.values.get(&value).copied()
     }
 
     fn eax_reg(&self) -> Option<llrm_lir::registers::RegId> {
@@ -601,16 +614,18 @@ impl Fast<'_> {
                     self.values.insert(instruction.result?, done);
                 }
                 Opcode::ICmp(predicate) => {
-                    // only as the condition of the branch that follows it
-                    let next = self.function.instruction(*insts.get(at)?).clone();
-                    let (Opcode::Br, [Operand::Value(cond), Operand::Block(on_true), Operand::Block(on_false)]) =
-                        (&next.opcode, next.operands.as_slice())
-                    else {
-                        return None;
-                    };
-                    if Some(*cond) != instruction.result || at + 1 != insts.len() {
-                        return None;
-                    }
+                    // the condition of the branch that closes the block, or else a `setcc` value
+                    let branch = insts.get(at).and_then(|&next| {
+                        let next = self.function.instruction(next).clone();
+                        match (&next.opcode, next.operands.as_slice()) {
+                            (Opcode::Br, [Operand::Value(cond), Operand::Block(on_true), Operand::Block(on_false)])
+                                if Some(*cond) == instruction.result && at + 1 == insts.len() =>
+                            {
+                                Some((*on_true, *on_false))
+                            }
+                            _ => None,
+                        }
+                    });
                     let left = self.value(instruction.operands[0])?;
                     let compared = if let Some(imm) = self.int(instruction.operands[1]) {
                         let imm = self.dag.get_constant_with(imm as u128, EVT::I32, true, false);
@@ -632,7 +647,19 @@ impl Fast<'_> {
                         Sle => 14,
                         Sgt => 15,
                     };
-                    let (mut on_true, mut on_false) = (*on_true, *on_false);
+                    let Some((mut on_true, mut on_false)) = branch else {
+                        // `setcc r8`: an i1 held in a byte register
+                        if self.module.context.types.int_bits(instruction.ty) != Some(1) {
+                            return None;
+                        }
+                        let flags = self.dag.get_copy_to_phys_reg(self.chain, super::dagisel_adapter::EFLAGS_ID, compared, None);
+                        let glue = SDValue { node: flags.node, res: 1 };
+                        let cc = self.dag.get_constant_with(u128::from(code), EVT::I8, true, false);
+                        let set = self.node(self.names.setcc, &[EVT::I8], &[cc, glue]);
+                        self.chain = SDValue { node: flags.node, res: 0 };
+                        self.values.insert(instruction.result?, set);
+                        continue;
+                    };
                     if Some(on_true) == self.next {
                         std::mem::swap(&mut on_true, &mut on_false);
                         code ^= 1;
@@ -646,6 +673,18 @@ impl Fast<'_> {
                     let jmp = self.node(self.names.jmp, &[EVT::OTHER], &[fall, jcc]);
                     self.chain = jmp;
                     at += 1;
+                }
+                Opcode::Cast(llrm_mir::opcode::CastOp::ZExt) => {
+                    // i1 -> i32: `and r8, 1; movzx`
+                    let from = self.function.operand_type(&self.module.context, instruction.operands[0])?;
+                    if self.module.context.types.int_bits(from) != Some(1) || self.module.context.types.int_bits(instruction.ty) != Some(32) {
+                        return None;
+                    }
+                    let byte = self.value_byte(instruction.operands[0])?;
+                    let one = self.dag.get_constant_with(1, EVT::I8, true, false);
+                    let masked = self.node(self.names.and8, &[EVT::I8, EVT::I32], &[byte, one]);
+                    let done = self.node(self.names.movzx8, &[EVT::I32], &[masked]);
+                    self.values.insert(instruction.result?, done);
                 }
                 Opcode::Br if instruction.operands.len() == 1 => {
                     let Operand::Block(target) = instruction.operands[0] else { return None };
