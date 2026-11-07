@@ -508,6 +508,31 @@ fn fast_isel_takes_volatile_accesses_and_never_folds_a_volatile_load() {
     }
 }
 
+/// FastISel called `llvm.usub.sat.i64` like a function: the object named a
+/// symbol that does not exist and `assemble.rs` panicked ("no entry found for
+/// key") on `sat_builtins.c` and `sat_sub_u64_shared_compare.c`. An intrinsic
+/// call is the DAG's (F3).
+#[test]
+fn fast_isel_leaves_an_intrinsic_call_to_the_dag() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(
+            scratch.path().join("a.c"),
+            "typedef unsigned long long u64;\nu64 h(u64 a, u64 b)\n{\n    return __builtin_elementwise_sub_sat(a, b);\n}\n",
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .current_dir(scratch.path())
+            .args(["-O0", "-c", "a.c", "-o", "a.o"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{target}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
 /// A shift by a constant left its function to the DAG ("fast declined at
 /// Binary(Shl)"): `next` of `div_constants_long.c`, the shifts of `mulconst_i64.c`.
 #[test]

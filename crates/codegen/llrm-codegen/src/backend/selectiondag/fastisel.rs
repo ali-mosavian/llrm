@@ -428,6 +428,12 @@ impl Fast<'_> {
         }
     }
 
+    /// Whether `global` names an `llvm.*` intrinsic: the DAG expands it, a call to it would name a symbol that does not exist.
+    fn is_intrinsic(&self, global: llrm_mir::context::GlobalId) -> bool {
+        self.module.global(global).name.intrinsic_id().is_some()
+            || self.module.global(global).name.as_deref().is_some_and(|name| name.starts_with("llvm."))
+    }
+
     /// The address of the folded load that `operand` is, if it is one.
     fn take_fold(&mut self, operand: Operand) -> Option<Vec<SDValue>> {
         let Operand::Value(value) = operand else { return None };
@@ -658,7 +664,7 @@ impl Fast<'_> {
                     if arguments.len() < parameters.len()
                         || arguments.len() > self.sysv.len()
                         || (!variadic && arguments.len() != parameters.len())
-                        || self.module.global(global).function().is_none_or(|callee| callee.calling_convention != call.calling_convention)
+                        || self.is_intrinsic(global) || self.module.global(global).function().is_none_or(|callee| callee.calling_convention != call.calling_convention)
                     {
                         return None;
                     }
@@ -721,7 +727,7 @@ impl Fast<'_> {
                     let Operand::Constant(callee) = *callee else { return None };
                     let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
                     let (returns, parameters, variadic) = self.module.signature(call.function_type);
-                    if variadic || arguments.len() != parameters.len() || self.module.global(global).function().is_none_or(|callee| callee.calling_convention != call.calling_convention) {
+                    if variadic || arguments.len() != parameters.len() || self.is_intrinsic(global) || self.module.global(global).function().is_none_or(|callee| callee.calling_convention != call.calling_convention) {
                         return None;
                     }
                     let int32 = |ty| word(&self.module.context.types, ty, true);
