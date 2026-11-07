@@ -1772,31 +1772,44 @@ fn test_an_implicit_def_overlapping_a_live_value_is_erased_by_the_join() {
 fn constant_of(
     v: u32,
     value: i64,
+    width: u32,
 ) -> Arc<Insn> {
     let what = Semantics {
         name: Some("mov".into()),
-        dests: vec![held(v)],
-        sources: vec![Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None })],
+        dests: vec![Loc::Held(Held { value: v, width, offset: 0 })],
+        sources: vec![Loc::Imm(crate::model::ir::Imm { value, width, address: None })],
         ..Semantics::new(Operation::Move)
     };
     Arc::new(Insn::new(0, None, Some(what), vec![v], vec![]))
 }
 
-/// The encoded sizes of a flat 32-bit target: a copy is two bytes, a zero is
-/// `xor` (two), any other constant five.
+/// The encoded sizes of a flat 64-bit target: a copy is two bytes, three for a
+/// qword (REX.W), a zero is `xor` (two), any other constant five.
 fn flat_bytes() -> llrm_target::MoveBytes {
-    llrm_target::MoveBytes { copy: |_, _| 2, literal: |number, _, _, _| if number == 0 { 2 } else { 5 } }
+    llrm_target::MoveBytes {
+        copy: |width, _| if width > 4 { 3 } else { 2 },
+        literal: |number, _, _, _| if number == 0 { 2 } else { 5 },
+    }
 }
 
 /// Whether the copy of the constant `value`, which stays read after the loop,
 /// is made again in a build for size, with `price` as the target's.
 fn size_copy_of_constant_is_remade(
     value: i64,
+    width: u32,
     price: Option<super::env::RematWins>,
 ) -> bool {
     use std::collections::BTreeSet;
 
-    let (a, c) = (constant_of(1, value), copy(2, 1));
+    let wide = |v: u32| Loc::Held(Held { value: v, width, offset: 0 });
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![wide(2)],
+        sources: vec![wide(1)],
+        ..Semantics::new(Operation::Move)
+    };
+    let c = Arc::new(Insn::new(0, None, Some(what), vec![2], vec![1]));
+    let a = constant_of(1, value, width);
     let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
     let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
     let env = TargetEnv {
@@ -1823,20 +1836,23 @@ fn size_copy_of_constant_is_remade(
     result == JoinResult::Joined && !names(&lis).contains(&(vec![2], vec![1]))
 }
 
-/// m64 `recgcd` and `idiv_loop_os` -Os kept `mov rsi, rcx` (3 B) where the pin
-/// has `xor esi, esi` (2 B), +2 B: a size build never remade a zero that stays
-/// read, though the `xor` is no longer than the copy. The target's encodings
-/// decide: a zero is remade, a constant dearer than the copy is not.
+/// m64 `recgcd` and `idiv_loop_os` -Os kept `mov rsi, rcx` (3 B, REX.W) where the
+/// pin has `xor esi, esi` (2 B), +2 B: a size build never remade a zero that stays
+/// read. The target's encodings decide: a qword zero is remade, a dword zero is a
+/// tie with the copy and stays one (a remade zero stored to a spill slot cost
+/// `over_aligned_local_after_even_pushes` m64 +9 B), a constant dearer than the
+/// copy stays one.
 #[test]
 fn test_for_size_a_zero_that_stays_read_is_made_again_where_the_target_prices_it() {
     let price = || Some(super::pass::remat_priced(flat_bytes(), 4));
-    assert!(size_copy_of_constant_is_remade(0, price()), "xor is no longer than the copy");
-    assert!(!size_copy_of_constant_is_remade(7, price()), "5 B against a 2 B copy");
+    assert!(size_copy_of_constant_is_remade(0, 8, price()), "xor 2 B against a 3 B copy");
+    assert!(!size_copy_of_constant_is_remade(0, 4, price()), "a tie keeps the copy");
+    assert!(!size_copy_of_constant_is_remade(7, 8, price()), "5 B against a 3 B copy");
 }
 
 /// A target that states no price keeps DEVIATE C10: at size no copy of a
 /// constant that stays read is remade (40 of 813 sources +1,383 bytes).
 #[test]
 fn test_for_size_without_a_price_a_constant_that_stays_read_stays_a_copy() {
-    assert!(!size_copy_of_constant_is_remade(0, None));
+    assert!(!size_copy_of_constant_is_remade(0, 8, None));
 }

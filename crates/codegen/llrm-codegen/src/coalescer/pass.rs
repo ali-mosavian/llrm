@@ -89,8 +89,8 @@ pub struct Coalescer {
     /// A build for size.
     pub size: bool,
     /// The target's encoded sizes of a copy and a constant load, with its
-    /// default operand size: at size a constant is remade where that is no
-    /// longer than the copy it replaces, or leaves no second copy of it.
+    /// default operand size: at size a constant is remade where that is
+    /// shorter than the copy it replaces, or leaves no second copy of it.
     pub moves: Option<(llrm_target::MoveBytes, i64)>,
 }
 
@@ -133,8 +133,10 @@ impl LIRTransform for Coalescer {
     }
 }
 
-/// The target's price of making a constant again at size: its encoding against
-/// the copy's, or any, where the source's own definition goes. At speed the
+/// The target's price of making a constant again at size: its encoding
+/// strictly under the copy's (a tie keeps the copy: before allocation a
+/// register's REX byte is unknown, and a remade zero stored to a spill slot is
+/// dearer than a register stored), or any, where the source's own definition goes. At speed the
 /// pin's choice stands: always.
 pub(super) fn remat_priced(
     bytes: llrm_target::MoveBytes,
@@ -147,7 +149,7 @@ pub(super) fn remat_priced(
         let Some(Semantics { sources, dests, .. }) = def.what.as_ref() else { return true };
         let ([Loc::Imm(literal)], [Loc::Held(held)]) = (sources.as_slice(), dests.as_slice()) else { return true };
         let width = i64::from(held.width);
-        (bytes.literal)(literal.value, literal.address.is_some(), width, operand) <= (bytes.copy)(width, operand)
+        (bytes.literal)(literal.value, literal.address.is_some(), width, operand) < (bytes.copy)(width, operand)
     })
 }
 
