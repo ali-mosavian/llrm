@@ -11,6 +11,9 @@ use crate::spaces::Spaces;
 /// states. The names are the pin's `TargetLoweringBase` fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tuning {
+    /// DEVIATE SD-REPFILL: at size, a constant fill whose stores take more
+    /// bytes than a `rep stos` fill is the fill. None: the pin's stores.
+    pub size_fill: Option<SizeFill>,
     /// `MaxStoresPerMemset`, and at size `MaxStoresPerMemsetOptSize`.
     pub max_stores_per_memset: usize,
     pub max_stores_per_memset_opt_size: usize,
@@ -185,9 +188,25 @@ pub struct Tuning {
     pub ipsccp_widen_keeps_sign: bool,
 }
 
+/// Encoded bytes of a constant fill, stores against `rep stos`. Each pair or
+/// triple is [frame object, global]: a short displacement against an absolute
+/// address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SizeFill {
+    /// A dword, word and byte store of an immediate.
+    pub store: [[u64; 3]; 2],
+    /// The value in `eax` for zero, all ones and any other byte.
+    pub value: [u64; 3],
+    /// `lea`/`mov edi`, `mov ecx` and the `rep stos`.
+    pub setup: [u64; 2],
+    /// One `fst qword` of the x87 zero fill.
+    pub fst: [u64; 2],
+}
+
 impl Tuning {
     /// X86ISelLowering.cpp: 16/8, 8/4, 8/4 stores; no clock price for a byte.
     pub const PIN: Tuning = Tuning {
+        size_fill: None,
         max_stores_per_memset: 16,
         max_stores_per_memset_opt_size: 8,
         max_stores_per_memcpy: 8,

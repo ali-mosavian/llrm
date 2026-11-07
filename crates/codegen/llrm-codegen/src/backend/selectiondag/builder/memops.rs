@@ -686,6 +686,7 @@ impl Builder<'_> {
         length: u64,
         opt_size: bool,
         fill: Option<u128>,
+        frame: bool,
     ) -> bool {
         let zero = fill == Some(0);
         if opt_size
@@ -694,6 +695,24 @@ impl Builder<'_> {
             && self.target.target_nodes.is_none()
         {
             return self.sse_fill_is_longer(length, fill.unwrap_or(0));
+        }
+        if opt_size && let Some(costs) = self.target.tuning.size_fill {
+            let place = usize::from(!frame);
+            let value = match fill {
+                Some(0) => costs.value[0],
+                Some(0xff) => costs.value[1],
+                Some(_) => costs.value[2],
+                None => return false,
+            };
+            let store = costs.store[place];
+            let mut stores = length / 4 * store[0] + u64::from(length % 4 >= 2) * store[1] + length % 2 * store[2];
+            // DEVIATE X87-ZERO-FILL stores whole doubles of zero as `fldz` (2) and
+            // one `fst qword` each: its stores are the pin's to beat, so the fill
+            // is taken only where it beats those too.
+            if fill == Some(0) && length >= 8 && length % 8 == 0 && !self.volatile_memory && self.x87_zero_fill() {
+                stores = stores.min(2 + length / 8 * costs.fst[place]);
+            }
+            return stores > value + costs.setup[place];
         }
         if self.target.dag.pointer.size_in_bits() != 16 {
             return false;
@@ -1231,7 +1250,12 @@ impl Builder<'_> {
                 };
                 let inline = match constant {
                     Some(bytes)
-                        if !self.fill_is_smaller(bytes, opt_size, self.dag.constant(other).map(|byte| byte & 0xff)) =>
+                        if !self.fill_is_smaller(
+                            bytes,
+                            opt_size,
+                            self.dag.constant(other).map(|byte| byte & 0xff),
+                            self.dag.opcode(dst) == ISD::FrameIndex,
+                        ) =>
                     {
                         self.inline_memset(root, dst, other, bytes, limit, alignment)?
                     }
