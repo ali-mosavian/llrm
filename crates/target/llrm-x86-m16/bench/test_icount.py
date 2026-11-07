@@ -159,6 +159,12 @@ class ServiceTests(unittest.TestCase):
         result = self.run_body("    mov ah, 19h\n    int 21h\n    mov bl, al\n    mov al, bl")
         self.assertEqual((result.error, result.exit_code), ("", 2))
 
+    def test_a_program_that_asks_for_the_free_disk_space_runs_to_its_exit(self):
+        """`int 21h ah=36h` (pds71 and vbdos runtimes of grep, stft_fixed and stft_single) stopped the run with `int 21h ah=0x36`:
+        six reference cells had no clock row. The drive has room: AX is the sectors per cluster, not 0FFFFh (invalid drive)."""
+        result = self.run_body("    mov ah, 36h\n    mov dl, 0\n    int 21h\n    mov bl, 0\n    cmp ax, 0FFFFh\n    je done\n    mov bl, 5\ndone:\n    mov al, bl")
+        self.assertEqual((result.error, result.exit_code), ("", 5))
+
     def test_a_file_opened_by_its_drive_and_root_path_is_found_in_the_programs_directory(self):
         """QuickBASIC names a file `C:\\DATA.BIN` once the drive is known: the emulator looked for a file of that very name, opened
         nothing and the program printed 0 where stft_single.bas and grep.bas want 78803551 and 4745."""
