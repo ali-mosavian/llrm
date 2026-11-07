@@ -427,6 +427,16 @@ pub fn select_ari<D: AddrDag>(
     parent: Option<u32>,
     n: SDValue,
 ) -> Option<SDValue> {
+    // DEVIATE: the pin tries `ARI` before `PCD` for an extending load, so the
+    // `WrapperPC` of a global is taken as a register (`lea (g,%pc),%a0`) and
+    // `move.w (%a0),%d0` follows, 4 B more than `move.w (g,%pc),%d0`; a plain
+    // load tries `PCD` first. Every extending load has its `PCD` row. Pin
+    // order: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kInstrData.td#L689
+    // (`ARI`, `ARID`, `ARII`, then `PCD` at L692). Owner m68k. Exit 2026-11-20
+    // (upstream the order, or keep).
+    if dag.opcode(n.node) == m68k_isd::WrapperPC && parent.is_some_and(|parent| dag.opcode(parent) == isd::LOAD) {
+        return None;
+    }
     let mut am = AddressMode::new(AddrType::Ari);
     if !match_register_address(dag, parent, n, &mut am) {
         return None;
