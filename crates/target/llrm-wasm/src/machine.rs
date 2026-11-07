@@ -168,6 +168,14 @@ impl Tti for Wasm {
         "WebAssembly"
     }
 
+    /// SZ1: a size build keeps a callee that inlining would copy into
+    /// several callers (sfm16_dbg -Os: `cmp_bits`, 101 B once or 7 x 105 B).
+    /// The pin's `OptSizeThreshold` 50 allows the growth.
+    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-20): the pin inlines it.
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
     /// The pin's `sinkUnusedInvariants` (grep -O2, stft_fixed -O1).
     fn sinks_unused_invariants(&self) -> bool {
         true
