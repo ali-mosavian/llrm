@@ -243,6 +243,13 @@ pub trait Target {
         true
     }
 
+    /// Whether a rematerializable instruction may read registers (the pin's
+    /// `isReMaterializable` with `allUsesAvailableAt`, not the trivial form):
+    /// AArch64 flags every non-flag-setting `ADD`/`SUB`.
+    fn remat_reads_registers() -> bool {
+        false
+    }
+
     /// Whether making the literal move `literal` again takes no more bytes than
     /// the copy it replaces, so that a build for size may do it where the
     /// constant stays read (DEVIATE C10 keeps the copy otherwise). The
