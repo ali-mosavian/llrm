@@ -10,6 +10,7 @@
 //! forms of the pin's block: no `2^N +- 2^M`. Exit: the hook in the shared
 //! `visit_mul`.
 
+use super::lowering::mosisd;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
@@ -76,7 +77,7 @@ impl CombineHooks for MosCombines {
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate)
+        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate | ISD::Or)
     }
 
     /// DEVIATE 6502-SHARED-SHIFT: a word shift is one instruction whose two
@@ -101,9 +102,41 @@ impl CombineHooks for MosCombines {
             ISD::Add => borrow_of_ult(dag, node).or_else(|| widened_add_with_carry(dag, node)),
             ISD::Sub => borrow_of_ult(dag, node),
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
+            ISD::Or => funnel_by_one(dag, node),
             _ => decompose_mul(dag, node, self.sized),
         }
     }
+}
+
+/// `(a << 1) | (b >> 15)` and `(a << 15) | (b >> 1)` of a word: one bit crosses
+/// from `b` (`a`) to the other word, `FSHL1` and `FSHR1`. A wide shift by one
+/// bit is split into words that way (`ExpandShiftByConstant`); it was a bit
+/// made into a byte (`asl a; lda #0; rol a`) and `ora`ed in.
+///
+/// The pin's analogue is `MatchRotate`'s funnel shift
+/// ([DAGCombiner.cpp#L9464](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L9464)),
+/// which asks the type for a legal or custom `FSHL`: that makes one for every
+/// amount, and its expansion hides the shifts from the folds that ran on them.
+fn funnel_by_one(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    if dag.value_type(node) != EVT::I16 {
+        return None;
+    }
+    let shift = |dag: &SelectionDAG, v: SDValue, op: ISD, by: u128| {
+        (dag.opcode(v) == op && dag.constant(dag.operand(v, 1)) == Some(by)).then(|| dag.operand(v, 0))
+    };
+    let (x, y) = (dag.operand(node, 0), dag.operand(node, 1));
+    for (left, right) in [(x, y), (y, x)] {
+        if let (Some(a), Some(b)) = (shift(dag, left, ISD::Shl, 1), shift(dag, right, ISD::Srl, 15)) {
+            return Some(dag.get_node(mosisd::FSHL1, EVT::I16, &[a, b]));
+        }
+        if let (Some(a), Some(b)) = (shift(dag, left, ISD::Shl, 15), shift(dag, right, ISD::Srl, 1)) {
+            return Some(dag.get_node(mosisd::FSHR1, EVT::I16, &[a, b]));
+        }
+    }
+    None
 }
 
 /// `x + sext(a <u b)` and `x - zext(a <u b)` in a word of two or more bytes: the
