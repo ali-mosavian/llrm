@@ -1,8 +1,8 @@
 // RUN: llrm-cc %s -m32 -O2 -march=i486 --isel=dag -S -o /dev/stdout
 // nbody at m32 -O2 (UP2-X87): four 4-element double arrays are 16 values for the x87 stack's 8 slots. The unroll was priced to save 44 clocks a run; its 8 elements past the stack were stored and loaded again each run: 20 `fxch`, 28 `fst` (381,454 clk against 362,987 rolled). It stays rolled.
-// CHECK-LABEL: _bench_nbody proc
+// CHECK-LABEL: bench_nbody_ proc
 // CHECK-MAX-8: fxch
-// CHECK: _bench_nbody endp
+// CHECK: bench_nbody_ endp
 /* Four-body scalar kernel; result quantization is part of the oracle. */
 extern void report(long value);
 

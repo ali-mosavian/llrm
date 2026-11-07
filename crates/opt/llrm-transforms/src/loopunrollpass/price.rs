@@ -156,9 +156,8 @@ pub(super) fn full_unroll_pays(
     // 12-trip loop inside a loop of `n` runs `n` times, 89 clocks each).
     let runs = ASSUMED_TRIPS.pow((lp.get_loop_depth() - 1).min(2));
     // DEVIATE UP2-X87 (owner x87, exit 2026-11-20): an element past the stack
-    // is stored and loaded again each run (nbody -O2 m32: 16 elements for 8
-    // slots, the unroll priced to save 44 clocks a run ran 92 more: 14 more
-    // stores, 17 more exchanges).
+    // is stored and loaded again each run (nbody -O2 m32: the unroll priced
+    // to save 44 clocks a run ran 92 more: 14 more stores, 17 more exchanges).
     let spill_clocks = spilled * (clocks.float_store + clocks.float_load);
     let saved = (saved_units * body_clocks / rolled_units + constant_clocks - spill_clocks) * runs;
     why(

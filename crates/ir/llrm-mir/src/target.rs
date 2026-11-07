@@ -79,6 +79,11 @@ pub struct Tuning {
     /// the negated constant is made too, is made once: `a + v*(-C)` is
     /// `a - v*C`, exact in IEEE (DEVIATE X87-SHARE, x87 targets only).
     pub x87_share_negated_products: bool,
+    /// At `-Os` a zero fill of eight bytes or more is `fldz` and one `fst
+    /// qword` per double, not two `mov dword` zero stores: 4 bytes a double
+    /// at a short displacement against 8 (DEVIATE X87-ZERO-FILL, x87 targets
+    /// only; the pin's `getOptimalMemOpType` is `i32` without SSE).
+    pub x87_zero_fill_at_size: bool,
     /// A stack slot a loop holds in a register is shared only by what is as
     /// wide (`slots::width_rule_allows`); false: the pin's `ColorSlot`,
     /// which shares any two slots whose ranges do not overlap.
@@ -200,6 +205,7 @@ impl Tuning {
         zext_imm_is_basic: false,
         x87_stack_slots: None,
         x87_share_negated_products: false,
+        x87_zero_fill_at_size: false,
         slots_loop_width_rule: false,
         unswitch_threshold: None,
         inline_threshold: None,
@@ -1024,6 +1030,7 @@ mod tests {
         assert_eq!(pin.x87_stack_slots, None);
         assert!(!pin.x87_share_negated_products);
         assert!(!pin.unroll_promotion_fits_x87_stack);
+        assert!(!pin.x87_zero_fill_at_size);
         assert!(!pin.slots_loop_width_rule);
         assert_eq!(pin.inline_threshold, None);
     }

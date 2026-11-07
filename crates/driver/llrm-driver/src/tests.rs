@@ -1268,7 +1268,9 @@ fn the_trap_intrinsics_select_or_are_refused_by_name() {
         );
         compiled(&flags(&["-m32"]), &text, "f")
     };
-    for (name, call, wanted) in [("llvm.trap()", "llvm.trap()", "ud2"), ("llvm.debugtrap()", "llvm.debugtrap()", "int3")] {
+    for (name, call, wanted) in
+        [("llvm.trap()", "llvm.trap()", "ud2"), ("llvm.debugtrap()", "llvm.debugtrap()", "int3")]
+    {
         let (built, _) = one(name, call).unwrap_or_else(|why| panic!("{name}: {why}"));
         let listing = llrm_codegen::backend::masm::text(&built).unwrap();
         assert!(listing.contains(wanted), "{name}: {listing}");
@@ -2002,8 +2004,293 @@ fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     assert!(lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
 }
 
+/// The COFF object of `text` (a Windows x86-64 module) built with the pin's
+/// section model.
+fn windows_object(text: &str) -> llrm_debug::Described {
+    let text = format!("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-pc-windows-msvc\"\n{text}");
+    let (built, format) = compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
+    assert_eq!(format, llrm_target::object::Format::Coff);
+    llrm_codegen::backend::objbuild::built_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap()
+}
+
+/// A `linkonce_odr` function in a comdat was written into the one `.text`
+/// with every other function, so the linker kept every copy and could not
+/// drop the duplicates other objects define. The pin (llc d1106deb71) writes
+/// it as a section of its own, flagged COMDAT, selection `any`.
+#[test]
+fn a_comdat_function_and_global_are_comdat_sections() {
+    let object = windows_object(
+        "$f = comdat any\n$v = comdat largest\n\
+         @v = linkonce_odr dso_local global i32 7, comdat, align 4\n\
+         define linkonce_odr dso_local i32 @f(i32 %a) comdat {\n  ret i32 %a\n}\n\
+         define dso_local i32 @h(i32 %a) {\n  ret i32 %a\n}\n",
+    );
+    let at = |name: &str| {
+        object
+            .symbols
+            .iter()
+            .find(|one| one.name == name)
+            .and_then(
+                |one| match one.definition {
+                    llrm_object::Definition::Defined { section, .. } => Some(section),
+                    llrm_object::Definition::Undefined => None,
+                },
+            )
+    };
+    let selection = |section: usize| object.comdats.iter().find(|one| one.section == section).map(|one| one.selection);
+    assert_eq!(selection(at("f").unwrap()), Some(llrm_object::Selection::Any), "{:?}", object.comdats);
+    assert_eq!(selection(at("v").unwrap()), Some(llrm_object::Selection::Largest), "{:?}", object.comdats);
+    // controls: a function with no comdat stays in the plain code section,
+    // apart from f's
+    assert_eq!(selection(at("h").unwrap()), None);
+    assert_ne!(at("h"), at("f"));
+    let bytes = llrm_x86::mc::coff64::write(&object).unwrap();
+    // IMAGE_SCN_LNK_COMDAT in a section header: 2 headers carry it
+    let sections = u16::from_le_bytes([bytes[2], bytes[3]]) as usize;
+    let flagged = (0..sections)
+        .filter(|n| u32::from_le_bytes(bytes[20 + 40 * n + 36..20 + 40 * n + 40].try_into().unwrap()) & 0x1000 != 0)
+        .count();
+    assert_eq!(flagged, 2);
+}
+
+/// A COMDAT global of zeros moved to `_BSS` after the COMDAT recorded its range
+/// in `_DATA`: `llrm-llc` panicked ("range end index 6 out of range"). The pin
+/// writes it as a `.bss` section flagged COMDAT, selection `any`, and the
+/// global after it keeps its own `.data` section.
+#[test]
+fn a_comdat_global_of_zeros_is_a_bss_comdat_section() {
+    let object = windows_object(
+        "$z = comdat any\n$w = comdat any\n\
+         @z = linkonce_odr dso_local global i32 0, comdat, align 4\n\
+         @w = linkonce_odr dso_local global [2 x i32] [i32 1, i32 2], comdat, align 4\n\
+         define i32 @f() {\n  %a = load i32, ptr @z\n  %b = load i32, ptr @w\n  %c = add i32 %a, %b\n  ret i32 %c\n}\n",
+    );
+    let section = |name: &str| match object.symbols.iter().find(|one| one.name == name).unwrap().definition {
+        llrm_object::Definition::Defined { section, .. } => section,
+        llrm_object::Definition::Undefined => unreachable!(),
+    };
+    let selection = |section: usize| object.comdats.iter().find(|one| one.section == section).map(|one| one.selection);
+    let (z, w) = (section("z"), section("w"));
+    // the writer drops the `$name` suffix: `.bss$z` is `.bss` in the file
+    assert_eq!((object.sections[z].name.as_str(), object.sections[z].role), (".bss$z", llrm_object::Role::Bss));
+    assert_eq!(selection(z), Some(llrm_object::Selection::Any), "{:?}", object.comdats);
+    assert_eq!(object.sections[w].name, ".data$w");
+    assert_eq!(selection(w), Some(llrm_object::Selection::Any), "{:?}", object.comdats);
+}
+
+/// A comdat of several members folded its globals into one section and gave
+/// its function a comdat of its own: the linker could keep one object's `k` and
+/// another's `g`. The pin writes the member named like the comdat as the comdat
+/// section, selection `any`, and every other member as its own section,
+/// associative with it.
+#[test]
+fn the_members_of_a_comdat_are_associative_with_its_named_member() {
+    let object = windows_object(
+        "$k = comdat any\n\
+         @k = linkonce_odr dso_local global i32 7, comdat, align 4\n\
+         @m = linkonce_odr dso_local global i32 9, comdat($k), align 4\n\
+         define linkonce_odr dso_local i32 @g(i32 %a) comdat($k) {\n  ret i32 %a\n}\n",
+    );
+    let section = |name: &str| match object.symbols.iter().find(|one| one.name == name).unwrap().definition {
+        llrm_object::Definition::Defined { section, .. } => section,
+        llrm_object::Definition::Undefined => unreachable!(),
+    };
+    let record = |section: usize| {
+        object.comdats.iter().find(|one| one.section == section).map(|one| (one.selection, one.associated))
+    };
+    let key = section("k");
+    assert_eq!(record(key), Some((llrm_object::Selection::Any, None)), "{:?}", object.comdats);
+    for member in ["m", "g"] {
+        assert_ne!(section(member), key, "{member} shares the key's section");
+        assert_eq!(
+            record(section(member)),
+            Some((llrm_object::Selection::Associative, Some(key))),
+            "{member}: {:?}",
+            object.comdats
+        );
+    }
+}
+
+/// The symbol of a COMDAT function or global was written as a static
+/// (storage class 3): the linker saw a private name in each object and kept
+/// every copy. The pin writes it external (class 2).
+#[test]
+fn a_comdat_symbol_is_external_and_a_static_stays_static() {
+    let object = windows_object(
+        "$g = comdat any\n$v = comdat any\n\
+         @v = linkonce_odr dso_local global i32 7, comdat, align 4\n\
+         define linkonce_odr dso_local i32 @g(i32 %a) comdat {\n  ret i32 %a\n}\n\
+         define internal i32 @s(i32 %a) {\n  ret i32 %a\n}\n\
+         define dso_local i32 @h(i32 %a) {\n  %r = call i32 @s(i32 %a)\n  ret i32 %r\n}\n",
+    );
+    let bytes = llrm_x86::mc::coff64::write(&object).unwrap();
+    let table = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let count = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let mut classes = std::collections::BTreeMap::new();
+    let mut at = 0;
+    while at < count {
+        let row = &bytes[table + 18 * at..table + 18 * (at + 1)];
+        if row[..4] != [0; 4] {
+            let name = String::from_utf8_lossy(&row[..8]).trim_end_matches('\0').to_owned();
+            classes.insert(name, row[16]);
+        }
+        at += 1 + row[17] as usize;
+    }
+    let class = |name: &str| classes.get(name).copied();
+    assert_eq!((class("g"), class("v"), class("h")), (Some(2), Some(2), Some(2)), "{classes:?}");
+    // control: an internal function stays a static (class 3), if it is kept at
+    // all
+    assert_ne!(class("s"), Some(2), "{classes:?}");
+}
+
+/// The object of `text` for `triple`, built as `windows_object` builds one.
+fn object_for(
+    triple: &str,
+    format: llrm_target::object::Format,
+    text: &str,
+) -> llrm_debug::Described {
+    let text = format!("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"{triple}\"\n{text}");
+    let (built, found) = compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
+    assert_eq!(found, format);
+    llrm_codegen::backend::objbuild::built_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap()
+}
+
+const WEAK_IR: &str = "@u = weak_odr dso_local global i32 7, align 4\n\
+     define weak_odr dso_local i32 @wf(i32 %a) {\n  ret i32 %a\n}\n\
+     define dso_local i32 @h() {\n  %v = load i32, ptr @u\n  ret i32 %v\n}\n";
+
+/// A `weak_odr` function and global were written local: `nm` showed `t` and
+/// `d` where the pin shows `W` and `V`, and the linker saw a private name.
+#[test]
+fn a_weak_definition_is_a_weak_symbol_in_an_elf_object() {
+    let object = object_for("x86_64-unknown-linux-gnu", llrm_target::object::Format::Elf, WEAK_IR);
+    let binding = |name: &str| object.symbols.iter().find(|one| one.name == name).map(|one| one.binding);
+    assert_eq!(
+        (binding("wf"), binding("u"), binding("h")),
+        (Some(llrm_object::Binding::Weak), Some(llrm_object::Binding::Weak), Some(llrm_object::Binding::Public)),
+    );
+}
+
+/// The pin writes a weak definition outside a COMDAT as a weak external
+/// (class 0x69, search-alias aux) that names a default symbol
+/// `.weak.NAME.default.UNIQUE` in the definition's section, UNIQUE the first
+/// strong external symbol of the object.
+#[test]
+fn a_weak_definition_is_a_weak_external_with_a_default_in_a_coff_object() {
+    let object = windows_object(WEAK_IR);
+    let bytes = llrm_x86::mc::coff64::write(&object).unwrap();
+    let table = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let count = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let strings = table + 18 * count;
+    let name = |row: &[u8]| {
+        if row[..4] == [0; 4] {
+            let at = strings + u32::from_le_bytes(row[4..8].try_into().unwrap()) as usize;
+            let end = bytes[at..].iter().position(|b| *b == 0).unwrap();
+            String::from_utf8_lossy(&bytes[at..at + end]).into_owned()
+        } else {
+            String::from_utf8_lossy(&row[..8]).trim_end_matches('\0').to_owned()
+        }
+    };
+    let mut rows = Vec::new();
+    let mut at = 0;
+    while at < count {
+        let row = &bytes[table + 18 * at..table + 18 * (at + 1)];
+        rows.push((at, name(row), u16::from_le_bytes([row[12], row[13]]), row[16], row[17]));
+        at += 1 + row[17] as usize;
+    }
+    let index = |wanted: &str| rows.iter().find(|one| one.1 == wanted).map(|one| one.0);
+    for weak in ["wf", "u"] {
+        let row = rows.iter().find(|one| one.1 == weak).unwrap_or_else(|| panic!("{weak} in {rows:?}"));
+        // section 0, class WEAK_EXTERNAL, one aux
+        assert_eq!((row.2, row.3, row.4), (0, 105, 1), "{weak}: {rows:?}");
+        let aux = &bytes[table + 18 * (row.0 + 1)..table + 18 * (row.0 + 2)];
+        let tag = u32::from_le_bytes(aux[..4].try_into().unwrap()) as usize;
+        assert_eq!(index(&format!(".weak.{weak}.default.h")), Some(tag), "{rows:?}");
+        assert_eq!(u32::from_le_bytes(aux[4..8].try_into().unwrap()), 3, "search alias");
+    }
+    // control: the strong function is a plain external
+    let strong = rows.iter().find(|one| one.1 == "h").unwrap();
+    assert_eq!((strong.2 != 0, strong.3), (true, 2));
+}
+
+/// A COMDAT function's `.pdata` row and `.xdata` were in the object's one
+/// `.pdata` and `.xdata`: where the linker kept another object's copy of the
+/// function and dropped this one's code, the row stayed and pointed into
+/// the dropped section. The pin writes both as sections associative with the
+/// function's code (selection 5, number of the code section).
+#[test]
+fn a_comdat_functions_unwind_data_is_associative_with_its_code() {
+    let object = windows_object(
+        "$f = comdat any\n\
+         define linkonce_odr dso_local i32 @f(i32 %a) comdat {\n  %p = alloca [16 x i32]\n  store volatile i32 %a, ptr %p\n  %v = load volatile i32, ptr %p\n  ret i32 %v\n}\n\
+         define dso_local i32 @h(i32 %a) {\n  %p = alloca [16 x i32]\n  store volatile i32 %a, ptr %p\n  %v = load volatile i32, ptr %p\n  ret i32 %v\n}\n",
+    );
+    let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
+    let code = |name: &str| match object.symbols.iter().find(|one| one.name == name).unwrap().definition {
+        llrm_object::Definition::Defined { section, .. } => section,
+        llrm_object::Definition::Undefined => unreachable!(),
+    };
+    let follows: Vec<(&str, usize)> = object
+        .comdats
+        .iter()
+        .filter(|one| one.selection == llrm_object::Selection::Associative)
+        .map(|one| (object.sections[one.section].name.as_str(), one.associated.unwrap()))
+        .collect();
+    assert_eq!(follows, [(".xdata", code("f")), (".pdata", code("f"))], "{:?}", object.comdats);
+    // control: h is not in a comdat, so its data stays in the shared pair
+    let shared = |name: &str| object.sections.iter().enumerate().filter(|(_, one)| one.name == name).count();
+    assert_eq!((shared(".xdata"), shared(".pdata")), (2, 2));
+}
+
+/// Every function got an `.xdata` block and a `.pdata` row, a frameless leaf
+/// too (12 bytes of `.pdata` each); the pin (llc d1106deb71) writes both only
+/// for a function with a `.seh_*` prologue, so a leaf cost 20 bytes the pin's
+/// object does not carry.
+#[test]
+fn a_frameless_leaf_gets_no_unwind_data_as_the_pin_writes_none() {
+    let object = windows_object(
+        "define dso_local i32 @leaf(i32 %a) uwtable {\n  ret i32 %a\n}\n\
+         define dso_local i32 @framed(i32 %a) uwtable {\n  %p = alloca [16 x i32]\n  store volatile i32 %a, ptr %p\n  %v = load volatile i32, ptr %p\n  ret i32 %v\n}\n",
+    );
+    let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
+    let size = |name: &str| object.sections.iter().find(|one| one.name == name).map_or(0, |one| one.image.len());
+    // one row for `framed`; control: that row is there, so the leaf's absence
+    // is not an empty table
+    assert_eq!(size(".pdata"), 12, "{:?}", object.sections.iter().map(|one| &one.name).collect::<Vec<_>>());
+    assert!(size(".xdata") >= 4);
+    let rows = object.sections.iter().find(|one| one.name == ".pdata").unwrap().relocs.len();
+    assert_eq!(rows, 3);
+}
+
+/// An object with only frameless leaves has no unwind sections at all, as the
+/// pin's has none.
+#[test]
+fn an_object_of_leaves_has_no_unwind_sections() {
+    let object = windows_object("define dso_local i32 @leaf(i32 %a) uwtable {\n  ret i32 %a\n}\n");
+    let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
+    assert!(object.sections.iter().all(|one| one.name != ".xdata" && one.name != ".pdata"));
+}
+
 /// The listing of `tail call @g(...)` then `ret`, built with `abi` at -O2.
-fn tail_call_listing(abi: &str, signature: &str, arguments: &str) -> String {
+fn tail_call_listing(
+    abi: &str,
+    signature: &str,
+    arguments: &str,
+) -> String {
     // a variadic call names its callee's type: `i32 (i32, ...) @g`
     let text = format!(
         "{SYSV}declare i32 @g{signature}\ndefine i32 @f(i32 %x) {{\n  %r = tail call i32 {} @g({arguments})\n  ret i32 %r\n}}\n",
@@ -2015,7 +2302,8 @@ fn tail_call_listing(abi: &str, signature: &str, arguments: &str) -> String {
 
 /// A variadic tail call under Win64 became `jmp g`; the pin keeps `call g`
 /// then `ret` (`isEligibleForSiblingCallOpt`: no variadic sibling call when
-/// either side is Win64). SysV, and a Win64 call of a fixed signature, still jump.
+/// either side is Win64). SysV, and a Win64 call of a fixed signature, still
+/// jump.
 #[test]
 fn a_win64_variadic_tail_call_stays_a_call() {
     let jumps = |listing: &str| listing.lines().any(|line| line.trim().starts_with("jmp g"));
@@ -3174,6 +3462,39 @@ fn a_branch_on_a_negated_bool_global_is_one_compare_at_m64() {
     assert!(listing.contains("cmp byte ptr bad, 1"), "{listing}");
 }
 
+/// The exit flag of a probe loop (`phi i1` from a compare) read by a branch
+/// whose true successor follows was `not cl; test cl, 1; je`, and `and cl, 1;
+/// cmp cl, 1` once rebuilt (x_hash `-Os` m32, +5 B on the pin): the phi
+/// register knew nothing of its bits. The pin's `ComputePHILiveOutRegInfo`
+/// tells it `i1`.
+#[test]
+fn a_branch_on_an_inverted_bool_phi_is_not_negated_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @keys = global [256 x i32] zeroinitializer\n\
+                @vals = global [256 x i32] zeroinitializer\n\
+                define void @f(i32 %n, i32 %k, i32 %s0) {\n\
+                e:\n  %p = getelementptr [4 x i8], ptr @keys, i32 %s0\n  %v = load i32, ptr %p\n\
+                \x20 %c0 = icmp eq i32 %v, -1\n  %m0 = icmp eq i32 %v, %k\n  %o0 = or i1 %c0, %m0\n\
+                \x20 br i1 %o0, label %j, label %h\n\
+                h:\n  br label %lp\n\
+                lp:\n  %s = phi i32 [ %s1, %lp ], [ %s0, %h ]\n  %a = add i32 %s, 1\n  %s1 = and i32 %a, 255\n\
+                \x20 %q = getelementptr [4 x i8], ptr @keys, i32 %s1\n  %w = load i32, ptr %q\n\
+                \x20 %c1 = icmp eq i32 %w, -1\n  %m1 = icmp eq i32 %w, %k\n  %o1 = or i1 %c1, %m1\n\
+                \x20 br i1 %o1, label %j, label %lp\n\
+                j:\n  %i = phi i32 [ %s0, %e ], [ %s1, %lp ]\n  %fl = phi i1 [ %c0, %e ], [ %c1, %lp ]\n\
+                \x20 br i1 %fl, label %ins, label %upd\n\
+                ins:\n  %pk = getelementptr [4 x i8], ptr @keys, i32 %i\n  store i32 %k, ptr %pk\n\
+                \x20 %pv = getelementptr [4 x i8], ptr @vals, i32 %i\n  store i32 %n, ptr %pv\n  br label %x\n\
+                upd:\n  %pu = getelementptr [4 x i8], ptr @vals, i32 %i\n  %o = load i32, ptr %pu\n\
+                \x20 %t = add i32 %o, %n\n  store i32 %t, ptr %pu\n  br label %x\n\
+                x:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("not ") && !listing.contains("and cl, 1"), "{listing}");
+    assert!(listing.contains("test cl, cl"), "{listing}");
+}
+
 /// The locals' base was aligned to the stack's 16 below the pushed registers
 /// (the pin aligns each object to its own and only the total to the stack):
 /// a function with one int local and two saved registers had `sub rsp, 24`
@@ -3234,19 +3555,22 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
     let (built, _) = compiled(&flags(&["-m64", "-O3", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     // Jammed by three: `px += 3 * vx` is `lea r, [v+v]` then `add r, v`.
-    let tripled = listing.lines().map(str::trim).filter(|line| {
-        line.strip_prefix("lea ")
-            .and_then(|rest| rest.split_once('['))
-            .and_then(|(_, inside)| inside.strip_suffix(']'))
-            .and_then(|inside| inside.split_once('+'))
-            .is_some_and(|(a, b)| a == b)
-    });
+    let tripled = listing
+        .lines()
+        .map(str::trim)
+        .filter(
+            |line| line.strip_prefix("lea ")
+                .and_then(|rest| rest.split_once('['))
+                .and_then(|(_, inside)| inside.strip_suffix(']'))
+                .and_then(|inside| inside.split_once('+'))
+                .is_some_and(|(a, b)| a == b),
+        );
     assert!(tripled.count() >= 2, "{listing}");
 }
 
-/// fib at m64 -O2 was copied into itself to the 150 `gcc_insns` the pass allowed
-/// (25941 clocks, 556 B) where gcc's cap is 450 (10793 clocks, 1028 B); -O3 keeps 150
-/// (m32's rectwo and bintree are worse with 450 there).
+/// fib at m64 -O2 was copied into itself to the 150 `gcc_insns` the pass
+/// allowed (25941 clocks, 556 B) where gcc's cap is 450 (10793 clocks, 1028 B);
+/// -O3 keeps 150 (m32's rectwo and bintree are worse with 450 there).
 #[test]
 fn fib_is_copied_into_itself_to_gccs_growth_cap_at_o2_only_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -3852,7 +4176,8 @@ fn a_win64_function_saves_the_xmm_registers_it_keeps_across_a_call() {
         rest.split(']').next()?.parse().ok()
     };
     let saves: Vec<i64> = lines.iter().filter_map(offset).collect();
-    let reloads = lines.iter().filter(|line| line.starts_with("movaps xmm") && line.contains(", xmmword ptr [rsp+")).count();
+    let reloads =
+        lines.iter().filter(|line| line.starts_with("movaps xmm") && line.contains(", xmmword ptr [rsp+")).count();
     assert!(saves.len() >= 2 && reloads == saves.len(), "{win}");
     assert!(saves.iter().all(|at| at % 16 == 0), "movaps faults off a 16-byte boundary: {win}");
     let sysv = listing_of("-mabi=sysv");
@@ -3869,7 +4194,11 @@ fn a_win64_function_with_alloca_reloads_its_xmm_saves_through_the_frame_register
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     // The frame register lies the pushes and the `sub` above the stack pointer.
-    let pushes = lines.iter().take_while(|l| !l.starts_with("sub rsp")).filter(|l| l.starts_with("push") && **l != "push rbp").count() as i64;
+    let pushes = lines
+        .iter()
+        .take_while(|l| !l.starts_with("sub rsp"))
+        .filter(|l| l.starts_with("push") && **l != "push rbp")
+        .count() as i64;
     let sub: i64 = lines.iter().find_map(|l| l.strip_prefix("sub rsp, ")?.parse().ok()).unwrap();
     let distance = 8 * pushes + sub;
     let number = |l: &str, open: &str| -> i64 {
@@ -3878,8 +4207,11 @@ fn a_win64_function_with_alloca_reloads_its_xmm_saves_through_the_frame_register
     };
     let saves: Vec<i64> =
         lines.iter().filter(|l| l.starts_with("movaps xmmword ptr [rsp+")).map(|l| number(l, "[rsp")).collect();
-    let reloads: Vec<i64> =
-        lines.iter().filter(|l| l.starts_with("movaps xmm") && l.contains(", xmmword ptr [rbp")).map(|l| number(l, "[rbp")).collect();
+    let reloads: Vec<i64> = lines
+        .iter()
+        .filter(|l| l.starts_with("movaps xmm") && l.contains(", xmmword ptr [rbp"))
+        .map(|l| number(l, "[rbp"))
+        .collect();
     assert!(!saves.is_empty(), "{listing}");
     assert_eq!(reloads, saves.iter().map(|at| at - distance).collect::<Vec<_>>(), "{listing}");
 }
@@ -3916,7 +4248,10 @@ fn a_win64_variadic_function_homes_its_register_arguments_for_va_start() {
     let below: i64 = lines.iter().find_map(|l| l.strip_prefix("sub rsp, ")?.parse().ok()).unwrap_or(0);
     for (at, register) in [(16, "rdx"), (24, "r8"), (32, "r9")] {
         let home = format!("mov qword ptr [rsp+{}], ", at + below);
-        assert!(lines.iter().any(|l| l.starts_with(&home)), "{register} not homed {at} above the return address: {listing}");
+        assert!(
+            lines.iter().any(|l| l.starts_with(&home)),
+            "{register} not homed {at} above the return address: {listing}"
+        );
     }
     assert!(!listing.contains("test al"), "SysV register save area: {listing}");
     // Win64 has no red zone: nothing is written below the stack pointer.
@@ -3984,9 +4319,8 @@ fn a_win64_function_with_an_unprobed_shape_is_refused() {
 #[test]
 fn a_64_bit_compare_with_a_shifted_mask_is_a_shift_and_a_narrow_test() {
     let listing_of = |mask: u64| {
-        let body = format!(
-            "define i1 @f(i64 %x) {{\n  %a = and i64 %x, {mask}\n  %c = icmp eq i64 %a, 0\n  ret i1 %c\n}}\n"
-        );
+        let body =
+            format!("define i1 @f(i64 %x) {{\n  %a = and i64 %x, {mask}\n  %c = icmp eq i64 %a, 0\n  ret i1 %c\n}}\n");
         let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &format!("{SYSV}{body}"), "f").unwrap();
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
@@ -4087,4 +4421,3 @@ fn a_zero_extended_select_mask_stays_an_immediate_in_the_loop_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("306674911"), "{listing}");
 }
-

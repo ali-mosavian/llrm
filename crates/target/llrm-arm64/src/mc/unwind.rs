@@ -131,6 +131,7 @@ pub fn eh_target() -> EhTarget<'static> {
         code_alignment: 4,
         entry: FrameRow { offset: 0, cfa_register: "sp".into(), cfa_offset: 0, saved: Vec::new() },
         register: &register,
+        def_cfa_on_register_change: true,
     }
 }
 
@@ -150,6 +151,37 @@ mod tests {
             cfa_offset: cfa,
             saved: saved.iter().map(|(name, at)| ((*name).to_owned(), *at)).collect(),
         }
+    }
+
+    /// `mov x29, sp` after `stp x29, x30, [sp, #-16]!` was `DW_CFA_def_cfa_register
+    /// x29` (2 bytes); the pin writes `.cfi_def_cfa w29, 16`, `DW_CFA_def_cfa`
+    /// (3): 30 of 77 same-size FDEs of the bench differed by it.
+    #[test]
+    fn a_new_frame_register_is_written_with_its_offset_as_the_pin_writes_it() {
+        use llrm_object::{Frame, Object, Role, Section};
+        let rows = vec![row(4, "sp", 16, &[("x29", -16), ("x30", -8)]), row(8, "x29", 16, &[("x29", -16), ("x30", -8)])];
+        let object = Object {
+            name: "f.c".into(),
+            bits: 64,
+            sections: vec![Section {
+                name: ".text".into(),
+                role: Role::Text,
+                near: true,
+                align: 4,
+                image: vec![0; 16],
+                spans: vec![[0, 16]],
+                relocs: Vec::new(),
+            }],
+            symbols: Vec::new(),
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            comdats: Vec::new(),
+            frames: vec![Frame { section: 0, offset: 0, length: 16, rows, cfi: Vec::new(), seh: Vec::new() }],
+        };
+        let written = llrm_dwarf::eh_frame::expanded(&object, &eh_target()).unwrap();
+        let image = &written.sections.last().unwrap().image;
+        let fde = image.windows(3).any(|bytes| bytes == [0x0C, 29, 16]);
+        assert!(fde, "no DW_CFA_def_cfa x29, 16 in {image:x?}");
     }
 
     #[test]
