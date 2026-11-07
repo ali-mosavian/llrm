@@ -449,7 +449,14 @@ impl TargetLowering {
     ) -> Action {
         match vt {
             EVT::Int(_) => Action::Expand,
-            EVT::Simple(vt) => self.maps.operations.get(&(op, vt)).copied().unwrap_or(Action::Legal),
+            // A vector type's operations are Expand unless the target lists them
+            // (`TargetLoweringBase::initActions` and the X86 constructor's
+            // `for (MVT VT : MVT::fixedlen_vector_valuetypes())` Expand loop).
+            EVT::Simple(vt) => self.maps.operations.get(&(op, vt)).copied().unwrap_or(if vt.is_vector() {
+                Action::Expand
+            } else {
+                Action::Legal
+            }),
         }
     }
 
@@ -900,6 +907,16 @@ impl TargetLowering {
         // L559..L566: 32-bit va_list is a pointer
         t.set_operation_action(VAStart, MVT::Other, Custom);
         t.set_ops(&[VAEnd, VACopy], &[MVT::Other], Expand);
+        if features.sse2 && is64 {
+            // L1019..L1060 (the SSE2 integer vectors): only memory moves, casts
+            // and the structural nodes exist on `VR128` until a consumer needs
+            // more; every other operation is Expand (`operation_action`).
+            t.set_ops(
+                &[Load, Store, BitCast, Undef, Poison, Freeze, CopyToReg, CopyFromReg],
+                &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
+                Legal,
+            );
+        }
         if features.sse2 {
             // L618..L674: f32 and f64 use SSE
             t.set_load_ext_action(LoadExt::ExtLoad, MVT::F64, MVT::F32, Expand);
@@ -947,6 +964,23 @@ impl TargetLowering {
 mod tests {
     use super::*;
     use crate::lowering::TypeAction;
+
+    /// m64 with SSE2 held the four integer vectors in `VR128` with every
+    /// operation Legal (the default of an unlisted entry): an `add <4 x i32>` would
+    /// have been selected with no pattern to match.
+    #[test]
+    fn sse2_vectors_have_memory_moves_and_nothing_else() {
+        let t = TargetLowering::x86_64(Features { sse2: true, ..Features::default() }, MVT::I64);
+        for vt in [MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64] {
+            for op in [ISD::Load, ISD::Store, ISD::BitCast, ISD::Undef] {
+                assert_eq!(t.operation_action(op, EVT::Simple(vt)), Action::Legal, "{op:?} {vt:?}");
+            }
+            for op in [ISD::Add, ISD::Mul, ISD::And, ISD::Shl] {
+                assert_eq!(t.operation_action(op, EVT::Simple(vt)), Action::Expand, "{op:?} {vt:?}");
+            }
+        }
+        assert_eq!(t.operation_action(ISD::Add, EVT::I32), Action::Legal, "scalars are as they were");
+    }
 
     fn a64() -> TargetLowering {
         TargetLowering::aarch64(Aarch64Features::default())
