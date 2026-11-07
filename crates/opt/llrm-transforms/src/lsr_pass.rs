@@ -325,7 +325,10 @@ fn plan_loop(
         // less than the one with them, or where theirs adds a base to the
         // counter in an address the pin's does not, on a target that
         // cannot fold it: they save a compare, which that add outweighs
-        // (wasm's copy epilog, jpeg_fixed `emit`).
+        // (wasm's copy epilog, jpeg_fixed `emit`), or where theirs saves
+        // neither a counter nor a register: the pin's formula already shares
+        // the exit test's, and a hoisted end base is only setup (wasm sieve,
+        // whose stores merge into one, -O2 507 B against the pin's 500).
         narrowed(se, &mut pin);
         let (pin_solution, pin_cost) = pin.solve_with_cost(se);
         // A target with no register-plus-register address (wasm) pays an add
@@ -341,7 +344,7 @@ fn plan_loop(
                 || (!folds_base_and_counter
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
                         || spent > saved
-                        || (spent == saved && tti.lsr_bytes().is_some() && cost.bytes >= pin_cost.bytes))));
+                        || !(cost.c.add_rec_cost < pin_cost.c.add_rec_cost || cost.c.num_regs < pin_cost.c.num_regs))));
         llrm_support::debug!("lsr", "  pin's space solved: kept {kept} (bytes {} against the pin's {})", cost.bytes, pin_cost.bytes);
         if kept {
             lsr = pin;
