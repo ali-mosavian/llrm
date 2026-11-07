@@ -932,6 +932,22 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let NodeData::CondCode(cond) = self.dag.node(self.dag.operand(node, 2)).data else { return None };
         let op_type = self.dag.value_type(n0);
+        // `SimplifySetCC` ([L5632][pin]): `setuo|seto x, C` of a constant that
+        // is no NaN is `setuo|seto x, x`, which needs no 0.0 materialized.
+        // DEVIATE: the `setcc (fneg x), C` arm after it is not ported.
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5632
+        if op_type.is_floating_point() {
+            if matches!(cond, CondCode::SetO | CondCode::SetUo)
+                && self.dag.opcode(n0) != ISD::ConstantFP
+                && self.fp_const(n1).is_some_and(|class| !class.nan)
+            {
+                let vt = self.dag.value_type(node);
+                return Some(self.dag.get_setcc(vt, n0, n0, cond));
+            }
+            return None;
+        }
         if !op_type.is_integer() {
             return None;
         }
