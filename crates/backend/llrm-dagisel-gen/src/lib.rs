@@ -10,6 +10,7 @@
 
 pub mod decode;
 pub mod emit;
+pub mod fastisel;
 pub mod features;
 pub mod flatten;
 pub mod ids_rs;

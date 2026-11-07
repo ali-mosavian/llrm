@@ -49,7 +49,7 @@
 //! Review 2026-11-13.
 //!
 //! DEVIATE SD11: no floating-point constant folding (`foldConstantFPMath`,
-//! `FP_TO_SINT` of a constant, `FoldSetCC` on FP constants), no FP constant
+//! `FP_TO_SINT` of a constant), no FP constant
 //! bitcasts; `ConstFp` holds raw bits. Reason: needs an `APFloat` (f80
 //! included); not on the integer path A1 builds. Exit: with the FP builder
 //! piece. Owner sdag-a. Review 2026-11-13.
@@ -121,6 +121,7 @@ pub mod ctcount_combine;
 mod dag;
 pub mod dag_combiner;
 pub mod dag_function;
+pub mod fastisel;
 pub mod dag_select;
 pub mod dag_target;
 pub mod dagisel_adapter;

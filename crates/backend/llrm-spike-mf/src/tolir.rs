@@ -172,10 +172,10 @@ impl<T: Target> Converted<T> {
                 })
             })),
             Some(Box::new(is_literal_move)),
-            Some(Box::new(|literal, source, destination, size| {
+            Some(Box::new(|literal, source, destination, size, alone| {
                 let (source, destination): (Vec<RegId>, Vec<RegId>) =
                     (source.iter().copied().collect(), destination.iter().copied().collect());
-                T::literal_move_wins(literal, &source, &destination, size)
+                literal_remat_wins::<T>(literal, &source, &destination, size, alone)
             })),
             Box::new(move |one, value| {
                 // which of the instruction's operand slots name the value: the
@@ -1244,6 +1244,21 @@ impl<T: Target> SpikeInstrInfo<T> {
         Some(Insn::new(beside.at, Some((at, at)), Some(what), defines, uses))
     }
 }
+
+/// Whether the coalescer makes the literal `literal` again for a copy from a value
+/// in `source` to one in `destination`. DEVIATE C10 (register_coalescer.rs): at -Os
+/// a constant that stays read (`!alone`) is not made again; the target's price
+/// decides the rest.
+pub fn literal_remat_wins<T: Target>(
+    literal: &Insn,
+    source: &[RegId],
+    destination: &[RegId],
+    size: bool,
+    alone: bool,
+) -> bool {
+    (!size || alone) && T::literal_move_wins(literal, source, destination, size)
+}
+
 
 /// One register written by a move of a literal, whatever the target names it:
 /// the target's `isAsCheapAsAMove && isReMaterializable` for a constant.

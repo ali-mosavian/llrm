@@ -237,6 +237,7 @@ fn a_constant_the_pin_leaves_an_imul_is_the_chain_where_the_block_is_hot() {
             freq,
             milliclocks_per_byte: rate,
             by_clocks: false,
+            no_growth: false,
             price_pin: false,
         };
         let mut lowering = X86Lowering {
