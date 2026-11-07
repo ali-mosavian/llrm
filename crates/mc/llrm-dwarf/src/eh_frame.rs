@@ -82,11 +82,12 @@ pub fn expanded_as(
         buf.u8(DW_CFA_OFFSET | target.return_column as u8);
         buf.uleb(target.entry.cfa_offset as u64 / target.address as u64);
     }
-    pad(&mut buf, target.address);
+    // As the pin: `emitValueToAlignment(Align(IsEH ? 4 : ...))`.
+    pad(&mut buf, 4);
     buf.patch32(0, buf.at() as u32 - 4);
     let initial = FrameRow { offset: 0, saved: Vec::new(), ..target.entry.clone() };
     let mut entries = Vec::new();
-    for frame in &object.frames {
+    for (at, frame) in object.frames.iter().enumerate() {
         let start = buf.at();
         entries.push(start);
         buf.u32(0);
@@ -103,7 +104,10 @@ pub fn expanded_as(
             changes(&number, &mut buf, state, row, alignment)?;
             state = row;
         }
-        pad(&mut buf, target.address);
+        // The pin aligns an FDE to the size of its pointer encoding, the last
+        // one to the code pointer size (the section is a multiple of it).
+        let last = at + 1 == object.frames.len();
+        pad(&mut buf, if last { target.address } else { width });
         buf.patch32(start, (buf.at() - start - 4) as u32);
     }
     let part = buf.done();
