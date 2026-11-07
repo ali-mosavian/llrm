@@ -1727,3 +1727,17 @@ fn a_constant_fill_of_odd_size_or_byte_alignment_stays_rep_stosb() {
     assert_eq!(constant_fill_unit(203, 2).as_deref(), Some("1"));
     assert_eq!(constant_fill_unit(202, 1).as_deref(), Some("1"));
 }
+
+/// rectwo -O2 at m32: gcc's depth-8 copies of `paths` into itself made 1965 B
+/// that ran 1449397 clk (gcc 849 B, 555823 clk). Depth 2 at -O2 is 277 B and
+/// 347314 clk; -O3 keeps gcc's 8.
+#[test]
+fn at_m32_the_copies_of_a_recursive_function_are_two_deep_at_o2_and_eight_at_o3() {
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let target = cpu.target();
+    let tti = target.tti();
+    let depth = |o3: bool| {
+        llrm_transforms::walk::Recursion::of(false, false, true, o3, tti.as_deref()).expect("m32 copies recursion").depth
+    };
+    assert_eq!((depth(false), depth(true)), (2, 8));
+}
