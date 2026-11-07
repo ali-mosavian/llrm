@@ -11,7 +11,10 @@ const IR: &str = include_str!("../crates/ir/llrm-mir/tests/clang/dbg_inlined.ll"
 fn test_a_callee_variable_is_not_listed_under_the_function_it_was_inlined_into() {
     let directory = tempfile::tempdir().unwrap();
     let input = directory.path().join("inc.ll");
-    let layout = format!("target datalayout = \"{}\"\ntarget triple = \"x86_64-unknown-linux-gnu\"", common::datalayout("x86-m64"));
+    let layout = format!(
+        "target datalayout = \"{}\"\ntarget triple = \"x86_64-unknown-linux-gnu\"",
+        common::datalayout("x86-m64")
+    );
     let text: String = IR
         .lines()
         .map(|line| if line.starts_with("target datalayout") { layout.clone() } else { line.to_owned() })
