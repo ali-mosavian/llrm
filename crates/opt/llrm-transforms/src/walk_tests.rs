@@ -3057,3 +3057,73 @@ rec:
 ";
     assert!(!is_tree(linear, "sum"), "sum is a tree");
 }
+
+/// jpeg_fixed Nib at m16 -O2: `next_byte` is a few hot instructions and a long
+/// cold refill block; inlined at 36 loop sites (#7817) the code went 4305 ->
+/// 9398 B and the clocks rose 561k, for the call it saved. The cold block's
+/// bytes buy no clocks: the call stays.
+#[test]
+fn test_a_helper_whose_bulk_is_a_cold_block_stays_a_call_at_m16_o2() {
+    let text = "@g = global i16 0
+
+define i16 @next_byte(i16 %x) {
+b0:
+  %p = load volatile i16, ptr @g
+  %z = icmp ne i16 %p, 0
+  br i1 %z, label %hot, label %cold
+
+hot:
+  ret i16 %p
+
+cold:
+  %c0 = load volatile i16, ptr @g
+  %c1 = load volatile i16, ptr @g
+  %c2 = load volatile i16, ptr @g
+  %c3 = load volatile i16, ptr @g
+  %c4 = load volatile i16, ptr @g
+  %c5 = load volatile i16, ptr @g
+  %c6 = load volatile i16, ptr @g
+  %c7 = load volatile i16, ptr @g
+  %c8 = load volatile i16, ptr @g
+  %c9 = load volatile i16, ptr @g
+  %c10 = load volatile i16, ptr @g
+  %c11 = load volatile i16, ptr @g
+  %c12 = load volatile i16, ptr @g
+  %c13 = load volatile i16, ptr @g
+  %s0 = add i16 %x, %c0
+  %s1 = add i16 %s0, %c1
+  %s2 = add i16 %s1, %c2
+  %s3 = add i16 %s2, %c3
+  %s4 = add i16 %s3, %c4
+  %s5 = add i16 %s4, %c5
+  %s6 = add i16 %s5, %c6
+  %s7 = add i16 %s6, %c7
+  %s8 = add i16 %s7, %c8
+  %s9 = add i16 %s8, %c9
+  %s10 = add i16 %s9, %c10
+  %s11 = add i16 %s10, %c11
+  %s12 = add i16 %s11, %c12
+  %s13 = add i16 %s12, %c13
+  ret i16 %s13
+}
+
+define i16 @top(i16 %n) {
+b0:
+  br label %loop
+
+loop:
+  %i = phi i16 [ 0, %b0 ], [ %j, %loop ]
+  %a = call i16 @next_byte(i16 %i)
+  %b = call i16 @next_byte(i16 %a)
+  %c = call i16 @next_byte(i16 %b)
+  store volatile i16 %c, ptr @g
+  %j = add i16 %i, 1
+  %k = icmp slt i16 %j, %n
+  br i1 %k, label %loop, label %done
+
+done:
+  ret i16 %c
+}";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert!(m16.contains("call i16 @next_byte"), "the calls were inlined:\n{m16}");
+}
