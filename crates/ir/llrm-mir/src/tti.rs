@@ -697,6 +697,11 @@ pub trait Tti {
         0
     }
 
+    /// `Tuning::unroll_never_grows_at_o1`.
+    fn unroll_never_grows_at_o1(&self) -> bool {
+        false
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false
