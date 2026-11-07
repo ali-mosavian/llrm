@@ -1530,6 +1530,38 @@ mod mul_lohi {
         assert_eq!(copied_to_eax(0x82f6_3b7f), (false, true), "a 32-bit magic goes to EAX");
     }
 
+    /// recmany/switch at m16 -O2: a signed `x % 5` magic is 31 bits
+    /// (0x66666667) and an unknown `i32` has 31 magnitude bits and a sign, but
+    /// the order rule counted 32, so the magic stayed the r/m operand and the
+    /// multiply ran at the magic's length (41 clocks) where the divide's
+    /// price assumed the dividend. A signed multiply against an unknown
+    /// dividend now sends a magic of its width to `EAX`; a narrower constant
+    /// still stays the r/m operand.
+    #[test]
+    fn a_signed_magic_as_long_as_the_dividends_magnitude_goes_to_eax() {
+        let copied_to_eax = |constant: i64| {
+            let mut dag = TestDag::new();
+            let a = dag.input(1, mvt::i32);
+            let c = dag.make_constant(constant, mvt::i32);
+            let node = dag.node(isd::SMUL_LOHI, &[mvt::i32, mvt::i32], &[a, c]);
+            dag.node(isd::ADD, &[mvt::i32], &[SDValue::new(node, 0), SDValue::new(node, 1)]);
+            let mut hooks = X86Hooks::new(Options {
+                cpu: Cpu::I486,
+                opt_none: false,
+                opt_for_size: false,
+                min_size: false,
+                has_frame_pointer: true,
+                multiply_early_out: true,
+                address_mode: crate::x86_addr::AddrMode::Flat32,
+            });
+            assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+            let copy = dag.nodes.iter().find(|n| n.opcode == isd::CopyToReg).unwrap().ops[2];
+            (copy == a, copy == c)
+        };
+        assert_eq!(copied_to_eax(0x6666_6667), (false, true), "a 31-bit magic against 31 magnitude bits");
+        assert_eq!(copied_to_eax(32758), (true, false), "15 bits: the pin's order");
+    }
+
     /// `a * b` where `b` arrives in `EAX` (virtual register 2, live-in `EAX`)
     /// and `a` in `EDX`: the pin swaps so `b` is the implicit operand. Without
     /// the swap the selector copied `b` out of `EAX` into `EDX` and `a` into

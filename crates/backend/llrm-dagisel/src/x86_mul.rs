@@ -46,7 +46,12 @@ fn constant_is_wider<D: AddrDag>(
         (narrow as u64).checked_ilog2().map_or(0, |n| n + 1)
     };
     let zeros = (dag.known_zero_bits(other) << (64 - width.min(64))).leading_ones();
-    bits >= width - zeros.min(width)
+    // A signed multiplier of unknown sign has `width - 1` magnitude bits: the
+    // sign is not one the early-out counts (a 31-bit `x / 5` magic against an
+    // unknown `i32` was a tie it lost: the magic stayed the r/m operand, 41
+    // clocks, where the dividend is the one priced).
+    let sign = u32::from(signed && zeros == 0);
+    bits >= (width - zeros.min(width)).saturating_sub(sign)
 }
 
 /// `orderRegForMul`: swap so the operand already in `lo` is the implicit one.
