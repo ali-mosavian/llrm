@@ -61,6 +61,12 @@ pub struct Tuning {
     /// can keep in a register. false: the pin's `va_start`, which leaves the
     /// list in memory.
     pub promote_va_list: bool,
+    /// DEVIATE SETCC-TREE-BRANCH (owner x86-m32, exit 2026-12-05): at -Os a
+    /// sum `x + zext(c)` whose `c` is an `and`/`or` of two or more word
+    /// compares is a branch around `x + 1` (the byte price of the `setcc`
+    /// chain decides), where the pin keeps the `setcc`/`or`/`movzx` chain.
+    /// false: the pin's lowering.
+    pub branch_compare_trees_at_size: bool,
     /// At -O1 (`OptLevel` 1) a full unroll is made only where its cost after
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
@@ -281,6 +287,7 @@ impl Tuning {
         narrow_divide_live_limit: 0,
         sink_spares_ranges: false,
         promote_va_list: false,
+        branch_compare_trees_at_size: false,
         unroll_never_grows_at_o1: false,
         inline_never_grows_without_rate: false,
         inline_o1_milliclocks_per_byte: 0,

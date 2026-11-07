@@ -689,6 +689,10 @@ impl Tti for X86 {
         self.tuning.promote_va_list
     }
 
+    fn branch_compare_trees_at_size(&self) -> bool {
+        self.tuning.branch_compare_trees_at_size
+    }
+
     fn sink_spares_ranges(&self) -> bool {
         self.tuning.sink_spares_ranges
     }
