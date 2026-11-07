@@ -71,14 +71,8 @@ pub(super) fn full_unroll_pays(
     // -O3 is speed: the nest's decision holds there (matmul -O3: 672
     // instructions kept against 4,148 priced, clang's 608).
     let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3;
-    // DEVIATE ARM64-UNROLL-PRICE (owner w15, exit 2026-11-30): and only while the
-    // whole nest can still unroll, within the bound the pin gives one loop
-    // (`threshold` x `max_percent_threshold_boost`): an inner loop unrolled in a
-    // nest that cannot finish folds nothing (tile -O2: the 40-trip loop in a
-    // 25-trip loop, 364 B for 2,155 instructions; gcc's rolled 80 B for 4,184).
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count)
-        && (!prices_nest
-            || (reads_outer_counter(run, analyzed, lp) && nest_can_finish(run, se, analyzed, lp, trips, uce, up)))
+        && (!prices_nest || reads_outer_counter(run, analyzed, lp))
     {
         why(run, lp, "unpriced unroll: the nest bypass");
         return true;
@@ -752,37 +746,6 @@ fn local_array_at(
     }
 }
 
-/// Whether the nest around `lp` (innermost, every loop around it of known
-/// trips) unrolled whole stays within the largest unrolled size one loop may
-/// have: the body of `lp` times the trips of all the loops.
-fn nest_can_finish(
-    run: &Run,
-    se: &mut ScalarEvolution,
-    analyzed: &Analyzed,
-    lp: Loop,
-    trips: u32,
-    uce: &UnrollCostEstimator,
-    up: &UnrollingPreferences,
-) -> bool {
-    let cx = llrm_analysis::scev::Cx {
-        context: &*run.context,
-        globals: run.globals,
-        metadata: run.metadata,
-        function: &*run.function,
-        layout: run.layout,
-        loops: &analyzed.loops,
-        tree: &analyzed.tree,
-        assumptions: &analyzed.assumptions,
-    };
-    let mut units = u64::from(uce.rolled_loop_size().max(1)) * u64::from(trips);
-    let mut around = lp.get_parent_loop();
-    while let Some(parent) = around {
-        units = units.saturating_mul(u64::from(se.get_small_constant_trip_count(&cx, parent.get_header()).max(1)));
-        around = parent.get_parent_loop();
-    }
-    units <= u64::from(up.threshold) * u64::from(up.max_percent_threshold_boost) / 100
-}
-
 /// Whether `lp` is innermost and has an enclosing loop, and every loop around
 /// it runs a known number of trips, at most `most`.
 fn encloses_known_trips(
@@ -942,7 +905,11 @@ fn reads_outer_counter(
                     one.opcode,
                     Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::Phi | Opcode::GetElementPtr { .. }
                 );
-                let sink = !passes && !matches!(one.opcode, Opcode::Br);
+                // DEVIATE ARM64-UNROLL-PRICE (owner w15, exit 2026-11-30): a load reads
+                // its address, which is addressing, not data (tile -O2: `tile[(y + dy) & 63]
+                // [(x + dx) & 63]` bypassed the pricing for 364 B and 2,155 instructions
+                // where the rolled loop is 68 B and 4,181).
+                let sink = !passes && !matches!(one.opcode, Opcode::Br | Opcode::Load { .. });
                 let reads_data = if passes { one.result.is_some_and(|result| data.contains(&result)) } else { sink };
                 if !reads_data {
                     continue;

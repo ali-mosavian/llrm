@@ -77,11 +77,12 @@ fn a_loop_whose_copies_make_data_constant_is_unrolled_with_its_nest() {
 }
 
 /// tile -O2: the 40-trip loop inside a 25-trip loop was unrolled by the nest
-/// bypass although the nest (40 x 25 x 5 units) can never finish unrolling:
-/// 364 B and 2,155 instructions where gcc's rolled loop is 80 B and 4,184.
-/// The module was 115 instructions; fewer than 80 with the loop priced.
+/// bypass: the outer counter's only reader is the address of a load, which is
+/// not data the nest folds. 364 B and 2,155 instructions where the rolled loop
+/// is 68 B and 4,181 (gcc 80 B, 4,184). The module was 115 instructions;
+/// fewer than 80 with the loop priced.
 #[test]
-fn a_nest_that_cannot_finish_unrolling_is_priced_not_bypassed() {
+fn a_nest_loop_whose_outer_counter_only_addresses_a_load_is_priced_not_bypassed() {
     let insns = instructions(include_str!("data/bench_tile.ll"), Level::O2);
     assert!(insns < 80, "{insns} instructions");
 }
