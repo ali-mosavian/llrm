@@ -379,6 +379,7 @@ impl Machine for Dos {
             unroll_max_percent_threshold_boost: Some(100),
             x87_stack_slots: Some(8),
             x87_share_negated_products: true,
+            x87_zero_fill_at_size: true,
             // DEVIATE SLOTS-LOOPWIDTH (owner greedy-subreg, exit 2026-11-20):
             // the pin's ColorSlot shares any two slots whose ranges do not
             // overlap. Here a word shares no slot a double word holds through a

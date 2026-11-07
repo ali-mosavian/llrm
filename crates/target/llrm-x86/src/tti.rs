@@ -704,6 +704,10 @@ impl Tti for X86 {
         self.tuning.x87_share_negated_products && !self.sse2
     }
 
+    fn x87_zero_fill_at_size(&self) -> bool {
+        self.tuning.x87_zero_fill_at_size && !self.sse2
+    }
+
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         self.tuning.unroll_partial_threshold
     }
