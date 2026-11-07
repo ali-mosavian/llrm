@@ -110,6 +110,9 @@ pub struct Options {
     /// A load of an incoming stack argument is made again where it is read
     /// ([`crate::regalloc::Registers`], M68K-ARGREMAT).
     pub rematerialize_arguments: bool,
+    /// A loop's top is chosen by the jumps its fall-throughs remove, not by
+    /// the edges they cover (M68K-TOP, [`crate::regalloc::place_blocks`]).
+    pub loop_top_by_jumps: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -131,6 +134,7 @@ impl Options {
         post_inc_across_blocks: false,
         tail_duplicate: false,
         rematerialize_arguments: false,
+        loop_top_by_jumps: false,
         debug: false,
     };
 }
@@ -151,6 +155,7 @@ impl Default for Options {
             post_inc_across_blocks: true,
             tail_duplicate: true,
             rematerialize_arguments: true,
+            loop_top_by_jumps: true,
             debug: false,
         }
     }
@@ -265,7 +270,7 @@ pub fn items_with(
     if options.tail_duplicate && !wants_size {
         llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
     }
-    crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
+    crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size, options.loop_top_by_jumps);
     let mut out = vec![Item::Label(name.to_owned())];
     // The line the function is declared at starts its rows (the prologue is
     // from no instruction).
