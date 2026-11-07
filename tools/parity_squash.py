@@ -1177,6 +1177,7 @@ ALWAYS_SCANNERS = (
     "no_local_paths",
     "no_partial_ecx_counts",
     "no_todo",
+    "no_watcom_frontend",
     "selectiondag_registry",
     "target_facts",
     "tracked_build_products",

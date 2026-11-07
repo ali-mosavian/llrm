@@ -610,6 +610,7 @@ RUNTIME_C = {
 # Targets that read files, not crates: scans of sources and docs, run on every PR (all together about 2 s).
 SCANNERS = {
     "block_list_ratchet": "counts a pattern in sources",
+    "no_watcom_frontend": "reads the manifest and the tree for the deleted Watcom front end",
     "build_script_reruns": "reads build scripts",
     "core_depends_on_no_target": "reads crates' manifests",
     "core_fixtures_are_for_core_tests": "reads test fixtures",
