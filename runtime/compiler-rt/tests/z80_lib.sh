@@ -23,12 +23,5 @@ sdasz80 -g -o "$OUT/div64.rel" config/z80/div64.s; cp config/z80/div64.s "$OUT/d
 # operands in static cells and are not reentrant, and they clobber IY (free in the llrm-z80 convention).
 # member names kept (fp_f32_add_sub, fp_f32_cmp): the z80 A/B instrument requires fp_f32_add_sub.s and links members by symbol
 for pair in sf32_arith:fp_f32_add_sub sf32_cmp:fp_f32_cmp; do src=${pair%%:*}; dst=${pair##*:}; cp config/z80/$src.s "$OUT/$dst.s"; sdasz80 -g -o "$OUT/$dst.rel" "$OUT/$dst.s"; done
-defined=$(grep -h '\.globl' $OUT/*.s | awk '{print $2}' | sort -u)
-missing=""
-for s in __adddf3 __subdf3 __muldf3 __divdf3 __eqdf2 __nedf2 __ltdf2 __ledf2 __gtdf2 __gedf2 __cmpdf2 __addsf3 __subsf3 __mulsf3 __divsf3 __eqsf2 __nesf2 __ltsf2 __lesf2 \
-         __gtsf2 __gesf2 __floatsidf __floatunsidf __floatdidf __floatundidf __floatsisf __floatunsisf __fixdfsi __fixunsdfsi __fixdfdi __fixunsdfdi \
-         __fixsfsi __fixunssfsi __fixunssfdi __extendsfdf2 __truncdfsf2; do
-  echo "$defined" | grep -qx "$s" || missing="$missing $s"
-done
-[ -z "$missing" ] || { echo "FAIL: not defined:$missing"; exit 1; }
-echo "ok: $(echo "$defined" | wc -l) globals in $OUT"
+bash "$(dirname "$0")/z80_lib_symbols.sh" "$OUT" || exit 1
+echo "ok: $(grep -hE '^[A-Za-z_][A-Za-z0-9_]*::|\.globl' $OUT/*.s | wc -l) globals in $OUT"

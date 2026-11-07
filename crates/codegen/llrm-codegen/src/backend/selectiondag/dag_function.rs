@@ -1240,7 +1240,7 @@ fn selected_in(
     // multiply by its block's frequency (the IR one: no machine block exists
     // before selection).
     let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks { 0 } else { cpu.speed_milliclocks_per_byte() };
-    let speed_goal = !(cpu.size || cpu.min_size || bytes_beat_clocks);
+    let speed_goal = cpu.has_speed_goal() && !bytes_beat_clocks;
     let mul_by_clocks = speed_goal && machine.tti().is_some_and(|tti| tti.multiply_by_clocks());
     let price_pin = speed_goal && machine.tti().is_some_and(|tti| tti.price_pin_multiplies());
     // The function's one `BranchProbabilityInfo`: the builder's edge
