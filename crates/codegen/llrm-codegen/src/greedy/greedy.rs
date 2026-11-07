@@ -427,6 +427,14 @@ pub trait GreedyEnv: SpillWeightEnv {
     fn csr_spill_first(&self) -> bool {
         false
     }
+    /// DEVIATE H-1 (owner greedy-subreg, exit: a hint-split price that counts
+    /// the reload it adds): whether `trySplitAroundHintReg` runs at all. The
+    /// pin runs it unless the function is optimized for size. Off for a
+    /// target whose memory operands make a reload cost more than the copy it
+    /// saves (6502: the piece is `ldy slot; sty cell` and no longer folds).
+    fn splits_around_hints(&self) -> bool {
+        true
+    }
 }
 
 /// `uint8_t(~0u)`: no limit on the cost per use of the register a range may
@@ -1111,7 +1119,7 @@ impl<'a> RAGreedy<'a> {
         // Split the VirtReg may generate COPY instructions in multiple cold
         // basic blocks, and increase code size. So we avoid it when the
         // function is optimized for size.
-        if OPT_SIZE.with(std::cell::Cell::get) {
+        if OPT_SIZE.with(std::cell::Cell::get) || !self.env.splits_around_hints() {
             return false;
         }
         // Don't allow repeated splitting as a safe guard against looping.

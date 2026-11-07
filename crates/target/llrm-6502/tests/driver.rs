@@ -2827,3 +2827,19 @@ fn an_i63_compare_of_a_truncated_i64_compiles() {
     );
     assembly(&ir, &Request::new(Level::O2)).unwrap();
 }
+
+/// f64 div (compiler-rt) at -O2: `trySplitAroundHintReg` split the divisor
+/// words around a hinted register, each piece `ldy slot; sty cell` read by the
+/// compare and by the subtract arm, so no `sbc slot` folded: 8 reloads against
+/// the -Os 2, +99,959 clk over 1596 loop trips.
+#[test]
+fn the_divide_loop_reloads_no_more_words_at_speed_than_at_size() {
+    let ir = include_str!("data/f64_div_loop.ll");
+    let reloads = |level| {
+        let text = assembly(ir, &Request::new(level)).unwrap();
+        text.lines().filter(|line| line.trim_start().starts_with("ldy s___divdf3")).count()
+    };
+    let (speed, size) = (reloads(Level::O2), reloads(Level::Os));
+    assert!(size > 0, "premise: the divisors are spilled");
+    assert!(speed <= size, "{speed} reloads through y at -O2 against {size} at -Os");
+}

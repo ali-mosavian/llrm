@@ -259,6 +259,10 @@ impl GreedyEnv for BodyEnv<'_> {
         self.tri.csr_spill_first()
     }
 
+    fn splits_around_hints(&self) -> bool {
+        self.tri.splits_around_hints()
+    }
+
     fn encoding_bytes(
         &self,
         insn: &crate::model::lir::Insn,

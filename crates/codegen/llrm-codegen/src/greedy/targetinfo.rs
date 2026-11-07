@@ -29,6 +29,11 @@ pub trait TargetRegisterInfo {
         false
     }
 
+    /// `GreedyEnv::splits_around_hints`.
+    fn splits_around_hints(&self) -> bool {
+        true
+    }
+
     /// Whether each lane of a callee-saved register is saved on its own, so
     /// using one costs its own first use (X86 saves the whole register).
     fn lanes_saved_apart(&self) -> bool {

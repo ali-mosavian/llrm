@@ -373,6 +373,13 @@ impl<const STACK: bool> Target for Mos<STACK> {
         true
     }
 
+    /// DEVIATE H-1: a split around `y`/`x`/`a` is `ldy slot; sty cell` once the
+    /// value is spilled, and the cell is read twice so the read no longer
+    /// folds (f64 div -O2: 8 reloads against the -Os 2).
+    fn splits_around_hints() -> bool {
+        false
+    }
+
     /// A zero-page byte costs more per use than `A`, `X` and `Y`: an
     /// instruction on a cell is a byte longer and a clock slower than the
     /// same on a register, and a transfer is two clocks against three.

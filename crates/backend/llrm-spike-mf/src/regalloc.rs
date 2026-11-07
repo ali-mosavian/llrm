@@ -210,6 +210,12 @@ pub trait Target {
         false
     }
 
+    /// Whether greedy splits a range around a physical register it is hinted
+    /// to (`trySplitAroundHintReg`), as the pin does outside `optsize`.
+    fn splits_around_hints() -> bool {
+        true
+    }
+
     /// Whether a value is spilled, not given a callee-saved register, when
     /// its spill costs less than the register's first use.
     fn csr_spill_first() -> bool {
