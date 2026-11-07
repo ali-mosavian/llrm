@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simpleloopunswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simpleloopunswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simpleloopunswitch.rs sha256:e64b0d32dcb38d54c2ce739e383d5401c3d24ef6623b47e1606086aab4d81f67 -->
+<!-- src: crates/opt/llrm-transforms/src/simpleloopunswitch.rs sha256:81e9908b0cafd820d5c87538a07bb0e01131b7a8fc83d55892e0e65a9f77f020 -->
 
 # simpleloopunswitch
 
@@ -47,12 +47,12 @@ sent to the latch's exit as well.
   poison-only form with no dominator tree: MIR has no `undef`.
 - SU6 ScalarEvolution is made for the one query, not kept and forgotten.
 - SU7, SU8, SU10, SU11 are the non-trivial form's: see `nontrivial.rs`.
-- SU9 No partially invariant conditions (`hasPartialIVCondition` and
-  `buildPartialInvariantUnswitchConditionalBranch`: a loop-header test of
-  loads MemorySSA shows unchanged on a path), no injected invariant
-  conditions, no guards (MIR has none). Costs 2 of the 21 corpus functions
-  `opt` unswitches (4 of 20 rotated), which the oracle classifies. Exit: the
-  MemorySSA migration lands (mssa-green-2127, 2026-10-29).
+- SU9 No injected invariant conditions: the pin injects only into a branch
+  with `!prof` weights that make it taken at least 15 in 16 times
+  (`shouldTryInjectBasingOnMetadata`,
+  [`SimpleLoopUnswitch.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimpleLoopUnswitch.cpp#L3043)),
+  and no IR here has profile data. No guards (MIR has none). Exit: program
+  PGO exists. Partially invariant conditions are `partial.rs` (SU12).
 
 ## Example
 Before:

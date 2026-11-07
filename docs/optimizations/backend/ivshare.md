@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/ivshare.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/ivshare.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/ivshare.rs sha256:71f73e0e5428a170a7009edfd07ec499fd55daa06d14761e01e724fe95cc5343 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/ivshare.rs sha256:0efe496f3883bb8a4ee7bb8f8d5a50eee6527ddafb412b08632101fb4c8a107e -->
 
 # ivshare
 
@@ -43,4 +43,4 @@ once, ahead of the loop, and the streams share one pointer:
 O(instructions) per loop.
 
 ## Used by
-Named by `flow`.
+Named by `flow`, `ivzero`.
