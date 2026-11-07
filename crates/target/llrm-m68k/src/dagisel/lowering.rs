@@ -169,11 +169,24 @@ pub struct M68kLowering {
     /// A global's address is an absolute one, not PC-relative (the medium
     /// model on the 68000 and 68010, the large model).
     pub absolute_data: bool,
+    /// `Subtarget`'s CPU.
+    pub cpu: super::hooks::Cpu,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
     fn little_endian(&self) -> bool {
         false
+    }
+
+    /// `M68kTargetLowering::decomposeMulByConstant`: `mulu` and `muls` are
+    /// 16-bit on the 68000 and 68010, so a multiply of up to 32 bits is shifts
+    /// and adds; a 64-bit one is left to the runtime before the 68020.
+    fn decompose_mul_by_constant(
+        &self,
+        vt: EVT,
+        _c: u128,
+    ) -> bool {
+        vt.size_in_bits() <= 32 || self.cpu.at_least(super::hooks::Cpu::M68020)
     }
 
     fn sub_of_sign_extended_bool(&self) -> bool {
