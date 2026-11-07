@@ -432,6 +432,7 @@ impl CombineHooks for X86Lowering<'_> {
             || op == ISD::SetCC
             || op == ISD::Select
             || op == ISD::Add
+            || op == ISD::Or
             || op == ISD::Sub
             || op == x86isd::ADD
             || op == x86isd::SUB
@@ -475,6 +476,7 @@ impl CombineHooks for X86Lowering<'_> {
             ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
             ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
+            ISD::Or => combine_or(dag, node),
             ISD::Sub => combine_sub(dag, node, self.three_address_adds),
             ISD::FAdd | ISD::FSub => combine_shared_product(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
@@ -1571,6 +1573,18 @@ fn combine_brcond(
     let code = cond_code(dag, code);
     let (chain, dest) = (dag.operand(node, 0), dag.operand(node, 1));
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
+}
+
+/// `combineOr`'s tail: `combineAddOrSubToADCOrSBB` of a disjoint `or`, which is
+/// what `(shl x, 1) + (zext setcc)` has become by the time the target sees it.
+fn combine_or(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    if !dag.node(node).flags.has(SDNodeFlags::DISJOINT) {
+        return None;
+    }
+    super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node)
 }
 
 /// `combineAdd`, the hidden LEA pattern: `(add (sub (shl x, c), y), z)` with
