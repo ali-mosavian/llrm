@@ -575,3 +575,13 @@ b1:
     assert_eq!(super::SCANS.with(|count| count.get()) - before, 1);
     assert_eq!((to_a.len(), to_b.len()), (3, 1));
 }
+
+/// Nib quicksort at -O2 (`lo` in 0..1025 after one solve; 0..1023 after the
+/// next): the range attributes the first solve writes seed a second, so
+/// `lo < hi` bounds `lo` and the partition loop counts (quicksort +11 B,
+/// stft_fixed +67 B, stft_single +62 B after #7759).
+#[test]
+fn test_the_ranges_one_solve_writes_seed_the_next() {
+    let text = ipsccp(include_str!("ipsccp_fixtures/sort_lo_hi.ll"));
+    assert!(header(&text, "sort").contains("range(i16 0, 1023) %3"), "{}", header(&text, "sort"));
+}
