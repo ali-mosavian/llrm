@@ -1239,7 +1239,10 @@ pub fn function_bytes(
                     }) + if wide { costs.prefix } else { 0 }
                 }
                 Opcode::GetElementPtr { .. } => costs.address,
-                Opcode::ICmp(_) | Opcode::FCmp(_) => costs.add + prefix,
+                // A float compare is the target's own: fcom and the status word on x87, a libcall where the FPU is
+                // software.
+                Opcode::FCmp(_) => costs.add + costs.float_compare,
+                Opcode::ICmp(_) => costs.add + prefix,
                 Opcode::Select => costs.branch + costs.r#move,
                 Opcode::Br => costs.branch,
                 Opcode::Switch => costs.branch * 2,
