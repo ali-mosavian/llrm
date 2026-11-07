@@ -103,3 +103,17 @@ fn the_estimate_tracks_the_objects_of_the_programs_it_was_fit_on() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// A float compare was priced as an integer add: `fcmp uno x, x` is a libcall on a 68000 with no FPU, about 14 B, and the
+/// estimate said 2. The SZ2 trial of sfm16_float -Os predicted -114 B for inlining `canon` and the object grew 28 B.
+#[test]
+fn a_float_compare_is_priced_as_the_libcall_it_is() {
+    let text = format!(
+        "target datalayout = \"{DATALAYOUT}\"\ndefine i32 @f(float %a, float %b, float %c, float %d) {{\nb0:\n  %p = fcmp uno float %a, %a\n  %q = fcmp uno float %b, %b\n  %r = fcmp uno float %c, %c\n  %s = fcmp uno float %d, %d\n  %w = zext i1 %p to i32\n  %x = zext i1 %q to i32\n  %y = zext i1 %r to i32\n  %z = zext i1 %s to i32\n  %t = add i32 %w, %x\n  %u = add i32 %y, %z\n  %v = add i32 %t, %u\n  ret i32 %v\n}}\n"
+    );
+    let module = llrm_mir::parse::module(&text).unwrap();
+    let object = driver::object_in(&text, driver::cpu_of("68000").unwrap(), Level::parse("s").unwrap(), "fcmp4", CodeModel::Small).unwrap();
+    let estimate = estimate_over(&module, Cpu::M68000);
+    let actual = text_bytes(&object) as i64;
+    assert!(estimate * 10 >= actual * 7, "four float compares: estimate {estimate} B against object {actual} B");
+}
