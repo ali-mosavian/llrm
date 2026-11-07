@@ -775,6 +775,10 @@ impl Tti for X86 {
         self.tuning.inline_variable_memcpy
     }
 
+    fn copy_for_size_is_priced_against_call(&self) -> bool {
+        self.tuning.size_copy_vs_call
+    }
+
     fn ipsccp_widen_keeps_sign(&self) -> bool {
         self.tuning.ipsccp_widen_keeps_sign
     }
