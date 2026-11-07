@@ -107,7 +107,7 @@ impl SchedInfo for MosSched {
     }
 
     fn source_order(&self) -> bool {
-        false
+        true
     }
 }
 
