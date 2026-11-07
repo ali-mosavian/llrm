@@ -57,7 +57,7 @@ SD *B_FOCT(unsigned long value)
 }
 
 /* The string of `size` bytes holding `value`'s bytes. */
-static SD *made(const void *value, unsigned size)
+static inline __attribute__((always_inline)) SD *made(const void *value, unsigned size)
 {
     char *data;
     SD *result = str_tmp(size, &data);
@@ -89,7 +89,7 @@ SD *B_FMKD(double value)
 /* The bytes of the first `size` characters of `sd`, in `into`; a shorter
    string is an Illegal function call.  The string is freed if it was a
    temporary. */
-static void bytes_of(SD *sd, void *into, unsigned size)
+static inline __attribute__((always_inline)) void bytes_of(SD *sd, void *into, unsigned size)
 {
     if (sd->len < size)
         qb_error(BE_ILLFUN);
