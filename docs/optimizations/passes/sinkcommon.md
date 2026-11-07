@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sinkcommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sinkcommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:a92fd3ab16da6d47926a639a5f20402e2580d791e7d7a2c582d451a3e3864142 -->
+<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:ee56ba45388f4ad21b330ab6c5ce625a13a27176d8ab445c04480e88e0dd5597 -->
 
 # sinkcommon
 
@@ -51,4 +51,4 @@ The add both arms end with runs once in the join:
 - D4. No `llvm.experimental.deoptimize`.
 
 ## Used by
-Named by `simplifycfg`, `switcharms`.
+Named by `constanthoisting`, `simplifycfg`, `switcharms`.

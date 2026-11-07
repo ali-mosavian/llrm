@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollpass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollpass.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollpass.rs sha256:f67654875dfc727d3c653b04a210c63068c3c9cfff5efa804130a2c77b39be47 -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollpass.rs sha256:51b1a23e2343d98c160998e4580cd67365df9e907478ec203ea07575cb7a1a3e -->
 
 # loopunrollpass
 
@@ -18,9 +18,11 @@ count. The count is the trip count when
   [`UnrolledInstAnalyzer`](../analyses/loopunrollanalyzer.md) and finds the
   unrolled cost under the threshold boosted by the dynamic cost saved.
 
-A count that is not the whole trip count would be partial or runtime
-unrolling, which this pass (`OnlyFullUnroll`) does not do. The loop is then
-unrolled by [`crate::loopunroll::unroll_loop_blocks`](loopunroll.md).
+A count that is not the whole trip count is partial unrolling, which the
+pass does only as `LoopUnrollPass` (`Options::target_unrolling`: the
+target's `AllowPartial` and `UpperBound`) and only where the count divides
+the trip count; runtime unrolling (the remainder loop) is not here yet. The
+loop is then unrolled by [`crate::loopunroll::unroll_loop_blocks`](loopunroll.md).
 
 ## Deviations
 - U3 `computePeelCount` is `looppeel.rs` (S2); its deviations are PL1 to PL5
@@ -65,4 +67,4 @@ with no `phi`, no `icmp` and no backedge.
 [`LoopFullUnrollPass::run`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L1640).
 
 ## Used by
-Named by `loopunrollandjam`, `pipeline`.
+Named by `assume_declared_is_scanned_once_per_module`, `loopunrollandjam`, `loopunrollloadcse`, `pipeline`, `x86_partial_unroll`.

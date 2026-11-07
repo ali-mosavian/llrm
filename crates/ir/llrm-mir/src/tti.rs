@@ -732,6 +732,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE DIV-LIVE (owner x86-m32, exit 2026-11-24): `Tuning::narrow_divide_live_limit`.
+    fn narrow_divide_live_limit(&self) -> u32 {
+        0
+    }
+
     /// `Tuning::divide_by_bytes`.
     fn divide_by_bytes(&self) -> bool {
         false

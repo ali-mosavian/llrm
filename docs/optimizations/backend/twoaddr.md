@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/twoaddr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/twoaddr.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/twoaddr.rs sha256:c5c48aa2572b789f345af367ae8a53835b7ba4fc165ebef966f05b8a085e4a18 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/twoaddr.rs sha256:20ce9b305006f694e1887c01f38202ddfcf91a425d11c8115c239f6970c402c2 -->
 
 # twoaddr
 
@@ -35,11 +35,11 @@ A source that is not a value (an immediate) is copied the same way. The
 inserted copies own no bytes of the input.
 
 DEVIATE TA-9 (owner x87, exit 2026-11-20): an x87 load that kills the source
-of a tied add goes above it before the `lea` is made (`rescheduleKillAboveMI`
-tried first for that kill only). The pin makes the `lea` and its pre-RA
-scheduler puts the load above it; the loads are in stack form here, which
-the scheduler treats as a boundary. A horner loop's `p -= 12` was `lea; fld
-[p]; mov p, q` a trip, now `fld [p]; add p, -12`.
+of a tied add goes above it before the `lea` is made
+(`rescheduleKillAboveMI` tried first for that kill only). The pin makes the
+`lea` and its pre-RA scheduler puts the load above it; the loads are in
+stack form here, which the scheduler treats as a boundary. A horner loop's
+`p -= 12` was `lea; fld [p]; mov p, q` a trip, now `fld [p]; add p, -12`.
 
 ## Example
 The body of a counted loop, before and after. Update in place made `v4 :=

@@ -28,3 +28,29 @@ fn a_zero_that_stays_read_is_made_again_at_size_but_another_constant_is_not() {
     assert!(literal_remat_wins::<Arm64>(&literal("Zero"), &from, &to, true, false));
     assert!(!literal_remat_wins::<Arm64>(&literal("Imm"), &from, &to, true, false));
 }
+
+/// A `movz` is one instruction, the size of the copy it replaces.
+#[test]
+fn a_constant_one_instruction_makes_is_made_again_at_size() {
+    let (from, to) = (Vec::<RegId>::new(), Vec::<RegId>::new());
+    assert!(literal_remat_wins::<Arm64>(&literal("Imm1"), &from, &to, true, false));
+}
+
+/// jpeg_fixed -Os held `movz w24,#1` in a callee-saved register and copied it
+/// to x0 at ten call sites (`orr x0,xzr,x24`; 35 reg-reg copies against the
+/// pin's 19): the constant also feeds `1 << n`, so it stays read. The pin makes
+/// it again at each call (`mov w0, #1`).
+#[test]
+fn a_constant_one_that_feeds_a_shift_is_not_copied_from_a_saved_register_at_each_call() {
+    use llrm_arm64::driver::{self, IselMode, Level};
+    use llrm_arm64::machine::Platform;
+    driver::set_isel_mode(IselMode::Dag);
+    let text = driver::assembly(include_str!("data/one_constant_across_calls_os.ll"), Platform::Linux, Level::Os)
+        .expect("lowers");
+    assert!(text.matches("bl w").count() >= 5, "premise: the calls are there:\n{text}");
+    let copies: Vec<&str> = text
+        .lines()
+        .filter(|line| (19..=28).any(|n| line.trim() == format!("orr x0, xzr, x{n}, lsl #0")))
+        .collect();
+    assert!(copies.is_empty(), "the constant is copied out of a saved register:\n{text}");
+}

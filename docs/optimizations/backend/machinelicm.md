@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinelicm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinelicm.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinelicm.rs sha256:6a0b50a63912f3fe17cf7ecea8a3d029eca83c52aff2e06b6535037bc715eaa4 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinelicm.rs sha256:701875e0910c30b0366d38ee17b07457efb16337b06fc2f7638663e4eaa07edf -->
 
 # machinelicm
 
@@ -34,14 +34,20 @@ moves to the end of the preheader, before its jump, when:
 - the loop does not already use as many values of its register class as the
   target has registers (`CanCauseHighRegPressure`, with the values named in
   the loop standing for the pressure: DEVIATE ML1, the pin tracks the live
-  registers of each block of the loop).
+  registers of each block of the loop; a block that does not run on every
+  trip also needs the loop's peak of live registers below that,
+  `AvoidSpeculation`).
 
 Not ported, priced at no yield (release/next 34d21c9f34, every C, nib and
 BASIC program at -Os and -O2, counters in a throwaway build):
 `getOrCreatePreheader` splitting an edge: the 6 to 32 loops per language
 and level without a preheader hold 0 hoistable instructions;
-`ExtractHoistableLoad`: 0 instructions, none of the 158 loop instructions
-flagged invariant (`isDereferenceableInvariantLoad`) is a folded load;
+`ExtractHoistableLoad`'s pricing held for the C, nib and BASIC corpus (no
+scalar SSE) and is wrong for SSE code: nbody_single -O3 m64 left
+`mulss xmm, [rip+K]` in a loop where the pin has the constant in a register
+before it. It is ported (`Policy::unfold`): scalar SSE arithmetic that reads
+a constant-pool cell is split, and the load moves if it can.
+
 `MayCSE`: only reached in the pin's high-pressure branch for an instruction
 outside a block that runs every trip, where the `constant` path above
 already hoists what the allocator can make again.

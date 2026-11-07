@@ -389,6 +389,14 @@ pub trait CombineHooks {
         false
     }
 
+    /// DEVIATE SD213 (owner llrm-target-6502, exit 2026-12-05): `ShrinkDemandedOp`
+    /// sizes the narrow type by the bits that are demanded and not known zero,
+    /// not by the demanded bits alone (the pin). Off elsewhere: x86-64
+    /// `div_constants_short` +80 B (the narrowed `imul` loses its fusion).
+    fn known_zero_narrowing(&self) -> bool {
+        false
+    }
+
     /// `isNarrowingProfitable(N, wide, narrow)`; X86: not i32 to i16.
     fn narrowing_profitable(
         &self,
