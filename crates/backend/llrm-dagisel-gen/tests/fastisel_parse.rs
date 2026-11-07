@@ -100,3 +100,19 @@ fn a_row_with_no_arm_the_cpu_allows_is_absent() {
     // Of the six rows in the excerpt only ABS has no arm an i486 allows.
     assert_eq!(chosen.len(), 5);
 }
+
+/// The chosen rows are written as a sorted Rust table the compiler looks up by
+/// binary search; an unsorted table would miss rows without any error.
+#[test]
+fn the_rust_table_is_sorted_and_names_the_i486_add() {
+    let cpu = llrm_dagisel_gen::features::Cpu::load(FEATURES, "i486").unwrap();
+    let chosen = fastisel::parse(EXCERPT).unwrap().resolve(&cpu).unwrap();
+    let text = chosen.render("i486");
+    assert!(text.contains(r#"("ISD", "ADD", "i32", "", 1, "ADD32rr", "GR32"),"#), "{text}");
+    assert!(text.contains(r#"("ISD", "SIGN_EXTEND", "i8", "i32", 0, "MOVSX32rr8", "GR32"),"#));
+    let rows: Vec<&str> = text.lines().filter(|l| l.trim_start().starts_with("(\"")).collect();
+    assert_eq!(rows.len(), chosen.len());
+    let mut sorted = rows.clone();
+    sorted.sort();
+    assert_eq!(rows, sorted, "rows are not in key order");
+}
