@@ -354,6 +354,41 @@ pub fn confinement_of<'a>(
     only.map_or(Confinement::Free, Confinement::Only)
 }
 
+thread_local! {
+    /// The xmm operands of a form by target, mnemonic and operand counts: the rows of
+    /// a mnemonic do not change, and reading them cost every instruction a table walk.
+    static XMM_ROWS: std::cell::RefCell<crate::support::hash::HashMap<usize, crate::support::hash::HashMap<String, Vec<(usize, usize, Option<u32>)>>>> =
+        std::cell::RefCell::new(Default::default());
+}
+
+fn xmm_operands_of(
+    regs: Regs,
+    what: &crate::model::ir::Semantics,
+) -> Option<u32> {
+    let read = || {
+        #[cfg(test)]
+        XMM_ROW_READS.with(|n| n.set(n.get() + 1));
+        llrm_x86::effects::xmm_operands(&regs.effects, what)
+    };
+    let Some(name) = what.name.as_deref().filter(|name| !name.is_empty()) else { return read() };
+    let (dests, sources) = (what.dests.len(), what.sources.len());
+    let target = regs.0 as *const _ as usize;
+    let known = XMM_ROWS.with(|memo| {
+        memo.borrow()
+            .get(&target)
+            .and_then(|names| names.get(name))
+            .and_then(|forms| forms.iter().find(|(d, s, _)| (*d, *s) == (dests, sources)))
+            .map(|(_, _, mask)| *mask)
+    });
+    known.unwrap_or_else(|| {
+        let mask = read();
+        XMM_ROWS.with(|memo| {
+            memo.borrow_mut().entry(target).or_default().entry(name.to_owned()).or_default().push((dests, sources, mask));
+        });
+        mask
+    })
+}
+
 /// Whether the form of `what` fills operand `at` with an xmm register (its row
 /// has `x` there and no `r`), as LLVM's operand class `FR64`/`VR128` says. A
 /// width of the xmm register does not: a 16-byte integer pair is not one. An
@@ -368,7 +403,7 @@ fn xmm_filled(
     if regs.xmm_bytes() == 0 {
         return false;
     }
-    match xmm.get_or_init(|| llrm_x86::effects::xmm_operands(&regs.effects, what)) {
+    match xmm.get_or_init(|| xmm_operands_of(regs, what)) {
         Some(mask) => mask >> at & 1 != 0,
         None => width == regs.xmm_bytes(),
     }
@@ -674,6 +709,9 @@ thread_local! {
     /// test that fixes how many a value's repeated restrictions cost.
     #[cfg(test)]
     pub(crate) static INTERSECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Times the rows of a mnemonic were read for the xmm operands of an instruction.
+    #[cfg(test)]
+    pub(crate) static XMM_ROW_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A set of register numbers as bits: `collected` inserts one for most
@@ -1536,6 +1574,33 @@ mod tests {
         assert!(found.get(&1).is_some_and(|class| !class.is_empty()), "the value keeps its xmm class");
         let made = INTERSECTIONS.with(|n| n.get());
         assert!(made <= 2, "{made} intersections for 100 restrictions of 2 values");
+    }
+
+    /// The xmm operands of a form were read from the mnemonic's rows for every
+    /// instruction (17.5 M Ir in `contribution`, mem expansion -O2): they depend only on
+    /// the mnemonic and the operand counts, as the pin's operand class is on the opcode.
+    #[test]
+    fn test_the_xmm_operands_of_a_mnemonic_are_read_once() {
+        let regs = Regs(&llrm_x86_m64::REGISTER_INFO);
+        let held = |value| Loc::Held(Held { value, width: 8, offset: 0 });
+        let insns: Vec<Arc<Insn>> = (0..50)
+            .map(|at| {
+                let what = Semantics {
+                    name: Some("addsd".into()),
+                    dests: vec![held(1)],
+                    sources: vec![held(1), held(2)],
+                    ..Semantics::new(Operation::Binary)
+                };
+                Arc::new(Insn::new(at, None, Some(what), vec![1], vec![1, 2]))
+            })
+            .collect();
+        let block = LirBlock { at: 0, insns: insns.into(), succ: vec![].into(), phis: vec![].into(), cold: false, align: 0, max_skip: 0 };
+        let mut body = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+        body.registers = Some(regs);
+        XMM_ROW_READS.with(|n| n.set(0));
+        classes(&body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m64::M64));
+        let reads = XMM_ROW_READS.with(|n| n.get());
+        assert!(reads <= 1, "{reads} reads of the rows for one mnemonic over 50 instructions");
     }
 }
 
