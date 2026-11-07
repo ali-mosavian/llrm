@@ -53,15 +53,16 @@ fn a_signed_less_or_equal_of_two_words_is_one_borrow_chain() {
     bytes_of("sle", 106);
 }
 
-/// `k_branch` and `k_select`: the order of two `i32` read by a branch and by a select.
-fn consumer(kind: &str) -> String {
+/// `k_branch<bits>` and `k_select<bits>`: the order of two `i<bits>` read by a branch and by a select.
+fn consumer(kind: &str, bits: u32) -> String {
     match kind {
-        "branch" => "declare void @one()
+        "branch" => format!(
+            "declare void @one()
 declare void @two()
-define void @k_branch(ptr %a, ptr %b) {
-  %x = load i32, ptr %a
-  %y = load i32, ptr %b
-  %c = icmp uge i32 %x, %y
+define void @k_branch{bits}(ptr %a, ptr %b) {{
+  %x = load i{bits}, ptr %a
+  %y = load i{bits}, ptr %b
+  %c = icmp uge i{bits} %x, %y
   br i1 %c, label %t, label %f
 t:
   call void @one()
@@ -69,24 +70,25 @@ t:
 f:
   call void @two()
   ret void
-}
+}}
 "
-        .to_owned(),
-        _ => "define i16 @k_select(ptr %a, ptr %b, i16 %p, i16 %q) {
-  %x = load i32, ptr %a
-  %y = load i32, ptr %b
-  %c = icmp uge i32 %x, %y
+        ),
+        _ => format!(
+            "define i16 @k_select{bits}(ptr %a, ptr %b, i16 %p, i16 %q) {{
+  %x = load i{bits}, ptr %a
+  %y = load i{bits}, ptr %b
+  %c = icmp uge i{bits} %x, %y
   %r = select i1 %c, i16 %p, i16 %q
   ret i16 %r
-}
+}}
 "
-        .to_owned(),
+        ),
     }
 }
 
-fn consumer_bytes(kind: &str, limit: u32) {
-    let name = format!("k_{kind}");
-    let ir = format!("target datalayout = \"{}\"\n{}", datalayout(), consumer(kind));
+fn consumer_bytes(kind: &str, bits: u32, limit: u32) {
+    let name = format!("k_{kind}{bits}");
+    let ir = format!("target datalayout = \"{}\"\n{}", datalayout(), consumer(kind, bits));
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     let from = text.find(&format!("{name}:")).unwrap_or_else(|| panic!("no {name} in\n{text}"));
     let body: String = text[from..].split(".segment").next().unwrap().to_owned();
@@ -99,10 +101,20 @@ fn consumer_bytes(kind: &str, limit: u32) {
 /// `int32.c`'s `udivmod` took it per call, `div_constants_short -Os` ran 25% more cycles.
 #[test]
 fn a_branch_on_the_order_of_two_words_reads_the_flags_of_the_chain() {
-    consumer_bytes("branch", 72);
+    consumer_bytes("branch", 32, 72);
 }
 
 #[test]
 fn a_select_on_the_order_of_two_words_reads_the_flags_of_the_chain() {
-    consumer_bytes("select", 88);
+    consumer_bytes("select", 32, 88);
+}
+
+#[test]
+fn a_branch_on_the_order_of_two_long_longs_reads_the_flags_of_the_chain() {
+    consumer_bytes("branch", 64, 0);
+}
+
+#[test]
+fn a_select_on_the_order_of_two_long_longs_reads_the_flags_of_the_chain() {
+    consumer_bytes("select", 64, 0);
 }
