@@ -163,6 +163,7 @@ mod tests {
             symbols: Vec::new(),
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
+            comdats: Vec::new(),
             frames: Vec::new(),
         };
         let direct = llrm_omf::write::write(&object, None, &omf::X86Omf).unwrap();

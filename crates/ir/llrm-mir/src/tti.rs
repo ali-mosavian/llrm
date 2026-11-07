@@ -123,10 +123,14 @@ pub struct OperandInfo {
     pub constant: bool,
     pub power_of_two: bool,
     pub negated_power_of_two: bool,
+    /// The constant, sign-extended from its width, where a target prices the
+    /// size of an immediate by it; the pin's `OperandValueInfo` has none, and
+    /// no target but the m68k reads it.
+    pub value: Option<i128>,
 }
 
 impl OperandInfo {
-    pub const ANY: OperandInfo = OperandInfo { constant: false, power_of_two: false, negated_power_of_two: false };
+    pub const ANY: OperandInfo = OperandInfo { constant: false, power_of_two: false, negated_power_of_two: false, value: None };
 
     /// A constant operand of this value at `width` bits.
     pub fn constant(
@@ -143,6 +147,12 @@ impl OperandInfo {
             constant: true,
             power_of_two: bits != 0 && bits & (bits - 1) == 0,
             negated_power_of_two: negated != 0 && negated & (negated - 1) == 0,
+            value: Some(if width >= 128 || width == 0 {
+                value
+            } else {
+                let shift = 128 - width;
+                (((value as u128) << shift) as i128) >> shift
+            }),
         }
     }
 }
@@ -561,6 +571,20 @@ pub trait Tti {
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around
     /// it).
+    /// Whether an -Os caller's SZ2 trial also inlines the sites its splice brings
+    /// (`Tuning::inline_chain_trial`).
+    fn opt_size_inline_chain_trial(&self) -> bool {
+        false
+    }
+
+    /// Whether an -Os caller's SZ2 trial prices the dying callee once and refuses copies that grow the
+    /// bytes where the callee's credit alone made the count accept. Only where `function_bytes` is
+    /// calibrated against objects (m68k, `size_calibration.rs`); the x86 model is not, and a truthful
+    /// credit refuses trials that shrink the build there.
+    fn opt_size_inline_byte_gate(&self) -> bool {
+        false
+    }
+
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
         1
     }
@@ -689,6 +713,12 @@ pub trait Tti {
         false
     }
 
+    /// Whether `sinks_select_arms` also holds in a size build: the branch form
+    /// leaves out the copy of the other arm, so it is not longer.
+    fn sinks_select_arms_for_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::inline_variable_memcpy`.
     fn inlines_variable_memcpy(&self) -> bool {
         false
@@ -772,6 +802,12 @@ pub trait Tti {
     /// Whether a product by a constant and one by its negation are made once
     /// on the x87 stack (`Tuning::x87_share_negated_products`).
     fn x87_share_negated_products(&self) -> bool {
+        false
+    }
+
+    /// Whether a zero fill is stored as zero doubles through the FPU at `-Os`
+    /// (`Tuning::x87_zero_fill_at_size`).
+    fn x87_zero_fill_at_size(&self) -> bool {
         false
     }
 

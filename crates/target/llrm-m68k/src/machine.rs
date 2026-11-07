@@ -100,6 +100,10 @@ impl M68k {
 }
 
 impl Tti for M68k {
+    fn opt_size_inline_byte_gate(&self) -> bool {
+        true
+    }
+
     /// `UnrollingPreferences::Threshold` of the full unroll, 32 where the pin's
     /// is 300: an iteration's loop control is about 24 clk on the 68000 (an
     /// `addq`, a `cmp` and a taken `bcc`), 6 B at 4 clk/B, so a copy of the

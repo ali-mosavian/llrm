@@ -216,6 +216,29 @@ struct CallConventions<'a> {
     general: &'a [llrm_lir::registers::RegId],
 }
 
+/// The huge-pointer routine a call of `name` is, if any. Only a name with the
+/// routines' prefix is looked up: building a routine assembles its code, which
+/// a call of any other function (`memcpy`) must not pay for.
+fn huge_routine(
+    arch: &dyn Target,
+    name: &str,
+) -> Option<llrm_target::routines::HugeString> {
+    huge_routine_with(name, |cell| arch.huge_fill_routine(cell).ok(), |backward| arch.huge_copy_routine(backward).ok())
+}
+
+pub(super) fn huge_routine_with(
+    name: &str,
+    fill: impl Fn(u32) -> Option<llrm_target::routines::HugeString>,
+    copy: impl Fn(bool) -> Option<llrm_target::routines::HugeString>,
+) -> Option<llrm_target::routines::HugeString> {
+    if !name.starts_with(llrm_target::routines::HUGE_PREFIX) {
+        return None;
+    }
+    let fills = [1u32, 2, 4].into_iter().filter_map(fill);
+    let copies = [false, true].into_iter().filter_map(copy);
+    fills.chain(copies).find(|routine| routine.name == name)
+}
+
 /// What the program's ABI says about its runtime routines: a QB routine's
 /// contract names the registers it destroys and how it returns, which its
 /// declared convention does not.
@@ -473,13 +496,11 @@ impl super::emit::Conventions for CallConventions<'_> {
             );
         }
         // a huge-pointer routine changes what it states and no more
-        if let Some(Callee::Named(name)) = callee {
+        if let Some(Callee::Named(name)) = callee
+            && let Some(routine) = huge_routine(self.arch, name)
+        {
             let regs = llrm_lir::registers::Regs(self.arch.registers());
-            let fills = [1u32, 2, 4].into_iter().filter_map(|cell| self.arch.huge_fill_routine(cell).ok());
-            let copies = [false, true].into_iter().filter_map(|backward| self.arch.huge_copy_routine(backward).ok());
-            if let Some(routine) = fills.chain(copies).find(|routine| routine.name == name.as_str()) {
-                return Some(routine.clobbers.iter().map(|reg| regs.root(*reg)).collect());
-            }
+            return Some(routine.clobbers.iter().map(|reg| regs.root(*reg)).collect());
         }
         // BASIC's convention (and any other with no row in calling.toml) is
         // the ABI's contract of the routine, as the old selector reads it.
@@ -780,9 +801,10 @@ impl super::emit::ConstantCells for PoolCells<'_> {
 /// pin's rule.
 fn div_prices(
     cpu: &crate::backend::cpu::Profile,
+    machine: &dyn llrm_mir::target::Machine,
     bitness: u32,
 ) -> Option<super::dag::DivPrices> {
-    let costs = cpu.target().costs();
+    let costs = machine.costs();
     if costs.divide <= costs.multiply {
         return None;
     }
@@ -815,12 +837,12 @@ fn div_prices(
 
 /// The clock prices a size-only pick weighs against bytes (m16: the fill it
 /// prices is real mode's).
-fn size_trade(cpu: &crate::backend::cpu::Profile) -> Option<SizeTrade> {
-    let rate = cpu.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte());
+fn size_trade(machine: &dyn llrm_mir::target::Machine) -> Option<SizeTrade> {
+    let rate = machine.tti().map_or(0, |tti| tti.speed_milliclocks_per_byte());
     if rate == 0 {
         return None;
     }
-    let costs = cpu.target().costs();
+    let costs = machine.costs();
     Some(SizeTrade {
         milliclocks_per_byte: rate,
         fill: costs.fill,
@@ -840,6 +862,9 @@ fn selected_in(
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let bitness = arch.object().bitness;
+    // One cost model for the function: `Profile::target` builds one (and clones
+    // the price tables) per call.
+    let machine = cpu.target();
     let m16 = match bitness {
         16 => true,
         32 | 64 => false,
@@ -874,7 +899,7 @@ fn selected_in(
     } else {
         // The machine fact is the cost model's: the same `has_cmov` SimplifyCFG
         // reads.
-        let cmov = cpu.target().tti().is_some_and(|tti| tti.has_cmov());
+        let cmov = machine.tti().is_some_and(|tti| tti.has_cmov());
         let features = Features { cmov, ..Features::default() };
         lowering_for(32, features, || TargetLowering::x86_32(features, MVT::I32))
     };
@@ -911,7 +936,7 @@ fn selected_in(
     builder_target.dag.dso_local_symbols = true;
     builder_target.dag.absolute_symbols = !module.position_independent();
     let builder_target = builder_target
-        .with_tuning(cpu.target().tuning())
+        .with_tuning(machine.tuning())
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
         // DEVIATE DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin:
@@ -926,9 +951,9 @@ fn selected_in(
         // +763 B over 309 programs (2026-10-27). Cost: an idiv is ~40 clocks
         // on a 486 where the multiply is ~13.
         .with_int_div_cheap(cpu.size || cpu.min_size)
-        .with_div_prices(div_prices(&cpu, bitness))
+        .with_div_prices(div_prices(cpu, &*machine, bitness))
         .with_jump_tables(
-            cpu.target().costs().jump_table != 0
+            machine.costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
                     matches!(
                         attr,
@@ -938,9 +963,9 @@ fn selected_in(
         )
         .with_opt_size(cpu.size || cpu.min_size)
         .with_min_size(cpu.min_size)
-        .with_size_trade(size_trade(cpu))
+        .with_size_trade(size_trade(&*machine))
         .with_tail_calls(tail_calls_on())
-        .with_tti(cpu.target().tti())
+        .with_tti(machine.tti())
         .with_runtime_call_verdicts(
             contracts
                 .filter(|contracts| contracts.runtime)
@@ -1014,11 +1039,16 @@ fn selected_in(
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
     let objects = crate::backend::stackcoloring::share_frame(module, function, &mut info, &sizes);
     let alloca_count = objects.len() as i32;
+    // A local above the alignment the stack keeps realigns it: the pin's
+    // `MaxAlignment > StackAlignment`
+    // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineFrameInfo.h#L641).
+    // DEVIATE OA-1: at least two slots, see `isel.rs`.
+    let kept = arch.stack_alignment().max(2 * arch.stack_slot_bytes());
     let mut over_aligned: Vec<(i64, i64)> = Vec::new();
     for (index, (size, align)) in objects.into_iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
         debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
-        if align > crate::backend::isel::OVER_ALIGNED {
+        if arch.can_realign_stack() && align > kept {
             over_aligned.push((frame.locals.borrow()[index].0, align));
         }
     }
@@ -1062,9 +1092,32 @@ fn selected_in(
     // after the block that made it and its LIR blocks belong to that block's
     // range, where the phis of its successors look for their edges.
     let mut work: Vec<(BlockId, BlockId, crate::backend::selectiondag::builder::BlockDag)> = Vec::new();
+    let mut fast_blocks = (!cpu.optimized && super::fastisel::enabled())
+        .then(|| {
+            super::fastisel::build_all(
+                module,
+                function,
+                &builder_target,
+                &|wanted: &str| {
+                    tables.names.iter().find(|(_, name)| name.split('|').next() == Some(wanted)).map(|(op, _)| *op)
+                },
+                &layout,
+                &convention,
+                arch,
+                &mut info,
+            )
+        })
+        .flatten()
+        .unwrap_or_default();
+    let fast = !fast_blocks.is_empty();
+    super::fastisel::note(fast);
     for &block in function.layout() {
-        let mut built = build_block(module, function, &layout, &builder_target, &arch, &convention, &mut info, block)
-            .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?;
+        let mut built = if fast {
+            fast_blocks.remove(0).1
+        } else {
+            build_block(module, function, &layout, &builder_target, &arch, &convention, &mut info, block)
+                .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?
+        };
         let extras = std::mem::take(&mut built.extra);
         work.push((block, block, built));
         for (id, extra) in extras {
@@ -1170,8 +1223,8 @@ fn selected_in(
     // before selection).
     let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks { 0 } else { cpu.speed_milliclocks_per_byte() };
     let speed_goal = !(cpu.size || cpu.min_size || bytes_beat_clocks);
-    let mul_by_clocks = speed_goal && cpu.target().tti().is_some_and(|tti| tti.multiply_by_clocks());
-    let price_pin = speed_goal && cpu.target().tti().is_some_and(|tti| tti.price_pin_multiplies());
+    let mul_by_clocks = speed_goal && machine.tti().is_some_and(|tti| tti.multiply_by_clocks());
+    let price_pin = speed_goal && machine.tti().is_some_and(|tti| tti.price_pin_multiplies());
     // The function's one `BranchProbabilityInfo`: the builder's edge
     // probabilities read the same one (the pin has it as an analysis).
     let frequencies = ((mul_rate > 0 || price_pin) && !mul_by_clocks).then(|| {
@@ -1190,67 +1243,105 @@ fn selected_in(
             );
         llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
     });
+    let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
+        if cpu.optimized && !fast && block == parent {
+            // `SelectAllBasicBlocks`: a phi knows what its incoming values do
+            // once all its predecessors are selected.
+            let ready = function.predecessors(block).iter().all(|pred| selected_blocks.contains(pred));
+            let phis: Vec<_> = function
+                .iter_block(block)
+                .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                .collect();
+            for phi in phis {
+                if ready {
+                    let bits = |bits: u32| match bits {
+                        1..=8 => Some(8),
+                        9..=16 => Some(16),
+                        17..=32 => Some(32),
+                        33..=64 if m64 => Some(64),
+                        _ => None,
+                    };
+                    super::live_out::compute_phi_live_out_reg_info(module, function, phi, &bits, &mut info);
+                } else if let Some(reg) = function.instruction(phi).result.and_then(|r| info.value_regs.get(&r)) {
+                    info.live_out.remove(reg);
+                }
+            }
+        }
+        if block == parent {
+            selected_blocks.insert(block);
+        }
         if !built.live_ins.is_empty() && block != function.layout()[0] {
             return refuse("register arguments outside the entry block");
         }
         let arrived = arrival_widths(&built.dag, &built.live_ins);
-        let done = select_block(
-            &mut info,
-            &mut built.dag,
-            &tli,
-            &mut X86Lowering {
-                cmov: tli.can_use_cmov(),
-                share_products: cpu.target().tti().is_some_and(|tti| tti.x87_share_negated_products()),
-                sse2,
-                min_size: cpu.min_size
-                    || bytes_beat_clocks
-                    || (cpu.size && cpu.target().tti().is_some_and(|tti| tti.imul_at_size())),
-                imul_if_smaller: cpu.size && !cpu.min_size && cpu.target().tti().is_some_and(|tti| tti.imul_at_size()),
-                three_address_adds: !(cpu.size || cpu.min_size)
-                    && !matches!(
-                        cpu.three_address(),
-                        crate::twoaddress::ThreeAddress::Off
-                            | crate::twoaddress::ThreeAddress::AddSub
-                            | crate::twoaddress::ThreeAddress::AddSubWords
-                    ),
-                i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
-                sext_load: true,
-                zext_free: m64,
-                profile: if mul_by_clocks {
-                    Some(super::x86_lowering::MulPricing {
-                        cpu,
-                        arch,
-                        freq: 1.0,
-                        milliclocks_per_byte: mul_rate,
-                        by_clocks: true,
-                        price_pin: false,
-                    })
-                } else {
-                    frequencies
-                        .as_ref()
-                        .map(
-                            |frequencies| super::x86_lowering::MulPricing {
-                                cpu,
-                                arch,
-                                freq: frequencies.relative_to_entry(parent),
-                                milliclocks_per_byte: mul_rate,
-                                by_clocks: false,
-                                price_pin,
-                            },
-                        )
+        let done = if fast {
+            super::dag_select::select_block_fast(
+                &mut built.dag,
+                &Info { source_order: true, m64 },
+                &ctx,
+                &mut state,
+                block_at[&block.0],
+            )
+            .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?
+        } else {
+            select_block(
+                &mut info,
+                &mut built.dag,
+                &tli,
+                &mut X86Lowering {
+                    cmov: tli.can_use_cmov(),
+                    share_products: machine.tti().is_some_and(|tti| tti.x87_share_negated_products()),
+                    sse2,
+                    min_size: cpu.min_size
+                        || bytes_beat_clocks
+                        || (cpu.size && machine.tti().is_some_and(|tti| tti.imul_at_size())),
+                    imul_if_smaller: cpu.size && !cpu.min_size && machine.tti().is_some_and(|tti| tti.imul_at_size()),
+                    three_address_adds: !(cpu.size || cpu.min_size)
+                        && !matches!(
+                            cpu.three_address(),
+                            crate::twoaddress::ThreeAddress::Off
+                                | crate::twoaddress::ThreeAddress::AddSub
+                                | crate::twoaddress::ThreeAddress::AddSubWords
+                        ),
+                    i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
+                    sext_load: true,
+                    zext_free: m64,
+                    profile: if mul_by_clocks {
+                        Some(super::x86_lowering::MulPricing {
+                            cpu,
+                            arch,
+                            freq: 1.0,
+                            milliclocks_per_byte: mul_rate,
+                            by_clocks: true,
+                            price_pin: false,
+                        })
+                    } else {
+                        frequencies
+                            .as_ref()
+                            .map(
+                                |frequencies| super::x86_lowering::MulPricing {
+                                    cpu,
+                                    arch,
+                                    freq: frequencies.relative_to_entry(parent),
+                                    milliclocks_per_byte: mul_rate,
+                                    by_clocks: false,
+                                    price_pin,
+                                },
+                            )
+                    },
                 },
-            },
-            &selector,
-            &mut hooks,
-            &Info { source_order: true, m64 },
-            &ctx,
-            &mut state,
-            block_at[&block.0],
-            arch,
-            &mut Temporaries(&frame),
-        )
-        .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?;
+                &selector,
+                &mut hooks,
+                &Info { source_order: true, m64 },
+                &ctx,
+                &mut state,
+                block_at[&block.0],
+                arch,
+                &mut Temporaries(&frame),
+            )
+            .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?
+        };
         let mut done = done;
         if !built.live_ins.is_empty() {
             // The entry says which registers the arguments arrive in; it is no
@@ -1619,10 +1710,8 @@ fn selected_in(
     }
     // The huge-pointer routines the calls name (`huge_memory`): their bytes
     // are laid down at the call as well.
-    for (at, name) in calls.iter().filter(|(_, name)| name.starts_with(llrm_target::routines::HUGE_PREFIX)) {
-        let fills = [1u32, 2, 4].into_iter().filter_map(|cell| arch.huge_fill_routine(cell).ok());
-        let copies = [false, true].into_iter().filter_map(|backward| arch.huge_copy_routine(backward).ok());
-        if let Some(routine) = fills.chain(copies).find(|routine| routine.name == name.as_str()) {
+    for (at, name) in &calls {
+        if let Some(routine) = huge_routine(arch, name) {
             inline.insert(*at, routine.code);
         }
     }

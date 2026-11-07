@@ -59,6 +59,10 @@ def SDTMOSCmov : SDTypeProfile<1, 4, [SDTCisSameAs<0, 1>, SDTCisSameAs<1, 2>, SD
 def MOScmp : SDNode<"MOSISD::CMP", SDTMOSCmp>;
 // Equality: the Z flag of a - b over all the bytes (cmp's own Z covers the high byte only).
 def MOScmpz : SDNode<"MOSISD::CMPZ", SDTMOSCmp>;
+// The flags of a - b over two words each: the low words compare, the high words subtract with their borrow, so C is
+// a >= b unsigned over all four bytes. Operands: the low pair a, b, then the high pair a, b.
+def SDTMOSCmp32 : SDTypeProfile<1, 4, [SDTCisVT<0, i8>, SDTCisVT<1, i16>, SDTCisVT<2, i16>, SDTCisVT<3, i16>, SDTCisVT<4, i16>]>;
+def MOScmp32 : SDNode<"MOSISD::CMP32", SDTMOSCmp32>;
 def MOSbrcond : SDNode<"MOSISD::BRCOND", SDTMOSBrcond, [SDNPHasChain]>;
 def MOSsetcc : SDNode<"MOSISD::SETCC", SDTMOSSetcc>;
 def MOScmov : SDNode<"MOSISD::CMOV", SDTMOSCmov>;
@@ -238,6 +242,9 @@ def COPY16 : MOSInst<(outs Imag16:$d), (ins Imag16:$s), "copy $d, $s", []>;
 def CMP8 : MOSInst<(outs Flags:$f), (ins Imag8:$a, Imag8:$b), "cmp $f, $a, $b", [(set i8:$f, (MOScmp i8:$a, i8:$b))]>;
 // LDA alo; CMP blo; LDA ahi; SBC bhi: C is a >= b unsigned and N the sign of a - b.
 def CMP16 : MOSInst<(outs Flags:$f), (ins Imag16:$a, Imag16:$b), "cmp16 $f, $a, $b", [(set i8:$f, (MOScmp i16:$a, i16:$b))]>;
+// A 32-bit compare: CMP16, then SBC of the high words' bytes with the borrow.
+def CMP32 : MOSInst<(outs Flags:$f), (ins Imag16:$al, Imag16:$bl, Imag16:$ah, Imag16:$bh), "cmp32 $f, $al, $bl, $ah, $bh",
+                    [(set i8:$f, (MOScmp32 i16:$al, i16:$bl, i16:$ah, i16:$bh))]>;
 // Z only when both bytes are equal.
 def CMPZ16 : MOSInst<(outs Flags:$f), (ins Imag16:$a, Imag16:$b), "cmpz16 $f, $a, $b", [(set i8:$f, (MOScmpz i16:$a, i16:$b))]>;
 let isBranch = 1, isTerminator = 1 in {
