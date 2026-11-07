@@ -820,3 +820,30 @@ x:
     assert!(shape.loops[small].body.iter().all(|block| shape.loops[large].body.contains(block)));
     assert!(shape.loops.iter().all(|one| one.latches.len() == 1), "{}", printed(&module));
 }
+
+/// A body with no nested loop to separate was walked for its shape twice, once
+/// to look and once to simplify: memexp -O2 derived 1,780 shapes in
+/// `simplified`, twice the calls.
+#[test]
+fn test_simplified_derives_one_shape_for_a_body_with_nothing_to_separate() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  %j = add i16 %i, 1
+  %k = icmp slt i16 %j, %n
+  br i1 %k, label %b1, label %b2
+
+b2:
+  ret i16 %j
+}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    let before = cfg::shapes_derived();
+    simplified(function);
+    assert_eq!(cfg::shapes_derived() - before, 1, "a shape was derived for a body already looked at");
+}
