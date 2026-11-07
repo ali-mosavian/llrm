@@ -669,6 +669,10 @@ impl Tti for X86 {
         self.tuning.multiply_by_clocks
     }
 
+    fn divide_by_bytes(&self) -> bool {
+        self.tuning.divide_by_bytes
+    }
+
     fn price_pin_multiplies(&self) -> bool {
         self.tuning.price_pin_multiplies
     }

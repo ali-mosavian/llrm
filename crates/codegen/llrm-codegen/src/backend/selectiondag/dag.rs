@@ -206,6 +206,29 @@ pub struct DivPrices {
     /// The clocks of the product `q * d` a remainder subtracts, by `d`: what
     /// the selector emits for it (`Machine::multiply_by`).
     pub product: Option<ProductPrice>,
+    /// The same parts in code bytes, and what a byte is worth at speed (DEVIATE
+    /// SD446): where the target trades bytes for clocks (`rate` > 0, -O2/-O3
+    /// on m16) the divide is chosen by clocks plus bytes at that rate.
+    pub bytes: Option<DivBytes>,
+}
+
+/// [`DivPrices`]' parts in code bytes, and the rate in thousandths of a clock
+/// per byte.
+#[derive(Clone, Debug)]
+pub struct DivBytes {
+    pub prefix: i64,
+    pub add: i64,
+    pub shift: i64,
+    pub extend: i64,
+    pub multiply: i64,
+    pub multiply_long: i64,
+    pub multiply_high: i64,
+    pub divide: i64,
+    pub divide_long: i64,
+    pub milliclocks_per_byte: i64,
+    /// The block's frequency over the entry's: the clocks recur that often,
+    /// the bytes are paid once.
+    pub frequency: f64,
 }
 
 /// A price by the constant `d`.
@@ -391,6 +414,10 @@ pub struct SelectionDAG {
     pub(super) survivors: Vec<u32>,
     /// The `IROrder` of the `SDLoc` in force: nodes made now carry it.
     pub cur_order: u32,
+    /// The physical register each virtual register arrives in
+    /// (`getLiveInPhysReg`), by virtual register number: set for the entry
+    /// block's arguments.
+    pub live_in_phys: llrm_support::hash::HashMap<u32, llrm_lir::registers::RegId>,
     /// The source line of the IR instruction at each `IROrder` (0: none), from
     /// the `!dbg` the builder read: `SDLoc`'s line.
     pub lines: Vec<Option<crate::model::lir::SrcLoc>>,
@@ -513,6 +540,7 @@ impl SelectionDAG {
             dead_work: Vec::new(),
             survivors: Vec::new(),
             cur_order: 0,
+            live_in_phys: Default::default(),
             lines: Vec::new(),
             inst_order: Vec::new(),
             expanded_integers: Default::default(),
@@ -563,6 +591,17 @@ impl SelectionDAG {
 
     pub fn config(&self) -> &DagConfig {
         &self.config
+    }
+
+    /// The frequency of the block this DAG is of, over the entry's, for the
+    /// divide's byte weighing (DEVIATE SD446).
+    pub fn set_divide_frequency(
+        &mut self,
+        frequency: f64,
+    ) {
+        if let Some(bytes) = self.config.div_prices.as_mut().and_then(|prices| prices.bytes.as_mut()) {
+            bytes.frequency = frequency;
+        }
     }
 
     /// The jump table is position independent (`EK_LabelDifference32`, its

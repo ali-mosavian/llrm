@@ -712,6 +712,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::divide_by_bytes`.
+    fn divide_by_bytes(&self) -> bool {
+        false
+    }
+
     /// `Tuning::price_pin_multiplies`.
     fn price_pin_multiplies(&self) -> bool {
         false

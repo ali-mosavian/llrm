@@ -157,6 +157,14 @@ pub trait AddrDag: Dag {
         &self,
         value: SDValue,
     ) -> bool;
+    /// `MachineRegisterInfo::getLiveInPhysReg` of the virtual register a
+    /// `Register` node names: the physical register it arrives in.
+    fn live_in_physical(
+        &self,
+        _node: u32,
+    ) -> Option<u16> {
+        None
+    }
     /// `FrameIndexSDNode::getIndex`.
     fn frame_index(
         &self,
