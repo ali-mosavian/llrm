@@ -39,6 +39,8 @@ pub mod mosisd {
     pub const SHL32: ISD = ISD::Target(ids::SHL32);
     pub const SRL32: ISD = ISD::Target(ids::SRL32);
     pub const SRA32: ISD = ISD::Target(ids::SRA32);
+    pub const FSHL1: ISD = ISD::Target(ids::FSHL1);
+    pub const FSHR1: ISD = ISD::Target(ids::FSHR1);
     pub const CMPZ: ISD = ISD::Target(ids::CMPZ);
     pub const CMP32: ISD = ISD::Target(ids::CMP32);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
@@ -139,6 +141,12 @@ pub fn target_lowering() -> TargetLowering {
         tl.set_operation_action(op, MVT::I1, Action::Custom);
     }
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
+    // the funnel shifts the `or` of two shifts is matched into (`MatchRotate`
+    // asks for a legal or custom one): by one bit they are an instruction
+    // (`lower_funnel`), by any other amount two shifts and an or again
+    for op in [FShl, FShr] {
+        tl.set_operation_action(op, MVT::I16, Action::Custom);
+    }
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
     for op in [SetCC, Select] {
         for vt in [MVT::I8, MVT::I16] {
@@ -166,6 +174,7 @@ impl Hooks for MosLowering {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::Rotl | ISD::Rotr => Some(lower_rotate(dag, node)),
+            ISD::FShl | ISD::FShr if dag.value_type(node) == EVT::I16 => lower_funnel(dag, node),
             ISD::SetCC => lower_setcc(dag, node),
             ISD::SetCCCarry => lower_setcc_carry(dag, node),
             ISD::Select => Some(lower_select(dag, node)),
@@ -288,6 +297,24 @@ fn lower_rotate(
     let back = dag.get_node(ISD::And, shift_vt, &[negated, mask]);
     let (high, low) = (dag.get_node(left, vt, &[x, by]), dag.get_node(right, vt, &[x, back]));
     dag.get_node(ISD::Or, vt, &[high, low])
+}
+
+/// `fshl a, b, 1` and `fshr a, b, 15` are `(a << 1) | (b >> 15)`; `fshl a, b, 15`
+/// and `fshr a, b, 1` are `(b >> 1) | (a << 15)`: one bit crosses from one word
+/// to the other, which is the carry of a shift. Any other amount is expanded
+/// (`None`) to the shifts and the `or`.
+fn lower_funnel(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (a, b, amount) = (dag.operand(node, 0), dag.operand(node, 1), dag.constant(dag.operand(node, 2))? % 16);
+    let left = dag.opcode(node) == ISD::FShl;
+    let opcode = match (left, amount) {
+        (true, 1) | (false, 15) => mosisd::FSHL1,
+        (true, 15) | (false, 1) => mosisd::FSHR1,
+        _ => return None,
+    };
+    Some(dag.get_node(opcode, EVT::I16, &[a, b]))
 }
 
 /// A long (`i32`) multiply, divide, remainder or shift by a variable:
