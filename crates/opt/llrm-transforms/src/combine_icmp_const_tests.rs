@@ -271,3 +271,35 @@ fn run_visit_icmp(text: &str) -> String {
     combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
     printed(&module)
 }
+
+/// `__cmpdf2` at m32: the NaN test `(x << 1) u> C` stayed a shift and a 64-bit
+/// compare against a constant that needs two registers; the pin compares the
+/// low 63 bits.
+#[test]
+fn a_shifted_compare_is_a_narrower_compare_of_a_trunc() {
+    check(
+        "i64 %x",
+        "  %s = shl i64 %x, 1\n  %r = icmp ugt i64 %s, -9007199254740992\n",
+        &["trunc i64 %x to i63", "icmp ugt i63", "-4503599627370496"],
+    );
+    check(
+        "i64 %x",
+        "  %s = shl i64 %x, 32\n  %r = icmp ult i64 %s, 8589934593\n",
+        &["trunc i64 %x to i32", "icmp ult i32", ", 3"],
+    );
+}
+
+#[test]
+fn a_shifted_equality_is_a_mask_and_a_sign_test_a_bit() {
+    check(
+        "i32 %x",
+        "  %s = shl i32 %x, 4\n  %r = icmp eq i32 %s, 48\n",
+        &["and i32 %x, 268435455", "icmp eq i32", ", 3"],
+    );
+    check("i32 %x", "  %s = shl i32 %x, 4\n  %r = icmp slt i32 %s, 0\n", &["and i32 %x, 134217728", "icmp ne i32"]);
+}
+
+#[test]
+fn a_power_of_two_shifted_left_is_a_compare_of_the_amount() {
+    check("i32 %y", "  %s = shl nuw i32 1, %y\n  %r = icmp ult i32 %s, 30\n", &["icmp ult i32 %y, 5"]);
+}
