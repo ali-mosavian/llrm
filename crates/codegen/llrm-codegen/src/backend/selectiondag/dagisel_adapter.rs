@@ -367,7 +367,19 @@ pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
 /// The pin's register number of the register the builder names `id`
 /// (`phys_reg` inverted); `None` where it has none.
 pub fn pin_register(id: llrm_lir::registers::RegId) -> Option<u16> {
-    (0..=u16::MAX.min(200)).find(|&number| phys_reg(number) == Some(id))
+    // The inverse of `phys_reg`, made once: a scan of 200 numbers per query cost 81 K Ir
+    // a call lowering (memory_expansion, 953 calls) and the same in selection.
+    static INVERSE: std::sync::OnceLock<Vec<Option<u16>>> = std::sync::OnceLock::new();
+    let table = INVERSE.get_or_init(|| {
+        let mut table = vec![None; llrm_lir::registers::RegId::values().len()];
+        for number in (0..=u16::MAX.min(200)).rev() {
+            if let Some(found) = phys_reg(number) {
+                table[found.index()] = Some(number);
+            }
+        }
+        table
+    });
+    table.get(id.index()).copied().flatten()
 }
 
 /// A target's physical registers in the pin's numbering: the ids the builder
