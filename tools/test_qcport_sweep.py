@@ -151,6 +151,8 @@ def test_the_header_names_the_sha_the_binary_was_built_from_not_the_ref_at_print
     binary = tmp_path / "llrm-cc"
     binary.write_text("#!/bin/sh\necho llrm-cc " + "a" * 40 + "\n")
     binary.chmod(0o755)
+    (tmp_path / "llrm-llc").write_text("#!/bin/sh\necho llrm-llc " + "a" * 40 + "\n")
+    (tmp_path / "llrm-llc").chmod(0o755)
     moved = "f" * 40
     real_run = q.subprocess.run
 

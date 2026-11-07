@@ -687,13 +687,12 @@ assertion `left == right` failed: a node on the worklist is ready
 
 
 def test_the_compile_smoke_drives_the_c_compiler_llrm_cc_names(tmp_path, monkeypatch):
-    """C2 switches the C compiler to llrm-cc: a smoke that compiled with the name "llrm-cc" would still pass on a dist that has only the old binary."""
+    """The smoke compiles C with the binary named "llrm-cc", the only C compiler."""
     seen = []
     monkeypatch.setattr(ps, "compile_ok", lambda command, env: seen.append(Path(command[0]).name))
-    for name in ("llrm-cc", "llrm-cc"):
-        (tmp_path / name).write_text("")
+    (tmp_path / "llrm-cc").write_text("")
     ps.programs(tmp_path)
-    assert {"llrm-cc"} <= set(seen) and "llrm-cc" not in seen
+    assert {"llrm-cc"} <= set(seen)
 
 
 
