@@ -194,9 +194,9 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD18 | sdag-a | select patterns (abs, min, max) | builder |
 | SD19 | sdag-b | `i64` division through our helper routines | §4 B0 |
 | SD20 | sdag-c | matcher jumps count items; `ByHwMode` resolved at generation | `llrm-dagisel/src/interp.rs` |
-| SD21 | sdag-c | no `mayRaiseFPException`/`NoFPExcept` in the interpreter | `llrm-dagisel/src/interp.rs` |
-| SD22 | sdag-c | no `MatchStateUpdater` around complex patterns | `llrm-dagisel/src/interp.rs` |
-| SD23 | sdag-c | vector immediate checks never match | `llrm-dagisel/src/interp.rs` |
+| SD21 | sdag-c | no `mayRaiseFPException`/`NoFPExcept` in the interpreter: MIR has no strict FP, and the pin's consumers (MachineCSE, `isSafeToMove`, the X87 wait pass) treat a non-strict op as movable, as ours does; no cell loses (2026-11-07). Exit: when the builder lowers constrained FP. Review 2026-12-10 | `llrm-dagisel/src/interp.rs` |
+| SD22 | sdag-c | no `MatchStateUpdater` around complex patterns: the address folds replace and remove the matched node as the pin does and nothing reads it afterwards; no stale-node failure in the corpus (2026-11-07). Exit: C1 (a complex pattern that CSEs while matching). Review 2026-12-10 | `llrm-dagisel/src/interp.rs` |
+| SD23 | sdag-c | vector immediate checks never match: no vector MIR, so nothing reaches them. Exit: vector MIR (after 32-bit parity). Review 2026-12-10 | `llrm-dagisel/src/interp.rs` |
 | SD30 | sdag-d | scheduler: no physical-register interference, `ClusterNodes`, vreg-cycle check | `selectiondag/schedule.rs` |
 | SD31 | sdag-d | scheduler: no IR order for the call tie break | `selectiondag/schedule.rs` |
 | SD32 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `llrm-sdag/src/actions.rs` |
