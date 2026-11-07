@@ -89,6 +89,7 @@ const MOVES: &[Writeback] = writeback![
     "MOV8de" true true, "MOV16de" true true, "MOV32de" true true, "MOV32ae" true true,
     "MOV8od" false false, "MOV16od" false false, "MOV32od" false false, "MOV32oa" false false,
     "MOV8ed" false true, "MOV16ed" false true, "MOV32ed" false true, "MOV32ea" false true,
+    "MOV32ro" true false,
 ];
 
 /// Every writeback: the moves, and one for each pin instruction that reads its
@@ -262,11 +263,13 @@ pub fn memory_move_rows() -> impl Iterator<Item = &'static str> {
     WRITEBACKS.iter().filter(|one| one.memory_move).map(|one| one.prints_as)
 }
 
-/// The width in bits of a post-increment load into a data register.
+/// The width in bits of a post-increment load into a data register (or either
+/// kind, `MOV32ro`).
 pub fn post_load_bits(name: &str) -> Option<&'static str> {
     let one = WRITEBACKS.iter().find(|one| one.name == name)?;
-    let move_to_data = !one.source && one.load && !one.pre && one.prints_as.ends_with("do");
-    move_to_data.then(|| one.prints_as.trim_start_matches("MOV").trim_end_matches("do"))
+    let move_to_register =
+        !one.source && one.load && !one.pre && (one.prints_as.ends_with("do") || one.prints_as.ends_with("ro"));
+    move_to_register.then(|| one.prints_as.trim_start_matches("MOV").trim_end_matches(char::is_alphabetic))
 }
 
 /// The instruction a writeback prints as, with the operand to drop (the
@@ -537,6 +540,8 @@ pub fn select(
         (
             match extended {
                 Some(row) => row,
+                // a long may land in either kind of register
+                None if bytes == 4 && !pre => code_of("MOV32ro_WB")?,
                 None => code(bytes, true, pre, false)?,
             },
             vec![adapter.value_type(at(0)), adapter.value_type(at(1)), adapter.value_type(at(2))],
