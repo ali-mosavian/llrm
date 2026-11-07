@@ -402,6 +402,13 @@ pub trait GreedyEnv: SpillWeightEnv {
     ) -> i64 {
         0
     }
+    /// DEVIATE C5: see `TargetInstrInfo::encoding_class`.
+    fn encoding_class(
+        &self,
+        _phys: RegId,
+    ) -> Option<u8> {
+        None
+    }
     /// `TRI->getCSRFirstUseCost(MF)`: what the first use of a callee-saved
     /// register costs in entry-block executions (X86: `push` and `pop`).
     fn csr_first_use_cost(&self) -> u32 {
@@ -768,11 +775,18 @@ impl<'a> RAGreedy<'a> {
             let decision = self.select_or_split(&virt_reg, &mut split_vregs);
             if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
                 let verdict = match &decision {
-                    Select::Reg(phys) => format!("assign {phys:?}"),
+                    Select::Reg(phys) => format!("assign {}", self.matrix.tri().name(*phys)),
                     Select::Fail => "FAIL".to_owned(),
                     Select::None => format!("split/spill into {split_vregs:?}"),
                 };
-                eprintln!("  hint {:?} prio {:#x}", self.simple_hint(virt_reg.reg()), self.get_priority(&virt_reg));
+                eprintln!(
+                    "  hint {:?} prio {:#x}",
+                    self.simple_hint(virt_reg.reg()).map(|hint| match hint {
+                        Hint::Phys(phys) => self.matrix.tri().name(phys),
+                        Hint::Virt(virt) => format!("v{virt}"),
+                    }),
+                    self.get_priority(&virt_reg)
+                );
                 eprintln!(
                     "{}",
                     decision_line(
@@ -1035,8 +1049,10 @@ impl<'a> RAGreedy<'a> {
         Some(self.try_evict(virt, order, new_vregs, cost, fixed).unwrap_or(phys))
     }
 
-    /// DEVIATE C5 (no number yet; exit: re-evaluated against the pin at
-    /// 2026-11-20 with the other numbered DEVIATEs). Pin: `tryAssign` takes the
+    /// DEVIATE C5 (owner greedy-subreg; exit 2026-12-05: replaced by a general
+    /// rule or kept with a new number). Without it the m32+m64 bench has 17
+    /// rows worse, +299 B (grep O2 +48, matmul +32, nbody_fixed +32); it costs
+    /// 30.9 M Ir on memory_expansion O2 (0.3%). Pin: `tryAssign` takes the
     /// first free register of the allocation order
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L532>),
     /// whatever its encoding costs. Evidence: m64 O2 frames 243 B against
@@ -1063,6 +1079,9 @@ impl<'a> RAGreedy<'a> {
         let class =
             |this: &Self, reg: RegId| (this.env.reg_cost(reg), is_unused_callee_saved_reg(this.env, &this.matrix, reg));
         let (mut best, mut best_bytes, kind) = (first, bytes(self.env, first), class(self, first));
+        // Registers of one encoding class take the same bytes: price each once.
+        let mut priced = ClassPrices::default();
+        priced.seed(self.env.encoding_class(first), best_bytes);
         let mut after = false;
         for (reg, is_hint) in order.iter() {
             if reg == first {
@@ -1072,7 +1091,7 @@ impl<'a> RAGreedy<'a> {
             if !after || is_hint || class(self, reg) != kind {
                 continue;
             }
-            let one = bytes(self.env, reg);
+            let one = priced.price(self.env.encoding_class(reg), || bytes(self.env, reg));
             if one < best_bytes && self.matrix.check_interference(virt, reg) == InterferenceKind::Free {
                 (best, best_bytes) = (reg, one);
             }
@@ -1813,6 +1832,39 @@ impl<'a> RAGreedy<'a> {
     }
 }
 
+/// DEVIATE C5's prices of one vreg's candidate registers, one per encoding
+/// class (`TargetInstrInfo::encoding_class`).
+#[derive(Default)]
+struct ClassPrices(Vec<(u8, i64)>);
+
+impl ClassPrices {
+    fn seed(
+        &mut self,
+        class: Option<u8>,
+        bytes: i64,
+    ) {
+        if let Some(class) = class {
+            self.0.push((class, bytes));
+        }
+    }
+
+    /// The bytes of a register of `class`, from `compute` unless the class has
+    /// been priced; a register with no class is always priced.
+    fn price(
+        &mut self,
+        class: Option<u8>,
+        compute: impl FnOnce() -> i64,
+    ) -> i64 {
+        let Some(class) = class else { return compute() };
+        if let Some(&(_, known)) = self.0.iter().find(|(one, _)| *one == class) {
+            return known;
+        }
+        let bytes = compute();
+        self.0.push((class, bytes));
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1823,6 +1875,28 @@ mod tests {
     use crate::greedy::matrix::NoFixed;
     use crate::greedy::spill::SimpleSpiller;
     use crate::greedy::virtregmap::RegisterInfo;
+
+    /// C5 priced every candidate register of a vreg by walking all its
+    /// instructions (137 k `encoding_bytes` calls, 23.6 M Ir on
+    /// memory_expansion O2); eight candidates of two classes are two prices.
+    #[test]
+    fn test_candidates_of_one_class_are_priced_once() {
+        let mut prices = ClassPrices::default();
+        prices.seed(Some(0), 0);
+        let mut computed = 0;
+        for class in [0, 1, 1, 0, 1, 1, 0, 1] {
+            prices.price(Some(class), || {
+                computed += 1;
+                i64::from(class)
+            });
+        }
+        assert_eq!(computed, 1, "class 0 was seeded; class 1 priced once");
+        prices.price(None, || {
+            computed += 1;
+            0
+        });
+        assert_eq!(computed, 2, "a register without a class is always priced");
+    }
     use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 

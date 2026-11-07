@@ -185,6 +185,14 @@ impl llrm_target::Target for M16 {
         llrm_x86::X87_WIDTH
     }
 
+    fn move_bytes(&self) -> Option<llrm_target::MoveBytes> {
+        Some(llrm_target::MoveBytes {
+            plain: 2,
+            copy: llrm_x86::encoding::copy_move_bytes,
+            literal: llrm_x86::encoding::literal_move_bytes,
+        })
+    }
+
     fn register_op_bytes(
         &self,
         width: i64,
@@ -283,6 +291,10 @@ impl llrm_target::Target for M16 {
         layout()
     }
 
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
+    }
+
     fn conventions(&self) -> &'static [&'static str] {
         &CONVENTIONS
     }
@@ -325,6 +337,11 @@ impl llrm_target::Target for M16 {
     /// A byte is pushed as a word: `calling.toml`'s.
     fn stack_slot_bytes(&self) -> i64 {
         CALLING.native().slot_bytes
+    }
+
+    /// Real mode has no `and sp` frame the pin builds.
+    fn can_realign_stack(&self) -> bool {
+        false
     }
 
     fn frame_register(&self) -> RegId {
@@ -611,6 +628,7 @@ mod tuning_tests {
             "the compiler reads the judge's row"
         );
         assert_eq!(table.speed_milliclocks_per_byte, 500, "policy: user 2026-10-31, 1 clk = 2 B");
+        assert!(table.divide_by_bytes, "DEVIATE SD446: m16 weighs the bytes of a divide by a constant");
         assert_eq!((table.unroll_threshold, table.unroll_max_percent_threshold_boost), (Some(0), Some(100)));
         assert_eq!(table.unroll_partial_threshold, Some(0));
         assert_eq!(table.x87_stack_slots, Some(8));
@@ -626,6 +644,7 @@ mod tuning_tests {
                 max_stores_per_memmove_opt_size: 4,
                 size_milliclocks_per_byte: 0,
                 multiply_by_clocks: false,
+                divide_by_bytes: false,
                 price_pin_multiplies: false,
                 imul_at_size: false,
                 speed_milliclocks_per_byte: 0,

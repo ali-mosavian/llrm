@@ -830,6 +830,13 @@ impl Selector<'_> {
     }
 }
 
+/// Whether the module states "PIC Level" itself: a module with no flags at all
+/// (the frontends', hand-written) is static code here, though
+/// `Module::position_independent` takes it as position independent.
+fn flagged_pic(module: &Module) -> bool {
+    module.named_metadata.iter().any(|(name, _)| name == "llvm.module.flags") && module.position_independent()
+}
+
 /// [`Selector::needs_got`] for any module: the one rule, shared with the DAG
 /// path.
 pub(crate) fn global_needs_got(
@@ -844,7 +851,13 @@ pub(crate) fn global_needs_got(
         GlobalKind::Variable(variable) => variable.initializer.is_some(),
     };
     let local = matches!(global.linkage, Linkage::Internal | Linkage::Private);
-    // Darwin reaches anything not defined here through the GOT; Linux
-    // static code reaches all of it directly.
-    platform == Platform::Darwin && !local && !defined
+    // Darwin reaches anything not defined here through the GOT; Linux static
+    // code reaches all of it directly, and position-independent code (the
+    // module's "PIC Level" flag) goes through the GOT for what is not defined
+    // here, as the pin's `shouldAssumeDSOLocal` (clang -fPIE marks a definition
+    // `dso_local`).
+    // A hidden or protected declaration binds inside the module: the pin loads it
+    // directly (`shouldAssumeDSOLocal`), not through the GOT, at Linux PIE.
+    let bound_here = global.visibility != llrm_mir::module::Visibility::Default;
+    (platform == Platform::Darwin || (flagged_pic(module) && !bound_here)) && !local && !defined
 }

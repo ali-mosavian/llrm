@@ -656,7 +656,7 @@ impl FunctionPass for Slot {
         let count = |unit: &Unit| -> i64 {
             unit.function.layout().iter().map(|&b| unit.function.iter_block(b).count() as i64).sum()
         };
-        if std::env::var_os("W2_SLOT_COUNT").is_none() {
+        if !llrm_support::env_flag!("W2_SLOT_COUNT") {
             return self.inner.run(unit, analyses);
         }
         let before = count(unit);
@@ -916,7 +916,7 @@ pub(crate) fn llvm_order(
             slot(
                 "unroll@1476",
                 Box::new(loopunrollpass::LoopFullUnroll {
-                    opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                    opt_level: unroll_level(&applied.options),
                     opt_size: size,
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
@@ -1033,7 +1033,7 @@ pub(crate) fn llvm_order(
                 slot(
                     "unroll@753",
                     Box::new(loopunrollpass::LoopFullUnroll {
-                        opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                        opt_level: unroll_level(&applied.options),
                         opt_size: size,
                         only_when_forced: !applied.options.loop_unrolling,
                         target_unrolling: false,
@@ -1135,6 +1135,19 @@ pub fn timed() {
         function: |name, run| debug::in_function(name, run),
         count: |what, hit| debug::counted(what, hit),
     });
+}
+
+/// The level `LoopFullUnroll` is told: 1 at -O1 (`pre` off, as `ABSENT_AT_O1`
+/// reads it), else 3 or 2 by the target percent. It was always 2 or 3, so the
+/// -O1 rule `unroll_never_grows_at_o1` never ran.
+fn unroll_level(options: &Options) -> u32 {
+    if !options.pre {
+        1
+    } else if options.limits.target_percent >= 200 {
+        3
+    } else {
+        2
+    }
 }
 
 /// `program` through the pipeline.
@@ -1413,8 +1426,8 @@ pub fn recorded(
         manager.add(cgpaddr::CgpAddr);
     }
     // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
-    if applied.options.prices_bytes() && applied.options.wanted("cgpselectarms") {
-        manager.add(crate::cgpselect::SelectArms);
+    if (applied.options.prices_bytes() || applied.options.for_size) && applied.options.wanted("cgpselectarms") {
+        manager.add(crate::cgpselect::SelectArms { size: applied.options.for_size });
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
@@ -1477,7 +1490,7 @@ fn mark_for_size(
             }
             for name in ["optsize"].into_iter().chain(min_size.then_some("minsize")) {
                 if !function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == name)) {
-                    function.attrs.push(Attribute::Flag(name.to_owned()));
+                    function.attrs.push(Attribute::Flag(name.into()));
                 }
             }
         }

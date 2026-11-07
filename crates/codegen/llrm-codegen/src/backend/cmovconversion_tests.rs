@@ -129,20 +129,52 @@ fn body_carried() -> LirBody {
 fn a_carried_register_cmov_is_a_branch_at_the_sandybridge_latencies() {
     let mut profile = cpu().clone();
     profile.mispredict_penalty = Some(16);
+    profile.speed_rate = true;
     let before = body_carried();
     assert_ne!(converted(&before, &profile), before);
     let old: Vec<(String, i64)> = [("mov_rm", 1), ("cmov", 1), ("alu_rm", 1)].map(|(a, b)| (a.to_owned(), b)).to_vec();
-    profile._latencies.retain(|(name, _)| !old.iter().any(|(other, _)| other == name));
-    profile._latencies.extend(old);
+    std::sync::Arc::make_mut(&mut profile._latencies).retain(|(name, _)| !old.iter().any(|(other, _)| other == name));
+    std::sync::Arc::make_mut(&mut profile._latencies).extend(old);
     assert_eq!(converted(&before, &profile), before);
 }
 
-/// The table the test above reads.
+/// The table the test above reads. A register `imul` is 3 (SandyBridge `WriteIMul32Reg`, load 5 more
+/// for the memory form), not the one-operand form's 4: at 4 every `imul` in a cmov loop
+/// deepened the chain by one more clock than the pin's model.
 #[test]
 fn the_x86_64_table_states_the_sandybridge_latencies() {
     let profile = cpu();
     assert_eq!(
         ["cmov", "mov_rm", "alu_rm", "imul_r32", "imul_m32"].map(|form| profile.latency(form).unwrap()),
-        [2, 5, 6, 4, 9]
+        [2, 5, 6, 3, 8]
     );
+}
+
+/// m64's table stated 1000 at every level, so jpeg_fixed -O2 kept 42 cmovs where
+/// the pin's SandyBridge penalty (16) leaves 33. -O2/-O3 take the pin's penalty;
+/// -O1, -Os and -Oz keep the 1000 (CMC3: the conversion cost -Os +2.6% on Zen 5).
+#[test]
+fn a_carried_register_cmov_is_a_branch_at_o2_and_stays_at_o1_and_size_at_m64() {
+    let before = body_carried();
+    let mut at = cpu().clone();
+    at.speed_rate = true;
+    assert_ne!(converted(&before, &at), before, "-O2/-O3");
+    let mut o1 = cpu().clone();
+    o1.speed_rate = false;
+    assert_eq!(converted(&before, &o1), before, "-O1");
+    let mut os = at.clone();
+    os.size = true;
+    assert_eq!(converted(&before, &os), before, "-Os");
+    os.size = false;
+    os.min_size = true;
+    assert_eq!(converted(&before, &os), before, "-Oz");
+}
+
+/// A `movzx` from memory is a load (SandyBridge `WriteLoad`, 5), not the register form's 1: the
+/// YCbCr loop of jpeg_fixed -O2 kept three clamp `cmovs` the pin turns into branches, its byte
+/// loads priced 4 clocks short.
+#[test]
+fn a_movzx_from_memory_costs_a_load_in_the_depth_walk() {
+    let load = insn(1, Operation::Extend, "movzx", vec![held(6)], vec![cell()], vec![6], vec![4]);
+    assert_eq!(latency_of(&load, cpu()), 5);
 }

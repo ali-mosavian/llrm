@@ -424,6 +424,18 @@ pub struct Alias {
     pub binding: llrm_object::Binding,
 }
 
+/// A function or global's COMDAT.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Comdat {
+    pub name: String,
+    pub selection: llrm_object::Selection,
+    /// A global: where its items are in `Module::data`, the segment and the
+    /// range of its items there.
+    pub extent: Option<(String, std::ops::Range<usize>)>,
+    /// A global that is never written (`constant`): COFF's `.rdata`.
+    pub constant: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
     /// The register file of the target the module is for.
@@ -447,9 +459,16 @@ pub struct Module {
     /// Of those, the segments of uninitialised data: class FAR_BSS, which an
     /// image does not store.
     pub far_bss: BTreeSet<String>,
+    /// The defined functions and globals of weak linkage (`weak`, `weak_odr`,
+    /// `linkonce`, `linkonce_odr`), by their names in the object.
+    pub weak: BTreeSet<String>,
     /// The code segment of a procedure that is not in `code` (`#pragma
     /// code_seg`), by its name.
     pub code_segments: std::collections::BTreeMap<String, String>,
+    /// The COMDAT each function or global of the module is in (`$f = comdat
+    /// any`, `comdat($f)`), by the symbol's name. COFF writes each as a
+    /// section of its own; the other formats ignore them.
+    pub comdats: std::collections::BTreeMap<String, Comdat>,
     /// Externs nothing references, declared so LINK pulls in their module.
     pub requests: BTreeSet<String>,
     /// `-g`'s debug information.
@@ -1709,8 +1728,10 @@ fn parts(
 /// The bytes of a leaf function's frame that live in the red zone, below the
 /// stack pointer, with no `sub` for them: `X86FrameLowering::emitPrologue`
 /// takes `has128ByteRedZone` bytes off `StackSize` where the function makes no
-/// call, keeps no frame register, realigns nothing and has no variable-sized
-/// object. `omit` is whether the frame register is left out. The registers
+/// call, realigns nothing and has no variable-sized object; a frame register
+/// does not forbid it (`HasFP` only adds its slot to `MinSize`), and the
+/// locals then sit at negative offsets from it with no `sub`. `omit` is
+/// whether the frame register is left out. The registers
 /// are pushed above the locals (`saved_first`) or there are none. A push in
 /// the body would write over the zone, so a body with one has none (its pops
 /// are not asked: `exits_inserted` puts the saved registers' there, and the
@@ -1721,8 +1742,9 @@ fn red_zone(
 ) -> i64 {
     let slot = procedure.registers.slot;
     let rounded = (procedure.reserve + slot - 1) / slot * slot;
-    if !omit
-        || procedure.registers.red_zone == 0
+    if procedure.registers.red_zone == 0
+        || moves_stack(&procedure.body)
+        || realign_of(&procedure.body) != 0
         || rounded == 0
         || procedure.stack_check.is_some()
         || procedure.probe_stack.is_some()
@@ -1734,8 +1756,12 @@ fn red_zone(
     if procedure.body.insns().iter().any(|one| one.what.as_ref().is_some_and(in_zone)) {
         return 0;
     }
-    let total = if procedure.body.slot_dropped { rounded } else { rounded + slot };
+    let total = if procedure.body.slot_dropped || !omit { rounded } else { rounded + slot };
     let zone = procedure.registers.red_zone.min(total);
+    if !omit {
+        // frame cells are addressed from the frame register: no displacement moves
+        return zone;
+    }
     // The zone must pay in bytes: it moves every local's displacement down by
     // `zone`, which can cost a disp8 where there was none, against the
     // `sub`/`add` (or `push`/`pop`) it removes, which is about a clock.
@@ -4637,7 +4663,9 @@ mod tests {
             procedures: Vec::new(),
             private: BTreeSet::new(),
             far_bss: BTreeSet::new(),
+            weak: BTreeSet::new(),
             code_segments: Default::default(),
+            comdats: Default::default(),
             padding: Default::default(),
             requests: BTreeSet::new(),
             debug: None,

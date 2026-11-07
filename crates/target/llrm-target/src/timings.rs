@@ -41,9 +41,16 @@ pub struct CpuTable {
     /// reversed-copy-chain test, and keeps a copy per iteration. Off: the
     /// pin's order.
     pub commute_loop_carried: bool,
+    /// The pin's stand-alone `TailDuplicator` runs after allocation, once this
+    /// target's A/B has been made (`TailDuplicate` slot). DEVIATE TD-M64 (owner
+    /// greedy-subreg, exit 2026-11-12): on at m64 only; m32/m16 stay off until
+    /// their sfm16 rows (+16/+4 B) are explained; the pin runs it everywhere.
+    pub post_ra_tail_duplicate: bool,
     /// Clocks a mispredicted branch costs (`MCSchedModel::MispredictPenalty`);
     /// `None`: the target states none.
     pub mispredict_penalty: Option<i64>,
+    /// The same at -O1, -Os and -Oz; `None`: the plain penalty applies.
+    pub mispredict_penalty_size: Option<i64>,
     /// Form and clocks, in file order.
     pub clocks: Vec<(String, i64)>,
     pub latency: Vec<(String, i64)>,
@@ -183,7 +190,9 @@ impl Timings {
                     ("scalars", "line_fill_clocks") => table.line_fill_clocks = Some(number()?),
                     ("scalars", "tail_dup_placement_threshold") => table.tail_dup_placement_threshold = Some(number()?),
                     ("scalars", "mispredict_penalty") => table.mispredict_penalty = Some(number()?),
+                    ("scalars", "mispredict_penalty_size") => table.mispredict_penalty_size = Some(number()?),
                     ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,
+                    ("scalars", "post_ra_tail_duplicate") => table.post_ra_tail_duplicate = number()? != 0,
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),
                     (_, form) => table.latency.push((form.to_owned(), number()?)),

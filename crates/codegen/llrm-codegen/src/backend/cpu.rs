@@ -112,19 +112,25 @@ pub struct Profile {
     pub ports: llrm_target::PortTable,
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
+    /// The encoded sizes of a register copy and a constant load, where the
+    /// target states them.
+    pub move_bytes: Option<llrm_target::MoveBytes>,
     /// `Target::bsf_rep_prefix`.
     pub bsf_rep_prefix: bool,
     /// `getPrefLoopAlignment` as a power of two; 0: loops are not aligned.
     pub loop_alignment: u8,
     /// `Target::loop_alignment_max_skip`.
     pub loop_max_skip: u8,
+    /// `Target::align_loops_at_o1`; below -O2 (`speed_rate` off) loops are
+    /// aligned only where this holds.
+    pub align_loops_at_o1: bool,
     pub call_register_capacity: i64,
     /// The floating values it holds in registers at once.
     pub float_register_capacity: i64,
     // Preferred forms only; the complete legal set is `address_forms`.
     pub address_scales: BTreeSet<i64>,
-    pub _costs: Vec<(String, i64)>,
-    pub _latencies: Vec<(String, i64)>,
+    pub _costs: std::sync::Arc<Vec<(String, i64)>>,
+    pub _latencies: std::sync::Arc<Vec<(String, i64)>>,
     pub operations: OperationCosts,
     // P5 can issue a U/V pair only for a restricted set of forms; distinct
     // from generic issue width.
@@ -160,6 +166,8 @@ pub struct Profile {
     pub commute_loop_carried: bool,
     /// Clocks a mispredicted branch costs, where the target states it.
     pub mispredict_penalty: Option<i64>,
+    /// `mispredict_penalty` at -O1, -Os and -Oz, where the target states one.
+    pub mispredict_penalty_size: Option<i64>,
     /// `-fexcess-precision=standard` (`-ffloat-store`): a float conversion
     /// rounds to its type, where otherwise x87 keeps the wider value in its
     /// register, as gcc's `-fexcess-precision=fast` does.
@@ -181,6 +189,10 @@ pub struct Profile {
     /// -O2 and -O3: the target's price of a code byte at speed counts
     /// (`Options::prices_bytes`); -O1, -Os and -Oz gate every metric alone.
     pub speed_rate: bool,
+    /// The target runs the pin's stand-alone tail duplication after
+    /// allocation (`TailDuplicator`, `PreRegAlloc` clear); on only where its
+    /// A/B has been made (`TailDuplicate` slot).
+    pub post_ra_tail_duplicate: bool,
     /// A spill of an x87 value keeps the register's 80 bits (`fstp tbyte`),
     /// as real BC keeps a temporary (BASIC). DEVIATE D-RFP5, exit: none, the
     /// pin rounds; QB follows real BC text.
@@ -263,7 +275,7 @@ impl Profile {
     /// What the CPU prices, as a target builds its cost model from.
     pub fn cpu_prices(&self) -> llrm_target::CpuPrices {
         llrm_target::CpuPrices {
-            costs: self._costs.clone(),
+            costs: self._costs.to_vec(),
             prefix: self.prefix_cost,
             address_stall: self.address_prefix_stall,
             registers: self.register_capacity,
@@ -281,6 +293,7 @@ impl Profile {
 
     /// The MIR target this profile prices: its target's cost model on its CPU.
     pub fn target(&self) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::MachineModels);
         (self.model)(&self.cpu_prices())
     }
 
@@ -356,14 +369,16 @@ impl Profile {
             foreign: arch.flat_foreign(),
             ports: arch.flat_ports(),
             operand_bytes: arch.operand_bytes(),
+            move_bytes: arch.move_bytes(),
             bsf_rep_prefix: arch.bsf_rep_prefix(),
             loop_alignment: arch.pref_loop_alignment(),
             loop_max_skip: arch.loop_alignment_max_skip(),
+            align_loops_at_o1: arch.align_loops_at_o1(),
             call_register_capacity: arch.callee_saved().len() as i64,
             float_register_capacity: arch.float_stack() as i64,
             address_scales: BTreeSet::from([1]),
-            _costs: Vec::new(),
-            _latencies: Vec::new(),
+            _costs: Default::default(),
+            _latencies: Default::default(),
             operations: OperationCosts::default(),
             pentium_pairing: false,
             address_forms: Vec::new(),
@@ -377,11 +392,13 @@ impl Profile {
             tail_dup_threshold: None,
             commute_loop_carried: false,
             mispredict_penalty: None,
+            mispredict_penalty_size: None,
             float_store: false,
             rounds_float_spills: false,
             stable_loads: true,
             min_size: false,
             speed_rate: true,
+            post_ra_tail_duplicate: false,
             spills_extended: false,
             exhaustive: false,
             model: arch.cost_model(),
@@ -403,13 +420,41 @@ impl Profile {
         if self.size || self.min_size { self.target().size_milliclocks_per_byte() } else { 0 }
     }
 
+    /// Code is tuned for clocks: not -O0 (the pin's -O0 is FastISel and no DAG
+    /// combine, so nothing there trades bytes for clocks) and not for size.
+    pub fn has_speed_goal(&self) -> bool {
+        self.optimized && !(self.size || self.min_size)
+    }
+
     /// Clocks a byte of code is worth at speed, in thousandths: the target's
     /// rate at -O2 and -O3, none at -O1 and for size.
     pub fn speed_milliclocks_per_byte(&self) -> i64 {
-        if self.size || self.min_size || !self.speed_rate {
+        if !self.has_speed_goal() || !self.speed_rate {
             return 0;
         }
-        self.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+        self.speed_milliclocks_per_byte_on(&*self.target())
+    }
+
+    /// [`Self::speed_milliclocks_per_byte`] on a cost model the caller already
+    /// has: `target` builds one (and clones the price tables) per call.
+    pub fn speed_milliclocks_per_byte_on(
+        &self,
+        machine: &dyn llrm_mir::target::Machine,
+    ) -> i64 {
+        if !self.has_speed_goal() || !self.speed_rate {
+            return 0;
+        }
+        machine.tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+    }
+
+    /// Clocks a mispredicted branch costs in this function: the size row at
+    /// -O1, -Os and -Oz (no byte price at speed) where stated.
+    pub fn mispredict_penalty_here(&self) -> Option<i64> {
+        if self.size || self.min_size || !self.speed_rate {
+            self.mispredict_penalty_size.or(self.mispredict_penalty)
+        } else {
+            self.mispredict_penalty
+        }
     }
 
     /// DEVIATE TA-LC applies here: the table says so, at -O1 to -O3 only (at
@@ -566,12 +611,14 @@ fn _profile(
         pentium_pairing: table.pairing,
         address_forms: _address_forms(arch, &operations, table.prefix, table.lcp_stall),
         operations,
-        _costs: table.clocks.clone(),
-        _latencies: table.latency.clone(),
+        _costs: std::sync::Arc::new(table.clocks.clone()),
+        _latencies: std::sync::Arc::new(table.latency.clone()),
         address_prefix_stall: table.lcp_stall,
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
         commute_loop_carried: table.commute_loop_carried,
+        post_ra_tail_duplicate: table.post_ra_tail_duplicate,
         mispredict_penalty: table.mispredict_penalty,
+        mispredict_penalty_size: table.mispredict_penalty_size,
         ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
     })
 }
@@ -744,6 +791,17 @@ mod tests {
         assert_eq!(with(vec![AddressForm { index_width: 8, ..dword }]), ThreeAddress::Wide);
     }
 
+    /// Every machine phase of every function cloned the profile, and its two
+    /// price tables with it: 62M of the 1.67G instructions of an -O0 compile of
+    /// 600 small functions. A clone shares the tables.
+    #[test]
+    fn test_a_cloned_profile_shares_its_price_tables() {
+        let cpu = profile("486").unwrap();
+        let copy = cpu.clone();
+        assert!(std::sync::Arc::ptr_eq(&cpu._costs, &copy._costs));
+        assert!(std::sync::Arc::ptr_eq(&cpu._latencies, &copy._latencies));
+    }
+
     /// A size build keeps the dword `lea` and drops the byte and word ones
     /// (TA-10): 11 m32 -Os cells grew when they were made there. Wide and
     /// the 16-bit modes are the same at either.
@@ -810,8 +868,8 @@ mod tests {
             register_capacity: 3,
             call_register_capacity: 1,
             address_scales: BTreeSet::from([1]),
-            _costs: Vec::new(),
-            _latencies: Vec::new(),
+            _costs: Default::default(),
+            _latencies: Default::default(),
             ..Profile::new(&llrm_x86_m16::M16, "test", 1, true, 0, 0)
         };
 

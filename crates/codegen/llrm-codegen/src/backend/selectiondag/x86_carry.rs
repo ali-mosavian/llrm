@@ -5,9 +5,10 @@
 //! sbb r, r`.
 //!
 //! DEVIATE SD219: the `ADOX` form (no x86 target of ours has ADX), the
-//! or/xor entry (`combineOrXorWithSETCC`) and the `ADD(ADC/SBB)`/`SUB(…, SBB)`
-//! folds of `combineAdd`/`combineSub` are not translated. Exit: with the rest
-//! of `combineSBB`/`combineADC`. Owner w10. Review 2026-12-10.
+//! or/xor entry (`combineOrXorWithSETCC`) and the `ADD(ADC/SBB)` folds of
+//! `combineAdd` are not translated. (The `SUB(…, ADC/SBB)` folds of
+//! `combineSub` are, in `x86_lowering`.) Exit: with the rest of
+//! `combineSBB`/`combineADC`. Owner w10. Review 2026-12-10.
 //!
 //! # See also
 //! LLVM's `combineAddOrSubToADCOrSBB`
@@ -79,7 +80,7 @@ pub(super) fn add_or_sub_to_adc_or_sbb(
     let (code, flags) = if dag.opcode(y) == x86isd::SETCC && dag.has_one_use(y.node) {
         (dag.constant(dag.operand(y, 0))?, dag.operand(y, 1))
     } else if dag.opcode(y) == ISD::And && dag.constant(dag.operand(y, 1)) == Some(1) && dag.has_one_use(y.node) {
-        let (flags, code) = lower_and_to_bt(dag, y, CondCode::SetNe)?;
+        let (flags, code) = lower_and_to_bt(dag, y, CondCode::SetNe, false)?;
         (code, flags)
     } else {
         return None;

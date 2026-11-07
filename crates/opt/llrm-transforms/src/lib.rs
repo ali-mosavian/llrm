@@ -128,6 +128,7 @@ mod combine_dispatch_tests;
 pub mod combine_distribute;
 #[cfg(test)]
 mod combine_flags_result_tests;
+pub mod combine_fcmp;
 pub mod combine_fp;
 pub mod combine_fp_int_casts;
 pub mod combine_fpcast;
@@ -223,6 +224,7 @@ pub mod exitne;
 pub mod exitopt;
 pub mod exitpredicate;
 pub mod exitsink;
+pub mod invariantsink;
 pub mod exitvalues;
 pub mod expand;
 pub mod expandmemcmp;

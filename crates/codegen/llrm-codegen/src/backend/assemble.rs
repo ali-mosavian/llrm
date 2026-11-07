@@ -207,6 +207,11 @@ pub fn assembled_by(
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();
     let mut data_publics = Vec::new();
+    let mut weak: BTreeSet<String> = BTreeSet::new();
+    let is_weak = |linkage: Linkage| {
+        matches!(linkage, Linkage::Weak | Linkage::WeakOdr | Linkage::LinkOnce | Linkage::LinkOnceOdr)
+    };
+    let mut comdats: std::collections::BTreeMap<String, masm::Comdat> = Default::default();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
     let (facts, order) = calleefacts::CalleeFacts::of(module);
@@ -236,7 +241,7 @@ pub fn assembled_by(
         }
     }
     let layout = module.datalayout.as_deref().and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok());
-    // DEVIATE SD231: a routine one site calls is pasted there, as the old
+    // DEVIATE SD231 (owner x86-m32, review 2026-11-27): a routine one site calls is pasted there, as the old
     // selector does: its procedure, call and return cost more than it saves.
     // The pin has no such routine (a libcall in the library).
     let mut sites: IndexMap<String, usize> = IndexMap::default();
@@ -286,6 +291,7 @@ pub fn assembled_by(
                 } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
                     far_data.extend(datums);
                 } else {
+                    let start = data.len();
                     zero_may_move |= !variable.constant
                         && datums.iter().all(|one| match one {
                             masm::Datum::Align(_) | masm::Datum::Label(_) => true,
@@ -293,9 +299,22 @@ pub fn assembled_by(
                             _ => false,
                         });
                     data.extend(datums);
+                    if let Some(comdat) = comdat_of(module, name) {
+                        let symbol = names[&(globals::space(module, id), at as i64)].clone();
+                        comdats.insert(
+                            symbol,
+                            masm::Comdat {
+                                extent: Some(("_DATA".to_owned(), start..data.len())),
+                                constant: variable.constant,
+                                ..comdat
+                            },
+                        );
+                    }
                 }
                 if global.linkage == llrm_mir::Linkage::External {
                     data_publics.push(names[&(globals::space(module, id), at as i64)].clone());
+                } else if is_weak(global.linkage) {
+                    weak.insert(names[&(globals::space(module, id), at as i64)].clone());
                 }
             }
             GlobalKind::Function(function) if !function.is_declaration() => {
@@ -397,6 +416,9 @@ pub fn assembled_by(
                     names.insert((space, index), globals::DGROUP.to_owned());
                     Addr { index, ..Addr::new(space, 0) }
                 });
+                if is_weak(global.linkage) {
+                    weak.insert(names[&(Space::Segment, at as i64)].clone());
+                }
                 let procedure = masm::Procedure {
                     name: names[&(Space::Segment, at as i64)].clone(),
                     public: global.linkage == Linkage::External,
@@ -440,7 +462,7 @@ pub fn assembled_by(
                         })
                     };
                     let body = timed("lir duplicated returns", || {
-                        jumps::duplicated_returns(procedure.body.clone(), &overhead)
+                        jumps::duplicated_returns(jumps::threaded_late(&procedure.body), &overhead)
                     });
                     if let Some(error) = unprintable.take() {
                         return Err(error);
@@ -584,6 +606,7 @@ pub fn assembled_by(
         .iter()
         .filter_map(|one| module.sections.get(&one.name).map(|section| (one.name.clone(), section.clone())))
         .collect();
+    comdats.extend(procedures.iter().filter_map(|one| Some((one.name.clone(), comdat_of(module, &one.name)?))));
     let has_far = !far_data.is_empty();
     let far_segment = format!("{}_FARDATA", code.strip_suffix("_TEXT").unwrap_or(code));
     let mut huge_segments: Vec<(String, Vec<masm::Datum>)> = Vec::new();
@@ -613,7 +636,9 @@ pub fn assembled_by(
         requests: BTreeSet::new(),
         debug,
         far_bss: BTreeSet::new(),
+        weak,
         code_segments,
+        comdats,
         stack: 0,
         object: arch.object(),
         padding: masm::Padding { function: arch.pref_function_alignment(), nop: arch.max_nop_bytes() },
@@ -1166,7 +1191,11 @@ fn staged(
     };
     let selected = if let Some(done) = dag {
         if done.is_ok() {
-            shadow::record(name, Selector::Dag);
+            if crate::backend::selectiondag::fastisel::take_took() {
+                shadow::record_fast(name);
+            } else {
+                shadow::record(name, Selector::Dag);
+            }
         }
         done
     } else {
@@ -1329,7 +1358,8 @@ fn staged(
     frame.alloca_align = alloca_align;
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;
-    // DEVIATE D14: the pin gives each rounding store and reload its own
+    // DEVIATE D14 (owner frame / x86-m32, review 2026-11-27, exit none while
+    // slot coloring shares them): the pin gives each rounding store and reload its own
     // `CreateStackTemporary` and no lifetime marker, so neither StackColoring
     // nor StackSlotColoring shares them; here they are spill slots, which
     // `slots_colored` shares.
@@ -1509,4 +1539,21 @@ mod saved_order_tests {
         assert_eq!(in_list_order(&order, vec![pair(4), pair(1)], pair(2)), [pair(1), pair(2), pair(4)]);
         assert_eq!(in_list_order(&order, vec![pair(3)], pair(9)), [pair(3), pair(9)]);
     }
+}
+
+/// The COMDAT the function or global `name` is in, if the module states one.
+fn comdat_of(
+    module: &llrm_mir::module::Module,
+    name: &str,
+) -> Option<masm::Comdat> {
+    let comdat = module.comdat_of.get(name)?;
+    let selection = match module.comdats.get(comdat)?.as_str() {
+        "any" => llrm_object::Selection::Any,
+        "exactmatch" => llrm_object::Selection::ExactMatch,
+        "largest" => llrm_object::Selection::Largest,
+        "nodeduplicate" => llrm_object::Selection::NoDuplicates,
+        "samesize" => llrm_object::Selection::SameSize,
+        _ => return None,
+    };
+    Some(masm::Comdat { name: comdat.clone(), selection, extent: None, constant: false })
 }

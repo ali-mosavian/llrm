@@ -253,6 +253,10 @@ impl Tti for Mos6502 {
         true
     }
 
+    fn sinks_select_arms_for_size(&self) -> bool {
+        true
+    }
+
     fn memory_op_cost(
         &self,
         _: MemoryOp,

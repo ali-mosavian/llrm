@@ -59,6 +59,7 @@ pub fn machine<'a>(
 
 /// The phases -O0 leaves out: each only makes code better.
 const UNOPTIMIZED: &[&str] = &[
+    "EarlyTailDuplicate",
     "Peephole",
     "LoopSlots",
     "Scheduler",
@@ -85,6 +86,7 @@ const UNOPTIMIZED: &[&str] = &[
     "FixupLEAs",
     "CmpAsSub",
     "CallFrameOpt",
+    "TailDuplicate",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
@@ -96,6 +98,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("OptimizePHIs", "optimizephis@1"),
     ("DeadMachineInstructionElim", "deadmi@1"),
     ("SharedConstants", "phiconst@2"),
+    ("LeafFold", "phiconst@2"),
     ("ProcessImplicitDefs", "processimpdefs@2"),
     ("PhiElimination", "phielim@4"),
     ("MachineLICM", "machinelicm@4"),
@@ -115,6 +118,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("ReserveCallFrame", "callframe@5"),
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
+    ("FloatUnhoist", "floatunhoist@6"),
     ("FloatFold", "floatfold@6"),
     ("FloatSink", "floatsink@6"),
     ("PushFold", "pushfold@6"),
@@ -132,6 +136,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("FixupLEAs", "fixupleas@14"),
     ("LoopSlots", "loopslots@15"),
     ("Scheduler", "schedule@16"),
+    ("TailDuplicate", "jumps@17"),
     ("ControlFlow", "jumps@17"),
     ("CopyPropagation", "copyprop@18"),
 ];
@@ -180,6 +185,9 @@ pub fn machine_with<'a>(
         // Before SsaSpill: a constant several edges of a phi carry is one
         // value.
         Box::new(crate::backend::phiconst::SharedConstants),
+        // After it, at -Os: a leaf that makes a constant for a join is made
+        // in the block that branches to it (DEVIATE LEAF-FOLD-OS).
+        Box::new(crate::backend::leaffold::LeafFold { size: target.size && classes.leaf_fold_at_size }),
         // Before the phis go: a value nothing defines is read as undef.
         Box::new(crate::processimpdefs::ProcessImplicitDefs { ignored_inputs: target.in_order }),
         // On SSA, ahead of the cmov conversion and EarlyMachineLICM (the pin's
@@ -250,6 +258,9 @@ pub fn machine_with<'a>(
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
+        // A float load a loop only reads is made again where it is read (so
+        // the next step can fold it).
+        Box::new(crate::backend::floatunhoist::FloatUnhoist { cpu: target, basic_semantics }),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target, registers: classes.available.len() }),
@@ -267,7 +278,7 @@ pub fn machine_with<'a>(
             lea: target.three_address_for(target.size || target.min_size),
             loop_carried: target.commutes_loop_carried(),
         }),
-        Box::new(Coalescer { size: target.size, ..Coalescer::new(None, segments, classes) }),
+        Box::new(Coalescer { size: target.size, moves: target.move_bytes, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
         Box::new(crate::backend::machinesched::MachineScheduler {
@@ -329,12 +340,22 @@ pub fn machine_with<'a>(
         Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
+        // The pin's TailDuplicatePass: after allocation, before placement.
+        Box::new(crate::backend::latetaildup::TailDuplicate {
+            size: target.size || target.min_size,
+            saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+            free: registers.free,
+            pointer: registers.pointer,
+        }),
         // Last: this physical order decides which explicit edge is now
         // fall-through.
         Box::new(jumps::ControlFlow { cpu: target, calls: calls.cloned() }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
     ];
+    if !target.post_ra_tail_duplicate {
+        phases.retain(|phase| phase.class_name() != "TailDuplicate");
+    }
     // -O0: gcc and clang improve nothing after selection and allocation.
     if !target.optimized {
         phases.retain(|phase| !UNOPTIMIZED.contains(&phase.class_name()));

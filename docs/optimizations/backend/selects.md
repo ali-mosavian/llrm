@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/selects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/selects.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/selects.rs sha256:17d3e1973353111fc1655ff9e9b9acda05499552e3210ad9f0eb3b85fe0f13e3 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/selects.rs sha256:2983be296b85e3997fc637630c6773e62fe4069cdbb7150f133547221b7e1ce4 -->
 
 # selects
 
@@ -26,6 +26,19 @@ DEVIATE S3 (no number): `llvm.usub.sat` is expanded here, before selection,
 to `umax(a, b) - b`. The pin expands it in the DAG legalizer
 (`TargetLowering::expandAddSubSat`, `TargetLowering.cpp`) to a subtraction
 and a conditional move. Exit: the legalizer's expansion lands.
+
+DEVIATE S4 (no number): `llvm.{u}{add,sub}.with.overflow` is expanded here
+to the operation and `icmp ult`, for the selectors that have no UADDO
+(`--isel=old`, shadow): CodeGenPrepare forms the intrinsic on every x86 width
+(`shouldFormOverflowOp`), and the old selector stopped at
+"@llvm.uadd.with.overflow.i16" (nib and qb tests). The pin's legalizer expands
+UADDO the same way (`TargetLowering::expandUADDSUBO`). Exit: the old selector
+is deleted.
+
+DEVIATE S5 (no number): `llvm.experimental.noalias.scope.decl` is erased
+here for the same selectors: no code runs it, and the DAG builder returns
+at it (`SelectionDAGBuilder`, `case Intrinsic::experimental_noalias_scope_decl`).
+Exit: the old selector is deleted.
 
 DEVIATE S2 (no number): the pin keeps the select to instruction selection.
 CodeGenPrepare's `optimizeSelectInst` forms no branch where

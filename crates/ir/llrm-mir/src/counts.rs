@@ -113,11 +113,23 @@ pub enum Event {
     /// A constant visited for the globals it holds the address of
     /// (`globalsaa::embedded_once`).
     ConstantsEmbedded,
+    /// A cost model built from a `Profile` (`Profile::target`): it clones the price tables.
+    MachineModels,
+    /// A list of attributes scanned for the fact one flag states
+    /// (`Fact::stated_by`).
+    AttributeScans,
+    /// A flag name matched against the facts' names (`Fact::flag`): once per
+    /// attribute made, never while attributes are read.
+    FlagNamesResolved,
+    /// A `Facts` set built from a list of attributes (`Facts::of`).
+    FactSets,
+    /// Dominator tree + loop info rebuilt by loop unroll (`Analyzed::of`).
+    LoopAnalyses,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 41] = [
+const NAMES: [&str; 46] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -159,6 +171,12 @@ const NAMES: [&str; 41] = [
     "combine_inserts",
     "branch_probabilities",
     "constants_embedded",
+    "machine_models",
+    "attribute_scans",
+    "flag_names_resolved",
+
+    "fact_sets",
+    "loop_analyses",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -175,7 +193,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 41] = const { [const { Cell::new(0) }; 41] };
+    static EVENTS: [Cell<u64>; 46] = const { [const { Cell::new(0) }; 46] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };

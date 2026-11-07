@@ -32,7 +32,8 @@ define i32 @f(i32 %x, i32 %t) {
 fn a_compare_widened_to_an_int_is_one_mask() {
     for cpu in [Cpu::M68000, Cpu::M68020] {
         let out = text_with(&module(COMPARE), "f", cpu, Options::default()).expect("compiles");
-        assert!(out.contains("and.l\t#1,"), "{cpu:?}: no mask of one:\n{out}");
+        // the one is a `moveq` since constants are priced by cost
+        assert!(out.contains("moveq\t#1,") && out.contains("and.l\t%d"), "{cpu:?}: no mask of one:\n{out}");
         assert!(!out.contains("#255"), "{cpu:?}: the byte mask is left:\n{out}");
     }
 }

@@ -270,6 +270,17 @@ impl State<'_> {
                 return true;
             }
         }
+        // Only a mask, a truncation or a call is looked at below; the others
+        // are not worth a copy of the instruction (56,940 copies, 48 M Ir of
+        // this pass's 50 M on memexp -O2).
+        if !matches!(
+            self.function.instruction(inst).opcode,
+            Opcode::Binary(BinaryOp::And) | Opcode::Cast(CastOp::Trunc) | Opcode::Call(_)
+        ) {
+            return false;
+        }
+        #[cfg(test)]
+        COPIES.with(|copies| copies.set(copies.get() + 1));
         let instruction = self.function.instruction(inst).clone();
         if let Some(changed) = self.fold_mask_or_trunc(walk, inst, &instruction) {
             return changed;
@@ -455,6 +466,12 @@ fn infer_alignment_declared(
         }
     }
     changed
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Instructions `try_to_improve` has copied on this thread.
+    pub(crate) static COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 pub struct InferAlignment;

@@ -126,6 +126,21 @@ fn lowered(mut f: MFunction<()>) -> MFunction<()> {
     f
 }
 
+/// A target that answers a refusal with another allocator showed nothing: arm64
+/// ran its linear scan for jpeg_single at -Os (+19%) and only stderr said so.
+/// The refusal is recorded with the function and the reason.
+#[test]
+fn test_a_function_greedy_refuses_is_recorded() {
+    let mut f = across_a_call(1);
+    f.name = "refused_for_a_phi".into();
+    f.blocks[2].phis.push(llrm_spike_mf::Phi { result: v(2), incoming: vec![(0, v(0)), (1, v(1))] });
+    assert!(llrm_spike_mf::tolir::allocate_greedy::<Flat>(&mut f, regs(), false).is_err());
+    let seen: Vec<_> =
+        llrm_spike_mf::tolir::take_refusals().into_iter().filter(|r| r.function == "refused_for_a_phi").collect();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(!seen[0].retried && seen[0].why.contains("phi"), "{seen:?}");
+}
+
 /// Greedy takes no phi and no tie; the converter says so rather than hand it
 /// a body it would refuse.
 #[test]
@@ -1936,4 +1951,53 @@ fn test_a_tied_instruction_reads_the_copy_for_every_use_of_its_source() {
     let f = lowered(f);
     let add = f.blocks[0].insts.iter().find(|inst| matches!(inst.kind, Kind::Op("add"))).expect("the add");
     assert_eq!(add.operands, vec![Operand::Def(v(1)), Operand::Use(v(1)), Operand::Use(v(1))], "{:?}", add.operands);
+}
+
+/// A value copied from another and live across a call is stored from the other's
+/// register; the copy goes (`TargetInstrInfo::foldMemoryOperand`: "straight COPY
+/// may fold as load/store"). arm64 `jpeg_single` -Os kept `mov x10, x9; str x10,
+/// [sp, #88]` fifteen times where the pin stores `x9`.
+#[test]
+fn test_a_copy_whose_value_is_spilled_is_folded_into_the_store() {
+    let mut f = MFunction::<()>::new("fold");
+    f.classes = vec![(); 3];
+    let mut only = Block { id: 0, ..Block::default() };
+    only.insts.push(op("load", vec![Operand::Def(v(0))]));
+    only.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    only.insts.push(op("add", vec![Operand::Def(v(0)), Operand::Use(v(0)), Operand::Use(v(0))]));
+    only.insts.push(call());
+    only.insts.push(op("add", vec![Operand::Def(v(2)), Operand::Use(v(1)), Operand::Use(v(0))]));
+    only.insts.push(op("store", vec![Operand::Use(v(2))]));
+    only.insts.push(ret());
+    f.blocks = vec![only];
+    let f = lowered(f);
+    let back = rewritten(&f);
+    assert_allocated(&back.function, &back.assignment);
+    let insts = &back.function.blocks[0].insts;
+    let copies = insts.iter().filter(|inst| inst.kind == Kind::Copy).count();
+    assert_eq!(copies, 0, "the copy is the store: {insts:?}");
+    assert!(insts.iter().any(|inst| inst.kind == Kind::Op("st")), "{insts:?}");
+}
+
+/// Remaking an argument load per value number (`argument_load_defs`) is the
+/// x86 TII's alone: the spike targets (6502, z80, m68k) read no cell as
+/// invariant by this rule, so their greedy keeps the path the parent had.
+/// A body with an unwritten incoming-argument load is one the x86 rule takes.
+#[test]
+fn test_a_spike_target_takes_no_argument_load_to_remake_per_value_number() {
+    use llrm_codegen::greedy::remat::argument_load_insns;
+    use llrm_codegen::model::ir::{Addr, Held, Mem, Semantics, Space};
+    use llrm_codegen::model::lir::Insn;
+    let converted = to_lir::<Flat>(&lowered(across_a_call(1)), regs()).expect("converts");
+    let mut body = converted.body.clone();
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Held(Held { value: 900, width: 4, offset: 0 })],
+        sources: vec![Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, 8)), 4))],
+        ..Semantics::new(Operation::Move)
+    };
+    let load = std::sync::Arc::new(Insn::new(9000, None, Some(what), vec![900], vec![]));
+    body.blocks[0].insns.edit(|insns| insns.insert(0, load));
+    assert_eq!(argument_load_insns(&body).len(), 1, "the x86 rule takes this load");
+    assert!(converted.tii.argument_load_defs(&body).is_empty(), "the spike TII takes none");
 }

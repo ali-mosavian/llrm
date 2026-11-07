@@ -204,6 +204,66 @@ fn a_16_byte_clear_at_m64_is_one_16_byte_store() {
     assert_eq!(dump.matches("LLRM_ZERO128").count(), 1, "{dump}");
 }
 
+/// m64 memory_expansion -O1: `mv64` was eight `mov r64,[src+N]` loads and eight
+/// stores (64 B) where the pin's `getMemmoveLoadsAndStores` takes
+/// `getOptimalMemOpType` = `v4i32` and does four `movups` loads, four stores
+/// (32 B); lc64 +55, mv33 +17, 14 functions in all. A 64-byte `memmove` at m64
+/// is one `LLRM_MOVE128` node of four pieces.
+#[test]
+fn a_64_byte_memmove_at_m64_moves_four_16_byte_pieces() {
+    let ir = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"\n\
+        declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)\n\
+        define void @f(ptr %d, ptr %s) {\n  call void @llvm.memmove.p0.p0.i64(ptr %d, ptr %s, i64 64, i1 false)\n  ret void\n}\n";
+    let module = llrm_mir::parse::module(ir).unwrap_or_else(|error| panic!("{error}"));
+    let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let (id, _, function) = module
+        .functions()
+        .find(|(_, global, function)| !function.is_declaration() && global.name.as_deref() == Some("f"))
+        .unwrap();
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m64::M64).expect("a convention");
+    let mut info = FunctionLoweringInfo::new(function);
+    let dump = build_block(
+        &module,
+        function,
+        &layout,
+        &BuilderTarget::m64(),
+        &llrm_x86_m64::M64,
+        &convention,
+        &mut info,
+        function.entry().unwrap(),
+    )
+    .map(|built| built.dag.dump())
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    assert_eq!(dump.matches("load (s64)").count(), 0, "{dump}");
+    assert_eq!(dump.matches("LLRM_MOVE128").count(), 1, "{dump}");
+}
+
+/// The memory_expansion Os cell grew 31 B once `memmove` of 64 bytes became the pin's four `movups` pairs (31 B) where
+/// gcc -Os and the library call are `mov edx, 64; jmp memmove` (10 B): tuned for size on x86-64 a constant copy whose
+/// pieces take more bytes than the call is the call, and a 16-byte one (one pair, 8 B) stays inline.
+#[test]
+fn a_constant_copy_for_size_at_m64_is_a_call_where_the_pieces_take_more_bytes() {
+    let tuning = llrm_mir::target::Tuning {
+        size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
+        ..llrm_mir::target::Tuning::PIN
+    };
+    let tti = llrm_x86::tti::X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
+    let target = BuilderTarget::m64().with_libcalls(&["memcpy", "memmove"]).with_tti(Some(std::rc::Rc::new(tti)));
+    let text = |bytes: u64, call: &str| {
+        format!(
+            "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"\n\
+            declare void @llvm.{call}.p0.p0.i64(ptr, ptr, i64, i1)\n\
+            define void @f(ptr %d, ptr %s) optsize {{\n  call void @llvm.{call}.p0.p0.i64(ptr %d, ptr %s, i64 {bytes}, i1 false)\n  ret void\n}}\n"
+        )
+    };
+    for call in ["memmove", "memcpy"] {
+        let long = built_from(&text(64, call), "f", &target).expect("builds");
+        assert!(long.contains(&format!("'{call}'")) && !long.contains("LLRM_MOVE128"), "{call} 64\n{long}");
+        let short = built_from(&text(16, call), "f", &target).expect("builds");
+        assert!(!short.contains(&format!("'{call}'")), "{call} 16\n{short}");
+    }
+}
+
 /// A constant clear for size, with no `memset` in the runtime, was `rep stosb`:
 /// a clock per byte, 512 clocks for matmul.nib's three arrays (+669 clocks at
 /// -Os). It is `rep stos` of whole pointer-width units at that alignment.

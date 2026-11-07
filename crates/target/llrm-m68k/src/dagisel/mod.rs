@@ -6,6 +6,7 @@ pub mod addr;
 #[path = "generated/asm.rs"]
 pub mod asm;
 pub mod call;
+pub mod cmpa;
 pub mod divrem;
 #[rustfmt::skip]
 #[path = "generated/enc.rs"]
@@ -23,3 +24,4 @@ pub mod pipeline;
 pub mod predicates;
 pub mod scaled;
 pub mod short;
+pub mod widemul;

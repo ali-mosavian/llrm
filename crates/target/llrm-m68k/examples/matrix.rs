@@ -18,7 +18,9 @@ use std::process::Command;
 use llrm_m68k::compile::{Item, Options, items, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::isa::Cpu as Model;
-use llrm_m68k::kernels::{Arg, data, extra_runs, library_data, library_table, program_with_data, source_in, table};
+use llrm_m68k::kernels::{
+    Arg, data, extra_runs, keep_named, library_data, library_table, program_with_data, source_in, table,
+};
 use llrm_m68k::object::{assemble, executable, write_executable};
 
 #[allow(dead_code)]
@@ -39,8 +41,37 @@ fn data_sections(listing: &str) -> Vec<String> {
         .collect()
 }
 
+/// The code sections of an `objdump -h` listing other than `.text` with a size
+/// above zero (`.text.startup` for `main`, `.text.unlikely` and `.text.hot`
+/// for gcc's cold and hot parts): the line after a section's carries its
+/// flags.
+fn other_code_sections(listing: &str) -> Vec<String> {
+    let lines: Vec<&str> = listing.lines().collect();
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| {
+            let mut fields = line.split_whitespace();
+            let (_, name, size) = (fields.next()?, fields.next()?, fields.next()?);
+            let flags = lines.get(at + 1)?;
+            let code = flags.split([',', ' ']).any(|flag| flag == "CODE");
+            (code && name != ".text" && u64::from_str_radix(size, 16).is_ok_and(|size| size > 0))
+                .then(|| name.to_owned())
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    /// gcc puts `main` in `.text.startup` and cold parts in `.text.unlikely`;
+    /// a column that read `.text` alone undercounted those bytes (softfloat's
+    /// finding for the ELF feeds; this corpus had none, so no cell moved).
+    #[test]
+    fn code_outside_text_is_not_counted_by_text_alone() {
+        let listing = "Idx Name          Size      VMA\n  0 .text         00000010  00000000\n                  CONTENTS, ALLOC, LOAD, READONLY, CODE\n  1 .text.startup 00000008  00000000\n                  CONTENTS, ALLOC, LOAD, READONLY, CODE\n  2 .comment      00000026  00000000\n                  CONTENTS, READONLY\n";
+        assert_eq!(super::other_code_sections(listing), vec![".text.startup".to_owned()]);
+    }
+
     /// A kernel that loads a constant from `.rodata` counted only its `.text`
     /// for every column (arm64's instrument hid up to 24 B that way).
     #[test]
@@ -68,6 +99,9 @@ fn text_bytes(
     let headers = Command::new(objdump).arg("-h").arg(object).output().map_err(|e| e.to_string())?;
     if let Some(section) = data_sections(&String::from_utf8_lossy(&headers.stdout)).first() {
         return Err(format!("loads data from {section}: bytes of .text alone would undercount"));
+    }
+    if let Some(section) = other_code_sections(&String::from_utf8_lossy(&headers.stdout)).first() {
+        return Err(format!("code in {section}: bytes of .text alone would undercount"));
     }
     let relocations = Command::new(objdump).arg("-r").arg(object).output().map_err(|e| e.to_string())?;
     let listing = String::from_utf8_lossy(&relocations.stdout).to_string();
@@ -222,6 +256,12 @@ fn main() {
     } else {
         (table().into_iter().map(|(name, args, expected)| (name, args, expected, true)).collect(), data())
     };
+    // `MATRIX_PROGS=partition,hex` keeps the named programs; an unknown name
+    // stops the run
+    let rows = match std::env::var("MATRIX_PROGS") {
+        Ok(only) => keep_named(rows, |row| row.0, &only).unwrap_or_else(|why| panic!("MATRIX_PROGS: {why}")),
+        Err(_) => rows,
+    };
     let cpus = [
         ("68000", Cpu::M68000, Model::M68000),
         ("68020", Cpu::M68020, Model::M68020),
@@ -266,7 +306,8 @@ fn main() {
                     let mut code = code;
                     code.extend(helper.clone().unwrap_or_default());
                     code.extend(runtime.clone());
-                    // the first input, then the others that make the branches go the other way
+                    // the first input, then the others that make the branches
+                    // go the other way
                     let mut runs: Vec<(&[Arg], i32)> = vec![(args.as_slice(), *expected)];
                     let more = extra_runs(name);
                     runs.extend(more.iter().map(|(args, expected)| (args.as_slice(), *expected)));
@@ -300,11 +341,12 @@ fn main() {
                     let n = runs.len() as u64;
                     let mean = |sum: u64| (sum + n / 2) / n;
                     let inputs = if n > 1 { format!("inputs {n}") } else { String::new() };
-                    let note = [notes, inputs].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("; ");
+                    let note =
+                        [notes, inputs].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("; ");
                     (Some(mean(clocks)), Some(mean(insns as u64) as usize), note)
                 };
 
-                let options = Options { size: level == "Os", ..Options::default() };
+                let options = Options { size: level == "Os", strict: level == "O1", ..Options::default() };
                 match items_with(&module, "k", cpu, options) {
                     Ok(code) => {
                         let size = {
@@ -334,7 +376,8 @@ fn main() {
                         clang_object(&clang, &llc, cpu_name, level_flag(level), &source, &object)
                     };
                     if !leaf {
-                        // the runtime is not linked into these objects: bytes only, from every column
+                        // the runtime is not linked into these objects: bytes
+                        // only, from every column
                         match built.and_then(|()| text_bytes(&objdump, &object, true)) {
                             Ok(bytes) => row(compiler, Some(bytes.len()), None, None, "calls the runtime: bytes only"),
                             Err(error) => row(compiler, None, None, None, &format!("n/a: {error}")),

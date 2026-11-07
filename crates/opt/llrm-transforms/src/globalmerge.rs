@@ -281,7 +281,7 @@ fn plan_group(
     // FIXME in the pin: better heuristics.
     globals.sort_by_key(|&id| size(id));
     let minsize = |function: usize| match &module.globals[function].kind {
-        GlobalKind::Function(f) => f.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "minsize")),
+        GlobalKind::Function(f) => f.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "minsize" || (options.optsize_counts && name == "optsize"))),
         GlobalKind::Variable(_) => false,
     };
 

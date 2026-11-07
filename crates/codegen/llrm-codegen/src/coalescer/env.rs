@@ -26,6 +26,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_lir::registers::{RegId, Regs};
@@ -39,7 +40,7 @@ use crate::support::hash::IndexMap;
 
 /// The registers each value may take, and the ones that are fixed.
 pub struct TargetEnv {
-    pub palettes: RefCell<IndexMap<u32, BTreeSet<RegId>>>,
+    pub palettes: RefCell<IndexMap<u32, Rc<BTreeSet<RegId>>>>,
     pub pins: IndexMap<u32, RegId>,
     pub size: bool,
     /// A join leaves a pinned value standing ([`CoalescerEnv::keeps`]): for a
@@ -255,7 +256,9 @@ impl TargetEnv {
 }
 
 /// See [`TargetEnv::remat_wins`].
-pub type RematWins = Box<dyn Fn(&Insn, &BTreeSet<RegId>, &BTreeSet<RegId>, bool) -> bool>;
+/// `(definition, source's registers, destination's, size build, alone)`:
+/// `alone` is that the source has no other reader, so its own definition goes.
+pub type RematWins = Box<dyn Fn(&Insn, &BTreeSet<RegId>, &BTreeSet<RegId>, bool, bool) -> bool>;
 
 /// One side of a copy about to be joined.
 pub struct JoinSide {
@@ -312,18 +315,23 @@ impl CoalescerEnv for TargetEnv {
         }
     }
 
+    fn prices_remat(&self) -> bool {
+        self.remat_wins.is_some()
+    }
+
     fn remat_wins(
         &self,
         def: &Insn,
         source: u32,
         destination: u32,
+        alone: bool,
     ) -> bool {
         let palettes = self.palettes.borrow();
         let (Some(wins), Some(from), Some(to)) = (&self.remat_wins, palettes.get(&source), palettes.get(&destination))
         else {
             return true;
         };
-        wins(def, from, to, self.size)
+        wins(def, from, to, self.size, alone)
     }
 
     fn keeps(
@@ -404,7 +412,7 @@ impl CoalescerEnv for TargetEnv {
         let mut palettes = self.palettes.borrow_mut();
         let Some(small) = palettes.get(&narrow).cloned() else { return };
         if let Some(big) = palettes.get(&wide).cloned() {
-            palettes.insert(wide, self.hosts_at(&big, &small, offset));
+            palettes.insert(wide, Rc::new(self.hosts_at(&big, &small, offset)));
         }
     }
 
@@ -416,7 +424,7 @@ impl CoalescerEnv for TargetEnv {
         let mut palettes = self.palettes.borrow_mut();
         let Some(small) = palettes.get(&narrow).cloned() else { return };
         if let Some(big) = palettes.get(&wide).cloned() {
-            palettes.insert(wide, self.hosts(&big, &small));
+            palettes.insert(wide, Rc::new(self.hosts(&big, &small)));
         }
     }
 
@@ -475,7 +483,7 @@ impl CoalescerEnv for TargetEnv {
         let mut palettes = self.palettes.borrow_mut();
         let Some(from) = palettes.get(&src).cloned() else { return };
         match palettes.get_mut(&dst) {
-            Some(into) => into.retain(|register| from.contains(register)),
+            Some(into) => Rc::make_mut(into).retain(|register| from.contains(register)),
             None => {
                 palettes.insert(dst, from);
             }
@@ -534,8 +542,8 @@ pub fn joined_with_map(
         lis.track_changes();
     }
     // `RegisterCoalescer::runOnMachineFunction` returns at once for a function
-    // that exposes `returns_twice`: after `longjmp` a joined variable would hold
-    // a value the first return never set
+    // that exposes `returns_twice`: after `longjmp` a joined variable would
+    // hold a value the first return never set
     // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L4338>).
     let stats = if body.returns_twice { driver::Stats::default() } else { driver::run(&mut lis, env, depth) };
     let after = lis.body_like(body);
@@ -590,7 +598,7 @@ pub fn coalesce(
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq = (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
     let env = TargetEnv {
-        palettes: palettes.into(),
+        palettes: RefCell::new(palettes.into_iter().map(|(value, set)| (value, Rc::new(set))).collect()),
         pins,
         size,
         keep_pinned: true,
@@ -611,7 +619,8 @@ pub fn coalesce(
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
     let (after, map) = joined_with_map(body, &env, &depth);
-    (after, env.palettes.into_inner(), map)
+    let palettes = env.palettes.into_inner().into_iter().map(|(value, set)| (value, Rc::unwrap_or_clone(set))).collect();
+    (after, palettes, map)
 }
 
 /// `LLRM_COALESCE_WHY=1`: the reason for each register copy the joins left. A

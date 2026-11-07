@@ -152,15 +152,84 @@ pub enum Refusal {
 struct Z80Combines;
 
 impl CombineHooks for Z80Combines {
+    /// DEVIATE Z80-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the folded
+    /// constant `c << n` is a `ld bc, #k` and an `add hl, bc` where the add of
+    /// a small `c` was `inc hl`s (bintree -O2 +14 B). The pin's default is
+    /// true. Owner: llrm-target-z80. Exit: 2026-11-20, a price per constant.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
     /// A byte or word multiply by a constant is a library call (`__mulhi3`, a
     /// loop over the constant's bits, tens of T-states a bit); `2^n +- 1` as
     /// shifts and one add is a `add hl, hl` and a copy per shifted bit.
+    ///
+    /// A long multiplied by `2^k +- 1` (k up to 8) is `k` long shifts and an
+    /// add (each a `add hl, hl` / `adc` pair); the multiply expands through
+    /// byte lanes instead: 49 instructions for `x * 3`, 58 for `x * 7`.
     fn decompose_mul_by_constant(
         &self,
         vt: EVT,
-        _c: u128,
+        c: u128,
     ) -> bool {
-        matches!(vt, EVT::I8 | EVT::I16)
+        let near_power = |n: u128| n.is_power_of_two() && n <= 256;
+        match vt {
+            EVT::I8 | EVT::I16 => true,
+            EVT::I32 => c >= 3 && (near_power(c - 1) || near_power(c + 1)),
+            _ => false,
+        }
+    }
+
+    /// The pin's default: a compare of a masked or zero-extended value against
+    /// a constant is made in the narrower type (`(and x, 7) == 3` is a byte
+    /// `cp`), legal or not; the type legalizer promotes it to a byte. Without
+    /// it the word compare kept a `sub a, #0` for the high byte the mask had
+    /// zeroed (div_constants_short, 36 sites).
+    fn is_setcc_type_desirable(
+        &self,
+        _narrow: EVT,
+        _legal: bool,
+    ) -> bool {
+        true
+    }
+
+    /// A selector masked to three bits and compared with 0..7 in a chain is
+    /// one `and` and a byte `cp` each, not a word compare with `sub a, #0` for
+    /// the zeroed high byte (div_constants_short, 36 sites).
+    fn narrow_setcc_with_other_uses(&self) -> bool {
+        true
+    }
+
+    /// X86InstrCompiler.td: `shl x, 1` is `add x, x`. A long shifted by one is
+    /// then a long add, whose carry is `adc hl, rr` (`carry.rs`); expanded as a
+    /// shift it was the funnel of two words, 24 instructions.
+    fn has_target_combine(
+        &self,
+        op: ISD,
+    ) -> bool {
+        op == ISD::Shl
+    }
+
+    fn perform_dag_combine(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+        level: CombineLevel,
+    ) -> Option<SDValue> {
+        // Also called for every target node, whatever its operands.
+        if dag.opcode(node) != ISD::Shl {
+            return None;
+        }
+        let (value, amount) = (dag.operand(node, 0), dag.operand(node, 1));
+        (level == CombineLevel::BeforeLegalizeTypes
+            && dag.value_type(node) == EVT::I32
+            && dag.constant(amount) == Some(1))
+        .then(|| dag.get_node(ISD::Add, EVT::I32, &[value, value]))
     }
 
     /// A word compare against a constant is two byte compares and a branch
