@@ -222,6 +222,7 @@ pub fn machine_with<'a>(
             size: target.size,
             limit: classes.available.len(),
             classes: Rc::clone(classes),
+            spare_ranges: target.size && target.target().tti().is_some_and(|tti| tti.sink_spares_ranges()),
         }),
         // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
         // nothing reads is a compare (optimizeCompareInstr).
