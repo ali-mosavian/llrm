@@ -10,6 +10,7 @@ for g in "$@"; do case $g in
   f8) ls lib/fp/f8/*.c;;
   int) ls lib/int/*.c;;
   int64) ls lib/int/muldi3.c lib/int/udivmod_w.c lib/int/udivdi3.c lib/int/umoddi3.c lib/int/divdi3.c lib/int/moddi3.c lib/int/ashldi3.c lib/int/lshrdi3.c lib/int/ashrdi3.c;;
+  clz) ls lib/int/clzsi2.c;; # the shared leading-zero count SF_CLZ_CALL targets call
   math) ls lib/math/*.c;;
   *) echo "fp_sources.sh: unknown group $g" >&2; exit 1;;
 esac; done

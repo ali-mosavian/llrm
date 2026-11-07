@@ -5,7 +5,7 @@ into the binary) and llvm-mos (compiler-rt soft double, mos-sim, the clock read 
 are the first N of tests/gen_vectors64.c's stream: random bits, denormals, edge values, one pair in eight special. Cycles are the call
 minus a stub that returns zero (A, X, rc2..rc7: eight stores, about 20 cycles, and a base record that must pass) for ours, minus a copy of the operand for llvm-mos. Bytes are the code reachable
 from the entry point: the library functions it calls (sim65_reach.py) plus the mos_rt.s routines they use; llvm-mos: text of the program
-with the operation minus the program without it. SDCC has a 32-bit double: no f64 column for it. cc65 rejects float types: no column."""
+with the operation minus the program without it. The library is built with config/6502/config.h (SF_CONFIG=file to try another), as tools/6502/crlib.py builds the shipped members: without it the bench measured the generic library. SDCC has a 32-bit double: no f64 column for it. cc65 rejects float types: no column."""
 import glob, os, re, subprocess, sys, tempfile
 here = os.path.dirname(os.path.abspath(__file__)); SF = os.path.join(here, '../..'); TESTS = os.path.join(here, '..')
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 300
@@ -42,9 +42,10 @@ _main:
 '''
 _srcs = subprocess.check_output([f'{here}/../fp_sources.sh', 'f64'], text=True).split() + subprocess.check_output([f'{here}/../fp_sources.sh', 'int64'], text=True).split()
 LIBPATH = {os.path.dirname(p).split('/')[-1] + '_' + os.path.basename(p)[:-2]: p for p in _srcs}
+LIBPATH['int_clzsi2'] = os.path.join(SF, 'lib/int/clzsi2.c')  # called by the -O2 configuration (SF_CLZ_CALL); unreachable at -Os
 LIBS = tuple(LIBPATH)
 def compile_libs(opt):
-    for f in LIBS: sh(CC, '--target=6502-sim65', f'-{opt}', '-S', '-DSF_INTABI', *os.environ.get('SF_EXTRA', '-DSF_MUL32X32_6502').split(), '-Iinclude', LIBPATH[f], '-o', f'{T}/{opt}_{f}.s')
+    for f in LIBS: sh(CC, '--target=6502-sim65', f'-{opt}', '-S', '-DSF_INTABI', '-include', os.environ.get('SF_CONFIG', 'config/6502/config.h'), *os.environ.get('SF_EXTRA', '-DSF_MUL32X32_6502').split(), '-Iinclude', LIBPATH[f], '-o', f'{T}/{opt}_{f}.s')
 
 def strip_exports(path):  # llrm-cc exports statics, which collide across objects
     s = open(path).read()
