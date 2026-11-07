@@ -126,6 +126,21 @@ fn lowered(mut f: MFunction<()>) -> MFunction<()> {
     f
 }
 
+/// A target that answers a refusal with another allocator showed nothing: arm64
+/// ran its linear scan for jpeg_single at -Os (+19%) and only stderr said so.
+/// The refusal is recorded with the function and the reason.
+#[test]
+fn test_a_function_greedy_refuses_is_recorded() {
+    let mut f = across_a_call(1);
+    f.name = "refused_for_a_phi".into();
+    f.blocks[2].phis.push(llrm_spike_mf::Phi { result: v(2), incoming: vec![(0, v(0)), (1, v(1))] });
+    assert!(llrm_spike_mf::tolir::allocate_greedy::<Flat>(&mut f, regs(), false).is_err());
+    let seen: Vec<_> =
+        llrm_spike_mf::tolir::take_refusals().into_iter().filter(|r| r.function == "refused_for_a_phi").collect();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(!seen[0].retried && seen[0].why.contains("phi"), "{seen:?}");
+}
+
 /// Greedy takes no phi and no tie; the converter says so rather than hand it
 /// a body it would refuse.
 #[test]
