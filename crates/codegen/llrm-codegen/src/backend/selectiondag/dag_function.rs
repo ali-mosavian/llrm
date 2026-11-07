@@ -91,6 +91,14 @@ impl SchedInfo for Info {
         self.source_order
     }
 
+    fn unfold_memory_operand(
+        &self,
+        dag: &mut super::SelectionDAG,
+        node: u32,
+    ) -> Option<[u32; 2]> {
+        super::x86_unfold::unfold_memory_operand(dag, node)
+    }
+
     fn has_cross_copy_class(
         &self,
         reg: u16,

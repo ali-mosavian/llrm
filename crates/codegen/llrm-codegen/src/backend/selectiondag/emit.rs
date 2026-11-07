@@ -1768,9 +1768,9 @@ impl Emitter<'_, '_> {
                 self.exported_register(SDValue { node: n, res: i as u8 })
                     .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), *vt)))
             };
-            if !cloned {
-                self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
-            }
+            // `CreateVirtualRegisters`: a clone erases the map entry, so what
+            // is emitted after it reads its result.
+            self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
             dests.push(Loc::Held(held));
         }
         let cell_width =
