@@ -28,8 +28,7 @@
 //! [MachineCopyPropagation.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/MachineCopyPropagation.cpp)
 //! (`BackwardCopyPropagateBlock`).
 //!
-//! DEVIATE: a block with a CFI directive or a jump-table label is not copied
-//! (the pin copies DWARF CFI); the backward propagation only looks in blocks
+//! DEVIATE: a block with a jump-table label is not copied; the backward propagation only looks in blocks
 //! that return, where the source is dead if it is caller-saved and not
 //! returned (the pin reads kill flags). Exit: 11-12.
 
@@ -39,6 +38,9 @@ use crate::frame::Lowered;
 use crate::layout::label_of;
 use crate::mc::inst::{Gpr, Inst, Logic, Shift, Target, Width};
 use crate::mc::visit::{Reg, RegRef, Role};
+
+/// Set at -O3: layout copies blocks of up to 4 instructions, not 2.
+pub static AGGRESSIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// `TailDuplicator::shouldTailDuplicate` for `block`.
 fn copyable(
@@ -50,8 +52,8 @@ fn copyable(
         block.insts.last(),
         Some(Inst::Branch { link: false, .. } | Inst::Ret { .. })
     );
-    ends && block.insts.len() <= size
-        && !block.insts.iter().any(|inst| matches!(inst, Inst::Cfi(_) | Inst::Label(_)))
+    ends && block.insts.iter().filter(|inst| !matches!(inst, Inst::Cfi(_) | Inst::Mark(_))).count() <= size
+        && !block.insts.iter().any(|inst| matches!(inst, Inst::Label(_)))
         && !block.insts.iter().filter_map(label_of).any(|label| label == own)
 }
 
@@ -61,7 +63,14 @@ pub fn tail_duplicate(
     blocks: &mut [Lowered],
     optsize: bool,
 ) -> Vec<(String, String)> {
-    let size = if optsize { 1 } else { 2 };
+    // `TargetInstrInfo::getTailDuplicateSize`: 4 at -O3, 2 below.
+    let size = if optsize {
+        1
+    } else if AGGRESSIVE.load(std::sync::atomic::Ordering::Relaxed) {
+        4
+    } else {
+        2
+    };
     let short: HashMap<String, (Vec<Inst>, Vec<Option<(u32, u32)>>)> = blocks
         .iter()
         .enumerate()
