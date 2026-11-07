@@ -561,6 +561,12 @@ pub trait Tti {
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around
     /// it).
+    /// Whether an -Os caller's SZ2 trial also inlines the sites its splice brings
+    /// (`Tuning::inline_chain_trial`).
+    fn opt_size_inline_chain_trial(&self) -> bool {
+        false
+    }
+
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
         1
     }
@@ -918,6 +924,19 @@ pub trait Tti {
         self.int_imm_cost_inst(op, index, imm, bits)
     }
 
+    /// `int_imm_cost_inst` as the pin prices it, before any DEVIATE of the
+    /// target's own (x86 ZIMM): what `ConstantHoisting` asks to keep a
+    /// constant a candidate.
+    fn int_imm_cost_inst_pin(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        self.int_imm_cost_inst(op, index, imm, bits)
+    }
+
     /// `isTruncateFree`.
     fn is_truncate_free(
         &self,
@@ -1082,6 +1101,19 @@ pub trait Tti {
     ) -> bool {
         let _ = min_size;
         div_rem_by_constant
+    }
+
+    /// DEVIATE ZIMM (M64-ZIMM-CRC): a zero-extended 32-bit constant that is
+    /// one arm of a `select` beside zero. The target turns it into a mask
+    /// `and` with the constant as an immediate, so hoisting it only holds a
+    /// register. The pin's `preferToKeepConstantsAttached` has no such case.
+    fn keeps_select_mask_attached(
+        &self,
+        bits: u128,
+        width: u32,
+    ) -> bool {
+        let _ = (bits, width);
+        false
     }
 
     /// `TargetTransformInfoImplBase::isLegalAddImmediate`: none.
@@ -1738,6 +1770,16 @@ mod access_tests {
                 for_size: bool,
             ) -> Cost {
                 self.0.int_imm_cost_inst_for_size(op, index, imm, bits, for_size)
+            }
+
+            fn int_imm_cost_inst_pin(
+                &self,
+                op: ImmUser,
+                index: u32,
+                imm: i128,
+                bits: u32,
+            ) -> Cost {
+                self.0.int_imm_cost_inst_pin(op, index, imm, bits)
             }
 
             fn is_truncate_free(

@@ -531,6 +531,48 @@ pub fn build_block(
     Ok(BlockDag { dag, phi_updates, live_ins, extra, tail_calls, values })
 }
 
+/// The empty DAG of `block`, with the function's names: the one `Builder`
+/// starts from and FastISel's blocks do.
+pub fn fresh_dag(
+    module: &Module,
+    function: &Function,
+    target: &BuilderTarget,
+    info: &mut FunctionLoweringInfo,
+    block: BlockId,
+    synthetic_name: Option<String>,
+) -> SelectionDAG {
+    let fp_extended = function.attrs.iter().any(|attr| {
+        matches!(
+            attr,
+            llrm_mir::Attribute::Str(name, Some(value))
+                if name == llrm_mir::constantfolding::FP_EVAL && value == llrm_mir::constantfolding::FP_EVAL_EXTENDED
+        )
+    });
+    let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag.clone() });
+    let module_tables = info.module_tables.clone();
+    let tables = info
+        .tables
+        .get_or_insert_with(|| {
+            let (global_names, local_symbols) = module_tables
+                .unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols));
+            super::function_lowering::Tables {
+                global_names,
+                local_symbols,
+                block_names: std::rc::Rc::new(
+                    (0..function.block_capacity())
+                        .map(|at| function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}")))
+                        .collect(),
+                ),
+            }
+        })
+        .clone();
+    dag.global_names = tables.global_names;
+    dag.local_symbols = tables.local_symbols;
+    dag.block_names = tables.block_names;
+    dag.synthetic_fill = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
+    dag
+}
+
 fn dag_name(
     dag: &SelectionDAG,
     block: BlockId,
@@ -594,40 +636,7 @@ impl<'a> Builder<'a> {
         next_synthetic: u32,
         synthetic_name: Option<String>,
     ) -> Builder<'a> {
-        let fp_extended = function
-            .attrs
-            .iter()
-            .any(
-                |attr| matches!(
-                    attr,
-                    llrm_mir::Attribute::Str(name, Some(value))
-                        if name == llrm_mir::constantfolding::FP_EVAL && value == llrm_mir::constantfolding::FP_EVAL_EXTENDED
-                ),
-            );
-        let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag.clone() });
-        let module_tables = info.module_tables.clone();
-        let tables = info
-            .tables
-            .get_or_insert_with(|| {
-                let (global_names, local_symbols) = module_tables
-                    .unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols));
-                super::function_lowering::Tables {
-                    global_names,
-                    local_symbols,
-                    block_names: std::rc::Rc::new(
-                        (0..function.block_capacity())
-                            .map(|at| {
-                                function.block(BlockId(at as u32)).name.clone().unwrap_or_else(|| format!("bb{at}"))
-                            })
-                            .collect(),
-                    ),
-                }
-            })
-            .clone();
-        dag.global_names = tables.global_names;
-        dag.local_symbols = tables.local_symbols;
-        dag.block_names = tables.block_names;
-        dag.synthetic_fill = synthetic_name.unwrap_or_else(|| dag_name(&dag, block));
+        let dag = fresh_dag(module, function, target, info, block, synthetic_name);
         Builder {
             current: None,
             prelowered: Default::default(),
