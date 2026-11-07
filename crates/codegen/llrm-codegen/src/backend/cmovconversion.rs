@@ -270,7 +270,7 @@ fn form_of(one: &Insn) -> Option<&'static str> {
         what.dests.iter().any(|place| matches!(place, Loc::Mem(_))),
     );
     Some(match what.op {
-        Operation::Move if loads => "mov_rm",
+        Operation::Move | Operation::Extend if loads => "mov_rm",
         Operation::Move if stores => "mov_mr",
         Operation::Move if what.sources.iter().any(|place| matches!(place, Loc::Imm(_))) => "mov_ri",
         // A copy of a register is transient.
@@ -741,8 +741,8 @@ pub fn converted(
     }
 
     // The groups of registers, in the innermost loops.
-    llrm_support::debug!("cmov", "penalty {:?}, {} loops", cpu.mispredict_penalty, found.len());
-    if let Some(penalty) = cpu.mispredict_penalty {
+    llrm_support::debug!("cmov", "penalty {:?}, {} loops", cpu.mispredict_penalty_here(), found.len());
+    if let Some(penalty) = cpu.mispredict_penalty_here() {
         let headers: Vec<i64> = found.iter().map(|one| one.header).collect();
         let first_sets = work.loops.clone();
         for (number, header) in headers.iter().enumerate() {

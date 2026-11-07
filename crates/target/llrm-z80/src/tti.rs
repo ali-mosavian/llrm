@@ -248,8 +248,9 @@ impl Tti for Z80Tti {
     ) -> bool {
         let key = |c: &LsrCost| {
             (
-                c.num_base_adds,
+                c.spills.saturating_add(c.num_base_adds),
                 c.num_regs,
+                c.spills,
                 c.insns,
                 c.add_rec_cost,
                 c.num_iv_muls,
@@ -259,6 +260,13 @@ impl Tti for Z80Tti {
             )
         };
         key(a) < key(b)
+    }
+
+    /// DEVIATE LU13: a call takes every register of the Z80, so what a loop
+    /// keeps across one is in the frame; `spills` plus the base adds (the
+    /// instructions that stand for a kept value) rank first.
+    fn lsr_call_clobbers_registers(&self) -> bool {
+        true
     }
 
     /// The adds of a use whose fixups all lie after the loop are rated as run

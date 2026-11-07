@@ -13,10 +13,11 @@
 //! DEVIATE CC2: `mayAlias` has no `MachineMemOperand` offset or base
 //! alignment: the relatively-aligned-offsets test is not run. The alias
 //! analysis (`useAA`) runs only where the builder records the IR pointer
-//! ([`MemBase::Value`], wasm), on whole accesses; there are no atomics; and a lifetime marker is the whole
-//! frame object of unknown size (it aliases an access of that object, none of
-//! another). A pair the address analysis cannot decide is a may-alias.
-//! Exit: `MemInfo` carrying the pointer info. Owner: w12.
+//! ([`MemBase::Value`], wasm), on whole accesses; there are no atomics; and a
+//! lifetime marker is the whole frame object of unknown size (it aliases an
+//! access of that object, none of another). A pair the address analysis cannot
+//! decide is a may-alias. Exit: `MemInfo` carrying the pointer info. Owner:
+//! w12.
 //!
 //! DEVIATE CC1: the pin skips all of this when optimising nothing
 //! (`OptLevel == None`); no opt level reaches the combiner, so it runs at
@@ -62,7 +63,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     }
 
     /// `mayAlias` for two loads or stores.
-    fn may_alias(
+    pub(super) fn may_alias(
         &self,
         op0: SDValue,
         op1: SDValue,
@@ -158,7 +159,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 }
                 // Always forward past a CopyFromReg.
                 ISD::CopyFromReg => Some(Some(self.dag.operand(chain, 0))),
-                // Forward past a lifetime marker proven not to alias the access.
+                // Forward past a lifetime marker proven not to alias the
+                // access.
                 ISD::LifetimeStart | ISD::LifetimeEnd => {
                     (!self.may_alias(node, chain)).then(|| Some(self.dag.operand(chain, 0)))
                 }
@@ -219,6 +221,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         self.add_to_worklist(token.node);
+        // `CombineTo` removes the load at once.
+        self.dag.delete_replaced(node.node);
+        self.queue_survivors();
         Some(node)
     }
 

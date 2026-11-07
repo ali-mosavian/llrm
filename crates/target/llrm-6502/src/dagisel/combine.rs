@@ -10,6 +10,7 @@
 //! forms of the pin's block: no `2^N +- 2^M`. Exit: the hook in the shared
 //! `visit_mul`.
 
+use super::lowering::mosisd;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
@@ -27,12 +28,41 @@ pub struct MosCombines {
 pub struct MosLateCombines;
 
 impl CombineHooks for MosLateCombines {
+    /// DEVIATE 6502-SHL-COMMUTE: as [`MosCombines`]; every run of the
+    /// combiner must give alike.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
     fn fold_shift_of_shared_shift(
         &self,
         vt: EVT,
         inner: u32,
     ) -> bool {
         folds_shared_shift(vt, inner)
+    }
+
+    /// The pieces of a wide shift by one are made by type legalization, after
+    /// the first run: [`funnel_by_one`] reads them here.
+    fn has_target_combine(
+        &self,
+        op: ISD,
+    ) -> bool {
+        matches!(op, ISD::Or | ISD::Add)
+    }
+
+    fn perform_dag_combine(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+        _level: CombineLevel,
+    ) -> Option<SDValue> {
+        funnel_by_one(dag, node)
     }
 }
 
@@ -47,11 +77,25 @@ fn folds_shared_shift(
 }
 
 impl CombineHooks for MosCombines {
+    /// DEVIATE 6502-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the shift
+    /// runs on the zero-page cells (`asl rc17; rol rc18`) where the add went
+    /// through Y and X (bintree -O2 +20 B). The pin's default is true
+    /// (@ d1106deb71). Owner: llrm-target-6502. Exit: 2026-11-14, when the
+    /// select-shift fold re-fires here.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
     fn has_target_combine(
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate)
+        matches!(op, ISD::Mul | ISD::Add | ISD::Sub | ISD::Srl | ISD::Truncate | ISD::Or)
     }
 
     /// DEVIATE 6502-SHARED-SHIFT: a word shift is one instruction whose two
@@ -73,12 +117,44 @@ impl CombineHooks for MosCombines {
         _level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Add => borrow_of_ult(dag, node).or_else(|| widened_add_with_carry(dag, node)),
+            ISD::Add => borrow_of_ult(dag, node).or_else(|| widened_add_with_carry(dag, node)).or_else(|| funnel_by_one(dag, node)),
             ISD::Sub => borrow_of_ult(dag, node),
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
+            ISD::Or => funnel_by_one(dag, node),
             _ => decompose_mul(dag, node, self.sized),
         }
     }
+}
+
+/// `(a << 1) | (b >> 15)` and `(a << 15) | (b >> 1)` of a word: one bit crosses
+/// from `b` (`a`) to the other word, `FSHL1` and `FSHR1`. A wide shift by one
+/// bit is split into words that way (`ExpandShiftByConstant`); it was a bit
+/// made into a byte (`asl a; lda #0; rol a`) and `ora`ed in.
+///
+/// The pin's analogue is `MatchRotate`'s funnel shift
+/// ([DAGCombiner.cpp#L9464](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L9464)),
+/// which asks the type for a legal or custom `FSHL`: that makes one for every
+/// amount, and its expansion hides the shifts from the folds that ran on them.
+fn funnel_by_one(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    if !matches!(dag.opcode(node), ISD::Or | ISD::Add) || dag.value_type(node) != EVT::I16 {
+        return None;
+    }
+    let shift = |dag: &SelectionDAG, v: SDValue, op: ISD, by: u128| {
+        (dag.opcode(v) == op && dag.constant(dag.operand(v, 1)) == Some(by)).then(|| dag.operand(v, 0))
+    };
+    let (x, y) = (dag.operand(node, 0), dag.operand(node, 1));
+    for (left, right) in [(x, y), (y, x)] {
+        if let (Some(a), Some(b)) = (shift(dag, left, ISD::Shl, 1), shift(dag, right, ISD::Srl, 15)) {
+            return Some(dag.get_node(mosisd::FSHL1, EVT::I16, &[a, b]));
+        }
+        if let (Some(a), Some(b)) = (shift(dag, left, ISD::Shl, 15), shift(dag, right, ISD::Srl, 1)) {
+            return Some(dag.get_node(mosisd::FSHR1, EVT::I16, &[a, b]));
+        }
+    }
+    None
 }
 
 /// `x + sext(a <u b)` and `x - zext(a <u b)` in a word of two or more bytes: the
@@ -284,8 +360,17 @@ fn carry_in(
     SDValue { node: sum.node, res: 1 }
 }
 
-/// `x * c` as `(x << n) +- x`, shifted by the factors of two in `c` and negated
-/// for a negative `c`.
+/// `x * c` for `c = (2^k +- 1) * 2^z` as the pin's two runs of shift steps,
+/// `(x << k+z) +- (x << z)`, or as one run and a shift of the sum,
+/// `((x << k) +- x) << z`, whichever takes fewer steps; negated for a negative
+/// `c`. Every step of a wide shift is a pass over each byte of the word, so
+/// the steps are the cost; a shift of `x` the function already has is free
+/// (the pin's runs share it by CSE: `b[y * 20 + x]` beside `a[y * 16 + x]`).
+///
+/// DEVIATE 6502-MUL-FACTOR: the pin has only the first form
+/// ([DAGCombiner.cpp#L5024](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5024)).
+/// Owner: llrm-target-6502. Exit: 2026-11-21, when the shared combine reads the
+/// form from a target hook. The constants covered are the pin's.
 fn decompose_mul(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -311,8 +396,8 @@ fn decompose_mul(
         (_, above) if above.is_power_of_two() => (false, above),
         _ => return None,
     };
-    let amount = bits.trailing_zeros() + zeros;
-    if amount >= width {
+    let k = bits.trailing_zeros();
+    if k + zeros >= width {
         return None;
     }
     // A long multiply is a call of about 59 bytes with its arguments. In a
@@ -320,16 +405,37 @@ fn decompose_mul(
     // (x * C at -Os) it is only where a shift is whole bytes (`2^8 +- 1`,
     // `2^16 +- 1`, `2^24 +- 1`, also `2^9 +- 1`); `x * 3` is 74 bytes. At
     // speed it saves ~2200 clocks a multiply for ~15 bytes.
-    if vt == EVT::I32 && sized && !(amount >= 8 && amount % 8 <= 1 && zeros % 8 == 0) {
+    if vt == EVT::I32 && sized && !(k + zeros >= 8 && (k + zeros) % 8 <= 1 && zeros % 8 == 0) {
         return None;
     }
+    let has = |dag: &SelectionDAG, by: u32| {
+        by == 0
+            || dag.users(x).any(|user| {
+                let user = SDValue { node: user, res: 0 };
+                dag.opcode(user) == ISD::Shl
+                    && dag.operand(user, 0) == x
+                    && dag.constant(dag.operand(user, 1)) == Some(u128::from(by))
+            })
+    };
+    let steps = |dag: &SelectionDAG, by: u32| if has(dag, by) { 0 } else { by };
+    let two_runs = steps(dag, k + zeros) + steps(dag, zeros);
+    let one_run = steps(dag, k) + zeros;
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: u32| {
         let by = dag.get_constant(u128::from(by), EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])
     };
-    let high = shift(dag, x, amount);
-    let low = if zeros == 0 { x } else { shift(dag, x, zeros) };
-    let mut result = dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[high, low]);
+    let op = if add { ISD::Add } else { ISD::Sub };
+    let mut result = if one_run < two_runs {
+        let sum = {
+            let high = shift(dag, x, k);
+            dag.get_node(op, vt, &[high, x])
+        };
+        if zeros == 0 { sum } else { shift(dag, sum, zeros) }
+    } else {
+        let high = shift(dag, x, k + zeros);
+        let low = if zeros == 0 { x } else { shift(dag, x, zeros) };
+        dag.get_node(op, vt, &[high, low])
+    };
     if signed < 0 {
         let zero = dag.get_constant(0, vt);
         result = dag.get_node(ISD::Sub, vt, &[zero, result]);

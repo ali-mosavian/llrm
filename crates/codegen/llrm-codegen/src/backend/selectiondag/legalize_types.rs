@@ -1557,6 +1557,10 @@ impl<'a> TypeLegalizer<'a> {
         &mut self,
         value: SDValue,
     ) -> Result<(), LegalizeError> {
+        // A division expanded with its sibling (DEVIATE DIVREM-HELPER) is done.
+        if self.expanded.contains_key(&self.remap(value)) {
+            return Ok(());
+        }
         let vt = self.dag.value_type(value);
         let half = self.tli.types.type_conversion(vt).1;
         let (lo, hi) = match self.dag.opcode(value) {
@@ -2780,9 +2784,42 @@ impl<'a> TypeLegalizer<'a> {
         let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         let ((dividend_lo, dividend_hi), (divisor_lo, divisor_hi)) =
             (self.expanded_integer(lhs), self.expanded_integer(rhs));
+        // DEVIATE DIV64-LIBCALL (owner x86-m32, exit 2026-11-20): where the
+        // platform's runtime lists the routine (libgcc's `__divdi3` family:
+        // the driver names it for hosted objects), the pin's call, not the
+        // inline routine; its bytes are the library's.
+        if let Some(name) = self.tli.libcall_name(op, vt).filter(|name| self.tli.libcall_convention(name).is_some()) {
+            let env = super::libcall::CallEnv { arch, pointer: self.dag.config().pointer };
+            let parts = super::libcall::c_lib_call_parts(
+                self.dag,
+                &env,
+                &self.tli.libcall_symbol(name),
+                self.tli.libcall_convention(name),
+                &[dividend_lo, dividend_hi, divisor_lo, divisor_hi],
+                vt,
+            );
+            if let Some([low, high]) = parts.as_deref() {
+                return Ok((*low, *high));
+            }
+        }
         let wide = self.dag.constant(divisor_hi) != Some(0);
-        let used =
-            if wants_quotient { llrm_target::routines::Used::Quotient } else { llrm_target::routines::Used::Remainder };
+        // DEVIATE DIVREM-HELPER (owner m32, exit 2026-11-27; the pin's
+        // `useDivRem` for a target whose routine makes both, e.g. ARM's
+        // `__aeabi_uldivmod`; the pin's x86 has none for i64): the quotient and
+        // the remainder of the same operands are one call of the routine, which
+        // returns both.
+        let sibling = match op {
+            ISD::UDiv => ISD::URem,
+            ISD::URem => ISD::UDiv,
+            ISD::SDiv => ISD::SRem,
+            _ => ISD::SDiv,
+        };
+        let sibling = self.dag.find_node(sibling, vt, &operands).filter(|other| self.dag.has_users(*other));
+        let used = match (sibling, wants_quotient) {
+            (Some(_), _) => llrm_target::routines::Used::Both,
+            (None, true) => llrm_target::routines::Used::Quotient,
+            (None, false) => llrm_target::routines::Used::Remainder,
+        };
         let Ok(routine) = arch.divide_routine_used(signed, wide, used) else {
             return Err(LegalizeError::Unsupported { op, ty: vt, what: "the i64 divide routine is unavailable" });
         };
@@ -2804,7 +2841,12 @@ impl<'a> TypeLegalizer<'a> {
         let root = self.dag.entry_node();
         let env = CallEnv { arch, pointer };
         let (_chain, results) = lib_call(self.dag, &env, root, callee, &args, 0, 0, &returns, &super::dagisel_adapter::call_clobbered_flags());
-        Ok(if wants_quotient { (results[0], results[1]) } else { (results[2], results[3]) })
+        let (quotient, remainder) = ((results[0], results[1]), (results[2], results[3]));
+        if let Some(other) = sibling {
+            let (lo, hi) = if wants_quotient { remainder } else { quotient };
+            self.set_expanded_integer(other, lo, hi);
+        }
+        Ok(if wants_quotient { quotient } else { remainder })
     }
 
     /// `CustomLowerNode`: ask the target to lower `n` when its action for the

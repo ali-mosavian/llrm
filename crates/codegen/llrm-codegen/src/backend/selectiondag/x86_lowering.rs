@@ -177,6 +177,8 @@ pub struct MulPricing<'a> {
     pub milliclocks_per_byte: i64,
     /// `Tuning::multiply_by_clocks`: the fewest clocks, no byte term.
     pub by_clocks: bool,
+    /// -O1: a chain by clocks is made only where it is no longer than the `imul`.
+    pub no_growth: bool,
     /// `Tuning::price_pin_multiplies`: the pin's decompositions are priced
     /// too, and a tie keeps the `imul`.
     pub price_pin: bool,
@@ -238,17 +240,18 @@ impl CombineHooks for X86Lowering<'_> {
 
     /// `visitBRCOND`'s `rebuildSetCC`: `!bad` on an `i1` global is `cmp byte
     /// [bad], 1; jne`, not `mov al; not al; test al, 1; jne` (jpeg_fixed
-    /// `-Os` m64, 2 sites, 8 B). The m16 judging cost a byte, so only the
-    /// 64-bit lowering asks. DEVIATE: off at m16 and m32. Exit 2026-12-01.
+    /// `-Os` m64, 2 sites, 8 B). The m16 judging cost a byte, so m16 stays off;
+    /// m32 asks too (x_hash `-Os`: `not dl; test dl, 1; je`, +5 B on the pin).
+    /// DEVIATE: off at m16. Exit 2026-12-01.
     fn rebuild_brcond_condition(&self) -> bool {
-        self.zext_free
+        self.zext_free || !self.i16_mul_chains
     }
 
     /// `visitAND`'s `(and (extload i1), 1)` is a `zextload`, so the branch
-    /// above compares the loaded byte without `and al, 1`. DEVIATE: m64
-    /// only, with it.
+    /// above compares the loaded byte without `and al, 1`. DEVIATE: off
+    /// at m16, with it.
     fn fold_and_of_extload(&self) -> bool {
-        self.zext_free
+        self.zext_free || !self.i16_mul_chains
     }
 
     fn fold_xor_of_and_with_mask(&self) -> bool {
@@ -294,6 +297,10 @@ impl CombineHooks for X86Lowering<'_> {
     }
 
     fn pack_word_pairs(&self) -> bool {
+        true
+    }
+
+    fn push_freeze_through_operands(&self) -> bool {
         true
     }
 
@@ -421,9 +428,11 @@ impl CombineHooks for X86Lowering<'_> {
                     } else {
                         6
                     };
-                    // A trailing `shl 1..3` whose users are all adds folds into the
-                    // address's scale (`t[3 * i]` as `[t + r*4]`): no bytes of its own.
-                    let scale = |shift: SDValue| dag.constant(dag.operand(shift, 1)).is_some_and(|by| (1..=3).contains(&by));
+                    // A trailing `shl 1..3` whose users are all adds folds into
+                    // the address's scale (`t[3 * i]` as
+                    // `[t + r*4]`): no bytes of its own.
+                    let scale =
+                        |shift: SDValue| dag.constant(dag.operand(shift, 1)).is_some_and(|by| (1..=3).contains(&by));
                     let folds = dag.opcode(*chain) == ISD::Shl
                         && scale(*chain)
                         && dag.users(node).all(|user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::Add);
@@ -1795,6 +1804,38 @@ fn lower_global_address(
 ) -> Option<SDValue> {
     let NodeData::Global { symbol, offset } = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
+    // `classifyGlobalReference`: a symbol that is not `dso_local` in position
+    // independent 64-bit code is `MO_GOTPCREL`; `LowerGlobalOrExternal` then
+    // loads its address from the GOT and adds the offset after (no folding).
+    if vt == EVT::I64 && !dag.config().absolute_symbols && !dag.local_symbols.get(symbol as usize).copied().unwrap_or(true) {
+        let target = dag.intern(
+            ISD::TargetGlobalAddress,
+            &[vt],
+            &[],
+            SDNodeFlags::default(),
+            NodeData::Global { symbol, offset: 0 },
+        );
+        let entry = dag.get_node(x86isd::WRAPPER_RIP, vt, &[target]);
+        let info = MemInfo {
+            mem_vt: vt,
+            align: 8,
+            volatile: false,
+            base: MemBase::Got,
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        let root = dag.entry_node();
+        let load = dag.get_load(vt, root, entry, info);
+        dag.invariant_loads.insert(load.node);
+        dag.got_loads.insert(load.node);
+        return Some(if offset == 0 {
+            load
+        } else {
+            let delta = dag.get_constant(offset as u128, vt);
+            dag.get_node(ISD::Add, vt, &[load, delta])
+        });
+    }
     let (folded, rest) = if offset >= 0 && offset <= i64::from(i32::MAX) { (offset, 0) } else { (0, offset) };
     let target = dag.intern(
         ISD::TargetGlobalAddress,
@@ -1927,6 +1968,41 @@ fn unsigned_fixup_operands(
     (dag.get_node(ISD::FSub, value_vt, &[value, offset]), adjust)
 }
 
+/// `LowerFP_TO_INT` for an unsigned `i64` at m64 or `i32` at m32 from an SSE
+/// float (non-strict): `cvttss2si`/`cvttsd2si` of the value (`small`) and of
+/// the value less 2^63 or 2^31 (`big`). The instruction gives the sign bit
+/// for a value it cannot hold, so `small >> 63` is all ones exactly when
+/// `big` is the answer, and the result is `small | (big & that)` -- no
+/// compare, no branch.
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L22414-L22449>
+/// The pin lays the float in a vector first (`SCALAR_TO_VECTOR`) for
+/// `X86ISD::CVTTS2SI`; here it is `FP_TO_SINT`, which selects the same
+/// `cvttsd2si` (the convention of `llrm-dagisel`'s `x86_fplogic`).
+fn small_and_big(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+    float: MVT,
+    result: EVT,
+) -> SDValue {
+    let value_vt = dag.value_type(value);
+    let bits: u128 = if result == EVT::I64 { 64 } else { 32 };
+    // `UINT_TO_FP(1 << (bits - 1))` in the source type.
+    let offset = match (float, bits) {
+        (MVT::F32, 64) => 0x5F00_0000u128,
+        (MVT::F64, 64) => 0x43E0_0000_0000_0000,
+        (MVT::F32, _) => 0x4F00_0000,
+        _ => 0x41E0_0000_0000_0000,
+    };
+    let offset = dag.get_constant_fp(offset, value_vt);
+    let small = dag.get_node(ISD::FpToSInt, result, &[value]);
+    let reduced = dag.get_node(ISD::FSub, value_vt, &[value, offset]);
+    let big = dag.get_node(ISD::FpToSInt, result, &[reduced]);
+    let shift = dag.get_constant(bits - 1, EVT::I8);
+    let overflown = dag.get_node(ISD::Sra, result, &[small, shift]);
+    let kept = dag.get_node(ISD::And, result, &[big, overflown]);
+    dag.get_node(ISD::Or, result, &[small, kept])
+}
+
 /// `FP_TO_INTHelper` for the x87: `fist` of the value to a stack slot of the
 /// result's size, then a load of it. An unsigned `i32` goes through an `i64`
 /// slot; an unsigned `i64` subtracts 2^63 from a value at or above it and
@@ -1945,6 +2021,12 @@ fn lower_fp_to_int(
         // `cvttss2si`/`cvttsd2si` truncate to i32 (and i64 at m64); the other
         // widths convert through the next one up.
         let pointer = dag.config().pointer;
+        if !signed && matches!(
+            (result_vt, pointer),
+            (EVT::I64, EVT::I64) | (EVT::I32, EVT::I32)
+        ) {
+            return Some(small_and_big(dag, value, float, result_vt));
+        }
         let via = match (signed, result_vt) {
             (true, EVT::I32) => return Some(node),
             (true, EVT::I64) if pointer == EVT::I64 => return Some(node),
@@ -1956,14 +2038,6 @@ fn lower_fp_to_int(
         if let Some(via) = via {
             let wide = dag.get_node(ISD::FpToSInt, via, &[value]);
             return Some(dag.get_node(ISD::Truncate, result_vt, &[wide]));
-        }
-        // An unsigned `i64` at m64 (`expandFP_TO_UINT`): the value less 2^63
-        // when it is at least that, converted signed, with the sign bit put
-        // back.
-        if !signed && result_vt == EVT::I64 && pointer == EVT::I64 {
-            let (shifted, adjust) = unsigned_fixup_operands(dag, value, float);
-            let wide = dag.get_node(ISD::FpToSInt, EVT::I64, &[shifted]);
-            return Some(dag.get_node(ISD::Xor, EVT::I64, &[wide, adjust]));
         }
     }
     let unsigned_fixup = !signed && result_vt == EVT::I64;
@@ -2431,9 +2505,9 @@ fn priced_chain(
 ) -> Option<SDValue> {
     use crate::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
-    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin } = pricing;
+    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, no_growth, price_pin } = pricing;
     let chain = if by_clocks {
-        arithmetic::chain_by_clocks(c, width, cpu)
+        arithmetic::chain_by_clocks_within(c, width, cpu, arch, no_growth)
     } else {
         arithmetic::priced_chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte, price_pin)
     }

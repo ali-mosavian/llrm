@@ -97,6 +97,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("OptimizePHIs", "optimizephis@1"),
     ("DeadMachineInstructionElim", "deadmi@1"),
     ("SharedConstants", "phiconst@2"),
+    ("LeafFold", "phiconst@2"),
     ("ProcessImplicitDefs", "processimpdefs@2"),
     ("PhiElimination", "phielim@4"),
     ("MachineLICM", "machinelicm@4"),
@@ -182,6 +183,9 @@ pub fn machine_with<'a>(
         // Before SsaSpill: a constant several edges of a phi carry is one
         // value.
         Box::new(crate::backend::phiconst::SharedConstants),
+        // After it, at -Os: a leaf that makes a constant for a join is made
+        // in the block that branches to it (DEVIATE LEAF-FOLD-OS).
+        Box::new(crate::backend::leaffold::LeafFold { size: target.size && classes.leaf_fold_at_size }),
         // Before the phis go: a value nothing defines is read as undef.
         Box::new(crate::processimpdefs::ProcessImplicitDefs { ignored_inputs: target.in_order }),
         // On SSA, ahead of the cmov conversion and EarlyMachineLICM (the pin's
@@ -272,7 +276,11 @@ pub fn machine_with<'a>(
             lea: target.three_address_for(target.size || target.min_size),
             loop_carried: target.commutes_loop_carried(),
         }),
-        Box::new(Coalescer { size: target.size, ..Coalescer::new(None, segments, classes) }),
+        Box::new(Coalescer {
+            size: target.size,
+            moves: target.move_bytes,
+            ..Coalescer::new(None, segments, classes)
+        }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
         Box::new(crate::backend::machinesched::MachineScheduler {

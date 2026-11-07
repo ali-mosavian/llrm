@@ -173,8 +173,7 @@ impl<'a> FunctionCompiler<'a> {
         borrows::check_disjoint(&lent, &arguments.iter().map(Expr::span).collect::<Vec<_>>())?;
         let mut operands: Vec<hir::Operand> = slot.into_iter().collect();
         for (argument, parameter) in arguments.iter().zip(&signature.parameters) {
-            let operand = self.argument_operand(argument, parameter)?;
-            operands.push(operand);
+            operands.extend(self.argument_operands(argument, parameter)?);
         }
         self.store_call_borrows(arguments, &signature.parameters, &lent, span)?;
         self.record_lends(&signature.name, arguments, &lent, span);
@@ -193,6 +192,43 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// What a call passes for `parameter`.
+    /// The values a parameter takes: a slice passed in parts is its
+    /// descriptor's words, then its data pointer, read from the descriptor
+    /// the borrow makes.
+    pub(super) fn argument_operands(
+        &mut self,
+        argument: &Expr,
+        parameter: &SignatureParameter,
+    ) -> Result<Vec<hir::Operand>, Diagnostic> {
+        let SignatureParameter::Borrowed {
+            mutable,
+            target: target @ BindingType::Slice { element, rank },
+            pointer,
+            data: Some(_),
+        } = *parameter
+        else {
+            return Ok(vec![self.argument_operand(argument, parameter)?]);
+        };
+        let (hir::Operand::Value(descriptor), _) = self.borrow_argument(argument, mutable, target, pointer)? else {
+            unreachable!("a slice borrow is a descriptor's address")
+        };
+        let mut operands = Vec::new();
+        for axis in 0..=rank {
+            let word = self.value(self.word());
+            let place = hir::Operand::IndirectPlace {
+                base: descriptor,
+                offset: descriptor::dim(axis, self.word_bytes()),
+                type_id: self.word_id(),
+                inbounds: false,
+                member: None,
+            };
+            self.emit("load", vec![word], vec![place], None);
+            operands.push(hir::Operand::Value(word));
+        }
+        operands.push(hir::Operand::Value(self.slice_data_pointer(descriptor, element, rank)));
+        Ok(operands)
+    }
+
     pub(super) fn argument_operand(
         &mut self,
         argument: &Expr,
@@ -223,7 +259,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.store_struct_expression(&copy, argument)?;
                 Ok(self.address_of(&copy))
             }
-            SignatureParameter::Borrowed { mutable, target, pointer } => {
+            SignatureParameter::Borrowed { mutable, target, pointer, .. } => {
                 Ok(self.borrow_argument(argument, *mutable, *target, *pointer)?.0)
             }
         }

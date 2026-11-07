@@ -152,6 +152,19 @@ pub enum Refusal {
 struct Z80Combines;
 
 impl CombineHooks for Z80Combines {
+    /// DEVIATE Z80-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the folded
+    /// constant `c << n` is a `ld bc, #k` and an `add hl, bc` where the add of
+    /// a small `c` was `inc hl`s (bintree -O2 +14 B). The pin's default is
+    /// true. Owner: llrm-target-z80. Exit: 2026-11-20, a price per constant.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
     /// A byte or word multiply by a constant is a library call (`__mulhi3`, a
     /// loop over the constant's bits, tens of T-states a bit); `2^n +- 1` as
     /// shifts and one add is a `add hl, hl` and a copy per shifted bit.
@@ -161,6 +174,26 @@ impl CombineHooks for Z80Combines {
         _c: u128,
     ) -> bool {
         matches!(vt, EVT::I8 | EVT::I16)
+    }
+
+    /// The pin's default: a compare of a masked or zero-extended value against
+    /// a constant is made in the narrower type (`(and x, 7) == 3` is a byte
+    /// `cp`), legal or not; the type legalizer promotes it to a byte. Without
+    /// it the word compare kept a `sub a, #0` for the high byte the mask had
+    /// zeroed (div_constants_short, 36 sites).
+    fn is_setcc_type_desirable(
+        &self,
+        _narrow: EVT,
+        _legal: bool,
+    ) -> bool {
+        true
+    }
+
+    /// A selector masked to three bits and compared with 0..7 in a chain is
+    /// one `and` and a byte `cp` each, not a word compare with `sub a, #0` for
+    /// the zeroed high byte (div_constants_short, 36 sites).
+    fn narrow_setcc_with_other_uses(&self) -> bool {
+        true
     }
 
     /// A word compare against a constant is two byte compares and a branch

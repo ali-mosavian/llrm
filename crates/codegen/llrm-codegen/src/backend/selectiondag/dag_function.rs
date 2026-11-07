@@ -832,6 +832,23 @@ fn div_prices(
         divide_long: costs.divide_long,
         margin: costs.divide_margin,
         product: Some(super::dag::ProductPrice(std::rc::Rc::new(product))),
+        bytes: {
+            let rate = cpu.speed_milliclocks_per_byte();
+            let size = cpu.target().size_costs();
+            (rate > 0 && cpu.target().tti().is_some_and(|tti| tti.divide_by_bytes())).then(|| super::dag::DivBytes {
+                prefix: size.prefix,
+                add: size.add,
+                shift: size.shift,
+                extend: size.extend,
+                multiply: size.multiply,
+                multiply_long: size.multiply_long,
+                multiply_high: size.multiply_high,
+                divide: size.divide,
+                divide_long: size.divide_long,
+                milliclocks_per_byte: rate,
+                frequency: 1.0,
+            })
+        },
     })
 }
 
@@ -862,7 +879,8 @@ fn selected_in(
     pool: &mut Pool,
 ) -> Result<Selected, Unselected> {
     let bitness = arch.object().bitness;
-    // One cost model for the function: `Profile::target` builds one (and clones the price tables) per call.
+    // One cost model for the function: `Profile::target` builds one (and clones
+    // the price tables) per call.
     let machine = cpu.target();
     let m16 = match bitness {
         16 => true,
@@ -931,8 +949,9 @@ fn selected_in(
         _ => (BuilderTarget::m32(), AddrMode::Flat32),
     };
     let mut builder_target = builder_target;
-    // The frontends compile static code: every symbol is `dso_local`.
-    builder_target.dag.dso_local_symbols = true;
+    // Static code: every symbol is `dso_local`. A 64-bit PIE reaches a symbol
+    // defined elsewhere through the GOT (X86Subtarget::classifyGlobalReference).
+    builder_target.dag.dso_local_symbols = bitness != 64 || !module.position_independent();
     builder_target.dag.absolute_symbols = !module.position_independent();
     let builder_target = builder_target
         .with_tuning(machine.tuning())
@@ -1047,7 +1066,7 @@ fn selected_in(
     for (index, (size, align)) in objects.into_iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
         debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
-        if align > kept {
+        if arch.can_realign_stack() && align > kept {
             over_aligned.push((frame.locals.borrow()[index].0, align));
         }
     }
@@ -1093,7 +1112,18 @@ fn selected_in(
     let mut work: Vec<(BlockId, BlockId, crate::backend::selectiondag::builder::BlockDag)> = Vec::new();
     let mut fast_blocks = (!cpu.optimized && super::fastisel::enabled())
         .then(|| {
-            super::fastisel::build_all(module, function, &builder_target, &|wanted: &str| tables.names.iter().find(|(_, name)| name.split('|').next() == Some(wanted)).map(|(op, _)| *op), &layout, &convention, arch, &mut info)
+            super::fastisel::build_all(
+                module,
+                function,
+                &builder_target,
+                &|wanted: &str| {
+                    tables.names.iter().find(|(_, name)| name.split('|').next() == Some(wanted)).map(|(op, _)| *op)
+                },
+                &layout,
+                &convention,
+                arch,
+                &mut info,
+            )
         })
         .flatten()
         .unwrap_or_default();
@@ -1215,7 +1245,11 @@ fn selected_in(
     let price_pin = speed_goal && machine.tti().is_some_and(|tti| tti.price_pin_multiplies());
     // The function's one `BranchProbabilityInfo`: the builder's edge
     // probabilities read the same one (the pin has it as an analysis).
-    let frequencies = ((mul_rate > 0 || price_pin) && !mul_by_clocks).then(|| {
+    // The divide weighs its bytes by the block's frequency too (SD446), whether
+    // or not the multiplies are priced by clocks alone (m16): without it
+    // every divide was priced as run once.
+    let divide_bytes = mul_rate > 0 && cpu.target().tti().is_some_and(|tti| tti.divide_by_bytes());
+    let frequencies = (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes).then(|| {
         let bpi = info
             .bpi
             .get_or_insert_with(
@@ -1231,10 +1265,41 @@ fn selected_in(
             );
         llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
     });
+    let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
+        if cpu.optimized && !fast && block == parent {
+            // `SelectAllBasicBlocks`: a phi knows what its incoming values do
+            // once all its predecessors are selected.
+            let ready = function.predecessors(block).iter().all(|pred| selected_blocks.contains(pred));
+            let phis: Vec<_> = function
+                .iter_block(block)
+                .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                .collect();
+            for phi in phis {
+                if ready {
+                    let bits = |bits: u32| match bits {
+                        1..=8 => Some(8),
+                        9..=16 => Some(16),
+                        17..=32 => Some(32),
+                        33..=64 if m64 => Some(64),
+                        _ => None,
+                    };
+                    super::live_out::compute_phi_live_out_reg_info(module, function, phi, &bits, &mut info);
+                } else if let Some(reg) = function.instruction(phi).result.and_then(|r| info.value_regs.get(&r)) {
+                    info.live_out.remove(reg);
+                }
+            }
+        }
+        if block == parent {
+            selected_blocks.insert(block);
+        }
         if !built.live_ins.is_empty() && block != function.layout()[0] {
             return refuse("register arguments outside the entry block");
         }
+        if let Some(frequencies) = &frequencies {
+            built.dag.set_divide_frequency(frequencies.relative_to_entry(parent));
+        }
+        built.dag.live_in_phys = built.live_ins.iter().map(|&(register, vreg)| (vreg, register)).collect();
         let arrived = arrival_widths(&built.dag, &built.live_ins);
         let done = if fast {
             super::dag_select::select_block_fast(
@@ -1275,11 +1340,13 @@ fn selected_in(
                             freq: 1.0,
                             milliclocks_per_byte: mul_rate,
                             by_clocks: true,
+                            no_growth: !cpu.speed_rate,
                             price_pin: false,
                         })
                     } else {
                         frequencies
                             .as_ref()
+                            .filter(|_| mul_rate > 0 || price_pin)
                             .map(
                                 |frequencies| super::x86_lowering::MulPricing {
                                     cpu,
@@ -1287,6 +1354,7 @@ fn selected_in(
                                     freq: frequencies.relative_to_entry(parent),
                                     milliclocks_per_byte: mul_rate,
                                     by_clocks: false,
+                                    no_growth: false,
                                     price_pin,
                                 },
                             )

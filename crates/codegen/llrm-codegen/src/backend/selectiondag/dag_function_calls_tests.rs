@@ -263,6 +263,26 @@ fn an_i64_divide_carries_the_routines_code_at_its_call() {
     assert_eq!(done.inline.get(&at), Some(&routine.code));
 }
 
+/// m32 -Os tests/run/c/int64_division was +329 B over the pin: the object carried
+/// the inline `$div64_u` routine (213 B) where the pin calls libgcc's
+/// `__udivdi3`. Where the runtime lists the routine (hosted ELF), the call is
+/// to it, no inline code travels, and the arguments are four dwords on the
+/// stack; DOS (no listing) keeps the routine.
+#[test]
+fn a_hosted_i64_divide_calls_libgcc_and_carries_no_routine() {
+    let module = crate::testing::module(DIV64).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    let sysv = llrm_target::calling::Calling::number_of(Some("sysv")).expect("sysv");
+    let listed: Vec<(String, u32, String)> =
+        ["__divdi3", "__udivdi3", "__moddi3", "__umoddi3"].map(|n| (n.to_owned(), sysv, n.to_owned())).to_vec();
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &listed).unwrap_or_else(|e| panic!("{}", e.0));
+    let called: Vec<&str> = done.calls.values().map(String::as_str).collect();
+    assert_eq!(called, ["__divdi3"], "{called:?}");
+    assert!(done.inline.is_empty(), "no routine travels with the call");
+    let dos = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    assert!(dos.calls.values().any(|name| name.starts_with("div64")), "{:?}", dos.calls);
+}
+
 const VARIADIC: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 declare void @llvm.va_start.p0(ptr)
 define i32 @f(i32 %n, ...) {

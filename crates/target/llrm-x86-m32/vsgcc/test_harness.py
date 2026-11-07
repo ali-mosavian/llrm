@@ -32,7 +32,7 @@ def built(tmp_path_factory):
     previous = harness.OUT
     harness.OUT = work
     harness.record_stub(work)
-    for prog in ("scroll", "fib", "x_ll_div", "nbody"):
+    for prog in ("scroll", "fib", "x_ll_div", "nbody", "run_mul_constants"):
         done = subprocess.run([str(HERE / "build.sh"), prog], capture_output=True, text=True, env=env)
         assert done.returncode == 0 and "FAIL" not in done.stdout, (prog, done.stdout, done.stderr)
     yield work
@@ -64,6 +64,15 @@ def test_the_per_mnemonic_clocks_add_up_to_the_clocks_of_the_run(built):
     r = harness.run("fib", "gccO2")
     assert sum(clk for _, clk in r["by_op"].values()) + r["misaligned"] * harness.MISALIGNED == r["clocks"]
     assert sum(count for count, _ in r["by_op"].values()) == r["ins"]
+
+
+def test_a_tests_run_c_cell_yields_clocks(built):
+    """tests/run/c cells (mul_constants, div_constants_short, ...) have only `main`, so the harness found no kernel and the table had no
+    clocks for them; `run_NAME` now counts the cell's `main`, and its reports are the cell's `.out`."""
+    for v in ("llrm", "llrmOs", "gccO2", "clangO2"):
+        r = harness.run("run_mul_constants", v)
+        assert r["clocks"] > 0 and r["ins"] > 0, r
+        assert r["reports"] == [int(x) for x in (harness.REPO / "tests/run/c/mul_constants.out").read_text().split()]
 
 
 def test_kernel_inlined_into_main_is_not_counted_as_zero(built):

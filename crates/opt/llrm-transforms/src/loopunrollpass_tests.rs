@@ -755,3 +755,66 @@ fn test_a_float_body_that_forwards_a_global_array_across_its_trips_stays_a_loop_
     let mut module = parsed(&sixteen_floats(true, true));
     assert!(!unrolled_at(&mut module, 3, Some(8)), "{}", printed(&module));
 }
+
+/// `unrolled_at` at -O1 with `unroll_never_grows_at_o1` as stated.
+fn unrolled_o1(
+    module: &mut Module,
+    never_grows: bool,
+) -> bool {
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(module).expect("closes");
+    let tti = X86::of_cpu("i486")
+        .expect("a cpu")
+        .with_tuning(llrm_mir::target::Tuning { unroll_never_grows_at_o1: never_grows, ..llrm_mir::target::Tuning::PIN });
+    let options = Options {
+        opt_level: 1,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+    };
+    unroll_function(module, "f", &tti, options).expect("unrolls")
+}
+
+/// x_life's neighbour sum: three loads at constant offsets from one base.
+const THREE_LOADS: &str = "define i32 @f(ptr %p) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi i32 [ 0, %b0 ], [ %s, %b1 ]
+  %q = getelementptr inbounds i8, ptr %p, i32 %i
+  %v = load i8, ptr %q
+  %z = zext i8 %v to i32
+  %s = add i32 %acc, %z
+  %next = add i32 %i, 1
+  %go = icmp ult i32 %next, 3
+  br i1 %go, label %b1, label %b2
+
+b2:
+  %r = phi i32 [ %s, %b1 ]
+  ret i32 %r
+}
+";
+
+/// m32 -O1 took gcc's `-funroll-loops` and every small loop unrolled whatever
+/// the copies cost: matmul +2066 B, fpbench +1209 B (O1 is strict, no cell
+/// larger). With the target's `unroll_never_grows_at_o1` a loop whose copies
+/// cost more than the rolled loop stays rolled.
+#[test]
+fn test_at_o1_a_loop_whose_copies_cost_more_than_the_loop_stays_rolled() {
+    assert!(unrolled_o1(&mut parsed(&counted(8)), false), "the pin's O1 bar unrolls it");
+    assert!(!unrolled_o1(&mut parsed(&counted(8)), true), "eight copies of a multiply and an add grow");
+}
+
+/// x_life O1 (gcc unrolls the dx loop and shrinks): three copies of a load
+/// and an add cost what the rolled loop's body and its branch do, so the
+/// size-neutral bar keeps this unroll.
+#[test]
+fn test_at_o1_a_loop_whose_copies_fit_the_loop_is_unrolled() {
+    let mut module = parsed(THREE_LOADS);
+    assert!(unrolled_o1(&mut module, true), "{}", printed(&module));
+}

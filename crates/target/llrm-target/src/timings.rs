@@ -44,6 +44,8 @@ pub struct CpuTable {
     /// Clocks a mispredicted branch costs (`MCSchedModel::MispredictPenalty`);
     /// `None`: the target states none.
     pub mispredict_penalty: Option<i64>,
+    /// The same at -O1, -Os and -Oz; `None`: the plain penalty applies.
+    pub mispredict_penalty_size: Option<i64>,
     /// Form and clocks, in file order.
     pub clocks: Vec<(String, i64)>,
     pub latency: Vec<(String, i64)>,
@@ -183,6 +185,7 @@ impl Timings {
                     ("scalars", "line_fill_clocks") => table.line_fill_clocks = Some(number()?),
                     ("scalars", "tail_dup_placement_threshold") => table.tail_dup_placement_threshold = Some(number()?),
                     ("scalars", "mispredict_penalty") => table.mispredict_penalty = Some(number()?),
+                    ("scalars", "mispredict_penalty_size") => table.mispredict_penalty_size = Some(number()?),
                     ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),

@@ -56,7 +56,7 @@
 //! # Runs
 //! At the end of `alloc::emit_with`, before branch relaxation.
 
-use llrm_support::hash::HashSet;
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::asm::{Asm, Flags, Index, Inst, Line, Op, Operand, Registers};
 
@@ -99,9 +99,22 @@ fn sets_nz_of(
 
 /// The passes, in the order they feed each other.
 pub fn run(asm: &mut Asm) {
+    run_with(asm, true);
+}
+
+/// [`run`], the transfer of a known constant (`drop_known_loads`) left out when
+/// `known_loads` is false: the text a layout choice is priced on.
+pub fn run_with(
+    asm: &mut Asm,
+    known_loads: bool,
+) {
     fold_known_cells(asm);
+    hoist_common_successor_code(asm);
+    branch_over_jump(asm);
     drop_reloads(asm);
-    drop_known_loads(asm);
+    if known_loads {
+        drop_known_loads(asm);
+    }
     drop_zero_compares(asm);
     step_in_place(asm);
     load_straight_into_a(asm);
@@ -114,6 +127,132 @@ pub fn run(asm: &mut Asm) {
     crate::peephole_cells::store_then_index_load(asm);
     branch_on_shift_carry(asm);
     jump_to_return(asm);
+}
+
+/// How many lines name `label`: a branch or jump to it, or a directive.
+fn references(
+    lines: &[Line],
+    label: &str,
+) -> usize {
+    lines
+        .iter()
+        .filter(|line| match line {
+            Line::Inst(Inst { operand, .. }) => operand.name() == Some(label),
+            Line::Raw(text) => text.contains(label),
+            Line::Label(_) => false,
+        })
+        .count()
+}
+
+/// The flag a conditional branch tests: `c`, `z`, `n` or `v`.
+fn tested_flag(op: Op) -> Option<char> {
+    match op {
+        Op::Bcc | Op::Bcs => Some('c'),
+        Op::Beq | Op::Bne => Some('z'),
+        Op::Bmi | Op::Bpl => Some('n'),
+        Op::Bvc | Op::Bvs => Some('v'),
+        _ => None,
+    }
+}
+
+/// Whether `inst` can run before a branch that tests `flag` instead of after
+/// it, when both paths start with it: it reads no flag and leaves that one
+/// alone (`lda`, `ldx`, `ldy`, the transfers write only `n` and `z`; the
+/// stores write none; `clc` and `sec` write `c`).
+fn hoistable(
+    inst: &Inst,
+    flag: char,
+) -> bool {
+    match inst.op {
+        Op::Sta | Op::Stx | Op::Sty | Op::Stz => true,
+        Op::Lda | Op::Ldx | Op::Ldy | Op::Tax | Op::Tay | Op::Txa | Op::Tya => flag == 'c' || flag == 'v',
+        Op::Clc | Op::Sec => flag != 'c',
+        _ => false,
+    }
+}
+
+/// The instructions both paths of a conditional branch start with run before
+/// the branch, once: `bcs b20 / b23: lda #1; sta rc8; jmp b3 / b20: lda #1; sta rc8`
+/// is `lda #1; sta rc8; bcs b20 / b23: jmp b3 / b20:`. Each path has only the
+/// branch for a predecessor. The pin's `BranchFolder::HoistCommonCode`
+/// ([BranchFolding.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L1980)),
+/// which also stops at an instruction that touches what the branch reads.
+pub fn hoist_common_successor_code(asm: &mut Asm) {
+    let mut at = 0;
+    while at < asm.lines.len() {
+        at += 1;
+        let Some((hoisted, fall, target)) = common_successor_code(&asm.lines, at - 1) else { continue };
+        let count = hoisted.len();
+        let mut lines = Vec::with_capacity(asm.lines.len());
+        for (index, line) in asm.lines.drain(..).enumerate() {
+            if index == at - 1 {
+                lines.extend(hoisted.iter().cloned().map(Line::Inst));
+            }
+            if (fall..fall + count).contains(&index) || (target..target + count).contains(&index) {
+                continue;
+            }
+            lines.push(line);
+        }
+        asm.lines = lines;
+        at += count;
+    }
+}
+
+/// The instructions to hoist above the branch at `at`, and where the two copies
+/// start (the fall-through path's first, the target's first).
+fn common_successor_code(
+    lines: &[Line],
+    at: usize,
+) -> Option<(Vec<Inst>, usize, usize)> {
+    let Line::Inst(branch) = &lines[at] else { return None };
+    let flag = tested_flag(branch.op)?;
+    let Operand::Direct(label) = &branch.operand else { return None };
+    let target_label = lines.iter().position(|line| matches!(line, Line::Label(name) if name == label))?;
+    // reached by this branch alone
+    let before = target_label.checked_sub(1).and_then(|index| lines[index].inst())?;
+    if references(lines, label) != 1 || !matches!(before.op, Op::Jmp | Op::Bra | Op::Rts) {
+        return None;
+    }
+    let mut fall = at + 1;
+    while let Some(Line::Label(name)) = lines.get(fall) {
+        if references(lines, name) != 0 {
+            return None;
+        }
+        fall += 1;
+    }
+    let target = target_label + 1;
+    let mut hoisted = Vec::new();
+    while let (Some(Line::Inst(one)), Some(Line::Inst(other))) = (lines.get(fall + hoisted.len()), lines.get(target + hoisted.len())) {
+        if one.op != other.op || one.operand != other.operand || !hoistable(one, flag) {
+            break;
+        }
+        hoisted.push(one.clone());
+    }
+    (!hoisted.is_empty()).then_some((hoisted, fall, target))
+}
+
+/// `bcs l / jmp m / l:` is `bcc m / l:` (labels nothing names between the
+/// branch and the jump go).
+pub fn branch_over_jump(asm: &mut Asm) {
+    let mut at = 0;
+    while at < asm.lines.len() {
+        at += 1;
+        let Line::Inst(branch) = &asm.lines[at - 1] else { continue };
+        if branch.op == Op::Bra || branch.op.opposite().is_none() {
+            continue;
+        }
+        let mut jump = at;
+        while matches!(&asm.lines[jump..], [Line::Label(name), ..] if references(&asm.lines, name) == 0) {
+            jump += 1;
+        }
+        let (Some(Line::Inst(jmp)), Some(Line::Label(over))) = (asm.lines.get(jump), asm.lines.get(jump + 1)) else { continue };
+        if jmp.op != Op::Jmp || branch.operand != Operand::Direct(over.clone()) {
+            continue;
+        }
+        let Operand::Direct(far) = &jmp.operand else { continue };
+        let inverted = Inst::new(branch.op.opposite().unwrap(), Operand::Direct(far.clone()));
+        asm.lines.splice(at - 1..=jump, [Line::Inst(inverted)]);
+    }
 }
 
 /// What a register-only instruction writes: a register, and which of the carry
@@ -374,35 +513,99 @@ pub fn fold_known_cells(asm: &mut Asm) {
     }
 }
 
-/// `ldx #n` (likewise `lda` and `ldy`) of what the register already holds: it
-/// goes, unless a branch reads the flags it sets. The values known are the
-/// immediates loaded and the transfers between registers, forgotten at a
-/// label, a call or an instruction not listed.
-pub fn drop_known_loads(asm: &mut Asm) {
-    let mut known: [Option<&str>; 3] = [None; 3];
-    let mut keep = vec![true; asm.lines.len()];
+/// What `a`, `x` and `y` hold: the immediate they were last loaded with.
+type Known<'a> = [Option<&'a str>; 3];
+
+/// The registers' values at a label, from every branch to it: a value both
+/// edges agree on.
+fn meet<'a>(
+    into: &mut Known<'a>,
+    other: &Known<'a>,
+) {
+    for (one, two) in into.iter_mut().zip(other) {
+        if one != two {
+            *one = None;
+        }
+    }
+}
+
+/// Whether the opcode jumps to the label it names, without a return.
+fn jumps(op: Op) -> bool {
+    op.is_branch() || op == Op::Jmp
+}
+
+/// The labels only branches in this text reach (a function's entry, anything
+/// called, exported or named by a directive is not): a branch's target.
+fn branch_targets(lines: &[Line]) -> Vec<&str> {
+    let mut branched: Vec<&str> = Vec::new();
+    let mut other: Vec<&str> = Vec::new();
+    for line in lines {
+        match line {
+            Line::Inst(Inst { op, operand: Operand::Direct(name), .. }) if jumps(*op) => branched.push(name),
+            Line::Inst(Inst { operand: Operand::Direct(name), .. }) => other.push(name),
+            _ => {}
+        }
+    }
+    let mut seen_label = false;
+    let mut targets = Vec::new();
+    for line in lines {
+        if let Line::Label(name) = line {
+            let entry = !std::mem::replace(&mut seen_label, true);
+            let named = lines.iter().any(|l| matches!(l, Line::Raw(text) if text.contains(name.as_str())));
+            if !entry && !named && branched.contains(&name.as_str()) && !other.contains(&name.as_str()) {
+                targets.push(name.as_str());
+            }
+        }
+    }
+    targets
+}
+
+/// One walk over `lines` with the values known at each label in `at_label`
+/// (a label no branch reached yet is not there): the loads to drop and to turn
+/// into transfers, and the values each branch carries to its label.
+fn walk<'a>(
+    lines: &'a [Line],
+    targets: &[&str],
+    at_label: &HashMap<&'a str, Known<'a>>,
+) -> (Vec<bool>, Vec<(usize, Op)>, Vec<(usize, Inst)>, HashMap<&'a str, Known<'a>>) {
+    let mut known: Option<Known<'a>> = Some([None; 3]);
+    let mut keep = vec![true; lines.len()];
+    let mut transfers: Vec<(usize, Op)> = Vec::new();
+    let mut carried: HashMap<&str, Known> = HashMap::default();
     let mut stores: Vec<(usize, Inst)> = Vec::new();
     let mut skip = 0;
-    for (at, line) in asm.lines.iter().enumerate() {
+    for (at, line) in lines.iter().enumerate() {
         if at < skip {
             continue;
         }
         let Line::Inst(Inst { op, operand, .. }) = line else {
-            known = [None; 3];
+            known = Some(match line {
+                Line::Label(name) if targets.contains(&name.as_str()) => {
+                    // fallen into, and branched to
+                    let mut here = at_label.get(name.as_str()).copied();
+                    if let (Some(fall), Some(here)) = (known.as_ref(), here.as_mut()) {
+                        meet(here, fall);
+                    }
+                    here.or(known).unwrap_or([None; 3])
+                }
+                _ => [None; 3],
+            });
             continue;
         };
+        let mut state = known.unwrap_or([None; 3]);
         // `pha; lda #n; sta m; pla` (a literal made into a cell while `a` is
         // live) is one store when `x` or `y` already holds `n`
         if *op == Op::Pha
             && let [Some(Line::Inst(load)), Some(Line::Inst(store)), Some(Line::Inst(pull))] =
-                [1, 2, 3].map(|n| asm.lines.get(at + n))
+                [1, 2, 3].map(|n| lines.get(at + n))
             && (load.op, store.op, pull.op) == (Op::Lda, Op::Sta, Op::Pla)
             && let (Operand::Imm(value), Operand::Direct(_)) = (&load.operand, &store.operand)
-            && flags_unread_after(&asm.lines, at + 4)
-            && let Some(by) = [(1, Op::Stx), (2, Op::Sty)].into_iter().find(|(r, _)| known[*r] == Some(value.as_str()))
+            && flags_unread_after(lines, at + 4)
+            && let Some(by) = [(1, Op::Stx), (2, Op::Sty)].into_iter().find(|(r, _)| state[*r] == Some(value.as_str()))
         {
             stores.push((at, Inst { op: by.1, operand: store.operand.clone(), place: store.place }));
             skip = at + 4;
+            known = Some(state);
             continue;
         }
         let register = match op {
@@ -412,37 +615,94 @@ pub fn drop_known_loads(asm: &mut Asm) {
             _ => None,
         };
         let on_a = matches!(operand, Operand::None | Operand::Acc);
+        if jumps(*op)
+            && let Operand::Direct(name) = operand
+            && targets.contains(&name.as_str())
+        {
+            carried.entry(name.as_str()).and_modify(|have| meet(have, &state)).or_insert(state);
+        }
+        // control does not run on past a jump or a return
+        let ends = matches!(op, Op::Bra | Op::Jmp | Op::Rts);
         match (op, register, operand) {
             (_, Some(register), Operand::Imm(value)) => {
-                if known[register] == Some(value) && flags_unread_after(&asm.lines, at + 1) {
+                if state[register] == Some(value.as_str()) && flags_unread_after(lines, at + 1) {
                     keep[at] = false;
+                    known = Some(state);
                     continue;
                 }
-                known[register] = Some(value);
+                // `x` and `y` have no transfer between them
+                let from = match register {
+                    0 => [1, 2].into_iter().find(|&from| state[from] == Some(value.as_str())),
+                    _ => (state[0] == Some(value.as_str())).then_some(0),
+                };
+                if let Some(from) = from {
+                    let op = match (from, register) {
+                        (1, 0) => Op::Txa,
+                        (2, 0) => Op::Tya,
+                        (0, 1) => Op::Tax,
+                        _ => Op::Tay,
+                    };
+                    transfers.push((at, op));
+                }
+                state[register] = Some(value);
             }
-            (Op::Lda | Op::Pla | Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor, ..) => known[0] = None,
-            (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, _, _) if on_a => known[0] = None,
-            (Op::Ldx | Op::Inx | Op::Dex, ..) => known[1] = None,
-            (Op::Ldy | Op::Iny | Op::Dey, ..) => known[2] = None,
-            (Op::Txa, ..) => known[0] = known[1],
-            (Op::Tya, ..) => known[0] = known[2],
-            (Op::Tax, ..) => known[1] = known[0],
-            (Op::Tay, ..) => known[2] = known[0],
+            (Op::Lda | Op::Pla | Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor, ..) => state[0] = None,
+            (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, _, _) if on_a => state[0] = None,
+            (Op::Ldx | Op::Inx | Op::Dex, ..) => state[1] = None,
+            (Op::Ldy | Op::Iny | Op::Dey, ..) => state[2] = None,
+            (Op::Txa, ..) => state[0] = state[1],
+            (Op::Tya, ..) => state[0] = state[2],
+            (Op::Tax, ..) => state[1] = state[0],
+            (Op::Tay, ..) => state[2] = state[0],
             // a register's value survives what neither writes it nor leaves
             // the function: stores, compares, branches, memory
             // read-modify-write
             (Op::Cmp | Op::Cpx | Op::Cpy | Op::Bit | Op::Inc | Op::Dec | Op::Asl | Op::Lsr | Op::Rol | Op::Ror, ..) => {
             }
             _ if line.inst().is_some_and(|i| i.flags() == Flags::Keeps) => {}
-            _ if op.opposite().is_some() => {}
-            _ => known = [None; 3],
+            _ if op.is_branch() => {}
+            _ => state = [None; 3],
         }
+        known = (!ends).then_some(state);
+    }
+    (keep, transfers, stores, carried)
+}
+
+/// `ldx #n` (likewise `lda` and `ldy`) of what the register already holds: it
+/// goes, unless a branch reads the flags it sets. One that another register
+/// holds is the 1-byte transfer (`txa` for `lda #0` when `x` is 0: the same
+/// clocks, and the same `N` and `Z`; llvm-mos's
+/// `MOSLateOptimization::combineLdImm` does the same, bar the 65816-only
+/// `x`/`y` transfers). The values known are the immediates loaded and the
+/// transfers between registers, forgotten at a call or an instruction not
+/// listed. At a label only branches in this text reach, they are the values
+/// every incoming edge agrees on (a loop's back edge is found by walking again
+/// until they hold); at any other label they are forgotten.
+pub fn drop_known_loads(asm: &mut Asm) {
+    let Some((mut keep, transfers, stores)) = decide_known_loads(&asm.lines) else { return };
+    for (at, op) in transfers {
+        asm.lines[at] = Line::Inst(Inst::new(op, Operand::None));
     }
     for (at, store) in stores {
         asm.lines[at] = Line::Inst(store);
         keep[at + 1..at + 4].fill(false);
     }
     retain(asm, &keep);
+}
+
+/// The loads to keep and to turn into transfers, once the values at the labels
+/// hold; none if eight walks do not settle them.
+fn decide_known_loads(lines: &[Line]) -> Option<(Vec<bool>, Vec<(usize, Op)>, Vec<(usize, Inst)>)> {
+    let targets = branch_targets(lines);
+    let mut at_label: HashMap<&str, Known> = HashMap::default();
+    for _ in 0..8 {
+        let (keep, transfers, stores, carried) = walk(lines, &targets, &at_label);
+        if carried == at_label {
+            return Some((keep, transfers, stores));
+        }
+        at_label = carried;
+    }
+    None
 }
 
 /// Whether `line` changes neither a register nor the cell `load` reads: a

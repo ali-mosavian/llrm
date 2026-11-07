@@ -380,9 +380,9 @@ pub fn cost_on(
 const BASES: [&str; 63] = [
     "movea", "move", "moveq", "movem", "adda", "addi", "addq", "addx", "add", "suba", "subi", "subq", "subx", "sub",
     "andi", "and", "ori", "or", "eori", "eor", "cmpa", "cmpi", "cmpm", "cmp", "clr", "negx", "neg", "not", "tst",
-    "ext", "extb", "swap", "lsl", "lsr", "asl", "asr", "rol", "ror", "roxl", "roxr", "link", "unlk", "lea", "pea", "jsr",
-    "jmp", "rts", "bra", "bsr", "mulu", "muls", "divu", "divs", "exg", "nop", "dbf", "dbra", "dbt", "dbne", "dbeq",
-    "scc", "seq", "sne",
+    "ext", "extb", "swap", "lsl", "lsr", "asl", "asr", "rol", "ror", "roxl", "roxr", "link", "unlk", "lea", "pea",
+    "jsr", "jmp", "rts", "bra", "bsr", "mulu", "muls", "divu", "divs", "exg", "nop", "dbf", "dbra", "dbt", "dbne",
+    "dbeq", "scc", "seq", "sne",
 ];
 
 /// `name` of GNU syntax (`addql`, `bnew`) as the pin's `base.size`.
@@ -463,8 +463,9 @@ pub fn from_gnu(text: &str) -> Result<String, String> {
         .into_iter()
         .map(gnu_operand)
         .map(|one| {
-            if !target && one.len() >= 4 && one.chars().all(|c| c.is_ascii_hexdigit()) {
-                format!("0x{one}:l")
+            if !target && !one.is_empty() && one.chars().all(|c| c.is_ascii_hexdigit()) {
+                // a short address is the 16-bit absolute form (`pea 0:w`)
+                format!("0x{one}:{}", if one.len() >= 4 { 'l' } else { 'w' })
             } else {
                 one
             }
