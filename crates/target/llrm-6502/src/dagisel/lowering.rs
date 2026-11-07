@@ -148,7 +148,7 @@ pub fn target_lowering() -> TargetLowering {
     }
     // a compare of two words is the borrow of the low words into the high
     // words' subtract (`IntegerExpandSetCCOperands`)
-    for vt in [MVT::I1, MVT::I8, MVT::I16] {
+    for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32] {
         tl.set_operation_action(SetCCCarry, vt, Action::Custom);
     }
     // softened floats: compiler-rt's routines
