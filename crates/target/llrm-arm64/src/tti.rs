@@ -312,14 +312,16 @@ impl Tti for AArch64 {
     }
 
     /// DEVIATE REC-1 (arm64, owner w15, exit 2026-11-30): a tree-recursive
-    /// function is copied into itself to depth 3 (bodies up to 150 `gcc_insns`),
-    /// as gcc's recursive inlining does; the clock-priced depth (`priced_self_inlining`)
-    /// never pays at 250 clk/B for the static trip guess. rectwo -O2: gcc 266,373
-    /// instructions against 777,916. Pin: none.
+    /// function of at most 40 `gcc_insns` is copied into itself to depth 2, as
+    /// gcc's recursive inlining does (the call, return and argument setup of a
+    /// small body are most of its clocks). rectwo -O2: 777,916 instructions to
+    /// 165,196 (gcc 266,373), fib 201,208 to 8,824. Depth 3 or a larger limit
+    /// copies recchop and quicksort (+134k, +126k), a clock-priced depth never
+    /// pays at 250 clk/B for the static trip guess. Open: bintree +97k (its
+    /// body is loads and a multiply, not calls). Pin: none.
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
-        Some((3, 150))
+        Some((2, 40))
     }
-
 
     /// DEVIATE UP1 (arm64): a full unroll at -O2/-O3 must save 250 clocks for
     /// each byte it adds, the bar's price (score = instructions + 250 per
