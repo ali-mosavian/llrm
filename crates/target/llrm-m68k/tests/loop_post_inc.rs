@@ -10,8 +10,8 @@ use llrm_m68k::dagisel::hooks::Cpu;
 const DATALAYOUT: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
 
 /// `f(p, n)`: sum the elements below 5; each such element is overwritten by
-/// the running sum, through the pointer the loop read it by. The element is read
-/// twice, so the load stays a `move`.
+/// the running sum, through the pointer the loop read it by. The element is
+/// read twice, so the load stays a `move`.
 const STORE_THROUGH_THE_SAME_POINTER: &str = "define i32 @f(ptr %p, i32 %n) {
 entry:
   br label %h

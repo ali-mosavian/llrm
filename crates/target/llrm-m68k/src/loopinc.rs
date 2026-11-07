@@ -16,7 +16,7 @@
 //! puts the increment beside a load only when nothing else reads the old
 //! pointer. gcc's `auto_inc_dec` rewrites the later uses as displacements.
 //! Reason: bytes and clocks on every loop that steps a pointer past a
-//! conditional store (`partition`, `copy`). Exit: 2026-11-14 (a POC; lands or
+//! conditional store (`partition`, `copy`). Owner m68k. Exit: 2026-11-14 (lands or
 //! goes). Off for `Options::PINNED`.
 //!
 //! # See also
@@ -120,7 +120,9 @@ pub fn post_increment_across_blocks(function: &mut MFunction) {
                     defs[*v as usize] += 1;
                 }
             }
-            if let (Kind::Copy, [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(s))]) = (inst.kind, &inst.operands[..]) {
+            if let (Kind::Copy, [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(s))]) =
+                (inst.kind, &inst.operands[..])
+            {
                 copy_of[*d as usize] = Some((*s, b, at));
             }
         }
@@ -152,7 +154,10 @@ pub fn post_increment_across_blocks(function: &mut MFunction) {
                 total[*v as usize] += 1;
                 // the copy that makes an alias is the alias, not a reader
                 let is_alias_copy = matches!(inst.kind, Kind::Copy)
-                    && matches!(inst.operands[0], Operand::Def(Reg::Virt(d)) if alias(d).is_some());
+                    && matches!(
+                        inst.operands[0],
+                        Operand::Def(Reg::Virt(d)) if alias(d).is_some()
+                    );
                 if !is_alias_copy {
                     reads[root(*v) as usize].insts.push((b, at, *v));
                 }
@@ -166,7 +171,13 @@ pub fn post_increment_across_blocks(function: &mut MFunction) {
     let mut gone: Vec<(usize, usize)> = Vec::new();
     for step_block in 0..function.blocks.len() {
         for at in 0..function.blocks[step_block].insts.len() {
-            let walk = Walk { cfg: &cfg, reads: &reads, total: &total, root: &root, copy_at: &|v| alias(v).map(|(_, b, at)| (b, at)) };
+            let walk = Walk {
+                cfg: &cfg,
+                reads: &reads,
+                total: &total,
+                root: &root,
+                copy_at: &|v| alias(v).map(|(_, b, at)| (b, at)),
+            };
             if let Some(dead) = try_step(function, &walk, &mut touched, step_block, at) {
                 gone.push((step_block, at));
                 gone.extend(dead);
@@ -242,7 +253,8 @@ fn try_step(
                 ok = false;
                 break;
             };
-            // the register read once, as the base, by an instruction after the load
+            // the register read once, as the base, by an instruction after the
+            // load
             if !after || inst.operands.iter().filter(|o| **o == Operand::Use(Reg::Virt(reg))).count() != 1 {
                 ok = false;
                 break;
