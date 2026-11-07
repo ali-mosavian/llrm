@@ -72,7 +72,7 @@ pub(super) fn full_unroll_pays(
     // instructions kept against 4,148 priced, clang's 608).
     let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3;
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count)
-        && (!prices_nest || reads_outer_counter(run, analyzed, lp))
+        && (!prices_nest || reads_outer_counter(run, se, analyzed, lp, up))
     {
         why(run, lp, "unpriced unroll: the nest bypass");
         return true;
@@ -122,7 +122,7 @@ pub(super) fn full_unroll_pays(
     // The accesses of a local array the copies make constant-indexed: the
     // array is promoted to registers, so they cost no clocks and no bytes
     // (frameless: `local[i]` filled and read by two 12-trip loops).
-    let (mut promoted, mut promoted_runs, ints, floats, forwarded) = promoted_accesses(run, analyzed, lp, &known);
+    let (mut promoted, mut promoted_runs, ints, floats, forwarded) = promoted_accesses(run, se, analyzed, lp, &known, up);
     let rmw = forwarded.len();
     // DEVIATE UP1-REG (owner m64, exit 2026-11-20): the promoted elements are
     // registers only while they fit: more than the file holds, and they are
@@ -480,11 +480,14 @@ fn alloca_of(
 /// a full unroll each is at a constant offset and the array is promoted.
 fn promoted_accesses(
     run: &Run,
+    se: &mut ScalarEvolution,
     analyzed: &Analyzed,
     lp: Loop,
     known: &IdSet<ValueId>,
+    up: &UnrollingPreferences,
 ) -> (i64, i64, usize, usize, IdSet<ValueId>) {
     let function = &*run.function;
+    let mut resident: std::collections::BTreeMap<u32, bool> = Default::default();
     let (mut found, mut runs) = (0, 0);
     let (mut ints, mut floats): (IdSet<ValueId>, IdSet<ValueId>) = (IdSet::new(), IdSet::new());
     // Float arrays the loop both reads and writes: after a full unroll their elements
@@ -520,6 +523,12 @@ fn promoted_accesses(
                 .captures_nothing(),
                 None => false,
             };
+            // A store the array survives is still run: the array is promoted only
+            // where every other access is a constant offset too.
+            let free = free
+                && !(matches!(one.opcode, Opcode::Store { .. })
+                    && matches!(local_array_at(run, pointer, known), Some(Base::Local(root))
+                        if *resident.entry(root.0).or_insert_with(|| stays_in_memory(run, se, analyzed, lp, root, up))));
             if free {
                 found += 1;
                 runs += ASSUMED_TRIPS.pow(nested.min(2));
@@ -545,6 +554,160 @@ fn promoted_accesses(
         }
     }
     (found, runs, ints.len(), floats.len(), rmw)
+}
+
+/// The most instructions a full unroll may have: the threshold the cost
+/// analysis boosts to.
+fn boosted(up: &UnrollingPreferences) -> u32 {
+    (u64::from(up.threshold) * u64::from(up.max_percent_threshold_boost) / 100).min(u64::from(u32::MAX)) as u32
+}
+
+/// Whether a local array keeps its memory after the full unroll of `lp`: some
+/// access outside `lp` is addressed by a value the unroll leaves a variable,
+/// one of a loop that stays rolled (it has no constant trip count, or its
+/// nest unrolled is past `limit` instructions, the boosted threshold). The
+/// stores of `lp` into it are then still run (matmul -O2: the init nest fills
+/// `a` and `b`, read by the rolled `k` loop at run-time indices; the credit
+/// for 128 stores grew the function 660 B against gcc's 320).
+fn stays_in_memory(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    root: ValueId,
+    up: &UnrollingPreferences,
+) -> bool {
+    let limit = boosted(up);
+    let function = &*run.function;
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    // Instructions of the loop and every loop in it, each copied by its trips.
+    fn unrolled_size(
+        run: &Run,
+        se: &mut ScalarEvolution,
+        cx: &llrm_analysis::scev::Cx,
+        lp: Loop,
+    ) -> Option<u64> {
+        // A triangular loop has no exact count but a constant maximum, and
+        // finishes with the loop around it.
+        let mut trips = se.get_small_constant_trip_count(cx, lp.get_header());
+        if trips == 0 {
+            trips = se.get_small_constant_max_trip_count(cx, lp.get_header());
+        }
+        if trips == 0 {
+            return None;
+        }
+        let mut inner = 0u64;
+        for sub in lp.get_sub_loops() {
+            inner += unrolled_size(run, se, cx, sub)?;
+        }
+        let own: u64 = lp
+            .get_blocks()
+            .iter()
+            .filter(|&&block| analyzed_depth(cx, block) == lp.get_loop_depth())
+            .map(|&block| run.function.iter_block(block).count() as u64)
+            .sum();
+        Some(u64::from(trips) * (own + inner))
+    }
+    fn analyzed_depth(
+        cx: &llrm_analysis::scev::Cx,
+        block: BlockId,
+    ) -> u32 {
+        cx.loops.get_loop_depth(block)
+    }
+    let mut finishes: std::collections::BTreeMap<u32, bool> = Default::default();
+    // Only a read that can run after the loop keeps the stores (nbody -O2: the
+    // last update loop, after the step loop, is followed by reads of constants).
+    let mut after: std::collections::HashSet<BlockId> = Default::default();
+    let mut work: Vec<BlockId> = lp.get_exit_blocks(function);
+    while let Some(block) = work.pop() {
+        if after.insert(block) {
+            work.extend(function.successors(block));
+        }
+    }
+    for &block in function.layout() {
+        if lp.get_blocks().contains(&block) || !after.contains(&block) {
+            continue;
+        }
+        for inst in function.iter_block(block) {
+            let one = function.instruction(inst);
+            let pointer = match one.opcode {
+                Opcode::Load { .. } => one.operands[0],
+                _ => continue,
+            };
+            if alloca_of(function, pointer) != Some(root) {
+                continue;
+            }
+            // The indices' sources: every loop whose counter feeds the address.
+            let mut work: Vec<Operand> = Vec::new();
+            let mut at = pointer;
+            while let Operand::Value(value) = at {
+                let ValueDef::Instruction(def) = function.value(value).def else { break };
+                let gep = function.instruction(def);
+                if !matches!(gep.opcode, Opcode::GetElementPtr { .. }) {
+                    break;
+                }
+                work.extend(gep.operands[1..].iter().copied());
+                at = gep.operands[0];
+            }
+            let mut seen: std::collections::HashSet<ValueId> = Default::default();
+            while let Some(operand) = work.pop() {
+                let value = match operand {
+                    Operand::Constant(_) => continue,
+                    Operand::Block(_) => continue,
+                    Operand::Value(value) => value,
+                };
+                if !seen.insert(value) {
+                    continue;
+                }
+                let ValueDef::Instruction(def) = function.value(value).def else { return true };
+                let source = function.instruction(def);
+                match source.opcode {
+                    Opcode::Phi => {
+                        let header = function.parent(def);
+                        let counter = header.and_then(|header| {
+                            analyzed.loops.get_loop_for(header).filter(|one| one.get_header() == header)
+                        });
+                        if let Some(counter) = counter {
+                            let id = counter.get_header().0;
+                            let fits = *finishes.entry(id).or_insert_with(|| {
+                                // It finishes alone, or with a loop around it (a
+                                // triangular loop has no count of its own).
+                                let mut around = Some(counter);
+                                let mut done = false;
+                                while let Some(one) = around {
+                                    // A loop an unroll of this run made is part of a nest
+                                    // decided already.
+                                    done |= !run.first.contains(&one.get_header())
+                                        || unrolled_size(run, se, &cx, one).is_some_and(|size| size <= u64::from(limit))
+                                        || bounds_few_trips(run, se, analyzed, one, up.max_iterations_count_to_analyze);
+                                    around = one.get_parent_loop();
+                                }
+                                done
+                            });
+                            if !fits {
+                                return true;
+                            }
+                        }
+                        work.extend(source.operands.iter().copied());
+                    }
+                    Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::Select => {
+                        work.extend(source.operands.iter().copied());
+                    }
+                    _ => return true,
+                }
+            }
+        }
+    }
+    false
 }
 
 /// The float values a full unroll of `lp` by `trips` keeps live across its
@@ -789,10 +952,11 @@ fn encloses_known_trips(
 /// is stored.
 fn reads_outer_counter(
     run: &Run,
+    se: &mut ScalarEvolution,
     analyzed: &Analyzed,
     lp: Loop,
+    up: &UnrollingPreferences,
 ) -> bool {
-    let _ = analyzed;
     let function = &*run.function;
     let Some(outermost) = std::iter::successors(lp.get_parent_loop(), |parent| parent.get_parent_loop()).last() else {
         return false;
@@ -821,7 +985,7 @@ fn reads_outer_counter(
     let headers: Vec<InstId> = seeds.iter().map(|&(inst, ..)| inst).collect();
     let (known, real) = loop {
         let mut known: IdSet<ValueId> = IdSet::new();
-        let mut real = false;
+        let mut real: Vec<ValueId> = Vec::new();
         let mut grew = true;
         while grew {
             grew = false;
@@ -875,7 +1039,9 @@ fn reads_outer_counter(
                     let has_value = one.operands.iter().any(|&operand| matches!(operand, Operand::Value(_)));
                     if pure && has_value && all_known(&one.operands, &known) {
                         known.insert(result);
-                        real |= (element || divides) && inside.contains(&block);
+                        if (element || divides) && inside.contains(&block) {
+                            real.push(result);
+                        }
                         grew = true;
                     }
                 }
@@ -895,6 +1061,7 @@ fn reads_outer_counter(
     // Which of the constants are data: read by something that is not
     // addressing or counting, or by a computation of such a value.
     let mut data: IdSet<ValueId> = IdSet::new();
+    let mut resident: std::collections::BTreeMap<u32, bool> = Default::default();
     let mut grew = true;
     while grew {
         grew = false;
@@ -909,7 +1076,17 @@ fn reads_outer_counter(
                 // its address, which is addressing, not data (tile -O2: `tile[(y + dy) & 63]
                 // [(x + dx) & 63]` bypassed the pricing for 364 B and 2,155 instructions
                 // where the rolled loop is 68 B and 4,181).
-                let sink = !passes && !matches!(one.opcode, Opcode::Br | Opcode::Load { .. });
+                let mut sink = !passes && !matches!(one.opcode, Opcode::Br | Opcode::Load { .. });
+                // DEVIATE ARM64-UNROLL-PRICE: nor a store into a local array that
+                // stays in memory, which the copies still run (matmul -O2: `a` and
+                // `b` filled by `(i + j) % 3`, read by the rolled `k` loop).
+                if sink
+                    && matches!(one.opcode, Opcode::Store { .. })
+                    && let Some(Base::Local(root)) = local_array_at(run, one.operands[1], &known)
+                    && *resident.entry(root.0).or_insert_with(|| stays_in_memory(run, se, analyzed, outermost, root, up))
+                {
+                    sink = false;
+                }
                 let reads_data = if passes { one.result.is_some_and(|result| data.contains(&result)) } else { sink };
                 if !reads_data {
                     continue;
@@ -926,7 +1103,7 @@ fn reads_outer_counter(
         }
     }
     // Data the copies of `lp` itself make constant.
-    real || inside.iter().any(|&block| {
+    real.iter().any(|value| data.contains(value)) || inside.iter().any(|&block| {
         function.iter_block(block).any(|inst| {
             let one = function.instruction(inst);
             one.opcode != Opcode::Phi && one.result.is_some_and(|result| data.contains(&result))
