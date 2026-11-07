@@ -276,7 +276,11 @@ impl Fast<'_> {
                 // the address of a global: `lea r, [rip + g]`
                 let ConstantKind::Global(global) = self.module.context.get(id).kind else { return None };
                 let target = self.dag.get_target_global_address(EVT::I64, global.0, 0);
-                Some(self.dag.get_node(super::x86_lowering::x86isd::WRAPPER_RIP, EVT::I64, &[target]))
+                let rip = self.dag.get_phys_register(EVT::I64, llrm_lir::registers::RegId::RIP);
+                let one = self.dag.get_constant_with(1, EVT::I8, true, false);
+                let noreg = self.dag.get_register(EVT::I64, 0);
+                let segment = self.dag.get_register(EVT::I16, 0);
+                Some(self.node(self.names.lea64?, &[EVT::I64], &[rip, one, noreg, target, segment]))
             }
             Operand::Constant(_) => {
                 // DEVIATE F4: the pin (X86MaterializeInt) makes 0 with `MOV32r0` (xor) and a 64-bit
