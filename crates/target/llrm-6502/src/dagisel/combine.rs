@@ -139,7 +139,7 @@ fn funnel_by_one(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    if dag.value_type(node) != EVT::I16 {
+    if !matches!(dag.opcode(node), ISD::Or | ISD::Add) || dag.value_type(node) != EVT::I16 {
         return None;
     }
     let shift = |dag: &SelectionDAG, v: SDValue, op: ISD, by: u128| {

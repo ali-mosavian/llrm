@@ -51,3 +51,12 @@ fn a_long_long_shifted_left_by_one_carries_between_its_words() {
 fn a_long_long_shifted_right_by_one_carries_between_its_words() {
     bytes_of("lshr", 64, 124);
 }
+
+/// The combiner after type legalization handed `funnel_by_one` every node, and a
+/// node with one operand indexed past its end: 42 corpus programs refused at
+/// -O1 with "index out of bounds: the len is 1 but the index is 1".
+#[test]
+fn a_late_combine_reads_only_the_nodes_it_matches() {
+    let ir = include_str!("data/late_combine_node.ll");
+    assembly(ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+}
