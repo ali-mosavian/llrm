@@ -2818,7 +2818,7 @@ fn m32_tree_calls(
 #[test]
 fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     let calls = m32_fib_calls(crate::pipeline::Options::default());
-    assert!(calls > 2, "fib was not copied into itself, {calls} calls of it");
+    assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
 }
 
 /// Calls of `@paths` after the default pipeline on x86-m32: bench rectwo's
