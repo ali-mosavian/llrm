@@ -7,13 +7,14 @@
 //! `ADJCALLSTACKUP`. [`plan`] finds the sequences whose stores fill the area
 //! with nothing else naming the stack pointer in between. Stores that come
 //! from `n - 4` down to 0 are pushed where they stand; in any other order the
-//! pushes go right before the call, which needs the stored registers to keep
-//! their values until then. Pushing is priced against
-//! the stores (`encode` and `timing::cost` on the cpu, the cleanup `adda`
-//! included) three ways: no sequence, every sequence, and the sequences that
-//! are cheaper alone. The frame is priced with each choice's largest call area
-//! left: when no store remains the prologue and epilogue lose their `suba` and
-//! `adda`, which is where a pair of two-word calls gains.
+//! pushes go as late as the stored registers allow: before the call, or before
+//! the first instruction after the last store that rewrites one of them.
+//! Pushing is priced against the stores (`encode` and `timing::cost` on the
+//! cpu, the cleanup `adda` included) three ways: no sequence, every sequence,
+//! and the sequences that are cheaper alone. The frame is priced with each
+//! choice's largest call area left: when no store remains the prologue and
+//! epilogue lose their `suba` and `adda`, which is where a pair of two-word
+//! calls gains.
 //!
 //! A pushed register that a scratch-register load in the same block filled,
 //! and nothing else reads, is pushed from the load's memory instead
@@ -32,6 +33,7 @@ use std::collections::{HashMap, HashSet};
 use crate::dagisel::hooks::Cpu;
 use crate::mfunc::{Inst, Kind, Operand, Reg};
 use crate::regalloc::Assignment;
+use crate::timing::Price;
 use crate::{REGISTER_INFO, mc, reg};
 
 /// Which instructions of a function are rewritten.
@@ -42,6 +44,10 @@ pub struct Plan {
     /// Argument stores that wait for the call and become pushes there, with
     /// their offsets.
     deferred: HashMap<usize, i64>,
+    /// The instruction each deferred sequence's pushes are made before: the
+    /// call, or the first one after the last store that rewrites a pushed
+    /// register.
+    flush: HashSet<usize>,
     /// Argument stores whose push reads memory, with the load that read it.
     folded: HashMap<usize, usize>,
     /// Loads that vanish into a push.
@@ -66,6 +72,14 @@ impl Plan {
         at: usize,
     ) -> Option<i64> {
         self.deferred.get(&at).copied()
+    }
+
+    /// Whether the deferred pushes are made before instruction `at`.
+    pub fn flushes(
+        &self,
+        at: usize,
+    ) -> bool {
+        self.flush.contains(&at)
     }
 
     /// The load whose memory operand the push of store `at` reads.
@@ -114,8 +128,10 @@ struct Sequence {
     bytes: i64,
     stores: Vec<usize>,
     offsets: Vec<i64>,
-    /// The stores are not in push order: the pushes wait for the call.
+    /// The stores are not in push order: the pushes wait.
     deferred: bool,
+    /// The instruction the waiting pushes are made before.
+    flush: usize,
     /// Stores that push what a load read, and the loads.
     folds: Vec<(usize, usize)>,
     kept: (usize, u32),
@@ -277,7 +293,8 @@ fn reads(
 /// The load that can be part of the push of store `store` (a register source
 /// `src`), and what it costs with the load: when the register is a scratch one
 /// only the push uses, the push can read the load's memory itself. `point` is
-/// where the push happens: the store, or the call when the pushes wait for it.
+/// where the push happens: the store, or the last store when the pushes wait
+/// for it.
 fn foldable(
     insts: &[&Inst],
     assignment: &Assignment,
@@ -331,8 +348,8 @@ fn foldable(
                     _ => false,
                 },
             );
-        // the call the pushes wait for may write memory: they are made first
-        let writes = !own_store && !(other.call && i == point) && (other.may_store || other.side_effects || other.call);
+        // a call or write before the push point may change what it reads
+        let writes = !own_store && (other.may_store || other.side_effects || other.call);
         if names_root || defines_address || writes {
             return None;
         }
@@ -340,9 +357,15 @@ fn foldable(
     // the load goes with its push: a later store of the same register still
     // needs the value (`a + a`: both arguments are the one load)
     for other in &insts[point + 1..] {
-        let reads_root = other.operands.iter().any(
-            |operand| matches!(operand, Operand::Use(r) if REGISTER_INFO.root(physical(*r, assignment)) == root),
-        );
+        let reads_root = other
+            .operands
+            .iter()
+            .any(
+                |operand| matches!(
+                    operand,
+                    Operand::Use(r) if REGISTER_INFO.root(physical(*r, assignment)) == root
+                ),
+            );
         if reads_root {
             return None;
         }
@@ -368,14 +391,14 @@ fn add(
     (a.0 + b.0, a.1 + b.1)
 }
 
-/// Whether `a` is the cheaper: bytes then clocks at the size level, clocks
-/// then bytes otherwise.
+/// Whether `a` is the cheaper at `price`.
 fn cheaper(
     a: (usize, u32),
     b: (usize, u32),
-    size: bool,
+    price: Price,
+    cpu: Cpu,
 ) -> bool {
-    if size { a < b } else { (a.1, a.0) < (b.1, b.0) }
+    price.beats(cpu, a, b)
 }
 
 /// The sequences of `insts` whose stores can be pushes, with their prices.
@@ -384,9 +407,10 @@ fn sequences(
     blocks: &[usize],
     assignment: &Assignment,
     cpu: Cpu,
-    size: bool,
+    price: Price,
     short: bool,
 ) -> Result<(Vec<Sequence>, Vec<i64>), String> {
+    let size = price == Price::Size;
     let mut found = Vec::new();
     // the call areas of the sequences that cannot be pushed
     let mut others = Vec::new();
@@ -409,10 +433,14 @@ fn sequences(
         // one `up` after two calls, and the one in another block is not this
         // call's. The arguments may be pushed before a diamond the call is
         // after.
-        let own_up = call.zip(up).filter(|&(call, up)| {
-            blocks[up] == blocks[call]
-                && insts[call + 1..up].iter().all(|inst| !inst.call && !matches!(inst.kind, Kind::Op("ADJCALLSTACKDOWN")))
-        });
+        let own_up = call
+            .zip(up)
+            .filter(
+                |&(call, up)| blocks[up] == blocks[call]
+                    && insts[call + 1..up]
+                        .iter()
+                        .all(|inst| !inst.call && !matches!(inst.kind, Kind::Op("ADJCALLSTACKDOWN"))),
+            );
         let Some((call, up)) = own_up else {
             others.push(bytes);
             at += 1;
@@ -456,13 +484,29 @@ fn sequences(
         let in_order = offsets == wanted;
         let mut sorted = offsets.clone();
         sorted.sort_unstable_by(|a, b| b.cmp(a));
+        let last_store = stores.iter().copied().max().unwrap_or(call);
+        // A deferred push is made as late as the pushed registers allow, so
+        // the stack-pointer-relative instructions before it keep their offsets:
+        // before the call, or before the first instruction after the last
+        // store that rewrites one of them.
+        let mut flush = call;
+        let mut keeps_values = true;
+        if !in_order {
+            for &(store, _, source, _, _) in &parts {
+                let Source::Register(src) = source else { continue };
+                match (store + 1..call).find(|&i| defines(insts[i], src, assignment)) {
+                    Some(at) if at < last_store => keeps_values = false,
+                    Some(at) => flush = flush.min(at),
+                    None => {}
+                }
+            }
+        }
         let mut priced = ((0usize, 0u32), (0usize, 0u32));
         let mut folds = Vec::new();
-        let mut keeps_values = true;
         for &(store, _, source, kept, pushed) in &parts {
             let (mut kept, mut pushed) = (kept, pushed);
             if let Source::Register(src) = source {
-                let point = if in_order { store } else { call };
+                let point = if in_order { store } else { flush - 1 };
                 // a push that reads memory replaces the load and the push
                 let memory = foldable(insts, assignment, blocks, store, point, src, &stores).and_then(|load| {
                     let Kind::Op(name) = insts[load].kind else { return None };
@@ -474,14 +518,10 @@ fn sequences(
                     Some((load, read, load_price))
                 });
                 match memory {
-                    Some((load, read, load_price)) if cheaper(read, add(load_price, pushed), size) => {
+                    Some((load, read, load_price)) if cheaper(read, add(load_price, pushed), price, cpu) => {
                         folds.push((store, load));
                         kept = add(kept, load_price);
                         pushed = read;
-                    }
-                    // a push that waits for the call reads its register there
-                    _ if !in_order => {
-                        keeps_values &= !insts[store + 1..call].iter().any(|inst| defines(inst, src, assignment));
                     }
                     _ => {}
                 }
@@ -501,6 +541,7 @@ fn sequences(
             stores,
             offsets,
             deferred: !in_order,
+            flush,
             folds,
             kept: priced.0,
             pushed: add(priced.1, cost(&cleanup, cpu)?),
@@ -516,11 +557,11 @@ pub fn plan(
     blocks: &[usize],
     assignment: &Assignment,
     cpu: Cpu,
-    size: bool,
+    price: Price,
     short: bool,
     frame_price: impl Fn(i64) -> Result<(usize, u32), String>,
 ) -> Result<Plan, String> {
-    let (found, others) = sequences(insts, blocks, assignment, cpu, size, short)?;
+    let (found, others) = sequences(insts, blocks, assignment, cpu, price, short)?;
     if found.is_empty() {
         return Ok(Plan::default());
     }
@@ -543,12 +584,12 @@ pub fn plan(
     };
     let none = vec![false; found.len()];
     let all = vec![true; found.len()];
-    let alone: Vec<bool> = found.iter().map(|one| cheaper(one.pushed, one.kept, size)).collect();
+    let alone: Vec<bool> = found.iter().map(|one| cheaper(one.pushed, one.kept, price, cpu)).collect();
     let mut best = (none.clone(), total(&none)?);
     for choice in [all, alone] {
-        let price = total(&choice)?;
-        if cheaper(price, best.1, size) {
-            best = (choice, price);
+        let sum = total(&choice)?;
+        if cheaper(sum, best.1, price, cpu) {
+            best = (choice, sum);
         }
     }
     let mut plan = Plan::default();
@@ -560,6 +601,7 @@ pub fn plan(
             }
             if one.deferred {
                 plan.deferred.extend(one.stores.iter().copied().zip(one.offsets.iter().copied()));
+                plan.flush.insert(one.flush);
             } else {
                 plan.pushes.extend(one.stores.iter().copied());
             }

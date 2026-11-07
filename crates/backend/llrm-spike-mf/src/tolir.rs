@@ -1282,25 +1282,30 @@ pub fn literal_remat_wins<T: Target>(
 /// virtual-register use and `allUsesAvailableAt` asks at the copy whether it
 /// still holds (the callers do).
 fn is_cheap_move<T: Target>(one: &Insn) -> bool {
-    is_literal_move(one) || (T::remat_reads_registers() && is_move_with_reads(one))
+    is_literal_move(one)
+        || (T::remat_reads_registers() && is_move_with_reads(one, false))
+        || (T::remats_symbol_addresses() && one.uses.is_empty() && is_move_with_reads(one, true))
 }
 
 /// One register written by a move of a literal, whatever the target names it:
 /// the target's `isAsCheapAsAMove && isReMaterializable` for a constant.
 fn is_literal_move(one: &Insn) -> bool {
-    one.uses.is_empty() && is_move_with_reads(one)
+    one.uses.is_empty() && is_move_with_reads(one, false)
 }
 
 /// [`is_literal_move`] that may read registers: the registers it reads, then
 /// the identity of the operation.
-fn is_move_with_reads(one: &Insn) -> bool {
+fn is_move_with_reads(
+    one: &Insn,
+    symbol: bool,
+) -> bool {
     let Some(what) = one.what.as_ref() else { return false };
     one.defines.len() == 1
         && one.group.is_none()
         && one.requires.is_empty()
         && one.delivers.is_empty()
         && one.clobbers.is_empty()
-        && one.symbol != Some(true)
+        && (symbol || one.symbol != Some(true))
         // a lane def makes part of its value: making it again does not
         && one.def_lanes.is_empty()
         && one.partial_defs.is_empty()
@@ -2184,10 +2189,16 @@ pub fn from_lir<T: Target>(
                     .find_map(|loc| if let Loc::Held(held) = loc { Some(*held) } else { None })
                     .ok_or("a spill of no value")?;
                 let numbered = number(value, &mut classes);
-                let class = classes[match numbered {
-                    Reg::Virt(v) => v as usize,
-                    Reg::Phys(_) => 0,
-                }];
+                // A pinned value is no virtual register: its class is one that holds its register
+                // (vreg 0's class made a spill of `hl` a byte store, `ld -4(ix), hl`).
+                let class = match numbered {
+                    Reg::Virt(v) => classes[v as usize],
+                    Reg::Phys(register) => classes
+                        .iter()
+                        .copied()
+                        .find(|class| T::candidates(*class).contains(&register))
+                        .unwrap_or_else(T::any),
+                };
                 let register = if T::spills_named_by_lane() {
                     lane_or_number(&named, &mut classes, &mut number)
                 } else {

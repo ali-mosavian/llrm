@@ -466,8 +466,7 @@ fn visit_order(
 
 /// Whether any loop changed.
 pub fn simplified(function: &mut Function) -> bool {
-    let (nested, held) = separated_nested_loops(function);
-    let shape = held.unwrap_or_else(|| cfg::Shape::of(function));
+    let (nested, shape) = separated_nested_loops(function);
     _simplified(function, shape) | nested
 }
 
@@ -481,13 +480,12 @@ pub fn simplified(function: &mut Function) -> bool {
 /// preheader and exit blocks of the pin's `simplifyOneLoop`, so the new block
 /// takes the edges the preheader would have (the later grouping gives the
 /// outer loop its own preheader); exit 2026-11-14.
-///
-/// Also the shape of the body as it was left, where the last look found
-/// nothing to separate: asked for again, it is the same.
-fn separated_nested_loops(function: &mut Function) -> (bool, Option<cfg::Shape>) {
+fn separated_nested_loops(function: &mut Function) -> (bool, cfg::Shape) {
     let mut changed = false;
-    let mut left = None;
     // Each separation removes a latch from a loop: the blocks bound it.
+    // The shape of the last round, where nothing was separated, is that of the
+    // function the caller goes on with.
+    let mut last = None;
     for _ in 0..function.layout().len() {
         let shape = cfg::Shape::of(function);
         let separated = shape.loops.iter().any(|loop_| {
@@ -511,12 +509,12 @@ fn separated_nested_loops(function: &mut Function) -> (bool, Option<cfg::Shape>)
             !outer.is_empty() && grouped(function, loop_.header, &outer).is_some()
         });
         if !separated {
-            left = Some(shape);
+            last = Some(shape);
             break;
         }
         changed = true;
     }
-    (changed, left)
+    (changed, last.unwrap_or_else(|| cfg::Shape::of(function)))
 }
 
 /// [`findPHIToPartitionLoops`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopSimplify.cpp#L297):

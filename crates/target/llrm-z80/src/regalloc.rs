@@ -226,6 +226,13 @@ impl Target for Z80Registers {
         Some(Inst { may_store: true, ..Inst::new(Kind::Op(name), vec![Operand::Frame(slot), Operand::Use(register)]) })
     }
 
+    /// Worse rows (owner greedy-subreg, exit 2026-12-05; net -1083 B O2, -2636 B Os): O2 mem_length_boundaries_m32 +12,
+    /// sat_sub_u64_shared_compare +3, switch_peeled_table +4; Os mem_length_boundaries_m32 +1, sat_sub_u64_shared_compare
+    /// +1, rep_tails +2, wide_shift_by_one +3. Allocation shifts after a remade address; clocks unpriced.
+    fn remats_symbol_addresses() -> bool {
+        true
+    }
+
     fn spills_lanes() -> bool {
         true
     }

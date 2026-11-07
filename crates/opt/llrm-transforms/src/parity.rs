@@ -348,6 +348,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // Runs in the strength slot,
     // before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
     entry("canonfreeze", Module, "canon-freeze", Translated, ""),
+    // Runs in the strength slot, right after `lsr`: `looptermfold::LoopTermFold`.
+    entry("looptermfold", Module, "loop-term-fold (LoopTermFold.cpp)", Translated, ""),
     // Runs in the strength slot, after `lsr`: `hardwareloops::HardwareLoops`.
     entry("hardwareloops", Module, "hardware-loops", Translated, ""),
     // Runs in the strength slot, after `hardwareloops`: `constanthoisting::ConstantHoisting`.

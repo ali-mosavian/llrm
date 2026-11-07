@@ -180,6 +180,13 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TargetLowering::isLegalAddImmediate`: whether an `add` takes the
+    /// signed immediate. Default true (arm64 and wasm are not judged); x86
+    /// is `isInt<32>`.
+    fn legal_add_immediate(&self, _imm: i64) -> bool {
+        true
+    }
+
     /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)`.
     /// Default false until x86 is judged.
     fn fold_mul_of_add_with_constant(&self) -> bool {
@@ -197,6 +204,21 @@ pub trait CombineHooks {
         _c: u128,
     ) -> bool {
         false
+    }
+
+    /// DEVIATE: [`Self::decompose_mul_by_constant`] with the multiplicand, for
+    /// a target whose multiply expansion gets cheaper with what is known of
+    /// it (the Z80's byte-lane multiply of a zero-extended byte). The pin's
+    /// hook sees the type and the constant only. Owner: llrm-target-z80.
+    /// Exit: 2026-11-30, when a second target needs it or the pin gains it.
+    fn decompose_mul_by_constant_of(
+        &self,
+        _dag: &SelectionDAG,
+        _x: SDValue,
+        vt: EVT,
+        c: u128,
+    ) -> bool {
+        self.decompose_mul_by_constant(vt, c)
     }
 
     /// `ExtendSetCCUses`: the compares of a load against a constant, which
@@ -2265,6 +2287,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         let ones = super::fold::mask(vt.size_in_bits());
         let cb = self.dag.constant(n1)?;
+        let bits = vt.size_in_bits();
+        // `TLI.isLegalAddImmediate((CA * CM + CB).getSExtValue())`
+        let legal = |this: &Self, imm: u128| {
+            let shift = 128 - bits;
+            this.hooks.legal_add_immediate((((imm << shift) as i128) >> shift) as i64)
+        };
         // `m_OneUse(m_Mul(m_Add(m_Value(A), m_ConstInt(CA)), m_ConstInt(CM)))`.
         let product = |this: &Self, v: SDValue| -> Option<(SDValue, u128, u128)> {
             if this.dag.opcode(v) != ISD::Mul || !this.dag.has_one_use(v.node) {
@@ -2279,6 +2307,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         };
         if let Some((a, ca, cm)) = product(self, n0) {
             let imm = ca.wrapping_mul(cm).wrapping_add(cb) & ones;
+            if !legal(self, imm) {
+                return None;
+            }
             let (cm, imm) = (self.dag.get_constant(cm, vt), self.dag.get_constant(imm, vt));
             let mul = self.dag.get_node(ISD::Mul, vt, &[a, cm]);
             return Some(self.dag.get_node(ISD::Add, vt, &[mul, imm]));
@@ -2288,6 +2319,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             for (mul, b) in [(x, y), (y, x)] {
                 if let Some((a, ca, cm)) = product(self, mul) {
                     let imm = ca.wrapping_mul(cm).wrapping_add(cb) & ones;
+                    if !legal(self, imm) {
+                        continue;
+                    }
                     let (cm, imm) = (self.dag.get_constant(cm, vt), self.dag.get_constant(imm, vt));
                     let product = self.dag.get_node(ISD::Mul, vt, &[a, cm]);
                     let sum = self.dag.get_node(ISD::Add, vt, &[product, b]);
@@ -2346,8 +2380,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             // CM), CM*CA + CB)`, also through an intermediate add; "this can
             // help if the inner add has multiple uses"
             // ([pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3179)).
-            // DEVIATE: the wrap flags of the result are not kept, and
-            // `isLegalAddImmediate` is the pin's default (true). Exit
+            // DEVIATE: the wrap flags of the result are not kept. Exit
             // 2026-11-12.
             if vt.size_in_bits() <= 64 {
                 if let Some(found) = self.fold_add_of_mul_of_add(n0, n1, vt) {
@@ -3778,7 +3811,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // [pin]:
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5024
         if let (Some(c), false) = (c1, opaque) {
-            if self.hooks.decompose_mul_by_constant(vt, c) {
+            if self.hooks.decompose_mul_by_constant_of(self.dag, n0, vt, c) {
                 if let Some(decomposed) = self.decompose_mul(n0, vt, c) {
                     return Some(decomposed);
                 }
