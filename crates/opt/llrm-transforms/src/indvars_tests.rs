@@ -601,6 +601,27 @@ pub(crate) fn m32() -> Rc<dyn llrm_mir::target::Machine> {
     (llrm_x86_m32::M32.cost_model())(&prices)
 }
 
+/// The 64-bit target as the driver builds it.
+pub(crate) fn m64() -> Rc<dyn llrm_mir::target::Machine> {
+    use llrm_target::Target;
+    let prices = llrm_target::CpuPrices {
+        costs: Vec::new(),
+        prefix: 1,
+        address_stall: 0,
+        registers: 14,
+        call_registers: 6,
+        float_registers: 0,
+        address_forms: Vec::new(),
+        operations: OperationCosts::default(),
+        spaces: llrm_x86_m64::layout().spaces.roles,
+        private: None,
+        calling: None,
+        foreign: llrm_target::Foreign::none(),
+        ports: llrm_x86_m64::M64.flat_ports(),
+    };
+    (llrm_x86_m64::M64.cost_model())(&prices)
+}
+
 /// A value a loop defines that a phi outside it reads, other than a phi in an
 /// exit block: the loop is not in closed SSA form. (A read by another
 /// instruction is left to the pass that closes loops again.)

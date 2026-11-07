@@ -2996,3 +2996,53 @@ b1:
     assert_eq!(one, 3);
     assert_eq!(three, one, "the callee goes once");
 }
+
+/// Calls of `@walk` after the pipeline on x86-m64: bench bintree's traversal,
+/// a call on each child with the second one in tail position.
+fn m64_walk_calls(options: crate::pipeline::Options) -> usize {
+    let mut module = parsed(
+        "define void @walk(ptr %t) {
+b0:
+  %nil = icmp eq ptr %t, null
+  br i1 %nil, label %done, label %rec
+
+done:
+  ret void
+
+rec:
+  %lp = getelementptr inbounds ptr, ptr %t, i64 1
+  %l = load ptr, ptr %lp
+  call void @walk(ptr %l)
+  %rp = getelementptr inbounds ptr, ptr %t, i64 2
+  %r = load ptr, ptr %rp
+  call void @walk(ptr %r)
+  ret void
+}
+
+define void @main(ptr %t) {
+b0:
+  call void @walk(ptr %t)
+  ret void
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        crate::indvars::tests::m64(),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    llrm_mir::print::module(&module).matches("call void @walk").count()
+}
+
+/// bench bintree at m64 -O3 grew `walk` from 2 to 9 calls (1160 B against
+/// clang's 398, no clock gain): the copies were made before the tail call
+/// became a loop. gcc and the pin eliminate it first, so nothing is left to copy.
+#[test]
+fn test_m64_o3_walk_keeps_one_call_of_itself() {
+    let calls = m64_walk_calls(crate::pipeline::Options::speed());
+    assert!(calls <= 3, "walk kept {calls} calls of itself");
+}

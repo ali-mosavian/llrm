@@ -403,6 +403,12 @@ impl llrm_target::Target for M64 {
                             // clk, frames -20%, rectwo -12%; -O3 stays at 150). Owner m64,
                             // exit 2026-11-20.
                             recursive_inlining_growth: Some((450, 150)),
+                            // DEVIATE REC-2, as m32: at -O3 a tree recursion's tail calls
+                            // become a loop before it is copied into itself (gcc's
+                            // `pass_tail_recursion` precedes `pass_ipa_inline`); the pin
+                            // copies nothing. bintree/queens O3 expanded 2 -> 9 calls
+                            // for +762 B at 0% clocks. Owner w10, exit 2026-11-20.
+                            recursive_tre_first: (false, true),
                             // DEVIATE REC5-1 (owner w2, exit 2026-11-20), as m32.
                             ipsccp_widen_keeps_sign: true,
                             // DEVIATE UJ2 (owner m64, exit 2026-11-14): BasicTTIImpl's
@@ -439,6 +445,16 @@ impl llrm_target::Target for M64 {
 
 #[cfg(test)]
 mod tests {
+    /// bintree O3 expanded `walk` from 2 to 9 calls (+762 B, 0% clocks vs
+    /// clang) because m64 ran the recursive copy before tail-call
+    /// elimination; the pin and gcc eliminate first.
+    #[test]
+    fn test_o3_eliminates_tail_calls_before_copying_a_recursion() {
+        use llrm_mir::tti::Tti;
+        let tti = llrm_target::Target::tti(&M64).expect("m64 states a TTI");
+        assert_eq!(tti.recursive_tre_first(), (false, true));
+    }
+
     /// The m64 sheet had a cache line and no line fill, so no byte rate was
     /// derivable at m64 and the borrowed 312 had no number to be compared with.
     /// Zen 5 fills a 64 B line from L2 in 10 clk: 156 mclk/B.

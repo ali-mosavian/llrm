@@ -23,6 +23,7 @@ llrm-arm64 = { workspace = true }
 llrm-x86 = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
+llrm-x86-m64 = { workspace = true }
 llrm-target = { workspace = true }
 llrm-analysis = { workspace = true, features = ["testing"] }
 llrm-gpl-gcc = { workspace = true }
