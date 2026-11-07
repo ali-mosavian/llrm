@@ -713,7 +713,9 @@ fn hoisted(
     // `PREMap`: expression -> the block it was last seen in or hoisted to.
     let mut seen: HashMap<Semantics, usize> = HashMap::default();
     let mut put: HashMap<usize, Vec<Arc<Insn>>> = HashMap::default();
-    let mut next = crate::backend::postings::next_value_following(body);
+    // Asked at the first hoist: the postings of the whole body are not built
+    // for a function that hoists nothing.
+    let mut next: Option<u32> = None;
     let mut like: Vec<(u32, u32)> = Vec::new();
     let mut stack = vec![body.entry];
     while let Some(at) = stack.pop() {
@@ -766,8 +768,8 @@ fn hoisted(
             if !(reaches(body, by_at, other, number) || reaches(body, by_at, number, other)) {
                 continue;
             }
-            let value = next;
-            next += 1;
+            let value = next.unwrap_or_else(|| body.next_value());
+            next = Some(value + 1);
             let mut made = what.clone();
             if let Some(Loc::Held(dest)) = made.dests.first_mut() {
                 dest.value = value;
@@ -1076,6 +1078,32 @@ mod tests {
         };
         assert_eq!(count(&body), 2, "the premise: two leas");
         assert_eq!(count(&shared(&body, &RegisterClasses::m16())), 1);
+    }
+
+    /// Compile time: `hoisted` took the next value from the postings of the
+    /// whole body, which made them for every function (14.9 M Ir of 83.9 M in
+    /// MachineCse on memexp -O2), whether or not anything was hoisted. A body
+    /// that hoists nothing builds no postings.
+    #[test]
+    fn test_a_body_that_hoists_nothing_builds_no_postings() {
+        let lea = |at, into| {
+            let memory = Mem {
+                base: Some(Held { value: 1, width: 4, offset: 0 }),
+                index: Some(Held { value: 1, width: 4, offset: 0 }),
+                scale: 2,
+                ..Mem::new(None, 4)
+            };
+            insn(at, Operation::Address, "lea", vec![held(into)], vec![Loc::Mem(memory)], vec![into], vec![1, 1])
+        };
+        let entry = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![lea(0, 10)]) };
+        let next = LirBlock::new(1, vec![lea(1, 11)]);
+        let mut body =
+            LirBody::new("lea", 0, vec![entry.into(), next.into()], IndexMap::default(), IndexMap::default());
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let before = crate::backend::postings::redone();
+        shared(&body, &RegisterClasses::m16());
+        assert_eq!(crate::backend::postings::redone(), before);
     }
 
     /// CSE7. x_life -O3 (#7261): the `lea` of a global and a register, shared
