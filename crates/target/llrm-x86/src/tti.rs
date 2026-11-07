@@ -1379,6 +1379,14 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    /// DEVIATE LS1: real mode keeps every formula of the first use in play
+    /// (A/B 2026-11-07: the pin's rule is +1..+8 B in 41 of 192 m16 cells, in
+    /// none better; m32 -37 B net, m64 0). owner: w12, exit: 2026-11-30, when
+    /// the m16 cause cards close.
+    fn lsr_visited_registers_lose(&self) -> bool {
+        self.real_mode.is_none()
+    }
+
     /// Real mode forms a scaled index with an address-size prefix.
     fn lsr_drops_spilling_solution(&self) -> bool {
         self.real_mode.is_some()
