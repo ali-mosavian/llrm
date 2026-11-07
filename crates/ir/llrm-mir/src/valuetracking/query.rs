@@ -17,6 +17,12 @@ use crate::module::{Function, GlobalKind, GlobalValue, InstId, Instruction, Meta
 use crate::opcode::Opcode;
 use crate::types::{Type, TypeId};
 
+#[cfg(test)]
+thread_local! {
+    /// `Query::instruction_of` calls, for a test that a pattern reads each operand once.
+    pub(crate) static LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `SimplifyQuery`.
 #[derive(Clone, Copy)]
 pub struct Query<'a> {
@@ -171,6 +177,8 @@ impl<'a> Query<'a> {
         &self,
         operand: Operand,
     ) -> Option<(InstId, &'a Instruction)> {
+        #[cfg(test)]
+        LOOKUPS.with(|count| count.set(count.get() + 1));
         let Operand::Value(value) = operand else { return None };
         let ValueDef::Instruction(inst) = self.function.value(value).def else { return None };
         Some((inst, self.function.instruction(inst)))

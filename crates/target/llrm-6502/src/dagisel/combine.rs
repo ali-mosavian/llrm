@@ -21,12 +21,49 @@ pub struct MosCombines {
     pub sized: bool,
 }
 
+/// The combines after legalization: only the shared-shift answer, which every
+/// run of the combiner must give alike (a fold the first run declined would
+/// be made by the next).
+pub struct MosLateCombines;
+
+impl CombineHooks for MosLateCombines {
+    fn fold_shift_of_shared_shift(
+        &self,
+        vt: EVT,
+        inner: u32,
+    ) -> bool {
+        folds_shared_shift(vt, inner)
+    }
+}
+
+/// A word shift by 1 to 4 is a chain of that many steps for both bytes, and
+/// the other half reads it; from 5 a byte shift or a bit trick is cheaper
+/// than the chain whoever else reads it.
+fn folds_shared_shift(
+    vt: EVT,
+    inner: u32,
+) -> bool {
+    vt != EVT::I16 || inner >= 5
+}
+
 impl CombineHooks for MosCombines {
     fn has_target_combine(
         &self,
         op: ISD,
     ) -> bool {
         matches!(op, ISD::Mul | ISD::Add | ISD::Srl | ISD::Truncate)
+    }
+
+    /// DEVIATE 6502-SHARED-SHIFT: a word shift is one instruction whose two
+    /// bytes both come from one chain, so the high half of `x >> 3` reads that
+    /// shift, not a byte shift of its own (`x >> 11`). Exit: none; the pin's
+    /// pieces are shared by node CSE.
+    fn fold_shift_of_shared_shift(
+        &self,
+        vt: EVT,
+        inner: u32,
+    ) -> bool {
+        folds_shared_shift(vt, inner)
     }
 
     fn perform_dag_combine(

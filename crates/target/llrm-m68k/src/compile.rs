@@ -94,6 +94,13 @@ pub struct Options {
     /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
     /// instruction for.
     pub short: bool,
+    /// A `tst` is dropped past instructions that set the codes between it and
+    /// the definition of its register, which move above the definition
+    /// ([`crate::cmpelim`]).
+    pub hoist_flag_setters: bool,
+    /// `cmpi.l #(2^s-1)` after the `lsr.l #s` of the same value is dropped
+    /// ([`crate::cmpshift`]).
+    pub reuse_shift_flags: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -110,6 +117,8 @@ impl Options {
         push_frame: false,
         push_arguments: false,
         short: false,
+        hoist_flag_setters: false,
+        reuse_shift_flags: false,
         debug: false,
     };
 }
@@ -125,6 +134,8 @@ impl Default for Options {
             push_frame: true,
             push_arguments: true,
             short: true,
+            hoist_flag_setters: true,
+            reuse_shift_flags: true,
             debug: false,
         }
     }
@@ -172,7 +183,10 @@ pub fn items_with(
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
-        crate::cmpelim::eliminate_tests(&mut function);
+        crate::cmpelim::eliminate_tests(&mut function, options.hoist_flag_setters);
+        if options.reuse_shift_flags {
+            crate::cmpshift::reuse_shift_flags(&mut function);
+        }
         crate::shiftadd::shifts_to_adds(&mut function);
         crate::negadd::negative_adds_to_subq(&mut function);
         crate::addrarith::address_adds(&mut function, cpu, wants_size);

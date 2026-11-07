@@ -414,6 +414,8 @@ impl llrm_target::Target for M64 {
                             // CH-STAGED (owner m64, exit 2026-11-20): the pin hoists
                             // constants after LSR on every target; m64 first.
                             constant_hoisting: true,
+                            // DEVIATE ZIMM (owner m64, exit 2026-11-27): see Tuning.
+                            zext_imm_is_basic: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

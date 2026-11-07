@@ -279,6 +279,63 @@ class Resume(Env, unittest.TestCase):
         self.assertEqual(state(pgid), "T")
 
 
+class SlotFile(Env, unittest.TestCase):
+    """A waiter's `echo > slots_now` truncates the file; another waiter's `cat` then read an empty count, `[ $busy -lt $slots ]` failed
+    with "integer expression expected", and that pass admitted nobody (13:39Z, every waiter's log)."""
+
+    def test_slot_count_in_the_mid_band_never_prints_empty_beside_a_truncating_writer(self):
+        os.makedirs(self.slots)
+        slot_file = os.path.join(self.slots, "slots_now")
+        open(slot_file, "w").write("3\n")
+        script = open(GUARD).read()
+        start = script.index("slot_count() {")
+        body = script[start:script.index("\n}\n", start) + 3]
+        harness = (
+            "above() { awk -v a=\"$1\" -v b=\"$2\" 'BEGIN{exit !(a>b)}'; }\n"
+            f"base=3 high=5 widen1=20 narrow1=22 wide=7 widest=10 widest1=14 slot_dir={self.slots}\n{body}\n"
+            f"( while :; do : > {slot_file}; echo 3 > {slot_file}; done ) & w=$!\n"
+            "empty=0; for i in $(seq 1 400); do n=$(slot_count 21 2>/dev/null | tail -1); [ -n \"$n\" ] || empty=$((empty+1)); done\n"
+            "kill $w; echo empty=$empty\n"
+        )
+        done = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.stdout.strip().splitlines()[-1], "empty=0", done.stdout + done.stderr)
+
+
+class TermInsideTheQueue(Env, unittest.TestCase):
+    """A waiter that got SIGTERM inside prio_edit ran its EXIT trap (prio_edit del) in the same shell, which flocked prio.lock a
+    second time on a new descriptor and waited for itself: the waiter never died (test_the_fast_settle... timed out in tearDown under load)."""
+
+    def test_a_waiter_terminated_while_it_holds_the_priority_lock_exits(self):
+        wrapper_dir = os.path.join(self.dir.name, "bin")
+        os.makedirs(wrapper_dir)
+        slow = os.path.join(wrapper_dir, "flock")
+        open(slow, "w").write("#!/bin/sh\n/usr/bin/flock \"$@\"; rc=$?; sleep 0.3; exit $rc\n")
+        os.chmod(slow, 0o755)
+        self.set_load(23.0, 23.0)
+        env = {"LG_SETTLE": "60", "LG_SETTLE_FAST": "1"}
+        self.assertEqual(self.start("true", **env).wait(timeout=10), 0)  # leaves the settle period running
+        path = f"{wrapper_dir}:{os.environ['PATH']}"
+        for attempt in range(6):  # a waiter spends most of each poll inside prio_edit first, holding the lock
+            guard = self.start("true", PATH=path, **env)
+            time.sleep(0.4 + 0.07 * attempt)
+            guard.terminate()
+            self.assertTrue(until(lambda: guard.poll() is not None, 3), f"attempt {attempt}: stuck on its own lock")  # LG_LOCK_WAIT 2 s
+            self.assertTrue(until(lambda: self.slots_free(), 2), f"attempt {attempt}: a slot stayed locked after the exit")
+
+    def slots_free(self):
+        import fcntl
+        slot_dir = os.path.join(self.dir.name, "slots")
+        for name in os.listdir(slot_dir):
+            if not name.startswith("slot."):
+                continue
+            with open(os.path.join(slot_dir, name)) as f:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    return False
+        return True
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -345,8 +402,12 @@ class Drain(Env, unittest.TestCase):
     def test_five_slots_at_one_minute_17_with_30_gb_available(self):
         self.assertEqual(self.admitted(17.0, 30), 5)
 
-    def test_five_slots_at_one_minute_19_with_80_gb_available(self):
-        self.assertEqual(self.admitted(19.0, 80), 5)
+    def test_seven_slots_at_one_minute_21_with_80_gb_available(self):
+        """Five slots at 1m 18.5 left 34 waiters queued with load 18 and the start limit 25: slots, not load, were the bottleneck."""
+        self.assertEqual(self.admitted(21.0, 80), 7)
+
+    def test_three_slots_at_one_minute_23_with_80_gb_available(self):
+        self.assertEqual(self.admitted(23.0, 80), 3)
 
     def test_a_waiter_wakes_within_ten_seconds_of_the_load_dropping(self):
         """The 15 s default poll let only the head waiter admit every 15-30 s: 38 queued at 1m 8, five slots free."""
@@ -393,8 +454,12 @@ class Drain(Env, unittest.TestCase):
     def test_ten_slots_at_one_minute_13_with_80_gb_available(self):
         self.assertEqual(self.admitted(13.0, 80, wanted=12), 10)
 
-    def test_seven_slots_at_one_minute_15_with_80_gb_available(self):
-        self.assertEqual(self.admitted(15.0, 80, wanted=12), 7)
+    def test_ten_slots_at_one_minute_16_with_80_gb_available(self):
+        """Seven slots at 1m 16 left 38 waiters queued with load 16 and the start limit 25."""
+        self.assertEqual(self.admitted(16.0, 80, wanted=12), 10)
+
+    def test_seven_slots_at_one_minute_18_with_80_gb_available(self):
+        self.assertEqual(self.admitted(18.0, 80, wanted=12), 7)
 
     def test_five_slots_at_one_minute_13_with_30_gb_available(self):
         self.assertEqual(self.admitted(13.0, 30, wanted=12), 5)

@@ -351,6 +351,25 @@ b:
     assert_eq!(get(Event::ContextClones), before, "earlycse cloned the context");
 }
 
+/// Every run forked the whole body for the view of the function as it was,
+/// though 15 of 22 runs on the corpus change nothing (EC-1): 9.8 M Ir and a
+/// drop of 3.1 M over 453 runs of memory_expansion.
+#[test]
+fn test_a_run_that_changes_nothing_forks_no_body() {
+    use llrm_mir::counts::{Event, get};
+    let before = get(Event::FunctionForks);
+    let after = run("define i32 @f(i32 %x, i32 %y) {
+b0:
+  %p = add i32 %x, 1
+  %q = add i32 %y, 2
+  %r = add i32 %p, %q
+  ret i32 %r
+}
+");
+    assert!(after.contains("%r = add i32 %p, %q"), "premise: nothing is removed: {after}");
+    assert_eq!(get(Event::FunctionForks), before, "earlycse forked the body");
+}
+
 /// Two loads with equal `!range` nodes were one load that lost its range, so
 /// `ipsccp` found no argument range for quicksort's `sort` (+30% clocks).
 #[test]

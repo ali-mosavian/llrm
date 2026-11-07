@@ -113,11 +113,14 @@ pub enum Event {
     /// A constant visited for the globals it holds the address of
     /// (`globalsaa::embedded_once`).
     ConstantsEmbedded,
+    /// A list of attributes scanned for the fact one flag states
+    /// (`Fact::stated_by`).
+    AttributeScans,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 41] = [
+const NAMES: [&str; 42] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -159,6 +162,7 @@ const NAMES: [&str; 41] = [
     "combine_inserts",
     "branch_probabilities",
     "constants_embedded",
+    "attribute_scans",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -175,7 +179,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 41] = const { [const { Cell::new(0) }; 41] };
+    static EVENTS: [Cell<u64>; 42] = const { [const { Cell::new(0) }; 42] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
