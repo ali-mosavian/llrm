@@ -661,8 +661,28 @@ impl Tti for X86 {
         self.tuning.unroll_milliclocks_per_byte
     }
 
+    fn unroll_never_grows_at_o1(&self) -> bool {
+        self.tuning.unroll_never_grows_at_o1
+    }
+
+    fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
+        self.tuning.unroll_o1_analyzed_trips
+    }
+
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
+    }
+
+    fn narrow_divide_live_limit(&self) -> u32 {
+        self.tuning.narrow_divide_live_limit
+    }
+
+    fn sink_spares_ranges(&self) -> bool {
+        self.tuning.sink_spares_ranges
+    }
+
+    fn divide_by_bytes(&self) -> bool {
+        self.tuning.divide_by_bytes
     }
 
     fn price_pin_multiplies(&self) -> bool {
@@ -704,6 +724,14 @@ impl Tti for X86 {
         self.tuning.x87_share_negated_products && !self.sse2
     }
 
+    fn x87_zero_fill_at_size(&self) -> bool {
+        self.tuning.x87_zero_fill_at_size && !self.sse2
+    }
+
+    fn size_fill(&self) -> Option<llrm_mir::target::SizeFill> {
+        self.tuning.size_fill
+    }
+
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         self.tuning.unroll_partial_threshold
     }
@@ -739,6 +767,10 @@ impl Tti for X86 {
         self.tuning.recursive_inlining_growth
     }
 
+    fn recursive_inlining_depth(&self) -> Option<(u32, u32)> {
+        self.tuning.recursive_inlining_depth
+    }
+
     fn recursive_tre_first(&self) -> (bool, bool) {
         self.tuning.recursive_tre_first
     }
@@ -753,6 +785,10 @@ impl Tti for X86 {
 
     fn inlines_variable_memcpy(&self) -> bool {
         self.tuning.inline_variable_memcpy
+    }
+
+    fn copy_price_for_size(&self) -> Option<llrm_mir::target::CopyPrice> {
+        self.tuning.size_copy_price
     }
 
     fn ipsccp_widen_keeps_sign(&self) -> bool {
@@ -793,8 +829,20 @@ impl Tti for X86 {
         self.tuning.unroll_promotion_fits_registers
     }
 
+    fn lsr_size_order(&self) -> bool {
+        self.tuning.lsr_size_order
+    }
+
+    fn unroll_promotion_fits_x87_stack(&self) -> bool {
+        self.tuning.unroll_promotion_fits_x87_stack && !self.sse2
+    }
+
     fn rotation_guard_must_fold_at_size(&self) -> bool {
         self.tuning.rotation_guard_must_fold_at_size
+    }
+
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        self.tuning.size_rotation_header_limit
     }
 
     fn rotation_header_priced_at_size(&self) -> bool {
@@ -803,6 +851,13 @@ impl Tti for X86 {
 
     fn constant_offset_phi_is_cheap(&self) -> bool {
         !self.tuning.keep_constant_displacements
+    }
+
+    fn constant_arith_phi_is_cheap(
+        &self,
+        optsize: bool,
+    ) -> bool {
+        optsize || !self.tuning.keep_constant_arith_operands
     }
 
     /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
@@ -858,12 +913,17 @@ impl Tti for X86 {
     // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
     // divides to `Expand` (L340) and leaves the two-result ones at the base
     // class's `Legal`, so every register type has one.
+    //
+    // DEVIATE DR1 (exit 2026-11-20): the 32-bit mode's inline `i64` divide
+    // routine returns both, so `i64` has one too (the pin's x86 has none and
+    // `DivRemPairs` writes `x % y` as `x - x / y * y`: a 64-bit multiply and
+    // a subtract per remainder, x_ll_div).
     fn has_div_rem_op(
         &self,
         bits: u32,
         _signed: bool,
     ) -> bool {
-        self.is_type_legal(Ty::Int(bits))
+        self.is_type_legal(Ty::Int(bits)) || (bits == 64 && !self.quad && self.real_mode.is_none())
     }
 
     /// `FSQRT` is legal on every scalar float: the SSE instruction, or x87's.
@@ -1177,10 +1237,15 @@ impl Tti for X86 {
             return false;
         }
         // Long mode, position independent (the PIE a default clang makes): a
-        // symbol is `[rip + symbol]`, which takes no displacement
-        // beside it and no index (the `isPositionIndependent() && is64Bit()`
-        // rule).
-        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale > 1) {
+        // symbol is `[rip + symbol]`, which takes no displacement, index or
+        // base register beside it.
+        // DEVIATE PIE64: the pin refuses only an offset or a scale above 1
+        // (`isPositionIndependent() && is64Bit()`), so `@sym + reg` is one
+        // address to it; the backend forms the symbol with a `lea` at every
+        // use, which the metric never saw (histo -O2 -80 B, jpeg_fixed -O1
+        // -832 B, objects of m32 and non-PIE unchanged). Owner w12, exit
+        // 2026-11-30.
+        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale != 0 || has_base_reg) {
             return false;
         }
         match scale {

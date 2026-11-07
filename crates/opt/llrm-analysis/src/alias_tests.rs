@@ -200,7 +200,7 @@ b0:
 #[test]
 fn test_a_pointer_advanced_through_memory_reaches_a_fixed_point() {
     // `*to++` in heap.c's copy_bytes: each pass stored one more offset into
-    // the cell, and llrm-c never finished.
+    // the cell, and llrm-cc never finished.
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let parsed = Parsed::new(

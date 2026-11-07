@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ipsccp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ipsccp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ipsccp.rs sha256:b66c76fddb124502719150effd9144b57f2caa7cb1736c4b7f305a4c39af9d32 -->
+<!-- src: crates/opt/llrm-transforms/src/ipsccp.rs sha256:28f8d1415aad71ff0a02fe60d056c2d20c4bc48ee7e965fa0c7f7b94f05acda9 -->
 
 # ipsccp
 
@@ -41,8 +41,8 @@ left.
 ## DEVIATEs
 1. No `FunctionSpecializer`
    ([L161](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/SCCP.cpp#L161),
-   on at -O3 in the pin): [`crate::sccpsolver`](sccpsolver.md) DEVIATE 2. Exit: its
-   translation.
+   on wherever ipsccp runs in the pin bar LTO pre-link): [`crate::sccpsolver`](sccpsolver.md) DEVIATE 2. Exit: none while it
+   specialises nothing on the corpus (pin, 202 files, O2 and O3, 2026-11-07).
 2. The solve is per module of a program, and
    `canTrackArgumentsInterprocedurally`
    ([L133](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/SCCP.cpp#L133))

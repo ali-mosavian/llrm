@@ -29,10 +29,10 @@
 //! coalescing the copies `eliminateRegSequence` makes
 //! (RegisterCoalescer.cpp#L464). Exit: the lane model, 2026-11-30.
 //!
-//! DEVIATE 2: the `MFunction` states no block odds. A branch with one edge
-//! that stays in its loop and one that leaves gets 31 in 32 to stay (LLVM's
-//! loop branch heuristic); every other branch is even. Exit: the odds the
-//! front end knows (the IR's branch weights).
+//! DEVIATE 2: a target whose `MFunction` states no odds (`odds` is `None`)
+//! gets 31 in 32 to stay on a branch with one edge that stays in its loop and
+//! one that leaves (LLVM's loop branch heuristic); every other branch is
+//! even. Exit: each target states the IR's edge probabilities.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -171,11 +171,11 @@ impl<T: Target> Converted<T> {
                     copy_frequency: join.copy_frequency,
                 })
             })),
-            Some(Box::new(is_literal_move)),
-            Some(Box::new(|literal, source, destination, size| {
+            Some(Box::new(|one: &Insn| is_cheap_move::<T>(one))),
+            Some(Box::new(|literal, source, destination, size, alone| {
                 let (source, destination): (Vec<RegId>, Vec<RegId>) =
                     (source.iter().copied().collect(), destination.iter().copied().collect());
-                T::literal_move_wins(literal, &source, &destination, size)
+                literal_remat_wins::<T>(literal, &source, &destination, size, alone)
             })),
             Box::new(move |one, value| {
                 // which of the instruction's operand slots name the value: the
@@ -516,7 +516,10 @@ pub fn to_lir<T: Target>(
     let entry = if function.blocks.is_empty() { 0 } else { 0 };
     let mut body = LirBody::new(function.name.clone(), entry, blocks, IndexMap::default(), made.pins.clone());
     body.returns_twice = function.returns_twice;
-    loop_branch_odds(&mut body);
+    match &function.odds {
+        Some(odds) => stated_odds(&mut body, function, odds),
+        None => loop_branch_odds(&mut body),
+    }
     body.inputs = entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect();
     let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
     for (v, class) in function.classes.iter().enumerate() {
@@ -551,6 +554,7 @@ pub fn to_lir<T: Target>(
             foldable,
             infos,
             clobbered: clobbered_by_spills,
+            buffers: call_result_buffers::<T>(function),
             marker: PhantomData,
         },
         tri: SpikeRegisterInfo {
@@ -561,6 +565,24 @@ pub fn to_lir<T: Target>(
             register_cost: T::register_cost,
         },
     })
+}
+
+/// The odds the `MFunction` states, by block number in `body`. An edge with
+/// none shares what the others leave (`getSuccProbability`).
+fn stated_odds<C>(
+    body: &mut LirBody,
+    function: &MFunction<C>,
+    odds: &crate::placement::Odds,
+) {
+    for block in body.blocks.iter() {
+        let from = function.blocks[block.at as usize].id;
+        for &to in block.succ.iter() {
+            let id = function.blocks[to as usize].id;
+            if let Some((probability, _)) = odds.get(&(from, id)) {
+                body.odds.taken.insert((block.at, to), probability.get_numerator());
+            }
+        }
+    }
 }
 
 /// The edge odds of a branch with one edge that stays in its innermost loop
@@ -1035,7 +1057,10 @@ fn operands_in<'a>(
         return Vec::new();
     }
     let lane_dest = |bytes: u32, offset: u32| {
-        matches!(what.dests.first(), Some(Loc::Held(held)) if held.width == bytes && held.offset == offset)
+        matches!(
+            what.dests.first(),
+            Some(Loc::Held(held)) if held.width == bytes && held.offset == offset
+        )
     };
     infos
         .iter()
@@ -1181,10 +1206,22 @@ pub struct SpikeInstrInfo<T: Target> {
     infos: Vec<(&'static str, Vec<OperandInfo>)>,
     /// `Target::spill_clobbers`: no value is held in one.
     clobbered: Vec<RegId>,
+    /// `call_result_buffers`: frame objects a call fills and loads read back.
+    buffers: BTreeSet<i64>,
     marker: PhantomData<T>,
 }
 
 impl<T: Target> SpikeInstrInfo<T> {
+    /// A load of one of `buffers`: any other load of a frame slot is a local
+    /// variable that other instructions write.
+    fn is_known_buffer_load(
+        &self,
+        one: &Insn,
+    ) -> bool {
+        is_buffer_load::<T>(one)
+            && one.what.as_ref().and_then(frame_cell).is_some_and(|addr| self.buffers.contains(&addr.disp))
+    }
+
     fn operands_of(
         &self,
         one: &Insn,
@@ -1245,17 +1282,51 @@ impl<T: Target> SpikeInstrInfo<T> {
     }
 }
 
+/// Whether the coalescer makes the literal `literal` again for a copy from a
+/// value in `source` to one in `destination`. DEVIATE C10
+/// (register_coalescer.rs): at -Os a constant that stays read (`!alone`) is not
+/// made again unless the target says the move is no longer than the copy; the
+/// target's price decides the rest.
+pub fn literal_remat_wins<T: Target>(
+    literal: &Insn,
+    source: &[RegId],
+    destination: &[RegId],
+    size: bool,
+    alone: bool,
+) -> bool {
+    (!size || alone || T::literal_move_is_copy_sized(literal))
+        && T::literal_move_wins(literal, source, destination, size)
+}
+
+/// [`is_literal_move`], or the cheap move that reads registers
+/// ([`Target::remat_reads_registers`]): the pin's `isReMaterializable` takes a
+/// virtual-register use and `allUsesAvailableAt` asks at the copy whether it
+/// still holds (the callers do).
+fn is_cheap_move<T: Target>(one: &Insn) -> bool {
+    is_literal_move(one)
+        || (T::remat_reads_registers() && is_move_with_reads(one, false))
+        || (T::remats_symbol_addresses() && one.uses.is_empty() && is_move_with_reads(one, true))
+}
+
 /// One register written by a move of a literal, whatever the target names it:
 /// the target's `isAsCheapAsAMove && isReMaterializable` for a constant.
 fn is_literal_move(one: &Insn) -> bool {
+    one.uses.is_empty() && is_move_with_reads(one, false)
+}
+
+/// [`is_literal_move`] that may read registers: the registers it reads, then
+/// the identity of the operation.
+fn is_move_with_reads(
+    one: &Insn,
+    symbol: bool,
+) -> bool {
     let Some(what) = one.what.as_ref() else { return false };
     one.defines.len() == 1
-        && one.uses.is_empty()
         && one.group.is_none()
         && one.requires.is_empty()
         && one.delivers.is_empty()
         && one.clobbers.is_empty()
-        && one.symbol != Some(true)
+        && (symbol || one.symbol != Some(true))
         // a lane def makes part of its value: making it again does not
         && one.def_lanes.is_empty()
         && one.partial_defs.is_empty()
@@ -1265,7 +1336,255 @@ fn is_literal_move(one: &Insn) -> bool {
             what.dests.as_slice(),
             [Loc::Held(held)] if held.value == one.defines[0]
         )
-        && matches!(what.sources.as_slice(), [Loc::Imm(_)])
+        && matches!(
+            what.sources.as_slice(),
+            [reads @ .., Loc::Imm(_)] if reads.iter().all(|loc| matches!(loc, Loc::Held(held) if one.uses.contains(&held.value)))
+        )
+}
+
+/// One register written by a load of a frame slot of an incoming argument.
+fn is_frame_load<T: Target>(one: &Insn) -> bool {
+    is_named_frame_load(one, T::is_invariant_argument_load)
+}
+
+/// One register written by a load of a frame object a call fills
+/// (`call_result_buffers`).
+fn is_buffer_load<T: Target>(one: &Insn) -> bool {
+    is_named_frame_load(one, T::is_buffer_load)
+}
+
+fn is_named_frame_load(
+    one: &Insn,
+    named: fn(&str) -> bool,
+) -> bool {
+    let Some(what) = one.what.as_ref() else { return false };
+    what.name.as_deref().is_some_and(named)
+        && one.defines.len() == 1
+        && one.uses.is_empty()
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty()
+        && one.def_lanes.is_empty()
+        && one.partial_defs.is_empty()
+        && !one.undef_super
+        && !one.volatile
+        && matches!(
+            what.dests.as_slice(),
+            [Loc::Held(held)] if held.value == one.defines[0]
+        )
+        && frame_cell(what).is_some()
+}
+
+/// The frame slot a load reads: its one memory source, the rest immediates (the
+/// displacement a pin row names beside it).
+fn frame_cell(what: &Semantics) -> Option<Addr> {
+    let mut found = None;
+    for place in &what.sources {
+        match place {
+            Loc::Mem(cell) if found.is_none() => found = cell.addr.filter(|addr| addr.space == Space::Frame),
+            Loc::Imm(imm) if imm.address.is_none() => {}
+            _ => return None,
+        }
+    }
+    found
+}
+
+/// The values defined once by a load of an incoming stack argument (a frame
+/// slot below zero) that nothing in `body` writes or takes the address of.
+fn incoming_argument_loads<T: Target>(body: &LirBody) -> BTreeSet<u32> {
+    let incoming = |addr: Addr| addr.space == Space::Frame && addr.disp < 0;
+    let mut written: BTreeSet<i64> = BTreeSet::new();
+    let mut definitions: llrm_support::hash::HashMap<u32, usize> = Default::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for value in &one.defines {
+            *definitions.entry(*value).or_default() += 1;
+        }
+        let Some(what) = one.what.as_ref() else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            match place {
+                Loc::Address(a) if a.addr.is_some_and(incoming) => return BTreeSet::new(),
+                Loc::Imm(imm) if imm.address.is_some_and(incoming) => return BTreeSet::new(),
+                _ => {}
+            }
+        }
+        for place in &what.dests {
+            if let Loc::Mem(cell) = place {
+                if let Some(addr) = cell.addr.filter(|addr| incoming(*addr)) {
+                    written.insert(addr.disp);
+                }
+            }
+        }
+        if what.op == Operation::Address {
+            if let Some(addr) = what.sources.iter().find_map(|place| match place {
+                Loc::Mem(cell) => cell.addr.filter(|addr| incoming(*addr)),
+                _ => None,
+            }) {
+                written.insert(addr.disp);
+            }
+        }
+    }
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| is_frame_load::<T>(one))
+        .filter_map(|one| {
+            let Some(what) = one.what.as_ref() else { return None };
+            let addr = frame_cell(what).filter(|addr| incoming(*addr))?;
+            (!written.contains(&addr.disp) && definitions.get(&one.defines[0]) == Some(&1)).then_some(one.defines[0])
+        })
+        .collect()
+}
+
+/// The values defined once by a load of a buffer, with the cell each reads.
+fn buffer_loads<T: Target>(
+    body: &LirBody,
+    buffers: &BTreeSet<i64>,
+) -> Vec<(u32, (i64, u32))> {
+    if buffers.is_empty() {
+        return Vec::new();
+    }
+    let mut definitions: llrm_support::hash::HashMap<u32, usize> = Default::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for value in &one.defines {
+            *definitions.entry(*value).or_default() += 1;
+        }
+    }
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| is_buffer_load::<T>(one))
+        .filter_map(|one| {
+            let what = one.what.as_ref()?;
+            let addr = frame_cell(what).filter(|addr| buffers.contains(&addr.disp))?;
+            let Some(Loc::Held(held)) = what.dests.first() else { return None };
+            (definitions.get(&one.defines[0]) == Some(&1)).then(|| (one.defines[0], (addr.disp, held.width)))
+        })
+        .collect()
+}
+
+/// DEVIATE R-BUF1 (owner greedy-subreg, exit 2026-11-20): the frame objects a
+/// call fills and only loads read, each load straight after that call. The
+/// pin remakes a load only from an immutable object. Here the address of the
+/// object is stored once into the arguments of one call (copies aside) and
+/// reaches nothing else, so that call is the one write to the object; every
+/// load of it follows that call in its block with no call between, so a value
+/// loaded is the object's content wherever the value lives, and a load made
+/// again where it is read gives the same value.
+fn call_result_buffers<T: Target>(function: &MFunction<T::Class>) -> BTreeSet<i64> {
+    let mut found = BTreeSet::new();
+    let mut frames: BTreeSet<i32> = BTreeSet::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if let Some(frame) = T::frame_address(inst) {
+            frames.insert(frame);
+        }
+    }
+    // uses of each virtual register in the whole function
+    let mut uses: llrm_support::hash::HashMap<u32, usize> = Default::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for operand in &inst.operands {
+            if let Operand::Use(Reg::Virt(v)) = operand {
+                *uses.entry(*v).or_default() += 1;
+            }
+        }
+    }
+    'frames: for frame in frames {
+        let mut taker: Option<(usize, usize)> = None;
+        let mut loads: Vec<(usize, usize)> = Vec::new();
+        for (b, block) in function.blocks.iter().enumerate() {
+            for (i, inst) in block.insts.iter().enumerate() {
+                if !inst.operands.iter().any(|o| matches!(o, Operand::Frame(f) if *f == frame)) {
+                    continue;
+                }
+                if T::frame_address(inst) == Some(frame) {
+                    if taker.replace((b, i)).is_some() {
+                        continue 'frames;
+                    }
+                } else if let Kind::Op(name) = inst.kind
+                    && T::is_buffer_load(name)
+                    && inst.operands.iter().any(|o| matches!(o, Operand::Def(_)))
+                {
+                    loads.push((b, i));
+                } else {
+                    continue 'frames;
+                }
+            }
+        }
+        let Some((tb, ti)) = taker else { continue };
+        // the address, from its definition to the first call
+        let block = &function.blocks[tb];
+        let mut holders: BTreeSet<u32> = BTreeSet::new();
+        let mut in_window = 0usize;
+        let mut call = None;
+        let mut spreads = false;
+        let takes = &block.insts[ti];
+        let mut phys_holders = false;
+        for operand in &takes.operands {
+            match operand {
+                Operand::Def(Reg::Virt(v)) => {
+                    holders.insert(*v);
+                }
+                Operand::Def(Reg::Phys(_)) => phys_holders = true,
+                _ => {}
+            }
+        }
+        for (i, inst) in block.insts.iter().enumerate().skip(ti + 1) {
+            if inst.call {
+                call = Some(i);
+                break;
+            }
+            let reads: Vec<(usize, Reg)> = inst
+                .operands
+                .iter()
+                .enumerate()
+                .filter_map(|(at, o)| if let Operand::Use(r) = o { Some((at, *r)) } else { None })
+                .collect();
+            let reads_address = reads
+                .iter()
+                .any(
+                    |(_, r)| match r {
+                        Reg::Virt(v) => holders.contains(v),
+                        Reg::Phys(_) => phys_holders,
+                    },
+                );
+            if !reads_address {
+                continue;
+            }
+            let is_copy = inst.kind == Kind::Copy;
+            let is_store = inst.may_store && !inst.operands.iter().any(|o| matches!(o, Operand::Def(_)));
+            if !is_copy && !is_store {
+                spreads = true;
+            }
+            for (_, r) in &reads {
+                if let Reg::Virt(v) = r {
+                    if holders.contains(v) {
+                        in_window += 1;
+                    }
+                }
+            }
+            if is_copy {
+                for operand in &inst.operands {
+                    if let Operand::Def(Reg::Virt(v)) = operand {
+                        holders.insert(*v);
+                    }
+                }
+            }
+        }
+        let Some(call) = call else { continue };
+        let total: usize = holders.iter().map(|v| uses.get(v).copied().unwrap_or(0)).sum();
+        if spreads || total != in_window {
+            continue;
+        }
+        // every load follows the call in its block, with no call between
+        for (b, i) in &loads {
+            let ok = *b == tb && *i > call && !function.blocks[*b].insts[call + 1..*i].iter().any(|inst| inst.call);
+            if !ok {
+                continue 'frames;
+            }
+        }
+        found.insert(i64::from(frame));
+    }
+    found
 }
 
 /// How wide `insn` holds `value`.
@@ -1318,22 +1637,48 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         &self,
         one: &Insn,
     ) -> bool {
-        is_literal_move(one)
+        is_cheap_move::<T>(one) || is_frame_load::<T>(one) || self.is_known_buffer_load(one)
     }
 
     fn is_trivially_re_materializable(
         &self,
         def: &Insn,
-        _invariant: bool,
+        invariant: bool,
     ) -> bool {
-        self.remat_shape(def)
+        let r = is_cheap_move::<T>(def) || (invariant && (is_frame_load::<T>(def) || self.is_known_buffer_load(def)));
+        r
     }
 
     fn argument_loads(
         &self,
-        _body: &LirBody,
+        body: &LirBody,
     ) -> BTreeSet<u32> {
-        BTreeSet::new()
+        let mut found = incoming_argument_loads::<T>(body);
+        found.extend(buffer_loads::<T>(body, &self.buffers).into_iter().map(|(value, _)| value));
+        found
+    }
+
+    fn argument_load_defs(
+        &self,
+        body: &LirBody,
+    ) -> BTreeSet<(i64, u32)> {
+        buffer_loads::<T>(body, &self.buffers).into_iter().map(|(_, cell)| cell).collect()
+    }
+
+    fn remat_load_cell(
+        &self,
+        one: &Insn,
+    ) -> Option<(i64, u32)> {
+        let addr = frame_cell(one.what.as_ref()?).filter(|addr| self.buffers.contains(&addr.disp))?;
+        self.is_known_buffer_load(one).then(|| {
+            (
+                addr.disp,
+                one.what.as_ref().and_then(|w| w.dests.first()).map_or(0, |d| match d {
+                    Loc::Held(held) => held.width,
+                    _ => 0,
+                }),
+            )
+        })
     }
 
     /// The read the target takes from memory (`Target::fold_spill`) becomes a
@@ -1375,6 +1720,30 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         cell: &Mem,
     ) -> Option<Arc<Insn>> {
         let what = one.what.as_ref()?;
+        // A straight COPY folds as a load or a store
+        // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetInstrInfo.cpp#L794>):
+        // the spilled end is the slot, the other end stays a register.
+        // A pinned end (`requires`/`delivers`) is a register this converter
+        // numbers, not the allocator: 6502 copied `rs0` into a slot as
+        // `lda rc18446744073709551603`.
+        if one.group.is_none()
+            && one.def_lanes.is_empty()
+            && one.requires.is_empty()
+            && one.delivers.is_empty()
+            && self.is_plain_move(what)
+            && let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice())
+            && dest.width == source.width
+            && dest.width as u32 == cell.width
+            && dest.value != source.value
+            && self.class_of(dest.value) == self.class_of(source.value)
+        {
+            if dest.value == reg {
+                return Some(self.store_reg_to_stack_slot(one, source.value, cell));
+            }
+            if source.value == reg {
+                return Some(self.load_reg_from_stack_slot(one, dest.value, cell));
+            }
+        }
         if one.group.is_none()
             && !what.sources.iter().any(|loc| matches!(loc, Loc::Held(_)))
             && what.name.as_deref().is_some_and(T::is_zero_def)
@@ -1775,9 +2144,8 @@ pub fn from_lir<T: Target>(
             .get(&held.value)
             .is_some_and(|wide| registers.bytes(*wide).is_some_and(|bytes| bytes > i64::from(held.width)));
         if (lane_values.contains(&held.value) || narrower) && !pinned.contains_key(&held.value) {
-            let found = placed_at
-                .get(&held.value)
-                .and_then(|wide| lane_register(&registers, *wide, held.offset, held.width));
+            let found =
+                placed_at.get(&held.value).and_then(|wide| lane_register(&registers, *wide, held.offset, held.width));
             match found {
                 Some(register) => return Reg::Phys(register),
                 None => {
@@ -1823,7 +2191,8 @@ pub fn from_lir<T: Target>(
                     .find_map(|loc| if let Loc::Mem(cell) = loc { Some(cell) } else { None });
                 let slot = slot_of(cell.ok_or_else(|| format!("a spill with no cell: {what:?}"))?);
                 let Some(value) = value else {
-                    // A zero stored from the zero register (`fold_memory_operand`).
+                    // A zero stored from the zero register
+                    // (`fold_memory_operand`).
                     let made = T::zero_store(T::any(), slot).ok_or("the target states no zero store")?;
                     insts.push(made);
                     if !slots.iter().any(|(one, _)| *one == slot) {
@@ -1831,11 +2200,31 @@ pub fn from_lir<T: Target>(
                     }
                     continue;
                 };
-                let register = number(value, &mut classes);
-                let class = classes[match register {
-                    Reg::Virt(v) => v as usize,
-                    Reg::Phys(_) => 0,
-                }];
+                // named as every other instruction names the value (by lane
+                // for a byte of a wider register): `drop_self_copies` counts
+                // the readers of a register by name
+                let named = what
+                    .dests
+                    .iter()
+                    .chain(&what.sources)
+                    .find_map(|loc| if let Loc::Held(held) = loc { Some(*held) } else { None })
+                    .ok_or("a spill of no value")?;
+                let numbered = number(value, &mut classes);
+                // A pinned value is no virtual register: its class is one that holds its register
+                // (vreg 0's class made a spill of `hl` a byte store, `ld -4(ix), hl`).
+                let class = match numbered {
+                    Reg::Virt(v) => classes[v as usize],
+                    Reg::Phys(register) => classes
+                        .iter()
+                        .copied()
+                        .find(|class| T::candidates(*class).contains(&register))
+                        .unwrap_or_else(T::any),
+                };
+                let register = if T::spills_named_by_lane() {
+                    lane_or_number(&named, &mut classes, &mut number)
+                } else {
+                    numbered
+                };
                 let lane = cell.filter(|_| insn.spill_store).and_then(llrm_codegen::greedy::tii::lane_offset);
                 let made = if let Some(offset) = lane {
                     T::spill_store_lane(class, register, slot, offset)
@@ -1885,9 +2274,11 @@ pub fn from_lir<T: Target>(
                     .ok_or_else(|| format!("an instruction that is no definition of the function: {what:?}"))?;
             }
             let source = &original.blocks[from].insts[inst];
-            // a copy into a lane of a pair: a move into the register of that lane
+            // a copy into a lane of a pair: a move into the register of that
+            // lane
             if name == Some(COPY) && !insn.def_lanes.is_empty() {
-                // a source that is no value (a physical register) stays as written
+                // a source that is no value (a physical register) stays as
+                // written
                 if let Some(Loc::Held(source)) = what.sources.first() {
                     let Some(Loc::Held(to)) = what.dests.first() else {
                         return Err("a lane copy that does not move a value".into());
@@ -1969,13 +2360,52 @@ pub fn allocate_greedy<T: Target>(
     registers: Regs,
     size: bool,
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
+    let name = function.name.clone();
     let first = allocate_greedy_pinned::<T>(function, registers, size, T::joins_pinned_copies());
-    match first {
+    let result = match first {
         Err(why) if T::joins_pinned_copies() && why.ends_with("greedy could not allocate") => {
-            allocate_greedy_pinned::<T>(function, registers, size, false).map_err(|_| why)
+            let second = allocate_greedy_pinned::<T>(function, registers, size, false);
+            if second.is_ok() {
+                record_refusal(&name, &why, true);
+            }
+            second.map_err(|_| why)
         }
         other => other,
+    };
+    if let Err(why) = &result {
+        record_refusal(&name, why, false);
     }
+    result
+}
+
+/// A function greedy would not take as it was, for the audit of silent
+/// fallbacks: a target that answers a refusal with another allocator, or with
+/// a second try, shows nothing else.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Refusal {
+    pub function: String,
+    pub why: String,
+    /// Allocated on a second try (DEVIATE PJ1) rather than refused.
+    pub retried: bool,
+}
+
+static REFUSALS: std::sync::Mutex<Vec<Refusal>> = std::sync::Mutex::new(Vec::new());
+
+fn record_refusal(
+    function: &str,
+    why: &str,
+    retried: bool,
+) {
+    if llrm_support::env_flag!("LLRM_GREEDY_REFUSALS") {
+        eprintln!("greedy refusal: @{function}: {why}{}", if retried { " (allocated on the second try)" } else { "" });
+    }
+    let one = Refusal { function: function.to_owned(), why: why.to_owned(), retried };
+    REFUSALS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(one);
+}
+
+/// The refusals since the last call, oldest first.
+pub fn take_refusals() -> Vec<Refusal> {
+    std::mem::take(&mut *REFUSALS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
 }
 
 fn allocate_greedy_pinned<T: Target>(

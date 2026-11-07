@@ -6,8 +6,18 @@
 //! - [`store_then_index_load`]: `sta m; lda n; ldx m` is `tax; lda n` when `m`
 //!   is dead after (likewise `ldy m`): the byte went through memory to leave
 //!   `a`.
-//! - [`chain_ends_in_a`]: `(asl m; rol n)*k; lda m` (also `lsr`/`ror`, and `lda
-//!   n`) is `lda m; (asl a; rol n)*k` when the loaded byte is dead after: the
+//! - [`fold_temp_operand`]: `lda x; sta t; lda y; [clc|sec]; adc t` (likewise
+//!   `sbc`, `and`, `ora`, `eor`, `cmp`) is `lda y; [clc|sec]; adc x` when `t` is
+//!   dead after: the first operand goes to the instruction straight from where
+//!   it was loaded (a memory cell, `(p),y`, an indexed byte), not through `a`
+//!   and a temporary.
+//! - [`carry_stays_in_the_flag`]: `lda #0; rol a; tax` (or `sta m`), work that
+//!   leaves the carry and the saved byte alone, `txa` (or `lda m`), `lsr a` is the
+//!   work alone when `a` and the byte are dead after: a borrow chain that ran
+//!   through loads of its next operand carried its bit in a register for
+//!   nothing (a compare of two longs: 5 instructions at each word).
+//! - [`chain_ends_in_a`]: `(asl m; rol n)*k; [clc]; lda m` (also `lsr`/`ror`,
+//!   and `lda n`) is `lda m; (asl a; rol n)*k` when the loaded byte is dead after: the
 //!   byte that is returned shifts in `a`, not in memory and then loaded.
 //!
 //! Runs from [`crate::peephole::run`].
@@ -193,6 +203,128 @@ fn store_then_index_once(asm: &mut Asm) -> bool {
     false
 }
 
+/// The ALU instructions that take a memory operand of every form `lda` does.
+fn alu(op: Op) -> bool {
+    matches!(op, Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor | Op::Cmp)
+}
+
+pub fn fold_temp_operand(asm: &mut Asm) {
+    while temp_operand_once(asm) {}
+}
+
+fn temp_operand_once(asm: &mut Asm) -> bool {
+    let lines = &asm.lines;
+    for at in 0..lines.len().saturating_sub(3) {
+        let (Line::Inst(first), Line::Inst(store), Line::Inst(second)) = (&lines[at], &lines[at + 1], &lines[at + 2]) else {
+            continue;
+        };
+        let Operand::Direct(t) = &store.operand else { continue };
+        if first.op != Op::Lda || store.op != Op::Sta || second.op != Op::Lda || !stable(&first.operand) {
+            continue;
+        }
+        // neither load reads the temporary, as a cell or as a pointer
+        if first.operand.name() == Some(t.as_str()) || second.operand.name() == Some(t.as_str()) {
+            continue;
+        }
+        let mut op_at = at + 3;
+        while matches!(lines.get(op_at), Some(Line::Inst(Inst { op: Op::Clc | Op::Sec, .. }))) {
+            op_at += 1;
+        }
+        let Some(Line::Inst(user)) = lines.get(op_at) else { continue };
+        if !alu(user.op) || user.operand != Operand::Direct(t.clone()) {
+            continue;
+        }
+        if !cell_dead_from(lines, op_at + 1, t, &asm.result_cells, &mut BTreeSet::new()) {
+            continue;
+        }
+        let operand = first.operand.clone();
+        asm.lines[op_at] = Line::Inst(Inst { op: user.op, operand, place: user.place });
+        asm.lines.drain(at..at + 2);
+        return true;
+    }
+    false
+}
+
+/// An operand a later instruction reads as the load did: the same bytes as
+/// long as no store or index change comes between, which the three lines of the
+/// pattern guarantee.
+fn stable(operand: &Operand) -> bool {
+    matches!(operand, Operand::Direct(_) | Operand::Imm(_) | Operand::Indexed(..) | Operand::IndirectY(_))
+}
+
+pub fn carry_stays_in_the_flag(asm: &mut Asm) {
+    let mut at = 0;
+    while at + 2 < asm.lines.len() {
+        let [Line::Inst(zero), Line::Inst(rotate), Line::Inst(save)] = &asm.lines[at..at + 3] else {
+            at += 1;
+            continue;
+        };
+        let saved_in = match (&save.op, &save.operand) {
+            (Op::Tax, _) => Some(None),
+            (Op::Sta, Operand::Direct(m)) => Some(Some(m.clone())),
+            _ => None,
+        };
+        let (Some(saved_in), true, true) = (
+            saved_in,
+            zero.op == Op::Lda && zero.operand == Operand::Imm("0".into()),
+            rotate.op == Op::Rol && rotate.operand == Operand::Acc,
+        ) else {
+            at += 1;
+            continue;
+        };
+        // work that changes neither the carry nor the byte in its place
+        let mut end = at + 3;
+        // `a` still holds the saved byte until a load replaces it
+        let mut a_loaded = false;
+        while let Some(Line::Inst(inst)) = asm.lines.get(end) {
+            let writes_m = matches!((&inst.operand, &saved_in), (Operand::Direct(c), Some(m)) if c == m);
+            let restore = matches!((&inst.op, &inst.operand, &saved_in), (Op::Lda, Operand::Direct(c), Some(m)) if c == m);
+            let quiet = match inst.op {
+                Op::Lda if restore => false,
+                Op::Lda => {
+                    a_loaded = true;
+                    true
+                }
+                Op::Ldy | Op::Sty | Op::Stx | Op::Tay => !writes_m,
+                // `x` is free to change when the byte waits in a cell
+                Op::Ldx | Op::Tax => saved_in.is_some() && !writes_m,
+                Op::Sta => a_loaded && !writes_m,
+                _ => false,
+            };
+            if !quiet {
+                break;
+            }
+            end += 1;
+        }
+        let (Some(Line::Inst(load)), Some(Line::Inst(shift))) = (asm.lines.get(end), asm.lines.get(end + 1)) else {
+            at += 1;
+            continue;
+        };
+        let restores = match &saved_in {
+            None => load.op == Op::Txa,
+            Some(m) => load.op == Op::Lda && load.operand == Operand::Direct(m.clone()),
+        };
+        // x must hold the byte in place: nothing between writes it
+        let x_kept = true;
+        if !restores || shift.op != Op::Lsr || shift.operand != Operand::Acc || !x_kept {
+            at += 1;
+            continue;
+        }
+        let exits = crate::peephole::Exits::of(asm);
+        let a_dead = crate::peephole::dead_from(&asm.lines, end + 2, crate::asm::Registers::A, &mut Default::default(), exits);
+        let byte_dead = match &saved_in {
+            None => crate::peephole::dead_from(&asm.lines, end + 2, crate::asm::Registers::X, &mut Default::default(), exits),
+            Some(m) => cell_dead_from(&asm.lines, end + 2, m, &asm.result_cells, &mut BTreeSet::new()),
+        };
+        if !a_dead || !byte_dead {
+            at += 1;
+            continue;
+        }
+        asm.lines.drain(end..end + 2);
+        asm.lines.drain(at..at + 3);
+    }
+}
+
 pub fn chain_ends_in_a(asm: &mut Asm) {
     while chain_once(asm) {}
 }
@@ -223,11 +355,16 @@ fn chain_once(asm: &mut Asm) -> bool {
         while step(lines, end) == Some((first, second, m.clone(), n.clone())) {
             end += 2;
         }
-        let Some(Line::Inst(Inst { op: Op::Lda, operand: Operand::Direct(x), .. })) = lines.get(end) else { continue };
+        // a carry op between the chain and the load is kept after the chain
+        let mut load = end;
+        while matches!(lines.get(load), Some(Line::Inst(Inst { op: Op::Clc | Op::Sec, .. }))) {
+            load += 1;
+        }
+        let Some(Line::Inst(Inst { op: Op::Lda, operand: Operand::Direct(x), .. })) = lines.get(load) else { continue };
         if x != &m && x != &n {
             continue;
         }
-        if !cell_dead_from(lines, end + 1, x, &asm.result_cells, &mut BTreeSet::new()) || !flags_unread(lines, end + 1) {
+        if !cell_dead_from(lines, load + 1, x, &asm.result_cells, &mut BTreeSet::new()) || !flags_unread(lines, load + 1) {
             continue;
         }
         let in_a = |op: Op, cell: &String| {
@@ -235,12 +372,13 @@ fn chain_once(asm: &mut Asm) -> bool {
             Line::Inst(Inst { op, operand, place: 0 })
         };
         let mut out: Vec<Line> = lines[..s].to_vec();
-        out.push(lines[end].clone());
+        out.push(lines[load].clone());
         for _ in 0..(end - s) / 2 {
             out.push(in_a(first, &m));
             out.push(in_a(second, &n));
         }
-        out.extend_from_slice(&lines[end + 1..]);
+        out.extend_from_slice(&lines[end..load]);
+        out.extend_from_slice(&lines[load + 1..]);
         asm.lines = out;
         return true;
     }

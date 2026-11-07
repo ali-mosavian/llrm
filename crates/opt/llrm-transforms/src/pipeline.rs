@@ -78,7 +78,7 @@
 //!
 //! # Example
 //! No honest example: the pipeline is the order of the passes, not one rewrite,
-//! and no one function shows it. `llrm-c --dump DIR` writes the module after
+//! and no one function shows it. `llrm-cc --dump DIR` writes the module after
 //! each stage (`NN-stage.ll`) and, for each body, each changed step of the
 //! fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 //!
@@ -154,7 +154,7 @@ pub struct Options {
     /// The library routines the compile states the program links (the pin's
     /// `TargetLibraryInfo`, which it reads from the triple: here the front
     /// end's profile states them, as the ABI chosen by `-mabi` spells and
-    /// calls them). DEVIATE D11: llrm-c states `strlen` for `-m32` under the
+    /// calls them). DEVIATE D11: llrm-cc states `strlen` for `-m32` under the
     /// System V convention only, llrm-qb and llrm-nib none, so no other
     /// compile forms a call of a library routine. Exit: a `Target::library`
     /// of each target that states its routines. Owner w-6, exit 2026-11-30.
@@ -510,7 +510,7 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" | "canonfreeze" | "maskscale" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" | "maskscale" | "looptermfold" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
@@ -656,7 +656,7 @@ impl FunctionPass for Slot {
         let count = |unit: &Unit| -> i64 {
             unit.function.layout().iter().map(|&b| unit.function.iter_block(b).count() as i64).sum()
         };
-        if std::env::var_os("W2_SLOT_COUNT").is_none() {
+        if !llrm_support::env_flag!("W2_SLOT_COUNT") {
             return self.inner.run(unit, analyses);
         }
         let before = count(unit);
@@ -701,14 +701,20 @@ impl FunctionPass for Together {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let mut changed = false;
+        let mut cfg = true;
         for part in &mut self.parts {
             let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
             if !preserved.are_all_preserved() {
                 changed = true;
+                cfg &= preserved.cfg_preserved();
                 analyses.invalidate(unit.function, &preserved);
             }
         }
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        match (changed, cfg) {
+            (false, _) => PreservedAnalyses::all(),
+            (true, true) => PreservedAnalyses::none().preserve_cfg(),
+            (true, false) => PreservedAnalyses::none(),
+        }
     }
 }
 
@@ -916,7 +922,7 @@ pub(crate) fn llvm_order(
             slot(
                 "unroll@1476",
                 Box::new(loopunrollpass::LoopFullUnroll {
-                    opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                    opt_level: unroll_level(&applied.options),
                     opt_size: size,
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
@@ -1033,7 +1039,7 @@ pub(crate) fn llvm_order(
                 slot(
                     "unroll@753",
                     Box::new(loopunrollpass::LoopFullUnroll {
-                        opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                        opt_level: unroll_level(&applied.options),
                         opt_size: size,
                         only_when_forced: !applied.options.loop_unrolling,
                         target_unrolling: false,
@@ -1135,6 +1141,19 @@ pub fn timed() {
         function: |name, run| debug::in_function(name, run),
         count: |what, hit| debug::counted(what, hit),
     });
+}
+
+/// The level `LoopFullUnroll` is told: 1 at -O1 (`pre` off, as `ABSENT_AT_O1`
+/// reads it), else 3 or 2 by the target percent. It was always 2 or 3, so the
+/// -O1 rule `unroll_never_grows_at_o1` never ran.
+fn unroll_level(options: &Options) -> u32 {
+    if !options.pre {
+        1
+    } else if options.limits.target_percent >= 200 {
+        3
+    } else {
+        2
+    }
 }
 
 /// `program` through the pipeline.
@@ -1413,8 +1432,8 @@ pub fn recorded(
         manager.add(cgpaddr::CgpAddr);
     }
     // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
-    if applied.options.prices_bytes() && applied.options.wanted("cgpselectarms") {
-        manager.add(crate::cgpselect::SelectArms);
+    if (applied.options.prices_bytes() || applied.options.for_size) && applied.options.wanted("cgpselectarms") {
+        manager.add(crate::cgpselect::SelectArms { size: applied.options.for_size });
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
@@ -1477,7 +1496,7 @@ fn mark_for_size(
             }
             for name in ["optsize"].into_iter().chain(min_size.then_some("minsize")) {
                 if !function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == name)) {
-                    function.attrs.push(Attribute::Flag(name.to_owned()));
+                    function.attrs.push(Attribute::Flag(name.into()));
                 }
             }
         }
@@ -1498,6 +1517,11 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // The pin runs canon-freeze with loop-reduce, before it.
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
         passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce { size: applied.options.prefers_size() }));
+        // `TargetPassConfig::addIRPasses` (pin l.875): LoopTermFold follows
+        // LSR; it does nothing for a target whose TTI does not enable it.
+        if applied.options.wanted("looptermfold") {
+            passes.push(Box::new(crate::looptermfold::LoopTermFold { size: applied.options.prefers_size() }));
+        }
         // What the counters it chose leave behind (a bound subtracted from a
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.

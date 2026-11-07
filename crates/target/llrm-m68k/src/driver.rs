@@ -186,6 +186,7 @@ pub fn assembly_in(
     let module = &optimized;
     let backend = Options {
         size: matches!(level, Level::Os | Level::Oz),
+        strict: level == Level::O1,
         debug,
         mid_end: false,
         code_model: model,
@@ -240,6 +241,7 @@ pub fn object_in(
     let module = lowered(text, cpu, level, None)?;
     let backend = Options {
         size: matches!(level, Level::Os | Level::Oz),
+        strict: level == Level::O1,
         mid_end: false,
         code_model: model,
         ..Options::default()

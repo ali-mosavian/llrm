@@ -22,6 +22,7 @@ from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC
 REPO = Path(__file__).resolve().parents[4]
 OUT = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))   # build products and results, never in the tree
 BENCH = REPO / "bench"
+RUN_C = REPO / "tests/run/c"
 KERNELS = Path(__file__).resolve().parent / "kernels"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import clocks  # noqa: E402
@@ -30,6 +31,11 @@ import clocks  # noqa: E402
 def source_dir(prog):
     """`bench/PROG`, or `kernels/PROG` for the x_ kernels written for this comparison."""
     return KERNELS / prog if (KERNELS / prog).is_dir() else BENCH / prog
+
+
+def expected_file(prog):
+    """The `.out` a run must report: tests/run/c/NAME.out for the cell `run_NAME`, else the program's own."""
+    return RUN_C / f"{prog[4:]}.out" if prog.startswith("run_") else source_dir(prog) / f"{prog}.out"
 sys.path.insert(0, str(REPO / "tools"))
 import llrmbin  # noqa: E402
 import sizes  # noqa: E402
@@ -506,8 +512,9 @@ def run(prog, variant, hot=False, limit=300_000_000):
             total["clocks"] += clk
             tally(by_op, pins[0], clk)
         st["firstrep"] = not (rep and prev == address)
-        if ins.mnemonic == Mnemonic.NOP:   # alignment padding (clang): counted apart, not work
+        if ins.mnemonic == Mnemonic.NOP:   # alignment padding (clang): not work, but the 486 spends its clock on it
             total["nops"] += 1
+            total["clocks"] += clocks.clocks("nop")
             st["prev"] = address
             hits[address] += 1
             return
@@ -572,6 +579,16 @@ def data_bytes(prog, variant):
     return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith((".data", ".rodata")))
 
 
+def eh_frame_bytes(prog, variant):
+    """The `.eh_frame` of the kernel's object, reported and never priced or added to the code bytes: llrm's own ELF object, and for gcc
+    and clang the object built with unwind tables (build.sh `.eh.o`; their code objects have none). None for OMF, which has no such section."""
+    if variant in OMF_VARIANTS:
+        return None
+    name = f"{prog}.{variant}.o" if variant.startswith("llrm") else f"{prog}.{variant}.eh.o"
+    out = subprocess.run(["size", "-A", str(OUT / "b" / name)], capture_output=True, text=True).stdout
+    return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith(".eh_frame"))
+
+
 def code_size(prog, variant):
     """(code bytes without alignment padding, the padding) of the kernel's object: the executable sections as tools/sizes.py reads them
     (the gate's definition: a loop aligned by nops is not growth). For gcc and clang `code_bytes` adds the runtime members they pulled in."""
@@ -607,8 +624,8 @@ def main():
     if "--hist" in sys.argv:   # to stderr, so the JSON line stays the one thing on stdout
         for name, (count, clk) in sorted(r["by_op"].items(), key=lambda row: -row[1][1])[:16]:
             print(f"HIST {name:8} {count:8} {clk:9}", file=sys.stderr)
-    expect = [int(x) for x in (source_dir(prog) / f"{prog}.out").read_text().split()]
-    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), cc=built_cc(prog), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
+    expect = [int(x) for x in expected_file(prog).read_text().split()]
+    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), cc=built_cc(prog), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), eh_frame=eh_frame_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
 
 
 if __name__ == "__main__":

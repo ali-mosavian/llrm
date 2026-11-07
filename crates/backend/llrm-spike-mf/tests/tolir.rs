@@ -126,6 +126,21 @@ fn lowered(mut f: MFunction<()>) -> MFunction<()> {
     f
 }
 
+/// A target that answers a refusal with another allocator showed nothing: arm64
+/// ran its linear scan for jpeg_single at -Os (+19%) and only stderr said so.
+/// The refusal is recorded with the function and the reason.
+#[test]
+fn test_a_function_greedy_refuses_is_recorded() {
+    let mut f = across_a_call(1);
+    f.name = "refused_for_a_phi".into();
+    f.blocks[2].phis.push(llrm_spike_mf::Phi { result: v(2), incoming: vec![(0, v(0)), (1, v(1))] });
+    assert!(llrm_spike_mf::tolir::allocate_greedy::<Flat>(&mut f, regs(), false).is_err());
+    let seen: Vec<_> =
+        llrm_spike_mf::tolir::take_refusals().into_iter().filter(|r| r.function == "refused_for_a_phi").collect();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(!seen[0].retried && seen[0].why.contains("phi"), "{seen:?}");
+}
+
 /// Greedy takes no phi and no tie; the converter says so rather than hand it
 /// a body it would refuse.
 #[test]
@@ -1936,4 +1951,116 @@ fn test_a_tied_instruction_reads_the_copy_for_every_use_of_its_source() {
     let f = lowered(f);
     let add = f.blocks[0].insts.iter().find(|inst| matches!(inst.kind, Kind::Op("add"))).expect("the add");
     assert_eq!(add.operands, vec![Operand::Def(v(1)), Operand::Use(v(1)), Operand::Use(v(1))], "{:?}", add.operands);
+}
+
+/// A value copied from another and live across a call is stored from the other's
+/// register; the copy goes (`TargetInstrInfo::foldMemoryOperand`: "straight COPY
+/// may fold as load/store"). arm64 `jpeg_single` -Os kept `mov x10, x9; str x10,
+/// [sp, #88]` fifteen times where the pin stores `x9`.
+#[test]
+fn test_a_copy_whose_value_is_spilled_is_folded_into_the_store() {
+    let mut f = MFunction::<()>::new("fold");
+    f.classes = vec![(); 3];
+    let mut only = Block { id: 0, ..Block::default() };
+    only.insts.push(op("load", vec![Operand::Def(v(0))]));
+    only.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    only.insts.push(op("add", vec![Operand::Def(v(0)), Operand::Use(v(0)), Operand::Use(v(0))]));
+    only.insts.push(call());
+    only.insts.push(op("add", vec![Operand::Def(v(2)), Operand::Use(v(1)), Operand::Use(v(0))]));
+    only.insts.push(op("store", vec![Operand::Use(v(2))]));
+    only.insts.push(ret());
+    f.blocks = vec![only];
+    let f = lowered(f);
+    let back = rewritten(&f);
+    assert_allocated(&back.function, &back.assignment);
+    let insts = &back.function.blocks[0].insts;
+    let copies = insts.iter().filter(|inst| inst.kind == Kind::Copy).count();
+    assert_eq!(copies, 0, "the copy is the store: {insts:?}");
+    assert!(insts.iter().any(|inst| inst.kind == Kind::Op("st")), "{insts:?}");
+}
+
+/// Remaking an argument load per value number (`argument_load_defs`) is the
+/// x86 TII's alone: the spike targets (6502, z80, m68k) read no cell as
+/// invariant by this rule, so their greedy keeps the path the parent had.
+/// A body with an unwritten incoming-argument load is one the x86 rule takes.
+#[test]
+fn test_a_spike_target_takes_no_argument_load_to_remake_per_value_number() {
+    use llrm_codegen::greedy::remat::argument_load_insns;
+    use llrm_codegen::model::ir::{Addr, Held, Mem, Semantics, Space};
+    use llrm_codegen::model::lir::Insn;
+    let converted = to_lir::<Flat>(&lowered(across_a_call(1)), regs()).expect("converts");
+    let mut body = converted.body.clone();
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Held(Held { value: 900, width: 4, offset: 0 })],
+        sources: vec![Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, 8)), 4))],
+        ..Semantics::new(Operation::Move)
+    };
+    let load = std::sync::Arc::new(Insn::new(9000, None, Some(what), vec![900], vec![]));
+    body.blocks[0].insns.edit(|insns| insns.insert(0, load));
+    assert_eq!(argument_load_insns(&body).len(), 1, "the x86 rule takes this load");
+    assert!(converted.tii.argument_load_defs(&body).is_empty(), "the spike TII takes none");
+}
+
+/// A block that branches three ways, each way returning.
+fn three_ways() -> MFunction<()> {
+    let mut f = MFunction::<()>::new("three");
+    let mut entry = Block { id: 7, ..Block::default() };
+    let mut switch = op("switch", vec![Operand::Block(8), Operand::Block(9), Operand::Block(10)]);
+    switch.terminator = true;
+    entry.insts.push(switch);
+    f.blocks.push(entry);
+    for id in 8..=10 {
+        f.blocks.push(Block { id, insts: vec![ret()], phis: Vec::new() });
+    }
+    f
+}
+
+fn shares(f: &MFunction<()>) -> Vec<f64> {
+    let body = to_lir::<Flat>(f, regs()).expect("converts").body;
+    let frequencies = llrm_codegen::liveness::blockfrequency::MachineBlockFrequencyInfo::of(&body);
+    (1..4).map(|at| frequencies.get_block_freq_relative_to_entry_block(at)).collect()
+}
+
+/// A target that states the IR's branch odds gets them in greedy's block
+/// frequencies: a branch the IR makes 90/5/5 was weighed 1/3 each (seed 126,
+/// m68k: the hint split cost 0.75 where the pin's was 1.333).
+#[test]
+fn test_the_odds_a_function_states_are_the_block_frequencies_greedy_sees() {
+    let mut f = three_ways();
+    assert_eq!(shares(&f).iter().map(|share| (share * 100.0).round()).collect::<Vec<_>>(), [33.0, 33.0, 33.0]);
+    let share = |n, d| llrm_mir::blockfrequency::BranchProbability::new(n, d);
+    f.odds = Some(
+        [((7, 8), (share(90, 100), 0)), ((7, 9), (share(5, 100), 1)), ((7, 10), (share(5, 100), 2))]
+            .into_iter()
+            .collect(),
+    );
+    assert_eq!(shares(&f).iter().map(|share| (share * 100.0).round()).collect::<Vec<_>>(), [90.0, 5.0, 5.0]);
+}
+
+/// An edge a pass made states no odds and takes the share the others leave.
+#[test]
+fn test_an_edge_with_no_stated_odds_takes_the_share_the_others_leave() {
+    let share = |n, d| llrm_mir::blockfrequency::BranchProbability::new(n, d);
+    let mut f = three_ways();
+    f.odds = Some([((7, 8), (share(50, 100), 0))].into_iter().collect());
+    assert_eq!(shares(&f).iter().map(|share| (share * 100.0).round()).collect::<Vec<_>>(), [50.0, 25.0, 25.0]);
+}
+
+/// A block put on an edge keeps the edge's odds, and a block that takes over
+/// a branch takes its odds.
+#[test]
+fn test_odds_follow_a_split_edge_and_a_taken_over_branch() {
+    let share = |n, d| llrm_mir::blockfrequency::BranchProbability::new(n, d);
+    let mut f = three_ways();
+    f.odds = Some([((7, 8), (share(90, 100), 0)), ((7, 9), (share(10, 100), 1))].into_iter().collect());
+    f.split_odds(7, 8, 11);
+    let odds = f.odds.clone().unwrap();
+    assert_eq!(odds[&(7, 11)].0, share(90, 100));
+    assert_eq!(odds[&(11, 8)].0, llrm_mir::blockfrequency::BranchProbability::get_one());
+    assert!(!odds.contains_key(&(7, 8)));
+    f.move_odds(7, 12);
+    let odds = f.odds.unwrap();
+    assert_eq!(odds[&(12, 9)].0, share(10, 100));
+    assert!(odds.keys().all(|(from, _)| *from != 7));
 }

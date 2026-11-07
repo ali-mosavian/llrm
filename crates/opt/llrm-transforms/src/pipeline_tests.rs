@@ -510,7 +510,7 @@ b2:
 
 /// `int a = *p; *q = 1; return a + *p` with `q` a `char *`: C lets the char
 /// store write `*p`, so the second load stays. TypeBasedAA's `omnipotent char`
-/// was not read as the parent of `int2`, and llrm-c's -O2 added `*p` to itself.
+/// was not read as the parent of `int2`, and llrm-cc's -O2 added `*p` to itself.
 #[test]
 fn a_char_store_between_two_int_loads_leaves_the_second_load() {
     let text = "define i16 @f(ptr %p, ptr %q) {
@@ -1321,6 +1321,41 @@ x:
     assert!(looped(pipeline::Options::standard()), "-O2: 202 over the threshold of 150 keeps 40 trips rolled");
     assert!(!looped(pipeline::Options::speed()), "-O3: 202 under 300 copies them out");
     assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
+}
+
+/// The pipeline gave `LoopFullUnroll` `opt_level` 2 at -O1, so the m32 rule
+/// "an -O1 unroll never grows" (`unroll_never_grows_at_o1`, which tests
+/// `opt_level == 1`) never ran: matmul -O1 grew 776 -> 2538 B. Its unit tests
+/// set the level by hand and passed.
+#[test]
+fn test_at_o1_the_pipeline_keeps_a_loop_rolled_whose_copies_grow() {
+    let text = "define i32 @f(ptr %p, i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi i32 [ 0, %b0 ], [ %s, %b1 ]
+  %q = getelementptr inbounds i32, ptr %p, i32 %i
+  %v = load i32, ptr %q
+  %m = mul i32 %v, %n
+  %s = add i32 %acc, %m
+  %next = add i32 %i, 1
+  %go = icmp slt i32 %next, 8
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i32 %s
+}
+";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let options = pipeline::Options { loop_unrolling: true, ..pipeline::Options::basic() };
+    Program::lend(&mut module, crate::indvars::tests::m32(), |program| {
+        pipeline::applied(program, &Applied { options, ..Applied::default() })
+    })
+    .and_then(|done| done)
+    .unwrap();
+    assert!(llrm_mir::print::module(&module).contains("phi i32"), "{}", llrm_mir::print::module(&module));
 }
 
 /// A compile has the four stages (early, cleanup, simplify, late), each run
@@ -2959,4 +2994,55 @@ fn test_the_early_simplifycfg_slot_leaves_a_switch_range_alone() {
     assert!(early.contains("switch i32"), "the early slot made the range an icmp:\n{early}");
     let later = run("decide@1244");
     assert!(!later.contains("switch i32"), "premise: the later slot folds the range:\n{later}");
+}
+
+thread_local! {
+    static GETENVS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts the calling thread's `getenv` calls in this test binary, then answers
+/// from `environ` as libc does.
+#[unsafe(no_mangle)]
+pub extern "C" fn getenv(name: *const std::ffi::c_char) -> *const std::ffi::c_char {
+    unsafe extern "C" {
+        static environ: *const *const std::ffi::c_char;
+    }
+    GETENVS.with(|count| count.set(count.get() + 1));
+    let name = unsafe { std::ffi::CStr::from_ptr(name) }.to_bytes();
+    let mut at = unsafe { environ };
+    while !at.is_null() && !unsafe { *at }.is_null() {
+        let entry = unsafe { std::ffi::CStr::from_ptr(*at) }.to_bytes();
+        if entry.len() > name.len() && entry.starts_with(name) && entry[name.len()] == b'=' {
+            return unsafe { (*at).add(name.len() + 1) };
+        }
+        at = unsafe { at.add(1) };
+    }
+    std::ptr::null()
+}
+
+/// `Slot::run` read the environment (`W2_SLOT_COUNT`) on every pass run: 17,322
+/// `getenv` calls, 10.3 M Ir on memory_expansion, for a debug switch. The reads
+/// of a compile do not grow with the functions it compiles.
+#[test]
+fn getenv_calls_do_not_grow_with_the_functions_compiled() {
+    let function = |name: usize| {
+        format!(
+            "define i32 @f{name}(i32 %n) {{\nb0:\n  br label %h\nh:\n  %i = phi i32 [ 0, %b0 ], [ %j, %h ]\n  %a = phi i32 [ 0, %b0 ], [ %b, %h ]\n  %b = add i32 %a, %i\n  %j = add i32 %i, 1\n  %c = icmp slt i32 %j, %n\n  br i1 %c, label %h, label %x\nx:\n  ret i32 %b\n}}\n"
+        )
+    };
+    let reads = |functions: usize| {
+        let text: String = (0..functions).map(function).collect();
+        let mut module = llrm_analysis::testing::parsed(&text);
+        let applied =
+            Applied { only: Some("decide@1178".to_owned()), options: pipeline::Options::standard(), ..Applied::default() };
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        let before = GETENVS.with(std::cell::Cell::get);
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the pipeline runs");
+        GETENVS.with(std::cell::Cell::get) - before
+    };
+    reads(1); // the first run reads what is read once
+    let (one, eight) = (reads(1), reads(8));
+    assert_eq!(one, eight, "getenv calls grow with the work: {one} for 1 function, {eight} for 8");
+    assert_eq!(eight, 0, "a pass run reads the environment: {eight} calls");
 }

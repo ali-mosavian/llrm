@@ -395,6 +395,12 @@ fn spares(
         )
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Bodies `hoisted` has analysed on this thread.
+    static ANALYSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `body` with each loop-invariant reload moved to where its loop is entered.
 pub fn hoisted(
     m: u32,
@@ -402,14 +408,21 @@ pub fn hoisted(
     body: &LirBody,
     spills: &BTreeSet<i64>,
 ) -> LirBody {
-    let regs = body.regs();
     let graph = &body.blocks;
+    let mut found = loops::loops(graph, Some(body.entry));
+    // No loop, nothing to hoist: the liveness and the write sets are not
+    // worth computing.
+    if found.is_empty() {
+        return body.clone();
+    }
+    #[cfg(test)]
+    ANALYSED.with(|count| count.set(count.get() + 1));
+    let regs = body.regs();
     let predecessors = loops::predecessors(&graph);
     let index =
         body.blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
     let (live_into, _, _) = liveness::live_into(body);
     let mut blocks = body.blocks.clone();
-    let mut found = loops::loops(graph, Some(body.entry));
     found.sort_by_key(|one| one.body.len());
     let mut taken = Taken::default();
     let written = may_writes(body);
@@ -718,6 +731,24 @@ mod tests {
         };
         let parked = out.iter_insns().filter(|insn| is_bp(insn, Operation::Push)).count();
         assert_eq!((parked, mentions(&out)), (0, 8), "the slot stays in memory");
+    }
+
+    /// Compile time: `hoisted` solved liveness and the write sets of every
+    /// function (15.7 M Ir on memexp -O2), loops or not. A body without a
+    /// loop is not analysed.
+    #[test]
+    fn test_a_body_without_a_loop_is_not_analysed() {
+        let body = LirBody::new(
+            "straight",
+            0,
+            vec![block(0, vec![made(0, Operation::Return, "ret", vec![], vec![])], vec![]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        super::ANALYSED.with(|count| count.set(0));
+        let out =
+            super::hoisted(2, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::new());
+        assert_eq!((super::ANALYSED.with(|count| count.get()), out.blocks.len()), (0, 1));
     }
 }
 

@@ -297,7 +297,7 @@ pub fn finish(
 }
 
 /// [`finish`], with the outgoing arguments pushed where [`crate::callpush`]
-/// finds that cheaper: `pushes` is `Some(size)` to allow it.
+/// finds that cheaper: `pushes` is `Some(price)` to allow it.
 pub fn finish_with(
     function: &MFunction,
     assignment: &Assignment,
@@ -306,7 +306,7 @@ pub fn finish_with(
     cpu: crate::dagisel::hooks::Cpu,
     push_frame: bool,
     short: bool,
-    pushes: Option<bool>,
+    pushes: Option<crate::timing::Price>,
 ) -> Result<Vec<Line>, String> {
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
@@ -385,9 +385,9 @@ pub fn finish_with(
             ..Function::default()
         })
     };
-    let wants_size = pushes.unwrap_or(false);
+    let wants_size = pushes == Some(crate::timing::Price::Size);
     let pushes = match pushes {
-        Some(size) => crate::callpush::plan(&insts, &blocks, assignment, cpu, size, short, |max_call_frame| {
+        Some(price) => crate::callpush::plan(&insts, &blocks, assignment, cpu, price, short, |max_call_frame| {
             let (opening, closing) = frame_ops(&frame_of(max_call_frame), cpu, push_frame, short, wants_size)?;
             frame_cost_with(&[opening, closing].concat(), cpu, short)
         })?,
@@ -400,8 +400,10 @@ pub fn finish_with(
     let mut lines = Vec::new();
     // Where each place starts in `out`: only when it changes.
     let mut marks: Vec<(usize, Row)> = Vec::new();
-    // The frame is made by the opening ops: the next row ends the prologue.
-    let mut frame_made = !opening.is_empty();
+    // The first row with a line ends the prologue, whether or not the opening
+    // ops made a frame (the pin flags a frameless function's too; #7199 made
+    // this one frameless).
+    let mut frame_made = true;
     let mut last_origin = 0u32;
     let mut block_top = false;
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
@@ -452,9 +454,13 @@ pub fn finish_with(
                 let opcode = crate::callpush::memory_push(name).ok_or("a folded load has a push")?;
                 Ok(mc::Inst { opcode, operands })
             }
+            None if matches!(insts[store].kind, Kind::Op("CLR32p" | "CLR32j")) => {
+                // a `clr.l` store has no value operand: it stores zero
+                Ok(crate::callpush::push_of_sized(&mc::Operand::Imm(0), wants_size))
+            }
             None => {
                 let operands = convert(insts[store], pushed)?;
-                Ok(crate::callpush::push_of(operands.last().ok_or("a push of nothing")?))
+                Ok(crate::callpush::push_of_sized(operands.last().ok_or("a push of nothing")?, wants_size))
             }
         }
     };
@@ -484,6 +490,13 @@ pub fn finish_with(
         if inst.origin != 0 {
             last_origin = inst.origin;
         }
+        if pushes.flushes(index) {
+            waiting.sort_by(|a, b| b.0.cmp(&a.0));
+            for (_, store) in waiting.drain(..) {
+                out.push(push_for(store, pushed)?);
+                pushed += 4;
+            }
+        }
         let operands = convert(inst, pushed)?;
         if pushes.is_dropped(index) {
             continue;
@@ -491,13 +504,6 @@ pub fn finish_with(
         if let Some(offset) = pushes.deferred_offset(index) {
             waiting.push((offset, index));
             continue;
-        }
-        if inst.call && !waiting.is_empty() {
-            waiting.sort_by(|a, b| b.0.cmp(&a.0));
-            for (_, store) in waiting.drain(..) {
-                out.push(push_for(store, pushed)?);
-                pushed += 4;
-            }
         }
         if pushes.is_push(index) {
             out.push(push_for(index, pushed)?);

@@ -15,13 +15,47 @@ use crate::{REGISTER_INFO, reg};
 const DATA: [RegId; 8] = [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7];
 const ADDRESS: [RegId; 6] = [reg::A0, reg::A1, reg::A2, reg::A3, reg::A4, reg::A5];
 
-/// The registers a call leaves unspecified (`CSR_STD` keeps the rest).
+/// The registers a call leaves unspecified (`CSR_STD` keeps the rest), data
+/// registers first as the pin has them.
 const CALLER_SAVED: [RegId; 4] = [reg::D0, reg::D1, reg::A0, reg::A1];
 
-/// m68k's register file for the allocator.
-pub struct M68kRegisters;
+/// The same, address registers first (see [`Registers`]).
+const CALLER_SAVED_ADDRESS_FIRST: [RegId; 4] = [reg::A1, reg::A0, reg::D0, reg::D1];
 
-impl Target for M68kRegisters {
+/// m68k's register file for the allocator.
+///
+/// DEVIATE M68K-FLEXORDER: with `ADDRESS_FIRST` a value either kind of
+/// register can hold takes `a1`, `a0` before `d0`, `d1`. The pin tries the data
+/// registers first, so a value only copied and compared sits in one and the
+/// values that need a data register (a counter, a compare's left side) are
+/// pushed to a saved one (arrmax -Os: `d2`, a push and a pop, 34 B against
+/// gcc's 26). Used with [`crate::compile::Options::indexed`]; the pin's order
+/// stays for the pinned output. Owner m68k. Exit: 2026-11-28, when the shared
+/// greedy prices a class by what its users need.
+/// Tried 2026-11-07 for fib/countgt/copy/crc16 (greedy-subreg), both reverted:
+/// no narrowing join of an address-capable value (0 better, 7 of 12 kernels
+/// worse) and a tied source kept in its own class (0 better, arrsum +8 B).
+/// The gap needs pressure (t and i hold d0, d1; b goes to an address register),
+/// which neither a join rule nor a class sees.
+///
+/// DEVIATE M68K-ARGREMAT (with `ARGUMENT_REMAT`): a load of an incoming stack
+/// argument that nothing writes is made again where it is read, not stored to
+/// a spill slot and reloaded. The pin's M68k marks no load rematerializable
+/// (`isReMaterializable` needs the descriptor flag), so it spills. Reason:
+/// the slot is an immutable fixed object, gcc reloads it, and a spill store
+/// plus a frame cell is more bytes and clocks (seeds 300: about 115 smaller,
+/// 11 larger per CPU and level). Owner m68k. Exit: 2026-11-28, or when the
+/// pin's M68k marks the rows. Off for `Options::PINNED`.
+pub struct Registers<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool>;
+
+/// The allocator's registers in the order this compiler uses by default.
+pub type M68kRegisters = Registers<true, true>;
+
+impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool> Target for Registers<ADDRESS_FIRST, ARGUMENT_REMAT> {
+    fn spills_named_by_lane() -> bool {
+        true
+    }
+
     type Class = Class;
 
     fn meet(
@@ -33,6 +67,14 @@ impl Target for M68kRegisters {
 
     fn any() -> Class {
         Class::Xr32
+    }
+
+    /// An incoming argument is an immutable fixed stack object, so the pin
+    /// makes a load of one again where it is read
+    /// (`isLoadFromInvariantOrConstantMemory`); `MOV32rp` takes either kind of
+    /// register, so the copy can land wherever its reader needs.
+    fn is_invariant_argument_load(name: &str) -> bool {
+        ARGUMENT_REMAT && name == "MOV32rp"
     }
 
     /// DEVIATE C13 (coalescer/mod.rs): the joins raised `movem` 71 -> 89 in
@@ -48,7 +90,7 @@ impl Target for M68kRegisters {
             // the registers a call clobbers anyway first, then the saved ones:
             // a saved register costs a push and a pop (`RegisterClassInfo`
             // orders the callee-saved last)
-            Class::Xr32 => CALLER_SAVED
+            Class::Xr32 => (if ADDRESS_FIRST { CALLER_SAVED_ADDRESS_FIRST } else { CALLER_SAVED })
                 .iter()
                 .chain(DATA.iter().filter(|one| !CALLER_SAVED.contains(one)))
                 .chain(ADDRESS.iter().filter(|one| !CALLER_SAVED.contains(one)))
@@ -170,8 +212,16 @@ pub fn allocate_spilling_by_frequency(
 pub fn allocate_greedy(
     function: &mut MFunction,
     size: bool,
+    address_first: bool,
+    rematerialize_arguments: bool,
 ) -> Result<(Assignment, Vec<(i32, Class)>), String> {
-    llrm_spike_mf::tolir::allocate_greedy::<M68kRegisters>(function, llrm_lir::registers::Regs(&REGISTER_INFO), size)
+    let regs = llrm_lir::registers::Regs(&REGISTER_INFO);
+    match (address_first, rematerialize_arguments) {
+        (true, true) => llrm_spike_mf::tolir::allocate_greedy::<Registers<true, true>>(function, regs, size),
+        (true, false) => llrm_spike_mf::tolir::allocate_greedy::<Registers<true, false>>(function, regs, size),
+        (false, true) => llrm_spike_mf::tolir::allocate_greedy::<Registers<false, true>>(function, regs, size),
+        (false, false) => llrm_spike_mf::tolir::allocate_greedy::<Registers<false, false>>(function, regs, size),
+    }
 }
 
 /// `MachineSinking` over the m68k function.
@@ -201,12 +251,17 @@ pub fn branch_fold(
 
 /// `MachineBlockPlacement` over the m68k function. M68kPassConfig does not
 /// override `addBlockPlacement`, so the pin runs it at every `-O` above 0.
+///
+/// DEVIATE M68K-TOP (with `top_saves_jumps`): a fall-through gains only where
+/// it removes a jump, from a block with one successor; see
+/// `llrm_spike_mf::placement` (`fall_through_gains`). Off for the pin's order.
 pub fn place_blocks(
     function: &mut MFunction,
     odds: &llrm_spike_mf::placement::Odds,
     size: bool,
+    top_saves_jumps: bool,
 ) -> bool {
-    llrm_spike_mf::placement::place_blocks::<_, M68kRegisters>(function, odds, size)
+    llrm_spike_mf::placement::place_blocks_priced::<_, M68kRegisters>(function, odds, size, false, top_saves_jumps)
 }
 
 pub fn remove_identity_copies(
@@ -239,7 +294,7 @@ pub fn remove_redundant_copies(
     })
 }
 
-impl Jump for M68kRegisters {
+impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool> Jump for Registers<ADDRESS_FIRST, ARGUMENT_REMAT> {
     fn reverse(branch: &llrm_spike_mf::Inst) -> Option<llrm_spike_mf::Inst> {
         let Kind::Op(name) = branch.kind else { return None };
         let opposite = CONDITIONAL

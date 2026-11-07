@@ -141,7 +141,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if !self.dag.has_one_use(op.node) {
             return Ok(());
         }
-        let size = (128 - demanded.leading_zeros()).max(1);
+        // DEVIATE SD257 (owner llrm-target-6502, exit 2026-12-05), `known_zero_narrowing`:
+        // the pin sizes by the demanded bits alone, so an `or` of two bytes read as
+        // a word was done as a word; the bits known zero above the narrow type come
+        // back as a zero extension. An `and` keeps the pin's sizing: its zeros come
+        // from its own mask, and `zext(and8(trunc x, c))` folds back into the `and`.
+        let by_known_zero = self.hooks.known_zero_narrowing() && self.dag.opcode(op) != ISD::And;
+        let live = if by_known_zero { demanded & !known_bits(self.dag, op).zero } else { demanded };
+        let size = (128 - live.leading_zeros()).max(1);
         let mut small = size.next_power_of_two();
         while small < width {
             let narrow = EVT::integer(small);
@@ -151,7 +158,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let a = self.dag.get_node(ISD::Truncate, narrow, &[a]);
                 let b = self.dag.get_node(ISD::Truncate, narrow, &[b]);
                 let x = self.dag.get_node(opcode, narrow, &[a, b]);
-                let z = self.dag.get_node(ISD::AnyExtend, vt, &[x]);
+                let kept = if small >= 128 { u128::MAX } else { (1u128 << small) - 1 };
+                let extend = if demanded & !kept == 0 { ISD::AnyExtend } else { ISD::ZeroExtend };
+                let z = self.dag.get_node(extend, vt, &[x]);
                 return Self::combine_to(tlo, op, z).map(|_| ());
             }
             small *= 2;

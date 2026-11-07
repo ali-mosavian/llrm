@@ -351,6 +351,7 @@ pub fn object(
         symbols: symbols.list,
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        comdats: Vec::new(),
         frames,
     })
 }

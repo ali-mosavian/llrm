@@ -80,6 +80,9 @@ pub struct Options {
     /// Size is wanted over clocks in every function (`-Os`; the x86 path's
     /// `Cpu::size`). A function marked `optsize` or `minsize` wants it too.
     pub size: bool,
+    /// At a speed level a choice takes a candidate only when it is no larger
+    /// and no slower (`-O1`); otherwise it is priced by the CPU's byte rate.
+    pub strict: bool,
     /// Schedule in source order (`-pre-RA-sched=source`) rather than with the
     /// ILP list scheduler `llc` defaults to.
     pub source_order: bool,
@@ -101,6 +104,18 @@ pub struct Options {
     /// `cmpi.l #(2^s-1)` after the `lsr.l #s` of the same value is dropped
     /// ([`crate::cmpshift`]).
     pub reuse_shift_flags: bool,
+    /// A load and the step of its pointer in another block are one `(An)+`
+    /// ([`crate::loopinc`]).
+    pub post_inc_across_blocks: bool,
+    /// A small conditional block is copied into the predecessors that jump to
+    /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build.
+    pub tail_duplicate: bool,
+    /// A load of an incoming stack argument is made again where it is read
+    /// ([`crate::regalloc::Registers`], M68K-ARGREMAT).
+    pub rematerialize_arguments: bool,
+    /// A loop's top is chosen by the jumps its fall-throughs remove, not by
+    /// the edges they cover (M68K-TOP, [`crate::regalloc::place_blocks`]).
+    pub loop_top_by_jumps: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -112,6 +127,7 @@ impl Options {
         code_model: CodeModel::Small,
         mid_end: false,
         size: false,
+        strict: false,
         source_order: false,
         indexed: false,
         push_frame: false,
@@ -119,6 +135,10 @@ impl Options {
         short: false,
         hoist_flag_setters: false,
         reuse_shift_flags: false,
+        post_inc_across_blocks: false,
+        tail_duplicate: false,
+        rematerialize_arguments: false,
+        loop_top_by_jumps: false,
         debug: false,
     };
 }
@@ -129,6 +149,7 @@ impl Default for Options {
             code_model: CodeModel::Small,
             mid_end: true,
             size: false,
+            strict: false,
             source_order: false,
             indexed: true,
             push_frame: true,
@@ -136,6 +157,10 @@ impl Default for Options {
             short: true,
             hoist_flag_setters: true,
             reuse_shift_flags: true,
+            post_inc_across_blocks: true,
+            tail_duplicate: true,
+            rematerialize_arguments: true,
+            loop_top_by_jumps: true,
             debug: false,
         }
     }
@@ -178,6 +203,7 @@ pub fn items_with(
         options.indexed,
         options.short,
         options.code_model.absolute_data(cpu),
+        wants_size,
     )?;
     let mut function = emit(name, &blocks)?;
     function.returns_twice =
@@ -199,7 +225,11 @@ pub fn items_with(
         if cpu.at_least(Cpu::M68020) {
             crate::scaledindex::scale_indexes(&mut function);
         }
+        if options.indexed && options.post_inc_across_blocks {
+            crate::loopinc::post_increment_across_blocks(&mut function);
+        }
     }
+    function.odds = Some(edge_odds(module, name)?);
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
     crate::regalloc::split_flag_edges(&mut function);
@@ -215,13 +245,14 @@ pub fn items_with(
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
-        crate::regalloc::allocate_greedy(&mut function, wants_size)?
+        crate::regalloc::allocate_greedy(&mut function, wants_size, options.indexed, options.rematerialize_arguments)?
     };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     if options.short {
         crate::addrarith::refine_lea_round_trips(&mut function, &assignment, cpu, wants_size);
         crate::addrarith::refine_address_adds(&mut function, &assignment, cpu, wants_size);
         crate::chain::post_increment_chains(&mut function, &assignment, cpu, wants_size);
+        crate::addrcmp::compare_address_registers(&mut function, &assignment);
         crate::narrow::merge_logic_immediates(&mut function, &assignment);
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
         crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
@@ -243,7 +274,10 @@ pub fn items_with(
     }
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
-    crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
+    if options.tail_duplicate && !wants_size {
+        llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
+    }
+    crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size, options.loop_top_by_jumps);
     let mut out = vec![Item::Label(name.to_owned())];
     // The line the function is declared at starts its rows (the prologue is
     // from no instruction).
@@ -263,7 +297,7 @@ pub fn items_with(
         cpu,
         options.push_frame,
         options.short,
-        options.push_arguments.then_some(wants_size),
+        options.push_arguments.then_some(crate::timing::Price::of(wants_size, options.strict)),
     )? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),

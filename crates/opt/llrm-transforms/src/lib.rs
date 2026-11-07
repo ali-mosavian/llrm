@@ -128,6 +128,7 @@ mod combine_dispatch_tests;
 pub mod combine_distribute;
 #[cfg(test)]
 mod combine_flags_result_tests;
+pub mod combine_fcmp;
 pub mod combine_fp;
 pub mod combine_fp_int_casts;
 pub mod combine_fpcast;
@@ -223,6 +224,7 @@ pub mod exitne;
 pub mod exitopt;
 pub mod exitpredicate;
 pub mod exitsink;
+pub mod invariantsink;
 pub mod exitvalues;
 pub mod expand;
 pub mod expandmemcmp;
@@ -319,6 +321,7 @@ pub mod lsr_generate;
 mod lsr_generate_tests;
 pub mod lsr_implement;
 pub mod lsr_narrow;
+pub mod looptermfold;
 pub mod lsr_pass;
 #[cfg(test)]
 mod lsr_pass_tests;

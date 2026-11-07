@@ -7,16 +7,19 @@
 //! and drop the tie copy.
 //!
 //! DEVIATE: kills come from block liveness over virtual registers, not
-//! `LiveIntervals`; the `SrcRegMap`/`DstRegMap` rule for copies to and from
-//! physical registers is not translated (so a result returned in `d0` does not
-//! steer the choice); `hasCommutePreference` is not asked (M68k has none).
-//! Reason: the spike has no analysis manager. Exit: the neutral-LIR task.
+//! `LiveIntervals`; `SrcRegMap`/`DstRegMap` are rebuilt per instruction from the
+//! block (a copy from a physical register not clobbered since, and the single
+//! copy of the result into one) rather than kept as the pin scans; chains
+//! follow copies only, not tied uses; `hasCommutePreference` is not asked
+//! (M68k has none). Reason: the spike has no analysis manager. Exit: the
+//! neutral-LIR task.
 //!
 //! # See also
 //! `llvm/lib/CodeGen/TwoAddressInstructionPass.cpp`, pin d1106deb71cc:
 //! `isRevCopyChain` (L320), `noUseAfterLastDef` (L351), `isKilled` (L454),
 //! `isProfitableToCommute` (L648), `tryInstructionCommute` (L1285).
 
+use llrm_lir::registers::RegId;
 use llrm_support::hash::HashMap;
 
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
@@ -30,6 +33,8 @@ pub(crate) struct Facts {
     live_out: Vec<Vec<u64>>,
     /// Every definition of a register: `(block, instruction)`.
     defs: HashMap<u32, Vec<(usize, usize)>>,
+    /// How many operands read each virtual register in the function.
+    use_counts: Vec<u32>,
 }
 
 fn virt(reg: Reg) -> Option<u32> {
@@ -53,10 +58,12 @@ impl Facts {
         let mut gen_ = vec![vec![0u64; words]; blocks];
         let mut kill = vec![vec![0u64; words]; blocks];
         let mut defs: HashMap<u32, Vec<(usize, usize)>> = HashMap::default();
+        let mut use_counts = vec![0u32; count];
         let bit = |set: &[u64], r: u32| set[r as usize / 64] >> (r % 64) & 1 != 0;
         for (b, block) in function.blocks.iter().enumerate() {
             for (i, inst) in block.insts.iter().enumerate() {
                 for u in uses(inst) {
+                    use_counts[u as usize] += 1;
                     if !bit(&kill[b], u) {
                         gen_[b][u as usize / 64] |= 1 << (u % 64);
                     }
@@ -84,7 +91,7 @@ impl Facts {
                 }
             }
         }
-        Facts { live_out, defs }
+        Facts { live_out, defs, use_counts }
     }
 
     /// `isPlainlyKilled`: nothing reads `reg` after instruction `at` of block
@@ -125,6 +132,89 @@ impl Facts {
             };
             (b, at, reg) = (*def_block, *def_at, *source);
         }
+    }
+
+    /// `getMappedReg(reg, SrcRegMap)`: the physical register `reg` was copied
+    /// from, through copies, when nothing wrote it (or a call) between that
+    /// copy and instruction `at` of block `b`.
+    fn copied_from_phys<T: Target>(
+        function: &MFunction<T::Class>,
+        b: usize,
+        at: usize,
+        reg: u32,
+    ) -> Option<RegId> {
+        let insts = &function.blocks[b].insts;
+        let mut reg = reg;
+        let mut before = at;
+        for _ in 0..MAX_DATA_FLOW_EDGE {
+            let only = Facts::single_def_index(insts, reg).filter(|&i| i < before)?;
+            let (Kind::Copy, [Operand::Def(_), Operand::Use(source)]) = (insts[only].kind, &insts[only].operands[..])
+            else {
+                return None;
+            };
+            match *source {
+                Reg::Virt(next) => {
+                    reg = next;
+                    before = only;
+                }
+                Reg::Phys(phys) => {
+                    let root = T::root(phys);
+                    let clobbered = insts[only + 1..at].iter().any(|inst| {
+                        (inst.call && T::caller_saved().iter().any(|&one| T::overlaps(one, root)))
+                            || inst.operands.iter().any(
+                                |o| matches!(o, Operand::Def(Reg::Phys(q)) if T::overlaps(T::root(*q), root)),
+                            )
+                    });
+                    return (!clobbered).then_some(phys);
+                }
+            }
+        }
+        None
+    }
+
+    /// `getMappedReg(reg, DstRegMap)`: the physical register `reg`, read once
+    /// in the function, is copied into after instruction `at` of block `b`,
+    /// through copies.
+    fn copied_to_phys<T: Target>(
+        function: &MFunction<T::Class>,
+        use_counts: &[u32],
+        b: usize,
+        at: usize,
+        reg: u32,
+    ) -> Option<RegId> {
+        let insts = &function.blocks[b].insts;
+        let mut reg = reg;
+        for _ in 0..MAX_DATA_FLOW_EDGE {
+            if use_counts[reg as usize] != 1 {
+                return None;
+            }
+            let reader = insts[at + 1..].iter().find(|inst| uses(inst).any(|u| u == reg))?;
+            let (Kind::Copy, [Operand::Def(target), Operand::Use(_)]) = (reader.kind, &reader.operands[..]) else {
+                return None;
+            };
+            match *target {
+                Reg::Phys(phys) => return Some(phys),
+                Reg::Virt(next) => reg = next,
+            }
+        }
+        None
+    }
+
+    /// The index of the one definition of `reg` in `insts`.
+    fn single_def_index(
+        insts: &[Inst],
+        reg: u32,
+    ) -> Option<usize> {
+        let mut found = None;
+        for (i, inst) in insts.iter().enumerate() {
+            if defines(inst).any(|d| d == reg) {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(i);
+            }
+        }
+        found
     }
 
     /// `getSingleDef`: the one definition of `reg` in block `b`.
@@ -234,7 +324,7 @@ pub fn commute_tied<T: Target>(function: &mut MFunction<T::Class>) {
             let dist = at + 1;
             let base_killed = facts.killed(function, b, at, base);
             let other_killed = facts.killed(function, b, at, c);
-            let commute = (!base_killed && other_killed) || profitable(&facts, function, b, at, dist, a, base, c);
+            let commute = (!base_killed && other_killed) || profitable::<T>(&facts, function, b, at, dist, a, base, c);
             if commute {
                 function.blocks[b].insts[at].operands.swap(used, other);
                 relax_demoted::<T>(function, &facts, b, at, base, other);
@@ -280,9 +370,9 @@ fn relax_demoted<T: Target>(
 
 /// `isProfitableToCommute`.
 #[allow(clippy::too_many_arguments)]
-fn profitable<C>(
+fn profitable<T: Target>(
     facts: &Facts,
-    function: &MFunction<C>,
+    function: &MFunction<T::Class>,
     b: usize,
     at: usize,
     dist: usize,
@@ -292,6 +382,20 @@ fn profitable<C>(
 ) -> bool {
     if !facts.plainly_killed(function, b, at, c) {
         return false;
+    }
+    // `r0 = ADD (MOV r1), (MOV r0)`: tie the source that arrives in the
+    // register the result leaves in, to drop an otherwise certain copy
+    if let Some(to_a) = Facts::copied_to_phys::<T>(function, &facts.use_counts, b, at, a) {
+        let from_b = Facts::copied_from_phys::<T>(function, b, at, base);
+        let from_c = Facts::copied_from_phys::<T>(function, b, at, c);
+        let compatible = |from: Option<RegId>| from.is_some_and(|from| T::overlaps(T::root(from), T::root(to_a)));
+        let (comp_b, comp_c) = (compatible(from_b), compatible(from_c));
+        if (from_b.is_none() && comp_c) || (from_b.is_some() && !comp_b && (from_c.is_none() || comp_c)) {
+            return true;
+        }
+        if (from_c.is_none() && comp_b) || (from_c.is_some() && !comp_c && (from_b.is_none() || comp_b)) {
+            return false;
+        }
     }
     let (clear_c, last_def_c) = Facts::no_use_after_last_def(function, b, c, dist);
     if !clear_c {

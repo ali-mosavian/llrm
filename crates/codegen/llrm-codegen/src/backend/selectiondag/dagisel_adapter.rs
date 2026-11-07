@@ -1061,6 +1061,9 @@ impl Dag for DagisAdapter<'_> {
         if !mems.is_empty() && mems.iter().all(|mem| self.dag.invariant_loads.contains(mem)) {
             self.dag.invariant_loads.insert(node);
         }
+        if !mems.is_empty() && mems.iter().all(|mem| self.dag.got_loads.contains(mem)) {
+            self.dag.got_loads.insert(node);
+        }
         self.mem_refs.insert(node, mems.to_vec());
     }
 
@@ -1268,6 +1271,17 @@ impl Dag for DagisAdapter<'_> {
 }
 
 impl AddrDag for DagisAdapter<'_> {
+    fn live_in_physical(
+        &self,
+        node: u32,
+    ) -> Option<u16> {
+        match self.dag.nodes()[node as usize].data {
+            NodeData::Register(number) => {
+                self.registers.pin_register(*self.dag.live_in_phys.get(&number)?)
+            }
+            _ => None,
+        }
+    }
     fn known_zero_bits(
         &self,
         value: PinValue,

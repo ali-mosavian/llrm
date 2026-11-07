@@ -37,6 +37,11 @@ for O in Os O2; do
       [ $w = 64 ] && f=$file || f=$file
       src=$rt/lib/fp/$d/$f.c; [ $name = float ] && [ $w = 32 ] && src=$rt/lib/fp/f32/float_si.c
       o=ERR; if LLRM_CC_TARGET=$ccw "$cc" $extra $cfg -$O -c -I$rt/include "$src" -o $T/o.o 2>/dev/null; then o=$(bytes $T/o.o); fi
+      # compiler-rt's comparesf2/comparedf2 object also holds __unordsf2/__unorddf2: ours is cmp.c plus unord.c
+      if [ $name = cmp ] && [ "$o" != ERR ]; then
+        u=ERR; if LLRM_CC_TARGET=$ccw "$cc" $extra $cfg -$O -c -I$rt/include "$rt/lib/fp/$d/unord.c" -o $T/u.o 2>/dev/null; then u=$(bytes $T/u.o); fi
+        [ "$u" = ERR ] && o=ERR || o=$((o + u))
+      fi
       list=$c64; [ $w = 32 ] && list=$c32
       c=0; g=0
       for r in ${list//,/ }; do
@@ -45,7 +50,11 @@ for O in Os O2; do
           if gcc -m32 -march=i486 -$O -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables -msoft-float -w -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$r.c -o $T/g.o 2>/dev/null; then [ $g != ERR ] && g=$((g + $(bytes $T/g.o))); else g=ERR; fi
         else g=-; fi
       done
-      case $name in add+sub|mul|div|neg|float) [ $tgt = m32 ] && [ "$c" != ERR ] && c="$c*";; esac
+      # m32 compiler-rt int->float is x87 arithmetic (fild/fmul/fadd), not a soft-float routine: no rank
+      [ $tgt = m32 ] && [ $name = float ] && c=fpu
+      # wasm32 compiler-rt floatdidf/floatundidf use f64.convert, f64.mul and f64.add (the machine has an FPU): the f64 cell is not a soft-float rank
+      [ $tgt = wasm32 ] && [ $name = float ] && [ $w = 64 ] && c=fpu
+      case $name in add+sub|mul|div|neg|float) [ $tgt = m32 ] && [ "$c" != fpu ] && [ "$c" != ERR ] && c="$c*";; esac
       row+=("$o" "$c" "$g")
     done
     x64=-; x32=-

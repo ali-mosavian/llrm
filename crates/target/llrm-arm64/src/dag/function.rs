@@ -126,6 +126,9 @@ pub struct Selected {
     /// The frame object each source variable lives in (`llvm.dbg.declare` of a
     /// static `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
+    /// The value each `llvm.dbg.value` of this block names, as the selected
+    /// nodes left it (`transferDbgValues`), in source order.
+    pub dbg_values: Vec<(llrm_mir::MetadataId, Option<SDValue>)>,
     /// The probabilities the builder kept for the edges of merged conditions.
     pub edge_probs: Vec<(u32, u32, u32)>,
 }
@@ -178,7 +181,7 @@ pub fn select_function_in(
     let tti = crate::tti::AArch64::of_cpu(platform.cpu())
         .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>);
     // `isIntDivCheap` keeps a divide by a constant a divide where it is smaller
-    // than the multiply-high sequence. DEVIATE SD534 (exit: none, arm64 is
+    // than the multiply-high sequence. DEVIATE SD535 (exit: none, arm64 is
     // strict on bytes): the pin answers `minsize` only
     // ([L33827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L33827));
     // `-Os` is `optsize` and gcc's `-Os` divides there too (2 instructions
@@ -271,6 +274,27 @@ pub fn select_function_in(
                 Ok(PhiCopy { to, dst, src, float })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let in_block: llrm_mir::dense::IdSet<llrm_mir::module::InstId> =
+            built.dag.inst_order.iter().map(|&(inst, _)| inst).collect();
+        // A note with no node to follow (the value is in another block) or no
+        // value at all (`undef`, a constant, a piece, an assignment) is kept as
+        // a note of nothing: the variable then says nothing, rather than
+        // leaving an earlier note standing over code it no longer holds.
+        let dbg_values = function
+            .debug_records()
+            .iter()
+            .filter_map(|record| match record.what {
+                llrm_mir::DebugWhat::Declare(_) => None,
+                llrm_mir::DebugWhat::Value(llrm_mir::Operand::Value(value)) => {
+                    if !in_block.contains(&record.before) {
+                        return None;
+                    }
+                    let node = built.values.iter().find(|(one, _)| *one == value).map(|(_, node)| *node);
+                    Some((record.variable, node.map(|node| built.dag.resolve(node))))
+                }
+                _ => (at == 0).then_some((record.variable, None)),
+            })
+            .collect();
         selected.push(Selected {
             dag: built.dag,
             units,
@@ -282,6 +306,7 @@ pub fn select_function_in(
             phis,
             tables: info.jump_tables.clone(),
             declared: declared.clone(),
+            dbg_values,
             edge_probs: info.edge_probs.iter().map(|(from, to, p)| (from.0, to.0, *p)).collect(),
         });
     }

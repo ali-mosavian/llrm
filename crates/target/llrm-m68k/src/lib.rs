@@ -3,6 +3,7 @@
 
 pub mod abi;
 pub mod addrarith;
+pub mod addrcmp;
 pub mod addrroles;
 pub mod amiga;
 pub mod atari;
@@ -30,6 +31,7 @@ pub mod foldload;
 pub mod frame;
 pub mod isa;
 pub mod kernels;
+pub mod loopinc;
 pub mod mac;
 pub mod machine;
 pub mod mc;
@@ -42,8 +44,8 @@ pub mod opcosts;
 pub mod regalloc;
 pub mod scaledindex;
 pub mod shiftadd;
-pub mod target;
 pub mod sizes;
+pub mod target;
 pub mod timing;
 
 use llrm_lir::registers::{RegId, Row};

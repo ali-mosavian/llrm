@@ -68,7 +68,8 @@ pub fn compare_mbb_priority(
 type Pick = fn(&crate::model::lir::Insn) -> Option<(crate::model::ir::Held, crate::model::ir::Held)>;
 
 pub(super) fn pick_of(env: &dyn CoalescerEnv) -> Pick {
-    if env.joins_sub_registers() { move_copy } else { full_copy }
+    let _ = env;
+    move_copy
 }
 
 /// `isSplitEdge`: a block to vacate to eliminate branches: one predecessor, one

@@ -1,5 +1,6 @@
-reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
-blessed = "2026-10-14"
+reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
+blessed = "2026-11-07"
+corpus = "8f6918017295f6796d8fe8f6786877f2"
 
 [ow.O2]
 instructions = 88353
@@ -68,7 +69,7 @@ kernel_ms = 1.4033
 [bc.O2]
 instructions = 145768
 memory_operands = 53033
-code_bytes = 338
+code_bytes = 337
 data_bytes = 7
 bss_bytes = 8716
 kernel_ms = 2.0304
@@ -76,7 +77,7 @@ kernel_ms = 2.0304
 [pds71.O2]
 instructions = 145522
 memory_operands = 53035
-code_bytes = 338
+code_bytes = 337
 data_bytes = 7
 bss_bytes = 8716
 kernel_ms = 2.0246
@@ -84,7 +85,7 @@ kernel_ms = 2.0246
 [vbdos.O2]
 instructions = 145556
 memory_operands = 53045
-code_bytes = 344
+code_bytes = 343
 data_bytes = 7
 bss_bytes = 8716
 kernel_ms = 2.0225

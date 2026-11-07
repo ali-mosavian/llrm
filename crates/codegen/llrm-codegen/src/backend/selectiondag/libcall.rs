@@ -147,6 +147,24 @@ pub fn c_lib_call(
     args: &[SDValue],
     ret: EVT,
 ) -> Option<SDValue> {
+    let values = c_lib_call_parts(dag, env, name, convention, args, ret)?;
+    Some(match values[..] {
+        [one] => one,
+        [low, high] => dag.get_node(ISD::BuildPair, ret, &[low, high]),
+        _ => return None,
+    })
+}
+
+/// `c_lib_call`, the result as the registers it is read from (low first), not
+/// joined: for a caller that is itself expanding the wide result.
+pub fn c_lib_call_parts(
+    dag: &mut SelectionDAG,
+    env: &CallEnv<'_>,
+    name: &str,
+    convention: Option<u32>,
+    args: &[SDValue],
+    ret: EVT,
+) -> Option<Vec<SDValue>> {
     use llrm_target::calling::Place as Where;
     let calling = env.arch.calling();
     let native = convention.and_then(|number| calling.by_number(number)).unwrap_or_else(|| calling.native());
@@ -197,9 +215,5 @@ pub fn c_lib_call(
     let stack = placement.stack_bytes as u64;
     let clobbers = super::dagisel_adapter::clobbered_by(env.arch, Some(native));
     let (_chain, values) = lib_call(dag, env, root, callee, &places, stack, 0, &returns, &clobbers);
-    Some(match values[..] {
-        [one] => one,
-        [low, high] => dag.get_node(ISD::BuildPair, ret, &[low, high]),
-        _ => return None,
-    })
+    Some(values)
 }

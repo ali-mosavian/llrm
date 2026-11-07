@@ -2742,12 +2742,13 @@ fn m32_tree_calls(
 }
 
 /// bench fib at m32 -O2 was 334151 clocks against gcc's 210636: the pin's
-/// inliner copies no recursive callee, gcc's `recursive_inlining` copies fib
-/// into itself to depth 8 (REC-2).
+/// inliner copies no recursive callee. gcc's `recursive_inlining` copies it to
+/// depth 8 (REC-2); m32 stops at depth 2 at -O2 (REC-7: fib 99618 -> 19993
+/// clocks), so 6 calls remain.
 #[test]
 fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     let calls = m32_fib_calls(crate::pipeline::Options::default());
-    assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
+    assert_eq!(calls, 6, "-O2 left {calls} calls of fib");
 }
 
 /// Calls of `@paths` after the default pipeline on x86-m32: bench rectwo's
@@ -2995,4 +2996,64 @@ b1:
     let three = super::dying_callees_bytes(&module, &[h, h, h], |body| body.walk().count() as i64);
     assert_eq!(one, 3);
     assert_eq!(three, one, "the callee goes once");
+}
+
+/// m68k sfm16_float -Os: five calls to `canon`, 60 instructions against 57 and a credit of 4, so the count accepted the
+/// copies; the byte estimate said +28 B (built +28). A callee that goes with its last calls must not grow the bytes.
+#[test]
+fn test_an_os_trial_that_grows_the_bytes_is_refused_though_the_count_accepts_it() {
+    assert!(!super::trial_accepted(true, false, 60, 57, 4, 0, 28, 0, 756));
+    assert!(super::trial_accepted(true, false, 60, 57, 4, 0, -4, 0, 756), "a copy that shrinks the code stays");
+    assert!(super::trial_accepted(false, false, 60, 57, 4, 0, 28, 0, 756), "off the gate's targets the count decides");
+    assert!(super::trial_accepted(true, false, 57, 57, 4, 0, 12, 0, 756), "copies no larger than the caller are decided by the count");
+}
+
+/// Whether `self_calls` takes `name` of `text` as a tree recursion.
+fn is_tree(
+    text: &str,
+    name: &str,
+) -> bool {
+    let mut module = parsed(text);
+    let mut tree = false;
+    llrm_mir::program::Program::lend(
+        &mut module,
+        crate::indvars::tests::m32(),
+        |program: &mut llrm_mir::program::Program| {
+            let module = &program.modules[0];
+            let id = module
+                .functions()
+                .find(|(_, global, _)| global.name.as_deref() == Some(name))
+                .map(|(id, _, _)| id)
+                .unwrap();
+            tree = crate::walk::self_calls(module, &program.layout, id, false).is_some();
+            Ok::<(), String>(())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the program lends");
+    tree
+}
+
+/// bench queens at m32 -O3 ran 154117 clocks against gcc's 94851: `place`
+/// calls itself once, in a loop, and was not a tree, so it was never copied
+/// into itself. `f(n - 1) + n` (one call, once per entry) stays linear.
+#[test]
+fn test_one_self_call_in_a_loop_is_a_tree_recursion_and_one_per_entry_is_not() {
+    assert!(is_tree(include_str!("testdata/rec2/queens.ll"), "place_"), "place_ is not a tree");
+    let linear = "define i32 @sum(i32 %n) {
+b0:
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %base, label %rec
+
+base:
+  ret i32 0
+
+rec:
+  %a = sub i32 %n, 1
+  %x = call i32 @sum(i32 %a)
+  %s = add i32 %x, %n
+  ret i32 %s
+}
+";
+    assert!(!is_tree(linear, "sum"), "sum is a tree");
 }

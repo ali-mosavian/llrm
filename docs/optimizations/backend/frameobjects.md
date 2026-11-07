@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/frameobjects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/frameobjects.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/frameobjects.rs sha256:79fa8b9539861d9f943e1f9d4cf67f6cb75e58ab1dcba4f0a7d44d65d4a3dddd -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/frameobjects.rs sha256:1f1143dc80fd31f6dac931cc017e94047f1339b84751d7f8640fcda3b2fb640e -->
 
 # frameobjects
 
@@ -31,13 +31,18 @@ The stack size is `Offset` less the local area.
   a call with 12 outgoing bytes: 24 + 12 = 36 -> 48 (16), size 44
 ```
 
-DEVIATE FO-1 (exit: frame indices, owner w-6, 2026-11-20): nothing calls
+DEVIATE FO-1 (exit: frame indices, owner llrm-target-x86-m16, 2026-11-20): nothing calls
 this yet. `frame::Frame` hands out a slot when the spiller asks and the
 displacement goes into the instruction at once; the pin names a frame index
 and `replaceFrameIndices` fills the offset after this runs.
 
-DEVIATE FO-2 (exit: with FO-1): the stack protector, the local stack
-allocation block, scavenging slots, `orderFrameObjects`,
+DEVIATE FO-1 also covers `order_frame_objects`
+(`X86FrameLowering::orderFrameObjects`): translated, used by
+`relayout::ordered` on the finished body, not yet between objects and
+`calculate_frame_object_offsets` (owner llrm-target-x86-m16, 2026-11-20).
+
+DEVIATE FO-2 (exit: with FO-1, owner llrm-target-x86-m16): the stack
+protector, the local stack allocation block, scavenging slots,
 `computeFreeStackSlots` and `StackSymbolOrdering` are not translated; i486
 enables none (`enableStackSlotScavenging` is false, no register scavenger,
 no `-fstack-protector` frontend).

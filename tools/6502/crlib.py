@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """The compiler-rt members a 6502 program links, built from runtime/compiler-rt as a linker would pick them from an archive: one object per
 source file, pulled by an undefined symbol (`tests/rt_index.sh` says which file defines it). Static helpers stay inside their file's object.
-Groups (tests/fp_sources.sh): int64 (one routine per file), f32, f32_64, f64. int32.c is not linked: the compiler calls the 32-bit helpers
+Groups (tests/fp_sources.sh): int64 (one routine per file), f32, f32_64, f64, clz (__clzsi2, called by the -O2 6502 config). int32.c is not linked: the compiler calls the 32-bit helpers
 in mos_rt.s with their own convention."""
 import re, subprocess, threading
 from pathlib import Path
 
-GROUPS = ["int64", "f32", "f32_64", "f64"]
+GROUPS = ["int64", "f32", "f32_64", "f64", "clz"]
 _LOCK = threading.Lock()
 _INDEX = {}
 _MEMBERS = {}

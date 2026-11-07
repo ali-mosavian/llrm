@@ -149,18 +149,108 @@ pub enum Refusal {
 }
 
 /// The Z80's combiner hooks.
-struct Z80Combines;
+struct Z80Combines {
+    /// The size routine `__mulsi3` is this function's long multiply.
+    long_multiply: bool,
+}
 
 impl CombineHooks for Z80Combines {
+    /// DEVIATE Z80-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the folded
+    /// constant `c << n` is a `ld bc, #k` and an `add hl, bc` where the add of
+    /// a small `c` was `inc hl`s (bintree -O2 +14 B). The pin's default is
+    /// true. Owner: llrm-target-z80. Exit: 2026-11-20, a price per constant.
+    fn is_desirable_to_commute_with_shift(
+        &self,
+        _dag: &SelectionDAG,
+        _shift: SDValue,
+        _level: CombineLevel,
+    ) -> bool {
+        false
+    }
+
     /// A byte or word multiply by a constant is a library call (`__mulhi3`, a
     /// loop over the constant's bits, tens of T-states a bit); `2^n +- 1` as
     /// shifts and one add is a `add hl, hl` and a copy per shifted bit.
+    ///
+    /// A long multiplied by `2^k +- 1` (k up to 8) is `k` long shifts and an
+    /// add (each a `add hl, hl` / `adc` pair); the multiply expands through
+    /// byte lanes instead: 49 instructions for `x * 3`, 58 for `x * 7`. Where
+    /// the function calls `__mulsi3` for its long multiplies (tuned for size,
+    /// a module with enough of them) the call, about 14 B, is the smaller
+    /// form: the decomposition left alone grew 12 -Os cells.
     fn decompose_mul_by_constant(
         &self,
         vt: EVT,
-        _c: u128,
+        c: u128,
     ) -> bool {
-        matches!(vt, EVT::I8 | EVT::I16)
+        let near_power = |n: u128| n.is_power_of_two() && n <= 256;
+        match vt {
+            EVT::I8 | EVT::I16 => true,
+            EVT::I32 => !self.long_multiply && c >= 3 && (near_power(c - 1) || near_power(c + 1)),
+            _ => false,
+        }
+    }
+
+    /// The byte-lane multiply of a long whose three high bytes are zero is 15
+    /// instructions for `x * 3` where the shifts and the add are 21 (a
+    /// zero-extended byte, byte_multiply -O2 +36 B and +38,149 T); a
+    /// zero-extended word keeps the decomposition (23 against 44).
+    fn decompose_mul_by_constant_of(
+        &self,
+        dag: &SelectionDAG,
+        x: SDValue,
+        vt: EVT,
+        c: u128,
+    ) -> bool {
+        self.decompose_mul_by_constant(vt, c)
+            && !(vt == EVT::I32 && llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero(dag, x, 0xFFFF_FF00))
+    }
+
+    /// The pin's default: a compare of a masked or zero-extended value against
+    /// a constant is made in the narrower type (`(and x, 7) == 3` is a byte
+    /// `cp`), legal or not; the type legalizer promotes it to a byte. Without
+    /// it the word compare kept a `sub a, #0` for the high byte the mask had
+    /// zeroed (div_constants_short, 36 sites).
+    fn is_setcc_type_desirable(
+        &self,
+        _narrow: EVT,
+        _legal: bool,
+    ) -> bool {
+        true
+    }
+
+    /// A selector masked to three bits and compared with 0..7 in a chain is
+    /// one `and` and a byte `cp` each, not a word compare with `sub a, #0` for
+    /// the zeroed high byte (div_constants_short, 36 sites).
+    fn narrow_setcc_with_other_uses(&self) -> bool {
+        true
+    }
+
+    /// X86InstrCompiler.td: `shl x, 1` is `add x, x`. A long shifted by one is
+    /// then a long add, whose carry is `adc hl, rr` (`carry.rs`); expanded as a
+    /// shift it was the funnel of two words, 24 instructions.
+    fn has_target_combine(
+        &self,
+        op: ISD,
+    ) -> bool {
+        op == ISD::Shl
+    }
+
+    fn perform_dag_combine(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+        level: CombineLevel,
+    ) -> Option<SDValue> {
+        // Also called for every target node, whatever its operands.
+        if dag.opcode(node) != ISD::Shl {
+            return None;
+        }
+        let (value, amount) = (dag.operand(node, 0), dag.operand(node, 1));
+        (level == CombineLevel::BeforeLegalizeTypes
+            && dag.value_type(node) == EVT::I32
+            && dag.constant(amount) == Some(1))
+        .then(|| dag.get_node(ISD::Add, EVT::I32, &[value, value]))
     }
 
     /// A word compare against a constant is two byte compares and a branch
@@ -192,19 +282,20 @@ pub fn select_block(
         tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
     }
     let mut lowering = Z80Lowering { sized };
+    let mut combines = Z80Combines { long_multiply: sized && long_multiply };
     let arch = Z80;
     if optimize {
         live_out::assert_live_out_copies(dag, info);
     }
-    DagCombiner::new(dag, &mut Z80Combines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut combines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     TypeLegalizer::new(dag, &tli)
         .with_target(&arch)
         .with_hooks(&mut lowering)
         .run()
         .map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut Z80Combines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut combines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut Z80Combines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut combines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
     if optimize {
         live_out::compute_live_out_vreg_info(dag, info);
     }

@@ -72,7 +72,7 @@ fn cdecl_is_the_stack_convention_on_x86_32_wat() {
 }
 
 /// A float spilled to the cell of its type, as the pin's RFP32 does and
-/// llrm-c ran it: without `rounds_float_spills` llrm-cc spilled each of the
+/// llrm-cc ran it: without `rounds_float_spills` llrm-cc spilled each of the
 /// ten live floats here as a qword (12 `fstp qword`, no `fstp dword`).
 #[test]
 fn a_spilled_float_is_stored_in_a_dword_cell() {
@@ -403,7 +403,7 @@ fn a_near_pointer_initialised_from_an_integer_is_data() {
 }
 
 /// The m16 `main_` pushed and popped bx, cx and dx (6 bytes in 56 programs,
-/// +336 B over llrm-c) for a start-up that discards every register after it
+/// +336 B over llrm-cc) for a start-up that discards every register after it
 /// returns. Nothing in the module calls it, so it keeps nothing; one that
 /// something calls keeps Watcom's contract.
 #[test]
@@ -447,7 +447,7 @@ fn an_uncalled_main_keeps_no_register_and_a_called_one_keeps_watcoms() {
 /// The all-llrm DOS configuration: `x86_16-dos-rp3` is regparm3 (`name@3`,
 /// `main_`) where `x86_16-dos` is cdecl (`_name`), and a program in it links
 /// with the shared start-up. Without the row, QCport-sized comparisons against
-/// llrm-c had cdecl's push/pop cleanup in them (+8.6 KB of +9.8 KB over 65
+/// llrm-cc had cdecl's push/pop cleanup in them (+8.6 KB of +9.8 KB over 65
 /// modules).
 #[test]
 fn the_rp3_dos_row_is_regparm3_and_links() {
@@ -485,7 +485,7 @@ fn the_rp3_dos_row_is_regparm3_and_links() {
 }
 
 /// The m32 row packed structs to a byte (`-fpack-struct=1`, copied from the m16
-/// rows): `struct { char id; void *next; }` was 5 bytes where llrm-c
+/// rows): `struct { char id; void *next; }` was 5 bytes where llrm-cc
 /// and the assembly sharing the QB runtime's structs (compvect: ids at +4,
 /// vectors at +8) have 8, so every m32 QB program died at start-up
 /// ("Out of memory", "String formula too complex") once the runtime was built

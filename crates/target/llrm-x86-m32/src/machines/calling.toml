@@ -155,6 +155,8 @@ results_clobbered = true
 [sysv32]
 like = "cdecl32"
 cc = "sysv"
+# i386 System V keeps the stack 16-aligned at a call (the pin's i386-linux); the DOS conventions above keep 8.
+stack_alignment = 16
 aggregate_in_register_bytes = []
 aggregate_pointer_popped_by = "callee"
 
