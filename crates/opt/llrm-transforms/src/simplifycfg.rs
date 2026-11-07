@@ -834,26 +834,26 @@ fn branch_speculated(
 pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
     let mut headers = IdSet::new();
     let Some(entry) = function.entry() else { return headers };
-    // 0 unseen, 1 on the walk's path, 2 done.
-    let mut state: IdMap<BlockId, u8> = IdMap::new();
-    state.insert(entry, 1);
+    // 0 unseen, 1 on the walk's path, 2 done; by block number.
+    let mut state = vec![0u8; function.block_capacity()];
+    state[entry.0 as usize] = 1;
     let mut path = vec![(entry, function.successors(entry), 0usize)];
     while let Some((block, successors, next)) = path.last_mut() {
         let Some(&successor) = successors.get(*next) else {
-            state.insert(*block, 2);
+            state[block.0 as usize] = 2;
             path.pop();
             continue;
         };
         *next += 1;
-        match state.get(&successor) {
-            Some(1) => {
+        match state[successor.0 as usize] {
+            1 => {
                 headers.insert(successor);
             }
-            Some(_) => {}
-            None => {
-                state.insert(successor, 1);
+            0 => {
+                state[successor.0 as usize] = 1;
                 path.push((successor, function.successors(successor), 0));
             }
+            _ => {}
         }
     }
     headers
@@ -1230,8 +1230,6 @@ fn insts_folded_to_unreachable(
     function: &mut Function,
     block: BlockId,
 ) -> bool {
-    let insts: Vec<InstId> = function.iter_block(block).collect();
-    let Some(&last) = insts.last() else { return false };
     let stops = |inst: InstId| {
         let Opcode::Call(info) = &function.instruction(inst).opcode else { return false };
         info.tail != Tail::MustTail
@@ -1240,6 +1238,21 @@ fn insts_folded_to_unreachable(
                     .and_then(|target| callees.get(&target))
                     .is_some_and(|summary| summary.no_return))
     };
+    // Most blocks hold no call that stops: found without listing the block.
+    let mut walk = function.iter_block(block).peekable();
+    let mut found = false;
+    while let Some(inst) = walk.next() {
+        if walk.peek().is_some() && stops(inst) {
+            found = true;
+            break;
+        }
+    }
+    drop(walk);
+    if !found {
+        return false;
+    }
+    let insts: Vec<InstId> = function.iter_block(block).collect();
+    let Some(&last) = insts.last() else { return false };
     let Some(at) = insts.iter().position(|&inst| inst != last && stops(inst)) else { return false };
     let cut = &insts[at + 1..];
     if cut.len() == 1 && function.instruction(last).opcode == Opcode::Unreachable {
