@@ -59,6 +59,10 @@ pub struct Tuning {
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
     pub unroll_never_grows_at_o1: bool,
+    /// DEVIATE INL-O1 (owner x86-m32, exit 2026-11-24): where no byte rate is
+    /// stated (-O1), an inline that stays is held to the -Os bound (the callee
+    /// copied only if it does not grow the code); false: the pin's threshold.
+    pub inline_never_grows_without_rate: bool,
     /// Trips the -O1 no-growth rule above analyses for folds: the pin's
     /// `-unroll-max-iteration-count-to-analyze` (10) when `None`.
     pub unroll_o1_analyzed_trips: Option<u32>,
@@ -267,6 +271,7 @@ impl Tuning {
         narrow_divide_live_limit: 0,
         sink_spares_ranges: false,
         unroll_never_grows_at_o1: false,
+        inline_never_grows_without_rate: false,
         unroll_o1_analyzed_trips: None,
         price_pin_multiplies: false,
         imul_at_size: false,
