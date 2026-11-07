@@ -65,3 +65,43 @@ fn a_reload_after_a_step_of_the_same_cell_is_dropped_when_a_is_dead() {
     drop_flag_reload(&mut asm);
     assert_eq!(asm.text(), live, "a is read after");
 }
+
+/// `scmp`'s second `ldy #0` sat after a label nothing names (`scmp_b4:`, kept
+/// by the emitter), and the walk forgot every register there: 2 bytes and 2
+/// clocks a byte.
+#[test]
+fn a_label_nothing_names_keeps_what_is_known() {
+    use llrm_6502::peephole::drop_known_loads;
+    let mut asm = Asm::parse("f:\n  ldy #0\n  inc rc2\nq:\n  ldy #0\n  lda (rc2),y\n  rts\n");
+    drop_known_loads(&mut asm);
+    assert_eq!(asm.text(), "f:\n  ldy #0\n  inc rc2\nq:\n  lda (rc2),y\n  rts\n");
+}
+
+/// `fletcher`'s `if (a >= 255) a -= 255`: the sum is in `a` and copied to `x`
+/// for the compare; the select stored it back through `txa; jmp` (11 bytes)
+/// where `cmp #255; bne l; lda #0; l:` keeps it (6): the function was 64 bytes.
+#[test]
+fn a_select_of_what_a_compare_left_in_a_overwrites_it_in_place() {
+    use llrm_6502::dagisel::hooks::Cpu;
+    use llrm_6502::driver::{Level, Request, assembly};
+    let text = assembly(include_str!("data/fletcher.ll"), &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let from = text.find("fletcher:").unwrap();
+    let body = text[from..].split(".segment").next().unwrap();
+    let bytes = llrm_6502::timing::estimate(Cpu::Mos6502, body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
+    assert!(bytes <= 56, "{bytes} B\n{body}");
+}
+
+/// `strnlen`'s `lda #0; sta rc6; lda #0; sta rc7` ahead of a loop label: the
+/// scan for a reader of the flags stopped at the label, so the second load
+/// stayed (2 bytes, 2 clocks).
+#[test]
+fn a_load_before_a_label_is_dropped_when_the_flags_are_set_again_after_it() {
+    use llrm_6502::peephole::drop_known_loads;
+    let mut asm = Asm::parse("f:\n  lda #0\n  sta rc6\n  lda #0\n  sta rc7\nl:\n  clc\n  lda rc2\n  bne l\n  rts\n");
+    drop_known_loads(&mut asm);
+    assert_eq!(asm.text(), "f:\n  lda #0\n  sta rc6\n  sta rc7\nl:\n  clc\n  lda rc2\n  bne l\n  rts\n");
+    let read = "f:\n  lda #0\n  sta rc6\n  lda #0\n  sta rc7\nl:\n  bne l\n  rts\n";
+    let mut asm = Asm::parse(read);
+    drop_known_loads(&mut asm);
+    assert_eq!(asm.text(), read, "a branch after the label reads the flags the load set");
+}
