@@ -41,7 +41,7 @@ impl CombineHooks for MosLateCombines {
         wide == EVT::I16 && narrow == EVT::I8
     }
 
-    /// DEVIATE SD213: a word `or` of two bytes read as a long is a byte `or`
+    /// DEVIATE SD257: a word `or` of two bytes read as a long is a byte `or`
     /// (`logical_value` 410 -> 402 B).
     fn known_zero_narrowing(&self) -> bool {
         true
@@ -109,7 +109,7 @@ impl CombineHooks for MosCombines {
         wide == EVT::I16 && narrow == EVT::I8
     }
 
-    /// DEVIATE SD213: a word `or` of two bytes read as a long is a byte `or`
+    /// DEVIATE SD257: a word `or` of two bytes read as a long is a byte `or`
     /// (`logical_value` 410 -> 402 B).
     fn known_zero_narrowing(&self) -> bool {
         true
@@ -171,7 +171,7 @@ impl CombineHooks for MosCombines {
 /// where the word subtract made both bytes (`isspace`'s `c >= 9 && c <= 13`,
 /// `adc #255` on the high byte and a borrow chain into the compare).
 ///
-/// DEVIATE SD214 (owner llrm-target-6502, exit 2026-12-05): the pin keeps the
+/// DEVIATE SD258 (owner llrm-target-6502, exit 2026-12-05): the pin keeps the
 /// word range check (`foldRangeTest`'s result) for the target to lower; a
 /// target with byte lanes gains the narrower subtract. Not a pin combine.
 fn range_on_low_byte(

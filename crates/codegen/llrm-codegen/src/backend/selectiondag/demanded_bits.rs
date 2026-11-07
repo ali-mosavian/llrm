@@ -141,7 +141,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if !self.dag.has_one_use(op.node) {
             return Ok(());
         }
-        // DEVIATE SD213 (owner llrm-target-6502, exit 2026-12-05), `known_zero_narrowing`:
+        // DEVIATE SD257 (owner llrm-target-6502, exit 2026-12-05), `known_zero_narrowing`:
         // the pin sizes by the demanded bits alone, so an `or` of two bytes read as
         // a word was done as a word; the bits known zero above the narrow type come
         // back as a zero extension. An `and` keeps the pin's sizing: its zeros come
