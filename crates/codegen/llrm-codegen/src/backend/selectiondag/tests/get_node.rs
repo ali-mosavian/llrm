@@ -129,6 +129,77 @@ fn setcc_of_constants_and_equal_operands() {
     assert_eq!(dag.constant(differ), Some(0));
 }
 
+/// wasm `uno x, 0.0` is `(x != x) | (0.0 != 0.0)` after legalisation; the
+/// constant half stayed a `setcc` (`FoldSetCC` was integers only), so
+/// sfm16_float -Os kept `f32.const 0; f32.const 0; f32.ne; i32.or` per call.
+#[test]
+fn setcc_of_two_float_constants_folds() {
+    let mut dag = dag();
+    let (zero, one) =
+        (dag.get_constant_fp(0, EVT::Simple(MVT::F32)), dag.get_constant_fp(0x3f80_0000, EVT::Simple(MVT::F32)));
+    let ne = dag.get_setcc(EVT::I1, zero, zero, CondCode::SetUNe);
+    assert_eq!(dag.constant(ne), Some(0), "0.0 une 0.0");
+    let lt = dag.get_setcc(EVT::I1, zero, one, CondCode::SetOLt);
+    assert_eq!(dag.constant(lt), Some(1), "0.0 olt 1.0");
+    let nan = dag.get_constant_fp(0x7fc0_0000, EVT::Simple(MVT::F32));
+    let uno = dag.get_setcc(EVT::I1, nan, zero, CondCode::SetUo);
+    assert_eq!(dag.constant(uno), Some(1), "uno with a NaN");
+    let oeq = dag.get_setcc(EVT::I1, nan, zero, CondCode::SetOEq);
+    assert_eq!(dag.constant(oeq), Some(0), "oeq with a NaN");
+    let ueq = dag.get_setcc(EVT::I1, nan, zero, CondCode::SetUEq);
+    assert_eq!(dag.constant(ueq), Some(1), "ueq with a NaN");
+}
+
+/// `FoldSetCC` on every condition code against less, greater, equal and
+/// unordered constants, as the pin's `APFloat::compare` switch: the `O` codes
+/// are false and the `U` codes true on a NaN, the plain codes undef.
+#[test]
+fn setcc_of_float_constants_follows_the_pin_table() {
+    use CondCode::*;
+    let mut dag = dag();
+    let f32_ = EVT::Simple(MVT::F32);
+    let (one, two, nan) = (
+        dag.get_constant_fp(0x3f80_0000, f32_),
+        dag.get_constant_fp(0x4000_0000, f32_),
+        dag.get_constant_fp(0x7fc0_0000, f32_),
+    );
+    // Columns: 1 ? 2 (less), 2 ? 1 (greater), 1 ? 1 (equal), NaN ? 1.
+    let table: [(CondCode, [u128; 4]); 14] = [
+        (SetOEq, [0, 0, 1, 0]),
+        (SetONe, [1, 1, 0, 0]),
+        (SetOLt, [1, 0, 0, 0]),
+        (SetOGt, [0, 1, 0, 0]),
+        (SetOLe, [1, 0, 1, 0]),
+        (SetOGe, [0, 1, 1, 0]),
+        (SetO, [1, 1, 1, 0]),
+        (SetUo, [0, 0, 0, 1]),
+        (SetUEq, [0, 0, 1, 1]),
+        (SetUNe, [1, 1, 0, 1]),
+        (SetULt, [1, 0, 0, 1]),
+        (SetUGt, [0, 1, 0, 1]),
+        (SetULe, [1, 0, 1, 1]),
+        (SetUGe, [0, 1, 1, 1]),
+    ];
+    let pairs = [(one, two), (two, one), (one, one), (nan, one)];
+    for (cond, row) in table {
+        for (column, (a, b)) in pairs.into_iter().enumerate() {
+            let folded = dag.get_setcc(EVT::I1, a, b, cond);
+            assert_eq!(dag.constant(folded), Some(row[column]), "{cond:?} column {column}");
+        }
+    }
+    // The plain codes are the ordered ones, and undef on a NaN.
+    for (plain, ordered) in
+        [(SetEq, SetOEq), (SetNe, SetONe), (SetLt, SetOLt), (SetGt, SetOGt), (SetLe, SetOLe), (SetGe, SetOGe)]
+    {
+        for (a, b) in [(one, two), (two, one), (one, one)] {
+            let (p, o) = (dag.get_setcc(EVT::I1, a, b, plain), dag.get_setcc(EVT::I1, a, b, ordered));
+            assert_eq!(dag.constant(p), dag.constant(o), "{plain:?}");
+        }
+        let unordered = dag.get_setcc(EVT::I1, nan, one, plain);
+        assert!(dag.is_undef(unordered), "{plain:?} of a NaN is undef");
+    }
+}
+
 #[test]
 fn select_on_a_constant_condition_and_equal_arms() {
     let mut dag = dag();
@@ -279,4 +350,27 @@ fn a_dead_token_factor_no_longer_counts_as_a_user_of_its_operand() {
     assert!(!dag.has_one_use(inner.node), "two token factors read it");
     dag.delete_dead(dead.node);
     assert!(dag.has_one_use(inner.node), "the dead one let go of it");
+}
+
+/// A deleted node stayed in the use list of each operand, so `delete_dead` and
+/// `has_users` walked it again for every later query (memory_expansion: 5.6
+/// scans and 1.8 stale entries per created node). It leaves them at deletion
+/// (`DropOperands`); an operand it read twice loses both entries.
+#[test]
+fn a_deleted_node_leaves_the_use_lists_of_its_operands() {
+    let mut dag = dag();
+    let x = arg(&mut dag, EVT::I32, 1);
+    let y = arg(&mut dag, EVT::I32, 2);
+    let kept = dag.get_node(ISD::Add, EVT::I32, &[x, y]);
+    let twice = dag.get_node(ISD::Mul, EVT::I32, &[x, x]);
+    let dead = dag.get_node(ISD::Sub, EVT::I32, &[twice, y]);
+    assert_eq!(dag.use_candidates(x.node).iter().filter(|&&u| u == twice.node).count(), 2);
+    dag.delete_dead(dead.node);
+    assert!(dag.is_deleted(dead.node) && dag.is_deleted(twice.node));
+    for operand in [x.node, y.node, twice.node] {
+        let stale: Vec<u32> =
+            dag.use_candidates(operand).iter().copied().filter(|&user| dag.is_deleted(user)).collect();
+        assert!(stale.is_empty(), "node {operand} still lists deleted users {stale:?}");
+    }
+    assert_eq!(dag.use_candidates(x.node), &[kept.node]);
 }

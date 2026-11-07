@@ -55,10 +55,12 @@ pub fn select_mul_lohi<D: AddrDag>(
         }
     }
 
-    // DEVIATE SD444: where the multiply ends early on the r/m operand, a
-    // constant (a division's full-width magic) goes to `EAX`, so the other
-    // operand is the one whose length is read. The pin keeps operand 0 in
-    // `EAX`.
+    // DEVIATE SD444 (owner w2, exit 2026-11-17): where the multiply ends early
+    // on the r/m operand, a constant (a division's full-width magic) goes to
+    // `EAX`, so the other operand is the one whose length is read. The pin
+    // keeps operand 0 in `EAX`. Stays while the 486 row (`mul` 43 clocks
+    // against 19 for a short dividend; +4M clocks on 7 frames/huge rows) holds;
+    // the exit is a re-measure against the pin's order on the 486 rows.
     if folded.is_none()
         && hooks.options.multiply_early_out
         && dag.opcode(n1.node) == isd::Constant
