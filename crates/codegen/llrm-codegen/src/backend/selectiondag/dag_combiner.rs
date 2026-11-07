@@ -209,6 +209,17 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TLI.isTruncateFree(from, to)`: truncating an integer needs no
+    /// instruction. The pin's default is false; x86 says yes for any narrower
+    /// integer.
+    fn is_truncate_free(
+        &self,
+        _from: EVT,
+        _to: EVT,
+    ) -> bool {
+        false
+    }
+
     /// `TargetLowering::shouldTransformSignedTruncationCheck`: `(add x,
     /// 1<<(k-1)) u< 1<<k` is `sext_inreg x, k == x`. The pin's default is
     /// false. Default false until x86 is judged.
@@ -1115,6 +1126,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_setcc(vt, x, value, cond));
             }
         }
+        if let Some(folded) = self.fold_setcc_with_and(vt, n0, c1, cond) {
+            return Some(folded);
+        }
         if let Some(folded) = self.signed_truncation_check(vt, n0, c1, cond) {
             return Some(folded);
         }
@@ -1203,6 +1217,41 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             (self.dag.get_constant(c1, min_vt), cond)
         };
         Some(self.dag.get_setcc(vt, trunc, rhs, cond))
+    }
+
+    /// `foldSetCCWithAnd`'s power-of-two mask arm
+    /// ([TargetLowering.cpp#L4340][pin]): `(X & 2^k) == 0` is `(trunc X to
+    /// k+1 bits) >= 0` and `!= 0` is `< 0`, when the truncate is free and
+    /// both types are legal. DEVIATE: the `(X & Y) == Y` and and-not arms are
+    /// not ported.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L4340
+    fn fold_setcc_with_and(
+        &mut self,
+        vt: EVT,
+        n0: SDValue,
+        c1: u128,
+        cond: CondCode,
+    ) -> Option<SDValue> {
+        if c1 != 0 || !matches!(cond, CondCode::SetEq | CondCode::SetNe) || self.dag.opcode(n0) != ISD::And {
+            return None;
+        }
+        let op_type = self.dag.value_type(n0);
+        let mask = self.dag.constant(self.dag.operand(n0, 1))?;
+        let mask = mask & super::fold::mask(op_type.size_in_bits());
+        if !mask.is_power_of_two() || !self.dag.has_one_use(n0.node) {
+            return None;
+        }
+        let legal = |vt: EVT| self.tli.is_some_and(|tli| tli.types.is_type_legal(vt));
+        let narrow = EVT::integer(128 - mask.leading_zeros());
+        if !legal(op_type) || !legal(narrow) || !self.hooks.is_truncate_free(op_type, narrow) {
+            return None;
+        }
+        let truncated = self.dag.get_zext_or_trunc(self.dag.operand(n0, 0), narrow);
+        let zero = self.dag.get_constant(0, narrow);
+        let new_cond = if cond == CondCode::SetEq { CondCode::SetGe } else { CondCode::SetLt };
+        Some(self.dag.get_setcc(vt, truncated, zero, new_cond))
     }
 
     /// `optimizeSetCCOfSignedTruncationCheck`: `(add x, 1<<(k-1)) u< 1<<k`, or

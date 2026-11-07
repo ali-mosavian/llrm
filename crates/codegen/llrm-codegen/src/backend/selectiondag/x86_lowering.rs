@@ -288,6 +288,15 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `X86TargetLowering::isTruncateFree`: any narrower integer.
+    fn is_truncate_free(
+        &self,
+        from: EVT,
+        to: EVT,
+    ) -> bool {
+        from.is_integer() && to.is_integer() && from.size_in_bits() > to.size_in_bits()
+    }
+
     /// Where `i16` is native (`i16_mul_chains`: m16) a dword's halves are the
     /// registers it is returned and passed in.
     fn split_dword_loads(&self) -> bool {
