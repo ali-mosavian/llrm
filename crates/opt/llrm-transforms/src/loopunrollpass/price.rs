@@ -66,8 +66,11 @@ pub(super) fn full_unroll_pays(
     // then the nest's unroll folds nothing here and the loop is priced as any
     // other (crc -O2: the bit loop reads the running value and constants only,
     // 64 B added for 232 instructions saved).
+    // -O3 is speed: the nest's decision holds there (matmul -O3: 672
+    // instructions kept against 4,148 priced, clang's 608).
+    let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3;
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count)
-        && (!run.tti.unroll_prices_nest_loops_without_outer_counter() || reads_outer_counter(run, analyzed, lp))
+        && (!prices_nest || reads_outer_counter(run, analyzed, lp))
     {
         return true;
     }
@@ -161,7 +164,7 @@ pub(super) fn full_unroll_pays(
     // The loop runs once for each trip of the loops around it, which the
     // bytes do not: the saving is counted over those runs (x_cordic: the
     // 12-trip loop inside a loop of `n` runs `n` times, 89 clocks each).
-    let runs = if run.tti.unroll_prices_nest_loops_without_outer_counter() {
+    let runs = if prices_nest {
         enclosing_runs(run, se, analyzed, lp)
     } else {
         ASSUMED_TRIPS.pow((lp.get_loop_depth() - 1).min(2))
