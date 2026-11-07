@@ -171,7 +171,7 @@ impl<T: Target> Converted<T> {
                     copy_frequency: join.copy_frequency,
                 })
             })),
-            Some(Box::new(is_literal_move)),
+            Some(Box::new(|one: &Insn| is_cheap_move::<T>(one))),
             Some(Box::new(|literal, source, destination, size, alone| {
                 let (source, destination): (Vec<RegId>, Vec<RegId>) =
                     (source.iter().copied().collect(), destination.iter().copied().collect());
@@ -1264,12 +1264,25 @@ pub fn literal_remat_wins<T: Target>(
         && T::literal_move_wins(literal, source, destination, size)
 }
 
+/// [`is_literal_move`], or the cheap move that reads registers
+/// ([`Target::remat_reads_registers`]): the pin's `isReMaterializable` takes a
+/// virtual-register use and `allUsesAvailableAt` asks at the copy whether it
+/// still holds (the callers do).
+fn is_cheap_move<T: Target>(one: &Insn) -> bool {
+    is_literal_move(one) || (T::remat_reads_registers() && is_move_with_reads(one))
+}
+
 /// One register written by a move of a literal, whatever the target names it:
 /// the target's `isAsCheapAsAMove && isReMaterializable` for a constant.
 fn is_literal_move(one: &Insn) -> bool {
+    one.uses.is_empty() && is_move_with_reads(one)
+}
+
+/// [`is_literal_move`] that may read registers: the registers it reads, then
+/// the identity of the operation.
+fn is_move_with_reads(one: &Insn) -> bool {
     let Some(what) = one.what.as_ref() else { return false };
     one.defines.len() == 1
-        && one.uses.is_empty()
         && one.group.is_none()
         && one.requires.is_empty()
         && one.delivers.is_empty()
@@ -1284,7 +1297,10 @@ fn is_literal_move(one: &Insn) -> bool {
             what.dests.as_slice(),
             [Loc::Held(held)] if held.value == one.defines[0]
         )
-        && matches!(what.sources.as_slice(), [Loc::Imm(_)])
+        && matches!(
+            what.sources.as_slice(),
+            [reads @ .., Loc::Imm(_)] if reads.iter().all(|loc| matches!(loc, Loc::Held(held) if one.uses.contains(&held.value)))
+        )
 }
 
 /// One register written by a load of a frame slot.
@@ -1418,7 +1434,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         &self,
         one: &Insn,
     ) -> bool {
-        is_literal_move(one) || is_frame_load::<T>(one)
+        is_cheap_move::<T>(one) || is_frame_load::<T>(one)
     }
 
     fn is_trivially_re_materializable(
@@ -1426,7 +1442,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         def: &Insn,
         invariant: bool,
     ) -> bool {
-        let r = is_literal_move(def) || (invariant && is_frame_load::<T>(def));
+        let r = is_cheap_move::<T>(def) || (invariant && is_frame_load::<T>(def));
         r
     }
 
