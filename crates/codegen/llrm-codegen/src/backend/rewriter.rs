@@ -255,7 +255,7 @@ pub(crate) fn _dead_insertions(body: &LirBody) -> LirBody {
 }
 
 /// Retain byte ownership without requiring an encodable register self-copy.
-fn _identity_anchor(one: Arc<Insn>) -> Arc<Insn> {
+pub(crate) fn _identity_anchor(one: Arc<Insn>) -> Arc<Insn> {
     if one.group.is_some() || !_pointless(&one) {
         return one;
     }
@@ -267,7 +267,7 @@ fn _identity_anchor(one: Arc<Insn>) -> Arc<Insn> {
 /// `handleIdentityCopy`
 /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/VirtRegMap.cpp#L492>):
 /// an identity that is not still owned by the parallel-copy scheduler.
-fn _discardable_identity(one: &Insn) -> bool {
+pub(crate) fn _discardable_identity(one: &Insn) -> bool {
     one.group.is_none() && _pointless(one)
 }
 
@@ -286,7 +286,7 @@ fn _placed_for_rewrite(
 
 /// `MachineInstr::isIdentityCopy`: whether this instruction moves a register
 /// into itself.
-fn _pointless(one: &Insn) -> bool {
+pub(crate) fn _pointless(one: &Insn) -> bool {
     let Some(what) = &one.what else {
         return false;
     };

@@ -308,10 +308,10 @@ b0:
     assert!(!after.contains("alloca") && !after.contains("load") && !after.contains("store"), "{after}");
 }
 
-/// A float and an int of one size in one slot are not reinterpreted (isel
-/// selects no such bitcast): the slot stays in memory.
+/// A float and an int of one size in one slot are reinterpreted, as the pin's
+/// `canConvertValue` has it: the slot is promoted to a bitcast.
 #[test]
-fn test_a_float_read_as_an_int_is_not_bitcast() {
+fn test_a_float_read_as_an_int_is_bitcast() {
     let after = sroa(
         "define i32 @f(float %x) {
 b0:
@@ -322,7 +322,7 @@ b0:
 }
 ",
     );
-    assert!(after.contains("alloca") && !after.contains("bitcast"), "{after}");
+    assert!(!after.contains("alloca") && after.contains("bitcast"), "{after}");
 }
 
 /// An i32 stored whole and its first byte loaded: the store is cut into a
@@ -677,9 +677,10 @@ fn test_a_double_stored_whole_and_read_by_halves_is_widened_and_promoted() {
         Sroa,
     );
     assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
-    // 16-bit: i64 is not native, the slot stays.
+    // 16-bit too: the pin's `canConvertValue` has no native-integer test, and isel
+    // moves the double through the stack (float_bits -Os m32 132 -> 68 B).
     let after = sroa(F);
-    assert!(after.contains("alloca"), "{after}");
+    assert!(!after.contains("alloca"), "{after}");
 }
 
 const X64: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";

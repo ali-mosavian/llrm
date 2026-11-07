@@ -3,7 +3,7 @@
 //! `llc` output for `@g = constant fp128 <text>` (m68k, big-endian `.quad`
 //! pairs: high word first).
 
-use crate::context::ConstantKind;
+use crate::context::{Constant, ConstantKind};
 use crate::module::{GlobalKind, Module, Operand};
 use crate::parse;
 
@@ -139,4 +139,25 @@ fn the_interpreter_refuses_an_fp128_module() {
 fn test_an_fp128_intrinsic_is_mangled_f128() {
     let module = parse::module("declare fp128 @llvm.fabs.f128(fp128)\n").unwrap_or_else(|why| panic!("{why:?}"));
     assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
+}
+
+/// `sitofp i32 7 to fp128` folded to `Float(7.0 as an f64's bits)` on an fp128:
+/// the constant read as a binary128 was a subnormal near zero, and arm64
+/// `mix(7, x, 2, y, 100)` printed 6 for 111.
+#[test]
+fn an_integer_cast_to_fp128_folds_to_a_binary128_constant() {
+    let module = parse::module("@g = constant fp128 1.0\n").unwrap();
+    let context = &module.context;
+    let GlobalKind::Variable(variable) = &module.globals[0].kind else { panic!("a variable") };
+    let quad = context.get(variable.initializer.unwrap()).ty;
+    let i32_ty = context.types.int(32);
+    let fold = |op, value: i64| {
+        let c = context.constant(Constant { ty: i32_ty, kind: ConstantKind::Int(value as u128 & 0xFFFF_FFFF) });
+        let folded = crate::constfold::cast(context, op, c, quad).expect("folds");
+        context.get(folded).kind.clone()
+    };
+    let seven = 0x4001_C000_0000_0000_0000_0000_0000_0000_u128;
+    assert_eq!(fold(crate::opcode::CastOp::SIToFP, 7), ConstantKind::Float128(seven));
+    assert_eq!(fold(crate::opcode::CastOp::SIToFP, -2), ConstantKind::Float128((1u128 << 127) | (0x4000u128 << 112)));
+    assert_eq!(fold(crate::opcode::CastOp::UIToFP, 0), ConstantKind::Float128(0));
 }

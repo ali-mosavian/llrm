@@ -56,8 +56,8 @@
 //! DEVIATE CSE3 (owner w-1, exit 2026-11-08): both selectors mark a load
 //! invariant when it reads a constant global or says so (`!invariant.load`, a
 //! `noalias readonly` argument), and the DAG selector the load of an incoming
-//! stack argument (an immutable fixed object). The pin also takes GOT and
-//! constant-pool loads, which ours lacks; the old selector reads an incoming
+//! stack argument (an immutable fixed object) and of a constant-pool entry. The
+//! pin also takes GOT loads, which ours lacks; the old selector reads an incoming
 //! argument as a memory operand of its reader, not a load of its own.
 //!
 //! Row CSE5 (was DEVIATE CSE5, retired 2026-10-25): `machinecse.rs`, the same
@@ -149,8 +149,12 @@ fn candidate(
     // (CSE2 keeps the narrower ones out).
     let remade = matches!(&what.dests[..], [Loc::Held(into)] if into.width == 8)
         && (what.op == Operation::Address || matches!(&what.sources[..], [Loc::Imm(imm)] if imm.address.is_some()));
+    let loads =
+        matches!(what.op, Operation::Move | Operation::FloatLoad) && matches!(what.sources.as_slice(), [Loc::Mem(_)]);
+    let loads_invariant = loads && one.invariant();
     if one.uses.is_empty()
         && !remade
+        && !loads_invariant
         && !matches!(
             what.sources.as_slice(),
             [Loc::Imm(imm)] if imm.address.is_none()
@@ -160,9 +164,6 @@ fn candidate(
     }
     let held = |place: &Loc| matches!(place, Loc::Held(_) | Loc::Imm(_) | Loc::Address(_));
     // `MI->mayLoad()` is a candidate only if `isDereferenceableInvariantLoad`.
-    let loads =
-        matches!(what.op, Operation::Move | Operation::FloatLoad) && matches!(what.sources.as_slice(), [Loc::Mem(_)]);
-    let loads_invariant = loads && one.invariant();
     let pure = pure && !loads || loads_invariant;
     pure && what.target.is_none()
         && !what.indirect
@@ -1520,6 +1521,62 @@ mod tests {
         assert_eq!(zeros(&shared(&next, &RegisterClasses::m16())), 1, "the next block reads the first");
         let far = build(2);
         assert_eq!(zeros(&shared(&far, &RegisterClasses::m16())), 2, "two edges away stays two");
+    }
+
+    /// A load of a constant-pool entry (`isDereferenceableInvariantLoad`) with
+    /// no register operand was never a candidate, so the six `movss xmm,
+    /// [1.0f]` of nbody_single stayed six through allocation where the pin
+    /// keeps one (+3 reloads, +24 B at -O3 m64). Two edges away is shared too:
+    /// a load is not as cheap as a move.
+    #[test]
+    fn test_an_invariant_pool_load_is_made_once_across_blocks() {
+        let load = |at: i64, result: u32| {
+            let mut one = insn(
+                at,
+                Operation::Move,
+                "movss",
+                vec![held(result)],
+                vec![Loc::Mem(llrm_lir::Mem::new(None, 4))],
+                vec![result],
+                vec![],
+            );
+            Arc::make_mut(&mut one).invariant = true;
+            one
+        };
+        let read = |at: i64, value: u32, result: u32| {
+            insn(
+                at,
+                Operation::Binary,
+                "addss",
+                vec![held(result)],
+                vec![held(value), held(1)],
+                vec![result],
+                vec![value, 1],
+            )
+        };
+        let blocks = vec![
+            LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![load(0, 10), read(1, 10, 11)]) },
+            LirBlock { succ: vec![2].into(), ..LirBlock::new(1, vec![]) },
+            LirBlock { succ: vec![].into(), ..LirBlock::new(2, vec![load(20, 20), read(21, 20, 21)]) },
+        ];
+        let mut body = LirBody::new(
+            "pool",
+            0,
+            blocks.into_iter().map(Into::<Block>::into).collect::<Vec<Block>>(),
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let loads = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("movss"))
+                .count()
+        };
+        assert_eq!(loads(&body), 2, "the premise: two loads");
+        assert_eq!(loads(&shared(&body, &RegisterClasses::of(&llrm_x86_m64::M64))), 1);
     }
 
     /// A store of a constant is not a copy: heuristic 2 took any `mov` that

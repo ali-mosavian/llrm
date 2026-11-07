@@ -89,6 +89,7 @@ fn context_in(
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
     let no_blocks = HashMap::default();
     f(&EmitContext {
+        x87_prices: None,
         tables: &[],
         caller_saved: &Default::default(),
         conventions: &super::emit::NoConventions,

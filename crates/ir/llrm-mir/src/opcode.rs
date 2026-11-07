@@ -771,6 +771,14 @@ pub enum Opcode {
     Cast(CastOp),
     ExtractValue(Vec<u32>),
     InsertValue(Vec<u32>),
+    /// `extractelement`: operands (vector, index); the element, or poison for
+    /// an index past the end.
+    ExtractElement,
+    /// `insertelement`: operands (vector, element, index).
+    InsertElement,
+    /// `shufflevector`: operands (first, second); lane `i` of the result is
+    /// the mask's `i`th entry counted over both inputs' lanes, -1 for poison.
+    ShuffleVector(Vec<i32>),
     Alloca {
         allocated: TypeId,
         align: Option<u64>,
@@ -851,6 +859,7 @@ impl Opcode {
                 | Self::Call(_)
                 | Self::ExtractValue(_)
                 | Self::InsertValue(_)
+                | Self::ShuffleVector(_)
                 | Self::Alloca { .. }
                 | Self::Load { .. }
                 | Self::Store { .. }
@@ -869,6 +878,7 @@ impl Opcode {
         match (self, other) {
             (Self::Invoke(a), Self::Invoke(b)) | (Self::Call(a), Self::Call(b)) => a == b,
             (Self::ExtractValue(a), Self::ExtractValue(b)) | (Self::InsertValue(a), Self::InsertValue(b)) => a == b,
+            (Self::ShuffleVector(a), Self::ShuffleVector(b)) => a == b,
             (
                 Self::Alloca { allocated: a, align: b, address_space: c },
                 Self::Alloca { allocated: d, align: e, address_space: f },
@@ -903,6 +913,9 @@ impl Opcode {
             Self::Binary(op) => spelling(&BINARY, *op),
             Self::Cast(op) => spelling(&CAST, *op),
             Self::ExtractValue(_) => "extractvalue",
+            Self::ExtractElement => "extractelement",
+            Self::InsertElement => "insertelement",
+            Self::ShuffleVector(_) => "shufflevector",
             Self::InsertValue(_) => "insertvalue",
             Self::Alloca { .. } => "alloca",
             Self::VaArg => "va_arg",
@@ -969,6 +982,10 @@ mod tests {
             Opcode::ExtractValue(vec![0]),
             Opcode::ExtractValue(vec![1]),
             Opcode::InsertValue(vec![0]),
+            Opcode::ExtractElement,
+            Opcode::InsertElement,
+            Opcode::ShuffleVector(vec![0, 1]),
+            Opcode::ShuffleVector(vec![1, 0]),
             Opcode::Call(info()),
             Opcode::Invoke(info()),
             Opcode::LandingPad { cleanup: false, clauses: vec![] },
