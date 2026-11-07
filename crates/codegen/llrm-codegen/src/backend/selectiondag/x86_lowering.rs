@@ -425,7 +425,7 @@ impl CombineHooks for X86Lowering<'_> {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Mul if self.imul_if_smaller => {
+            ISD::Mul if self.imul_if_smaller && dag.value_type(node) != EVT::I64 => {
                 combine_mul(dag, node, level, false, self.i16_mul_chains, self.profile).filter(|chain| {
                     let imul = if dag.constant(dag.operand(node, 1)).is_some_and(|bits| {
                         let bits = bits as u32 as i32;
@@ -2396,7 +2396,7 @@ fn combine_mul(
     profile: Option<MulPricing<'_>>,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
-    if vt != EVT::I32 && !(vt == EVT::I16 && i16_chains) {
+    if vt != EVT::I32 && vt != EVT::I64 && !(vt == EVT::I16 && i16_chains) {
         return None;
     }
     let (x, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
@@ -2412,7 +2412,11 @@ fn combine_mul(
     if is_pow2(bits) || min_size || level == CombineLevel::BeforeLegalizeTypes {
         return None;
     }
-    let signed = if vt == EVT::I16 { i128::from(bits as u16 as i16) } else { i128::from(bits as u32 as i32) };
+    let signed = match vt {
+        EVT::I16 => i128::from(bits as u16 as i16),
+        EVT::I64 => i128::from(bits as u64 as i64),
+        _ => i128::from(bits as u32 as i32),
+    };
     let abs = signed.unsigned_abs();
     let negate = |dag: &mut SelectionDAG, value: SDValue| if signed < 0 { dag.get_negative(value, vt) } else { value };
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
@@ -2436,6 +2440,8 @@ fn combine_mul(
         && [3u128, 5, 9].iter().any(|base| abs % base == 0 && matches!(abs / base, 2 | 4 | 8))
         && dag.has_one_use(node.node)
         && dag.users(node).next().is_some_and(|user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::Add);
+    // The priced chains are written for 16- and 32-bit products.
+    let profile = profile.filter(|_| vt != EVT::I64);
     if let Some(pricing) = profile.filter(|pricing| pricing.price_pin && !summed) {
         return priced_chain(dag, x, signed as i64, vt, pricing);
     }
