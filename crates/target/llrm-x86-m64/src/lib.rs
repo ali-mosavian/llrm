@@ -405,6 +405,10 @@ impl llrm_target::Target for M64 {
                             price_pin_multiplies: true,
                             // DEVIATE REC-2, as m32
                             recursive_inlining: Some((8, 450)),
+                            // DEVIATE REC-2, as m32: at -O3 gcc eliminates tail calls before it
+                            // copies a recursion (bintree walk: 96 B at -O2, 672 B and 9 calls
+                            // at -O3, +78% clocks vs clang). Owner m64, exit 2026-11-20.
+                            recursive_tre_first: (false, true),
                             // gcc's 15/30 size units in `gcc_insns` (m64 counts the sext/gep of its IR).
                             recursive_edge_growth: Some((16, 31)),
                             // DEVIATE REC-2, as m32: -O2 takes gcc's 450 (fib 25941 -> 10793
