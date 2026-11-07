@@ -16,9 +16,9 @@ def run(modules, compiler_ok=True):
             os.makedirs(os.path.join(src, sub))
         for m in range(modules):
             open(os.path.join(src, "host", f"m{m}.c"), "w").close()
-        fake = os.path.join(d, "llrm-c")
+        fake = os.path.join(d, "llrm-cc")
         with open(fake, "w") as f:
-            f.write("#!/bin/sh\n" + ("exit 0\n" if compiler_ok else "echo 'llrm-c: refused'; exit 1\n"))
+            f.write("#!/bin/sh\n" + ("exit 0\n" if compiler_ok else "echo 'llrm-cc: refused'; exit 1\n"))
         os.chmod(fake, 0o755)
         env = dict(os.environ, QCPORT=src, QCPORT_INC=d)
         return subprocess.run(["bash", SCRIPT, fake], cwd=ROOT, env=env, capture_output=True, text=True)
