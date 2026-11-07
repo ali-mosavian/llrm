@@ -87,7 +87,7 @@ pub fn build_all(
         return declined("a result that is not an int, a pointer or void");
     }
     let eax = (returns_int && convention.returns.len() == 1).then(|| arch.registers().named(convention.returns[0], 4));
-    let names = Names::new(opcode)?;
+    let names = Names::new(opcode, if m32 { llrm_dagisel::fastisel::Table::I486 } else { llrm_dagisel::fastisel::Table::X64 })?;
     let mut blocks = Vec::new();
     let layout = function.layout();
     for (at, &block) in layout.iter().enumerate() {
@@ -136,8 +136,12 @@ struct Calls {
 }
 
 impl Names {
-    fn new(opcode: &dyn Fn(&str) -> Option<u16>) -> Option<Names> {
-        let pair = |one: &str| Some((opcode(&format!("{one}32rr"))?, opcode(&format!("{one}32ri"))?));
+    fn new(opcode: &dyn Fn(&str) -> Option<u16>, table: llrm_dagisel::fastisel::Table) -> Option<Names> {
+        // The pin's own rows (`fastEmit_ISD_<OP>_MVT_i32_rr` / `_ri`) name the opcodes.
+        let pair = |one: &str| {
+            let row = |shape| llrm_dagisel::fastisel::lookup(table, "ISD", one, "i32", "", shape).map(|(name, _)| name);
+            Some((opcode(row(1)?)?, opcode(row(2)?)?))
+        };
         Some(Names {
             mov_rm: opcode("MOV32rm")?,
             mov_mr: opcode("MOV32mr")?,

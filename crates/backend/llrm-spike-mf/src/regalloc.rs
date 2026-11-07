@@ -200,6 +200,15 @@ pub trait Target {
         false
     }
 
+    /// Whether the row `name`, loading an incoming stack argument (a frame slot
+    /// below zero) that nothing writes or takes the address of, is made again
+    /// where it is read, not stored and reloaded: the pin's rule for an
+    /// immutable fixed stack object (`isLoadFromInvariantOrConstantMemory`).
+    /// Only a full-width row that takes any register the value may land in.
+    fn is_invariant_argument_load(_name: &str) -> bool {
+        false
+    }
+
     /// Whether a value is spilled, not given a callee-saved register, when
     /// its spill costs less than the register's first use.
     fn csr_spill_first() -> bool {

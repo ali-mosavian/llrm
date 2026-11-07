@@ -28,6 +28,19 @@ pub struct MosCombines {
 pub struct MosLateCombines;
 
 impl CombineHooks for MosLateCombines {
+    /// `isTruncateFree` and `isZExtFree` for a word and its low byte: the
+    /// byte is a lane of the pair, and an any-extension leaves the high one
+    /// unwritten. `ShrinkDemandedOp` then does an add or a subtract whose
+    /// result is truncated (`p - s` returned as a byte) on the byte, not on the
+    /// word with its high half dropped after (`schr` -O2 47 B).
+    fn free_narrowing(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        wide == EVT::I16 && narrow == EVT::I8
+    }
+
     /// DEVIATE 6502-SHL-COMMUTE: as [`MosCombines`]; every run of the
     /// combiner must give alike.
     fn is_desirable_to_commute_with_shift(
@@ -77,6 +90,19 @@ fn folds_shared_shift(
 }
 
 impl CombineHooks for MosCombines {
+    /// `isTruncateFree` and `isZExtFree` for a word and its low byte: the
+    /// byte is a lane of the pair, and an any-extension leaves the high one
+    /// unwritten. `ShrinkDemandedOp` then does an add or a subtract whose
+    /// result is truncated (`p - s` returned as a byte) on the byte, not on the
+    /// word with its high half dropped after (`schr` -O2 47 B).
+    fn free_narrowing(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        wide == EVT::I16 && narrow == EVT::I8
+    }
+
     /// DEVIATE 6502-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the shift
     /// runs on the zero-page cells (`asl rc17; rol rc18`) where the add went
     /// through Y and X (bintree -O2 +20 B). The pin's default is true

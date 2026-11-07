@@ -17,6 +17,7 @@
 //! `docs/working/selectiondag-plan.md`, section 3.
 
 pub mod dag;
+pub mod fastisel;
 #[rustfmt::skip]
 pub mod generated;
 pub mod aarch64_predicates;
