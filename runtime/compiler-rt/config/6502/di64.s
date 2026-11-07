@@ -34,6 +34,7 @@ ld:     .res 1
 nb:     .res 1
 sh:     .res 1
 dz:     .res 1
+wq:     .res 1                  ; 1: the quotient is wanted
 cnt:    .res 1
 sgn:    .res 1
 sgd:    .res 1
@@ -151,6 +152,68 @@ load:
     bne :-
     rts
 
+.macro divloop roll
+    .local lp, c1, c2, nosub
+lp:
+    ldx ln
+c1: lda N,x
+    cmp d,x
+    bne c2
+    dex
+    bpl c1
+    sec
+c2: bcc nosub
+    sec
+    lda N
+    sbc d
+    sta N
+    lda N+1
+    sbc d+1
+    sta N+1
+    lda N+2
+    sbc d+2
+    sta N+2
+    lda N+3
+    sbc d+3
+    sta N+3
+    lda N+4
+    sbc d+4
+    sta N+4
+    lda N+5
+    sbc d+5
+    sta N+5
+    lda N+6
+    sbc d+6
+    sta N+6
+    lda N+7
+    sbc d+7
+    sta N+7
+    sec
+nosub:
+    .if roll
+    rol qv
+    rol qv+1
+    rol qv+2
+    rol qv+3
+    rol qv+4
+    rol qv+5
+    rol qv+6
+    rol qv+7
+    .endif
+    lsr d+7
+    ror d+6
+    ror d+5
+    ror d+4
+    ror d+3
+    ror d+2
+    ror d+1
+    ror d
+    dec cnt
+    beq :+
+    jmp lp
+:
+.endmacro
+
 udm:
     lda #0
     sta dz
@@ -264,61 +327,16 @@ noshl:
     clc
     adc #1
     sta cnt
-lp:
-    ldx ln
-c1: lda N,x
-    cmp d,x
-    bne c2
-    dex
-    bpl c1
-    sec
-c2: bcc nosub
-    sec
-    lda N
-    sbc d
-    sta N
-    lda N+1
-    sbc d+1
-    sta N+1
-    lda N+2
-    sbc d+2
-    sta N+2
-    lda N+3
-    sbc d+3
-    sta N+3
-    lda N+4
-    sbc d+4
-    sta N+4
-    lda N+5
-    sbc d+5
-    sta N+5
-    lda N+6
-    sbc d+6
-    sta N+6
-    lda N+7
-    sbc d+7
-    sta N+7
-    sec
-nosub:
-    rol qv
-    rol qv+1
-    rol qv+2
-    rol qv+3
-    rol qv+4
-    rol qv+5
-    rol qv+6
-    rol qv+7
-    lsr d+7
-    ror d+6
-    ror d+5
-    ror d+4
-    ror d+3
-    ror d+2
-    ror d+1
-    ror d
-    dec cnt
-    bne lp
+    lda wq
+    bne wantq
+    jmp noq
+wantq:
+    divloop 1
     rts
+noq:
+    divloop 0
+    rts
+
 
 retq:
     ldx #5
@@ -422,10 +440,14 @@ negq:
     rts
 
 __udivdi3:
+    lda #1
+    sta wq
     jsr load
     jsr udm
     jmp retq
 __umoddi3:
+    lda #0
+    sta wq
     jsr load
     jsr udm
     jmp retr
@@ -445,6 +467,8 @@ sload:                      ; signed: absolute values in N and d, the signs in s
 :   rts
 
 __divdi3:
+    lda #1
+    sta wq
     jsr sload
     jsr udm
     lda sgn
@@ -455,6 +479,8 @@ __divdi3:
     jsr negq
 :   jmp retq
 __moddi3:
+    lda #0
+    sta wq
     jsr sload
     jsr udm
     lda sgn
