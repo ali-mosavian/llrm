@@ -1956,11 +1956,21 @@ pub fn from_lir<T: Target>(
                     }
                     continue;
                 };
-                let register = number(value, &mut classes);
-                let class = classes[match register {
+                // named as every other instruction names the value (by lane
+                // for a byte of a wider register): `drop_self_copies` counts
+                // the readers of a register by name
+                let named = what
+                    .dests
+                    .iter()
+                    .chain(&what.sources)
+                    .find_map(|loc| if let Loc::Held(held) = loc { Some(*held) } else { None })
+                    .ok_or("a spill of no value")?;
+                let numbered = number(value, &mut classes);
+                let class = classes[match numbered {
                     Reg::Virt(v) => v as usize,
                     Reg::Phys(_) => 0,
                 }];
+                let register = lane_or_number(&named, &mut classes, &mut number);
                 let lane = cell.filter(|_| insn.spill_store).and_then(llrm_codegen::greedy::tii::lane_offset);
                 let made = if let Some(offset) = lane {
                     T::spill_store_lane(class, register, slot, offset)
