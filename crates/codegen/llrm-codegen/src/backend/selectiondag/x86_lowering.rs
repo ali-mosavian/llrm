@@ -399,6 +399,7 @@ impl CombineHooks for X86Lowering<'_> {
         op == ISD::Mul
             || (self.share_products && (op == ISD::FAdd || op == ISD::FSub))
             || op == ISD::SetCC
+            || op == ISD::Select
             || op == ISD::Add
             || op == ISD::Sub
             || op == x86isd::ADD
@@ -446,6 +447,7 @@ impl CombineHooks for X86Lowering<'_> {
             ISD::Sub => combine_sub(dag, node, self.three_address_adds),
             ISD::FAdd | ISD::FSub => combine_shared_product(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
+            ISD::Select => combine_select_of_two_constants(dag, node, self.zext_free),
             x86isd::CMOV => combine_cmov(dag, node),
             x86isd::SETCC => combine_setcc(dag, node),
             x86isd::BRCOND => combine_brcond(dag, node),
@@ -1721,6 +1723,68 @@ fn combine_sub_setcc(
     let widened = dag.get_node(ISD::ZeroExtend, vt, &[inverted]);
     let adjusted = dag.get_constant(constant.wrapping_sub(1), vt);
     Some(dag.get_node(ISD::Add, vt, &[widened, adjusted]))
+}
+
+/// `combineSelectOfTwoConstants` ([L48675][pin]): an `i1` select between two
+/// constants whose difference is a power of two, or 3, 5, 9 at `i32`/`i64`, is
+/// the condition widened, multiplied by the difference and added to the false
+/// constant: `c ? 48 : 32` is `zext(c) * 16 + 32` (`setl; shl 4; or 32`),
+/// where the `cmov` of two `mov`s was both larger and slower. `is64` is
+/// whether `i64` is legal.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L48675
+fn combine_select_of_two_constants(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    is64: bool,
+) -> Option<SDValue> {
+    let (mut cond, then, other) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let (mut true_c, mut false_c) = (dag.constant(then)?, dag.constant(other)?);
+    let vt = dag.value_type(node);
+    // Not "crazy integer types", and the condition is `i1`.
+    if !(vt == EVT::I8 || vt == EVT::I16 || vt == EVT::I32 || (vt == EVT::I64 && is64)) || dag.value_type(cond) != EVT::I1 {
+        return None;
+    }
+    let bits = vt.size_in_bits();
+    let mask = super::fold::mask(bits);
+    let signed = |value: u128| -> i128 {
+        let shift = 128 - bits;
+        ((value << shift) as i128) >> shift
+    };
+    let (true_value, false_value) = (signed(true_c & mask), signed(false_c & mask));
+    // `(X == 0) ? Y : -1` has a better lowering with `sbb`.
+    if (true_c & mask == mask || false_c & mask == mask) && dag.opcode(cond) == ISD::SetCC {
+        let zero = dag.constant(dag.operand(cond, 1)) == Some(0);
+        let NodeData::CondCode(code) = dag.node(dag.operand(cond, 2)).data else { return None };
+        if zero && matches!(code, CondCode::SetEq | CondCode::SetNe) {
+            return None;
+        }
+    }
+    let difference = true_value.checked_sub(false_value)?;
+    if !(-(1i128 << (bits - 1))..(1i128 << (bits - 1))).contains(&difference) {
+        return None;
+    }
+    let absolute = difference.unsigned_abs();
+    if !(absolute.is_power_of_two() || ((vt == EVT::I32 || vt == EVT::I64) && matches!(absolute, 3 | 5 | 9))) {
+        return None;
+    }
+    // A positive multiplier shifts or `lea`s; the `not` folds into the compare.
+    let mut false_op = other;
+    if true_value < false_value {
+        cond = dag.get_not(cond, EVT::I1);
+        std::mem::swap(&mut true_c, &mut false_c);
+        false_op = then;
+    }
+    let mut result = dag.get_node(ISD::ZeroExtend, vt, &[cond]);
+    if absolute != 1 {
+        let scale = dag.get_constant(absolute, vt);
+        result = dag.get_node(ISD::Mul, vt, &[result, scale]);
+    }
+    if false_c & mask != 0 {
+        result = dag.get_node(ISD::Add, vt, &[result, false_op]);
+    }
+    Some(result)
 }
 
 /// `combineCMov`, up to the constant selects: `cmov x, x` is `x`; a select
