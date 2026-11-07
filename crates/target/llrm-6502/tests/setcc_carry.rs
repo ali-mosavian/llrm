@@ -95,14 +95,14 @@ fn consumer_bytes(kind: &str, limit: u32) {
 }
 
 /// A branch on `x >= y` made the borrow a byte (`lda #0; sbc #0; and #1`), selected it to 0 or 1 and tested it
-/// again: 25 B and a `jmp` more than the `bcs` after the last `sbc`. `int32.c`'s `udivmod` took it per call, and
-/// `div_constants_short -Os` 25% more cycles.
+/// again: 77 B for the branch and 94 B for the select, where the flags of the last `sbc` are 70 B and 85 B.
+/// `int32.c`'s `udivmod` took it per call, `div_constants_short -Os` ran 25% more cycles.
 #[test]
 fn a_branch_on_the_order_of_two_words_reads_the_flags_of_the_chain() {
-    consumer_bytes("branch", 0);
+    consumer_bytes("branch", 72);
 }
 
 #[test]
 fn a_select_on_the_order_of_two_words_reads_the_flags_of_the_chain() {
-    consumer_bytes("select", 0);
+    consumer_bytes("select", 88);
 }

@@ -614,6 +614,11 @@ fn lower_setcc_carry_flags(
     if dag.value_type(high) != EVT::I16 || dag.opcode(borrow) != ISD::USubO || borrow.res != 1 {
         return None;
     }
+    // Flags are made again where they are read: a chain that two orders share
+    // (`a < b` and `a >= b`) is made once as a borrow and kept in a byte.
+    if !dag.has_one_use(borrow.node) {
+        return None;
+    }
     let cc = cond_of(dag, dag.operand(node, 3));
     let (high, other) = match cc {
         CondCode::SetULt | CondCode::SetUGe => (high, other),
