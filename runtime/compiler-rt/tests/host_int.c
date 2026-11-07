@@ -52,12 +52,12 @@ int main(int argc, char **argv)
         CK("divdi3", sfb_divdi3(la, lb), lq, a, b);
         CK("moddi3", sfb_moddi3(la, lb), lr, a, b);
         for (int k = 0; k < 4; k++) {
-            int c = k == 3 ? (int)(rnd() % 80) : (int)(b & 63);   /* also 64..79: defined here as 0 or sign */
+            int c = k == 3 ? (int)(rnd() % 64) : (int)(b & 63);   /* 0..63: 64 or more is undefined, as in libgcc and compiler-rt */
             if (k == 1) c = (int)((b >> 8) & 63);
             if (k == 2) c = i % 64;
-            CK("ashldi3", sfb_ashldi3(a, c), c >= 64 ? 0 : a << c, a, c);
-            CK("lshrdi3", sfb_lshrdi3(a, c), c >= 64 ? 0 : a >> c, a, c);
-            CK("ashrdi3", sfb_ashrdi3(la, c), c >= 64 ? (la < 0 ? -1 : 0) : la >> c, a, c);
+            CK("ashldi3", sfb_ashldi3(a, c), a << c, a, c);
+            CK("lshrdi3", sfb_lshrdi3(a, c), a >> c, a, c);
+            CK("ashrdi3", sfb_ashrdi3(la, c), la >> c, a, c);
         }
     }
     printf("vectors=%ld per op=%ld fails=%ld\n", n, cnt, fails);

@@ -312,7 +312,7 @@ def run(args, work: Path) -> int:
         source, level = case
         return case, build(source, level, target, work, support_obj, names[case], rules)
 
-    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+    with ThreadPoolExecutor(max_workers=cpulimit.pool_workers()) as pool:
         for case, (kind, why, exe) in pool.map(one, cases):
             if kind == "built":
                 exes[case] = exe
@@ -376,7 +376,7 @@ def run_64(args, work: Path) -> int:
             kind, why = run_native(exe)
         return case, (kind, why)
 
-    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+    with ThreadPoolExecutor(max_workers=cpulimit.pool_workers()) as pool:
         result = dict(pool.map(one, cases))
     by_design = differences()
     for case, (kind, why) in list(result.items()):

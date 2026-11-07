@@ -59,6 +59,10 @@ def SDTMOSCmov : SDTypeProfile<1, 4, [SDTCisSameAs<0, 1>, SDTCisSameAs<1, 2>, SD
 def MOScmp : SDNode<"MOSISD::CMP", SDTMOSCmp>;
 // Equality: the Z flag of a - b over all the bytes (cmp's own Z covers the high byte only).
 def MOScmpz : SDNode<"MOSISD::CMPZ", SDTMOSCmp>;
+// The flags of a - b over two words each: the low words compare, the high words subtract with their borrow, so C is
+// a >= b unsigned over all four bytes. Operands: the low pair a, b, then the high pair a, b.
+def SDTMOSCmp32 : SDTypeProfile<1, 4, [SDTCisVT<0, i8>, SDTCisVT<1, i16>, SDTCisVT<2, i16>, SDTCisVT<3, i16>, SDTCisVT<4, i16>]>;
+def MOScmp32 : SDNode<"MOSISD::CMP32", SDTMOSCmp32>;
 def MOSbrcond : SDNode<"MOSISD::BRCOND", SDTMOSBrcond, [SDNPHasChain]>;
 def MOSsetcc : SDNode<"MOSISD::SETCC", SDTMOSSetcc>;
 def MOScmov : SDNode<"MOSISD::CMOV", SDTMOSCmov>;
@@ -238,6 +242,9 @@ def COPY16 : MOSInst<(outs Imag16:$d), (ins Imag16:$s), "copy $d, $s", []>;
 def CMP8 : MOSInst<(outs Flags:$f), (ins Imag8:$a, Imag8:$b), "cmp $f, $a, $b", [(set i8:$f, (MOScmp i8:$a, i8:$b))]>;
 // LDA alo; CMP blo; LDA ahi; SBC bhi: C is a >= b unsigned and N the sign of a - b.
 def CMP16 : MOSInst<(outs Flags:$f), (ins Imag16:$a, Imag16:$b), "cmp16 $f, $a, $b", [(set i8:$f, (MOScmp i16:$a, i16:$b))]>;
+// A 32-bit compare: CMP16, then SBC of the high words' bytes with the borrow.
+def CMP32 : MOSInst<(outs Flags:$f), (ins Imag16:$al, Imag16:$bl, Imag16:$ah, Imag16:$bh), "cmp32 $f, $al, $bl, $ah, $bh",
+                    [(set i8:$f, (MOScmp32 i16:$al, i16:$bl, i16:$ah, i16:$bh))]>;
 // Z only when both bytes are equal.
 def CMPZ16 : MOSInst<(outs Flags:$f), (ins Imag16:$a, Imag16:$b), "cmpz16 $f, $a, $b", [(set i8:$f, (MOScmpz i16:$a, i16:$b))]>;
 let isBranch = 1, isTerminator = 1 in {
@@ -292,8 +299,14 @@ defm : RemapAllTargetPseudoPointerOperands<Imag16>;
 // A word's bytes are the two halves of its pair.
 def : Pat<(i8 (trunc Imag16:$a)), (EXTRACT_SUBREG Imag16:$a, sub_lo)>;
 def : Pat<(i8 (trunc (srl Imag16:$a, (i8 8)))), (EXTRACT_SUBREG Imag16:$a, sub_hi)>;
+// A word shift by 1 to 4 that only one use reads: matched through the use, the shift is not selected a second time
+// for another reader of the word (the pair's bytes are then one chain, not a chain and a byte shift of its own). From 5
+// a byte shift of the low byte is cheaper than the chain whoever else reads it.
+def shl_oneuse : PatFrag<(ops node:$a, node:$b), (shl node:$a, node:$b), [{ return N->hasOneUse(); }]>;
 // Only the low byte of a left shift is wanted: shift the low byte (`(x << 11) >> 8` is a byte shifted by 3).
-def : Pat<(i8 (trunc (shl Imag16:$a, (i8 imm:$k)))), (SHL8 (EXTRACT_SUBREG Imag16:$a, sub_lo), imm:$k)>;
+def : Pat<(i8 (trunc (shl_oneuse Imag16:$a, (i8 imm:$k)))), (SHL8 (EXTRACT_SUBREG Imag16:$a, sub_lo), imm:$k)>;
+foreach k = 5-15 in
+  def : Pat<(i8 (trunc (shl Imag16:$a, (i8 k)))), (SHL8 (EXTRACT_SUBREG Imag16:$a, sub_lo), k)>;
 // The low byte of a word shifted right by 5 to 7 is the high byte of the word shifted left by 3 to 1: three
 // steps of `asl; rol` where seven of `lsr; ror` were.
 foreach k = 5-7 in

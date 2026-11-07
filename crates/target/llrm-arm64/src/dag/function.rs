@@ -65,6 +65,7 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
             big_endian: false,
             calling: Some(if platform == Platform::Linux { &*LINUX } else { &*DARWIN }),
         }),
+        legal_f128: true,
         ..BuilderTarget::m64()
     }
 }
@@ -125,6 +126,9 @@ pub struct Selected {
     /// The frame object each source variable lives in (`llvm.dbg.declare` of a
     /// static `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
+    /// The value each `llvm.dbg.value` of this block names, as the selected
+    /// nodes left it (`transferDbgValues`), in source order.
+    pub dbg_values: Vec<(llrm_mir::MetadataId, Option<SDValue>)>,
     /// The probabilities the builder kept for the edges of merged conditions.
     pub edge_probs: Vec<(u32, u32, u32)>,
 }
@@ -223,8 +227,8 @@ pub fn select_function_in(
         let parent_updates = built.phi_updates.clone();
         // The branches are read before selection turns them into machine nodes.
         let exits = (branch_targets(&built.dag), ends_in_jump(&built.dag));
-        let units =
-            select_block(&mut built.dag, &globals, &mut info, opt_for_size).map_err(|why| format!("{why:?}"))?;
+        let units = select_block(&mut built.dag, &globals, &mut info, opt_for_size, platform == Platform::Linux)
+            .map_err(|why| format!("{why:?}"))?;
         work.push((block.0, made, built, units, exits));
         for (id, mut extra) in extras {
             // `FinishBasicBlock`: a block the lowering made is a predecessor
@@ -232,8 +236,8 @@ pub fn select_function_in(
             // that made it does.
             extra.phi_updates = parent_updates.clone();
             let exits = (branch_targets(&extra.dag), ends_in_jump(&extra.dag));
-            let units =
-                select_block(&mut extra.dag, &globals, &mut info, opt_for_size).map_err(|why| format!("{why:?}"))?;
+            let units = select_block(&mut extra.dag, &globals, &mut info, opt_for_size, platform == Platform::Linux)
+                .map_err(|why| format!("{why:?}"))?;
             work.push((id.0, true, extra, units, exits));
         }
     }
@@ -270,6 +274,27 @@ pub fn select_function_in(
                 Ok(PhiCopy { to, dst, src, float })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let in_block: llrm_mir::dense::IdSet<llrm_mir::module::InstId> =
+            built.dag.inst_order.iter().map(|&(inst, _)| inst).collect();
+        // A note with no node to follow (the value is in another block) or no
+        // value at all (`undef`, a constant, a piece, an assignment) is kept as
+        // a note of nothing: the variable then says nothing, rather than
+        // leaving an earlier note standing over code it no longer holds.
+        let dbg_values = function
+            .debug_records()
+            .iter()
+            .filter_map(|record| match record.what {
+                llrm_mir::DebugWhat::Declare(_) => None,
+                llrm_mir::DebugWhat::Value(llrm_mir::Operand::Value(value)) => {
+                    if !in_block.contains(&record.before) {
+                        return None;
+                    }
+                    let node = built.values.iter().find(|(one, _)| *one == value).map(|(_, node)| *node);
+                    Some((record.variable, node.map(|node| built.dag.resolve(node))))
+                }
+                _ => (at == 0).then_some((record.variable, None)),
+            })
+            .collect();
         selected.push(Selected {
             dag: built.dag,
             units,
@@ -281,6 +306,7 @@ pub fn select_function_in(
             phis,
             tables: info.jump_tables.clone(),
             declared: declared.clone(),
+            dbg_values,
             edge_probs: info.edge_probs.iter().map(|(from, to, p)| (from.0, to.0, *p)).collect(),
         });
     }

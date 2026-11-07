@@ -574,7 +574,10 @@ fn readers_of(function: &MFunc) -> HashMap<Reg, Vec<(usize, usize)>> {
 /// DEVIATE: heuristic 1 (a cheap operation across blocks) and 3 (phi readers)
 /// are not translated; within one block equal operations always merge (one DAG
 /// node in the pin); at `optsize` they always merge (a shared constant is the
-/// smaller code; the heuristics guard register pressure). Exit: 11-20.
+/// smaller code; the heuristics guard register pressure). Translating 1 and 3
+/// moved 29 of 144 arm64 cells (5 better on both axes, 17 worse on one or
+/// both: lru -O2 93 -> 99 instructions, the pin 103; handoff/arm64-nest-cse1-ab-2026-11-07.md).
+/// Owner w15. Exit: 11-30.
 fn profitable(
     readers: &HashMap<Reg, Vec<(usize, usize)>>,
     definitions: &HashMap<Reg, usize>,

@@ -4,7 +4,7 @@
 
 use llrm_spike_mf::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
 use llrm_spike_mf::regalloc::Assignment;
-use llrm_z80::compile::slots_are_a_stack;
+use llrm_z80::compile::{slots_are_a_stack, stack_slot_report_by};
 use llrm_z80::reg;
 use llrm_z80::regalloc::Class;
 
@@ -55,4 +55,24 @@ fn a_slot_read_twice_is_peeked_then_popped() {
     assert!(slots_are_a_stack(&mut f, &Assignment(Vec::new())));
     let kinds: Vec<Kind> = f.blocks[0].insts.iter().map(|inst| inst.kind).collect();
     assert_eq!(kinds, [Kind::Op("PUSHP"), Kind::Op("PEEKP"), Kind::Op("POPP")]);
+}
+
+/// Four words saved and read back the way a queue is read, three of them under
+/// the fourth, which is read last: the slot loaded first was sent to the
+/// frame, then the next, then the next, and only the top one stayed a `push`
+/// (1 of 4). The top one is in every conflict, so it goes: three stay.
+#[test]
+fn the_slot_in_the_most_conflicts_goes_back_to_the_frame() {
+    let save = |slot| Inst::new(Kind::Op("SPILL16"), vec![Operand::Frame(slot), Operand::Use(Reg::Phys(reg::DE))]);
+    let read = |slot| Inst::new(Kind::Op("RELOAD16"), vec![Operand::Def(Reg::Phys(reg::BC)), Operand::Frame(slot)]);
+    let body = || {
+        let mut f = MFunction::new("f");
+        let insts = vec![save(0), save(1), save(2), save(3), read(2), read(1), read(0), read(3)];
+        f.blocks = vec![Block { id: 0, insts, phis: Vec::new() }];
+        f
+    };
+    let first_violation = stack_slot_report_by(&mut body(), &Assignment(Vec::new()), false, false);
+    assert_eq!(first_violation.pushed, [3]);
+    let by_conflicts = stack_slot_report_by(&mut body(), &Assignment(Vec::new()), false, true);
+    assert_eq!(by_conflicts.pushed, [0, 1, 2]);
 }

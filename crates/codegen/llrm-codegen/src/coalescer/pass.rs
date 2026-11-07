@@ -71,6 +71,7 @@ use crate::analysis::intervals as ranges;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::regclass;
 use crate::backend::target::{self, Segments};
+use crate::model::ir::{Loc, Semantics};
 use crate::model::lir::LirBody;
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
@@ -87,6 +88,10 @@ pub struct Coalescer {
     pub classes: std::rc::Rc<RegisterClasses>,
     /// A build for size.
     pub size: bool,
+    /// The target's encoded sizes of a copy and a constant load, with its
+    /// default operand size: at size a constant is remade where that is
+    /// shorter than the copy it replaces, or leaves no second copy of it.
+    pub moves: Option<llrm_target::MoveBytes>,
 }
 
 impl Coalescer {
@@ -102,6 +107,7 @@ impl Coalescer {
             segments: segments.clone(),
             classes: std::rc::Rc::clone(classes),
             size: false,
+            moves: None,
         }
     }
 }
@@ -125,6 +131,32 @@ impl LIRTransform for Coalescer {
             None => body,
         })
     }
+}
+
+/// The target's price of making a constant again at size: its encoding
+/// strictly under the copy's (a tie keeps the copy: before allocation a
+/// register's REX byte is unknown, and a remade zero stored to a spill slot is
+/// dearer than a register stored), or any, where the source's own definition goes. At speed the
+/// pin's choice stands: always.
+pub(super) fn remat_priced(bytes: llrm_target::MoveBytes) -> crate::coalescer::env::RematWins {
+    Box::new(move |def, _, _, size, alone| {
+        if !size || alone {
+            return true;
+        }
+        // Not a plain constant (an `lea` of a register and a constant): no
+        // price stated, so the source that stays read keeps its copy (C10).
+        let Some(Semantics { sources, dests, .. }) = def.what.as_ref() else { return false };
+        let ([Loc::Imm(literal)], [Loc::Held(held)]) = (sources.as_slice(), dests.as_slice()) else { return false };
+        let width = i64::from(held.width);
+        // DEVIATE C13 (owner greedy-anyisa, exit: the greedy rematerializes a
+        // spilled zero as the pin's does): a value wider than the operand size
+        // often spills, and its remade zero is a 9 B `movq $0, slot` for a 5 B
+        // store of the shared one (jpeg_fixed m64 -Os +42 B).
+        if width > bytes.plain {
+            return false;
+        }
+        (bytes.literal)(literal.value, literal.address.is_some(), width, bytes.plain) < (bytes.copy)(width, bytes.plain)
+    })
 }
 
 impl Coalescer {
@@ -193,7 +225,7 @@ impl Coalescer {
                 should_join: None,
                 freq: Vec::new(),
                 remat: None,
-                remat_wins: None,
+                remat_wins: self.moves.map(remat_priced),
                 regs: None,
                 kind_of: None,
                 kinds: Default::default(),

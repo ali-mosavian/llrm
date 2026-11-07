@@ -155,8 +155,15 @@ pub trait CoalescerEnv {
     }
 
     /// A build for size: a copy of a constant is made again only where that
-    /// leaves no second copy of the constant (DEVIATE C10).
+    /// leaves no second copy of the constant (DEVIATE C10), unless the target
+    /// prices it ([`CoalescerEnv::prices_remat`]).
     fn tuned_for_size(&self) -> bool {
+        false
+    }
+
+    /// Whether [`CoalescerEnv::remat_wins`] is the target's own price (its
+    /// encodings), not the default that always remakes.
+    fn prices_remat(&self) -> bool {
         false
     }
 
@@ -196,6 +203,7 @@ pub trait CoalescerEnv {
         _def: &Insn,
         _source: u32,
         _destination: u32,
+        _alone: bool,
     ) -> bool {
         true
     }

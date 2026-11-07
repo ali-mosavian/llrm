@@ -75,7 +75,7 @@ pub fn mark_long_multiplies(module: &mut Module) {
         .collect();
     for name in names {
         if let Some((_, function)) = module.function_mut(&name) {
-            function.attrs.push(Attribute::Flag(LONG_MULTIPLY.to_owned()));
+            function.attrs.push(Attribute::Flag(LONG_MULTIPLY.into()));
         }
     }
 }
