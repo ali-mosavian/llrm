@@ -79,6 +79,7 @@ uint64_to_float
 value_of_valueless
 volatile_bitfield
 wide_frame
+wide_shift_by_one
 word_compare_branches
 word_compares
 write_through_parameter
