@@ -1235,6 +1235,7 @@ impl Collection<'_, '_> {
             as_written: false,
             other_register_units: self.pressure_units(),
             size: self.size,
+            across_call: self.across_call,
         };
         cost.rate_formula(&mut rating, f, regs, visited, &self.uses[lu_idx], losers);
     }

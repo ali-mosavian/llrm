@@ -267,6 +267,8 @@ fn plan_loop(
         Default::default()
     };
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
+    // DEVIATE LU13: the loop calls and the target's call takes every register.
+    let across_call = tti.lsr_call_clobbers_registers() && crate::lsr_collect::loop_calls(&cx, tti, header);
     // The loop's register units do not change between the two builds.
     let units = std::cell::Cell::new(None);
     let build = |se: &mut ScalarEvolution| {
@@ -280,6 +282,7 @@ fn plan_loop(
             }
         };
         lsr.size = size;
+        lsr.across_call = across_call;
         llrm_support::debug!("lsr", "  other registers: {}", lsr.other_register_units);
         lsr.chain_uses = chains.inc_set.clone();
         lsr.collect_interesting_types_and_factors(se, &users);
