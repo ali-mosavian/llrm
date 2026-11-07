@@ -156,6 +156,26 @@ pub(crate) fn def_of(
     }
 }
 
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopUtils.cpp#L507
+/// `isAlmostDeadIV`: the phi is read only by its increment and `cond`, and
+/// the increment only by the phi and `cond`.
+pub(crate) fn is_almost_dead_iv(
+    function: &Function,
+    phi: InstId,
+    latch: BlockId,
+    cond: Operand,
+) -> bool {
+    let cond = def_of(function, cond);
+    let inc = arms(function, phi).into_iter().find(|(_, from)| *from == latch).expect("a latch case").0;
+    let phi_value = function.instruction(phi).result.expect("a phi value");
+    let inc_inst = def_of(function, inc);
+    let Operand::Value(inc_value) = inc else { return false };
+    if function.users(phi_value).iter().any(|u| Some(u.user) != cond && Some(u.user) != inc_inst) {
+        return false;
+    }
+    !function.users(inc_value).iter().any(|u| Some(u.user) != cond && u.user != phi)
+}
+
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp#L770
 /// `getLoopPhiForCounter`: the header phi `inc` is the increment of, if it is
 /// an add, subtract or one-index GEP of it by a loop invariant.
@@ -464,24 +484,14 @@ impl Lftr<'_> {
         self.has_concrete_def_impl(v, &mut visited, 0)
     }
 
-    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopUtils.cpp#L507
-    /// `isAlmostDeadIV`: the phi is read only by its increment and `cond`, and
-    /// the increment only by the phi and `cond`.
+    /// `isAlmostDeadIV` over this run's function.
     fn is_almost_dead_iv(
         &self,
         phi: InstId,
         latch: BlockId,
         cond: Operand,
     ) -> bool {
-        let cond = def_of(self.function, cond);
-        let inc = arms(self.function, phi).into_iter().find(|(_, from)| *from == latch).expect("a latch case").0;
-        let phi_value = self.function.instruction(phi).result.expect("a phi value");
-        let inc_inst = def_of(self.function, inc);
-        let Operand::Value(inc_value) = inc else { return false };
-        if self.function.users(phi_value).iter().any(|u| Some(u.user) != cond && Some(u.user) != inc_inst) {
-            return false;
-        }
-        !self.function.users(inc_value).iter().any(|u| Some(u.user) != cond && u.user != phi)
+        is_almost_dead_iv(self.function, phi, latch, cond)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp#L938
