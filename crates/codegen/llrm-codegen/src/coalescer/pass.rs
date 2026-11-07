@@ -64,6 +64,7 @@
 //! <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp>
 
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
 use llrm_lir::registers::RegId;
 
@@ -185,9 +186,9 @@ impl Coalescer {
             }
         }
         let everything: BTreeSet<RegId> = self.classes.available.iter().copied().collect();
-        let mut palettes: IndexMap<u32, BTreeSet<RegId>> = IndexMap::default();
+        let mut palettes: IndexMap<u32, Rc<BTreeSet<RegId>>> = IndexMap::default();
         // Values of one class share an allocation order: it is made once.
-        let mut made: crate::support::hash::HashMap<Option<&BTreeSet<RegId>>, BTreeSet<RegId>> = Default::default();
+        let mut made: crate::support::hash::HashMap<Option<&BTreeSet<RegId>>, Rc<BTreeSet<RegId>>> = Default::default();
         for block in &body.blocks {
             for one in block.insns.iter() {
                 for value in one.defines.iter().chain(&one.uses) {
@@ -197,7 +198,7 @@ impl Coalescer {
                             .or_insert_with(|| {
                                 #[cfg(test)]
                                 ORDERS_MADE.with(|one| one.set(one.get() + 1));
-                                target::order(class, &self.segments, &self.classes).into_iter().collect()
+                                Rc::new(target::order(class, &self.segments, &self.classes).into_iter().collect())
                             })
                             .clone()
                     });
@@ -206,7 +207,7 @@ impl Coalescer {
         }
         for (value, register) in &pins {
             if !everything.contains(register) && !where_of.contains_key(value) {
-                palettes.insert(*value, BTreeSet::from([*register]));
+                palettes.insert(*value, Rc::new(BTreeSet::from([*register])));
             }
         }
         let depths = ranges::depths_shared(body);
@@ -373,6 +374,22 @@ mod palette_tests {
         let made = ORDERS_MADE.with(std::cell::Cell::get) - before;
         let values = env.palettes.borrow().len();
         assert!(values > 8 * made, "{values} palettes took {made} orders");
+    }
+
+    /// Each value held a copy of its class's register set (a `BTreeSet` cloned
+    /// per value, then dropped): about 10 M Ir of memory_expansion's coalescer.
+    /// Values of one class hold the one set.
+    #[test]
+    fn test_values_of_one_class_hold_one_register_set() {
+        let (body, _) = before_phase(Calls::Everything, "sievejumps.ll", "bench_sieve", "486", "Coalescer");
+        let classes = RegisterClasses::m16();
+        let segments = crate::backend::target::BUILT_IN.clone();
+        let coalescer = Coalescer::new(None, &segments, &classes);
+        let (env, _) = coalescer.llvm_env(&body).expect("no phis");
+        let palettes = env.palettes.borrow();
+        let held: std::collections::HashSet<*const std::collections::BTreeSet<_>> =
+            palettes.values().map(|set| std::borrow::Borrow::borrow(set) as *const _).collect();
+        assert!(palettes.len() > 8 * held.len(), "{} palettes held {} sets", palettes.len(), held.len());
     }
 }
 

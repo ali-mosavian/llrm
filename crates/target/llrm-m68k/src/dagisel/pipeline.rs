@@ -151,6 +151,20 @@ impl SchedInfo for M68kSched {
         Some(pin::CCR)
     }
 
+    /// `M68kRegisterInfo::getCrossCopyRegClass` ([L101-L105][pin]) gives
+    /// `CCR` the class `DR16`, so a flag live across a call cannot be copied
+    /// within its class: the scheduler clones the definition
+    /// (`CopyAndMoveSuccessors`) and the flags are recomputed after the call.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/M68k/M68kRegisterInfo.h#L101-L105
+    fn has_cross_copy_class(
+        &self,
+        register: u16,
+    ) -> bool {
+        register == pin::CCR
+    }
+
     /// M68k does not enable the machine scheduler: `createDefaultScheduler`
     /// gives it the ILP list scheduler.
     fn preference(&self) -> Preference {

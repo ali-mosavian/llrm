@@ -104,6 +104,9 @@ pub struct Options {
     /// A load and the step of its pointer in another block are one `(An)+`
     /// ([`crate::loopinc`]).
     pub post_inc_across_blocks: bool,
+    /// A small conditional block is copied into the predecessors that jump to
+    /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build.
+    pub tail_duplicate: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -123,6 +126,7 @@ impl Options {
         hoist_flag_setters: false,
         reuse_shift_flags: false,
         post_inc_across_blocks: false,
+        tail_duplicate: false,
         debug: false,
     };
 }
@@ -141,6 +145,7 @@ impl Default for Options {
             hoist_flag_setters: true,
             reuse_shift_flags: true,
             post_inc_across_blocks: true,
+            tail_duplicate: true,
             debug: false,
         }
     }
@@ -183,6 +188,7 @@ pub fn items_with(
         options.indexed,
         options.short,
         options.code_model.absolute_data(cpu),
+        wants_size,
     )?;
     let mut function = emit(name, &blocks)?;
     function.returns_twice =
@@ -223,7 +229,7 @@ pub fn items_with(
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
-        crate::regalloc::allocate_greedy(&mut function, wants_size)?
+        crate::regalloc::allocate_greedy(&mut function, wants_size, options.indexed)?
     };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     if options.short {
@@ -251,6 +257,9 @@ pub fn items_with(
     }
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
+    if options.tail_duplicate && !wants_size {
+        llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
+    }
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
     let mut out = vec![Item::Label(name.to_owned())];
     // The line the function is declared at starts its rows (the prologue is

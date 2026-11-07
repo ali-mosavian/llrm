@@ -673,7 +673,7 @@ fn test_a_constant_the_target_names_its_own_way_is_made_again() {
     let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
     let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
     let env = TargetEnv {
-        palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+        palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette.clone())), (2, std::rc::Rc::new(palette))]).into(),
         pins: IndexMap::default(),
         size: false,
         keep_pinned: false,
@@ -713,7 +713,7 @@ fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
     let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
     let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
     let env = TargetEnv {
-        palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+        palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette.clone())), (2, std::rc::Rc::new(palette))]).into(),
         pins: IndexMap::default(),
         size: false,
         keep_pinned: false,
@@ -792,9 +792,9 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
     use super::env::TargetEnv;
     let palette = |registers: &[RegId]| registers.iter().copied().collect::<BTreeSet<_>>();
     let palettes = IndexMap::from_iter([
-        (1, palette(&[RegId::AX, RegId::BX, RegId::SI])),
-        (2, palette(&[RegId::BX, RegId::BP])),
-        (3, palette(&[RegId::SI, RegId::DI])),
+        (1, std::rc::Rc::new(palette(&[RegId::AX, RegId::BX, RegId::SI]))),
+        (2, std::rc::Rc::new(palette(&[RegId::BX, RegId::BP]))),
+        (3, std::rc::Rc::new(palette(&[RegId::SI, RegId::DI]))),
     ]);
     let env = TargetEnv {
         joins_global_copies: true,
@@ -1258,7 +1258,7 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
     TargetEnv {
         palettes: palettes
             .iter()
-            .map(|(value, registers)| (*value, registers.iter().copied().collect()))
+            .map(|(value, registers)| (*value, std::rc::Rc::new(registers.iter().copied().collect())))
             .collect::<IndexMap<_, _>>()
             .into(),
         pins: IndexMap::default(),
@@ -1318,7 +1318,7 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
         let env = TargetEnv {
             joins_global_copies: true,
             joins_pinned_copies,
-            palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+            palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette.clone())), (2, std::rc::Rc::new(palette))]).into(),
             pins: IndexMap::from_iter([(1, RegId::AX)]),
             size: false,
             keep_pinned: true,
@@ -1700,7 +1700,7 @@ fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
         let was = body(&[(&[constant_named(1, "CONST_I32"), Arc::clone(&c)], &[1]), (&[read(2)], &[])]);
         let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
         let env = TargetEnv {
-            palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+            palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette.clone())), (2, std::rc::Rc::new(palette))]).into(),
             pins: IndexMap::default(),
             size: false,
             keep_pinned: false,

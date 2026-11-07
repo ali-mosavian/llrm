@@ -3105,7 +3105,10 @@ fn a_store_the_next_to_the_same_word_overwrites_is_dropped_at_m64() {
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-fno-tree-dse"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let stores = listing.lines().filter(|line| line.trim().starts_with("mov word ptr")).count();
-    assert!(listing.lines().any(|line| line.trim().starts_with("add word ptr") && line.trim().ends_with(", 2")), "{listing}");
+    assert!(
+        listing.lines().any(|line| line.trim().starts_with("add word ptr") && line.trim().ends_with(", 2")),
+        "{listing}"
+    );
     assert_eq!(stores, 0, "{listing}");
 }
 
@@ -3134,7 +3137,8 @@ fn an_or_of_two_compares_with_one_constant_is_one_setne_at_m32() {
 /// before the select becomes an `and`. A select made an `and` ahead of the
 /// DAG left `xor(and, -1)`, which De Morgan turned into `setae` + `or`: a
 /// second flag in a spill slot (switch_table_holes -O2 m32, 122 -> 132 B).
-/// Runs at m64: the hook is off at m32, where it costs sieve -O3 3 B and 172 clk.
+/// Runs at m64: the hook is off at m32, where it costs sieve -O3 3 B and 172
+/// clk.
 #[test]
 fn a_branch_on_a_bool_select_is_an_and_and_a_compare_not_an_or_of_inverses_at_m64() {
     let ir = "target datalayout = \"@m64-datalayout@\"\n\
@@ -3595,6 +3599,48 @@ fn a_branch_on_an_inverted_bool_phi_is_not_negated_at_m32() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("not ") && !listing.contains("and cl, 1"), "{listing}");
     assert!(listing.contains("test cl, cl"), "{listing}");
+}
+
+/// `while (env(i, line) >= 0 && len > 8 && line[0]=='C' && ... line[7]=='=')`
+/// as an unrotated loop: the eight byte loads of `line` stayed in the block
+/// above the chain, `mov r8, [esp+k]` held across the branches (os_execute m32
+/// -Os); the pin sinks each into the chain block that compares it.
+#[test]
+fn byte_loads_of_a_chain_sink_into_their_compare_blocks_at_m32() {
+    let mut body = String::new();
+    for (at, byte) in [67, 79, 77, 83, 80, 69, 67, 61].iter().enumerate() {
+        let prev = if at == 0 { "%big".to_owned() } else { format!("%c{}", at - 1) };
+        body += &format!(
+            "  %p{at} = getelementptr inbounds i8, ptr %buf, i32 {at}\n  %v{at} = load i8, ptr %p{at}\n\
+             \x20 %e{at} = icmp eq i8 %v{at}, {byte}\n  %c{at} = select i1 {prev}, i1 %e{at}, i1 false\n"
+        );
+    }
+    let text = format!(
+        "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
+         declare i32 @env(i32, ptr)\ndeclare void @hit()\n\
+         define void @f() optsize {{\n  %buf = alloca [96 x i8]\n  br label %lp\nlp:\n\
+         \x20 %i = phi i32 [ 0, %0 ], [ %n, %chain ]\n  %len = call i32 @env(i32 %i, ptr %buf)\n\
+         \x20 %ok = icmp sgt i32 %len, -1\n  br i1 %ok, label %chain, label %out\nchain:\n\
+         \x20 %big = icmp ugt i32 %len, 8\n{body}  %n = add i32 %i, 1\n  br i1 %c7, label %yes, label %lp\n\
+         yes:\n  call void @hit()\n  ret void\nout:\n  ret void\n}}\n"
+    );
+    let (built, _) = compiled(&flags(&["-m32", "-Os", "--isel=dag"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("mov dl, byte ptr"), "{listing}");
+    assert!(listing.matches("cmp byte ptr").count() >= 8, "{listing}");
+}
+
+/// `n % 5 == 0` was the divide's multiply-high, `shr`, `lea` and a compare of
+/// the product with `n` (7 instructions); the pin's `buildUREMEqFold` is one
+/// multiply by the inverse and a compare against `floor((2^32-1)/5)`.
+#[test]
+fn an_unsigned_remainder_compared_to_a_constant_is_a_multiply_and_a_compare_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
+                define i1 @f(i32 %n) {\n  %r = urem i32 %n, 5\n  %c = icmp eq i32 %r, 0\n  ret i1 %c\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("cmp eax, 858993460"), "{listing}");
+    assert!(!listing.contains("shr ") && !listing.contains("div "), "{listing}");
 }
 
 /// The locals' base was aligned to the stack's 16 below the pushed registers
@@ -4533,7 +4579,6 @@ fn a_zero_extended_select_mask_stays_an_immediate_in_the_loop_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("306674911"), "{listing}");
 }
-
 
 /// Position-independent m64: a symbol defined elsewhere is reached through
 /// the GOT, as the pin does (`X86Subtarget::classifyGlobalReference` is

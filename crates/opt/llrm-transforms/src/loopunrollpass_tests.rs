@@ -647,11 +647,12 @@ fn a_priced_unroll_line_names_the_arrays_trips_and_float_file() {
         ints: 0,
         floats: 4,
         rmw: 2,
+        spilled: 3,
         float_file: 8,
         rate: 312,
     }
     .line();
-    for want in ["4 trips", "ints 0", "floats 4", "rmw 2", "float file 8", "rate 312"] {
+    for want in ["4 trips", "ints 0", "floats 4", "rmw 2", "spilled 3", "float file 8", "rate 312"] {
         assert!(line.contains(want), "{want} missing from: {line}");
     }
 }

@@ -669,6 +669,10 @@ impl Tti for X86 {
         self.tuning.multiply_by_clocks
     }
 
+    fn divide_by_bytes(&self) -> bool {
+        self.tuning.divide_by_bytes
+    }
+
     fn price_pin_multiplies(&self) -> bool {
         self.tuning.price_pin_multiplies
     }
@@ -813,6 +817,10 @@ impl Tti for X86 {
         self.tuning.rotation_guard_must_fold_at_size
     }
 
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        self.tuning.size_rotation_header_limit
+    }
+
     fn rotation_header_priced_at_size(&self) -> bool {
         self.tuning.rotation_header_priced_at_size
     }
@@ -874,12 +882,17 @@ impl Tti for X86 {
     // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
     // divides to `Expand` (L340) and leaves the two-result ones at the base
     // class's `Legal`, so every register type has one.
+    //
+    // DEVIATE DR1 (exit 2026-11-20): the 32-bit mode's inline `i64` divide
+    // routine returns both, so `i64` has one too (the pin's x86 has none and
+    // `DivRemPairs` writes `x % y` as `x - x / y * y`: a 64-bit multiply and
+    // a subtract per remainder, x_ll_div).
     fn has_div_rem_op(
         &self,
         bits: u32,
         _signed: bool,
     ) -> bool {
-        self.is_type_legal(Ty::Int(bits))
+        self.is_type_legal(Ty::Int(bits)) || (bits == 64 && !self.quad && self.real_mode.is_none())
     }
 
     /// `FSQRT` is legal on every scalar float: the SSE instruction, or x87's.
