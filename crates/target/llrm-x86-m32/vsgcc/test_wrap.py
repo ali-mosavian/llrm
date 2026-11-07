@@ -1,4 +1,5 @@
 """The kernel stays a call and the rest inlines: why the table no longer builds with -fno-inline-functions."""
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -47,3 +48,20 @@ def test_the_helper_is_inlined_and_the_kernel_stays_a_call(tmp_path):
 def test_the_pointer_has_the_kernels_own_parameters():
     """`long (*)()` for a kernel of `unsigned short` is an error in clang (lru, floats, sieve)."""
     assert "long (*volatile bench_k_via)(unsigned short n) = bench_k;" in wrap.wrapped("k", SOURCE.replace("bench_k(int n)", "bench_k(unsigned short n)"))
+
+
+def test_every_program_is_measured_with_its_trip_counts_unknown():
+    """A kernel compiled from its raw source has `main`'s constant (x_matmul_f's 12) folded into it, so its loops unroll and
+    its listing is not what the table measures; a cause card built on one blamed a threshold for 6,684 clk (2026-11-07)."""
+    here = Path(__file__).parent
+    root = here.parents[3]
+    sources = sorted((here / "kernels").glob("*/*.c")) + sorted((root / "bench").glob("*/*.c"))
+    assert sources, "premise: the corpus is found"
+    for path in sources:
+        text = path.read_text()
+        program = path.stem
+        if not re.search(rf"^int\s+main\s*\(", text, re.M) or not re.search(rf"\bbench_{program}\s*\(", text):
+            continue
+        out = wrap.wrapped(program, text)
+        main = out[re.search(r"^int\s+main\s*\(", out, re.M).start():]
+        assert not re.search(rf"(?<![*(])\bbench_{program}\s*\(", main), f"{path}: main calls the kernel directly"

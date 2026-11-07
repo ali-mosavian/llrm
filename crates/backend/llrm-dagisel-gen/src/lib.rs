@@ -13,6 +13,7 @@ pub mod emit;
 pub mod fastisel;
 pub mod features;
 pub mod flatten;
+pub mod foldtables;
 pub mod ids_rs;
 pub mod inc;
 pub mod predicate;

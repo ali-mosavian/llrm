@@ -121,6 +121,9 @@ pub struct Profile {
     pub loop_alignment: u8,
     /// `Target::loop_alignment_max_skip`.
     pub loop_max_skip: u8,
+    /// `Target::align_loops_at_o1`; below -O2 (`speed_rate` off) loops are
+    /// aligned only where this holds.
+    pub align_loops_at_o1: bool,
     pub call_register_capacity: i64,
     /// The floating values it holds in registers at once.
     pub float_register_capacity: i64,
@@ -186,6 +189,10 @@ pub struct Profile {
     /// -O2 and -O3: the target's price of a code byte at speed counts
     /// (`Options::prices_bytes`); -O1, -Os and -Oz gate every metric alone.
     pub speed_rate: bool,
+    /// The target runs the pin's stand-alone tail duplication after
+    /// allocation (`TailDuplicator`, `PreRegAlloc` clear); on only where its
+    /// A/B has been made (`TailDuplicate` slot).
+    pub post_ra_tail_duplicate: bool,
     /// A spill of an x87 value keeps the register's 80 bits (`fstp tbyte`),
     /// as real BC keeps a temporary (BASIC). DEVIATE D-RFP5, exit: none, the
     /// pin rounds; QB follows real BC text.
@@ -366,6 +373,7 @@ impl Profile {
             bsf_rep_prefix: arch.bsf_rep_prefix(),
             loop_alignment: arch.pref_loop_alignment(),
             loop_max_skip: arch.loop_alignment_max_skip(),
+            align_loops_at_o1: arch.align_loops_at_o1(),
             call_register_capacity: arch.callee_saved().len() as i64,
             float_register_capacity: arch.float_stack() as i64,
             address_scales: BTreeSet::from([1]),
@@ -390,6 +398,7 @@ impl Profile {
             stable_loads: true,
             min_size: false,
             speed_rate: true,
+            post_ra_tail_duplicate: false,
             spills_extended: false,
             exhaustive: false,
             model: arch.cost_model(),
@@ -411,13 +420,31 @@ impl Profile {
         if self.size || self.min_size { self.target().size_milliclocks_per_byte() } else { 0 }
     }
 
+    /// Code is tuned for clocks: not -O0 (the pin's -O0 is FastISel and no DAG
+    /// combine, so nothing there trades bytes for clocks) and not for size.
+    pub fn has_speed_goal(&self) -> bool {
+        self.optimized && !(self.size || self.min_size)
+    }
+
     /// Clocks a byte of code is worth at speed, in thousandths: the target's
     /// rate at -O2 and -O3, none at -O1 and for size.
     pub fn speed_milliclocks_per_byte(&self) -> i64 {
-        if self.size || self.min_size || !self.speed_rate {
+        if !self.has_speed_goal() || !self.speed_rate {
             return 0;
         }
-        self.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+        self.speed_milliclocks_per_byte_on(&*self.target())
+    }
+
+    /// [`Self::speed_milliclocks_per_byte`] on a cost model the caller already
+    /// has: `target` builds one (and clones the price tables) per call.
+    pub fn speed_milliclocks_per_byte_on(
+        &self,
+        machine: &dyn llrm_mir::target::Machine,
+    ) -> i64 {
+        if !self.has_speed_goal() || !self.speed_rate {
+            return 0;
+        }
+        machine.tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
     }
 
     /// Clocks a mispredicted branch costs in this function: the size row at
@@ -589,6 +616,7 @@ fn _profile(
         address_prefix_stall: table.lcp_stall,
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
         commute_loop_carried: table.commute_loop_carried,
+        post_ra_tail_duplicate: table.post_ra_tail_duplicate,
         mispredict_penalty: table.mispredict_penalty,
         mispredict_penalty_size: table.mispredict_penalty_size,
         ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)

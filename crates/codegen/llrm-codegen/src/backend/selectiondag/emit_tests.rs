@@ -151,7 +151,7 @@ fn an_add_copied_to_a_virtual_register_defines_it() {
     let sum = machine(&mut dag, "ADD32rr", &[EVT::I32], &[a, b]);
     let root = copy_to(&mut dag, entry, 12, sum);
     context(|ctx| {
-        let units = schedule(&dag, root, &Info);
+        let units = schedule(&mut dag, root, &Info);
         let blocks = emit(&dag, &units, ctx).expect("emits").blocks;
         let insns = &blocks[0].insns;
         let lines = text(insns);
@@ -178,7 +178,7 @@ fn a_copy_to_a_physical_register_is_a_mov() {
     let five = dag.get_constant(5, EVT::I32);
     let root = copy_to(&mut dag, entry, EAX, five);
     context(|ctx| {
-        let units = schedule(&dag, root, &Info);
+        let units = schedule(&mut dag, root, &Info);
         let blocks = emit(&dag, &units, ctx).expect("emits").blocks;
         let insns = &blocks[0].insns;
         let mov = insns[0].what.as_ref().unwrap();
@@ -197,7 +197,7 @@ fn an_unmapped_opcode_is_an_error() {
     let cmov = machine(&mut dag, "LXADD32", &[EVT::I32], &[a, b]);
     let root = copy_to(&mut dag, entry, 12, cmov);
     context(|ctx| {
-        let units = schedule(&dag, root, &Info);
+        let units = schedule(&mut dag, root, &Info);
         assert!(matches!(emit(&dag, &units, ctx), Err(EmitError::Unmapped(_))));
     });
 }
@@ -216,7 +216,7 @@ fn a_select_without_cmov_becomes_a_branch_and_a_phi() {
     let select = machine(&mut dag, "CMOV_GR32", &[EVT::I32], &[when_false, when_true, ne]);
     let root = copy_to(&mut dag, entry, 12, select);
     context(|ctx| {
-        let units = schedule(&dag, root, &Info);
+        let units = schedule(&mut dag, root, &Info);
         let blocks = emit(&dag, &units, ctx).expect("emits").blocks;
         assert_eq!(blocks.len(), 3, "this, false, sink");
         let (this, fallthrough, sink) = (&blocks[0], &blocks[1], &blocks[2]);
@@ -250,7 +250,7 @@ fn real_mode_address_components_are_confined_to_their_classes() {
         let load = machine(&mut dag, "MOV16rm", &[EVT::I16, EVT::OTHER], &[base, scale, index, disp, noreg, entry]);
         let root = copy_to(&mut dag, entry, 12, load);
         context_in(mode, |ctx| {
-            let units = schedule(&dag, root, &Info);
+            let units = schedule(&mut dag, root, &Info);
             let emitted = emit(&dag, &units, ctx).expect("emits");
             let value = |loc: &Loc| match loc {
                 Loc::Held(held) => held.value,
@@ -286,7 +286,7 @@ fn a_shift_by_cl_reads_cl() {
     let shifted = machine(&mut dag, "SHL32rCL", &[EVT::I32, EVT::I32], &[value, glue]);
     let root = copy_to(&mut dag, entry, 12, shifted);
     context(|ctx| {
-        let units = schedule(&dag, root, &Info);
+        let units = schedule(&mut dag, root, &Info);
         let blocks = emit(&dag, &units, ctx).expect("emits").blocks;
         let lines = text(&blocks[0].insns);
         let shl =
@@ -313,7 +313,7 @@ fn a_lea_of_a_constant_and_a_scaled_index_at_m16_shifts_the_index() {
     let lea = machine(&mut dag, "LEA32r", &[EVT::I32], &[noreg, scale, index, disp, noreg]);
     let root = copy_to(&mut dag, entry, 12, lea);
     context_in(AddrMode::Real16, |ctx| {
-        let units = schedule(&dag, root, &Info);
+        let units = schedule(&mut dag, root, &Info);
         let emitted = emit(&dag, &units, ctx).expect("emits");
         let names: Vec<_> = emitted.blocks[0].insns.iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
         assert_eq!(names.iter().map(|n| &**n).collect::<Vec<_>>(), ["shl", "lea", "mov"]);
@@ -335,7 +335,7 @@ fn a_lea_of_a_base_and_a_scaled_dword_index_at_m16_has_no_displacement() {
     let lea = machine(&mut dag, "LEA32r", &[EVT::I32], &[base, scale, index, disp, noreg]);
     let root = copy_to(&mut dag, entry, 12, lea);
     context_in(AddrMode::Real16, |ctx| {
-        let units = schedule(&dag, root, &Info);
+        let units = schedule(&mut dag, root, &Info);
         let emitted = emit(&dag, &units, ctx).expect("emits");
         let lea = emitted.blocks[0]
             .insns
@@ -365,7 +365,7 @@ fn an_x87_add_copied_to_a_virtual_register_defines_it() {
     let out = dag.get_register(EVT::Simple(MVT::F64), 12);
     let root = dag.get_node_multi(ISD::CopyToReg, &[EVT::OTHER], &[entry, out, sum]);
     context(|ctx| {
-        let units = schedule(&dag, root, &Info);
+        let units = schedule(&mut dag, root, &Info);
         let blocks = emit(&dag, &units, ctx).expect("emits").blocks;
         let lines = text(&blocks[0].insns);
         assert_eq!(blocks[0].insns.len(), 1, "{lines:?}");

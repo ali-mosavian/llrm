@@ -106,6 +106,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // [esp+d8], imm` 8/7/5 B, at an absolute address 10/9/7; `xor eax, eax` 2,
         // `or eax, -1` 3, `mov eax, imm32` 5; `lea edi, [esp+d8]` (4) or `mov
         // edi, imm32` (5), `mov ecx, imm32` 5, `rep stos` 2; `fst qword` 4 / 6.
+        // DEVIATE SINK-CONST-PHI (owner x86-m32, exit 2026-11-27): the pin sinks
+        // `z -= a` / `z += b` of a diamond into the join as `z += phi(-a, b)`; on
+        // a 486 each arm then pays a `mov imm` and one a taken `jmp` (x_cordic -O3
+        // +20% against gcc, which keeps an immediate op per arm). Not at -Os.
+        keep_constant_arith_operands: true,
         size_fill: Some(llrm_mir::target::SizeFill {
             store: [[8, 7, 5], [10, 9, 7]],
             value: [2, 3, 5],
@@ -137,6 +142,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // worse with 450; their O3 card is open). Owner x86-m32, exit
         // 2026-11-20.
         recursive_inlining_growth: Some((450, 150)),
+        // DEVIATE REC-7 (owner m32, exit 2026-11-27): depth 2 at -O2, gcc's 8
+        // at -O3. rectwo -O2 1449397 -> 347314 clk (1965 -> 277 B), fib
+        // 99618 -> 19993 (962 -> 215 B), frames 5035113 -> 4585856;
+        // depth 8 stays where it wins (-O3 rectwo 466986, x_hanoi2 155672).
+        recursive_inlining_depth: Some((2, 8)),
         // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion
         // (passes.def:97, then pass_ipa_inline :164). At -O3 the copies of the
         // loop beat the tree's (rectwo 1230664 -> 466986 clk, recchop,
@@ -202,6 +212,15 @@ impl llrm_target::Target for M32 {
 
     fn name(&self) -> &'static str {
         "x86-m32"
+    }
+
+    // DEVIATE LEAF-FOLD-OS (owner m32, exit 2026-11-20): the pin keeps each
+    // `mov imm; jmp` leaf of a sparse switch (PHIElimination.cpp L841, L858,
+    // L879 split an edge only for a value live out past the phis, so the
+    // leaf stays and costs a `jmp`); at -Os the constant is made in the
+    // branching block and the branch goes to the join.
+    fn leaf_fold_at_size(&self) -> bool {
+        true
     }
 
     fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
@@ -483,6 +502,12 @@ impl llrm_target::Target for M32 {
     /// X86ISelLowering.cpp: `setPrefLoopAlignment(Align(16))`.
     fn pref_loop_alignment(&self) -> u8 {
         4
+    }
+
+    /// DEVIATE ALIGN-O1 (owner m32, exit 2026-11-27): no loop alignment at
+    /// -O1, as gcc. `mandel` -O1 ran 5,376 one-byte nops against gcc's 0.
+    fn align_loops_at_o1(&self) -> bool {
+        false
     }
 
     /// DEVIATE SD545 (owner anyisa, exit 2026-11-20): the pin pads a loop

@@ -133,7 +133,19 @@ impl Printer<'_> {
         &mut self,
         text: impl Into<String>,
     ) {
-        self.out.push(Line::Inst(text.into()));
+        let text = text.into();
+        // `ld r, a` then `ld a, r`: `a` still holds what `r` was just given and
+        // neither load touches the flags (an `and`/`or` chain on one byte went
+        // `ld c, a; ld a, c` between its steps). Registers only: a memory
+        // cell may be volatile. Not while pricing: the price at the speed
+        // levels is taken before the peepholes.
+        if let Some(from) = text.strip_prefix("ld a, ").filter(|from| from.len() == 1)
+            && matches!(self.out.last(), Some(Line::Inst(last)) if *last == format!("ld {from}, a"))
+            && !PRICING.with(|one| one.get())
+        {
+            return;
+        }
+        self.out.push(Line::Inst(text));
     }
 
     fn physical(
@@ -1427,6 +1439,11 @@ fn shift_count(inst: &Inst) -> Result<i64, String> {
         Some(Operand::Imm(count)) => Ok(*count),
         other => Err(format!("a shift by {other:?}")),
     }
+}
+
+/// Whether `function` with spill `slots` keeps an IX frame.
+pub(crate) fn needs_frame(function: &MFunction, slots: &[(i32, usize)]) -> bool {
+    layout(function, slots).active
 }
 
 /// The frame of `function`: its static allocas, then the spill `slots`.

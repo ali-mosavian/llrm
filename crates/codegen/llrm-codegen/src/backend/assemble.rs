@@ -241,7 +241,7 @@ pub fn assembled_by(
         }
     }
     let layout = module.datalayout.as_deref().and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok());
-    // DEVIATE SD231: a routine one site calls is pasted there, as the old
+    // DEVIATE SD231 (owner x86-m32, review 2026-11-27): a routine one site calls is pasted there, as the old
     // selector does: its procedure, call and return cost more than it saves.
     // The pin has no such routine (a libcall in the library).
     let mut sites: IndexMap<String, usize> = IndexMap::default();
@@ -462,7 +462,7 @@ pub fn assembled_by(
                         })
                     };
                     let body = timed("lir duplicated returns", || {
-                        jumps::duplicated_returns(procedure.body.clone(), &overhead)
+                        jumps::duplicated_returns(jumps::threaded_late(&procedure.body), &overhead)
                     });
                     if let Some(error) = unprintable.take() {
                         return Err(error);
@@ -1358,7 +1358,8 @@ fn staged(
     frame.alloca_align = alloca_align;
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;
-    // DEVIATE D14: the pin gives each rounding store and reload its own
+    // DEVIATE D14 (owner frame / x86-m32, review 2026-11-27, exit none while
+    // slot coloring shares them): the pin gives each rounding store and reload its own
     // `CreateStackTemporary` and no lifetime marker, so neither StackColoring
     // nor StackSlotColoring shares them; here they are spill slots, which
     // `slots_colored` shares.

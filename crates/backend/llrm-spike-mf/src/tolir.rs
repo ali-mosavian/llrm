@@ -1035,7 +1035,10 @@ fn operands_in<'a>(
         return Vec::new();
     }
     let lane_dest = |bytes: u32, offset: u32| {
-        matches!(what.dests.first(), Some(Loc::Held(held)) if held.width == bytes && held.offset == offset)
+        matches!(
+            what.dests.first(),
+            Some(Loc::Held(held)) if held.width == bytes && held.offset == offset
+        )
     };
     infos
         .iter()
@@ -1245,10 +1248,11 @@ impl<T: Target> SpikeInstrInfo<T> {
     }
 }
 
-/// Whether the coalescer makes the literal `literal` again for a copy from a value
-/// in `source` to one in `destination`. DEVIATE C10 (register_coalescer.rs): at -Os
-/// a constant that stays read (`!alone`) is not made again; the target's price
-/// decides the rest.
+/// Whether the coalescer makes the literal `literal` again for a copy from a
+/// value in `source` to one in `destination`. DEVIATE C10
+/// (register_coalescer.rs): at -Os a constant that stays read (`!alone`) is not
+/// made again unless the target says the move is no longer than the copy; the
+/// target's price decides the rest.
 pub fn literal_remat_wins<T: Target>(
     literal: &Insn,
     source: &[RegId],
@@ -1256,9 +1260,9 @@ pub fn literal_remat_wins<T: Target>(
     size: bool,
     alone: bool,
 ) -> bool {
-    (!size || alone) && T::literal_move_wins(literal, source, destination, size)
+    (!size || alone || T::literal_move_is_copy_sized(literal))
+        && T::literal_move_wins(literal, source, destination, size)
 }
-
 
 /// One register written by a move of a literal, whatever the target names it:
 /// the target's `isAsCheapAsAMove && isReMaterializable` for a constant.
@@ -1281,6 +1285,87 @@ fn is_literal_move(one: &Insn) -> bool {
             [Loc::Held(held)] if held.value == one.defines[0]
         )
         && matches!(what.sources.as_slice(), [Loc::Imm(_)])
+}
+
+/// One register written by a load of a frame slot.
+fn is_frame_load<T: Target>(one: &Insn) -> bool {
+    let Some(what) = one.what.as_ref() else { return false };
+    what.name.as_deref().is_some_and(T::is_invariant_argument_load)
+        && one.defines.len() == 1
+        && one.uses.is_empty()
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty()
+        && one.def_lanes.is_empty()
+        && one.partial_defs.is_empty()
+        && !one.undef_super
+        && !one.volatile
+        && matches!(
+            what.dests.as_slice(),
+            [Loc::Held(held)] if held.value == one.defines[0]
+        )
+        && frame_cell(what).is_some()
+}
+
+/// The frame slot a load reads: its one memory source, the rest immediates (the
+/// displacement a pin row names beside it).
+fn frame_cell(what: &Semantics) -> Option<Addr> {
+    let mut found = None;
+    for place in &what.sources {
+        match place {
+            Loc::Mem(cell) if found.is_none() => found = cell.addr.filter(|addr| addr.space == Space::Frame),
+            Loc::Imm(imm) if imm.address.is_none() => {}
+            _ => return None,
+        }
+    }
+    found
+}
+
+/// The values defined once by a load of an incoming stack argument (a frame
+/// slot below zero) that nothing in `body` writes or takes the address of.
+fn incoming_argument_loads<T: Target>(body: &LirBody) -> BTreeSet<u32> {
+    let incoming = |addr: Addr| addr.space == Space::Frame && addr.disp < 0;
+    let mut written: BTreeSet<i64> = BTreeSet::new();
+    let mut definitions: llrm_support::hash::HashMap<u32, usize> = Default::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for value in &one.defines {
+            *definitions.entry(*value).or_default() += 1;
+        }
+        let Some(what) = one.what.as_ref() else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            match place {
+                Loc::Address(a) if a.addr.is_some_and(incoming) => return BTreeSet::new(),
+                Loc::Imm(imm) if imm.address.is_some_and(incoming) => return BTreeSet::new(),
+                _ => {}
+            }
+        }
+        for place in &what.dests {
+            if let Loc::Mem(cell) = place {
+                if let Some(addr) = cell.addr.filter(|addr| incoming(*addr)) {
+                    written.insert(addr.disp);
+                }
+            }
+        }
+        if what.op == Operation::Address {
+            if let Some(addr) = what.sources.iter().find_map(|place| match place {
+                Loc::Mem(cell) => cell.addr.filter(|addr| incoming(*addr)),
+                _ => None,
+            }) {
+                written.insert(addr.disp);
+            }
+        }
+    }
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| is_frame_load::<T>(one))
+        .filter_map(|one| {
+            let Some(what) = one.what.as_ref() else { return None };
+            let addr = frame_cell(what).filter(|addr| incoming(*addr))?;
+            (!written.contains(&addr.disp) && definitions.get(&one.defines[0]) == Some(&1)).then_some(one.defines[0])
+        })
+        .collect()
 }
 
 /// How wide `insn` holds `value`.
@@ -1333,22 +1418,23 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         &self,
         one: &Insn,
     ) -> bool {
-        is_literal_move(one)
+        is_literal_move(one) || is_frame_load::<T>(one)
     }
 
     fn is_trivially_re_materializable(
         &self,
         def: &Insn,
-        _invariant: bool,
+        invariant: bool,
     ) -> bool {
-        self.remat_shape(def)
+        let r = is_literal_move(def) || (invariant && is_frame_load::<T>(def));
+        r
     }
 
     fn argument_loads(
         &self,
-        _body: &LirBody,
+        body: &LirBody,
     ) -> BTreeSet<u32> {
-        BTreeSet::new()
+        incoming_argument_loads::<T>(body)
     }
 
     /// The read the target takes from memory (`Target::fold_spill`) becomes a
@@ -1390,6 +1476,30 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         cell: &Mem,
     ) -> Option<Arc<Insn>> {
         let what = one.what.as_ref()?;
+        // A straight COPY folds as a load or a store
+        // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetInstrInfo.cpp#L794>):
+        // the spilled end is the slot, the other end stays a register.
+        // A pinned end (`requires`/`delivers`) is a register this converter
+        // numbers, not the allocator: 6502 copied `rs0` into a slot as
+        // `lda rc18446744073709551603`.
+        if one.group.is_none()
+            && one.def_lanes.is_empty()
+            && one.requires.is_empty()
+            && one.delivers.is_empty()
+            && self.is_plain_move(what)
+            && let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice())
+            && dest.width == source.width
+            && dest.width as u32 == cell.width
+            && dest.value != source.value
+            && self.class_of(dest.value) == self.class_of(source.value)
+        {
+            if dest.value == reg {
+                return Some(self.store_reg_to_stack_slot(one, source.value, cell));
+            }
+            if source.value == reg {
+                return Some(self.load_reg_from_stack_slot(one, dest.value, cell));
+            }
+        }
         if one.group.is_none()
             && !what.sources.iter().any(|loc| matches!(loc, Loc::Held(_)))
             && what.name.as_deref().is_some_and(T::is_zero_def)
@@ -1790,9 +1900,8 @@ pub fn from_lir<T: Target>(
             .get(&held.value)
             .is_some_and(|wide| registers.bytes(*wide).is_some_and(|bytes| bytes > i64::from(held.width)));
         if (lane_values.contains(&held.value) || narrower) && !pinned.contains_key(&held.value) {
-            let found = placed_at
-                .get(&held.value)
-                .and_then(|wide| lane_register(&registers, *wide, held.offset, held.width));
+            let found =
+                placed_at.get(&held.value).and_then(|wide| lane_register(&registers, *wide, held.offset, held.width));
             match found {
                 Some(register) => return Reg::Phys(register),
                 None => {
@@ -1838,7 +1947,8 @@ pub fn from_lir<T: Target>(
                     .find_map(|loc| if let Loc::Mem(cell) = loc { Some(cell) } else { None });
                 let slot = slot_of(cell.ok_or_else(|| format!("a spill with no cell: {what:?}"))?);
                 let Some(value) = value else {
-                    // A zero stored from the zero register (`fold_memory_operand`).
+                    // A zero stored from the zero register
+                    // (`fold_memory_operand`).
                     let made = T::zero_store(T::any(), slot).ok_or("the target states no zero store")?;
                     insts.push(made);
                     if !slots.iter().any(|(one, _)| *one == slot) {
@@ -1846,11 +1956,21 @@ pub fn from_lir<T: Target>(
                     }
                     continue;
                 };
-                let register = number(value, &mut classes);
-                let class = classes[match register {
+                // named as every other instruction names the value (by lane
+                // for a byte of a wider register): `drop_self_copies` counts
+                // the readers of a register by name
+                let named = what
+                    .dests
+                    .iter()
+                    .chain(&what.sources)
+                    .find_map(|loc| if let Loc::Held(held) = loc { Some(*held) } else { None })
+                    .ok_or("a spill of no value")?;
+                let numbered = number(value, &mut classes);
+                let class = classes[match numbered {
                     Reg::Virt(v) => v as usize,
                     Reg::Phys(_) => 0,
                 }];
+                let register = lane_or_number(&named, &mut classes, &mut number);
                 let lane = cell.filter(|_| insn.spill_store).and_then(llrm_codegen::greedy::tii::lane_offset);
                 let made = if let Some(offset) = lane {
                     T::spill_store_lane(class, register, slot, offset)
@@ -1900,9 +2020,11 @@ pub fn from_lir<T: Target>(
                     .ok_or_else(|| format!("an instruction that is no definition of the function: {what:?}"))?;
             }
             let source = &original.blocks[from].insts[inst];
-            // a copy into a lane of a pair: a move into the register of that lane
+            // a copy into a lane of a pair: a move into the register of that
+            // lane
             if name == Some(COPY) && !insn.def_lanes.is_empty() {
-                // a source that is no value (a physical register) stays as written
+                // a source that is no value (a physical register) stays as
+                // written
                 if let Some(Loc::Held(source)) = what.sources.first() {
                     let Some(Loc::Held(to)) = what.dests.first() else {
                         return Err("a lane copy that does not move a value".into());
@@ -1984,13 +2106,52 @@ pub fn allocate_greedy<T: Target>(
     registers: Regs,
     size: bool,
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
+    let name = function.name.clone();
     let first = allocate_greedy_pinned::<T>(function, registers, size, T::joins_pinned_copies());
-    match first {
+    let result = match first {
         Err(why) if T::joins_pinned_copies() && why.ends_with("greedy could not allocate") => {
-            allocate_greedy_pinned::<T>(function, registers, size, false).map_err(|_| why)
+            let second = allocate_greedy_pinned::<T>(function, registers, size, false);
+            if second.is_ok() {
+                record_refusal(&name, &why, true);
+            }
+            second.map_err(|_| why)
         }
         other => other,
+    };
+    if let Err(why) = &result {
+        record_refusal(&name, why, false);
     }
+    result
+}
+
+/// A function greedy would not take as it was, for the audit of silent
+/// fallbacks: a target that answers a refusal with another allocator, or with
+/// a second try, shows nothing else.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Refusal {
+    pub function: String,
+    pub why: String,
+    /// Allocated on a second try (DEVIATE PJ1) rather than refused.
+    pub retried: bool,
+}
+
+static REFUSALS: std::sync::Mutex<Vec<Refusal>> = std::sync::Mutex::new(Vec::new());
+
+fn record_refusal(
+    function: &str,
+    why: &str,
+    retried: bool,
+) {
+    if llrm_support::env_flag!("LLRM_GREEDY_REFUSALS") {
+        eprintln!("greedy refusal: @{function}: {why}{}", if retried { " (allocated on the second try)" } else { "" });
+    }
+    let one = Refusal { function: function.to_owned(), why: why.to_owned(), retried };
+    REFUSALS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(one);
+}
+
+/// The refusals since the last call, oldest first.
+pub fn take_refusals() -> Vec<Refusal> {
+    std::mem::take(&mut *REFUSALS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
 }
 
 fn allocate_greedy_pinned<T: Target>(

@@ -254,6 +254,25 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// `sadd.sat(load a, load b)`: the flag add was cloned for the shift that reads
+/// the sum, and the load of `b` stayed folded in one of them (`add rcx, [rsi]`)
+/// so the cell was read twice and the copy of the sum took a `mov`
+/// (sat_builtins m64 -O2, +32 B). The pin's scheduler unfolds the load first,
+/// then clones: one load of each cell, a `lea` for the sum, the flag add on
+/// registers.
+#[test]
+fn a_saturating_add_of_two_loads_reads_each_cell_once_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(ptr %a, ptr %b) {\n  %x = load i64, ptr %a\n  %y = load i64, ptr %b\n\
+                \x20 %r = call i64 @llvm.sadd.sat.i64(i64 %x, i64 %y)\n  ret i64 %r\n}\n\
+                declare i64 @llvm.sadd.sat.i64(i64, i64)\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert_eq!(listing.matches("[rsi]").count(), 1, "{listing}");
+    assert!(listing.lines().any(|line| line.trim().starts_with("lea r") && line.contains("+")), "{listing}");
+    assert!(!listing.lines().any(|line| line.trim().starts_with("add") && line.contains('[')), "{listing}");
+}
+
 /// A symbol's address passed to a call, read by a loop and passed to a call
 /// again is made once for the first call and the loop, and again for the last
 /// call, as the pin has it (`lea` into a callee-saved register, then a `lea`
@@ -745,6 +764,45 @@ fn a_select_of_a_loaded_value_is_a_cmov_from_memory() {
     let (built, _) = compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("cmovge") && line.contains('[')), "{listing}");
+}
+
+/// `c ? 48 : 32` (a difference of 16) was two `mov`s and a `cmov`: the pin's
+/// `combineSelectOfTwoConstants` is `zext(c) * 16 + 32`, a `setl`, a `shl` and
+/// an `or` (word_compare_branches -Os m64: +37 B against the pin).
+#[test]
+fn a_select_of_two_constants_a_power_of_two_apart_is_a_shifted_setcc() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %x, i32 %y) {\n  %c = icmp slt i32 %x, %y\n  %r = select i1 %c, i32 48, i32 32\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("shl")), "{listing}");
+    assert!(!listing.lines().any(|line| line.trim().starts_with("cmov")), "{listing}");
+}
+
+/// A compare folded a volatile load into its memory operand, and the flags made
+/// again for a later reader re-emitted it: `vv[j]` read once in the source was
+/// read three times (`cmp ecx, [rdx+rax*4]` each), word_compare_branches -Os.
+/// The cells must be read exactly twice, once per volatile load.
+#[test]
+fn a_volatile_load_folded_into_a_compare_is_read_once() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @vv = global [16 x i32] zeroinitializer, align 16\n\
+                define i32 @f(i32 %0, i32 %1) {\n\
+                  %3 = sext i32 %0 to i64\n  %4 = getelementptr inbounds [4 x i8], ptr @vv, i64 %3\n\
+                  %5 = load volatile i32, ptr %4, align 4\n  %6 = sext i32 %1 to i64\n\
+                  %7 = getelementptr inbounds [4 x i8], ptr @vv, i64 %6\n  %8 = load volatile i32, ptr %7, align 4\n\
+                  %9 = icmp ult i32 %5, %8\n  %10 = zext i1 %9 to i32\n  %11 = icmp ugt i32 %5, %8\n\
+                  %12 = select i1 %11, i32 4, i32 2\n  %13 = or disjoint i32 %12, %10\n  %14 = or disjoint i32 %13, 8\n\
+                  %15 = select i1 %9, i32 %13, i32 %14\n  %16 = icmp slt i32 %5, %8\n  %17 = icmp sgt i32 %5, %8\n\
+                  %18 = select i1 %16, i32 48, i32 32\n  %19 = select i1 %17, i32 0, i32 %18\n\
+                  %20 = or disjoint i32 %15, %19\n  %21 = or disjoint i32 %20, 64\n  %22 = select i1 %17, i32 %21, i32 %20\n\
+                  %23 = add nuw nsw i32 %22, 128\n  %24 = select i1 %16, i32 %20, i32 %23\n  ret i32 %24\n}\n";
+    let (built, _) = compiled(&flags(&["-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let reads = listing.lines().filter(|line| line.contains("ptr [")).count();
+    assert_eq!(reads, 2, "{listing}");
 }
 
 /// Setting a bit of an `i64` by a variable index stopped the emitter
@@ -3105,7 +3163,10 @@ fn a_store_the_next_to_the_same_word_overwrites_is_dropped_at_m64() {
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-fno-tree-dse"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let stores = listing.lines().filter(|line| line.trim().starts_with("mov word ptr")).count();
-    assert!(listing.lines().any(|line| line.trim().starts_with("add word ptr") && line.trim().ends_with(", 2")), "{listing}");
+    assert!(
+        listing.lines().any(|line| line.trim().starts_with("add word ptr") && line.trim().ends_with(", 2")),
+        "{listing}"
+    );
     assert_eq!(stores, 0, "{listing}");
 }
 
@@ -3134,7 +3195,8 @@ fn an_or_of_two_compares_with_one_constant_is_one_setne_at_m32() {
 /// before the select becomes an `and`. A select made an `and` ahead of the
 /// DAG left `xor(and, -1)`, which De Morgan turned into `setae` + `or`: a
 /// second flag in a spill slot (switch_table_holes -O2 m32, 122 -> 132 B).
-/// Runs at m64: the hook is off at m32, where it costs sieve -O3 3 B and 172 clk.
+/// Runs at m64: the hook is off at m32, where it costs sieve -O3 3 B and 172
+/// clk.
 #[test]
 fn a_branch_on_a_bool_select_is_an_and_and_a_compare_not_an_or_of_inverses_at_m64() {
     let ir = "target datalayout = \"@m64-datalayout@\"\n\
@@ -3624,6 +3686,19 @@ fn byte_loads_of_a_chain_sink_into_their_compare_blocks_at_m32() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("mov dl, byte ptr"), "{listing}");
     assert!(listing.matches("cmp byte ptr").count() >= 8, "{listing}");
+}
+
+/// `n % 5 == 0` was the divide's multiply-high, `shr`, `lea` and a compare of
+/// the product with `n` (7 instructions); the pin's `buildUREMEqFold` is one
+/// multiply by the inverse and a compare against `floor((2^32-1)/5)`.
+#[test]
+fn an_unsigned_remainder_compared_to_a_constant_is_a_multiply_and_a_compare_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
+                define i1 @f(i32 %n) {\n  %r = urem i32 %n, 5\n  %c = icmp eq i32 %r, 0\n  ret i1 %c\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("cmp eax, 858993460"), "{listing}");
+    assert!(!listing.contains("shr ") && !listing.contains("div "), "{listing}");
 }
 
 /// The locals' base was aligned to the stack's 16 below the pushed registers
@@ -4563,7 +4638,6 @@ fn a_zero_extended_select_mask_stays_an_immediate_in_the_loop_at_m64() {
     assert!(!listing.contains("306674911"), "{listing}");
 }
 
-
 /// Position-independent m64: a symbol defined elsewhere is reached through
 /// the GOT, as the pin does (`X86Subtarget::classifyGlobalReference` is
 /// `MO_GOTPCREL` for a declaration that is not `dso_local`): the address is
@@ -4599,4 +4673,33 @@ fn a_call_and_a_defined_global_at_m64_pie_stay_direct() {
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("ptr d") && listing.contains("call ext"), "{listing}");
+}
+
+/// `zext(icmp eq (and i64 x, 0x80000000), 0) + y` (the last step of `__clzsi2`)
+/// compiled to `and edi, 0x80000000; cmp rdi, 1; adc eax, 0` (13 B); the pin
+/// tests the narrow sign bit (`(and X, 2^k) == 0` is `(trunc X) >= 0`,
+/// `foldSetCCWithAnd`) and shifts it down: `not; shr 31; add` (7 B, -8 B at
+/// sfm16_float_cmp -Os).
+#[test]
+fn a_single_bit_mask_test_at_m64_is_a_narrow_sign_test_not_cmp_adc() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(i64 %x, i32 %y) optsize {\n\
+                \x20 %a = and i64 %x, 2147483648\n  %c = icmp eq i64 %a, 0\n  %z = zext i1 %c to i32\n\
+                \x20 %r = add nuw nsw i32 %y, %z\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("adc") && listing.contains("setns"), "{listing}");
+}
+
+/// The pin's `combineMul` covers i64 as well as i32: `x * 40` is `lea; shl`. Ours returned early for i64 and kept
+/// `imul r64, r64, imm`; 100+ products in mul_constants -O2 became `movabs` + `imul` (+450 B over the pin llc).
+#[test]
+fn an_i64_multiply_by_a_lea_constant_is_not_an_imul_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i64 %x) {\n  %r = mul i64 %x, 40\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("imul"), "{listing}");
 }

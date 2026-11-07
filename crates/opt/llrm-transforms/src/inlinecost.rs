@@ -68,8 +68,12 @@
 //!   `CodeSize` of the callee's instructions that the walk did not fold must
 //!   not exceed the `CodeSize` of the call and the pushes of its arguments.
 //!   LLVM's `OptSizeThreshold` 50 allows growth; a fixed bound (25) copied a
-//!   14-instruction loop into ten sites (`idioms.bas`, +690 B). The last call
-//!   of a local callee, which goes with it, is the pin's. No shape of callee
+//!   14-instruction loop into ten sites (`idioms.bas`, +690 B).
+//!   Measured 2026-11-07 (m32 -Os, 176 programs, guard off = the pin's rule):
+//!   47 cells worse, 4 better, +22946 B net (`memory_expansion` 23740 ->
+//!   40688, `div_constants_long` +989, `idioms` +507, `rep_tails` +485); the
+//!   one gain is `byvalue_struct_address` 147 -> 16. The guard stays.
+//!   The last call of a local callee, which goes with it, is the pin's. No shape of callee
 //!   but the loop and the one smaller than its call is tested.
 //! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
 //!   address of a stack slot or a global the caller stored a constant to and
@@ -2143,7 +2147,11 @@ impl<'a> Analyzer<'a> {
             .saturating_add(self.callee_frame(llrm_mir::tti::CostKind::Latency))
             .max(1);
         let frequency = self.site.relative_frequency.unwrap_or(1.0).max(0.0);
-        (growth * rate) as f64 > saved as f64 * 1000.0 * frequency
+        let grows = (growth * rate) as f64 > saved as f64 * 1000.0 * frequency;
+        if llrm_support::debug::enabled("inline") {
+            eprintln!("inline:   bytes-vs-clocks: growth={growth} rate={rate} saved={saved} frequency={frequency:.2} -> {}", if grows { "grows" } else { "pays" });
+        }
+        grows
     }
 
     fn finalize(&mut self) -> Result<(), String> {
@@ -2475,13 +2483,7 @@ pub fn shadow(
                             ),
                     );
                 let verdict = inline_cost(&site, params);
-                let line = match &verdict {
-                    InlineCost::Always(why) => format!("always ({why})"),
-                    InlineCost::Never(why) => format!("never ({why})"),
-                    InlineCost::Cost { cost, threshold, .. } => {
-                        format!("cost={cost} threshold={threshold} {}", if verdict.is_ok() { "inline" } else { "no" })
-                    }
-                };
+                let line = describe(&verdict);
                 eprintln!(
                     "[inlinecost] {} -> {} #{}: {line}{}",
                     caller_global_name(module, caller_id),
@@ -2490,6 +2492,18 @@ pub fn shadow(
                     if leaf { " leaf" } else { "" }
                 );
             }
+        }
+    }
+}
+
+/// A verdict as `LLRM_DEBUG=inline` and `LLRM_EXP_INLINECOST` print it:
+/// `cost=90 threshold=225 inline`, set beside `clang -Rpass=inline`.
+pub fn describe(verdict: &InlineCost) -> String {
+    match verdict {
+        InlineCost::Always(why) => format!("always ({why})"),
+        InlineCost::Never(why) => format!("never ({why})"),
+        InlineCost::Cost { cost, threshold, .. } => {
+            format!("cost={cost} threshold={threshold} {}", if verdict.is_ok() { "inline" } else { "no" })
         }
     }
 }
@@ -2876,6 +2890,15 @@ pub fn decide(
         tti: context.tti,
     };
     let cost = inline_cost(&site, context.params);
+    if llrm_support::debug::enabled("inline") {
+        eprintln!(
+            "inline: {} -> {}: {} (site frequency {:?})",
+            caller_global_name(module, caller_id),
+            callee_global.name.as_deref().unwrap_or("?"),
+            describe(&cost),
+            site.relative_frequency
+        );
+    }
     // `-fno-inline-functions`: clang's pipeline is the always-inliner
     // alone.
     let inline =

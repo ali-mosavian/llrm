@@ -40,6 +40,10 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// DEVIATE SD446: a divide by a constant is chosen against the multiply-high
+    /// sequence by clocks plus bytes at `speed_milliclocks_per_byte`
+    /// (`hardware_divide_wins`); false: the clocks and margin alone.
+    pub divide_by_bytes: bool,
     /// At -O1 (`OptLevel` 1) a full unroll is made only where its cost after
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
@@ -145,6 +149,9 @@ pub struct Tuning {
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
     pub keep_constant_displacements: bool,
+    /// DEVIATE SINK-CONST-PHI: a constant operand of an arithmetic instruction
+    /// is not made a phi by sinking (the pin: cheap), except at size.
+    pub keep_constant_arith_operands: bool,
     /// DEVIATE REC-2: (depth, callee `gcc_insns`) of the recursion copied at
     /// speed, gcc's `max-inline-recursive-depth` and
     /// `max-inline-insns-recursive` (`Tti::recursive_inlining`); none: the
@@ -159,6 +166,9 @@ pub struct Tuning {
     /// at (-O2, -O3), in `gcc_insns` (gcc's `max-inline-insns-recursive`, 450);
     /// none: `inline::MAX_INLINE_INSNS_RECURSIVE`.
     pub recursive_inlining_growth: Option<(i64, i64)>,
+    /// DEVIATE REC-7: the copies' depth at (-O2, -O3), where the target wants
+    /// a depth apart from `recursive_inlining`'s; none: that one's.
+    pub recursive_inlining_depth: Option<(u32, u32)>,
     /// DEVIATE REC-2: at (-O2, -O3) a tree recursion's tail calls are
     /// eliminated before it is copied into itself (gcc:
     /// `pass_tail_recursion` runs early, `passes.def` before
@@ -185,6 +195,12 @@ pub struct Tuning {
     /// Linux x86-64 stays false: glibc's `memcpy` of 0-32 bytes is 6.4 TSC
     /// ticks a call, `rep movsb` 8.2 (Ryzen 9 9950X3D, fsrm; 2026-11-05).
     pub inline_variable_memcpy: bool,
+    /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541: tuned for size, a constant
+    /// `memcpy`/`memmove` whose load and store pieces take more bytes than the call of the library
+    /// routine (`mov edx, n` and the call, 10 B) is the call. The pin counts pieces
+    /// (`MaxStoresPerMemcpyOptSize`). gcc -Os calls from 32 B (mv64 10 B against the pin's 31).
+    /// false: the pin's pieces.
+    pub size_copy_vs_call: bool,
     /// DEVIATE REC5-1 (owner w2, exit 2026-11-20): IPSCCP widens a range that
     /// keeps growing to its half-line, keeping the sign, not to overdefined
     /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
@@ -221,6 +237,7 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        divide_by_bytes: false,
         unroll_never_grows_at_o1: false,
         price_pin_multiplies: false,
         imul_at_size: false,
@@ -247,14 +264,17 @@ impl Tuning {
         rotation_header_priced_at_size: false,
         size_rotation_header_limit: None,
         keep_constant_displacements: false,
+        keep_constant_arith_operands: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
         recursive_inlining_growth: None,
+        recursive_inlining_depth: None,
         recursive_tre_first: (false, false),
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,
         inline_variable_memcpy: false,
+        size_copy_vs_call: false,
         ipsccp_widen_keeps_sign: false,
     };
 }
@@ -268,6 +288,11 @@ pub struct GlobalMerge {
     pub max_offset: u64,
     /// `OnlyOptimizeForSize`: only uses in `minsize` functions count.
     pub size_only: bool,
+    /// DEVIATE ARM64-GM-OPTSIZE (owner w15, exit 2026-11-30): with `size_only`,
+    /// uses in `optsize` functions count too, not only `minsize` ones (the
+    /// pin's `-Os` merges nothing; gcc's section anchors do: stft_fixed -Os
+    /// 15 `adrp` against gcc's 5). False: the pin.
+    pub optsize_counts: bool,
     /// The object format is Mach-O: the merged struct is `internal`, not
     /// `private`.
     pub mach_o: bool,

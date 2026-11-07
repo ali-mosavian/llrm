@@ -586,6 +586,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE ARM64-UNROLL-PRICE: whether a loop of a nest of known trips
+    /// that reads no counter of the loops around it is priced like any other
+    /// full unroll instead of following the nest's decision (unrolling the
+    /// nest folds nothing there), and a priced unroll counts the constant trips
+    /// of the loops around it, not 32 each. False: the nest bypass holds for
+    /// every such loop, the pin's threshold alone, and 32 a loop.
+    fn unroll_prices_nest_loops_without_outer_counter(&self) -> bool {
+        false
+    }
+
     /// Whether a size build's loop rotation copies a header only when its
     /// exit test folds in the preheader (RS1). False: the pass's header limit
     /// alone.
@@ -629,6 +639,16 @@ pub trait Tti {
     /// register offset costs an add and a register at m16 (6 GPRs, base+index
     /// already taken), nothing at m32.
     fn constant_offset_phi_is_cheap(&self) -> bool {
+        true
+    }
+
+    /// Whether a constant operand of an arithmetic instruction may become a phi
+    /// in `sinkLastInstruction`: false where the join then costs a `mov` and a
+    /// taken jump per use (DEVIATE SINK-CONST-PHI). Never at size.
+    fn constant_arith_phi_is_cheap(
+        &self,
+        _optsize: bool,
+    ) -> bool {
         true
     }
 
@@ -712,6 +732,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::divide_by_bytes`.
+    fn divide_by_bytes(&self) -> bool {
+        false
+    }
+
     /// `Tuning::price_pin_multiplies`.
     fn price_pin_multiplies(&self) -> bool {
         false
@@ -752,6 +777,11 @@ pub trait Tti {
 
     /// `Tuning::inline_variable_memcpy`.
     fn inlines_variable_memcpy(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::size_copy_vs_call`.
+    fn copy_for_size_is_priced_against_call(&self) -> bool {
         false
     }
 
@@ -807,6 +837,12 @@ pub trait Tti {
     /// DEVIATE REC-2: what the copies of a recursive function in itself may add
     /// at (-O2, -O3), in `gcc_insns`; none: the pass's own.
     fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        None
+    }
+
+    /// DEVIATE REC-7: the depth of the copies at (-O2, -O3); none: the depth
+    /// of `recursive_inlining`.
+    fn recursive_inlining_depth(&self) -> Option<(u32, u32)> {
         None
     }
 

@@ -70,9 +70,10 @@ pub trait Target {
     /// DEVIATE HC1: how many independent instructions `HoistCommonCodeInSuccs`
     /// may look past for an identical one in the other successor. The pin
     /// compares heads only, an intended rule
-    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L2043>). Reason: a constant both successors need, one of
-    /// them behind a load, stays twice (crc16: `move.l #65535,%d0` on both
-    /// sides of a guard). Exit: 2026-11-12, or when the pin hoists past them.
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L2043>).
+    /// Reason: a constant both successors need, one of them behind a load,
+    /// stays twice (crc16: `move.l #65535,%d0` on both sides of a guard). Exit:
+    /// 2026-11-12, or when the pin hoists past them.
     fn hoist_window() -> usize {
         0
     }
@@ -200,6 +201,15 @@ pub trait Target {
         false
     }
 
+    /// Whether the row `name`, loading an incoming stack argument (a frame slot
+    /// below zero) that nothing writes or takes the address of, is made again
+    /// where it is read, not stored and reloaded: the pin's rule for an
+    /// immutable fixed stack object (`isLoadFromInvariantOrConstantMemory`).
+    /// Only a full-width row that takes any register the value may land in.
+    fn is_invariant_argument_load(_name: &str) -> bool {
+        false
+    }
+
     /// Whether a value is spilled, not given a callee-saved register, when
     /// its spill costs less than the register's first use.
     fn csr_spill_first() -> bool {
@@ -231,6 +241,15 @@ pub trait Target {
         _size: bool,
     ) -> bool {
         true
+    }
+
+    /// Whether making the literal move `literal` again takes no more bytes than
+    /// the copy it replaces, so that a build for size may do it where the
+    /// constant stays read (DEVIATE C10 keeps the copy otherwise). The
+    /// default is no: a literal move is longer than a register copy on the
+    /// machines this was priced for.
+    fn literal_move_is_copy_sized(_literal: &llrm_codegen::model::lir::Insn) -> bool {
+        false
     }
 
     /// What one register-to-register copy costs, in the unit of

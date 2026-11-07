@@ -208,10 +208,16 @@ impl Recursion {
         flag: bool,
         single: bool,
         inlining: bool,
+        o3: bool,
         tti: Option<&dyn llrm_mir::tti::Tti>,
     ) -> Option<Self> {
         match tti.and_then(|tti| tti.recursive_inlining()) {
-            Some((depth, callee)) if !single && inlining => Some(Self { depth: depth as usize, callee }),
+            Some((depth, callee)) if !single && inlining => {
+                let depth = tti
+                    .and_then(|tti| tti.recursive_inlining_depth())
+                    .map_or(depth, |(o2, o3_depth)| if o3 { o3_depth } else { o2 });
+                Some(Self { depth: depth as usize, callee })
+            }
             _ => flag.then_some(Self { depth: crate::inline::MAX_INLINE_RECURSIVE_DEPTH, callee: i64::MAX }),
         }
     }
@@ -254,6 +260,7 @@ impl ProgramPass for Walk {
             self.inline.recursive,
             self.inline.single,
             self.inline.limit != 0 && self.speed_rate,
+            self.inline.cp_clone,
             program.target.tti().as_deref(),
         );
         let mut params = crate::inlinecost::InlineParams {
@@ -862,7 +869,7 @@ pub(crate) fn self_calls_from(
             distinct.push((operands, inst));
         }
     }
-    if for_size || distinct.len() < fewest {
+    if for_size || distinct.is_empty() {
         return None;
     }
     let frequencies = crate::inlinecost::call_frequencies(module, layout, function);
@@ -873,6 +880,11 @@ pub(crate) fn self_calls_from(
     // copying it peels it (+3.7% clocks at -O2).
     let calls: f64 = distinct.iter().map(|(_, inst)| frequencies.get(inst).copied().unwrap_or(0.0)).sum();
     if calls < 1.0 - 1e-9 {
+        return None;
+    }
+    // One call is a tree only when a loop runs it more than once per entry
+    // (queens `place`); `f(n - 1) + n` has frequency exactly 1.
+    if distinct.len() < fewest && calls <= 1.0 + 1e-9 {
         return None;
     }
     Some(frequencies)
@@ -1029,7 +1041,7 @@ impl SelfInline {
                 )
         };
         let Some(recursion) =
-            Recursion::of(self.flag, self.for_size, self.inlining && self.speed_rate, program.target.tti().as_deref())
+            Recursion::of(self.flag, self.for_size, self.inlining && self.speed_rate, self.o3, program.target.tti().as_deref())
         else {
             return Ok(());
         };
@@ -1056,7 +1068,9 @@ impl SelfInline {
                 let frequencies = self_calls_from(module, &program.layout, id, self.for_size, if tre_first { 1 } else { 2 }).filter(|_| {
                     let bar = edge_growth_bar(program.target.tti().as_deref(), self.o3);
                     let body = module.global(id).function().expect("a marked function");
-                    crate::inline::recursive_edge_growth(body) <= bar
+                    // The bar was fitted on the body as marked; the
+                    // elimination's loop is larger (queens 22 -> 27).
+                    tre_first || crate::inline::recursive_edge_growth(body) <= bar
                 });
                 if let Some(frequencies) = frequencies {
                     let tti = program.target.tti();

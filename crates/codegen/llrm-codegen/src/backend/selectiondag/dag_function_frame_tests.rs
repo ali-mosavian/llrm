@@ -1177,6 +1177,8 @@ fn at_m32_os_a_28_byte_fill_is_rep_stos_and_at_speed_stores() {
     assert_eq!(memset_shape_m32(28, -1, true).0, 1, "-Os: a fill");
     assert_eq!(memset_shape_m32(28, -1, false).0, 0, "-O2: stores");
     assert_eq!(memset_shape_m32(4, -1, true).0, 0, "one dword store is smaller than the fill");
+    // rep_tails -Os grew a byte when a 5-byte fill (no whole dwords) was a fill.
+    assert_eq!(memset_shape_m32(5, 7, true).0, 0, "a tail is stores");
 }
 
 /// A 10-byte clear at m16 -Os was a `rep stosb` on bytes alone (19 B of
@@ -1724,4 +1726,41 @@ fn a_constant_fill_of_whole_words_at_word_alignment_is_rep_stosw() {
 fn a_constant_fill_of_odd_size_or_byte_alignment_stays_rep_stosb() {
     assert_eq!(constant_fill_unit(203, 2).as_deref(), Some("1"));
     assert_eq!(constant_fill_unit(202, 1).as_deref(), Some("1"));
+}
+
+/// `d / 1000` on a u64 at m32: the high-multiply expansion added its partial
+/// products with `add; setb; add` (6 `setb`, 6 `add`), where the pin folds
+/// `(add X, (zext carry))` and `(uaddo X, carry)` into `adc`. The pin has no
+/// `setb` at all (it expands the divide before type legalization, so every
+/// carry is still a node when the combine runs); ours keeps 2 until then.
+#[test]
+fn at_m32_a_carry_added_back_is_adc_not_setb() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %d) {
+  %q = udiv i64 %d, 1000
+  ret i64 %q
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(named("setb") <= 2 && named("adc") >= 4, "setb {} adc {}", named("setb"), named("adc"));
+}
+
+/// rectwo -O2 at m32: gcc's depth-8 copies of `paths` into itself made 1965 B
+/// that ran 1449397 clk (gcc 849 B, 555823 clk). Depth 2 at -O2 is 277 B and
+/// 347314 clk; -O3 keeps gcc's 8.
+#[test]
+fn at_m32_the_copies_of_a_recursive_function_are_two_deep_at_o2_and_eight_at_o3() {
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let target = cpu.target();
+    let tti = target.tti();
+    let depth = |o3: bool| {
+        llrm_transforms::walk::Recursion::of(false, false, true, o3, tti.as_deref()).expect("m32 copies recursion").depth
+    };
+    assert_eq!((depth(false), depth(true)), (2, 8));
 }

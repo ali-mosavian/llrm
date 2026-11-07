@@ -6,8 +6,8 @@
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{Instruction, Operand};
-use llrm_mir::opcode::{Attribute, CallInfo};
+use llrm_mir::module::{Instruction, Operand, ValueDef};
+use llrm_mir::opcode::{Attribute, CallInfo, Opcode};
 
 use super::super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue};
 use super::super::isd::ISD;
@@ -83,22 +83,25 @@ impl Builder<'_> {
                 }
                 Ok(())
             }
-            // `case Intrinsic::trap`: a `TRAP` node on the chain (selected as `ud2`).
+            // `case Intrinsic::trap`: a `TRAP` node on the chain (selected
+            // as `ud2`).
             Intrinsic::Trap => {
                 let root = self.root();
                 let trap = self.dag.get_node(ISD::Trap, EVT::OTHER, &[root]);
                 self.dag.set_root(trap);
                 Ok(())
             }
-            // `case Intrinsic::debugtrap`: a `DEBUGTRAP` node (selected as `int3`).
+            // `case Intrinsic::debugtrap`: a `DEBUGTRAP` node (selected
+            // as `int3`).
             Intrinsic::DebugTrap => {
                 let root = self.root();
                 let trap = self.dag.get_node(ISD::DebugTrap, EVT::OTHER, &[root]);
                 self.dag.set_root(trap);
                 Ok(())
             }
-            // `case Intrinsic::ubsantrap`: `UBSAN_UD1` (a `ud1` with the kind as its
-            // displacement) is not translated: a named refusal, not a panic.
+            // `case Intrinsic::ubsantrap`: `UBSAN_UD1` (a `ud1` with the kind
+            // as its displacement) is not translated: a named refusal, not a
+            // panic.
             Intrinsic::UbsanTrap => Err(Refused("llvm.ubsantrap: M16-UBSANTRAP, not translated")),
             // `case Intrinsic::experimental_noalias_scope_decl: return;`
             Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse | Intrinsic::NoAliasScopeDecl => Ok(()),
@@ -371,6 +374,28 @@ impl Builder<'_> {
     ) -> Result<(), Refused> {
         let Some(Operand::Value(object)) = instruction.operands.iter().rev().nth(1).copied() else { return Ok(()) };
         let Some(index) = self.info.static_allocas.get(&object).copied() else { return Ok(()) };
+        // `MFI.getObjectSize` of the frame object, which `visitLIFETIME_END`
+        // bounds the dying stores by.
+        if let ValueDef::Instruction(def) = self.function.value(object).def
+            && let Opcode::Alloca { allocated, .. } = self.function.instruction(def).opcode
+        {
+            let count = match self.function.instruction(def).operands.first() {
+                None => Some(1),
+                Some(Operand::Constant(id)) => match self.module.context.get(*id).kind {
+                    ConstantKind::Int(bits) => u64::try_from(bits).ok(),
+                    _ => None,
+                },
+                Some(_) => None,
+            };
+            if let Some(count) = count {
+                let bytes = self.layout.alloc_size(&self.module.context.types, allocated).saturating_mul(count);
+                let at = usize::try_from(index).unwrap_or(0);
+                if self.dag.frame_object_bytes.len() <= at {
+                    self.dag.frame_object_bytes.resize(at + 1, 0);
+                }
+                self.dag.frame_object_bytes[at] = self.dag.frame_object_bytes[at].max(bytes);
+            }
+        }
         let root = self.root();
         let frame = self.dag.get_target_frame_index(self.target.dag.pointer, index);
         let node =
@@ -629,8 +654,27 @@ impl Builder<'_> {
         dst_align: u64,
         src_align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        let widest = self.widest_mem_op(size);
+        let widest = self.widest_mem_op_sse(size, false);
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
+        if ops.contains(&16) {
+            // DEVIATE SD540 (see `LLRM_MOVE128`): the pin's `v4i32` pieces are
+            // loaded and stored by one node
+            let (mut off, mut left) = (0u64, size);
+            let mut operands = vec![chain];
+            for width in &ops {
+                if *width > left {
+                    off -= width - left;
+                }
+                let align = common_alignment(src_align, off).min(common_alignment(dst_align, off));
+                operands.push(self.dag.get_object_ptr_offset(dst, off as i64));
+                operands.push(self.dag.get_object_ptr_offset(src, off as i64));
+                operands.push(self.dag.get_constant(u128::from(*width), EVT::I32));
+                operands.push(self.dag.get_constant(u128::from(align), EVT::I32));
+                off += width;
+                left = left.saturating_sub(*width);
+            }
+            return Ok(Some(self.dag.get_node(x86isd::LLRM_MOVE128, EVT::OTHER, &operands)));
+        }
         let (mut off, mut left) = (0u64, size);
         let mut loads = Vec::new();
         let mut placed = Vec::new();
@@ -687,6 +731,7 @@ impl Builder<'_> {
         opt_size: bool,
         fill: Option<u128>,
         frame: bool,
+        alignment: u64,
     ) -> bool {
         let zero = fill == Some(0);
         if opt_size
@@ -697,6 +742,12 @@ impl Builder<'_> {
             return self.sse_fill_is_longer(length, fill.unwrap_or(0));
         }
         if opt_size && let Some(costs) = self.target.tti.as_ref().and_then(|tti| tti.0.size_fill()) {
+            // `rep stosd` takes whole aligned dwords; a tail or an unaligned
+            // fill is `rep stosb` or stores again (rep_tails -Os
+            // grew a byte).
+            if length % 4 != 0 || alignment < 4 {
+                return false;
+            }
             let place = usize::from(!frame);
             let value = match fill {
                 Some(0) => costs.value[0],
@@ -706,9 +757,10 @@ impl Builder<'_> {
             };
             let store = costs.store[place];
             let mut stores = length / 4 * store[0] + u64::from(length % 4 >= 2) * store[1] + length % 2 * store[2];
-            // DEVIATE X87-ZERO-FILL stores whole doubles of zero as `fldz` (2) and
-            // one `fst qword` each: its stores are the pin's to beat, so the fill
-            // is taken only where it beats those too.
+            // DEVIATE X87-ZERO-FILL stores whole doubles of zero as `fldz` (2)
+            // and one `fst qword` each: its stores are the pin's to
+            // beat, so the fill is taken only where it beats those
+            // too.
             if fill == Some(0) && length >= 8 && length % 8 == 0 && !self.volatile_memory && self.x87_zero_fill() {
                 stores = stores.min(2 + length / 8 * costs.fst[place]);
             }
@@ -781,6 +833,34 @@ impl Builder<'_> {
         setup + wide * 5 + (ops.len() as u64 - wide) * 8 > fill
     }
 
+    /// DEVIATE MEM-OS (`Tuning::size_copy_vs_call`, x86-64 tuned for size): whether the load and store
+    /// pieces of a constant copy take more bytes than the call. A piece is a load and a store at a
+    /// `[reg+disp8]` address: `movups` 4 + 4, a qword 4 + 4, a dword 3 + 3, a word 4 + 4, a byte 3 + 3;
+    /// the call is `mov edx, n` 5 and `call`/`jmp` 5 (the pointers are in `rdi` and `rsi` for either).
+    /// A copy from a constant (stored as immediates) and a volatile one keep the pin's pieces.
+    fn copy_is_longer_than_call(
+        &self,
+        length: u64,
+        source: SDValue,
+    ) -> bool {
+        const CALL: u64 = 14;
+        let priced = self.target.tti.as_ref().is_some_and(|tti| tti.0.copy_for_size_is_priced_against_call());
+        if !priced || self.volatile_memory || self.constant_slice(source).is_some() {
+            return false;
+        }
+        let Some(ops) = Self::mem_ops(length, self.widest_mem_op_sse(length, false), usize::MAX, false) else {
+            return false;
+        };
+        let pieces: u64 = ops
+            .iter()
+            .map(|width| match width {
+                16 | 8 => 8,
+                _ => 6,
+            })
+            .sum();
+        pieces > CALL
+    }
+
     /// `getMemsetStores`: the fill value splatted to the widest operation,
     /// truncated for the narrower ones.
     fn inline_memset(
@@ -809,12 +889,8 @@ impl Builder<'_> {
         // doubles only: a dword tail needs the integer zero register anyway,
         // and the mixed form moved x_jpeg_single -Os +5 B through the
         // allocation it changed.
-        let fpu_zero = zero
-            && size >= 8
-            && size % 8 == 0
-            && self.has_opt_size()
-            && !self.volatile_memory
-            && self.x87_zero_fill();
+        let fpu_zero =
+            zero && size >= 8 && size % 8 == 0 && self.has_opt_size() && !self.volatile_memory && self.x87_zero_fill();
         let ops = if fpu_zero { vec![8u64; (size / 8) as usize] } else { ops };
         let largest = ops.iter().copied().filter(|width| *width != 16).max().unwrap_or(8);
         let largest_vt = EVT::integer(largest as u32 * 8);
@@ -1058,7 +1134,17 @@ impl Builder<'_> {
         let callee = self.dag.get_target_external_symbol(word, routine.name);
         let root = self.memory_root();
         let env = CallEnv { arch: self.full_arch()?, pointer: word };
-        let (chain, _) = lib_call(&mut self.dag, &env, root, callee, &args, 0, 0, &[], &super::super::dagisel_adapter::call_clobbered_flags());
+        let (chain, _) = lib_call(
+            &mut self.dag,
+            &env,
+            root,
+            callee,
+            &args,
+            0,
+            0,
+            &[],
+            &super::super::dagisel_adapter::call_clobbered_flags(),
+        );
         self.dag.set_root(chain);
         Ok(())
     }
@@ -1149,6 +1235,7 @@ impl Builder<'_> {
                     && constant.is_some_and(|bytes| bytes / 4 + u64::from((bytes % 4).count_ones()) > limit as u64);
                 let inline = match constant {
                     Some(_) if strings => None,
+                    Some(bytes) if opt_size && self.copy_is_longer_than_call(bytes, other) => None,
                     Some(bytes) if matches!(which, Intrinsic::MemCpy) => {
                         self.inline_memcpy(root, dst, other, bytes, limit, dst_align, src_align)?
                     }
@@ -1255,6 +1342,7 @@ impl Builder<'_> {
                             opt_size,
                             self.dag.constant(other).map(|byte| byte & 0xff),
                             self.dag.opcode(dst) == ISD::FrameIndex,
+                            alignment,
                         ) =>
                     {
                         self.inline_memset(root, dst, other, bytes, limit, alignment)?

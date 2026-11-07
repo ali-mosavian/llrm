@@ -536,6 +536,12 @@ pub trait Target {
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 
+    /// A `mov imm; jmp` block with one predecessor is folded into it at -Os
+    /// (LEAF-FOLD-OS).
+    fn leaf_fold_at_size(&self) -> bool {
+        false
+    }
+
     /// The pressure sets of the register classes and each set's limit, for a
     /// target that has them (the pre-RA scheduler tracks pressure per set).
     fn pressure(&self) -> Option<(&'static pressure::PressureSets, Vec<u32>)> {
@@ -715,6 +721,12 @@ pub trait Target {
     /// bytes, 4); 0: loops are not aligned.
     fn pref_loop_alignment(&self) -> u8 {
         0
+    }
+
+    /// Whether loops are aligned at -O1. The pin's X86 aligns at every level
+    /// above -O0; gcc's `-falign-loops` starts at -O2.
+    fn align_loops_at_o1(&self) -> bool {
+        true
     }
 
     /// The most bytes of padding a loop header's alignment may take (the

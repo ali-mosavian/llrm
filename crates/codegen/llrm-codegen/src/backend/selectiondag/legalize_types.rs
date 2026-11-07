@@ -38,6 +38,7 @@
 //! ([L636](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeTypes.cpp#L636)).
 
 use llrm_mir::hash::HashSet;
+use llrm_sdag::actions::Action;
 use llrm_sdag::lowering::ShiftAmount;
 use llrm_support::hash::HashMap;
 
@@ -1557,6 +1558,10 @@ impl<'a> TypeLegalizer<'a> {
         &mut self,
         value: SDValue,
     ) -> Result<(), LegalizeError> {
+        // A division expanded with its sibling (DEVIATE DIVREM-HELPER) is done.
+        if self.expanded.contains_key(&self.remap(value)) {
+            return Ok(());
+        }
         let vt = self.dag.value_type(value);
         let half = self.tli.types.type_conversion(vt).1;
         let (lo, hi) = match self.dag.opcode(value) {
@@ -2780,9 +2785,42 @@ impl<'a> TypeLegalizer<'a> {
         let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         let ((dividend_lo, dividend_hi), (divisor_lo, divisor_hi)) =
             (self.expanded_integer(lhs), self.expanded_integer(rhs));
+        // DEVIATE DIV64-LIBCALL (owner x86-m32, exit 2026-11-20): where the
+        // platform's runtime lists the routine (libgcc's `__divdi3` family:
+        // the driver names it for hosted objects), the pin's call, not the
+        // inline routine; its bytes are the library's.
+        if let Some(name) = self.tli.libcall_name(op, vt).filter(|name| self.tli.libcall_convention(name).is_some()) {
+            let env = super::libcall::CallEnv { arch, pointer: self.dag.config().pointer };
+            let parts = super::libcall::c_lib_call_parts(
+                self.dag,
+                &env,
+                &self.tli.libcall_symbol(name),
+                self.tli.libcall_convention(name),
+                &[dividend_lo, dividend_hi, divisor_lo, divisor_hi],
+                vt,
+            );
+            if let Some([low, high]) = parts.as_deref() {
+                return Ok((*low, *high));
+            }
+        }
         let wide = self.dag.constant(divisor_hi) != Some(0);
-        let used =
-            if wants_quotient { llrm_target::routines::Used::Quotient } else { llrm_target::routines::Used::Remainder };
+        // DEVIATE DIVREM-HELPER (owner m32, exit 2026-11-27; the pin's
+        // `useDivRem` for a target whose routine makes both, e.g. ARM's
+        // `__aeabi_uldivmod`; the pin's x86 has none for i64): the quotient and
+        // the remainder of the same operands are one call of the routine, which
+        // returns both.
+        let sibling = match op {
+            ISD::UDiv => ISD::URem,
+            ISD::URem => ISD::UDiv,
+            ISD::SDiv => ISD::SRem,
+            _ => ISD::SDiv,
+        };
+        let sibling = self.dag.find_node(sibling, vt, &operands).filter(|other| self.dag.has_users(*other));
+        let used = match (sibling, wants_quotient) {
+            (Some(_), _) => llrm_target::routines::Used::Both,
+            (None, true) => llrm_target::routines::Used::Quotient,
+            (None, false) => llrm_target::routines::Used::Remainder,
+        };
         let Ok(routine) = arch.divide_routine_used(signed, wide, used) else {
             return Err(LegalizeError::Unsupported { op, ty: vt, what: "the i64 divide routine is unavailable" });
         };
@@ -2804,7 +2842,12 @@ impl<'a> TypeLegalizer<'a> {
         let root = self.dag.entry_node();
         let env = CallEnv { arch, pointer };
         let (_chain, results) = lib_call(self.dag, &env, root, callee, &args, 0, 0, &returns, &super::dagisel_adapter::call_clobbered_flags());
-        Ok(if wants_quotient { (results[0], results[1]) } else { (results[2], results[3]) })
+        let (quotient, remainder) = ((results[0], results[1]), (results[2], results[3]));
+        if let Some(other) = sibling {
+            let (lo, hi) = if wants_quotient { remainder } else { quotient };
+            self.set_expanded_integer(other, lo, hi);
+        }
+        Ok(if wants_quotient { quotient } else { remainder })
     }
 
     /// `CustomLowerNode`: ask the target to lower `n` when its action for the
@@ -3287,7 +3330,16 @@ impl<'a> TypeLegalizer<'a> {
         // Lower with SETCCCARRY if the target supports it: the high halves
         // subtracted with the low halves' borrow; `>` and `<=` flip the
         // operands.
-        if self.tli.is_operation_legal_or_custom(ISD::SetCCCarry, self.dag.value_type(lh)) {
+        // DEVIATE SC1 (owner llrm-target-6502, exit 2026-12-05): a target that
+        // marks the node Custom on a half that is itself expanded gets the
+        // borrow chain across every piece (`ExpandIntOp_SETCCCARRY`
+        // below); the pin asks for a legal half, so a 64-bit compare on a
+        // byte machine was a select of two compares of 32-bit halves.
+        let half_vt = self.dag.value_type(lh);
+        let chain_by_expansion = !self.tli.types.is_type_legal(half_vt)
+            && self.tli.operation_action(ISD::SetCCCarry, half_vt) == Action::Custom;
+        if chain_by_expansion || self.tli.is_operation_legal_or_custom(ISD::SetCCCarry, half_vt) {
+            let original = code;
             let (code, flip) = match code {
                 CondCode::SetGt => (CondCode::SetLt, true),
                 CondCode::SetUGt => (CondCode::SetULt, true),
@@ -3295,6 +3347,40 @@ impl<'a> TypeLegalizer<'a> {
                 CondCode::SetULe => (CondCode::SetUGe, true),
                 other => (other, false),
             };
+            // DEVIATE CC1 (owner greedy-subreg, exit 2026-11-27): against a
+            // constant, `x > c` is `x >= c + 1` and `x <= c` is `x < c + 1`,
+            // so the operands stay in place and the constant an immediate
+            // (`cmp lo, c.lo; sbb hi, c.hi`); the pin swaps them and
+            // materializes the constant in registers. The pin's own form is the
+            // IR canonical `ult` of `getFlippedStrictnessPredicate`.
+            let wide = self.dag.value_type(self.dag.operand(setcc, 1));
+            let moved = if flip {
+                let bits = wide.size_in_bits();
+                let top = super::fold::mask(bits);
+                let max = if matches!(original, CondCode::SetUGt | CondCode::SetULe) { top } else { top >> 1 };
+                self.dag.constant(self.dag.operand(setcc, 1)).filter(|&c| c != max)
+            } else {
+                None
+            };
+            if let Some(constant) = moved {
+                let half_bits = half.size_in_bits();
+                let next = constant.wrapping_add(1) & super::fold::mask(wide.size_in_bits());
+                let (rl, rh) = (
+                    self.dag.get_constant(next & super::fold::mask(half_bits), half),
+                    self.dag.get_constant(next >> half_bits, half),
+                );
+                let overflow_vt = self.tli.types.set_cc_result_type(half);
+                let borrow = self.dag.get_node_multi(ISD::USubO, &[half, overflow_vt], &[ll, rl]);
+                let borrow = SDValue { node: borrow.node, res: 1 };
+                let moved_code = match original {
+                    CondCode::SetUGt => CondCode::SetUGe,
+                    CondCode::SetULe => CondCode::SetULt,
+                    CondCode::SetGt => CondCode::SetGe,
+                    _ => CondCode::SetLt,
+                };
+                let cc = self.dag.get_cond_code(moved_code);
+                return self.dag.get_node(ISD::SetCCCarry, vt, &[lh, rh, borrow, cc]);
+            }
             let ((ll, rl), (lh, rh)) = if flip { ((rl, ll), (rh, lh)) } else { ((ll, rl), (lh, rh)) };
             let overflow_vt = self.tli.types.set_cc_result_type(half);
             let borrow = self.dag.get_node_multi(ISD::USubO, &[half, overflow_vt], &[ll, rl]);
@@ -3409,6 +3495,18 @@ impl<'a> TypeLegalizer<'a> {
                 let zero = self.dag.get_constant(0, self.dag.value_type(hi));
                 let code = self.dag.operand(node, 2);
                 self.dag.get_node(ISD::SetCC, self.dag.value_type(node), &[hi, zero, code])
+            }
+            ISD::SetCCCarry if at < 2 => {
+                // `ExpandIntOp_SETCCCARRY`: the low halves' subtract takes the
+                // carry in, and the high halves compare with its borrow.
+                let (lhs, rhs, carry, cc) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2), self.dag.operand(node, 3));
+                let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
+                let half = self.dag.value_type(ll);
+                let carry_vt = self.dag.value_type(carry);
+                let low = self.dag.get_node_multi(ISD::USubOCarry, &[half, carry_vt], &[ll, rl, carry]);
+                let vt = self.dag.value_type(node);
+                self.dag.get_node(ISD::SetCCCarry, vt, &[lh, rh, SDValue { node: low.node, res: 1 }, cc])
             }
             ISD::SetCC => match self.setcc_code(node) {
                 Some(code) => self.expand_setcc(node, code),
