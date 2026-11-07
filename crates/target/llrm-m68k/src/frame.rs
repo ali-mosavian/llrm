@@ -89,6 +89,12 @@ pub enum FrameOp {
     Push { registers: Vec<RegId> },
     /// `move.l (%sp)+, reg` for one register, else `movem.l (%sp)+, regs`
     Pop { registers: Vec<RegId> },
+    /// One `move.l reg, -(%sp)` a register, in the order that lays them out as
+    /// `movem` does (gcc's form; dearer in bytes from three registers, cheaper
+    /// in clocks from the 68020 on).
+    PushEach { registers: Vec<RegId> },
+    /// One `move.l (%sp)+, reg` a register, undoing [`FrameOp::PushEach`].
+    PopEach { registers: Vec<RegId> },
 }
 
 /// The laid-out frame.
@@ -201,6 +207,21 @@ impl Layout {
         if rest != 0 {
             ops.push(FrameOp::SubSp(rest));
         }
+        Some(ops)
+    }
+
+    /// [`Layout::push_prologue`] with a `move.l` for each register.
+    pub fn push_each_prologue(&self) -> Option<Vec<FrameOp>> {
+        let mut ops = self.push_prologue()?;
+        ops[0] = FrameOp::PushEach { registers: self.saved.clone() };
+        Some(ops)
+    }
+
+    /// The epilogue that undoes [`Layout::push_each_prologue`].
+    pub fn push_each_epilogue(&self) -> Option<Vec<FrameOp>> {
+        let mut ops = self.push_epilogue()?;
+        let last = ops.len() - 1;
+        ops[last] = FrameOp::PopEach { registers: self.saved.clone() };
         Some(ops)
     }
 

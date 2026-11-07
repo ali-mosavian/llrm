@@ -1893,11 +1893,13 @@ mod tests {
     }
 
     /// `object_of` looked each symbol up in the module's public list, a
-    /// `Vec`: 4x the symbols cost about 16x the time (2400 tiny functions
-    /// spent 27% of the object write there).
+    /// `Vec`: 4x the symbols cost about 16x the work (2400 tiny functions
+    /// spent 27% of the object write there). Counted in work (instructions, or
+    /// thread CPU time), not wall clock: at load 17 a preempted 0.6 ms run
+    /// read 5.5 ms and failed a linear table.
     #[test]
     fn test_the_symbol_table_is_linear_in_the_symbols() {
-        let time = |count: usize| -> std::time::Duration {
+        let work = |count: usize| -> u64 {
             let names: Vec<String> = (0..count).map(|at| format!("f{at}")).collect();
             let module = masm::Module {
                 registers: crate::backend::registerinfo::test_regs(),
@@ -1921,16 +1923,17 @@ mod tests {
             let symbols: IndexMap<String, (usize, usize)> = names.into_iter().map(|name| (name, (0, 0))).collect();
             (0..3)
                 .map(|_| {
-                    let start = std::time::Instant::now();
-                    object_of(&module, "t.c", Vec::new(), &symbols, &IndexMap::default(), &IndexMap::default())
-                        .unwrap();
-                    start.elapsed()
+                    llrm_support::debug::work_of(|| {
+                        object_of(&module, "t.c", Vec::new(), &symbols, &IndexMap::default(), &IndexMap::default())
+                            .unwrap();
+                    })
+                    .1
                 })
                 .min()
                 .unwrap()
         };
-        let (small, large) = (time(8000), time(32000));
-        assert!(large < small * 8, "4x the symbols took {large:?} against {small:?}");
+        let (small, large) = (work(8000), work(32000));
+        assert!(large < small * 8, "4x the symbols took {large} work against {small}");
     }
 
     /// A second name and a hidden export reach the object's symbol table: the

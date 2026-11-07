@@ -75,6 +75,7 @@ fn a_float_read_as_an_i32_goes_through_a_stack_slot() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             share_products: false,
             cmov: false,
             sse2: false,
