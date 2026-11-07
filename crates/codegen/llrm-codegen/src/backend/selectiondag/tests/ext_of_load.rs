@@ -155,7 +155,7 @@ fn the_extending_load_keeps_the_address_space() {
 #[test]
 fn a_volatile_load_is_extended_where_the_target_has_the_extending_load() {
     use super::super::dag_combiner::DagCombiner;
-    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let tli = TargetLowering::x86_64(Features::default(), MVT::I64);
     for (op, ext) in [(ISD::ZeroExtend, LoadExt::ZExtLoad), (ISD::SignExtend, LoadExt::SExtLoad)] {
         let mut dag = dag();
         let byte = load(&mut dag, true);
@@ -167,4 +167,20 @@ fn a_volatile_load_is_extended_where_the_target_has_the_extending_load() {
         let NodeData::Mem(info) = dag.node(root).data else { panic!("a load") };
         assert!(info.volatile, "{op:?}: the extending load stays volatile");
     }
+}
+
+/// A target that gates the fold (z80, x86 m32 and m16: the extending form
+/// lowered larger there, +37 B on z80 stackdeep) keeps the volatile load and
+/// the extension apart, as before the fold.
+#[test]
+fn a_target_that_gates_the_fold_keeps_the_volatile_load_unextended() {
+    use super::super::dag_combiner::DagCombiner;
+    let mut tli = TargetLowering::x86_64(Features::default(), MVT::I64);
+    tli.set_fold_extend_of_volatile_load(false);
+    let mut dag = dag();
+    let byte = load(&mut dag, true);
+    let wide = dag.get_node(ISD::ZeroExtend, EVT::I32, &[byte]);
+    dag.set_root(wide);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::ZeroExtend, "the extension stays a separate node");
 }

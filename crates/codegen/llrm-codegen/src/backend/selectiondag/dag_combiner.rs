@@ -1836,7 +1836,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // `and.l #255` at m68k (every seed had them, ~60% of the 68000 gap).
         if info.volatile {
             let (EVT::Simple(wide_mvt), EVT::Simple(mem_mvt)) = (wide, info.mem_vt) else { return None };
-            if self.tli.is_none_or(|tli| tli.load_ext_action(ext, wide_mvt, mem_mvt) != Action::Legal) {
+            if self.tli.is_none_or(|tli| {
+                    !tli.folds_extend_of_volatile_load() || tli.load_ext_action(ext, wide_mvt, mem_mvt) != Action::Legal
+                }) {
                 return None;
             }
         }

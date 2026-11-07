@@ -138,6 +138,10 @@ pub struct TargetLowering {
     /// `X86TargetLowering::BuildSDIVPow2` builds the `cmov` form of a signed
     /// divide by a power of two: `Some(is64)`, `i64` too where `is64`.
     sdiv_pow2_cmov: Option<bool>,
+    /// `tryToFoldExtOfLoad` extends a volatile load too when the extending load
+    /// is legal (the pin, every target). DEVIATE: a target whose lowering of the
+    /// extending form is worse than the load and the extension turns it off.
+    fold_extend_of_volatile_load: bool,
 }
 
 impl TargetLowering {
@@ -161,6 +165,7 @@ impl TargetLowering {
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
             sdiv_pow2_cmov: None,
+            fold_extend_of_volatile_load: true,
         };
         table.set_default_integer_libcalls();
         // `TargetLoweringBase`: `VAARG` is expanded unless the target says
@@ -447,6 +452,18 @@ impl TargetLowering {
         }
     }
 
+    /// Whether a volatile load is extended where the extending load is legal.
+    pub fn folds_extend_of_volatile_load(&self) -> bool {
+        self.fold_extend_of_volatile_load
+    }
+
+    pub fn set_fold_extend_of_volatile_load(
+        &mut self,
+        on: bool,
+    ) {
+        self.fold_extend_of_volatile_load = on;
+    }
+
     pub fn load_ext_action(
         &self,
         ext: LoadExt,
@@ -601,7 +618,12 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
-        Self::x86(TargetLoweringInfo::x86_32(), features, ptr, false)
+        let mut t = Self::x86(TargetLoweringInfo::x86_32(), features, ptr, false);
+        // DEVIATE SD205-X86-32: with the extending form of a volatile load,
+        // div_constants_short O2 is +48 B and the Os cells are larger. Owner
+        // x86-m32. Exit: ungate once the cells are not worse (card sent).
+        t.fold_extend_of_volatile_load = false;
+        t
     }
 
     /// m64: the constructor's `is64Bit()` arms (L183..L533, the scalar integer
@@ -634,6 +656,10 @@ impl TargetLowering {
         } else {
             Self::x86(info, features, ptr, false)
         };
+        // DEVIATE SD205-X86-16: volatile_bitfield O2/Os is +8 B with the
+        // extending form of a volatile load. Owner x86-m16. Exit: ungate once
+        // the cells are not worse (card sent).
+        t.fold_extend_of_volatile_load = false;
         // DEVIATE SD542: the pin promotes an `i16` trailing count to `i32` to
         // avoid the 0x66 prefix; at m16 `i16` is the native width and the
         // promoted form is a dword scan plus a dword spill. Owner m16.

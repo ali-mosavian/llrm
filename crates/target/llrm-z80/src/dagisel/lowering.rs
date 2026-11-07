@@ -50,6 +50,11 @@ pub fn target_lowering() -> TargetLowering {
         TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_narrow_library_shift(),
     );
     tl.init_actions();
+    // DEVIATE SD205-Z80: the extending form of a volatile load lowers through
+    // an address in HL (`ld hl,#1; add hl,sp`) where the load and the extension
+    // used IX: stackdeep/stackover +37 B, all six cells larger. Owner z80.
+    // Exit: ungate once the extending load takes the frame address (card sent).
+    tl.set_fold_extend_of_volatile_load(false);
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
