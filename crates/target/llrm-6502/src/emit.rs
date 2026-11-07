@@ -536,16 +536,6 @@ pub fn expand(
             let ((al, ah), (bl, bh), (cl, ch), (dl, dh)) = (word(&o[1])?, word(&o[2])?, word(&o[3])?, word(&o[4])?);
             writeln!(out, "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}\n  lda {cl}\n  sbc {dl}\n  lda {ch}\n  sbc {dh}").unwrap();
         }
-        op::CMP64 => {
-            let pairs = o[1..].chunks(2).map(|p| Ok((word(&p[0])?, word(&p[1])?))).collect::<Result<Vec<_>, _>>()?;
-            for (at, ((al, ah), (bl, bh))) in pairs.iter().enumerate() {
-                if at == 0 {
-                    writeln!(out, "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}").unwrap();
-                } else {
-                    writeln!(out, "  lda {al}\n  sbc {bl}\n  lda {ah}\n  sbc {bh}").unwrap();
-                }
-            }
-        }
         // Z only if both bytes are equal: the first mismatch leaves Z clear.
         op::CMPZ16 => {
             *labels += 1;

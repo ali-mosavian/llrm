@@ -63,10 +63,6 @@ def MOScmpz : SDNode<"MOSISD::CMPZ", SDTMOSCmp>;
 // a >= b unsigned over all four bytes. Operands: the low pair a, b, then the high pair a, b.
 def SDTMOSCmp32 : SDTypeProfile<1, 4, [SDTCisVT<0, i8>, SDTCisVT<1, i16>, SDTCisVT<2, i16>, SDTCisVT<3, i16>, SDTCisVT<4, i16>]>;
 def MOScmp32 : SDNode<"MOSISD::CMP32", SDTMOSCmp32>;
-// The same over four words each: three more pairs, low to high.
-def SDTMOSCmp64 : SDTypeProfile<1, 8, [SDTCisVT<0, i8>, SDTCisVT<1, i16>, SDTCisVT<2, i16>, SDTCisVT<3, i16>, SDTCisVT<4, i16>,
-                                       SDTCisVT<5, i16>, SDTCisVT<6, i16>, SDTCisVT<7, i16>, SDTCisVT<8, i16>]>;
-def MOScmp64 : SDNode<"MOSISD::CMP64", SDTMOSCmp64>;
 def MOSbrcond : SDNode<"MOSISD::BRCOND", SDTMOSBrcond, [SDNPHasChain]>;
 def MOSsetcc : SDNode<"MOSISD::SETCC", SDTMOSSetcc>;
 def MOScmov : SDNode<"MOSISD::CMOV", SDTMOSCmov>;
@@ -249,9 +245,6 @@ def CMP16 : MOSInst<(outs Flags:$f), (ins Imag16:$a, Imag16:$b), "cmp16 $f, $a, 
 // A 32-bit compare: CMP16, then SBC of the high words' bytes with the borrow.
 def CMP32 : MOSInst<(outs Flags:$f), (ins Imag16:$al, Imag16:$bl, Imag16:$ah, Imag16:$bh), "cmp32 $f, $al, $bl, $ah, $bh",
                     [(set i8:$f, (MOScmp32 i16:$al, i16:$bl, i16:$ah, i16:$bh))]>;
-def CMP64 : MOSInst<(outs Flags:$f), (ins Imag16:$a0, Imag16:$b0, Imag16:$a1, Imag16:$b1, Imag16:$a2, Imag16:$b2, Imag16:$a3, Imag16:$b3),
-                    "cmp64 $f, $a0, $b0, $a1, $b1, $a2, $b2, $a3, $b3",
-                    [(set i8:$f, (MOScmp64 i16:$a0, i16:$b0, i16:$a1, i16:$b1, i16:$a2, i16:$b2, i16:$a3, i16:$b3))]>;
 // Z only when both bytes are equal.
 def CMPZ16 : MOSInst<(outs Flags:$f), (ins Imag16:$a, Imag16:$b), "cmpz16 $f, $a, $b", [(set i8:$f, (MOScmpz i16:$a, i16:$b))]>;
 let isBranch = 1, isTerminator = 1 in {

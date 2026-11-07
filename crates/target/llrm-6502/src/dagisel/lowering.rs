@@ -41,7 +41,6 @@ pub mod mosisd {
     pub const SRA32: ISD = ISD::Target(ids::SRA32);
     pub const CMPZ: ISD = ISD::Target(ids::CMPZ);
     pub const CMP32: ISD = ISD::Target(ids::CMP32);
-    pub const CMP64: ISD = ISD::Target(ids::CMP64);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
@@ -606,51 +605,30 @@ fn lower_setcc_carry(
     }
 }
 
-/// `lower_setcc_carry` as the flags of the whole subtract: `CMP32` or `CMP64` of
-/// the words, low to high (the sign bit of the highest flipped for a signed
-/// order), read with `CC` for below and `CS` for not below.
+/// `lower_setcc_carry` as the flags of the whole subtract: `CMP32` of the low
+/// words and of the high words (their sign bits flipped for a signed order),
+/// read with `CC` for below and `CS` for not below.
 fn lower_setcc_carry_flags(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<(SDValue, SDValue)> {
-    let (high, other, mut borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
-    if dag.value_type(high) != EVT::I16 {
+    let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    if dag.value_type(high) != EVT::I16 || dag.opcode(borrow) != ISD::USubO || borrow.res != 1 {
         return None;
     }
-    // The words below the highest: a borrow chain ends in a `usubo` of the
-    // lowest. Flags are made again where they are read, so a chain that two
-    // orders share (`a < b` and `a >= b`) is made once as a borrow instead.
-    let mut below = Vec::new();
-    loop {
-        if borrow.res != 1 || !dag.has_one_use(borrow.node) {
-            return None;
-        }
-        let (x, y) = (dag.operand(borrow, 0), dag.operand(borrow, 1));
-        if dag.value_type(x) != EVT::I16 {
-            return None;
-        }
-        below.push((x, y));
-        match dag.opcode(borrow) {
-            ISD::USubO => break,
-            ISD::USubOCarry => borrow = dag.operand(borrow, 2),
-            _ => return None,
-        }
+    // Flags are made again where they are read: a chain that two orders share
+    // (`a < b` and `a >= b`) is made once as a borrow and kept in a byte.
+    if !dag.has_one_use(borrow.node) {
+        return None;
     }
-    below.reverse();
     let cc = cond_of(dag, dag.operand(node, 3));
     let (high, other) = match cc {
         CondCode::SetULt | CondCode::SetUGe => (high, other),
         CondCode::SetLt | CondCode::SetGe => (flip_sign(dag, high), flip_sign(dag, other)),
         _ => return None,
     };
-    below.push((high, other));
-    let opcode = match below.len() {
-        2 => mosisd::CMP32,
-        4 => mosisd::CMP64,
-        _ => return None,
-    };
-    let operands: Vec<SDValue> = below.into_iter().flat_map(|(x, y)| [x, y]).collect();
-    let flags = dag.get_node(opcode, EVT::I8, &operands);
+    let (low, below) = (dag.operand(borrow, 0), dag.operand(borrow, 1));
+    let flags = dag.get_node(mosisd::CMP32, EVT::I8, &[low, below, high, other]);
     let code = if matches!(cc, CondCode::SetULt | CondCode::SetLt) { cond::CC } else { cond::CS };
     Some((cc_operand(dag, code), flags))
 }

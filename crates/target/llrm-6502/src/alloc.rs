@@ -484,8 +484,8 @@ struct Compare {
     /// (`cmp g; sbc g+1`); `b` names nothing. Kept only when no store, call
     /// or saved flags lie between the compare and the end of its block.
     memory: Option<String>,
-    /// Over more words: the pairs above the first, low to high, each subtracted with the borrow of the one below.
-    wide: Vec<((String, u32), (String, u32))>,
+    /// Over two words: the high pair, subtracted with the borrow of the first.
+    wide: Option<((String, u32), (String, u32))>,
 }
 
 impl Builder {
@@ -814,7 +814,7 @@ impl Builder {
             self.copy(d, acc);
         }
         let version = self.version(&cell);
-        self.pending = Some(Compare { a, b: (cell, version), word, zero: false, memory: None, wide: Vec::new() });
+        self.pending = Some(Compare { a, b: (cell, version), word, zero: false, memory: None, wide: None });
         Ok(())
     }
 
@@ -933,7 +933,7 @@ impl Builder {
             sbc.sets_flags = true;
             self.push(sbc);
         }
-        for (a1, b1) in wide {
+        if let Some((a1, b1)) = wide {
             if self.version(&a1.0) != a1.1 || self.version(&b1.0) != b1.1 {
                 return Err(Unsupported("a compare's operand changed before its branch".into()));
             }
@@ -1816,7 +1816,7 @@ pub fn build_with_places(
                     word: false,
                     zero: false,
                     memory: None,
-                    wide: Vec::new(),
+                    wide: None,
                 });
             }
             // a global on the right of a compare: read at the compare, kept
@@ -1830,7 +1830,7 @@ pub fn build_with_places(
                     word: inst.opcode == op::CMP16M,
                     zero: false,
                     memory: Some(symbol),
-                    wide: Vec::new(),
+                    wide: None,
                 });
                 if !memory_holds_until_flags_are_read(items, at) {
                     b.load_compared_global(at)?;
@@ -1844,7 +1844,7 @@ pub fn build_with_places(
                     word: true,
                     zero: true,
                     memory: None,
-                    wide: Vec::new(),
+                    wide: None,
                 });
             }
             // the carry out of the first goes into the next: the instructions
@@ -2014,20 +2014,16 @@ pub fn build_with_places(
                     b.copy(to, acc);
                 }
             }
-            op::CMP32 | op::CMP64 => {
+            op::CMP32 => {
                 let (a, c) = (name(&o[1])?, name(&o[2])?);
-                let mut wide = Vec::new();
-                for pair in o[3..].chunks(2) {
-                    let (x, y) = (name(&pair[0])?, name(&pair[1])?);
-                    wide.push(((x.to_owned(), b.version(x)), (y.to_owned(), b.version(y))));
-                }
+                let (a1, c1) = (name(&o[3])?, name(&o[4])?);
                 b.pending = Some(Compare {
                     a: (a.to_owned(), b.version(a)),
                     b: (c.to_owned(), b.version(c)),
                     word: true,
                     zero: false,
                     memory: None,
-                    wide,
+                    wide: Some(((a1.to_owned(), b.version(a1)), (c1.to_owned(), b.version(c1)))),
                 });
             }
             op::CMP16 => {
@@ -2038,7 +2034,7 @@ pub fn build_with_places(
                     word: true,
                     zero: false,
                     memory: None,
-                    wide: Vec::new(),
+                    wide: None,
                 });
             }
             spill_op if spill_op == spill::SAVE_FLAGS => {

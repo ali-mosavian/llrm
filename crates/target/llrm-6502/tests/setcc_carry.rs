@@ -53,16 +53,15 @@ fn a_signed_less_or_equal_of_two_words_is_one_borrow_chain() {
     bytes_of("sle", 106);
 }
 
-/// `k_branch<bits>` and `k_select<bits>`: the order of two `i<bits>` read by a branch and by a select.
-fn consumer(kind: &str, bits: u32) -> String {
+/// `k_branch` and `k_select`: the order of two `i32` read by a branch and by a select.
+fn consumer(kind: &str) -> String {
     match kind {
-        "branch" => format!(
-            "declare void @one()
+        "branch" => "declare void @one()
 declare void @two()
-define void @k_branch{bits}(ptr %a, ptr %b) {{
-  %x = load i{bits}, ptr %a
-  %y = load i{bits}, ptr %b
-  %c = icmp uge i{bits} %x, %y
+define void @k_branch(ptr %a, ptr %b) {
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  %c = icmp uge i32 %x, %y
   br i1 %c, label %t, label %f
 t:
   call void @one()
@@ -70,25 +69,24 @@ t:
 f:
   call void @two()
   ret void
-}}
+}
 "
-        ),
-        _ => format!(
-            "define i16 @k_select{bits}(ptr %a, ptr %b, i16 %p, i16 %q) {{
-  %x = load i{bits}, ptr %a
-  %y = load i{bits}, ptr %b
-  %c = icmp uge i{bits} %x, %y
+        .to_owned(),
+        _ => "define i16 @k_select(ptr %a, ptr %b, i16 %p, i16 %q) {
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  %c = icmp uge i32 %x, %y
   %r = select i1 %c, i16 %p, i16 %q
   ret i16 %r
-}}
+}
 "
-        ),
+        .to_owned(),
     }
 }
 
-fn consumer_bytes(kind: &str, bits: u32, limit: u32) {
-    let name = format!("k_{kind}{bits}");
-    let ir = format!("target datalayout = \"{}\"\n{}", datalayout(), consumer(kind, bits));
+fn consumer_bytes(kind: &str, limit: u32) {
+    let name = format!("k_{kind}");
+    let ir = format!("target datalayout = \"{}\"\n{}", datalayout(), consumer(kind));
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     let from = text.find(&format!("{name}:")).unwrap_or_else(|| panic!("no {name} in\n{text}"));
     let body: String = text[from..].split(".segment").next().unwrap().to_owned();
@@ -101,22 +99,12 @@ fn consumer_bytes(kind: &str, bits: u32, limit: u32) {
 /// `int32.c`'s `udivmod` took it per call, `div_constants_short -Os` ran 25% more cycles.
 #[test]
 fn a_branch_on_the_order_of_two_words_reads_the_flags_of_the_chain() {
-    consumer_bytes("branch", 32, 72);
+    consumer_bytes("branch", 72);
 }
 
 #[test]
 fn a_select_on_the_order_of_two_words_reads_the_flags_of_the_chain() {
-    consumer_bytes("select", 32, 88);
-}
-
-#[test]
-fn a_branch_on_the_order_of_two_long_longs_reads_the_flags_of_the_chain() {
-    consumer_bytes("branch", 64, 0);
-}
-
-#[test]
-fn a_select_on_the_order_of_two_long_longs_reads_the_flags_of_the_chain() {
-    consumer_bytes("select", 64, 0);
+    consumer_bytes("select", 88);
 }
 
 /// `k_valuege`: `x >= y` of two `i32` as a value. "Not below" was a select of the borrow byte: `bne; lda #1; jmp;
