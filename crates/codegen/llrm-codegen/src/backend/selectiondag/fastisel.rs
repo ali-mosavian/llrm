@@ -504,12 +504,14 @@ impl Fast<'_> {
                     // a static alloca is its frame object
                     self.info.static_allocas.get(&instruction.result?)?;
                 }
-                Opcode::Load { volatile: false, .. } => {
+                Opcode::Load { volatile, .. } => {
                     let wide = wide_kind(&self.module.context.types, instruction.ty, self.m32)?;
                     let (mov_rm, _, _, _, _, _, _, _, vt) = self.set(wide)?;
                     let mut ops = self.address(instruction.operands[0])?;
                     let result = instruction.result?;
-                    if let Some(&user) = insts.get(at)
+                    // a volatile load is never folded (`tryToFoldLoad`)
+                    if !volatile
+                        && let Some(&user) = insts.get(at)
                         && self.folds(&self.function.instruction(user).clone(), result, wide)
                     {
                         self.folded = Some((result, ops));
@@ -520,7 +522,7 @@ impl Fast<'_> {
                     self.chain = SDValue { node: load.node, res: 1 };
                     self.values.insert(instruction.result?, load);
                 }
-                Opcode::Store { volatile: false, .. } => {
+                Opcode::Store { .. } => {
                     let stored = self.function.operand_type(&self.module.context, instruction.operands[0])?;
                     let wide = wide_kind(&self.module.context.types, stored, self.m32)?;
                     let (_, mov_mr, mov_mi, _, _, _, _, _, vt) = self.set(wide)?;

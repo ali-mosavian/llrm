@@ -942,18 +942,20 @@ fn test_a_function_the_unroll_leaves_alone_makes_no_loop_analyses() {
 }
 
 /// Every partial unroll of a top-level loop built the function's dominator tree
-/// again (467 builds, 517 M Ir of memory_expansion -O2); the pin applies the
-/// unroll's edge updates to the tree it has.
+/// and loop info again (467 builds of each, 517 M and 277 M Ir of
+/// memory_expansion -O2); the pin updates both in place (`UnrollLoop`'s `DTU`
+/// and `LI`).
 #[test]
-fn test_partial_unrolls_in_sequence_build_one_dominator_tree() {
+fn test_partial_unrolls_in_sequence_build_one_dominator_tree_and_nest() {
     use llrm_mir::counts::{Event, get};
-    let text = sequential(8);
-    let text = (0..8).fold(text, |text, k| text.replace(&format!("icmp slt i16 %n{k}, 4"), &format!("icmp slt i16 %n{k}, 64")));
+    let text = (0..8).fold(sequential(8), |text, k| {
+        text.replace(&format!("icmp slt i16 %n{k}, 4"), &format!("icmp slt i16 %n{k}, 1024"))
+    });
     let mut module = parsed(&text);
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
     crate::testing::closed(&mut module).expect("closes");
-    let tti = X86::of_cpu("i486").expect("a cpu");
+    let tti = X86::of_cpu("x86-64").expect("a cpu");
     let options = Options {
         opt_level: 2,
         opt_size: false,
@@ -962,9 +964,9 @@ fn test_partial_unrolls_in_sequence_build_one_dominator_tree() {
         prepare_for_lto: false,
         target_unrolling: true,
     };
-    let (before, nests) = (get(Event::Dominators), get(Event::LoopAnalyses));
+    let (trees, nests) = (get(Event::Dominators), get(Event::LoopAnalyses));
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
-    let built = get(Event::Dominators) - before;
-    let nests = get(Event::LoopAnalyses) - nests;
-    assert!(built <= 2, "{built} dominator trees built for 8 partial unrolls ({nests} nests)");
+    assert_eq!(printed(&module).matches("phi i16 [ 0,").count(), 8, "partial: the eight loops remain");
+    let (trees, nests) = (get(Event::Dominators) - trees, get(Event::LoopAnalyses) - nests);
+    assert!(trees <= 2 && nests <= 2, "{trees} dominator trees and {nests} nests built for 8 partial unrolls");
 }
