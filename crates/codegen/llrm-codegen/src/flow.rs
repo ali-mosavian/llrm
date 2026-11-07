@@ -115,6 +115,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("ReserveCallFrame", "callframe@5"),
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
+    ("FloatUnhoist", "floatunhoist@6"),
     ("FloatFold", "floatfold@6"),
     ("FloatSink", "floatsink@6"),
     ("PushFold", "pushfold@6"),
@@ -249,6 +250,9 @@ pub fn machine_with<'a>(
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
+        // A float load a loop only reads is made again where it is read (so
+        // the next step can fold it).
+        Box::new(crate::backend::floatunhoist::FloatUnhoist { cpu: target, basic_semantics }),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target, registers: classes.available.len() }),

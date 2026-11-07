@@ -56,6 +56,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 143 documen
 | floatfold | A float load that only one arithmetic instruction reads becomes that instruction's memory operand: `fld [m]; faddp` is `fadd [m]`. | Machine phase after `machinesched` and before `floatassign`, once per | [floatfold](floatfold.md) |
 | floatregions | Where the x87 stack cannot reach, and the error type the x87 allocator raises. | `floatassign`, `floatalloc`. | [floatregions](floatregions.md) |
 | floatsink | A float load moves down to the instruction that reads it. | After `FloatFold` (so a load that folds has folded), before `FloatAssign`. | [floatsink](floatsink.md) |
+| floatunhoist | A hoisted float load that a loop only reads is made again where it is read. | After phi elimination, before `FloatFold` (which folds the new loads). | [floatunhoist](floatunhoist.md) |
 | fmuladd | Expands `llvm.fmuladd` into an `fmul` and an `fadd` in MIR before the old instruction selector, which has no fused multiply-add to select. | Once per module in `driver::optimized`, unless the selector is the DAG, | [fmuladd](fmuladd.md) |
 | fpconvert | Rewrites a float converted to an unsigned 64-bit integer as signed conversions and a select, in MIR before instruction selection. | `mir fp to unsigned` in `driver::optimized`, after `ehprepare` and before | [fpconvert](fpconvert.md) |
 | fpcopyprop | Copy propagation over the x87 registers FP0..FP6: LLVM's `MachineCopyPropagation` for the RFP class. | At the start of `FloatAlloc`, under RFP. | [fpcopyprop](fpcopyprop.md) |
