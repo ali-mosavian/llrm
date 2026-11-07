@@ -4,18 +4,11 @@
 
 /* An entry is a header of one word, then its data; WORD is that word, QB's two
  * bytes where a near pointer is two. */
-enum { NUMTEMPS = 20, WORD = sizeof(uword) };
+enum { WORD = sizeof(uword) };
 
 typedef struct StrEntry {
     uword header;
 } StrEntry;
-
-/* A string temporary (inc/string.inc LenTemp = 6): a descriptor, and the
-   program level that made it or -1 while it is free. */
-typedef struct Tmp {
-    SD sd;
-    int level;
-} Tmp;
 
 static StrEntry *str_first;
 static StrEntry *str_free; /* where the last allocation left off: a hint */
@@ -24,7 +17,7 @@ static char *str_end;
 int cur_level;
 SD str_nul;
 
-static Tmp temps[NUMTEMPS];
+Tmp str_temps[NUMTEMPS];
 static byte nul_owner_slot;
 
 /* B$ERR_SSC */
@@ -256,14 +249,14 @@ static Tmp *as_tmp(SD *sd)
 
 byte str_is_tmp(const SD *sd)
 {
-    return (const Tmp *)sd >= temps && (const Tmp *)sd < temps + NUMTEMPS;
+    return (const Tmp *)sd >= str_temps && (const Tmp *)sd < str_temps + NUMTEMPS;
 }
 
 static Tmp *free_tmp(void)
 {
     Tmp *tmp;
 
-    for (tmp = temps; tmp < temps + NUMTEMPS; tmp++)
+    for (tmp = str_temps; tmp < str_temps + NUMTEMPS; tmp++)
         if (tmp->level < 0)
             return tmp;
     qb_error(BE_STRINGFO);
@@ -330,7 +323,7 @@ void str_all_tmp_free(int level)
 {
     Tmp *tmp;
 
-    for (tmp = temps; tmp < temps + NUMTEMPS; tmp++)
+    for (tmp = str_temps; tmp < str_temps + NUMTEMPS; tmp++)
         if (tmp->level >= level)
             str_tmp_free(&tmp->sd);
 }
@@ -347,6 +340,6 @@ void str_init(char *first, char *end)
     cur_level = 0;
     str_nul.len = 0;
     str_nul.ptr = &nul_owner_slot;
-    for (tmp = temps; tmp < temps + NUMTEMPS; tmp++)
+    for (tmp = str_temps; tmp < str_temps + NUMTEMPS; tmp++)
         tmp_release(tmp);
 }
