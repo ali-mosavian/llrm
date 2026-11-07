@@ -570,6 +570,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::size_rotation_header_limit`.
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        None
+    }
+
     /// Whether a priced full unroll counts a promoted local array's accesses
     /// as free only while its elements fit the registers (UP1).
     fn unroll_promotion_fits_registers(&self) -> bool {
