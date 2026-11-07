@@ -531,6 +531,11 @@ pub fn expand(
             let ((al, ah), (bl, bh)) = (word(&o[1])?, word(&o[2])?);
             writeln!(out, "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}").unwrap();
         }
+        // the words' compare, then the high words subtract with its borrow
+        op::CMP32 => {
+            let ((al, ah), (bl, bh), (cl, ch), (dl, dh)) = (word(&o[1])?, word(&o[2])?, word(&o[3])?, word(&o[4])?);
+            writeln!(out, "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}\n  lda {cl}\n  sbc {dl}\n  lda {ch}\n  sbc {dh}").unwrap();
+        }
         // Z only if both bytes are equal: the first mismatch leaves Z clear.
         op::CMPZ16 => {
             *labels += 1;
