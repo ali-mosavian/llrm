@@ -1035,7 +1035,10 @@ fn operands_in<'a>(
         return Vec::new();
     }
     let lane_dest = |bytes: u32, offset: u32| {
-        matches!(what.dests.first(), Some(Loc::Held(held)) if held.width == bytes && held.offset == offset)
+        matches!(
+            what.dests.first(),
+            Some(Loc::Held(held)) if held.width == bytes && held.offset == offset
+        )
     };
     infos
         .iter()
@@ -1245,10 +1248,11 @@ impl<T: Target> SpikeInstrInfo<T> {
     }
 }
 
-/// Whether the coalescer makes the literal `literal` again for a copy from a value
-/// in `source` to one in `destination`. DEVIATE C10 (register_coalescer.rs): at -Os
-/// a constant that stays read (`!alone`) is not made again unless the target says the
-/// move is no longer than the copy; the target's price decides the rest.
+/// Whether the coalescer makes the literal `literal` again for a copy from a
+/// value in `source` to one in `destination`. DEVIATE C10
+/// (register_coalescer.rs): at -Os a constant that stays read (`!alone`) is not
+/// made again unless the target says the move is no longer than the copy; the
+/// target's price decides the rest.
 pub fn literal_remat_wins<T: Target>(
     literal: &Insn,
     source: &[RegId],
@@ -1256,9 +1260,9 @@ pub fn literal_remat_wins<T: Target>(
     size: bool,
     alone: bool,
 ) -> bool {
-    (!size || alone || T::literal_move_is_copy_sized(literal)) && T::literal_move_wins(literal, source, destination, size)
+    (!size || alone || T::literal_move_is_copy_sized(literal))
+        && T::literal_move_wins(literal, source, destination, size)
 }
-
 
 /// One register written by a move of a literal, whatever the target names it:
 /// the target's `isAsCheapAsAMove && isReMaterializable` for a constant.
@@ -1297,7 +1301,10 @@ fn is_frame_load<T: Target>(one: &Insn) -> bool {
         && one.partial_defs.is_empty()
         && !one.undef_super
         && !one.volatile
-        && matches!(what.dests.as_slice(), [Loc::Held(held)] if held.value == one.defines[0])
+        && matches!(
+            what.dests.as_slice(),
+            [Loc::Held(held)] if held.value == one.defines[0]
+        )
         && frame_cell(what).is_some()
 }
 
@@ -1893,9 +1900,8 @@ pub fn from_lir<T: Target>(
             .get(&held.value)
             .is_some_and(|wide| registers.bytes(*wide).is_some_and(|bytes| bytes > i64::from(held.width)));
         if (lane_values.contains(&held.value) || narrower) && !pinned.contains_key(&held.value) {
-            let found = placed_at
-                .get(&held.value)
-                .and_then(|wide| lane_register(&registers, *wide, held.offset, held.width));
+            let found =
+                placed_at.get(&held.value).and_then(|wide| lane_register(&registers, *wide, held.offset, held.width));
             match found {
                 Some(register) => return Reg::Phys(register),
                 None => {
@@ -1941,7 +1947,8 @@ pub fn from_lir<T: Target>(
                     .find_map(|loc| if let Loc::Mem(cell) = loc { Some(cell) } else { None });
                 let slot = slot_of(cell.ok_or_else(|| format!("a spill with no cell: {what:?}"))?);
                 let Some(value) = value else {
-                    // A zero stored from the zero register (`fold_memory_operand`).
+                    // A zero stored from the zero register
+                    // (`fold_memory_operand`).
                     let made = T::zero_store(T::any(), slot).ok_or("the target states no zero store")?;
                     insts.push(made);
                     if !slots.iter().any(|(one, _)| *one == slot) {
@@ -2003,9 +2010,11 @@ pub fn from_lir<T: Target>(
                     .ok_or_else(|| format!("an instruction that is no definition of the function: {what:?}"))?;
             }
             let source = &original.blocks[from].insts[inst];
-            // a copy into a lane of a pair: a move into the register of that lane
+            // a copy into a lane of a pair: a move into the register of that
+            // lane
             if name == Some(COPY) && !insn.def_lanes.is_empty() {
-                // a source that is no value (a physical register) stays as written
+                // a source that is no value (a physical register) stays as
+                // written
                 if let Some(Loc::Held(source)) = what.sources.first() {
                     let Some(Loc::Held(to)) = what.dests.first() else {
                         return Err("a lane copy that does not move a value".into());

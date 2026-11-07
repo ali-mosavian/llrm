@@ -537,10 +537,8 @@ pub fn rebuild(
         ops.retain(|_| (kept[at], at += 1).0);
         at = 0;
         locs.retain(|_| (kept[at], at += 1).0);
-        NOTES_PLACED.fetch_add(
-            ops.iter().filter(|op| op.is_debug()).count() as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        NOTES_PLACED
+            .fetch_add(ops.iter().filter(|op| op.is_debug()).count() as u64, std::sync::atomic::Ordering::Relaxed);
         block.ops = ops.into_iter().zip(locs).collect();
     }
     if llrm_support::env_var("LLRM_NOTE_COUNTS").is_some() {
@@ -695,10 +693,14 @@ impl AllocTarget for Arm64 {
         literal.what.as_ref().is_none_or(|what| what.name.as_deref() != Some("AddPageOffset"))
     }
 
-    /// The zero register's `mov xd, xzr` is one four-byte `orr`, the size of the copy it
-    /// replaces. Another constant may take several instructions (`mul_constants` -Os
-    /// grew 124 B when every constant was made again); its operand here is an
-    /// identity, not the value, so only the zero is known to be one.
+    /// Mirrors `RegisterCoalescer::reMaterializeDef`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L1298>):
+    /// the pin makes a trivially rematerializable def again for a copy with no
+    /// size guard. The zero register's `mov xd, xzr` is one four-byte
+    /// `orr`, the size of the copy it replaces. Another constant may take
+    /// several instructions (`mul_constants` -Os grew 124 B when every
+    /// constant was made again); its operand here is an identity, not the
+    /// value, so only the zero is known to be one.
     fn literal_move_is_copy_sized(literal: &llrm_codegen::model::lir::Insn) -> bool {
         literal.what.as_ref().and_then(|what| what.name.as_deref()).is_some_and(Self::is_zero_def)
     }
