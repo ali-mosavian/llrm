@@ -166,6 +166,9 @@ pub struct Tuning {
     /// at (-O2, -O3), in `gcc_insns` (gcc's `max-inline-insns-recursive`, 450);
     /// none: `inline::MAX_INLINE_INSNS_RECURSIVE`.
     pub recursive_inlining_growth: Option<(i64, i64)>,
+    /// DEVIATE REC-7: the copies' depth at (-O2, -O3), where the target wants
+    /// a depth apart from `recursive_inlining`'s; none: that one's.
+    pub recursive_inlining_depth: Option<(u32, u32)>,
     /// DEVIATE REC-2: at (-O2, -O3) a tree recursion's tail calls are
     /// eliminated before it is copied into itself (gcc:
     /// `pass_tail_recursion` runs early, `passes.def` before
@@ -259,6 +262,7 @@ impl Tuning {
         recursive_inlining: None,
         recursive_edge_growth: None,
         recursive_inlining_growth: None,
+        recursive_inlining_depth: None,
         recursive_tre_first: (false, false),
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
