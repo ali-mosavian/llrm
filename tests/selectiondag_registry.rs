@@ -36,7 +36,7 @@ fn tracked(pattern: &str) -> Vec<Source> {
 /// Numbers a `///` or `//` comment names as `DEVIATE SDn` with no registry row,
 /// found when the test began to read those comments (2026-11-07): a ratchet,
 /// each to get its row and leave this list; a number not here needs its row at once.
-const UNREGISTERED: &[u32] = &[440, 441, 447, 448, 543];
+const UNREGISTERED: &[u32] = &[440, 441, 447, 448];
 
 /// A number outside its owner's block: SD44..SD99 are closed, SD100.. go
 /// to sdag-a, SD200.. to sdag-b, SD300.. to sdag-c, SD400.. to sdag-d.

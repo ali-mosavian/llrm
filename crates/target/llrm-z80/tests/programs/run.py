@@ -99,12 +99,14 @@ def reported(out):
 
 
 def program_flags(src):
-    """The `-f` flags of the program's first `// flags:` alternative, and whether it expects x86's types."""
+    """The `-f` flags of the program's first `// flags:` alternative, and whether it expects x86's types: any alternative
+    of any `// flags:` line names an x86 mode (`-m32`, `-mabi=sysv`, `-march=i*`), a line `// x86-widths: WHY` says so (the
+    other tools read only `// flags:`; a `-m64` there would move a program from the default m16 to m64), or it uses `long double`."""
     text = src.read_text()
-    first = text.splitlines()[0] if text.startswith("// flags:") else ""
-    tokens = first.removeprefix("// flags:").split("|")[0].split()
-    keep = [t for t in tokens if t.startswith("-f") and not t.startswith("-fsanitize")]
-    x86 = any(t in ("-m32", "-mabi=sysv") or t.startswith("-march=i") for t in tokens) or "long double" in text
+    lines = [line.removeprefix("// flags:") for line in text.splitlines() if line.startswith("// flags:")]
+    tokens = [t for line in lines for alternative in line.split("|") for t in alternative.split()]
+    keep = [t for t in (lines[0].split("|")[0].split() if lines else []) if t.startswith("-f") and not t.startswith("-fsanitize")]
+    x86 = any(t in ("-m32", "-mabi=sysv") or t.startswith(("-march=i", "-march=pentium")) for t in tokens) or "long double" in text or "\n// x86-widths:" in text
     return keep, x86
 
 
@@ -193,4 +195,5 @@ def main():
     sys.exit(1 if any(v in ("WRONG", "HALT") for _, v, _ in results) else 0)
 
 
-main()
+if __name__ == "__main__":
+    main()
