@@ -1135,6 +1135,19 @@ impl Printer<'_> {
                 self.push(format!("ld a, {}", name(ah)));
                 self.push(format!("or a, {}", name(al)));
             }
+            // a constant with a zero byte: the other byte subtracted and the
+            // zero byte's partner or-ed in, `(lo ^ c) | hi` is zero only for
+            // equality (no scratch register for two nonzero bytes)
+            (false, true) if bh == "#0" && bl.starts_with('#') => {
+                self.push(format!("ld a, {}", name(al)));
+                self.push(format!("sub a, {bl}"));
+                self.push(format!("or a, {}", name(ah)));
+            }
+            (false, true) if bl == "#0" && bh.starts_with('#') => {
+                self.push(format!("ld a, {}", name(ah)));
+                self.push(format!("sub a, {bh}"));
+                self.push(format!("or a, {}", name(al)));
+            }
             // two pairs, one of them `hl`: `sbc hl, rr` sets zero for the whole
             // word (`add hl, rr` leaves it alone and puts `hl` back)
             (false, true)
