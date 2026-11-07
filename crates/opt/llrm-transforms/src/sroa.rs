@@ -19,7 +19,10 @@
 //!   `tryCanonicalizeStructToVector` L5460): the targets have no vector
 //!   registers, and `AggregateToVector` is off at -O2.
 //! - Calls and invokes escape a pointer whatever their attributes
-//!   (`visitCallBase` L1402 looks at read-only, nocapture operands).
+//!   (`visitCallBase` L1402 looks at read-only, nocapture operands). Owner
+//!   softfloat, kept because: 542 call escapes in tests/run/c + bench, none with a
+//!   call-site nocapture, and `strlen(b)+b[0]` forwards the same as the pin at
+//!   -Os; exit when a cell shows a missed forward, review 2026-12-10.
 //! - Address-space casts abort; pointers in a space that is a selector and an
 //!   offset are not converted to integers (`canConvertValue` L2057).
 //! - Debug records (`migrateDebugInfo` L348, the migration in `splitAlloca`
@@ -195,7 +198,10 @@ fn size_equals_store_size(
 }
 
 /// DEVIATE: whether isel selects an integer of `bytes` bytes (LLVM legalizes
-/// any width, so SROA makes i24 where a 3-byte slice is cut).
+/// any width, so SROA makes i24 where a 3-byte slice is cut). Owner softfloat,
+/// kept because: all 60 triggers in tests/run/c + bench are 10-byte x87
+/// `long double` slices, and an i80 lowering costs more than the alloca; exit
+/// when isel lowers odd widths, review 2026-12-10.
 fn supported_int_size(
     layout: &DataLayout,
     bytes: u64,
