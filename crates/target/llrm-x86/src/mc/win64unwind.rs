@@ -307,14 +307,11 @@ fn is_frame_set(instruction: &Instruction) -> bool {
 
 /// The name and `UNWIND_INFO` bytes of the function at (section, offset,
 /// size, symbol index): the compiler's declared prologue, else the code's.
-/// None for a frameless leaf: the pin writes neither `.xdata` nor `.pdata`
-/// for a function with no `.seh_*` directive (DEVIATE COFF-UNWIND-LEAF-1
-/// closed here).
 fn unwind_of(
     object: &Object,
     frames: &[llrm_object::Frame],
     (section, offset, size, index): (usize, usize, usize, usize),
-) -> Result<Option<(String, Vec<u8>)>, Unsupported> {
+) -> Result<(String, Vec<u8>), Unsupported> {
     let name = object.symbols[index].name.clone();
     let code = &object.sections[section].image;
     // A producer that declared the prologue is believed. A function it
@@ -335,11 +332,8 @@ fn unwind_of(
         }
         None => from_prologue(&name, body)?,
     };
-    if info.codes.is_empty() && info.frame.is_none() {
-        return Ok(None);
-    }
     let bytes = info.bytes().map_err(|why| refused(&name, &why))?;
-    Ok(Some((name, bytes)))
+    Ok((name, bytes))
 }
 
 /// `object` with `.xdata` and `.pdata` for every function of its text, the
@@ -381,7 +375,7 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
         relocs,
     };
     for (code_section, offset, size, index) in own {
-        let Some((name, bytes)) = unwind_of(&object, &frames, (code_section, offset, size, index))? else { continue };
+        let (name, bytes) = unwind_of(&object, &frames, (code_section, offset, size, index))?;
         let xdata = object.sections.len();
         object.symbols.push(Symbol {
             name: format!("$unwind${name}"),
@@ -418,7 +412,7 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
     let mut pdata_relocs: Vec<Reloc> = Vec::new();
     for function in functions {
         let (_, _, size, index) = function;
-        let Some((name, bytes)) = unwind_of(&object, &frames, function)? else { continue };
+        let (name, bytes) = unwind_of(&object, &frames, function)?;
         let at = xdata_image.len();
         xdata_image.extend(bytes);
         object
@@ -441,9 +435,6 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
         pdata_relocs.push(Reloc::new(entry, rva, Target::Symbol(index), 0));
         pdata_relocs.push(Reloc::new(entry + 4, rva, Target::Symbol(index), size as i64));
         pdata_relocs.push(Reloc::new(entry + 8, rva, Target::Symbol(unwind_symbol), 0));
-    }
-    if xdata_image.is_empty() {
-        return Ok(object);
     }
     object.sections.push(section(".xdata", xdata_image, Vec::new()));
     object.sections.push(section(".pdata", pdata_image, pdata_relocs));

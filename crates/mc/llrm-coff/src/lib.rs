@@ -297,7 +297,13 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     }
     for one in &object.symbols {
         let name = symbol_name(&one.name, &mut strings);
-        let class = if one.binding == Binding::Public { SYM_CLASS_EXTERNAL } else { SYM_CLASS_STATIC };
+        // A symbol in a COMDAT section is external, so the linker keeps one of
+        // the copies of the name.
+        // DEVIATE COFF-WEAK-1 (owner object-refactor, exit 2026-11-20): a weak
+        // symbol outside a COMDAT is static here; the pin writes class 69.
+        let in_comdat = matches!(one.definition, Definition::Defined { section, .. }
+            if object.comdats.iter().any(|comdat| comdat.section == section));
+        let class = if one.binding == Binding::Public || in_comdat { SYM_CLASS_EXTERNAL } else { SYM_CLASS_STATIC };
         match one.definition {
             Definition::Defined { section, offset } => {
                 let kind = if object.sections[section].role == Role::Text { SYM_TYPE_FUNCTION } else { 0 };

@@ -117,6 +117,7 @@ fn data_role(
         "_BSS" | "BSSB" => Role::Bss,
         "CONST" => Role::ROData,
         _ if name.starts_with(".rdata$") => Role::ROData,
+        _ if name.starts_with(".bss$") => Role::Bss,
         // The pin's mergeable constant sections (`.rodata.cst4`...).
         _ if name.starts_with(".rodata.cst") => Role::ROData,
         crate::backend::globals::INIT_SEGMENT => Role::InitFunctions,
@@ -125,14 +126,19 @@ fn data_role(
     }
 }
 
-/// The name of the segment a COMDAT function or global is written in.
-fn comdat_segment(comdat: &masm::Comdat) -> String {
+/// The name of the segment the COMDAT member `symbol` is written in: one per
+/// member, so the members of one comdat stay apart.
+fn comdat_segment(
+    symbol: &str,
+    comdat: &masm::Comdat,
+) -> String {
     let base = match (&comdat.extent, comdat.constant) {
         (None, _) => ".text",
+        (Some((segment, _)), _) if segment == "_BSS" => ".bss",
         (Some(_), true) => ".rdata",
         (Some(_), false) => ".data",
     };
-    format!("{base}${}", comdat.name)
+    format!("{base}${symbol}")
 }
 
 /// COFF: each COMDAT function in a code segment of its own, and each COMDAT
@@ -144,9 +150,9 @@ fn comdat_sections(module: &mut masm::Module) {
     for (symbol, comdat) in &comdats {
         match &comdat.extent {
             None => {
-                module.code_segments.entry(symbol.clone()).or_insert_with(|| comdat_segment(comdat));
+                module.code_segments.entry(symbol.clone()).or_insert_with(|| comdat_segment(symbol, comdat));
             }
-            Some((segment, range)) => cuts.push((segment.clone(), range.clone(), comdat_segment(comdat))),
+            Some((segment, range)) => cuts.push((segment.clone(), range.clone(), comdat_segment(symbol, comdat))),
         }
     }
     // Later ranges first, so the earlier ones stay where they were recorded.
@@ -166,14 +172,30 @@ fn comdat_records(
     module: &masm::Module,
     object: &Object,
 ) -> Vec<llrm_object::Comdat> {
-    let by_name: IndexMap<String, llrm_object::Selection> =
-        module.comdats.values().map(|one| (comdat_segment(one), one.selection)).collect();
+    // A member that is not named like its comdat follows the one that is, when
+    // the module has it: associative with that member's section.
+    let named = |symbol: &str, comdat: &masm::Comdat| module.comdats.get(&comdat.name).map(|key| comdat_segment(&comdat.name, key)).filter(|_| symbol != comdat.name);
+    let by_name: IndexMap<String, (llrm_object::Selection, Option<String>)> = module
+        .comdats
+        .iter()
+        .map(|(symbol, one)| {
+            let key = named(symbol, one);
+            let selection = if key.is_some() { llrm_object::Selection::Associative } else { one.selection };
+            (comdat_segment(symbol, one), (selection, key))
+        })
+        .collect();
+    let section_of = |name: &str| object.sections.iter().position(|one| one.name == name);
     object
         .sections
         .iter()
         .enumerate()
         .filter_map(|(section, one)| {
-            Some(llrm_object::Comdat { section, selection: *by_name.get(&one.name)?, associated: None })
+            let (selection, key) = by_name.get(&one.name)?;
+            Some(llrm_object::Comdat {
+                section,
+                selection: *selection,
+                associated: key.as_deref().and_then(section_of).filter(|&at| at != section),
+            })
         })
         .collect()
 }

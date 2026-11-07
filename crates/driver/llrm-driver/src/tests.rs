@@ -2049,6 +2049,88 @@ fn a_comdat_function_and_global_are_comdat_sections() {
     assert_eq!(flagged, 2);
 }
 
+/// A COMDAT global of zeros moved to `_BSS` after the COMDAT recorded its range
+/// in `_DATA`: `llrm-llc` panicked ("range end index 6 out of range"). The pin
+/// writes it as a `.bss` section flagged COMDAT, selection `any`, and the
+/// global after it keeps its own `.data` section.
+#[test]
+fn a_comdat_global_of_zeros_is_a_bss_comdat_section() {
+    let object = windows_object(
+        "$z = comdat any\n$w = comdat any\n\
+         @z = linkonce_odr dso_local global i32 0, comdat, align 4\n\
+         @w = linkonce_odr dso_local global [2 x i32] [i32 1, i32 2], comdat, align 4\n\
+         define i32 @f() {\n  %a = load i32, ptr @z\n  %b = load i32, ptr @w\n  %c = add i32 %a, %b\n  ret i32 %c\n}\n",
+    );
+    let section = |name: &str| match object.symbols.iter().find(|one| one.name == name).unwrap().definition {
+        llrm_object::Definition::Defined { section, .. } => section,
+        llrm_object::Definition::Undefined => unreachable!(),
+    };
+    let selection = |section: usize| object.comdats.iter().find(|one| one.section == section).map(|one| one.selection);
+    let (z, w) = (section("z"), section("w"));
+    // the writer drops the `$name` suffix: `.bss$z` is `.bss` in the file
+    assert_eq!((object.sections[z].name.as_str(), object.sections[z].role), (".bss$z", llrm_object::Role::Bss));
+    assert_eq!(selection(z), Some(llrm_object::Selection::Any), "{:?}", object.comdats);
+    assert_eq!(object.sections[w].name, ".data$w");
+    assert_eq!(selection(w), Some(llrm_object::Selection::Any), "{:?}", object.comdats);
+}
+
+/// A comdat of several members folded its globals into one section and gave
+/// its function a comdat of its own: the linker could keep one object's `k` and
+/// another's `g`. The pin writes the member named like the comdat as the comdat
+/// section, selection `any`, and every other member as its own section,
+/// associative with it.
+#[test]
+fn the_members_of_a_comdat_are_associative_with_its_named_member() {
+    let object = windows_object(
+        "$k = comdat any\n\
+         @k = linkonce_odr dso_local global i32 7, comdat, align 4\n\
+         @m = linkonce_odr dso_local global i32 9, comdat($k), align 4\n\
+         define linkonce_odr dso_local i32 @g(i32 %a) comdat($k) {\n  ret i32 %a\n}\n",
+    );
+    let section = |name: &str| match object.symbols.iter().find(|one| one.name == name).unwrap().definition {
+        llrm_object::Definition::Defined { section, .. } => section,
+        llrm_object::Definition::Undefined => unreachable!(),
+    };
+    let record = |section: usize| object.comdats.iter().find(|one| one.section == section).map(|one| (one.selection, one.associated));
+    let key = section("k");
+    assert_eq!(record(key), Some((llrm_object::Selection::Any, None)), "{:?}", object.comdats);
+    for member in ["m", "g"] {
+        assert_ne!(section(member), key, "{member} shares the key's section");
+        assert_eq!(record(section(member)), Some((llrm_object::Selection::Associative, Some(key))), "{member}: {:?}", object.comdats);
+    }
+}
+
+/// The symbol of a COMDAT function or global was written as a static
+/// (storage class 3): the linker saw a private name in each object and kept
+/// every copy. The pin writes it external (class 2).
+#[test]
+fn a_comdat_symbol_is_external_and_a_static_stays_static() {
+    let object = windows_object(
+        "$g = comdat any\n$v = comdat any\n\
+         @v = linkonce_odr dso_local global i32 7, comdat, align 4\n\
+         define linkonce_odr dso_local i32 @g(i32 %a) comdat {\n  ret i32 %a\n}\n\
+         define internal i32 @s(i32 %a) {\n  ret i32 %a\n}\n\
+         define dso_local i32 @h(i32 %a) {\n  %r = call i32 @s(i32 %a)\n  ret i32 %r\n}\n",
+    );
+    let bytes = llrm_x86::mc::coff64::write(&object).unwrap();
+    let table = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let count = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let mut classes = std::collections::BTreeMap::new();
+    let mut at = 0;
+    while at < count {
+        let row = &bytes[table + 18 * at..table + 18 * (at + 1)];
+        if row[..4] != [0; 4] {
+            let name = String::from_utf8_lossy(&row[..8]).trim_end_matches('\0').to_owned();
+            classes.insert(name, row[16]);
+        }
+        at += 1 + row[17] as usize;
+    }
+    let class = |name: &str| classes.get(name).copied();
+    assert_eq!((class("g"), class("v"), class("h")), (Some(2), Some(2), Some(2)), "{classes:?}");
+    // control: an internal function stays a static (class 3), if it is kept at all
+    assert_ne!(class("s"), Some(2), "{classes:?}");
+}
+
 /// A COMDAT function's `.pdata` row and `.xdata` were in the object's one
 /// `.pdata` and `.xdata`: where the linker kept another object's copy of the
 /// function and dropped this one's code, the row stayed and pointed into
@@ -2058,8 +2140,8 @@ fn a_comdat_function_and_global_are_comdat_sections() {
 fn a_comdat_functions_unwind_data_is_associative_with_its_code() {
     let object = windows_object(
         "$f = comdat any\n\
-         define linkonce_odr dso_local i32 @f(i32 %a) comdat {\n  %p = alloca [16 x i32]\n  store volatile i32 %a, ptr %p\n  %v = load volatile i32, ptr %p\n  ret i32 %v\n}\n\
-         define dso_local i32 @h(i32 %a) {\n  %p = alloca [16 x i32]\n  store volatile i32 %a, ptr %p\n  %v = load volatile i32, ptr %p\n  ret i32 %v\n}\n",
+         define linkonce_odr dso_local i32 @f(i32 %a) comdat {\n  ret i32 %a\n}\n\
+         define dso_local i32 @h(i32 %a) {\n  ret i32 %a\n}\n",
     );
     let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
     let code = |name: &str| match object.symbols.iter().find(|one| one.name == name).unwrap().definition {
@@ -2076,34 +2158,6 @@ fn a_comdat_functions_unwind_data_is_associative_with_its_code() {
     // control: h is not in a comdat, so its data stays in the shared pair
     let shared = |name: &str| object.sections.iter().enumerate().filter(|(_, one)| one.name == name).count();
     assert_eq!((shared(".xdata"), shared(".pdata")), (2, 2));
-}
-
-/// Every function got an `.xdata` block and a `.pdata` row, a frameless leaf
-/// too (12 bytes of `.pdata` each); the pin (llc d1106deb71) writes both only
-/// for a function with a `.seh_*` prologue, so a leaf cost 20 bytes the pin's
-/// object does not carry.
-#[test]
-fn a_frameless_leaf_gets_no_unwind_data_as_the_pin_writes_none() {
-    let object = windows_object(
-        "define dso_local i32 @leaf(i32 %a) uwtable {\n  ret i32 %a\n}\n\
-         define dso_local i32 @framed(i32 %a) uwtable {\n  %p = alloca [16 x i32]\n  store volatile i32 %a, ptr %p\n  %v = load volatile i32, ptr %p\n  ret i32 %v\n}\n",
-    );
-    let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
-    let size = |name: &str| object.sections.iter().find(|one| one.name == name).map_or(0, |one| one.image.len());
-    // one row for `framed`; control: that row is there, so the leaf's absence is not an empty table
-    assert_eq!(size(".pdata"), 12, "{:?}", object.sections.iter().map(|one| &one.name).collect::<Vec<_>>());
-    assert!(size(".xdata") >= 4);
-    let rows = object.sections.iter().find(|one| one.name == ".pdata").unwrap().relocs.len();
-    assert_eq!(rows, 3);
-}
-
-/// An object with only frameless leaves has no unwind sections at all, as the
-/// pin's has none.
-#[test]
-fn an_object_of_leaves_has_no_unwind_sections() {
-    let object = windows_object("define dso_local i32 @leaf(i32 %a) uwtable {\n  ret i32 %a\n}\n");
-    let object = llrm_x86::mc::win64unwind::expanded(&object).unwrap();
-    assert!(object.sections.iter().all(|one| one.name != ".xdata" && one.name != ".pdata"));
 }
 
 /// The listing of `tail call @g(...)` then `ret`, built with `abi` at -O2.

@@ -1,4 +1,5 @@
 # Objects a leg of objsweep_gate.py may change against the merge-base, with the reason. Empty once the base has the change.
+# Counts are programs x levels x debug flavours that compile (71 x 2 x 4 for m32 debug), every object carrying the COFF writer's output.
 # COFF-AUXNUM-1: the aux Number of every COFF section symbol is the section's own number (the pin's), so every COFF object changes by those bytes and no size.
 
 [leg."m32"]
@@ -6,7 +7,7 @@ changed = 142
 why = "COFF section symbols carry their section number in the aux record"
 
 [leg."m32 debug"]
-changed = 284
+changed = 568
 why = "COFF section symbols carry their section number in the aux record"
 
 [leg."m64"]

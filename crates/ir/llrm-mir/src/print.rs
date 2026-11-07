@@ -3,6 +3,12 @@
 
 use std::fmt::Write;
 
+/// MIR keeps a `llvm.experimental.noalias.scope.decl` call's node as this
+/// attachment and the call without operands; the pin's text has it as the
+/// argument, `(metadata !N)`.
+pub(crate) const SCOPE_DECL_KIND: &str = "noalias.scope.decl";
+pub(crate) const SCOPE_DECL_NAME: &str = "llvm.experimental.noalias.scope.decl";
+
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, signed};
 use crate::hash::HashMap;
 use crate::lexer::is_name;
@@ -591,6 +597,9 @@ impl Printer<'_> {
         if variadic {
             parameters.push("...".to_owned());
         }
+        if parameters.is_empty() && global.name.as_deref() == Some(SCOPE_DECL_NAME) {
+            parameters.push("metadata".to_owned());
+        }
         let mut words: Vec<String> = vec![(if declaration { "declare" } else { "define" }).to_owned()];
         // A declaration has no linkage but external's, in LLVM's syntax.
         if !declaration {
@@ -882,6 +891,13 @@ impl Printer<'_> {
                         )
                     })
                     .collect();
+                // The pin's spelling of a scope declaration: its node is the
+                // argument.
+                let scope_decl = inst.metadata.iter().find(|(kind, _)| kind == SCOPE_DECL_KIND);
+                let arguments = match scope_decl {
+                    Some((_, node)) if arguments.is_empty() => vec![format!("metadata !{}", node.0)],
+                    _ => arguments,
+                };
                 let tail = match info.tail {
                     Tail::None => "",
                     Tail::Tail => "tail ",
@@ -921,7 +937,11 @@ impl Printer<'_> {
                 text
             }
         };
+        let spelled_as_argument = matches!(inst.opcode, Opcode::Call(_)) && ops.len() == 1;
         for (kind, node) in &inst.metadata {
+            if spelled_as_argument && kind == SCOPE_DECL_KIND {
+                continue;
+            }
             let _ = write!(body, ", !{kind} !{}", node.0);
         }
         match inst.result {

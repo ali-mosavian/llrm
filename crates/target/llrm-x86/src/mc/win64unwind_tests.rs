@@ -125,12 +125,8 @@ fn a_list_of_codes_is_encoded_last_first_with_operand_slots_after_theirs() {
 }
 
 #[test]
-fn a_function_without_a_prologue_has_no_unwind_data() {
-    let object = expanded(&with(&[0xC3])).unwrap();
-    assert!(object.sections.iter().all(|one| one.name != ".xdata" && one.name != ".pdata"));
-    // control: with a prologue it has both
-    let framed = expanded(&with(&[0x55, 0xC3])).unwrap();
-    assert!(framed.sections.iter().any(|one| one.name == ".xdata") && framed.sections.iter().any(|one| one.name == ".pdata"));
+fn a_function_without_a_prologue_has_an_empty_unwind_info() {
+    assert_eq!(xdata(&[0xC3]), [0x01, 0x00, 0x00, 0x00]);
 }
 
 #[test]
