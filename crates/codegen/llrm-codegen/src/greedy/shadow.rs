@@ -1325,6 +1325,9 @@ pub fn decide_with_split(
     let invariant: std::collections::BTreeSet<u32> =
         invariant.into_iter().chain(super::remat::flagged_loads(body)).collect();
     tables.remat.borrow_mut().extend(super::remat::values(body, &invariant, inputs.tii));
+    if !inputs.stable_loads {
+        tables.remat_cells.borrow_mut().extend(inputs.tii.argument_load_defs(body));
+    }
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         if let [value] = one.defines.as_slice()
             && tables.remat.borrow().contains(value)

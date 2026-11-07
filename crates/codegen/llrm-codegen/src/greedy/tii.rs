@@ -88,6 +88,16 @@ pub trait TargetInstrInfo {
         body: &crate::model::lir::LirBody,
     ) -> BTreeSet<u32>;
 
+    /// The incoming argument cells (frame displacement, width) `argument_loads`
+    /// takes a load of, though other instructions also define the value loaded:
+    /// the pin remakes a load per value number, not per register.
+    fn argument_load_defs(
+        &self,
+        _body: &crate::model::lir::LirBody,
+    ) -> BTreeSet<(i64, u32)> {
+        BTreeSet::new()
+    }
+
     /// The registers each value `one` names may take there (the class of the
     /// operand, `MCInstrDesc`'s `RegClass`), as (value, registers in order). A
     /// target whose classes live on its virtual registers says it here, so a
@@ -267,6 +277,13 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         invariant: bool,
     ) -> bool {
         super::remat::is_trivially_re_materializable(def, invariant)
+    }
+
+    fn argument_load_defs(
+        &self,
+        body: &crate::model::lir::LirBody,
+    ) -> BTreeSet<(i64, u32)> {
+        super::remat::argument_load_insns(body).into_iter().map(|(_, _, cell)| cell).collect()
     }
 
     fn argument_loads(
