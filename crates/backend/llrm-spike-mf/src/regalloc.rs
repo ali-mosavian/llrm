@@ -210,6 +210,19 @@ pub trait Target {
         false
     }
 
+    /// Whether the row `name` loads a frame object a call filled (see
+    /// `frame_address`): made again where it is read.
+    fn is_buffer_load(_name: &str) -> bool {
+        false
+    }
+
+    /// The frame object whose address `inst` puts in a register (z80 `LEAFI`),
+    /// for the buffers a call fills (`call_result_buffers`); None for the
+    /// targets that pass no address of a local to a call this way.
+    fn frame_address(_inst: &Inst) -> Option<i32> {
+        None
+    }
+
     /// Whether a value is spilled, not given a callee-saved register, when
     /// its spill costs less than the register's first use.
     fn csr_spill_first() -> bool {

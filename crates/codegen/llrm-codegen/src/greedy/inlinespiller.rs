@@ -534,7 +534,7 @@ impl<'a> InlineSpiller<'a> {
             let value = lis.interval_rc(from).query(&index).value_in()?;
             let site = lis.indexes.get_instruction_from_index(&value.def())?;
             let found = Arc::clone(lis.instr(site));
-            if let Some(cell) = super::remat::argument_load_cell(&found)
+            if let Some(cell) = self.tii.remat_load_cell(&found)
                 && self.tables.remat_cells.borrow().contains(&cell)
                 && self.tii.is_trivially_re_materializable(&found, true)
             {

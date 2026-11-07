@@ -551,6 +551,7 @@ pub fn to_lir<T: Target>(
             foldable,
             infos,
             clobbered: clobbered_by_spills,
+            buffers: call_result_buffers::<T>(function),
             marker: PhantomData,
         },
         tri: SpikeRegisterInfo {
@@ -1184,6 +1185,8 @@ pub struct SpikeInstrInfo<T: Target> {
     infos: Vec<(&'static str, Vec<OperandInfo>)>,
     /// `Target::spill_clobbers`: no value is held in one.
     clobbered: Vec<RegId>,
+    /// `call_result_buffers`: frame objects a call fills and loads read back.
+    buffers: BTreeSet<i64>,
     marker: PhantomData<T>,
 }
 
@@ -1303,10 +1306,23 @@ fn is_move_with_reads(one: &Insn) -> bool {
         )
 }
 
-/// One register written by a load of a frame slot.
+/// One register written by a load of a frame slot of an incoming argument.
 fn is_frame_load<T: Target>(one: &Insn) -> bool {
+    is_named_frame_load(one, T::is_invariant_argument_load)
+}
+
+/// One register written by a load of a frame object a call fills
+/// (`call_result_buffers`).
+fn is_buffer_load<T: Target>(one: &Insn) -> bool {
+    is_named_frame_load(one, T::is_buffer_load)
+}
+
+fn is_named_frame_load(
+    one: &Insn,
+    named: fn(&str) -> bool,
+) -> bool {
     let Some(what) = one.what.as_ref() else { return false };
-    what.name.as_deref().is_some_and(T::is_invariant_argument_load)
+    what.name.as_deref().is_some_and(named)
         && one.defines.len() == 1
         && one.uses.is_empty()
         && one.group.is_none()
@@ -1384,6 +1400,157 @@ fn incoming_argument_loads<T: Target>(body: &LirBody) -> BTreeSet<u32> {
         .collect()
 }
 
+/// The values defined once by a load of a buffer, with the cell each reads.
+fn buffer_loads<T: Target>(
+    body: &LirBody,
+    buffers: &BTreeSet<i64>,
+) -> Vec<(u32, (i64, u32))> {
+    if buffers.is_empty() {
+        return Vec::new();
+    }
+    let mut definitions: llrm_support::hash::HashMap<u32, usize> = Default::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for value in &one.defines {
+            *definitions.entry(*value).or_default() += 1;
+        }
+    }
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| is_buffer_load::<T>(one))
+        .filter_map(|one| {
+            let what = one.what.as_ref()?;
+            let addr = frame_cell(what).filter(|addr| buffers.contains(&addr.disp))?;
+            let Some(Loc::Held(held)) = what.dests.first() else { return None };
+            (definitions.get(&one.defines[0]) == Some(&1)).then(|| (one.defines[0], (addr.disp, held.width)))
+        })
+        .collect()
+}
+
+/// DEVIATE R-BUF1 (owner greedy-subreg, exit 2026-11-20): the frame objects a
+/// call fills and only loads read, each load straight after that call. The
+/// pin remakes a load only from an immutable object. Here the address of the
+/// object is stored once into the arguments of one call (copies aside) and
+/// reaches nothing else, so that call is the one write to the object; every
+/// load of it follows that call in its block with no call between, so a value
+/// loaded is the object's content wherever the value lives, and a load made
+/// again where it is read gives the same value.
+fn call_result_buffers<T: Target>(function: &MFunction<T::Class>) -> BTreeSet<i64> {
+    let mut found = BTreeSet::new();
+    let mut frames: BTreeSet<i32> = BTreeSet::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if let Some(frame) = T::frame_address(inst) {
+            frames.insert(frame);
+        }
+    }
+    // uses of each virtual register in the whole function
+    let mut uses: llrm_support::hash::HashMap<u32, usize> = Default::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for operand in &inst.operands {
+            if let Operand::Use(Reg::Virt(v)) = operand {
+                *uses.entry(*v).or_default() += 1;
+            }
+        }
+    }
+    'frames: for frame in frames {
+        let mut taker: Option<(usize, usize)> = None;
+        let mut loads: Vec<(usize, usize)> = Vec::new();
+        for (b, block) in function.blocks.iter().enumerate() {
+            for (i, inst) in block.insts.iter().enumerate() {
+                if !inst.operands.iter().any(|o| matches!(o, Operand::Frame(f) if *f == frame)) {
+                    continue;
+                }
+                if T::frame_address(inst) == Some(frame) {
+                    if taker.replace((b, i)).is_some() {
+                        continue 'frames;
+                    }
+                } else if let Kind::Op(name) = inst.kind
+                    && T::is_buffer_load(name)
+                    && inst.operands.iter().any(|o| matches!(o, Operand::Def(_)))
+                {
+                    loads.push((b, i));
+                } else {
+                    continue 'frames;
+                }
+            }
+        }
+        let Some((tb, ti)) = taker else { continue };
+        // the address, from its definition to the first call
+        let block = &function.blocks[tb];
+        let mut holders: BTreeSet<u32> = BTreeSet::new();
+        let mut in_window = 0usize;
+        let mut call = None;
+        let mut spreads = false;
+        let takes = &block.insts[ti];
+        let mut phys_holders = false;
+        for operand in &takes.operands {
+            match operand {
+                Operand::Def(Reg::Virt(v)) => {
+                    holders.insert(*v);
+                }
+                Operand::Def(Reg::Phys(_)) => phys_holders = true,
+                _ => {}
+            }
+        }
+        for (i, inst) in block.insts.iter().enumerate().skip(ti + 1) {
+            if inst.call {
+                call = Some(i);
+                break;
+            }
+            let reads: Vec<(usize, Reg)> = inst
+                .operands
+                .iter()
+                .enumerate()
+                .filter_map(|(at, o)| if let Operand::Use(r) = o { Some((at, *r)) } else { None })
+                .collect();
+            let reads_address = reads
+                .iter()
+                .any(
+                    |(_, r)| match r {
+                        Reg::Virt(v) => holders.contains(v),
+                        Reg::Phys(_) => phys_holders,
+                    },
+                );
+            if !reads_address {
+                continue;
+            }
+            let is_copy = inst.kind == Kind::Copy;
+            let is_store = inst.may_store && !inst.operands.iter().any(|o| matches!(o, Operand::Def(_)));
+            if !is_copy && !is_store {
+                spreads = true;
+            }
+            for (_, r) in &reads {
+                if let Reg::Virt(v) = r {
+                    if holders.contains(v) {
+                        in_window += 1;
+                    }
+                }
+            }
+            if is_copy {
+                for operand in &inst.operands {
+                    if let Operand::Def(Reg::Virt(v)) = operand {
+                        holders.insert(*v);
+                    }
+                }
+            }
+        }
+        let Some(call) = call else { continue };
+        let total: usize = holders.iter().map(|v| uses.get(v).copied().unwrap_or(0)).sum();
+        if spreads || total != in_window {
+            continue;
+        }
+        // every load follows the call in its block, with no call between
+        for (b, i) in &loads {
+            let ok = *b == tb && *i > call && !function.blocks[*b].insts[call + 1..*i].iter().any(|inst| inst.call);
+            if !ok {
+                continue 'frames;
+            }
+        }
+        found.insert(i64::from(frame));
+    }
+    found
+}
+
 /// How wide `insn` holds `value`.
 fn held_width(
     insn: &Insn,
@@ -1434,7 +1601,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         &self,
         one: &Insn,
     ) -> bool {
-        is_cheap_move::<T>(one) || is_frame_load::<T>(one)
+        is_cheap_move::<T>(one) || is_frame_load::<T>(one) || is_buffer_load::<T>(one)
     }
 
     fn is_trivially_re_materializable(
@@ -1442,7 +1609,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         def: &Insn,
         invariant: bool,
     ) -> bool {
-        let r = is_cheap_move::<T>(def) || (invariant && is_frame_load::<T>(def));
+        let r = is_cheap_move::<T>(def) || (invariant && (is_frame_load::<T>(def) || is_buffer_load::<T>(def)));
         r
     }
 
@@ -1450,7 +1617,32 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         &self,
         body: &LirBody,
     ) -> BTreeSet<u32> {
-        incoming_argument_loads::<T>(body)
+        let mut found = incoming_argument_loads::<T>(body);
+        found.extend(buffer_loads::<T>(body, &self.buffers).into_iter().map(|(value, _)| value));
+        found
+    }
+
+    fn argument_load_defs(
+        &self,
+        body: &LirBody,
+    ) -> BTreeSet<(i64, u32)> {
+        buffer_loads::<T>(body, &self.buffers).into_iter().map(|(_, cell)| cell).collect()
+    }
+
+    fn remat_load_cell(
+        &self,
+        one: &Insn,
+    ) -> Option<(i64, u32)> {
+        let addr = frame_cell(one.what.as_ref()?).filter(|addr| self.buffers.contains(&addr.disp))?;
+        (is_buffer_load::<T>(one)).then(|| {
+            (
+                addr.disp,
+                one.what.as_ref().and_then(|w| w.dests.first()).map_or(0, |d| match d {
+                    Loc::Held(held) => held.width,
+                    _ => 0,
+                }),
+            )
+        })
     }
 
     /// The read the target takes from memory (`Target::fold_spill`) becomes a
