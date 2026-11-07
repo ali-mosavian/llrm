@@ -1952,8 +1952,8 @@ thread_local! {
 /// the call makes smaller keep it only where together they save what the
 /// routines cost (switch_table_holes -Os: 40 B saved, 57 B routine).
 /// DEVIATE z80-mul-function-price: the pin's `decomposeMulByConstant` has no
-/// such choice. Owner z80, exit 2026-11-20 (a pricing of the other
-/// libcalls a variant moves).
+/// such choice. Owner z80. Every runtime routine a variant reaches is already
+/// priced (`runtime_size`), so no libcall is left out of the total.
 fn decomposes(
     selected: &Selections,
     alternatives: &Selections,

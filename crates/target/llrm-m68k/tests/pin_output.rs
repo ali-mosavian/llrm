@@ -69,6 +69,7 @@ const SOURCE_ORDER: Options = Options {
     tail_duplicate: false,
     rematerialize_arguments: false,
     loop_top_by_jumps: false,
+    call_targets: false,
     debug: false,
 };
 
