@@ -3330,6 +3330,7 @@ impl<'a> TypeLegalizer<'a> {
         // subtracted with the low halves' borrow; `>` and `<=` flip the
         // operands.
         if self.tli.is_operation_legal_or_custom(ISD::SetCCCarry, self.dag.value_type(lh)) {
+            let original = code;
             let (code, flip) = match code {
                 CondCode::SetGt => (CondCode::SetLt, true),
                 CondCode::SetUGt => (CondCode::SetULt, true),
@@ -3337,6 +3338,40 @@ impl<'a> TypeLegalizer<'a> {
                 CondCode::SetULe => (CondCode::SetUGe, true),
                 other => (other, false),
             };
+            // DEVIATE CC1 (owner greedy-subreg, exit 2026-11-27): against a
+            // constant, `x > c` is `x >= c + 1` and `x <= c` is `x < c + 1`,
+            // so the operands stay in place and the constant an immediate
+            // (`cmp lo, c.lo; sbb hi, c.hi`); the pin swaps them and
+            // materializes the constant in registers. The pin's own form is the
+            // IR canonical `ult` of `getFlippedStrictnessPredicate`.
+            let wide = self.dag.value_type(self.dag.operand(setcc, 1));
+            let moved = if flip {
+                let bits = wide.size_in_bits();
+                let top = super::fold::mask(bits);
+                let max = if matches!(original, CondCode::SetUGt | CondCode::SetULe) { top } else { top >> 1 };
+                self.dag.constant(self.dag.operand(setcc, 1)).filter(|&c| c != max)
+            } else {
+                None
+            };
+            if let Some(constant) = moved {
+                let half_bits = half.size_in_bits();
+                let next = constant.wrapping_add(1) & super::fold::mask(wide.size_in_bits());
+                let (rl, rh) = (
+                    self.dag.get_constant(next & super::fold::mask(half_bits), half),
+                    self.dag.get_constant(next >> half_bits, half),
+                );
+                let overflow_vt = self.tli.types.set_cc_result_type(half);
+                let borrow = self.dag.get_node_multi(ISD::USubO, &[half, overflow_vt], &[ll, rl]);
+                let borrow = SDValue { node: borrow.node, res: 1 };
+                let moved_code = match original {
+                    CondCode::SetUGt => CondCode::SetUGe,
+                    CondCode::SetULe => CondCode::SetULt,
+                    CondCode::SetGt => CondCode::SetGe,
+                    _ => CondCode::SetLt,
+                };
+                let cc = self.dag.get_cond_code(moved_code);
+                return self.dag.get_node(ISD::SetCCCarry, vt, &[lh, rh, borrow, cc]);
+            }
             let ((ll, rl), (lh, rh)) = if flip { ((rl, ll), (rh, lh)) } else { ((ll, rl), (lh, rh)) };
             let overflow_vt = self.tli.types.set_cc_result_type(half);
             let borrow = self.dag.get_node_multi(ISD::USubO, &[half, overflow_vt], &[ll, rl]);
