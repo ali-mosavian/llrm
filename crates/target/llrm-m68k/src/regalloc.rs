@@ -19,9 +19,21 @@ const ADDRESS: [RegId; 6] = [reg::A0, reg::A1, reg::A2, reg::A3, reg::A4, reg::A
 const CALLER_SAVED: [RegId; 4] = [reg::D0, reg::D1, reg::A0, reg::A1];
 
 /// m68k's register file for the allocator.
-pub struct M68kRegisters;
+///
+/// DEVIATE M68K-ARGREMAT (with `ARGUMENT_REMAT`): a load of an incoming stack
+/// argument that nothing writes is made again where it is read, not stored to
+/// a spill slot and reloaded. The pin's M68k marks no load rematerializable
+/// (`isReMaterializable` needs the descriptor flag), so it spills. Reason:
+/// the slot is an immutable fixed object, gcc reloads it, and a spill store
+/// plus a frame cell is more bytes and clocks (seeds 300: about 115 smaller,
+/// 11 larger per CPU and level). Owner m68k. Exit: 2026-11-28, or when the
+/// pin's M68k marks the rows. Off for `Options::PINNED`.
+pub struct Registers<const ARGUMENT_REMAT: bool>;
 
-impl Target for M68kRegisters {
+/// The allocator's registers in the order this compiler uses by default.
+pub type M68kRegisters = Registers<true>;
+
+impl<const ARGUMENT_REMAT: bool> Target for Registers<ARGUMENT_REMAT> {
     type Class = Class;
 
     fn meet(
@@ -33,6 +45,14 @@ impl Target for M68kRegisters {
 
     fn any() -> Class {
         Class::Xr32
+    }
+
+    /// An incoming argument is an immutable fixed stack object, so the pin
+    /// makes a load of one again where it is read
+    /// (`isLoadFromInvariantOrConstantMemory`); `MOV32rp` takes either kind of
+    /// register, so the copy can land wherever its reader needs.
+    fn is_invariant_argument_load(name: &str) -> bool {
+        ARGUMENT_REMAT && name == "MOV32rp"
     }
 
     /// DEVIATE C13 (coalescer/mod.rs): the joins raised `movem` 71 -> 89 in
@@ -170,8 +190,14 @@ pub fn allocate_spilling_by_frequency(
 pub fn allocate_greedy(
     function: &mut MFunction,
     size: bool,
+    rematerialize_arguments: bool,
 ) -> Result<(Assignment, Vec<(i32, Class)>), String> {
-    llrm_spike_mf::tolir::allocate_greedy::<M68kRegisters>(function, llrm_lir::registers::Regs(&REGISTER_INFO), size)
+    let registers = llrm_lir::registers::Regs(&REGISTER_INFO);
+    if rematerialize_arguments {
+        llrm_spike_mf::tolir::allocate_greedy::<Registers<true>>(function, registers, size)
+    } else {
+        llrm_spike_mf::tolir::allocate_greedy::<Registers<false>>(function, registers, size)
+    }
 }
 
 /// `MachineSinking` over the m68k function.
@@ -239,7 +265,7 @@ pub fn remove_redundant_copies(
     })
 }
 
-impl Jump for M68kRegisters {
+impl<const ARGUMENT_REMAT: bool> Jump for Registers<ARGUMENT_REMAT> {
     fn reverse(branch: &llrm_spike_mf::Inst) -> Option<llrm_spike_mf::Inst> {
         let Kind::Op(name) = branch.kind else { return None };
         let opposite = CONDITIONAL
