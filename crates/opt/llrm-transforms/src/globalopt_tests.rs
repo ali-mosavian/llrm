@@ -293,3 +293,45 @@ b0:
         assert!(!line.contains("unnamed_addr"), "{line}\n{after}");
     }
 }
+
+/// A global only loaded `volatile` is not constant: `analyzeGlobal` gives up
+/// at a volatile load (GlobalStatus.cpp#L95). The `opq0` of every bench was
+/// made `internal constant` and emitted in `.rodata` (arm64 `fib`: 4 bytes of
+/// read-only data where the pin has `.bss`).
+#[test]
+fn a_global_only_loaded_volatile_stays_a_variable() {
+    let after = piped(
+        "@v = internal global i16 0
+
+define i16 @f() {
+b0:
+  %a = load volatile i16, ptr @v
+  ret i16 %a
+}
+",
+    );
+    assert!(after.contains("@v = internal") && after.contains("global i16 0") && !after.contains("constant"), "{after}");
+    assert!(after.contains("load volatile i16, ptr @v"), "{after}");
+}
+
+/// A `memcpy` from the global that is `volatile` is not a plain read either
+/// (`analyzeGlobal`: `MTI->isVolatile()` gives up).
+#[test]
+fn a_global_copied_from_by_a_volatile_memcpy_stays_a_variable() {
+    let after = piped(
+        "@x = internal global [4 x i8] c\"\\05\\00\\0c\\00\"
+
+declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+
+define i16 @f() {
+b0:
+  %s = alloca [4 x i8]
+  call void @llvm.memcpy.p0.p0.i16(ptr %s, ptr @x, i16 4, i1 true)
+  %p = getelementptr i8, ptr %s, i16 2
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+",
+    );
+    assert!(!after.contains("@x = internal constant"), "{after}");
+}
