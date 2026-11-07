@@ -114,16 +114,21 @@ impl LIRTransform for FloatUnhoist<'_> {
             return Ok(body);
         }
         let Some(prices) = Prices::of(self.cpu) else { return Ok(body) };
-        // The scan below accepts a memory `fld` and nothing else: without one the
-        // loops and the read counts are not worth computing.
-        let has_candidate = body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| {
-            one.what.as_ref().is_some_and(|what| name_is(what, "fld")) && _loads_memory(one.what.as_ref())
-        });
-        if !has_candidate {
-            return Ok(body);
-        }
-        Ok(unhoisted(&body, &prices))
+        Ok(unhoisted_if_any(body, &prices))
     }
+}
+
+/// `unhoisted`, for a body that has a memory `fld` to move. The scan accepts
+/// nothing else, so without one the loops and the read counts are not worth
+/// computing.
+fn unhoisted_if_any(
+    body: LirBody,
+    prices: &Prices,
+) -> LirBody {
+    let has_candidate = body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| {
+        one.what.as_ref().is_some_and(|what| name_is(what, "fld")) && _loads_memory(one.what.as_ref())
+    });
+    if has_candidate { unhoisted(&body, prices) } else { body }
 }
 
 /// How `one` reads `value`, when it is a read the memory form can take.
@@ -185,12 +190,20 @@ fn disturbs(
             ))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Bodies `unhoisted` has analysed on this thread.
+    static ANALYSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `body` with each hoisted float load a loop only reads made again at its
 /// reads.
 fn unhoisted(
     body: &LirBody,
     prices: &Prices,
 ) -> LirBody {
+    #[cfg(test)]
+    ANALYSED.with(|count| count.set(count.get() + 1));
     let loops = loopy::loops(&body.blocks, Some(body.entry));
     if loops.is_empty() {
         return body.clone();
@@ -467,5 +480,24 @@ mod tests {
     fn test_a_load_read_as_the_left_operand_stays_hoisted() {
         let body = looped(vec![fld(10, 2, 1), arith(11, "fsub", 3, 1, 2), fstp(12, 3, 2)]);
         assert_eq!(loads_in(&unhoisted(&body, &I486), 0), 1);
+    }
+
+    /// Compile time: `unhoisted` built loop info and read maps for every
+    /// function (93 M Ir of 8,863 M on memexp -O2). A loop without a memory
+    /// `fld` must not be analysed.
+    #[test]
+    fn test_a_function_with_no_memory_fld_is_not_analysed() {
+        let body = looped(vec![arith(11, "fsub", 3, 2, 1), fstp(12, 3, 2)]);
+        let without: Vec<Arc<Insn>> =
+            body.blocks[0].insns.iter().filter(|one| !_loads_memory(one.what.as_ref())).cloned().collect();
+        let mut body = body;
+        body.blocks[0] = LirBlock { succ: body.blocks[0].succ.clone(), ..LirBlock::new(0, without) }.into();
+        ANALYSED.with(|count| count.set(0));
+        let kept = unhoisted_if_any(body.clone(), &I486);
+        assert_eq!(ANALYSED.with(|count| count.get()), 0);
+        assert_eq!(kept.blocks.len(), body.blocks.len());
+        let with = looped(vec![fld(10, 2, 1), arith(11, "fsub", 3, 2, 1), fstp(12, 3, 2)]);
+        unhoisted_if_any(with, &I486);
+        assert_eq!(ANALYSED.with(|count| count.get()), 1);
     }
 }
