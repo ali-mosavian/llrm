@@ -277,6 +277,11 @@ pub struct GlobalMerge {
     pub max_offset: u64,
     /// `OnlyOptimizeForSize`: only uses in `minsize` functions count.
     pub size_only: bool,
+    /// DEVIATE ARM64-GM-OPTSIZE (owner w15, exit 2026-11-30): with `size_only`,
+    /// uses in `optsize` functions count too, not only `minsize` ones (the
+    /// pin's `-Os` merges nothing; gcc's section anchors do: stft_fixed -Os
+    /// 15 `adrp` against gcc's 5). False: the pin.
+    pub optsize_counts: bool,
     /// The object format is Mach-O: the merged struct is `internal`, not
     /// `private`.
     pub mach_o: bool,
