@@ -84,10 +84,7 @@ fn a_copy_is_repeated_in_a_block_with_two_ways_in() {
 /// The register was written between: the copy is a real one.
 #[test]
 fn a_copy_after_the_source_changed_in_the_predecessor_stays() {
-    let got = blocks(
-        vec![Inst::copy(v(1), v(0)), op("w", vec![Operand::Def(v(2))])],
-        vec![Inst::copy(v(1), v(0))],
-        false,
-    );
+    let got =
+        blocks(vec![Inst::copy(v(1), v(0)), op("w", vec![Operand::Def(v(2))])], vec![Inst::copy(v(1), v(0))], false);
     assert_eq!(got[1], [Kind::Copy], "{got:?}");
 }

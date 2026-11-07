@@ -847,7 +847,8 @@ pub fn remove_identity_copies<T: Target>(
 /// what the allocator leaves behind (phi and two-address copies of one value),
 /// and the block a target puts on a critical edge (`split_flag_edges`) repeats
 /// the copy its predecessor already made for the other phi (m68k
-/// x87_arguments -Os, +4 B). Exit: the neutral-LIR task.
+/// x87_arguments -Os, +4 B). Owner greedy-subreg, exit 2026-12-05: the pass
+/// is translated whole (`MachineCopyPropagation`) or the carry goes.
 pub fn remove_redundant_copies<T: Target>(
     function: &mut MFunction<T::Class>,
     assignment: &Assignment,
