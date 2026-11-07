@@ -409,6 +409,45 @@ b0:
     assert!(!verdict(60, true), "sixty copies of it outgrow the callee and the calls");
 }
 
+/// At `-Os` on x86 the call's price left out the copy of a by-value argument
+/// (`byvalue_struct_address` m64: `foo(struct baz x)` read 7 units against a
+/// call of 6, so `foo` stayed and `main` built the 20-byte copy). The same
+/// body is refused behind a pointer argument and inlined behind a by-value one.
+#[test]
+fn an_optsize_caller_counts_the_copy_of_a_byval_argument_in_the_call() {
+    let text = |param: &str, arg: &str| {
+        format!(
+            "{GLOBAL}%S = type {{ i32, i32, i32, i32, i32 }}
+
+define i32 @callee({param} %p) {{
+b0:
+  %a = load i32, ptr %p
+  %b = load i32, ptr @g
+  %c = add i32 %a, %b
+  %d = mul i32 %c, %a
+  %e = add i32 %d, %b
+  store i32 %e, ptr @g
+  ret i32 %e
+}}
+
+define i32 @f(ptr %q) {{
+b0:
+  %r = call i32 @callee({arg} %q)
+  ret i32 %r
+}}
+"
+        )
+    };
+    let x86 = x86_real();
+    let params = || InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let verdict = |text: &str| {
+        let (cost, threshold) = priced_params(text, 0, false, CallerSize::OptSize, Some(&x86), params(), (2, false));
+        cost < threshold
+    };
+    assert!(!verdict(&text("ptr", "ptr")), "premise: a callee that stays and outgrows its call is refused");
+    assert!(verdict(&text("ptr byval(%S)", "ptr byval(%S)")), "the 20-byte copy is part of the call");
+}
+
 /// A callee at `-Os` on x86 (D11): the inline must not make the code bigger.
 /// `idioms.bas` copied a 14-instruction loop (cost 15 against the target's old
 /// bound of 25) into ten call sites, +690 bytes. The callee that stays is
