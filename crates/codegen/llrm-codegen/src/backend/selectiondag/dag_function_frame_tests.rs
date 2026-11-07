@@ -1749,6 +1749,7 @@ define i64 @f(i64 %d) {
     let insns = done.body.insns();
     let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
     assert!(named("setb") <= 2 && named("adc") >= 4, "setb {} adc {}", named("setb"), named("adc"));
+}
 
 /// rectwo -O2 at m32: gcc's depth-8 copies of `paths` into itself made 1965 B
 /// that ran 1449397 clk (gcc 849 B, 555823 clk). Depth 2 at -O2 is 277 B and
