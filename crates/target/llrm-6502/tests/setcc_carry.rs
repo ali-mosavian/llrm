@@ -52,3 +52,53 @@ fn a_signed_less_than_of_two_words_is_one_borrow_chain() {
 fn a_signed_less_or_equal_of_two_words_is_one_borrow_chain() {
     bytes_of("sle", 106);
 }
+
+/// `k_branch` and `k_select`: the order of two `i32` read by a branch and by a select.
+fn consumer(kind: &str) -> String {
+    match kind {
+        "branch" => "define i16 @k_branch(ptr %a, ptr %b) {
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  %c = icmp uge i32 %x, %y
+  br i1 %c, label %t, label %f
+t:
+  ret i16 1
+f:
+  ret i16 2
+}
+"
+        .to_owned(),
+        _ => "define i16 @k_select(ptr %a, ptr %b, i16 %p, i16 %q) {
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  %c = icmp uge i32 %x, %y
+  %r = select i1 %c, i16 %p, i16 %q
+  ret i16 %r
+}
+"
+        .to_owned(),
+    }
+}
+
+fn consumer_bytes(kind: &str, limit: u32) {
+    let name = format!("k_{kind}");
+    let ir = format!("target datalayout = \"{}\"\n{}", datalayout(), consumer(kind));
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let from = text.find(&format!("{name}:")).unwrap_or_else(|| panic!("no {name} in\n{text}"));
+    let body: String = text[from..].split(".segment").next().unwrap().to_owned();
+    let bytes = estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
+    assert!(bytes <= limit, "{name}: {bytes} B\n{body}");
+}
+
+/// A branch on `x >= y` made the borrow a byte (`lda #0; sbc #0; and #1`), selected it to 0 or 1 and tested it
+/// again: 25 B and a `jmp` more than the `bcs` after the last `sbc`. `int32.c`'s `udivmod` took it per call, and
+/// `div_constants_short -Os` 25% more cycles.
+#[test]
+fn a_branch_on_the_order_of_two_words_reads_the_flags_of_the_chain() {
+    consumer_bytes("branch", 0);
+}
+
+#[test]
+fn a_select_on_the_order_of_two_words_reads_the_flags_of_the_chain() {
+    consumer_bytes("select", 0);
+}

@@ -40,6 +40,7 @@ pub mod mosisd {
     pub const SRL32: ISD = ISD::Target(ids::SRL32);
     pub const SRA32: ISD = ISD::Target(ids::SRA32);
     pub const CMPZ: ISD = ISD::Target(ids::CMPZ);
+    pub const CMP32: ISD = ISD::Target(ids::CMP32);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
@@ -602,12 +603,43 @@ fn lower_setcc_carry(
     }
 }
 
+/// `lower_setcc_carry` as the flags of the whole subtract: `CMP32` of the low
+/// words and of the high words (their sign bits flipped for a signed order),
+/// read with `CC` for below and `CS` for not below.
+fn lower_setcc_carry_flags(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<(SDValue, SDValue)> {
+    let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    if dag.value_type(high) != EVT::I16 || dag.opcode(borrow) != ISD::USubO || borrow.res != 1 {
+        return None;
+    }
+    let cc = cond_of(dag, dag.operand(node, 3));
+    let (high, other) = match cc {
+        CondCode::SetULt | CondCode::SetUGe => (high, other),
+        CondCode::SetLt | CondCode::SetGe => (flip_sign(dag, high), flip_sign(dag, other)),
+        _ => return None,
+    };
+    let (low, below) = (dag.operand(borrow, 0), dag.operand(borrow, 1));
+    let flags = dag.get_node(mosisd::CMP32, EVT::I8, &[low, below, high, other]);
+    let code = if matches!(cc, CondCode::SetULt | CondCode::SetLt) { cond::CC } else { cond::CS };
+    Some((cc_operand(dag, code), flags))
+}
+
 /// The code and flags a condition value branches on: a lowered compare, or the
 /// value tested against zero (`NE`).
 fn condition(
     dag: &mut SelectionDAG,
     value: SDValue,
 ) -> (SDValue, SDValue) {
+    // A branch or a select on the order of two longs reads the flags the
+    // chain leaves: `bcc` after the last `sbc`, not the borrow made into a byte
+    // and tested again.
+    if dag.opcode(value) == ISD::SetCCCarry
+        && let Some(flags) = lower_setcc_carry_flags(dag, value)
+    {
+        return flags;
+    }
     let value = match dag.opcode(value) {
         ISD::SetCC => lower_setcc(dag, value).unwrap_or(value),
         ISD::SetCCCarry => lower_setcc_carry(dag, value).unwrap_or(value),
