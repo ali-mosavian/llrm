@@ -5,11 +5,14 @@ here=$(cd "$(dirname "$0")" && pwd)
 d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 mkdir -p "$d/bin" "$d/tools" "$d/repo/crates/a" "$d/repo/tools"
 cp "$here/red-tip.sh" "$here/tip_crates.py" "$d/tools/"
+printf 'ALWAYS_SCANNERS = (\n    "docs_in_sync",\n    "target_facts",\n)\n' > "$d/parity_squash.py"
 cat > "$d/bin/cargo" <<EOF
 #!/bin/sh
 case "\$1" in
   metadata) echo '{"workspace_root":"$d/repo","packages":[{"name":"a","manifest_path":"$d/repo/crates/a/Cargo.toml","dependencies":[]}]}' ;;
-  test) echo "cargo test \$*" >> "$d/ran"; echo 'test x ... ok' ;;
+  test) echo "cargo test \$*" >> "$d/ran"
+    case "\$*" in *--test*) [ -n "\$STUB_SCANNER_RED" ] && { echo "shared_code_holds_no_copy_of_a_target_fact --- FAILED"; exit 101; } ;; esac
+    echo 'test x ... ok' ;;
 esac
 EOF
 chmod +x "$d/bin/cargo"; export PATH="$d/bin:$PATH"
@@ -26,7 +29,7 @@ grep -q -- '-p a' "$d/ran" || { echo "FAIL: control: the tests of -p a did not r
 git -c user.name=t -c user.email=t@t commit -q --allow-empty -m 2; echo 2 > tools/x; git add tools/x; git -c user.name=t -c user.email=t@t commit -q -m 3
 rm -f "$d/ran"
 tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD >/dev/null || { echo "FAIL: a tooling-only tip was red"; exit 1; }
-[ ! -e "$d/ran" ] || { echo "FAIL: a tooling-only tip ran tests"; exit 1; }
+! grep -q -- "--lib" "$d/ran" 2>/dev/null || { echo "FAIL: a tooling-only tip ran lib tests"; exit 1; }  # the root scanners still run
 # the scanners: a stale generated page and a tracked .md naming ~/scratch each stop the runner, named (they were refused as batches, never blamed on the tip)
 mkdir -p "$d/repo/tools/docs/docsbuild"; printf 'print("generated docs are out of date; run it")\nprint("  docs/x.md")\n' > "$d/repo/tools/docs/docsbuild/build.py"
 stop=$(tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD) && { echo "FAIL: a tip with a stale page was green"; exit 1; }
@@ -41,6 +44,10 @@ stop=$(tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD) && { echo "FAIL: a
 echo "$stop" | grep -q 'names the assistant.*m.txt' || { echo "FAIL: file not named: $stop"; exit 1; }
 git -C "$d/repo" rm -qf m.txt
 tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD >/dev/null || { echo "FAIL: a clean tip was red"; exit 1; }
+# a root scanner red on the tip (target_facts) stops the runner, named, with no change to any lib crate
+stop=$(STUB_SCANNER_RED=1 tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD) && { echo "FAIL: a tip with a red scanner was green"; exit 1; }
+echo "$stop" | grep -q 'STOP: release/next red: .*target_fact' || { echo "FAIL: scanner not named: $stop"; exit 1; }
+grep -q -- '--test target_facts' "$d/ran" || { echo "FAIL: the scanners were not run"; exit 1; }
 # the crash: tip_crates.py dies
 printf 'raise SystemExit("boom")\n' > "$d/tools/tip_crates.py"
 tip_crates HEAD~2 HEAD >/dev/null 2>&1 && { echo "FAIL: tip_crates returned 0 although tip_crates.py crashed"; exit 1; }
