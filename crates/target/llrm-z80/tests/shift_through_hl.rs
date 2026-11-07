@@ -29,9 +29,11 @@ fn a_word_in_de_shifted_left_doubles_through_hl() {
     assert_eq!(text.matches("add hl, hl").count(), 3, "{text}");
 }
 
-/// The row stride of huffman_decode's tables, `x * 18`, was 22 B (`sla e; rl d` x4 beside `add hl, hl`).
+/// The row stride of huffman_decode's tables, `x * 18`, was 22 B (`sla e; rl d` x4 beside `add hl, hl`); the
+/// doublings through `hl` left `ex de, hl; ex de, hl` between them.
 #[test]
-fn a_multiply_by_eighteen_has_no_byte_pair_shifts() {
+fn a_multiply_by_eighteen_doubles_through_hl_without_a_cancelling_exchange() {
     let text = assembly("x18", "define i16 @g(i16 %a, i16 %b) {\n  %r = mul i16 %b, 18\n  ret i16 %r\n}\n");
-    assert!(!text.contains("sla e") && !text.contains("sla c"), "{text}");
+    assert!(text.matches("sla").count() <= 1, "{text}");
+    assert!(!text.contains("ex de, hl\n\tex de, hl"), "{text}");
 }

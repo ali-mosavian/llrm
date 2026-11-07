@@ -145,6 +145,14 @@ impl Printer<'_> {
         {
             return;
         }
+        // `ex de, hl` twice is nothing; the flags are untouched
+        if text == "ex de, hl"
+            && matches!(self.out.last(), Some(Line::Inst(last)) if last == "ex de, hl")
+            && !PRICING.with(|one| one.get())
+        {
+            self.out.pop();
+            return;
+        }
         self.out.push(Line::Inst(text));
     }
 
