@@ -690,6 +690,16 @@ impl Builder<'_> {
         {
             return self.sse_fill_is_longer(length, fill.unwrap_or(0));
         }
+        if opt_size && let Some(costs) = self.target.tuning.size_fill {
+            let value = match fill {
+                Some(0) => costs.value[0],
+                Some(0xff) => costs.value[1],
+                Some(_) => costs.value[2],
+                None => return false,
+            };
+            let stores = length / 4 * costs.store[0] + u64::from(length % 4 >= 2) * costs.store[1] + length % 2 * costs.store[2];
+            return stores > value + costs.setup;
+        }
         if self.target.dag.pointer.size_in_bits() != 16 {
             return false;
         }

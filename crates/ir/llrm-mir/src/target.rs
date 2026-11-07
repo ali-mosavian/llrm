@@ -11,6 +11,9 @@ use crate::spaces::Spaces;
 /// states. The names are the pin's `TargetLoweringBase` fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tuning {
+    /// DEVIATE SD-REPFILL: at size, a constant fill whose stores take more
+    /// bytes than a `rep stos` fill is the fill. None: the pin's stores.
+    pub size_fill: Option<SizeFill>,
     /// `MaxStoresPerMemset`, and at size `MaxStoresPerMemsetOptSize`.
     pub max_stores_per_memset: usize,
     pub max_stores_per_memset_opt_size: usize,
@@ -169,6 +172,17 @@ pub struct Tuning {
     /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
     /// all the way into the callee.
     pub ipsccp_widen_keeps_sign: bool,
+}
+
+/// Encoded bytes of a constant fill, stores against `rep stos`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SizeFill {
+    /// A dword, word and byte store of an immediate.
+    pub store: [u64; 3],
+    /// The value in `eax` for zero, all ones and any other byte.
+    pub value: [u64; 3],
+    /// `lea edi`, `mov ecx` and the `rep stos`.
+    pub setup: u64,
 }
 
 impl Tuning {
