@@ -1,5 +1,6 @@
-reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
-blessed = "2026-10-15"
+reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
+blessed = "2026-11-07"
+corpus = "22aafb2ab0b9a19280dc9bafc6078e88"
 
 [bcc.O2]
 code_bytes = 1115
@@ -26,10 +27,11 @@ bss_bytes = 5122
 kernel_ms = 1179.9877
 
 [bc.O2]
-code_bytes = 2014
+instructions = 157022900
+memory_operands = 50317328
+code_bytes = 2012
 data_bytes = 61
 bss_bytes = 130
-kernel_ms = 2136.2355
 
 [pds71.O2]
 code_bytes = 2036
