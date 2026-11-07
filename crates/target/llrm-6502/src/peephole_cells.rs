@@ -6,6 +6,11 @@
 //! - [`store_then_index_load`]: `sta m; lda n; ldx m` is `tax; lda n` when `m`
 //!   is dead after (likewise `ldy m`): the byte went through memory to leave
 //!   `a`.
+//! - [`fold_temp_operand`]: `lda x; sta t; lda y; [clc|sec]; adc t` (likewise
+//!   `sbc`, `and`, `ora`, `eor`, `cmp`) is `lda y; [clc|sec]; adc x` when `t` is
+//!   dead after: the first operand goes to the instruction straight from where
+//!   it was loaded (a memory cell, `(p),y`, an indexed byte), not through `a`
+//!   and a temporary.
 //! - [`chain_ends_in_a`]: `(asl m; rol n)*k; [clc]; lda m` (also `lsr`/`ror`,
 //!   and `lda n`) is `lda m; (asl a; rol n)*k` when the loaded byte is dead after: the
 //!   byte that is returned shifts in `a`, not in memory and then loaded.
@@ -191,6 +196,55 @@ fn store_then_index_once(asm: &mut Asm) -> bool {
         }
     }
     false
+}
+
+/// The ALU instructions that take a memory operand of every form `lda` does.
+fn alu(op: Op) -> bool {
+    matches!(op, Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor | Op::Cmp)
+}
+
+pub fn fold_temp_operand(asm: &mut Asm) {
+    while temp_operand_once(asm) {}
+}
+
+fn temp_operand_once(asm: &mut Asm) -> bool {
+    let lines = &asm.lines;
+    for at in 0..lines.len().saturating_sub(3) {
+        let (Line::Inst(first), Line::Inst(store), Line::Inst(second)) = (&lines[at], &lines[at + 1], &lines[at + 2]) else {
+            continue;
+        };
+        let Operand::Direct(t) = &store.operand else { continue };
+        if first.op != Op::Lda || store.op != Op::Sta || second.op != Op::Lda || !stable(&first.operand) {
+            continue;
+        }
+        // neither load reads the temporary, as a cell or as a pointer
+        if first.operand.name() == Some(t.as_str()) || second.operand.name() == Some(t.as_str()) {
+            continue;
+        }
+        let mut op_at = at + 3;
+        while matches!(lines.get(op_at), Some(Line::Inst(Inst { op: Op::Clc | Op::Sec, .. }))) {
+            op_at += 1;
+        }
+        let Some(Line::Inst(user)) = lines.get(op_at) else { continue };
+        if !alu(user.op) || user.operand != Operand::Direct(t.clone()) {
+            continue;
+        }
+        if !cell_dead_from(lines, op_at + 1, t, &asm.result_cells, &mut BTreeSet::new()) {
+            continue;
+        }
+        let operand = first.operand.clone();
+        asm.lines[op_at] = Line::Inst(Inst { op: user.op, operand, place: user.place });
+        asm.lines.drain(at..at + 2);
+        return true;
+    }
+    false
+}
+
+/// An operand a later instruction reads as the load did: the same bytes as
+/// long as no store or index change comes between, which the three lines of the
+/// pattern guarantee.
+fn stable(operand: &Operand) -> bool {
+    matches!(operand, Operand::Direct(_) | Operand::Imm(_) | Operand::Indexed(..) | Operand::IndirectY(_))
 }
 
 pub fn chain_ends_in_a(asm: &mut Asm) {
