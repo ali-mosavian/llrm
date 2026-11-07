@@ -194,6 +194,12 @@ pub struct InlineParams {
     /// The `LastCallToStatic` bonus applies. The pin's always does;
     /// `-fno-inline-functions-called-once` turns it off.
     pub last_call_to_static: bool,
+    /// The target's byte price at speed counts (`inline_policy().by_rate`):
+    /// -O2 and -O3, where the rate was fitted. -O1 takes the pin's threshold
+    /// alone (225, as at -O2: `getInlineParams`, InlineCost.cpp:3376-3433; the
+    /// pin has no byte price at any level): arm64 -O1 jpeg_single refused
+    /// `next` (cost 95) at 68 of 79 sites and ran 589k instructions over.
+    pub prices_bytes: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -226,6 +232,7 @@ impl InlineParams {
             recursive_callee_limit: i64::MAX,
             recursive_edge_growth: i64::MAX,
             last_call_to_static: true,
+            prices_bytes: true,
             tti: Tti::Generic,
         }
     }
@@ -2123,7 +2130,7 @@ impl<'a> Analyzer<'a> {
         let growth = self.growth_per_site();
         // Growth under one call's size is inside the estimate's resolution: the
         // sites of a dying callee fold differently and must not split.
-        if rate == 0 || growth <= self.call_size() || self.site.sole_call_to_local {
+        if rate == 0 || !self.params.prices_bytes || growth <= self.call_size() || self.site.sole_call_to_local {
             return false;
         }
         let saved = self
