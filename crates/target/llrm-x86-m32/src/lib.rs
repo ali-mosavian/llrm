@@ -98,6 +98,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
         unroll_promotion_fits_x87_stack: true,
+        unroll_threshold: Some(4000),
         x87_zero_fill_at_size: true,
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant
