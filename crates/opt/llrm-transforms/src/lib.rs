@@ -176,6 +176,7 @@ pub mod combine_select_into_op;
 pub mod combine_select_op_op;
 pub mod combine_select_spf;
 pub mod combine_select_tail;
+pub mod combine_select_to_cmp;
 #[cfg(test)]
 mod combine_semantics_tests;
 pub mod combine_shared;
