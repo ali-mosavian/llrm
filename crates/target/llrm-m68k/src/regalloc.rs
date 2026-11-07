@@ -47,6 +47,10 @@ pub struct Registers<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool>;
 pub type M68kRegisters = Registers<true, true>;
 
 impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool> Target for Registers<ADDRESS_FIRST, ARGUMENT_REMAT> {
+    fn spills_named_by_lane() -> bool {
+        true
+    }
+
     type Class = Class;
 
     fn meet(
