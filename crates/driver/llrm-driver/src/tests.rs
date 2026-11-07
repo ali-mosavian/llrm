@@ -736,13 +736,15 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
 
 /// A `select` of a loaded value stopped the matcher at m64 ("node transform
 /// `GetOppositeBranchCondition` is not translated"): the table folds the load
-/// into `cmov` with the condition inverted (`inv_cond_XFORM`).
+/// into `cmov` with the condition inverted (`inv_cond_XFORM`). At -O0: from
+/// -O1 the pin's CmovConversion turns a cmov with a memory operand into a
+/// branch (`-x86-cmov-converter-force-mem-operand`, #6867), as its `llc` does.
 #[test]
 fn a_select_of_a_loaded_value_is_a_cmov_from_memory() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 define i64 @f(ptr %p, i64 %x, i64 %y, i64 %z) {\n  %a = load i64, ptr %p\n  %c = icmp slt i64 %x, %y\n  %r = select i1 %c, i64 %z, i64 %a\n  ret i64 %r\n}\n";
-    let (built, _) = compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
+    let (built, _) = compiled(&flags(&["-O0", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("cmovge") && line.contains('[')), "{listing}");
 }
@@ -2349,13 +2351,14 @@ fn m32_over_aligned_local_realigns_the_stack_pointer() {
     assert!(lines.contains(&"mov esp, ebp"), "{listing}");
 }
 
-/// There is no pin alignment at 16 bits: an over-aligned local is refused with
-/// its reason, not compiled off its alignment.
+/// m16 cannot realign the stack and the pin clamps the alignment there
+/// (OA-2, #7706): an over-aligned local compiles, where it was refused with
+/// "an over-aligned local ... is not realigned".
 #[test]
-fn m16_over_aligned_local_is_refused() {
+fn m16_over_aligned_local_compiles() {
     let text = format!("target datalayout = \"@m16-datalayout@-ni:2:3\"\n{ALIGNED_IR}");
-    let error = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().unwrap();
-    assert!(error.contains("in 16-bit code is not realigned"), "{error}");
+    let built = compiled(&flags(&["-m16", "-O1"]), &text, "aligned");
+    assert!(built.is_ok(), "{:?}", built.err());
 }
 
 /// A callee-saved register pushed before the stack `sub` (the pin's order,
