@@ -99,7 +99,7 @@ impl CombineHooks for MosCombines {
         _level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Add => borrow_of_ult(dag, node).or_else(|| widened_add_with_carry(dag, node)),
+            ISD::Add => borrow_of_ult(dag, node).or_else(|| widened_add_with_carry(dag, node)).or_else(|| funnel_by_one(dag, node)),
             ISD::Sub => borrow_of_ult(dag, node),
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
             ISD::Or => funnel_by_one(dag, node),
