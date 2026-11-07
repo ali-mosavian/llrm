@@ -11,6 +11,7 @@
 //! strings (they name no operands after allocation). Reason: nothing else reads
 //! them yet. Exit: the MC printer.
 
+use llrm_codegen::backend::frameobjects::{Sorting, order_frame_objects};
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::livephys::PhysLiveness;
 use llrm_spike_mf::regalloc::Assignment;
@@ -1448,16 +1449,30 @@ fn layout(
             frame.offsets.insert(index, -frame.size);
         }
     } else {
-        // The smallest objects lie nearest IX: `ld -n(ix), r` reaches 128 bytes
-        // below it, and past that every access is `ld iy, #n; add iy, sp`.
-        // Spill slots and scalars came after a local array and lay beyond its
-        // 8 KB (tests/run/c/fill_nest).
+        // The densest objects (most uses per byte) lie nearest IX, as the pin's
+        // `orderFrameObjects` lays a frame addressed from the frame pointer:
+        // `ld -n(ix), r` reaches 128 bytes below it, and past that every access
+        // is `ld iy, #n; add iy, sp`. Spill slots and scalars came after a local
+        // array and lay beyond its 8 KB (tests/run/c/fill_nest); by size alone a
+        // hot array lay beyond a cold smaller one (tests/frame_density.rs).
         let mut objects: Vec<(i32, i64)> = function.locals.iter().map(|&(index, size, _)| (index, size)).collect();
         objects.extend(slots.iter().map(|&(index, size)| (index, size as i64)));
         // A frame within IX's reach keeps its locals first and its slots last,
         // the last slot lying at SP (`pop` then `push` for a reload).
         if objects.iter().map(|&(_, size)| size).sum::<i64>() > 127 {
-            objects.sort_by_key(|&(_, size)| size);
+            let mut uses: llrm_support::hash::HashMap<i32, u64> = llrm_support::hash::HashMap::default();
+            for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+                for operand in &inst.operands {
+                    if let Operand::Frame(index) = operand {
+                        *uses.entry(*index).or_default() += 1;
+                    }
+                }
+            }
+            let sorting: Vec<_> = objects
+                .iter()
+                .map(|&(index, size)| Sorting { size: size as u64, align: 1, uses: uses.get(&index).copied().unwrap_or(0) })
+                .collect();
+            objects = order_frame_objects(&sorting, true).into_iter().map(|at| objects[at]).collect();
         }
         for (index, size) in objects {
             frame.size += size;
