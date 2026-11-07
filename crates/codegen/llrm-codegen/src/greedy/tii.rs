@@ -142,6 +142,15 @@ pub trait TargetInstrInfo {
         0
     }
 
+    /// DEVIATE C5: registers of one class take the same `encoding_bytes` in
+    /// every instruction, so greedy prices a class once. `None`: no sharing.
+    fn encoding_class(
+        &self,
+        _phys: RegId,
+    ) -> Option<u8> {
+        None
+    }
+
     /// The registers `one` is cheaper with, as (value, register): the target's
     /// `getRegAllocationHints` for the values `one` names.
     fn preferred_registers(
@@ -243,6 +252,13 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         phys: RegId,
     ) -> i64 {
         one.what.as_ref().map_or(0, |what| llrm_x86::register_cost::register_extra_bytes(what, value, phys))
+    }
+
+    fn encoding_class(
+        &self,
+        phys: RegId,
+    ) -> Option<u8> {
+        Some(llrm_x86::register_cost::encoding_class(phys))
     }
 
     fn is_trivially_re_materializable(
