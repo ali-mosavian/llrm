@@ -291,11 +291,14 @@ fn branched(
     }
 }
 
-/// [`select_arms_sunk`] as a pass, after `cgpaddr`, at the speed rate only
-/// (-O2 and -O3: -O1 and -Os are strict bytes and the branch form is up to 3 B
-/// longer), where the target states `sinks_select_arms` and has no
-/// conditional move.
-pub struct SelectArms;
+/// [`select_arms_sunk`] as a pass, after `cgpaddr`, at the speed rate (-O2 and
+/// -O3) and, where the target states `sinks_select_arms_for_size`, in a size
+/// build (-Os); not at -O1, where the branch form is up to 3 B longer on some
+/// targets. The target states `sinks_select_arms` and has no conditional move.
+pub struct SelectArms {
+    /// A size build (-Os): the target must state `sinks_select_arms_for_size`.
+    pub size: bool,
+}
 
 impl FunctionPass for SelectArms {
     fn name(&self) -> &'static str {
@@ -311,7 +314,12 @@ impl FunctionPass for SelectArms {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let wanted = analyses.outer().target().tti().is_some_and(|tti| !tti.has_cmov() && tti.sinks_select_arms());
+        let size = self.size;
+        let wanted = analyses
+            .outer()
+            .target()
+            .tti()
+            .is_some_and(|tti| !tti.has_cmov() && tti.sinks_select_arms() && (!size || tti.sinks_select_arms_for_size()));
         let fused = |bits: u32, signed: bool| analyses.outer().target().tti().is_some_and(|tti| tti.has_div_rem_op(bits, signed));
         if wanted && select_arms_sunk(unit.context, unit.function, &fused) {
             PreservedAnalyses::none()
