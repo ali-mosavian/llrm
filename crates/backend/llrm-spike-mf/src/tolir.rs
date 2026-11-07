@@ -1445,6 +1445,10 @@ fn buffer_loads<T: Target>(
 /// load of it follows that call in its block with no call between, so a value
 /// loaded is the object's content wherever the value lives, and a load made
 /// again where it is read gives the same value.
+///
+/// Worse row (owner greedy-subreg, exit 2026-11-28): z80 `float_in_memory_loop`
+/// -Os 326 -> 332 B. A remade load splits one value into two pieces and the
+/// allocation after it shifts; no single defect.
 fn call_result_buffers<T: Target>(function: &MFunction<T::Class>) -> BTreeSet<i64> {
     let mut found = BTreeSet::new();
     let mut frames: BTreeSet<i32> = BTreeSet::new();
