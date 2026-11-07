@@ -8,7 +8,7 @@
 #include "../../runtime/qb/stcore.c"
 
 void qb_error(unsigned n) { fprintf(stderr, "qb_error %u\n", n); exit(3); }
-void copy_bytes(char *to, const char *from, unsigned n) { while (n--) *to++ = *from++; }
+void copy_rt(char *to, const char *from, unsigned n) { while (n--) *to++ = *from++; }
 int lh_take_from_strings(void) { return 0; }
 void *lh_alloc(uword b, enum LhType t, void *o, byte f) { (void)b; (void)t; (void)o; (void)f; return 0; }
 void lh_free(void *d) { (void)d; }

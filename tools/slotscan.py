@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Frame stores that reach past the frame's saved BP, in the asm of every m16 program and of the QB runtime.
 
-    slotscan.py corpus BIN_DIR ISEL [ROOT]    every .c (llrm-c -O2 and -Os) and .bas (llrm-qb -O2) under ROOT (the repo)
-    slotscan.py runtime BIN_DIR ISEL          the QB runtime's C files (llrm-c -O2 and -Os, the include set of tools/dosbatch/qbruntime.py)
+    slotscan.py corpus BIN_DIR ISEL [ROOT]    every .c (llrm-cc -O2 and -Os) and .bas (llrm-qb -O2) under ROOT (the repo)
+    slotscan.py runtime BIN_DIR ISEL          the QB runtime's C files (llrm-cc -O2 and -Os, the include set of tools/dosbatch/qbruntime.py)
 
-BIN_DIR holds llrm-c and llrm-qb, ISEL is old, dag or shadow. A hit is a store `op SIZE ptr [bp-N]` with SIZE > N: it writes the saved BP or the return
+BIN_DIR holds llrm-cc and llrm-qb, ISEL is old, dag or shadow. A hit is a store `op SIZE ptr [bp-N]` with SIZE > N: it writes the saved BP or the return
 address (grep.c's dword zero, B$FLOF and tone.c's dword spill into a word slot). Prints `jobs N programs-with-hits M` and one `HIT` line per function;
 a file that does not compile is a `NOCOMPILE` line, and counts as a red. Exit status is 1 on any hit or NOCOMPILE.
 
@@ -58,7 +58,7 @@ def corpus_jobs(bins: Path, isel: str, root: Path) -> list[tuple[str, str, list[
         if "target" in source.parts or ".git" in source.parts or ".venv" in source.parts:
             continue
         for level in ("-O2", "-Os"):
-            cmd = [str(bins / "llrm-c"), str(source), "-I", str(root / "bench"), "-I", str(source.parent), "-m16", "-march=i386", level, f"--isel={isel}"]
+            cmd = [str(bins / "llrm-cc"), str(source), "-I", str(root / "bench"), "-I", str(source.parent), "-m16", "-march=i386", level, f"--isel={isel}"]
             jobs.append((f"c-m16{level}", str(source), cmd))
     for source in sorted(root.rglob("*.bas")):
         if "target" in source.parts or ".git" in source.parts or ".venv" in source.parts:
@@ -74,7 +74,7 @@ def runtime_jobs(bins: Path, isel: str) -> list[tuple[str, str, list[str]]]:
     for one in ("qb", "qb/dos/m16", "qb/dev/dos/m16", "qb/dev/dos", "shared/dos/m16"):
         sources.update((runtime / one).glob("*.c"))
     return [
-        (f"rt{level}", str(source), [str(bins / "llrm-c"), str(source), *includes, "-m16", "-march=i386", level, "-mbss-begin", f"--isel={isel}"])
+        (f"rt{level}", str(source), [str(bins / "llrm-cc"), str(source), *includes, "-m16", "-march=i386", level, "-mbss-begin", f"--isel={isel}"])
         for source in sorted(sources)
         for level in ("-O2", "-Os")
     ]
@@ -97,7 +97,7 @@ def main(argv: list[str]) -> int:
     with ThreadPoolExecutor(6) as pool:
         results = list(pool.map(one, jobs))
     bad = [one for one in results if one[2]]
-    print(f"# slotscan {mode} isel={isel} llrm-c {bins / 'llrm-c'}")
+    print(f"# slotscan {mode} isel={isel} llrm-cc {bins / 'llrm-cc'}")
     print(f"jobs {len(results)} programs-with-hits {len(bad)}")
     for tag, source, found, _ in bad:
         print(f"HIT {tag} {source}: {'; '.join(found)}")

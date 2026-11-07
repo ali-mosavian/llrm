@@ -1429,7 +1429,7 @@ impl FunctionPass for EarlyCse {
         if !changed {
             return PreservedAnalyses::all();
         }
-        let mut preserved = PreservedAnalyses::none().preserve::<Dominators>();
+        let mut preserved = PreservedAnalyses::none().preserve::<Dominators>().preserve_cfg();
         if let (Some(updated), Some(accesses)) = (updated, kept_accesses) {
             analyses.replace::<MemorySsa>(&*unit.function, Ok(Rc::new(MssaGraph::new(updated, Some(accesses)))));
             preserved = preserved.preserve_updated::<MemorySsa>();

@@ -1255,7 +1255,25 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if min_bits == 0 || min_bits >= width || min_bits < reqd {
             return None;
         }
-        let min_vt = EVT::integer(min_bits);
+        let mut min_vt = EVT::integer(min_bits);
+        let mut pre_ext = pre_ext;
+        // DEVIATE (`narrow_setcc_with_other_uses`): a mask that other uses keep,
+        // or an assertion, is compared as it stands, truncated to the smallest
+        // legal type that holds it. Truncating the value under it to the
+        // illegal `min_bits` made the promoted operand a second mask beside
+        // the one kept (masked_selector_chain: `and a, #7` at each compare).
+        // Owner z80, exit 2026-11-27.
+        let shared_mask = self.dag.opcode(n0) == ISD::And && !self.dag.has_one_use(n0.node);
+        if (shared_mask || self.dag.opcode(n0) == ISD::AssertZext)
+            && let Some(tli) = self.tli
+            && !tli.types.is_type_legal(min_vt)
+            && let Some(legal) = (min_bits + 1..width)
+                .map(EVT::integer)
+                .find(|candidate| tli.types.is_type_legal(*candidate))
+        {
+            min_vt = legal;
+            pre_ext = n0;
+        }
         if let Some(tli) = self.tli {
             if !self.hooks.is_setcc_type_desirable(min_vt, tli.types.is_type_legal(min_vt)) {
                 return None;

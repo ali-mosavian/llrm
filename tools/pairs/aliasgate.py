@@ -3,7 +3,7 @@
 
     tools/pairs/aliasgate.py --dumper BASE_LLRM_C --old OLD_ALIAS_PAIRS --new NEW_ALIAS_PAIRS [--src DIR] [--jobs N]
 
-The dumper (one llrm-c, so both sides read one IR) writes each source's per-pass
+The dumper (one llrm-cc, so both sides read one IR) writes each source's per-pass
 module dumps (`--dump`); at three stages of each (the first, the last of the
 walk, the last) the OLD and NEW builds of `alias_pairs` record the stack's
 answers for every load and store pair and every call against every access

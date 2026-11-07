@@ -566,7 +566,7 @@ def test_a_pr_that_does_not_link_alone_is_refused_and_only_a_runtime_or_frontend
     head = branch(repo, "ok", "b.txt", "b\n")
     sh(repo, "checkout", "-q", "main")
     kw = dict(base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda _: set(), units=lambda _: set(), docs=lambda root: set())
-    why = ps.alone_refusals(head, links=lambda files, cwd, target: ["qb arena_type: llrm-c: _line@3", "qb bc_draw: x"], **kw)
+    why = ps.alone_refusals(head, links=lambda files, cwd, target: ["qb arena_type: llrm-cc: _line@3", "qb bc_draw: x"], **kw)
     assert why == ["programs do not link: link qb arena_type, link qb bc_draw"], why
     assert ps.alone_refusals(head, links=lambda files, cwd, target: [], **kw) == []
 

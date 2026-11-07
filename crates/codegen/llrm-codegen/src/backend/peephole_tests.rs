@@ -3869,7 +3869,7 @@ fn steps(done: &LirBody) -> Vec<(String, Vec<Loc>)> {
 
 /// X86FixupLEAs `optLEAALU`: `lea ecx,[eax+edx]; add ebx,ecx` is `add ebx,eax;
 /// add ebx,edx`, and a subtract the same two steps. Without the case the
-/// six-term sums of two llrm-c listings kept the `lea`/`mov` pair and ended
+/// six-term sums of two llrm-cc listings kept the `lea`/`mov` pair and ended
 /// `mov eax, edx`.
 #[test]
 fn test_an_lea_read_once_by_an_add_or_sub_is_two_steps_on_its_destination() {

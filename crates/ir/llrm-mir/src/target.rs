@@ -50,10 +50,23 @@ pub struct Tuning {
     /// `div` pins eax, edx and the divisor's register, the narrow multiply
     /// sequence none.
     pub narrow_divide_live_limit: u32,
+    /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): at size, MachineSink
+    /// leaves an instruction where it is when moving it would replace its one
+    /// result by more operands that die at it, across a later instruction that
+    /// clobbers registers (more values spilled). false: the pin's sink.
+    pub sink_spares_ranges: bool,
     /// At -O1 (`OptLevel` 1) a full unroll is made only where its cost after
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
     pub unroll_never_grows_at_o1: bool,
+    /// DEVIATE INL-O1 (owner x86-m32, exit 2026-11-24): where no byte rate is
+    /// stated (-O1), an inline that stays is held to the -Os bound (the callee
+    /// copied only if it does not grow the code); false: the pin's threshold.
+    pub inline_never_grows_without_rate: bool,
+    /// With `inline_never_grows_without_rate`: what a byte of growth costs an
+    /// -O1 inline, in thousandths of a clock, against the call's latency at
+    /// the site's frequency. m32: half the -O2 rate (-O1 weighs code size).
+    pub inline_o1_milliclocks_per_byte: i64,
     /// Trips the -O1 no-growth rule above analyses for folds: the pin's
     /// `-unroll-max-iteration-count-to-analyze` (10) when `None`.
     pub unroll_o1_analyzed_trips: Option<u32>,
@@ -260,7 +273,10 @@ impl Tuning {
         multiply_by_clocks: false,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
+        sink_spares_ranges: false,
         unroll_never_grows_at_o1: false,
+        inline_never_grows_without_rate: false,
+        inline_o1_milliclocks_per_byte: 0,
         unroll_o1_analyzed_trips: None,
         price_pin_multiplies: false,
         imul_at_size: false,

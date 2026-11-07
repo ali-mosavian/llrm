@@ -78,7 +78,7 @@
 //!
 //! # Example
 //! No honest example: the pipeline is the order of the passes, not one rewrite,
-//! and no one function shows it. `llrm-c --dump DIR` writes the module after
+//! and no one function shows it. `llrm-cc --dump DIR` writes the module after
 //! each stage (`NN-stage.ll`) and, for each body, each changed step of the
 //! fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 //!
@@ -154,7 +154,7 @@ pub struct Options {
     /// The library routines the compile states the program links (the pin's
     /// `TargetLibraryInfo`, which it reads from the triple: here the front
     /// end's profile states them, as the ABI chosen by `-mabi` spells and
-    /// calls them). DEVIATE D11: llrm-c states `strlen` for `-m32` under the
+    /// calls them). DEVIATE D11: llrm-cc states `strlen` for `-m32` under the
     /// System V convention only, llrm-qb and llrm-nib none, so no other
     /// compile forms a call of a library routine. Exit: a `Target::library`
     /// of each target that states its routines. Owner w-6, exit 2026-11-30.
@@ -701,14 +701,20 @@ impl FunctionPass for Together {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let mut changed = false;
+        let mut cfg = true;
         for part in &mut self.parts {
             let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
             if !preserved.are_all_preserved() {
                 changed = true;
+                cfg &= preserved.cfg_preserved();
                 analyses.invalidate(unit.function, &preserved);
             }
         }
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        match (changed, cfg) {
+            (false, _) => PreservedAnalyses::all(),
+            (true, true) => PreservedAnalyses::none().preserve_cfg(),
+            (true, false) => PreservedAnalyses::none(),
+        }
     }
 }
 

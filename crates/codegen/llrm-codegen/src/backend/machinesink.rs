@@ -136,6 +136,8 @@ pub struct MachineSink {
     /// The registers a block may hold at once (`getRegPressureSetLimit`; the
     /// number of allocatable registers, not the pin's per-set limits).
     pub limit: usize,
+    /// DEVIATE SINK-EXT: see `Tuning::sink_spares_ranges`.
+    pub spare_ranges: bool,
 }
 
 impl LIRTransform for MachineSink {
@@ -151,7 +153,7 @@ impl LIRTransform for MachineSink {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(sunk_within(&body, self.size, self.limit, Some(&self.classes)))
+        Ok(sunk_within_ranges(&body, self.size, self.limit, Some(&self.classes), self.spare_ranges))
     }
 }
 
@@ -380,6 +382,8 @@ struct Sinker {
     flags_live_in: Vec<bool>,
     /// `RegClassInfo->getRegPressureSetLimit`.
     limit: usize,
+    /// DEVIATE SINK-EXT.
+    spare_ranges: bool,
     /// Instructions with an operand the encoding pins to a register (DEVIATE
     /// M7).
     pinned: HashSet<usize>,
@@ -518,6 +522,7 @@ impl Sinker {
             bits: body.bits,
             flags_live_in: Vec::new(),
             limit: usize::MAX,
+            spare_ranges: false,
             pinned: HashSet::default(),
             stack: None,
             phi_blocks,
@@ -1074,6 +1079,9 @@ impl Sinker {
         if self.touches_machine_state(block, index) {
             return false;
         }
+        if self.stretches_over_clobber(block, index, &one) {
+            return false;
+        }
         let mut break_phi_edge = false;
         let Some(sink_to) = self.find_succ_to_sink_to(&one, block, &mut break_phi_edge) else { return false };
         // A dead flags def that is live into the block it moves to would turn
@@ -1119,6 +1127,34 @@ impl Sinker {
         true
     }
 
+    /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): moving the
+    /// instruction at `index` out of `block` trades its result for the
+    /// operands that die at it, and an instruction that clobbers registers
+    /// follows it in `block`: the extra values would stay live across that
+    /// clobber and be spilled. The pin sinks it (`isProfitableToSinkTo` counts
+    /// no such cost outside a cycle).
+    fn stretches_over_clobber(
+        &self,
+        block: usize,
+        index: usize,
+        one: &Insn,
+    ) -> bool {
+        if !self.spare_ranges {
+            return false;
+        }
+        let me = self.canonical(one.id());
+        let dying = one
+            .uses
+            .iter()
+            .filter(|&&value| !self.stack_has(value))
+            .filter(|&&value| {
+                self.uses.get(&value).into_iter().flatten().all(|&used| matches!(used, Use::Insn(id) if id == me))
+            })
+            .count();
+        dying > one.defines.len()
+            && self.insns[block][index + 1..].iter().any(|next| !next.clobbers.is_empty() || !next.clobbers_high.is_empty())
+    }
+
     /// `ProcessBlock`: the block bottom-up.
     fn process_block(
         &mut self,
@@ -1151,6 +1187,17 @@ pub fn sunk_within(
     limit: usize,
     classes: Option<&crate::backend::classes::RegisterClasses>,
 ) -> LirBody {
+    sunk_within_ranges(body, size, limit, classes, false)
+}
+
+/// [`sunk_within`], and with `spare_ranges` DEVIATE SINK-EXT.
+pub fn sunk_within_ranges(
+    body: &LirBody,
+    size: bool,
+    limit: usize,
+    classes: Option<&crate::backend::classes::RegisterClasses>,
+    spare_ranges: bool,
+) -> LirBody {
     // `ProcessBlock` (MachineSink.cpp#L959-L961) leaves a block with one
     // successor or fewer, or none of its own, at once: a body with no other
     // block has nothing to sink and no edge to split, and needs none of the
@@ -1165,6 +1212,7 @@ pub fn sunk_within(
     loop {
         let mut sinker = Sinker::new(&body, size, before.take());
         sinker.limit = limit;
+        sinker.spare_ranges = spare_ranges;
         if let Some(classes) = classes {
             sinker.pinned = body
                 .blocks
@@ -1689,6 +1737,49 @@ mod tests {
         assert_eq!(Sinker::new(&body, true, None).flags_live_in, [false, false, false]);
         let moved = sunk(&body, true);
         assert_eq!(names(&moved, 0), ["cmp", "jbe"], "the fsub moved, as the pin has it");
+    }
+
+    /// A sum of two dying values sank past the branch beside a call: both
+    /// operands stayed live across the call and were spilled (x_idioms -Os,
+    /// 13 results spilled, +61 B). With the size rule on it stays before the
+    /// call; with it off the pin's sink moves it.
+    #[test]
+    fn test_in_a_size_build_a_sum_of_dying_values_stays_before_a_call() {
+        let call = {
+            let mut one = (*insn(1, Operation::Move, "mov", vec![held(6)], vec![held(9)], vec![6], vec![9])).clone();
+            one.clobbers.insert(llrm_lir::registers::RegId::from_raw(0));
+            Arc::new(one)
+        };
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::FloatArith, "fadd", vec![held(10)], vec![held(1), held(2)], vec![10], vec![1, 2]),
+                    call,
+                    insn(5, Operation::Compare, "cmp", vec![], vec![held(3), held(4)], vec![], vec![3, 4]),
+                    insn(2, Operation::Branch, "jbe", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let arm = LirBlock {
+            succ: vec![2].into(),
+            ..LirBlock::new(1, vec![insn(3, Operation::Move, "mov", vec![held(5)], vec![held(10)], vec![5], vec![10])])
+        };
+        let join = LirBlock::new(2, vec![insn(4, Operation::Return, "ret", vec![], vec![], vec![], vec![])]);
+        let mut body = LirBody::new(
+            "chain",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2, 3, 4, 9].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let first = |body: &LirBody| body.blocks[0].insns.first().and_then(|one| one.what.as_ref()?.name.clone());
+        assert_ne!(first(&sunk_within(&body, true, usize::MAX, None)).as_deref(), Some("fadd"), "the pin sinks it");
+        let spared = sunk_within_ranges(&body, true, usize::MAX, None, true);
+        assert_eq!(first(&spared).as_deref(), Some("fadd"), "the size rule keeps it");
     }
 
     /// x_collatz ran `lea edi,[ecx+ecx*2]` on every trip of its inner loop,
