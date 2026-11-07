@@ -33,3 +33,16 @@ fn an_extending_load_of_a_global_reads_it_pc_relative_at_every_cpu() {
         }
     }
 }
+
+/// Three extending loads of one global, a call between each, share the one
+/// `lea`: a `(g,%pc)` each is 2 B more from the third load. The first version
+/// of the fix took the shared address apart: 196 of 300 seeds got bigger.
+#[test]
+fn extending_loads_that_share_an_address_share_the_lea() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"\n@g16 = global i16 7\ndeclare void @h()\ndefine i32 @f() {{\n  %a = load i16, ptr @g16, align 2\n  call void @h()\n  %b = load i16, ptr @g16, align 2\n  call void @h()\n  %c = load i16, ptr @g16, align 2\n  %x = sext i16 %a to i32\n  %y = sext i16 %b to i32\n  %z = sext i16 %c to i32\n  %s = add i32 %x, %y\n  %t = add i32 %s, %z\n  ret i32 %t\n}}"
+    );
+    let module = llrm_mir::parse::module(&ir).expect("parses");
+    let text = text_with(&module, "f", Cpu::M68000, Options::default()).expect("compiles");
+    assert_eq!(text.matches("lea\t(g16,%pc)").count(), 1, "{text}");
+}

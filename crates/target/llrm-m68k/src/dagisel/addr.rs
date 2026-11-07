@@ -432,9 +432,14 @@ pub fn select_ari<D: AddrDag>(
     // `move.w (%a0),%d0` follows, 4 B more than `move.w (g,%pc),%d0`; a plain
     // load tries `PCD` first. Every extending load has its `PCD` row. Pin
     // order: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kInstrData.td#L689
-    // (`ARI`, `ARID`, `ARII`, then `PCD` at L692). Owner m68k. Exit 2026-11-20
-    // (upstream the order, or keep).
-    if dag.opcode(n.node) == m68k_isd::WrapperPC && parent.is_some_and(|parent| dag.opcode(parent) == isd::LOAD) {
+    // (`ARI`, `ARID`, `ARII`, then `PCD` at L692). Only for a wrapper this load
+    // alone reads: from three loads on, one shared `lea` is smaller than a
+    // `(g,%pc)` each (the seeds grew 0.7% to 1.7% without the test). Owner
+    // m68k. Exit 2026-11-20 (upstream the order, or keep).
+    if dag.opcode(n.node) == m68k_isd::WrapperPC
+        && dag.has_one_use(n)
+        && parent.is_some_and(|parent| dag.opcode(parent) == isd::LOAD)
+    {
         return None;
     }
     let mut am = AddressMode::new(AddrType::Ari);
