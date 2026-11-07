@@ -673,7 +673,7 @@ fn test_a_constant_the_target_names_its_own_way_is_made_again() {
     let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
     let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
     let env = TargetEnv {
-        palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+        palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette.clone())), (2, std::rc::Rc::new(palette))]).into(),
         pins: IndexMap::default(),
         size: false,
         keep_pinned: false,
@@ -713,7 +713,7 @@ fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
     let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
     let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
     let env = TargetEnv {
-        palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+        palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette.clone())), (2, std::rc::Rc::new(palette))]).into(),
         pins: IndexMap::default(),
         size: false,
         keep_pinned: false,
@@ -792,9 +792,9 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
     use super::env::TargetEnv;
     let palette = |registers: &[RegId]| registers.iter().copied().collect::<BTreeSet<_>>();
     let palettes = IndexMap::from_iter([
-        (1, palette(&[RegId::AX, RegId::BX, RegId::SI])),
-        (2, palette(&[RegId::BX, RegId::BP])),
-        (3, palette(&[RegId::SI, RegId::DI])),
+        (1, std::rc::Rc::new(palette(&[RegId::AX, RegId::BX, RegId::SI]))),
+        (2, std::rc::Rc::new(palette(&[RegId::BX, RegId::BP]))),
+        (3, std::rc::Rc::new(palette(&[RegId::SI, RegId::DI]))),
     ]);
     let env = TargetEnv {
         joins_global_copies: true,
@@ -1258,7 +1258,7 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
     TargetEnv {
         palettes: palettes
             .iter()
-            .map(|(value, registers)| (*value, registers.iter().copied().collect()))
+            .map(|(value, registers)| (*value, std::rc::Rc::new(registers.iter().copied().collect())))
             .collect::<IndexMap<_, _>>()
             .into(),
         pins: IndexMap::default(),
@@ -1318,7 +1318,8 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
         let env = TargetEnv {
             joins_global_copies: true,
             joins_pinned_copies,
-            palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+            palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette.clone())), (2, std::rc::Rc::new(palette))])
+                .into(),
             pins: IndexMap::from_iter([(1, RegId::AX)]),
             size: false,
             keep_pinned: true,
@@ -1573,7 +1574,10 @@ fn test_a_lane_def_after_a_joined_lane_keeps_it() {
     let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
     assert_eq!(result, JoinResult::Joined);
     let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
-    let low = kept.iter().find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1))).expect("the low copy");
+    let low = kept
+        .iter()
+        .find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1)))
+        .expect("the low copy");
     assert!(!low.undef_super && low.partial_defs == vec![2], "{low:?}");
 }
 
@@ -1596,7 +1600,10 @@ fn test_a_plain_lane_def_keeps_a_lane_joined_after_it() {
     let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
     assert_eq!(result, JoinResult::Joined);
     let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
-    let low = kept.iter().find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1))).expect("the low copy");
+    let low = kept
+        .iter()
+        .find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1)))
+        .expect("the low copy");
     assert!(low.partial_defs == vec![2], "{low:?}");
 }
 
@@ -1604,7 +1611,8 @@ fn test_a_plain_lane_def_keeps_a_lane_joined_after_it() {
 /// join their lanes it defines the whole pair. The high lane's copy kept the
 /// low one, so the def was marked to read the pair, which nothing defined
 /// before it: the pair was live from the function entry and the split of it
-/// died on "Cannot overlap different values" (6502, write_through_parameter -O1).
+/// died on "Cannot overlap different values" (6502, write_through_parameter
+/// -O1).
 #[test]
 fn test_one_instruction_defining_both_bytes_does_not_read_the_pair() {
     let both = Arc::new(Insn::new(0, None, None, vec![1, 3], vec![]));
@@ -1700,7 +1708,8 @@ fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
         let was = body(&[(&[constant_named(1, "CONST_I32"), Arc::clone(&c)], &[1]), (&[read(2)], &[])]);
         let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
         let env = TargetEnv {
-            palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+            palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette.clone())), (2, std::rc::Rc::new(palette))])
+                .into(),
             pins: IndexMap::default(),
             size: false,
             keep_pinned: false,
@@ -1784,7 +1793,8 @@ fn constant_of(
 }
 
 /// The encoded sizes of a flat 32-bit target: a copy is two bytes, three for a
-/// word (66h) or a qword (REX.W), a zero is `xor` (two), any other constant five.
+/// word (66h) or a qword (REX.W), a zero is `xor` (two), any other constant
+/// five.
 fn flat_bytes() -> llrm_target::MoveBytes {
     llrm_target::MoveBytes {
         plain: 4,
@@ -1812,7 +1822,8 @@ fn size_copy_of_def_is_remade(
     size_copy_of_def_is_remade_after(Vec::new(), Vec::new(), a, width, price)
 }
 
-/// `size_copy_of_def_is_remade`, with `before` the definition and `after` the copy.
+/// `size_copy_of_def_is_remade`, with `before` the definition and `after` the
+/// copy.
 fn size_copy_of_def_is_remade_after(
     before: Vec<Arc<Insn>>,
     after: Vec<Arc<Insn>>,
@@ -1832,9 +1843,9 @@ fn size_copy_of_def_is_remade_after(
     let c = Arc::new(Insn::new(0, None, Some(what), vec![2], vec![1]));
     let head: Vec<Arc<Insn>> = before.into_iter().chain([a, Arc::clone(&c)]).chain(after).collect();
     let was = body(&[(&head, &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
-    let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+    let palette: std::rc::Rc<BTreeSet<RegId>> = std::rc::Rc::new([RegId::AX, RegId::BX].into_iter().collect());
     let env = TargetEnv {
-        palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+        palettes: IndexMap::from_iter([(1, std::rc::Rc::clone(&palette)), (2, palette)]).into(),
         pins: IndexMap::default(),
         size: true,
         keep_pinned: false,
@@ -1858,10 +1869,11 @@ fn size_copy_of_def_is_remade_after(
 }
 
 /// The target's encodings decide at size: a word zero (`xor` 2 B against a 66h
-/// copy, 3 B) is remade, a dword zero is a tie with the copy and stays one, and so
-/// does a constant dearer than the copy. A qword zero is left a copy (C13): its
-/// `xor` beat the REX.W copy (m64 `recgcd`, +2 B) but a remade zero that spills is a
-/// 9 B `movq $0, slot` (jpeg_fixed m64 -Os +42 B, over_aligned_local_after_even_pushes +9).
+/// copy, 3 B) is remade, a dword zero is a tie with the copy and stays one, and
+/// so does a constant dearer than the copy. A qword zero is left a copy (C13):
+/// its `xor` beat the REX.W copy (m64 `recgcd`, +2 B) but a remade zero that
+/// spills is a 9 B `movq $0, slot` (jpeg_fixed m64 -Os +42 B,
+/// over_aligned_local_after_even_pushes +9).
 #[test]
 fn test_for_size_a_zero_that_stays_read_is_made_again_where_the_target_prices_it() {
     let price = || Some(super::pass::remat_priced(flat_bytes()));
@@ -1878,9 +1890,10 @@ fn test_for_size_without_a_price_a_constant_that_stays_read_stays_a_copy() {
     assert!(!size_copy_of_constant_is_remade(0, 2, None));
 }
 
-/// mul_constants m32 -Os: `mov edx, eax` became `lea eax, [esi+0x3c6ef35f]` (6 B for 2):
-/// the definition was an `lea` of a register and a constant, not a plain constant,
-/// which the byte price did not cover and let through. It stays a copy.
+/// mul_constants m32 -Os: `mov edx, eax` became `lea eax, [esi+0x3c6ef35f]` (6
+/// B for 2): the definition was an `lea` of a register and a constant, not a
+/// plain constant, which the byte price did not cover and let through. It stays
+/// a copy.
 #[test]
 fn test_for_size_an_lea_of_a_register_that_stays_read_stays_a_copy() {
     let base = Loc::Held(Held { value: 9, width: 4, offset: 0 });

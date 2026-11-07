@@ -75,7 +75,8 @@ pub(crate) fn heaviest_first(
     sorted
 }
 
-/// DEVIATE SLOTS-LOOPWIDTH: whether the slot at hand may hold `home`. A slot
+/// DEVIATE SLOTS-LOOPWIDTH (owner greedy-subreg, exit 2026-11-20: keep with
+/// the bench rows in `Tuning`, or drop): whether the slot at hand may hold `home`. A slot
 /// shares with a slot of its own kind (scratch or spill); with the width rule
 /// on, only with one as wide, or where neither is held in a register through a
 /// loop (`loopslots`: a word shares no slot a double word is read from).

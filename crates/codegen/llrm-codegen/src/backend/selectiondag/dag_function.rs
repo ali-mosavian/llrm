@@ -1340,7 +1340,6 @@ fn selected_in(
                             freq: 1.0,
                             milliclocks_per_byte: mul_rate,
                             by_clocks: true,
-                            no_growth: !cpu.speed_rate,
                             price_pin: false,
                         })
                     } else {
@@ -1354,7 +1353,6 @@ fn selected_in(
                                     freq: frequencies.relative_to_entry(parent),
                                     milliclocks_per_byte: mul_rate,
                                     by_clocks: false,
-                                    no_growth: false,
                                     price_pin,
                                 },
                             )

@@ -586,6 +586,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE ARM64-UNROLL-PRICE: whether a loop of a nest of known trips
+    /// that reads no counter of the loops around it is priced like any other
+    /// full unroll instead of following the nest's decision (unrolling the
+    /// nest folds nothing there), and a priced unroll counts the constant trips
+    /// of the loops around it, not 32 each. False: the nest bypass holds for
+    /// every such loop, the pin's threshold alone, and 32 a loop.
+    fn unroll_prices_nest_loops_without_outer_counter(&self) -> bool {
+        false
+    }
+
     /// Whether a size build's loop rotation copies a header only when its
     /// exit test folds in the preheader (RS1). False: the pass's header limit
     /// alone.
@@ -629,6 +639,16 @@ pub trait Tti {
     /// register offset costs an add and a register at m16 (6 GPRs, base+index
     /// already taken), nothing at m32.
     fn constant_offset_phi_is_cheap(&self) -> bool {
+        true
+    }
+
+    /// Whether a constant operand of an arithmetic instruction may become a phi
+    /// in `sinkLastInstruction`: false where the join then costs a `mov` and a
+    /// taken jump per use (DEVIATE SINK-CONST-PHI). Never at size.
+    fn constant_arith_phi_is_cheap(
+        &self,
+        _optsize: bool,
+    ) -> bool {
         true
     }
 

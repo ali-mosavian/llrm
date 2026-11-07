@@ -1,7 +1,8 @@
-//! switch_table_holes at m32 -O2: the pin gives the byte-valued use its own
-//! `i8` counter beside the `i32` one; ours counted the third register past a
-//! budget of two (six allocatable, one more kept back, three live elsewhere)
-//! and kept one `i32` counter that widens the `i8` add: 130 B against 122.
+//! switch_table_holes at m32 -O2: ours counted the third register past a
+//! budget of two (six allocatable, one more kept back for a stack pointer
+//! already outside the six, three live elsewhere) and kept one `i32` counter
+//! that widens the `i8` add: 130 B against 122. The `i8` counter is our shape,
+//! not a claim about the pin's.
 
 use std::rc::Rc;
 
@@ -46,7 +47,7 @@ impl llrm_mir::target::Machine for M32Like {
 }
 
 #[test]
-fn a_target_that_states_its_registers_keeps_none_back_for_the_pins_stack_pointer() {
+fn a_target_that_states_its_registers_keeps_none_back_for_the_stack_pointer() {
     let mut module = llrm_mir::parse::module(include_str!("lsr_register_budget/switch_table_holes.ll"))
         .unwrap_or_else(|why| panic!("{why:?}"));
     let mut manager = llrm_mir::passes::PassManager::default();
