@@ -35,7 +35,7 @@ fn an_extern_global_is_loaded_through_the_got_at_linux_pie() {
     assert!(pie.to_lowercase().contains("got"), "{pie}");
 }
 
-/// A hidden extern global at Linux PIE was read through the GOT (3 loads) where
+/// A hidden extern global at Linux PIE was read through the GOT (2 loads) where
 /// the pin reads it directly (`adrp` + `ldr :lo12:`, 1 load): hidden binds in
 /// the module. Default visibility and `extern_weak` keep the GOT.
 #[test]
