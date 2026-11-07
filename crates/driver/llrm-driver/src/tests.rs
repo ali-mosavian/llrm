@@ -4631,5 +4631,5 @@ fn a_single_bit_mask_test_at_m64_is_a_narrow_sign_test_not_cmp_adc() {
                 \x20 %r = add nuw nsw i32 %y, %z\n  ret i32 %r\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(!listing.contains("adc") && listing.contains(", 31"), "{listing}");
+    assert!(!listing.contains("adc") && listing.contains("setns"), "{listing}");
 }
