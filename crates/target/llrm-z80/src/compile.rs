@@ -105,7 +105,7 @@ fn cached_selections(
     environment.sort();
     TEXT_COMPARES.with(|one| one.set(one.get() + 1));
     let key = (
-        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts)),
+        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips)),
         environment,
     );
     let held = SELECTED.with(|held| {
@@ -209,7 +209,7 @@ fn allocated_with(
     duplicate: bool,
 ) -> Result<Allocated, String> {
     SLOT_BY_CONFLICTS.with(|one| one.set(request.slot_by_conflicts));
-    expand::forget_trips();
+    expand::set_frequencies(&frequencies_of(selected, name));
     let mut function = machine_function_with(selected, name, duplicate)?;
     eliminate_phis_with(&mut function, false);
     let mut hoisted = function.clone();
@@ -527,8 +527,6 @@ fn allocate_once(
                 "stack-price {name} {level:?} peek {peek} conflicts {by_conflicts} best {best_price:?} stacked {now:?}"
             );
         }
-        // the best is priced again: this candidate may have shown trips it hid
-        best_price = priced_in_loops(&best, level);
         if keeps_stacked(level, best_price, now) {
             best = stacked;
             best_price = now;
@@ -1859,6 +1857,32 @@ pub fn lines(
     lines_in(&cached_selections(ir, request)?, name, number, request)
 }
 
+/// The block frequencies of function `name`, relative to its entry.
+fn frequencies_of(
+    selected: &Selections,
+    name: &str,
+) -> Vec<(u32, f64)> {
+    selected
+        .iter()
+        .find(|(one, ..)| one == name)
+        .and_then(|(_, source, _)| source.as_ref().ok())
+        .map(|selection| selection.frequencies.clone())
+        .unwrap_or_default()
+}
+
+/// The lines of function `name` as [`lines`] gives them, each with the weight
+/// its price counts its clocks by: the frequency of its block.
+pub fn weighted_lines(
+    ir: &str,
+    name: &str,
+    request: &Request,
+) -> Result<Vec<(Line, f64)>, String> {
+    let selected = cached_selections(ir, request)?;
+    let lines = lines_in(&selected, name, 0, request)?;
+    let frequencies = frequencies_of(&selected, name).into_iter().collect();
+    Ok(expand::weighted(&lines, &frequencies))
+}
+
 fn lines_in(
     selected: &Selections,
     name: &str,
@@ -1899,7 +1923,7 @@ fn lines_in(
     crate::dagisel::pipeline::ILP.with(|one| one.set(false));
     match (source, ilp) {
         (Ok(source), Ok(ilp)) => {
-            let price = |lines: &[Line]| expand::price_relaxed(lines, !matches!(request.level, Level::Os | Level::Oz));
+            let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
             Ok(if cheaper(request.level, price(&ilp), price(&source)) { ilp } else { source })
         }
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),

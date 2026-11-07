@@ -1996,95 +1996,156 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
     (bytes, clocks)
 }
 
-/// The trips of a loop the lines do not count: the pin's loop branch heuristic
-/// takes the back edge with probability 124/128 (`LBH_TAKEN_WEIGHT` and
-/// `LBH_NONTAKEN_WEIGHT` in `BranchProbabilityInfo.cpp`), 32 trips. It was 8
-/// here, a number of this port's own: a variant saving 4 T in a loop of 32
-/// trips against one costing 3 T in a loop of 10 was ranked by loops of 8
-/// alike (split_loops -O1 +870 T).
-const UNCOUNTED_TRIPS: u64 = 32;
-
-/// The trips of the loop between `head` and its jump back at `end` when the
-/// lines count it: `djnz` or `dec r; jr nz` closing it, and `ld r, #n` for that
-/// register ahead of the head with nothing between that writes it or starts a
-/// block (`#0` is 256).
-///
-/// DEVIATE Z80-TRIP-WEIGHT: the pin weighs a loop by block frequency (32 trips
-/// when it cannot tell); this stage has none, and a counted loop shows its
-/// own. Owner z80, exit 2026-11-30: block frequencies at this stage.
-fn counted_trips(
-    lines: &[Line],
-    head: usize,
-    end: usize,
-) -> Option<u64> {
-    let Line::Inst(closing) = &lines[end] else { return None };
-    let counter = if closing.starts_with("djnz ") {
-        "b".to_owned()
-    } else if closing.starts_with("jr nz, ") {
-        // the `dec r` that set the flag, past what leaves the flags alone
-        let mut found = None;
-        for line in lines[..end].iter().rev() {
-            match line {
-                Line::Loc(_) => continue,
-                Line::Inst(text) => {
-                    if let Some(register) = text.strip_prefix("dec ") {
-                        if matches!(register, "a" | "b" | "c" | "d" | "e" | "h" | "l") {
-                            found = Some(register.to_owned());
-                            break;
-                        }
-                    }
-                    if !leaves_flags(text) {
-                        break;
-                    }
-                }
-                _ => break,
-            }
-        }
-        found?
-    } else {
-        return None;
-    };
-    let pair = match counter.as_str() {
-        "b" | "c" => "bc",
-        "d" | "e" => "de",
-        "h" | "l" => "hl",
-        _ => "af",
-    };
-    let inside: Vec<&str> = lines[head..=end]
-        .iter()
-        .filter_map(|line| if let Line::Label(name) = line { Some(name.as_str()) } else { None })
-        .collect();
-    for line in lines[..head].iter().rev() {
-        let Line::Inst(text) = line else { continue };
-        if let Some(count) = text.strip_prefix(&format!("ld {counter}, #")) {
-            let count: u64 = count.parse().ok()?;
-            return Some(if count == 0 { 256 } else { count });
-        }
-        let (mnemonic, operands) = text.split_once(' ').unwrap_or((text, ""));
-        // the jump that enters a rotated loop at its test
-        if matches!(mnemonic, "jr" | "jp") && inside.contains(&operands) {
-            continue;
-        }
-        let target = operands.split(", ").next().unwrap_or("");
-        if matches!(mnemonic, "call" | "ret" | "jp" | "jr" | "djnz" | "ldir" | "lddr" | "cpir" | "cpdr")
-            || target == counter
-            || target == pair
-        {
-            return None;
-        }
-    }
-    None
+thread_local! {
+    /// The frequency of each block of the function being compiled, relative to
+    /// its entry, by block id: the pin's `BlockFrequencyInfo` of the IR
+    /// function (`Selection::frequencies`).
+    static FREQUENCIES: std::cell::RefCell<llrm_support::hash::HashMap<u32, f64>> = std::cell::RefCell::default();
 }
 
-/// Whether `text` leaves the flags as they are: a load, a 16-bit `inc`/`dec`,
-/// a push or an exchange.
-fn leaves_flags(text: &str) -> bool {
-    let (mnemonic, operands) = text.split_once(' ').unwrap_or((text, ""));
-    match mnemonic {
-        "ld" | "push" | "ex" => true,
-        "inc" | "dec" => matches!(operands, "bc" | "de" | "hl" | "sp" | "ix" | "iy"),
-        _ => false,
+/// Sets the block frequencies the prices of the function being compiled weigh by.
+pub fn set_frequencies(frequencies: &[(u32, f64)]) {
+    FREQUENCIES.with(|one| *one.borrow_mut() = frequencies.iter().copied().collect());
+}
+
+/// The block a label names (`L<function>_<block>`).
+fn block_of(label: &str) -> Option<u32> {
+    label.strip_prefix('L')?.rsplit_once('_')?.1.parse().ok()
+}
+
+/// Each line with its weight: the frequency of the block it is in. A block the
+/// passes made after selection (a `select`'s halves, a block split off or
+/// merged by branch folding, an edge split) has no frequency of its own: it
+/// takes what flows into it from the blocks that jump or fall to it. The pin
+/// keeps the machine blocks' frequencies in step with each split
+/// (`MachineBlockFrequencyInfo::onEdgeSplit`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBlockFrequencyInfo.cpp#L284>;
+/// `BranchFolder::SplitMBBAt`, `BranchFolding.cpp#L513`; a merged tail,
+/// `#L1283`). DEVIATE Z80-BLOCK-FLOW: the flow is worked out here from the
+/// jumps of the printed lines; a branch with one known side gives the other
+/// what is left, otherwise the sides split evenly (the pin's unweighted
+/// branch). Without it the block took the weight of the label before it, the
+/// arm of a diamond when the block is the join (pattern_fill -O1: the loop's
+/// join, 163 T a trip, priced at the arm's 240 for 384). Owner z80, exit
+/// 2026-11-20: the per-site updates above replace this reconstruction.
+pub fn weighted(
+    lines: &[Line],
+    frequencies: &llrm_support::hash::HashMap<u32, f64>,
+) -> Vec<(Line, f64)> {
+    // blocks: the entry (before the first label) and one per `L<fn>_<id>`
+    let mut starts = vec![0usize];
+    let mut ids: Vec<Option<u32>> = vec![None];
+    for (at, line) in lines.iter().enumerate() {
+        if let Line::Label(name) = line {
+            if let Some(id) = block_of(name) {
+                starts.push(at);
+                ids.push(Some(id));
+            }
+        }
     }
+    let count = starts.len();
+    let end = |block: usize| starts.get(block + 1).copied().unwrap_or(lines.len());
+    let index_of: llrm_support::hash::HashMap<u32, usize> =
+        ids.iter().enumerate().filter_map(|(block, id)| id.map(|id| (id, block))).collect();
+    // successors of each block: the global labels it jumps to, and the next
+    // block when it can fall through
+    let mut succs: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for block in 0..count {
+        let mut falls = true;
+        for line in &lines[starts[block]..end(block)] {
+            let Line::Inst(text) = line else { continue };
+            let (mnemonic, rest) = text.split_once(' ').unwrap_or((text.as_str(), ""));
+            let target = rest.rsplit(',').next().unwrap_or("").trim();
+            falls = true;
+            match mnemonic {
+                "jp" | "jr" | "djnz" => {
+                    let conditional = rest.contains(',') || mnemonic == "djnz";
+                    if let Some(&to) = block_of(target).and_then(|id| index_of.get(&id)) {
+                        if !succs[block].contains(&to) {
+                            succs[block].push(to);
+                        }
+                    }
+                    if !conditional {
+                        falls = false;
+                    }
+                }
+                "ret" if rest.is_empty() => falls = false,
+                "halt" => falls = false,
+                _ => {}
+            }
+        }
+        if falls && block + 1 < count && !succs[block].contains(&(block + 1)) {
+            succs[block].push(block + 1);
+        }
+    }
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (block, to) in succs.iter().enumerate() {
+        for &s in to {
+            preds[s].push(block);
+        }
+    }
+    let known: Vec<Option<f64>> = ids
+        .iter()
+        .enumerate()
+        .map(|(block, id)| if block == 0 { Some(1.0) } else { id.and_then(|id| frequencies.get(&id).copied()) })
+        .collect();
+    let mut freq: Vec<f64> = known.iter().map(|one| one.unwrap_or(0.0)).collect();
+    for _ in 0..4 {
+        for u in 0..count {
+            if known[u].is_some() {
+                continue;
+            }
+            let mut total = 0.0;
+            for &p in &preds[u] {
+                let sides = &succs[p];
+                total += if sides.len() == 1 {
+                    freq[p]
+                } else {
+                    // a side that is known and entered only from here takes its own
+                    // frequency; the rest of the block's is shared by the others
+                    let (mut taken, mut open) = (0.0, 0usize);
+                    for &s in sides {
+                        if known[s].is_some() && preds[s].len() == 1 {
+                            taken += freq[s];
+                        } else {
+                            open += 1;
+                        }
+                    }
+                    let share = (freq[p] - taken).max(0.0) / open.max(1) as f64;
+                    share
+                };
+            }
+            // no way in (unreachable, or only a back edge not yet worked out):
+            // the block before it
+            freq[u] = if preds[u].is_empty() { freq[u - 1] } else { total };
+        }
+    }
+    let mut out = Vec::with_capacity(lines.len());
+    let mut block = 0;
+    for (at, line) in lines.iter().enumerate() {
+        while block + 1 < count && starts[block + 1] <= at {
+            block += 1;
+        }
+        out.push((line.clone(), freq[block]));
+    }
+    out
+}
+
+/// [`price_emitted`]'s measure: bytes, and the clocks of each instruction times
+/// the frequency of its block (the entry's is 1), what two variants of one
+/// function are compared by. DEVIATE Z80-BLOCK-WEIGHT: the pin's frequencies
+/// are of the IR; the machine blocks of this stage take them by block id.
+/// Owner z80, exit 2026-11-20: `MachineBlockFrequencyInfo` over the machine function.
+pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
+    let frequencies = FREQUENCIES.with(|one| one.borrow().clone());
+    let (mut bytes, mut clocks) = (0, 0.0);
+    for (line, weight) in weighted(lines, &frequencies) {
+        let Line::Inst(text) = line else { continue };
+        let cost = table_cost(&form(&text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
+        bytes += cost.0;
+        clocks += f64::from(cost.1) * weight;
+    }
+    (bytes, clocks.round() as u64)
 }
 
 /// [`price_in_loops`] of the lines as emitted: after branch relaxation, which
@@ -2092,105 +2153,11 @@ fn leaves_flags(text: &str) -> bool {
 /// counter in `b`. Priced before it, a counter in `c` cost the same as one in
 /// `b`, and the pick took the allocation 3 T a trip slower (byval_struct -O1:
 /// +83 T for -1 B).
-///
-/// The loops' trips are shared between the variants of a function
-/// ([`forget_trips`] at its start): a loop one variant counts weighs the same
-/// in the variant whose shape hides the count (loop_interchange -O1: the loop
-/// closed by `jp` after a test at its top, priced at 8 trips against 20).
 pub fn price_emitted(
     lines: &[Line],
     speed: bool,
 ) -> (u32, u64) {
-    price_loops(&relax(lines.to_vec(), speed), true)
-}
-
-/// [`price_emitted`] without the trips the function's other variants showed.
-pub fn price_relaxed(
-    lines: &[Line],
-    speed: bool,
-) -> (u32, u64) {
     price_in_loops(&relax(lines.to_vec(), speed))
-}
-
-/// [`price`] with the clocks of an instruction counted once for each trip of
-/// each loop it is in ([`UNCOUNTED_TRIPS`] where the lines do not count them), a loop being
-/// the lines from a label to a jump back to it: what two allocations of a loop
-/// are compared by.
-pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
-    price_loops(lines, false)
-}
-
-thread_local! {
-    /// The trips of the loops the lines of this function have shown, by the
-    /// label of the loop's head (a block's label: the same in every variant).
-    static TRIPS: std::cell::RefCell<std::collections::BTreeMap<String, u64>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
-}
-
-/// Forget the trips the previous function showed.
-pub fn forget_trips() {
-    TRIPS.with(|trips| trips.borrow_mut().clear());
-}
-
-fn price_loops(
-    lines: &[Line],
-    shared: bool,
-) -> (u32, u64) {
-    let labels: llrm_support::hash::HashMap<&str, usize> = lines
-        .iter()
-        .enumerate()
-        .filter_map(|(at, line)| match line {
-            Line::Label(label) => Some((label.as_str(), at)),
-            _ => None,
-        })
-        .collect();
-    // one loop per head, reaching to its farthest jump back: a loop with two
-    // jumps back to its head (a `continue`) is one loop, not two nested ones
-    let mut reach = std::collections::BTreeMap::<usize, usize>::new();
-    for (at, line) in lines.iter().enumerate() {
-        let Line::Inst(text) = line else { continue };
-        let mut words = text.split([' ', ',']).filter(|word| !word.is_empty());
-        if !matches!(words.next(), Some("jr" | "jp" | "djnz")) {
-            continue;
-        }
-        if let Some(&head) = words.last().and_then(|target| labels.get(target)).filter(|&&head| head <= at) {
-            let end = reach.entry(head).or_insert(at);
-            *end = (*end).max(at);
-        }
-    }
-    // a loop runs its counted trips where the lines show them, else the pin's 32; the
-    // weights of up to three enclosing loops multiply
-    let mut weight = vec![1u64; lines.len()];
-    let mut levels = vec![0u32; lines.len()];
-    for (head, end) in reach {
-        let counted = counted_trips(lines, head, end);
-        let trips = match (&lines[head], shared) {
-            // a variant that hides the count behind its shape takes the one another showed
-            (Line::Label(name), true) => TRIPS.with(|known| {
-                let mut known = known.borrow_mut();
-                if let Some(count) = counted {
-                    let entry = known.entry(name.clone()).or_insert(0);
-                    *entry = (*entry).max(count);
-                }
-                known.get(name).copied()
-            }),
-            _ => counted,
-        }
-        .unwrap_or(UNCOUNTED_TRIPS);
-        for at in head..=end {
-            if levels[at] < 3 {
-                weight[at] *= trips;
-                levels[at] += 1;
-            }
-        }
-    }
-    let (mut bytes, mut clocks) = (0, 0u64);
-    for (at, line) in lines.iter().enumerate() {
-        let Line::Inst(text) = line else { continue };
-        let cost = table_cost(&form(text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
-        bytes += cost.0;
-        clocks += u64::from(cost.1) * weight[at];
-    }
-    (bytes, clocks)
 }
 
 /// The bytes of one printed line, jumps being the three-byte form.
