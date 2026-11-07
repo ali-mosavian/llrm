@@ -1,7 +1,8 @@
 //! `MemorySSAUpdater` (`MemorySSAUpdater.cpp`, `d1106deb71cc`): keeps the graph
 //! right as instructions are inserted, moved and erased, in place of making it
 //! again. The edits of the instruction level, the ones LICM and DSE make;
-//! edits of the CFG are not here yet.
+//! Of the CFG edits, `remove_edge`, `move_all_after_merge_blocks` and
+//! `update_for_cloned_block_into_pred` are here; the rest are not yet.
 //!
 //! The updater carries three sets between its calls
 //! (`VisitedBlocks`, `InsertedPHIs`, `NonOptPhis`); the graph and the function
@@ -933,6 +934,153 @@ impl MemorySsaUpdater {
         let place = list.get(at + 1).map_or(Where::End, |&next| Where::Before(next));
         mssa.insert_into_lists_before(access, block, place);
         Some(access)
+    }
+}
+
+impl MemorySsaUpdater {
+    /// [`removeEdge`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSAUpdater.cpp#L637):
+    /// the edge `from` to `to` is gone from the CFG; `to`'s phi loses what
+    /// came along it.
+    pub fn remove_edge(
+        &mut self,
+        mssa: &mut Mssa,
+        function: &Function,
+        from: BlockId,
+        to: BlockId,
+    ) {
+        if let Some(phi) = mssa.get_memory_phi(to) {
+            mssa.unordered_delete_incoming_if(phi, |_, block| block == from);
+            self.try_remove_trivial_phi(mssa, function, phi);
+        }
+    }
+
+    /// [`moveAllAccesses`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSAUpdater.cpp#L1308):
+    /// the accesses of `from` that follow `start` (an instruction now in `to`)
+    /// go to the end of `to`.
+    fn move_all_accesses(
+        &mut self,
+        mssa: &mut Mssa,
+        function: &Function,
+        from: BlockId,
+        to: BlockId,
+        start: InstId,
+    ) {
+        if mssa.get_block_accesses(from).is_none() {
+            return;
+        }
+        assert_eq!(function.parent(start), Some(to), "incorrect start instruction");
+        let first_in_new =
+            std::iter::once(start).chain(function.iter_after(start)).find_map(|inst| mssa.get_memory_access(inst));
+        if let Some(first) = first_in_new {
+            let list = mssa.get_block_accesses(from).expect("accesses of from").to_vec();
+            let at = list.iter().position(|&one| one == first).expect("the first access in from");
+            for &access in &list[at..] {
+                mssa.move_to_place(access, to, Place::End);
+            }
+        }
+        // If all accesses were moved and only a trivial phi remains, it goes
+        // (needed when `from` is to be deleted).
+        if let Some(&first) = mssa.get_block_defs(from).and_then(|defs| defs.first())
+            && mssa.access(first).kind == Kind::Phi
+        {
+            self.try_remove_trivial_phi(mssa, function, first);
+        }
+    }
+
+    /// [`moveAllAfterMergeBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSAUpdater.cpp#L1354):
+    /// `from` was merged into its only predecessor `to`, `start` the first
+    /// instruction that came with it.
+    pub fn move_all_after_merge_blocks(
+        &mut self,
+        mssa: &mut Mssa,
+        function: &Function,
+        from: BlockId,
+        to: BlockId,
+        start: InstId,
+    ) {
+        assert_eq!(unique_predecessor(function, from), Some(to), "from is expected to have a single predecessor (to)");
+        self.move_all_accesses(mssa, function, from, to, start);
+        for succ in function.successors(from) {
+            if let Some(phi) = mssa.get_memory_phi(succ)
+                && let Some(at) = mssa.get_basic_block_index(phi, from)
+            {
+                mssa.set_incoming_block(phi, at, to);
+            }
+        }
+    }
+
+    /// [`getNewDefiningAccessForClone`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSAUpdater.cpp#L674).
+    fn new_defining_access_for_clone(
+        mssa: &Mssa,
+        function: &Function,
+        access: AccessId,
+        vmap: &dyn Fn(InstId) -> Option<InstId>,
+        phi_map: &BTreeMap<AccessId, AccessId>,
+        in_cloned_region: &dyn Fn(BlockId) -> bool,
+    ) -> AccessId {
+        if mssa.access(access).kind == Kind::Phi {
+            return phi_map.get(&access).copied().unwrap_or(access);
+        }
+        if mssa.is_live_on_entry_def(access) {
+            return access;
+        }
+        // A def outside the cloned region is left alone.
+        let inst = mssa.access(access).inst.expect("a memory def has an instruction");
+        if !function.parent(inst).is_some_and(in_cloned_region) {
+            return access;
+        }
+        let cloned = vmap(inst).and_then(|new| mssa.get_memory_access(new));
+        match cloned {
+            Some(new) if mssa.access(new).kind != Kind::Use => new,
+            // The clone was simplified and is no longer a def: look up.
+            _ => {
+                let above = mssa.access(access).defining.expect("a defining access");
+                Self::new_defining_access_for_clone(mssa, function, above, vmap, phi_map, in_cloned_region)
+            }
+        }
+    }
+
+    /// [`updateForClonedBlockIntoPred`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSAUpdater.cpp#L844)
+    /// with `cloneUsesAndDefs(CloneWasSimplified = true)`: the instructions of
+    /// `bb` that `vmap` maps were cloned into `p1`; each gets an access made
+    /// from scratch (the clone may be simplified, so no template), reading
+    /// what the original read, or its clone where that is in `bb`. `bb`'s phi
+    /// reads as what comes in from `p1`.
+    pub fn update_for_cloned_block_into_pred(
+        &mut self,
+        mssa: &mut Mssa,
+        function: &Function,
+        bb: BlockId,
+        p1: BlockId,
+        vmap: &dyn Fn(InstId) -> Option<InstId>,
+        modref: &dyn Fn(InstId) -> Effect,
+    ) {
+        let mut phi_map: BTreeMap<AccessId, AccessId> = BTreeMap::new();
+        if let Some(phi) = mssa.get_memory_phi(bb) {
+            let at = mssa.get_basic_block_index(phi, p1).expect("an incoming value for p1");
+            phi_map.insert(phi, mssa.access(phi).incoming[at].1);
+        }
+        let Some(list) = mssa.get_block_accesses(bb).map(<[AccessId]>::to_vec) else { return };
+        for access in list {
+            if mssa.access(access).kind == Kind::Phi {
+                continue;
+            }
+            let inst = mssa.access(access).inst.expect("a memory use or def has an instruction");
+            // Not every instruction was cloned, and a clone may be a value
+            // that is no instruction.
+            let Some(new_inst) = vmap(inst) else { continue };
+            let definition = Self::new_defining_access_for_clone(
+                mssa,
+                function,
+                mssa.access(access).defining.expect("a defining access"),
+                vmap,
+                &phi_map,
+                &|block| block == bb,
+            );
+            if let Some(new) = mssa.create_defined_access(p1, new_inst, Some(definition), modref) {
+                mssa.insert_into_lists_for_block(new, p1, Place::End);
+            }
+        }
     }
 }
 
