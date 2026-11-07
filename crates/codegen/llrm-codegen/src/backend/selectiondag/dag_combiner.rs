@@ -2365,6 +2365,38 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node_flags(self.dag.opcode(n0), vt, &[shl0, shl1], flags));
             }
         }
+        // The rest of `visitShiftByConstant` ([L10870][pin]): a one-use logic
+        // op under a shift by a constant, when its operand is a shift
+        // by a constant or a register copy or select read elsewhere.
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L10870
+        if self.dag.constant(n1).is_some()
+            && self.dag.has_one_use(n0.node)
+            && self.hooks.is_desirable_to_commute_with_shift(self.dag, node, self.level)
+            && match self.dag.opcode(n0) {
+                ISD::Or | ISD::Xor | ISD::And => true,
+                ISD::Add => op == ISD::Shl,
+                _ => false,
+            }
+        {
+            let b = self.dag.operand(n0, 0);
+            let bo = self.dag.opcode(b);
+            let shift_by_const =
+                matches!(bo, ISD::Shl | ISD::Sra | ISD::Srl) && self.dag.constant(self.dag.operand(b, 1)).is_some();
+            let copy_or_select = matches!(bo, ISD::CopyFromReg | ISD::Select);
+            let n01 = self.dag.operand(n0, 1);
+            if shift_by_const || (copy_or_select && !self.dag.has_one_use(node.node)) {
+                if let Some(shl1) = self.dag.fold_constant_arithmetic(op, vt, &[n01, n1]) {
+                    let shl0 = self.dag.get_node(op, vt, &[b, n1]);
+                    self.add_to_worklist(shl0.node);
+                    let disjoint =
+                        self.dag.opcode(n0) == ISD::Or && self.dag.node(n0).flags.0 & SDNodeFlags::DISJOINT.0 != 0;
+                    let flags = if disjoint { SDNodeFlags::DISJOINT } else { SDNodeFlags::default() };
+                    return Some(self.dag.get_node_flags(self.dag.opcode(n0), vt, &[shl0, shl1], flags));
+                }
+            }
+        }
         // `srl (sra x, y), w-1` is `srl x, w-1`: the sign bit is the one `sra`
         // leaves alone ([L11886][pin]).
         //
