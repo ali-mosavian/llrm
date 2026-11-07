@@ -1,5 +1,7 @@
 # EarlyCse snapshot: DEVIATE EC-1 (2026-10-25)
 
+UPDATE 2026-11-06: the copy is made lazily, at the first edit (`Edited` in earlycse.rs): a run that edits nothing copies nothing (15 of 22 corpus runs; memory_expansion forked 453 times, 9.8 M + 3.1 M drop). The edited body is put back, lineage unchanged. Exit unchanged: retire with a MemorySSA updater.
+
 TL;DR: the pin mutates the function in place and keeps MemorySSA current with `MemorySSAUpdater`; ours forks the function and the context first. The fork costs about 6.8 M over the whole compile; no variant tried removes it for less than it saves.
 
 ## EC-1: what differs

@@ -11,6 +11,7 @@ pub mod ccr;
 pub mod chain;
 pub mod cmpdup;
 pub mod cmpelim;
+pub mod cmpshift;
 pub mod commutative;
 pub mod compile;
 pub mod constreg;

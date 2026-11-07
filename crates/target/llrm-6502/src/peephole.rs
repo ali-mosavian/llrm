@@ -2,10 +2,10 @@
 //! instructions.
 //!
 //! # How it works
-//! Seven passes walk the lines of an [`Asm`] once each. What an instruction does
-//! to `a` and to the zero and sign flags comes from [`crate::asm::Op::flags`],
-//! so a pass asks "does this instruction set the flags" and does not list
-//! mnemonics:
+//! Seven passes walk the lines of an [`Asm`] once each. What an instruction
+//! does to `a` and to the zero and sign flags comes from
+//! [`crate::asm::Op::flags`], so a pass asks "does this instruction set the
+//! flags" and does not list mnemonics:
 //!
 //! - [`drop_reloads`]: `sta m; lda m` (likewise `x`, `y`) of a zero-page or
 //!   spill cell, when the load's flags are unread. A carry flag op or a store
@@ -34,10 +34,10 @@
 //!   what `m` holds: the shift's carry is `m`'s top bit, so `bcc` replaces
 //!   both.
 //! - [`step_in_place`]: `lda #1; clc; adc m; sta m` (also `lda m; clc; adc #1;
-//!   sta m`, `lda m; sec; sbc #1; sta m` and the 65C02's `lda m; inc a; sta
-//!   m`, each a step of 1) of a byte in memory, with `a` and the carry dead
-//!   after: `inc m` (`dec m`), which sets the sign and zero flags as the store
-//!   left them.
+//!   sta m`, `lda m; sec; sbc #1; sta m` and the 65C02's `lda m; inc a; sta m`,
+//!   each a step of 1) of a byte in memory, with `a` and the carry dead after:
+//!   `inc m` (`dec m`), which sets the sign and zero flags as the store left
+//!   them.
 //! - [`jump_to_return`]: `jmp l` where `l:` is a lone `rts` becomes `rts`.
 //!
 //! DEVIATE: LLVM's `PeepholeOptimizer` and `MachineCSE` work on allocated
@@ -62,7 +62,7 @@ use crate::asm::{Asm, Flags, Index, Inst, Line, Op, Operand, Registers};
 
 /// Whether the zero and sign flags are set again before anything reads them,
 /// from `lines[from]` on.
-fn flags_unread_after(
+pub(crate) fn flags_unread_after(
     lines: &[Line],
     from: usize,
 ) -> bool {
@@ -107,8 +107,116 @@ pub fn run(asm: &mut Asm) {
     load_straight_into_a(asm);
     store_before_transfer(asm);
     drop_cancelling_transfers(asm);
+    crate::peephole_cells::arithmetic_chain_in_a(asm);
+    crate::peephole_cells::chain_ends_in_a(asm);
+    crate::peephole_cells::drop_dead_stores(asm);
+    drop_dead_writes(asm);
+    crate::peephole_cells::store_then_index_load(asm);
     branch_on_shift_carry(asm);
     jump_to_return(asm);
+}
+
+/// What a register-only instruction writes: a register, and which of the carry
+/// and the zero and sign flags.
+struct Writes {
+    register: Option<Registers>,
+    carry: bool,
+    nz: bool,
+}
+
+/// The writes of `inst` if it does nothing else: no memory, no call, no branch,
+/// no stack. A load reads a zero-page cell or an immediate, never a device.
+fn pure_writes(inst: &Inst) -> Option<Writes> {
+    use Op::*;
+    let plain = matches!(inst.operand, Operand::Imm(_)) || inst.operand.is_cell();
+    let (register, carry, nz) = match inst.op {
+        Lda | And | Ora | Eor if plain => (Some(Registers::A), false, true),
+        Ldx if plain => (Some(Registers::X), false, true),
+        Ldy if plain => (Some(Registers::Y), false, true),
+        Tax | Dex | Inx => (Some(Registers::X), false, true),
+        Tay | Dey | Iny => (Some(Registers::Y), false, true),
+        Txa | Tya => (Some(Registers::A), false, true),
+        Asl | Lsr | Rol | Ror if inst.operand == Operand::Acc => (Some(Registers::A), true, true),
+        Cmp | Cpx | Cpy if plain => (None, true, true),
+        Clc | Sec => (None, true, false),
+        _ => return None,
+    };
+    Some(Writes { register, carry, nz })
+}
+
+/// A register-only instruction all of whose results are dead goes: the register
+/// is written before it is read, the carry and the zero and sign flags too,
+/// along every path.
+///
+/// The pin's `DeadMachineInstructionElim`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/DeadMachineInstructionElim.cpp>)
+/// removes a def nothing reads while the value is a virtual register; here the
+/// last reader of a carry made into a byte (`lda #0; rol a; sta cell`) is the
+/// store that `drop_dead_stores` removes after allocation, so the def is dead
+/// only now. The pin has no post-allocation dead-def elimination:
+/// `DeadMachineInstructionElim` is added only in `addMachineSSAOptimization`
+/// ([TargetPassConfig.cpp#L1361](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetPassConfig.cpp#L1361),
+/// [#L1376](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetPassConfig.cpp#L1376)),
+/// and `addMachineLateOptimization`
+/// ([#L1560](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetPassConfig.cpp#L1560))
+/// runs `MachineLateInstrsCleanup`, `BranchFolder`, `TailDuplicate` and
+/// `MachineCopyPropagation` only.
+///
+/// DEVIATE 6502-DEAD-WRITE (owner llrm-target-6502, exit 2026-11-20; 6502 only,
+/// no other target runs this pass): the same rule over the registers and flags
+/// the instruction writes, in the asm; exit: a post-allocation dead-def
+/// elimination on machine IR.
+pub fn drop_dead_writes(asm: &mut Asm) {
+    let mut at = asm.lines.len();
+    while at > 0 {
+        at -= 1;
+        let Line::Inst(inst) = &asm.lines[at] else { continue };
+        let Some(writes) = pure_writes(inst) else { continue };
+        let exits = Exits::of(asm);
+        let dead = writes.register.is_none_or(|register| dead_from(&asm.lines, at + 1, register, &mut HashSet::default(), exits))
+            && (!writes.carry || carry_dead_from(&asm.lines, at + 1, &mut HashSet::default()))
+            && (!writes.nz || nz_dead_from(&asm.lines, at + 1, &mut HashSet::default()));
+        if dead {
+            asm.lines.remove(at);
+        }
+    }
+}
+
+/// Whether the zero and sign flags are written before they are read, along
+/// every path from `lines[from]`. A call or a return counts as a write.
+fn nz_dead_from(
+    lines: &[Line],
+    from: usize,
+    seen: &mut HashSet<usize>,
+) -> bool {
+    let to = |inst: &Inst| inst.target().and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())));
+    let mut at = from;
+    while let Some(line) = lines.get(at) {
+        if !seen.insert(at) {
+            return true;
+        }
+        at += 1;
+        let inst = match line {
+            Line::Inst(inst) => inst,
+            Line::Label(_) => continue,
+            Line::Raw(_) => return false,
+        };
+        match inst.op {
+            Op::Beq | Op::Bne | Op::Bmi | Op::Bpl => return false,
+            Op::Bcc | Op::Bcs | Op::Bvc | Op::Bvs => {
+                if !to(inst).is_some_and(|target| nz_dead_from(lines, target, seen)) {
+                    return false;
+                }
+            }
+            Op::Jmp | Op::Bra => return to(inst).is_some_and(|target| nz_dead_from(lines, target, seen)),
+            _ => match inst.flags() {
+                Flags::Keeps => {}
+                Flags::Of(_) | Flags::Sets => return true,
+                Flags::Reads => return false,
+            },
+        }
+    }
+    false
 }
 
 /// The first instruction at or after `lines[from]`, past labels.
@@ -419,10 +527,22 @@ fn load_straight_once(asm: &mut Asm) -> bool {
             }
             let index = if register == Registers::X { Index::X } else { Index::Y };
             let touches_index = matches!(operand, Operand::Indexed(_, i) if *i == index)
-                || matches!((operand, register), (Operand::IndirectX(_), Registers::X) | (Operand::IndirectY(_), Registers::Y));
+                || matches!(
+                    (operand, register),
+                    (Operand::IndirectX(_), Registers::X) | (Operand::IndirectY(_), Registers::Y)
+                );
             let quiet = !touches_index
                 && match op {
-                    Op::Clc | Op::Sec | Op::Nop | Op::Lda | Op::Cmp | Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor => true,
+                    Op::Clc
+                    | Op::Sec
+                    | Op::Nop
+                    | Op::Lda
+                    | Op::Cmp
+                    | Op::Adc
+                    | Op::Sbc
+                    | Op::And
+                    | Op::Ora
+                    | Op::Eor => true,
                     Op::Sta => matches!(operand, Operand::Direct(_)) && operand != from,
                     Op::Beq | Op::Bne | Op::Bcc | Op::Bcs | Op::Bmi | Op::Bpl => match operand {
                         Operand::Direct(target) => label_at(target)
@@ -495,7 +615,10 @@ fn store_before_once(asm: &mut Asm) -> bool {
                 break;
             }
             let touches_index = matches!(operand, Operand::Indexed(_, i) if *i == index)
-                || matches!((operand, register), (Operand::IndirectX(_), Registers::X) | (Operand::IndirectY(_), Registers::Y));
+                || matches!(
+                    (operand, register),
+                    (Operand::IndirectX(_), Registers::X) | (Operand::IndirectY(_), Registers::Y)
+                );
             let quiet = !touches_index
                 && match op {
                     Op::Clc | Op::Sec | Op::Nop => true,
@@ -503,7 +626,9 @@ fn store_before_once(asm: &mut Asm) -> bool {
                         matches!(operand, Operand::Direct(_) | Operand::Imm(_))
                     }
                     Op::Sta => matches!(operand, Operand::Direct(_)),
-                    o if *o == other_transfer || *o == other_load => matches!(operand, Operand::Direct(_) | Operand::Imm(_) | Operand::None),
+                    o if *o == other_transfer || *o == other_load => {
+                        matches!(operand, Operand::Direct(_) | Operand::Imm(_) | Operand::None)
+                    }
                     o if *o == other_store => matches!(operand, Operand::Direct(_)),
                     _ => false,
                 };
@@ -706,9 +831,9 @@ fn dead_from(
                     || bit == Registers::Y && exits.no_y_result;
             }
             (Op::Jsr, _) if bit == Registers::X || bit == Registers::Y => {
-                // the callee writes `x` (a result) or `y` (scratch) unless it was
-                // an argument; a runtime routine may take one that no
-                // instruction lists
+                // the callee writes `x` (a result) or `y` (scratch) unless it
+                // was an argument; a runtime routine may take
+                // one that no instruction lists
                 let callee = match &inst.operand {
                     Operand::Direct(name) if !name.starts_with("__") => name,
                     _ => return false,
@@ -931,7 +1056,8 @@ fn carry_branch(
             return None;
         }
     };
-    (copied && dead_from(&asm.lines, at + 1, tested, &mut HashSet::default(), Exits::default())).then_some((carry, from))
+    (copied && dead_from(&asm.lines, at + 1, tested, &mut HashSet::default(), Exits::default()))
+        .then_some((carry, from))
 }
 
 /// The memory byte a step of one was added to and stored back, and the step

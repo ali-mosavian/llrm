@@ -367,7 +367,7 @@ impl<T: Target> BuilderArch for T {
         Target::stack_alignment(self)
     }
     fn roles(&self) -> llrm_mir::spaces::Spaces {
-        Target::layout(self).spaces.roles
+        Target::address_roles(self)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(self)
@@ -391,7 +391,7 @@ impl BuilderArch for &dyn Target {
         Target::stack_alignment(*self)
     }
     fn roles(&self) -> llrm_mir::spaces::Spaces {
-        Target::layout(*self).spaces.roles
+        Target::address_roles(*self)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(*self)
@@ -484,6 +484,11 @@ pub trait Target {
     /// The data layout programs are built under and the address spaces a
     /// frontend's addresses are.
     fn layout(&self) -> layout::Layout;
+
+    /// `layout().spaces.roles`, without cloning the layout: asked per function.
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        self.layout().spaces.roles
+    }
 
     /// The bytes an argument of `width` takes on the stack, and the least a
     /// stack cell holds.
