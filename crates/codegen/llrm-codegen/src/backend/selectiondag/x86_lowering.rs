@@ -628,9 +628,9 @@ impl Hooks for X86Lowering<'_> {
         node: SDValue,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::SetCC => lower_setcc(dag, node),
-            ISD::Select => lower_select(dag, node, self.cmov),
-            ISD::BrCond => lower_brcond(dag, node),
+            ISD::SetCC => lower_setcc(dag, node, self.min_size),
+            ISD::Select => lower_select(dag, node, self.cmov, self.min_size),
+            ISD::BrCond => lower_brcond(dag, node, self.min_size),
             ISD::UAddO | ISD::USubO | ISD::SAddO | ISD::SSubO | ISD::UMulO | ISD::SMulO => Some(lower_xalu(dag, node)),
             ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::SetCCCarry => Some(lower_setcc_carry(dag, node)),
@@ -914,12 +914,13 @@ fn get_bt(
 
 /// `LowerAndToBT`: `(x & (1 << n)) == 0` and `((x >> n) & 1) != 0` test bit `n`
 /// of `x`; the carry flag is the bit, so `!= 0` is `B` and `== 0` is `AE`.
-/// (The reassociated three-way `and` and the immediate forms are not taken,
-/// SD200.)
+/// `(x & 2^k)` is the bit `k` when the immediate does not fit a `test` (32 bits;
+/// a byte at minsize). (The reassociated three-way `and` is not taken, SD200.)
 pub(super) fn lower_and_to_bt(
     dag: &mut SelectionDAG,
     and: SDValue,
     cc: CondCode,
+    min_size: bool,
 ) -> Option<(SDValue, u128)> {
     let (a, b) = (dag.operand(and, 0), dag.operand(and, 1));
     let is_bit_shift =
@@ -932,6 +933,14 @@ pub(super) fn lower_and_to_bt(
         (dag.operand(a, 0), dag.operand(a, 1))
     } else if dag.constant(a) == Some(1) && dag.opcode(b) == ISD::Srl {
         (dag.operand(b, 0), dag.operand(b, 1))
+    } else if let Some(imm) = dag.constant(b).filter(|imm| imm.is_power_of_two()) {
+        // `(Src & ConstPow2)`: BT when the immediate cannot be a TEST's.
+        let bit_no = imm.trailing_zeros();
+        if bit_no < if min_size { 8 } else { 32 } {
+            return None;
+        }
+        let vt = dag.value_type(a);
+        (a, dag.get_constant(u128::from(bit_no), vt))
     } else {
         return None;
     };
@@ -941,9 +950,6 @@ pub(super) fn lower_and_to_bt(
     if dag.opcode(src) == ISD::Xor && dag.constant(dag.operand(src, 1)) == Some(ones) {
         src = dag.operand(src, 0);
         cc = if cc == CondCode::SetEq { CondCode::SetNe } else { CondCode::SetEq };
-    }
-    if dag.value_type(src).size_in_bits() > 32 {
-        return None;
     }
     let flags = get_bt(dag, src, bit);
     Some((flags, if cc == CondCode::SetEq { cond::AE } else { cond::B }))
@@ -955,6 +961,7 @@ fn emit_flags_for_setcc(
     op0: SDValue,
     op1: SDValue,
     cc: CondCode,
+    min_size: bool,
 ) -> (SDValue, SDValue) {
     if matches!(cc, CondCode::SetEq | CondCode::SetNe)
         && (dag.is_null_constant(op1) || dag.constant(op1) == Some(1))
@@ -971,7 +978,7 @@ fn emit_flags_for_setcc(
         && dag.users(op0).count() == 1
         && dag.is_null_constant(op1)
     {
-        if let Some((flags, code)) = lower_and_to_bt(dag, op0, cc) {
+        if let Some((flags, code)) = lower_and_to_bt(dag, op0, cc, min_size) {
             return (flags, cond_code(dag, code));
         }
     }
@@ -1001,6 +1008,7 @@ fn emit_flags_for_setcc(
 fn lower_setcc(
     dag: &mut SelectionDAG,
     node: SDValue,
+    min_size: bool,
 ) -> Option<SDValue> {
     let (op0, mut op1) = (dag.operand(node, 0), dag.operand(node, 1));
     if dag.value_type(op0).is_floating_point() {
@@ -1030,7 +1038,7 @@ fn lower_setcc(
             cc = if cc == CondCode::SetGt { CondCode::SetGe } else { CondCode::SetUGe };
         }
     }
-    let (flags, code) = emit_flags_for_setcc(dag, op0, op1, cc);
+    let (flags, code) = emit_flags_for_setcc(dag, op0, op1, cc, min_size);
     Some(dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]))
 }
 
@@ -1130,6 +1138,7 @@ fn lower_select(
     dag: &mut SelectionDAG,
     node: SDValue,
     can_cmov: bool,
+    min_size: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if !vt.is_integer() && !vt.is_floating_point() {
@@ -1137,7 +1146,7 @@ fn lower_select(
     }
     let (mut cond, op1, op2) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     if dag.opcode(cond) == ISD::SetCC {
-        if let Some(lowered) = lower_setcc(dag, cond) {
+        if let Some(lowered) = lower_setcc(dag, cond, min_size) {
             cond = lowered;
         }
     }
@@ -1184,6 +1193,7 @@ fn lower_select(
 fn lower_brcond(
     dag: &mut SelectionDAG,
     node: SDValue,
+    min_size: bool,
 ) -> Option<SDValue> {
     let (chain, cond, dest) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     if dag.opcode(cond) == ISD::SetCC && dag.value_type(dag.operand(cond, 0)).is_floating_point() {
@@ -1202,13 +1212,13 @@ fn lower_brcond(
     let (code, flags) = if dag.opcode(cond) == ISD::SetCC && dag.value_type(dag.operand(cond, 0)).is_integer() {
         let (lhs, rhs) = (dag.operand(cond, 0), dag.operand(cond, 1));
         let cc = cond_of(dag, dag.operand(cond, 2));
-        let (flags, code) = emit_flags_for_setcc(dag, lhs, rhs, cc);
+        let (flags, code) = emit_flags_for_setcc(dag, lhs, rhs, cc, min_size);
         (code, flags)
     } else {
         // Anything else is tested: `and cond, 1`, then `!= 0`; an `and` is
         // tried as a bit test first.
         if dag.opcode(cond) == ISD::And && dag.users(cond).count() == 1 {
-            if let Some((flags, code)) = lower_and_to_bt(dag, cond, CondCode::SetNe) {
+            if let Some((flags, code)) = lower_and_to_bt(dag, cond, CondCode::SetNe, min_size) {
                 let code = cond_code(dag, code);
                 return Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]));
             }
@@ -1221,7 +1231,7 @@ fn lower_brcond(
             dag.get_node(ISD::And, vt, &[cond, one])
         };
         let zero = dag.get_constant(0, vt);
-        let (flags, code) = emit_flags_for_setcc(dag, masked, zero, CondCode::SetNe);
+        let (flags, code) = emit_flags_for_setcc(dag, masked, zero, CondCode::SetNe, min_size);
         (code, flags)
     };
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
