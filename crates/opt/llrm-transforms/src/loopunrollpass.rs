@@ -450,6 +450,18 @@ pub(crate) fn gather_unrolling_preferences_of_target(
     up.threshold = threshold.unwrap_or(up.threshold);
     up.max_percent_threshold_boost = boost.unwrap_or(up.max_percent_threshold_boost);
     up.partial_threshold = run.tti.unroll_partial_threshold_override().unwrap_or(up.partial_threshold);
+    // DEVIATE UP3-THRESHOLD (owner x87, exit 2026-11-27): where the unroll is
+    // priced (full_unroll_pays: -O2 and above, a speed build, a rate), the
+    // price decides what the pin's threshold would veto (x_matmul_f -O3 m32:
+    // a 12-trip loop of 114 units, gcc's unroll is 6,684 clk for 762 B).
+    if let Some(priced) = run.tti.unroll_priced_threshold()
+        && run.tti.unroll_milliclocks_per_byte() > 0
+        && run.options.opt_level >= 2
+        && !run.options.opt_size
+        && !run.options.min_size
+    {
+        up.threshold = up.threshold.max(priced);
+    }
     // Apply size attributes.
     if run.options.opt_size {
         up.threshold = up.opt_size_threshold;

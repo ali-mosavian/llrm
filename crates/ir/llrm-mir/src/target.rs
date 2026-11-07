@@ -131,6 +131,11 @@ pub struct Tuning {
     /// 8), which holds nothing across the nest's inner loops. Ints keep the
     /// rule above. false: floats are free (DEVIATE UP1-X87, owner x87).
     pub unroll_promotion_fits_x87_stack: bool,
+    /// DEVIATE UP3-THRESHOLD (owner x87, exit 2026-11-27): the full-unroll
+    /// threshold at -O2 and above, where `unroll_milliclocks_per_byte` prices
+    /// the unroll (`full_unroll_pays` vetoes what does not repay its bytes).
+    /// none: the pin's. Never applies at -O1 or to a size build.
+    pub unroll_priced_threshold: Option<u32>,
     /// A size build rotates a loop only when the header's exit test folds in
     /// the preheader (RS1): an unfolded copy is a compare and a branch, more
     /// than the loop-closing jump it removes. false: the pass's header limit
@@ -248,6 +253,7 @@ impl Tuning {
         inline_chain_trial: false,
         unroll_promotion_fits_registers: false,
         unroll_promotion_fits_x87_stack: false,
+        unroll_priced_threshold: None,
         rotation_guard_must_fold_at_size: false,
         rotation_header_priced_at_size: false,
         size_rotation_header_limit: None,
@@ -1064,6 +1070,7 @@ mod tests {
         assert_eq!(pin.x87_stack_slots, None);
         assert!(!pin.x87_share_negated_products);
         assert!(!pin.unroll_promotion_fits_x87_stack);
+        assert_eq!(pin.unroll_priced_threshold, None);
         assert!(!pin.x87_zero_fill_at_size);
         assert!(!pin.slots_loop_width_rule);
         assert_eq!(pin.inline_threshold, None);

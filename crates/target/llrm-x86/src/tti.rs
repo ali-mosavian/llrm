@@ -809,6 +809,10 @@ impl Tti for X86 {
         self.tuning.unroll_promotion_fits_registers
     }
 
+    fn unroll_priced_threshold(&self) -> Option<u32> {
+        self.tuning.unroll_priced_threshold
+    }
+
     fn unroll_promotion_fits_x87_stack(&self) -> bool {
         self.tuning.unroll_promotion_fits_x87_stack && !self.sse2
     }

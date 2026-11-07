@@ -586,6 +586,12 @@ pub trait Tti {
         false
     }
 
+    /// The full-unroll threshold where the unroll is priced (-O2 and above, a
+    /// speed build); none: the pin's (`Tuning::unroll_priced_threshold`).
+    fn unroll_priced_threshold(&self) -> Option<u32> {
+        None
+    }
+
     /// DEVIATE ARM64-UNROLL-PRICE: whether a loop of a nest of known trips
     /// that reads no counter of the loops around it is priced like any other
     /// full unroll instead of following the nest's decision (unrolling the
