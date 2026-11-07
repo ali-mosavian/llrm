@@ -304,6 +304,14 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `X86TargetLowering::hasAndNotCompare`: NOT+TEST for any scalar integer.
+    fn has_and_not_compare(
+        &self,
+        vt: EVT,
+    ) -> bool {
+        vt.is_integer()
+    }
+
     /// `X86TargetLowering::isTruncateFree`: any narrower integer.
     fn is_truncate_free(
         &self,
