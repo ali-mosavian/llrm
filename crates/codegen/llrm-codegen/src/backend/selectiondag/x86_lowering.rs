@@ -183,6 +183,22 @@ pub struct MulPricing<'a> {
 }
 
 impl CombineHooks for X86Lowering<'_> {
+    /// `X86TargetLowering::shouldNormalizeToSelectSequence` is true unless CCMP
+    /// (APX) keeps the `and`/`or` tree.
+    ///
+    /// DEVIATE SQ1 (owner greedy-subreg, exit 2026-11-21): only where there is
+    /// a `cmov`. Without one the split is two branches where the merged
+    /// condition was one `sete`/`or`/branch; the pin's `EmitLoweredSelect`
+    /// shares the compare of back-to-back selects, ours does not: +16 B at m32
+    /// -O2 (sfm16_*), +4 at m16. Exit: the select expansion shares the flags.
+    fn normalize_to_select_sequence(
+        &self,
+        _vt: EVT,
+        _cond_vt: EVT,
+    ) -> bool {
+        self.cmov
+    }
+
     /// `X86TargetLowering::mergeStoresAfterLegalization`: `!MemVT.isVector()`.
     /// The only vector a store here holds is the opaque 16 bytes of an SSE
     /// move (`I128`).
@@ -1825,6 +1841,26 @@ fn combine_cmov(
     if let Some((flags, simpler)) = check_bool_test(dag, flags, code) {
         let simpler = cond_code(dag, simpler);
         return Some(dag.get_node(x86isd::CMOV, vt, &[false_op, true_op, simpler, flags]));
+    }
+    // `(cmov 1, T, uge, (sub T, 2))` is `T + (T < 1)`: `adc T, 0` on the carry
+    // of `sub T, 1` (X86ISelLowering.cpp#L50411, the `umax(x, 1)` the soft-float
+    // runtime builds its exponents with).
+    if code == cond::AE
+        && dag.constant(false_op) == Some(1)
+        && dag.opcode(flags) == x86isd::SUB
+        && dag.has_one_use(flags.node)
+    {
+        let mut tested = dag.operand(flags, 0);
+        if dag.opcode(tested) == ISD::Truncate {
+            tested = dag.operand(tested, 0);
+        }
+        if tested == true_op && dag.constant(dag.operand(flags, 1)) == Some(2) {
+            let cond_vt = dag.value_type(dag.operand(flags, 0));
+            let one = dag.get_constant(1, cond_vt);
+            let sub = dag.get_node_multi(x86isd::SUB, &[cond_vt, EVT::I32], &[dag.operand(flags, 0), one]);
+            let zero = dag.get_constant(0, vt);
+            return Some(dag.get_node_multi(x86isd::ADC, &[vt, EVT::I32], &[true_op, zero, SDValue { node: sub.node, res: 1 }]));
+        }
     }
     let (Some(mut true_c), Some(mut false_c)) = (dag.constant(true_op), dag.constant(false_op)) else { return None };
     if !vt.is_integer() {

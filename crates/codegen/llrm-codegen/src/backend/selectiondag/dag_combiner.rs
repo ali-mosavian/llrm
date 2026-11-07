@@ -55,6 +55,19 @@ pub enum CombineLevel {
 
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
 pub trait CombineHooks {
+    /// `TLI.shouldNormalizeToSelectSequence`: `select (or c0, c1), x, y` is
+    /// `select c0, x, (select c1, x, y)` (and the `and` form likewise). The
+    /// pin's default asks whether the type is split; DEVIATE: false here (the
+    /// select-of-select merges instead) for the targets written before the
+    /// hook, X86 overrides. Exit: each target answers as the pin does.
+    fn normalize_to_select_sequence(
+        &self,
+        _vt: EVT,
+        _cond_vt: EVT,
+    ) -> bool {
+        false
+    }
+
     /// `TLI.convertSelectOfConstantsToMath`: a select of two constants is an
     /// extend of the condition plus a constant. The pin's default is false;
     /// DEVIATE: true here because this combiner was written for x86, which
@@ -1311,10 +1324,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// `visitSELECT` ([L13507][pin]) up to the setcc folds: a flipped
     /// condition swaps the arms; an `i1` select is logic
     /// (`foldBoolSelectToLogic`); a select of a select on the same arm
-    /// merges into one with an `and`/`or` condition (X86 does not normalize
-    /// to a select sequence). The split of an `and`/`or` condition into a
-    /// sequence, taken only when the inner select already has users, is not
-    /// translated: the arena cannot tell a live user from a dead one.
+    /// merges into one with an `and`/`or` condition, and an `and`/`or`
+    /// condition splits into a select sequence where the target asks for it
+    /// (`normalize_to_select_sequence`, X86 does).
     ///
     /// [pin]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13507
@@ -1371,20 +1383,55 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(math);
         }
         let arm_vt = self.dag.value_type(n1);
-        // `select c0, (select c1, x, y), y` is `select (and c0, c1), x, y`.
+        let normalize = self.hooks.normalize_to_select_sequence(vt, cond_vt);
+        // `select (and c0, c1), x, y` is `select c0, (select c1, x, y), y`,
+        // `select (or c0, c1), x, y` is `select c0, x, (select c1, x, y)`; the
+        // pin also splits when the inner select exists already, which the
+        // arena cannot tell from a dead one (only `normalize` splits here).
+        if normalize && self.dag.has_one_use(n0.node) && matches!(self.dag.opcode(n0), ISD::And | ISD::Or) {
+            let (c0, c1) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            match self.dag.opcode(n0) {
+                ISD::And => {
+                    let inner = self.dag.get_select(arm_vt, c1, n1, n2);
+                    return Some(self.dag.get_select(arm_vt, c0, inner, n2));
+                }
+                ISD::Or => {
+                    let inner = self.dag.get_select(arm_vt, c1, n1, n2);
+                    return Some(self.dag.get_select(arm_vt, c0, n1, inner));
+                }
+                _ => {}
+            }
+        }
+        // `select c0, (select c1, x, y), y` is `select (and c0, c1), x, y`: the
+        // `and` itself without a normalizing target, else only where the two
+        // compares fold to one (`visitANDLike`; its `add`/`srl` arm is not
+        // translated).
         if self.dag.opcode(n1) == ISD::Select && self.dag.has_one_use(n1.node) {
             let (c1, x, y) = (self.dag.operand(n1, 0), self.dag.operand(n1, 1), self.dag.operand(n1, 2));
             if y == n2 && self.dag.value_type(c1) == cond_vt {
-                let and = self.dag.get_node(ISD::And, cond_vt, &[n0, c1]);
-                return Some(self.dag.get_select(arm_vt, and, x, n2));
+                let and = if normalize {
+                    self.fold_logic_of_setccs(true, n0, c1)
+                } else {
+                    Some(self.dag.get_node(ISD::And, cond_vt, &[n0, c1]))
+                };
+                if let Some(and) = and {
+                    return Some(self.dag.get_select(arm_vt, and, x, n2));
+                }
             }
         }
-        // `select c0, x, (select c1, x, y)` is `select (or c0, c1), x, y`.
+        // `select c0, x, (select c1, x, y)` is `select (or c0, c1), x, y`, the
+        // same way (`visitORLike`; its `and`-pair arm is not translated).
         if self.dag.opcode(n2) == ISD::Select && self.dag.has_one_use(n2.node) {
             let (c1, x, y) = (self.dag.operand(n2, 0), self.dag.operand(n2, 1), self.dag.operand(n2, 2));
             if x == n1 && self.dag.value_type(c1) == cond_vt {
-                let or = self.dag.get_node(ISD::Or, cond_vt, &[n0, c1]);
-                return Some(self.dag.get_select(arm_vt, or, n1, y));
+                let or = if normalize {
+                    self.fold_logic_of_setccs(false, n0, c1)
+                } else {
+                    Some(self.dag.get_node(ISD::Or, cond_vt, &[n0, c1]))
+                };
+                if let Some(or) = or {
+                    return Some(self.dag.get_select(arm_vt, or, n1, y));
+                }
             }
         }
         if let Some(folded) = self.select_sign_folds(n0, n1, n2).or_else(|| self.select_single_bit_test(n0, n1, n2)) {
