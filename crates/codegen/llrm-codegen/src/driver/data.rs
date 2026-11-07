@@ -288,8 +288,22 @@ fn zeros_out(
             end += 1;
         }
         let object: Vec<masm::Datum> = items.drain(start..end).collect();
+        let (from, removed) = (start, end - start);
+        let segment = built.data[at].0.clone();
+        let moved_to = bss.len();
         bss.extend(object.into_iter().filter(|one| matches!(one, masm::Datum::Align(_) | masm::Datum::Label(_))));
         bss.push(masm::Datum::Fill(masm::Fill { size: size as i64, byte: None }));
+        // A COMDAT records where its items are: the ones after the moved items
+        // shift down, and the moved ones are now in `_BSS`.
+        for (symbol, comdat) in built.comdats.iter_mut() {
+            let Some((in_segment, range)) = &mut comdat.extent else { continue };
+            if *symbol == label {
+                *comdat.extent.as_mut().expect("matched above") = ("_BSS".to_owned(), moved_to..bss.len());
+            } else if *in_segment == segment && range.start >= from + removed {
+                range.start -= removed;
+                range.end -= removed;
+            }
+        }
     }
     bss
 }
@@ -457,6 +471,7 @@ mod tests {
             private: Default::default(),
             far_bss: Default::default(),
             code_segments: Default::default(),
+            comdats: Default::default(),
             padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: Default::default(),
