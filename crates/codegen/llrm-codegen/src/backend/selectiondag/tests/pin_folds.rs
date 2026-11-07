@@ -1068,3 +1068,71 @@ fn a_target_that_refuses_keeps_the_shift_of_the_add() {
     assert_eq!(dag.opcode(root), ISD::Shl);
     assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Add);
 }
+
+/// A target with an and-not instruction for every non-constant `i32`, as
+/// AArch64's `bic`.
+struct AndNot;
+
+impl CombineHooks for AndNot {
+    fn has_and_not(
+        &self,
+        vt: EVT,
+        constant: bool,
+    ) -> bool {
+        vt == EVT::I32 && !constant
+    }
+}
+
+fn masked_merge(dag: &mut SelectionDAG) {
+    let (x, y, m) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6), dag.get_register(EVT::I32, 7));
+    let diff = dag.get_node(ISD::Xor, EVT::I32, &[x, y]);
+    let masked = dag.get_node(ISD::And, EVT::I32, &[diff, m]);
+    let root = dag.get_node(ISD::Xor, EVT::I32, &[masked, y]);
+    dag.set_root(root);
+}
+
+/// `((x ^ y) & m) ^ y` stayed three operations; with an and-not it is `(x & m)
+/// | (y & ~m)`.
+#[test]
+fn a_masked_merge_is_unfolded_where_the_target_has_and_not() {
+    let mut dag = dag();
+    masked_merge(&mut dag);
+    DagCombiner::new(&mut dag, &mut AndNot, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Or);
+}
+
+#[test]
+fn a_masked_merge_stays_where_the_target_has_no_and_not() {
+    let mut dag = dag();
+    masked_merge(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Xor);
+}
+
+fn and_with_not_plus(dag: &mut SelectionDAG) {
+    let (x, y, z) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6), dag.get_register(EVT::I32, 7));
+    let not_y = dag.get_not(y, EVT::I32);
+    let sum = dag.get_node(ISD::Add, EVT::I32, &[not_y, z]);
+    let root = dag.get_node(ISD::And, EVT::I32, &[x, sum]);
+    dag.set_root(root);
+}
+
+/// `x & (~y + z)` is `x & ~(y - z)`: the `not` moves out so `bic` takes it.
+#[test]
+fn an_and_with_a_sum_of_a_not_takes_the_not_out_where_the_target_has_and_not() {
+    let mut dag = dag();
+    and_with_not_plus(&mut dag);
+    DagCombiner::new(&mut dag, &mut AndNot, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    let rhs = dag.operand(root, 1);
+    assert_eq!((dag.opcode(root), dag.opcode(rhs)), (ISD::And, ISD::Xor), "{rhs:?}");
+    assert_eq!(dag.opcode(dag.operand(rhs, 0)), ISD::Sub);
+}
+
+#[test]
+fn an_and_with_a_sum_of_a_not_stays_where_the_target_has_no_and_not() {
+    let mut dag = dag();
+    and_with_not_plus(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.operand(dag.get_root(), 1)), ISD::Add);
+}
