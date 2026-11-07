@@ -841,9 +841,9 @@ fn div_prices(
         margin: costs.divide_margin,
         product: Some(super::dag::ProductPrice(std::rc::Rc::new(product))),
         bytes: {
-            let rate = cpu.speed_milliclocks_per_byte();
-            let size = cpu.target().size_costs();
-            (rate > 0 && cpu.target().tti().is_some_and(|tti| tti.divide_by_bytes())).then(|| super::dag::DivBytes {
+            let rate = cpu.speed_milliclocks_per_byte_on(machine);
+            let size = machine.size_costs();
+            (rate > 0 && machine.tti().is_some_and(|tti| tti.divide_by_bytes())).then(|| super::dag::DivBytes {
                 prefix: size.prefix,
                 add: size.add,
                 shift: size.shift,
@@ -1199,7 +1199,7 @@ fn selected_in(
                 mul_m: cost("x87_mul_m")?,
                 div: cost("x87_div")?,
                 div_m: cost("x87_div_m")?,
-                milliclocks_per_byte: cpu.speed_milliclocks_per_byte(),
+                milliclocks_per_byte: cpu.speed_milliclocks_per_byte_on(&*machine),
                 memory_bytes: if matches!(address_mode, AddrMode::Real16) { 4 } else { 6 },
             })
         })
@@ -1249,7 +1249,7 @@ fn selected_in(
     // SD446: a target that trades bytes for clocks at speed prices a constant
     // multiply by its block's frequency (the IR one: no machine block exists
     // before selection).
-    let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks { 0 } else { cpu.speed_milliclocks_per_byte() };
+    let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks { 0 } else { cpu.speed_milliclocks_per_byte_on(&*machine) };
     let speed_goal = cpu.has_speed_goal() && !bytes_beat_clocks;
     let mul_by_clocks = speed_goal && machine.tti().is_some_and(|tti| tti.multiply_by_clocks());
     let price_pin = speed_goal && machine.tti().is_some_and(|tti| tti.price_pin_multiplies());
@@ -1258,7 +1258,7 @@ fn selected_in(
     // The divide weighs its bytes by the block's frequency too (SD446), whether
     // or not the multiplies are priced by clocks alone (m16): without it
     // every divide was priced as run once.
-    let divide_bytes = mul_rate > 0 && cpu.target().tti().is_some_and(|tti| tti.divide_by_bytes());
+    let divide_bytes = mul_rate > 0 && machine.tti().is_some_and(|tti| tti.divide_by_bytes());
     let frequencies = (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes).then(|| {
         let bpi = info
             .bpi

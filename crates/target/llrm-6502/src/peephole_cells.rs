@@ -11,6 +11,11 @@
 //!   dead after: the first operand goes to the instruction straight from where
 //!   it was loaded (a memory cell, `(p),y`, an indexed byte), not through `a`
 //!   and a temporary.
+//! - [`carry_stays_in_the_flag`]: `lda #0; rol a; tax` (or `sta m`), work that
+//!   leaves the carry and the saved byte alone, `txa` (or `lda m`), `lsr a` is the
+//!   work alone when `a` and the byte are dead after: a borrow chain that ran
+//!   through loads of its next operand carried its bit in a register for
+//!   nothing (a compare of two longs: 5 instructions at each word).
 //! - [`chain_ends_in_a`]: `(asl m; rol n)*k; [clc]; lda m` (also `lsr`/`ror`,
 //!   and `lda n`) is `lda m; (asl a; rol n)*k` when the loaded byte is dead after: the
 //!   byte that is returned shifts in `a`, not in memory and then loaded.
@@ -245,6 +250,79 @@ fn temp_operand_once(asm: &mut Asm) -> bool {
 /// pattern guarantee.
 fn stable(operand: &Operand) -> bool {
     matches!(operand, Operand::Direct(_) | Operand::Imm(_) | Operand::Indexed(..) | Operand::IndirectY(_))
+}
+
+pub fn carry_stays_in_the_flag(asm: &mut Asm) {
+    let mut at = 0;
+    while at + 2 < asm.lines.len() {
+        let [Line::Inst(zero), Line::Inst(rotate), Line::Inst(save)] = &asm.lines[at..at + 3] else {
+            at += 1;
+            continue;
+        };
+        let saved_in = match (&save.op, &save.operand) {
+            (Op::Tax, _) => Some(None),
+            (Op::Sta, Operand::Direct(m)) => Some(Some(m.clone())),
+            _ => None,
+        };
+        let (Some(saved_in), true, true) = (
+            saved_in,
+            zero.op == Op::Lda && zero.operand == Operand::Imm("0".into()),
+            rotate.op == Op::Rol && rotate.operand == Operand::Acc,
+        ) else {
+            at += 1;
+            continue;
+        };
+        // work that changes neither the carry nor the byte in its place
+        let mut end = at + 3;
+        // `a` still holds the saved byte until a load replaces it
+        let mut a_loaded = false;
+        while let Some(Line::Inst(inst)) = asm.lines.get(end) {
+            let writes_m = matches!((&inst.operand, &saved_in), (Operand::Direct(c), Some(m)) if c == m);
+            let restore = matches!((&inst.op, &inst.operand, &saved_in), (Op::Lda, Operand::Direct(c), Some(m)) if c == m);
+            let quiet = match inst.op {
+                Op::Lda if restore => false,
+                Op::Lda => {
+                    a_loaded = true;
+                    true
+                }
+                Op::Ldy | Op::Sty | Op::Stx | Op::Tay => !writes_m,
+                // `x` is free to change when the byte waits in a cell
+                Op::Ldx | Op::Tax => saved_in.is_some() && !writes_m,
+                Op::Sta => a_loaded && !writes_m,
+                _ => false,
+            };
+            if !quiet {
+                break;
+            }
+            end += 1;
+        }
+        let (Some(Line::Inst(load)), Some(Line::Inst(shift))) = (asm.lines.get(end), asm.lines.get(end + 1)) else {
+            at += 1;
+            continue;
+        };
+        let restores = match &saved_in {
+            None => load.op == Op::Txa,
+            Some(m) => load.op == Op::Lda && load.operand == Operand::Direct(m.clone()),
+        };
+        // x must hold the byte in place: nothing between writes it
+        let x_kept = true;
+        if !restores || shift.op != Op::Lsr || shift.operand != Operand::Acc || !x_kept {
+            at += 1;
+            continue;
+        }
+        let exits = crate::peephole::Exits::of(asm);
+        let a_dead = crate::peephole::dead_from(&asm.lines, end + 2, crate::asm::Registers::A, &mut Default::default(), exits);
+        let byte_dead = match &saved_in {
+            None => crate::peephole::dead_from(&asm.lines, end + 2, crate::asm::Registers::X, &mut Default::default(), exits),
+            Some(m) => cell_dead_from(&asm.lines, end + 2, m, &asm.result_cells, &mut BTreeSet::new()),
+        };
+        if !a_dead || !byte_dead {
+            at += 1;
+            continue;
+        }
+        asm.lines.drain(end..end + 2);
+        asm.lines.drain(at..at + 3);
+    }
 }
 
 pub fn chain_ends_in_a(asm: &mut Asm) {
