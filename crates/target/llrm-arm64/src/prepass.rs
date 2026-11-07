@@ -1284,13 +1284,20 @@ mod tests {
     /// `mov x0, x25` for fd 1, +42 reg-reg over the pin).
     #[test]
     fn a_cheap_constant_two_blocks_away_is_remade() {
+        let keep = |rd: u32| {
+            Op::I(Inst::Store {
+                mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(rd) },
+                addr: Addr::Slot { slot: 0, offset: 0 },
+                mmo: MemOperand::default(),
+            })
+        };
         let mut function = function();
         function.blocks = vec![
-            MBlock { label: "entry".into(), ops: vec![movz(64, 1), branch_to("mid")].into() },
+            MBlock { label: "entry".into(), ops: vec![movz(64, 1), keep(64), branch_to("mid")].into() },
             MBlock { label: "mid".into(), ops: vec![branch_to("far")].into() },
             MBlock {
                 label: "far".into(),
-                ops: vec![movz(66, 1), add(67, 65, 66), Op::Return { uses: vec![], tail: None }].into(),
+                ops: vec![movz(66, 1), keep(66), Op::Return { uses: vec![], tail: None }].into(),
             },
         ];
         run(&mut function, false);
