@@ -1000,7 +1000,14 @@ impl<'a> Graph<'a> {
         // Nothing to backtrack to: the live register's definition is cloned
         // where the target cannot copy the register (`CopyAndMoveSuccessors`).
         let (try_su, lregs) = self.interferences[0].clone();
+        // DEVIATE: a unit held only by the copy-clobber rule (`copy_clobbers`)
+        // is a preference, not a dependency: the pin has no such hold-back and
+        // so never clones for it. Cloning the flag setter instead cost
+        // partition 68000 -O2 two instructions a trip (1268 -> 1444 clk, memset
+        // and memcpy +30%). Owner m68k. Exit: with `copy_clobbers`.
+        let only_copies = self.sus[try_su].nodes.iter().all(|&node| self.is_virtual_copy(node));
         if let [reg] = lregs[..]
+            && !only_copies
             && self.info.has_cross_copy_class(reg)
             && let Some(&lr_def) = self.live_reg_defs.get(&reg)
             && let Some(new_def) = self.copy_and_move_successors(lr_def, queue)
