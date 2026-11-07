@@ -554,6 +554,8 @@ thread_local! {
     pub(crate) static PREDECESSOR_LISTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// The blocks `cond_branch_simplified` visited.
     pub(crate) static CONDITIONAL_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The blocks `insts_folded_to_unreachable` listed whole.
+    pub(crate) static BLOCKS_LISTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The kind of terminator ending a block, as `simplifyOnce` dispatches on it.
@@ -1251,6 +1253,8 @@ fn insts_folded_to_unreachable(
     if !found {
         return false;
     }
+    #[cfg(test)]
+    BLOCKS_LISTED.with(|one| one.set(one.get() + 1));
     let insts: Vec<InstId> = function.iter_block(block).collect();
     let Some(&last) = insts.last() else { return false };
     let Some(at) = insts.iter().position(|&inst| inst != last && stops(inst)) else { return false };
