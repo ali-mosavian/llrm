@@ -482,3 +482,28 @@ fn fast_isel_folds_a_load_into_the_instruction_after_it() {
         assert!(folded("add") && folded("imul"), "{target}: {asm}");
     }
 }
+
+/// A `volatile` load or store left its function to the DAG ("fast declined at
+/// Store { volatile: true }"): the pin selects them like any other, only never
+/// folding the load. 14 of `div_constants_long.c`'s functions, +458 B over clang.
+#[test]
+fn fast_isel_takes_volatile_accesses_and_never_folds_a_volatile_load() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(int a)\n{\n    volatile int v = a;\n    return a + v;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(!asm.lines().any(|line| line.trim_start().starts_with("add") && line.contains("ptr [")), "{target}: a volatile load was folded: {asm}");
+    }
+}
