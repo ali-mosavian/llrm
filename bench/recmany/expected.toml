@@ -1,2 +1,45 @@
-reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
-blessed = "2026-10-12"
+reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
+blessed = "2026-11-05"
+corpus = "13bcbec8360840b161b6985fb3095cf1"
+
+[bcc.O2]
+instructions = 60026
+memory_operands = 15007
+code_bytes = 193
+data_bytes = 0
+bss_bytes = 0
+
+[bcc.Os]
+instructions = 60027
+memory_operands = 15007
+code_bytes = 191
+data_bytes = 0
+bss_bytes = 0
+
+[tc.O2]
+instructions = 196535
+memory_operands = 48012
+code_bytes = 207
+data_bytes = 0
+bss_bytes = 0
+
+[tc.Os]
+instructions = 196535
+memory_operands = 48012
+code_bytes = 205
+data_bytes = 0
+bss_bytes = 0
+
+[tcpp.O2]
+instructions = 210038
+memory_operands = 46512
+code_bytes = 228
+data_bytes = 0
+bss_bytes = 0
+
+[tcpp.Os]
+instructions = 210038
+memory_operands = 46512
+code_bytes = 226
+data_bytes = 0
+bss_bytes = 0

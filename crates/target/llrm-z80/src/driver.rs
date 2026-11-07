@@ -96,10 +96,6 @@ pub fn program(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
-        // Bytes over speed on an 8-bit target: no unrolling (the 6502's
-        // stand-in for the override table).
-        options.unroll = false;
-        options.loop_unrolling = false;
         // No zero- or sign-extending load: the compare of a loaded byte stays a
         // byte compare (`cp #255`), not a word compare of its extension.
         options.extload = false;
@@ -110,7 +106,8 @@ pub fn program(
             apply_pass_flag(&mut options, flag);
         }
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
-        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
+        program.modules.iter_mut().for_each(crate::prepare::mark_long_multiplies);
     }
     Ok(program)
 }
@@ -161,6 +158,11 @@ pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
     Rc::new(Z80Machine)
 }
 
+/// `opcosts.txt`.
+pub static DESCRIPTION: std::sync::LazyLock<llrm_target::opcosts::Description> = std::sync::LazyLock::new(|| {
+    llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses")
+});
+
 struct Z80Machine;
 
 impl llrm_mir::target::Machine for Z80Machine {
@@ -181,6 +183,11 @@ impl llrm_mir::target::Machine for Z80Machine {
         llrm_mir::target::Neutral.costs()
     }
 
+    /// Real code bytes for the decisions weighed at a rate (`opcosts.txt`).
+    fn byte_costs(&self) -> llrm_mir::target::OperationCosts {
+        DESCRIPTION.size_costs()
+    }
+
     fn registers(&self) -> i64 {
         llrm_mir::target::Neutral.registers()
     }
@@ -198,16 +205,43 @@ impl llrm_mir::target::Machine for Z80Machine {
     }
 }
 
+thread_local! {
+    /// Parses of a module's text for its source file since the last
+    /// [`take_source_parses`].
+    static SOURCE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The parses made by [`source_of`] and [`sources_of`] on this thread since
+/// the last call.
+pub fn take_source_parses() -> usize {
+    SOURCE_PARSES.with(|one| one.replace(0))
+}
+
 /// The source file of the unit's `!DICompileUnit` and the line function `name`
 /// starts at (its `!DISubprogram`'s `scopeLine`), if `text` has them.
 pub fn source_of(
     text: &str,
     name: &str,
 ) -> Option<(String, Option<u32>)> {
+    SOURCE_PARSES.with(|one| one.set(one.get() + 1));
     let module = llrm_mir::parse::module(&without_triple(text)).ok()?;
     let (file, _) = llrm_mir::dbgimport::unit_file(&module)?;
     let line = module.named(name).and_then(|id| module.subprogram_line(module.global(id).function()?));
     Some((file, line))
+}
+
+/// [`source_of`] for every function of the module, from one parse.
+pub fn sources_of(text: &str) -> llrm_support::hash::HashMap<String, (String, Option<u32>)> {
+    SOURCE_PARSES.with(|one| one.set(one.get() + 1));
+    let mut out = llrm_support::hash::HashMap::default();
+    let Ok(module) = llrm_mir::parse::module(&without_triple(text)) else { return out };
+    let Some((file, _)) = llrm_mir::dbgimport::unit_file(&module) else { return out };
+    for global in &module.globals {
+        let Some(name) = global.name.as_deref() else { continue };
+        let Some(function) = global.function() else { continue };
+        out.insert(name.to_owned(), (file.clone(), module.subprogram_line(function)));
+    }
+    out
 }
 
 /// SDCC's size and spelling of a debug type, as the `.adb` writes it: the class

@@ -1,7 +1,9 @@
 //! Ranges and no-wrap flag inference (S2): `getRangeRef` and what it is made
 //! of, `getConstantMultiple`, `setNoWrapFlags`, `inferNoWrapViaConstantRanges`.
 
-use llrm_mir::constantrange::{ConstantRange, PreferredRangeType, RangeIntrinsic};
+use llrm_mir::apint::U256;
+use llrm_mir::apint::Word;
+use llrm_mir::constantrange::{PreferredRangeType, RangeIntrinsic};
 use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
@@ -9,6 +11,7 @@ use llrm_mir::valuetracking::known::{compute_known_bits, pointer_alignment, poin
 use llrm_mir::valuetracking::nonzero::is_known_non_zero;
 use llrm_mir::valuetracking::signbits::compute_num_sign_bits;
 
+use super::ConstantRange;
 use super::ap::Ap;
 use super::backedge::ExitCountKind;
 use super::expr::{Kind, Scev, Ty, Type, Use, flags};
@@ -74,7 +77,7 @@ impl ScalarEvolution {
                 // If there are no wrap guarentees, find the trailing zeros,
                 // which is the sum of trailing zeros for all its operands.
                 let mut tz = 0u32;
-                for operand in &ops {
+                for operand in ops.iter() {
                     tz += self.get_min_trailing_zeros(cx, operand.scev, ctx_i);
                 }
                 shifted_by_zeros(tz)
@@ -242,7 +245,7 @@ impl ScalarEvolution {
         s: Scev,
     ) -> Ap {
         let bits = self.get_type_size_in_bits(cx, self.type_of(s));
-        Ap::new(bits, self.get_unsigned_range(cx, s).get_unsigned_min())
+        Ap::from_word(bits, self.get_unsigned_range(cx, s).get_unsigned_min())
     }
 
     /// `getUnsignedRangeMax`.
@@ -252,7 +255,7 @@ impl ScalarEvolution {
         s: Scev,
     ) -> Ap {
         let bits = self.get_type_size_in_bits(cx, self.type_of(s));
-        Ap::new(bits, self.get_unsigned_range(cx, s).get_unsigned_max())
+        Ap::from_word(bits, self.get_unsigned_range(cx, s).get_unsigned_max())
     }
 
     /// `getSignedRangeMin`.
@@ -262,7 +265,7 @@ impl ScalarEvolution {
         s: Scev,
     ) -> Ap {
         let bits = self.get_type_size_in_bits(cx, self.type_of(s));
-        Ap::new(bits, self.get_signed_range(cx, s).get_signed_min())
+        Ap::from_word(bits, self.get_signed_range(cx, s).get_signed_min())
     }
 
     /// `getSignedRangeMax`.
@@ -272,7 +275,7 @@ impl ScalarEvolution {
         s: Scev,
     ) -> Ap {
         let bits = self.get_type_size_in_bits(cx, self.type_of(s));
-        Ap::new(bits, self.get_signed_range(cx, s).get_signed_max())
+        Ap::from_word(bits, self.get_signed_range(cx, s).get_signed_max())
     }
 
     /// Drops the cached ranges. A range asked while a loop's trip count was
@@ -399,7 +402,7 @@ impl ScalarEvolution {
         }
 
         if let Kind::Constant(c) = self.node(s).kind {
-            return self.set_range(s, hint, ConstantRange::single(c.width, c.bits));
+            return self.set_range(s, hint, ConstantRange::single(c.width, c.word()));
         }
 
         // Switch to iteratively computing the range for S, if it is part of a
@@ -418,13 +421,14 @@ impl ScalarEvolution {
             let max = Ap::all_ones(bit_width);
             let remainder = max.urem(multiple);
             if !remainder.is_zero() {
-                conservative_result = ConstantRange::new(bit_width, 0, max.sub(remainder).add(Ap::one(bit_width)).bits);
+                conservative_result =
+                    ConstantRange::new(bit_width, U256::ZERO, max.sub(remainder).add(Ap::one(bit_width)).word());
             }
         } else {
             let tz = self.get_min_trailing_zeros(cx, s, None);
             if tz != 0 {
                 let upper = Ap::signed_max(bit_width).ashr(tz).shl(tz).add(Ap::one(bit_width));
-                conservative_result = ConstantRange::new(bit_width, Ap::signed_min(bit_width).bits, upper.bits);
+                conservative_result = ConstantRange::new(bit_width, Ap::signed_min(bit_width).word(), upper.word());
             }
         }
 
@@ -491,8 +495,10 @@ impl ScalarEvolution {
                     let start = self.addrec_start(add_rec);
                     let unsigned_min_value = self.get_unsigned_range_min(cx, start);
                     if !unsigned_min_value.is_zero() {
-                        conservative_result = conservative_result
-                            .intersect_with(&ConstantRange::new(bit_width, unsigned_min_value.bits, 0), range_type);
+                        conservative_result = conservative_result.intersect_with(
+                            &ConstantRange::new(bit_width, unsigned_min_value.word(), U256::ZERO),
+                            range_type,
+                        );
                     }
                 }
 
@@ -517,7 +523,7 @@ impl ScalarEvolution {
                     if all_non_neg {
                         let min = self.get_signed_range_min(cx, start);
                         conservative_result = conservative_result.intersect_with(
-                            &ConstantRange::non_empty(bit_width, min.bits, Ap::signed_min(bit_width).bits),
+                            &ConstantRange::non_empty(bit_width, min.word(), Ap::signed_min(bit_width).word()),
                             range_type,
                         );
                     } else if all_non_pos {
@@ -525,8 +531,8 @@ impl ScalarEvolution {
                         conservative_result = conservative_result.intersect_with(
                             &ConstantRange::non_empty(
                                 bit_width,
-                                Ap::signed_min(bit_width).bits,
-                                max.add(Ap::one(bit_width)).bits,
+                                Ap::signed_min(bit_width).word(),
+                                max.add(Ap::one(bit_width)).word(),
                             ),
                             range_type,
                         );
@@ -625,7 +631,11 @@ impl ScalarEvolution {
                 let (known_min, known_max) = (known.min_value(), known.max_value());
                 if known_min != known_max.wrapping_add(1) & llrm_mir::context::mask(bit_width) {
                     conservative_result = conservative_result.intersect_with(
-                        &ConstantRange::new(bit_width, known_min, known_max.wrapping_add(1)),
+                        &ConstantRange::new(
+                            bit_width,
+                            U256::from_u128(known_min),
+                            U256::from_u128(known_max.wrapping_add(1)),
+                        ),
                         range_type,
                     );
                 }
@@ -633,7 +643,7 @@ impl ScalarEvolution {
                     let lower = Ap::signed_min(bit_width).ashr(ns - 1);
                     let upper = Ap::signed_max(bit_width).ashr(ns - 1).add(Ap::one(bit_width));
                     conservative_result = conservative_result
-                        .intersect_with(&ConstantRange::new(bit_width, lower.bits, upper.bits), range_type);
+                        .intersect_with(&ConstantRange::new(bit_width, lower.word(), upper.word()), range_type);
                 }
 
                 if self.type_of(s).is_pointer() && hint == RangeSignHint::Unsigned {
@@ -659,7 +669,11 @@ impl ScalarEvolution {
                             min_val = Ap::new(bit_width, u128::from(align));
                         }
                         conservative_result = conservative_result.intersect_with(
-                            &ConstantRange::non_empty(bit_width, min_val.bits, max_val.add(Ap::one(bit_width)).bits),
+                            &ConstantRange::non_empty(
+                                bit_width,
+                                min_val.word(),
+                                max_val.add(Ap::one(bit_width)).word(),
+                            ),
                             range_type,
                         );
                     }
@@ -720,10 +734,13 @@ impl ScalarEvolution {
         let q = cx.query(None);
         let inst = match cx.function.value(id).def {
             ValueDef::Instruction(inst) => inst,
-            ValueDef::Argument(at) => return llrm_mir::valuetracking::pattern::argument_range(&q, at),
+            ValueDef::Argument(at) => {
+                return llrm_mir::valuetracking::pattern::argument_range(&q, at).map(|range| range.to_word());
+            }
         };
         let Some(node) = q.metadata_node(inst, "range") else {
-            return llrm_mir::valuetracking::pattern::call_range(&q, cx.function.instruction(inst));
+            return llrm_mir::valuetracking::pattern::call_range(&q, cx.function.instruction(inst))
+                .map(|range| range.to_word());
         };
         let mut range: Option<ConstantRange> = None;
         for pair in node.operands.chunks(2) {
@@ -736,7 +753,7 @@ impl ScalarEvolution {
             };
             let ((lower, width), (upper, _)) =
                 (q.int_constant(Operand::Constant(*lower))?, q.int_constant(Operand::Constant(*upper))?);
-            let one = ConstantRange::new(width, lower, upper);
+            let one = ConstantRange::new(width, U256::from_u128(lower), U256::from_u128(upper));
             range = Some(match range {
                 None => one,
                 Some(previous) => previous.union_with(&one, PreferredRangeType::Smallest),
@@ -816,15 +833,15 @@ impl ScalarEvolution {
                 if known_start.is_non_negative() {
                     return ConstantRange::non_empty(
                         bit_width,
-                        known_end.min_value(),
-                        known_start.max_value().wrapping_add(1),
+                        U256::from_u128(known_end.min_value()),
+                        U256::from_u128(known_start.max_value().wrapping_add(1)),
                     );
                 }
                 if known_start.is_negative() {
                     return ConstantRange::non_empty(
                         bit_width,
-                        known_start.min_value(),
-                        known_end.max_value().wrapping_add(1),
+                        U256::from_u128(known_start.min_value()),
+                        U256::from_u128(known_end.max_value().wrapping_add(1)),
                     );
                 }
             }
@@ -833,8 +850,8 @@ impl ScalarEvolution {
                 let known_end = KnownBits::lshr(&known_start, &total_shift, false, false);
                 return ConstantRange::non_empty(
                     bit_width,
-                    known_end.min_value(),
-                    known_start.max_value().wrapping_add(1),
+                    U256::from_u128(known_end.min_value()),
+                    U256::from_u128(known_start.max_value().wrapping_add(1)),
                 );
             }
             BinaryOp::Shl => {
@@ -844,8 +861,8 @@ impl ScalarEvolution {
                 if total < u128::from(known_start.count_min_leading_zeros()) {
                     return ConstantRange::new(
                         bit_width,
-                        known_start.min_value(),
-                        known_end.max_value().wrapping_add(1),
+                        U256::from_u128(known_start.min_value()),
+                        U256::from_u128(known_end.max_value().wrapping_add(1)),
                     );
                 }
             }
@@ -910,8 +927,8 @@ impl ScalarEvolution {
         // Offset otherwise. Maximum value of the final range will match the
         // maximal value of StartRange if the expression is decreasing and will
         // be increased by Offset otherwise.
-        let start_lower = Ap::new(bit_width, start_range.lower);
-        let start_upper = Ap::new(bit_width, start_range.upper).sub(Ap::one(bit_width));
+        let start_lower = Ap::from_word(bit_width, start_range.lower);
+        let start_upper = Ap::from_word(bit_width, start_range.upper).sub(Ap::one(bit_width));
         let overflow;
         let moved_boundary;
         if signed {
@@ -934,7 +951,7 @@ impl ScalarEvolution {
         // initial range (due to wrap around). This means that the expression
         // can take any value in this bitwidth, and we have to return full
         // range.
-        if start_range.contains(moved_boundary.bits) {
+        if start_range.contains(moved_boundary.word()) {
             return (ConstantRange::full(bit_width), false);
         }
 
@@ -943,7 +960,7 @@ impl ScalarEvolution {
 
         // No overflow detected, return [StartLower, StartUpper + Offset + 1)
         // range.
-        (ConstantRange::non_empty(bit_width, new_lower.bits, new_upper.bits), !overflow)
+        (ConstantRange::non_empty(bit_width, new_lower.word(), new_upper.word()), !overflow)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L6906
@@ -970,13 +987,13 @@ impl ScalarEvolution {
         // If Step can be both positive and negative, we need to find ranges for
         // the maximum absolute step values in both directions and union them.
         let (sr1, nsw1) = Self::get_range_for_affine_ar_helper(
-            Ap::new(bits, step_s_range.get_signed_min()),
+            Ap::from_word(bits, step_s_range.get_signed_min()),
             &start_s_range,
             max_be_count,
             true,
         );
         let (sr2, nsw2) = Self::get_range_for_affine_ar_helper(
-            Ap::new(bits, step_s_range.get_signed_max()),
+            Ap::from_word(bits, step_s_range.get_signed_max()),
             &start_s_range,
             max_be_count,
             true,

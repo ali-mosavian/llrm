@@ -3,7 +3,7 @@
 //! edge, so that edge gets a block.
 
 use llrm_mir::module::{Module, Operand};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::opcode::{Attribute, BinaryOp, Opcode};
 use llrm_transforms::edges::split_critical_edge;
 
 /// Splits every critical edge into a block with phis, in every function with a
@@ -35,6 +35,47 @@ pub fn split_phi_edges(module: &mut Module) {
                     split_critical_edge(function, from, to);
                 }
             }
+        }
+    }
+}
+
+/// The attribute that lets a function tuned for size call `__mulsi3`.
+pub const LONG_MULTIPLY: &str = "llrm-mulsi3";
+
+/// Marks every function with a body when the module multiplies longs often
+/// enough to pay for `__mulsi3` (57 B): a long multiply counts one, a long
+/// long three (its cross products). A lone small multiply is cheaper inline
+/// (copy_runs, switch_jump_table: +10 and +31 B at -Os with the call).
+pub fn mark_long_multiplies(module: &mut Module) {
+    let bits = |ty| module.context.types.int_bits(ty);
+    let sites: u32 = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .map(|(_, _, function)| {
+            function
+                .layout()
+                .iter()
+                .flat_map(|&block| function.iter_block(block))
+                .filter(|&inst| function.instruction(inst).opcode == Opcode::Binary(BinaryOp::Mul))
+                .map(|inst| match bits(function.instruction(inst).ty) {
+                    Some(32) => 1,
+                    Some(64) => 3,
+                    _ => 0,
+                })
+                .sum::<u32>()
+        })
+        .sum();
+    if sites < 2 {
+        return;
+    }
+    let names: Vec<String> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .filter_map(|(_, global, _)| global.name.owned())
+        .collect();
+    for name in names {
+        if let Some((_, function)) = module.function_mut(&name) {
+            function.attrs.push(Attribute::Flag(LONG_MULTIPLY.to_owned()));
         }
     }
 }

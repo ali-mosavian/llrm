@@ -39,24 +39,68 @@ pub(crate) fn mask_bit(root: RegId) -> Option<u32> {
         )
 }
 
-fn is_address(register: RegId) -> bool {
+pub(crate) fn is_address(register: RegId) -> bool {
     mask_bit(REGISTER_INFO.root(register)).is_some_and(|bit| bit >= 8)
+}
+
+/// `%sp` moved by `bytes`: the pin's `adda.l`/`suba.l` (6 bytes), or where
+/// `short` `addq` (1 to 8, 2 bytes) or `lea (d16,%sp), %sp` (4 bytes). No
+/// `subq` to an address register has a row yet (`SUBQ32ai` is not built).
+pub(crate) fn sp_adjust(
+    bytes: i64,
+    short: bool,
+) -> mc::Inst {
+    use mc::Operand::{Imm, Reg as R};
+    let sp = || R(reg::SP);
+    match bytes {
+        1..=8 if short => mc::Inst { opcode: "ADDQ32ai", operands: vec![sp(), sp(), Imm(bytes)] },
+        -32768..=32767 if short => mc::Inst { opcode: "LEA32p", operands: vec![sp(), Imm(bytes), sp()] },
+        0.. => mc::Inst { opcode: "ADD32ai", operands: vec![sp(), sp(), Imm(bytes)] },
+        _ => mc::Inst { opcode: "SUB32ai", operands: vec![sp(), sp(), Imm(-bytes)] },
+    }
 }
 
 fn frame_op(
     op: &FrameOp,
     out: &mut Vec<mc::Inst>,
+    short: bool,
 ) {
     use mc::Operand::{Imm, Reg as R};
     let base = |base: &Base| R(if *base == Base::Sp { reg::SP } else { reg::A6 });
     let mask = |registers: &[RegId]| {
         registers.iter().filter_map(|one| mask_bit(REGISTER_INFO.root(*one))).fold(0i64, |all, bit| all | 1 << bit)
     };
+    // one `move.l` a register, in `movem`'s memory order: the registers of the
+    // highest address are pushed first, and popped last
+    let order = |registers: &[RegId]| {
+        let mut ranked: Vec<(u32, RegId)> =
+            registers.iter().filter_map(|one| mask_bit(REGISTER_INFO.root(*one)).map(|bit| (bit, *one))).collect();
+        ranked.sort_by_key(|(bit, _)| *bit);
+        ranked
+    };
+    match op {
+        FrameOp::PushEach { registers } => {
+            for (_, one) in order(registers).into_iter().rev() {
+                let opcode = if is_address(one) { "MOV32ea" } else { "MOV32ed" };
+                out.push(mc::Inst { opcode, operands: vec![R(reg::SP), R(one)] });
+            }
+            return;
+        }
+        FrameOp::PopEach { registers } => {
+            for (_, one) in order(registers) {
+                let opcode = if is_address(one) { "MOV32ao" } else { "MOV32do" };
+                out.push(mc::Inst { opcode, operands: vec![R(one), R(reg::SP)] });
+            }
+            return;
+        }
+        _ => {}
+    }
     out.push(match op {
+        FrameOp::PushEach { .. } | FrameOp::PopEach { .. } => unreachable!("handled above"),
         FrameOp::Link { bytes } => mc::Inst { opcode: "LINK16", operands: vec![R(reg::A6), Imm(-bytes)] },
         FrameOp::Unlink => mc::Inst { opcode: "UNLK", operands: vec![R(reg::A6)] },
-        FrameOp::SubSp(bytes) => mc::Inst { opcode: "SUB32ai", operands: vec![R(reg::SP), R(reg::SP), Imm(*bytes)] },
-        FrameOp::AddSp(bytes) => mc::Inst { opcode: "ADD32ai", operands: vec![R(reg::SP), R(reg::SP), Imm(*bytes)] },
+        FrameOp::SubSp(bytes) => sp_adjust(-bytes, short),
+        FrameOp::AddSp(bytes) => sp_adjust(*bytes, short),
         FrameOp::Save { registers, base: at, offset } => {
             mc::Inst { opcode: "MOVM32pm", operands: vec![Imm(*offset), base(at), Imm(mask(registers))] }
         }
@@ -86,8 +130,17 @@ pub fn frame_cost(
     ops: &[FrameOp],
     cpu: crate::dagisel::hooks::Cpu,
 ) -> Result<(usize, u32), String> {
+    frame_cost_with(ops, cpu, false)
+}
+
+/// [`frame_cost`] with the short stack-pointer adjusts where `short`.
+pub fn frame_cost_with(
+    ops: &[FrameOp],
+    cpu: crate::dagisel::hooks::Cpu,
+    short: bool,
+) -> Result<(usize, u32), String> {
     let mut insts = Vec::new();
-    ops.iter().for_each(|op| frame_op(op, &mut insts));
+    ops.iter().for_each(|op| frame_op(op, &mut insts, short));
     let (mut bytes, mut clocks) = (0, 0);
     for inst in &insts {
         let size = crate::encode::encode(inst)?.bytes.len();
@@ -104,8 +157,16 @@ fn frame_ops(
     layout: &frame::Layout,
     cpu: crate::dagisel::hooks::Cpu,
     push_frame: bool,
+    short: bool,
+    size: bool,
 ) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
-    frame_ops_priced(layout, push_frame, |ops| frame_cost(ops, cpu))
+    frame_ops_choosing(
+        layout,
+        push_frame,
+        true,
+        |ops| frame_cost_with(ops, cpu, short),
+        |bytes, clocks| crate::timing::order(cpu, size, clocks, bytes as u32),
+    )
 }
 
 /// [`frame_ops`] with the price of a sequence, `(bytes, clocks)`, given: a test
@@ -115,20 +176,57 @@ pub fn frame_ops_priced(
     push_frame: bool,
     cost: impl Fn(&[FrameOp]) -> Result<(usize, u32), String>,
 ) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
+    frame_ops_choosing(layout, push_frame, false, cost, |_, clocks| (0, i64::from(clocks)))
+}
+
+/// [`frame_ops_priced`] that also weighs a `move.l` a register (`each`) beside
+/// the one `movem`: of the frames no larger and no slower than the pin's, the
+/// one `key(bytes, clocks)` of its two halves ranks lowest, the `movem` push
+/// on a tie.
+///
+/// DEVIATE from the pin, which has neither: gcc pushes each register. At two
+/// registers the bytes are equal and the clocks lower from the 68020 on
+/// (68020: `movem` pair 34, four `move.l` 22; 68040 9 against 4). From three
+/// registers `movem` is smaller and stays (fnptr +4 B, partition 040 +8 B in
+/// the first A/B). Exit: none.
+pub fn frame_ops_choosing(
+    layout: &frame::Layout,
+    push_frame: bool,
+    each: bool,
+    cost: impl Fn(&[FrameOp]) -> Result<(usize, u32), String>,
+    key: impl Fn(usize, u32) -> (i64, i64),
+) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
     let (pin_opening, pin_closing) = (layout.prologue(), layout.epilogue());
-    let pushed = if push_frame { layout.push_prologue().zip(layout.push_epilogue()) } else { None };
-    let Some((opening, closing)) = pushed else {
-        return Ok((pin_opening, pin_closing));
-    };
+    let mut pushed = Vec::new();
+    if push_frame {
+        pushed.extend(layout.push_prologue().zip(layout.push_epilogue()));
+        if each {
+            pushed.extend(layout.push_each_prologue().zip(layout.push_each_epilogue()));
+        }
+    }
     let no_worse = |ours: &[FrameOp], pin: &[FrameOp]| -> Result<bool, String> {
         let ((ours_bytes, ours_clocks), (pin_bytes, pin_clocks)) = (cost(ours)?, cost(pin)?);
         Ok(ours_bytes <= pin_bytes && ours_clocks <= pin_clocks)
     };
-    if no_worse(&opening, &pin_opening)? && no_worse(&closing, &pin_closing)? {
-        Ok((opening, closing))
-    } else {
-        Ok((pin_opening, pin_closing))
+    let mut best: Option<((i64, i64), (Vec<FrameOp>, Vec<FrameOp>))> = None;
+    // the first candidate that passes is the `movem` push; a later one must not
+    // be larger than it (strict on bytes: no m68k byte rate is derived)
+    let mut bytes_limit = usize::MAX;
+    for (opening, closing) in pushed {
+        if !(no_worse(&opening, &pin_opening)? && no_worse(&closing, &pin_closing)?) {
+            continue;
+        }
+        let ((ob, oc), (cb, cc)) = (cost(&opening)?, cost(&closing)?);
+        if ob + cb > bytes_limit {
+            continue;
+        }
+        bytes_limit = bytes_limit.min(ob + cb);
+        let ranked = key(ob + cb, oc + cc);
+        if best.as_ref().is_none_or(|(held, _)| ranked < *held) {
+            best = Some((ranked, (opening, closing)));
+        }
     }
+    Ok(best.map_or((pin_opening, pin_closing), |(_, frame)| frame))
 }
 
 /// A line of the function: a block's label (its layout index) or an
@@ -195,6 +293,21 @@ pub fn finish(
     cpu: crate::dagisel::hooks::Cpu,
     push_frame: bool,
 ) -> Result<Vec<Line>, String> {
+    finish_with(function, assignment, number, slots, cpu, push_frame, false, None)
+}
+
+/// [`finish`], with the outgoing arguments pushed where [`crate::callpush`]
+/// finds that cheaper: `pushes` is `Some(size)` to allow it.
+pub fn finish_with(
+    function: &MFunction,
+    assignment: &Assignment,
+    number: usize,
+    slots: &[i32],
+    cpu: crate::dagisel::hooks::Cpu,
+    push_frame: bool,
+    short: bool,
+    pushes: Option<bool>,
+) -> Result<Vec<Line>, String> {
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
         .iter()
@@ -206,6 +319,7 @@ pub fn finish(
         })
         .collect();
     let insts: Vec<_> = kept.iter().map(|(_, inst)| *inst).collect();
+    let blocks: Vec<usize> = kept.iter().map(|(at, _)| *at).collect();
     let targeted: Vec<usize> = insts
         .iter()
         .flat_map(|inst| &inst.operands)
@@ -216,15 +330,6 @@ pub fn finish(
         .collect();
     // a tail call has no call sequence: it leaves the frame it is in
     let has_calls = insts.iter().any(|inst| inst.call && inst.kind != Kind::Op("TCRETURNq"));
-    let max_call_frame = insts
-        .iter()
-        .filter(|inst| inst.kind == Kind::Op("ADJCALLSTACKDOWN"))
-        .filter_map(|inst| match inst.operands.first() {
-            Some(Operand::Imm(bytes)) => Some(*bytes),
-            _ => None,
-        })
-        .max()
-        .unwrap_or(0);
     // the callee-saved registers the allocation used, in `CSR_STD` order
     let used: Vec<RegId> = frame::callee_saved()
         .into_iter()
@@ -257,17 +362,41 @@ pub fn finish(
     objects.extend(slots.iter().map(|_| Object { size: 4, align: 4, offset: 0, callee_saved: false, dead: false }));
     let frame_indices: Vec<i32> =
         fixed.iter().copied().chain(function.locals.iter().map(|local| local.0)).chain(slots.iter().copied()).collect();
-    let layout = frame::layout(&Function {
-        fixed: fixed.len(),
-        objects,
-        saved: used,
-        max_call_frame,
-        adjusts_stack: has_calls,
-        ..Function::default()
-    });
+    let call_area = |kept_sequences: &dyn Fn(usize) -> bool| -> i64 {
+        insts
+            .iter()
+            .enumerate()
+            .filter(|(at, inst)| inst.kind == Kind::Op("ADJCALLSTACKDOWN") && kept_sequences(*at))
+            .filter_map(|(_, inst)| match inst.operands.first() {
+                Some(Operand::Imm(bytes)) => Some(*bytes),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0)
+    };
+    let frame_of = |max_call_frame: i64| {
+        frame::layout(&Function {
+            fixed: fixed.len(),
+            objects: objects.clone(),
+            saved: used.clone(),
+            max_call_frame,
+            stack_align: if short { frame::SHIPPED_STACK_ALIGN } else { 0 },
+            adjusts_stack: has_calls,
+            ..Function::default()
+        })
+    };
+    let wants_size = pushes.unwrap_or(false);
+    let pushes = match pushes {
+        Some(size) => crate::callpush::plan(&insts, &blocks, assignment, cpu, size, short, |max_call_frame| {
+            let (opening, closing) = frame_ops(&frame_of(max_call_frame), cpu, push_frame, short, wants_size)?;
+            frame_cost_with(&[opening, closing].concat(), cpu, short)
+        })?,
+        None => crate::callpush::Plan::default(),
+    };
+    let layout = frame_of(call_area(&|at| pushes.keeps_frame(at)));
     let mut out = Vec::new();
-    let (opening, closing) = frame_ops(&layout, cpu, push_frame)?;
-    opening.iter().for_each(|op| frame_op(op, &mut out));
+    let (opening, closing) = frame_ops(&layout, cpu, push_frame, short, wants_size)?;
+    opening.iter().for_each(|op| frame_op(op, &mut out, short));
     let mut lines = Vec::new();
     // Where each place starts in `out`: only when it changes.
     let mut marks: Vec<(usize, Row)> = Vec::new();
@@ -278,9 +407,62 @@ pub fn finish(
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
     // pointer is that much further
     let mut pushed = 0i64;
+    // the values of the stores whose pushes wait for the call, by offset
+    let mut waiting: Vec<(i64, usize)> = Vec::new();
     let mut block_of = kept.iter().map(|(at, _)| *at).peekable();
     let mut shown = 0usize;
-    for inst in insts.iter().copied() {
+    // the operands of `inst` as the printer has them, with `pushed` bytes
+    // more on the stack than the frame accounts for
+    let convert = |inst: &crate::mfunc::Inst, pushed: i64| -> Result<Vec<mc::Operand>, String> {
+        let mut converted = Vec::new();
+        let mut it = inst.operands.iter().peekable();
+        while let Some(operand) = it.next() {
+            converted.push(match operand {
+                Operand::Def(r) | Operand::Use(r) => mc::Operand::Reg(physical(*r, assignment)),
+                Operand::Imm(value) => {
+                    // a frame index follows the displacement it adds to
+                    if let Some(Operand::Frame(index)) = it.peek() {
+                        let at = frame_indices.iter().position(|one| one == index).ok_or("an unknown frame index")?;
+                        let (base, disp) = layout.address(at);
+                        it.next();
+                        converted.push(mc::Operand::Imm(value + disp + if base == Base::Sp { pushed } else { 0 }));
+                        converted.push(mc::Operand::Reg(if base == Base::Sp { reg::SP } else { reg::A6 }));
+                        continue;
+                    }
+                    mc::Operand::Imm(*value)
+                }
+                Operand::Symbol(name, addend) => mc::Operand::Symbol(name.clone(), *addend),
+                Operand::Block(id) => {
+                    let at = function.blocks.iter().position(|block| block.id == *id).ok_or("a branch to no block")?;
+                    mc::Operand::Symbol(format!(".LBB{number}_{at}"), 0)
+                }
+                Operand::Frame(_) => return Err("a frame index with no displacement".to_owned()),
+            });
+        }
+        Ok(converted)
+    };
+    // the push of argument store `store`, `pushed` bytes down: of its value,
+    // or of the memory the load folded into it reads
+    let push_for = |store: usize, pushed: i64| -> Result<mc::Inst, String> {
+        match pushes.folded_load(store) {
+            Some(load) => {
+                let Kind::Op(name) = insts[load].kind else { return Err("a folded load is an instruction".to_owned()) };
+                let mut operands = convert(insts[load], pushed)?;
+                operands[0] = mc::Operand::Reg(reg::SP);
+                let opcode = crate::callpush::memory_push(name).ok_or("a folded load has a push")?;
+                Ok(mc::Inst { opcode, operands })
+            }
+            None if matches!(insts[store].kind, Kind::Op("CLR32p" | "CLR32j")) => {
+                // a `clr.l` store has no value operand: it stores zero
+                Ok(crate::callpush::push_of_sized(&mc::Operand::Imm(0), wants_size))
+            }
+            None => {
+                let operands = convert(insts[store], pushed)?;
+                Ok(crate::callpush::push_of_sized(operands.last().ok_or("a push of nothing")?, wants_size))
+            }
+        }
+    };
+    for (index, inst) in insts.iter().copied().enumerate() {
         let at = block_of.next().expect("a block per instruction");
         while shown <= at {
             if targeted.contains(&shown) {
@@ -306,36 +488,34 @@ pub fn finish(
         if inst.origin != 0 {
             last_origin = inst.origin;
         }
-        let operands: Vec<mc::Operand> = {
-            let mut converted = Vec::new();
-            let mut it = inst.operands.iter().peekable();
-            while let Some(operand) = it.next() {
-                converted.push(match operand {
-                    Operand::Def(r) | Operand::Use(r) => mc::Operand::Reg(physical(*r, assignment)),
-                    Operand::Imm(value) => {
-                        // a frame index follows the displacement it adds to
-                        if let Some(Operand::Frame(index)) = it.peek() {
-                            let at =
-                                frame_indices.iter().position(|one| one == index).ok_or("an unknown frame index")?;
-                            let (base, disp) = layout.address(at);
-                            it.next();
-                            converted.push(mc::Operand::Imm(value + disp + if base == Base::Sp { pushed } else { 0 }));
-                            converted.push(mc::Operand::Reg(if base == Base::Sp { reg::SP } else { reg::A6 }));
-                            continue;
-                        }
-                        mc::Operand::Imm(*value)
-                    }
-                    Operand::Symbol(name, addend) => mc::Operand::Symbol(name.clone(), *addend),
-                    Operand::Block(id) => {
-                        let at =
-                            function.blocks.iter().position(|block| block.id == *id).ok_or("a branch to no block")?;
-                        mc::Operand::Symbol(format!(".LBB{number}_{at}"), 0)
-                    }
-                    Operand::Frame(_) => return Err("a frame index with no displacement".to_owned()),
-                });
+        let operands = convert(inst, pushed)?;
+        if pushes.is_dropped(index) {
+            continue;
+        }
+        if let Some(offset) = pushes.deferred_offset(index) {
+            waiting.push((offset, index));
+            continue;
+        }
+        if inst.call && !waiting.is_empty() {
+            waiting.sort_by(|a, b| b.0.cmp(&a.0));
+            for (_, store) in waiting.drain(..) {
+                out.push(push_for(store, pushed)?);
+                pushed += 4;
             }
-            converted
-        };
+        }
+        if pushes.is_push(index) {
+            out.push(push_for(index, pushed)?);
+            pushed += 4;
+            continue;
+        }
+        if pushes.is_down(index) {
+            continue;
+        }
+        if let Some(bytes) = pushes.cleanup(index) {
+            frame_op(&FrameOp::AddSp(bytes), &mut out, short);
+            pushed -= bytes;
+            continue;
+        }
         match inst.kind {
             Kind::Copy => {
                 let [mc::Operand::Reg(dst), mc::Operand::Reg(src)] = operands[..] else {
@@ -384,13 +564,14 @@ pub fn finish(
                 });
             }
             Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP") => {}
+            Kind::Op("UNREACHABLE") => {}
             Kind::Op("RET") => {
-                closing.iter().for_each(|op| frame_op(op, &mut out));
+                closing.iter().for_each(|op| frame_op(op, &mut out, short));
                 out.push(mc::Inst { opcode: "RTS", operands: vec![] });
             }
             Kind::Op("TCRETURNq") => {
                 let [target, _] = &operands[..] else { return Err("TCRETURNq operands".to_owned()) };
-                closing.iter().for_each(|op| frame_op(op, &mut out));
+                closing.iter().for_each(|op| frame_op(op, &mut out, short));
                 out.push(mc::Inst { opcode: "BRA16", operands: vec![target.clone()] });
             }
             Kind::Op("MOVM32pm_P") => {
@@ -431,8 +612,20 @@ pub fn finish(
                 };
                 out.extend(expand_any_extension(dst, src)?);
             }
-            Kind::Op(name) if extension(name).is_some() => {
-                out.extend(expand_extension(name, &operands)?);
+            Kind::Op(name)
+                if extension(name).is_some()
+                    || crate::dagisel::scaled::base_of(name).is_some_and(|base| extension(base).is_some()) =>
+            {
+                out.extend(expand_extension(name, &operands, cpu)?);
+            }
+            Kind::Op(name) if crate::dagisel::indexed::extension_of(name).is_some() => {
+                let (_, def, count) = crate::dagisel::indexed::printed_as(name).ok_or("a writeback")?;
+                let mut operands = operands;
+                for _ in 0..count {
+                    operands.remove(def);
+                }
+                let plain = crate::dagisel::indexed::extension_of(name).ok_or("an extension writeback")?;
+                out.extend(expand_extension(plain, &operands, cpu)?);
             }
             Kind::Op(name) if crate::dagisel::indexed::printed_as(name).is_some() => {
                 let (opcode, def, count) = crate::dagisel::indexed::printed_as(name).ok_or("a writeback")?;
@@ -550,8 +743,14 @@ fn inst(
 fn expand_extension(
     name: &str,
     operands: &[mc::Operand],
+    cpu: crate::dagisel::hooks::Cpu,
 ) -> Result<Vec<mc::Inst>, String> {
     use mc::Operand::{Imm, Reg as R};
+    // `MOVZXd32f16x2`: the load is the scaled sibling of `MOV16rf`
+    let (name, scale) = match crate::dagisel::scaled::base_of(name) {
+        Some(base) => (base, crate::dagisel::scaled::scale_of(name)),
+        None => (name, None),
+    };
     let (signed, to, mode, from) = extension(name).ok_or("not an extension")?;
     let R(dst) = operands[0] else { return Err(format!("{name}: operands")) };
     let root = REGISTER_INFO.root(dst);
@@ -559,6 +758,12 @@ fn expand_extension(
     let mut out = Vec::new();
     let extend = |out: &mut Vec<mc::Inst>| -> Result<(), String> {
         if signed {
+            // DEVIATE: `extb.l` from the 68020 on, where the pin has `ext.w`
+            // then `ext.l`; gcc -m68020 uses it. Exit: beyond pin.
+            if from == 8 && to == 32 && cpu.at_least(crate::dagisel::hooks::Cpu::M68020) {
+                out.push(inst("EXTB32", vec![R(view(32)?), R(view(32)?)]));
+                return Ok(());
+            }
             if from == 8 {
                 let word = view(16)?;
                 out.push(inst("EXT16", vec![R(word), R(word)]));
@@ -590,17 +795,25 @@ fn expand_extension(
         return Ok(out);
     }
     let load: &'static str = match (from, mode) {
+        (8, 'o') => "MOV8do",
         (8, 'j') => "MOV8dj",
         (8, 'p') => "MOV8dp",
         (8, 'f') => "MOV8df",
         (8, 'q') => "MOV8dq",
         (8, 'k') => "MOV8dk",
+        (16, 'o') => "MOV16do",
         (16, 'j') => "MOV16rj",
         (16, 'p') => "MOV16rp",
         (16, 'f') => "MOV16rf",
         (16, 'q') => "MOV16rq",
         (16, 'k') => "MOV16rk",
         _ => return Err(format!("{name}: addressing mode {mode} is not translated")),
+    };
+    let load = match scale {
+        Some(scale) => {
+            crate::dagisel::scaled::scaled_name(load, scale).ok_or_else(|| format!("{name}: no scaled {load}"))?
+        }
+        None => load,
     };
     let reads_dst = operands[1..].iter().any(|one| matches!(one, R(reg) if REGISTER_INFO.root(*reg) == root));
     let mut moved = operands.to_vec();

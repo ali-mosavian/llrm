@@ -33,9 +33,10 @@
 //!   formed only where the compile states them in `Options::library`, as
 //!   `strlen` is (loopidiom D11); the pin reads the triple. Exit:
 //!   `Target::library` naming them.
-//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `mem*`, math)
+//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `memchr`, math)
 //!   are untranslated, and so are `iprintf`/`__small_printf`,
-//!   `optimizeErrorReporting` and the argument annotations.
+//!   `optimizeErrorReporting` and the argument annotations. The `memcpy`
+//!   family is `memops.rs`.
 //! - D4: the arms of `strchr`, `strpbrk`, `strcspn` and `strstr` that call a
 //!   routine (`memchr`, `strlen`, `strncmp`, `strchr`) are untranslated, as is
 //!   the character compare the pin makes of a `strchr` or `strstr` tested
@@ -59,13 +60,30 @@ use llrm_mir::constantfolding::{Env, read_byte_array_from_global};
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::libfunc::{Generic, LibFunc, Routine, TargetLibraryInfo};
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::module::{InstId, Operand, UnnamedAddr};
 use llrm_mir::opcode::{Attribute, CallInfo, CastOp, Flags, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 use llrm_mir::types::{Type, TypeId};
+use llrm_mir::valuetracking::Query;
+use llrm_mir::valuetracking::nonzero::strip_and_accumulate_constant_offsets;
+use llrm_mir::valuetracking::underlying::get_underlying_object;
 
 mod compare;
+mod memops;
 mod search;
+
+/// One table per module: the target's library, else the pin's defaults for
+/// the pointer's width.
+pub(crate) fn target_library_info(
+    outer: &llrm_mir::passes::Outer,
+    size_bits: u32,
+) -> std::rc::Rc<TargetLibraryInfo> {
+    outer.memo::<TargetLibraryInfo>(0, || {
+        let library =
+            outer.program().target.library().unwrap_or_else(|| std::rc::Rc::new(Generic::for_pointer(size_bits)));
+        TargetLibraryInfo::new(&*library)
+    })
+}
 
 pub struct SimplifyLibCalls {
     routines: Vec<Routine>,
@@ -92,16 +110,28 @@ fn build(
     Operand::Value(unit.function.instruction(made).result.expect("a result"))
 }
 
-/// `getConstantDataArrayInfo` of a pointer that is a constant global: every
-/// byte of the array.
+/// `getConstantDataArrayInfo`
+/// ([L7001](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7001))
+/// of a pointer based on a constant global: every byte from the constant
+/// offset the pointer adds, through GEPs and casts.
 fn constant_array(
     unit: &Unit,
     env: Env,
     operand: Operand,
 ) -> Option<Vec<u8>> {
-    let Operand::Constant(id) = operand else { return None };
-    let ConstantKind::Global(global) = unit.context.get(id).kind else { return None };
-    let bytes = read_byte_array_from_global(unit.context, env, global, 0)?;
+    let query = Query { globals: env.globals, ..Query::bare(unit.context, unit.function, env.layout) };
+    let Operand::Constant(object) = get_underlying_object(&query, operand, 0) else { return None };
+    let ConstantKind::Global(global) = unit.context.get(object).kind else { return None };
+    let space = match unit.context.types.get(query.type_of(operand)?) {
+        Type::Pointer(space) => *space,
+        _ => return None,
+    };
+    let width = env.layout.pointer(space).index_bits;
+    let (base, offset) = strip_and_accumulate_constant_offsets(&query, operand, width, true);
+    if base != Operand::Constant(object) {
+        return None;
+    }
+    let bytes = read_byte_array_from_global(unit.context, env, global, u64::try_from(offset).ok()?)?;
     let ConstantKind::Bytes(raw) = &unit.context.get(bytes).kind else { return None };
     Some(raw.to_vec())
 }
@@ -118,15 +148,28 @@ fn string_info(
     Some(if trim_at_nul { bytes.into_iter().take_while(|&byte| byte != 0).collect() } else { bytes })
 }
 
-/// `getConstantStringInfo` of a pointer that is a constant global: the bytes
-/// up to the first NUL, which must be there.
+/// `constant_array` over a context alone.
+pub(crate) fn constant_array_in(
+    context: &llrm_mir::context::Context,
+    env: Env,
+    operand: Operand,
+) -> Option<Vec<u8>> {
+    let Operand::Constant(id) = operand else { return None };
+    let ConstantKind::Global(global) = context.get(id).kind else { return None };
+    let bytes = read_byte_array_from_global(context, env, global, 0)?;
+    let ConstantKind::Bytes(raw) = &context.get(bytes).kind else { return None };
+    Some(raw.to_vec())
+}
+
+/// `getConstantStringInfo` with `TrimAtNul`: the bytes up to the first NUL,
+/// else the whole tail.
 fn constant_string(
     unit: &Unit,
     env: Env,
     operand: Operand,
 ) -> Option<Vec<u8>> {
     let raw = constant_array(unit, env, operand)?;
-    let end = raw.iter().position(|&byte| byte == 0)?;
+    let end = raw.iter().position(|&byte| byte == 0).unwrap_or(raw.len());
     Some(raw[..end].to_vec())
 }
 
@@ -427,7 +470,7 @@ fn string(
     let i8 = unit.context.types.int(8);
     let ty = unit.context.types.intern(Type::Array { element: i8, count: raw.len() as u64 });
     let initializer = unit.context.constant(Constant { ty, kind: ConstantKind::Bytes(raw) });
-    let global = unit.declared.table("str", ty, initializer);
+    let global = unit.declared.table("str", ty, initializer, UnnamedAddr::Global);
     let pointer = unit.context.types.ptr(0);
     Operand::Constant(unit.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(global) }))
 }
@@ -468,7 +511,9 @@ impl FunctionPass for SimplifyLibCalls {
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
         let size_bits = unit.layout.pointer(0).index_bits;
-        let info = TargetLibraryInfo::new(&Generic { int_bits: 32, size_t_bits: size_bits });
+        // One table per module: the target's library, else the pin's defaults
+        // for the pointer's width.
+        let info = target_library_info(&outer, size_bits);
         let env = Env { globals: &outer.globals, layout: unit.layout };
         let mut changed = false;
         let calls: Vec<InstId> = unit
@@ -515,6 +560,11 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Strspn => search::str_spn(unit, &site, true),
                 LibFunc::Strcspn => search::str_spn(unit, &site, false),
                 LibFunc::Strstr => search::str_str(unit, &site),
+                LibFunc::Memcpy => memops::mem_copy(unit, &site, crate::loopidioms::How::Apart),
+                LibFunc::Memmove => memops::mem_copy(unit, &site, crate::loopidioms::How::Overlapping),
+                LibFunc::Mempcpy => memops::mem_p_cpy(unit, &site),
+                LibFunc::Memset => memops::mem_set(unit, &site),
+                LibFunc::Memccpy => memops::mem_c_cpy(unit, &site),
                 _ => None,
             };
             let Some(rewrite) = rewrite else { continue };
@@ -543,3 +593,7 @@ impl FunctionPass for SimplifyLibCalls {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "simplifylibcalls_tests.rs"]
+mod tests;

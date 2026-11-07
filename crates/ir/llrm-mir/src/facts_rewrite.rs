@@ -311,6 +311,10 @@ mod tests {
             // LowerMemIntrinsics.cpp makes the pattern loop's GEP `inbounds`;
             // `memsetpattern.rs` sets the flag on it and reads none.
             "memsetpattern.rs",
+            // SimplifyLibCalls.cpp's `optimizeMemPCpy` and `optimizeMemCCpy`
+            // return `CreateInBoundsGEP(i8, dst, n)`; `memops.rs` sets the flag
+            // on that new GEP and reads none.
+            "memops.rs",
             // SelectionDAGBuilder.cpp copies `nsw`, `nuw` and a GEP's
             // `inbounds` into the node's SDNodeFlags (`visitBinary`,
             // `visitGetElementPtr`); the DAG grants no promise from them.
@@ -544,6 +548,24 @@ mod tests {
             // `inbounds` GEP into the CRC table it just created, indexed by
             // a byte. It reads no flag off an existing instruction.
             "crc.rs",
+            // InstCombineCalls.cpp's `Intrinsic::abs` reads the `nsw` of a
+            // negation (`abs(-x)` is `abs(x)` with the minimum poison when the
+            // negation was `nsw`) and of a multiply by another `abs`, and
+            // gives the new multiply `nsw` only when both the old one and
+            // the intrinsic's flag promised it. No instruction gets a flag
+            // its operands did not already promise.
+            "combine_abs.rs",
+            // InstructionCombining.cpp's `visitSwitchInst` reads the `nuw`/
+            // `nsw` of a shift in the condition: with either, the shifted-out
+            // bits are zero or a copy of the sign, so the condition is the
+            // operand and the cases shift down; without, it masks them. It
+            // sets no flag.
+            "combine_switch.rs",
+            // InstCombineCasts.cpp's `foldPtrToIntOrAddrOfGEP` reads the `nuw`
+            // of each GEP in the chain it turns into integer additions, and
+            // gives the add that flag: the GEP promised the offset did not
+            // wrap. It grants no flag to an instruction that had none.
+            "combine_ptrcast.rs",
             // The `nsw` of a counter's `add phi, 1` bounds the counter to its
             // start and the loop's end, for the range of a fixed-point
             // product; the interval is worked out afresh when asked and kept
@@ -594,6 +616,34 @@ mod tests {
             // drops `nsw` off a trunc to i1 that is not also `nuw`. It sets no
             // flag.
             "typepromotion_pass.rs",
+            // AggressiveInstCombine.cpp's `tryToRecognizeTableBasedPatterns`
+            // takes `nusw` (`hasNoUnsignedSignedWrap`; `inbounds` implies it)
+            // of the table's GEP as the proof its index does not wrap, and
+            // `foldICmpOrChain` takes `nsw` or `nuw` of a `shl` in an or chain
+            // compared with zero as the proof the shift loses no
+            // bit; `foldSqrt` takes a call's `nnan` as the proof of a
+            // non-negative argument and copies the call's flags onto
+            // the `llvm.sqrt` it makes. It reads no other flag.
+            "aggressive_instcombine.rs",
+            // CodeGenPrepare.cpp's `AddrMode.InBounds`: a mode stays in
+            // bounds while every GEP it folds is, and the sunk address is made
+            // `inbounds` on that (`CreatePtrAdd(.., "sunkaddr",
+            // AddrMode.InBounds)`); it puts the flag on new GEPs and takes
+            // none off an instruction.
+            "cgpaddr.rs",
+            // InstCombineCalls.cpp's `abs` folds read a `neg`'s and a `mul`'s
+            // `nsw` and set it on the new instruction only.
+            "combine_abs.rs",
+            // `ptrtoint` of a GEP chain is adds carrying the GEP's `nuw`
+            // (`EmitGEPOffsets`); the GEP is read, not changed.
+            "combine_ptrcast.rs",
+            // `visitSwitchInst`'s `switch (X << C)` is `switch X` when the
+            // `shl` is `nuw` or `nsw`; the `shl` is read, never rewritten.
+            "combine_switch.rs",
+            // `zeromerge` makes one `inbounds` GEP per member of the new
+            // `alloca` it builds (llrm only); it reads no flag off an
+            // existing instruction.
+            "zeromerge.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

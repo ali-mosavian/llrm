@@ -54,7 +54,7 @@ fn test_a_right_shift_recurrence_over_four_trips_stays_above_its_last_value() {
     let value = function.instruction(phi).result.expect("a result");
     let mut se = ScalarEvolution::new();
     let s = se.get_scev(&cx, Operand::Value(value));
-    let range = se.get_unsigned_range(&cx, s);
+    let range = se.get_unsigned_range(&cx, s).to_word::<u128>();
     assert_eq!(range.get_unsigned_min(), 31, "{range:?}");
 }
 
@@ -116,11 +116,11 @@ fn test_a_doubling_counter_is_limited_once_its_trip_count_is_cached() {
     let value = function.instruction(phi).result.expect("a result");
     let mut se = ScalarEvolution::new();
     let s = se.get_scev(&cx, Operand::Value(value));
-    let first = se.get_unsigned_range(&cx, s);
+    let first = se.get_unsigned_range(&cx, s).to_word::<u128>();
     assert!(first.get_unsigned_max() > 256, "asked first, before the count: {first:?}");
     let header = function.parent(phi).expect("a header");
     assert_eq!(se.get_small_constant_max_trip_count(&cx, header), 8);
     se.forget_cached_ranges();
-    let sharp = se.get_unsigned_range(&cx, s);
+    let sharp = se.get_unsigned_range(&cx, s).to_word::<u128>();
     assert_eq!((sharp.get_unsigned_min(), sharp.get_unsigned_max()), (2, 256), "{sharp:?}");
 }

@@ -125,7 +125,12 @@ fn print_method(
     // The type suffix (`8`, `16`, `32`) changes nothing in the text.
     let kind = method.trim_end_matches("Mem").trim_start_matches("print").trim_end_matches(char::is_numeric);
     Ok(match kind {
-        "Operand" | "Immediate" => print_operand(inst, at)?,
+        "Operand" => print_operand(inst, at)?,
+        // `printImmediate`: a symbol in an immediate slot is `#sym` (the address), bare `sym` is the memory at it.
+        "Immediate" => match operand(inst, at)? {
+            Operand::Symbol(name, addend) => format!("#{}", symbol(name, *addend)),
+            _ => print_operand(inst, at)?,
+        },
         "PCRelImm" => print_disp(inst, at)?,
         "MoveMask" => print_move_mask(inst, at)?,
         "ARI" => format!("({})", print_operand(inst, at)?),
@@ -133,7 +138,14 @@ fn print_method(
         "ARIPD" => format!("-({})", print_operand(inst, at)?),
         "ARID" => format!("({},{})", print_disp(inst, at)?, print_operand(inst, at + 1)?),
         "ARII" => {
-            format!("({},{},{})", print_disp(inst, at)?, print_operand(inst, at + 1)?, print_operand(inst, at + 2)?)
+            let scale =
+                crate::dagisel::scaled::scale_of(inst.opcode).map_or(String::new(), |scale| format!(".l*{scale}"));
+            format!(
+                "({},{},{}{scale})",
+                print_disp(inst, at)?,
+                print_operand(inst, at + 1)?,
+                print_operand(inst, at + 2)?
+            )
         }
         "AL" => match operand(inst, at)? {
             Operand::Symbol(name, addend) => symbol(name, *addend),

@@ -59,8 +59,7 @@ fn recognized(
     module: &mut Module,
     name: &str,
 ) -> Result<PolynomialInfo, &'static str> {
-    let (_, function) = module.function_mut(name).expect("the function");
-    crate::lcssa::formed(function).expect("lcssa");
+    crate::testing::closed_named(module, name).expect("lcssa");
     let module = &*module;
     let (_, _, function) =
         module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).expect("the function");

@@ -609,6 +609,7 @@ impl<'m> Machine<'m> {
                 self.poison[range].fill(poison);
                 void
             }
+            Intrinsic::Trap | Intrinsic::DebugTrap | Intrinsic::UbsanTrap => return unsupported("a trap: the program stops"),
             Intrinsic::MemSetPattern => {
                 let (Val::Ptr(address), Val::Int { bits: count, .. }) = (argument(0), argument(2)) else {
                     return undefined("a pattern fill of a poison address or count");
@@ -649,8 +650,22 @@ impl<'m> Machine<'m> {
             | Intrinsic::InvariantEnd
             | Intrinsic::Assume
             | Intrinsic::Prefetch
-            | Intrinsic::FakeUse => void,
+            | Intrinsic::FakeUse
+            | Intrinsic::NoAliasScopeDecl
+            | Intrinsic::SetLoopIterations => void,
             Intrinsic::Expect => argument(0),
+            Intrinsic::TestSetLoopIterations => match argument(0) {
+                Val::Int { bits, .. } => Val::Int { bits: u128::from(bits != 0), width: 1 },
+                _ => Val::Poison,
+            },
+            Intrinsic::StartLoopIterations => argument(0),
+            Intrinsic::LoopDecrementReg => match (argument(0), argument(1)) {
+                (Val::Int { bits: a, width }, Val::Int { bits: b, .. }) => {
+                    Val::Int { bits: a.wrapping_sub(b) & mask(width), width }
+                }
+                _ => Val::Poison,
+            },
+            Intrinsic::LoopDecrement => return unsupported("a hardware loop counter"),
             // The scope is a token no code reads: the address it covers.
             Intrinsic::InvariantStart => argument(1),
             // Flat memory: the address difference, wrapped to the result.
@@ -916,6 +931,7 @@ impl<'m> Machine<'m> {
                     }
                     Opcode::Unreachable => return undefined("unreachable was reached"),
                     Opcode::Resume | Opcode::LandingPad { .. } => return unsupported("unwinding"),
+                    Opcode::VaArg => return unsupported("va_arg"),
                     Opcode::Call(_) | Opcode::Invoke(_) => {
                         let invoke = matches!(instruction.opcode, Opcode::Invoke(_));
                         let count = ops.len() - if invoke { 3 } else { 1 };
@@ -977,6 +993,44 @@ impl<'m> Machine<'m> {
                         Some(at)
                     }
                     Opcode::InsertValue(indices) => Some(insert(value(self, 0)?, indices, value(self, 1)?)),
+                    Opcode::ExtractElement => {
+                        let index = match value(self, 1)? {
+                            Val::Int { bits, .. } => usize::try_from(bits).ok(),
+                            _ => None,
+                        };
+                        Some(match (value(self, 0)?, index) {
+                            (Val::Aggregate(mut lanes), Some(index)) if index < lanes.len() => lanes.swap_remove(index),
+                            _ => Val::Poison,
+                        })
+                    }
+                    Opcode::InsertElement => {
+                        let index = match value(self, 2)? {
+                            Val::Int { bits, .. } => usize::try_from(bits).ok(),
+                            _ => None,
+                        };
+                        let element = value(self, 1)?;
+                        Some(match (value(self, 0)?, index) {
+                            (Val::Aggregate(mut lanes), Some(index)) if index < lanes.len() => {
+                                lanes[index] = element;
+                                Val::Aggregate(lanes)
+                            }
+                            _ => Val::Poison,
+                        })
+                    }
+                    Opcode::ShuffleVector(mask) => {
+                        let (Val::Aggregate(first), Val::Aggregate(second)) = (value(self, 0)?, value(self, 1)?) else {
+                            return undefined("a shuffle of non-vectors");
+                        };
+                        let lanes = mask
+                            .iter()
+                            .map(|&lane| match usize::try_from(lane) {
+                                Ok(lane) if lane < first.len() => first[lane].clone(),
+                                Ok(lane) => second.get(lane - first.len()).cloned().unwrap_or(Val::Poison),
+                                Err(_) => Val::Poison,
+                            })
+                            .collect();
+                        Some(Val::Aggregate(lanes))
+                    }
                     Opcode::Alloca { allocated, align, .. } => {
                         let count = match ops.first() {
                             Some(&one) => match self.operand(&values, one)? {

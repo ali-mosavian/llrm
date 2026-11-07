@@ -7,12 +7,13 @@
 //! lifetime intrinsics, phis and selects of pointers, pre-splitting).
 //!
 //! DEVIATE, each with its reason (line numbers are SROA.cpp's):
-//! - The mode is `sroa<preserve-cfg>` (`PreserveCFG`, L174): a select whose
-//!   load is not speculatable, a store through a select, and a store through a
-//!   phi on a critical edge are not rewritten (they need
-//!   `SplitBlockAndInsertIfThenElse` or `SplitBlockPredecessors`), and the
-//!   alloca is left. LLVM's early and late `sroa` of -O2 run with CFG
-//!   modification allowed.
+//! - Two modes, as the pin's slots: `Sroa` is `sroa<preserve-cfg>` (`PreserveCFG`,
+//!   L174: the late slot), where a select whose load is not speculatable, a
+//!   store through a select and a store through a phi on a critical edge are
+//!   not rewritten and the alloca is left; `SroaModifyCfg` is the early slots'
+//!   `ModifyCFG`, which makes the blocks (`SplitBlockAndInsertIfThen(Else)`,
+//!   `SplitBlockPredecessors`). No `DomTreeUpdater` either way: the analyses are
+//!   dropped.
 //! - Vectors (`isVectorPromotionViable` L2374, `rewriteVectorized*`
 //!   L3451-L3637, `rewriteTreeStructuredMerge` L3002,
 //!   `tryCanonicalizeStructToVector` L5460): the targets have no vector
@@ -74,8 +75,41 @@ use llrm_mir::types::{Type, TypeId};
 use llrm_mir::{Constant, ConstantKind, Context};
 use llrm_support::hash::{HashMap, HashSet};
 
-/// The pass: LLVM's `SROAPass` (`SROA.cpp` L6490).
+/// The pass: LLVM's `SROAPass` (`SROA.cpp` L6490) in `preserve-cfg` mode, the
+/// pin's late slots.
 pub struct Sroa;
+
+/// `SROAPass(SROAOptions::ModifyCFG)`: the pin's early slots. A store through a
+/// select, a load of a select that is not speculatable and a store through a
+/// phi on a critical edge are rewritten with new blocks.
+pub struct SroaModifyCfg;
+
+impl FunctionPass for SroaModifyCfg {
+    fn name(&self) -> &'static str {
+        "sroa-real-modify-cfg"
+    }
+
+    fn translation(&self) -> Option<&'static str> {
+        Some("sroa<modify-cfg>")
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        llrm_mir::footprint::Footprint::MEMORY | llrm_mir::footprint::Footprint::STRUCTURE
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        true
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let changed = State::new(unit, analyses, false).run_sroa();
+        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
 
 impl FunctionPass for Sroa {
     fn name(&self) -> &'static str {
@@ -100,7 +134,7 @@ impl FunctionPass for Sroa {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let changed = State::new(unit, analyses).run_sroa();
+        let changed = State::new(unit, analyses, true).run_sroa();
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
@@ -191,13 +225,6 @@ fn can_convert_value(
     }
     // Integers of different widths are not converted.
     if int_bits(context, old).is_some() && int_bits(context, new).is_some() {
-        return false;
-    }
-    // DEVIATE: a float is not reinterpreted as an integer or a pointer, nor an
-    // integer as a float: isel selects no such bitcast (x87 has no register
-    // move to a general register).
-    let is_float = |ty: TypeId| matches!(context.types.get(ty), Type::Float(_));
-    if is_float(old) || is_float(new) {
         return false;
     }
     if layout.size_bits(&context.types, new) != layout.size_bits(&context.types, old) {
@@ -1184,7 +1211,17 @@ struct State<'a, 'b, 'c> {
     /// `SpeculatablePHIs`, `PHIsWithStoreToRewrite`, `SelectsToRewrite`.
     speculatable_phis: Vec<InstId>,
     phis_with_store_to_rewrite: Vec<InstId>,
-    selects_to_rewrite: Vec<(InstId, Vec<InstId>)>,
+    selects_to_rewrite: Vec<(InstId, Vec<SelectOp>)>,
+    /// `PreserveCFG` (L178): no block is made.
+    preserve_cfg: bool,
+}
+
+/// A load or store through a select, with the hands (`SelectHandSpeculativity`,
+/// L132) whose pointer may be loaded before the select's condition is known.
+struct SelectOp {
+    inst: InstId,
+    true_speculatable: bool,
+    false_speculatable: bool,
 }
 
 /// What `AllocaSliceRewriter` carries from slice to slice (L2811).
@@ -1218,6 +1255,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     fn new(
         unit: &'a mut passes::Unit<'b>,
         analyses: &'c mut Analyses,
+        preserve_cfg: bool,
     ) -> Self {
         let globals = std::rc::Rc::clone(&analyses.outer().globals);
         Self {
@@ -1231,6 +1269,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             speculatable_phis: Vec::new(),
             phis_with_store_to_rewrite: Vec::new(),
             selects_to_rewrite: Vec::new(),
+            preserve_cfg,
         }
     }
 
@@ -1555,8 +1594,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         for phi in std::mem::take(&mut self.phis_with_store_to_rewrite).into_iter().rev() {
             self.rewrite_phi_node_store(phi);
         }
-        for (select, loads) in std::mem::take(&mut self.selects_to_rewrite).into_iter().rev() {
-            self.rewrite_select_inst_mem_ops(select, &loads);
+        for (select, ops) in std::mem::take(&mut self.selects_to_rewrite).into_iter().rev() {
+            self.rewrite_select_inst_mem_ops(select, &ops);
         }
         changed
     }
@@ -2157,7 +2196,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 break;
             }
         }
-        let mut new_selects: Vec<(InstId, Vec<InstId>)> = Vec::new();
+        let mut new_selects: Vec<(InstId, Vec<SelectOp>)> = Vec::new();
         for &select in &select_users {
             match self.is_safe_select_to_speculate(select) {
                 Some(loads) => new_selects.push((select, loads)),
@@ -3197,8 +3236,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         }
     }
 
-    /// `getPHIStoreToRewrite` (preserving the CFG: every predecessor has the
-    /// block as its only successor). SROA.cpp#L1659
+    /// `getPHIStoreToRewrite`: with `preserve_cfg`, every predecessor has the
+    /// block as its only successor. SROA.cpp#L1659
     fn get_phi_store_to_rewrite(
         &self,
         phi: InstId,
@@ -3225,10 +3264,21 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 continue;
             }
             seen.push(pred);
-            if pred == block || self.successor_edges(pred) != 1 {
+            // TODO in the pin: support other terminators.
+            let terminator = function.terminator(pred)?;
+            if function.instruction(terminator).opcode != Opcode::Br || pred == block {
                 return None;
             }
             if !self.available_at_end_of(stored, pred) {
+                return None;
+            }
+            if self.successor_edges(pred) == 1 {
+                continue;
+            }
+            // More than one successor: the block is split so the store runs
+            // only on the path to this one (`canSplitPredecessors` holds
+            // for every block here: the only pad is a landing pad).
+            if self.preserve_cfg {
                 return None;
             }
         }
@@ -3289,6 +3339,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     ) {
         let result = self.function().instruction(phi).result.expect("a phi");
         let store = self.function().users(result).first().expect("the phi's store").user;
+        let block = self.function().parent(phi).expect("a placed phi");
         let pairs: Vec<Operand> = self.function().instruction(phi).operands.clone();
         let mut seen: Vec<llrm_mir::module::BlockId> = Vec::new();
         for pair in pairs.chunks(2) {
@@ -3301,7 +3352,11 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             if let Some(root) = self.strip_in_bounds_offsets(pair[0]) {
                 self.worklist.push(root);
             }
-            let terminator = self.function().terminator(pred).expect("a terminated block");
+            // A predecessor with other successors gets a block of its own on
+            // the edge (`SplitBlockPredecessors(BB, {Pred}, ".sroa.store")`).
+            let store_block =
+                if self.successor_edges(pred) != 1 { crate::edges::split_block_predecessors(self.unit.function, block, &[pred]) } else { pred };
+            let terminator = self.function().terminator(store_block).expect("a terminated block");
             let mut operands = self.function().instruction(store).operands.clone();
             operands[1] = pair[0];
             let opcode = self.function().instruction(store).opcode.clone();
@@ -3312,61 +3367,86 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         self.unit.function.erase(phi).expect("its store is gone");
     }
 
-    /// `isSafeSelectToSpeculate` (preserving the CFG: simple loads whose both
-    /// pointers are safe to load). SROA.cpp#L1854
+    /// `isSafeSelectToSpeculate`: the loads and stores through `select` and, per
+    /// hand, whether the pointer may be loaded before the condition is known.
+    /// With `preserve_cfg` only loads with both hands speculatable are safe.
+    /// SROA.cpp#L1854
     fn is_safe_select_to_speculate(
         &self,
         select: InstId,
-    ) -> Option<Vec<InstId>> {
+    ) -> Option<Vec<SelectOp>> {
         let function = self.function();
         let result = function.instruction(select).result?;
-        let mut loads = Vec::new();
+        let mut ops = Vec::new();
         for user in function.users(result) {
+            if let Opcode::Store { volatile, .. } = function.instruction(user.user).opcode {
+                // Stores are not speculatable, so if we can't turn it into a
+                // predicated store, we are done.
+                if volatile || self.preserve_cfg {
+                    return None;
+                }
+                ops.push(SelectOp { inst: user.user, true_speculatable: false, false_speculatable: false });
+                continue;
+            }
             if !self.is_simple_load(user.user) {
                 return None;
             }
             let ty = function.instruction(user.user).ty;
             let size = self.unit.layout.store_size(&self.context().types, ty);
             let operands = &function.instruction(select).operands;
-            if !self.safe_to_load_unconditionally(operands[1], size)
-                || !self.safe_to_load_unconditionally(operands[2], size)
-            {
+            let true_speculatable = self.safe_to_load_unconditionally(operands[1], size);
+            let false_speculatable = self.safe_to_load_unconditionally(operands[2], size);
+            if self.preserve_cfg && !(true_speculatable && false_speculatable) {
                 return None;
             }
-            loads.push(user.user);
+            ops.push(SelectOp { inst: user.user, true_speculatable, false_speculatable });
         }
-        Some(loads)
+        Some(ops)
     }
 
-    /// `rewriteSelectInstMemOps` with every load speculatable: each load of the
-    /// select is a select of two loads. SROA.cpp#L2002, L1897
+    /// `rewriteSelectInstMemOps`: a load with both hands speculatable is a
+    /// select of two loads; any other load or store through the select is
+    /// made once on each path or, with one hand speculatable, once before the
+    /// branch and once on the other path. SROA.cpp#L2002, L1897
     fn rewrite_select_inst_mem_ops(
         &mut self,
         select: InstId,
-        loads: &[InstId],
+        ops: &[SelectOp],
     ) {
         let operands = self.function().instruction(select).operands.clone();
-        for &load in loads {
-            let ty = self.function().instruction(load).ty;
-            let Opcode::Load { align, .. } = self.function().instruction(load).opcode else { unreachable!("a load") };
-            let true_load = self.build(
-                load,
-                Opcode::Load { align, volatile: false },
-                ty,
-                vec![operands[1]],
-                Some("sroa.speculate.load.true"),
-            );
-            let false_load = self.build(
-                load,
-                Opcode::Load { align, volatile: false },
-                ty,
-                vec![operands[2]],
-                Some("sroa.speculate.load.false"),
-            );
-            let chosen =
-                self.build(load, Opcode::Select, ty, vec![operands[0], true_load, false_load], Some("sroa.speculated"));
-            let loaded = self.function().instruction(load).result.expect("a load");
-            self.unit.function.replace_value(loaded, chosen);
+        for op in ops {
+            let load = op.inst;
+            if op.true_speculatable && op.false_speculatable {
+                let ty = self.function().instruction(load).ty;
+                let Opcode::Load { align, .. } = self.function().instruction(load).opcode else {
+                    unreachable!("a load")
+                };
+                let true_load = self.build(
+                    load,
+                    Opcode::Load { align, volatile: false },
+                    ty,
+                    vec![operands[1]],
+                    Some("sroa.speculate.load.true"),
+                );
+                let false_load = self.build(
+                    load,
+                    Opcode::Load { align, volatile: false },
+                    ty,
+                    vec![operands[2]],
+                    Some("sroa.speculate.load.false"),
+                );
+                let chosen = self.build(
+                    load,
+                    Opcode::Select,
+                    ty,
+                    vec![operands[0], true_load, false_load],
+                    Some("sroa.speculated"),
+                );
+                let loaded = self.function().instruction(load).result.expect("a load");
+                self.unit.function.replace_value(loaded, chosen);
+            } else {
+                self.rewrite_mem_op_of_select(&operands, op);
+            }
             self.unit.function.erase(load).expect("its uses were replaced");
         }
         // The select goes with the pointers it chose between.
@@ -3375,6 +3455,90 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             self.unit.function.erase(user).ok();
         }
         self.dead_insts.push(select);
+    }
+
+    /// `rewriteMemOpOfSelect`: the access `op.inst` through the select
+    /// `[condition, true pointer, false pointer]` is made on the path of its
+    /// pointer, in a block of its own unless that hand is speculatable, where
+    /// it is made before the branch. A load's value is a phi of the copies.
+    /// SROA.cpp#L1936
+    fn rewrite_mem_op_of_select(
+        &mut self,
+        select: &[Operand],
+        op: &SelectOp,
+    ) {
+        use llrm_mir::module::BlockId;
+        let inst = op.inst;
+        let void = self.unit.context.types.void();
+        let head = self.function().parent(inst).expect("a placed access");
+        let tail = crate::edges::split_block_at(self.unit.function, head, inst);
+        let branch = self.function().terminator(head).expect("the jump the split made");
+        self.unit.function.set_operands(branch, Vec::new());
+        self.unit.function.erase(branch).expect("a jump nothing reads");
+        let new_block = |this: &mut Self, after: BlockId| -> BlockId {
+            let block = this.unit.function.create_block(None);
+            this.unit.function.insert_block(block, Some(after)).expect("a new block");
+            let jump =
+                this.unit.function.create_instruction(Opcode::Br, void, vec![Operand::Block(tail)], Flags::default(), None);
+            this.unit.function.insert(jump, Position::End(block)).expect("a placed block");
+            block
+        };
+        // The two successors of the head, as `HeadBI` has them.
+        let (first, second);
+        if !op.true_speculatable && !op.false_speculatable {
+            let then_block = new_block(self, head);
+            let else_block = new_block(self, then_block);
+            (first, second) = (then_block, else_block);
+        } else {
+            let then_block = new_block(self, head);
+            // A speculatable true hand is made in the head: its successor is
+            // the tail.
+            (first, second) = if op.true_speculatable { (tail, then_block) } else { (then_block, tail) };
+        }
+        let jump = self.unit.function.create_instruction(
+            Opcode::Br,
+            void,
+            vec![select[0], Operand::Block(first), Operand::Block(second)],
+            Flags::default(),
+            None,
+        );
+        self.unit.function.insert(jump, Position::End(head)).expect("a placed block");
+        let is_load = matches!(self.function().instruction(inst).opcode, Opcode::Load { .. });
+        let mut incoming: Vec<Operand> = Vec::new();
+        for (at, successor) in [first, second].into_iter().enumerate() {
+            let target = if successor == tail { head } else { successor };
+            let terminator = self.function().terminator(target).expect("a terminated block");
+            let pointer = select[1 + at];
+            let copy = if target == head {
+                // Made before the branch, where the access may not fault
+                // (`dropUBImplyingAttrsAndMetadata`): a plain one.
+                let ty = self.function().instruction(inst).ty;
+                let opcode = match self.function().instruction(inst).opcode {
+                    Opcode::Load { align, .. } => Opcode::Load { align, volatile: false },
+                    ref other => other.clone(),
+                };
+                let mut operands = self.function().instruction(inst).operands.clone();
+                operands[usize::from(!is_load)] = pointer;
+                self.build_inst(terminator, opcode, ty, operands, None)
+            } else {
+                let copy = self.unit.function.clone_instruction(inst);
+                self.unit.function.insert(copy, Position::Before(terminator)).expect("a placed block");
+                self.unit.function.set_operand(copy, usize::from(!is_load), pointer);
+                copy
+            };
+            if is_load {
+                let value = Operand::Value(self.function().instruction(copy).result.expect("a load's value"));
+                incoming.extend([value, Operand::Block(target)]);
+            }
+        }
+        if is_load {
+            let ty = self.function().instruction(inst).ty;
+            let phi = self.unit.function.create_instruction(Opcode::Phi, ty, incoming, Flags::default(), None);
+            self.unit.function.insert(phi, Position::Before(inst)).expect("a placed access");
+            let loaded = self.function().instruction(inst).result.expect("a load");
+            let value = Operand::Value(self.function().instruction(phi).result.expect("a phi"));
+            self.unit.function.replace_value(loaded, value);
+        }
     }
 
     /// `Value::stripInBoundsOffsets` to an alloca of the entry block.

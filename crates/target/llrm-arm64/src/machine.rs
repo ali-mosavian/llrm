@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use llrm_mir::lowering::Lowering;
 use llrm_mir::spaces::Spaces;
-use llrm_mir::target::{AddressForm, Machine, OperationCosts};
+use llrm_mir::target::{AddressForm, GlobalMerge, Machine, OperationCosts};
 use llrm_mir::tti::Tti;
 
 use crate::tti::{AArch64, AArch64Lowering};
@@ -105,6 +105,54 @@ impl Machine for Arm64Machine {
         OperationCosts::default()
     }
 
+    /// Real bytes for the rate-priced decisions (unroll, inline growth, call
+    /// overhead): every instruction is 4 bytes in the fixed-width encoding,
+    /// and a store of a constant is a `movz` and the store. DEVIATE BC1 (owner
+    /// w15, exit 2026-11-20): `ADRP`+`ADD` global addresses and `movz`/`movk`
+    /// runs of wide constants are not in the table; `function_bytes` prices
+    /// them as one instruction.
+    fn byte_costs(&self) -> OperationCosts {
+        let units = OperationCosts::default();
+        let word = |units: i64| units * 4;
+        OperationCosts {
+            add: word(units.add),
+            multiply: word(units.multiply),
+            divide: word(units.divide),
+            multiply_long: word(units.multiply_long),
+            divide_long: word(units.divide_long),
+            multiply_high: word(units.multiply_high),
+            shift: word(units.shift),
+            address: word(units.address),
+            carry: word(units.carry),
+            carry_step: word(units.carry_step),
+            load: word(units.load),
+            store: word(units.store),
+            store_immediate: word(units.store_immediate) * 2,
+            memory_update: word(units.memory_update),
+            branch: word(units.branch),
+            r#move: word(units.r#move),
+            call: word(units.call),
+            return_: word(units.return_),
+            argument: word(units.argument.min(1)),
+            pop: word(units.pop),
+            adjust: word(units.adjust),
+            float_add: word(units.float_add),
+            float_multiply: word(units.float_multiply),
+            float_divide: word(units.float_divide),
+            float_load: word(units.float_load),
+            float_load_folded: word(units.float_load_folded),
+            float_store: word(units.float_store),
+            extend: word(units.extend),
+            set: word(units.set),
+            fill: word(units.fill),
+            fill_cell: word(units.fill_cell),
+            copy: word(units.copy),
+            copy_cell: word(units.copy_cell),
+            direction: word(units.direction),
+            ..units
+        }
+    }
+
     /// `x0`..`x15`, `x19`..`x28`: the allocatable integer registers.
     fn registers(&self) -> i64 {
         26
@@ -124,5 +172,14 @@ impl Machine for Arm64Machine {
     fn address_forms(&self) -> Vec<AddressForm> {
         let scales: BTreeSet<i64> = [1, 2, 4, 8].into_iter().collect();
         vec![AddressForm::new(8, scales, 0, 0, 0, false, None).expect("a well-formed address form")]
+    }
+
+    /// `AArch64PassConfig::addIRPasses`: `createGlobalMergePass(TM, 4095,
+    /// OnlyOptimizeForSize = below -O3, MergeExternalByDefault = !MachO)`.
+    fn global_merge(
+        &self,
+        aggressive: bool,
+    ) -> Option<GlobalMerge> {
+        Some(GlobalMerge { max_offset: 4095, size_only: !aggressive, mach_o: self.platform == Platform::Darwin })
     }
 }

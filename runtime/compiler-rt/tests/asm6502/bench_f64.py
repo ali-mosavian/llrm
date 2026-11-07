@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """bench_f64.py [N] [OPS] [OPTS]: mean and worst cycles per call and code bytes of the 6502 binary64 add/sub/mul/div, ours (lib/fp/f64 and
-lib/int/int64.c through $LLRM_CC at each of OPTS, default "Os O2", on sim65: one run per record with the driver's start index and count patched
+lib/int/{muldi3..ashrdi3}.c through $LLRM_CC at each of OPTS, default "Os O2", on sim65: one run per record with the driver's start index and count patched
 into the binary) and llvm-mos (compiler-rt soft double, mos-sim, the clock read around each call). The N operand pairs (default 300)
 are the first N of tests/gen_vectors64.c's stream: random bits, denormals, edge values, one pair in eight special. Cycles are the call
 minus a stub that returns zero (A, X, rc2..rc7: eight stores, about 20 cycles, and a base record that must pass) for ours, minus a copy of the operand for llvm-mos. Bytes are the code reachable
@@ -40,7 +40,7 @@ _main:
   jsr main
   rts
 '''
-_srcs = subprocess.check_output([f'{here}/../fp_sources.sh', 'f64'], text=True).split() + ['lib/int/int64.c']
+_srcs = subprocess.check_output([f'{here}/../fp_sources.sh', 'f64'], text=True).split() + subprocess.check_output([f'{here}/../fp_sources.sh', 'int64'], text=True).split()
 LIBPATH = {os.path.dirname(p).split('/')[-1] + '_' + os.path.basename(p)[:-2]: p for p in _srcs}
 LIBS = tuple(LIBPATH)
 def compile_libs(opt):

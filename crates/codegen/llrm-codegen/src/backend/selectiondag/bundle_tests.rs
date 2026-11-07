@@ -194,6 +194,38 @@ mod libcall_shape {
         dag.get_register(vt, reg)
     }
 
+    /// A call to a C library routine (`memcpy`, a conversion) lists the native convention's clobbered registers in its
+    /// `RegisterMask`, as the pin's `LowerCall` does for every call; it listed the flags alone (SCM1).
+    #[test]
+    fn a_c_library_call_mask_names_the_native_conventions_clobbers() {
+        use super::super::dag::NodeData;
+        use super::super::isd::ISD;
+        use llrm_lir::registers::RegId;
+        let mut dag = dag();
+        let env = CallEnv { arch: &llrm_x86_m32::M32, pointer: EVT::I32 };
+        let a = arg(&mut dag, EVT::I32, 1);
+        super::super::libcall::c_lib_call(&mut dag, &env, "helper", None, &[a], EVT::I32).expect("a call");
+        let masks: Vec<_> = dag
+            .nodes()
+            .iter()
+            .filter(|node| node.opcode == ISD::RegisterMask)
+            .map(|node| match node.data {
+                NodeData::RegMask(at) => dag.register_masks[at as usize].clone(),
+                _ => panic!("a mask without its registers"),
+            })
+            .collect();
+        assert_eq!(masks.len(), 1);
+        let arch: &dyn llrm_target::Target = &llrm_x86_m32::M32;
+        let native = arch.calling().native();
+        let named: Vec<_> = native.clobbered.iter().filter(|name| *name != "flags" && !name.starts_with("st")).collect();
+        assert!(!named.is_empty(), "premise: the native convention clobbers a register");
+        for name in named {
+            let reg: RegId = arch.registers().root(arch.register_named(name));
+            let number = super::super::dagisel_adapter::pin_register(reg).expect("a pin number");
+            assert!(masks[0].contains(&number), "{:?} lacks {name}", masks[0]);
+        }
+    }
+
     /// A helper call with a stack argument and a register argument reads
     /// `callseq_start, store, CopyToReg, CALL, callseq_end, CopyFromReg`
     /// in that order, the result on the call's chain and glue. Without
@@ -216,6 +248,7 @@ mod libcall_shape {
             4,
             0,
             &[Returned { reg: eax, vt: EVT::I32 }],
+            &[],
         );
         let opcodes: Vec<String> = dag.nodes().iter().map(|node| node.opcode.name()).collect();
         let position =

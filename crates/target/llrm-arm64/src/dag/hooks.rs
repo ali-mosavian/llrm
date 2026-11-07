@@ -65,10 +65,16 @@ impl PatternContext for NoContext {
 pub struct Aarch64Hooks {
     complex: Vec<Complex>,
     globals: Globals,
+    /// `CurDAG->shouldOptForSize()`: every operand fold is worth its extra
+    /// uses.
+    opt_for_size: bool,
 }
 
 impl Aarch64Hooks {
-    pub fn new(globals: Globals) -> Aarch64Hooks {
+    pub fn new(
+        globals: Globals,
+        opt_for_size: bool,
+    ) -> Aarch64Hooks {
         let patterns = table::COMPLEX_PATTERNS;
         let mut complex = vec![Complex::Never; patterns.iter().map(|&(n, ..)| usize::from(n) + 1).max().unwrap_or(0)];
         for &(number, function, _) in patterns {
@@ -91,7 +97,7 @@ impl Aarch64Hooks {
                 other => panic!("complex pattern `{other}` is not translated"),
             };
         }
-        Aarch64Hooks { complex, globals }
+        Aarch64Hooks { complex, globals, opt_for_size }
     }
 }
 
@@ -129,20 +135,28 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
         match self.complex[usize::from(pattern)] {
             Complex::ArithImmed => addr::arith_immed(dag, value).map(|v| push(&v)).is_some(),
             Complex::NegArithImmed => addr::neg_arith_immed(dag, value).map(|v| push(&v)).is_some(),
-            Complex::ArithShiftedRegister => addr::shifted_register(dag, value, false).map(|v| push(&v)).is_some(),
-            Complex::LogicalShiftedRegister => addr::shifted_register(dag, value, true).map(|v| push(&v)).is_some(),
+            Complex::ArithShiftedRegister => {
+                addr::shifted_register(dag, self.opt_for_size, value, false).map(|v| push(&v)).is_some()
+            }
+            Complex::LogicalShiftedRegister => {
+                addr::shifted_register(dag, self.opt_for_size, value, true).map(|v| push(&v)).is_some()
+            }
             Complex::Indexed(size) => {
                 addr::addr_mode_indexed(dag, &self.globals, value, size).map(|v| push(&v)).is_some()
             }
             Complex::Unscaled => addr::addr_mode_unscaled(dag, value).map(|v| push(&v)).is_some(),
-            Complex::Xro(size) => addr::addr_mode_xro(dag, value, size).map(|v| push(&v)).is_some(),
-            Complex::Wro(size) => addr::addr_mode_wro(dag, value, size).map(|v| push(&v)).is_some(),
+            Complex::Xro(size) => addr::addr_mode_xro(dag, self.opt_for_size, value, size).map(|v| push(&v)).is_some(),
+            Complex::Wro(size) => addr::addr_mode_wro(dag, self.opt_for_size, value, size).map(|v| push(&v)).is_some(),
             Complex::Indexed7S(size) => {
                 push(&addr::addr_mode_indexed_7s(dag, value, size));
                 true
             }
-            Complex::ArithExtendedRegister => addr::arith_extended_register(dag, value).map(|v| push(&v)).is_some(),
-            Complex::ArithUxtxRegister => addr::arith_uxtx_register(dag, value).map(|v| push(&v)).is_some(),
+            Complex::ArithExtendedRegister => {
+                addr::arith_extended_register(dag, self.opt_for_size, value).map(|v| push(&v)).is_some()
+            }
+            Complex::ArithUxtxRegister => {
+                addr::arith_uxtx_register(dag, self.opt_for_size, value).map(|v| push(&v)).is_some()
+            }
             Complex::CvtFixedPos { reg_width, reciprocal } => {
                 addr::cvt_fixed_pos(dag, value, reg_width, reciprocal).map(|v| push(&v)).is_some()
             }

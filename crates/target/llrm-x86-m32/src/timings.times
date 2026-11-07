@@ -47,6 +47,8 @@ cache_line             =    =
 # (their CPU files), later CPUs do not.
 line_fill_clocks             =    = 
 pairing                 =    =
+# DEVIATE TA-LC (owner anyisa, exit 2026-11-27): measured on the 486 (m32 A/B, 1984 cells); P5 off until measured.
+commute_loop_carried    1    0
 
 [clocks]
 alu_rr       =   =
@@ -87,6 +89,7 @@ rep_movs     =   =
 rep_movs_cell =  =
 x87_load     =   =
 x87_exchange =   =
+x87_copy     =   =
 x87_store    =   =
 x87_release 3   1
 x87_add      =   =
@@ -103,6 +106,7 @@ x87_add_i    =    =
 x87_mul_i    =    =
 x87_div_i    =   = 
 x87_cmp_i    =    =
+x87_compare  =    =
 x87_control_load = =
 x87_control_store = =
 mul_r16      =   = 
@@ -169,6 +173,7 @@ rep_movs     =   =
 rep_movs_cell =  =
 x87_load     =   =
 x87_exchange =   =
+x87_copy     =   =
 x87_store    =   =
 x87_release 3   1
 x87_add      =   =
@@ -185,6 +190,7 @@ x87_add_i    =    =
 x87_mul_i    =    =
 x87_div_i    =   = 
 x87_cmp_i    =    =
+x87_compare  =    =
 x87_control_load = =
 x87_control_store = =
 mul_r16      =   = 

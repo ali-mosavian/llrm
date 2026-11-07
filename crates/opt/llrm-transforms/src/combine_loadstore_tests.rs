@@ -16,6 +16,7 @@ fn visit(
     match c.function.instruction(inst).opcode {
         Opcode::Store { .. } => c.visit_store(inst),
         Opcode::Alloca { .. } => c.visit_alloca(inst),
+        Opcode::Br => c.visit_uncond_br(inst),
         _ => Visit::None,
     }
 }
@@ -496,4 +497,74 @@ b0:
 ",
     );
     assert!(text.contains("alloca"), "{text}");
+}
+
+/// jpeg_fixed `emit`: a store, then the same address stored again on one
+/// path. The pin's InstCombine makes it a phi and one store in the join
+/// (`mergeStoreIntoSuccessor`); ours left both stores, and LICM later
+/// promoted the address with two selects: wasm32 jpeg_fixed -O1 was 294 B
+/// over the pin.
+#[test]
+fn a_store_and_a_conditional_store_of_one_address_become_a_phi_and_a_store() {
+    let text = combined(
+        "@g = global i32 0
+define void @f(i32 %a, i32 %b, i1 %c) {
+entry:
+  store i32 %a, ptr @g
+  br i1 %c, label %then, label %join
+then:
+  store i32 %b, ptr @g
+  br label %join
+join:
+  ret void
+}
+",
+    );
+    assert_eq!(text.matches("store ").count(), 1, "{text}");
+    assert!(text.contains("%storemerge = phi i32 [ %b, %then ], [ %a, %entry ]"), "{text}");
+}
+
+/// `if () { *P = v1 } else { *P = v2 }`.
+#[test]
+fn the_stores_of_both_arms_become_a_phi_and_a_store() {
+    let text = combined(
+        "@g = global i32 0
+define void @f(i32 %a, i32 %b, i1 %c) {
+entry:
+  br i1 %c, label %then, label %else
+then:
+  store i32 %a, ptr @g
+  br label %join
+else:
+  store i32 %b, ptr @g
+  br label %join
+join:
+  ret void
+}
+",
+    );
+    assert_eq!(text.matches("store ").count(), 1, "{text}");
+    assert!(text.contains("phi i32"), "{text}");
+}
+
+/// A load between the two stores reads the first: they stay.
+#[test]
+fn a_read_between_the_stores_keeps_both() {
+    let text = combined(
+        "@g = global i32 0
+define i32 @f(i32 %a, i32 %b, i1 %c) {
+entry:
+  store i32 %a, ptr @g
+  br i1 %c, label %then, label %join
+then:
+  %x = load i32, ptr @g
+  store i32 %b, ptr @g
+  br label %join
+join:
+  %r = phi i32 [ 0, %entry ], [ %x, %then ]
+  ret i32 %r
+}
+",
+    );
+    assert_eq!(text.matches("store ").count(), 2, "{text}");
 }

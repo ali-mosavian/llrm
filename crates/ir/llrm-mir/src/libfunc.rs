@@ -178,6 +178,14 @@ pub struct Generic {
     pub size_t_bits: u32,
 }
 
+impl Generic {
+    /// The pin's defaults for a pointer `bits` wide: a 32-bit `int` unless the
+    /// pointer is 16 bits wide, `size_t` as wide as the pointer.
+    pub fn for_pointer(bits: u32) -> Self {
+        Self { int_bits: if bits == 16 { 16 } else { 32 }, size_t_bits: bits }
+    }
+}
+
 impl Library for Generic {
     fn int_bits(&self) -> u32 {
         self.int_bits

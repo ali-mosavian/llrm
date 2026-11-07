@@ -238,3 +238,59 @@ out:
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     assert_eq!(loops(&after), 2, "{after}");
 }
+
+/// A header branch on a load that no path back to the header may write: the
+/// pin copies the load and the compare before the loop and unswitches on them
+/// (`hasPartialIVCondition`). `store` is what both paths write.
+fn partially_invariant(store: &str) -> String {
+    format!(
+        "@g = global i16 5
+@h = global i16 0
+
+define i16 @f(i16 %n, i16 %m) {{
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %latch ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %latch ]
+  %v = load i16, ptr @g
+  %c = icmp eq i16 %v, %n
+  br i1 %c, label %then, label %else
+
+then:
+  {store}
+  %a = add i16 %acc, %i
+  br label %latch
+
+else:
+  {store}
+  %b = mul i16 %acc, 3
+  br label %latch
+
+latch:
+  %sum = phi i16 [ %a, %then ], [ %b, %else ]
+  %next = add i16 %i, 1
+  %done = icmp eq i16 %next, %m
+  br i1 %done, label %out, label %head
+
+out:
+  %r = phi i16 [ %sum, %latch ]
+  ret i16 %r
+}}
+"
+    )
+}
+
+/// A condition of loads the loop does not write was left in the loop and
+/// tested on every trip (partially invariant conditions were not translated:
+/// 2 of the 21 corpus functions the pin unswitches at -O3). A store to
+/// another global leaves two loops; a store to the loaded one on both paths leaves one.
+#[test]
+fn test_a_header_test_of_loads_nothing_writes_is_unswitched() {
+    let inputs: &[&[i128]] = &[&[5, 1], &[5, 6], &[3, 4], &[0, 2]];
+    let other = unswitched(&partially_invariant("store i16 1, ptr @h"), inputs, true);
+    assert_eq!(loops(&other), 2, "{other}");
+    let same = unswitched(&partially_invariant("store i16 1, ptr @g"), inputs, true);
+    assert_eq!(loops(&same), 1, "{same}");
+}

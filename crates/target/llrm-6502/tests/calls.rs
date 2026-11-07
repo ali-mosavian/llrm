@@ -43,6 +43,7 @@ fn a_call_passes_a_byte_in_rc2_and_a_word_in_rs2() {
                 split: false,
                 variadic: false,
                 sret: false,
+                byval: None,
             },
             Out {
                 value: b,
@@ -52,9 +53,10 @@ fn a_call_passes_a_byte_in_rc2_and_a_word_in_rs2() {
                 split: false,
                 variadic: false,
                 sret: false,
+                byval: None,
             },
         ],
-        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any }],
+        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any, byval: None }],
     )
     .unwrap();
 
@@ -87,6 +89,7 @@ fn a_fourth_word_is_stored_on_the_soft_stack() {
             split: false,
             variadic: false,
             sret: false,
+            byval: None,
         })
         .collect();
     let callee = dag.get_global_address(EVT::I16, 7, 0);
@@ -121,7 +124,7 @@ fn a_fourth_formal_word_is_loaded_from_a_fixed_object() {
     let args = lower_formal_arguments(
         &mut dag,
         entry,
-        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any }; 4],
+        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any, byval: None }; 4],
         &mut fixed,
         &mut |_| 4096,
     )
@@ -145,8 +148,8 @@ fn formal_arguments_are_live_in_at_rc2_and_rs2() {
     };
 
     let ins = [
-        In { vt: EVT::I8, pointer: false, arg_vt: EVT::I8, split: false, sret: false, ext: Ext::Any },
-        In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any },
+        In { vt: EVT::I8, pointer: false, arg_vt: EVT::I8, split: false, sret: false, ext: Ext::Any, byval: None },
+        In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any, byval: None },
     ];
     let args = lower_formal_arguments(&mut dag, entry, &ins, &mut |_, _, _| 0, &mut live_in).unwrap();
 
@@ -166,7 +169,7 @@ fn a_returned_byte_is_copied_to_a() {
     let ret = lower_return(
         &mut dag,
         entry,
-        &[Out { value: v, ext: Ext::Any, pointer: false, arg_vt: EVT::I8, split: false, variadic: false, sret: false }],
+        &[Out { value: v, ext: Ext::Any, pointer: false, arg_vt: EVT::I8, split: false, variadic: false, sret: false, byval: None }],
     )
     .unwrap();
 
@@ -174,4 +177,24 @@ fn a_returned_byte_is_copied_to_a() {
     assert_eq!(phys(&dag, dag.operand(ret, 1)), reg::A);
     let copy = dag.operand(ret, 0);
     assert_eq!((dag.opcode(copy), phys(&dag, dag.operand(copy, 1))), (ISD::CopyToReg, reg::A));
+}
+
+/// A call's `RegisterMask` names the flags register `P`: the scheduler read an
+/// empty mask, so flags live across a call were never recomputed after it (arm64
+/// fib10 gave 49 for 55 the same way).
+#[test]
+fn a_call_register_mask_names_the_flags() {
+    use llrm_6502::dagisel::generated::ids::reg::P;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let callee = dag.get_global_address(EVT::I16, 7, 0);
+    let (chain, _) = lower_call(&mut dag, entry, callee, &[], &[]).unwrap();
+    let call = dag.operand(dag.operand(chain, 0), 0);
+    let masks: Vec<_> = (0..dag.node_count() as u32)
+        .map(|node| SDValue { node, res: 0 })
+        .filter(|&v| dag.opcode(v) == ISD::RegisterMask)
+        .collect();
+    assert_eq!(masks.len(), 1, "premise: the call has a mask (call {call:?})");
+    let NodeData::RegMask(at) = dag.node(masks[0]).data else { panic!("a mask without its registers") };
+    assert!(dag.register_masks[at as usize].contains(&P), "{:?}", dag.register_masks);
 }

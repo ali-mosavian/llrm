@@ -374,7 +374,8 @@ entry:
 /// `va_start` at m64 was refused ("the SysV register save area is not
 /// translated"; `varargs` of `tests/llc`). A variadic function stores the five
 /// argument registers its one named parameter left in the register save area,
-/// then the four fields of the `va_list`: nine stores.
+/// then the `va_list`: eight stores, `gp_offset` and `fp_offset` as one qword
+/// (`mergeStoresAfterLegalization`, #7153; the pin's `movabsq`).
 #[test]
 fn a_variadic_function_saves_the_argument_registers_and_fills_the_list() {
     use crate::model::ir::{Loc, Operation};
@@ -400,7 +401,7 @@ define i32 @f(i32 %n, ...) {
         .filter_map(|i| i.what.as_ref())
         .filter(|w| w.op == Operation::Move && matches!(w.dests.first(), Some(Loc::Mem(cell)) if cell.width != 16))
         .count();
-    assert_eq!(stores, 9);
+    assert_eq!(stores, 8);
 }
 
 /// `ret {i32, i64}` returned `eax = x`, `edx = x >> 16`: the one-integer path
@@ -1208,9 +1209,10 @@ define i32 @f({params}, ...) {{
             .filter_map(|i| i.what.as_ref())
             .filter(|w| w.op == Operation::Move)
             .filter_map(|w| match (&w.dests[..], &w.sources[..]) {
-                ([Loc::Mem(cell)], [Loc::Imm(imm)]) if cell.width == 4 && imm.address.is_none() => Some(imm.value),
+                ([Loc::Held(_)], [Loc::Imm(imm)]) if imm.width == 8 && imm.address.is_none() => Some(imm.value),
                 _ => None,
             })
+            .flat_map(|pair| [pair & 0xffff_ffff, pair >> 32])
             .collect();
         found.sort_unstable();
         found
@@ -1316,4 +1318,71 @@ entry:
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
     assert!(names.iter().any(|n| n == "and" || n == "movzx" || n == "mov"), "premise: selected, got {names:?}");
     assert!(!names.iter().any(|n| n.starts_with("movsx")), "a free zero extension, not movsxd: {names:?}");
+}
+
+/// `store volatile double 1.5` was an xmm load of the constant and an xmm store
+/// (m64 float rows, the pool entry stayed); the pin stores the integer image of
+/// a volatile one too (`replaceStoreOfFPConstant` L24395, `legalOrCustom(STORE,
+/// i64)`).
+#[test]
+fn an_m64_volatile_double_constant_store_is_an_integer_store_of_its_image() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p) {
+entry:
+  store volatile double 1.5, ptr %p
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.clone()).collect();
+    assert!(!names.iter().any(|n| n.starts_with("movs")), "no xmm load of the constant: {names:?}");
+}
+
+/// `(x + 2^31) u< 2^32` is the check that an `i64` fits an `i32`. It stayed an
+/// `add`, a 10-byte `movabs` of the limit and a compare (m64 -Os
+/// widening_multiply +20 B over the pin's `movslq; cmp; jne`): x86's
+/// `shouldTransformSignedTruncationCheck` was off.
+#[test]
+fn an_m64_signed_truncation_check_is_a_sign_extension_compare() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i1 @f(i64 %x) {
+entry:
+  %a = add i64 %x, 2147483648
+  %c = icmp ult i64 %a, 4294967296
+  ret i1 %c
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.clone()).collect();
+    assert!(!names.iter().any(|n| &**n == "add"), "the add is gone: {names:?}");
+    assert!(names.iter().any(|n| n.starts_with("movs")), "a sign extension: {names:?}");
+}
+
+/// `x*5 + (x+3)*5` kept a separate `add` (m64 -O2 mul_constants +489 B over the
+/// pin): x86's `(x+3)*5` was not rewritten to `x*5 + 15`, so `x*5` was not
+/// shared.
+#[test]
+fn an_m64_multiply_of_a_sum_shares_the_multiply_of_its_addend() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(i32 %x) {
+entry:
+  %a = add i32 %x, 3
+  %m1 = mul i32 %a, 5
+  %m2 = mul i32 %x, 5
+  %s = add i32 %m1, %m2
+  ret i32 %s
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.clone()).collect();
+    assert!(!names.iter().any(|n| &**n == "add"), "x*5 is shared, +15 folds into the sum's lea: {names:?}");
 }

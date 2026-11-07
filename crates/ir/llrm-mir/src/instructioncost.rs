@@ -43,7 +43,8 @@ fn operand_info(
     }
 }
 
-fn operand_type(
+/// The type of an operand; none for a block.
+pub fn operand_type(
     context: &Context,
     function: &Function,
     operand: Operand,
@@ -192,7 +193,7 @@ fn gep_cost(
             })
         })
         .collect();
-    let (offset, variable) = layout.collect_offset(&context.types, source, &indices);
+    let (offset, variable, target) = layout.collect_offset_typed(&context.types, source, &indices);
     // No addressing mode takes two scale registers.
     if variable.len() > 1 {
         return Cost::BASIC;
@@ -201,10 +202,10 @@ fn gep_cost(
     // A scaled index that costs instructions of its own (real mode's prefixed
     // form) is not free in the address.
     let folds = scale <= 1 || tti.scaled_index_insns() == 0;
-    let legal = match access_bytes {
-        Some(bytes) => tti.is_legal_addressing_mode_for(bytes, base_global, offset as i64, !base_global, scale),
-        None => tti.is_legal_addressing_mode(base_global, offset as i64, !base_global, scale),
-    };
+    // `if (!AccessType) AccessType = TargetType`: without a load or store to
+    // ask about, the type the last index selects stands in for it.
+    let bytes = access_bytes.unwrap_or_else(|| layout.alloc_size(&context.types, target));
+    let legal = tti.is_legal_addressing_mode_for(bytes, base_global, offset as i64, !base_global, scale);
     if folds && legal { Cost::FREE } else { Cost::BASIC }
 }
 
@@ -310,6 +311,10 @@ pub fn instruction_cost_with(
                 Cost::FREE
             }
         }
+        // BasicTTIImpl::getInstructionCost prices these through getVectorInstrCost and
+        // getShuffleCost; the model has no vector type yet (VECTORS-1 PR-D), so
+        // they are invalid, never cheap.
+        Opcode::ExtractElement | Opcode::InsertElement | Opcode::ShuffleVector(_) => Cost::INVALID,
         Opcode::Alloca { .. } => {
             if is_static_alloca(function, inst) {
                 Cost::FREE
@@ -380,6 +385,6 @@ pub fn instruction_cost_with(
                 None => Cost::INVALID,
             }
         }
-        Opcode::Unreachable | Opcode::Resume | Opcode::LandingPad { .. } => Cost::BASIC,
+        Opcode::Unreachable | Opcode::Resume | Opcode::LandingPad { .. } | Opcode::VaArg => Cost::BASIC,
     }
 }

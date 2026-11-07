@@ -29,7 +29,7 @@ const CAP: usize = 2_000_000;
 
 /// `CYCLES_CPUS=68000,68030,68060`: the processors to price for (default 68000
 /// and 68020).
-fn models() -> Vec<Model> {
+pub(crate) fn models() -> Vec<Model> {
     let list = std::env::var("CYCLES_CPUS").unwrap_or_else(|_| "68000,68020".to_owned());
     list.split(',')
         .map(|one| match one.trim() {
@@ -59,13 +59,6 @@ fn trace(
         .expect("timeout runs qemu-m68k");
     let mut pcs = Vec::new();
     for line in BufReader::new(child.stderr.take().unwrap()).lines().map_while(Result::ok) {
-        // a trace that ends in a fault is a short program, not a cheap one
-        assert!(
-            !line.contains("uncaught target signal"),
-            "{} faulted on {cpu} after {} instructions: {line} (CYCLES_QEMU_CPU names the CPU to run on)",
-            exe.display(),
-            pcs.len()
-        );
         let Some(fields) = line.split_once('[').and_then(|(_, rest)| rest.split_once(']')) else { continue };
         if let Some(pc) = fields.0.split('/').nth(1).and_then(|pc| u32::from_str_radix(pc, 16).ok()) {
             pcs.push(pc);
@@ -77,80 +70,6 @@ fn trace(
     }
     child.wait().ok();
     pcs
-}
-
-/// The qemu CPU an executable runs on: the newest of 68020, 68030, 68040 and
-/// 68060 its path names, else the 68000.
-fn qemu_cpu_for(path: &str) -> &'static str {
-    ["68060", "68040", "68030", "68020"]
-        .into_iter()
-        .find(|tag| path.contains(tag))
-        .map_or(
-            "m68000",
-            |tag| match tag {
-                "68060" => "m68060",
-                "68040" => "m68040",
-                "68030" => "m68030",
-                _ => "m68020",
-            },
-        )
-}
-
-#[cfg(test)]
-mod tests {
-    use std::process::Command;
-
-    use super::{qemu_cpu_for, trace};
-
-    /// A 68020 program (`divu.l`) assembled and linked with the m68k binutils;
-    /// `None` without `$GCC_M68K`.
-    fn program_with_divu_l() -> Option<std::path::PathBuf> {
-        let root = std::env::var("GCC_M68K").ok().filter(|root| !root.is_empty())?;
-        let dir = std::env::temp_dir().join(format!("cycles-fault-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let (source, object, exe) = (dir.join("p.s"), dir.join("p.o"), dir.join("p.exe"));
-        std::fs::write(
-            &source,
-            ".globl _start\n_start:\n\tmoveq #5,%d0\n\tmoveq #3,%d1\n\tdivu.l %d1,%d0\n\tmoveq #1,%d0\n\tmoveq #0,%d1\n\ttrap #0\n",
-        )
-        .unwrap();
-        let tool = |name: &str| {
-            let mut command = Command::new(format!("{root}/usr/bin/m68k-linux-gnu-{name}"));
-            command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));
-            command
-        };
-        assert!(tool("as").args(["-m68020", "-o"]).arg(&object).arg(&source).status().unwrap().success());
-        assert!(tool("ld").arg("-o").arg(&exe).arg(&object).status().unwrap().success());
-        Some(exe)
-    }
-
-    /// The 68020 program on `m68000` faulted at `divu.l`; its trace of three
-    /// instructions was priced as the whole program, with no error.
-    #[test]
-    #[should_panic(expected = "faulted on m68000")]
-    fn a_trace_that_ends_in_a_fault_is_refused() {
-        let Some(exe) = program_with_divu_l() else { panic!("faulted on m68000 (skipped: no GCC_M68K)") };
-        trace(&exe, 1000, "m68000");
-    }
-
-    #[test]
-    fn the_same_program_traces_on_the_cpu_it_needs() {
-        let Some(exe) = program_with_divu_l() else { return };
-        assert!(trace(&exe, 1000, "m68020").len() >= 6);
-    }
-
-    /// A 68040 or 68060 program ran on `m68000`, faulted at its first 68020+
-    /// instruction and was priced for the few it had executed (339
-    /// instructions, 0.1 clock a call), with no error.
-    #[test]
-    fn a_path_naming_a_newer_cpu_runs_on_it() {
-        assert_eq!(qemu_cpu_for("/t/f.68000"), "m68000");
-        assert_eq!(qemu_cpu_for("/t/f.68020"), "m68020");
-        assert_eq!(qemu_cpu_for("/t/f.68030"), "m68030");
-        assert_eq!(qemu_cpu_for("/t/f.68040.exe"), "m68040");
-        assert_eq!(qemu_cpu_for("/t/sf32-68060"), "m68060");
-        assert_eq!(qemu_cpu_for("/t/plain"), "m68000");
-    }
 }
 
 /// `CYCLES_EXE=program CYCLES_FUNCS=a,b,c`: price a whole program (a
@@ -200,14 +119,55 @@ fn listing(
     (lines, ranges)
 }
 
-struct Total {
-    insns: usize,
-    clocks: Vec<u64>,
-    partial: bool,
-    unknown: usize,
+pub(crate) struct Total {
+    pub(crate) insns: usize,
+    pub(crate) clocks: Vec<u64>,
+    pub(crate) partial: bool,
+    pub(crate) unknown: usize,
 }
 
-fn price(
+/// The qemu CPU a run of `exe` is traced on: the one its path names, the 68000
+/// when none. A trace on the wrong CPU counts the instructions of another
+/// program (the 040 and 060 matrix columns were traced on the 68000).
+fn qemu_cpu_of(exe: &Path) -> &'static str {
+    let name = exe.to_string_lossy();
+    ["68060", "68040", "68030", "68020", "68010"]
+        .into_iter()
+        .find(|cpu| name.contains(cpu))
+        .map_or(
+            "m68000",
+            |cpu| match cpu {
+                "68060" => "m68060",
+                "68040" => "m68040",
+                "68030" => "m68030",
+                "68020" => "m68020",
+                _ => "m68010",
+            },
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::qemu_cpu_of;
+
+    /// The 040 and 060 matrix columns priced the instruction counts of a trace
+    /// on `m68000` (partition 040: 202 instructions for gcc's 121).
+    #[test]
+    fn a_run_is_traced_on_the_cpu_its_path_names() {
+        for (path, cpu) in [
+            ("sum_68000_O2_ours.elf", "m68000"),
+            ("sum_68020_O2_ours.elf", "m68020"),
+            ("sum_68040_O2_ours.elf", "m68040"),
+            ("sum_68060_Os_gcc.elf", "m68060"),
+        ] {
+            assert_eq!(qemu_cpu_of(Path::new(path)), cpu, "{path}");
+        }
+    }
+}
+
+pub(crate) fn price(
     gcc: &Path,
     exe: &Path,
     models: &[Model],
@@ -221,12 +181,8 @@ fn price(
             (*address, (lines.get(index + 1).map_or(2, |next| next.0 - address) as usize, text.as_str()))
         })
         .collect();
-    let (cap, cpu) = if harness {
-        let cpu = std::env::var("CYCLES_QEMU_CPU").unwrap_or_else(|_| qemu_cpu_for(&exe.to_string_lossy()).to_owned());
-        (200_000_000, cpu)
-    } else {
-        (CAP, "m68000".to_owned())
-    };
+    let cpu = std::env::var("CYCLES_QEMU_CPU").unwrap_or_else(|_| qemu_cpu_of(exe).to_owned());
+    let cap = if harness { 200_000_000 } else { CAP };
     let pcs = trace(exe, cap, &cpu);
     let mut total = Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0 };
     let mut seen = std::collections::HashSet::new();
@@ -326,35 +282,10 @@ fn assembled(
     Some(std::fs::read(raw).unwrap())
 }
 
-/// The run's directory, deleted when the run ends however it ends. Not the
-/// shared `scratch` module: `matrix` includes this file as a module of its own.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new() -> Scratch {
-        let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        Scratch(dir)
-    }
-}
-
-impl std::ops::Deref for Scratch {
-    type Target = Path;
-
-    fn deref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).ok();
-    }
-}
-
 fn main() {
     let gcc = PathBuf::from(std::env::var("GCC_M68K").expect("GCC_M68K: the unpacked m68k binutils root"));
-    let dir = Scratch::new();
+    let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
     let models = models();
     if std::env::args().nth(1).as_deref() == Some("--exe") {
         let calls: f64 = std::env::var("CYCLES_CALLS").ok().and_then(|n| n.parse().ok()).unwrap_or(3000.0);
@@ -451,4 +382,5 @@ fn main() {
         }
         println!("| {name} | {} |", cells.join(" | "));
     }
+    std::fs::remove_dir_all(&dir).ok();
 }

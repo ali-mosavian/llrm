@@ -109,7 +109,9 @@ pub fn names(
         let id = GlobalId(at as u32);
         // An intrinsic is lowered where it is called, never linked.
         if global.name.as_deref().is_some_and(|name| {
-            (llrm_mir::intrinsics::is_reserved(name) && !is_list(name)) || llrm_mir::atomic::decode(name).is_some()
+            (llrm_mir::intrinsics::is_reserved(name) && !is_list(name))
+                || llrm_mir::intrinsics::is_wide_divide(name)
+                || llrm_mir::atomic::decode(name).is_some()
         }) {
             continue;
         }
@@ -387,7 +389,7 @@ impl Initializer<'_> {
                 _ => self.bytes(&bits.to_le_bytes()[..size]),
             },
             ConstantKind::Float80(bits) => self.bytes(&llrm_mir::types::x87_image(*bits)),
-            ConstantKind::Float128(_) => return Err("an fp128 initializer: no emission yet".to_owned()),
+            ConstantKind::Float128(bits) => self.bytes(&bits.to_le_bytes()),
             // An undef initializer is any bytes: zero. A poison one is a hole
             // of a switch lookup table (the pin's holes are `poison` too),
             // which the guard never indexes. `emitGlobalConstantImpl` writes

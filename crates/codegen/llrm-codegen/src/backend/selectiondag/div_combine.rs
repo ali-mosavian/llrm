@@ -136,7 +136,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         {
             return Some(narrowed);
         }
-        self.visit_sdiv_like(n0, n1, node)
+        self.visit_sdiv_like(n0, n1, node).or_else(|| self.divrem_of_div(node, n1))
     }
 
     fn sign_bit_is_zero(
@@ -367,7 +367,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         {
             return Some(narrowed);
         }
-        self.visit_udiv_like(n0, n1, node)
+        self.visit_udiv_like(n0, n1, node).or_else(|| self.divrem_of_div(node, n1))
     }
 
     /// `visitUDIVLike`.
@@ -505,8 +505,94 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if self.int_div_cheap(vt) || self.hardware_divide_wins(vt, n0, n1, signed, true) {
             return None;
         }
-        let quotient = if signed { self.visit_sdiv_like(n0, n1, node) } else { self.visit_udiv_like(n0, n1, node) }?;
+        let quotient = if signed { self.visit_sdiv_like(n0, n1, node) } else { self.visit_udiv_like(n0, n1, node) };
+        let Some(quotient) = quotient else {
+            // sdiv, srem -> sdivrem
+            return self.use_div_rem(node).map(|both| SDValue { node: both.node, res: 1 });
+        };
         let product = self.dag.get_node(ISD::Mul, vt, &[quotient, n1]);
         Some(self.dag.get_node(ISD::Sub, vt, &[n0, product]))
+    }
+
+    /// The end of `visitSDIV` and `visitUDIV`: "If the divisor is constant,
+    /// then return DIVREM only if isIntDivCheap() is true. Otherwise, we break
+    /// the simplification logic in visitREM()."
+    fn divrem_of_div(
+        &mut self,
+        node: SDValue,
+        divisor: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.constant(divisor).is_some() && !self.int_div_cheap(self.dag.value_type(node)) {
+            return None;
+        }
+        self.use_div_rem(node)
+    }
+
+    /// `DAGCombiner::useDivRem`
+    /// ([L5181](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5181)):
+    /// a divide and a remainder of the same operands are one `DIVREM` node,
+    /// when the target has it (legal or custom) or a library call that makes
+    /// both (`isDivRemLibcallAvailable`: the target names a routine for it).
+    /// Every divide and remainder of the pair is rewritten to read it.
+    pub(super) fn use_div_rem(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        use super::actions::Action;
+        let op = self.dag.opcode(node);
+        let signed = matches!(op, ISD::SDiv | ISD::SRem);
+        let divrem = if signed { ISD::SDivRem } else { ISD::UDivRem };
+        let vt = self.dag.value_type(node);
+        if !vt.is_integer() || !self.dag.has_users(node) {
+            return None;
+        }
+        let tli = self.tli?;
+        if !tli.types.is_type_legal(vt) && tli.operation_action(divrem, vt) != Action::Custom {
+            return None;
+        }
+        if !tli.is_operation_legal_or_custom(divrem, vt) && tli.libcall_name(divrem, vt).is_none() {
+            return None;
+        }
+        // "If div is legal, it's better to do the normal expansion"
+        let (quotient_op, remainder_op) = if signed { (ISD::SDiv, ISD::SRem) } else { (ISD::UDiv, ISD::URem) };
+        let other = if op == quotient_op { remainder_op } else { quotient_op };
+        let checked = if op == quotient_op { op } else { other };
+        if tli.is_operation_legal_or_custom(checked, vt) {
+            return None;
+        }
+        let (op0, op1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let users: Vec<u32> = self.dag.users(op0).collect();
+        let mut combined: Option<SDValue> = None;
+        for user in users {
+            let at = SDValue { node: user, res: 0 };
+            let used = (0..self.dag.node(at).values.len())
+                .any(|res| self.dag.has_users(SDValue { node: user, res: res as u8 }));
+            if user == node.node || !used {
+                continue;
+            }
+            let user_op = self.dag.opcode(at);
+            if !(user_op == op || user_op == other || user_op == divrem)
+                || self.dag.operand(at, 0) != op0
+                || self.dag.operand(at, 1) != op1
+            {
+                continue;
+            }
+            if combined.is_none() {
+                if user_op == other {
+                    combined = Some(self.dag.get_node_multi(divrem, &[vt, vt], &[op0, op1]));
+                } else if user_op == divrem {
+                    combined = Some(at);
+                } else {
+                    continue;
+                }
+            }
+            let both = combined?;
+            if user_op == quotient_op {
+                self.dag.combine_to(at, SDValue { node: both.node, res: 0 });
+            } else if user_op == remainder_op {
+                self.dag.combine_to(at, SDValue { node: both.node, res: 1 });
+            }
+        }
+        combined
     }
 }

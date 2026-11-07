@@ -370,6 +370,25 @@ impl fmt::Display for Line {
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub struct Asm {
     pub lines: Vec<Line>,
+    /// The function returns nothing in `a`: a `rts` does not read it.
+    pub no_a_result: bool,
+    /// The routines this function calls with an argument in `a` (as written
+    /// after `jsr`).
+    pub a_callees: std::collections::BTreeSet<String>,
+    /// The function returns nothing in `x`: a `rts` does not read it.
+    pub no_x_result: bool,
+    /// The routines this function calls with an argument in `x`. A call to any
+    /// other that is not a runtime routine (`__`) writes `x` as a result: the
+    /// `mos` convention passes arguments in `rc2..` and returns `a:x`.
+    pub x_callees: std::collections::BTreeSet<String>,
+    /// The function returns nothing in `y`: a `rts` does not read it.
+    pub no_y_result: bool,
+    /// The cells a `rts` returns (`rc2`, `rc3` for a long): every other
+    /// caller-saved cell is dead there.
+    pub result_cells: std::collections::BTreeSet<String>,
+    /// The routines this function calls with an argument in `y` (see
+    /// [`Self::x_callees`]).
+    pub y_callees: std::collections::BTreeSet<String>,
     /// The place the instructions written from now on get.
     pub place: u32,
     /// What was written since the last newline.

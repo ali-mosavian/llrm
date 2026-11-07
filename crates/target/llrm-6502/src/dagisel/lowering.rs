@@ -40,6 +40,7 @@ pub mod mosisd {
     pub const SRL32: ISD = ISD::Target(ids::SRL32);
     pub const SRA32: ISD = ISD::Target(ids::SRA32);
     pub const CMPZ: ISD = ISD::Target(ids::CMPZ);
+    pub const CMP32: ISD = ISD::Target(ids::CMP32);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
@@ -57,7 +58,9 @@ pub mod cond {
 
 pub fn target_lowering() -> TargetLowering {
     use ISD::*;
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float());
+    let mut tl = TargetLowering::empty(
+        TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_int_size(16),
+    );
     tl.init_actions();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
@@ -72,11 +75,17 @@ pub fn target_lowering() -> TargetLowering {
     {
         tl.set_load_ext_action(LoadExt::SExtLoad, vt, mem, Action::Expand);
     }
-    // and a zero- or any-extending one to a type that is not a register is not
-    // formed, to be split again
-    for (vt, mem) in
-        [(MVT::I32, MVT::I8), (MVT::I32, MVT::I16), (MVT::I64, MVT::I8), (MVT::I64, MVT::I16), (MVT::I64, MVT::I32)]
-    {
+    // and a zero- or any-extending one is not selected from a global's address
+    // (a pointer pair and `lda (zp),y` where `lda abs` is one instruction),
+    // or at all to a type that is not a register: split again
+    for (vt, mem) in [
+        (MVT::I16, MVT::I8),
+        (MVT::I32, MVT::I8),
+        (MVT::I32, MVT::I16),
+        (MVT::I64, MVT::I8),
+        (MVT::I64, MVT::I16),
+        (MVT::I64, MVT::I32),
+    ] {
         for ext in [LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, mem, Action::Expand);
         }
@@ -99,10 +108,7 @@ pub fn target_lowering() -> TargetLowering {
     // variable ones expand to runtime calls where they are emitted.
     set(&[Mul, SDiv, SRem, Shl, Srl, Sra], Action::Legal);
     set(&[SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
-    // An unsigned word multiply with overflow stays refused ("convert node to
-    // libcall"): expanded wide, its flag's extension is not lowered
-    // (CannotSelect ZeroExtend). Exit: 2026-11-12.
-    set(&[UMulO], Action::LibCall);
+    set(&[UMulO], Action::Expand);
     // an unsigned divide and remainder are the one runtime call that makes
     // both: the legalizer expands each to the `UDIVREM` node, and the pair
     // of one dividend and divisor is one node
@@ -139,6 +145,11 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_operation_action(op, vt, Action::Custom);
         }
     }
+    // a compare of two words is the borrow of the low words into the high
+    // words' subtract (`IntegerExpandSetCCOperands`)
+    for vt in [MVT::I1, MVT::I8, MVT::I16] {
+        tl.set_operation_action(SetCCCarry, vt, Action::Custom);
+    }
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
     tl
@@ -156,6 +167,7 @@ impl Hooks for MosLowering {
         match dag.opcode(node) {
             ISD::Rotl | ISD::Rotr => Some(lower_rotate(dag, node)),
             ISD::SetCC => lower_setcc(dag, node),
+            ISD::SetCCCarry => lower_setcc_carry(dag, node),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
@@ -213,12 +225,13 @@ impl Hooks for MosLowering {
                 split,
                 variadic: false,
                 sret: false,
+                byval: None,
             }));
         }
         let count = if ret.size_in_bits() > 16 { ret.size_in_bits() / 16 } else { 1 };
         let part_vt = if count > 1 { EVT::I16 } else { ret };
         let ins = vec![
-            In { vt: part_vt, pointer: false, arg_vt: ret, split: count > 1, sret: false, ext: Ext::Any };
+            In { vt: part_vt, pointer: false, arg_vt: ret, split: count > 1, sret: false, ext: Ext::Any, byval: None };
             count as usize
         ];
         let callee = dag.get_target_external_symbol(EVT::I16, name);
@@ -361,13 +374,29 @@ fn lower_extend(
     if dag.value_type(condition) != EVT::I1 {
         return node;
     }
+    let condition = if dag.opcode(condition) == ISD::SetCCCarry {
+        lower_setcc_carry(dag, condition).unwrap_or(condition)
+    } else {
+        condition
+    };
     // the flag of an overflow op is not a condition yet: its expansion makes
     // one, and the extension is lowered when that is done (`condition_byte` has
     // no byte for it and would widen the flag with this very node)
-    if matches!(dag.opcode(condition), ISD::SAddO | ISD::SSubO | ISD::SMulO) {
+    if matches!(dag.opcode(condition), ISD::SAddO | ISD::SSubO | ISD::SMulO | ISD::UMulO) {
         return node;
     }
     let vt = dag.value_type(node);
+    // the carry an add or subtract leaves is `0 + 0 + C`, not a select on it
+    if dag.opcode(node) != ISD::SignExtend
+        && condition.res == 1
+        && matches!(
+            dag.opcode(condition),
+            ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry
+        )
+    {
+        let byte = condition_byte(dag, condition);
+        return if vt == EVT::I8 { byte } else { dag.get_node(ISD::ZeroExtend, vt, &[byte]) };
+    }
     // a logic op over compares is a byte of 0 or 1 already (`condition_byte`):
     // widened, it is that byte, not a select that tests the byte it was
     // just made into
@@ -532,13 +561,132 @@ fn lower_setcc(
     Some(dag.get_node(mosisd::SETCC, EVT::I8, &[code, flags]))
 }
 
+/// `x >= 0` and `-1 >= x` (`x <= -1`) of a long are the sign of its high word:
+/// the pin's `IntegerExpandSetCCOperands` takes that for `x < 0` and `x > -1`
+/// only, and the other two reach the chain as a compare against a constant of
+/// zero or of all ones. The word's compare, as a `SETCC` of the high word.
+fn sign_compare(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    if dag.opcode(borrow) != ISD::USubO || borrow.res != 1 || cond_of(dag, dag.operand(node, 3)) != CondCode::SetGe {
+        return None;
+    }
+    let (low, below) = (dag.operand(borrow, 0), dag.operand(borrow, 1));
+    let zero = dag.get_constant(0, EVT::I16);
+    if dag.constant(other) == Some(0) && dag.constant(below) == Some(0) {
+        // x >= 0
+        let ge = dag.get_cond_code(CondCode::SetGe);
+        return Some(dag.get_node(ISD::SetCC, EVT::I1, &[high, zero, ge]));
+    }
+    if dag.constant(high) == Some(0xFFFF) && dag.constant(low) == Some(0xFFFF) {
+        // -1 >= x
+        let lt = dag.get_cond_code(CondCode::SetLt);
+        return Some(dag.get_node(ISD::SetCC, EVT::I1, &[other, zero, lt]));
+    }
+    None
+}
+
+/// `LowerSETCCCARRY`: the high words' subtract takes the borrow of the low
+/// words', and the order is the borrow it leaves. A signed order compares the
+/// high words with their sign bits flipped.
+///
+/// The pin's `IntegerExpandSetCCOperands` makes the node when the target has
+/// it ([LegalizeIntegerTypes.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp));
+/// ours is `legalize_types.rs`. Without it a compare of two words was a select
+/// of the compares of its halves, each a chain.
+fn lower_setcc_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    if dag.value_type(high) != EVT::I16 || dag.opcode(borrow) != ISD::USubO || borrow.res != 1 {
+        return None;
+    }
+    if let Some(sign) = sign_compare(dag, node) {
+        let vt = dag.value_type(node);
+        return Some(if vt == EVT::I1 { sign } else { dag.get_node(ISD::ZeroExtend, vt, &[sign]) });
+    }
+    let cc = cond_of(dag, dag.operand(node, 3));
+    let (high, other) = match cc {
+        CondCode::SetULt | CondCode::SetUGe => (high, other),
+        CondCode::SetLt | CondCode::SetGe => (flip_sign(dag, high), flip_sign(dag, other)),
+        _ => return None,
+    };
+    // the flags are bits, as a subtract of words leaves them: `condition` reads
+    // the carry of the node itself, not of a truncation of it
+    let (low, below) = (dag.operand(borrow, 0), dag.operand(borrow, 1));
+    let low_borrow = dag.get_node_multi(ISD::USubO, &[EVT::I16, EVT::I1], &[low, below]);
+    let borrow = SDValue { node: low_borrow.node, res: 1 };
+    let pair = dag.get_node_multi(ISD::USubOCarry, &[EVT::I16, EVT::I1], &[high, other, borrow]);
+    let below = SDValue { node: pair.node, res: 1 };
+    let vt = dag.value_type(node);
+    match cc {
+        CondCode::SetULt | CondCode::SetLt if vt == EVT::I1 => Some(below),
+        CondCode::SetULt | CondCode::SetLt => Some(dag.get_node(ISD::ZeroExtend, vt, &[below])),
+        _ => {
+            // "not below" is the borrow's byte flipped: bytes only, no `xor` of
+            // the bit, whose select tests itself
+            let one = dag.get_constant(1, EVT::I8);
+            let byte = carry_byte(dag, below);
+            let byte = dag.get_node(ISD::Xor, EVT::I8, &[byte, one]);
+            Some(if vt == EVT::I8 { byte } else { dag.get_node(ISD::Truncate, vt, &[byte]) })
+        }
+    }
+}
+
+/// `lower_setcc_carry` as the flags of the whole subtract: `CMP32` of the low
+/// words and of the high words (their sign bits flipped for a signed order),
+/// read with `CC` for below and `CS` for not below.
+fn lower_setcc_carry_flags(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<(SDValue, SDValue)> {
+    let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    if dag.value_type(high) != EVT::I16 || dag.opcode(borrow) != ISD::USubO || borrow.res != 1 {
+        return None;
+    }
+    if let Some(sign) = sign_compare(dag, node) {
+        let lowered = lower_setcc(dag, sign)?;
+        return Some((dag.operand(lowered, 0), dag.operand(lowered, 1)));
+    }
+    // Flags are made again where they are read: a chain that two orders share
+    // (`a < b` and `a >= b`) is made once as a borrow and kept in a byte.
+    if !dag.has_one_use(borrow.node) {
+        return None;
+    }
+    let cc = cond_of(dag, dag.operand(node, 3));
+    let (high, other) = match cc {
+        CondCode::SetULt | CondCode::SetUGe => (high, other),
+        CondCode::SetLt | CondCode::SetGe => (flip_sign(dag, high), flip_sign(dag, other)),
+        _ => return None,
+    };
+    let (low, below) = (dag.operand(borrow, 0), dag.operand(borrow, 1));
+    let flags = dag.get_node(mosisd::CMP32, EVT::I8, &[low, below, high, other]);
+    let code = if matches!(cc, CondCode::SetULt | CondCode::SetLt) { cond::CC } else { cond::CS };
+    Some((cc_operand(dag, code), flags))
+}
+
 /// The code and flags a condition value branches on: a lowered compare, or the
 /// value tested against zero (`NE`).
 fn condition(
     dag: &mut SelectionDAG,
     value: SDValue,
 ) -> (SDValue, SDValue) {
-    let value = if dag.opcode(value) == ISD::SetCC { lower_setcc(dag, value).unwrap_or(value) } else { value };
+    // A branch or a select on the order of two longs reads the flags the
+    // chain leaves: `bcc` after the last `sbc`, not the borrow made into a byte
+    // and tested again.
+    if dag.opcode(value) == ISD::SetCCCarry
+        && let Some(flags) = lower_setcc_carry_flags(dag, value)
+    {
+        return flags;
+    }
+    let value = match dag.opcode(value) {
+        ISD::SetCC => lower_setcc(dag, value).unwrap_or(value),
+        ISD::SetCCCarry => lower_setcc_carry(dag, value).unwrap_or(value),
+        _ => value,
+    };
     if dag.opcode(value) == mosisd::SETCC {
         return (dag.operand(value, 0), dag.operand(value, 1));
     }
@@ -588,6 +736,10 @@ fn condition_byte(
                 Some(lowered) => lowered,
                 None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
             },
+            ISD::SetCCCarry => match lower_setcc_carry(dag, value) {
+                Some(lowered) => condition_byte(dag, lowered),
+                None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
+            },
             // a multi-result lowering's wrapper (`lower_bit_load`): the bit it
             // holds
             ISD::MergeValues => {
@@ -607,15 +759,7 @@ fn condition_byte(
             }
             // the carry an add or subtract leaves in C: `0 + 0 + C`, and for
             // a borrow `0 - 0 - C` (all ones) masked to the bit
-            op @ (ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry) if value.res == 1 => {
-                let zero = dag.get_constant(0, EVT::I8);
-                let adds = matches!(op, ISD::UAddO | ISD::UAddOCarry);
-                let widen = if adds { ISD::UAddOCarry } else { ISD::USubOCarry };
-                let pair = dag.get_node_multi(widen, &[EVT::I8, EVT::I1], &[zero, zero, value]);
-                let byte = SDValue { node: pair.node, res: 0 };
-                let one = dag.get_constant(1, EVT::I8);
-                if adds { byte } else { dag.get_node(ISD::And, EVT::I8, &[byte, one]) }
-            }
+            ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry if value.res == 1 => carry_byte(dag, value),
             ISD::Select => {
                 let (test, a, b) = (dag.operand(value, 0), dag.operand(value, 1), dag.operand(value, 2));
                 let (a, b) = (condition_byte(dag, a), condition_byte(dag, b));
@@ -628,8 +772,28 @@ fn condition_byte(
             }
             _ => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
         },
+        // the boolean of a saturating subtract's expansion is a byte
+        // (`getSetCCResultType`): the same borrow, which read as C is inverted
+        EVT::I8 if value.res == 1 && matches!(dag.opcode(value), ISD::USubO | ISD::USubOCarry) => {
+            carry_byte(dag, value)
+        }
         _ => value,
     }
+}
+
+/// The carry an add or subtract leaves in C as a byte of 0 or 1: `0 + 0 + C`,
+/// and for a borrow `0 - 0 - C` (all ones) masked to the bit.
+fn carry_byte(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+) -> SDValue {
+    let zero = dag.get_constant(0, EVT::I8);
+    let adds = matches!(dag.opcode(value), ISD::UAddO | ISD::UAddOCarry);
+    let widen = if adds { ISD::UAddOCarry } else { ISD::USubOCarry };
+    let pair = dag.get_node_multi(widen, &[EVT::I8, EVT::I1], &[zero, zero, value]);
+    let byte = SDValue { node: pair.node, res: 0 };
+    let one = dag.get_constant(1, EVT::I8);
+    if adds { byte } else { dag.get_node(ISD::And, EVT::I8, &[byte, one]) }
 }
 
 /// `LowerSELECT`: `CMOV false, true, cc, flags`.

@@ -122,6 +122,19 @@ pub fn registers(outer: &Outer) -> Room {
     Room::of(outer)
 }
 
+/// How many native words the integer type `ty` is, where the target states
+/// its native width (`OperationCosts::native_bits`); 1 for anything else.
+fn words(
+    context: &Context,
+    ty: Option<TypeId>,
+    costs: &OperationCosts,
+) -> i64 {
+    match ty.map(|ty| context.types.get(ty)) {
+        Some(Type::Int(bits)) => costs.words(*bits),
+        _ => 1,
+    }
+}
+
 fn floating(
     context: &Context,
     function: &Function,
@@ -202,17 +215,25 @@ pub fn operation(
                 costs.float_load
             }
         }
-        Opcode::Load { .. } => costs.load,
+        Opcode::Load { .. } => {
+            costs.load * words(context, instruction.result.map(|value| function.value(value).ty), costs)
+        }
         Opcode::Store { .. } if floating(context, function, instruction.operands[0]) => costs.float_store,
-        Opcode::Store { .. } => costs.store,
-        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
-        | Opcode::ICmp(_) => costs.add,
+        Opcode::Store { .. } => {
+            costs.store * words(context, function.operand_type(context, instruction.operands[0]), costs)
+        }
+        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) => {
+            costs.add * words(context, instruction.result.map(|value| function.value(value).ty), costs)
+        }
+        Opcode::ICmp(_) => costs.add * words(context, function.operand_type(context, instruction.operands[0]), costs),
         Opcode::Cast(_) | Opcode::ExtractValue(_) | Opcode::InsertValue(_) | Opcode::Phi | Opcode::Freeze => {
-            costs.r#move
+            costs.r#move * words(context, instruction.result.map(|value| function.value(value).ty), costs)
         }
         Opcode::Binary(BinaryOp::Mul) => costs.multiply,
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => costs.divide,
-        Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => costs.shift,
+        Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => {
+            costs.shift * words(context, instruction.result.map(|value| function.value(value).ty), costs)
+        }
         Opcode::GetElementPtr { .. } => {
             let constant = instruction.operands[1..].iter().all(|&index| matches!(index, Operand::Constant(_)));
             advance(context, layout, function.value(instruction.result?).ty, costs.address, constant, costs)
@@ -229,6 +250,11 @@ pub fn operation(
             let cells = llrm_mir::intrinsics::length(context, instruction.operands[2])
                 .and_then(|count| i64::try_from(count).ok())
                 .unwrap_or(UNKNOWN_TRIPS);
+            // The backend stores a small constant memset inline.
+            let inline = crate::loopidioms::InlineFills { max_stores: costs.memset_stores, bytes: cells };
+            if costs.memset_stores > 0 && inline.stores() <= inline.max_stores {
+                return Some(inline.price(costs));
+            }
             return Some(costs.fill + cells * costs.fill_cell);
         }
         Opcode::Call(_) | Opcode::Invoke(_) => costs.call,

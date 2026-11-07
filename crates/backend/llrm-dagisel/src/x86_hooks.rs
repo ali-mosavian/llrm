@@ -6,7 +6,7 @@
 //! The generated table names its complex patterns by number; [`X86Hooks`] reads
 //! the function each number stands for from the CPU's `COMPLEX_PATTERNS` and
 //! runs the matcher of that name from [`crate::x86_addr`]. `selectTLSADDRAddr`
-//! and `selectMOV64Imm32` never match here (SD35).
+//! never matches here (SD35).
 //!
 //! Numbered deviations from the pin (reason / owner / exit / review):
 //! - **SD36** `checkTCRetEnoughRegs` is `false` and `isDef32`,
@@ -30,7 +30,7 @@ use crate::generated::ids::{isd, mvt, x86, x86isd};
 use crate::generated::{x86_i486, x86_m16, x86_p5, x86_x64};
 use crate::instr;
 use crate::matcher::Vt;
-use crate::x86_addr::{AddrDag, AddrMode, Matcher, vt_bits};
+use crate::x86_addr::{AddrDag, AddrMode, Matcher, SymbolKind, vt_bits};
 
 /// The CPU whose table is walked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -293,6 +293,19 @@ impl X86Hooks {
         has_no_flag_uses(dag, flags, |cc| !matches!(cc, 0 | 1 | 4 | 5 | 8..=15))
     }
 
+    /// `onlyUsesZeroFlag` ([L3556][zero]): every reader of the flags tests
+    /// `COND_E` or `COND_NE`.
+    ///
+    /// [zero]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3556
+    pub fn only_uses_zero_flag<D: AddrDag>(
+        &self,
+        dag: &D,
+        flags: SDValue,
+    ) -> bool {
+        has_no_flag_uses(dag, flags, |cc| !matches!(cc, 4 | 5))
+    }
+
     /// `hasNoSignFlagUses` ([L3636][sign]). Unlike the pin, a user that reads
     /// the flags directly (`SETCC`, `CMOV`, `BRCOND`) is examined too.
     ///
@@ -449,7 +462,19 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
                 results.push((matcher.dag.operand(value.node, 0), None));
                 return true;
             }
-            // ELF TLS and 64-bit immediates (SD35).
+            "selectMOV64Imm32" => {
+                // `selectMOV64Imm32`, small code model: a `Wrapper` of a
+                // symbol (not TLS) is a dword immediate, the address of static
+                // code. A RIP wrapper is the `lea`'s.
+                if matcher.dag.opcode(value.node) != x86isd::Wrapper
+                    || matcher.dag.opcode(matcher.dag.operand(value.node, 0).node) == isd::TargetGlobalTLSAddress
+                {
+                    return false;
+                }
+                results.push((matcher.dag.operand(value.node, 0), None));
+                return true;
+            }
+            // ELF TLS (SD35).
             _ => None,
         };
         let Some(a) = operands else { return false };
@@ -646,18 +671,90 @@ impl<D: AddrDag> X86Predicates<D> for X86Hooks {
         }
         let opcode = dag.opcode(node);
         let bit_scan = matches!(opcode, x86isd::BSF | x86isd::BSR)
-            && !matches!(dag.opcode(dag.operand(node, 0).node), isd::UNDEF | isd::Constant);
+            && !matches!(
+                dag.opcode(dag.operand(node, 0).node),
+                isd::UNDEF | isd::Constant
+            );
         !(matches!(
             opcode,
             isd::TRUNCATE | isd::CopyFromReg | isd::AssertSext | isd::AssertZext | isd::AssertAlign | isd::FREEZE
         ) || bit_scan)
     }
 
+    /// `checkTCRetEnoughRegs`
+    /// ([L3727](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3727)):
+    /// the callee's load is folded into the tail jump only when the volatile
+    /// registers the arguments leave are enough for the load's base and index.
+    /// (chain, load, offset, register arguments..., glue).
     fn check_tc_ret_enough_regs(
         &self,
-        _: &D,
-        _: u32,
+        dag: &D,
+        node: u32,
     ) -> bool {
-        false
+        let base = dag.operand(dag.operand(node, 1).node, 1);
+        // The tail call executes after the epilogue, where only fixed stack
+        // objects can still be addressed.
+        if may_use_non_fixed_frame_index(dag, base, 0) {
+            return false;
+        }
+        let is64 = self.options.cpu == Cpu::X64;
+        // GR64_TC (rax, rcx, rdx, rsi, rdi, r8, r9, r11, rip, rsp) or GR32_TC
+        // (eax, ecx, edx, esp), less the stack pointer and the IP.
+        let available = if is64 { 8 } else { 3 };
+        let mut load_regs = 2;
+        if !is64 {
+            if dag.frame_index(base).is_some() {
+                load_regs = 0;
+            } else if dag.opcode(base.node) == x86isd::Wrapper
+                && dag
+                    .wrapped_symbol(dag.operand(base.node, 0))
+                    .is_some_and(|wrapped| wrapped.symbol.kind == SymbolKind::Global)
+            {
+                // Position independent code is not selected here: the pin
+                // refuses the fold then, and this target has none.
+                load_regs = 1;
+            }
+        }
+        let mut arguments = 0;
+        for at in 3..dag.num_operands(node) {
+            let operand = dag.operand(node, at);
+            if dag.opcode(operand.node) == isd::Register
+                && matches!(
+                    dag.value_type(operand),
+                    mvt::i8 | mvt::i16 | mvt::i32 | mvt::i64
+                )
+            {
+                arguments += 1;
+                if arguments + load_regs > available {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+
+/// `addrMayUseNonFixedFrameIndex`
+/// ([L3704](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3704)):
+/// a frame index of a local, in an address built of adds, ors, xors and the
+/// left side of a sub.
+fn may_use_non_fixed_frame_index<D: AddrDag>(
+    dag: &D,
+    address: SDValue,
+    depth: u32,
+) -> bool {
+    if let Some(index) = dag.frame_index(address) {
+        return index >= 0;
+    }
+    if depth >= 6 {
+        return true;
+    }
+    match dag.opcode(address.node) {
+        isd::ADD | isd::OR | isd::XOR => {
+            may_use_non_fixed_frame_index(dag, dag.operand(address.node, 0), depth + 1)
+                || may_use_non_fixed_frame_index(dag, dag.operand(address.node, 1), depth + 1)
+        }
+        isd::SUB => may_use_non_fixed_frame_index(dag, dag.operand(address.node, 0), depth + 1),
+        _ => false,
     }
 }

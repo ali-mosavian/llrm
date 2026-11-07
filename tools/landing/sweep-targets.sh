@@ -17,7 +17,7 @@ for root in $roots; do
       # a process with a file open under it (a running build or test) keeps it
       [ -z "$(lsof -t +D "$d" 2>/dev/null | head -1)" ] || continue
     fi
-    [ -n "${DRY:-}" ] && { echo "would prune stale hashes of: $d"; continue; }
+    [ -n "${DRY:-}" ] && { echo "would prune stale hashes of: $d: $("$HERE/prune-target.sh" "$d")"; continue; }
     out=$("$HERE/prune-target.sh" "$d" --apply) && echo "$d: pruned $out"
   done
 done

@@ -55,16 +55,27 @@ impl MosHooks {
 }
 
 /// `SelectIndirect`: the pointer and the byte offset.
-fn select_indirect<D: Dag>(
+fn select_indirect<D: AddrDag>(
     dag: &mut D,
     value: SDValue,
     results: &mut Vec<(SDValue, Option<u32>)>,
 ) {
-    let (base, offset) = match (dag.opcode(value.node) == isd::ADD).then(|| dag.constant(dag.operand(value.node, 1))) {
+    // A sum that is also wanted as a value (the pointer a loop steps) is the
+    // address as it is: folding its constant instead keeps the old pointer
+    // alive beside the new one, a copy of the pair each trip.
+    let folds = dag.opcode(value.node) == isd::ADD && !dag.has_materializing_use(value);
+    let (base, offset) = match folds.then(|| dag.constant(dag.operand(value.node, 1))) {
         Some(Some(c)) if (0..256).contains(&c) => (dag.operand(value.node, 0), c),
         _ => (value, 0),
     };
     let offset = dag.target_constant(offset, mvt::i8);
+    // A frame object stays an object (`rc0` plus its offset once the frame is
+    // laid out), not a pointer value built by `LEASP16`: the address becomes a
+    // `TargetFrameIndex`, as x86's `getAddressOperands` makes it.
+    let base = match dag.frame_index(base) {
+        Some(index) => dag.target_frame_index(index, mvt::i16),
+        None => base,
+    };
     results.push((base, None));
     results.push((offset, None));
 }
@@ -86,8 +97,9 @@ fn select_plain<D: AddrDag>(
 
 /// `SelectIndexed`: `(add pointer, (zext i8 index))` as the pointer and the
 /// byte index, either operand order; a global's address is left to
-/// `SelectAbsX`.
-fn select_indexed<D: Dag>(
+/// `SelectAbsX`. A word whose high byte is known zero is the same index: its
+/// low half (`MaskedValueIsZero`, as the pin's address complex patterns ask).
+fn select_indexed<D: AddrDag>(
     dag: &mut D,
     value: SDValue,
     results: &mut Vec<(SDValue, Option<u32>)>,
@@ -97,11 +109,20 @@ fn select_indexed<D: Dag>(
     }
     let operands = [dag.operand(value.node, 0), dag.operand(value.node, 1)];
     for (base, extend) in [(operands[0], operands[1]), (operands[1], operands[0])] {
-        if dag.opcode(extend.node) != isd::ZERO_EXTEND || dag.opcode(base.node) == own::WRAPPER {
+        if dag.opcode(base.node) == own::WRAPPER || dag.value_type(base) != mvt::i16 {
             continue;
         }
-        let index = dag.operand(extend.node, 0);
-        if dag.value_type(index) == mvt::i8 && dag.value_type(base) == mvt::i16 {
+        let index = if dag.opcode(extend.node) == isd::ZERO_EXTEND {
+            dag.operand(extend.node, 0)
+        } else if dag.value_type(extend) == mvt::i16
+            && dag.constant(extend).is_none()
+            && dag.masked_value_is_zero(extend, 0xFF00)
+        {
+            dag.get_node(isd::TRUNCATE, mvt::i8, &[extend])
+        } else {
+            continue;
+        };
+        if dag.value_type(index) == mvt::i8 {
             results.push((base, None));
             results.push((index, None));
             return true;

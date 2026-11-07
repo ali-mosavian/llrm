@@ -241,6 +241,7 @@ pub fn embedded(
     constant: ConstantId,
     out: &mut BTreeSet<GlobalId>,
 ) {
+    llrm_mir::counts::bump(llrm_mir::counts::Event::ConstantsEmbedded);
     match &context.get(constant).kind {
         ConstantKind::Global(global) => {
             out.insert(*global);
@@ -250,6 +251,63 @@ pub fn embedded(
             operands.iter().for_each(|&one| embedded(context, one, out))
         }
         ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => embedded(context, *value, out),
+        _ => {}
+    }
+}
+
+/// The constants [`embedded_once`] has visited: a bit per interned id.
+#[derive(Default)]
+pub struct Visited(Vec<u64>);
+
+impl Visited {
+    /// Whether `constant` was not visited before; it is now.
+    #[inline(always)]
+    fn first(
+        &mut self,
+        constant: ConstantId,
+    ) -> bool {
+        let (word, bit) = (constant.index() / 64, constant.index() % 64);
+        if word >= self.0.len() {
+            self.0.resize(word + 1, 0);
+        }
+        let fresh = self.0[word] & (1 << bit) == 0;
+        self.0[word] |= 1 << bit;
+        fresh
+    }
+}
+
+/// [`embedded`] over many constants: each is visited once, so a body that
+/// names one global in a thousand operands costs one visit and a bit test per
+/// operand, not a set insertion.
+#[inline(always)]
+pub fn embedded_once(
+    context: &Context,
+    constant: ConstantId,
+    seen: &mut Visited,
+    out: &mut BTreeSet<GlobalId>,
+) {
+    if seen.first(constant) {
+        embedded_fresh(context, constant, seen, out);
+    }
+}
+
+#[inline(never)]
+fn embedded_fresh(
+    context: &Context,
+    constant: ConstantId,
+    seen: &mut Visited,
+    out: &mut BTreeSet<GlobalId>,
+) {
+    llrm_mir::counts::bump(llrm_mir::counts::Event::ConstantsEmbedded);
+    match &context.get(constant).kind {
+        ConstantKind::Global(global) => {
+            out.insert(*global);
+        }
+        ConstantKind::Aggregate(members) => members.iter().for_each(|&one| embedded_once(context, one, seen, out)),
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => {
+            operands.iter().for_each(|&one| embedded_once(context, one, seen, out))
+        }
+        ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => embedded_once(context, *value, seen, out),
         _ => {}
     }
 }

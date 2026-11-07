@@ -1,4 +1,5 @@
 // flags: -O0 -m32 | -O2 -march=i486 -m32 | -O2 -march=i486 -m32 -mabi=sysv
+// flags-m68k: -mcmodel=medium
 /* The runtime's memcpy (memcpy_ in the default convention, _memcpy in sysv): dst in EAX, src in EDX, n in EBX, or on the stack; dst comes
    back; every byte and no more is copied, n = 0 and n past 64 KiB included. Called through a pointer so that the call is the symbol, not
    an inline `rep movs`. */

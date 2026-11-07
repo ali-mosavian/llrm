@@ -101,6 +101,54 @@ fn adjacent_stores_merge_when_optimizing() {
     assert!(!body(&o2, "s").contains("i32.store16"), "{o2}");
 }
 
+const TWO_BYTE_STORES: &str = "define void @s(ptr %p) {
+entry:
+  store i8 66, ptr %p
+  %q = getelementptr i8, ptr %p, i32 1
+  store i8 77, ptr %q
+  ret void
+}
+";
+
+/// Two adjacent constant byte stores stayed two `i32.store8`: the combiner's
+/// truncating-store merge was off for wasm, so jpeg_fixed's BMP header kept
+/// 4 more stores and 43 bytes over the pin at `-Os`.
+#[test]
+fn adjacent_byte_stores_of_constants_are_one_store16() {
+    let o2 = asm(TWO_BYTE_STORES, Level::O2);
+    assert!(body(&o2, "s").matches("i32.store16").count() == 1 && !body(&o2, "s").contains("i32.store8"), "{o2}");
+}
+
+const MASKED_GLOBAL_INDEX: &str =
+    "target datalayout = \"e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20\"
+@counts = global [256 x i16] zeroinitializer
+define void @f(i8 %d, i16 %seed) {
+entry:
+  %z = zext i8 %d to i32
+  %m = mul nuw nsw i32 %z, 7
+  %s = zext i16 %seed to i32
+  %a = add nuw nsw i32 %m, %s
+  %i = and i32 %a, 255
+  %p = getelementptr inbounds nuw [2 x i8], ptr @counts, i32 %i
+  %v = load i16, ptr %p
+  %w = add i16 %v, 1
+  store i16 %w, ptr %p
+  ret void
+}
+";
+
+/// A demanded-bits rewrite of an operand left `nuw`/`nsw` on the `mul`, `add`
+/// and `shl` above it (the pin clears them: "we can no longer guarantee that
+/// we won't wrap"), so the `add nuw` of the address folded `counts` into the
+/// load and store offsets, 5 bytes of relocation each; the pin keeps one
+/// `i32.const counts` and `i32.add` (histo, 1 byte over the pin at `-Os`).
+#[test]
+fn a_rewritten_operand_clears_the_wrap_flags_so_the_global_is_not_folded_into_the_offset() {
+    let o2 = asm(MASKED_GLOBAL_INDEX, Level::O2);
+    let f = body(&o2, "f");
+    assert!(f.contains("i32.const\tcounts") && !f.contains("i32.load16_u\tcounts"), "{f}");
+}
+
 const SEQUENTIAL: &str = "declare void @h(i32)
 define void @k(i32 %x) {
 entry:
@@ -356,6 +404,8 @@ fn a_constant_for_a_loop_exit_phi_is_set_on_the_exit_edge() {
     assert!(constant > end_loop, "{text}");
 }
 
+// The loops stay rolled: the test is about where the exit blocks sit, and the
+// target unrolls a loop of this size.
 const TWO_LOOP_EXITS: &str = "declare void @sort(ptr, i32, i32)
 declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)
 declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)
@@ -376,7 +426,7 @@ define i32 @f(i16 %0) {
   store i32 %9, ptr %11, align 4
   %12 = add nsw i32 %4, 4
   %exitcond2 = icmp eq i32 %12, 0
-  br i1 %exitcond2, label %13, label %3
+  br i1 %exitcond2, label %13, label %3, !llvm.loop !0
 
 13:
   call void @sort(ptr %2, i32 0, i32 1023)
@@ -385,7 +435,7 @@ define i32 @f(i16 %0) {
 14:
   %15 = add nsw i32 %18, 4
   %exitcond1 = icmp eq i32 %15, 0
-  br i1 %exitcond1, label %16, label %17
+  br i1 %exitcond1, label %16, label %17, !llvm.loop !0
 
 16:
   br label %25
@@ -412,13 +462,16 @@ define i32 @f(i16 %0) {
   %34 = add nuw nsw i32 %28, 1
   %35 = getelementptr i8, ptr %26, i32 4
   %exitcond = icmp eq i32 1024, %34
-  br i1 %exitcond, label %36, label %25
+  br i1 %exitcond, label %36, label %25, !llvm.loop !0
 
 36:
   %37 = phi i32 [ %33, %25 ], [ -1, %17 ]
   call void @llvm.lifetime.end.p0(i64 -1, ptr nonnull %2)
   ret i32 %37
 }
+
+!0 = distinct !{!0, !1}
+!1 = !{!\"llvm.loop.unroll.disable\"}
 ";
 
 /// The split block of a loop exit stayed next to the loop, so the code jumped
@@ -442,4 +495,43 @@ fn a_loop_exit_phi_edge_has_a_block_of_its_own_at_o1() {
     let text = asm(EXIT_CONSTANT, Level::O1);
     let f = body(&text, "f");
     assert!(f.lines().any(|line| line.split_whitespace().eq(["br", "2"])), "{text}");
+}
+
+/// Ten globals a loop adds its index to, each a promotion candidate.
+fn ten_counters() -> String {
+    let globals: String = (1..=10).map(|k| format!("@g{k} = internal global i32 0\n")).collect();
+    let body: String = (1..=10)
+        .map(|k| format!("  %x{k} = load i32, ptr @g{k}\n  %y{k} = add i32 %x{k}, %v\n  store i32 %y{k}, ptr @g{k}\n"))
+        .collect();
+    format!(
+        "target datalayout = \"e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20\"
+{globals}declare i32 @h(i32) nounwind willreturn memory(none)
+define void @f(i32 %n) {{
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %i1, %loop ]
+  %v = call i32 @h(i32 %i)
+{body}  %i1 = add nuw i32 %i, 1
+  %c = icmp eq i32 %i1, %n
+  br i1 %c, label %exit, label %loop
+exit:
+  ret void
+}}
+"
+    )
+}
+
+/// LICM refused promotions past eight values held across the loop, a limit
+/// the pin does not have (wasm locals are virtual): bench nbody_fixed -O2
+/// kept `pos_x[0]` and `pos_y[0]` in memory, 2 loads more a step; here five of
+/// ten stay stores in the loop.
+#[test]
+fn every_global_a_loop_updates_is_kept_in_a_local_whatever_the_count() {
+    let text = asm(&ten_counters(), Level::O2);
+    let f = body(&text, "f");
+    let start = f.find("loop").expect("a loop");
+    let end = f.rfind("end_loop").expect("its end");
+    let accesses = f[start..end].matches("i32.load\tg").count() + f[start..end].matches("i32.store\tg").count();
+    assert_eq!(accesses, 0, "{text}");
 }

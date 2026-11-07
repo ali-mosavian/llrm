@@ -24,7 +24,7 @@
 //! `WebAssemblyRegisterInfo.cpp` (`eliminateFrameIndex` L52) and
 //! `PrologEpilogInserter.cpp` (`AdjustStackOffset`), pin d1106deb71cc.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::generated::instrinfo::{desc, flag};
@@ -128,8 +128,8 @@ pub fn frame_lowering(
 
     // `eliminateFrameIndex`: an address added to a constant that has no other
     // use folds the offset into that constant.
-    let mut uses: HashMap<VReg, u32> = HashMap::new();
-    let mut constants: HashMap<VReg, (usize, usize, u32)> = HashMap::new();
+    let mut uses: HashMap<VReg, u32> = HashMap::default();
+    let mut constants: HashMap<VReg, (usize, usize, u32)> = HashMap::default();
     for (block, insts) in f.blocks.iter().enumerate() {
         for (at, inst) in insts.iter().enumerate() {
             for operand in &inst.operands {

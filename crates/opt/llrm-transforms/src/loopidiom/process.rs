@@ -68,6 +68,9 @@ pub struct Run<'a> {
     pub clocks: Option<(&'a OperationCosts, i64)>,
     /// The target's clock prices, at speed; none at `-Os`.
     pub speed: Option<&'a OperationCosts>,
+    /// `Tuning::max_stores_per_memset`: the stores a constant fill may be
+    /// inline.
+    pub memset_stores: i64,
     /// `TTI`: the target's costs, where it has them.
     pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
@@ -245,6 +248,21 @@ impl LoopIdiomRecognize {
         for &block in blocks {
             for inst in run.function.iter_block(block) {
                 let instruction = run.function.instruction(inst);
+                // The memset a loop promotes (`processLoopMemSet`) is the one
+                // fill the loop makes: priced, it is a store of its length.
+                if args.is_loop_memset && inst == args.the_store {
+                    stores += 1;
+                    let object = llrm_mir::valuetracking::underlying::get_underlying_object(
+                        &cx.query(Some(inst)),
+                        instruction.operands[0],
+                        0,
+                    );
+                    let group = (object, instruction.operands[1]);
+                    if !groups.contains(&group) {
+                        groups.push(group);
+                    }
+                    continue;
+                }
                 if !matches!(instruction.opcode, Opcode::Store { .. }) {
                     continue;
                 }
@@ -332,6 +350,17 @@ impl LoopIdiomRecognize {
                         );
                     (clocks, rate, trips, cells)
                 }),
+                {
+                    let (be, size) = (run.se.match_apint(args.be_count), run.se.match_apint(args.store_size_scev));
+                    let bytes = be
+                        .filter(|be| be.active_bits() <= 32)
+                        .zip(size.filter(|size| size.active_bits() <= 32))
+                        .map(|(be, size)| (be.zext_value() as i64 + 1) * size.zext_value() as i64 * stores);
+                    bytes.map(|bytes| crate::loopidioms::InlineFills {
+                        max_stores: run.memset_stores,
+                        bytes: bytes / (groups.len() as i64).max(1),
+                    })
+                },
             ) {
                 return false;
             }
@@ -736,7 +765,8 @@ impl LoopIdiomRecognize {
         // generating the base address and checking everything.
         // DEVIATE: at -Os a copy whose length is known only at run time stays
         // a loop when the `rep movs` that replaces it is more bytes (no libc
-        // `memcpy` to call). Exit: none.
+        // `memcpy` to call). At speed, DEVIATE MEM-1 inlines the copy. Exit
+        // 2026-11-20.
         if let Some((costs, callees)) = run.bytes
             && run.se.match_apint(args.be_count).is_none()
         {
@@ -748,6 +778,7 @@ impl LoopIdiomRecognize {
                 callees,
                 &blocks,
                 costs,
+                run.clocks.is_none(),
             ) {
                 return (false, false);
             }

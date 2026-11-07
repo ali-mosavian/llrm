@@ -13,7 +13,7 @@ fn out(
     value: SDValue,
     pointer: bool,
 ) -> Out {
-    Out { value, ext: Ext::Any, pointer, arg_vt: EVT::I32, split: false, variadic: false, sret: false }
+    Out { value, ext: Ext::Any, pointer, arg_vt: EVT::I32, split: false, variadic: false, sret: false, byval: None }
 }
 
 fn register_of(
@@ -42,7 +42,7 @@ fn a_call_stores_each_argument_in_a_four_byte_slot() {
         entry,
         callee,
         &[out(a, false), out(b, false)],
-        &[In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any }],
+        &[In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None }],
     );
 
     let end = dag.operand(chain, 0);
@@ -85,7 +85,7 @@ fn a_pointer_result_is_in_a0_and_an_integer_by_its_width() {
             entry,
             callee,
             &[],
-            &[In { vt, pointer, arg_vt: vt, split: false, sret: false, ext: Ext::Any }],
+            &[In { vt, pointer, arg_vt: vt, split: false, sret: false, ext: Ext::Any, byval: None }],
         );
         assert_eq!(register_of(&dag, dag.operand(chain, 1)), expected, "{vt:?} pointer={pointer}");
     }
@@ -108,8 +108,8 @@ fn formal_arguments_are_loaded_from_their_slots() {
         &mut dag,
         entry,
         &[
-            In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any },
-            In { vt: EVT::I8, pointer: false, arg_vt: EVT::I8, split: false, sret: false, ext: Ext::Any },
+            In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None },
+            In { vt: EVT::I8, pointer: false, arg_vt: EVT::I8, split: false, sret: false, ext: Ext::Any, byval: None },
         ],
         &mut fixed,
     );
@@ -149,7 +149,7 @@ fn a_global_address_is_a_pc_relative_wrapper() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let address = dag.get_global_address(EVT::I32, 3, 0);
 
-    let wrapped = llrm_m68k::dagisel::call::lower_global_address(&mut dag, address);
+    let wrapped = llrm_m68k::dagisel::call::lower_global_address(&mut dag, address, false);
 
     assert_eq!(dag.opcode(wrapped), m68kisd::WRAPPER_PC);
     assert_eq!(dag.opcode(dag.operand(wrapped, 0)), ISD::TargetGlobalAddress);

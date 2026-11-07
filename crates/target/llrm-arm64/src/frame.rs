@@ -16,6 +16,8 @@
 
 use llrm_object::assembler::Cfi;
 
+use rustc_hash::FxHashSet as HashSet;
+
 use crate::mc::inst::*;
 use crate::mc::unwind;
 use crate::mc::visit::Reg;
@@ -42,6 +44,8 @@ struct Layout {
     /// The register pairs saved and the frame record, lowest address first.
     saves: Vec<(Save, u64)>,
     frame_record: Option<u64>,
+    /// The bytes of the frame below the saved registers (the locals).
+    locals: u64,
 }
 
 /// One store of the callee-saved area: the register at the lower address
@@ -147,6 +151,34 @@ fn object_uses(function: &MFunc) -> Vec<u64> {
 /// order is the index order, the first object at the top, and its `sub sp; str
 /// [sp, #8]` is two instructions the fold makes one (exit: none, the rule is
 /// the better one).
+/// The frame's size by `per_register` bytes for each register, as a bound on
+/// what spilling adds: locals, the registers, the saves.
+pub fn frame_bound(
+    function: &MFunc,
+    per_register: u64,
+) -> u64 {
+    let (_, locals) = place_objects(function);
+    locals + per_register * u64::from(function.next_register) + 512
+}
+
+/// The frame size at which an offset may need a scratch register
+/// (`x16`/`x17`, the lowerer's pair): below it, no offset does.
+pub const SCRATCH_FREE_BELOW: u64 = 4000;
+
+/// Whether the frame may stay below `SCRATCH_FREE_BELOW` (so `x16`/`x17` can
+/// be allocated): `(tight, loose)` for 8 and 16 B per register.
+pub fn scratch_estimate(function: &MFunc) -> (bool, bool) {
+    if UNSURE.load(std::sync::atomic::Ordering::Relaxed) {
+        return (true, false);
+    }
+    let fits = |per_register| frame_bound(function, per_register) < SCRATCH_FREE_BELOW;
+    (fits(8), fits(16))
+}
+
+/// Tests set this to make every function "maybe small": the pair is allocated
+/// and the real frame decides whether the allocation stands.
+pub static UNSURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn place_objects(function: &MFunc) -> (Vec<u64>, u64) {
     let uses = object_uses(function);
     let size = |at: usize| function.slots[at].size.max(1);
@@ -203,7 +235,108 @@ fn place_objects(function: &MFunc) -> (Vec<u64>, u64) {
         slots[index] = at;
         at += slot.size;
     }
+    // The dense order can put an object past what a pair reaches
+    // (`ldp`/`stp` of an 8-byte register: 504 bytes from the base). Ordered
+    // by the pairs per byte instead, the pairs are the ones near the base; it
+    // is taken where it leaves fewer of them out of reach.
+    let reach = unreachable_pairs(function, &slots);
+    if reach > 0 {
+        let pairs = pair_uses(function);
+        let mut by_pairs: Vec<usize> = (0..function.slots.len()).collect();
+        by_pairs.sort_by(|&a, &b| {
+            (pairs[a] * size(b)).cmp(&(pairs[b] * size(a))).then(function.slots[a].align.cmp(&function.slots[b].align))
+        });
+        let mut paired = vec![0; slots.len()];
+        let mut end = function.outgoing;
+        for &index in by_pairs.iter().rev() {
+            let slot = &function.slots[index];
+            end = end.next_multiple_of(slot.align.max(1));
+            paired[index] = end;
+            end += slot.size;
+        }
+        if formable_pairs(function, &paired) > formable_pairs(function, &slots) {
+            (slots, at) = (paired, end);
+        }
+    }
     (slots, at.next_multiple_of(16))
+}
+
+/// How many adjacent same-kind access pairs (`ldp`/`stp` candidates) start in
+/// each frame object.
+fn pair_uses(function: &MFunc) -> Vec<u64> {
+    let mut uses = vec![0; function.slots.len()];
+    for block in &function.blocks {
+        let mut seen: HashSet<(bool, u8, u32, i64)> = HashSet::default();
+        for op in &block.ops {
+            let (load, mem, slot, offset) = match op {
+                Op::I(Inst::Load { mem, addr: Addr::Slot { slot, offset }, .. }) => (true, mem, slot, offset),
+                Op::I(Inst::Store { mem, addr: Addr::Slot { slot, offset }, .. }) => (false, mem, slot, offset),
+                _ => continue,
+            };
+            let (Memory::Int { bytes, .. } | Memory::Fp { bytes, .. }) = mem;
+            if matches!(bytes, 4 | 8 | 16) {
+                seen.insert((load, *bytes, *slot, *offset));
+            }
+        }
+        for &(load, bytes, slot, offset) in &seen {
+            if seen.contains(&(load, bytes, slot, offset + i64::from(bytes)))
+                && let Some(count) = uses.get_mut(slot as usize)
+            {
+                *count += 1;
+            }
+        }
+    }
+    uses
+}
+
+/// The adjacent same-kind accesses in a block that one pair instruction can
+/// take with the objects at `slots`: the lower address a multiple of the size
+/// and within what `ldp`/`stp` reaches from the stack pointer.
+fn formable_pairs(
+    function: &MFunc,
+    slots: &[u64],
+) -> usize {
+    pairs_at(function, slots, true)
+}
+
+/// The same adjacent accesses that a pair cannot take.
+fn unreachable_pairs(
+    function: &MFunc,
+    slots: &[u64],
+) -> usize {
+    pairs_at(function, slots, false)
+}
+
+fn pairs_at(
+    function: &MFunc,
+    slots: &[u64],
+    formable: bool,
+) -> usize {
+    let mut count = 0;
+    for block in &function.blocks {
+        let mut seen: HashSet<(bool, u8, i64)> = HashSet::default();
+        for op in &block.ops {
+            let (load, mem, slot, offset) = match op {
+                Op::I(Inst::Load { mem, addr: Addr::Slot { slot, offset }, .. }) => (true, mem, slot, offset),
+                Op::I(Inst::Store { mem, addr: Addr::Slot { slot, offset }, .. }) => (false, mem, slot, offset),
+                _ => continue,
+            };
+            let (Memory::Int { bytes, .. } | Memory::Fp { bytes, .. }) = mem;
+            if let Some(&base) = slots.get(*slot as usize)
+                && matches!(bytes, 4 | 8 | 16)
+            {
+                seen.insert((load, *bytes, base as i64 + offset));
+            }
+        }
+        count += seen
+            .iter()
+            .filter(|&&(load, bytes, at)| {
+                let reachable = at <= 63 * i64::from(bytes) && at % i64::from(bytes) == 0;
+                seen.contains(&(load, bytes, at + i64::from(bytes))) && reachable == formable
+            })
+            .count();
+    }
+    count
 }
 
 fn layout(
@@ -212,7 +345,12 @@ fn layout(
     darwin: bool,
 ) -> Layout {
     let (slots, locals_end) = place_objects(function);
-    let record = function.calls || function.dynamic;
+    // `AArch64FrameLowering::hasFP`: `disableFramePointerElim` (the attribute)
+    // or a variable-sized object keeps the frame record; so does a call, which
+    // saves the link register beside it.
+    let keeps =
+        llrm_codegen::backend::framefree::keeps_frame_pointer(function.frame_pointer.as_deref(), function.calls);
+    let record = function.calls || function.dynamic || keeps;
     let pairs = paired(&saved_list(allocation, record, darwin));
     let registers: u64 = pairs.iter().map(|(_, second)| 1 + u64::from(second.is_some())).sum();
     let area = (8 * registers).next_multiple_of(16);
@@ -244,7 +382,7 @@ fn layout(
         saves.push((save, at));
     }
     saves.reverse();
-    Layout { size: locals_end + area, dynamic: function.dynamic, slots, saves, frame_record }
+    Layout { size: locals_end + area, dynamic: function.dynamic, slots, saves, frame_record, locals: locals_end }
 }
 
 impl Layout {
@@ -254,6 +392,16 @@ impl Layout {
     fn folded_bump(&self) -> Option<i64> {
         let first = self.saves.first().map(|(_, at)| *at).or(self.frame_record)?;
         (first == 0 && self.size <= 512).then_some(self.size as i64)
+    }
+
+    /// The locals' bytes where the saved registers are pushed first and the
+    /// locals taken after, as the pin when `CombineSPBump` is off
+    /// (`shouldCombineCSRLocalStackBump`: a frame of 512 bytes or more).
+    /// DEVIATE FS1: a frame with a moving stack pointer stays combined (the
+    /// pin does not combine it either). Exit: 11-12.
+    fn split_locals(&self) -> Option<u64> {
+        let saved = !self.saves.is_empty() || self.frame_record.is_some();
+        (saved && !self.dynamic && self.locals > 0 && self.size >= 512).then_some(self.locals)
     }
 
     /// The register and the offset from it that address byte `offset` of frame
@@ -431,6 +579,13 @@ pub fn lower(
                     _ => return Err("a copy between register classes".into()),
                 },
                 Op::Imm { dst, bits, value } => emitter.insts.extend(crate::expand_imm::mov_imm(*value, *bits, *dst)),
+                Op::DbgValue { variable, reg } => {
+                    let reg = match reg {
+                        Some(Reg::Gpr(gpr)) => Some(*gpr),
+                        _ => None,
+                    };
+                    emitter.insts.push(Inst::Mark(FrameMark::Value { variable: *variable, reg }));
+                }
                 Op::Call { callee, .. } => emitter.insts.push(match callee {
                     Callee::Symbol(name) => {
                         Inst::Branch { link: true, target: Target::Symbol { name: name.clone(), addend: 0 } }
@@ -489,17 +644,37 @@ fn prologue(
     frame: &Layout,
     emitter: &mut Emitter,
 ) {
+    if let Some(locals) = frame.split_locals() {
+        // The saved registers first, the locals after them.
+        let area = (frame.size - locals) as i64;
+        save_registers(frame, emitter, true, Some(area), locals);
+        if let Some(at) = frame.frame_record {
+            emitter.add_to(Gpr::FP, Gpr::R31, false, at - locals, Gpr(16));
+            emitter.cfi(Cfi::DefCfa { register: unwind::FP, offset: (frame.size - at) as i64 });
+        }
+        flush_saved(emitter);
+        emitter.adjust_sp(-(locals as i64));
+        if frame.frame_record.is_none() {
+            emitter.cfi(Cfi::DefCfaOffset { offset: frame.size as i64 });
+        }
+        return;
+    }
     let bump = frame.folded_bump();
     if bump.is_none() && frame.size > 0 {
         emitter.adjust_sp(-(frame.size as i64));
         emitter.cfi(Cfi::DefCfaOffset { offset: frame.size as i64 });
     }
-    save_registers(frame, emitter, true, bump);
+    save_registers(frame, emitter, true, bump, 0);
     if let Some(at) = frame.frame_record {
         emitter.add_to(Gpr::FP, Gpr::R31, false, at, Gpr(16));
         emitter.cfi(Cfi::DefCfa { register: unwind::FP, offset: (frame.size - at) as i64 });
     }
-    // Highest address first: the order of the pin's frame indices.
+    flush_saved(emitter);
+}
+
+/// The saves' `.cfi_offset`s, highest address first: the order of the pin's
+/// frame indices.
+fn flush_saved(emitter: &mut Emitter) {
     let mut saved = std::mem::take(&mut emitter.saved);
     saved.sort_by_key(|cfi| match cfi {
         Cfi::Offset { offset, .. } => std::cmp::Reverse(*offset),
@@ -530,13 +705,25 @@ fn take_down(
     if let (true, Some(record)) = (frame.dynamic, frame.frame_record) {
         emitter.add_to(Gpr::R31, Gpr::FP, true, record, Gpr(16));
     }
+    if let Some(locals) = frame.split_locals() {
+        // The locals first, then the registers pushed ahead of them.
+        emitter.adjust_sp(locals as i64);
+        let area = (frame.size - locals) as i64;
+        if frame.frame_record.is_some() {
+            emitter.cfi(Cfi::DefCfa { register: unwind::SP, offset: area });
+        } else {
+            emitter.cfi(Cfi::DefCfaOffset { offset: area });
+        }
+        save_registers(frame, emitter, false, Some(area), locals);
+        return;
+    }
     // The frame address is the stack pointer's again, before the registers
     // come back from under it.
     if frame.frame_record.is_some() {
         emitter.cfi(Cfi::DefCfa { register: unwind::SP, offset: frame.size as i64 });
     }
     let bump = frame.folded_bump();
-    save_registers(frame, emitter, false, bump);
+    save_registers(frame, emitter, false, bump, 0);
     if bump.is_none() && frame.size > 0 {
         emitter.adjust_sp(frame.size as i64);
         emitter.cfi(Cfi::DefCfaOffset { offset: 0 });
@@ -549,6 +736,7 @@ fn save_registers(
     emitter: &mut Emitter,
     store: bool,
     bump: Option<i64>,
+    below: u64,
 ) {
     let int = |reg: Gpr| Memory::Int { width: Width::X, bytes: 8, sign: false, reg };
     let mut accesses: Vec<(Memory, Option<Memory>, u64, i64)> = Vec::new();
@@ -567,7 +755,10 @@ fn save_registers(
     if !store {
         accesses.reverse();
     }
-    for (first, second, offset, _) in accesses {
+    for (first, second, absolute, _) in accesses {
+        // From the stack pointer as it stands: `below` bytes of locals are not
+        // taken yet where the registers go first.
+        let offset = absolute - below;
         let moves = bump.filter(|_| offset == 0);
         let addr = match moves {
             Some(by) if store => Addr::Pre { base: Gpr::R31, imm: -by },
@@ -582,7 +773,7 @@ fn save_registers(
                 (None, false) => Inst::Load { mem: first, addr, mmo: MemOperand::default() },
             };
             emitter.insts.push(inst);
-            declare(frame, emitter, store, &first, second.as_ref(), offset, true);
+            declare(frame, emitter, store, &first, second.as_ref(), absolute, bump.filter(|_| moves.is_some()));
             continue;
         }
         // A pair reaches 504 bytes from the base; further, the address is made.
@@ -601,7 +792,7 @@ fn save_registers(
             (None, false) => Inst::Load { mem: first, addr, mmo: MemOperand::default() },
         };
         emitter.insts.push(inst);
-        declare(frame, emitter, store, &first, second.as_ref(), offset, false);
+        declare(frame, emitter, store, &first, second.as_ref(), absolute, None);
     }
 }
 
@@ -615,15 +806,16 @@ fn declare(
     first: &Memory,
     second: Option<&Memory>,
     offset: u64,
-    moves: bool,
+    moves: Option<i64>,
 ) {
     let number = |memory: &Memory| match memory {
         Memory::Int { reg, .. } => reg.0 as u16,
         Memory::Fp { reg, .. } => 64 + reg.0 as u16,
     };
     let size = frame.size as i64;
-    if store && moves {
-        emitter.cfi(Cfi::DefCfaOffset { offset: size });
+    if let (true, Some(by)) = (store, moves) {
+        // The bytes the stack pointer has moved by this far.
+        emitter.cfi(Cfi::DefCfaOffset { offset: by });
     }
     for (index, memory) in std::iter::once(first).chain(second).enumerate() {
         let register = number(memory);
@@ -633,7 +825,7 @@ fn declare(
             emitter.cfi(Cfi::Restore { register });
         }
     }
-    if !store && moves {
+    if !store && moves.is_some() {
         emitter.cfi(Cfi::DefCfaOffset { offset: 0 });
     }
 }

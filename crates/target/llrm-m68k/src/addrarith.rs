@@ -25,13 +25,13 @@
 //! # See also
 //! `M68kInstrInfo::copyPhysReg`, which is what the copies become.
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
 use crate::REGISTER_INFO;
 use crate::dagisel::hooks::Cpu;
-use crate::dagisel::local;
+use crate::dagisel::{indexed, local};
 use crate::mc;
 use crate::mfunc::{Class, MFunction, op_inst, operand_class};
 use crate::reg;
@@ -70,6 +70,9 @@ fn uses_by_register(function: &MFunction) -> Vec<Vec<Use>> {
                     all[*v as usize].push(match (&inst.kind, &inst.operands[..]) {
                         (Kind::Copy, [Operand::Def(Reg::Virt(dst)), _]) => Use::Copy(*dst),
                         (Kind::Op(name), _) if operand_class(name, index) == Some(Class::Ar32) => Use::Address,
+                        (Kind::Op(name), operands) if indexed::is_base_operand(name, index, operands.len()) => {
+                            Use::Address
+                        }
                         _ => Use::Other,
                     });
                 }
@@ -183,6 +186,49 @@ fn cheapest(
         .map(|(_, one)| one)
 }
 
+/// The base of the add at `at` that reads `x`: `x` is a copy of an address
+/// register (or of one of either class whose other uses are all addresses
+/// too), read by the add alone. The copy's place and its source.
+fn address_copy(
+    function: &MFunction,
+    uses: &[Vec<Use>],
+    b: usize,
+    at: usize,
+    x: u32,
+) -> Option<(usize, Reg)> {
+    let insts = &function.blocks[b].insts;
+    let copy = insts[..at]
+        .iter()
+        .rposition(|one| matches!(&one.operands[..], [Operand::Def(Reg::Virt(def)), _] if *def == x))?;
+    let Kind::Copy = insts[copy].kind else { return None };
+    let Operand::Use(base @ Reg::Virt(y)) = insts[copy].operands[1] else { return None };
+    if uses[x as usize].len() != 1 {
+        return None;
+    }
+    match function.classes[y as usize] {
+        Class::Ar32 => {}
+        Class::Xr32 if reaches_addresses_only(function, uses, y, Some(x), &mut HashSet::default()) => {}
+        _ => return None,
+    }
+    Some((copy, base))
+}
+
+/// Whether no instruction reads the codes of the one at `at`.
+fn codes_unread(
+    insts: &[Inst],
+    at: usize,
+) -> bool {
+    for after in &insts[at + 1..] {
+        if after.sets_flags || after.call {
+            break;
+        }
+        if after.reads_flags {
+            return false;
+        }
+    }
+    true
+}
+
 /// Makes each pointer add that qualifies an address-register instruction.
 pub fn address_adds(
     function: &mut MFunction,
@@ -216,42 +262,16 @@ fn rewrite_one(
     let sign = match name {
         "ADD32di" | "ADDQ32di" => 1,
         "SUB32di" | "SUBQ32di" => -1,
+        "ADD32dr" | "ADD32dd" => return rewrite_indexed(function, uses, b, at),
         _ => return None,
     };
     let [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(x)), Operand::Imm(value)] = insts[at].operands[..] else {
         return None;
     };
-    // the base: a copy of an address register, read by this add alone
-    let copy = insts[..at]
-        .iter()
-        .rposition(
-            |one| matches!(
-                &one.operands[..],
-                [Operand::Def(Reg::Virt(def)), _] if *def == x
-            ),
-        )?;
-    let Kind::Copy = insts[copy].kind else { return None };
-    let Operand::Use(base @ Reg::Virt(y)) = insts[copy].operands[1] else { return None };
-    if uses[x as usize].len() != 1 {
-        return None;
-    }
-    // either an address register, or one of either class (a loop's pointer)
-    // whose other uses are all addresses too
-    match function.classes[y as usize] {
-        Class::Ar32 => {}
-        Class::Xr32 if reaches_addresses_only(function, uses, y, Some(x), &mut HashSet::new()) => {}
-        _ => return None,
-    }
-    // the add's codes are read by nobody
-    for after in &insts[at + 1..] {
-        if after.sets_flags || after.call {
-            break;
-        }
-        if after.reads_flags {
-            return None;
-        }
-    }
-    if !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::new()) {
+    let (copy, base) = address_copy(function, uses, b, at, x)?;
+    if !codes_unread(&function.blocks[b].insts, at)
+        || !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::default())
+    {
         return None;
     }
     // the form, priced on the CPU's selection class so that the allocation
@@ -262,7 +282,44 @@ fn rewrite_one(
     // none of the three changes the codes; the pin's `adda` says it does
     inst.sets_flags = false;
     function.classes[d as usize] = Class::Ar32;
-    function.classes[y as usize] = Class::Ar32;
+    if let Reg::Virt(y) = base {
+        function.classes[y as usize] = Class::Ar32;
+    }
+    let insts = &mut function.blocks[b].insts;
+    insts[at] = inst;
+    insts.remove(copy);
+    Some(at)
+}
+
+/// A pointer plus a register, used only as an address, is `lea (0,An,Dn)`:
+/// `move.l %a0, %d0; add.l %d2, %d0; move.l %d0, %a1` has the same bytes and
+/// no copy to an address register after it.
+fn rewrite_indexed(
+    function: &mut MFunction,
+    uses: &[Vec<Use>],
+    b: usize,
+    at: usize,
+) -> Option<usize> {
+    let insts = &function.blocks[b].insts;
+    let [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(first)), Operand::Use(Reg::Virt(second))] =
+        insts[at].operands[..]
+    else {
+        return None;
+    };
+    let (copy, base, x, index) = [(first, second), (second, first)]
+        .into_iter()
+        .find_map(|(x, index)| address_copy(function, uses, b, at, x).map(|(copy, base)| (copy, base, x, index)))?;
+    if !codes_unread(insts, at) || !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::default()) {
+        return None;
+    }
+    let desc = local::desc(local::code_of("LEA32f")?)?;
+    let operands = vec![Operand::Def(Reg::Virt(d)), Operand::Imm(0), Operand::Use(base), Operand::Use(Reg::Virt(index))];
+    let mut inst: Inst = op_inst("LEA32f", desc, operands);
+    inst.sets_flags = false;
+    function.classes[d as usize] = Class::Ar32;
+    if let Reg::Virt(y) = base {
+        function.classes[y as usize] = Class::Ar32;
+    }
     let insts = &mut function.blocks[b].insts;
     insts[at] = inst;
     insts.remove(copy);

@@ -61,6 +61,15 @@ pub struct X86 {
     pub registers: Option<u32>,
     /// The target's tuning table (`Machine::tuning`); the pin's by default.
     pub tuning: llrm_mir::target::Tuning,
+    /// `getSchedModel().LoopMicroOpBufferSize` of the cpu's model: 28 for the
+    /// `SandyBridgeModel` of `core2` and `x86-64`, 0 for the `GenericModel` of
+    /// the rest (`LoopMicroOpBufferSize = -1`).
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86SchedSandyBridge.td#L28
+    pub loop_micro_op_buffer: u32,
+    /// The program's code is position independent (clang's "PIC Level"); set
+    /// by `Program::new`. A symbol in long mode is then `[rip + symbol]`
+    /// without index or displacement.
+    pub position_independent: std::cell::Cell<bool>,
 }
 
 /// T6: the 16-bit target's address forms and registers, from its description
@@ -113,6 +122,88 @@ impl RealMode {
 }
 
 impl X86 {
+    /// `getIntImmCost(const APInt &, Type *)`; `zext_basic` is ZIMM.
+    fn imm_cost(
+        &self,
+        imm: i128,
+        bits: u32,
+        zext_basic: bool,
+    ) -> Cost {
+        if bits == 0 {
+            return Cost::of(i64::from(u32::MAX));
+        }
+        if bits > 128 || imm == 0 {
+            return Cost::FREE;
+        }
+        // Sign-extended to a multiple of 64 bits, costed 64 bits at a time.
+        let extended = if bits >= 128 { imm } else { (imm << (128 - bits)) >> (128 - bits) };
+        let mut total = 0;
+        let mut shift = 0;
+        while shift < bits {
+            let chunk = (extended >> shift) as i64;
+            total += if zext_basic && bits == 64 && chunk > 0 && chunk <= i64::from(u32::MAX) {
+                1
+            } else {
+                int_imm_chunk(chunk)
+            };
+            shift += 64;
+        }
+        Cost::of(total.max(1))
+    }
+
+    /// `getIntImmCostInst`; `zext_basic` is ZIMM.
+    fn imm_cost_inst(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+        zext_basic: bool,
+    ) -> Cost {
+        if bits == 0 {
+            return Cost::FREE;
+        }
+        let zext = if bits >= 128 { imm as u128 } else { (imm as u128) & ((1u128 << bits) - 1) };
+        let immediate = match op {
+            ImmUser::Unknown => return Cost::FREE,
+            ImmUser::GetElementPtr => return if index == 0 { Cost::of(2) } else { Cost::FREE },
+            ImmUser::Store => Some(0),
+            ImmUser::ICmp => {
+                if index == 1 && bits == 64 && (zext == 0x1_0000_0000 || zext == 0xffff_ffff) {
+                    return Cost::FREE;
+                }
+                Some(1)
+            }
+            ImmUser::And => {
+                if index == 1 && bits == 64 && zext <= u128::from(u32::MAX) {
+                    return Cost::FREE;
+                }
+                Some(1)
+            }
+            ImmUser::Add | ImmUser::Sub => {
+                if index == 1 && bits == 64 && zext == 0x8000_0000 {
+                    return Cost::FREE;
+                }
+                Some(1)
+            }
+            ImmUser::Divide => return Cost::FREE,
+            ImmUser::Mul | ImmUser::Or | ImmUser::Xor => Some(1),
+            ImmUser::Shift => {
+                if index == 1 {
+                    return Cost::FREE;
+                }
+                None
+            }
+            ImmUser::Other => None,
+        };
+        let cost = self.imm_cost(imm, bits, zext_basic);
+        if immediate == Some(index) {
+            let constants = i64::from(bits.div_ceil(64));
+            return if cost.value <= constants { Cost::FREE } else { cost };
+        }
+        cost
+    }
+
     /// The bits of the integer registers.
     pub fn native(&self) -> u32 {
         if self.quad { 64 } else { 32 }
@@ -144,6 +235,8 @@ impl X86 {
                 real_mode: None,
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
+                loop_micro_op_buffer: 0,
+                position_independent: std::cell::Cell::new(true),
             }),
             "core2" => Some(X86 {
                 cmov: true,
@@ -154,6 +247,8 @@ impl X86 {
                 real_mode: None,
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
+                loop_micro_op_buffer: 28,
+                position_independent: std::cell::Cell::new(true),
             }),
             // `-march=x86-64`: the baseline of long mode, SSE2
             // and `TuningMacroFusion` (X86.td `X86_64V1Tuning`).
@@ -166,6 +261,8 @@ impl X86 {
                 real_mode: None,
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
+                loop_micro_op_buffer: 28,
+                position_independent: std::cell::Cell::new(true),
             }),
             _ => None,
         }
@@ -560,12 +657,20 @@ impl Tti for X86 {
         self.tuning.speed_milliclocks_per_byte
     }
 
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.unroll_milliclocks_per_byte
+    }
+
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
     }
 
     fn price_pin_multiplies(&self) -> bool {
         self.tuning.price_pin_multiplies
+    }
+
+    fn imul_at_size(&self) -> bool {
+        self.tuning.imul_at_size
     }
 
     fn has_cmov(&self) -> bool {
@@ -576,12 +681,47 @@ impl Tti for X86 {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
 
+    /// `X86.td` gives `core2` and `x86-64` the `SandyBridgeModel`; the base
+    /// `getUnrollingPreferences` then enables partial and runtime unrolling
+    /// (`Tti::get_unrolling_preferences`):
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L768-L803
+    fn set_position_independent(
+        &self,
+        position_independent: bool,
+    ) {
+        self.position_independent.set(position_independent);
+    }
+
+    fn loop_micro_op_buffer_size(&self) -> u32 {
+        self.loop_micro_op_buffer
+    }
+
     fn x87_stack_slots(&self) -> Option<u32> {
         self.tuning.x87_stack_slots.filter(|_| !self.sse2)
     }
 
+    fn x87_share_negated_products(&self) -> bool {
+        self.tuning.x87_share_negated_products && !self.sse2
+    }
+
+    fn x87_zero_fill_at_size(&self) -> bool {
+        self.tuning.x87_zero_fill_at_size && !self.sse2
+    }
+
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         self.tuning.unroll_partial_threshold
+    }
+
+    fn unroll_jam_exact_count(&self) -> bool {
+        self.tuning.unroll_jam_exact_count
+    }
+
+    fn constant_hoisting(&self) -> bool {
+        self.tuning.constant_hoisting
+    }
+
+    fn unroll_jam_partial_threshold_override(&self) -> Option<u32> {
+        self.tuning.unroll_jam_partial_threshold
     }
 
     fn unswitch_threshold_override(&self) -> Option<i64> {
@@ -597,6 +737,30 @@ impl Tti for X86 {
 
     fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
         self.tuning.recursive_edge_growth
+    }
+
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        self.tuning.recursive_inlining_growth
+    }
+
+    fn recursive_tre_first(&self) -> (bool, bool) {
+        self.tuning.recursive_tre_first
+    }
+
+    fn peels_folded_entry(&self) -> bool {
+        self.tuning.peel_folded_entry
+    }
+
+    fn sinks_select_arms(&self) -> bool {
+        self.tuning.sink_select_arms
+    }
+
+    fn inlines_variable_memcpy(&self) -> bool {
+        self.tuning.inline_variable_memcpy
+    }
+
+    fn ipsccp_widen_keeps_sign(&self) -> bool {
+        self.tuning.ipsccp_widen_keeps_sign
     }
 
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
@@ -615,8 +779,30 @@ impl Tti for X86 {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_at_size
     }
 
+    fn opt_size_inline_chain_trial(&self) -> bool {
+        self.tuning.inline_chain_trial
+    }
+
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
-        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) { 1 } else { 2 }
+        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+            || self.tuning.inline_size_guard_single_site
+        {
+            1
+        } else {
+            2
+        }
+    }
+
+    fn unroll_promotion_fits_registers(&self) -> bool {
+        self.tuning.unroll_promotion_fits_registers
+    }
+
+    fn rotation_guard_must_fold_at_size(&self) -> bool {
+        self.tuning.rotation_guard_must_fold_at_size
+    }
+
+    fn rotation_header_priced_at_size(&self) -> bool {
+        self.tuning.rotation_header_priced_at_size
     }
 
     fn constant_offset_phi_is_cheap(&self) -> bool {
@@ -635,6 +821,43 @@ impl Tti for X86 {
         self.real_mode.as_ref().map_or(100, |real| real.float_code_size_percent)
     }
 
+    // X86TTIImpl::enableMemCmpExpansion
+    // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7513).
+    // DEVIATE X1 (exit 2026-11-30, same permalink): the 16-, 32- and 64-byte
+    // vector load sizes of an equality compare are left out (vectors are
+    // deferred); the pin takes them from `getPreferVectorWidth`.
+    fn enable_mem_cmp_expansion(
+        &self,
+        _opt_size: bool,
+        is_zero_cmp: bool,
+    ) -> Option<MemCmpExpansionOptions> {
+        let mut load_sizes = Vec::new();
+        if self.quad {
+            load_sizes.push(8);
+        }
+        load_sizes.extend([4, 2, 1]);
+        Some(MemCmpExpansionOptions {
+            load_sizes,
+            // X86ISelLowering.cpp#L2946: MaxLoadsPerMemcmp and its OptSize
+            // twin.
+            max_num_loads: 2,
+            num_loads_per_block: if is_zero_cmp { 2 } else { 1 },
+            allow_overlapping_loads: true,
+            allowed_tail_expansions: Vec::new(),
+        })
+    }
+
+    // X86TargetLowering::allowsMisalignedMemoryAccesses
+    // (X86ISelLoweringCall.cpp#L371): any size, but a non-temporal vector.
+    fn allows_misaligned_memory_accesses(
+        &self,
+        _bits: u32,
+        _address_space: u32,
+        _align: u64,
+    ) -> bool {
+        true
+    }
+
     // X86TTIImpl::hasDivRemOp (X86TargetTransformInfo.cpp#L7421) asks
     // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
     // divides to `Expand` (L340) and leaves the two-result ones at the base
@@ -645,6 +868,14 @@ impl Tti for X86 {
         _signed: bool,
     ) -> bool {
         self.is_type_legal(Ty::Int(bits))
+    }
+
+    /// `FSQRT` is legal on every scalar float: the SSE instruction, or x87's.
+    fn have_fast_sqrt(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Float | Ty::Double | Ty::X87)
     }
 
     fn is_type_legal(
@@ -809,21 +1040,7 @@ impl Tti for X86 {
         imm: i128,
         bits: u32,
     ) -> Cost {
-        if bits == 0 {
-            return Cost::of(i64::from(u32::MAX));
-        }
-        if bits > 128 || imm == 0 {
-            return Cost::FREE;
-        }
-        // Sign-extended to a multiple of 64 bits, costed 64 bits at a time.
-        let extended = if bits >= 128 { imm } else { (imm << (128 - bits)) >> (128 - bits) };
-        let mut total = 0;
-        let mut shift = 0;
-        while shift < bits {
-            total += int_imm_chunk((extended >> shift) as i64);
-            shift += 64;
-        }
-        Cost::of(total.max(1))
+        self.imm_cost(imm, bits, self.tuning.zext_imm_is_basic)
     }
 
     /// `X86TTIImpl::getIntImmCostInst`:
@@ -835,48 +1052,85 @@ impl Tti for X86 {
         imm: i128,
         bits: u32,
     ) -> Cost {
+        self.imm_cost_inst(op, index, imm, bits, self.tuning.zext_imm_is_basic)
+    }
+
+    fn int_imm_cost_inst_pin(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        self.imm_cost_inst(op, index, imm, bits, false)
+    }
+
+    /// ZIMM does not apply to a function built for size: a hoisted constant
+    /// costs a 2-3 byte register copy per use where `mov r32, imm32` is 5.
+    fn int_imm_cost_inst_for_size(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+        for_size: bool,
+    ) -> Cost {
+        self.imm_cost_inst(op, index, imm, bits, self.tuning.zext_imm_is_basic && !for_size)
+    }
+
+    /// `X86TTIImpl::getIntImmCostIntrin`:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7040
+    fn int_imm_cost_intrin(
+        &self,
+        name: &str,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
         if bits == 0 {
             return Cost::FREE;
         }
-        let zext = if bits >= 128 { imm as u128 } else { (imm as u128) & ((1u128 << bits) - 1) };
-        let immediate = match op {
-            ImmUser::Unknown => return Cost::FREE,
-            ImmUser::GetElementPtr => return if index == 0 { Cost::of(2) } else { Cost::FREE },
-            ImmUser::Store => Some(0),
-            ImmUser::ICmp => {
-                if index == 1 && bits == 64 && (zext == 0x1_0000_0000 || zext == 0xffff_ffff) {
-                    return Cost::FREE;
-                }
-                Some(1)
+        let name = name.strip_prefix("llvm.").unwrap_or(name);
+        // `getBitWidth() <= 64 && isSignedIntN(width)`.
+        let extended = if bits >= 128 { imm } else { (imm << (128 - bits)) >> (128 - bits) };
+        let fits = |width: u32| bits <= 64 && (-(1i128 << (width - 1))..1i128 << (width - 1)).contains(&extended);
+        let overflow = ["sadd", "uadd", "ssub", "usub", "smul", "umul"]
+            .iter()
+            .any(|op| name.strip_prefix(op).is_some_and(|rest| rest.starts_with(".with.overflow")));
+        if overflow {
+            if index == 1 && fits(32) {
+                return Cost::FREE;
             }
-            ImmUser::And => {
-                if index == 1 && bits == 64 && zext <= u128::from(u32::MAX) {
-                    return Cost::FREE;
-                }
-                Some(1)
+        } else if name.starts_with("experimental.stackmap") {
+            if index < 2 || fits(64) {
+                return Cost::FREE;
             }
-            ImmUser::Add | ImmUser::Sub => {
-                if index == 1 && bits == 64 && zext == 0x8000_0000 {
-                    return Cost::FREE;
-                }
-                Some(1)
+        } else if name.starts_with("experimental.patchpoint") {
+            if index < 4 || fits(64) {
+                return Cost::FREE;
             }
-            ImmUser::Divide => return Cost::FREE,
-            ImmUser::Mul | ImmUser::Or | ImmUser::Xor => Some(1),
-            ImmUser::Shift => {
-                if index == 1 {
-                    return Cost::FREE;
-                }
-                None
-            }
-            ImmUser::Other => None,
-        };
-        let cost = self.int_imm_cost(imm, bits);
-        if immediate == Some(index) {
-            let constants = i64::from(bits.div_ceil(64));
-            return if cost.value <= constants { Cost::FREE } else { cost };
+        } else {
+            return Cost::FREE;
         }
-        cost
+        self.int_imm_cost(imm, bits)
+    }
+
+    /// `X86TargetLowering::isIntDivCheap`: only at `minsize`.
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
+    fn prefer_to_keep_constants_attached(
+        &self,
+        div_rem_by_constant: bool,
+        min_size: bool,
+    ) -> bool {
+        div_rem_by_constant && !min_size
+    }
+
+    fn keeps_select_mask_attached(
+        &self,
+        bits: u128,
+        width: u32,
+    ) -> bool {
+        self.tuning.zext_imm_is_basic && width == 64 && bits <= u128::from(u32::MAX)
     }
 
     /// `X86TargetLowering::isTruncateFree`:
@@ -930,7 +1184,7 @@ impl Tti for X86 {
         // symbol is `[rip + symbol]`, which takes no displacement
         // beside it and no index (the `isPositionIndependent() && is64Bit()`
         // rule).
-        if self.quad && base_gv && (base_offset != 0 || scale > 1) {
+        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale > 1) {
             return false;
         }
         match scale {
@@ -1016,8 +1270,14 @@ impl Tti for X86 {
 
     /// Real mode declares the registers the allocator has, and the live count
     /// LSR keeps is exact there: the six fill (PLASMA's loop, 4 + 2 live).
+    ///
+    /// DEVIATE LU3d: a target that states its allocatable registers
+    /// (`with_registers`: the frame and stack pointers are not among them)
+    /// keeps none back; the pin's one stands for the stack pointer its count
+    /// of eight includes. owner: w12, exit: 2026-11-20 (the m32/m64 A/B in the
+    /// PR; without it the line goes).
     fn lsr_reserved_registers(&self) -> u32 {
-        u32::from(self.real_mode.is_none())
+        u32::from(self.real_mode.is_none() && self.registers.is_none())
     }
 
     /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold
@@ -1135,6 +1395,12 @@ impl Tti for X86 {
 
     /// `X86TTIImpl::getArithmeticInstrCost`, scalars:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L255
+    /// The count must sit in `cl`. Not in real mode: its six registers spill
+    /// the multiplier's select (pack_ref -Os m16: +24 B).
+    fn variable_shift_count_in_fixed_register(&self) -> bool {
+        self.real_mode.is_none()
+    }
+
     fn arithmetic_cost(
         &self,
         op: ArithOp,

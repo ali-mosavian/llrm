@@ -130,13 +130,53 @@ impl Table {
     }
 }
 
+impl Table {
+    /// The table of a file that states `@lanes bytes`: the 32 flag lanes, then a
+    /// lane for each byte of each root. A view covers the bytes `lane / 8 ..
+    /// (lane + bits) / 8` of its root (the 6502's `rc3` is byte 1 of `rs1`).
+    fn of_bytes(regs: Regs) -> Table {
+        let entries = || regs.table.iter().flatten();
+        let bytes_of = |entry: &llrm_lir::registers::Entry| ((entry.bits / 8).max(1)) as usize;
+        let mut lanes: Vec<Lane> = (0..32).map(|bit| (RegId::None, bit)).collect();
+        for root in entries().filter(|entry| entry.root == entry.id) {
+            let top = entries()
+                .filter(|view| view.root == root.id)
+                .map(|view| (view.lane / 8) as usize + bytes_of(view))
+                .max()
+                .unwrap_or(1);
+            lanes.extend((0..top).map(|byte| (root.id, byte as u32)));
+        }
+        lanes.sort();
+        assert!(lanes.len() <= 128, "{} lanes of a register file are more than a mask holds", lanes.len());
+        let (mut first, mut count, mut bytes) = ([0_u8; REGISTERS], [0_u8; REGISTERS], [0_u8; REGISTERS]);
+        for (bit, lane) in lanes.iter().enumerate() {
+            let slot = lane.0.index();
+            if count[slot] == 0 {
+                first[slot] = u8::try_from(bit).expect("fits");
+            }
+            count[slot] += 1;
+            bytes[slot] = count[slot];
+        }
+        for entry in entries().filter(|entry| entry.root != entry.id) {
+            let root = entry.root.index();
+            let slot = entry.id.index();
+            first[slot] = first[root] + u8::try_from(entry.lane / 8).expect("a byte offset");
+            count[slot] = u8::try_from(bytes_of(entry)).expect("a register is under 256 bytes");
+            bytes[slot] = count[slot];
+        }
+        Table { lanes, first, count, bytes }
+    }
+}
+
 /// The table the file of `regs` stands under: x86's for an x86 file, else one
 /// built once and kept.
 fn table_of(regs: Regs) -> &'static Table {
     static FILES: Mutex<Vec<(usize, &'static Table)>> = Mutex::new(Vec::new());
     // A file with an integer view under four bytes (`al`, `ax`) has byte lanes;
     // one without writes a root whole (arm64's `w` write clears the `x`).
-    if regs.0.entries().any(|(_, entry)| entry.bits / 8 < 4 && entry.classes & llrm_lir::registers::class::INT != 0) {
+    if !regs.0.byte_lanes
+        && regs.0.entries().any(|(_, entry)| entry.bits / 8 < 4 && entry.classes & llrm_lir::registers::class::INT != 0)
+    {
         return &X86;
     }
     let key = regs.0 as *const _ as usize;
@@ -144,9 +184,16 @@ fn table_of(regs: Regs) -> &'static Table {
     if let Some((_, table)) = files.iter().find(|(one, _)| *one == key) {
         return table;
     }
-    let table: &'static Table = Box::leak(Box::new(Table::of_file(regs)));
+    let table: &'static Table =
+        Box::leak(Box::new(if regs.0.byte_lanes { Table::of_bytes(regs) } else { Table::of_file(regs) }));
     files.push((key, table));
     table
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Lane-by-lane walks of a set this thread has begun.
+    pub(crate) static WALKS: Cell<usize> = const { Cell::new(0) };
 }
 
 thread_local! {
@@ -155,7 +202,14 @@ thread_local! {
 }
 
 fn active() -> &'static Table {
+    #[cfg(test)]
+    TABLE_READS.with(|count| count.set(count.get() + 1));
     ACTIVE.with(Cell::get).unwrap_or(&X86)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TABLE_READS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// The register file's lane table in force until this drops.
@@ -176,7 +230,13 @@ pub fn enter(regs: Regs) -> Guard {
 }
 
 fn bit(lane: &Lane) -> Option<u32> {
-    let table = active();
+    bit_in(active(), lane)
+}
+
+fn bit_in(
+    table: &Table,
+    lane: &Lane,
+) -> Option<u32> {
     let slot = lane.0.index();
     (slot < REGISTERS && lane.1 < u32::from(table.bytes[slot]))
         .then(|| u32::from(table.first[slot]) + lane.1.min(u32::from(table.count[slot]) - 1))
@@ -293,7 +353,17 @@ impl Lanes {
     }
 
     pub fn iter(&self) -> Iter {
+        #[cfg(test)]
+        WALKS.with(|walks| walks.set(walks.get() + 1));
         Iter(self.0, active())
+    }
+
+    /// The flag lanes among these (`RegId::None`'s), without walking the rest.
+    pub fn flag_part(&self) -> Self {
+        let table = active();
+        let slot = RegId::None.index();
+        let (first, count) = (u32::from(table.first[slot]), u32::from(table.count[slot]));
+        Self(self.0 & (((1u128 << count) - 1) << first))
     }
 
     // The set operations as `BTreeSet` spells them, yielding lanes in order.
@@ -316,6 +386,14 @@ impl Lanes {
         other: &Self,
     ) -> Iter {
         Iter(self.0 & other.0, active())
+    }
+
+    /// Every lane of `other` added: `extend` of its lanes, as one word operation.
+    pub fn include(
+        &mut self,
+        other: Self,
+    ) {
+        self.0 |= other.0;
     }
 
     // The same operations as sets, without an iterator between.
@@ -424,8 +502,9 @@ impl Extend<Lane> for Lanes {
         &mut self,
         lanes: I,
     ) {
+        let table = active();
         for lane in lanes {
-            self.insert(lane);
+            self.0 |= 1 << bit_in(table, &lane).unwrap_or_else(|| panic!("{lane:?} is no lane"));
         }
     }
 }
@@ -556,6 +635,24 @@ mod tests {
 
     /// `span` must name the lanes a byte-by-byte `collect` names, including a
     /// root's upper bytes folded into one lane.
+    /// `Lanes::extend` read the thread's lane table once for each lane it added
+    /// (27 M Ir self over a memory_expansion -O2 compile, 111,780 `_lanes`
+    /// asks in the peephole alone); it reads it once, and `include` of a
+    /// mask reads it never.
+    #[test]
+    fn extend_reads_the_lane_table_once_and_include_never() {
+        let lanes: Vec<Lane> = X86.lanes.iter().copied().take(6).collect();
+        let before = TABLE_READS.with(Cell::get);
+        let mut extended = Lanes::new();
+        extended.extend(lanes.iter().copied());
+        assert_eq!(TABLE_READS.with(Cell::get) - before, 1, "one table read for six lanes");
+        let before = TABLE_READS.with(Cell::get);
+        let mut included = Lanes::new();
+        included.include(extended);
+        assert_eq!(TABLE_READS.with(Cell::get) - before, 0);
+        assert_eq!(included, extended);
+    }
+
     #[test]
     fn span_matches_the_lanes_of_each_byte() {
         let registers: BTreeSet<RegId> = X86.lanes.iter().map(|lane| lane.0).collect();

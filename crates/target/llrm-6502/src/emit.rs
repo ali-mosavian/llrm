@@ -47,6 +47,9 @@ pub mod spill {
     /// `cell := P` and `P := cell`.
     pub const SAVE_FLAGS: u16 = 0xF002;
     pub const LOAD_FLAGS: u16 = 0xF003;
+    /// The end of a block IR `unreachable` closes (a call that never
+    /// returns): control does not fall into the next block. Prints nothing.
+    pub const UNREACHABLE: u16 = 0xF004;
 }
 
 #[derive(Clone, Debug)]
@@ -252,6 +255,18 @@ pub fn expand(
             };
             byte3(&mut out, carry, mnemonic, reg(&o[0])?, reg(&o[1])?, &address(&o[2], &o[3])?);
         }
+        op::ADD8MX | op::SUB8MX | op::AND8MX | op::OR8MX | op::XOR8MX => {
+            let (carry, mnemonic) = match inst.opcode {
+                op::ADD8MX => ("clc", "adc"),
+                op::SUB8MX => ("sec", "sbc"),
+                op::AND8MX => ("", "and"),
+                op::OR8MX => ("", "ora"),
+                _ => ("", "eor"),
+            };
+            writeln!(out, "  ldx {}", reg(&o[4])?).unwrap();
+            let symbol = format!("{},x", indexed_address(&o[2], &o[3])?);
+            byte3(&mut out, carry, mnemonic, reg(&o[0])?, reg(&o[1])?, &symbol);
+        }
         op::ADD16 => wide(&mut out, "adc", "adc", &o[0], &o[1], &o[2])?,
         op::SUB16 => wide(&mut out, "sbc", "sbc", &o[0], &o[1], &o[2])?,
         op::ADDO16 => wide(&mut out, "adc", "adc", &o[0], &o[2], &o[3])?,
@@ -341,6 +356,15 @@ pub fn expand(
             address(&o[1], &o[2])?
         )
         .unwrap(),
+        op::LDABS16 | op::STABS16 => {
+            let symbol = address(&o[1], &o[2])?;
+            let (lo, hi) = word(&o[0])?;
+            if inst.opcode == op::LDABS16 {
+                writeln!(out, "  lda {symbol}\n  sta {lo}\n  lda {symbol}+1\n  sta {hi}").unwrap();
+            } else {
+                writeln!(out, "  lda {lo}\n  sta {symbol}\n  lda {hi}\n  sta {symbol}+1").unwrap();
+            }
+        }
         op::STZABS => writeln!(out, "  stz {}", address(&o[0], &o[1])?).unwrap(),
         op::STZP => {
             let ((lo, hi), off) = (word(&o[0])?, imm(&o[1])?);
@@ -507,6 +531,11 @@ pub fn expand(
             let ((al, ah), (bl, bh)) = (word(&o[1])?, word(&o[2])?);
             writeln!(out, "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}").unwrap();
         }
+        // the words' compare, then the high words subtract with its borrow
+        op::CMP32 => {
+            let ((al, ah), (bl, bh), (cl, ch), (dl, dh)) = (word(&o[1])?, word(&o[2])?, word(&o[3])?, word(&o[4])?);
+            writeln!(out, "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}\n  lda {cl}\n  sbc {dl}\n  lda {ch}\n  sbc {dh}").unwrap();
+        }
         // Z only if both bytes are equal: the first mismatch leaves Z clear.
         op::CMPZ16 => {
             *labels += 1;
@@ -578,6 +607,7 @@ pub fn expand(
         spill::LOAD_CARRY => writeln!(out, "  lda {}\n  lsr a", reg(&o[0])?).unwrap(),
         spill::SAVE_FLAGS => writeln!(out, "  php\n  pla\n  sta {}", reg(&o[0])?).unwrap(),
         spill::LOAD_FLAGS => writeln!(out, "  lda {}\n  pha\n  plp", reg(&o[0])?).unwrap(),
+        spill::UNREACHABLE => {}
         other => return Err(format!("opcode {other} has no expansion")),
     }
     Ok(out)

@@ -63,7 +63,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     }
 
     /// The class of `value` when it is a `ConstantFP`.
-    fn fp_const(
+    pub(super) fn fp_const(
         &self,
         value: SDValue,
     ) -> Option<FpClass> {

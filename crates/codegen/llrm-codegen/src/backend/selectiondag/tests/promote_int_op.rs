@@ -60,11 +60,15 @@ fn promoted(
     let pairs = || SAMPLES.iter().flat_map(|&p| SAMPLES.iter().map(move |&q| (p & 0xFFFF, q & 0xFFFF)));
     let before: Vec<u32> = pairs().map(|pair| eval(&dag, root, pair)).collect();
     let mut hooks = X86Lowering {
+        imul_if_smaller: false,
+        share_products: false,
         cmov: true,
         sse2: false,
         min_size: false,
+        three_address_adds: false,
         i16_mul_chains: false,
-        sext_load: false, zext_free: false,
+        sext_load: false,
+        zext_free: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
@@ -116,11 +120,15 @@ fn only_words_and_byte_multiplies_are_promoted_and_not_at_m16() {
     let add = dag.get_node(ISD::Add, EVT::I8, &[mul, y]);
     dag.set_root(add);
     let mut hooks = X86Lowering {
+        imul_if_smaller: false,
+        share_products: false,
         cmov: true,
         sse2: false,
         min_size: false,
+        three_address_adds: false,
         i16_mul_chains: false,
-        sext_load: false, zext_free: false,
+        sext_load: false,
+        zext_free: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();

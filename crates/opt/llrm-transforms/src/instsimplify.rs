@@ -46,7 +46,7 @@ use crate::local::is_instruction_trivially_dead;
 
 /// `RecursivelyDeleteTriviallyDeadInstructions`: `dead` erased, then each
 /// operand's defining instruction that nothing reads now.
-fn delete_dead(
+pub(crate) fn delete_dead(
     context: &Context,
     callees: &Callees,
     declarations: &Declarations,

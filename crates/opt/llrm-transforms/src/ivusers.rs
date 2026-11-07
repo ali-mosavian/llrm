@@ -33,7 +33,7 @@ use std::cell::RefCell;
 
 use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
-use llrm_mir::dense::{IdMap, IdSet};
+use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::pattern::phi_incoming;
@@ -50,6 +50,10 @@ pub struct Env<'a> {
     pub safe_to_speculate: &'a dyn Fn(InstId) -> bool,
     /// Membership in the loop's ephemeral values.
     pub ephemeral: &'a dyn Fn(InstId) -> bool,
+    /// DEVIATE LSR-N: widths LSR takes as native besides the datalayout's `n`
+    /// (`Tti::lsr_native_integer_widths`); the pin's check is
+    /// [`!DL.isLegalInteger(Width)`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVUsers.cpp#L157).
+    pub native_widths: &'a [u32],
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/IVUsers.h#L33
@@ -70,11 +74,6 @@ pub struct IvUsers {
     pub l: BlockId,
     pub uses: Vec<IvStrideUse>,
     processed: IdSet<InstId>,
-    /// Each block's place in the layout, made once for the loop the
-    /// first time a value has two users (IU1).
-    order: Option<IdMap<BlockId, usize>>,
-    /// How many times `order` was made: 0 or 1.
-    order_builds: u32,
     /// How many users had their place worked out.
     ordered: usize,
 }
@@ -109,7 +108,7 @@ fn is_interesting(
         // An add is interesting if exactly one operand is.
         Kind::Add(operands) => {
             let mut any = false;
-            for op in operands {
+            for op in operands.iter().copied() {
                 if is_interesting(se, cx, op.scev, inst, l) {
                     if any {
                         return false;
@@ -199,7 +198,8 @@ impl IvUsers {
     ) -> Self {
         #[cfg(test)]
         BUILDS.with(|made| made.set(made.get() + 1));
-        let mut users = Self { l, uses: Vec::new(), processed: IdSet::new(), order: None, order_builds: 0, ordered: 0 };
+        let mut users =
+            Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), ordered: 0 };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {
@@ -237,7 +237,7 @@ impl IvUsers {
         // 64-bit IV in 32-bit code for one 64-bit cast is no gain.
         let ty = cx.function.operand_type(cx.context, value).and_then(|ty| se.ty_of(cx, ty)).expect("a SCEVable type");
         let width = se.get_type_size_in_bits(cx, ty);
-        if width > 64 || !cx.layout.legal_integer(width) {
+        if width > 64 || !(cx.layout.legal_integer(width) || env.native_widths.contains(&width)) {
             return false;
         }
         // An ephemeral value is removed later anyway.
@@ -252,25 +252,20 @@ impl IvUsers {
 
         let l = self.l;
         let lp = cx.loops.get_loop_for(l).expect("a loop");
-        let mut unique = IdSet::<InstId>::new();
         let mut users: Vec<InstId> = cx.function.users(result).iter().map(|one| one.user).collect();
         if users.len() > 1 {
-            if self.order.is_none() {
-                self.order_builds += 1;
-                self.order = Some(cx.function.layout().iter().enumerate().map(|(at, &block)| (block, at)).collect());
-            }
-            let order = self.order.as_ref().expect("made above");
             self.ordered += users.len();
+            // The function keeps each block's index in the layout, made once
+            // for all the loops (IU1).
             let place = |user: &InstId| {
                 let block = cx.function.parent(*user)?;
-                Some((*order.get(&block)?, cx.function.number_in_block(*user)?))
+                Some((cx.function.layout_index(block)?, cx.function.number_in_block(*user)?))
             };
             users.sort_by_key(|user| std::cmp::Reverse(place(user)));
+            // One instruction using the result twice sorts to one place.
+            users.dedup();
         }
         for user in users {
-            if !unique.insert(user) {
-                continue;
-            }
             // Do not recurse into a phi twice.
             let is_phi = cx.function.instruction(user).opcode == Opcode::Phi;
             if is_phi && self.processed.contains(&user) {
@@ -317,11 +312,6 @@ impl IvUsers {
     /// users sorted, not the function.
     pub fn ordered_instructions(&self) -> usize {
         self.ordered
-    }
-
-    /// How many times the program-order map was made: once per loop at most.
-    pub fn order_builds(&self) -> u32 {
-        self.order_builds
     }
 
     /// `isIVUserOrOperand`: whether the walk reached `inst`.

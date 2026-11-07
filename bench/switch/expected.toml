@@ -1,3 +1,59 @@
-reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
-blessed = "2026-10-14"
+reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
+blessed = "2026-11-05"
+corpus = "df75c82ce58a91c11ec1efd83242c334"
 
+[ow.O2]
+instructions = 535837
+memory_operands = 37419
+code_bytes = 444
+data_bytes = 0
+bss_bytes = 0
+
+[ow.Os]
+instructions = 535901
+memory_operands = 37419
+code_bytes = 444
+data_bytes = 0
+bss_bytes = 0
+
+[bcc.O2]
+instructions = 234417
+memory_operands = 68051
+code_bytes = 651
+data_bytes = 0
+bss_bytes = 0
+
+[bcc.Os]
+instructions = 245502
+memory_operands = 76051
+code_bytes = 559
+data_bytes = 0
+bss_bytes = 0
+
+[tc.O2]
+instructions = 916969
+memory_operands = 53713
+code_bytes = 444
+data_bytes = 0
+bss_bytes = 0
+
+[tc.Os]
+instructions = 957083
+memory_operands = 66930
+code_bytes = 443
+data_bytes = 0
+bss_bytes = 0
+
+[tcpp.O2]
+instructions = 1042126
+memory_operands = 130228
+code_bytes = 584
+data_bytes = 0
+bss_bytes = 0
+
+[tcpp.Os]
+instructions = 1034121
+memory_operands = 132228
+code_bytes = 572
+data_bytes = 0
+bss_bytes = 0

@@ -269,6 +269,8 @@ fn main() -> ExitCode {
                     rotation_only: false,
                     is_util_mode: false,
                     prepare_for_lto: false,
+                    check_exit_count: false,
+                    guard_must_fold: false,
                 };
                 // Every function with a body.
                 let names: Vec<String> = module
@@ -367,6 +369,7 @@ fn main() -> ExitCode {
                     min_size: false,
                     only_when_forced: false,
                     prepare_for_lto: false,
+                    target_unrolling: false,
                 };
                 let names: Vec<String> = module
                     .functions()
@@ -829,8 +832,9 @@ fn unrolled_loop(
         .find(|(_, _, one)| !one.layout().is_empty())
         .and_then(|(_, one, _)| one.name.owned())
         .ok_or("no function")?;
-    let (_, function) = module.function_mut(&name).ok_or("no function")?;
-    llrm_transforms::lcssa::closed(function)?;
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("e-p:32:32"))?;
+    let (context, function) = module.function_mut(&name).ok_or("no function")?;
+    llrm_transforms::lcssa::closed(context, &layout, function)?;
     let named = |function: &llrm_mir::module::Function, label: &str| {
         function
             .layout()
@@ -849,6 +853,6 @@ fn unrolled_loop(
         })
         .collect::<Result<Vec<_>, String>>()?;
     let options = llrm_transforms::loopunroll::Options { count, max_trip_count: count, max_or_zero: false, exits };
-    llrm_transforms::loopunroll::unroll_loop(function, loop_, &options)?;
+    llrm_transforms::loopunroll::unroll_loop(context, &layout, function, loop_, &options)?;
     Ok(())
 }

@@ -311,6 +311,19 @@ impl LiveRegMatrix {
         self.tri.regunits(phys).any(|unit| self.matrix.get(unit as usize).is_some_and(|union| !union.empty()))
     }
 
+    /// What a cached query is about: the register and the stretches asked for.
+    /// A value with sub-ranges is asked for the lanes of each register's unit,
+    /// so one register has several ranges.
+    fn range_key(
+        vreg: VReg,
+        lr: &LiveRange,
+    ) -> u64 {
+        lr.segments.iter().fold(u64::from(vreg), |key, segment| {
+            let key = key.wrapping_mul(0x100000001b3) ^ segment.start.get_index() as u64;
+            key.wrapping_mul(0x100000001b3) ^ segment.end.get_index() as u64
+        })
+    }
+
     /// `query` (LiveRegMatrix.cpp#L160) followed by `checkInterference()`: does
     /// `lr` meet a virtual register in the union of `unit`? The result is kept
     /// until the union changes or the tag moves.
@@ -323,7 +336,7 @@ impl LiveRegMatrix {
         self.grow(unit);
         let union = &self.matrix[unit as usize];
         let q = &mut self.queries[unit as usize];
-        q.init(self.user_tag, u64::from(vreg), u64::from(unit), union);
+        q.init(self.user_tag, Self::range_key(vreg, lr), u64::from(unit), union);
         q.check_interference(lr, union)
     }
 
@@ -339,7 +352,7 @@ impl LiveRegMatrix {
         self.grow(unit);
         let union = &self.matrix[unit as usize];
         let q = &mut self.queries[unit as usize];
-        q.init(self.user_tag, u64::from(vreg), u64::from(unit), union);
+        q.init(self.user_tag, Self::range_key(vreg, lr), u64::from(unit), union);
         q.interfering_vregs(lr, union, max).to_vec()
     }
 
@@ -550,6 +563,21 @@ mod tests {
         assert!(!matrix.is_phys_reg_used(RegId::AX));
     }
 
+    /// A value with sub-ranges is asked about a different range for each unit
+    /// of a register; the cached answer of one unit's range was served for the
+    /// next (the key was the register alone), so a register was called free
+    /// over a lane that was held (lz4c -O2 assigned a pair over two others).
+    #[test]
+    fn test_a_cached_answer_is_for_the_range_asked_not_the_register() {
+        let at = indexes();
+        let mut matrix = LiveRegMatrix::new(info(), Box::new(NoFixed));
+        matrix.assign(&interval(2, 30, 40, &at), RegId::AL);
+        matrix.invalidate_virt_regs();
+        let unit = matrix.tri().regunits(RegId::AL).next().expect("al has a unit");
+        assert!(!matrix.query_check(1, &interval(1, 10, 20, &at).range, unit), "premise: nothing there");
+        assert!(matrix.query_check(1, &interval(1, 32, 38, &at).range, unit), "the same register, another range");
+    }
+
     #[test]
     fn test_a_register_interferes_with_a_virtual_register_that_holds_a_unit_of_it() {
         let at = indexes();
@@ -646,6 +674,7 @@ mod tests {
             effects: base.effects,
             cache: Default::default(),
             views: base.views,
+            byte_lanes: base.byte_lanes,
         })))
     }
 

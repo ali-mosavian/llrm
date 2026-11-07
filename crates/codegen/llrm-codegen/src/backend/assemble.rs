@@ -93,6 +93,22 @@ use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
+/// `kept` and the freed frame register `freed`, in the order of the
+/// convention's whole callee-saved list `order` (the frame register's place in
+/// it included); `freed` last where the list does not name it.
+fn in_list_order(
+    order: &[(RegId, RegId)],
+    mut kept: Vec<(RegId, RegId)>,
+    freed: (RegId, RegId),
+) -> Vec<(RegId, RegId)> {
+    kept.push(freed);
+    let mut sorted: Vec<(RegId, RegId)> = order.iter().copied().filter(|one| kept.contains(one)).collect();
+    if !sorted.contains(&freed) {
+        sorted.push(freed);
+    }
+    sorted
+}
+
 /// What only the frontend knows: each call's contract, and the symbol each
 /// MIR name links as.
 pub trait Abi {
@@ -183,10 +199,19 @@ pub fn assembled_by(
     let mut shared: IndexMap<String, Vec<u8>> = IndexMap::default();
     let mut shared_registers = None;
     let mut data = Vec::new();
+    // A variable of zeros moves to `.data?` after this (`zero_to_bss`): where
+    // one is among `data`, the pool's start offset in `.data` is not known
+    // here.
+    let mut zero_may_move = false;
     let mut far_data = Vec::new();
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();
     let mut data_publics = Vec::new();
+    let mut weak: BTreeSet<String> = BTreeSet::new();
+    let is_weak = |linkage: Linkage| {
+        matches!(linkage, Linkage::Weak | Linkage::WeakOdr | Linkage::LinkOnce | Linkage::LinkOnceOdr)
+    };
+    let mut comdats: std::collections::BTreeMap<String, masm::Comdat> = Default::default();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
     let (facts, order) = calleefacts::CalleeFacts::of(module);
@@ -266,10 +291,30 @@ pub fn assembled_by(
                 } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
                     far_data.extend(datums);
                 } else {
+                    let start = data.len();
+                    zero_may_move |= !variable.constant
+                        && datums.iter().all(|one| match one {
+                            masm::Datum::Align(_) | masm::Datum::Label(_) => true,
+                            masm::Datum::Bytes(bytes) => bytes.iter().all(|byte| *byte == 0),
+                            _ => false,
+                        });
                     data.extend(datums);
+                    if let Some(comdat) = comdat_of(module, name) {
+                        let symbol = names[&(globals::space(module, id), at as i64)].clone();
+                        comdats.insert(
+                            symbol,
+                            masm::Comdat {
+                                extent: Some(("_DATA".to_owned(), start..data.len())),
+                                constant: variable.constant,
+                                ..comdat
+                            },
+                        );
+                    }
                 }
                 if global.linkage == llrm_mir::Linkage::External {
                     data_publics.push(names[&(globals::space(module, id), at as i64)].clone());
+                } else if is_weak(global.linkage) {
+                    weak.insert(names[&(globals::space(module, id), at as i64)].clone());
                 }
             }
             GlobalKind::Function(function) if !function.is_declaration() => {
@@ -371,6 +416,9 @@ pub fn assembled_by(
                     names.insert((space, index), globals::DGROUP.to_owned());
                     Addr { index, ..Addr::new(space, 0) }
                 });
+                if is_weak(global.linkage) {
+                    weak.insert(names[&(Space::Segment, at as i64)].clone());
+                }
                 let procedure = masm::Procedure {
                     name: names[&(Space::Segment, at as i64)].clone(),
                     public: global.linkage == Linkage::External,
@@ -393,6 +441,7 @@ pub fn assembled_by(
                 // Copies of returns and split tails only make code better: -O0
                 // has neither.
                 let procedure = if !cpu.optimized {
+                    let procedure = masm::Procedure { body: LirBody { unwrapped: true, ..procedure.body }, ..procedure };
                     if let Some(why) = masm::realign_refusal(&procedure) {
                         return Err(why);
                     }
@@ -441,7 +490,15 @@ pub fn assembled_by(
         let registers = shared_registers.clone().expect("a routine is shared by a function");
         procedures.push(masm::routine_procedure(&name, code, registers, Regs(arch.registers())));
     }
-    for (bytes, id) in crate::backend::constpool::wide_first(pool.borrow().entries()) {
+    let flat_elf = arch.object().default == llrm_target::object::Format::Elf && arch.object().code_model().flat();
+    // A flat ELF object keeps the pool in mergeable sections, with no gap to fill.
+    let entries = pool.borrow();
+    let pooled = if flat_elf || zero_may_move {
+        crate::backend::constpool::wide_first(entries.entries())
+    } else {
+        crate::backend::constpool::gap_filled(entries.entries(), masm::data_size(&data, 0))
+    };
+    for (bytes, id) in pooled {
         let name = format!("$K{id}");
         names.insert((Space::Segment, id), name.clone());
         // A double is on an 8-byte boundary: a 486 takes 3 clocks more for one
@@ -464,6 +521,16 @@ pub fn assembled_by(
         // `align` would still raise the segment to dword, and the linker pads
         // the next module's data up to it (+2 B in the linked exe of nine
         // programs at m16 -Os).
+        // A flat ELF object keeps a constant of 4, 8, 16 or 32 bytes in the pin's
+        // read-only mergeable section of its size, not in the writable data.
+        if flat_elf && matches!(bytes.len(), 4 | 8 | 16 | 32) {
+            let section = sectioned.entry(format!(".rodata.cst{}", bytes.len())).or_default();
+            if section.is_empty() {
+                section.push(masm::Datum::Align(masm::Align { to: bytes.len() as i64 }));
+            }
+            section.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
+            continue;
+        }
         if to > 1 && (to >= 8 || masm::data_size(&data, 0) % to != 0) {
             data.push(masm::Datum::Align(masm::Align { to }));
         }
@@ -539,6 +606,7 @@ pub fn assembled_by(
         .iter()
         .filter_map(|one| module.sections.get(&one.name).map(|section| (one.name.clone(), section.clone())))
         .collect();
+    comdats.extend(procedures.iter().filter_map(|one| Some((one.name.clone(), comdat_of(module, &one.name)?))));
     let has_far = !far_data.is_empty();
     let far_segment = format!("{}_FARDATA", code.strip_suffix("_TEXT").unwrap_or(code));
     let mut huge_segments: Vec<(String, Vec<masm::Datum>)> = Vec::new();
@@ -568,7 +636,9 @@ pub fn assembled_by(
         requests: BTreeSet::new(),
         debug,
         far_bss: BTreeSet::new(),
+        weak,
         code_segments,
+        comdats,
         stack: 0,
         object: arch.object(),
         padding: masm::Padding { function: arch.pref_function_alignment(), nop: arch.max_nop_bytes() },
@@ -1121,7 +1191,11 @@ fn staged(
     };
     let selected = if let Some(done) = dag {
         if done.is_ok() {
-            shadow::record(name, Selector::Dag);
+            if crate::backend::selectiondag::fastisel::take_took() {
+                shadow::record_fast(name);
+            } else {
+                shadow::record(name, Selector::Dag);
+            }
         }
         done
     } else {
@@ -1173,17 +1247,27 @@ fn staged(
             .collect();
         std::sync::Arc::make_mut(&mut body.call_pops).extend(open.into_iter().map(|at| (at, 0)));
     }
-    let mut registers =
-        llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
-    // The convention's entry functions (`entry_clobbers_all`) keep nothing for
-    // a caller that does not exist.
+    // Win64's xmm6-15 are kept too, but saved into the frame, not pushed.
+    let (vector_saved, pushed): (Vec<_>, Vec<_>) =
+        convention.saved.iter().copied().partition(|(whole, _)| whole.is_xmm());
     let entry = module
         .named(name)
         .and_then(|id| module.global(id).function())
         .and_then(|function| target.arch.calling().by_number(function.calling_convention));
+    // The red zone is the function's convention's (Win64 has none).
+    let base = target.arch.frame_registers();
+    let mut registers = llrm_target::FrameRegisters {
+        saved: pushed,
+        vector_saved,
+        red_zone: entry.map_or(base.red_zone, |one| one.frame_red_zone),
+        ..base
+    };
+    // The convention's entry functions (`entry_clobbers_all`) keep nothing for
+    // a caller that does not exist.
     if target.facts.uncalled(name) && entry.is_some_and(|one| one.entry_clobbers_all.iter().any(|entry| entry == name))
     {
         registers.saved.clear();
+        registers.vector_saved.clear();
     }
     registers.align = target.facts.stack_alignment(target.arch, name);
     // LLVM's `hasFP`, before allocation: a function that can do without its
@@ -1228,7 +1312,18 @@ fn staged(
         registers.free = true;
         // Saved as any kept register is: its root, and the register a prologue
         // pushes.
-        registers.saved.push((body.regs().root(registers.pointer), registers.pointer));
+        let freed = (body.regs().root(registers.pointer), registers.pointer);
+        match entry {
+            // At its place in the convention's list, as the pin's callee-saved
+            // order has it (Win64 lists RBP second, System V last).
+            Some(entry) => {
+                let mut open = entry.clone();
+                open.frame = String::new();
+                let order = target.arch.convention_callee_saved(&open);
+                registers.saved = in_list_order(&order, std::mem::take(&mut registers.saved), freed);
+            }
+            None => registers.saved.push(freed),
+        }
         Rc::new(target.classes.with_frame_free())
     } else {
         Rc::clone(target.classes)
@@ -1374,6 +1469,18 @@ fn phased(
         }
         None => (body, None),
     };
+    // The widest alignment of an object of the frame: an alloca's, or a spill
+    // slot's as its width up to the slot cap.
+    let object_align = frame
+        .capacities
+        .values()
+        .filter(|&&size| size > 0)
+        .map(|&size| (1i64 << size.ilog2()).min(frame.align))
+        .chain([frame.alloca_align])
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let body = LirBody { object_align, ..body };
     Ok((
         Machined {
             body,
@@ -1410,4 +1517,42 @@ fn landed_last(
     let at = pad.at;
     blocks.push(pad);
     Ok((body.with_blocks(blocks), at))
+}
+
+#[cfg(test)]
+mod saved_order_tests {
+    use llrm_lir::registers::RegId;
+
+    use super::in_list_order;
+
+    fn pair(number: u8) -> (RegId, RegId) {
+        (RegId::from_raw(number), RegId::from_raw(number))
+    }
+
+    /// A freed frame register was pushed first whatever the convention lists:
+    /// Win64's hanoi pushed `rbp, r14, rsi, rdi, rbx` where the pin has `r14,
+    /// rsi, rdi, rbp, rbx` (RBP is second in Win64's list, last in System V's).
+    #[test]
+    fn a_freed_frame_register_takes_its_place_in_the_convention_list() {
+        let order = [pair(1), pair(2), pair(3), pair(4)];
+        assert_eq!(in_list_order(&order, vec![pair(4), pair(1)], pair(2)), [pair(1), pair(2), pair(4)]);
+        assert_eq!(in_list_order(&order, vec![pair(3)], pair(9)), [pair(3), pair(9)]);
+    }
+}
+
+/// The COMDAT the function or global `name` is in, if the module states one.
+fn comdat_of(
+    module: &llrm_mir::module::Module,
+    name: &str,
+) -> Option<masm::Comdat> {
+    let comdat = module.comdat_of.get(name)?;
+    let selection = match module.comdats.get(comdat)?.as_str() {
+        "any" => llrm_object::Selection::Any,
+        "exactmatch" => llrm_object::Selection::ExactMatch,
+        "largest" => llrm_object::Selection::Largest,
+        "nodeduplicate" => llrm_object::Selection::NoDuplicates,
+        "samesize" => llrm_object::Selection::SameSize,
+        _ => return None,
+    };
+    Some(masm::Comdat { name: comdat.clone(), selection, extent: None, constant: false })
 }

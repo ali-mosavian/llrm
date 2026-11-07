@@ -123,6 +123,11 @@ pub fn rewrite(
 /// `X86FixupBWInsts::getSuperRegDestIfDead` reads as "the rest is undefined".
 /// DEVIATE W1 above has no sub-register operands, so the widths of the value's
 /// operands stand in for the sub-register indices.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static INTERVALS_WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn _undef_supers(body: &LirBody) -> BTreeSet<usize> {
     let mut widest: IndexMap<u32, u32> = IndexMap::default();
     let held_places = |one: &Insn| {
@@ -143,23 +148,37 @@ fn _undef_supers(body: &LirBody) -> BTreeSet<usize> {
             }
         }
     }
-    let index = ranges::indexed_shared(body);
-    let live = ranges::intervals_shared(body, Some(&index));
-    let mut found = BTreeSet::new();
-    for block in &body.blocks {
+    // The intervals are worked out only for a body that has a narrower write
+    // whose value the instruction does not read: most have none.
+    let mut candidates: Vec<(usize, usize, u32)> = Vec::new();
+    for (at, block) in body.blocks.iter().enumerate() {
         for (position, one) in block.insns.iter().enumerate() {
             let Some(what) = &one.what else { continue };
-            let slot = index.slot(block, position);
             for place in &what.dests {
                 let Loc::Held(held) = place else { continue };
                 let narrower = u32::from(held.width) < widest.get(&held.value).copied().unwrap_or(0);
-                let live_before = live
-                    .get(&held.value)
-                    .is_some_and(|value| value.segments.iter().any(|run| run.start <= slot && slot < run.end));
-                if narrower && !live_before && !one.uses.contains(&held.value) {
-                    found.insert(ranges::key(one));
+                if narrower && !one.uses.contains(&held.value) {
+                    candidates.push((at, position, held.value));
                 }
             }
+        }
+    }
+    let mut found = BTreeSet::new();
+    if candidates.is_empty() {
+        return found;
+    }
+    #[cfg(test)]
+    INTERVALS_WORKED.with(|n| n.set(n.get() + 1));
+    let index = ranges::indexed_shared(body);
+    let live = ranges::intervals_shared(body, Some(&index));
+    for (at, position, value) in candidates {
+        let block = &body.blocks[at];
+        let one = &block.insns[position];
+        let slot = index.slot(block, position);
+        let live_before =
+            live.get(&value).is_some_and(|v| v.segments.iter().any(|run| run.start <= slot && slot < run.end));
+        if !live_before {
+            found.insert(ranges::key(one));
         }
     }
     found
@@ -236,7 +255,7 @@ pub(crate) fn _dead_insertions(body: &LirBody) -> LirBody {
 }
 
 /// Retain byte ownership without requiring an encodable register self-copy.
-fn _identity_anchor(one: Arc<Insn>) -> Arc<Insn> {
+pub(crate) fn _identity_anchor(one: Arc<Insn>) -> Arc<Insn> {
     if one.group.is_some() || !_pointless(&one) {
         return one;
     }
@@ -248,7 +267,7 @@ fn _identity_anchor(one: Arc<Insn>) -> Arc<Insn> {
 /// `handleIdentityCopy`
 /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/VirtRegMap.cpp#L492>):
 /// an identity that is not still owned by the parallel-copy scheduler.
-fn _discardable_identity(one: &Insn) -> bool {
+pub(crate) fn _discardable_identity(one: &Insn) -> bool {
     one.group.is_none() && _pointless(one)
 }
 
@@ -267,7 +286,7 @@ fn _placed_for_rewrite(
 
 /// `MachineInstr::isIdentityCopy`: whether this instruction moves a register
 /// into itself.
-fn _pointless(one: &Insn) -> bool {
+pub(crate) fn _pointless(one: &Insn) -> bool {
     let Some(what) = &one.what else {
         return false;
     };
@@ -315,7 +334,44 @@ pub(crate) fn _placed(
                     },
                 );
             let fits = |register: &RegId| width.is_none_or(|bits| regs.view(regs.root(*register), bits).is_some());
-            more.insert(*value, own.filter(fits).or_else(|| held.get(value).copied()).unwrap_or(classes.available[0]));
+            // Named in an address it takes the first register an address can be
+            // made of: `ax` has no form there.
+            let in_address = what
+                .dests
+                .iter()
+                .chain(&what.sources)
+                .any(
+                    |place| matches!(
+                        place,
+                        Loc::Mem(cell) if cell.base.is_some_and(|base| base.value == *value) || cell.index.is_some_and(|index| index.value == *value)
+                    ),
+                );
+            let first = if in_address {
+                classes
+                    .available
+                    .iter()
+                    .copied()
+                    .find(|register| {
+                        let word = regs.named(*register, 2);
+                        classes.word_bases.contains(&word) || classes.word_indexes.contains(&word)
+                    })
+                    .unwrap_or(classes.available[0])
+            } else {
+                classes.available[0]
+            };
+            // A pin to a register no address is made of (the selector's `es`,
+            // for a far pointer's one value) is not kept.
+            let addressable = |register: &RegId| {
+                let word = regs.named(*register, 2);
+                !in_address || classes.word_bases.contains(&word) || classes.word_indexes.contains(&word)
+            };
+            more.insert(
+                *value,
+                own.filter(fits)
+                    .filter(addressable)
+                    .or_else(|| held.get(value).copied().filter(addressable))
+                    .unwrap_or(first),
+            );
         }
         undef_held = more;
         &undef_held
@@ -427,4 +483,70 @@ fn _register_of(
         return Ok(Loc::Reg(Reg { register: *register, width: 1 }));
     }
     Ok(Loc::Reg(Reg { register: regs.named(*register, i64::from(value.width)), width: value.width }))
+}
+
+#[cfg(test)]
+mod undef_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::model::ir::{Held, Semantics};
+    use crate::model::lir::{Insn, LirBlock};
+    use crate::support::hash::IndexMap;
+
+    fn held(
+        value: u32,
+        width: u32,
+    ) -> Loc {
+        Loc::Held(Held { value, width, offset: 0 })
+    }
+
+    fn mov(
+        at: i64,
+        dest: Loc,
+        source: Loc,
+        defines: u32,
+        uses: Vec<u32>,
+    ) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some("mov".into()),
+            dests: vec![dest],
+            sources: vec![source],
+            ..Semantics::new(Operation::Move)
+        };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![defines], uses))
+    }
+
+    fn body(insns: Vec<Arc<Insn>>) -> LirBody {
+        let ret = Arc::new(Insn::new(99, Some((99, 99)), Some(Semantics::new(Operation::Return)), vec![], vec![]));
+        let mut all = insns;
+        all.push(ret);
+        LirBody::new("f", 0, vec![LirBlock::new(0, all).into()], IndexMap::default(), IndexMap::default())
+    }
+
+    fn imm(value: i64) -> Loc {
+        Loc::Imm(llrm_lir::Imm { value, width: 2, address: None })
+    }
+
+    /// Every write as wide as its value's widest reader: the intervals of the
+    /// body were still worked out after allocation (39 M Ir of 7.2 G on
+    /// memory_expansion) to answer a question nobody asked.
+    #[test]
+    fn test_a_body_without_a_narrower_write_works_out_no_intervals() {
+        INTERVALS_WORKED.with(|n| n.set(0));
+        let plain = body(vec![mov(1, held(1, 2), imm(5), 1, vec![]), mov(2, held(2, 2), held(1, 2), 2, vec![1])]);
+        assert!(_undef_supers(&plain).is_empty());
+        assert_eq!(INTERVALS_WORKED.with(|n| n.get()), 0, "no candidate, no intervals");
+    }
+
+    /// A one-byte write of a value read as two bytes, the value not live
+    /// before it: the rest is undefined, and that needs the intervals.
+    #[test]
+    fn test_a_narrower_write_of_a_dead_value_is_found() {
+        INTERVALS_WORKED.with(|n| n.set(0));
+        let narrow = body(vec![mov(1, held(1, 1), imm(5), 1, vec![]), mov(2, held(2, 2), held(1, 2), 2, vec![1])]);
+        let found = _undef_supers(&narrow);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(INTERVALS_WORKED.with(|n| n.get()), 1);
+    }
 }

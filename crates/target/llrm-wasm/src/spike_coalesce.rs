@@ -121,6 +121,8 @@ fn convert(f: &Function) -> MFunction<Class> {
                 let mut copy = MInst::new(Kind::Copy, operands);
                 copy.cheap_as_move = true;
                 copy
+            } else if inst.opcode == crate::mir::IMPLICIT_DEF {
+                MInst::new(Kind::Op(llrm_codegen::processimpdefs::IMPLICIT_DEF), operands)
             } else {
                 MInst::new(Kind::Op(name_of(inst.opcode)), operands)
             };
@@ -155,6 +157,25 @@ pub fn coalesce(f: &mut Function) -> usize {
         }
     };
     converted.coalesce(registers, false);
+    // The coalescer erases an `IMPLICIT_DEF` whose value a join overlaps; the
+    // instruction must go too, or its zero is written into the register the
+    // join gave to the live value.
+    let kept: std::collections::HashSet<(usize, usize)> = converted
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter_map(|insn| converted.origin.get((insn.at / 2) as usize).copied())
+        .collect();
+    let converted_all: std::collections::HashSet<(usize, usize)> = converted.origin.iter().copied().collect();
+    for (at, block) in f.blocks.iter_mut().enumerate() {
+        let mut position = 0;
+        block.retain(|inst| {
+            let here = (at, position);
+            position += 1;
+            !(inst.opcode == crate::mir::IMPLICIT_DEF && converted_all.contains(&here) && !kept.contains(&here))
+        });
+    }
     let map = converted.joined();
     let rename = |r: VReg| -> VReg { map.survivor(r + 1) - 1 };
     let mut joined = 0;

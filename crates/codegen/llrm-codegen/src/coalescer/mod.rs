@@ -27,9 +27,12 @@
 //! `CP.isPhys()` have nothing to join; the environment says whether two values
 //! may share a register (`CoalescerEnv::can_share`, `getCommonSubClass`).
 //!
-//! DEVIATE C3 (no number): no IMPLICIT_DEF, so `ErasableImplicitDef`,
-//! `removeImplicitDefs` and `eliminateUndefCopy` are not translated. Fact:
-//! phi elimination here leaves no `IMPLICIT_DEF`.
+//! DEVIATE C3 (no number): `removeImplicitDefs` (sub-range joins only) is not
+//! translated, and with one lane `ErasableImplicitDef` is a single flag:
+//! the `implicit_def` of a phi's predecessor is erased where a live value
+//! overlaps it (`analyzeValue`, `pruneValues`, `eraseInstrs`); it is kept as
+//! a value where it extends beyond its block. No EH pad successors in LIR.
+//! `eliminateUndefCopy` is translated.
 //!
 //! DEVIATE C12 (no number): a member of a parallel copy is not touched by
 //! `adjustCopiesBackFrom`, `removeCopyByCommutingDef` or

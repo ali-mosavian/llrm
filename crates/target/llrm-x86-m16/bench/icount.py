@@ -13,6 +13,7 @@ stops the run and is reported, never guessed.
 from __future__ import annotations
 
 import io
+import os
 import struct
 import sys
 from pathlib import Path
@@ -52,6 +53,9 @@ def _prices():
     return harness.cost, harness.multiplier_of, harness.clocks.prefixes
 
 
+# Instructions a run may take before it is stopped: LLRM_ICOUNT_LIMIT raises it for a program the reference compiler makes slow (Turbo C's
+# 8086 long multiply: stft_fixed and jpeg_fixed run past 400 M).
+LIMIT = int(os.environ.get("LLRM_ICOUNT_LIMIT", 400_000_000))
 NEVER_ENTERED = "the region was never entered"
 
 
@@ -109,7 +113,7 @@ def dos_file(cwd: Path, name: str) -> Path:
     return path
 
 
-def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch: set | None = None, only: tuple[int, int] | None = None, whole: bool = False, stdin: bytes | None = None, profile: dict | None = None) -> Run:
+def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set | None = None, only: tuple[int, int] | None = None, whole: bool = False, stdin: bytes | None = None, profile: dict | None = None) -> Run:
     """`exe` to its exit; `entry` is the linear address, from the image's first byte, of the function whose
     work is counted (None: count nothing, only run). `only` is a range of such addresses: of the region, what runs outside it
     (the scene around the code under test) is not counted, and the region still ends where `entry` returns. Files the program
@@ -143,7 +147,10 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
     prefixes = {}  # address -> operand- and address-size prefixes it carries
     target = None if entry is None else LOAD * 16 + entry
 
+    steps = [0]
+
     def step(uc, address, size, _):
+        steps[0] += 1
         if watch is not None:
             watch.add(address - LOAD * 16)
         if profile is not None:
@@ -218,6 +225,18 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
             carry(False)
         except OSError:
             uc.reg_write(UC_X86_REG_AX, 2)
+            carry(True)
+
+    def attributes(ax):
+        # Borland's open() asks for the attributes first (_chmod): get (AL=0) says whether the file is there, set (AL=1) is taken.
+        if ax & 0xFF == 1:
+            carry(False)
+            return
+        if dos_path(cstring(uc.reg_read(UC_X86_REG_DS), uc.reg_read(UC_X86_REG_DX))).is_file():
+            uc.reg_write(UC_X86_REG_CX, 0x20)  # archive
+            carry(False)
+        else:
+            uc.reg_write(UC_X86_REG_AX, 2)  # file not found
             carry(True)
 
     def read_(ax):
@@ -362,7 +381,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         0x02: print_char, 0x30: version, 0x2C: time_, 0x35: get_vector, 0x33: break_flag, 0x06: console_io,
         0x0B: input_status, 0x4A: resize, 0x25: set_vector, 0x0E: accepted, 0x42: seek,
         0x19: current_drive, 0x47: get_directory, 0x1A: set_dta, 0x2F: get_dta, 0x41: unlink, 0x4E: find_first,
-        0x4F: find_next, 0x3B: accepted, 0x39: accepted, 0x3A: accepted,
+        0x4F: find_next, 0x43: attributes, 0x3B: accepted, 0x39: accepted, 0x3A: accepted,
     }
 
     def interrupt(uc, number, _):
@@ -419,6 +438,10 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         result.error = result.error or f"emulator: {error} at {uc.reg_read(UC_X86_REG_CS):x}:{uc.reg_read(UC_X86_REG_IP):x}"
     for handle, file in state["files"].items():
         file.close()
+    if result.exit_code is None and not result.error and steps[0] >= limit:
+        # unicorn stops quietly at `limit` instructions: the program has not finished, not failed to return
+        result.error = f"stopped at the {limit}-instruction limit (LLRM_ICOUNT_LIMIT raises it)"
+        return result
     if whole and result.exit_code is not None:
         result.region = counts
     elif entry is not None and state["done"]:

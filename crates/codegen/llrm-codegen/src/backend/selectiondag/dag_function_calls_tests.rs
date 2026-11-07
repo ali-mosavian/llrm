@@ -1188,6 +1188,7 @@ entry:
     let module = crate::testing::module(IR).expect("parses");
     let (facts, _) = crate::backend::calleefacts::CalleeFacts::of(&module);
     let frame = llrm_target::FrameRegisters {
+        vector_saved: Vec::new(),
         pointer: RegId::BP,
         stack: RegId::SP,
         saved: vec![],
@@ -1417,4 +1418,23 @@ fn an_i16_multiply_by_seven_is_a_chain_at_m16_not_an_imul() {
         .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
         .collect();
     assert!(!names.iter().any(|n| n.starts_with("imul") || n == "mul"), "an imul is left: {names:?}");
+}
+
+/// A call of `memcpy` built the three huge-fill routines (5.9 M Ir of
+/// assembly on the first one in a process, jpeg_fixed -O2 m32) to learn it was
+/// not one of them.
+#[test]
+fn test_a_call_of_an_ordinary_function_builds_no_huge_routine() {
+    use super::dag_function::huge_routine_with;
+    let none = |_| -> Option<llrm_target::routines::HugeString> { panic!("a routine was built for `memcpy`") };
+    let none_copy = |_| -> Option<llrm_target::routines::HugeString> { panic!("a routine was built for `memcpy`") };
+    assert!(huge_routine_with("memcpy", none, none_copy).is_none());
+    let routine = |name: &'static str| llrm_target::routines::HugeString {
+        name,
+        code: vec![0x90],
+        reads: Vec::new(),
+        clobbers: Vec::new(),
+    };
+    let found = huge_routine_with("huge_copy", |_| Some(routine("huge_fill1")), |_| Some(routine("huge_copy")));
+    assert_eq!(found.map(|found| found.name), Some("huge_copy"));
 }

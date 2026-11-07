@@ -337,14 +337,26 @@ pub struct ShadowEdit {
     pub step: u64,
 }
 
+/// DEVIATE LS-SH: `OptimizeShadowIV` makes one variable per loop and breaks;
+/// where floats live on the x87 stack a further one is made: an FP counter
+/// costs one stack slot and an `fadd`, a conversion of the integer counter a
+/// store and a `fild` every trip. The x86 cost table (an SSE model, checked
+/// against the pin) prices both alike, so the hook that says floats are on the
+/// stack decides. Exit: 2026-11-20, x87 conversion prices in the table.
+fn floats_live_on_the_x87_stack(tti: &dyn Tti) -> bool {
+    tti.x87_stack_slots().is_some()
+}
+
 /// `OptimizeShadowIV`, read-only: `(double)i` in `for (i = 0; ...; i += c)` is
 /// a second variable, `d = 0.0; d += c`, if the conversion is exact for every
 /// value `i` takes.
 pub fn analyze_shadow(
     se: &mut ScalarEvolution,
     cx: &Cx,
+    tti: &dyn Tti,
     l: BlockId,
     users: &IvUsers,
+    shadowed: bool,
 ) -> Option<ShadowEdit> {
     let function = cx.function;
     let btc = se.get_backedge_taken_count(cx, l, ExitCountKind::Exact);
@@ -367,6 +379,9 @@ pub fn analyze_shadow(
             llrm_mir::types::Type::Float(llrm_mir::types::FloatKind::X86Fp80) => 64,
             _ => continue,
         };
+        if shadowed && !floats_live_on_the_x87_stack(tti) {
+            continue;
+        }
         let Operand::Value(phi_value) = instruction.operands[0] else { continue };
         let ValueDef::Instruction(phi) = function.value(phi_value).def else { continue };
         let phi_inst = function.instruction(phi);

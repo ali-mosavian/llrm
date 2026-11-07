@@ -4,10 +4,10 @@
 //! to a virtual register, for the blocks that read the register.
 //!
 //! [`compute_phi_live_out_reg_info`] is `ComputePHILiveOutRegInfo`: a phi's
-//! register knows what all its incoming values know. DEVIATE: x86 and arm64
+//! register knows what all its incoming values know. DEVIATE: arm64
 //! do not call it, so their phi registers carry nothing; the caller walks the
 //! blocks in layout order where the pin walks them in reverse post-order.
-//! Exit: x86 and arm64 judged, no later than 2026-11-20.
+//! Exit: arm64 judged, no later than 2026-11-20.
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{Function, InstId, Module, Operand};
@@ -60,7 +60,7 @@ pub fn assert_live_out_copies(
 ) {
     for id in dag.node_ids().collect::<Vec<_>>() {
         let copy = SDValue { node: id, res: 0 };
-        if dag.opcode(copy) != ISD::CopyFromReg {
+        if dag.opcode(copy) != ISD::CopyFromReg || dag.direct_copies.contains(&id) {
             continue;
         }
         let NodeData::Register(reg) = dag.node(dag.operand(copy, 1)).data else { continue };
