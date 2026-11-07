@@ -32,6 +32,8 @@ pub struct Node {
 #[derive(Default)]
 pub struct TestDag {
     pub nodes: Vec<Node>,
+    /// (virtual register, physical register it arrives in).
+    pub live_ins: Vec<(u16, u16)>,
 }
 
 impl TestDag {
@@ -742,6 +744,13 @@ impl crate::dag::PatternContext for OptSize {
 }
 
 impl AddrDag for TestDag {
+    fn live_in_physical(
+        &self,
+        node: u32,
+    ) -> Option<u16> {
+        let register = self.nodes[node as usize].register?;
+        self.live_ins.iter().find(|&&(virt, _)| virt == register).map(|&(_, phys)| phys)
+    }
     fn is_add_like(
         &self,
         value: SDValue,

@@ -15,19 +15,7 @@ use llrm_mir::passes::{Outer, Unit};
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::{self, Query, Sizes};
 
-use super::{NewCall, Rewrite, Site};
-
-/// `getConstantStringInfo(V, Str, TrimAtNul)` of a pointer that is a constant
-/// global.
-fn string_info(
-    unit: &Unit,
-    site: &Site,
-    operand: Operand,
-    trim_at_nul: bool,
-) -> Option<Vec<u8>> {
-    let bytes = super::constant_array(unit, site.env, operand)?;
-    Some(if trim_at_nul { bytes.into_iter().take_while(|&byte| byte != 0).collect() } else { bytes })
-}
+use super::{NewCall, Rewrite, Site, build, string_info};
 
 /// `std::clamp(A.compare(B), -1, 1)` as a constant of the call's type.
 fn ordering(
@@ -43,19 +31,6 @@ fn zero(
     site: &Site,
 ) -> Rewrite {
     Rewrite::Value(Operand::Constant(unit.context.int(unit.function.instruction(site.call).ty, 0)))
-}
-
-/// The instruction `opcode` placed before the call, as an operand.
-fn build(
-    unit: &mut Unit,
-    site: &Site,
-    opcode: Opcode,
-    ty: TypeId,
-    operands: Vec<Operand>,
-) -> Operand {
-    let made = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
-    unit.function.insert(made, Position::Before(site.call)).expect("a placed instruction");
-    Operand::Value(unit.function.instruction(made).result.expect("a result"))
 }
 
 /// `B.CreateZExt(B.CreateLoad(i8, pointer))`, negated for `negate`.

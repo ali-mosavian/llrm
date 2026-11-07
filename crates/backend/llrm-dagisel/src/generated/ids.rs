@@ -411,6 +411,7 @@ pub mod x86isd {
     pub const LLRM_CODE: u16 = 24582;
     pub const LLRM_COPY128: u16 = 24592;
     pub const LLRM_FARCALL: u16 = 24584;
+    pub const LLRM_MOVE128: u16 = 24594;
     pub const LLRM_PORT: u16 = 24586;
     pub const LLRM_PTRDIFF: u16 = 24583;
     pub const LLRM_TC_RETURN: u16 = 24587;
@@ -727,6 +728,7 @@ pub mod x86 {
     pub const ADD16mr: u16 = 583;
     pub const ADD32mi: u16 = 614;
     pub const ADD32mr: u16 = 624;
+    pub const ADD32rr: u16 = 644;
     pub const ADD64rr: u16 = 685;
     pub const ADD8mi: u16 = 696;
     pub const ADD8mr: u16 = 702;
@@ -740,7 +742,12 @@ pub mod x86 {
     pub const AND8mr: u16 = 933;
     pub const ANDPSrm: u16 = 977;
     pub const AX: u16 = 3;
+    pub const BH: u16 = 4;
+    pub const BL: u16 = 5;
+    pub const BP: u16 = 6;
+    pub const BX: u16 = 9;
     pub const CDQ: u16 = 1202;
+    pub const CH: u16 = 10;
     pub const CL: u16 = 11;
     pub const CQO: u16 = 1396;
     pub const CS: u16 = 12;
@@ -749,6 +756,8 @@ pub mod x86 {
     pub const DEC16m: u16 = 1511;
     pub const DEC32m: u16 = 1522;
     pub const DEC8m: u16 = 1543;
+    pub const DH: u16 = 15;
+    pub const DI: u16 = 16;
     pub const DIV16m: u16 = 1553;
     pub const DIV16r: u16 = 1556;
     pub const DIV32m: u16 = 1559;
@@ -757,12 +766,19 @@ pub mod x86 {
     pub const DIV64r: u16 = 1568;
     pub const DIV8m: u16 = 1571;
     pub const DIV8r: u16 = 1574;
+    pub const DL: u16 = 19;
     pub const DS: u16 = 20;
     pub const DX: u16 = 21;
     pub const EAX: u16 = 22;
+    pub const EBP: u16 = 23;
+    pub const EBX: u16 = 24;
+    pub const ECX: u16 = 25;
+    pub const EDI: u16 = 26;
     pub const EDX: u16 = 27;
     pub const EFLAGS: u16 = 28;
     pub const ES: u16 = 31;
+    pub const ESI: u16 = 32;
+    pub const ESP: u16 = 33;
     pub const FNSTSW16r: u16 = 1706;
     pub const FS: u16 = 36;
     pub const GS: u16 = 38;
@@ -783,7 +799,15 @@ pub mod x86 {
     pub const INC16m: u16 = 1901;
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
+    pub const MOV16mr: u16 = 2561;
+    pub const MOV16rm: u16 = 2568;
+    pub const MOV32mr: u16 = 2580;
     pub const MOV32r0: u16 = 386;
+    pub const MOV32rm: u16 = 2588;
+    pub const MOV64mr: u16 = 2598;
+    pub const MOV64rm: u16 = 2605;
+    pub const MOV8mr: u16 = 2617;
+    pub const MOV8rm: u16 = 2624;
     pub const MOVAPSmr: u16 = 2633;
     pub const MOVAPSrm: u16 = 2634;
     pub const MOVSX16rm8: u16 = 2735;
@@ -815,9 +839,31 @@ pub mod x86 {
     pub const OR8mi: u16 = 3045;
     pub const OR8mr: u16 = 3051;
     pub const ORPSrm: u16 = 3079;
+    pub const R10: u16 = 121;
+    pub const R10D: u16 = 169;
+    pub const R11: u16 = 122;
+    pub const R11D: u16 = 170;
+    pub const R12: u16 = 123;
+    pub const R12D: u16 = 171;
+    pub const R13: u16 = 124;
+    pub const R13D: u16 = 172;
+    pub const R14: u16 = 125;
+    pub const R14D: u16 = 173;
+    pub const R15: u16 = 126;
+    pub const R15D: u16 = 174;
+    pub const R8: u16 = 119;
+    pub const R8D: u16 = 167;
+    pub const R9: u16 = 120;
+    pub const R9D: u16 = 168;
     pub const RAX: u16 = 51;
+    pub const RBP: u16 = 52;
+    pub const RBX: u16 = 53;
+    pub const RCX: u16 = 54;
+    pub const RDI: u16 = 55;
     pub const RDX: u16 = 56;
     pub const RIP: u16 = 58;
+    pub const RSI: u16 = 60;
+    pub const RSP: u16 = 61;
     pub const SAHF: u16 = 4033;
     pub const SBB16mi: u16 = 4165;
     pub const SBB16mr: u16 = 4171;
@@ -826,8 +872,12 @@ pub mod x86 {
     pub const SBB32rr: u16 = 4208;
     pub const SBB8mi: u16 = 4240;
     pub const SBB8mr: u16 = 4244;
+    pub const SHL32ri: u16 = 4351;
     pub const SHL64ri: u16 = 4381;
+    pub const SHR32ri: u16 = 4539;
     pub const SHR64ri: u16 = 4569;
+    pub const SI: u16 = 62;
+    pub const SP: u16 = 65;
     pub const SS: u16 = 68;
     pub const SUB16mi: u16 = 4744;
     pub const SUB16mr: u16 = 4754;
@@ -874,6 +924,7 @@ pub mod x86 {
         (583, "ADD16mr"),
         (614, "ADD32mi"),
         (624, "ADD32mr"),
+        (644, "ADD32rr"),
         (685, "ADD64rr"),
         (696, "ADD8mi"),
         (702, "ADD8mr"),
@@ -916,6 +967,14 @@ pub mod x86 {
         (1901, "INC16m"),
         (1912, "INC32m"),
         (1933, "INC8m"),
+        (2561, "MOV16mr"),
+        (2568, "MOV16rm"),
+        (2580, "MOV32mr"),
+        (2588, "MOV32rm"),
+        (2598, "MOV64mr"),
+        (2605, "MOV64rm"),
+        (2617, "MOV8mr"),
+        (2624, "MOV8rm"),
         (2633, "MOVAPSmr"),
         (2634, "MOVAPSrm"),
         (2735, "MOVSX16rm8"),
@@ -955,7 +1014,9 @@ pub mod x86 {
         (4208, "SBB32rr"),
         (4240, "SBB8mi"),
         (4244, "SBB8mr"),
+        (4351, "SHL32ri"),
         (4381, "SHL64ri"),
+        (4539, "SHR32ri"),
         (4569, "SHR64ri"),
         (4744, "SUB16mi"),
         (4754, "SUB16mr"),
@@ -1235,6 +1296,7 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LLRM_CODE" => 24582,
         "LLRM_COPY128" => 24592,
         "LLRM_FARCALL" => 24584,
+        "LLRM_MOVE128" => 24594,
         "LLRM_PORT" => 24586,
         "LLRM_PTRDIFF" => 24583,
         "LLRM_TC_RETURN" => 24587,

@@ -81,6 +81,14 @@ impl llrm_target::Target for M64 {
         bytes
     }
 
+    fn move_bytes(&self) -> Option<llrm_target::MoveBytes> {
+        Some(llrm_target::MoveBytes {
+            plain: 4,
+            copy: llrm_x86::encoding::copy_move_bytes,
+            literal: llrm_x86::encoding::literal_move_bytes,
+        })
+    }
+
     fn register_op_bytes(
         &self,
         width: i64,
@@ -182,6 +190,10 @@ impl llrm_target::Target for M64 {
 
     fn layout(&self) -> llrm_target::layout::Layout {
         LAYOUT.clone()
+    }
+
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
     }
 
     /// An argument takes a dword at least: `calling.toml`'s.
@@ -411,6 +423,11 @@ impl llrm_target::Target for M64 {
                             // count (particle -O3: count 3 of 100 left a nest copy,
                             // +433 B, +8.6% clk).
                             unroll_jam_exact_count: true,
+                            // CH-STAGED (owner m64, exit 2026-11-20): the pin hoists
+                            // constants after LSR on every target; m64 first.
+                            constant_hoisting: true,
+                            // DEVIATE ZIMM (owner m64, exit 2026-11-27): see Tuning.
+                            zext_imm_is_basic: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

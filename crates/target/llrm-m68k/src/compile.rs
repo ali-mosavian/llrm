@@ -94,6 +94,25 @@ pub struct Options {
     /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
     /// instruction for.
     pub short: bool,
+    /// A `tst` is dropped past instructions that set the codes between it and
+    /// the definition of its register, which move above the definition
+    /// ([`crate::cmpelim`]).
+    pub hoist_flag_setters: bool,
+    /// `cmpi.l #(2^s-1)` after the `lsr.l #s` of the same value is dropped
+    /// ([`crate::cmpshift`]).
+    pub reuse_shift_flags: bool,
+    /// A load and the step of its pointer in another block are one `(An)+`
+    /// ([`crate::loopinc`]).
+    pub post_inc_across_blocks: bool,
+    /// A small conditional block is copied into the predecessors that jump to
+    /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build.
+    pub tail_duplicate: bool,
+    /// A load of an incoming stack argument is made again where it is read
+    /// ([`crate::regalloc::Registers`], M68K-ARGREMAT).
+    pub rematerialize_arguments: bool,
+    /// A loop's top is chosen by the jumps its fall-throughs remove, not by
+    /// the edges they cover (M68K-TOP, [`crate::regalloc::place_blocks`]).
+    pub loop_top_by_jumps: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -110,6 +129,12 @@ impl Options {
         push_frame: false,
         push_arguments: false,
         short: false,
+        hoist_flag_setters: false,
+        reuse_shift_flags: false,
+        post_inc_across_blocks: false,
+        tail_duplicate: false,
+        rematerialize_arguments: false,
+        loop_top_by_jumps: false,
         debug: false,
     };
 }
@@ -125,6 +150,12 @@ impl Default for Options {
             push_frame: true,
             push_arguments: true,
             short: true,
+            hoist_flag_setters: true,
+            reuse_shift_flags: true,
+            post_inc_across_blocks: true,
+            tail_duplicate: true,
+            rematerialize_arguments: true,
+            loop_top_by_jumps: true,
             debug: false,
         }
     }
@@ -167,12 +198,16 @@ pub fn items_with(
         options.indexed,
         options.short,
         options.code_model.absolute_data(cpu),
+        wants_size,
     )?;
     let mut function = emit(name, &blocks)?;
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
-        crate::cmpelim::eliminate_tests(&mut function);
+        crate::cmpelim::eliminate_tests(&mut function, options.hoist_flag_setters);
+        if options.reuse_shift_flags {
+            crate::cmpshift::reuse_shift_flags(&mut function);
+        }
         crate::shiftadd::shifts_to_adds(&mut function);
         crate::negadd::negative_adds_to_subq(&mut function);
         crate::addrarith::address_adds(&mut function, cpu, wants_size);
@@ -184,6 +219,9 @@ pub fn items_with(
         crate::addrroles::address_roles(&mut function);
         if cpu.at_least(Cpu::M68020) {
             crate::scaledindex::scale_indexes(&mut function);
+        }
+        if options.indexed && options.post_inc_across_blocks {
+            crate::loopinc::post_increment_across_blocks(&mut function);
         }
     }
     expand_cmov(&mut function)?;
@@ -201,7 +239,7 @@ pub fn items_with(
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
-        crate::regalloc::allocate_greedy(&mut function, wants_size)?
+        crate::regalloc::allocate_greedy(&mut function, wants_size, options.indexed, options.rematerialize_arguments)?
     };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     if options.short {
@@ -214,6 +252,7 @@ pub fn items_with(
         crate::constreg::constant_into_destination(&mut function, &assignment);
         crate::constreg::immediate_from_free_register(&mut function, &assignment);
         crate::narrow_add::narrow_adds(&mut function, &assignment);
+        crate::narrow_add::narrow_compares(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
@@ -228,7 +267,10 @@ pub fn items_with(
     }
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
-    crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
+    if options.tail_duplicate && !wants_size {
+        llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
+    }
+    crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size, options.loop_top_by_jumps);
     let mut out = vec![Item::Label(name.to_owned())];
     // The line the function is declared at starts its rows (the prologue is
     // from no instruction).

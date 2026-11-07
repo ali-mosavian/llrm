@@ -95,6 +95,7 @@ fn rated_by(
         as_written: false,
         other_register_units: 0,
         size: false,
+        across_call: false,
     };
     let (mut cost, mut regs) = (Cost::new(), HashSet::default());
     cost.rate_formula(&mut rating, f, &mut regs, visited, lu, None);
@@ -234,6 +235,7 @@ fn a_visited_register_loses_and_a_chosen_one_is_free() {
             as_written: false,
             other_register_units: 0,
             size: false,
+            across_call: false,
         };
         let (mut cost, mut regs) = (Cost::new(), [a].into_iter().collect::<HashSet<Scev>>());
         cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
@@ -454,6 +456,7 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
                 as_written: false,
                 other_register_units: 0,
                 size: false,
+                across_call: false,
             };
             let (mut cost, mut regs, visited) = (Cost::new(), HashSet::default(), HashSet::default());
             cost.rate_formula(&mut rating, &fa, &mut regs, &visited, &lu, None);
@@ -605,6 +608,7 @@ fn a_pointer_stepping_by_a_constant_is_free_where_post_indexed_access_is_favored
                 as_written: false,
                 other_register_units: 0,
                 size: false,
+                across_call: false,
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
@@ -637,6 +641,7 @@ fn a_zero_ending_counter_pays_the_targets_zero_test() {
                 as_written: false,
                 other_register_units: 0,
                 size: false,
+                across_call: false,
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);

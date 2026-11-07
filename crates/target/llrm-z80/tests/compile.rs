@@ -1150,6 +1150,19 @@ fn a_spilled_word_shifted_right_by_a_byte_reloads_one_byte() {
     assert!(lines.windows(2).any(|w| w[0].starts_with("ld e, -") && w[1] == "ld d, #0"), "{out}");
 }
 
+/// `memory_expansion` at -Os was refused ("a conditional return in a function
+/// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
+/// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The
+/// function (two 700-byte arrays) keeps the jump.
+#[test]
+fn an_early_return_in_a_function_with_a_frame_compiles() {
+    let ir = include_str!("kernels/ir/conditional_return_with_frame.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "lc1", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(out.contains("pop ix"), "{level:?}: {out}");
+    }
+}
+
 /// A float argument or result killed the compiler ("legal parts: Type(F32)",
 /// 8 programs of tests/run/c); it is softened to an integer now (#6578), so
 /// passing one through is register moves and a return, no routine.
@@ -1669,6 +1682,53 @@ fn a_function_tuned_for_size_calls_the_small_long_divide() {
         }
         let out = compiled(&body("", ops), "f");
         assert!(fast.iter().all(|call| out.contains(call)) && !out.contains("__s_"), "{ops:?}: {out}");
+    }
+}
+
+/// A long divided and taken the remainder of by the same operands was two calls
+/// (`x / d` and `x % d` of div_constants: two 388 B-routine runs of the same
+/// loop). They are one call to the routine that stores the remainder through an
+/// address (the pin's `useDivRem`); a divide alone, or a remainder of other
+/// operands, keeps its own call.
+#[test]
+fn a_long_divide_and_remainder_of_the_same_operands_are_one_call() {
+    let body = |attr: &str, ops: [&str; 2]| {
+        format!(
+            "define i32 @f(i32 %a, i32 %b) {attr} {{\n  %q = {} i32 %a, %b\n  %r = {} i32 %a, %b\n  %s = add i32 %q, %r\n  ret i32 %s\n}}",
+            ops[0], ops[1]
+        )
+    };
+    for (ops, fast, small, others) in [
+        (["udiv", "urem"], "call __udivremsi4", "call __s_udivremsi4", ["__udivsi3", "__umodsi3"]),
+        (["sdiv", "srem"], "call __divremsi4", "call __s_divremsi4", ["__divsi3", "__modsi3"]),
+    ] {
+        for (attr, call) in [("", fast), ("optsize", small)] {
+            let out = compiled(&body(attr, ops), "f");
+            assert_eq!(out.matches("call").count(), 1, "{ops:?} {attr}: {out}");
+            assert!(out.contains(call), "{ops:?} {attr}: {out}");
+        }
+        let alone =
+            compiled(&format!("define i32 @f(i32 %a, i32 %b) {{\n  %q = {} i32 %a, %b\n  ret i32 %q\n}}", ops[0]), "f");
+        assert!(alone.contains(&format!("call {}", others[0])) && !alone.contains("rem"), "{ops:?} alone: {alone}");
+    }
+}
+
+/// A word divided and taken the remainder of by the same operands was a divide,
+/// a multiply and a subtract (`x % d` as `x - (x / d) * d`: `__udivhi3`,
+/// `__mulhi3`, 14 B a site more than the remainder call). They are one call;
+/// the routine leaves the quotient in `de` and the remainder in `hl`.
+#[test]
+fn a_word_divide_and_remainder_of_the_same_operands_are_one_call() {
+    for (ops, call) in [(["udiv", "urem"], "call __udivhi3"), (["sdiv", "srem"], "call __divremhi4")] {
+        for attr in ["", "optsize"] {
+            let ir = format!(
+                "define i16 @f(i16 %a, i16 %b) {attr} {{\n  %q = {} i16 %a, %b\n  %r = {} i16 %a, %b\n  %s = add i16 %q, %r\n  ret i16 %s\n}}",
+                ops[0], ops[1]
+            );
+            let out = compiled(&ir, "f");
+            assert_eq!(out.matches("call").count(), 1, "{ops:?} {attr}: {out}");
+            assert!(out.contains(call) && !out.contains("__mulhi3"), "{ops:?} {attr}: {out}");
+        }
     }
 }
 

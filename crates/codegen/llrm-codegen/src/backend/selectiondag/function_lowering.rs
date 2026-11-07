@@ -82,6 +82,7 @@ pub static MODULE_TABLES_BUILT: std::sync::atomic::AtomicUsize = std::sync::atom
 pub fn module_tables(
     module: &llrm_mir::module::Module,
     dso_local_symbols: bool,
+    defined_dso_local: bool,
 ) -> crate::backend::constpool::Symbols {
     MODULE_TABLES_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     (
@@ -94,11 +95,15 @@ pub fn module_tables(
             module
                 .globals
                 .iter()
-                .map(|global| {
+                .enumerate()
+                .map(|(at, global)| {
+                    // clang -fPIE marks what it defines `dso_local`, not what it declares.
                     matches!(
                         global.linkage,
                         llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                    )
+                    ) || (defined_dso_local
+                        && crate::backend::globals::space(module, llrm_mir::GlobalId(at as u32))
+                            == crate::model::ir::Space::Segment)
                 })
                 .collect()
         }),

@@ -135,6 +135,9 @@ pub struct Run<'a> {
     /// The headers of the loops this run made: those that were no loop's header
     /// when it began (`LPMUpdater::addSiblingLoops`, for the passes after it).
     pub created: Vec<BlockId>,
+    /// The headers of the loops the run began with: a loop not among them is a
+    /// copy an unroll made.
+    pub first: IdSet<BlockId>,
     /// The expressions of the passes before (`Scevs`), current while the
     /// function is as they left it: dropped at the first change.
     pub scev: ScalarEvolution,
@@ -1026,6 +1029,29 @@ fn should_full_unroll(
     // When computing the unrolled size, note that BEInsns are not replicated
     // like the rest of the loop body.
     let unrolled_size = uce.unrolled_loop_size(up, full_unroll_trip_count);
+    // DEVIATE UNROLL-O1: at -O1 on a target that says so, the copies must not
+    // cost more than the rolled loop: by size, or by the cost the analysis
+    // finds once the trip's constants fold (gcc's size-neutral complete unroll).
+    if run.options.opt_level == 1 && !run.options.opt_size && run.tti.unroll_never_grows_at_o1() {
+        let rolled = u64::from(uce.rolled_loop_size());
+        let fits = unrolled_size <= rolled
+            || analyze_loop_unroll_cost(
+                run,
+                se,
+                analyzed,
+                lp,
+                full_unroll_trip_count,
+                eph,
+                rolled.min(u64::from(u32::MAX)) as u32,
+                up.max_iterations_count_to_analyze,
+                None,
+                false,
+            )
+            .is_some_and(|cost| u64::from(cost.unrolled_cost) <= rolled);
+        return (fits
+            && price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up))
+        .then_some(full_unroll_trip_count);
+    }
     // DEVIATE U1: a loop of few trips is held to the target's `optsize` bar
     // (the pin's is `OptSizeThreshold`, 0 on x86).
     let few = if run.options.opt_size {
@@ -1425,9 +1451,20 @@ fn why(
     reason: &str,
 ) {
     if llrm_support::debug::enabled("unroll") {
-        let name = run.function.block(lp.get_header()).name.clone().unwrap_or_default();
-        eprintln!("unroll: %{name}: {reason}");
+        let owner = run.this.and_then(|id| (*run.globals[id.0 as usize].name).clone()).unwrap_or_default();
+        eprintln!("unroll: {}: {reason}", loop_label(run.function, lp.get_header(), &owner));
     }
+}
+
+/// `@function %label` of a loop's header: the label the IR dumps print, so a
+/// debug line finds its loop there (an unnamed block prints as its slot).
+fn loop_label(
+    function: &Function,
+    header: BlockId,
+    owner: &str,
+) -> String {
+    let labels = llrm_mir::print::block_labels(function);
+    format!("@{owner} %{}", labels[&header])
 }
 
 /// `tryToUnrollLoop`, for the full unroll pass.
@@ -1502,20 +1539,6 @@ fn try_to_unroll_loop(
         return Unrolled::Unmodified;
     }
 
-    // DEVIATE U3: on a float stack, copies of a body whose floats do not fit
-    // twice are interleaved past the stack and spill. The aggressive bar's
-    // extra growth is where that cost more than the loop (nbody_single and
-    // fpbench -O3: 57 stores and 90 reloads against 30 and 30 rolled), while
-    // within the default bar the unrolled loop won (-O2: nbody_single -2.5%,
-    // fpbench -4.0%), so such a body is held to the default bar. Owner
-    // llrm-target-x86-m32, exit 2026-11-20.
-    if let Some(peak) = float_stack_overflow(run, lp) {
-        if up.threshold > UNROLL_THRESHOLD_DEFAULT {
-            why(run, lp, &format!("{peak} floats live in a body, past half the float stack: the default bar"));
-            up.threshold = UNROLL_THRESHOLD_DEFAULT;
-        }
-    }
-
     let eph = ephemeral_values(run, analyzed, lp);
     let uce = cost_estimator(run, lp, &eph, up.be_insns);
     if !uce.can_unroll() {
@@ -1558,7 +1581,7 @@ fn try_to_unroll_loop(
     // on the loop trip count, but an exit at an earlier iteration is still
     // possible.
     let header = lp.get_header();
-    let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
+    let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::placeholder());
     let cx = llrm_analysis::scev::Cx {
         context: &*run.context,
         globals: run.globals,
@@ -1599,6 +1622,25 @@ fn try_to_unroll_loop(
     if trip_count == 0 {
         max_trip_count = se.get_small_constant_max_trip_count(&cx, header);
         max_or_zero = se.is_backedge_taken_count_max_or_zero(&cx, header);
+    }
+
+    // DEVIATE U3: on a float stack, copies of a body whose floats do not fit
+    // twice are interleaved past the stack and spill, where the unroll keeps
+    // more floats live across its trips: the elements of an array it both
+    // reads and writes are forwarded from copy to copy, one value each
+    // (nbody_single and fpbench -O3: 57 stores and 90 reloads against 30 and
+    // 30 rolled, -O2 within the default bar the unroll won: -2.5%, -4.0%).
+    // Such a body is held to the default bar only then: independent trips
+    // keep nothing across them (x_jpeg_single -O3: three 8-trip loops of 9
+    // floats, held to 150 and 2.3M clocks slower than the pin's unroll).
+    // Owner llrm-target-x86-m32, exit 2026-11-20.
+    if let Some(peak) = float_stack_overflow(run, lp) {
+        let kept = if trip_count == 0 { usize::MAX } else { price::forwarded_floats(run, analyzed, lp, trip_count) };
+        let depth = run.tti.x87_stack_slots().map_or(0, |slots| slots as usize);
+        if !opt_for_size && up.threshold > UNROLL_THRESHOLD_DEFAULT && peak.saturating_add(kept) > peak.max(depth) {
+            why(run, lp, &format!("{peak} floats live in a body, {kept} kept across its trips: the default bar"));
+            up.threshold = UNROLL_THRESHOLD_DEFAULT;
+        }
     }
 
     let pinfo = UnrollPragmaInfo::of(run, &options);
@@ -2023,6 +2065,7 @@ fn simplify_ivs_and_load_cse(
         tree: &analyzed.tree,
         assumptions: &analyzed.assumptions,
     };
+    let mark = run.function.mark();
     let _ = crate::simplifyindvar::simplified_loop_ivs(
         run.context,
         run.layout,
@@ -2034,7 +2077,35 @@ fn simplify_ivs_and_load_cse(
         header,
     );
     crate::loopunrollloadcse::load_cse(run, analyzed, header);
-    run.scev = ScalarEvolution::new();
+    forget_since(run, analyzed, mark);
+}
+
+/// `forgetTopmostLoop` and the deleted values (`SCEVCallbackVH`): the
+/// expressions the edits since `mark` made stale are dropped and the rest
+/// kept, where the pin's one `ScalarEvolution` lives on through the unroll.
+/// `before` are the loops of the function as it was at `mark`; a block made
+/// since has none, a block erased or rewritten drops the counts of its loops.
+/// The expressions are dropped whole where the log from `mark` is gone.
+fn forget_since(
+    run: &mut Run,
+    before: &Analyzed,
+    mark: llrm_mir::module::Mark,
+) {
+    let Some(touched) = run.function.touched_since(mark) else {
+        run.scev = ScalarEvolution::new();
+        return;
+    };
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &before.loops,
+        tree: &before.tree,
+        assumptions: &before.assumptions,
+    };
+    run.scev.forget_touched(&cx, &touched);
 }
 
 /// The blocks `UnrollLoop` hands `simplifyLoopAfterUnroll`: the loop's own that
@@ -2058,6 +2129,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     let closed = crate::lcssa::closed(run.context, run.layout, run.function).unwrap_or(false);
     let mut analyzed = Analyzed::of(run);
     let at_first: IdSet<BlockId> = analyzed.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
+    run.first = at_first.clone();
     // The worklist is popped from the back (`appendReversedLoopsToWorklist`):
     // the loops are visited in the reverse of
     // `getLoopsInReverseSiblingPreorder`, each loop after the loops it
@@ -2094,13 +2166,33 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let capacity = run.function.block_capacity();
         let body = lp.get_blocks().to_vec();
         let holds_loops = lp.get_sub_loops().next().is_some();
+        let mark = run.function.mark();
+        let inside: Vec<BlockId> = if holds_loops {
+            analyzed
+                .loops
+                .get_loops_in_preorder()
+                .iter()
+                .filter(|one| one.get_header() != header && lp.contains_loop(Some(**one)))
+                .map(|one| one.get_header())
+                .collect()
+        } else {
+            Vec::new()
+        };
         let result = try_to_unroll_loop(run, &analyzed, lp);
         if result == Unrolled::Unmodified {
             continue;
         }
+        // The loops of a nest whose outer loop is unrolled are its copies'
+        // loops, whichever copy keeps the first ids: they are priced as the
+        // copies are (`price.rs`, loops this run made).
+        if result == Unrolled::Fully {
+            for one in &inside {
+                run.first.remove(one);
+            }
+        }
         let peeled = result == Unrolled::Peeled;
         changed = true;
-        run.scev = ScalarEvolution::new();
+        forget_since(run, &analyzed, mark);
         // The pin's loop pass manager runs LPM2's whole list on a loop,
         // children before parents ([`L270`][pop]): a parent's IndVars
         // sees its child already unrolled. Here each pass runs over
@@ -2278,6 +2370,7 @@ impl FunctionPass for LoopFullUnroll {
             peeled: Default::default(),
             finished: IdSet::new(),
             created: Vec::new(),
+            first: Default::default(),
             scev: held.take(),
             options: Options {
                 opt_level: self.opt_level,
@@ -2293,7 +2386,7 @@ impl FunctionPass for LoopFullUnroll {
         if changed {
             PreservedAnalyses::none()
         } else {
-            held.put(std::mem::replace(&mut run.scev, ScalarEvolution::new()));
+            held.put(std::mem::replace(&mut run.scev, ScalarEvolution::placeholder()));
             PreservedAnalyses::all()
         }
     }
@@ -2339,6 +2432,7 @@ pub fn unroll_function(
         peeled: Default::default(),
         finished: IdSet::new(),
         created: Vec::new(),
+        first: Default::default(),
         scev: ScalarEvolution::new(),
     };
     let unrolled = unroll_loops(&mut run);

@@ -423,7 +423,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 // demanded is one shift by the difference (likewise `srl`).
                 let outside = if is_shl { mask(amount) } else { all & !(all >> amount) };
                 if self.dag.opcode(op0) == inner_op && demanded & outside == 0 {
-                    if let Some(c1) = self.dag.constant(self.dag.operand(op0, 1)).filter(|&c| c < u128::from(width)) {
+                    if let Some(c1) = self.dag.constant(self.dag.operand(op0, 1)).filter(|&c| c < u128::from(width))
+                        && (self.dag.has_one_use(op0.node) || self.hooks.fold_shift_of_shared_shift(vt, c1 as u32))
+                    {
                         let diff = i64::from(amount) - c1 as i64;
                         let shifted = if is_shl { diff >= 0 } else { diff >= 0 };
                         let (new_op, by) = if shifted { (opcode, diff as u128) } else { (inner_op, (-diff) as u128) };
@@ -725,7 +727,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         known: KnownBits,
         tlo: &mut Tlo,
     ) -> Result<KnownBits, ()> {
-        if demanded & !(known.zero | known.one) == 0 && self.dag.constant(op).is_none() {
+        // [L3175]: "Avoid folding to a constant if any OpaqueConstant is
+        // involved": a hoisted constant (`bitcast iN C`) stays a register.
+        //
+        // [L3175]: https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L3175
+        let opaque_operand = self.dag.node(op).ops.iter().any(|&operand| self.dag.is_opaque(operand));
+        if demanded & !(known.zero | known.one) == 0 && self.dag.constant(op).is_none() && !opaque_operand {
             let vt = self.dag.value_type(op);
             let constant = self.dag.get_constant(known.one, vt);
             return Self::combine_to(tlo, op, constant);

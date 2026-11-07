@@ -79,7 +79,7 @@ pub(super) fn add_or_sub_to_adc_or_sbb(
     let (code, flags) = if dag.opcode(y) == x86isd::SETCC && dag.has_one_use(y.node) {
         (dag.constant(dag.operand(y, 0))?, dag.operand(y, 1))
     } else if dag.opcode(y) == ISD::And && dag.constant(dag.operand(y, 1)) == Some(1) && dag.has_one_use(y.node) {
-        let (flags, code) = lower_and_to_bt(dag, y, CondCode::SetNe)?;
+        let (flags, code) = lower_and_to_bt(dag, y, CondCode::SetNe, false)?;
         (code, flags)
     } else {
         return None;
