@@ -122,7 +122,7 @@ pub(super) fn full_unroll_pays(
     // The accesses of a local array the copies make constant-indexed: the
     // array is promoted to registers, so they cost no clocks and no bytes
     // (frameless: `local[i]` filled and read by two 12-trip loops).
-    let (mut promoted, mut promoted_runs, ints, floats, forwarded) = promoted_accesses(run, se, analyzed, lp, &known, up);
+    let (mut promoted, mut promoted_runs, ints, floats, forwarded) = promoted_accesses(run, se, analyzed, lp, &known, up, prices_nest);
     let rmw = forwarded.len();
     // DEVIATE UP1-REG (owner m64, exit 2026-11-20): the promoted elements are
     // registers only while they fit: more than the file holds, and they are
@@ -485,6 +485,7 @@ fn promoted_accesses(
     lp: Loop,
     known: &IdSet<ValueId>,
     up: &UnrollingPreferences,
+    memory_aware: bool,
 ) -> (i64, i64, usize, usize, IdSet<ValueId>) {
     let function = &*run.function;
     let mut resident: std::collections::BTreeMap<u32, bool> = Default::default();
@@ -526,7 +527,8 @@ fn promoted_accesses(
             // A store the array survives is still run: the array is promoted only
             // where every other access is a constant offset too.
             let free = free
-                && !(matches!(one.opcode, Opcode::Store { .. })
+                && !(memory_aware
+                    && matches!(one.opcode, Opcode::Store { .. })
                     && matches!(local_array_at(run, pointer, known), Some(Base::Local(root))
                         if *resident.entry(root.0).or_insert_with(|| stays_in_memory(run, se, analyzed, lp, root, up))));
             if free {
