@@ -201,11 +201,6 @@ impl Z80Lowering {
                 let byte = if count == 8 { high } else { dag.get_node(ISD::Sra, EVT::I8, &[high, rest]) };
                 return Some(dag.get_node(ISD::SignExtend, EVT::I16, &[byte]));
             }
-            // X86InstrCompiler.td: `shl x, 1` is `add x, x`; the same node the
-            // funnel of a long shifted by one adds, so the carry is shared.
-            if count == 1 && dag.opcode(node) == ISD::Shl && vt == EVT::I16 {
-                return Some(dag.get_node(ISD::Add, vt, &[value, value]));
-            }
             return Some(node);
         }
         let name = match (dag.opcode(node), vt) {
