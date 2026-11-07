@@ -348,6 +348,8 @@ struct Emitter<'a, 'd> {
     /// The machine nodes emitted: the scheduler's clone of a unit emits its
     /// node again.
     machine_emitted: llrm_support::hash::HashSet<u32>,
+    /// Nodes the scheduler emits in more than one unit (`IsCloned`).
+    cloned_nodes: llrm_support::hash::HashSet<u32>,
     /// The `CopyToReg EFLAGS` nodes emitted.
     flag_copies_done: llrm_support::hash::HashSet<u32>,
 }
@@ -485,6 +487,16 @@ pub fn emit_in(
         flag_insns: HashMap::default(),
         saved_carry: HashMap::default(),
         machine_emitted: Default::default(),
+        cloned_nodes: {
+            let mut seen = llrm_support::hash::HashSet::default();
+            let mut cloned = llrm_support::hash::HashSet::default();
+            for &node in units.iter().flat_map(|unit| &unit.nodes) {
+                if !seen.insert(node) {
+                    cloned.insert(node);
+                }
+            }
+            cloned
+        },
         flag_copies_done: Default::default(),
         pending_fcom: HashMap::default(),
         first_at: HashMap::default(),
@@ -1226,11 +1238,14 @@ impl Emitter<'_, '_> {
                         && matches!(what.sources.as_slice(), [Loc::Mem(_)]),
                 );
             // A folded load: one memory source read into registers.
-            let folded = one.what.as_ref().is_some_and(|what| {
-                what.dests.iter().all(|dest| matches!(dest, Loc::Held(_)))
-                    && !what.dests.is_empty()
-                    && what.sources.iter().filter(|source| matches!(source, Loc::Mem(_))).count() == 1
-            });
+            let folded = one
+                .what
+                .as_ref()
+                .is_some_and(
+                    |what| what.dests.iter().all(|dest| matches!(dest, Loc::Held(_)))
+                        && !what.dests.is_empty()
+                        && what.sources.iter().filter(|source| matches!(source, Loc::Mem(_))).count() == 1,
+                );
             if (plain || folded) && !one.volatile() {
                 *one = Arc::new(Insn { invariant: true, ..(**one).clone() });
             }
@@ -1762,7 +1777,9 @@ impl Emitter<'_, '_> {
         let cloned = !self.machine_emitted.insert(n);
         let mut dests = Vec::new();
         for (i, vt) in node.values.iter().enumerate().take(usize::from(desc.num_defs)) {
-            let held = if cloned {
+            // `CreateVirtualRegisters`: neither a clone nor its original takes
+            // the register a `CopyToReg` names.
+            let held = if cloned || self.cloned_nodes.contains(&n) {
                 self.fresh(width(self.ctx.map.scalar_sse(), *vt))
             } else {
                 self.exported_register(SDValue { node: n, res: i as u8 })

@@ -24,7 +24,8 @@
 //! # Used by
 //! The scheduler's `TryUnfoldSU`, through [`super::schedule::SchedInfo`].
 //!
-//! [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L9026
+//! [pin]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L9026
 
 use llrm_dagisel::generated::foldtables::{FOLDED_LOAD, FOLDED_STORE, INDEX_MASK, UNFOLD};
 use llrm_dagisel::generated::ids::x86;
@@ -40,7 +41,9 @@ const LOADS: [(u16, EVT); 4] =
 
 /// The load that fills a register of class `class`, and the type it holds.
 fn load_for_class(class: i16) -> Option<(u16, EVT)> {
-    LOADS.into_iter().find(|&(opcode, _)| desc(opcode).and_then(|d| d.operands.first()).is_some_and(|o| o.reg_class == class))
+    LOADS
+        .into_iter()
+        .find(|&(opcode, _)| desc(opcode).and_then(|d| d.operands.first()).is_some_and(|o| o.reg_class == class))
 }
 
 /// The load and the register form of `node`, or None where the pin's
@@ -73,7 +76,13 @@ pub fn unfold_memory_operand(
     let mut before: Vec<SDValue> = rest[..first].to_vec();
     let after: Vec<SDValue> = rest[first + 5..].to_vec();
 
-    let load = dag.intern(ISD::Machine(u32::from(load_opcode)), &[load_vt, EVT::OTHER], &address, SDNodeFlags::default(), NodeData::None);
+    let load = dag.intern(
+        ISD::Machine(u32::from(load_opcode)),
+        &[load_vt, EVT::OTHER],
+        &address,
+        SDNodeFlags::default(),
+        NodeData::None,
+    );
     // The register form's results: its defs, then the node's other values
     // (the flags) but not the chain.
     let values = dag.node(SDValue { node, res: 0 }).values.to_vec();
@@ -88,15 +97,17 @@ pub fn unfold_memory_operand(
     }
     before.push(load);
     before.extend(after);
-    let register = dag.intern(ISD::Machine(u32::from(register_form)), &vts, &before, SDNodeFlags::default(), NodeData::None);
+    let register =
+        dag.intern(ISD::Machine(u32::from(register_form)), &vts, &before, SDNodeFlags::default(), NodeData::None);
     Some([load.node, register.node])
 }
 
 #[cfg(test)]
 mod tests {
+    use llrm_dagisel::generated::x86_x64::MACHINE_OPCODES;
+
     use super::*;
     use crate::backend::selectiondag::dag::DagConfig;
-    use llrm_dagisel::generated::x86_x64::MACHINE_OPCODES;
 
     fn id(name: &str) -> u32 {
         u32::from(MACHINE_OPCODES.iter().find(|(_, n)| *n == name).unwrap_or_else(|| panic!("no {name}")).0)
@@ -134,8 +145,13 @@ mod tests {
         let mut dag = SelectionDAG::new(DagConfig::default());
         let entry = dag.entry_node();
         let a = dag.get_copy_from_reg(entry, 1000, EVT::I64);
-        let add =
-            dag.intern(ISD::Machine(id("ADD64rr")), &[EVT::I64, EVT::I32], &[a, a], SDNodeFlags::default(), NodeData::None);
+        let add = dag.intern(
+            ISD::Machine(id("ADD64rr")),
+            &[EVT::I64, EVT::I32],
+            &[a, a],
+            SDNodeFlags::default(),
+            NodeData::None,
+        );
         assert_eq!(unfold_memory_operand(&mut dag, add.node), None);
     }
 }

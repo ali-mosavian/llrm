@@ -17,7 +17,8 @@
 //! # Used by
 //! `llrm-dagisel`'s `unfold_memory_operand`.
 //!
-//! [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrFoldTables.cpp#L175
+//! [pin]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrFoldTables.cpp#L175
 
 use std::fmt::Write as _;
 
@@ -61,7 +62,10 @@ fn flag(name: &str) -> Result<u16, String> {
 }
 
 /// The rows of `table` as `(register form, memory form, flags)`.
-fn rows<'a>(text: &'a str, table: &str) -> Result<Vec<(&'a str, &'a str, u16)>, String> {
+fn rows<'a>(
+    text: &'a str,
+    table: &str,
+) -> Result<Vec<(&'a str, &'a str, u16)>, String> {
     let head = format!("static const X86FoldTableEntry {table}[] = {{");
     let start = text.find(&head).ok_or_else(|| format!("no `{table}` in the fold tables"))? + head.len();
     let body = &text[start..];

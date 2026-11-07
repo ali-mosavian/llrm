@@ -18,8 +18,18 @@ const X64_CPUS: [&str; 1] = ["x64"];
 
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let (mut inc_path, mut ids_path, mut pin, mut out, mut extras, mut memflags, mut inc_m16, mut record, mut fast_inc, mut fold_inc) =
-        (None, None, None, None, None, None, None, None, None, None);
+    let (
+        mut inc_path,
+        mut ids_path,
+        mut pin,
+        mut out,
+        mut extras,
+        mut memflags,
+        mut inc_m16,
+        mut record,
+        mut fast_inc,
+        mut fold_inc,
+    ) = (None, None, None, None, None, None, None, None, None, None);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--inc" => inc_path = args.next(),
