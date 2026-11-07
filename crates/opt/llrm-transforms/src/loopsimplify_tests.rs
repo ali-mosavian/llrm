@@ -820,3 +820,20 @@ x:
     assert!(shape.loops[small].body.iter().all(|block| shape.loops[large].body.contains(block)));
     assert!(shape.loops.iter().all(|one| one.latches.len() == 1), "{}", printed(&module));
 }
+
+/// A function whose loops are already simplified is looked over once: the shape
+/// (dominators and loop info) made to find nested loops to separate was made
+/// again for the grouping, two per call and 9,622 `LoopInfo::analyze` calls on
+/// memory_expansion -O2.
+#[test]
+fn test_a_simplified_function_derives_one_shape() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {\nb0:\n  br label %l\n\nl:\n  %i = phi i16 [ 0, %b0 ], [ %j, %l ]\n  %j = add i16 %i, 1\n  %g = icmp slt i16 %j, %n\n  br i1 %g, label %l, label %x\n\nx:\n  ret i16 %j\n}\n",
+    );
+    let function = module.function_mut("f").expect("@f").1;
+    let before = get(Event::Shapes);
+    assert!(!simplified(function));
+    let derived = get(Event::Shapes) - before;
+    assert_eq!(derived, 1, "{derived} shapes derived for a function that needed nothing");
+}

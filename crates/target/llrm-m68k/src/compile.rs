@@ -80,6 +80,9 @@ pub struct Options {
     /// Size is wanted over clocks in every function (`-Os`; the x86 path's
     /// `Cpu::size`). A function marked `optsize` or `minsize` wants it too.
     pub size: bool,
+    /// At a speed level a choice takes a candidate only when it is no larger
+    /// and no slower (`-O1`); otherwise it is priced by the CPU's byte rate.
+    pub strict: bool,
     /// Schedule in source order (`-pre-RA-sched=source`) rather than with the
     /// ILP list scheduler `llc` defaults to.
     pub source_order: bool,
@@ -124,6 +127,7 @@ impl Options {
         code_model: CodeModel::Small,
         mid_end: false,
         size: false,
+        strict: false,
         source_order: false,
         indexed: false,
         push_frame: false,
@@ -145,6 +149,7 @@ impl Default for Options {
             code_model: CodeModel::Small,
             mid_end: true,
             size: false,
+            strict: false,
             source_order: false,
             indexed: true,
             push_frame: true,
@@ -291,7 +296,7 @@ pub fn items_with(
         cpu,
         options.push_frame,
         options.short,
-        options.push_arguments.then_some(wants_size),
+        options.push_arguments.then_some(crate::timing::Price::of(wants_size, options.strict)),
     )? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
