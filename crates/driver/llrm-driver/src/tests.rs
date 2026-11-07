@@ -4511,6 +4511,59 @@ fn a_64_bit_compare_with_a_shifted_mask_is_a_shift_and_a_narrow_test() {
     assert!(!low.contains("and ") && !low.contains("movabs"), "{low}");
 }
 
+/// A number wider than 32 bits in a listing: a 64-bit immediate, which masm
+/// prints as plain `mov`, never `movabs`.
+fn has_wide_immediate(listing: &str) -> bool {
+    listing
+        .split(|c: char| !c.is_ascii_digit())
+        .any(|n| n.parse::<u64>().is_ok_and(|v| v > u32::MAX as u64))
+}
+
+/// `visitADDLike`'s `add(mul(add(A, CA), CM), CB)` ignored `isLegalAddImmediate`:
+/// `CA * CM + CB` outgrew an `add` immediate, so every step of a multiply-add
+/// chain carried a 64-bit immediate (`mul_constants` -O2 5790 B against the
+/// pin's 4427, +31%).
+#[test]
+fn a_folded_multiply_add_constant_that_outgrows_an_add_immediate_is_not_formed_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i64 %x0) {\n\
+                \x20 %v5 = mul i64 %x0, 1664525\n  %v6 = add i64 %v5, 1013904223\n\
+                \x20 %v8 = mul i64 %v6, 93\n  %v10 = mul i64 %v6, 1664525\n\
+                \x20 %v11 = add i64 %v10, 1013904223\n  %v12 = mul i64 %v11, 3\n\
+                \x20 %r = xor i64 %v8, %v12\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!has_wide_immediate(&listing), "{listing}");
+}
+
+/// `combineMul` ran on `i32` only, so a multiply of an `i64` by 10 stayed an
+/// `imul` at m64 where the pin writes `lea` and `add` (`mul_constants`: 6 `lea`
+/// against the pin's 45).
+#[test]
+fn a_64_bit_multiply_by_ten_is_a_lea_and_an_add_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i64 %x) {\n  %r = mul i64 %x, 10\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("lea ") && !listing.contains("imul"), "{listing}");
+}
+
+/// Legality alone: the inner add has a second use, so `visitMUL` leaves
+/// `(a * 1000003) + 5` alone and only `visitADDLike`'s fold could form the
+/// 3e14 constant (a 64-bit `mov`); the pin's `isLegalAddImmediate` refuses it.
+#[test]
+fn a_multiply_add_with_a_shared_inner_add_keeps_its_add_immediates_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i64 %x) {\n  %a = add i64 %x, 305419896\n  %m = mul i64 %a, 1000003\n\
+                \x20 %r = add i64 %m, 5\n  %s = xor i64 %r, %a\n  ret i64 %s\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!has_wide_immediate(&listing), "{listing}");
+}
+
 /// ZIMM priced `0x9E3779B9` at one instruction in a size build too, so
 /// ConstantHoisting kept every `mov r32, imm32` (5 B) where one register
 /// copy (3 B) did: `mul_constants` -Os +30 B.
