@@ -2172,7 +2172,9 @@ b2:
 }
 ";
     let after = licm_printed(text);
-    let body = block_of(&after, "b1");
+    let f = &after[after.find("define i64 @f(").expect("@f")..];
+    let start = f.find("\nb1:\n").expect("b1") + 5;
+    let body: Vec<&str> = f[start..].lines().take_while(|line| line.starts_with("  ")).collect();
     let left: Vec<_> = body.iter().filter(|line| line.contains("= mul i64 ") && line.trim_end().ends_with(", 31")).collect();
     assert!(left.is_empty(), "{left:?}\n{after}");
 }
