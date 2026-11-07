@@ -4,15 +4,8 @@
 ; Divide: restoring, the divisor is shifted up to the dividend's bit length and steps down one bit at a time; the quotient bits roll into qv. Division by zero gives all ones and the dividend as remainder (lib/int/int64.c).
 
 .setcpu "6502"
-.export __muldi3, __udivdi3, __umoddi3, __divdi3, __moddi3
+.export __muldi3, __udivdi3, __divdi3
 
-rc0 = $80
-rc2 = $82
-rc3 = $83
-rc4 = $84
-rc5 = $85
-rc6 = $86
-rc7 = $87
 r0 = $90                ; rc16..rc23: the product
 r1 = $91
 r2 = $92
@@ -24,20 +17,10 @@ r7 = $97
 a6 = $98                ; rc24, rc25
 a7 = $99
 
+.include "di64_div.inc"
 .bss
 bb:     .res 1
 top:    .res 1
-d:      .res 8
-qv:     .res 8
-ln:     .res 1
-ld:     .res 1
-nb:     .res 1
-sh:     .res 1
-dz:     .res 1
-cnt:    .res 1
-sgn:    .res 1
-sgd:    .res 1
-
 .segment "CODE"
 
 __muldi3:
@@ -127,143 +110,8 @@ out:
     rts
 
 ; ---- divide: N = rc16..rc23 (dividend, then remainder), d = divisor, qv = quotient
-N = $90
 
-load:
-    ldx #5
-:   lda rc2,x
-    sta N,x
-    dex
-    bpl :-
-    ldy #0
-    lda (rc0),y
-    sta N+6
-    iny
-    lda (rc0),y
-    sta N+7
-    ldy #2
-    ldx #0
-:   lda (rc0),y
-    sta d,x
-    iny
-    inx
-    cpx #8
-    bne :-
-    rts
-
-udm:
-    lda #0
-    sta dz
-    lda d
-    ora d+1
-    ora d+2
-    ora d+3
-    ora d+4
-    ora d+5
-    ora d+6
-    ora d+7
-    bne dok
-    ldx #7                  ; divide by zero: all ones, the remainder stays the dividend
-    lda #$ff
-    sta dz
-:   sta qv,x
-    dex
-    bpl :-
-    rts
-dok:
-    lda #0
-    ldx #7
-:   sta qv,x
-    dex
-    bpl :-
-    ldx #7                  ; N < d: quotient 0, remainder N
-:   lda N,x
-    cmp d,x
-    bne :+
-    dex
-    bpl :-
-    sec
-:   bcs align
-    rts
-align:                      ; s = bitlength(N) - bitlength(d); d <<= s; s + 1 steps
-    ldx #7
-:   lda N,x
-    bne :+
-    dex
-    bpl :-
-:   stx ln
-    ldy #0
-:   iny
-    lsr a
-    bne :-
-    txa
-    asl a
-    asl a
-    asl a
-    sty cnt
-    clc
-    adc cnt
-    sta sh                  ; bitlength(N)
-    ldx #7
-:   lda d,x
-    bne :+
-    dex
-    bpl :-
-:   stx ld
-    ldy #0
-:   iny
-    lsr a
-    bne :-
-    txa
-    asl a
-    asl a
-    asl a
-    sty cnt
-    clc
-    adc cnt                 ; bitlength(d)
-    eor #$ff
-    sec
-    adc sh
-    sta sh                  ; s
-    lsr a
-    lsr a
-    lsr a
-    sta nb                  ; bytes to move d up
-    beq nomove
-    ldx ld
-:   txa
-    clc
-    adc nb
-    tay
-    lda d,x
-    sta d,y
-    dex
-    bpl :-
-    ldx nb
-    lda #0
-:   dex
-    sta d,x
-    bne :-
-nomove:
-    lda sh
-    and #7
-    beq noshl
-    tay
-:   asl d
-    rol d+1
-    rol d+2
-    rol d+3
-    rol d+4
-    rol d+5
-    rol d+6
-    rol d+7
-    dey
-    bne :-
-noshl:
-    lda sh
-    clc
-    adc #1
-    sta cnt
+.include "di64_align.inc"
 lp:
     ldx ln
 c1: lda N,x
@@ -329,70 +177,6 @@ retq:
     ldx qv+1
     lda qv
     rts
-retr:
-    ldx #5
-:   lda N+2,x
-    sta rc2,x
-    dex
-    bpl :-
-    ldx N+1
-    lda N
-    rts
-
-negn:
-    sec
-    lda #0
-    sbc N
-    sta N
-    lda #0
-    sbc N+1
-    sta N+1
-    lda #0
-    sbc N+2
-    sta N+2
-    lda #0
-    sbc N+3
-    sta N+3
-    lda #0
-    sbc N+4
-    sta N+4
-    lda #0
-    sbc N+5
-    sta N+5
-    lda #0
-    sbc N+6
-    sta N+6
-    lda #0
-    sbc N+7
-    sta N+7
-    rts
-negd:
-    sec
-    lda #0
-    sbc d
-    sta d
-    lda #0
-    sbc d+1
-    sta d+1
-    lda #0
-    sbc d+2
-    sta d+2
-    lda #0
-    sbc d+3
-    sta d+3
-    lda #0
-    sbc d+4
-    sta d+4
-    lda #0
-    sbc d+5
-    sta d+5
-    lda #0
-    sbc d+6
-    sta d+6
-    lda #0
-    sbc d+7
-    sta d+7
-    rts
 negq:
     sec
     lda #0
@@ -425,25 +209,6 @@ __udivdi3:
     jsr load
     jsr udm
     jmp retq
-__umoddi3:
-    jsr load
-    jsr udm
-    jmp retr
-
-sload:                      ; signed: absolute values in N and d, the signs in sgn (dividend) and sgd (divisor)
-    jsr load
-    lda N+7
-    and #$80
-    sta sgn
-    beq :+
-    jsr negn
-:   lda d+7
-    and #$80
-    sta sgd
-    beq :+
-    jsr negd
-:   rts
-
 __divdi3:
     jsr sload
     jsr udm
@@ -454,10 +219,3 @@ __divdi3:
     bne :+
     jsr negq
 :   jmp retq
-__moddi3:
-    jsr sload
-    jsr udm
-    lda sgn
-    beq :+
-    jsr negn
-:   jmp retr
