@@ -340,7 +340,7 @@ fn decompose_mul(
         return None;
     }
     let zeros = magnitude.trailing_zeros();
-    let chain = cheapest_chain(magnitude >> zeros, zeros, width, sized)?;
+    let chain = cheapest_chain(magnitude >> zeros, zeros, width, sized || vt == EVT::I32, sized)?;
     // A long multiply is a call of about 59 bytes with its arguments. In a
     // function tuned for size the expansion has to be no longer, and measured
     // (x * C at -Os) it is only where a shift is whole bytes (`2^8 +- 1`,
@@ -357,6 +357,28 @@ fn decompose_mul(
         let by = dag.get_constant(u128::from(by), EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])
     };
+    // A shift of `x` the function already has is free to reuse: the pin's two
+    // runs share it, the chain does not (`b[y * 20 + x]` beside `a[y * 16 + x]`).
+    if let &[(by, add)] = chain.as_slice() {
+        let has = |dag: &SelectionDAG, by: u32| {
+            dag.users(x).any(|user| {
+                let user = SDValue { node: user, res: 0 };
+                dag.opcode(user) == ISD::Shl
+                    && dag.operand(user, 0) == x
+                    && dag.constant(dag.operand(user, 1)) == Some(u128::from(by))
+            })
+        };
+        if has(dag, by + zeros) || (zeros != 0 && has(dag, zeros)) {
+            let high = shift(dag, x, by + zeros);
+            let low = if zeros == 0 { x } else { shift(dag, x, zeros) };
+            let mut result = dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[high, low]);
+            if signed < 0 {
+                let zero = dag.get_constant(0, vt);
+                result = dag.get_node(ISD::Sub, vt, &[zero, result]);
+            }
+            return Some(result);
+        }
+    }
     let mut result = x;
     for (by, add) in chain {
         let high = shift(dag, result, by);
@@ -373,11 +395,12 @@ fn decompose_mul(
 }
 
 /// The factors `(k, add)` of the odd `m`, each `2^k + 1` (`add`) or `2^k - 1`,
-/// at most two, with the lowest price; `zeros` is the shift after them.
+/// two only unless `single` (a long, or a function tuned for size), with the lowest price; `zeros` is the shift after them.
 fn cheapest_chain(
     m: u128,
     zeros: u32,
     width: u32,
+    single: bool,
     sized: bool,
 ) -> Option<Vec<(u32, bool)>> {
     let mut chains = Vec::new();
@@ -388,7 +411,7 @@ fn cheapest_chain(
         let rest = m / factor;
         if rest == 1 {
             chains.push(vec![(k, add)]);
-        } else if !sized {
+        } else if !single {
             for (j, add2, factor2) in factors(width) {
                 if rest == factor2 {
                     chains.push(vec![(k, add), (j, add2)]);
