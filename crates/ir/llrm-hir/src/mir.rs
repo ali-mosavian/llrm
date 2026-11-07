@@ -87,7 +87,7 @@ fn evaluate_extended(module: &mut Module) {
                 .attrs
                 .push(
                     Attribute::Str(
-                        llrm_mir::constantfolding::FP_EVAL.to_owned(),
+                        llrm_mir::constantfolding::FP_EVAL.into(),
                         Some(llrm_mir::constantfolding::FP_EVAL_EXTENDED.to_owned()),
                     ),
                 );
