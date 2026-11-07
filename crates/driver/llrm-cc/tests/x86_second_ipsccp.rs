@@ -2,16 +2,22 @@
 //! address `check_locals` took until inlining made its call direct; with one
 //! IPSCCP (the pin's) the arguments stay and `memory_expansion` is 1332 B
 //! bigger at m32 -O2. The positive control of the SD443 A/B: the bench corpus
-//! never reached the pass. Needs `LLRM_OW` and `LLRM_PIN_CLANG`.
+//! never reached the pass. Needs the Open Watcom tree (tools/ow-fetch.sh) and
+//! `LLRM_PIN_CLANG`.
 
 use std::path::Path;
 use std::process::Command;
 
 #[test]
 fn a_function_called_with_constants_after_inlining_loses_its_parameters_at_m32() {
-    for name in ["LLRM_OW", "LLRM_PIN_CLANG"] {
-        assert!(std::env::var_os(name).is_some(), "{name} is not set: this test needs it and does not skip");
-    }
+    assert!(
+        llrm_cc::ow_tree().is_dir(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
+    assert!(
+        std::env::var_os("LLRM_PIN_CLANG").is_some(),
+        "LLRM_PIN_CLANG is not set: this test needs it and does not skip"
+    );
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("x86-ipsccp-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -32,5 +38,9 @@ fn a_function_called_with_constants_after_inlining_loses_its_parameters_at_m32()
         .find(|path| path.file_name().unwrap().to_string_lossy().ends_with("-interprocedural.ll"))
         .expect("no interprocedural stage dumped");
     let ir = std::fs::read_to_string(stage).unwrap();
-    assert!(ir.contains("@lr1()"), "lr1 kept its parameters:\n{}", ir.lines().filter(|line| line.contains("@lr1(")).collect::<Vec<_>>().join("\n"));
+    assert!(
+        ir.contains("@lr1()"),
+        "lr1 kept its parameters:\n{}",
+        ir.lines().filter(|line| line.contains("@lr1(")).collect::<Vec<_>>().join("\n")
+    );
 }

@@ -1,6 +1,7 @@
 //! m32 -Os: LSR ranks formulae by bytes. Four fill/copy loops over globals were
 //! 383 B with the pin's order (a pointer IV per loop) and 373 B ranked by
-//! bytes. Needs `LLRM_OW` and the m16 clang (`LLRM_CLANG_M16`).
+//! bytes. Needs the Open Watcom tree (tools/ow-fetch.sh) and the m16 clang
+//! (`LLRM_CLANG_M16`).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -18,9 +19,14 @@ void copy_w(short n) { short i; for (i = 0; i < n; ++i) b[i] = a[i]; }
 
 #[test]
 fn test_m32_os_lsr_picks_the_smaller_loop_formulae() {
-    for name in ["LLRM_OW", "LLRM_CLANG_M16"] {
-        assert!(std::env::var_os(name).is_some(), "{name} is not set: this test needs it and does not skip");
-    }
+    assert!(
+        llrm_cc::ow_tree().is_dir(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
+    assert!(
+        std::env::var_os("LLRM_CLANG_M16").is_some(),
+        "LLRM_CLANG_M16 is not set: this test needs it and does not skip"
+    );
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lsrsize-{}", std::process::id()));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let _ = std::fs::remove_dir_all(&dir);

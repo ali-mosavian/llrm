@@ -655,7 +655,19 @@ pub fn optimized(
                 let wanted = |ty: &str| {
                     layout.expands_for("select", ty) && !crate::backend::selects::kept_for_isel(options.isel, ty)
                 };
-                crate::backend::selects::priced(module, &*tti, &wanted, &|name| profile.cost(name).ok())
+                // DEVIATE SETCC-TREE-BRANCH: at -Os only, where the table is bytes.
+                let trees = |ty: &str| {
+                    options.pipeline.prefers_size()
+                        && tti.branch_compare_trees_at_size()
+                        && layout.expands_for("select", ty)
+                };
+                crate::backend::selects::priced_with_trees(
+                    module,
+                    &*tti,
+                    &wanted,
+                    &|name| profile.cost(name).ok(),
+                    &trees,
+                )
             })
         })?;
     }

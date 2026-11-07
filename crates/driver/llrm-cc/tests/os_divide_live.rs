@@ -1,8 +1,9 @@
-//! m32 -Os: a narrow divide by a constant keeps its `div` (DIV-OPTSIZE-1) unless
-//! more than four values are live across it (DIV-LIVE). matmul's init nest,
-//! `(i + j) % 3` over seven live values, was `mov ax,si; mov cx,3; div cx` with
-//! four copies and two reloads around it: 1148 B, 1140 B with the multiply.
-//! Needs `LLRM_OW` and the m16 clang (`LLRM_CLANG_M16`).
+//! m32 -Os: a narrow divide by a constant keeps its `div` (DIV-OPTSIZE-1)
+//! unless more than four values are live across it (DIV-LIVE). matmul's init
+//! nest, `(i + j) % 3` over seven live values, was `mov ax,si; mov cx,3; div
+//! cx` with four copies and two reloads around it: 1148 B, 1140 B with the
+//! multiply. Needs the Open Watcom tree (tools/ow-fetch.sh) and the m16 clang
+//! (`LLRM_CLANG_M16`).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -40,9 +41,14 @@ fn compile(
     source: &str,
     flag: &str,
 ) -> (String, u64) {
-    for var in ["LLRM_OW", "LLRM_CLANG_M16"] {
-        assert!(std::env::var_os(var).is_some(), "{var} is not set: this test needs it and does not skip");
-    }
+    assert!(
+        llrm_cc::ow_tree().is_dir(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
+    assert!(
+        std::env::var_os("LLRM_CLANG_M16").is_some(),
+        "LLRM_CLANG_M16 is not set: this test needs it and does not skip"
+    );
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("divlive-{name}-{}", std::process::id()));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let _ = std::fs::remove_dir_all(&dir);
@@ -64,10 +70,7 @@ fn compile(
     };
     run("-S", "d.s");
     run("-c", "d.o");
-    (
-        std::fs::read_to_string(dir.join("d.s")).unwrap(),
-        std::fs::metadata(dir.join("d.o")).unwrap().len(),
-    )
+    (std::fs::read_to_string(dir.join("d.s")).unwrap(), std::fs::metadata(dir.join("d.o")).unwrap().len())
 }
 
 #[test]
