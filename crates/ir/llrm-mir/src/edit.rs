@@ -1121,7 +1121,7 @@ impl Function {
         };
         let attrs = &mut info.argument_attrs[index];
         attrs.retain(|one| !matches!(one, crate::opcode::Attribute::Int(name, _) if name == "align"));
-        attrs.push(crate::opcode::Attribute::Int("align".to_owned(), align));
+        attrs.push(crate::opcode::Attribute::Int("align".into(), align));
         self.log(Change::Rewritten(inst));
     }
 

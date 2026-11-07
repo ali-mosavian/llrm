@@ -384,7 +384,7 @@ fn attributes(
     attrs
         .iter()
         .map(|one| match one {
-            Attribute::Flag(name) => name.clone(),
+            Attribute::Flag(name) => name.to_string(),
             Attribute::Int(name, value) if name == "align" => format!("align {value}"),
             Attribute::Int(name, value) => format!("{name}({value})"),
             Attribute::Type(name, ty) => format!("{name}({})", context.types.display(*ty)),
