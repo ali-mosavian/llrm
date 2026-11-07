@@ -22,7 +22,7 @@
 //! its register allocator, which splits it with copies. Reason: this
 //! allocator does not split, and best of gcc and clang is the goal. Exit: none.
 //!
-//! DEVIATE SD257: [`data_leas_to_adds`]. The pin's address matcher turns an
+//! DEVIATE SD549: [`data_leas_to_adds`]. The pin's address matcher turns an
 //! `or` of disjoint bits and a constant into `lea (n,An)` wherever the sum is
 //! selected, and leaves the sum in an address register whatever reads it. Here a
 //! `lea` whose sum only data reads is the data add before allocation, where
@@ -326,7 +326,7 @@ fn reaches_data_only(
 }
 
 /// `lea (n,An)` of a data register, whose sum only data reads, is the data
-/// add (DEVIATE SD257 above), where the add prices below the `lea` and the
+/// add (DEVIATE SD549 above), where the add prices below the `lea` and the
 /// copies a data sum needs around it. The add sets the codes the `lea`
 /// leaves: where a later instruction reads the codes of an earlier one, the
 /// add goes before that one, as long as its input is defined above it.
