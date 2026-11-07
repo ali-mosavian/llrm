@@ -93,6 +93,7 @@ use llrm_mir::context::{ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
+use llrm_mir::domtree::{DomTree, Update, UpdateKind};
 use llrm_mir::loopinfo::{Loop, LoopInfo};
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{
@@ -212,6 +213,127 @@ impl Run<'_> {
         }
         let node = self.declared.node(MetadataNode { distinct: false, operands });
         self.function.set_metadata(branch, "prof", Some(node));
+    }
+}
+
+/// The analyses the rotation keeps right as it edits (R1 retired for the
+/// dominator tree and the loops): what the pin hands `LoopRotation` as `DT`
+/// and `LI`.
+pub struct Kept {
+    pub dt: DomTree,
+    pub info: LoopInfo,
+}
+
+impl Kept {
+    /// The dominator tree and loops of `function` as it stands.
+    pub fn of(function: &Function) -> Self {
+        let dt = DomTree::of(function);
+        let info = LoopInfo::analyze(function, || &dt);
+        Self { dt, info }
+    }
+
+    /// `MergeBlockIntoPredecessor(bb, &DTU, LI)` and its dominator and loop
+    /// updates ([BasicBlockUtils.cpp:300-380](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L300)).
+    fn merge_block_into_predecessor(
+        &mut self,
+        run: &mut Run,
+        bb: BlockId,
+        with_two_successors: bool,
+    ) -> bool {
+        let mut observer = MergeUpdates { kept: self, updates: Vec::new() };
+        cfg::merge_block_into_predecessor_observed(run.context, run.function, bb, with_two_successors, &mut observer)
+    }
+
+    /// `SplitCriticalEdge(from, to, Options(DT, LI).setPreserveLCSSA())`
+    /// ([BreakCriticalEdges.cpp:147](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BreakCriticalEdges.cpp#L147)).
+    fn split_critical_edge(
+        &mut self,
+        run: &mut Run,
+        from: BlockId,
+        to: BlockId,
+    ) -> Option<BlockId> {
+        let split = edges::split_critical_edge(run.function, from, to)?;
+        // Tell the tree of the new path first, then of the old edge's end, so
+        // `to` stays reachable the whole time.
+        let mut updates = vec![
+            Update { kind: UpdateKind::Insert, from, to: split },
+            Update { kind: UpdateKind::Insert, from: split, to },
+        ];
+        if !run.function.successors(from).contains(&to) {
+            updates.push(Update { kind: UpdateKind::Delete, from, to });
+        }
+        self.dt.apply_updates(&*run.function, &updates);
+        // Update LoopInfo if it is around.
+        let target = match (self.info.get_loop_for(from), self.info.get_loop_for(to)) {
+            // If one or the other block is in no loop, the new one is not.
+            (Some(from_loop), Some(to_loop)) => {
+                if from_loop == to_loop || from_loop.contains_loop(Some(to_loop)) {
+                    // The same loop, or an edge from an outer loop to an inner one.
+                    Some(from_loop.id())
+                } else if to_loop.contains_loop(Some(from_loop)) {
+                    // An edge from an inner loop to an outer one.
+                    Some(to_loop.id())
+                } else {
+                    // Two loops with no containment: `to` heads its loop.
+                    debug_assert_eq!(to_loop.get_header(), to, "no irreducible loops");
+                    to_loop.get_parent_loop().map(|parent| parent.id())
+                }
+            }
+            _ => None,
+        };
+        if let Some(target) = target {
+            self.info.add_basic_block_to_loop(target, split);
+        }
+        Some(split)
+    }
+}
+
+/// The dominator and loop updates of one `MergeBlockIntoPredecessor`.
+struct MergeUpdates<'a> {
+    kept: &'a mut Kept,
+    updates: Vec<Update>,
+}
+
+impl cfg::MergeObserver for MergeUpdates<'_> {
+    fn begin(
+        &mut self,
+        function: &Function,
+        bb: BlockId,
+        pred: BlockId,
+    ) {
+        // Inserts first: deleting first may leave blocks unreachable that the
+        // inserts then reach again (BasicBlockUtils.cpp:325).
+        let of_pred = function.successors(pred);
+        let mut seen = Vec::new();
+        for succ in function.successors(bb) {
+            if !of_pred.contains(&succ) && !seen.contains(&succ) {
+                seen.push(succ);
+                self.updates.push(Update { kind: UpdateKind::Insert, from: pred, to: succ });
+            }
+        }
+        seen.clear();
+        for succ in function.successors(bb) {
+            if !seen.contains(&succ) {
+                seen.push(succ);
+                self.updates.push(Update { kind: UpdateKind::Delete, from: bb, to: succ });
+            }
+        }
+        self.updates.push(Update { kind: UpdateKind::Delete, from: pred, to: bb });
+    }
+
+    fn done(
+        &mut self,
+        function: &Function,
+        bb: BlockId,
+        _pred: BlockId,
+    ) {
+        // `LI->removeBlock(BB)`.
+        if let Some(inner) = self.kept.info.get_loop_for(bb) {
+            let id = inner.id();
+            self.kept.info.remove_blocks_from_loop(id, &[bb]);
+        }
+        // `bb` is unreachable once its edges are gone: the update drops it.
+        self.kept.dt.apply_updates(function, &self.updates);
     }
 }
 
@@ -406,8 +528,10 @@ fn should_speculate_instrs(
 /// the tail instructions, typically a single post-increment.
 fn simplify_loop_latch(
     run: &mut Run,
-    lp: Loop,
+    kept: &mut Kept,
+    header: BlockId,
 ) -> Option<BlockId> {
+    let lp = kept.info.get_loop_for(header)?;
     let latch = lp.get_loop_latch(run.function)?;
     let jump = run.function.terminator(latch)?;
     let operation = run.function.instruction(jump);
@@ -426,7 +550,7 @@ fn simplify_loop_latch(
     if !should_speculate_instrs(run, lp, latch) {
         return None;
     }
-    if cfg::merge_block_into_predecessor(run.context, run.function, latch, true) {
+    if kept.merge_block_into_predecessor(run, latch, true) {
         run.dead.insert(latch);
         return Some(last_exit);
     }
@@ -596,16 +720,14 @@ fn create_phis_for_split_loop_exit(
 /// edge `pred` is a block of the loop `lp` (if any) leaves by.
 fn split_critical_edge(
     run: &mut Run,
-    info: &LoopInfo,
+    kept: &mut Kept,
     pred: BlockId,
     dest: BlockId,
 ) -> Option<BlockId> {
-    let split = edges::split_critical_edge(run.function, pred, dest)?;
+    let split = kept.split_critical_edge(run, pred, dest)?;
     // If `pred` is in a loop and `dest` is outside it, `split` is a new exit
     // block: its LCSSA form is made here.
-    if let Some(pred_loop) = info.get_loop_for(pred)
-        && !pred_loop.contains(dest)
-    {
+    if kept.info.get_loop_for(pred).is_some_and(|pred_loop| !pred_loop.contains(dest)) {
         create_phis_for_split_loop_exit(run, pred, split, dest);
     }
     Some(split)
@@ -694,10 +816,13 @@ fn guard_folds(
 /// branch, and the rotation would have happened had it not been folded.
 fn rotate_loop(
     run: &mut Run,
-    info: &LoopInfo,
-    lp: Loop,
+    kept: &mut Kept,
+    header: BlockId,
     simplified_latch: bool,
 ) -> Option<BlockId> {
+    let info = &kept.info;
+    let lp = info.get_loop_for(header)?;
+    let loop_id = lp.id();
     // If the loop has only one block there is not much to rotate: a block
     // merged away by `simplify_loop_latch` is no longer one of them.
     if lp.get_blocks().iter().filter(|&&block| !run.dead.contains(&block)).count() == 1 {
@@ -969,6 +1094,19 @@ fn rotate_loop(
     // the loop, update them, inserting phis as required.
     rewrite_uses_of_cloned_instructions(run, orig_header, orig_preheader, &value_map);
 
+    // `NewHeader` is now the header of the loop, and the tree is told the
+    // preheader branches to it and to the exit now, not to the old header.
+    let kept = &mut *kept;
+    kept.info.move_to_header(loop_id, new_header);
+    kept.dt.apply_updates(
+        &*run.function,
+        &[
+            Update { kind: UpdateKind::Insert, from: orig_preheader, to: exit },
+            Update { kind: UpdateKind::Insert, from: orig_preheader, to: new_header },
+            Update { kind: UpdateKind::Delete, from: orig_preheader, to: orig_header },
+        ],
+    );
+
     // At this point the major CFG changes are finished. The duplicated branch
     // may now branch on a constant; if that means the loop is entered, the
     // conditional branch is folded to an unconditional one. This simplifies
@@ -993,7 +1131,7 @@ fn rotate_loop(
         //
         // The preheader has two successors now, the new header and the exit,
         // and is not a preheader anymore: split the edge to form a real one.
-        split_critical_edge(run, info, orig_preheader, new_header);
+        split_critical_edge(run, kept, orig_preheader, new_header);
 
         // Preserve canonical loop form, which means that the exit should have
         // only one predecessor. The exit could be an exit block for multiple
@@ -1002,11 +1140,11 @@ fn rotate_loop(
         let exit_preds = run.function.predecessors(exit);
         for exit_pred in exit_preds {
             // Only loop exit edges need splitting.
-            let Some(pred_loop) = info.get_loop_for(exit_pred) else { continue };
+            let Some(pred_loop) = kept.info.get_loop_for(exit_pred) else { continue };
             if pred_loop.contains(exit) {
                 continue;
             }
-            if let Some(exit_split) = split_critical_edge(run, info, exit_pred, exit) {
+            if let Some(exit_split) = split_critical_edge(run, kept, exit_pred, exit) {
                 // `ExitSplit->moveBefore(Exit)` (LoopRotationUtils.cpp:788).
                 run.function.move_block_before(exit_split, exit).expect("placed blocks");
             }
@@ -1021,13 +1159,15 @@ fn rotate_loop(
         run.function.insert(jump, Position::End(orig_preheader)).expect("a placed preheader");
         run.function.move_records_before(guard, jump);
         run.function.erase(guard).expect("a branch defines nothing");
+        // With our CFG finalized, update the tree.
+        kept.dt.delete_edge(&*run.function, orig_preheader, exit);
     }
 
     // Now that the CFG is consistent again, try to merge the old header into
     // the old latch. This succeeds if they are connected by an
     // unconditional branch. This is just a cleanup so the emitted code
     // isn't too gross in this common case.
-    let latch = if cfg::merge_block_into_predecessor(run.context, run.function, orig_header, false) {
+    let latch = if kept.merge_block_into_predecessor(run, orig_header, false) {
         run.dead.insert(orig_header);
         orig_latch
     } else {
@@ -1059,9 +1199,10 @@ fn assume_calls(
 /// `LoopRotate::processLoop`: whether the loop changed.
 pub fn process_loop(
     run: &mut Run,
-    info: &LoopInfo,
-    lp: Loop,
+    kept: &mut Kept,
+    header: BlockId,
 ) -> bool {
+    let lp = kept.info.get_loop_for(header).expect("a loop headed by this block");
     // Save the loop metadata.
     let loop_md = lp
         .get_loop_latch(run.function)
@@ -1082,9 +1223,9 @@ pub fn process_loop(
     // Simplify the loop latch before attempting to rotate the header upward:
     // rotation may not be needed if the loop tail can be folded into the loop
     // exit.
-    let simplified_latch = if run.options.rotation_only { None } else { simplify_loop_latch(run, lp) };
+    let simplified_latch = if run.options.rotation_only { None } else { simplify_loop_latch(run, kept, header) };
 
-    let rotated_latch = rotate_loop(run, info, lp, simplified_latch.is_some());
+    let rotated_latch = rotate_loop(run, kept, header, simplified_latch.is_some());
 
     // Restore the loop metadata onto the new latch's branch.
     if let Some(latch) = rotated_latch.or(simplified_latch)
@@ -1106,35 +1247,29 @@ pub fn process_loop(
 /// `LoopInfo` is made once. A rotation adds blocks to the loops outside the
 /// rotated one and the driver derives it again before it reaches one of them;
 /// any other loop is read from the first.
-pub fn rotate_loops(run: &mut Run) -> bool {
-    let analyze = |run: &Run| LoopInfo::analyze(run.function, || llrm_mir::domtree::DomTree::of(run.function));
-    let mut info = analyze(run);
+pub fn rotate_loops(
+    run: &mut Run,
+    kept: &mut Kept,
+) -> bool {
     // The loop pass manager's worklist is popped from the back: a loop's
     // children before it, siblings in program order.
     let headers: Vec<BlockId> =
-        info.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
-    let mut stale = IdSet::<BlockId>::new();
+        kept.info.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
     let mut changed = false;
     for header in headers {
-        if stale.contains(&header) {
-            run.finish();
-            info = analyze(run);
-            stale.clear();
-        }
-        if !info.is_loop_header(header) {
-            continue;
-        }
-        let lp = info.get_loop_for(header).expect("a loop headed by this block");
-        if process_loop(run, &info, lp) {
+        if kept.info.is_loop_header(header) && process_loop(run, kept, header) {
             changed = true;
-            let mut outer = lp.get_parent_loop();
-            while let Some(one) = outer {
-                stale.insert(one.get_header());
-                outer = one.get_parent_loop();
-            }
         }
     }
     run.finish();
+    // `VerifyDomInfo` and `VerifyLoopInfo`: what the rotation kept is what a
+    // fresh analysis says.
+    #[cfg(debug_assertions)]
+    {
+        let fresh = Kept::of(run.function);
+        assert!(kept.dt == fresh.dt, "the dominator tree the rotation kept is not the function's");
+        assert!(kept.info.equivalent(&fresh.info, run.function), "the loops the rotation kept are not the function's");
+    }
     changed
 }
 
@@ -1184,6 +1319,10 @@ impl FunctionPass for LoopRotate {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
+        let mut kept = Kept {
+            dt: (*analyses.get::<llrm_mir::passes::Dominators>(&*unit.context, unit.layout, &*unit.function)).clone(),
+            info: (*analyses.get::<llrm_mir::passes::Loops>(&*unit.context, unit.layout, &*unit.function)).clone(),
+        };
         let tti = target_tti(outer.target());
         let options = Options {
             max_header_size: header_limit(self.duplicate_headers, self.size, outer.target(), &*tti),
@@ -1209,7 +1348,18 @@ impl FunctionPass for LoopRotate {
             dead: IdSet::new(),
             scev: Default::default(),
         };
-        if rotate_loops(&mut run) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if !rotate_loops(&mut run, &mut kept) {
+            return PreservedAnalyses::all();
+        }
+        drop(run);
+        // `PA.preserve<DominatorTreeAnalysis>()` and `LoopAnalysis`: the ones
+        // the rotation kept right are the manager's from here.
+        let Kept { dt, info } = kept;
+        analyses.replace::<llrm_mir::passes::Dominators>(&*unit.function, dt);
+        analyses.replace::<llrm_mir::passes::Loops>(&*unit.function, info);
+        PreservedAnalyses::none()
+            .preserve_updated::<llrm_mir::passes::Dominators>()
+            .preserve_updated::<llrm_mir::passes::Loops>()
     }
 }
 
@@ -1271,7 +1421,8 @@ pub fn rotate_function_knowing(
             dead: IdSet::new(),
             scev: Default::default(),
         };
-        rotate_loops(&mut run)
+        let mut kept = Kept::of(run.function);
+        rotate_loops(&mut run, &mut kept)
     };
     declared.place(module)?;
     Ok(changed)

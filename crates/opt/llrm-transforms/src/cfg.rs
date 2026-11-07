@@ -69,7 +69,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, Operand, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
@@ -214,6 +214,54 @@ pub fn merge_block_into_predecessor(
     bb: BlockId,
     with_two_successors: bool,
 ) -> bool {
+    merge_block_into_predecessor_observed(context, function, bb, with_two_successors, &mut ())
+}
+
+/// What a caller that keeps analyses current sees of `MergeBlockIntoPredecessor`:
+/// the places where the pin updates `DomTreeUpdater`, `LoopInfo` and `MemorySSAUpdater`
+/// ([BasicBlockUtils.cpp:300-380](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L300)).
+pub trait MergeObserver {
+    /// The merge will go ahead; nothing has moved.
+    fn begin(
+        &mut self,
+        _function: &Function,
+        _bb: BlockId,
+        _pred: BlockId,
+    ) {
+    }
+
+    /// `bb`'s instructions but its terminator are in `pred` (`start` the first
+    /// of them, or `pred`'s terminator where none moved); `bb` has its
+    /// terminator still (`MoveAllAfterMergeBlocks`).
+    fn moved(
+        &mut self,
+        _function: &Function,
+        _bb: BlockId,
+        _pred: BlockId,
+        _start: InstId,
+    ) {
+    }
+
+    /// The merge is done: `bb` is empty and `pred` holds what it held.
+    fn done(
+        &mut self,
+        _function: &Function,
+        _bb: BlockId,
+        _pred: BlockId,
+    ) {
+    }
+}
+
+impl MergeObserver for () {}
+
+/// `merge_block_into_predecessor`, telling `observer` of each step.
+pub fn merge_block_into_predecessor_observed(
+    context: &Context,
+    function: &mut Function,
+    bb: BlockId,
+    with_two_successors: bool,
+    observer: &mut dyn MergeObserver,
+) -> bool {
     // Can't merge if there are multiple predecessors, or no predecessors.
     let predecessors = function.predecessors(bb);
     let [pred] = predecessors[..] else { return false };
@@ -257,13 +305,16 @@ pub fn merge_block_into_predecessor(
 
     // Begin by getting rid of unneeded phis.
     local::fold_single_entry_phi_nodes(context, function, bb);
+    observer.begin(function, bb, pred);
 
     // Move all definitions in the successor to the predecessor...
     let end = function.terminator(bb).expect("a terminated block");
     let moved = function.iter_block(bb).filter(|&one| one != end).collect::<Vec<_>>();
+    let start = moved.first().copied().unwrap_or(pti);
     for inst in moved {
         function.move_to(inst, Position::Before(pti)).expect("a placed predecessor");
     }
+    observer.moved(function, bb, pred, start);
 
     // Make all phis that referred to bb now refer to pred as their source...
     function.replace_block_uses_with(bb, pred);
@@ -279,6 +330,7 @@ pub fn merge_block_into_predecessor(
         function.erase(pti).expect("a jump defines nothing");
         function.move_to(end, Position::End(pred)).expect("a placed predecessor");
     }
+    observer.done(function, bb, pred);
     true
 }
 

@@ -703,6 +703,25 @@ impl LoopInfo<BlockId> {
         }
     }
 
+    /// `Loop::moveToHeader`
+    /// ([L355](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericLoopInfo.h#L355)):
+    /// `new_header`, a block of the loop and in no loop inside it, takes the
+    /// header's place at the front of the loop's blocks.
+    pub fn move_to_header(
+        &mut self,
+        loop_id: LoopId,
+        new_header: BlockId,
+    ) {
+        debug_assert_eq!(self.bb_map[new_header.0 as usize], loop_id.0, "a block of this loop, in none inside it");
+        let data = &self.loops[loop_id.0 as usize];
+        let start = data.start as usize;
+        let at = self.layout[start..start + data.len as usize]
+            .iter()
+            .position(|&block| block == new_header)
+            .expect("a block of the loop");
+        self.layout.swap(start, start + at);
+    }
+
     /// `Loop::addBasicBlockToLoop` for one block.
     pub fn add_basic_block_to_loop(
         &mut self,

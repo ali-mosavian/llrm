@@ -639,3 +639,42 @@ fn test_the_size_header_limit_of_m32_is_four() {
     assert_eq!(super::header_limit(true, true, &*m32, &*tti), 4);
     assert_eq!(super::header_limit(true, false, &*m32, &*tti), 16);
 }
+
+/// Asks the manager what it holds, and says so in `held`.
+struct Holds(std::rc::Rc<std::cell::Cell<(bool, bool)>>);
+
+impl llrm_mir::passes::FunctionPass for Holds {
+    fn name(&self) -> &'static str {
+        "holds"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        self.0.set((
+            analyses.cached::<llrm_mir::passes::Dominators>().is_some(),
+            analyses.cached::<llrm_mir::passes::Loops>().is_some(),
+        ));
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// Compile time: a rotation returned `none()`, so the dominator tree and the
+/// loops were made again for the next pass (64 of 65 rotations on memexp -O2
+/// were followed by a rebuild). The rotation edits them and keeps them.
+#[test]
+fn test_a_rotation_keeps_the_dominator_tree_and_the_loops() {
+    let mut module = parsed(COUNTED);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let held = std::rc::Rc::new(std::cell::Cell::new((false, false)));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::LoopRotate { duplicate_headers: true, size: false, check_exit_count: false });
+    manager.add(Holds(held.clone()));
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    assert!(printed(&module).contains(".lr.ph") || printed(&module) != printed(&parsed(COUNTED)), "the loop was not rotated");
+    assert_eq!(held.get(), (true, true), "dominators, loops held after the rotation");
+}
