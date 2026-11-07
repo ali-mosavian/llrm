@@ -3,6 +3,7 @@
 //! says of the body as it stands.
 
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::domtree::{DomTree, Update};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Module, Operand};
 
@@ -496,4 +497,126 @@ b3:
     let mut updater = MemorySsaUpdater::new();
     updater.wire_old_predecessors_to_new_immediate_predecessor(&mut mssa, body.function(), b3, new, &[b1, b2], false);
     body.check(&mut mssa, "splitting two predecessors of b3");
+}
+
+/// An edge added to a join: the join gets a phi of what each predecessor
+/// leaves, and a use the new edge makes lose its def's dominance reads the def
+/// that reaches it now (`applyUpdates`, inserts only). Without the call the
+/// load after the join still reads the one store, though the other path
+/// writes nothing.
+#[test]
+fn test_an_edge_added_to_a_block_gives_it_a_phi_of_what_each_predecessor_leaves() {
+    let mut body = Body::new(
+        "define void @f(i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 1, ptr @ga
+  br label %b3
+
+b2:
+  br i1 %c, label %b4, label %b4
+
+b3:
+  %x = load i16, ptr @ga
+  ret void
+
+b4:
+  ret void
+}
+",
+    );
+    let mut mssa = body.fresh();
+    let (b2, b3, b4) = (body.block("b2"), body.block("b3"), body.block("b4"));
+    let mut dt = DomTree::of(body.function());
+    let term = body.function().terminator(b2).expect("a terminator");
+    body.mutate(|function| function.set_operand(term, 2, Operand::Block(b3)));
+    let _ = b4;
+    let mut updater = MemorySsaUpdater::new();
+    updater.apply_updates(&mut mssa, body.function(), &[Update::insert(b2, b3)], &mut dt, true);
+    mssa.set_dominance(Shape::of(body.function()).dominance);
+    body.check(&mut mssa, "adding the edge b2 to b3");
+    assert!(mssa.get_memory_phi(b3).is_some(), "the join has a phi");
+}
+
+/// An edge moved from one target to another, both updates in one call: the
+/// phi of the new target and the edge taken out of the old one's.
+#[test]
+fn test_an_edge_moved_between_targets_updates_both_phis() {
+    let mut body = Body::new(
+        "define void @f(i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 1, ptr @ga
+  br label %b3
+
+b2:
+  store i16 2, ptr @ga
+  br i1 %c, label %b3, label %b5
+
+b3:
+  %x = load i16, ptr @ga
+  ret void
+
+b5:
+  ret void
+}
+",
+    );
+    let mut mssa = body.fresh();
+    let (b2, b3, b5) = (body.block("b2"), body.block("b3"), body.block("b5"));
+    let mut dt = DomTree::of(body.function());
+    let term = body.function().terminator(b2).expect("a terminator");
+    // b2 branches to b5 on both arms: the edge to b3 is gone.
+    body.mutate(|function| function.set_operand(term, 1, Operand::Block(b5)));
+    let mut updater = MemorySsaUpdater::new();
+    updater.apply_updates(&mut mssa, body.function(), &[Update::delete(b2, b3)], &mut dt, true);
+    mssa.set_dominance(Shape::of(body.function()).dominance);
+    body.check(&mut mssa, "removing the edge b2 to b3");
+    assert!(mssa.get_memory_phi(b3).is_none(), "the join has one predecessor left");
+}
+
+/// One edge replaced by another in a single call: the inserts are applied with
+/// the deletes still in the snapshot, then the deletes (`applyUpdates`, the
+/// path with a post view).
+#[test]
+fn test_an_edge_retargeted_in_one_call_updates_both_ends() {
+    let mut body = Body::new(
+        "define void @f(i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 1, ptr @ga
+  br label %b3
+
+b2:
+  store i16 2, ptr @gb
+  br i1 %c, label %b5, label %b4
+
+b3:
+  %x = load i16, ptr @ga
+  ret void
+
+b4:
+  ret void
+
+b5:
+  ret void
+}
+",
+    );
+    let mut mssa = body.fresh();
+    let (b2, b3, b5) = (body.block("b2"), body.block("b3"), body.block("b5"));
+    let mut dt = DomTree::of(body.function());
+    let term = body.function().terminator(b2).expect("a terminator");
+    body.mutate(|function| function.set_operand(term, 1, Operand::Block(b3)));
+    let mut updater = MemorySsaUpdater::new();
+    updater.apply_updates(&mut mssa, body.function(), &[Update::insert(b2, b3), Update::delete(b2, b5)], &mut dt, true);
+    mssa.set_dominance(Shape::of(body.function()).dominance);
+    body.check(&mut mssa, "retargeting b2 from b5 to b3");
+    assert!(mssa.get_memory_phi(b3).is_some(), "the join has a phi");
 }

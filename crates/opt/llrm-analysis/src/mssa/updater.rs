@@ -4,7 +4,7 @@
 //! Of the CFG edits, `remove_edge`, `move_all_after_merge_blocks`,
 //! `update_for_cloned_block_into_pred` and
 //! `wire_old_predecessors_to_new_immediate_predecessor` are here;
-//! `apply_updates` is not yet.
+//! `apply_updates` too.
 //!
 //! The updater carries three sets between its calls
 //! (`VisitedBlocks`, `InsertedPHIs`, `NonOptPhis`); the graph and the function
@@ -13,6 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::dense::{IdMap, IdSet};
+use llrm_mir::domtree::{DomTree, GraphDiff, Snapshot, Update, UpdateKind};
 use llrm_mir::module::{BlockId, Function, InstId};
 
 use super::build::{Effect, Place};
@@ -1053,6 +1054,295 @@ impl MemorySsaUpdater {
         }
         mssa.add_incoming(phi, new_phi, new);
         self.try_remove_trivial_phi(mssa, function, new_phi);
+    }
+
+    /// [`applyUpdates`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSAUpdater.cpp#L899):
+    /// the CFG edges `updates` were added or removed in `function`, as it
+    /// stands. `dt` is told too (`update_dt`) or already was. The graph's own
+    /// copy of the tree is the caller's to give with `set_dominance`.
+    pub fn apply_updates(
+        &mut self,
+        mssa: &mut Mssa,
+        function: &Function,
+        updates: &[Update],
+        dt: &mut DomTree,
+        update_dt: bool,
+    ) {
+        let (mut deletes, mut reverse_deletes, mut inserts) = (Vec::new(), Vec::new(), Vec::new());
+        for &update in updates {
+            if update.kind == UpdateKind::Insert {
+                inserts.push(update);
+            } else {
+                deletes.push(Update::delete(update.from, update.to));
+                reverse_deletes.push(Update::insert(update.from, update.to));
+            }
+        }
+        if !deletes.is_empty() {
+            if !inserts.is_empty() {
+                if !update_dt {
+                    // Deletes are reversed applied, because this view pretends
+                    // the deletes did not happen yet, hence the edges still
+                    // exist.
+                    dt.apply_updates_with_post_view(function, &[], &reverse_deletes);
+                } else {
+                    // Apply all updates, with the reversed deletes as the
+                    // post view.
+                    dt.apply_updates_with_post_view(function, updates, &reverse_deletes);
+                }
+                let diff = GraphDiff::new(&reverse_deletes, false, false);
+                self.apply_insert_updates(mssa, function, &inserts, dt, &diff);
+                // The tree redeletes the edges: it matches the real CFG.
+                dt.apply_updates(function, &deletes);
+            } else if update_dt {
+                dt.apply_updates(function, &deletes);
+            }
+        } else {
+            if update_dt {
+                dt.apply_updates(function, updates);
+            }
+            self.apply_insert_updates(mssa, function, &inserts, dt, &GraphDiff::default());
+        }
+        // Update for the deleted edges.
+        for update in &deletes {
+            self.remove_edge(mssa, function, update.from, update.to);
+        }
+    }
+
+    /// `applyInsertUpdates`' `GetLastDef`: the last def of `block`, or of what
+    /// reaches it, found through the snapshot's single predecessors and the
+    /// immediate dominators.
+    fn last_def_in_snapshot(
+        mssa: &Mssa,
+        function: &Function,
+        dt: &DomTree,
+        diff: &GraphDiff,
+        mut block: BlockId,
+    ) -> AccessId {
+        loop {
+            // Return the last def or phi in the block, if it exists.
+            if let Some(&last) = mssa.get_block_defs(block).and_then(|defs| defs.last()) {
+                return last;
+            }
+            // We only care whether there is more than one predecessor.
+            let predecessors = diff.children(function, block, true);
+            if predecessors.len() != 1 {
+                // Several: the last def of the immediate dominator. A dead
+                // block about to be deleted is not in the tree: live on entry.
+                if !dt.contains(block) {
+                    return LIVE_ON_ENTRY;
+                }
+                match dt.immediate_dominator(block) {
+                    Some(idom) if idom != block => block = idom,
+                    _ => return LIVE_ON_ENTRY,
+                }
+            } else {
+                // One predecessor, so the block is not dead; it can be
+                // unreachable though.
+                if !dt.contains(block) {
+                    return LIVE_ON_ENTRY;
+                }
+                block = predecessors[0];
+            }
+        }
+    }
+
+    /// [`applyInsertUpdates`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSAUpdater.cpp#L976):
+    /// phis for the edges `updates` added, and the uses that stopped being
+    /// dominated by their def moved to the def that now reaches them.
+    /// `diff` is the CFG the edges are added to (the pin's `GD`).
+    fn apply_insert_updates(
+        &mut self,
+        mssa: &mut Mssa,
+        function: &Function,
+        updates: &[Update],
+        dt: &DomTree,
+        diff: &GraphDiff,
+    ) {
+        let last_def = |mssa: &Mssa, block: BlockId| Self::last_def_in_snapshot(mssa, function, dt, diff, block);
+        struct PredInfo {
+            block: BlockId,
+            added: Vec<BlockId>,
+            prev: Vec<BlockId>,
+        }
+        // Map a block to its predecessors: added and previously existing, in
+        // the order of `updates` and then of the snapshot.
+        let mut pred_map: Vec<PredInfo> = Vec::new();
+        for update in updates {
+            let at = match pred_map.iter().position(|info| info.block == update.to) {
+                Some(at) => at,
+                None => {
+                    pred_map.push(PredInfo { block: update.to, added: Vec::new(), prev: Vec::new() });
+                    pred_map.len() - 1
+                }
+            };
+            if !pred_map[at].added.contains(&update.from) {
+                pred_map[at].added.push(update.from);
+            }
+        }
+        // All the existing predecessors of each block, at least one must exist.
+        let mut edge_count: BTreeMap<(BlockId, BlockId), usize> = BTreeMap::new();
+        let mut new_blocks: Vec<BlockId> = Vec::new();
+        for info in &mut pred_map {
+            for pred in diff.children(function, info.block, true) {
+                if !info.added.contains(&pred) && !info.prev.contains(&pred) {
+                    info.prev.push(pred);
+                }
+                *edge_count.entry((pred, info.block)).or_default() += 1;
+            }
+            if info.prev.is_empty() {
+                // An edge added to a new, likely cloned, block: its accesses
+                // are already right, and a single such edge is added.
+                assert_eq!(info.added.len(), 1, "can only handle adding one predecessor to a new block");
+                new_blocks.push(info.block);
+            }
+        }
+        // Nothing to process for new or cloned blocks.
+        pred_map.retain(|info| !new_blocks.contains(&info.block));
+
+        let mut blocks_with_defs_to_replace: Vec<BlockId> = Vec::new();
+        let mut inserted_phis: Vec<AccessId> = Vec::new();
+        // First create the phis in all blocks that have none, in the order of
+        // `updates`.
+        for update in updates {
+            if pred_map.iter().any(|info| info.block == update.to) && mssa.get_memory_phi(update.to).is_none() {
+                inserted_phis.push(mssa.create_memory_phi(update.to));
+            }
+        }
+        // Now fill the phis in with the right incoming values.
+        for info in &pred_map {
+            let block = info.block;
+            assert!(!info.prev.is_empty(), "at least one previous predecessor must exist");
+            let mut last_def_added_pred: Vec<(BlockId, AccessId)> = Vec::new();
+            for &added in &info.added {
+                let def = last_def(mssa, added);
+                last_def_added_pred.push((added, def));
+            }
+            let phi = mssa.get_memory_phi(block).expect("a phi");
+            let add_for_added = |mssa: &mut Mssa| {
+                for &(pred, def) in &last_def_added_pred {
+                    for _ in 0..edge_count[&(pred, block)] {
+                        mssa.add_incoming(phi, def, pred);
+                    }
+                }
+            };
+            if !mssa.access(phi).incoming.is_empty() {
+                // A phi that is not empty gets an incoming edge from each
+                // added predecessor.
+                add_for_added(mssa);
+            } else {
+                // Any existing predecessor's definition: the others have the
+                // same one, since no phi existed.
+                let def_p1 = last_def(mssa, info.prev[0]);
+                if last_def_added_pred.iter().all(|&(_, def)| def == def_p1) {
+                    // Nothing to add. The phi may be used by other new phis:
+                    // they read the definition from all predecessors instead.
+                    mssa.replace_all_uses_with(phi, def_p1);
+                    self.remove_memory_access(mssa, function, phi, true);
+                    continue;
+                }
+                add_for_added(mssa);
+                for &pred in &info.prev {
+                    for _ in 0..edge_count[&(pred, block)] {
+                        mssa.add_incoming(phi, def_p1, pred);
+                    }
+                }
+            }
+            // The blocks that used to dominate this one and no longer do.
+            let prev_idom = info
+                .prev
+                .iter()
+                .copied()
+                .reduce(|a, b| dt.find_nearest_common_dominator(function, a, b).unwrap_or(a))
+                .expect("a previous idom");
+            let new_idom = dt.immediate_dominator(block).expect("a valid idom");
+            assert!(dt.dominates(new_idom, prev_idom), "the new idom dominates the old one");
+            if prev_idom != new_idom {
+                blocks_with_defs_to_replace.push(prev_idom);
+                let mut next = prev_idom;
+                while let Some(up) = dt.immediate_dominator(next) {
+                    if up == new_idom {
+                        break;
+                    }
+                    blocks_with_defs_to_replace.push(up);
+                    next = up;
+                }
+            }
+        }
+        self.try_remove_trivial_phis(mssa, function, &inserted_phis);
+        // The blocks that now have a definition place the phis of their
+        // iterated dominance frontier.
+        let blocks_to_process: Vec<BlockId> =
+            inserted_phis.iter().filter(|&&phi| !mssa.access(phi).dead).map(|&phi| mssa.access(phi).block).collect();
+        if !blocks_to_process.is_empty() {
+            let snapshot = Snapshot { graph: function, diff };
+            let defining: IdSet<BlockId> = blocks_to_process.iter().copied().collect();
+            let frontier = llrm_mir::idf::forward(dt, &snapshot, &defining, None);
+            let mut to_fill: Vec<AccessId> = Vec::new();
+            for &block in &frontier {
+                if mssa.get_memory_phi(block).is_none() {
+                    let phi = mssa.create_memory_phi(block);
+                    inserted_phis.push(phi);
+                    to_fill.push(phi);
+                }
+            }
+            for &block in &frontier {
+                let phi = mssa.get_memory_phi(block).expect("a phi");
+                if !to_fill.contains(&phi) {
+                    // Update the existing phi.
+                    for at in 0..mssa.access(phi).incoming.len() {
+                        let def = last_def(mssa, mssa.access(phi).incoming[at].0);
+                        mssa.set_incoming_value(phi, at, def);
+                    }
+                } else {
+                    for pred in diff.children(function, block, true) {
+                        let def = last_def(mssa, pred);
+                        mssa.add_incoming(phi, def, pred);
+                    }
+                }
+            }
+        }
+        // For all defs in the blocks to replace, the uses they no longer
+        // dominate read the closest dominating def. Optimized accesses are
+        // uses too.
+        for &block in &blocks_with_defs_to_replace {
+            let Some(defs) = mssa.get_block_defs(block).map(<[AccessId]>::to_vec) else { continue };
+            for def in defs {
+                let dominating = mssa.access(def).block;
+                let mut reset_optimized: Vec<AccessId> = Vec::new();
+                for user in mssa.access(def).users.clone() {
+                    let used_in = mssa.access(user).block;
+                    if !dt.dominates(dominating, used_in) {
+                        let new = match mssa.get_memory_phi(used_in) {
+                            Some(phi) => phi,
+                            None => {
+                                let idom = dt.immediate_dominator(used_in).expect("a block has a valid idom");
+                                last_def(mssa, idom)
+                            }
+                        };
+                        mssa.set_defining_access(user, Some(new));
+                        reset_optimized.push(user);
+                    }
+                }
+                for phi in mssa.access(def).phi_users.clone() {
+                    for at in 0..mssa.access(phi).incoming.len() {
+                        let (from, value) = mssa.access(phi).incoming[at];
+                        if value == def && !dt.dominates(dominating, from) {
+                            let new = last_def(mssa, from);
+                            mssa.set_incoming_value(phi, at, new);
+                        }
+                    }
+                }
+                for user in mssa.access(def).optimized_users.clone() {
+                    if !dt.dominates(dominating, mssa.access(user).block) {
+                        reset_optimized.push(user);
+                    }
+                }
+                for user in reset_optimized {
+                    mssa.reset_optimized(user);
+                }
+            }
+        }
+        self.try_remove_trivial_phis(mssa, function, &inserted_phis);
     }
 
     /// [`getNewDefiningAccessForClone`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSAUpdater.cpp#L674).
