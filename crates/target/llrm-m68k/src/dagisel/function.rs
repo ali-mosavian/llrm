@@ -95,7 +95,7 @@ pub fn select_function(
     name: &str,
     cpu: Cpu,
 ) -> Result<Vec<Selected>, String> {
-    select_function_with(module, name, cpu, false, false, false, false)
+    select_function_with(module, name, cpu, false, false, false, false, false)
 }
 
 /// [`select_function`], with `source_order`: the pin's source-order scheduler
@@ -110,6 +110,7 @@ pub fn select_function_with(
     indexed: bool,
     short: bool,
     absolute_data: bool,
+    size: bool,
 ) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
@@ -121,7 +122,11 @@ pub fn select_function_with(
     let layout = DataLayout::parse(text)?;
     let arch = M68k;
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
-    let mut target = builder_target();
+    // DEVIATE M68K-DIVSIZE: from the 68020 a divide by a constant stays one
+    // `divu.l` in a size build (4-6 B) where the pin's default (`isIntDivCheap`
+    // false) makes the multiply-high sequence (10-14 B, `mulu.l` and shifts);
+    // X86 and AArch64 return the size flag here too. Owner m68k. Exit: none.
+    let mut target = builder_target().with_int_div_cheap(size && cpu.at_least(Cpu::M68020));
     target.ordered_copies = indexed;
     let mut info = FunctionLoweringInfo::new(function);
     let mut temporaries = Temporaries::new(info.static_allocas.iter().map(|(_, &index)| index + 1).max().unwrap_or(0));
