@@ -1002,6 +1002,36 @@ pub fn _passage(block: &LirBlock) -> Option<i64> {
     }
 }
 
+/// [`_passage`] where the anchors of identity copies are no work: the values
+/// they define are read by no pass left.
+pub fn _passage_late(block: &LirBlock) -> Option<i64> {
+    if !block.phis.is_empty() {
+        return None;
+    }
+    let mut work = _work(block).filter(|one| !_inert(one));
+    match (work.next(), work.next()) {
+        (None, _) if block.succ.len() == 1 => Some(block.succ[0]),
+        (Some(only), None) if only.what.as_ref().is_some_and(|what| what.op == Operation::Jump) => {
+            only.what.as_ref().and_then(|what| what.target)
+        }
+        _ => None,
+    }
+}
+
+/// `threaded` for a body about to be assembled: the edge blocks that only
+/// hold an identity copy's anchor are bypassed.
+///
+/// DEVIATE LATE-1 (owner m32, exit 2026-11-21). The pin's `VirtRegRewriter`
+/// deletes an identity copy where allocation ends, so `OptimizeBranches` finds
+/// the edge block empty. Here the anchor keeps the virtual definition for
+/// `machinecp` and the passes before `ControlFlow`, so the bypass waits for
+/// the last reader of values. Exit: delete identity copies at the end of
+/// allocation and drop the anchors' value uses in `machinecp`.
+pub fn threaded_late(body: &LirBody) -> LirBody {
+    let protected: BTreeSet<i64> = body.loop_trip_counts.iter().map(|(header, _count)| *header).collect();
+    branchfold::folded_late(body, &protected)
+}
+
 pub fn _predecessors(blocks: &[Block]) -> IndexMap<i64, BTreeSet<i64>> {
     let mut found: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
     for block in blocks {

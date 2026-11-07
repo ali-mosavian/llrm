@@ -32,12 +32,21 @@ const CALLER_SAVED_ADDRESS_FIRST: [RegId; 4] = [reg::A1, reg::A0, reg::D0, reg::
 /// gcc's 26). Used with [`crate::compile::Options::indexed`]; the pin's order
 /// stays for the pinned output. Owner m68k. Exit: 2026-11-28, when the shared
 /// greedy prices a class by what its users need.
-pub struct Registers<const ADDRESS_FIRST: bool>;
+///
+/// DEVIATE M68K-ARGREMAT (with `ARGUMENT_REMAT`): a load of an incoming stack
+/// argument that nothing writes is made again where it is read, not stored to
+/// a spill slot and reloaded. The pin's M68k marks no load rematerializable
+/// (`isReMaterializable` needs the descriptor flag), so it spills. Reason:
+/// the slot is an immutable fixed object, gcc reloads it, and a spill store
+/// plus a frame cell is more bytes and clocks (seeds 300: about 115 smaller,
+/// 11 larger per CPU and level). Owner m68k. Exit: 2026-11-28, or when the
+/// pin's M68k marks the rows. Off for `Options::PINNED`.
+pub struct Registers<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool>;
 
 /// The allocator's registers in the order this compiler uses by default.
-pub type M68kRegisters = Registers<true>;
+pub type M68kRegisters = Registers<true, true>;
 
-impl<const ADDRESS_FIRST: bool> Target for Registers<ADDRESS_FIRST> {
+impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool> Target for Registers<ADDRESS_FIRST, ARGUMENT_REMAT> {
     type Class = Class;
 
     fn meet(
@@ -49,6 +58,14 @@ impl<const ADDRESS_FIRST: bool> Target for Registers<ADDRESS_FIRST> {
 
     fn any() -> Class {
         Class::Xr32
+    }
+
+    /// An incoming argument is an immutable fixed stack object, so the pin
+    /// makes a load of one again where it is read
+    /// (`isLoadFromInvariantOrConstantMemory`); `MOV32rp` takes either kind of
+    /// register, so the copy can land wherever its reader needs.
+    fn is_invariant_argument_load(name: &str) -> bool {
+        ARGUMENT_REMAT && name == "MOV32rp"
     }
 
     /// DEVIATE C13 (coalescer/mod.rs): the joins raised `movem` 71 -> 89 in
@@ -187,12 +204,14 @@ pub fn allocate_greedy(
     function: &mut MFunction,
     size: bool,
     address_first: bool,
+    rematerialize_arguments: bool,
 ) -> Result<(Assignment, Vec<(i32, Class)>), String> {
     let regs = llrm_lir::registers::Regs(&REGISTER_INFO);
-    if address_first {
-        llrm_spike_mf::tolir::allocate_greedy::<Registers<true>>(function, regs, size)
-    } else {
-        llrm_spike_mf::tolir::allocate_greedy::<Registers<false>>(function, regs, size)
+    match (address_first, rematerialize_arguments) {
+        (true, true) => llrm_spike_mf::tolir::allocate_greedy::<Registers<true, true>>(function, regs, size),
+        (true, false) => llrm_spike_mf::tolir::allocate_greedy::<Registers<true, false>>(function, regs, size),
+        (false, true) => llrm_spike_mf::tolir::allocate_greedy::<Registers<false, true>>(function, regs, size),
+        (false, false) => llrm_spike_mf::tolir::allocate_greedy::<Registers<false, false>>(function, regs, size),
     }
 }
 
@@ -261,7 +280,7 @@ pub fn remove_redundant_copies(
     })
 }
 
-impl<const ADDRESS_FIRST: bool> Jump for Registers<ADDRESS_FIRST> {
+impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool> Jump for Registers<ADDRESS_FIRST, ARGUMENT_REMAT> {
     fn reverse(branch: &llrm_spike_mf::Inst) -> Option<llrm_spike_mf::Inst> {
         let Kind::Op(name) = branch.kind else { return None };
         let opposite = CONDITIONAL
