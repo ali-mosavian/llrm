@@ -155,6 +155,12 @@ pub trait Target {
     /// pin's is `enableMachineScheduler()`: x86 and AArch64 true; M68k and
     /// WebAssembly false (the default of a target that sets nothing). Here
     /// true, as before, until a target's owner states otherwise.
+    ///
+    /// m68k (owner greedy-subreg, exit 2026-11-29): keeps true. False is the
+    /// pin's value and fixes `fib` -Os (the local copy `v7 = COPY a` joins before
+    /// the global `a := b`), but makes 7-9 cells per CPU/level worse (68000 O2
+    /// div_constants_long +284 B), as in idiv_loop_os, where the pin's own
+    /// order gives the same `bra` + `moveq #0`. Not flipped while a strict cell is worse.
     fn joins_global_copies() -> bool {
         true
     }

@@ -145,6 +145,22 @@ impl State {
     }
 }
 
+/// DEVIATE C13, the part left on: a target that joins no copy between widths
+/// still joins the low part of a value that lives on past the copy. The narrow
+/// range lies inside the wide one, so the join lengthens nothing and adds no
+/// interference; `v8 = COPY v32` before a byte store of `v8` while `v32` is
+/// read later.
+fn joins_inside_wide_value(
+    lis: &mut LiveIntervals,
+    cp: &CoalescerPair,
+) -> bool {
+    if cp.lane_offset() != 0 || has_lane_defs(lis, cp.dst_reg()) || has_lane_defs(lis, cp.src_reg()) {
+        return false;
+    }
+    let narrow = lis.interval(cp.src_reg()).range.clone();
+    lis.interval(cp.dst_reg()).range.covers(&narrow)
+}
+
 /// `joinCopy`.
 pub fn join_copy(
     lis: &mut LiveIntervals,
@@ -159,7 +175,7 @@ pub fn join_copy(
     };
     // DEVIATE C13: with the joins between widths off, such a copy is as it
     // was before they existed: no pair, nothing below touches it.
-    if cp.is_partial() && !env.joins_sub_registers() {
+    if cp.is_partial() && !env.joins_sub_registers() && !joins_inside_wide_value(lis, &cp) {
         return JoinResult::Rejected;
     }
     if !env.should_coalesce(lis, copy, cp.src_reg(), cp.dst_reg()) {

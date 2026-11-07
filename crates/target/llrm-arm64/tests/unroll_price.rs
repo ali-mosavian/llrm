@@ -75,3 +75,14 @@ fn a_loop_in_a_known_thousand_trip_loop_is_priced_by_its_real_runs() {
 fn a_loop_whose_copies_make_data_constant_is_unrolled_with_its_nest() {
     assert!(labels(include_str!("data/bench_stft_fixed.ll")) <= 27);
 }
+
+/// tile -O2: the 40-trip loop inside a 25-trip loop was unrolled by the nest
+/// bypass: the outer counter's only reader is the address of a load, which is
+/// not data the nest folds. 364 B and 2,155 instructions where the rolled loop
+/// is 68 B and 4,181 (gcc 80 B, 4,184). The module was 115 instructions;
+/// fewer than 80 with the loop priced.
+#[test]
+fn a_nest_loop_whose_outer_counter_only_addresses_a_load_is_priced_not_bypassed() {
+    let insns = instructions(include_str!("data/bench_tile.ll"), Level::O2);
+    assert!(insns < 80, "{insns} instructions");
+}

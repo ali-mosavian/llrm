@@ -44,7 +44,11 @@
 //! `TRI->shouldCoalesce` (RegisterCoalescer.cpp#L2080, which M68k does not
 //! override); a target may switch the joins off. m68k does: they raised
 //! `movem` 71 -> 89 in div_constants_short (68020 -O1) and cost 15 of 90
-//! cell-CPU rows. Exit: 2026-11-15, re-evaluated when the allocator-sensitivity
+//! cell-CPU rows. Narrowed (owner greedy-subreg, exit 2026-11-29): a copy whose
+//! narrow range lies inside the wide value's is joined anyway (it lengthens
+//! nothing). Worse row: div_constants_short 68020 -O2 4954 -> 4978 B (the
+//! sixth join lets a function at d0-d7 take d2: movem 96 -> 98), clocks
+//! unpriced. Exit: 2026-11-15, re-evaluated when the allocator-sensitivity
 //! work (pair roles) lands; no join rule explains the rows (the harmful joins
 //! leave palettes unchanged and shift one dequeue order).
 //!

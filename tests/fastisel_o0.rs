@@ -456,3 +456,29 @@ fn fast_isel_multiplies_by_a_constant_with_an_immediate() {
         assert!(asm.contains("shl") && asm.lines().any(|line| line.contains("imul") && line.trim_end().ends_with(", 3")), "{target}: {asm}");
     }
 }
+
+/// A one-use load right before its user was loaded into a register first
+/// (`mov rax, [b]; mov rcx, [b]; add rcx, rax`), where the pin folds it
+/// (`mov rax, [b]; add rax, [b]`): `llrm_wide` of `wc_mixed.c`, 49 B against 32.
+#[test]
+fn fast_isel_folds_a_load_into_the_instruction_after_it() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(int a, int b)\n{\n    return a + b - a * b;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        let folded = |op: &str| asm.lines().any(|line| line.trim_start().starts_with(op) && line.contains("ptr ["));
+        assert!(folded("add") && folded("imul"), "{target}: {asm}");
+    }
+}
