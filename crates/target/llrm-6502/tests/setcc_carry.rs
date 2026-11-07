@@ -56,15 +56,19 @@ fn a_signed_less_or_equal_of_two_words_is_one_borrow_chain() {
 /// `k_branch` and `k_select`: the order of two `i32` read by a branch and by a select.
 fn consumer(kind: &str) -> String {
     match kind {
-        "branch" => "define i16 @k_branch(ptr %a, ptr %b) {
+        "branch" => "declare void @one()
+declare void @two()
+define void @k_branch(ptr %a, ptr %b) {
   %x = load i32, ptr %a
   %y = load i32, ptr %b
   %c = icmp uge i32 %x, %y
   br i1 %c, label %t, label %f
 t:
-  ret i16 1
+  call void @one()
+  ret void
 f:
-  ret i16 2
+  call void @two()
+  ret void
 }
 "
         .to_owned(),
