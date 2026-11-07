@@ -547,6 +547,13 @@ pub trait Tti {
         None
     }
 
+    /// Whether the rate test of `speed_inline_milliclocks_per_byte` also holds at
+    /// -O3. False: the pin's threshold alone there (its locally hot call-site
+    /// threshold already weighs the frequency).
+    fn inline_rate_at_o3(&self) -> bool {
+        true
+    }
+
     /// What a byte of growth is worth, in thousandths of a clock, to a speed
     /// caller's inline (D11 at speed): the growth is refused when it costs
     /// more than the call's latency saves, weighted by the site's frequency.

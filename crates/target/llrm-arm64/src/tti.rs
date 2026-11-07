@@ -299,6 +299,13 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE ARM64-INLINE-O3 (owner w15, exit 2026-11-30): no rate test at -O3.
+    /// The pin's threshold stands (jpeg_fixed -O2: 141 of 147
+    /// sites refused, clang 12.4M against 12.9M); -O3 has the locally hot threshold.
+    fn inline_rate_at_o3(&self) -> bool {
+        false
+    }
+
     /// 0.004 B/clock, provisional: one byte of growth is 250 frequency-weighted
     /// clocks. The median of the -O2/-O3 cells where inlining grew the code
     /// (w15-arm64-rate-proposal-11-03.md); widened to 30 clean cells by 11-12.

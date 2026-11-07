@@ -198,6 +198,9 @@ pub struct InlineParams {
     /// The `LastCallToStatic` bonus applies. The pin's always does;
     /// `-fno-inline-functions-called-once` turns it off.
     pub last_call_to_static: bool,
+    /// The target's bytes-for-clocks rate test applies (`Tti::inline_rate_at_o3`
+    /// turns it off at -O3: the pin's own frequency rule stands there).
+    pub rate_test: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -230,6 +233,7 @@ impl InlineParams {
             recursive_callee_limit: i64::MAX,
             recursive_edge_growth: i64::MAX,
             last_call_to_static: true,
+            rate_test: true,
             tti: Tti::Generic,
         }
     }
@@ -2123,6 +2127,9 @@ impl<'a> Analyzer<'a> {
     /// not trade bytes for clocks.
     fn grows_more_than_it_saves(&self) -> bool {
         let Some(tti) = self.site.tti else { return false };
+        if !self.params.rate_test {
+            return false;
+        }
         let rate = tti.inline_policy().by_rate;
         let growth = self.growth_per_site();
         // Growth under one call's size is inside the estimate's resolution: the
