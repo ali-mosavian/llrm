@@ -223,9 +223,6 @@ pub struct DivBytes {
     pub divide: i64,
     pub divide_long: i64,
     pub milliclocks_per_byte: i64,
-    /// The block's frequency over the entry's: the clocks recur that often,
-    /// the bytes are paid once.
-    pub frequency: f64,
 }
 
 /// A price by the constant `d`.
@@ -411,9 +408,8 @@ pub struct SelectionDAG {
     pub(super) survivors: Vec<u32>,
     /// The `IROrder` of the `SDLoc` in force: nodes made now carry it.
     pub cur_order: u32,
-    /// The physical register each virtual register arrives in
-    /// (`getLiveInPhysReg`), by virtual register number: set for the entry
-    /// block's arguments.
+    /// The physical register each virtual register arrives in (`getLiveInPhysReg`), by
+    /// virtual register number: set for the entry block's arguments.
     pub live_in_phys: llrm_support::hash::HashMap<u32, llrm_lir::registers::RegId>,
     /// The source line of the IR instruction at each `IROrder` (0: none), from
     /// the `!dbg` the builder read: `SDLoc`'s line.
@@ -582,17 +578,6 @@ impl SelectionDAG {
 
     pub fn config(&self) -> &DagConfig {
         &self.config
-    }
-
-    /// The frequency of the block this DAG is of, over the entry's, for the
-    /// divide's byte weighing (DEVIATE SD446).
-    pub fn set_divide_frequency(
-        &mut self,
-        frequency: f64,
-    ) {
-        if let Some(bytes) = self.config.div_prices.as_mut().and_then(|prices| prices.bytes.as_mut()) {
-            bytes.frequency = frequency;
-        }
     }
 
     /// The jump table is position independent (`EK_LabelDifference32`, its

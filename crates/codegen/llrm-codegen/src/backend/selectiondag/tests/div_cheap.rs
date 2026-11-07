@@ -155,7 +155,6 @@ fn the_rate_weighs_the_bytes_of_the_divide_against_the_sequence() {
         divide: 6,
         divide_long: 8,
         milliclocks_per_byte: 500,
-        frequency: 1.0,
     };
     assert_ne!(priced(ISD::SRem, EVT::I32, 5, Some(I486_REAL_MODE)), ISD::SRem, "clocks alone: the sequence");
     let weighed = DivPrices { bytes: Some(bytes), ..I486_REAL_MODE };
@@ -193,28 +192,4 @@ fn a_32_bit_remainder_is_the_sequence_when_the_multiply_high_is_the_shortest_mul
         ISD::SRem,
         "the premise: at the midpoint it was the divide"
     );
-}
-
-/// recmany `% 5` and `% 7` sat in a loop at m16 -O2, and the bytes weighed
-/// against one execution's clocks chose `idiv`: 98 bytes saved for 28889
-/// clocks lost (+12.6%), switch the same (-63 B, +4.9%). The clocks recur with
-/// the block's frequency; the bytes do not.
-#[test]
-fn a_divide_in_a_hot_block_keeps_the_sequence_the_bytes_would_drop() {
-    let bytes = |frequency| DivBytes {
-        prefix: 1,
-        add: 4,
-        shift: 6,
-        extend: 6,
-        multiply: 6,
-        multiply_long: 8,
-        multiply_high: 8,
-        divide: 6,
-        divide_long: 8,
-        milliclocks_per_byte: 500,
-        frequency,
-    };
-    let at = |frequency| DivPrices { bytes: Some(bytes(frequency)), ..I486_REAL_MODE };
-    assert_eq!(priced(ISD::SRem, EVT::I32, 5, Some(at(1.0))), ISD::SRem, "once: the divide");
-    assert_ne!(priced(ISD::SRem, EVT::I32, 5, Some(at(16.0))), ISD::SRem, "sixteen times: the sequence");
 }
