@@ -237,7 +237,7 @@ pub fn kept_for_isel(
     isel: crate::backend::shadow::Selector,
     ty: &str,
 ) -> bool {
-    isel == crate::backend::shadow::Selector::Dag && matches!(ty, "i1" | "i8" | "i16" | "i32")
+    isel == crate::backend::shadow::Selector::Dag && matches!(ty, "i1" | "i8" | "i16" | "i32" | "i64")
 }
 
 /// Every select of `module`'s functions made a branch and a phi.
@@ -852,7 +852,7 @@ done:
     #[test]
     fn the_dag_run_keeps_an_integer_select_for_its_own_lowering() {
         use crate::backend::shadow::Selector;
-        for ty in ["i8", "i16", "i32"] {
+        for ty in ["i8", "i16", "i32", "i64"] {
             assert!(super::kept_for_isel(Selector::Dag, ty), "{ty}");
             assert!(!super::kept_for_isel(Selector::Old, ty), "{ty}");
         }

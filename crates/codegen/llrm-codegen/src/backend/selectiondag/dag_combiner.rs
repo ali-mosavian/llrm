@@ -2482,6 +2482,30 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node_flags(ISD::Add, vt, &[self.dag.operand(n0, 0), sum], flags));
             }
         }
+        // `visitADDLike`: `add (sext i1 X), 1` is `zext (not i1 X)`; the pin
+        // does not make `add (zext i1 X), -1` a `sext` ("most targets
+        // generate better code for the zext form").
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L2991
+        if self.dag.opcode(n0) == ISD::SignExtend
+            && self.dag.has_one_use(n0.node)
+            && self.dag.constant(n1) == Some(1)
+            && self.dag.value_type(self.dag.operand(n0, 0)) == EVT::I1
+            && (!self.legal_operations() || (self.fp_op_legal(ISD::Xor, EVT::I1) && self.fp_op_legal(ISD::ZeroExtend, vt)))
+        {
+            let not = self.dag.get_not(self.dag.operand(n0, 0), EVT::I1);
+            return Some(self.dag.get_node(ISD::ZeroExtend, vt, &[not]));
+        }
+        // `visitADDLikeCommutative`: where booleans are 0/1, `add (sext i1
+        // Y), X` is `sub X, (zext i1 Y)`.
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3534
+        if self.dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrOne {
+            for (sext, other) in [(n0, n1), (n1, n0)] {
+                if self.dag.opcode(sext) == ISD::SignExtend && self.dag.value_type(self.dag.operand(sext, 0)) == EVT::I1 {
+                    let zext = self.dag.get_node(ISD::ZeroExtend, vt, &[self.dag.operand(sext, 0)]);
+                    return Some(self.dag.get_node(ISD::Sub, vt, &[other, zext]));
+                }
+            }
+        }
         let is_neg =
             |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::Sub && dag.constant(dag.operand(v, 0)) == Some(0);
         // `(add (sub 0, a), b)` is `(sub b, a)`; likewise on the right.
