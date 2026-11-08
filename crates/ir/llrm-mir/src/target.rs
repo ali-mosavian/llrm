@@ -90,6 +90,19 @@ pub struct Tuning {
     /// x_sf_mul 82587 -> 88263 (88107). Recovery: weigh callee size against
     /// the site's frequency and loop depth.
     pub inline_o1_unit_bytes_milli: i64,
+    /// DEVIATE INL-O2 RATE (owner x86-m32, exit 2026-11-22): what a byte of
+    /// growth is worth, in thousandths of a clock, to a speed caller's inline
+    /// (`Tti::speed_inline_milliclocks_per_byte`; the pin has no such rule).
+    /// 0: the pin's threshold alone.
+    pub speed_inline_milliclocks_per_byte: i64,
+    /// What one call costs in clocks when the inliner prices its latency
+    /// (`Tti::call_sequence_cost`): the call and return, each argument word
+    /// pushed, and the caller's pop of them. The pin prices the call as one
+    /// instruction (4 on x86), which at 486 prices (call 3, ret 5, a push and
+    /// a pop each) is a third of the sequence. 0 fixed: the pin's flat price.
+    pub call_sequence_fixed_clocks: i64,
+    pub call_sequence_argument_clocks: i64,
+    pub call_sequence_pop_clocks: i64,
     /// DEVIATE INL-O1 ENTRY (owner x86-m32, exit 2026-11-15): the -O1
     /// bytes-vs-clocks check weighs a site's frequency by how often its
     /// function runs (the calls to it up the call graph), not by the
@@ -321,6 +334,10 @@ impl Tuning {
         inline_never_grows_without_rate: false,
         inline_o1_milliclocks_per_byte: 0,
         inline_o1_unit_bytes_milli: 1000,
+        speed_inline_milliclocks_per_byte: 0,
+        call_sequence_fixed_clocks: 0,
+        call_sequence_argument_clocks: 0,
+        call_sequence_pop_clocks: 0,
         inline_o1_weighs_entry: false,
         unroll_o1_analyzed_trips: None,
         second_ipsccp: false,
