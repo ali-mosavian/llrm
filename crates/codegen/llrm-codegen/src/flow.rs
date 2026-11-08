@@ -91,14 +91,15 @@ const UNOPTIMIZED: &[&str] = &[
     // d1106deb71cc): `addMachineSSAOptimization` (DeadMachineInstructionElim)
     // and `addOptimizedRegAlloc` (ProcessImplicitDefs) are O>0 only, as is
     // `addMachineLateOptimization` (BranchFolder); the float and leaf rewrites
-    // are ours alone.
+    // are ours alone. `ControlFlow` stays: it also drops the jump to the next
+    // block, which the pin's FastISel never emits (gated, div_constants_short
+    // -O0 had 318 `jmp` against 132).
     "DeadMachineInstructionElim",
     "ProcessImplicitDefs",
     "LeafFold",
     "FloatUnhoist",
     "FloatFold",
     "FloatSink",
-    "ControlFlow",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
@@ -770,7 +771,7 @@ mod tests {
     /// The pin's -O0 `addMachinePasses` runs no `DeadMachineInstructionElim`
     /// (`addMachineSSAOptimization` is O>0 only), no `ProcessImplicitDefs`
     /// (`addOptimizedRegAlloc`: the fast allocator takes `addFastRegAlloc`) and
-    /// no branch folding or tail duplication (`addMachineLateOptimization`).
+    /// no tail duplication (`addMachineLateOptimization`).
     /// Ours ran them at -O0: 12 M Ir of 78 M on div_constants_short.
     #[test]
     fn test_the_o0_pipeline_has_none_of_the_phases_the_pin_runs_only_when_optimizing() {
@@ -778,9 +779,10 @@ mod tests {
         let phases = machine(&IndexMap::default(), None, None, None, false, &o0, &crate::backend::target::BUILT_IN)
             .expect("the phases");
         let names: Vec<&str> = phases.iter().map(|phase| phase.class_name()).collect();
-        for gone in ["DeadMachineInstructionElim", "ProcessImplicitDefs", "ControlFlow", "TailDuplicate"] {
+        for gone in ["DeadMachineInstructionElim", "ProcessImplicitDefs", "LeafFold", "FloatUnhoist", "TailDuplicate"] {
             assert!(!names.contains(&gone), "{gone} runs at -O0: {names:?}");
         }
+        assert!(names.contains(&"ControlFlow"), "the jump to the next block is dropped at -O0: {names:?}");
     }
 
     /// Every phase `-O0` leaves out is a phase with a slot.
