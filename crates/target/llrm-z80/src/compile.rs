@@ -2340,13 +2340,15 @@ fn sunk_operand(
     // after the diamond sees what the slice leaves only if the slice leaves
     // none
     let flags = Reg::Phys(crate::reg::FLAGS);
-    let makes_flags = slice.iter().any(|&at| touches(&insts[at], flags));
+    // an instruction that sets the flags may not name them (`XOR16i`)
+    let sets = |inst: &Inst| inst.sets_flags || touches(inst, flags);
+    let makes_flags = slice.iter().any(|&at| sets(&insts[at]));
     if makes_flags {
-        if insts.iter().rposition(|inst| touches(inst, flags)).is_some_and(|last| slice.contains(&last)) {
+        if insts.iter().rposition(sets).is_some_and(|last| slice.contains(&last)) {
             return None;
         }
         let tail = &function.blocks[block].insts[p + 1..];
-        let wanted = tail.iter().find(|inst| inst.reads_flags || touches(inst, flags));
+        let wanted = tail.iter().find(|inst| inst.reads_flags || sets(inst));
         if wanted.is_some_and(|inst| inst.reads_flags) {
             return None;
         }
