@@ -1835,3 +1835,50 @@ define i1 @f(i8 %x, ptr %p) {
     let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
     assert!(named("test") == 1 && named("and") == 0, "test {} and {}", named("test"), named("and"));
 }
+
+/// `x + y + ((z >> 3) & 1)` was `add; bt; adc eax, 0`: the pin folds
+/// `ADC(ADD(X,Y),0,Carry)` to `ADC(X,Y,Carry)` when nothing reads the carry
+/// out, giving `bt; adc` (sfm16_float `sf32_pack`, +3 B).
+#[test]
+fn at_m32_an_add_into_an_adc_of_zero_is_one_adc() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %y, i32 %z) {
+  %s = add i32 %x, %y
+  %b = lshr i32 %z, 3
+  %m = and i32 %b, 1
+  %r = add i32 %s, %m
+  ret i32 %r
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(named("adc") == 1 && named("add") == 0, "adc {} add {}", named("adc"), named("add"));
+}
+
+/// `(x << 1) + ((z >> 3) & 1)` was `add eax, eax; bt; adc eax, 0`; the pin's
+/// `ADC(SHL(X,1),0,Carry)` fold makes it `bt; adc eax, eax`.
+#[test]
+fn at_m32_a_double_into_an_adc_of_zero_is_adc_of_itself() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %z) {
+  %s = shl i32 %x, 1
+  %b = lshr i32 %z, 3
+  %m = and i32 %b, 1
+  %r = add i32 %s, %m
+  ret i32 %r
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(named("adc") == 1 && named("add") == 0, "adc {} add {}", named("adc"), named("add"));
+}
