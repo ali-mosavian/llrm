@@ -78,9 +78,9 @@ fn declined_all(why: &str) -> Vec<Option<BlockDag>> {
     Vec::new()
 }
 
-/// A 32-bit integer, or at m32 a pointer in the default space (the same register).
-fn word(types: &llrm_mir::types::Types, ty: llrm_mir::types::TypeId, m32: bool) -> bool {
-    types.int_bits(ty) == Some(32) || (m32 && matches!(types.get(ty), llrm_mir::types::Type::Pointer(0)))
+/// A 32-bit integer, or at narrow a pointer in the default space (the same register).
+fn word(types: &llrm_mir::types::Types, ty: llrm_mir::types::TypeId, narrow: bool) -> bool {
+    types.int_bits(ty) == Some(32) || (narrow && matches!(types.get(ty), llrm_mir::types::Type::Pointer(0)))
 }
 
 /// `Some(0)` for `i8`, `Some(1)` for `i16`: the types FastISel holds in a byte or word register.
@@ -94,11 +94,11 @@ fn narrow_kind(types: &llrm_mir::types::Types, ty: llrm_mir::types::TypeId) -> O
 
 /// Whether a value of `ty` lives in a 64-bit register (`Some(true)`), a 32-bit one
 /// (`Some(false)`), or is not a type FastISel holds: `i32`; at m64 also `i64` and a pointer.
-fn wide_kind(types: &llrm_mir::types::Types, ty: llrm_mir::types::TypeId, m32: bool) -> Option<bool> {
+fn wide_kind(types: &llrm_mir::types::Types, ty: llrm_mir::types::TypeId, narrow: bool) -> Option<bool> {
     match (types.int_bits(ty), types.get(ty)) {
         (Some(32), _) => Some(false),
-        (Some(64), _) if !m32 => Some(true),
-        (_, llrm_mir::types::Type::Pointer(0)) => Some(!m32),
+        (Some(64), _) if !narrow => Some(true),
+        (_, llrm_mir::types::Type::Pointer(0)) => Some(!narrow),
         _ => None,
     }
 }
@@ -120,17 +120,19 @@ pub fn build_all(
     arch: &dyn llrm_target::Target,
     info: &mut FunctionLoweringInfo,
 ) -> Vec<Option<BlockDag>> {
-    let m32 = arch.object().bitness == 32;
-    if !(m32 || arch.object().bitness == 64) || module.signature(function.ty).2 {
+    // The width of a pointer, from the data layout: 4 bytes is the 32-bit mode, 8 the 64-bit one.
+    let pointer_bytes = i64::from(data_layout.pointer(0).bits / 8);
+    let narrow = pointer_bytes == 4;
+    if !matches!(pointer_bytes, 4 | 8) || module.signature(function.ty).2 {
         return declined_all("a variadic function or another width");
     }
     // every parameter is a 4-byte stack cell: fixed object -(n + 1)
-    let int32 = |ty| wide_kind(&module.context.types, ty, m32).is_some() || narrow_kind(&module.context.types, ty).is_some();
+    let int32 = |ty| wide_kind(&module.context.types, ty, narrow).is_some() || narrow_kind(&module.context.types, ty).is_some();
     let (returns, parameters, _) = module.signature(function.ty);
-    // m32: a 4-byte stack cell; m64: one register
+    // narrow: a 4-byte stack cell; m64: one register
     let arrives = |one: &crate::backend::isel::Parameter| match one {
-        crate::backend::isel::Parameter::Cell(_) => m32,
-        crate::backend::isel::Parameter::Registers(regs) => !m32 && regs.len() == 1,
+        crate::backend::isel::Parameter::Cell(_) => narrow,
+        crate::backend::isel::Parameter::Registers(regs) => !narrow && regs.len() == 1,
         _ => false,
     };
     if parameters.iter().any(|&ty| !int32(ty))
@@ -139,7 +141,7 @@ pub fn build_all(
     {
         return declined_all("a parameter that is not a 4-byte stack cell or one register");
     }
-    let arg_regs: Vec<(llrm_lir::registers::RegId, u32)> = match m32 {
+    let arg_regs: Vec<(llrm_lir::registers::RegId, u32)> = match narrow {
         true => Vec::new(),
         false => convention
             .parameters
@@ -154,15 +156,20 @@ pub fn build_all(
     if !returns_int && !module.context.types.is_void(returns) {
         return declined_all("a result that is not an int, a pointer or void");
     }
-    let return_bytes = if wide_kind(&module.context.types, returns, m32) == Some(true) { 8 } else { 4 };
+    let return_bytes = if wide_kind(&module.context.types, returns, narrow) == Some(true) { 8 } else { 4 };
     let eax = (returns_int && convention.returns.len() == 1).then(|| arch.registers().named(convention.returns[0], return_bytes));
+    // The function's own convention, from the description: the registers it passes integers in, and the pair a
+    // double-width result (and the divide's implicit operands) uses.
+    let calling = arch.calling().by_number(function.calling_convention);
     let view = |name: &str, bytes| arch.registers().named(arch.register_named(name), bytes);
-    let sysv: Vec<[llrm_lir::registers::RegId; 2]> =
-        [("edi", "rdi"), ("esi", "rsi"), ("edx", "rdx"), ("ecx", "rcx"), ("r8d", "r8"), ("r9d", "r9")]
-            .iter()
-            .map(|&(narrow, wide)| [view(narrow, 4), view(wide, 8)])
-            .collect();
-    let al = view("al", 1);
+    let sysv: Vec<[llrm_lir::registers::RegId; 2]> = calling
+        .map(|one| one.argument_registers.iter().map(|name| [view(name, 4), view(name, 8)]).collect())
+        .unwrap_or_default();
+    let Some([low, high]) = calling.and_then(|one| one.result_registers(2 * pointer_bytes)).and_then(|pair| <&[String; 2]>::try_from(pair).ok())
+    else {
+        return declined_all("a convention with no register pair for a double-width result");
+    };
+    let al = view(low, 1);
     let mut uses: llrm_mir::dense::IdMap<ValueId, u32> = Default::default();
     for block in function.layout() {
         for id in function.iter_block(*block) {
@@ -174,7 +181,7 @@ pub fn build_all(
             }
         }
     }
-    let Some(names) = Names::of(opcode, if m32 { llrm_dagisel::fastisel::Table::I486 } else { llrm_dagisel::fastisel::Table::X64 }) else { return Vec::new() };
+    let Some(names) = Names::of(opcode, if narrow { llrm_dagisel::fastisel::Table::I486 } else { llrm_dagisel::fastisel::Table::X64 }) else { return Vec::new() };
     let mut blocks = Vec::new();
     let layout = function.layout();
     for (at, &block) in layout.iter().enumerate() {
@@ -182,7 +189,7 @@ pub fn build_all(
         let dag = fresh_dag(module, function, target, info, block, None);
         let chain = dag.entry_node();
         let mut declined = None;
-        let dag = Fast { layout: data_layout, module, function, info: &mut *info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), arg_regs: &arg_regs, entry: layout[0] == block, sysv: &sysv, al, edx: arch.registers().named(arch.register_named("edx"), 4), rax: view("rax", 8), rdx: view("rdx", 8), m32, dag, chain, values: Default::default(), next, uses: &uses, folded: None, exports: Vec::new(), phi_updates: Vec::new(), geps: Default::default() }
+        let dag = Fast { layout: data_layout, module, function, info: &mut *info, names: &names, eax, any_eax: view(low, 4), esp: arch.stack_pointer(), arg_regs: &arg_regs, entry: layout[0] == block, sysv: &sysv, al, edx: view(high, 4), rax: view(low, 8), rdx: view(high, 8), narrow, dag, chain, values: Default::default(), next, uses: &uses, folded: None, exports: Vec::new(), phi_updates: Vec::new(), geps: Default::default() }
             .block(block, &mut declined);
         let Some((dag, phi_updates)) = dag else {
             llrm_support::debug!("isel", "fast declined at {}", declined_text(module, function, declined));
@@ -267,7 +274,7 @@ struct Names {
     narrow: Option<Narrow>,
     wide: Option<Wide>,
     mem: Mem,
-    /// m64: `movsxd r64, m32`.
+    /// m64: `movsxd r64, narrow`.
     movsx64_rm: Option<u16>,
     mov_rm: u16,
     mov_mr: u16,
@@ -293,7 +300,7 @@ struct Names {
     lea64: Option<u16>,
     /// `add`, `sub`, `and`, `or`, `xor` with a register and with an immediate.
     alu: [(u16, u16); 5],
-    /// m32 only so far: calls and the signed divide.
+    /// narrow only so far: calls and the signed divide.
     calls: Option<Calls>,
     divide: Option<Divide>,
     /// `SUBREG_TO_REG` and `EXTRACT_SUBREG`: widening and narrowing between `r32` and `r64`.
@@ -321,9 +328,9 @@ impl Names {
     /// The opcode set of `table`, looked up once per process: the by-name search costs about 4 M
     /// instructions, which on every function made a FastISel compile dearer than the DAG's.
     fn of(opcode: &dyn Fn(&str) -> Option<u16>, table: llrm_dagisel::fastisel::Table) -> Option<&'static Names> {
-        static M32: std::sync::OnceLock<Option<Names>> = std::sync::OnceLock::new();
-        static M64: std::sync::OnceLock<Option<Names>> = std::sync::OnceLock::new();
-        let cell = if matches!(table, llrm_dagisel::fastisel::Table::I486) { &M32 } else { &M64 };
+        static NARROW: std::sync::OnceLock<Option<Names>> = std::sync::OnceLock::new();
+        static WIDE: std::sync::OnceLock<Option<Names>> = std::sync::OnceLock::new();
+        let cell = if matches!(table, llrm_dagisel::fastisel::Table::I486) { &NARROW } else { &WIDE };
         cell.get_or_init(|| Names::new(opcode, table)).as_ref()
     }
 
@@ -450,8 +457,8 @@ struct Fast<'a> {
     edx: llrm_lir::registers::RegId,
     rax: llrm_lir::registers::RegId,
     rdx: llrm_lir::registers::RegId,
-    /// Frame objects are addressed at m32 only so far (F3).
-    m32: bool,
+    /// Frame objects are addressed at narrow only so far (F3).
+    narrow: bool,
     dag: SelectionDAG,
     /// The memory chain: every load and store follows the one before.
     chain: SDValue,
@@ -480,7 +487,7 @@ impl Fast<'_> {
     /// Whether `operand` is 64-bit (see `wide_kind`).
     fn is_wide(&self, operand: Operand) -> Option<bool> {
         let ty = self.function.operand_type(&self.module.context, operand)?;
-        wide_kind(&self.module.context.types, ty, self.m32)
+        wide_kind(&self.module.context.types, ty, self.narrow)
     }
 
     /// The opcode set and register type for 32-bit (`false`) or 64-bit values.
@@ -524,7 +531,7 @@ impl Fast<'_> {
             [(at, scale)] if matches!(scale, 1 | 2 | 4 | 8) => {
                 let index = indices[at];
                 let bits = self.module.context.types.int_bits(self.function.operand_type(&self.module.context, index)?)?;
-                (bits == if self.m32 { 32 } else { 64 }).then_some((index, scale as u8))?.into()
+                (bits == if self.narrow { 32 } else { 64 }).then_some((index, scale as u8))?.into()
             }
             _ => return None,
         };
@@ -536,7 +543,7 @@ impl Fast<'_> {
         let mut ops = match base {
             Operand::Value(value) if self.info.static_allocas.contains_key(&value) => self.frame(self.info.static_allocas[&value]),
             _ => {
-                let register = if self.m32 { EVT::I32 } else { EVT::I64 };
+                let register = if self.narrow { EVT::I32 } else { EVT::I64 };
                 vec![
                     self.value(base)?,
                     self.dag.get_constant_with(1, EVT::I8, true, false),
@@ -578,13 +585,13 @@ impl Fast<'_> {
         {
             let ValueDef::Instruction(def) = self.function.value(value).def else { return None };
             let Opcode::Alloca { allocated, .. } = self.function.instruction(def).opcode else { return None };
-            if wide_kind(&self.module.context.types, allocated, self.m32).is_none() && narrow_kind(&self.module.context.types, allocated).is_none() {
+            if wide_kind(&self.module.context.types, allocated, self.narrow).is_none() && narrow_kind(&self.module.context.types, allocated).is_none() {
                 return None;
             }
             return Some(self.frame(object));
         }
         let base = self.value(pointer)?;
-        let pointer = if self.m32 { EVT::I32 } else { EVT::I64 };
+        let pointer = if self.narrow { EVT::I32 } else { EVT::I64 };
         Some(vec![
             base,
             self.dag.get_constant_with(1, EVT::I8, true, false),
@@ -614,11 +621,11 @@ impl Fast<'_> {
                 let immediate = if wide { self.int_signed(user.operands[1]) } else { self.int(user.operands[1]) };
                 immediate.is_some_and(|imm| !(imm > 0 && (imm & (imm - 1)) == 0))
             }
-            Opcode::Binary(Sub) => second(self) && wide_kind(&self.module.context.types, user.ty, self.m32) == Some(wide),
+            Opcode::Binary(Sub) => second(self) && wide_kind(&self.module.context.types, user.ty, self.narrow) == Some(wide),
             Opcode::Binary(Add | And | Or | Xor | Mul) => {
                 // a commutative user swaps a first-operand load to the second, as the pin's `foldMemoryOperand` commutes
                 let first = user.operands[0] == Operand::Value(result) && matches!(user.operands[1], Operand::Value(_)) && self.is_wide(user.operands[1]) == Some(wide);
-                (second(self) || first) && wide_kind(&self.module.context.types, user.ty, self.m32) == Some(wide)
+                (second(self) || first) && wide_kind(&self.module.context.types, user.ty, self.narrow) == Some(wide)
             }
             Opcode::ICmp(_) if user.operands[0] == Operand::Value(result) => {
                 // `cmp m, imm`
@@ -626,7 +633,7 @@ impl Fast<'_> {
             }
             Opcode::ICmp(_) => second(self),
             Opcode::Cast(llrm_mir::opcode::CastOp::SExt) => {
-                !self.m32 && !wide && user.operands[0] == Operand::Value(result) && self.module.context.types.int_bits(user.ty) == Some(64)
+                !self.narrow && !wide && user.operands[0] == Operand::Value(result) && self.module.context.types.int_bits(user.ty) == Some(64)
             }
             _ => false,
         }
@@ -643,11 +650,11 @@ impl Fast<'_> {
             && self.module.global(global).name.as_deref().is_some_and(|name| NOOPS.iter().any(|noop| name.starts_with(noop)))
     }
 
-    /// Whether conventions `a` and `b` pass integer arguments alike. At m32 `cdecl` and `sysvcc` do: on the
+    /// Whether conventions `a` and `b` pass integer arguments alike. At narrow `cdecl` and `sysvcc` do: on the
     /// stack, the caller popping. The C library routines the `memcpy` expansion calls are `sysvcc`, their declarations `cdecl`.
     fn alike(&self, a: u32, b: u32) -> bool {
         use llrm_mir::opcode::SYSV;
-        a == b || (self.m32 && matches!(a, 0 | SYSV) && matches!(b, 0 | SYSV))
+        a == b || (self.narrow && matches!(a, 0 | SYSV) && matches!(b, 0 | SYSV))
     }
 
     /// A `memcpy` or `memset` intrinsic call as the library call FastISel makes of it, with the
@@ -725,7 +732,7 @@ impl Fast<'_> {
     }
 
     fn frame(&mut self, object: i32) -> Vec<SDValue> {
-        let pointer = if self.m32 { EVT::I32 } else { EVT::I64 };
+        let pointer = if self.narrow { EVT::I32 } else { EVT::I64 };
         vec![
             self.dag.get_target_frame_index(pointer, object),
             self.dag.get_constant_with(1, EVT::I8, true, false),
@@ -738,11 +745,11 @@ impl Fast<'_> {
     /// The value of `operand` in a register: a computed one, a constant, or a parameter loaded from its cell.
     fn value(&mut self, operand: Operand) -> Option<SDValue> {
         match operand {
-            Operand::Constant(id) if !self.m32 && matches!(self.module.context.get(id).kind, ConstantKind::Global(_)) => {
+            Operand::Constant(id) if !self.narrow && matches!(self.module.context.get(id).kind, ConstantKind::Global(_)) => {
                 // the address of a global: `lea r, [rip + g]`
                 let ConstantKind::Global(global) = self.module.context.get(id).kind else { return None };
                 let target = self.dag.get_target_global_address(EVT::I64, global.0, 0);
-                let rip = self.dag.get_phys_register(EVT::I64, llrm_lir::registers::RegId::RIP);
+                let rip = self.dag.get_phys_register(EVT::I64, super::dagisel_adapter::phys_reg(llrm_dagisel::generated::ids::x86::RIP)?);
                 let one = self.dag.get_constant_with(1, EVT::I8, true, false);
                 let noreg = self.dag.get_register(EVT::I64, 0);
                 let segment = self.dag.get_register(EVT::I16, 0);
@@ -780,14 +787,14 @@ impl Fast<'_> {
                 }
                 if let Some(&object) = self.info.static_allocas.get(&value) {
                     // the address of a frame object: `lea r, [frame + 0]`
-                    let (lea, vt) = if self.m32 { (self.names.lea?, EVT::I32) } else { (self.names.lea64?, EVT::I64) };
+                    let (lea, vt) = if self.narrow { (self.names.lea?, EVT::I32) } else { (self.names.lea64?, EVT::I64) };
                     let ops = self.frame(object);
                     let address = self.node(lea, &[vt], &ops);
                     self.values.insert(value, address);
                     return Some(address);
                 }
                 let ValueDef::Argument(n) = self.function.value(value).def else { return None };
-                if !self.m32 {
+                if !self.narrow {
                     if !self.entry {
                         return None;
                     }
@@ -857,7 +864,7 @@ impl Fast<'_> {
                 if self.function.users(result).is_empty() {
                     continue;
                 }
-                wide_kind(&self.module.context.types, phi.ty, self.m32)?;
+                wide_kind(&self.module.context.types, phi.ty, self.narrow)?;
                 let incoming = phi.operands.chunks(2).find(|pair| pair[1] == Operand::Block(block)).map(|pair| pair[0])?;
                 let reg = match incoming {
                     Operand::Value(value) if self.info.value_regs.contains_key(&value) => self.info.value_regs[&value],
@@ -892,7 +899,7 @@ impl Fast<'_> {
             match &instruction.opcode {
                 Opcode::Phi => {
                     // read back from its register where used; the predecessors write it
-                    wide_kind(&self.module.context.types, instruction.ty, self.m32)?;
+                    wide_kind(&self.module.context.types, instruction.ty, self.narrow)?;
                 }
                 Opcode::Alloca { .. } => {
                     // a static alloca is its frame object
@@ -908,7 +915,7 @@ impl Fast<'_> {
                         && let user = self.function.instruction(user)
                         && matches!(user.opcode, Opcode::Cast(llrm_mir::opcode::CastOp::ZExt | llrm_mir::opcode::CastOp::SExt))
                         && user.operands[0] == Operand::Value(result)
-                        && (self.module.context.types.int_bits(user.ty) == Some(32) || !self.m32)
+                        && (self.module.context.types.int_bits(user.ty) == Some(32) || !self.narrow)
                     {
                         self.folded = Some((result, ops));
                         continue;
@@ -932,7 +939,7 @@ impl Fast<'_> {
                     let (mov_mr, mov_mi) = (narrow.mov_mr[kind], narrow.mov_mi[kind]);
                     let mut ops = self.address(instruction.operands[1])?;
                     let op = if let Some(imm) = self.int(instruction.operands[0]) {
-                        let mask = if kind == 0 { 0xff } else { 0xffff };
+                        let mask = (1u128 << (8 << kind)) - 1;
                         ops.push(self.dag.get_constant_with(imm as u128 & mask, vt, true, false));
                         mov_mi
                     } else {
@@ -959,7 +966,7 @@ impl Fast<'_> {
                         let (opcode, vt) = match (to, signed) {
                             (32, false) | (64, false) => (narrow.movzx32_rm[kind], EVT::I32),
                             (32, true) => (narrow.movsx32_rm[kind], EVT::I32),
-                            (64, true) if !self.m32 => (narrow.movsx64_rm?[kind], EVT::I64),
+                            (64, true) if !self.narrow => (narrow.movsx64_rm?[kind], EVT::I64),
                             _ => return None,
                         };
                         address.push(self.chain);
@@ -978,8 +985,8 @@ impl Fast<'_> {
                     let done = match (to, signed) {
                         (32, false) => self.node(narrow.movzx32[kind], &[EVT::I32], &[value]),
                         (32, true) => self.node(narrow.movsx32[kind], &[EVT::I32], &[value]),
-                        (64, true) if !self.m32 => self.node(narrow.movsx64?[kind], &[EVT::I64], &[value]),
-                        (64, false) if !self.m32 => {
+                        (64, true) if !self.narrow => self.node(narrow.movsx64?[kind], &[EVT::I64], &[value]),
+                        (64, false) if !self.narrow => {
                             let low = self.node(narrow.movzx32[kind], &[EVT::I32], &[value]);
                             let (to_reg, _) = self.names.subreg?;
                             let index = self.dag.get_constant_with(6, EVT::I32, true, false);
@@ -996,7 +1003,7 @@ impl Fast<'_> {
                     let kind = narrow_kind(&self.module.context.types, instruction.ty)?;
                     let from = self.function.operand_type(&self.module.context, instruction.operands[0])?;
                     // from i32 or i64, or i16 to i8
-                    if wide_kind(&self.module.context.types, from, self.m32).is_none() && !(kind == 0 && narrow_kind(&self.module.context.types, from) == Some(1)) {
+                    if wide_kind(&self.module.context.types, from, self.narrow).is_none() && !(kind == 0 && narrow_kind(&self.module.context.types, from) == Some(1)) {
                         return None;
                     }
                     let (_, extract) = self.names.subreg?;
@@ -1006,7 +1013,7 @@ impl Fast<'_> {
                     self.values.insert(instruction.result?, done);
                 }
                 Opcode::Load { volatile, .. } => {
-                    let wide = wide_kind(&self.module.context.types, instruction.ty, self.m32)?;
+                    let wide = wide_kind(&self.module.context.types, instruction.ty, self.narrow)?;
                     let (mov_rm, _, _, _, _, _, _, _, vt) = self.set(wide)?;
                     let mut ops = self.address(instruction.operands[0])?;
                     let result = instruction.result?;
@@ -1025,7 +1032,7 @@ impl Fast<'_> {
                 }
                 Opcode::Store { .. } => {
                     let stored = self.function.operand_type(&self.module.context, instruction.operands[0])?;
-                    let wide = wide_kind(&self.module.context.types, stored, self.m32)?;
+                    let wide = wide_kind(&self.module.context.types, stored, self.narrow)?;
                     let (_, mov_mr, mov_mi, _, _, _, _, _, vt) = self.set(wide)?;
                     let mut ops = self.address(instruction.operands[1])?;
                     let immediate = if wide { self.int_signed(instruction.operands[0]) } else { self.int(instruction.operands[0]) };
@@ -1051,11 +1058,11 @@ impl Fast<'_> {
                         continue;
                     }
                     let ops = self.address_of(parts)?;
-                    let (lea, vt) = if self.m32 { (self.names.lea?, EVT::I32) } else { (self.names.lea64?, EVT::I64) };
+                    let (lea, vt) = if self.narrow { (self.names.lea?, EVT::I32) } else { (self.names.lea64?, EVT::I64) };
                     let done = self.node(lea, &[vt], &ops);
                     self.values.insert(result, done);
                 }
-                Opcode::Cast(llrm_mir::opcode::CastOp::SExt) if !self.m32 => {
+                Opcode::Cast(llrm_mir::opcode::CastOp::SExt) if !self.narrow => {
                     // i32 -> i64: `movsxd`
                     let from = self.function.operand_type(&self.module.context, instruction.operands[0])?;
                     if self.module.context.types.int_bits(from) != Some(32) || self.module.context.types.int_bits(instruction.ty) != Some(64) {
@@ -1078,7 +1085,7 @@ impl Fast<'_> {
                     let calls = self.names.divide.as_ref()?;
                     let wide = match self.module.context.types.int_bits(instruction.ty) {
                         Some(32) => false,
-                        Some(64) if !self.m32 => true,
+                        Some(64) if !self.narrow => true,
                         _ => return None,
                     };
                     let (sign, idiv, div, vt, accumulator, remainder) = match (wide, calls.wide) {
@@ -1104,7 +1111,7 @@ impl Fast<'_> {
                 // `FastISel::selectIntrinsicCall`: "at -O0 we don't care about the lifetime intrinsics", and
                 // `donothing`, `sideeffect`, `assume` and `noalias.scope.decl` emit nothing either.
                 Opcode::Call(_) if self.is_noop_intrinsic(&instruction) => {}
-                Opcode::Call(call) if !self.m32 && call.calling_convention == self.function.calling_convention => {
+                Opcode::Call(call) if !self.narrow && call.calling_convention == self.function.calling_convention => {
                     // SysV: up to six integer or pointer arguments in registers; `al` = 0 for a variadic callee
                     let (down, up, call_op, mov8) = self.names.calls64?;
                     let (arguments, callee, returns, variadic) = self.callee(&instruction, call, self.sysv.len())?;
@@ -1169,7 +1176,7 @@ impl Fast<'_> {
                     }
                     self.chain = chain;
                 }
-                Opcode::Call(call) if self.m32 && self.alike(call.calling_convention, self.function.calling_convention) => {
+                Opcode::Call(call) if self.narrow && self.alike(call.calling_convention, self.function.calling_convention) => {
                     let calls = self.names.calls.as_ref()?;
                     let (arguments, callee, returns, variadic) = self.callee(&instruction, call, usize::MAX)?;
                     let int32 = |ty| word(&self.module.context.types, ty, true);
@@ -1227,7 +1234,7 @@ impl Fast<'_> {
                 }
                 Opcode::Binary(op) => {
                     use llrm_mir::opcode::BinaryOp::*;
-                    let wide = wide_kind(&self.module.context.types, instruction.ty, self.m32)?;
+                    let wide = wide_kind(&self.module.context.types, instruction.ty, self.narrow)?;
                     let (_, _, _, _, alu, _, _, imul, vt) = self.set(wide)?;
                     if matches!(op, Shl | LShr | AShr) {
                         // a constant count: `shl`/`shr`/`sar r, imm8` (a variable count is `cl`, not here yet)
@@ -1433,7 +1440,7 @@ impl Fast<'_> {
                     };
                     at += 1;
                 }
-                Opcode::Cast(llrm_mir::opcode::CastOp::ZExt) if !self.m32 && self.is_wide(instruction.operands[0]) == Some(false) && self.module.context.types.int_bits(instruction.ty) == Some(64) => {
+                Opcode::Cast(llrm_mir::opcode::CastOp::ZExt) if !self.narrow && self.is_wide(instruction.operands[0]) == Some(false) && self.module.context.types.int_bits(instruction.ty) == Some(64) => {
                     // i32 -> i64: `SUBREG_TO_REG` (a dword write zeroes the high half)
                     let (to_reg, _) = self.names.subreg?;
                     let value = self.value(instruction.operands[0])?;
@@ -1441,7 +1448,7 @@ impl Fast<'_> {
                     let done = self.node(to_reg, &[EVT::I64], &[value, index]);
                     self.values.insert(instruction.result?, done);
                 }
-                Opcode::Cast(llrm_mir::opcode::CastOp::Trunc) if !self.m32 => {
+                Opcode::Cast(llrm_mir::opcode::CastOp::Trunc) if !self.narrow => {
                     // i64 -> i32: the low dword, `EXTRACT_SUBREG`
                     let (_, extract) = self.names.subreg?;
                     if self.is_wide(instruction.operands[0]) != Some(true) || self.module.context.types.int_bits(instruction.ty) != Some(32) {

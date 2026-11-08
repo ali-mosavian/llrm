@@ -60,7 +60,6 @@
 2 crates/codegen/llrm-codegen/src/backend/selectiondag/div_combine.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dump.rs
 58 crates/codegen/llrm-codegen/src/backend/selectiondag/emit.rs
-50 crates/codegen/llrm-codegen/src/backend/selectiondag/fastisel.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/opcodes.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/schedule.rs
 3 crates/codegen/llrm-codegen/src/backend/selectiondag/x86_lowering.rs
