@@ -913,3 +913,24 @@ fn o0_makes_a_zero_with_xor_on_both_selectors() {
         }
     }
 }
+
+/// The reason a block was declined was formatted for every instruction, the
+/// `isel` channel on or off: 4.7 M of a 196 M compile. It is made only when the
+/// channel is on, and says where the block was declined.
+#[test]
+fn the_decline_reason_is_made_for_the_isel_channel_and_names_the_instruction() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), "int h(int x)\n{\n    return (int)(x * 1.5);\n}\n").unwrap();
+    let said = |channel: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
+        command.env("LLRM_CC_TARGET", "x86_32-linux").current_dir(scratch.path()).args(["-O0", "-c", "a.c", "-o", "a.o"]);
+        if let Some(channel) = channel {
+            command.env("LLRM_DEBUG", channel);
+        }
+        let out = command.output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    assert!(said(Some("isel")).contains("fast declined at Cast(SIToFP) double"));
+    assert!(!said(None).contains("declined"));
+}

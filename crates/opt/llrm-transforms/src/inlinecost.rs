@@ -175,6 +175,9 @@ const COLD_CC: u32 = 9;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InlineParams {
     pub default_threshold: i64,
+    /// -O1 (and -Og): the pass prices no byte in clocks (`Options::speed_rate`
+    /// off). The only level INL-O1's `inline_never_grows_without_rate` binds.
+    pub o1_bound: bool,
     pub hint_threshold: i64,
     pub opt_size_hint_threshold: i64,
     pub cold_threshold: i64,
@@ -217,6 +220,7 @@ impl InlineParams {
     pub fn new(threshold: i64) -> Self {
         Self {
             default_threshold: threshold,
+            o1_bound: false,
             hint_threshold: HINT_THRESHOLD,
             opt_size_hint_threshold: HINT_THRESHOLD,
             cold_threshold: COLD_THRESHOLD,
@@ -2189,6 +2193,7 @@ impl<'a> Analyzer<'a> {
         // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
         let unpriced = self.site.caller_size == CallerSize::Speed
+            && self.params.o1_bound
             && self.site.tti.is_some_and(|tti| tti.inline_policy().by_rate == 0 && tti.inline_never_grows_without_rate());
         let grows = if self.site.caller_size == CallerSize::Speed && !unpriced {
             self.grows_more_than_it_saves()
