@@ -86,7 +86,7 @@ impl Placer {
                 count -= 1;
             }
         }
-        count <= self.dup_size
+        count <= self.dup_size || (!self.latch[block] && self.hot.is_some_and(|hot| hot.pays(count, self.freq[block])))
     }
 
     fn at(
