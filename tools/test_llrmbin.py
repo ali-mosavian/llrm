@@ -269,21 +269,25 @@ class CleanEnvTests(unittest.TestCase):
 
 
 
-def test_a_pair_sharing_the_targets_own_backend_is_refused_for_every_non_x86_row(tmp_path):
+def test_a_pair_sharing_the_targets_own_backend_is_refused_for_every_row(tmp_path):
     """The 9-target AVG identity run (2026-11-09) compared dists whose llrm-llc differed; arm64, m68k, z80 and 6502 run their own llrm-<family>-llc, and a pair sharing it
-    reads SAME on every row of that target. `backends_of` names the programs a target needs distinct.
+    reads SAME on every row of that target. `backends_of` reads each row's `llc_program` from targets.toml (a hard-coded list missed arm64-glibc, 65c02-sim65, m68k-68040 ...).
     Not caught by md5: two worktrees built into one CARGO_TARGET_DIR reuse each other's workspace crates (hashed by relative path) when the outputs are newer than the sources;
     a stale crate that still compiles gives binaries with differing md5 and the wrong code. Build each tree in its own target dir."""
     import pytest
+    import tomllib
 
-    assert llrmbin.backends_of("x86_64-linux") == ("llrm-llc",)
+    rows = tomllib.loads((Path(llrmbin.__file__).resolve().parents[1] / "crates/driver/llrm-cc/targets.toml").read_text())
+    own = {name: row["llc_program"] for name, row in rows.items() if "llc_program" in row and row["llc_program"] != "llrm-llc"}
+    assert own, "no row names its own backend: the table was not read"
+    for name in rows:
+        assert llrmbin.backends_of(name) == (("llrm-llc", own[name]) if name in own else ("llrm-llc",)), name
     base, head = tmp_path / "base", tmp_path / "head"
-    for target, own in (("arm64-linux", "llrm-arm64-llc"), ("m68k-68020", "llrm-m68k-llc"), ("z80-sdcc", "llrm-z80-llc"), ("6502-sim65", "llrm-6502-llc"), ("wasm32", "llrm-wasm-llc")):
-        assert llrmbin.backends_of(target) == ("llrm-llc", own)
+    for name, program in own.items():
         for folder in (base, head):
             folder.mkdir(exist_ok=True)
             (folder / "llrm-cc").write_bytes(folder.name.encode())
             (folder / "llrm-llc").write_bytes(folder.name.encode())
-            (folder / own).write_bytes(b"one backend")
-        with pytest.raises(SystemExit, match=f"same {own}"):
-            llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=llrmbin.backends_of(target), required=True)
+            (folder / program).write_bytes(b"one backend")
+        with pytest.raises(SystemExit, match=f"same {program}"):
+            llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=llrmbin.backends_of(name), required=True)

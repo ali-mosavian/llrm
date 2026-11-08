@@ -247,10 +247,13 @@ def assert_distinct(base, new, same_source: bool = False) -> str:
 
 
 def backends_of(target: str) -> tuple[str, ...]:
-    """The programs beside llrm-cc that compile for `target` (an LLRM_CC_TARGET row): llrm-llc, and the target's own llrm-<family>-llc where it has one. A pair that shares
-    the target's own backend reads SAME on every row of that target, whatever llrm-llc is."""
-    own = {"wasm32": "wasm", "arm64-linux": "arm64", "z80-sdcc": "z80", "6502-sim65": "6502"}.get(target) or ("m68k" if target.startswith("m68k") else None)
-    return ("llrm-llc", f"llrm-{own}-llc") if own else ("llrm-llc",)
+    """The programs beside llrm-cc that compile for `target` (a row of crates/driver/llrm-cc/targets.toml): llrm-llc, and the row's own `llc_program` where it names another. A pair
+    that shares the target's own backend reads SAME on every row of that target, whatever llrm-llc is."""
+    import tomllib
+
+    rows = tomllib.loads((Path(__file__).resolve().parents[1] / "crates/driver/llrm-cc/targets.toml").read_text())
+    own = rows.get(target, {}).get("llc_program", "llrm-llc")
+    return ("llrm-llc",) if own == "llrm-llc" else ("llrm-llc", own)
 
 
 def assert_distinct_llc(base, new, same_llc: bool = False, names=("llrm-llc",), required: bool = False) -> None:
