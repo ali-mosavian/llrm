@@ -234,14 +234,28 @@ pub fn function_items_with_places(
     };
     let mut body: Vec<Item> = vec![Item::Label(name.to_owned())];
     let mut edges: Vec<Item> = Vec::new();
-    for inst in cells.frame.prologue() {
-        body.push(Item::Inst(inst));
-    }
+    let mut prologue = Some(cells.frame.prologue());
     for one in blocks {
-        body.push(Item::Label(block_label(name, one.block.0)));
         let mut values: HashMap<(u32, u8), Operand> = HashMap::default();
+        // the frame's stack adjust goes through `a`: an argument that arrives in `a` or
+        // `x` is copied out before it, and the prologue is then outside the first block
         for &(register, vreg) in &one.live_ins {
             let from = REGISTER_INFO.name(register).ok_or("a live-in with no name")?;
+            if prologue.is_some() && ["a", "x"].contains(&from) {
+                let cell = cell_for(&mut cells, 8);
+                cells.virtual_regs.insert(vreg, cell.clone());
+                body.push(Item::Inst(copy(8, cell, Operand::reg(from))));
+            }
+        }
+        for inst in prologue.take().into_iter().flatten() {
+            body.push(Item::Inst(inst));
+        }
+        body.push(Item::Label(block_label(name, one.block.0)));
+        for &(register, vreg) in &one.live_ins {
+            let from = REGISTER_INFO.name(register).ok_or("a live-in with no name")?;
+            if cells.virtual_regs.contains_key(&vreg) {
+                continue;
+            }
             let bits = if from.starts_with("rs") { 16 } else { 8 };
             let cell = cell_for(&mut cells, bits);
             cells.virtual_regs.insert(vreg, cell.clone());
