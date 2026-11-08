@@ -103,6 +103,9 @@ struct Placer {
     /// Edges rerouted by copies, for the odds: (from, its successors before,
     /// the tail, the tail's successors with their chances).
     rerouted: Vec<(i64, Vec<i64>, i64, Vec<(i64, f64)>)>,
+    /// Instructions of frame teardown a return block will carry: the pin
+    /// places after the epilogue is in (DEVIATE: counted, not emitted yet).
+    epilogue: usize,
 }
 
 fn succ_seen(
@@ -156,10 +159,12 @@ pub(super) fn order(
     aggressive: bool,
     tail_dup: Option<usize>,
     hot: Option<HotTailDup>,
+    epilogue: usize,
 ) -> (Vec<Block>, BlockOdds) {
     let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(place, block)| (block.at, place)).collect();
     let entry = index.get(&entry).copied().unwrap_or(0);
     let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, tail_dup, hot, entry);
+    placer.epilogue = epilogue;
     for found in natural {
         let Some(&header) = index.get(&found.header) else { continue };
         for at in found.body.to_set().iter() {
@@ -250,6 +255,7 @@ impl Placer {
             hot: hot.filter(|_| !size),
             latch: vec![false; n],
             rerouted: Vec::new(),
+            epilogue: 0,
         }
     }
 
