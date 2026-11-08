@@ -57,11 +57,8 @@ fn a_callee_the_trial_rejected_is_not_tried_again_in_the_same_caller() {
     assert!(trials > 0, "premise: trials run\n{log}");
 }
 
-/// jpeg_fixed -Os: every SZ2 trial ran the whole simplifier list over a 600-instruction caller,
-/// 2.95 G instructions to compile it against 1.38 G before the trial existed. The trial's copy
-/// goes through the cleanup list (1.39 G); `tmul` is still inlined.
-#[test]
-fn the_byte_trial_simplifies_its_copy_with_the_cleanup_list() {
+/// The SZ2 trial remarks of `jpeg_fixed_os.ll` at -Os, in order.
+fn jpeg_fixed_trials() -> Vec<String> {
     let dir = tempfile::tempdir().unwrap();
     let ir = dir.path().join("jpeg_fixed_os.ll");
     std::fs::write(&ir, include_str!("data/jpeg_fixed_os.ll")).unwrap();
@@ -74,8 +71,43 @@ fn the_byte_trial_simplifies_its_copy_with_the_cleanup_list() {
         .output()
         .unwrap();
     let log = String::from_utf8_lossy(&output.stderr);
-    let trials: Vec<&str> = log.lines().filter(|line| line.contains("SZ2 trial of")).collect();
+    let trials: Vec<String> = log.lines().filter(|line| line.contains("SZ2 trial of")).map(str::to_owned).collect();
     assert!(!trials.is_empty(), "premise: trials run\n{log}");
-    let whole: Vec<&&str> = trials.iter().filter(|line| !line.contains("cleanup list")).collect();
-    assert!(whole.is_empty(), "trials on the whole list: {whole:?}");
+    trials
+}
+
+/// The callee a trial remark names, with its caller.
+fn trial_site(line: &str) -> (&str, &str) {
+    let caller = line.split(' ').next().unwrap();
+    let callee = line.rsplit_once("call(s) to '").unwrap().1.split('\'').next().unwrap();
+    (caller, callee)
+}
+
+/// jpeg_fixed -Os: every SZ2 trial ran the whole simplifier list over a 600-instruction caller,
+/// 2.95 G instructions to compile it against 1.38 G before the trial existed. A trial's copy
+/// goes through the cleanup list first; only a near miss runs the whole list (2.05 G).
+#[test]
+fn the_byte_trial_simplifies_its_copy_with_the_cleanup_list() {
+    let trials = jpeg_fixed_trials();
+    let light = trials.iter().filter(|line| line.contains("cleanup list")).count();
+    assert!(light > trials.len() - light, "most trials use the cleanup list: {trials:#?}");
+    for (at, line) in trials.iter().enumerate().filter(|(_, line)| !line.contains("cleanup list")) {
+        let site = trial_site(line);
+        assert!(
+            trials[..at].iter().any(|before| before.contains("cleanup list") && trial_site(before) == site),
+            "whole-list trial without a cleanup-list trial first: {line}\n{trials:#?}"
+        );
+    }
+}
+
+/// jpeg_single -Os: the cleanup list rejected `extend`, `receive` and `clamp` by a few bytes the
+/// whole list removes, leaving 3608 B against 3592 B. A trial rejected within `NEAR_MISS` is run
+/// again with the whole list.
+#[test]
+fn a_trial_the_cleanup_list_misses_by_a_little_is_run_again_with_the_whole_list() {
+    let trials = jpeg_fixed_trials();
+    assert!(
+        trials.iter().any(|line| !line.contains("cleanup list") && line.contains("'clamp'")),
+        "premise: clamp is a near miss\n{trials:#?}"
+    );
 }

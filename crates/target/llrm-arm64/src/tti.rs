@@ -318,11 +318,9 @@ impl Tti for AArch64 {
         20_000
     }
 
-    /// DEVIATE (owner greedy-anyisa, exit 2026-11-12): the trial's copy goes through the cleanup
-    /// list, not the whole one: Ir of jpeg_fixed -Os 1.39 G, not 2.95 G (pre-trial 1.38 G). The
-    /// cleanup list misses a few simplifications, so some trials decide otherwise
-    /// (jpeg_single 3592 -> 3608 B, jpeg_fixed 3516 -> 3484 B). Exit: a near miss is re-run with
-    /// the whole list.
+    /// The trial's copy goes through the cleanup list, not the whole one: Ir of jpeg_fixed -Os
+    /// 2.05 G, not 2.95 G (pre-trial 1.38 G). A trial it rejects by a near miss is run again with
+    /// the whole list (`walk::NEAR_MISS`), so the bytes match the whole list's.
     fn inline_trial_light_simplify(&self) -> bool {
         true
     }

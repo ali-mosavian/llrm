@@ -557,6 +557,10 @@ impl ProgramPass for Walk {
                                 {
                                     continue;
                                 }
+                                // A trial the cleanup list rejects by a miss within its resolution is run
+                                // again with the whole list (`NEAR_MISS`).
+                                let mut full = false;
+                                'attempt: loop {
                                 let kept = function_mut(module, id).1.clone();
                                 let kept_clocks = function_clocks(module, &program.layout, tti, &kept);
                                 let mut chosen = accepted.clone();
@@ -630,7 +634,7 @@ impl ProgramPass for Walk {
                                             .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                                                                             }
                                 }
-                                (self.simplify)(module, &mut modules[at], id, if tti.inline_trial_light_simplify() { TRIAL_LIGHT } else { "walk.trial." });
+                                (self.simplify)(module, &mut modules[at], id, if tti.inline_trial_light_simplify() && !full { TRIAL_LIGHT } else { "walk.trial." });
                                 let tried = body_size(module, &program.layout, tti, id);
                                 // At speed a target that prices bytes in clocks
                                 // takes a trial that grows the code where the
@@ -733,7 +737,7 @@ impl ProgramPass for Walk {
                                         credit,
                                         saved,
                                         growth,
-                                        if tti.inline_trial_light_simplify() { ", cleanup list" } else { "" }
+                                        if tti.inline_trial_light_simplify() && !full { ", cleanup list" } else { "" }
                                     );
                                 }
                                 // At speed with a byte price only the sites of
@@ -756,7 +760,13 @@ impl ProgramPass for Walk {
                                 if trial_accepted(tti.opt_size_inline_byte_gate(), tti.inline_trial_keeps_shrinking_copy(), priced, tried, best, credit, saved, growth, rate, kept_bytes) {
                                     best = tried;
                                     accepted.extend(calls);
+                                    break 'attempt;
                                 } else {
+                                    if tti.inline_trial_light_simplify() && !full && tried <= best + credit + best / NEAR_MISS {
+                                        *function_mut(module, id).1 = kept;
+                                        full = true;
+                                        continue 'attempt;
+                                    }
                                     rejected.extend(calls.iter().filter_map(|one| trials[one].callee));
                                     if remarks {
                                         eprintln!(
@@ -769,6 +779,8 @@ impl ProgramPass for Walk {
                                     modules[at].changed(id);
                                     modules[at]
                                         .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                    break 'attempt;
+                                }
                                 }
                             }
                         }
@@ -1245,6 +1257,13 @@ impl SelfInline {
 #[cfg(test)]
 #[path = "walk_tests.rs"]
 mod tests;
+
+/// DEVIATE (owner greedy-anyisa, exit 2026-11-30): a trial the cleanup list rejects by at most
+/// 1/`NEAR_MISS` of the caller (its resolution: it leaves the few instructions the whole list
+/// removes) is run again with the whole list. At 64 jpeg_single -Os is 3592 B (3608 B on the cleanup
+/// list alone, 3592 B on the whole list) and jpeg_fixed 3500 B; compile cost 2.05 G instructions
+/// against 1.39 G and 2.95 G.
+const NEAR_MISS: i64 = 64;
 
 /// The stage name of a SZ2 trial's simplification when the target asks for the cleanup list.
 pub const TRIAL_LIGHT: &str = "walk.trial.light.";
