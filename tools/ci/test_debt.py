@@ -59,22 +59,34 @@ def test_a_repeated_id_is_red():
 
 
 RATCHET = Path(__file__).with_name("debt_ratchet.toml")
+NUMBER = re.compile(r"(?<![\w#-])(\d+)(?!\w)")
+
+
+def numbers_of(limit: str) -> list[int]:
+    """The standalone numbers of a limit text (not those in names like bq32 or -O2, nor issue numbers)."""
+    return [int(n) for n in NUMBER.findall(limit.split("(")[0] if "waivers/" in limit else limit)]
 
 
 def ratchet_problems(text: str, ratchet: dict) -> list[str]:
-    """One message per debt row whose limit numbers are not at or below the accepted ones."""
+    """One message per debt row with a numeric limit that is missing from the ratchet or not at or below the accepted numbers."""
     out = []
     for line in text.splitlines():
         m = LINE.match(line) if line.startswith("- DEBT") else None
-        if m and m["id"] in ratchet:
-            numbers = [int(n) for n in re.findall(r"(\d+) (?:B|insns|memops)\b", m["limit"])]
-            floor = ratchet[m["id"]]
-            if len(numbers) != len(floor) or any(a > b for a, b in zip(numbers, floor)):
-                out.append(f"{m['id']}: limit numbers {numbers} are not at or below the accepted {floor}")
+        if not m:
+            continue
+        numbers = numbers_of(m["limit"])
+        if not numbers:
+            continue
+        if m["id"] not in ratchet:
+            out.append(f"{m['id']}: numeric limit {numbers} is not in debt_ratchet.toml")
+            continue
+        floor = ratchet[m["id"]]
+        if len(numbers) != len(floor) or any(a > b for a, b in zip(numbers, floor)):
+            out.append(f"{m['id']}: limit numbers {numbers} are not at or below the accepted {floor}")
     return out
 
 
-def test_no_debt_limit_goes_up():
+def test_no_debt_limit_goes_up_and_every_numeric_limit_is_in_the_ratchet():
     import tomllib
 
     assert ratchet_problems(DOC.read_text(), tomllib.loads(RATCHET.read_text())) == []
@@ -83,5 +95,13 @@ def test_no_debt_limit_goes_up():
 def test_a_raised_limit_is_red():
     """lru-os-m16-bytes carried 402 B for days after the code measured 382: a limit nobody lowers is a waiver."""
     row = "- DEBT lru-os-m16-bytes | limit lru c -Os 402 B / 129 insns / 57 memops, lru bq32 -Os 515 B, lru nib -Os 147 memops (x) | deadline 2026-12-01 | owner m16 | w"
-    assert ratchet_problems(row, {"lru-os-m16-bytes": [382, 129, 57, 515, 147]}) != []
-    assert ratchet_problems(row.replace("402", "381"), {"lru-os-m16-bytes": [382, 129, 57, 515, 147]}) == []
+    floor = {"lru-os-m16-bytes": [382, 129, 57, 515, 147]}
+    assert ratchet_problems(row, floor) != []
+    assert ratchet_problems(row.replace("402", "381"), floor) == []
+
+
+def test_a_numeric_limit_missing_from_the_ratchet_is_red():
+    row = "- DEBT new-row | limit 7 tests | deadline 2026-12-01 | owner m16 | w"
+    assert ratchet_problems(row, {}) == ["new-row: numeric limit [7] is not in debt_ratchet.toml"]
+    assert ratchet_problems(row, {"new-row": [7]}) == []
+    assert ratchet_problems("- DEBT prose | limit the whole listing | deadline 2026-12-01 | owner m16 | w", {}) == []
