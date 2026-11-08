@@ -1798,7 +1798,7 @@ pub fn finish(
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
     }
-    Ok(drop_unreachable(forward_high_bytes(cancel_steps(printer.out))))
+    Ok(drop_unreachable(forward_high_bytes(drop_overwritten_byte_stores(cancel_steps(printer.out)))))
 }
 
 /// Whether `text` ends the flow: `ret`, `jp L` or `jr L` with no condition.
@@ -1978,6 +1978,45 @@ fn cancel_steps(lines: Vec<Line>) -> Vec<Line> {
         }
     }
     out
+}
+
+/// `ld r, a` and a later `ld r, ...` with nothing between that names the pair of
+/// `r`, a label or a jump: the first store is never read. The printer leaves it
+/// when the `ld a, r` that read it was spared (`and a, #248; ld c, a; or a, #5;
+/// ld c, a`). The load leaves the flags alone.
+fn drop_overwritten_byte_stores(lines: Vec<Line>) -> Vec<Line> {
+    let byte = |text: &str| {
+        let register = text.strip_prefix("ld ")?.strip_suffix(", a")?;
+        (register.len() == 1 && "bcdehl".contains(register)).then_some(register.to_owned())
+    };
+    let pair_of = |register: &str| match register {
+        "b" | "c" => "bc",
+        "d" | "e" => "de",
+        _ => "hl",
+    };
+    let mut keep = vec![true; lines.len()];
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Inst(text) = line else { continue };
+        let Some(register) = byte(text) else { continue };
+        for later in &lines[at + 1..] {
+            match later {
+                Line::Loc(_) => continue,
+                Line::Label(_) => break,
+                Line::Inst(next) => {
+                    if let Some(source) = next.strip_prefix(&format!("ld {register}, "))
+                        && !mentions(&format!("ld x, {source}"), pair_of(&register))
+                    {
+                        keep[at] = false;
+                        break;
+                    }
+                    if mentions(next, pair_of(&register)) || HIDDEN.contains(&next.split(' ').next().unwrap_or("")) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    lines.into_iter().zip(keep).filter_map(|(line, keep)| keep.then_some(line)).collect()
 }
 
 /// `ret z` stands in for a branch to a block that is only a `ret`, which
@@ -2566,6 +2605,23 @@ mod tests {
         assert_eq!(kept, vec![inst("ld -2(ix), c")]);
         let kept = cancel_steps(vec![inst("dec hl"), inst("ld (hl), d"), inst("inc hl")]);
         assert_eq!(kept.len(), 3, "a store through the pointer reads it: {kept:?}");
+    }
+
+    /// `and a, #248; ld c, a; or a, #5; ld c, a` (a volatile long's bit field
+    /// store) wrote `c` twice; the first write is never read.
+    #[test]
+    fn a_byte_store_overwritten_before_any_read_is_dropped() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let kept = drop_overwritten_byte_stores(vec![inst("and a, #248"), inst("ld c, a"), inst("or a, #5"), inst("ld c, a")]);
+        assert_eq!(kept, vec![inst("and a, #248"), inst("or a, #5"), inst("ld c, a")]);
+        for between in ["add hl, bc", "ld (bc), a", "call _f", "jr nz, 1$", "ld b, c"] {
+            let lines = vec![inst("ld c, a"), inst(between), inst("ld c, a")];
+            assert_eq!(drop_overwritten_byte_stores(lines.clone()), lines, "{between} reads c");
+        }
+        let lines = vec![inst("ld c, a"), Line::Label("L".to_owned()), inst("ld c, a")];
+        assert_eq!(drop_overwritten_byte_stores(lines.clone()), lines, "a label may be entered from elsewhere");
+        let lines = vec![inst("ld c, a"), inst("ld c, d"), inst("ld c, (hl)")];
+        assert_eq!(drop_overwritten_byte_stores(lines).len(), 2, "a load of another register overwrites it");
     }
 
     /// A pair stored to its slot and reloaded after lines that leave it alone
