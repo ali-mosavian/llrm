@@ -78,6 +78,12 @@ pub enum ISD {
     SMax,
     UMin,
     UMax,
+    /// `AVGFLOORS`, `AVGFLOORU`, `AVGCEILS`, `AVGCEILU`: the average of two
+    /// values, rounded down / up, computed without overflowing the type.
+    AvgFloorS,
+    AvgFloorU,
+    AvgCeilS,
+    AvgCeilU,
     Abs,
     /// `ASSERT_ZEXT` / `ASSERT_SEXT`: the value's bits above the type in
     /// operand 1 are zero / copies of its sign bit. Selection drops them.
@@ -292,6 +298,10 @@ impl ISD {
             SMax => "smax",
             UMin => "umin",
             UMax => "umax",
+            AvgFloorS => "avgfloors",
+            AvgFloorU => "avgflooru",
+            AvgCeilS => "avgceils",
+            AvgCeilU => "avgceilu",
             Abs => "abs",
             AssertZext => "assertzext",
             AssertSext => "assertsext",
@@ -422,6 +432,10 @@ impl ISD {
                 | UMax
                 | SAddSat
                 | UAddSat
+                | AvgFloorS
+                | AvgFloorU
+                | AvgCeilS
+                | AvgCeilU
                 | FAdd
                 | FMul
                 | UAddO

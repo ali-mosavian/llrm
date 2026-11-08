@@ -111,6 +111,7 @@ pub mod bswap_combine;
 pub mod builder;
 pub mod chain_combine;
 pub mod combine_andnot;
+mod combine_avg;
 pub mod combine_funnel;
 pub mod combine_lifetime_end;
 pub mod combine_load;
@@ -208,6 +209,8 @@ mod asmcall_tests;
 mod bundle_tests;
 #[cfg(test)]
 mod codecall_tests;
+#[cfg(test)]
+mod combine_avg_tests;
 #[cfg(test)]
 mod dag_function_aggregates_tests;
 #[cfg(test)]
