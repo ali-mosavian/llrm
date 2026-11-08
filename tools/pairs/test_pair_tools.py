@@ -215,3 +215,21 @@ def test_pindiff_pin_side_has_no_forced_frame_pointer():
     assert not pindiff.forced_frame("f:\n\tret\n", "define void @f() {\n  ret void\n}\n")
     assert not pindiff.forced_frame("f:\n\tpush\tebp\n\tmov\tebp, esp\n\tand\tesp, -8\n", "define void @f() {\n  ret void\n}\n")
     assert "-frame-pointer=all" not in (HERE / "pindiff.py").read_text()
+
+
+def test_a_matrix_row_whose_pin_is_built_at_another_stack_alignment_is_refused_unless_labelled_cf6():
+    """The m32 O1 matrix put the pin at the Linux 16-byte stack against our 4: select_of_constants (+39 against a matched pin) read -773, wc_mixed
+    +15 read -79, and the cells looked closed or opened by the ABI and not by the code."""
+    cells = load("m32cells")
+    ours, matched, linux = cells.columns()
+    assert (ours.stack_alignment, matched.stack_alignment, linux.stack_alignment) == (4, 4, 16)
+    cells.check_row(ours, matched)
+    cells.check_row(ours, linux)
+    unlabelled = cells.Column("pin", 16)
+    try:
+        cells.check_row(ours, unlabelled)
+    except cells.Refused as why:
+        assert "stack alignment 16 against ours 4" in str(why)
+    else:
+        raise AssertionError("an unlabelled pin at 16 against ours at 4 was accepted")
+    assert "-mstack-alignment=4" in cells.pin_flags(matched) and not any(f.startswith("-mstack-alignment") for f in cells.pin_flags(linux))
