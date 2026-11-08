@@ -175,6 +175,8 @@ pub struct X87Prices {
     /// The bytes of `fld m` / `fadd m` on a pool cell (6 flat, 4 real mode);
     /// the register forms take 2.
     pub memory_bytes: i64,
+    /// Bytes decide over clocks (`Profile::bytes_strict`: -O1, -Os).
+    pub bytes_strict: bool,
 }
 
 /// The pin's machine opcode names, by number.
