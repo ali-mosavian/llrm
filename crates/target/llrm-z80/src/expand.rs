@@ -713,9 +713,11 @@ impl Printer<'_> {
                 }
                 self.push(format!("jp {symbol}"));
             }
-            // The area is `push bc`s (bc is only saved and restored: no
-            // register is lost, and no result lives in it); a store into it is
-            // addressed from IX, so the frame is set up.
+            // The area is `push bc`s, which change nothing; a store into it is
+            // addressed from IX, so the frame is set up. The cleanup pops the
+            // words into a register nothing reads afterwards: the allocator
+            // may reload a value into bc between the call and the cleanup (a
+            // loop counter, lost to the pops), and a result lives in hl or de.
             "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" => {
                 let Some(Operand::Imm(bytes)) = inst.operands.first() else { return Ok(()) };
                 if *bytes == 0 {
@@ -726,8 +728,26 @@ impl Printer<'_> {
                     return Err(format!("{bytes} bytes of stack arguments"));
                 }
                 let down = op == "ADJCALLSTACKDOWN";
+                let discard = if down {
+                    Some("bc")
+                } else if let Some(pair) =
+                    [reg::BC, reg::DE, reg::HL].into_iter().find(|&pair| self.pair_unused_after(pair, rest))
+                {
+                    Some(name(pair))
+                } else if self.dead_after(reg::A, rest) && self.flags_dead(rest) {
+                    Some("af")
+                } else {
+                    None
+                };
                 for _ in 0..pushes {
-                    self.push(if down { "push bc" } else { "pop bc" });
+                    match discard {
+                        Some(pair) => self.push(format!("{} {pair}", if down { "push" } else { "pop" })),
+                        // `inc sp` needs no register and leaves the flags
+                        None => {
+                            self.push("inc sp");
+                            self.push("inc sp");
+                        }
+                    }
                 }
                 self.call_bytes = if down { 2 * pushes } else { 0 };
             }
@@ -1034,6 +1054,24 @@ impl Printer<'_> {
         }
         // the block ends with the pair unmentioned: what the blocks it goes on
         // to read of it (the loop head of digits defines `de` first thing)
+        let after = self
+            .liveness
+            .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 1);
+        ![pair, lo, hi].into_iter().any(|one| after.is_live(&REGISTER_INFO, one))
+    }
+
+    /// [`Self::pair_dead_after`], or no byte of the pair live after this
+    /// instruction by the allocator's liveness (the scan stops at a byte
+    /// defined alone, e.g. a reload of `b` through `pop bc`).
+    fn pair_unused_after(
+        &self,
+        pair: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        if self.pair_dead_after(pair, rest) {
+            return true;
+        }
+        let Ok((lo, hi)) = lanes(pair) else { return false };
         let after = self
             .liveness
             .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 1);
