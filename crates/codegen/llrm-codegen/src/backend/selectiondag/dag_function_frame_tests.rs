@@ -1811,3 +1811,27 @@ define i1 @f(i8 %x, i8 %y) {
     let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
     assert!(named("test") == 1 && named("and") == 0, "test {} and {}", named("test"), named("and"));
 }
+
+/// `(x & *p) == 0` selected `and r, [mem]; sete`: the `and` writes a register
+/// nothing reads. The pin's `PostprocessISelDAG` makes it `test [mem], r`
+/// (`AND8rm` + `TEST8rr` -> `TEST8mr`).
+#[test]
+fn at_m32_a_test_of_an_and_with_memory_is_one_test() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i1 @f(i8 %x, ptr %p) {
+  %v = load i8, ptr %p
+  %q = add i8 %x, 1
+  %a = and i8 %q, %v
+  %c = icmp eq i8 %a, 0
+  ret i1 %c
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(named("test") == 1 && named("and") == 0, "test {} and {}", named("test"), named("and"));
+}
