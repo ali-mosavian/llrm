@@ -178,6 +178,13 @@ fn nearest_common_dominator(
 /// tests already edited to take the post-incremented value; none until the
 /// first look has found edits to make.
 #[allow(clippy::too_many_arguments)]
+/// Function flag: LSR chose end-biased formulae (DEVIATE LG3) that differ from
+/// the pin's solution somewhere in the function.
+pub const END_BIASED_FIRED: &str = "llrm-end-biased";
+/// Function flag, set by a driver that builds the function both ways: LSR makes
+/// no end-biased formulae for it.
+pub const NO_END_BIASED: &str = "llrm-no-end-biased";
+
 fn plan_loop(
     context: &Context,
     layout: &DataLayout,
@@ -313,8 +320,12 @@ fn plan_loop(
     let pin_counts = counts(&lsr);
     // DEVIATE LG3's formulae (beyond the pin) join the space before its
     // narrowing, as the formulae they share registers with do.
-    lsr.generate_end_biased(se);
+    // `llrm-no-end-biased`: the driver builds this function without them.
+    if !llrm_mir::memory::has(&function.attrs, NO_END_BIASED) {
+        lsr.generate_end_biased(se);
+    }
     let beyond = counts(&lsr) != pin_counts;
+    let mut differs = false;
     narrowed(se, &mut lsr);
     let (mut solution, cost) = lsr.solve_with_cost(se);
     if beyond {
@@ -349,12 +360,15 @@ fn plan_loop(
         if kept {
             lsr = pin;
             solution = pin_solution;
+        } else {
+            differs = !pin_solution.is_empty();
         }
     }
     if solution.is_empty() {
         return planned(None);
     }
     let mut plan = lsr.into_plan(solution);
+    plan.end_biased_differs = differs;
     plan.chains = chains.chains;
     planned(Some(plan))
 }
@@ -486,6 +500,9 @@ pub fn reduced_held(
                     }
                     Outcome::Planned(Some(plan)) => {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrSolutions);
+                        if plan.end_biased_differs && !llrm_mir::memory::has(&function.attrs, END_BIASED_FIRED) {
+                            function.attrs.push(llrm_mir::opcode::Attribute::Flag(END_BIASED_FIRED.into()));
+                        }
                         plan
                     }
                 };

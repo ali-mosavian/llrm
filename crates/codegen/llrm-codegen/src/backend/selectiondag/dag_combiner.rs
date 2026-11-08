@@ -464,6 +464,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// `visitSUB`'s `sub C, X` is `xor X, C` where X cannot borrow from C's bits
+    /// ([L4651](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4651)).
+    /// DEVIATE SW2 (owner w9, 2026-11-08): on only where a target states it;
+    /// the x86 targets do (the Dag switch-over: `c ? 4 : 5` at i16 is `setl;
+    /// xor 5`). Exit: every target on, after their integration sweeps.
+    fn sub_without_borrow_is_xor(&self) -> bool {
+        false
+    }
+
     /// `visitSUB`'s algebraic folds (`a - (b - c)` is `a + (c - b)`, the
     /// cancelling pairs, the constants that meet). DEVIATE: off by default.
     /// On x86 the regrouped remainder `x - (8q - q)` keeps `q` live longer and
@@ -956,7 +965,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 .or_else(|| self.reduce_load_width_of(node))
                 .or_else(|| self.simplify_demanded(node))
                 .or_else(|| self.and_of_extload(node)),
-            ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
+            ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)).or_else(|| self.visit_or_as_add(node)),
             ISD::Add => self.visit_add(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sub => self.visit_sub(node),
             ISD::UAddO => self.visit_uaddo(node),
@@ -2364,6 +2373,38 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
+        let flags = self.dag.node(node).flags;
+        self.visit_add_like(node, flags)
+    }
+
+    /// `visitOR`'s last step: "If OR can be rewritten into ADD, try combines
+    /// based on ADD" (`isADDLike`: a `disjoint` or whose operands share no
+    /// bits), after `SimplifyDemandedBits` as in the pin. `(or disjoint (add
+    /// x, c0), c1)` of a truncating store is `(add x, c0 + c1)`.
+    fn visit_or_as_add(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        if !vt.is_integer() || (self.legal_operations() && !self.fp_op_legal(ISD::Add, vt)) {
+            return None;
+        }
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if !(self.dag.node(node).flags.has(SDNodeFlags::DISJOINT) || super::dagisel_adapter::no_common_bits(self.dag, n0, n1)) {
+            return None;
+        }
+        // The add made of the or keeps no wrap flags (`getFlags` of an or has none).
+        let combined = self.visit_add_like(node, SDNodeFlags::default())?;
+        (combined != node).then_some(combined)
+    }
+
+    /// `visitADDLike`: the folds of `n0 + n1` as the add `node` spells them (or
+    /// as an add-like `or`); `flags` are the wrap flags the regrouped adds keep.
+    fn visit_add_like(
+        &mut self,
+        node: SDValue,
+        flags: SDNodeFlags,
+    ) -> Option<SDValue> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let vt = self.dag.value_type(node);
         if self.dag.constant(n0).is_some() && self.dag.constant(n1).is_none() {
@@ -2425,7 +2466,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 // `NewFlags`); DEVIATE: only where `global_addresses_constant`
                 // is set, until x86 is judged.
                 let nuw = |dag: &SelectionDAG, v: SDValue| dag.node(v).flags.has(SDNodeFlags::NO_UNSIGNED_WRAP);
-                let keep = self.dag.config().global_addresses_constant && nuw(self.dag, n0) && nuw(self.dag, node);
+                let keep = self.dag.config().global_addresses_constant
+                    && nuw(self.dag, n0)
+                    && flags.has(SDNodeFlags::NO_UNSIGNED_WRAP);
                 let flags = if keep { SDNodeFlags::NO_UNSIGNED_WRAP } else { SDNodeFlags::default() };
                 return Some(self.dag.get_node_flags(ISD::Add, vt, &[self.dag.operand(n0, 0), sum], flags));
             }
@@ -2469,7 +2512,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
-            && let Some(regrouped) = self.reassociate_ops(ISD::Add, n0, n1, self.dag.node(node).flags)
+            && let Some(regrouped) = self.reassociate_ops(ISD::Add, n0, n1, flags)
         {
             return Some(regrouped);
         }
@@ -3102,6 +3145,21 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             && let Some(folded) = self.fold_sub_algebra(vt, n0, n1)
         {
             return Some(folded);
+        }
+        // `visitSUB` ([L4651][pin]): with no chance of borrowing from the
+        // adjacent bits, `sub C0, X` is `xor X, C0` (`5 - zext(c)` is `5 ^ c`).
+        //
+        // [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4651
+        if self.hooks.sub_without_borrow_is_xor()
+            && let Some(c0) = self.dag.constant(n0).filter(|_| !self.dag.is_opaque(n0))
+        {
+            let mask = super::fold::mask(vt.size_in_bits());
+            let maybe_ones = !super::known_bits::known_bits(self.dag, n1).zero & mask;
+            // `sub -1, x` is `~x`, a fold `sub_algebra_folds` keeps off (it moved
+            // x86_16 spills).
+            if c0 & mask != mask && c0.wrapping_sub(maybe_ones) & mask == (c0 ^ maybe_ones) & mask {
+                return Some(self.dag.get_node(ISD::Xor, vt, &[n1, n0]));
+            }
         }
         let c = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1))?;
         let negated = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(vt.size_in_bits()), vt);

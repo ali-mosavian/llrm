@@ -74,6 +74,16 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
 /// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 ///
+/// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32, exit 2026-11-15): at
+/// -O1 that chain is the stated trade against the pin's `imul`, not a
+/// Pareto win. `x * 1664525`: 29 B and ~9 clocks against 6 B and 13-42. Rows
+/// (padded .text at the matrix flags, 2026-11-08): mul_constants -O1 ours 2279,
+/// pin llc 2061, clang 2063, gcc 3032 (gcc chains it too); x_iir -O1 49.5k clk
+/// against 130.5k with the `imul` (#8211 kept it and was reverted, #8222);
+/// urem_eq -O1 +86 B for the 0xAAAAAAAB constant. Exit: a general mechanism
+/// with the chain's clocks and `imul`-like bytes (a shorter chain search, or
+/// the block's frequency pricing the choice).
+///
 /// A code byte costs the CPU's instruction-cache fill, once per run: a line's
 /// fill clocks over its bytes (`line_fill_clocks` / `cache_line` of the CPU's
 /// sheet; 486: 5 / 16 = 312 milliclocks), so `speed_milliclocks_per_byte` is
@@ -382,6 +392,10 @@ impl llrm_target::Target for M32 {
 
     fn stack_pointer(&self) -> RegId {
         llrm_x86::calling::stack(CALLING.native())
+    }
+
+    fn string_roots(&self) -> Option<llrm_target::StringRoots> {
+        Some(llrm_x86::registers::STRING_ROOTS)
     }
 
     /// What cdecl32 keeps, but the frame register.

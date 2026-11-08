@@ -56,6 +56,8 @@ pub struct TargetEnv {
     /// Whether a copy into or out of a lane above the low one is joined
     /// ([`CoalescerEnv::can_share_lane`]). Off: such a copy stays.
     pub joins_lanes: bool,
+    /// DEVIATE C15 (`CoalescerEnv::joins_loop_carried_first`).
+    pub joins_loop_carried_first: bool,
     /// For each pinned value, the pinned values on overlapping registers.
     pub aliases: IndexMap<u32, Vec<u32>>,
     /// `TargetRegisterInfo::shouldCoalesce`: whether the join goes ahead.
@@ -287,6 +289,10 @@ pub struct Join {
 impl CoalescerEnv for TargetEnv {
     fn joins_global_copies(&self) -> bool {
         self.joins_global_copies
+    }
+
+    fn joins_loop_carried_first(&self) -> bool {
+        self.joins_loop_carried_first
     }
 
     fn joins_pinned_copies(&self) -> bool {
@@ -574,6 +580,7 @@ pub fn coalesce(
     joins_pinned_copies: bool,
     joins_sub_registers: bool,
     joins_lanes: bool,
+    joins_loop_carried_first: bool,
     regs: llrm_lir::registers::Regs,
     should_join: Option<Box<dyn Fn(&Join) -> bool>>,
     remat: Option<Box<dyn Fn(&Insn) -> bool>>,
@@ -606,6 +613,7 @@ pub fn coalesce(
         joins_pinned_copies,
         joins_sub_registers,
         joins_lanes,
+        joins_loop_carried_first,
         aliases,
         should_join,
         freq,
@@ -619,7 +627,8 @@ pub fn coalesce(
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
     let (after, map) = joined_with_map(body, &env, &depth);
-    let palettes = env.palettes.into_inner().into_iter().map(|(value, set)| (value, Rc::unwrap_or_clone(set))).collect();
+    let palettes =
+        env.palettes.into_inner().into_iter().map(|(value, set)| (value, Rc::unwrap_or_clone(set))).collect();
     (after, palettes, map)
 }
 
