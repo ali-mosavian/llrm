@@ -37,6 +37,7 @@ pub mod mac;
 pub mod machine;
 pub mod mc;
 pub mod mfunc;
+pub mod mulprice;
 pub mod narrow;
 pub mod narrow_add;
 pub mod negadd;
@@ -45,8 +46,8 @@ pub mod opcosts;
 pub mod regalloc;
 pub mod scaledindex;
 pub mod shiftadd;
-pub mod spillmove;
 pub mod sizes;
+pub mod spillmove;
 pub mod target;
 pub mod timing;
 

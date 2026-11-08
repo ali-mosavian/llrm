@@ -208,7 +208,7 @@ pub fn items_with(
         options.indexed,
         options.short,
         options.code_model.absolute_data(cpu),
-        wants_size,
+        crate::timing::Price::of(wants_size, options.strict),
     )?;
     let mut function = emit(name, &blocks)?;
     function.returns_twice =

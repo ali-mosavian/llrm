@@ -8,6 +8,7 @@ use llrm_m68k::driver::{Level, assembly, cpu_of};
 fn text(
     factor: i64,
     cpu: &str,
+    level: Level,
 ) -> String {
     let ir = format!(
         "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
@@ -17,14 +18,14 @@ define i32 @f(i32 %x) {{
 }}
 "
     );
-    assembly(&ir, cpu_of(cpu).unwrap(), Level::O2).expect("compiles")
+    assembly(&ir, cpu_of(cpu).unwrap(), level).expect("compiles")
 }
 
 #[test]
 fn a_32_bit_multiply_by_two_to_the_n_minus_one_is_a_shift_and_a_subtract() {
-    for cpu in ["68000", "68020"] {
+    for (cpu, level) in [("68000", Level::O2), ("68000", Level::Os), ("68020", Level::O2)] {
         for (factor, shift) in [(7, 3), (31, 5)] {
-            let out = text(factor, cpu);
+            let out = text(factor, cpu, level);
             assert!(!out.contains("__mulsi3") && !out.contains("muls"), "{cpu} x*{factor}:\n{out}");
             assert!(out.contains(&format!("lsl.l\t#{shift}")), "{cpu} x*{factor}:\n{out}");
         }
@@ -35,6 +36,15 @@ fn a_32_bit_multiply_by_two_to_the_n_minus_one_is_a_shift_and_a_subtract() {
 /// multiply.
 #[test]
 fn another_constant_stays_a_multiply() {
-    assert!(text(100, "68000").contains("__mulsi3"));
-    assert!(text(100, "68020").contains("muls.l"));
+    assert!(text(100, "68000", Level::O2).contains("__mulsi3"));
+    assert!(text(100, "68020", Level::O2).contains("muls.l"));
+}
+
+/// `x * 12` is `(x << 3) + (x << 2)`: two copies and two shifts, larger and
+/// slower than `muls.l`, but smaller and far faster than the library call. The
+/// same constant, a different answer by price.
+#[test]
+fn the_pieces_win_where_the_multiply_is_a_call_and_lose_where_it_is_an_instruction() {
+    assert!(!text(12, "68000", Level::Os).contains("__mulsi3"));
+    assert!(text(12, "68020", Level::Os).contains("muls.l"));
 }

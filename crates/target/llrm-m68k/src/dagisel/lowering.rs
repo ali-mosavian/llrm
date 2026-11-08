@@ -171,6 +171,8 @@ pub struct M68kLowering {
     pub absolute_data: bool,
     /// `Subtarget`'s CPU.
     pub cpu: super::hooks::Cpu,
+    /// What a priced choice minimizes at this level.
+    pub price: crate::timing::Price,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
@@ -178,19 +180,29 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         false
     }
 
-    /// `M68kTargetLowering::decomposeMulByConstant`: `mulu` and `muls` are
-    /// 16-bit on the 68000 and 68010, so a multiply of up to 32 bits is shifts
-    /// and adds; a 64-bit one is left to the runtime before the 68020.
+    /// `M68kTargetLowering::decomposeMulByConstant`, priced: the pieces replace
+    /// a multiply of 32 bits or fewer where they cost less than the library
+    /// call (68000, 68010) or `muls.l` ([`crate::mulprice`]).
     fn decompose_mul_by_constant(
         &self,
         vt: EVT,
-        _c: u128,
+        c: u128,
     ) -> bool {
-        vt.size_in_bits() <= 32 || self.cpu.at_least(super::hooks::Cpu::M68020)
-    }
-
-    fn sub_of_sign_extended_bool(&self) -> bool {
-        self.short
+        let width = vt.size_in_bits();
+        if !self.short {
+            // the pin's answer, for the output compared with `llc`
+            return width <= 32 || self.cpu.at_least(super::hooks::Cpu::M68020);
+        }
+        if width > 32 {
+            return false;
+        }
+        let Some(pieces) = llrm_codegen::backend::selectiondag::dag_combiner::mul_pieces(width, c) else {
+            return false;
+        };
+        // the constant as the 32-bit value the multiply takes
+        let signed = ((c as u32) as i32) as i64;
+        let signed = if width < 32 { (((c as u32) << (32 - width)) as i32 >> (32 - width)) as i64 } else { signed };
+        crate::mulprice::pieces_beat_multiply(self.cpu, self.price, pieces, signed)
     }
 
     fn is_indexed_legal(

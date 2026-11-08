@@ -183,7 +183,10 @@ pub trait CombineHooks {
     /// `TargetLowering::isLegalAddImmediate`: whether an `add` takes the
     /// signed immediate. Default true (arm64 and wasm are not judged); x86
     /// is `isInt<32>`.
-    fn legal_add_immediate(&self, _imm: i64) -> bool {
+    fn legal_add_immediate(
+        &self,
+        _imm: i64,
+    ) -> bool {
         true
     }
 
@@ -411,10 +414,11 @@ pub trait CombineHooks {
         false
     }
 
-    /// DEVIATE SD257 (owner llrm-target-6502, exit 2026-12-05): `ShrinkDemandedOp`
-    /// sizes the narrow type by the bits that are demanded and not known zero,
-    /// not by the demanded bits alone (the pin). Off elsewhere: x86-64
-    /// `div_constants_short` +80 B (the narrowed `imul` loses its fusion).
+    /// DEVIATE SD257 (owner llrm-target-6502, exit 2026-12-05):
+    /// `ShrinkDemandedOp` sizes the narrow type by the bits that are
+    /// demanded and not known zero, not by the demanded bits alone (the
+    /// pin). Off elsewhere: x86-64 `div_constants_short` +80 B (the
+    /// narrowed `imul` loses its fusion).
     fn known_zero_narrowing(&self) -> bool {
         false
     }
@@ -1257,19 +1261,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let mut min_vt = EVT::integer(min_bits);
         let mut pre_ext = pre_ext;
-        // DEVIATE (`narrow_setcc_with_other_uses`): a mask that other uses keep,
-        // or an assertion, is compared as it stands, truncated to the smallest
-        // legal type that holds it. Truncating the value under it to the
-        // illegal `min_bits` made the promoted operand a second mask beside
-        // the one kept (masked_selector_chain: `and a, #7` at each compare).
-        // Owner z80, exit 2026-11-27.
+        // DEVIATE (`narrow_setcc_with_other_uses`): a mask that other uses
+        // keep, or an assertion, is compared as it stands, truncated to
+        // the smallest legal type that holds it. Truncating the value
+        // under it to the illegal `min_bits` made the promoted operand
+        // a second mask beside the one kept (masked_selector_chain:
+        // `and a, #7` at each compare). Owner z80, exit 2026-11-27.
         let shared_mask = self.dag.opcode(n0) == ISD::And && !self.dag.has_one_use(n0.node);
         if (shared_mask || self.dag.opcode(n0) == ISD::AssertZext)
             && let Some(tli) = self.tli
             && !tli.types.is_type_legal(min_vt)
-            && let Some(legal) = (min_bits + 1..width)
-                .map(EVT::integer)
-                .find(|candidate| tli.types.is_type_legal(*candidate))
+            && let Some(legal) =
+                (min_bits + 1..width).map(EVT::integer).find(|candidate| tli.types.is_type_legal(*candidate))
         {
             min_vt = legal;
             pre_ext = n0;
@@ -2468,7 +2471,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // `(add X, (uaddo_carry Y, 0, c))` is `(uaddo_carry X, Y, c)`, and
         // `(add X, carry)` is `(uaddo_carry X, 0, carry)`.
         for (x, y) in [(n0, n1), (n1, n0)] {
-            if self.dag.opcode(y) == ISD::UAddOCarry && self.dag.is_null_constant(self.dag.operand(y, 1)) && y.res == 0 {
+            if self.dag.opcode(y) == ISD::UAddOCarry && self.dag.is_null_constant(self.dag.operand(y, 1)) && y.res == 0
+            {
                 let values = self.dag.node(y).values.clone();
                 return Some(self.dag.get_node_multi(
                     ISD::UAddOCarry,
@@ -2519,9 +2523,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let op = self.dag.opcode(value);
         // DEVIATE (owner x86-m32, exit 2026-11-14): the pin also takes the
-        // borrow of USUBO and USUBO_CARRY. A target whose borrow is the inverted
-        // carry (the 6502's `sbc`) read it as the carry: `sub_overflow` returned
-        // 3 for 4 (#7850). Add only until the target states what its borrow is.
+        // borrow of USUBO and USUBO_CARRY. A target whose borrow is the
+        // inverted carry (the 6502's `sbc`) read it as the carry:
+        // `sub_overflow` returned 3 for 4 (#7850). Add only until the
+        // target states what its borrow is.
         if !matches!(op, ISD::UAddOCarry | ISD::UAddO) {
             return None;
         }
@@ -3868,33 +3873,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         c: u128,
     ) -> Option<SDValue> {
         let width = vt.size_in_bits();
-        let ones = super::fold::mask(width);
-        let negative = c >> (width - 1) & 1 == 1;
-        let mut magnitude = if negative { c.wrapping_neg() & ones } else { c };
-        // the constant `2` is `2^0 + 1`
-        let zeros = if magnitude == 2 { 0 } else { magnitude.trailing_zeros() };
-        magnitude >>= zeros;
-        let (add, bits) = if (magnitude - 1).is_power_of_two() {
-            (true, magnitude - 1)
-        } else if (magnitude + 1).is_power_of_two() {
-            (false, magnitude + 1)
-        } else {
-            return None;
-        };
-        let amount = bits.trailing_zeros() + zeros;
-        if amount >= width {
-            return None;
-        }
-        let high_amount = self.shift_amount(vt, amount);
+        let pieces = mul_pieces(width, c)?;
+        let high_amount = self.shift_amount(vt, pieces.high);
         let high = self.dag.get_node(ISD::Shl, vt, &[x, high_amount]);
-        let low = if zeros == 0 {
+        let low = if pieces.low == 0 {
             x
         } else {
-            let low_amount = self.shift_amount(vt, zeros);
+            let low_amount = self.shift_amount(vt, pieces.low);
             self.dag.get_node(ISD::Shl, vt, &[x, low_amount])
         };
-        let result = self.dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[high, low]);
-        Some(if negative { self.dag.get_negative(result, vt) } else { result })
+        let result = self.dag.get_node(if pieces.add { ISD::Add } else { ISD::Sub }, vt, &[high, low]);
+        Some(if pieces.negative { self.dag.get_negative(result, vt) } else { result })
     }
 
     /// `isMulAddWithConstProfitable`: a one-use add the target accepts, or
@@ -4097,4 +4086,43 @@ pub fn combine<H: CombineHooks>(
     level: CombineLevel,
 ) {
     DagCombiner::new(dag, hooks, level).run();
+}
+
+/// What `x * c` is made of when `c = +-(2^n +- 1) << k`: `(x << high)` plus or
+/// minus `(x << low)` (`x` itself when `low` is 0), negated when `negative`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MulPieces {
+    pub negative: bool,
+    pub add: bool,
+    pub high: u32,
+    pub low: u32,
+}
+
+/// The pieces of a multiply of `width` bits by `c`, or `None` for a constant
+/// that is not of that form (`visitMUL`).
+pub fn mul_pieces(
+    width: u32,
+    c: u128,
+) -> Option<MulPieces> {
+    let ones = super::fold::mask(width);
+    let negative = c >> (width - 1) & 1 == 1;
+    let mut magnitude = if negative { c.wrapping_neg() & ones } else { c };
+    if magnitude < 2 {
+        return None;
+    }
+    // the constant `2` is `2^0 + 1`
+    let zeros = if magnitude == 2 { 0 } else { magnitude.trailing_zeros() };
+    magnitude >>= zeros;
+    let (add, bits) = if (magnitude - 1).is_power_of_two() {
+        (true, magnitude - 1)
+    } else if (magnitude + 1).is_power_of_two() {
+        (false, magnitude + 1)
+    } else {
+        return None;
+    };
+    let high = bits.trailing_zeros() + zeros;
+    if high >= width {
+        return None;
+    }
+    Some(MulPieces { negative, add, high, low: zeros })
 }

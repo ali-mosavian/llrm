@@ -295,13 +295,14 @@ pub fn trade_passes(
 }
 
 /// What a choice between two priced candidates minimizes: the level's price.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Price {
     /// Bytes, then clocks (`-Os`).
     Size,
     /// A candidate is taken only when no larger and no slower (`-O1`).
     Strict,
     /// Clocks plus bytes at the CPU's byte price (`-O2`, `-O3`).
+    #[default]
     Rate,
 }
 
