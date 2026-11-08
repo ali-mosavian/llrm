@@ -184,13 +184,13 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // threshold alone refuses, at a site 16x the caller's entry or hotter, is tried
         // inlined at -O2 and kept where the rate pays, the trial counting the callee's
         // preserved registers (x_sf_* -O2 clk -10..-23%, +516..676 B; jpeg -0.4% clk,
-        // +442..586 B). Trips are the pin's estimate (31), not a profile.
+        // +442..586 B). Trips are the pin's block frequency (31 in x_sf_add's loop, 400 run), not a
+        // profile; -O3 stays off (jpeg `getbit` into `receive`: est. 31 trips, ~1 real).
         inline_hot_trial_frequency: Some(16),
         // -O3 off: x_jpeg_fixed/single get +129/+112 B and +0.2%/+0.1% clk there
         // (`getbit` into `receive`; a trip count of 31 estimated, ~1 real).
         // A callee that keeps more than eax/ecx/edx live pushes and pops ebx, esi,
         // edi, ebp once per call: the trial's clocks saved count it.
-        register_spill: Some((6, costs.store + costs.load)),
         callee_saved: Some((3, 4, costs.argument + costs.pop)),
         // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion
         // (passes.def:97, then pass_ipa_inline :164). At -O3 the copies of the

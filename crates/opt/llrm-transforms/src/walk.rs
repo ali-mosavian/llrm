@@ -686,11 +686,7 @@ impl ProgramPass for Walk {
                                         .iter()
                                         .map(|body| tti.callee_saved_clocks(llrm_analysis::liveness::pressure(body, None, None)))
                                         .sum();
-                                    let spills = tti.register_spill_clocks(
-                                        llrm_analysis::liveness::pressure(&kept, None, None),
-                                        llrm_analysis::liveness::pressure(now, None, None),
-                                    );
-                                    let once = kept_clocks + run + saves - spills - function_clocks(module, &program.layout, tti, now);
+                                    let once = kept_clocks + run + saves - function_clocks(module, &program.layout, tti, now);
                                     (
                                         (once as f64 * trips) as i64,
                                         function_bytes(module, &program.layout, &costs, now)

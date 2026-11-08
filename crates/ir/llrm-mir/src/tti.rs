@@ -610,14 +610,6 @@ pub trait Tti {
         0
     }
 
-    /// What inlining costs in clocks, per run of the code it lands in, when it
-    /// lifts the caller's peak live values from `before` to `after`: each value
-    /// beyond the allocatable registers is stored and reloaded. 0: not priced.
-    fn register_spill_clocks(&self, before: usize, after: usize) -> i64 {
-        let _ = (before, after);
-        0
-    }
-
     /// INL-HOT: the least site frequency (over the caller's entry) at which a
     /// call the pin's threshold alone refused is tried inlined at -O2/-O3 and
     /// kept where the rate pays. Whole units of relative frequency. None: the threshold is final.

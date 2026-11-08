@@ -727,13 +727,6 @@ impl Tti for X86 {
         })
     }
 
-    fn register_spill_clocks(&self, before: usize, after: usize) -> i64 {
-        self.tuning.register_spill.map_or(0, |(registers, clocks)| {
-            let over = |peak: usize| (i64::try_from(peak).unwrap_or(i64::MAX) - registers).max(0);
-            (over(after) - over(before)).max(0) * clocks
-        })
-    }
-
     fn inline_hot_trial_at_o3(&self) -> bool {
         self.tuning.inline_hot_trial_at_o3
     }
