@@ -23,17 +23,25 @@ Answer source: **P** the pin (AArch64 .td / InstrInfo / FrameLowering), **E** ex
 | `operand_bytes` | 4 | x86 "size without a prefix" |
 | `object` (`bitness` 16 or 32) | needs a value for 64 | field is x86's |
 
-## C. x86-shaped: no truthful arm64 answer; proposed neutral default (8) — held for oversight
-| method | why | proposed default |
+## C. x86-shaped (8): arm64 can answer all within today's signatures
+Read: `cost_model` is `fn(&CpuPrices) -> Rc<dyn llrm_mir::target::Machine>` (`lib.rs:358`), so arm64 answers it with its own `tti.rs` machine and ignores the x86-derived prices. `march`/`cpu_table` return `Option`, `marches` a `Vec`, the routines a `Result`, and `OperationCosts` has `Default` (`llrm-mir/src/target.rs:947`).
+| method | arm64 answer today (no edit) | neutral default, a convenience for later targets |
 |---|---|---|
-| `march`, `marches` | gcc `-march` names from `timings.times` | `None`, empty |
-| `cpu_table` | `timings.times` columns (issue, prefix, pairing, lcp) | `None`: the target prices from its own model |
-| `operation_costs` | `opcosts.txt` forms | empty `OperationCosts` |
-| `cost_model` | variants not read yet (unverified) | read before proposing |
-| `huge_fill_routine`, `huge_copy_routine` | huge-pointer strings, x86-16 only | `Err("none")` |
-| `divide_routine` | inline 64-bit divide on a 32-bit file | `Err("none")` |
+| `march`, `marches` | `None`, empty | trait default |
+| `cpu_table` | `None` | trait default |
+| `operation_costs` | `OperationCosts::default()` | trait default |
+| `cost_model` | the `tti.rs` machine (A in kind: real data) | none: every target has its own |
+| `huge_fill_routine`, `huge_copy_routine`, `divide_routine` | `Err("none")` | trait default |
 
-Counts: A 27 + B 4 + C 8 = 39. A neutral default changes every implementer (x86 m16/m32/m64, and m68k, wasm, z80, 6502 as they converge); C is the list to show them.
+So no `llrm-target` edit blocks arm64. The defaults only save m68k, wasm, z80 and 6502 writing seven stubs; additive, x86 unchanged, deferred until the objection window closes.
+
+## Effort for a second target (per method)
+- **Trivial, under 20 lines (a constant or a lookup), 22:** `name`, `machine`, `cpus`, `default_cpu`, `layout`, `registers`, `registers_text`, `register_named`, `stack_pointer`, `frame_register`, `register_capacity`, `stack_slot_bytes`, `first_argument_offset`, `return_address_bytes`, `operand_bytes`, `float_width`, `register_op_bytes`, `shift_op_bytes`, `multiply_immediate_bytes`, `results`, `callee_saved`, `conventions`.
+- **Stub, one line each (zero with a trait default), 7:** `march`, `marches`, `cpu_table`, `operation_costs`, `huge_fill_routine`, `huge_copy_routine`, `divide_routine`.
+- **Data file, 6:** `calling`, `convention_results`, `convention_callee_saved` (`calling.toml`), `dialect` (`dialect.toml`), `address_forms`, `debug_target`.
+- **Adapter over existing writers, 2:** `objects`, `object`.
+- **Large, 2:** `forms_text` (the instruction file; arm64 about 250 names), `cost_model` (a `Machine` impl; arm64 has `tti.rs`, 1183 lines, a target without a TTI pays this).
+- Shared cost of a second target beyond these: its `RegisterClasses` pins live in the same forms file, its `Frame` facts in `FrameRegisters`.
 
 ## Deviations expected
 - `cpu_table`/`operation_costs` empty: arm64 prices from `tti.rs` (the pin's cost model), not `timings.times`. DEVIATE, exit when the cost model is data.
