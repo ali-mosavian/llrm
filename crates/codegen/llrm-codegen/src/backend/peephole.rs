@@ -323,6 +323,20 @@ impl LIRTransform for Peephole {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
+        // The pin's -O0 has no peephole, but `ExpandPostRAPseudos` still turns a zero (`MOV32r0`) into `xor`
+        // where the flags are dead ([X86InstrInfo.cpp:6236]).
+        if !self.cpu.optimized {
+            // the flag liveness costs a dataflow: only a body with a zero to make pays it
+            let has_zero = body.blocks.iter().flat_map(|block| &block.insns).any(|one| {
+                one.what.as_ref().is_some_and(|what| {
+                    matches!(
+                        (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()),
+                        (Operation::Move, Some("mov"), [Loc::Reg(_)], [Loc::Imm(Imm { value: 0, address: None, .. })])
+                    )
+                })
+            });
+            return Ok(if has_zero { zeroes(&body) } else { body });
+        }
         self.once(body)
     }
 }

@@ -175,6 +175,9 @@ const COLD_CC: u32 = 9;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InlineParams {
     pub default_threshold: i64,
+    /// -O1 (and -Og): the pass prices no byte in clocks (`Options::speed_rate`
+    /// off). The only level INL-O1's `inline_never_grows_without_rate` binds.
+    pub o1_bound: bool,
     pub hint_threshold: i64,
     pub opt_size_hint_threshold: i64,
     pub cold_threshold: i64,
@@ -217,6 +220,7 @@ impl InlineParams {
     pub fn new(threshold: i64) -> Self {
         Self {
             default_threshold: threshold,
+            o1_bound: false,
             hint_threshold: HINT_THRESHOLD,
             opt_size_hint_threshold: HINT_THRESHOLD,
             cold_threshold: COLD_THRESHOLD,
@@ -278,6 +282,10 @@ pub struct Site<'a> {
     pub caller_size: CallerSize,
     /// The site's block frequency over the caller's entry block's (D1).
     pub relative_frequency: Option<f64>,
+    /// How often the caller runs per run of the program, from the calls to it
+    /// up the call graph (read only where the target weighs it,
+    /// `Tti::inline_o1_weighs_entry`); none: once.
+    pub entry_weight: Option<&'a dyn Fn() -> f64>,
     /// The target's LLVM cost model (`Machine::tti`); none: the generic rules.
     pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
@@ -2131,12 +2139,12 @@ impl<'a> Analyzer<'a> {
     /// not trade bytes for clocks.
     fn grows_more_than_it_saves(&self) -> bool {
         let Some(tti) = self.site.tti else { return false };
-        self.grows_more_than_it_saves_at(tti.inline_policy().by_rate, 1000)
+        self.grows_more_than_it_saves_at(tti.inline_policy().by_rate, 1000, false)
     }
 
     /// [`Self::grows_more_than_it_saves`] at a byte rate of the caller's
     /// choosing, in thousandths of a clock.
-    fn grows_more_than_it_saves_at(&self, rate: i64, unit_bytes_milli: i64) -> bool {
+    fn grows_more_than_it_saves_at(&self, rate: i64, unit_bytes_milli: i64, weigh_entry: bool) -> bool {
         let Some(tti) = self.site.tti else { return false };
         let growth = self.growth_per_site();
         // Growth under one call's size is inside the estimate's resolution: the
@@ -2160,7 +2168,10 @@ impl<'a> Analyzer<'a> {
             })
             .saturating_add(self.callee_frame(llrm_mir::tti::CostKind::Latency))
             .max(1);
-        let frequency = self.site.relative_frequency.unwrap_or(1.0).max(0.0);
+        let mut frequency = self.site.relative_frequency.unwrap_or(1.0).max(0.0);
+        if weigh_entry && let Some(entry) = self.site.entry_weight {
+            frequency *= entry();
+        }
         let grows = (growth * unit_bytes_milli / 1000 * rate) as f64 > saved as f64 * 1000.0 * frequency;
         if llrm_support::debug::enabled("inline") {
             eprintln!("inline:   bytes-vs-clocks: growth={growth} rate={rate} saved={saved} frequency={frequency:.2} -> {}", if grows { "grows" } else { "pays" });
@@ -2182,6 +2193,7 @@ impl<'a> Analyzer<'a> {
         // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
         let unpriced = self.site.caller_size == CallerSize::Speed
+            && self.params.o1_bound
             && self.site.tti.is_some_and(|tti| tti.inline_policy().by_rate == 0 && tti.inline_never_grows_without_rate());
         let grows = if self.site.caller_size == CallerSize::Speed && !unpriced {
             self.grows_more_than_it_saves()
@@ -2190,7 +2202,7 @@ impl<'a> Analyzer<'a> {
             // the site's frequency, pay for the bytes at the target's -O1 rate
             // (`inline_o1_milliclocks_per_byte`).
             let rate = self.site.tti.map_or(0, |tti| tti.inline_o1_milliclocks_per_byte());
-            !self.site.sole_call_to_local && self.grows_the_code() && !(rate > 0 && !self.grows_more_than_it_saves_at(rate, self.site.tti.map_or(1000, |tti| tti.inline_o1_unit_bytes_milli())))
+            !self.site.sole_call_to_local && self.grows_the_code() && !(rate > 0 && !self.grows_more_than_it_saves_at(rate, self.site.tti.map_or(1000, |tti| tti.inline_o1_unit_bytes_milli()), self.site.tti.is_some_and(|tti| tti.inline_o1_weighs_entry())))
         } else {
             !self.site.sole_call_to_local
                 && self.site.tti.is_some_and(|tti| {
@@ -2485,6 +2497,7 @@ pub fn shadow(
                     caller_recursive,
                     caller_size: CallerSize::Speed,
                     relative_frequency: caller.parent(inst).and_then(|block| relative_to_entry(&frequencies, block)),
+                    entry_weight: None,
                     // The shadow is the oracle's: opt without a triple prices
                     // generically.
                     tti: None,
@@ -2599,6 +2612,62 @@ fn relative_to_entry(
     block: BlockId,
 ) -> Option<f64> {
     (frequencies.get_entry_freq().get_frequency() > 0).then(|| frequencies.relative_to_entry(block))
+}
+
+/// How many times `function` runs per run of the program, estimated from the
+/// calls to it: the sum over its direct call sites of the site's frequency
+/// over its function's entry, times that function's own count, up to
+/// `ENTRY_DEPTH` calls. A function with an outside caller (not local, or its
+/// address taken) or none runs at least once. Capped at `ENTRY_CAP`.
+fn caller_entry_weight(
+    module: &Module,
+    layout: &DataLayout,
+    function: GlobalId,
+    addressed: &BTreeSet<GlobalId>,
+) -> f64 {
+    const ENTRY_DEPTH: usize = 8;
+    const ENTRY_CAP: f64 = 256.0;
+    let mut frequencies: HashMap<GlobalId, llrm_analysis::blockfreq::BlockFrequencies> = HashMap::default();
+    fn weight(
+        module: &Module,
+        layout: &DataLayout,
+        function: GlobalId,
+        addressed: &BTreeSet<GlobalId>,
+        depth: usize,
+        visiting: &mut Vec<GlobalId>,
+        frequencies: &mut HashMap<GlobalId, llrm_analysis::blockfreq::BlockFrequencies>,
+    ) -> f64 {
+        let outside = !local_linkage(module.global(function).linkage) || addressed.contains(&function);
+        if depth == 0 {
+            return 1.0;
+        }
+        visiting.push(function);
+        let mut total = 0.0;
+        for (at, global) in module.globals.iter().enumerate() {
+            let caller_id = GlobalId(at as u32);
+            let GlobalKind::Function(caller) = &global.kind else { continue };
+            if visiting.contains(&caller_id) || caller.layout().is_empty() {
+                continue;
+            }
+            let sites: Vec<InstId> = caller
+                .walk()
+                .map(|(_, inst)| inst)
+                .filter(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(function))
+                .collect();
+            if sites.is_empty() {
+                continue;
+            }
+            let inner = weight(module, layout, caller_id, addressed, depth - 1, visiting, frequencies);
+            let table = frequencies.entry(caller_id).or_insert_with(|| caller_frequencies(module, layout, caller));
+            for call in sites {
+                let local = caller.parent(call).and_then(|block| relative_to_entry(table, block)).unwrap_or(1.0);
+                total += local * inner;
+            }
+        }
+        visiting.pop();
+        if outside || total == 0.0 { total.max(1.0) } else { total }
+    }
+    weight(module, layout, function, addressed, ENTRY_DEPTH, &mut Vec::new(), &mut frequencies).min(ENTRY_CAP)
 }
 
 fn caller_global_name(
@@ -2893,6 +2962,7 @@ pub fn decide(
     if callee.layout().is_empty() || callee_id == caller_id || !crate::inline::copyable(module, callee) {
         return None;
     }
+    let entry_weight = || caller_entry_weight(module, layout, caller_id, context.addressed);
     let site = Site {
         module,
         layout,
@@ -2909,6 +2979,7 @@ pub fn decide(
         caller_recursive: context.recursive.contains(&caller_id),
         caller_size: context.size,
         relative_frequency: caller.parent(call).and_then(|block| relative_to_entry(frequencies, block)),
+        entry_weight: Some(&entry_weight),
         tti: context.tti,
     };
     let cost = inline_cost(&site, context.params);

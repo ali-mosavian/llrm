@@ -2,9 +2,16 @@
 //! IR block straight to machine nodes without the combiner, the legalizers or
 //! the matcher.
 //!
-//! Off unless `LLRM_FAST_ISEL=1`, and then only at -O0 (`!cpu.optimized`); -O1
-//! and up never see it. A function it cannot take is selected by the DAG path,
-//! whole (DEVIATE F2).
+//! On at -O0 (`!cpu.optimized`) unless `LLRM_FAST_ISEL=0`; -O1 and up never see it. A block it
+//! cannot take is selected by the DAG path (DEVIATE F2).
+//!
+//! # DEVIATE rows (`.text` above the pin's `llc -O0` on 11 of the 61 programs of the 2026-11-08 corpus; the total is 12% below)
+//! - F2: fallback by block, not by instruction. Owner greedy-anyisa, exit 2026-11-30.
+//! - F6: an argument is computed in `eax` and copied to `edi`, where the pin's allocator hints the register. Owner
+//!   greedy-subreg (`RegAllocFast`), exit 2026-11-14.
+//! - F7: floats, doubles, `byval` and stack-passed parameters, `i1` phis and variable shifts go to the DAG, whose -O0
+//!   combiner makes other code (a division by a constant is a multiply, where FastISel emits `idiv`). Owner greedy-anyisa,
+//!   exit 2026-11-30.
 //!
 //! # See also
 //! `docs`: `/home/alim/scratch/handoff/o0-fastisel-poc-plan-2026-11-06.md`.
@@ -12,7 +19,7 @@
 use std::cell::Cell;
 
 use llrm_mir::context::ConstantKind;
-use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 
 use super::builder::{BlockDag, BuilderTarget, fresh_dag};
@@ -26,9 +33,9 @@ thread_local! {
     static TOOK: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Whether `LLRM_FAST_ISEL=1` asks for the fast path.
+/// Whether the fast path is on: at -O0 it is, unless `LLRM_FAST_ISEL=0` (the pin's -O0 selects with FastISel).
 pub fn enabled() -> bool {
-    llrm_support::env_var("LLRM_FAST_ISEL").is_some_and(|value| value == "1")
+    llrm_support::env_var("LLRM_FAST_ISEL").is_none_or(|value| value != "0")
 }
 
 /// Records whether the function being selected goes through FastISel.
@@ -43,6 +50,29 @@ pub fn take_took() -> bool {
 }
 
 /// Logs why FastISel left a whole function to the DAG (`LLRM_DEBUG=isel`).
+/// Where a block was declined, kept as ids: the text is made only when the `isel` channel is on.
+enum Declined {
+    At(InstId),
+    Export(ValueId),
+}
+
+fn declined_text(module: &Module, function: &Function, declined: Option<Declined>) -> String {
+    match declined {
+        None => String::new(),
+        Some(Declined::At(id)) => {
+            let instruction = function.instruction(id);
+            format!("{:?} {}", instruction.opcode, module.context.types.display(instruction.ty))
+        }
+        Some(Declined::Export(value)) => {
+            let def = match function.value(value).def {
+                ValueDef::Instruction(id) => format!("{:?}", function.instruction(id).opcode),
+                _ => "an argument".to_owned(),
+            };
+            format!("a value another block reads that is not a register value: {def}")
+        }
+    }
+}
+
 fn declined_all(why: &str) -> Vec<Option<BlockDag>> {
     llrm_support::debug!("isel", "fast declined: {why}");
     Vec::new()
@@ -151,11 +181,11 @@ pub fn build_all(
         let next = layout.get(at + 1).copied();
         let dag = fresh_dag(module, function, target, info, block, None);
         let chain = dag.entry_node();
-        let mut declined = String::new();
+        let mut declined = None;
         let dag = Fast { layout: data_layout, module, function, info: &mut *info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), arg_regs: &arg_regs, entry: layout[0] == block, sysv: &sysv, al, edx: arch.registers().named(arch.register_named("edx"), 4), rax: view("rax", 8), rdx: view("rdx", 8), m32, dag, chain, values: Default::default(), next, uses: &uses, folded: None, exports: Vec::new(), phi_updates: Vec::new(), geps: Default::default() }
             .block(block, &mut declined);
         let Some((dag, phi_updates)) = dag else {
-            llrm_support::debug!("isel", "fast declined at {declined}");
+            llrm_support::debug!("isel", "fast declined at {}", declined_text(module, function, declined));
             blocks.push(None);
             continue;
         };
@@ -577,7 +607,7 @@ impl Fast<'_> {
         if self.uses.get(&result).copied() != Some(1) {
             return false;
         }
-        let second = |this: &Self| user.operands.get(1) == Some(&Operand::Value(result)) && matches!(user.operands[0], Operand::Value(_)) && this.is_wide(user.operands[0]) == Some(wide);
+        let second = |this: &Self| user.operands.get(1) == Some(&Operand::Value(result)) && this.is_wide(user.operands[0]) == Some(wide);
         match &user.opcode {
             Opcode::Binary(Mul) if user.operands[0] == Operand::Value(result) => {
                 // `imul r, m, imm`: a constant that is not a power of two (that one is a shift)
@@ -719,8 +749,7 @@ impl Fast<'_> {
                 Some(self.node(self.names.lea64?, &[EVT::I64], &[rip, one, noreg, target, segment]))
             }
             Operand::Constant(_) => {
-                // DEVIATE F4: the pin (X86MaterializeInt) makes 0 with `MOV32r0` (xor) and a 64-bit
-                // constant with `getMOVriOpcode`; here every constant is `MOV32ri`. Exit 2026-11-27 with F1.
+                // a zero is `MOV32ri` here and `xor` after allocation, where the flags are dead (`Peephole` at -O0)
                 let wide = self.is_wide(operand)?;
                 let (_, _, _, mov_ri, _, _, _, _, vt) = self.set(wide)?;
                 if wide && self.int_signed(operand).is_none() {
@@ -845,7 +874,7 @@ impl Fast<'_> {
         Some(())
     }
 
-    fn block(mut self, block: BlockId, declined: &mut String) -> Option<(SelectionDAG, Vec<(ValueId, u32)>)> {
+    fn block(mut self, block: BlockId, declined: &mut Option<Declined>) -> Option<(SelectionDAG, Vec<(ValueId, u32)>)> {
         self.chain = self.dag.entry_node();
         let insts: Vec<_> = self.function.iter_block(block).collect();
         self.exports = insts
@@ -858,7 +887,7 @@ impl Fast<'_> {
         while at < insts.len() {
             let instruction = self.function.instruction(insts[at]).clone();
             at += 1;
-            *declined = format!("{:?} {}", instruction.opcode, self.module.context.types.display(instruction.ty));
+            *declined = Some(Declined::At(insts[at - 1]));
             self.export_ready()?;
             match &instruction.opcode {
                 Opcode::Phi => {
@@ -1459,11 +1488,7 @@ impl Fast<'_> {
             }
         }
         if !self.exports.is_empty() {
-            let def = match self.function.value(self.exports[0]).def {
-                ValueDef::Instruction(id) => format!("{:?}", self.function.instruction(id).opcode),
-                _ => "an argument".to_owned(),
-            };
-            *declined = format!("a value another block reads that is not a register value: {def}");
+            *declined = Some(Declined::Export(self.exports[0]));
             return None;
         }
         self.dag.set_root(self.chain);

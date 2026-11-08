@@ -1311,9 +1311,14 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // comparison (`frame_omitted`), its cell is not reserved: the return
     // address and the registers are what the locals are aligned below. The
     // 32-bit frames keep it (Watcom's layout, not the pin's).
+    let mut checked = None;
     let dropped = matches!(procedure.body.bits, 64) && {
         let held = frame_held(&procedure);
-        (!procedure.size || held || procedure.registers.free) && stack_addressed(&procedure, 0).is_some()
+        (!procedure.size || held || procedure.registers.free) && {
+            let addressed = stack_addressed(&procedure, 0).is_some();
+            checked = Some(addressed);
+            addressed
+        }
     };
     // A caller whose frame is only its call area has no cell for the frame
     // register either (Win64's home area: pin `sub rsp, 40`, not 56).
@@ -1322,7 +1327,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         && procedure.body.vector_saves.is_empty()
         && !(dropped && procedure.reserve != 0 && aligns_for_calls(&procedure))
     {
-        return procedure;
+        return with_checked(procedure, checked);
     }
     let above = if dropped { slot } else { 0 };
     // Nothing is aligned where there are no locals: a leaf with two pushed
@@ -1350,12 +1355,23 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     let gap = gap + pad;
     match crate::backend::relayout::pushed_down(&procedure.body, pushed + shifted - above) {
         Some(body) => Procedure {
-            body: lir::LirBody { saved_first: true, slot_dropped: dropped, ..body },
+            body: lir::LirBody { saved_first: true, slot_dropped: dropped, stack_checked: checked, ..body },
             reserve: procedure.reserve + gap,
             ..procedure
         },
-        None => procedure,
+        None => with_checked(procedure, checked),
     }
+}
+
+/// `procedure` with the answer `stack_addressed` gave of its body.
+fn with_checked(
+    procedure: Procedure,
+    checked: Option<bool>,
+) -> Procedure {
+    if checked.is_none() {
+        return procedure;
+    }
+    Procedure { body: lir::LirBody { stack_checked: checked, ..procedure.body.clone() }, ..procedure }
 }
 
 /// `procedure` with what each return takes back as instructions before the
@@ -1369,7 +1385,19 @@ pub fn exits_inserted(procedure: Procedure) -> Procedure {
         return procedure;
     }
     let held = frame_held(&procedure);
-    let omit = frame_omitted(&procedure, 0, held).is_some();
+    // `saved_first` asked of this body whether the stack pointer can address
+    // it; where that alone decides (`frame_omitted`'s first two returns) it is
+    // not asked again.
+    let decided = procedure.body.stack_checked.filter(|_| !procedure.size || held || procedure.registers.free);
+    let omit = match decided {
+        Some(addressed) => addressed,
+        None => frame_omitted(&procedure, 0, held).is_some(),
+    };
+    let procedure = if decided.is_some() {
+        Procedure { body: lir::LirBody { stack_checked: None, ..procedure.body.clone() }, ..procedure }
+    } else {
+        procedure
+    };
     if !omit && held {
         return procedure;
     }
@@ -2924,6 +2952,12 @@ fn inert(callee: &Callee) -> bool {
         )
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Times `stack_addressed` ran: the work, for the once-per-frame test.
+    static ADDRESSED_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The items of a procedure that needs no frame register, its cells addressed
 /// through the stack pointer: gcc's `-fomit-frame-pointer`, as the target's
 /// `frame_optional` allows. A cell the frame register held at `[bp+d]` is at
@@ -2936,6 +2970,8 @@ fn stack_addressed(
     procedure: &Procedure,
     number: usize,
 ) -> Option<Vec<Item>> {
+    #[cfg(test)]
+    ADDRESSED_RUNS.with(|runs| runs.set(runs.get() + 1));
     let registers = &procedure.registers;
     if !registers.optional
         || procedure.far
@@ -4332,6 +4368,42 @@ mod tests {
             _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
         assert!(lines.iter().any(|one| one == "jmp _other"), "{lines:?}");
         assert!(!lines.iter().any(|one| one == "ret"), "{lines:?}");
+    }
+
+    /// memexp -O2 m64: a procedure was asked whether the stack pointer can
+    /// address its frame twice in a row (`saved_first`, then `exits_inserted`
+    /// on the same body), each time building every item: 68.7 M Ir with the
+    /// listing's third ask. One ask answers both.
+    #[test]
+    fn test_the_stack_pointer_addressing_is_asked_once_before_the_exits() {
+        let rbx = Loc::Reg(ir::Reg { register: RegId::RBX, width: 8 });
+        let rsi = Loc::Reg(ir::Reg { register: RegId::RSI, width: 8 });
+        let r#move = insn(0, semantics(Operation::Move, "mov", vec![rbx], vec![rsi]));
+        let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
+        let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
+        let body = lir::LirBody {
+            bits: 64,
+            ..lir::LirBody::new("get", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default())
+        };
+        let procedure = Procedure {
+            name: "get".into(),
+            public: true,
+            far: false,
+            body,
+            reserve: 0,
+            callees: IndexMap::default(),
+            interrupt: None,
+            size: false,
+            entry: 0,
+            stack_check: None,
+            probe_stack: None,
+            registers: llrm_target::Target::frame_registers(&llrm_x86_m64::M64),
+        };
+        ADDRESSED_RUNS.with(|runs| runs.set(0));
+        let procedure = saved_first(procedure);
+        assert_eq!(procedure.body.stack_checked, Some(true), "premise: the frame can be addressed from the stack");
+        exits_inserted(procedure);
+        assert_eq!(ADDRESSED_RUNS.with(|runs| runs.get()), 1, "one ask of the body, not one per pass");
     }
 
     /// x_hanoi2 `mv` -Os m32 pushed four registers before its `n == 0` exit:
