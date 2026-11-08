@@ -773,6 +773,12 @@ impl AllocTarget for Arm64 {
         1
     }
 
+    /// `stp`/`ldp` save two registers in 4 bytes; a spill is one 4-byte
+    /// `str`/`ldr`; a made-again constant is a `movz` or an `adrp`+`add`.
+    fn size_bytes() -> Option<llrm_codegen::greedy::targetinfo::SizeBytes> {
+        Some(llrm_codegen::greedy::targetinfo::SizeBytes { push: 2, pop: 2, load: 4, store: 4, constant: 4, extended_prefix: 0 })
+    }
+
     fn spill_store(
         _class: Class,
         register: LirReg,
