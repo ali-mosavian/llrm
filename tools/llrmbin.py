@@ -252,7 +252,9 @@ def backends_of(target: str) -> tuple[str, ...]:
     import tomllib
 
     rows = tomllib.loads((Path(__file__).resolve().parents[1] / "crates/driver/llrm-cc/targets.toml").read_text())
-    own = rows.get(target, {}).get("llc_program", "llrm-llc")
+    if target not in rows:
+        raise SystemExit(f"unknown target {target!r}: not a row of crates/driver/llrm-cc/targets.toml (a misspelled name would read as 'no own backend' and fake an identity pass)")
+    own = rows[target].get("llc_program", "llrm-llc")
     return ("llrm-llc",) if own == "llrm-llc" else ("llrm-llc", own)
 
 

@@ -291,3 +291,13 @@ def test_a_pair_sharing_the_targets_own_backend_is_refused_for_every_row(tmp_pat
             (folder / program).write_bytes(b"one backend")
         with pytest.raises(SystemExit, match=f"same {program}"):
             llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=llrmbin.backends_of(name), required=True)
+
+
+def test_a_misspelled_target_name_raises_instead_of_reading_as_no_own_backend():
+    """An unknown name fell back to ("llrm-llc",): `arm4-linux` for `arm64-linux` checked only llrm-llc and a pair sharing llrm-arm64-llc passed the identity run."""
+    import pytest
+
+    for typo in ("arm4-linux", "", "ARM64-LINUX", "m68k"):
+        with pytest.raises(SystemExit, match="unknown target"):
+            llrmbin.backends_of(typo)
+    assert llrmbin.backends_of("arm64-linux") == ("llrm-llc", "llrm-arm64-llc")
