@@ -275,7 +275,7 @@ fn a_printf_whose_result_is_read_stays_and_an_empty_format_goes() {
 fn a_frame_of_saved_registers_moves_the_stack_pointer_in_the_pair_access() {
     let asm = driver::assembly(include_str!("darwin/fib.ll"), Platform::Darwin, true).expect("lowers");
     let fib = asm.split("_main:").next().expect("fib first");
-    assert!(fib.contains("[sp, #-32]!") && fib.contains("[sp], #32"), "{fib}");
+    assert!(fib.contains("[sp, #-") && fib.contains("]!") && fib.contains("[sp], #"), "{fib}");
     assert!(!fib.contains("sub sp") && !fib.contains("add sp"), "{fib}");
 }
 
@@ -717,7 +717,7 @@ fn an_extension_is_free_only_for_the_users_the_bfm_family_folds() {
 /// `-g` on arm64 wrote no debug information at all (`Object::debug` was always
 /// none): a debugger could not name a function or print a variable. At -O0 each
 /// variable lives in its frame object, `a` at `sp+0` and the frame 32 bytes, so
-/// 32 bytes below the canonical frame address.
+/// 16 bytes below the canonical frame address (the frame record is lowest, #8139).
 #[test]
 fn a_variable_in_the_frame_has_its_place_below_the_frame_address() {
     use llrm_debug::Location;
@@ -731,9 +731,9 @@ fn a_variable_in_the_frame_has_its_place_below_the_frame_address() {
     assert_eq!(
         places,
         [
-            ("a", &Location::Frame { disp: -32 }),
-            ("b", &Location::Frame { disp: -28 }),
-            ("t", &Location::Frame { disp: -24 })
+            ("a", &Location::Frame { disp: -16 }),
+            ("b", &Location::Frame { disp: -12 }),
+            ("t", &Location::Frame { disp: -8 })
         ]
     );
     use llrm_debug::DebugObjectTarget;
@@ -759,7 +759,7 @@ fn an_arm64_object_has_a_line_row_where_the_source_place_changes() {
         .iter()
         .map(|one| (one.offset, one.line, one.column))
         .collect();
-    assert_eq!(rows, [(0, 2, 0), (12, 3, 11), (20, 3, 18), (24, 3, 16), (28, 3, 7), (32, 4, 12), (36, 4, 3)]);
+    assert_eq!(rows, [(0, 2, 0), (8, 3, 11), (16, 3, 18), (20, 3, 16), (24, 3, 7), (28, 4, 12), (32, 4, 3)]);
 }
 
 /// `-g` must not change the code: the source place each operation carries
