@@ -30,7 +30,7 @@ def test_prose_after_owner_is_not_a_name():
 
 def test_the_fixture_allow_list_cannot_grow_silently():
     """The files that name a made-up owner on purpose. A new entry is a hole in the check: add it here with a reason."""
-    assert len(owners.FIXTURES) == 5
+    assert len(owners.FIXTURES) == 6
     root = Path(__file__).resolve().parent.parent
     assert all((root / f).is_file() for f in owners.FIXTURES)
 

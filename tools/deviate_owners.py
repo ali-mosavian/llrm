@@ -17,6 +17,7 @@ EXIT = re.compile(r"exit[ :]+(?P<date>\d{4}-\d\d-\d\d)")
 # Files whose "owner NAME" is a made-up name under test, not an attribution. Fixed list: a growing list is a hole, test_dead_owners asserts its size.
 FIXTURES = (
     "tools/ci/test_debt.py",
+    "tools/test_dead_owners.py",
     "tools/gate/test_nightly_integration.py",
     "tools/landing/test-build-queue.sh",
     "tools/landing/test-unlogged.sh",
