@@ -398,6 +398,10 @@ impl llrm_target::Target for M32 {
         Some(llrm_x86::registers::STRING_ROOTS)
     }
 
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Some(llrm_x86::registers::X87_TOP)
+    }
+
     /// What cdecl32 keeps, but the frame register.
     fn callee_saved(&self) -> Vec<(RegId, RegId)> {
         llrm_x86::calling::callee_saved(CALLING.native())
