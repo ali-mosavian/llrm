@@ -209,6 +209,11 @@ impl Target for Arm64 {
         Platform::Linux.cpu()
     }
 
+    /// A `nop` is one 4-byte instruction.
+    fn max_nop_bytes(&self) -> u8 {
+        4
+    }
+
     /// There is no `bsf` to prefix.
     fn bsf_rep_prefix(&self) -> bool {
         false
@@ -292,6 +297,9 @@ mod tests {
         assert_eq!((Arm64.stack_slot_bytes(), Arm64.stack_alignment()), (8, 16));
         assert_eq!((Arm64.return_address_bytes(false), Arm64.first_argument_offset(false)), (0, 16));
         assert!(Arm64.aligned_calls() && !Arm64.callee_pops());
+        // A `nop` is one 4-byte instruction: padding is whole words, not x86's
+        // 1-byte default.
+        assert_eq!(Arm64.max_nop_bytes(), 4);
         assert_eq!(Arm64.results(8), [reg::X0]);
         assert_eq!(Arm64.results(16), [reg::X0, register("x1")]);
     }
