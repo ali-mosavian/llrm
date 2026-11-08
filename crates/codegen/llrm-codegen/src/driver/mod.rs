@@ -413,6 +413,8 @@ pub fn compiled_module(
     Ok(assembled)
 }
 
+// DEVIATE LG3B-DEFAULT-OFF (owner x86-m64, exit 2026-11-22): `-fend-biased-trial` is off by default. The second
+// whole-module mid-end run costs 1.94x llrm-cc Ir at -O2; default-on waits for a function twin made at LSR time.
 /// The module `unbuilt` (as it was before the pipeline) through the pipeline
 /// again with `llrm-no-end-biased` on the functions `built` marks
 /// `llrm-end-biased`; none where it marks none, or where the two come out with
