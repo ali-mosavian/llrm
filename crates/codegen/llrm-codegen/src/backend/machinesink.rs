@@ -79,6 +79,12 @@
 //! reads them (`SinkInstruction`'s zombie check).
 //! Exit: honor a dead implicit def when LIR marks one.
 //!
+//! DEVIATE F1 (owner w2, exit 2026-11-12): the x87 compare is one pseudo here
+//! and writes the flags itself (the pin's `SAHF` does), so flags defs above it
+//! sink. tests_run_c_fcmp_all -Os m32 grew 4600 -> 4728 B (pin llc 6296); the
+//! cause is not yet read. Exit: cause found and fixed, or the growth shown to
+//! be the pin's own.
+//!
 //! DEVIATE M7 (no number): an instruction whose pinned operands are all
 //! sources (the count of `shld`/`shl r, cl`) stays, as the pin's `$cl = COPY`
 //! makes it read a physical register; ours names the pin only in the register
