@@ -937,12 +937,16 @@ b0:
     assert_eq!(cost, -15025, "the pin prices this callee at -15025");
 }
 
-/// A target that states only its `inline_policy`.
-struct PolicyOnly(llrm_mir::tti::InlinePolicy);
+/// A target that states only its `inline_policy`, and whether its rate binds at -O1.
+struct PolicyOnly(llrm_mir::tti::InlinePolicy, bool);
 
 impl llrm_mir::tti::Tti for PolicyOnly {
     fn inline_policy(&self) -> llrm_mir::tti::InlinePolicy {
         self.0
+    }
+
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        self.1
     }
 
     fn cmp_sel_cost(
@@ -1038,12 +1042,31 @@ impl llrm_mir::tti::Tti for PolicyOnly {
 fn the_inliner_reads_the_inline_policy_of_the_target() {
     use llrm_mir::tti::{InlinePolicy, Tti};
     let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
-    let pin = PolicyOnly(InlinePolicy::PIN);
-    let priced = PolicyOnly(InlinePolicy { by_rate: arm.inline_policy().by_rate, ..InlinePolicy::PIN });
+    let pin = PolicyOnly(InlinePolicy::PIN, true);
+    let priced = PolicyOnly(InlinePolicy { by_rate: arm.inline_policy().by_rate, ..InlinePolicy::PIN }, true);
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&pin));
     assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&priced));
     assert!(cost >= threshold, "{cost} against {threshold}");
+}
+
+/// z80 -O1 inlined with the -O2 byte price (1 B = 3 T): 5 cells bigger or
+/// slower than -O1 must be (loop_fusion +43,813 T). A rate that does not bind
+/// at -O1 leaves the pin's verdict there and refuses at -O2.
+#[test]
+fn a_rate_that_binds_from_o2_leaves_o1_to_the_pin() {
+    use llrm_mir::tti::InlinePolicy;
+    let policy = InlinePolicy { by_rate: 250_000, ..InlinePolicy::PIN };
+    let from_o2 = PolicyOnly(policy, false);
+    let always = PolicyOnly(policy, true);
+    let verdict = |tti: &dyn llrm_mir::tti::Tti, o1_bound| {
+        let params = InlineParams { compute_full_inline_cost: true, o1_bound, ..InlineParams::from_level(2) };
+        let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(tti), params, (2, false));
+        cost < threshold
+    };
+    assert!(!verdict(&from_o2, false), "-O2 is priced");
+    assert!(verdict(&from_o2, true), "-O1 keeps the pin's verdict");
+    assert!(!verdict(&always, true), "a rate that binds at -O1 still does");
 }
 
 /// A target that states its rules through the older hooks gets the policy they

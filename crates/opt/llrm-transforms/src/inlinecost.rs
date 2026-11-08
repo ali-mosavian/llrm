@@ -2192,10 +2192,12 @@ impl<'a> Analyzer<'a> {
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
-        let unpriced = self.site.caller_size == CallerSize::Speed
-            && self.params.o1_bound
+        let at_o1 = self.site.caller_size == CallerSize::Speed && self.params.o1_bound;
+        let unpriced = at_o1
             && self.site.tti.is_some_and(|tti| tti.inline_policy().by_rate == 0 && tti.inline_never_grows_without_rate());
-        let grows = if self.site.caller_size == CallerSize::Speed && !unpriced {
+        // -O1 keeps the pin's threshold alone where the target's rate binds at -O2 and -O3 only.
+        let rate_off = at_o1 && self.site.tti.is_some_and(|tti| !tti.speed_inline_rate_at_o1());
+        let grows = if self.site.caller_size == CallerSize::Speed && !unpriced && !rate_off {
             self.grows_more_than_it_saves()
         } else if unpriced {
             // INL-O1: a growing inline stays only where the call's clocks, at

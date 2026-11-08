@@ -336,6 +336,17 @@ impl Tti for Z80Tti {
         if llrm_mir::tti::is_free_intrinsic(name) { Cost::FREE } else { llrm_mir::tti::base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
     }
 
+    /// A byte of growth is worth 3 T at -O2 and -O3, the rate the program table is judged at: an inline that costs
+    /// more bytes than its call saves clocks is refused (a callee that stays and is copied into its one caller).
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        3000
+    }
+
+    /// -O1 is strict on bytes and clocks: the pin's threshold alone, no rate.
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        false
+    }
+
     /// SZ1, rule 1: a size build keeps a callee bigger than its call. The pin's
     /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
     /// call is 3.

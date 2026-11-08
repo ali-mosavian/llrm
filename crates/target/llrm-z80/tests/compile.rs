@@ -2065,3 +2065,15 @@ fn an_internal_function_is_a_local_label_and_an_external_one_is_global() {
     let external = text(include_str!("kernels/ir/digits.ll"), "digits", 0, &Request::new(Level::Os)).expect("compiles");
     assert!(external.starts_with("_digits::\n"), "{external}");
 }
+
+/// A byte of growth is worth 3 T from -O2 (z80 `speed_inline_milliclocks_per_byte`): `marks`, a loop nest
+/// called twice, stays a call (-O2 was 396 B, 52,701 T with it copied into both). -O1 prices no byte in
+/// clocks: its trial inlines went on at -O1 and `from` (a call at -O1) was copied in, 24 B smaller and
+/// 38,901 T slower.
+#[test]
+fn the_speed_rate_refuses_a_big_copy_at_o2_and_leaves_o1_to_the_pin() {
+    let ir = include_str!("kernels/ir/split_loops.ll");
+    let at = |level| text(ir, "main", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(at(Level::O2).contains("call _marks"), "-O2\n{}", at(Level::O2));
+    assert!(at(Level::O1).contains("call _from"), "-O1\n{}", at(Level::O1));
+}

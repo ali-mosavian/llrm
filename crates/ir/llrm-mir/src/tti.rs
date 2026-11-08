@@ -555,6 +555,12 @@ pub trait Tti {
         0
     }
 
+    /// Whether `speed_inline_milliclocks_per_byte` also binds at -O1. False:
+    /// -O1 prices no byte in clocks and keeps the pin's threshold alone.
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        true
+    }
+
     /// Whether one wider store of constants may start off its own size
     /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
     /// at a multiple of its size.

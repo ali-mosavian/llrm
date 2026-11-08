@@ -334,7 +334,8 @@ impl ProgramPass for Walk {
                                 decided.as_mut(),
                                 (tti.as_deref().is_some_and(|tti| {
                                     size != crate::inlinecost::CallerSize::Speed
-                                        || tti.inline_policy().by_rate > 0
+                                        || (tti.inline_policy().by_rate > 0
+                                            && (self.speed_rate || tti.speed_inline_rate_at_o1()))
                                 }))
                                 .then_some(&mut trials),
                             )
