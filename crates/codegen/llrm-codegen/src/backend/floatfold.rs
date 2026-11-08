@@ -4,8 +4,8 @@
 //! DEVIATE FF1 (owner m16, exit 2026-11-17): a volatile cell folds too; the
 //! fused instruction stays volatile and ordered against every other volatile
 //! access. The pin keeps `fld [m]` for it. Cost rule: the fold drops an `fld`
-//! and a stack slot and keeps the one memory read, so it never costs a byte or a
-//! clock; the exit is the pin's own fold, or this stays with the exit moved.
+//! and a stack slot and keeps the one memory read, so it never costs a byte or
+//! a clock; the exit is the pin's own fold, or this stays with the exit moved.
 //!
 //! # How it works
 //! x87 arithmetic has a memory form for a float or a double (`fadd qword ptr
@@ -20,8 +20,8 @@
 //!
 //! - it is read exactly once in the body;
 //! - its defining instruction is the nearest earlier definition in the block, a
-//!   plain `fld` or `fild` of a memory cell, with no clobbers and
-//!   not part of a group;
+//!   plain `fld` or `fild` of a memory cell, with no clobbers and not part of a
+//!   group;
 //! - nothing between the load and the arithmetic is volatile, a call, a barrier
 //!   or an escape, or may write the cell (`storedhomes::may_write`);
 //! - the cell is 4 or 8 bytes, or a 2 or 4 byte integer the target prices below
@@ -99,16 +99,20 @@
 
 use std::sync::Arc;
 
+use crate::backend::constpool;
 use crate::backend::floatalloc::{_loads_memory, _reversed, _two_values, cell_of, name_is, semantics};
 use crate::backend::select;
 use crate::backend::storedhomes::may_write;
-use crate::model::ir::{Loc, Mem, Operation};
+use crate::model::ir::{Addr, Loc, Mem, Operation, Space};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap, IndexSet};
 
 pub struct FloatFold<'a> {
     pub cpu: &'a crate::backend::cpu::Profile,
+    /// Where a constant folded into an operand is kept (`fold_constants`);
+    /// none: constants stay loaded.
+    pub pool: Option<std::rc::Rc<std::cell::RefCell<crate::backend::constpool::Pool>>>,
     /// How many registers an integer value may take: the pressure a refold
     /// may not take a block over.
     pub registers: usize,
@@ -127,7 +131,8 @@ impl LIRTransform for FloatFold<'_> {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(folded(&body, self.cpu, self.registers))
+        let mut pool = self.pool.as_ref().map(|pool| pool.borrow_mut());
+        Ok(folded_with(&body, self.cpu, self.registers, pool.as_deref_mut()))
     }
 }
 
@@ -136,6 +141,16 @@ pub fn folded(
     body: &LirBody,
     cpu: &crate::backend::cpu::Profile,
     registers: usize,
+) -> LirBody {
+    folded_with(body, cpu, registers, None)
+}
+
+/// [`folded`], with a pool to keep the constants it folds in.
+pub fn folded_with(
+    body: &LirBody,
+    cpu: &crate::backend::cpu::Profile,
+    registers: usize,
+    pool: Option<&mut crate::backend::constpool::Pool>,
 ) -> LirBody {
     let mut uses: HashMap<u32, usize> = HashMap::default();
     let mut defs: HashMap<u32, usize> = HashMap::default();
@@ -153,8 +168,10 @@ pub fn folded(
             }
         }
     }
+    let constants = pool.and_then(|pool| fold_constants(body, &uses, &defs, cpu, pool));
+    let body = constants.as_ref().unwrap_or(body);
     let mut blocks = Vec::new();
-    let mut changed = false;
+    let mut changed = constants.is_some();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
         let mut at = 0;
@@ -212,6 +229,118 @@ pub fn folded(
     }
     let folded = if changed { body.with_blocks(blocks) } else { body.clone() };
     _refolded(&folded, &uses, &defs, &floating, cpu, registers).unwrap_or(folded)
+}
+
+/// A constant `fldz` or `fld1` that one arithmetic instruction reads becomes
+/// that instruction's memory operand, the constant kept in the pool: `fld1;
+/// faddp` is `fadd dword [K]`.
+///
+/// DEVIATE FF2 (owner x87, exit 2026-11-28): the pin keeps `fld1`/`fldz` for
+/// every use (LLVM's legal x87 immediates) and gcc folds them when the memory
+/// form is cheaper. The same rule as a load: the clocks the fold saves
+/// (`memory_form`, per CPU) and the bytes at the target's exchange rate; the
+/// memory form is the longer (6 bytes against 4 at m32), so code built for size
+/// keeps the constant. x_ld_sum -O2 m32: `x[r] += 1` ran `fld1; faddp` (12
+/// clocks) against `fadd dword [K]` (8); in the loops of x_ld_poly 129 of them.
+fn fold_constants(
+    body: &LirBody,
+    uses: &HashMap<u32, usize>,
+    defs: &HashMap<u32, usize>,
+    cpu: &crate::backend::cpu::Profile,
+    pool: &mut crate::backend::constpool::Pool,
+) -> Option<LirBody> {
+    if cpu.size || cpu.min_size {
+        return None;
+    }
+    let mut blocks = Vec::new();
+    let mut changed = false;
+    for block in &body.blocks {
+        let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
+        let mut at = 0;
+        while at < insns.len() {
+            let one = Arc::clone(&insns[at]);
+            let constant = one
+                .what
+                .as_ref()
+                .filter(
+                    |what| what.op == Operation::FloatLoad
+                        && what.sources.is_empty()
+                        && matches!(what.dests.as_slice(), [Loc::Held(held)] if held.width == 10),
+                );
+            let Some(((value, one_value), what)) = constant.and_then(|what| {
+                let Loc::Held(held) = &what.dests[0] else { return None };
+                let one_value = match what.name.as_deref()? {
+                    "fldz" => false,
+                    "fld1" => true,
+                    _ => return None,
+                };
+                Some(((held.value, one_value), what))
+            }) else {
+                at += 1;
+                continue;
+            };
+            let _ = what;
+            if uses.get(&value) != Some(&1)
+                || defs.get(&value) != Some(&1)
+                || !one.clobbers.is_empty()
+                || one.group.is_some()
+            {
+                at += 1;
+                continue;
+            }
+            // Its reader: the next instruction in the block that names it.
+            let Some(reader) = (at + 1..insns.len()).find(|&next| {
+                insns[next]
+                    .what
+                    .as_ref()
+                    .is_some_and(|w| w.sources.iter().any(|s| matches!(s, Loc::Held(h) if h.value == value)))
+            }) else {
+                at += 1;
+                continue;
+            };
+            let Some(arith) =
+                insns[reader].what.as_ref().filter(|w| w.op == Operation::FloatArith && w.dests.len() == 1)
+            else {
+                at += 1;
+                continue;
+            };
+            let Some((name, left, right)) =
+                _two_values(Some(arith)).filter(|(_, left, right)| left.value != right.value)
+            else {
+                at += 1;
+                continue;
+            };
+            let cell_is_left = left.value == value;
+            let bytes = constpool::narrowest(if one_value { 1.0 } else { 0.0 });
+            let Some((_, saved)) = memory_form_of(&name, cell_is_left, false, bytes.len() as u32, cpu) else {
+                at += 1;
+                continue;
+            };
+            // Gone: the constant's load and the register form's operand
+            // encoding; added: the memory form's.
+            let probe = Mem {
+                disp_width: 2,
+                ..Mem::new(Some(Addr { index: 0, ..Addr::new(Space::Segment, 0) }), bytes.len() as u32)
+            };
+            let gained = 2 + REGISTER_FORM - _memory_operation_bytes(&probe, body.bits);
+            let rate = cpu.speed_milliclocks_per_byte();
+            let pays = if rate == 0 { saved > 0 && gained >= 0 } else { saved * 1000 + gained * rate > 0 };
+            if !pays {
+                at += 1;
+                continue;
+            }
+            let cell = pool.cell(bytes);
+            let Some(fused) = read_from_cell(&insns[reader], value, &cell) else {
+                at += 1;
+                continue;
+            };
+            insns[reader] = Arc::new(fused);
+            insns.remove(at);
+            changed = true;
+        }
+        blocks.push(block.with_insns(insns));
+    }
+    changed.then(|| body.with_blocks(blocks))
 }
 
 /// Bytes of an x87 register form (`fmul st, st(i)`, `fld st(i)`).
@@ -639,6 +768,17 @@ fn memory_form(
     load: &Insn,
     cpu: &crate::backend::cpu::Profile,
 ) -> Option<(String, i64)> {
+    memory_form_of(name, cell_is_left, name_is(load.what.as_ref()?, "fild"), cell_of(load).width, cpu)
+}
+
+/// [`memory_form`] for a cell of `width` bytes, an integer one if `integer`.
+fn memory_form_of(
+    name: &str,
+    cell_is_left: bool,
+    integer: bool,
+    width: u32,
+    cpu: &crate::backend::cpu::Profile,
+) -> Option<(String, i64)> {
     let reversed = |name: &str| -> String {
         match name {
             "fsub" => "fsubr".to_owned(),
@@ -651,7 +791,7 @@ fn memory_form(
     // form below the `fild` and the operation it replaces, per operation:
     // the 486 has `fimul` at 23 clocks against 13 and 16, `fiadd` at 20 against
     // 13 and 8.
-    if name_is(load.what.as_ref()?, "fild") {
+    if integer {
         let (integer, float) = match name.as_str() {
             "fadd" => ("x87_add_i", "x87_add"),
             "fsub" | "fsubr" => ("x87_add_i", "x87_add"),
@@ -661,12 +801,12 @@ fn memory_form(
         };
         let price = |key: &str| cpu.cost(key).ok();
         let replaced = price("x87_load_i")? + price(float)?;
-        if !matches!(cell_of(load).width, 2 | 4) || price(integer)? >= replaced {
+        if !matches!(width, 2 | 4) || price(integer)? >= replaced {
             return None;
         }
         return Some((format!("fi{}", &name[1..]), replaced - price(integer)?));
     }
-    if !matches!(cell_of(load).width, 4 | 8) {
+    if !matches!(width, 4 | 8) {
         return None;
     }
     // A float or double cell: the load is saved, and the memory form may cost
@@ -792,6 +932,79 @@ mod tests {
             fstp(4, 4, frame(-4)),
         ]);
         assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fmul+m", "fadd+m", "fstp"]);
+    }
+
+    /// `fold_constants` over a pool of its own.
+    fn constants_folded(
+        body: &LirBody,
+        cpu: &crate::backend::cpu::Profile,
+    ) -> LirBody {
+        let mut pool = crate::backend::constpool::Pool::new(0);
+        folded_with(body, cpu, REGISTERS, Some(&mut pool))
+    }
+
+    /// x_ld_sum -O2 m32: `x[r] += 1` was `fld1; faddp` (12 clocks, 4 bytes)
+    /// where `fadd dword [K]` is 8 clocks and 6 bytes: 129 executed in the
+    /// loops of x_ld_poly, 60 clocks over gcc in x_ld_sum. The constant one
+    /// arithmetic instruction reads is its memory operand where the target
+    /// prices the clocks above the extra bytes.
+    #[test]
+    fn test_a_constant_one_instruction_reads_is_its_memory_operand_at_speed() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(2, "fadd", 3, 1, 2),
+            fstp(3, 3, global(0, 0)),
+        ]);
+        assert_eq!(names(&constants_folded(&body, cpu)), ["fadd+m", "fstp"]);
+        assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fadd", "fstp"], "no pool: unchanged");
+    }
+
+    /// The fold is the table's call, not a constant: on every CPU the target
+    /// knows it is made exactly where the clocks `x87_load + x87_add -
+    /// x87_add_m` save, at the CPU's exchange rate, outweigh the extra bytes of
+    /// the memory form.
+    #[test]
+    fn test_a_constant_is_folded_exactly_where_the_cpu_table_prices_it_so() {
+        let body = one_block(vec![
+            insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(2, "fadd", 3, 1, 2),
+            fstp(3, 3, global(0, 0)),
+        ]);
+        let mut folded_on = Vec::new();
+        for name in ["386", "486", "P5", "K5", "K6", "K7"] {
+            let cpu = crate::backend::cpu::profile(name).expect("a profile");
+            let price = |key: &str| cpu.cost(key).expect("a priced operation");
+            let saved = price("x87_load") + price("x87_add") - price("x87_add_m");
+            let probe = Mem { disp_width: 2, ..Mem::new(Some(Addr { index: 0, ..Addr::new(Space::Segment, 0) }), 4) };
+            let gained = 2 + REGISTER_FORM - _memory_operation_bytes(&probe, body.bits);
+            let rate = cpu.speed_milliclocks_per_byte();
+            let expected = if rate == 0 { saved > 0 && gained >= 0 } else { saved * 1000 + gained * rate > 0 };
+            let done = names(&constants_folded(&body, cpu));
+            assert_eq!(
+                done == ["fadd+m", "fstp"],
+                expected,
+                "{name}: saved {saved} clocks, {gained} bytes, rate {rate}"
+            );
+            if expected {
+                folded_on.push(name);
+            }
+        }
+        assert!(folded_on.contains(&"486"), "{folded_on:?}");
+    }
+
+    /// A constant that two instructions read stays loaded: one `fld1` serves
+    /// both, and each memory form would cost its bytes again.
+    #[test]
+    fn test_a_constant_read_twice_stays_loaded() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(2, "fadd", 3, 1, 2),
+            arith(3, "fmul", 4, 3, 2),
+            fstp(4, 4, global(0, 0)),
+        ]);
+        assert_eq!(names(&constants_folded(&body, cpu)), ["fld1", "fadd", "fmul", "fstp"]);
     }
 
     /// int_compared_with_float -Os: a volatile float read once by a compare was
@@ -1019,7 +1232,10 @@ mod tests {
     /// A load read by `readers` arithmetic instructions: the several-reader
     /// refold, the only fold that weighs clocks against bytes (a single reader
     /// folds as the pin does, whatever the clocks).
-    fn read_by(readers: usize, cell: Mem) -> LirBody {
+    fn read_by(
+        readers: usize,
+        cell: Mem,
+    ) -> LirBody {
         let mut insns = vec![fld(0, 1, cell), insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![])];
         let mut left = 2;
         for reader in 0..readers {

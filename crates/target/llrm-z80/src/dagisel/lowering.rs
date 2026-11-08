@@ -170,6 +170,8 @@ pub fn target_lowering() -> TargetLowering {
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
+    // equality of a long is the bytes' xors or-ed in the accumulator
+    tl.set_byte_equality(true);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
     tl
 }

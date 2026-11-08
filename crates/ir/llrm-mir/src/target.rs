@@ -84,6 +84,11 @@ pub struct Tuning {
     /// takes are 3.5 to 5 times that on x86 (22 callees of the m32 O1 corpus:
     /// median 3.99 bytes per unit). Scales the growth the -O1 bytes-vs-clocks
     /// check compares with its per-byte rate; 1000: one byte a unit.
+    /// DEVIATE INL-O1 unit scale (owner x86-m32, exit 2026-12-05). Stated cost,
+    /// exit 2026-11-15 (strict -O1 clocks, not waived): x_sf_cmp64 81196 ->
+    /// 93965 clk (best gcc/clang 90307), x_sf_div 146540 -> 152986 (149453),
+    /// x_sf_mul 82587 -> 88263 (88107). Recovery: weigh callee size against
+    /// the site's frequency and loop depth.
     pub inline_o1_unit_bytes_milli: i64,
     /// DEVIATE INL-O1 ENTRY (owner x86-m32, exit 2026-11-15): the -O1
     /// bytes-vs-clocks check weighs a site's frequency by how often its

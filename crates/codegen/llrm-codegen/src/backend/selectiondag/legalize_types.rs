@@ -764,6 +764,97 @@ impl<'a> TypeLegalizer<'a> {
         *self.promoted.get(&value).expect("operand promoted before its user")
     }
 
+    /// `SExtPromotedInteger`: the promoted value with its bits above `value`'s
+    /// own width made copies of the sign.
+    fn sext_promoted_integer(
+        &mut self,
+        value: SDValue,
+    ) -> SDValue {
+        let narrow = self.dag.get_value_type_node(self.dag.value_type(value));
+        let promoted = self.promoted_integer(value);
+        let wide = self.dag.value_type(promoted);
+        self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, narrow])
+    }
+
+    /// `ZExtPromotedInteger`: the promoted value with its bits above `value`'s
+    /// own width cleared.
+    fn zext_promoted_integer(
+        &mut self,
+        value: SDValue,
+    ) -> SDValue {
+        let bits = self.dag.value_type(value).size_in_bits();
+        let promoted = self.promoted_integer(value);
+        let wide = self.dag.value_type(promoted);
+        let mask = self.dag.get_constant(super::fold::mask(bits), wide);
+        self.dag.get_node(ISD::And, wide, &[promoted, mask])
+    }
+
+    /// `PromoteIntRes_ADDSUBSHLSAT`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L1067>).
+    ///
+    /// DEVIATE: `SExtOrZExtPromotedOperands` (`usubsat`) always inserts the
+    /// extension where the pin skips it for operands whose known bits already
+    /// fit; the combiner removes it. Exit: when that helper is translated.
+    fn promote_saturating(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        to: EVT,
+    ) -> SDValue {
+        let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        let old = self.dag.value_type(lhs);
+        let old_bits = old.size_in_bits();
+        let new_bits = to.size_in_bits();
+        if op == ISD::USubSat {
+            let (lhs, rhs) = if self.tli.is_sext_cheaper_than_zext(old, to) {
+                (self.sext_promoted_integer(lhs), self.sext_promoted_integer(rhs))
+            } else {
+                (self.zext_promoted_integer(lhs), self.zext_promoted_integer(rhs))
+            };
+            return self.dag.get_node(ISD::USubSat, to, &[lhs, rhs]);
+        }
+        if op == ISD::UAddSat {
+            if self.tli.is_sext_cheaper_than_zext(old, to) {
+                let (lhs, rhs) = (self.sext_promoted_integer(lhs), self.sext_promoted_integer(rhs));
+                return self.dag.get_node(ISD::UAddSat, to, &[lhs, rhs]);
+            }
+            let (lhs, rhs) = (self.zext_promoted_integer(lhs), self.zext_promoted_integer(rhs));
+            let top = self.dag.get_constant(super::fold::mask(old_bits), to);
+            let sum = self.dag.get_node(ISD::Add, to, &[lhs, rhs]);
+            return self.dag.get_node(ISD::UMin, to, &[sum, top]);
+        }
+        let shift = matches!(op, ISD::SShlSat | ISD::UShlSat);
+        let (mut lhs, mut rhs) = if shift {
+            let amount = if self.action(self.dag.value_type(rhs)) == TypeAction::PromoteInteger {
+                self.zext_promoted_integer(rhs)
+            } else {
+                rhs
+            };
+            (self.promoted_integer(lhs), amount)
+        } else {
+            (self.sext_promoted_integer(lhs), self.sext_promoted_integer(rhs))
+        };
+        // A shift cannot be a min and a max: no overflow is seen once every
+        // bit has been shifted out.
+        if shift || self.tli.is_operation_legal(op, to) {
+            let back = if op == ISD::UShlSat { ISD::Srl } else { ISD::Sra };
+            let amount = self.shift_const(u128::from(new_bits - old_bits), to);
+            lhs = self.dag.get_node(ISD::Shl, to, &[lhs, amount]);
+            if !shift {
+                rhs = self.dag.get_node(ISD::Shl, to, &[rhs, amount]);
+            }
+            let result = self.dag.get_node(op, to, &[lhs, rhs]);
+            return self.dag.get_node(back, to, &[result, amount]);
+        }
+        let combine = if op == ISD::SAddSat { ISD::Add } else { ISD::Sub };
+        let widen = |value: i128| (value as u128) & super::fold::mask(new_bits);
+        let min = self.dag.get_constant(widen(-(1_i128 << (old_bits - 1))), to);
+        let max = self.dag.get_constant(widen((1_i128 << (old_bits - 1)) - 1), to);
+        let result = self.dag.get_node(combine, to, &[lhs, rhs]);
+        let result = self.dag.get_node(ISD::SMin, to, &[result, max]);
+        self.dag.get_node(ISD::SMax, to, &[result, min])
+    }
+
     /// `SetPromotedInteger`.
     fn set_promoted_integer(
         &mut self,
@@ -1039,6 +1130,42 @@ impl<'a> TypeLegalizer<'a> {
                 let loaded = self.dag.get_ext_load(ext, to, chain, ptr, info);
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: loaded.node, res: 1 });
                 loaded
+            }
+            op @ (ISD::SAddSat | ISD::UAddSat | ISD::SSubSat | ISD::USubSat | ISD::SShlSat | ISD::UShlSat) => {
+                self.promote_saturating(value, op, to)
+            }
+            op @ (ISD::SMulFix | ISD::UMulFix | ISD::SMulFixSat | ISD::UMulFixSat) => {
+                // `PromoteIntRes_MULFIX`
+                // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L1162>):
+                // the operands extended in the promoted type, then the same
+                // operation there. A saturating one saturates at the wider
+                // width, so one operand is shifted up by the difference and
+                // the result shifted back.
+                let signed = matches!(op, ISD::SMulFix | ISD::SMulFixSat);
+                let saturating = matches!(op, ISD::SMulFixSat | ISD::UMulFixSat);
+                let narrow = self.dag.value_type(self.dag.operand(value, 0));
+                let narrow_node = self.dag.get_value_type_node(narrow);
+                let mut extended = Vec::with_capacity(2);
+                for at in 0..2 {
+                    let promoted = self.promoted_integer(self.dag.operand(value, at));
+                    extended.push(if signed {
+                        self.dag.get_node(ISD::SignExtendInReg, to, &[promoted, narrow_node])
+                    } else {
+                        let mask = self.dag.get_constant(super::fold::mask(narrow.size_in_bits()), to);
+                        self.dag.get_node(ISD::And, to, &[promoted, mask])
+                    });
+                }
+                let scale = self.dag.operand(value, 2);
+                if saturating {
+                    let difference = u128::from(to.size_in_bits() - narrow.size_in_bits());
+                    let up = self.shift_const(difference, to);
+                    let lhs = self.dag.get_node(ISD::Shl, to, &[extended[0], up]);
+                    let result = self.dag.get_node(op, to, &[lhs, extended[1], scale]);
+                    let back = self.shift_const(difference, to);
+                    self.dag.get_node(if signed { ISD::Sra } else { ISD::Srl }, to, &[result, back])
+                } else {
+                    self.dag.get_node(op, to, &[extended[0], extended[1], scale])
+                }
             }
             ISD::SDivFix => {
                 // `PromoteIntRes_DIVFIX`: the operands sign-extended in the
@@ -3292,6 +3419,36 @@ impl<'a> TypeLegalizer<'a> {
         let ((ll, lh), (rl, rh)) =
             (self.expanded_integer(self.dag.operand(setcc, 0)), self.expanded_integer(self.dag.operand(setcc, 1)));
         let half = self.dag.value_type(ll);
+        // A constant operand leaves one operand's bytes live beside the
+        // accumulator; two registers' worth spilled in the corpus.
+        if matches!(code, CondCode::SetEq | CondCode::SetNe)
+            && self.tli.byte_equality()
+            && self.dag.constant(self.dag.operand(setcc, 1)).is_some()
+        {
+            // DEVIATE WIDE-EQ-BYTES (see `TargetLowering::byte_equality`)
+            let (left, right) = (self.dag.operand(setcc, 0), self.dag.operand(setcc, 1));
+            let wide = self.dag.value_type(left);
+            let byte = |this: &mut Self, value: SDValue, at: u32| {
+                let shifted = if at == 0 {
+                    value
+                } else {
+                    let by = this.dag.get_constant(u128::from(8 * at), EVT::I8);
+                    this.dag.get_node(ISD::Srl, wide, &[value, by])
+                };
+                this.dag.get_node(ISD::Truncate, EVT::I8, &[shifted])
+            };
+            let mut seen: Option<SDValue> = None;
+            for at in 0..wide.size_in_bits() / 8 {
+                let (a, b) = (byte(self, left, at), byte(self, right, at));
+                let diff = self.dag.get_node(ISD::Xor, EVT::I8, &[a, b]);
+                seen = Some(match seen {
+                    Some(so_far) => self.dag.get_node(ISD::Or, EVT::I8, &[diff, so_far]),
+                    None => diff,
+                });
+            }
+            let zero = self.dag.get_constant(0, EVT::I8);
+            return self.dag.get_setcc(vt, seen.expect("a byte"), zero, code);
+        }
         if matches!(code, CondCode::SetEq | CondCode::SetNe) {
             let (low, high) =
                 (self.dag.get_node(ISD::Xor, half, &[ll, rl]), self.dag.get_node(ISD::Xor, half, &[lh, rh]));

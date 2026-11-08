@@ -493,7 +493,17 @@ fn visit_order(
 
 /// Whether any loop changed.
 pub fn simplified(function: &mut Function) -> bool {
-    let (nested, shape) = separated_nested_loops(function);
+    simplified_given(function, None)
+}
+
+/// [`simplified`], `first` being `function`'s shape where the caller holds one
+/// (the manager's dominator tree and loops): the first round asks it rather
+/// than building a new one.
+pub fn simplified_given(
+    function: &mut Function,
+    first: Option<cfg::Shape>,
+) -> bool {
+    let (nested, shape) = separated_nested_loops(function, first);
     _simplified(function, shape) | nested
 }
 
@@ -507,14 +517,17 @@ pub fn simplified(function: &mut Function) -> bool {
 /// preheader and exit blocks of the pin's `simplifyOneLoop`, so the new block
 /// takes the edges the preheader would have (the later grouping gives the
 /// outer loop its own preheader); exit 2026-11-14.
-fn separated_nested_loops(function: &mut Function) -> (bool, cfg::Shape) {
+fn separated_nested_loops(
+    function: &mut Function,
+    mut first: Option<cfg::Shape>,
+) -> (bool, cfg::Shape) {
     let mut changed = false;
     // Each separation removes a latch from a loop: the blocks bound it.
     // The shape of the last round, where nothing was separated, is that of the
     // function the caller goes on with.
     let mut last = None;
     for _ in 0..function.layout().len() {
-        let shape = cfg::Shape::of(function);
+        let shape = first.take().unwrap_or_else(|| cfg::Shape::of(function));
         let separated = shape.loops.iter().any(|loop_| {
             if loop_.latches.len() < 2 {
                 return false;
