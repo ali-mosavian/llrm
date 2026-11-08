@@ -38,7 +38,7 @@ fn _inline_contract(
         names
             .iter()
             .map(|name| {
-                crate::backend::inline_asm::view(name)
+                llrm_x86::inline_asm::view(name)
                     .ok_or_else(|| AbiError(format!("inline assembly names no register {}", pyrepr::string(name))))
             })
             .collect::<Result<Vec<_>, _>>()
@@ -99,7 +99,7 @@ pub fn asm_call(name: &str) -> Option<Result<(Contract, Registers), AbiError>> {
                     | runtime::Reg::Si
                     | runtime::Reg::Di
                     | runtime::Reg::Sp
-                    | runtime::Reg::Es => crate::backend::inline_asm::machine(one, bits)
+                    | runtime::Reg::Es => llrm_x86::inline_asm::machine(one, bits)
                         .ok_or_else(|| AbiError(format!("inline assembly passes a value in {}", one.name()))),
                     other => Err(AbiError(format!("inline assembly passes a value in {}", other.name()))),
                 })

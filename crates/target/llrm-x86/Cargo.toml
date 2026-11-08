@@ -24,6 +24,7 @@ llrm-mir = { workspace = true }
 llrm-target = { workspace = true }
 llrm-sdag = { workspace = true }
 llrm-support = { workspace = true }
+llrm-qbruntime = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
