@@ -263,7 +263,14 @@ impl Collection<'_, '_> {
             // search per instance.
             if self.uses.len() > 1 && !solution.is_empty() && self.tti.lsr_solves_both_use_orders() {
                 let (other, other_cost) = self.search(se, &reversed);
-                if !other.is_empty() && other_cost.is_less(self.tti, &solution_cost) {
+                // It must also save an instruction over the loop as written:
+                // a tie there is settled by `AddRecCost`, which prices a
+                // rewrite that adds a base register as a win (recpow at m16:
+                // +10 B, +402 instructions).
+                if !other.is_empty()
+                    && other_cost.is_less(self.tti, &solution_cost)
+                    && other_cost.c.insns < self.baseline_cost.c.insns
+                {
                     solution = other;
                     solution_cost = other_cost;
                 }
