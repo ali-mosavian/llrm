@@ -349,7 +349,7 @@ fn priced_verdict(
     let runs = if prices_nest {
         enclosing_runs(run, se, analyzed, lp)
     } else {
-        ASSUMED_TRIPS.pow((lp.get_loop_depth() - 1).min(2))
+        if run.tti.unroll_assumes_unknown_loops_run() { ASSUMED_TRIPS.pow((lp.get_loop_depth() - 1).min(2)) } else { 1 }
     };
     // DEVIATE UP2-X87 (owner x87, exit 2026-11-20): an element past the stack
     // is stored and loaded again each run (nbody -O2 m32: the unroll priced
@@ -407,7 +407,7 @@ fn enclosing_runs(
         let trips = se.get_small_constant_trip_count(&cx, parent.get_header());
         if trips != 0 {
             runs = runs.saturating_mul(i64::from(trips)).min(1 << 24);
-        } else if assumed < 2 {
+        } else if run.tti.unroll_assumes_unknown_loops_run() && assumed < 2 {
             // As before: at most two unknown loops around count.
             assumed += 1;
             runs *= ASSUMED_TRIPS;
