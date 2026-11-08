@@ -80,6 +80,7 @@ fn priced_params(
         caller_recursive: false,
         caller_size: size,
         relative_frequency: None,
+        entry_weight: None,
         tti,
     };
     match inline_cost(&site, params) {
@@ -553,6 +554,7 @@ fn a_noipa_callee_is_never_inlined_by_cost() {
             caller_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
+            entry_weight: None,
             tti: None,
         };
         let verdict = inline_cost(&site, InlineParams::from_level(2));
@@ -596,6 +598,7 @@ fn an_interposable_callee_is_not_inlined() {
             caller_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
+            entry_weight: None,
             tti: None,
         };
         let verdict = inline_cost(&site, InlineParams::from_level(2));
@@ -833,6 +836,7 @@ b0:
         caller_recursive: false,
         caller_size: CallerSize::Speed,
         relative_frequency: None,
+        entry_weight: None,
         tti: None,
     };
     let verdict = inline_cost(&site, InlineParams::from_level(2));
@@ -894,6 +898,7 @@ b0:
             caller_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
+            entry_weight: None,
             tti: None,
         };
         let params =
