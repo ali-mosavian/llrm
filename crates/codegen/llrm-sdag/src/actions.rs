@@ -146,6 +146,12 @@ pub struct TargetLowering {
     /// `X86TargetLowering::BuildSDIVPow2` builds the `cmov` form of a signed
     /// divide by a power of two: `Some(is64)`, `i64` too where `is64`.
     sdiv_pow2_cmov: Option<bool>,
+    /// DEVIATE WIDE-EQ-BYTES (owner z80, exit 2026-11-30): equality of a wide
+    /// integer is the or of its bytes' xors, not of its halves' xors. The pin
+    /// (`IntegerExpandSetCCOperands`) xors the halves; on an 8-bit machine
+    /// that is a byte write-back per xor, and the bytes accumulate in the
+    /// accumulator without them.
+    byte_equality: bool,
 }
 
 impl TargetLowering {
@@ -164,6 +170,7 @@ impl TargetLowering {
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
             sdiv_pow2_cmov: None,
+            byte_equality: false,
         };
         table.set_default_integer_libcalls();
         // `TargetLoweringBase`: `VAARG` is expanded unless the target says
@@ -429,6 +436,17 @@ impl TargetLowering {
 
     pub fn small_divide(&self) -> bool {
         self.small_divide
+    }
+
+    pub fn set_byte_equality(
+        &mut self,
+        on: bool,
+    ) {
+        self.byte_equality = on;
+    }
+
+    pub fn byte_equality(&self) -> bool {
+        self.byte_equality
     }
 
     /// `DAG.shouldOptForSize()` for the function selected next.
