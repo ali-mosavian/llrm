@@ -5,10 +5,8 @@
 //! On at -O0 (`!cpu.optimized`) unless `LLRM_FAST_ISEL=0`; -O1 and up never see it. A block it
 //! cannot take is selected by the DAG path (DEVIATE F2).
 //!
-//! # DEVIATE rows (`.text` above the pin's `llc -O0` on 24 of the 61 programs of the 2026-11-08 corpus; the total is 10% below)
+//! # DEVIATE rows (`.text` above the pin's `llc -O0` on 11 of the 61 programs of the 2026-11-08 corpus; the total is 12% below)
 //! - F2: fallback by block, not by instruction. Owner greedy-anyisa, exit 2026-11-30.
-//! - F4: a zero is `mov r, 0`, not `xor r, r` (the pin's `MOV32r0`; `Peephole` is gated at -O0, so neither path makes the
-//!   `xor`). Owner greedy-anyisa, exit 2026-11-10.
 //! - F6: an argument is computed in `eax` and copied to `edi`, where the pin's allocator hints the register. Owner
 //!   greedy-subreg (`RegAllocFast`), exit 2026-11-14.
 //! - F7: floats, doubles, `byval` and stack-passed parameters, `i1` phis and variable shifts go to the DAG, whose -O0
@@ -728,7 +726,7 @@ impl Fast<'_> {
                 Some(self.node(self.names.lea64?, &[EVT::I64], &[rip, one, noreg, target, segment]))
             }
             Operand::Constant(_) => {
-                // DEVIATE F4 (module doc): the pin (X86MaterializeInt) makes 0 with `MOV32r0` (xor); here it is `MOV32ri`.
+                // a zero is `MOV32ri` here and `xor` after allocation, where the flags are dead (`Peephole` at -O0)
                 let wide = self.is_wide(operand)?;
                 let (_, _, _, mov_ri, _, _, _, _, vt) = self.set(wide)?;
                 if wide && self.int_signed(operand).is_none() {
