@@ -4773,3 +4773,17 @@ fn a_memmove_ending_a_function_is_a_tail_call_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("jmp memmove") && !listing.contains("call memmove"), "{listing}");
 }
+
+/// `memcpycall` rebuilt a large `memcpy` as a plain call and dropped the `tail` marker, so the call kept its
+/// `push; call; pop; ret` where the pin jumps (memory_expansion -O2: ten `cp*` wrappers, +3 B each).
+#[test]
+fn a_memcpy_ending_a_function_is_a_tail_call_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %d, ptr %s) {\n  \
+                tail call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 600, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("jmp memcpy") && !listing.contains("call memcpy"), "{listing}");
+}
