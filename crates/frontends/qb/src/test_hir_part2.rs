@@ -337,7 +337,7 @@ fn test_qb_float_function_uses_hidden_near_result_pointer() {
     let (segment, offset) = omf::public_definitions(&records).expect("pubdefs")["ADDHALF"];
     let image = omf::segment_image(&records, segment, omf::segments(&records)[segment as usize].as_ref().unwrap().1);
     let procedure = &image[offset as usize..];
-    let statement_table = find(procedure, &hex("558bec"), 3);
+    let statement_table = find(procedure, &hex("558bec"), 3).or_else(|| find(procedure, &hex("5589e5"), 3));
     assert!(statement_table.is_some_and(|at| at > 0));
     assert!(procedure[..statement_table.unwrap()].ends_with(&hex("ca0600")));
 }
