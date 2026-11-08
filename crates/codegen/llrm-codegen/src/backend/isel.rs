@@ -191,7 +191,7 @@ fn _named_values(where_: &[Loc]) -> Vec<u32> {
 }
 
 /// The values an instruction writes: a destination that *is* a value.
-pub(crate) fn _written(dests: &[Loc]) -> Vec<u32> {
+pub fn _written(dests: &[Loc]) -> Vec<u32> {
     dests
         .iter()
         .filter_map(|one| match one {
@@ -204,7 +204,7 @@ pub(crate) fn _written(dests: &[Loc]) -> Vec<u32> {
 /// The values an instruction reads: its sources, and the addresses its
 /// destinations are reached by. Sized for what it holds: a list grown a push
 /// at a time was reallocated twice (107,000 growths in memory_expansion).
-pub(crate) fn _read(what: &ir::Semantics) -> Vec<u32> {
+pub fn _read(what: &ir::Semantics) -> Vec<u32> {
     let addressed = || what.dests.iter().filter(|where_| !matches!(where_, Loc::Held(_)));
     let count: usize = what.sources.iter().chain(addressed()).map(|operand| ir::values(operand).len()).sum();
     let mut out = Vec::with_capacity(count);

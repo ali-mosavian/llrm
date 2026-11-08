@@ -48,7 +48,7 @@ use llrm_target::routines::Used;
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, RuntimeAnswer, SizeTrade, build_block};
 use super::dag_select::select_block;
-use super::emit::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
+use super::emit_api::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
 use super::function_lowering::FunctionLoweringInfo;
 use super::mvt::MVT;
 use super::opcodes::OpcodeMap;
@@ -190,7 +190,7 @@ impl FrameObjects for Temporaries<'_> {
 /// The module's globals by `GlobalId`: where each symbol is.
 struct Globals<'a>(&'a Module, llrm_mir::spaces::Spaces);
 
-impl super::emit::GlobalMap for Globals<'_> {
+impl super::emit_api::GlobalMap for Globals<'_> {
     fn segment(
         &self,
         symbol: Option<u32>,
@@ -427,7 +427,7 @@ impl CallConventions<'_> {
     }
 }
 
-impl super::emit::Conventions for CallConventions<'_> {
+impl super::emit_api::Conventions for CallConventions<'_> {
     fn effects(
         &self,
         callee: Option<&Callee>,
@@ -819,7 +819,7 @@ pub fn selected_in_pool(
 /// The module's constant pool as the emitter asks it.
 struct PoolCells<'a>(std::cell::RefCell<&'a mut Pool>);
 
-impl super::emit::ConstantCells for PoolCells<'_> {
+impl super::emit_api::ConstantCells for PoolCells<'_> {
     fn cell(
         &self,
         bytes: Vec<u8>,
@@ -1264,7 +1264,7 @@ fn selected_in(
     let x87_prices = (!arch.scalar_sse())
         .then(|| {
             let cost = |name: &str| cpu.cost(name).ok();
-            Some(super::emit::X87Prices {
+            Some(super::emit_api::X87Prices {
                 load: cost("x87_load")?,
                 add: cost("x87_add")?,
                 add_m: cost("x87_add_m")?,
