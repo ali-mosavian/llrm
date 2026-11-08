@@ -116,6 +116,9 @@ pub struct Options {
     /// A loop's top is chosen by the jumps its fall-throughs remove, not by
     /// the edges they cover (M68K-TOP, [`crate::regalloc::place_blocks`]).
     pub loop_top_by_jumps: bool,
+    /// A callee called again and again is called through an address register
+    /// where that makes the function cheaper ([`crate::calltarget`]).
+    pub call_targets: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -139,6 +142,7 @@ impl Options {
         tail_duplicate: false,
         rematerialize_arguments: false,
         loop_top_by_jumps: false,
+        call_targets: false,
         debug: false,
     };
 }
@@ -161,6 +165,7 @@ impl Default for Options {
             tail_duplicate: true,
             rematerialize_arguments: true,
             loop_top_by_jumps: true,
+            call_targets: true,
             debug: false,
         }
     }
@@ -289,16 +294,24 @@ pub fn items_with(
             epilogue_begin: false,
         }));
     }
-    for line in finish_with(
-        &function,
-        &assignment,
-        number,
-        &slots,
-        cpu,
-        options.push_frame,
-        options.short,
-        options.push_arguments.then_some(crate::timing::Price::of(wants_size, options.strict)),
-    )? {
+    let price = crate::timing::Price::of(wants_size, options.strict);
+    let expand = |function: &crate::mfunc::MFunction| {
+        finish_with(
+            function,
+            &assignment,
+            number,
+            &slots,
+            cpu,
+            options.push_frame,
+            options.short,
+            options.push_arguments.then_some(price),
+        )
+    };
+    if options.short && options.call_targets {
+        let chosen = crate::calltarget::choose(&function, &assignment, cpu, price, expand)?;
+        crate::calltarget::through_registers(&mut function, &chosen)?;
+    }
+    for line in expand(&function)? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),
