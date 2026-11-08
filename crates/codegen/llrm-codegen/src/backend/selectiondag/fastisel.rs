@@ -432,6 +432,16 @@ impl Fast<'_> {
     }
 
     /// Whether `global` names an `llvm.*` intrinsic: the DAG expands it, a call to it would name a symbol that does not exist.
+    /// A call to an intrinsic `FastISel` selects to nothing (permalink: FastISel.cpp `selectIntrinsicCall`).
+    fn is_noop_intrinsic(&self, instruction: &llrm_mir::module::Instruction) -> bool {
+        const NOOPS: [&str; 6] =
+            ["llvm.lifetime.start", "llvm.lifetime.end", "llvm.donothing", "llvm.sideeffect", "llvm.assume", "llvm.experimental.noalias.scope.decl"];
+        let Some(Operand::Constant(callee)) = instruction.operands.last() else { return false };
+        let ConstantKind::Global(global) = self.module.context.get(*callee).kind else { return false };
+        instruction.result.is_none()
+            && self.module.global(global).name.as_deref().is_some_and(|name| NOOPS.iter().any(|noop| name.starts_with(noop)))
+    }
+
     fn is_intrinsic(&self, global: llrm_mir::context::GlobalId) -> bool {
         self.module.global(global).name.intrinsic_id().is_some()
             || self.module.global(global).name.as_deref().is_some_and(|name| name.starts_with("llvm."))
@@ -664,6 +674,9 @@ impl Fast<'_> {
                     let result = self.dag.get_copy_from_phys_reg(self.dag.entry_node(), register, vt, divided);
                     self.values.insert(instruction.result?, SDValue { node: result.node, res: 0 });
                 }
+                // `FastISel::selectIntrinsicCall`: "at -O0 we don't care about the lifetime intrinsics", and
+                // `donothing`, `sideeffect`, `assume` and `noalias.scope.decl` emit nothing either.
+                Opcode::Call(_) if self.is_noop_intrinsic(&instruction) => {}
                 Opcode::Call(call) if !self.m32 && call.calling_convention == self.function.calling_convention => {
                     // SysV: up to six integer or pointer arguments in registers; `al` = 0 for a variadic callee
                     let (down, up, call_op, mov8) = self.names.calls64?;

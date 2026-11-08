@@ -143,7 +143,7 @@ use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
     fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
-    loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
+    loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, sccp, simpleloopunswitch, simplifycfg,
     switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
@@ -1410,9 +1410,6 @@ pub fn recorded(
     if applied.options.wanted("window") {
         manager.add(window::Window { size: applied.options.prefers_size() });
     }
-    // Last, as the old drivers rotated in lowering: unroll and peel refuse
-    // a rotated loop.
-    manager.add(rotate::Rotate { proven: true, copy: false });
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if applied.options.wanted("hoist") && !llvm_motion(applied) {

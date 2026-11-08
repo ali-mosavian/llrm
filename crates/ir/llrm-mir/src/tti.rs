@@ -809,6 +809,11 @@ pub trait Tti {
         0
     }
 
+    /// `Tuning::carry_slot_indexes`.
+    fn carries_slot_indexes(&self) -> bool {
+        true
+    }
+
     /// `Tuning::sink_select_arms`.
     fn sinks_select_arms(&self) -> bool {
         false

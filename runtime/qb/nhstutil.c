@@ -313,7 +313,7 @@ SD *str_tmp_copy(SD *source, uword from, uword len)
     SD *tmp = str_tmp(len, &data);
 
     copy_bytes(data, source->ptr + from, len);
-    str_tmp_free(source);
+    str_free_if_tmp(source);
     return tmp;
 }
 
