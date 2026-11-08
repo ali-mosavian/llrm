@@ -577,10 +577,11 @@ pub trait Tti {
         false
     }
 
-    /// Whether `speed_inline_milliclocks_per_byte` also binds at -O1. False:
-    /// -O1 prices no byte in clocks and keeps the pin's threshold alone.
+    /// Whether `speed_inline_milliclocks_per_byte` also binds at -O1. False
+    /// (the default; -O1 is strict): -O1 prices no byte in clocks and keeps
+    /// the pin's threshold alone.
     fn speed_inline_rate_at_o1(&self) -> bool {
-        true
+        false
     }
 
     /// Whether one wider store of constants may start off its own size

@@ -96,7 +96,7 @@ pub struct Tuning {
     /// 0: the pin's threshold alone.
     pub speed_inline_milliclocks_per_byte: i64,
     /// `Tti::speed_inline_rate_at_o1`: whether that rate binds at -O1 too
-    /// (m32: no, -O1 has its own rule, INL-O1).
+    /// (false by default; m32's -O1 has its own rule, INL-O1).
     pub speed_inline_rate_at_o1: bool,
     /// What one call costs in clocks when the inliner prices its latency
     /// (`Tti::call_sequence_cost`): the call and return, each argument word
@@ -342,7 +342,7 @@ impl Tuning {
         inline_o1_milliclocks_per_byte: 0,
         inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: 0,
-        speed_inline_rate_at_o1: true,
+        speed_inline_rate_at_o1: false,
         call_sequence_fixed_clocks: 0,
         call_sequence_argument_clocks: 0,
         call_sequence_pop_clocks: 0,
