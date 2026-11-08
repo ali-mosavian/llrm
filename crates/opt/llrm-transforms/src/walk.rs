@@ -300,6 +300,9 @@ impl ProgramPass for Walk {
                     // made direct is inlined by another run
                     // of the inliner over the body.
                     let mut repeats = 0;
+                    // SZ2: the callees a trial rejected in this caller; a later round
+                    // of the loop does not try them again.
+                    let mut rejected: BTreeSet<GlobalId> = BTreeSet::new();
                     loop {
                         let mut decided = remarks.then(Vec::new);
                         // `sites` prices every block's frequency before it
@@ -549,6 +552,11 @@ impl ProgramPass for Walk {
                             }
                             let mut accepted: Vec<llrm_mir::module::InstId> = Vec::new();
                             for (calls, credit) in units {
+                                if tti.inline_trial_skips_rejected()
+                                    && calls.iter().any(|one| trials[one].callee.is_some_and(|callee| rejected.contains(&callee)))
+                                {
+                                    continue;
+                                }
                                 let kept = function_mut(module, id).1.clone();
                                 let kept_clocks = function_clocks(module, &program.layout, tti, &kept);
                                 let mut chosen = accepted.clone();
@@ -748,6 +756,14 @@ impl ProgramPass for Walk {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
+                                    rejected.extend(calls.iter().filter_map(|one| trials[one].callee));
+                                    if remarks {
+                                        eprintln!(
+                                            "{} SZ2 trial rejected '{}'",
+                                            module.global(id).name.as_deref().unwrap_or("?"),
+                                            module.global(trials[&calls[0]].callee.expect("a callee")).name.as_deref().unwrap_or("?"),
+                                        );
+                                    }
                                     *function_mut(module, id).1 = kept;
                                     modules[at].changed(id);
                                     modules[at]
