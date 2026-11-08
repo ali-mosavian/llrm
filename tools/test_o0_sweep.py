@@ -73,10 +73,19 @@ def test_a_refusal_outside_the_baseline_is_red_and_one_inside_is_not():
     assert sweep.verdict({"wasm32": row}, {"wasm32 bad"}) == []
 
 
-def test_only_dash_d_and_dash_f_flags_of_the_first_configuration_are_kept():
-    assert sweep.flags_of("// flags: -O2 -march=i486 -DREAL_MODE -fno-inline | -O1 -DOTHER\nint x;\n") == ["-DREAL_MODE", "-fno-inline"]
+def test_only_feature_flags_of_the_first_configuration_are_kept():
+    """Dropping -mlong-double-80 made every long_double program a false refusal at m16 (ms_struct layouts)."""
+    assert sweep.flags_of("// flags: -O2 -march=i486 -m32 -DREAL_MODE -fno-inline -mlong-double-80 | -O1 -DOTHER\nint x;\n") == [
+        "-DREAL_MODE", "-fno-inline", "-mlong-double-80"]
 
 
 @pytest.mark.skipif(not __import__("os").environ.get("LLRM_O0_SWEEP"), reason="the corpus gate: set LLRM_O0_SWEEP=1 (minutes, every target)")
 def test_the_corpus_compiles_at_o0_on_every_target():
     assert sweep.main(["o0_sweep.py"]) == 0
+
+
+def test_feature_m_flags_are_given_to_x86_targets_only():
+    """-mlong-double-80 on m68k, arm64 and wasm is a clang error: a refusal made by the sweep, not by the compiler."""
+    source = "// flags: -O0 -mlong-double-80 -DX\nint x;\n"
+    assert sweep.flags_of(source, "x86_16-wat") == ["-mlong-double-80", "-DX"]
+    assert sweep.flags_of(source, "m68k-68020") == ["-DX"]
