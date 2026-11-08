@@ -544,6 +544,12 @@ impl Printer<'_> {
                 }
             }
             "SHL16" | "SRL16" | "SRA16" => {
+                if op == "SHL16" && shift_count(inst)? >= 2 && self.shift_the_copy_in_hl(self.register(inst, 0)?, rest) {
+                    for _ in 0..shift_count(inst)? {
+                        self.push("add hl, hl");
+                    }
+                    return Ok(());
+                }
                 if op == "SHL16"
                     && let Some(lines) =
                         word_double_through_hl(&name_of(self, 0)?, shift_count(inst)?, self.dead_after(reg::HL, rest))
@@ -1117,6 +1123,31 @@ impl Printer<'_> {
         stores: &[(String, String)],
     ) -> bool {
         held_since_stored(&self.out, stores)
+    }
+
+    /// `pair` is a copy of `hl` made just above, shifted, and added to `hl`
+    /// next, then dead: `(hl << n) + hl` is the same sum with the shifts
+    /// done in `hl` (`add hl, hl` a bit, `sla`/`rl` four times the bytes) and
+    /// the copy added.
+    fn shift_the_copy_in_hl(
+        &self,
+        pair: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        let Ok((lo, hi)) = lanes(pair) else { return false };
+        let mut tail = self.out.iter().rev().filter(|line| !matches!(line, Line::Loc(_)));
+        let copied = matches!(
+            (tail.next(), tail.next()),
+            (Some(Line::Inst(high)), Some(Line::Inst(low)))
+                if *high == format!("ld {}, h", name(hi)) && *low == format!("ld {}, l", name(lo))
+        );
+        copied
+            && pair != reg::HL
+            && rest.first().is_some_and(|next| {
+                next.kind == Kind::Op("ADD16")
+                    && matches!(next.operands.get(2), Some(Operand::Use(r)) if self.physical(*r) == pair)
+            })
+            && self.pair_dead_after(pair, &rest[1..])
     }
 
     /// [`Self::dead_after`] for both bytes of `pair`, and the pair itself.
