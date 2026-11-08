@@ -763,3 +763,48 @@ impl llrm_mir::passes::FunctionPass for HoldsMemory {
         llrm_mir::passes::PreservedAnalyses::all()
     }
 }
+
+/// Asks for the `Shape` before the rotation, and whether the one held after it
+/// is the function's.
+struct ShapeFresh(std::rc::Rc<std::cell::Cell<Option<bool>>>);
+
+impl llrm_mir::passes::FunctionPass for ShapeFresh {
+    fn name(&self) -> &'static str {
+        "shape-fresh"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        let held = analyses.get::<llrm_analysis::cfg::Shape>(&*unit.context, unit.layout, &*unit.function);
+        if self.0.get().is_none() && analyses.cached::<llrm_mir::passes::Loops>().is_some() {
+            // The first run is the one before the rotation: it only warms.
+            self.0.set(Some(true));
+            return llrm_mir::passes::PreservedAnalyses::all();
+        }
+        self.0.set(Some(*held == llrm_analysis::cfg::Shape::of(&*unit.function)));
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// Wrong code motion: the `Shape` Licm@724 made (loops and dominance read from
+/// the kept trees) outlived a rotation that moved blocks, so Licm@730 saw the
+/// loop as it was before and hoisted nothing (memfuncs_runtime -O2 lost an
+/// `icmp` hoist). A result derived from analyses a pass updated is dropped.
+#[test]
+fn test_a_shape_made_before_a_rotation_is_made_again_after_it() {
+    let mut module = parsed(COUNTED);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let fresh = std::rc::Rc::new(std::cell::Cell::new(None));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(ShapeFresh(fresh.clone()));
+    manager.add(super::LoopRotate { duplicate_headers: true, size: false, check_exit_count: false });
+    manager.add(ShapeFresh(fresh.clone()));
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    assert_ne!(printed(&module), printed(&parsed(COUNTED)), "the loop was not rotated");
+    assert_eq!(fresh.get(), Some(true), "the shape held after the rotation is the one from before it");
+}

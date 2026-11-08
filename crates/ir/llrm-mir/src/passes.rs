@@ -1344,6 +1344,12 @@ impl PreservedAnalyses {
         self.all || self.kept.contains(&analysis)
     }
 
+    /// Whether the pass kept `A` by updating it (`preserve_updated`): what is
+    /// derived from `A` was made from the function before the edits.
+    pub fn updated<A: Analysis>(&self) -> bool {
+        self.updated_by_pass(TypeId::of::<A>())
+    }
+
     /// Whether the pass kept `analysis` by updating it (`preserve_updated`).
     fn updated_by_pass(
         &self,

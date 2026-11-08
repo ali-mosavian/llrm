@@ -653,7 +653,14 @@ impl Analysis for Shape {
     const READS_OUTER: bool = false;
 
     fn preserved(preserved: &PreservedAnalyses) -> bool {
-        preserved.kept::<Shape>() || (Dominators::preserved(preserved) && Loops::preserved(preserved))
+        // Read from `Dominators` and `Loops`: held only where they stand
+        // unedited. A pass that updated them edited the CFG, and a shape made
+        // before is as old as the edits.
+        preserved.kept::<Shape>()
+            || (Dominators::preserved(preserved)
+                && Loops::preserved(preserved)
+                && !preserved.updated::<Dominators>()
+                && !preserved.updated::<Loops>())
     }
 }
 
