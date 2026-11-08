@@ -238,6 +238,7 @@ fn a_constant_the_pin_leaves_an_imul_is_the_chain_where_the_block_is_hot() {
             milliclocks_per_byte: rate,
             by_clocks: false,
             price_pin: false,
+            no_growth: false,
         };
         let mut lowering = X86Lowering {
             imul_if_smaller: false,
@@ -260,6 +261,40 @@ fn a_constant_the_pin_leaves_an_imul_is_the_chain_where_the_block_is_hot() {
     assert_eq!(shape(8.0, 0, false, true), ISD::Mul, "no rate: the pin's imul");
     assert_eq!(shape(8.0, 500, false, false), ISD::Mul, "no pricing: the pin's imul");
     assert_eq!(shape(8.0, 500, true, true), ISD::Mul, "minsize grew");
+}
+
+/// m32 -O1 (bytes strict): `x * 1664525` is `imul r,r,imm32` (6 B) or an eight-step chain (~29 B) that is faster on a 486. The chain was
+/// built at -O1 by clocks alone, so mul_constants' LCG step grew +17 B per site against the pin (+218 B padded, 2026-11-08). At -O1 a chain
+/// is built only if no longer than the `imul`; at -O2 the clocks decide as before.
+#[test]
+fn at_o1_a_multiply_chain_is_built_only_if_it_is_no_longer_than_the_imul() {
+    use super::super::x86_lowering::MulPricing;
+    let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let shape = |constant: u128, no_growth: bool| {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I32, 1);
+        let product = mul_by(&mut dag, x, constant);
+        dag.set_root(product);
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let pricing =
+            MulPricing { cpu: m32, arch: &llrm_x86_m32::M32, freq: 1.0, milliclocks_per_byte: 312, by_clocks: true, price_pin: false, no_growth };
+        let mut lowering = X86Lowering {
+            imul_if_smaller: false,
+            share_products: false,
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            three_address_adds: false,
+            i16_mul_chains: false,
+            sext_load: false,
+            zext_free: false,
+            profile: Some(pricing),
+        };
+        DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
+        dag.opcode(dag.get_root())
+    };
+    assert_ne!(shape(1_664_525, false), ISD::Mul, "-O2: the clocks no longer decide");
+    assert_eq!(shape(1_664_525, true), ISD::Mul, "-O1 grew an 8-step chain over a 6 B imul");
 }
 
 /// The `i16` multiply chain is built where `i16` is not promoted and nowhere
