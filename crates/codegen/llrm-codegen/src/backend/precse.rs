@@ -382,7 +382,8 @@ impl Walk<'_> {
         // pin's allocator holds it in a register it pushes for the other
         // addresses too, and a later loop reads it from there. Exit
         // 2026-11-20.
-        if !qword_address(one)
+        if std::env::var_os("LLRM_NO_CSE4").is_none()
+            && !qword_address(one)
             && !reads_value
             && self.freq[block] <= 2.0
             && self.crosses_call(shared, shared_block, block, index)
