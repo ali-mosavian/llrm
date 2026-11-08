@@ -519,14 +519,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                         return Self::combine_to(tlo, op, new);
                     }
                 }
-                if is_shl {
-                    KnownBits { zero: ((k.zero << amount) | mask(amount)) & all, one: (k.one << amount) & all, width }
                 // "Try to match AVG patterns (after shift simplification)."
                 if !is_shl {
                     if let Some(avg) = self.combine_shift_to_avg(op, demanded) {
                         return Self::combine_to(tlo, op, avg);
                     }
                 }
+                if is_shl {
+                    KnownBits { zero: ((k.zero << amount) | mask(amount)) & all, one: (k.one << amount) & all, width }
                 } else {
                     KnownBits { zero: (k.zero >> amount) | (all & !(all >> amount)), one: k.one >> amount, width }
                 }

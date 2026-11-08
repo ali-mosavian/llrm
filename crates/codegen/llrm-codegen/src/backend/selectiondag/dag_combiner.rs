@@ -2712,6 +2712,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(folded) = self.shift_of_shifted_logic(node) {
             return Some(folded);
         }
+        if matches!(op, ISD::Srl | ISD::Sra) {
+            if let Some(avg) = self.fold_shift_to_avg(node) {
+                return Some(avg);
+            }
+        }
         if self.dag.opcode(n0) != op {
             return None;
         }
@@ -2723,11 +2728,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if sum < width {
             let amount = self.dag.get_constant(sum, self.dag.value_type(n1));
             return Some(self.dag.get_node(op, vt, &[x, amount]));
-        }
-        if matches!(op, ISD::Srl | ISD::Sra) {
-            if let Some(avg) = self.fold_shift_to_avg(node) {
-                return Some(avg);
-            }
         }
         if op == ISD::Sra {
             let amount = self.dag.get_constant(width - 1, self.dag.value_type(n1));
