@@ -895,8 +895,15 @@ fn machined_once(
     // backend again; `LLRM_CHECK_FRAME=1` runs it again beside, and the two
     // must be the same function. A frame that cannot be moved keeps its first
     // layout.
-    let laid = timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled));
-    if llrm_support::env_flag!("LLRM_CHECK_FRAME") {
+    // Built only where it has fewer far cells, which is told by counting them.
+    let check = llrm_support::env_flag!("LLRM_CHECK_FRAME");
+    let worth = check || crate::backend::relayout::far_again(&first, &frame, spilled, sp).is_none_or(|again| again < far);
+    let laid = if worth {
+        timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled))
+    } else {
+        None
+    };
+    if check {
         let (again, _) = cheaper(&staged(module, name, abi, pool, target, spilled)?, name, pool, target)?;
         match &laid {
             Some((laid, _)) => {

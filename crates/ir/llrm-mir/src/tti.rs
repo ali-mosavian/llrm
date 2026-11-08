@@ -724,6 +724,14 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE UNROLL-TRIAL (beyond the pin; owner 6502, exit 2026-12-05): the
+    /// unrolled size, in the unroll units, up to which a loop the threshold
+    /// refused is unrolled on trial: the function is simplified and priced
+    /// whole, and the unroll stays only if it pays. `None`: no trial.
+    fn unroll_trial_threshold(&self) -> Option<u32> {
+        None
+    }
+
     /// `Tuning::unroll_never_grows_at_o1`.
     fn unroll_never_grows_at_o1(&self) -> bool {
         false
@@ -746,6 +754,11 @@ pub trait Tti {
 
     /// DEVIATE INL-O1: `Tuning::inline_never_grows_without_rate`.
     fn inline_never_grows_without_rate(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::inline_o1_weighs_entry`.
+    fn inline_o1_weighs_entry(&self) -> bool {
         false
     }
 

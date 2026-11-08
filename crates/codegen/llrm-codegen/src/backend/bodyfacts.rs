@@ -923,14 +923,9 @@ pub(crate) fn _literals(
 ) -> IndexMap<u32, Imm> {
     let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
     let mut excluded: BTreeSet<u32> = BTreeSet::new();
-    let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         for value in &one.defines {
             definitions.entry(*value).or_default().push(Arc::clone(one));
-        }
-        for value in &one.uses {
-            let had = widths.get(value).copied().unwrap_or(0);
-            widths.insert(*value, had.max(_width(one, *value)));
         }
         if one.group.is_some() {
             excluded.extend(one.defines.iter().copied());
@@ -969,12 +964,30 @@ pub(crate) fn _literals(
             Loc::Held(held) => (held.width, vec![held.value]),
             _ => continue,
         };
-        if into.width == source_width
-            && one.uses == source_uses
-            && (any_width || widths.get(value).copied().unwrap_or(0) <= source_width)
-        {
+        if into.width == source_width && one.uses == source_uses {
             sources.insert(*value, source.clone());
         }
+    }
+    // How wide each use reads a value matters only for those that could be
+    // remade, which are few: most values are not a copy of a literal.
+    if !any_width && !sources.is_empty() {
+        let mut widest: IndexMap<u32, u32> = IndexMap::default();
+        for one in body.blocks.iter().flat_map(|block| &block.insns) {
+            for value in &one.uses {
+                if sources.contains_key(value) {
+                    let had = widest.get(value).copied().unwrap_or(0);
+                    widest.insert(*value, had.max(_width(one, *value)));
+                }
+            }
+        }
+        sources.retain(|value, source| {
+            let source_width = match source {
+                Loc::Imm(imm) => imm.width,
+                Loc::Held(held) => held.width,
+                _ => return false,
+            };
+            widest.get(value).copied().unwrap_or(0) <= source_width
+        });
     }
     let mut result: IndexMap<u32, Imm> = IndexMap::default();
     loop {
@@ -1135,5 +1148,32 @@ mod keeps_tests {
             Default::default(),
         );
         assert!(!_keeps(&store, &load, &cell, true, &body));
+    }
+
+    /// Every use of every value recorded how wide it reads (a map entry, a scan
+    /// of the instruction's operands): 1.2 M of a 179 M -O0 compile, for values
+    /// of which a handful could be remade. Only those that are a copy of a
+    /// literal are measured; the literals found are the same.
+    #[test]
+    fn test_use_widths_are_kept_only_for_values_that_could_be_remade() {
+        let mut insns = vec![Arc::new(Insn::new(
+            0,
+            None,
+            Some(Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(Held { value: 1, width: 4, offset: 0 })],
+                sources: vec![Loc::Imm(Imm { value: 7, width: 4, address: None })],
+                ..Semantics::new(Operation::Move)
+            }),
+            vec![1],
+            vec![],
+        ))];
+        // 200 distinct values read, none of them a copy of a literal
+        insns.extend((0..200).map(|at| Arc::new(Insn::new(at + 1, None, None, vec![], vec![at as u32 + 1000]))));
+        let body = LirBody::new("f", 0, vec![crate::model::lir::LirBlock::new(0, insns).into()], Default::default(), Default::default());
+        let values: BTreeSet<u32> = [1].into_iter().collect();
+        let (found, made) = llrm_support::alloc_count::counted(|| _literals(&body, &values, false));
+        assert_eq!(found.get(&1).map(|imm| imm.value), Some(7));
+        assert!(made <= 12, "{made} allocations (23 before)");
     }
 }

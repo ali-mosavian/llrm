@@ -162,6 +162,30 @@ fn the_zero_page_override_survives_the_platform_flag() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// An unknown `-f` switch was taken as a pass and ignored: `-fno-bogus` compiled (the wasm
+/// session's instrument check, 2026-11-08), so a header flag the compiler did not know
+/// measured as if honored. The switches llrm-cc forwards must still pass.
+#[test]
+fn an_unknown_f_switch_is_refused() {
+    let dir = std::env::temp_dir().join(format!("llrm6502-fsw-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ir = dir.join("f.ll");
+    std::fs::write(&ir, module("define i8 @f(i8 %a) {\n  ret i8 %a\n}")).unwrap();
+    let run = |switch: &str| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_llrm-6502-llc"))
+            .args(["--platform=sim65", "-S", switch, "-o", dir.join("f.s").to_str().unwrap(), ir.to_str().unwrap()])
+            .output()
+            .unwrap()
+    };
+    let bogus = run("-fno-bogus");
+    assert_eq!(bogus.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&bogus.stderr).contains("-fno-bogus"));
+    for known in ["-fno-unroll-loops", "-fno-inline=f", "-fno-second-inline", "-fwrapv", "-fexcess-precision=standard"] {
+        assert!(run(known).status.success(), "{known} is refused");
+    }
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// `-Os` holds an inline to the size threshold: a callee of about forty
 /// instructions called three times stays a call, where `-O2` copies it in. The
 /// hand corpus and bench tables have no such callee, so their `-Os` rows
