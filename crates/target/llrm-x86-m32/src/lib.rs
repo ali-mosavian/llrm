@@ -83,8 +83,8 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// 1782/287.0k | 1777/142.2k; urem_eq 467/792k | 340/1444k | 374/1468k;
 /// bintree 308/74.0k | 282/79.4k | 276/84.1k; recpow 267/442k | 220/532k |
 /// 238/575k; x_spill_store_order 687/82.2k | 611/99.5k | 633/103.3k;
-/// copy_runs 818/6.3k | 778/8.3k | 964/8.1k. The chain wins clocks 5-31% for
-/// 16-80 B; it is above the best byte bar on the first six rows, the `imul`
+/// copy_runs 818/6.3k | 778/8.3k | 964/8.1k. The chain wins clocks 7-62% for
+/// 26-503 B; it is above the best byte bar on the first six rows, the `imul`
 /// above the clock bar on x_iir and mul_constants. Exit (if ever): a general
 /// mechanism with the chain's clocks and `imul`-like bytes (a shorter chain
 /// search, or the block's frequency pricing the choice).
