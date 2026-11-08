@@ -40,14 +40,13 @@ use llrm_codegen::backend::constpool::Pool;
 use llrm_codegen::backend::isel::{Parameter, Selected, Unselected};
 use llrm_codegen::backend::selectiondag::actions::{Features, TargetLowering};
 use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, RuntimeAnswer, SizeTrade, build_block};
-use llrm_codegen::backend::selectiondag::dag_select::select_block;
+use llrm_codegen::backend::selectiondag::dag_target::FrameObjects;
 use llrm_codegen::backend::selectiondag::emit_api::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::mvt::MVT;
 use llrm_codegen::backend::selectiondag::opcodes::OpcodeMap;
 use llrm_codegen::backend::selectiondag::schedule::SchedInfo;
 use llrm_codegen::backend::selectiondag::x86_lowering::X86Lowering;
-use llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects;
 use llrm_codegen::model::ir::{Addr, Held, Mem, Space};
 use llrm_codegen::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use llrm_dagisel::addr::AddrMode;
@@ -59,6 +58,8 @@ use llrm_target::Target;
 use llrm_target::routines::Used;
 use llrm_x86_dagisel::generated::{x86_i486, x86_m16, x86_x64};
 use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
+
+use super::select::select_block;
 
 struct Info {
     source_order: bool,
@@ -96,7 +97,7 @@ impl SchedInfo for Info {
         dag: &mut llrm_codegen::backend::selectiondag::SelectionDAG,
         node: u32,
     ) -> Option<[u32; 2]> {
-        llrm_codegen::backend::selectiondag::x86_unfold::unfold_memory_operand(dag, node)
+        super::unfold::unfold_memory_operand(dag, node)
     }
 
     fn has_cross_copy_class(
