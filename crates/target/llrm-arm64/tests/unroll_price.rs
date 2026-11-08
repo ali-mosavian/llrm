@@ -61,28 +61,25 @@ fn an_init_nest_whose_arrays_stay_in_memory_is_not_unrolled() {
     assert!(insns < 120, "{insns} instructions");
 }
 
-/// matmul and tile -O3: the nest was left to the pin's bar at -O3, which unrolls
-/// the 8 x 8 x 8 nest (700 B) and tile's 40-trip loop (364 B) where the byte
-/// rate keeps them rolled (292 B and 68 B). The rate holds at -O3.
+/// matmul -O3: pricing the nest kept the multiply loop rolled, 4,148
+/// instructions run against 672 unrolled (clang 608), for 40 B. -O3 keeps the
+/// pin's decision: more instructions than the priced -O2 module.
 #[test]
-fn a_nest_is_priced_at_o3_as_at_o2() {
+fn a_nest_is_not_priced_at_o3() {
     let ir = include_str!("data/bench_matmul.ll");
-    let (o2, o3) = (instructions(ir, Level::O2), instructions(ir, Level::O3));
-    assert!(o3 < o2 + 20, "{o3} instructions at -O3, {o2} at -O2");
-    let tile = include_str!("data/bench_tile.ll");
-    assert!(instructions(tile, Level::O3) < 80, "tile -O3: {} instructions", instructions(tile, Level::O3));
+    assert!(instructions(ir, Level::O3) > instructions(ir, Level::O2));
 }
 
-/// A synthetic 8 x 8 nest fills a local array that a loop of run-time trips
-/// reads at run-time indices (`data/nest_fill_then_read.c`). The array stays in
-/// memory, so unrolling the fill saves nothing it keeps: the module is the same
-/// size at -O3 as at -O2 (46 instructions). -O3 unrolled the inner fill loop
-/// first, its nest bypass assuming the nest would follow: 69.
+/// nbody -O2: the last update loop is priced while the pair nest's copies are
+/// still rolled loops made by an earlier slot of the loop pass manager
+/// (#8054 runs the pass once for each loop). They were taken for readers that
+/// stay rolled, the array for one that stays in memory, and the update loop
+/// kept rolled: 472 B (128 instructions in the module). Decided with their nest: 424 B (116).
+/// Fewer than 120 instructions.
 #[test]
-fn a_nest_filling_an_array_read_at_run_time_indices_is_rolled_at_every_level() {
-    let ir = include_str!("data/nest_fill_then_read.ll");
-    let (o2, o3) = (instructions(ir, Level::O2), instructions(ir, Level::O3));
-    assert!(o3 <= o2 + 5, "{o3} instructions at -O3, {o2} at -O2");
+fn loops_an_earlier_slot_unrolled_around_are_decided_with_their_nest() {
+    let insns = instructions(include_str!("data/bench_nbody.ll"), Level::O2);
+    assert!(insns < 120, "{insns} instructions");
 }
 
 /// nbody_single -O2: the 6-trip loops sit in a 1000-trip loop and were priced

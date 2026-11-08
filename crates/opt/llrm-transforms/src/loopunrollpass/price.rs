@@ -68,9 +68,12 @@ pub(super) fn full_unroll_pays(
     // then the nest's unroll folds nothing here and the loop is priced as any
     // other (crc -O2: the bit loop reads the running value and constants only,
     // 64 B added for 232 instructions saved).
-    // The target's byte rate holds at -O3 too (tile -O3: the pin's 364 B and
-    // 2,155 instructions against the priced loop's 68 B and 4,181).
-    let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter();
+    // -O3 is speed: the pin's decision holds there. A byte rate priced at -O3
+    // (250 down to 3 clocks a byte) trades matmul 672 -> 5,009 instructions (or
+    // 857 at 6) for 700 -> 292 B, and no rate keeps shellsort and jpeg at the
+    // pin's bytes: DEVIATE ARM64-NEST-O3 (owner w15, exit 2026-11-30) leaves the
+    // rows slower than gcc and clang at the pin's value.
+    let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3;
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count)
         && (!prices_nest || reads_outer_counter(run, se, analyzed, lp, up))
     {
