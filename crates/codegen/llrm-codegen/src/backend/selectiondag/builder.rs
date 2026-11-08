@@ -404,17 +404,6 @@ impl BuilderTarget {
     }
 }
 
-/// The stack pointer the pointer type names: `sp`, `esp` or `rsp`.
-pub(super) fn stack_pointer_name(pointer: EVT) -> &'static str {
-    if pointer == EVT::I16 {
-        "sp"
-    } else if pointer == EVT::I64 {
-        "rsp"
-    } else {
-        "esp"
-    }
-}
-
 /// A selected block: its DAG and the phi inputs it exports.
 pub struct BlockDag {
     pub dag: SelectionDAG,
@@ -1402,7 +1391,7 @@ impl Builder<'_> {
     ) -> Result<(), Refused> {
         let calling = self.full_arch()?.calling();
         let Some(found) = calling.by_number(self.function.calling_convention) else {
-            return Err(Refused("va_start at m64 in a function with no convention"));
+            return Err(Refused("va_start in a function with no convention"));
         };
         if found.positional {
             return self.home_variadic_registers(found, fixed);
@@ -1419,7 +1408,7 @@ impl Builder<'_> {
         let registers: Vec<RegId> =
             found.argument_registers.iter().map(|name| self.arch.register_named(name)).collect();
         let Some(save) = self.info.variadic_save else {
-            return Err(Refused("va_start at m64 with no register save area"));
+            return Err(Refused("va_start with no register save area"));
         };
         let pointer = self.target.dag.pointer;
         for (at, &register) in registers.iter().enumerate().skip(named) {
@@ -2080,11 +2069,9 @@ impl Builder<'_> {
         value
     }
 
-    /// The stack pointer register: x86's by pointer width, else the target's.
+    /// The stack pointer register: the target's, or the one its node set names.
     fn stack_pointer_register(&self) -> RegId {
-        let name =
-            self.target.target_nodes.map_or_else(|| stack_pointer_name(self.target.dag.pointer), |t| t.stack_pointer);
-        self.arch.register_named(name)
+        self.target.target_nodes.map_or_else(|| self.arch.stack_pointer(), |t| self.arch.register_named(t.stack_pointer))
     }
 
     /// Whether an attribute of `attrs` moves its argument out of the ordinary
@@ -3626,7 +3613,8 @@ impl Builder<'_> {
 
     /// `SS`, the stack's selector.
     fn stack_selector(&mut self) -> SDValue {
-        let ss = self.sized_register(self.arch.register_named("ss"), EVT::I16);
+        let ss = self.arch.registers().stack_segment.expect("a target with a stack selector names its register");
+        let ss = self.sized_register(ss, EVT::I16);
         let entry = self.dag.entry_node();
         self.dag.get_copy_from_phys_reg_plain(entry, ss, EVT::I16)
     }
