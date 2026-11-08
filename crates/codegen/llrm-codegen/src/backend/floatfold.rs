@@ -246,8 +246,9 @@ pub fn folded_with(
 /// every use (LLVM's legal x87 immediates) and gcc folds them when the memory
 /// form is cheaper. The same rule as a load: the clocks the fold saves
 /// (`memory_form`, per CPU) and the bytes at the target's exchange rate; the
-/// memory form is the longer (6 bytes against 4 at m32), so code built for size
-/// keeps the constant. x_ld_sum -O2 m32: `x[r] += 1` ran `fld1; faddp` (12
+/// memory form is the longer (6 bytes against 4 at m32) and the pool keeps the
+/// constant besides, so code whose bytes are strict (-O1, -Os, -Oz) keeps the
+/// constant: -O1 m16 x_ld_sum grew 9 B with the 486 rows, two new pool cells. x_ld_sum -O2 m32: `x[r] += 1` ran `fld1; faddp` (12
 /// clocks) against `fadd dword [K]` (8); in the loops of x_ld_poly 129 of them.
 fn fold_constants(
     body: &LirBody,
@@ -256,7 +257,7 @@ fn fold_constants(
     cpu: &crate::backend::cpu::Profile,
     pool: &mut crate::backend::constpool::Pool,
 ) -> Option<LirBody> {
-    if cpu.size || cpu.min_size {
+    if cpu.bytes_strict() {
         return None;
     }
     let mut blocks = Vec::new();
@@ -1087,6 +1088,23 @@ mod tests {
         ]);
         assert_eq!(names(&constants_folded(&body, cpu)), ["fld", "fadd+m", "fstp"]);
         assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fadd+m", "fstp"], "no pool: only the load folds");
+    }
+
+    /// x_ld_sum -O1 m16 grew 9 B (x_nbody_f 21) once the table priced `fld1;
+    /// faddp` above `fadd [K]`: the code ties and the pool cell is the growth.
+    /// Where bytes are strict the constant stays loaded.
+    #[test]
+    fn test_a_constant_stays_loaded_where_bytes_are_strict() {
+        let mut cpu = crate::backend::cpu::profile("486").expect("a profile").clone();
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(2, "fadd", 3, 1, 2),
+            fstp(3, 3, global(0, 0)),
+        ]);
+        assert_eq!(names(&constants_folded(&body, &cpu)), ["fld", "fadd+m", "fstp"], "-O2: the control");
+        cpu.speed_rate = false;
+        assert_eq!(names(&constants_folded(&body, &cpu)), ["fld1", "fadd+m", "fstp"], "-O1: the constant stays");
     }
 
     /// x_nbody_f -O3 m32 and x_ld_axpy -O2: the other operand is not the last
