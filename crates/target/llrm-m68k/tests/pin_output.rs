@@ -72,6 +72,7 @@ const SOURCE_ORDER: Options = Options {
     call_targets: false,
     pc_calls: false,
     sext_adds: false,
+    return_dup: false,
     debug: false,
 };
 
