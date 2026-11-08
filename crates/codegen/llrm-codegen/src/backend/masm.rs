@@ -3772,6 +3772,10 @@ pub fn _instruction(
         Operation::Binary if name == "bsf" && what.repeat => {
             vec!["db 0F3h".to_owned(), format!("bsf {}, {}", dests[0], sources[1])]
         }
+        // `cmpss xmm0, xmm1, 0`: the predicate is the third operand.
+        Operation::Binary if sources.len() == 3 && matches!(what.sources[2], Loc::Imm(_)) => {
+            vec![format!("{} {}, {}, {}", name.trim_end_matches("_x"), dests[0], sources[1], sources[2])]
+        }
         Operation::Binary | Operation::Select => vec![format!("{name} {}, {}", dests[0], sources[1])],
         // `sqrtsd xmm0, xmm0`: an xmm unary reads a source of its own, and a
         // unary that reads a place other than the one it writes names both.

@@ -128,7 +128,9 @@ pub(super) fn ours(text: &str) -> std::collections::BTreeMap<String, Vec<String>
                 &module,
                 function,
                 &layout,
-                &BuilderTarget::for_pointer_bits(32).with_libcalls(&["memcpy", "memmove", "memset"]).with_stack_alignment(16),
+                &BuilderTarget::for_pointer_bits(32)
+                    .with_libcalls(&["memcpy", "memmove", "memset"])
+                    .with_stack_alignment(16),
                 &llrm_x86_m32::M32,
                 &convention,
                 &mut info,
@@ -194,15 +196,21 @@ mod libcall_shape {
         dag.get_register(vt, reg)
     }
 
-    /// A call to a C library routine (`memcpy`, a conversion) lists the native convention's clobbered registers in its
-    /// `RegisterMask`, as the pin's `LowerCall` does for every call; it listed the flags alone (SCM1).
+    /// A call to a C library routine (`memcpy`, a conversion) lists the native
+    /// convention's clobbered registers in its `RegisterMask`, as the pin's
+    /// `LowerCall` does for every call; it listed the flags alone (SCM1).
     #[test]
     fn a_c_library_call_mask_names_the_native_conventions_clobbers() {
+        use llrm_lir::registers::RegId;
+
         use super::super::dag::NodeData;
         use super::super::isd::ISD;
-        use llrm_lir::registers::RegId;
         let mut dag = dag();
-        let env = CallEnv { arch: &llrm_x86_m32::M32, pointer: EVT::I32 };
+        let env = CallEnv {
+            arch: &llrm_x86_m32::M32,
+            pointer: EVT::I32,
+            call: super::super::builder::LoweringNodes::installed().call.unwrap(),
+        };
         let a = arg(&mut dag, EVT::I32, 1);
         super::super::libcall::c_lib_call(&mut dag, &env, "helper", None, &[a], EVT::I32).expect("a call");
         let masks: Vec<_> = dag
@@ -217,7 +225,8 @@ mod libcall_shape {
         assert_eq!(masks.len(), 1);
         let arch: &dyn llrm_target::Target = &llrm_x86_m32::M32;
         let native = arch.calling().native();
-        let named: Vec<_> = native.clobbered.iter().filter(|name| *name != "flags" && !name.starts_with("st")).collect();
+        let named: Vec<_> =
+            native.clobbered.iter().filter(|name| *name != "flags" && !name.starts_with("st")).collect();
         assert!(!named.is_empty(), "premise: the native convention clobbers a register");
         for name in named {
             let reg: RegId = arch.registers().root(arch.register_named(name));
@@ -227,8 +236,9 @@ mod libcall_shape {
     }
 
     /// `pin_register` answers from a table made once (a scan of 200 numbers a
-    /// query cost 81 K Ir a call in memory_expansion); it is `phys_reg`'s inverse
-    /// and, where two numbers name one register, the lower one, as the scan did.
+    /// query cost 81 K Ir a call in memory_expansion); it is `phys_reg`'s
+    /// inverse and, where two numbers name one register, the lower one, as
+    /// the scan did.
     #[test]
     fn pin_register_is_the_lowest_number_of_phys_reg() {
         use super::super::dagisel_adapter::{phys_reg, pin_register};
@@ -249,7 +259,11 @@ mod libcall_shape {
     #[test]
     fn a_helper_call_has_the_builders_shape() {
         let mut dag = dag();
-        let env = CallEnv { arch: &llrm_x86_m32::M32, pointer: EVT::I32 };
+        let env = CallEnv {
+            arch: &llrm_x86_m32::M32,
+            pointer: EVT::I32,
+            call: super::super::builder::LoweringNodes::installed().call.unwrap(),
+        };
         let (a, b) = (arg(&mut dag, EVT::I32, 1), arg(&mut dag, EVT::I32, 2));
         let callee = dag.get_target_external_symbol(EVT::I32, "helper");
         let eax = llrm_target::Target::register_named(&llrm_x86_m32::M32, "eax");

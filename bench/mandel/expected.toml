@@ -1,58 +1,101 @@
-reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
-blessed = "2026-11-07"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "e3ec60a20262e7b9736e51b880a13840"
+
+[ow.O1]
+instructions = 1584031
+memory_operands = 418329
+clocks = 4580588
+code_bytes = 336
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 21.1296
 
 [ow.O2]
 instructions = 1588281
 memory_operands = 419863
+clocks = 4568865
 code_bytes = 345
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 21.1857
+kernel_ms = 21.1863
 
 [ow.Os]
 instructions = 1584031
 memory_operands = 418329
+clocks = 4580588
 code_bytes = 336
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 21.129
+kernel_ms = 21.1296
+
+[bcc.O1]
+instructions = 232254
+memory_operands = 150418
+clocks = 959598
+code_bytes = 211
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.0987
 
 [bcc.O2]
 instructions = 231560
 memory_operands = 151210
+clocks = 946291
 code_bytes = 221
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.0892
+kernel_ms = 3.0895
 
 [bcc.Os]
 instructions = 232254
 memory_operands = 150418
+clocks = 959598
 code_bytes = 211
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.0985
+kernel_ms = 3.0987
+
+[tc.O1]
+instructions = 1272242
+memory_operands = 286260
+clocks = 4028589
+code_bytes = 313
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 16.9706
 
 [tc.O2]
 instructions = 1272244
 memory_operands = 286260
+clocks = 4028578
 code_bytes = 316
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 16.9705
+kernel_ms = 16.9707
 
 [tc.Os]
 instructions = 1272242
 memory_operands = 286260
+clocks = 4028589
 code_bytes = 313
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 16.9705
+kernel_ms = 16.9706
+
+[tcpp.O1]
+instructions = 1240129
+memory_operands = 320886
+clocks = 4007483
+code_bytes = 323
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 16.5422
 
 [tcpp.O2]
 instructions = 1240899
 memory_operands = 301654
+clocks = 3980926
 code_bytes = 324
 data_bytes = 0
 bss_bytes = 0
@@ -61,6 +104,7 @@ kernel_ms = 16.5525
 [tcpp.Os]
 instructions = 1240129
 memory_operands = 320886
+clocks = 4007483
 code_bytes = 323
 data_bytes = 0
 bss_bytes = 0

@@ -1,62 +1,114 @@
-reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
-blessed = "2026-11-07"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "df75c82ce58a91c11ec1efd83242c334"
+
+[ow.O1]
+instructions = 535901
+memory_operands = 37419
+clocks = 1142695
+code_bytes = 444
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 7.1492
 
 [ow.O2]
 instructions = 535837
 memory_operands = 37419
+clocks = 1148929
 code_bytes = 444
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 7.1484
 
 [ow.Os]
 instructions = 535901
 memory_operands = 37419
+clocks = 1142695
 code_bytes = 444
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 7.1492
+
+[bcc.O1]
+instructions = 245502
+memory_operands = 76051
+clocks = 960853
+code_bytes = 559
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.2756
 
 [bcc.O2]
 instructions = 234417
 memory_operands = 68051
+clocks = 879581
 code_bytes = 651
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 3.1277
 
 [bcc.Os]
 instructions = 245502
 memory_operands = 76051
+clocks = 960853
 code_bytes = 559
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 3.2756
+
+[tc.O1]
+instructions = 957083
+memory_operands = 66930
+clocks = 2055109
+code_bytes = 443
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 12.7672
 
 [tc.O2]
 instructions = 916969
 memory_operands = 53713
+clocks = 1960370
 code_bytes = 444
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 12.2323
 
 [tc.Os]
 instructions = 957083
 memory_operands = 66930
+clocks = 2055109
 code_bytes = 443
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 12.7672
+
+[tcpp.O1]
+instructions = 1034121
+memory_operands = 132228
+clocks = 2280389
+code_bytes = 572
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 13.7944
 
 [tcpp.O2]
 instructions = 1042126
 memory_operands = 130228
+clocks = 2234383
 code_bytes = 584
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 13.9012
 
 [tcpp.Os]
 instructions = 1034121
 memory_operands = 132228
+clocks = 2280389
 code_bytes = 572
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 13.7944
 
 [bc.O2]
 instructions = 1302550
