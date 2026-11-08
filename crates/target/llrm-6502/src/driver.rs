@@ -284,11 +284,14 @@ fn tail(
     let data = data_text(module, &program.layout)?;
     let mut selections = Vec::new();
     let mut from_module = Vec::new();
+    // The module each function was selected from: its blocks are the text's.
+    let mut sources: Vec<Option<&llrm_mir::module::Module>> = Vec::new();
     for name in &names {
         SELECTED.with(|count| count.set(count.get() + 1));
         let mut selection = select_function(module, name, request.cpu)?;
         let mut as_called = true;
         let mut paged_chosen = false;
+        let mut source = None;
         selection.zero_page = request.platform.zero_page;
         selection.tuning = request.level.tuning();
         if let Some(looped) = looped.as_ref().filter(|_| copies.contains(name)) {
@@ -298,6 +301,7 @@ fn tail(
             if cheaper(module, name, &other, looped, &selection, request)? {
                 selection = other;
                 as_called = false;
+                source = Some(looped);
             }
         }
         if let Some((_, paged)) = paged.as_ref().filter(|(names, _)| as_called && names.contains(name)) {
@@ -307,9 +311,11 @@ fn tail(
             if cheaper(module, name, &other, paged, &selection, request)? {
                 selection = other;
                 paged_chosen = true;
+                source = Some(paged);
             }
         }
         selections.push(selection);
+        sources.push(source);
         from_module.push(as_called && !paged_chosen);
     }
     crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
@@ -323,14 +329,18 @@ fn tail(
     let pieces = module_text(module, &parts)?;
     let (mut clocks, mut bytes) = (0i64, 0i64);
     if price {
-        for (name, piece) in names.iter().zip(&pieces) {
-            let function = module.named(name).and_then(|id| module.global(id).function());
-            let depths = function.map(llrm_transforms::memloops::loop_depths).unwrap_or_default();
-            let depth_of = |block: u32| depths.get(block as usize).copied().unwrap_or(0);
-            let one = crate::timing::estimate_calling(request.cpu, piece, &[], Some(&depth_of))?;
-            clocks += one.cycles as i64;
-            bytes += one.bytes as i64;
-        }
+        let weights: Vec<Vec<u64>> = names
+            .iter()
+            .zip(&sources)
+            .map(|(name, source)| {
+                let from = source.unwrap_or(module);
+                let function = from.named(name).and_then(|id| from.global(id).function());
+                function
+                    .map_or_else(Vec::new, |function| crate::weights::block_weights(from, function, &program.layout))
+            })
+            .collect();
+        let (run, size) = crate::weights::run_cost(request.cpu, &names, &pieces, &weights)?;
+        (clocks, bytes) = (run as i64, size as i64);
     }
     let mut text = pieces.concat();
     for (name, label) in &data.1 {
