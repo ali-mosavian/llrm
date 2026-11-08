@@ -218,6 +218,21 @@ impl TargetLowering {
                 self.set_libcall_name(op, vt, name);
             }
         }
+        // `RTLIB::CTLZ_I32` and the rest (RuntimeLibcalls.td): the pin names clz and popcount at i32, i64 and
+        // i128, no cttz and no i16. DEVIATE BC1 (owner softfloat, exit 2026-11-30): `__ctz*2` for a zero-poison
+        // cttz, and libgcc's `__clzhi2`, `__ctzhi2`, `__popcounthi2` for the 8-bit targets' i16. A name is
+        // only called where the target's action for the op and type is `LibCall`.
+        let counts: [(MVT, [&'static str; 3]); 4] = [
+            (MVT::I16, ["__clzhi2", "__popcounthi2", "__ctzhi2"]),
+            (MVT::I32, ["__clzsi2", "__popcountsi2", "__ctzsi2"]),
+            (MVT::I64, ["__clzdi2", "__popcountdi2", "__ctzdi2"]),
+            (MVT::I128, ["__clzti2", "__popcountti2", "__ctzti2"]),
+        ];
+        for (vt, names) in counts {
+            for (op, name) in [CtLzZeroPoison, CtPop, CtTzZeroPoison].into_iter().zip(names) {
+                self.set_libcall_name(op, vt, name);
+            }
+        }
     }
 
     /// `RTLIB::ADD_F32` and the rest: compiler-rt's names for the `f32` and
