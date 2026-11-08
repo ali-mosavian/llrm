@@ -206,6 +206,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// DEVIATE: `x * ((2^n +- 1) << k)` is `((x << n) +- x) << k`, not the
+    /// pin's `(x << n + k) +- (x << k)`: where a shift costs per bit the
+    /// factored form shifts `n + k` bits in all, not `n + 2k`. Owner:
+    /// llrm-target-z80. Exit: 2026-11-30, when a second target measures it or
+    /// the pin gains it.
+    fn factor_trailing_zeros_of_mul(&self) -> bool {
+        false
+    }
+
     /// DEVIATE: [`Self::decompose_mul_by_constant`] with the multiplicand, for
     /// a target whose multiply expansion gets cheaper with what is known of
     /// it (the Z80's byte-lane multiply of a zero-extended byte). The pin's
@@ -3982,6 +3991,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         } else {
             return None;
         };
+        if zeros > 0 && self.hooks.factor_trailing_zeros_of_mul() && bits.trailing_zeros() + zeros < width {
+            let amount = self.shift_amount(vt, bits.trailing_zeros());
+            let shifted = self.dag.get_node(ISD::Shl, vt, &[x, amount]);
+            let inner = self.dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[shifted, x]);
+            let by = self.shift_amount(vt, zeros);
+            let result = self.dag.get_node(ISD::Shl, vt, &[inner, by]);
+            return Some(if negative { self.dag.get_negative(result, vt) } else { result });
+        }
         let amount = bits.trailing_zeros() + zeros;
         if amount >= width {
             return None;
