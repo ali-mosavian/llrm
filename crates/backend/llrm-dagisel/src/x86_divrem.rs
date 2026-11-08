@@ -20,10 +20,10 @@
 //! [case]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L6214
 
+use crate::addr::{AddrDag, known_zero};
 use crate::dag::SDValue;
 use crate::generated::ids::{isd, mvt, target_opcode, x86};
 use crate::matcher::Vt;
-use crate::x86_addr::{AddrDag, known_zero};
 use crate::x86_hooks::{Cpu, X86Hooks};
 
 /// Selects `node`; false when its type is not one the pin selects here.

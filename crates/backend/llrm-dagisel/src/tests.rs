@@ -4,7 +4,8 @@ use crate::dag::{Dag, SDValue};
 use crate::generated::ids::{isd, mvt};
 use crate::generated::x86_i486 as table;
 use crate::interp::{Outcome, Selector};
-use crate::testing::{Node, TestDag, TestHooks};
+use crate::testing::{Node, TestDag};
+use crate::x86_testing::TestHooks;
 
 fn machine_name(opcode: u16) -> &'static str {
     table::MACHINE_OPCODES.iter().find(|(v, _)| *v == opcode).map_or("?", |(_, n)| n)
@@ -108,11 +109,11 @@ fn neither_cpu_emits_cmov_and_only_p5_emits_cmpxchg8b() {
     assert!(emits(table::MACHINE_OPCODES, "ADD32rr"), "the table must not be empty of the basics");
 }
 
-mod x86_addr {
+mod addr {
     use super::*;
+    use crate::addr::{AddressMode, AddressOperands, BaseType, Matcher, SymbolKind};
     use crate::dag::LoadExt;
     use crate::testing::{Node, TestDag};
-    use crate::x86_addr::{AddressMode, AddressOperands, BaseType, Matcher, SymbolKind};
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
 
     fn hooks() -> X86Hooks {
@@ -123,7 +124,7 @@ mod x86_addr {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         })
     }
 
@@ -147,7 +148,7 @@ mod x86_addr {
     }
 
     fn matcher(dag: &mut TestDag) -> Matcher<'_, TestDag> {
-        Matcher { dag, pointer_type: mvt::i32, mode: crate::x86_addr::AddrMode::Flat32, size: false }
+        Matcher { dag, pointer_type: mvt::i32, mode: crate::addr::AddrMode::Flat32, size: false }
     }
 
     #[test]
@@ -269,7 +270,7 @@ mod rmw {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         })
     }
 
@@ -375,7 +376,7 @@ mod fold_load {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         })
     }
 
@@ -415,11 +416,11 @@ mod fold_load {
 
 mod address_folds {
     use super::*;
+    use crate::addr::{AddressMode, Matcher};
     use crate::testing::TestDag;
-    use crate::x86_addr::{AddressMode, Matcher};
 
     fn matcher(dag: &mut TestDag) -> Matcher<'_, TestDag> {
-        Matcher { dag, pointer_type: mvt::i32, mode: crate::x86_addr::AddrMode::Flat32, size: false }
+        Matcher { dag, pointer_type: mvt::i32, mode: crate::addr::AddrMode::Flat32, size: false }
     }
 
     fn masked_shift(
@@ -541,7 +542,7 @@ mod select_without_cmov {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         });
         assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks, cmov), Outcome::Selected);
         (dag, cmov)
@@ -558,8 +559,8 @@ mod select_without_cmov {
 
 mod real_mode_addresses {
     use super::*;
+    use crate::addr::{AddrMode, AddressMode, Matcher};
     use crate::testing::TestDag;
-    use crate::x86_addr::{AddrMode, AddressMode, Matcher};
 
     fn matcher(
         dag: &mut TestDag,
@@ -713,10 +714,10 @@ mod instr_desc {
 
 mod far_pointer_loads {
     use super::*;
+    use crate::addr::AddrMode;
     use crate::generated::ids::x86isd;
     use crate::generated::x86_m16;
     use crate::testing::{Node, TestDag};
-    use crate::x86_addr::AddrMode;
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
 
     fn hooks(
@@ -836,8 +837,8 @@ mod far_pointer_loads {
 
 mod pointer_classes {
     use super::*;
+    use crate::addr::AddrMode;
     use crate::instr::desc;
-    use crate::x86_addr::AddrMode;
     use crate::x86_classes::{Role, class_tag, memory_reference, role_of};
 
     fn opcode(name: &str) -> u16 {
@@ -883,11 +884,11 @@ mod pointer_classes {
 
 mod string_instructions {
     use super::*;
+    use crate::addr::AddrMode;
     use crate::dag::Dag;
     use crate::generated::ids::{x86, x86isd};
     use crate::generated::x86_m16;
     use crate::testing::TestDag;
-    use crate::x86_addr::AddrMode;
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
 
     fn hooks(cpu: Cpu) -> X86Hooks {
@@ -955,10 +956,10 @@ mod string_instructions {
 
 mod segment_overrides {
     use super::*;
+    use crate::addr::AddrMode;
     use crate::dag::LoadExt;
     use crate::generated::ids::x86;
     use crate::testing::{Node, TestDag};
-    use crate::x86_addr::AddrMode;
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
 
     fn load_through(segment: Option<u16>) -> (TestDag, u32, SDValue) {
@@ -1096,9 +1097,9 @@ mod shift_amount_mod {
 
 mod x87_pseudos {
     use super::*;
+    use crate::addr::AddrMode;
     use crate::dag::LoadExt;
     use crate::testing::{Node, TestDag};
-    use crate::x86_addr::AddrMode;
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
 
     fn hooks() -> X86Hooks {
@@ -1160,10 +1161,10 @@ fn a_machine_opcode_is_named_for_its_instruction_not_for_a_register_that_shares_
 
 mod select_loop {
     use super::*;
+    use crate::addr::AddrMode;
     use crate::dag::LoadExt;
     use crate::generated::ids::{x86, x86isd};
     use crate::testing::{Node, TestDag};
-    use crate::x86_addr::AddrMode;
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
     use crate::x86_select::select_node;
 
@@ -1238,7 +1239,7 @@ mod nodes_before_the_table {
         dag: &mut TestDag,
         node: u32,
     ) -> Outcome {
-        Selector::new(table::TABLE).select(dag, &mut crate::testing::TestHooks { address: None }, node)
+        Selector::new(table::TABLE).select(dag, &mut crate::x86_testing::TestHooks { address: None }, node)
     }
 
     #[test]
@@ -1301,7 +1302,7 @@ fn a_return_glue_node_is_selected_to_ret() {
         min_size: false,
         has_frame_pointer: true,
         multiply_early_out: false,
-        address_mode: crate::x86_addr::AddrMode::Flat32,
+        address_mode: crate::addr::AddrMode::Flat32,
     });
 
     assert_eq!(
@@ -1314,8 +1315,8 @@ fn a_return_glue_node_is_selected_to_ret() {
 
 mod symbol_plus_two_registers {
     use super::*;
+    use crate::addr::{AddrMode, AddressMode, Matcher, SymbolKind};
     use crate::testing::TestDag;
-    use crate::x86_addr::{AddrMode, AddressMode, Matcher, SymbolKind};
 
     /// `@sym + x + (y << 2)`, associated either way.
     fn address(
@@ -1390,7 +1391,7 @@ mod divrem {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         });
         select_node(&Selector::new(table::TABLE), dag, &mut hooks, node)
     }
@@ -1436,8 +1437,8 @@ mod divrem {
 
 mod masked_operand_that_is_not_a_shift {
     use super::*;
+    use crate::addr::{AddrMode, AddressMode, Matcher};
     use crate::testing::TestDag;
-    use crate::x86_addr::{AddrMode, AddressMode, Matcher};
 
     /// `a + (zext(b) & 0xff)` in an address: the AND's first operand has one
     /// operand, not a shift. The mask fold read operand 1 of that register
@@ -1483,7 +1484,7 @@ mod mul_lohi {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
         machine(&dag)
@@ -1520,7 +1521,7 @@ mod mul_lohi {
                 min_size: false,
                 has_frame_pointer: true,
                 multiply_early_out: true,
-                address_mode: crate::x86_addr::AddrMode::Flat32,
+                address_mode: crate::addr::AddrMode::Flat32,
             });
             assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
             let copy = dag.nodes.iter().find(|n| n.opcode == isd::CopyToReg).unwrap().ops[2];
@@ -1553,7 +1554,7 @@ mod mul_lohi {
                 min_size: false,
                 has_frame_pointer: true,
                 multiply_early_out: true,
-                address_mode: crate::x86_addr::AddrMode::Flat32,
+                address_mode: crate::addr::AddrMode::Flat32,
             });
             assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
             let copy = dag.nodes.iter().find(|n| n.opcode == isd::CopyToReg).unwrap().ops[2];
@@ -1581,7 +1582,7 @@ mod mul_lohi {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
         let copied = dag.nodes.iter().find(|n| n.opcode == isd::CopyToReg).unwrap().ops[2];
@@ -1614,7 +1615,7 @@ mod llrm_intrinsics {
                 min_size: false,
                 has_frame_pointer: true,
                 multiply_early_out: false,
-                address_mode: crate::x86_addr::AddrMode::Real16,
+                address_mode: crate::addr::AddrMode::Real16,
             });
 
             assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
@@ -1643,7 +1644,7 @@ mod llrm_intrinsics {
                 min_size: false,
                 has_frame_pointer: true,
                 multiply_early_out: false,
-                address_mode: crate::x86_addr::AddrMode::Real16,
+                address_mode: crate::addr::AddrMode::Real16,
             });
 
             assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
@@ -1670,7 +1671,7 @@ mod llrm_intrinsics {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Real16,
+            address_mode: crate::addr::AddrMode::Real16,
         });
 
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
@@ -1697,7 +1698,7 @@ mod llrm_intrinsics {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Real16,
+            address_mode: crate::addr::AddrMode::Real16,
         });
 
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
@@ -1745,7 +1746,7 @@ mod fcmp_without_fcomi {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         });
 
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, cmp), Outcome::Selected);
@@ -1782,7 +1783,7 @@ mod pop_from_x87 {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         });
 
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, pop), Outcome::Selected);
@@ -1835,7 +1836,7 @@ mod decrement_for_flags {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
         selected(&dag, add)
@@ -1874,7 +1875,7 @@ mod and_with_a_low_mask {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, and), Outcome::Selected);
         dag.nodes.iter().filter_map(|n| n.machine).map(machine_name).collect()
@@ -1918,7 +1919,7 @@ mod setcc_carry {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
         dag.nodes.iter().filter(|n| !n.dead).filter_map(|n| n.machine).map(machine_name).collect()
@@ -1964,7 +1965,7 @@ mod x64_table {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
         dag.nodes.iter().filter_map(|n| n.machine).map(names).collect()
@@ -1996,7 +1997,7 @@ mod x64_table {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat64,
+            address_mode: crate::addr::AddrMode::Flat64,
         });
         assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, address), Outcome::Selected);
         let names: Vec<_> = dag.nodes.iter().filter_map(|n| n.machine).map(names).collect();
@@ -2007,7 +2008,7 @@ mod x64_table {
     /// the scale arms only ran for `Flat32` (D64-1).
     #[test]
     fn a_shifted_index_is_scaled_at_64_bits() {
-        use crate::x86_addr::{AddrMode, Matcher};
+        use crate::addr::{AddrMode, Matcher};
         let mut dag = TestDag::new();
         let (base, index) = (dag.input(1, mvt::i64), dag.input(2, mvt::i64));
         let two = dag.make_constant(2, mvt::i8);
@@ -2019,8 +2020,8 @@ mod x64_table {
         assert_eq!(dag.nodes[ops.scale.node as usize].constant, Some(4));
     }
 
-    fn rip_matcher(dag: &mut TestDag) -> crate::x86_addr::Matcher<'_, TestDag> {
-        crate::x86_addr::Matcher { dag, pointer_type: mvt::i64, mode: crate::x86_addr::AddrMode::Flat64, size: false }
+    fn rip_matcher(dag: &mut TestDag) -> crate::addr::Matcher<'_, TestDag> {
+        crate::addr::Matcher { dag, pointer_type: mvt::i64, mode: crate::addr::AddrMode::Flat64, size: false }
     }
 
     /// A `WrapperRIP` global had no arm: it stayed a register operand, not
@@ -2031,7 +2032,7 @@ mod x64_table {
         let global = dag.wrapped_global_rip(7, 0, mvt::i64);
         let twelve = dag.make_constant(12, mvt::i64);
         let address = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[global, twelve]), 0);
-        let mut am = crate::x86_addr::AddressMode::default();
+        let mut am = crate::addr::AddressMode::default();
 
         assert!(!rip_matcher(&mut dag).match_address(address, &mut am));
 
@@ -2047,7 +2048,7 @@ mod x64_table {
         let global = dag.wrapped_global_rip(7, 0, mvt::i64);
         let x = dag.input(1, mvt::i64);
         let address = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[global, x]), 0);
-        let mut am = crate::x86_addr::AddressMode::default();
+        let mut am = crate::addr::AddressMode::default();
 
         assert!(!rip_matcher(&mut dag).match_address(address, &mut am));
 
@@ -2069,7 +2070,7 @@ mod x64_table {
         let minus_one = dag.make_constant(-1, mvt::i64);
         let offset = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[global, minus_one]), 0);
         let address = SDValue::new(dag.node(isd::SUB, &[mvt::i64], &[offset, x]), 0);
-        let mut am = crate::x86_addr::AddressMode::default();
+        let mut am = crate::addr::AddressMode::default();
 
         assert!(!rip_matcher(&mut dag).match_address(address, &mut am));
 
@@ -2095,7 +2096,7 @@ mod x64_table {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat64,
+            address_mode: crate::addr::AddrMode::Flat64,
         });
         assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, address), Outcome::Selected);
         let names: Vec<_> = dag.nodes.iter().filter_map(|n| n.machine).map(names).collect();
@@ -2120,7 +2121,7 @@ mod x64_table {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat64,
+            address_mode: crate::addr::AddrMode::Flat64,
         });
         assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
         let names: Vec<_> = dag.nodes.iter().filter_map(|n| n.machine).map(names).collect();
@@ -2141,7 +2142,7 @@ mod x64_table {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         };
         assert_eq!(options.pointer_type(), mvt::i64);
     }
@@ -2174,7 +2175,7 @@ mod minsize_store_immediate {
             min_size,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         });
         assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks, store), Outcome::Selected);
         selected(&dag, store)
@@ -2303,9 +2304,10 @@ mod memop128 {
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
     use crate::x86_memop128::select_mem128;
 
-    /// A volatile 16-byte copy kept no mark on its SSE load and store (`set_node_mem_refs` was never called), so the
-    /// LIR instructions they became were ordinary accesses a pass could drop or merge; the pin's `MachineMemOperand`s
-    /// carry the flag on both.
+    /// A volatile 16-byte copy kept no mark on its SSE load and store
+    /// (`set_node_mem_refs` was never called), so the LIR instructions they
+    /// became were ordinary accesses a pass could drop or merge; the pin's
+    /// `MachineMemOperand`s carry the flag on both.
     #[test]
     fn the_load_and_the_store_of_a_16_byte_copy_keep_the_copy_s_memory_reference() {
         let mut dag = TestDag::new();
@@ -2319,7 +2321,7 @@ mod memop128 {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
-            address_mode: crate::x86_addr::AddrMode::Flat32,
+            address_mode: crate::addr::AddrMode::Flat32,
         });
         assert!(select_mem128(&mut dag, &hooks, copy));
         let marked: Vec<&Vec<u32>> = dag.mem_refs.iter().map(|(_, mems)| mems).collect();

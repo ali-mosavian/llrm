@@ -129,9 +129,10 @@ impl<'p> DagTarget for X86Target<'_, 'p> {
         super::x86_preprocess::preprocess(dag, temporaries, self.lowering.sse2);
         // DEVIATE SD544 (m16): no callee-load move at real mode. Reason: its
         // calls and jumps carry a far callee and a segment, which the pin has
-        // no counterpart for. Exit 2026-11-12: the x86-m16 review of far indirect calls.
+        // no counterpart for. Exit 2026-11-12: the x86-m16 review of far
+        // indirect calls.
         let options = &self.chooser.hooks.options;
-        if options.address_mode != llrm_dagisel::x86_addr::AddrMode::Real16 {
+        if options.address_mode != llrm_dagisel::addr::AddrMode::Real16 {
             let facts = super::x86_preprocess::CalleeLoadFacts {
                 optimizing: !options.opt_none,
                 is_64: options.cpu == llrm_dagisel::x86_hooks::Cpu::X64,
@@ -365,6 +366,8 @@ fn emit_units(
 ) -> Result<Emitted, super::emit_api::EmitError> {
     match crate::backend::hooks::installed() {
         Some(hooks) => hooks.emit_units(dag, units, ctx, state, first_at),
-        None => Err(super::emit_api::EmitError::Unsupported("no backend installed (llrm_x86_backend::install)".to_owned())),
+        None => {
+            Err(super::emit_api::EmitError::Unsupported("no backend installed (llrm_x86_backend::install)".to_owned()))
+        }
     }
 }

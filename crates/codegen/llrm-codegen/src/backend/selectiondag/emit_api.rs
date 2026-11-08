@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use llrm_dagisel::x86_addr::AddrMode;
+use llrm_dagisel::addr::AddrMode;
 use llrm_support::hash::HashMap;
 
 use super::dag::SDValue;
@@ -305,4 +305,3 @@ pub struct Emitted {
     /// The address of the first instruction emitted for each `IROrder`.
     pub first_at: HashMap<u32, i64>,
 }
-

@@ -19,10 +19,10 @@
 //! [fusable]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3787
 
+use crate::addr::{AddrDag, Matcher};
 use crate::dag::{LoadExt, SDValue};
 use crate::generated::ids::{isd, mvt, x86, x86isd};
 use crate::matcher::Vt;
-use crate::x86_addr::{AddrDag, Matcher};
 use crate::x86_hooks::X86Hooks;
 
 /// The memory opcode of an operation by operand width: `[8, 16, 32]`.

@@ -100,7 +100,7 @@ fn hooks() -> X86Hooks {
         min_size: false,
         has_frame_pointer: true,
         multiply_early_out: false,
-        address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
+        address_mode: llrm_dagisel::addr::AddrMode::Flat32,
     })
 }
 
@@ -132,7 +132,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         globals: &NoGlobals,
         block_at: &HashMap::default(),
         frame: &frame,
-        address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
+        address_mode: llrm_dagisel::addr::AddrMode::Flat32,
         opt_size: false,
         call_alignment: 1,
         reserved_calls: false,
@@ -226,9 +226,17 @@ fn the_combiner_runs_between_the_legalizers() {
     let convention = crate::backend::isel::convention(&module, &layout, id, &machine).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
     let block = function.layout()[0];
-    let mut built =
-        build_block(&module, function, &layout, &BuilderTarget::for_pointer_bits(32), &machine, &convention, &mut info, block)
-            .expect("builds");
+    let mut built = build_block(
+        &module,
+        function,
+        &layout,
+        &BuilderTarget::for_pointer_bits(32),
+        &machine,
+        &convention,
+        &mut info,
+        block,
+    )
+    .expect("builds");
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     super::dag_select::legalized(
         &mut built.dag,
@@ -360,7 +368,7 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
         .expect("builds");
         let (mut lowering, mut hooks) = (
             X86Lowering {
-               imul_if_smaller: false,
+                imul_if_smaller: false,
                 share_products: false,
                 cmov: false,
                 sse2: false,

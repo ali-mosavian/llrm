@@ -19,7 +19,7 @@ fn hooks() -> X86Hooks {
         min_size: false,
         has_frame_pointer: true,
         multiply_early_out: false,
-        address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
+        address_mode: llrm_dagisel::addr::AddrMode::Flat32,
     })
 }
 
@@ -577,8 +577,8 @@ fn use_queries_agree_with_a_scan_of_the_live_nodes() {
 /// an allocation.
 #[test]
 fn pin_opcode_and_the_use_queries_allocate_nothing() {
+    use llrm_dagisel::addr::AddrDag;
     use llrm_dagisel::dag::Dag;
-    use llrm_dagisel::x86_addr::AddrDag;
 
     let (_, made) = llrm_support::alloc_count::counted(|| {
         (0..1024u16)
@@ -809,8 +809,8 @@ fn a_selected_node_stops_the_spread_of_invalidated_ids() {
 /// The adapter answers `computeKnownBits`.
 #[test]
 fn the_adapter_answers_the_known_zero_bits_of_the_dag() {
+    use llrm_dagisel::addr::{AddrDag, known_zero};
     use llrm_dagisel::dag::SDValue as PinValue;
-    use llrm_dagisel::x86_addr::{AddrDag, known_zero};
     let mut dag = SelectionDAG::new(DagConfig::default());
     let x = input(&mut dag, 40);
     let fifteen = dag.get_constant(15, EVT::I32);
