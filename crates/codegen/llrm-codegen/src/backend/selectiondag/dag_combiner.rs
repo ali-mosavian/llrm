@@ -2712,6 +2712,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(folded) = self.shift_of_shifted_logic(node) {
             return Some(folded);
         }
+        if matches!(op, ISD::Srl | ISD::Sra) {
+            if let Some(avg) = self.fold_shift_to_avg(node) {
+                return Some(avg);
+            }
+        }
         if self.dag.opcode(n0) != op {
             return None;
         }

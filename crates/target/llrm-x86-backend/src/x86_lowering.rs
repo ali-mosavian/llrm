@@ -697,7 +697,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::Select => lower_select(dag, node, self.cmov, self.min_size),
             ISD::BrCond => lower_brcond(dag, node, self.min_size),
             ISD::UAddO | ISD::USubO | ISD::SAddO | ISD::SSubO | ISD::UMulO | ISD::SMulO => Some(lower_xalu(dag, node)),
-            ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
+            ISD::UAddOCarry | ISD::USubOCarry | ISD::SAddOCarry | ISD::SSubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::SetCCCarry => Some(lower_setcc_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
@@ -947,7 +947,7 @@ fn emit_cmp(
 ) -> SDValue {
     if dag.is_null_constant(op1) {
         // a runtime routine's answer in the flags: they are already set
-        if dag.opcode(op0) == llrm_codegen::backend::selectiondag::x86isd::LLRM_CALL_FLAGS {
+        if dag.opcode(op0) == super::x86isd::LLRM_CALL_FLAGS {
             return dag.operand(op0, 0);
         }
         return emit_test(dag, op0, code);
@@ -2234,7 +2234,8 @@ fn lower_xalu(
 }
 
 /// `LowerADDSUBO_CARRY`: the carry in is put into the flags (`carry + -1`),
-/// then `ADC`/`SBB` add or subtract it; the carry out is `B` of its flags.
+/// then `ADC`/`SBB` add or subtract it; the carry out is `B` of its flags
+/// (`O` for the signed forms).
 fn lower_addsub_carry(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -2245,10 +2246,12 @@ fn lower_addsub_carry(
     let ones = dag.get_all_ones_constant(carry_vt);
     let set_carry = dag.get_node_multi(x86isd::ADD, &[carry_vt, EVT::I32], &[carry, ones]);
     let flags_in = SDValue { node: set_carry.node, res: 1 };
-    let opcode = if dag.opcode(node) == ISD::UAddOCarry { x86isd::ADC } else { x86isd::SBB };
+    let kind = dag.opcode(node);
+    let opcode = if matches!(kind, ISD::UAddOCarry | ISD::SAddOCarry) { x86isd::ADC } else { x86isd::SBB };
     let sum = dag.get_node_multi(opcode, &[vt, EVT::I32], &[lhs, rhs, flags_in]);
     let flags = SDValue { node: sum.node, res: 1 };
-    let code = cond_code(dag, cond::B);
+    let signed = matches!(kind, ISD::SAddOCarry | ISD::SSubOCarry);
+    let code = cond_code(dag, if signed { cond::O } else { cond::B });
     let carry_out = dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]);
     dag.get_node_multi(ISD::MergeValues, &[vt, EVT::I8], &[sum, carry_out])
 }

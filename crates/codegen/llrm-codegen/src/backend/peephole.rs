@@ -3097,6 +3097,38 @@ pub fn cleared(
                     }
                 }
             }
+            // `MOV32r1` (X86InstrCompiler.td#L335, `OptForSize, Not64BitMode`):
+            // 1 is `xor r,r; inc r`, three bytes where `mov r,1` has five.
+            if ones && body.bits == 32 && flags_dead && one.clobbers.is_empty() && one.symbol != Some(true) {
+                if let Some(what) = &one.what {
+                    if let (
+                        Operation::Move,
+                        Some("mov"),
+                        [Loc::Reg(dest)],
+                        [Loc::Imm(Imm { value: 1, width: 4, address: None })],
+                    ) = (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
+                    {
+                        if dest.width == 4 && regs.integer(dest.register) {
+                            let zero = with_what(
+                                &one,
+                                semantics(
+                                    Operation::Binary,
+                                    "xor",
+                                    vec![Loc::Reg(*dest)],
+                                    vec![Loc::Reg(*dest), Loc::Reg(*dest)],
+                                ),
+                            );
+                            let up = with_what(
+                                &one,
+                                semantics(Operation::Unary, "inc", vec![Loc::Reg(*dest)], vec![Loc::Reg(*dest)]),
+                            );
+                            // Reversed below: the xor comes first.
+                            insns.push(Arc::new(up));
+                            one = Arc::new(zero);
+                        }
+                    }
+                }
+            }
             flags_dead = previous;
             insns.push(one);
         }

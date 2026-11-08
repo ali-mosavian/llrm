@@ -664,7 +664,8 @@ pub(crate) fn _keeps(
     };
     // A register the cell is addressed by, written, names another cell.
     let moved = one.defines.iter().any(|defined| define.uses.contains(defined));
-    holds && !moved && !(!apart && _may_write(one, cell, sealed)) && !written.clone().any(meets)
+    // An invariant load (a pool constant) is written by nothing.
+    holds && !moved && (define.invariant || !(!apart && _may_write(one, cell, sealed)) && !written.clone().any(meets))
 }
 
 /// Whether allocated LIR names one fixed BP-relative frame range.
