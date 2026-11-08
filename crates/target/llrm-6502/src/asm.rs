@@ -400,6 +400,40 @@ impl Asm {
         Asm::default()
     }
 
+    /// A pass's candidate: `self` with `lines` instead. Every other field
+    /// (`a_callees`, the result flags, `result_cells`) decides what the
+    /// cleanup may drop, so all are named: a field added to [`Asm`] fails
+    /// to build here until it is carried.
+    pub fn candidate_from(
+        &self,
+        lines: Vec<Line>,
+    ) -> Asm {
+        let Asm {
+            lines: _,
+            no_a_result,
+            a_callees,
+            no_x_result,
+            x_callees,
+            no_y_result,
+            result_cells,
+            y_callees,
+            place,
+            pending,
+        } = self;
+        Asm {
+            lines,
+            no_a_result: *no_a_result,
+            a_callees: a_callees.clone(),
+            no_x_result: *no_x_result,
+            x_callees: x_callees.clone(),
+            no_y_result: *no_y_result,
+            result_cells: result_cells.clone(),
+            y_callees: y_callees.clone(),
+            place: *place,
+            pending: pending.clone(),
+        }
+    }
+
     /// The lines of `text`.
     pub fn parse(text: &str) -> Asm {
         let mut asm = Asm::new();
