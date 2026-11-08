@@ -1842,7 +1842,13 @@ pub fn finish(
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
     }
-    Ok(drop_unreachable(forward_high_bytes(drop_overwritten_byte_stores(cancel_steps(printer.out)))))
+    Ok(tidy(printer.out))
+}
+
+/// The post-printer passes. `forward_high_bytes` runs before `drop_overwritten_byte_stores`: the latter drops the
+/// `ld R1, S1` the former needs to see.
+fn tidy(lines: Vec<Line>) -> Vec<Line> {
+    drop_unreachable(drop_overwritten_byte_stores(forward_high_bytes(cancel_steps(lines))))
 }
 
 /// Whether `text` ends the flow: `ret`, `jp L` or `jr L` with no condition.
@@ -2671,7 +2677,16 @@ mod tests {
         let lines = vec![inst("ld c, a"), Line::Label("L".to_owned()), inst("ld c, a")];
         assert_eq!(drop_overwritten_byte_stores(lines.clone()), lines, "a label may be entered from elsewhere");
         let lines = vec![inst("ld c, a"), inst("ld c, d"), inst("ld c, (hl)")];
-        assert_eq!(drop_overwritten_byte_stores(lines).len(), 2, "a load of another register overwrites it");
+        assert_eq!(drop_overwritten_byte_stores(lines), vec![inst("ld c, (hl)")], "each load is overwritten by the next");
+    }
+
+    /// `ld l, c; ld h, b; ld l, h; ld h, #0` fuses to `ld l, b; ld h, #0`. Dropping the dead `ld l, c` first left
+    /// `ld h, b; ld l, h; ld h, #0` (struct_with_i64 -O3: 1 B and 4 T more, 8 sites).
+    #[test]
+    fn a_dead_load_is_dropped_after_the_high_byte_forward_has_used_it() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![inst("ld l, c"), inst("ld h, b"), inst("ld l, h"), inst("ld h, #0")];
+        assert_eq!(tidy(lines), vec![inst("ld l, b"), inst("ld h, #0")]);
     }
 
     /// A pair stored to its slot and reloaded after lines that leave it alone
