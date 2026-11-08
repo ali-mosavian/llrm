@@ -693,6 +693,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LICM-FRAME (size builds, target opt-in, owner w15, exit
+    /// 2026-11-30): the speculative LICM does not hoist an instruction the loop
+    /// might never execute into the entry block of a function when the loop
+    /// calls: the value would live across the call in a callee-saved register
+    /// and the frame could no longer start after the guard (shrink wrapping).
+    /// False: the pin's rule.
+    fn licm_speculation_keeps_frame_late(&self) -> bool {
+        false
+    }
+
     /// DEVIATE Z80-ROT: whether -Oz rotates a loop whose copied header folds away in
     /// the preheader, the pin's no-copy limit notwithstanding. False: the pin.
     fn rotation_free_guard_at_minsize(&self) -> bool {
@@ -1605,6 +1615,15 @@ pub trait Tti {
     /// for the narrower search to hide a counter that serves two uses.
     fn lsr_visited_registers_lose(&self) -> bool {
         true
+    }
+
+    /// DEVIATE LU14: whether `Solve` also searches the uses in the opposite
+    /// order and keeps the cheaper solution (a tie keeps the pin's order).
+    /// `SolveRecurse` requires of a use the registers the uses before it
+    /// chose, so a cheaper combination that starts with a later use is never
+    /// rated. The pin searches one order.
+    fn lsr_solves_both_use_orders(&self) -> bool {
+        false
     }
 
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop

@@ -46,7 +46,6 @@ use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo
 use llrm_codegen::backend::selectiondag::mvt::MVT;
 use llrm_codegen::backend::selectiondag::opcodes::OpcodeMap;
 use llrm_codegen::backend::selectiondag::schedule::SchedInfo;
-use llrm_codegen::backend::selectiondag::x86_lowering::X86Lowering;
 use llrm_codegen::model::ir::{Addr, Held, Mem, Space};
 use llrm_codegen::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use llrm_dagisel::addr::AddrMode;
@@ -60,6 +59,7 @@ use llrm_x86_dagisel::generated::{x86_i486, x86_m16, x86_x64};
 use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 
 use super::select::select_block;
+use super::x86_lowering::X86Lowering;
 
 struct Info {
     source_order: bool,
@@ -1420,7 +1420,7 @@ fn selected_in(
                                 | llrm_codegen::twoaddress::ThreeAddress::AddSub
                                 | llrm_codegen::twoaddress::ThreeAddress::AddSubWords
                         ),
-                    i16_mul_chains: !llrm_codegen::backend::selectiondag::x86_lowering::promotes_i16(&tli),
+                    i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
                     sext_load: true,
                     zext_free: m64,
                     branch_constant_selects: select_branch > 0
@@ -1428,7 +1428,7 @@ fn selected_in(
                             frequencies.relative_to_entry(parent) >= f64::from(select_branch)
                         }),
                     profile: if mul_by_clocks {
-                        Some(llrm_codegen::backend::selectiondag::x86_lowering::MulPricing {
+                        Some(super::x86_lowering::MulPricing {
                             cpu,
                             arch,
                             freq: 1.0,
@@ -1441,7 +1441,7 @@ fn selected_in(
                             .as_ref()
                             .filter(|_| mul_rate > 0 || price_pin)
                             .map(
-                                |frequencies| llrm_codegen::backend::selectiondag::x86_lowering::MulPricing {
+                                |frequencies| super::x86_lowering::MulPricing {
                                     cpu,
                                     arch,
                                     freq: frequencies.relative_to_entry(parent),

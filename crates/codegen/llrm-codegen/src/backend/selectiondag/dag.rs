@@ -1228,7 +1228,7 @@ impl SelectionDAG {
         self.constant(value) == Some(0)
     }
 
-    pub(super) fn width(
+    pub fn width(
         &self,
         value: SDValue,
     ) -> u32 {
