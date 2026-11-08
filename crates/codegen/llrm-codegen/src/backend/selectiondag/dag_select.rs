@@ -103,6 +103,16 @@ impl<'p> DagTarget for X86Target<'_, 'p> {
         super::live_out::assert_live_out_copies(dag, self.live);
     }
 
+    /// `PostprocessISelDAG`; skipped at -O0 like the pin's.
+    fn postprocess(
+        &mut self,
+        dag: &mut SelectionDAG,
+    ) {
+        if !self.chooser.hooks.options.opt_none {
+            super::x86_postprocess::postprocess(dag);
+        }
+    }
+
     fn preprocess(
         &mut self,
         dag: &mut SelectionDAG,

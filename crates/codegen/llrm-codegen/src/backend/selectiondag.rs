@@ -162,6 +162,7 @@ pub mod switchcg;
 pub mod target_calling;
 pub mod x86_carry;
 pub mod x86_lowering;
+pub mod x86_postprocess;
 pub mod x86_preprocess;
 pub mod x86_unfold;
 
