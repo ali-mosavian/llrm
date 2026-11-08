@@ -871,7 +871,11 @@ fn machined_once(
     let far = far_frame(&first, sp);
     // An over-aligned local lies on its alignment below the aligned top: a
     // layout that moves objects would break it.
-    let ordered = if far > 0 && first.body.over_aligned.is_empty() {
+    // Built only where it has fewer far cells than the first layout, which is told by counting them.
+    let ordered = if far > 0
+        && first.body.over_aligned.is_empty()
+        && crate::backend::relayout::far_ordered(&first, &frame, sp).is_none_or(|ordered| ordered < far)
+    {
         crate::backend::relayout::ordered(&first, &frame, sp).map(|(ordered, _)| ordered)
     } else {
         None
