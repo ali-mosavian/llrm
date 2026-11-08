@@ -576,6 +576,12 @@ pub trait Tti {
         300
     }
 
+    /// Whether SZ2 trials simplify their copy with the cleanup list, not the whole one: a trial
+    /// only counts instructions. False: the whole list.
+    fn inline_trial_light_simplify(&self) -> bool {
+        false
+    }
+
     /// Whether a later round of the inliner over one caller skips a callee SZ2 rejected in an
     /// earlier round: a round costs the simplifier over the caller per callee. False: tried again.
     fn inline_trial_skips_rejected(&self) -> bool {
