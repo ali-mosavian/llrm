@@ -842,6 +842,17 @@ impl Convention {
             .map(|(_, registers)| registers.as_slice())
     }
 
+    /// The register a returned pointer (and the `sret` pointer a callee hands
+    /// back) leaves in: the `pointer` entry, else the first register of a
+    /// result `bytes` wide.
+    pub fn pointer_result_register(
+        &self,
+        bytes: i64,
+    ) -> Option<&str> {
+        let named = self.results.get("pointer").and_then(|registers| registers.first());
+        named.or_else(|| self.result_registers(bytes)?.first()).map(String::as_str)
+    }
+
     /// The vector register a `float` or `double` result leaves in, where the
     /// convention has one.
     pub fn float_result_register(&self) -> Option<&str> {
