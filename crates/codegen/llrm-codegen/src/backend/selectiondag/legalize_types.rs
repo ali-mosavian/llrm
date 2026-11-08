@@ -3831,7 +3831,7 @@ impl<'a> TypeLegalizer<'a> {
             // The scale of a fixed-point multiply is an `i32`
             // constant whatever the operands' width. `PromoteIntOp_FIX` zero
             // extends it; where `i32` is expanded the low half carries it.
-            // DEVIATE SD105: the pin has no expand case, so a 16-bit target
+            // DEVIATE SD602: the pin has no expand case, so a 16-bit target
             // dies on `llvm.smul.fix.i16`. Exit: none, the pin's gap. Owner
             // z80. Review 2026-11-27.
             ISD::SMulFix
