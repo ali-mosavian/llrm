@@ -53,7 +53,7 @@ pub(crate) fn caller_saved() -> Vec<RegId> {
     <Arm64 as AllocTarget>::caller_saved()
 }
 
-fn to_lir(register: Reg) -> LirReg {
+pub(crate) fn to_lir(register: Reg) -> LirReg {
     match register {
         Reg::Gpr(Gpr(n)) if n < Gpr::FIRST_VIRTUAL => LirReg::Phys(id(Class::Gpr, n)),
         Reg::Fpr(Vreg(n)) if n < Gpr::FIRST_VIRTUAL => LirReg::Phys(id(Class::Fpr, n)),
@@ -61,7 +61,7 @@ fn to_lir(register: Reg) -> LirReg {
     }
 }
 
-fn from_lir(
+pub(crate) fn from_lir(
     register: LirReg,
     class: Class,
 ) -> Reg {
@@ -76,7 +76,7 @@ fn from_lir(
 }
 
 /// The instruction's name for the allocator: its variant (`AddSubImm`).
-fn name_of(inst: &Inst) -> &'static str {
+pub(crate) fn name_of(inst: &Inst) -> &'static str {
     static NAMES: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
     let debug = format!("{inst:?}");
     let variant = debug.split([' ', '(', '{']).next().unwrap_or_default().to_owned();
