@@ -1205,6 +1205,19 @@ fn a_long_equality_with_a_constant_accumulates_its_bytes_in_a() {
     assert!(writes_back(&constant) <= 3, "{constant:#?}");
 }
 
+/// A volatile long's low bits replaced (`and` then `or` of the low byte) wrote the byte back twice: `and a, #248; ld e, a;
+/// or a, #5; ld e, a`. The first write is never read.
+#[test]
+fn a_masked_then_set_byte_is_written_back_once() {
+    let ir = include_str!("kernels/ir/volatile_field_store.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "store_low_bits", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        let lines: Vec<&str> = out.lines().map(str::trim).collect();
+        let written_back = lines.iter().filter(|line| line.len() == 7 && line.starts_with("ld ") && line.ends_with(", a")).count();
+        assert_eq!(written_back, 1, "{level:?}: {lines:#?}");
+    }
+}
+
 /// `memory_expansion` at -Os was refused ("a conditional return in a function
 /// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
 /// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The
