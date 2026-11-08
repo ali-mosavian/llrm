@@ -840,6 +840,7 @@ pub trait Target {
             saved_first: self.frame_saved_first(),
             enter: self.frame_enter(),
             wrap_split_size: self.frame_wrap_split_size(),
+            object_aligned: self.frame_object_aligned(),
             red_zone: self.frame_red_zone(),
             slot_scratch: self.frame_slot_scratch(),
             free: false,
@@ -886,6 +887,12 @@ pub trait Target {
         false
     }
 
+    /// Whether the frame aligns its locals to the widest object
+    /// (`calling.toml`'s `frame_object_aligned`).
+    fn frame_object_aligned(&self) -> bool {
+        false
+    }
+
     /// The bytes below the stack pointer a leaf frame may use (`calling.toml`'s
     /// `frame_red_zone`).
     fn frame_red_zone(&self) -> i64 {
@@ -920,6 +927,8 @@ pub struct FrameRegisters {
     pub enter: bool,
     /// A size build may skip the frame on an early exit into a shared return.
     pub wrap_split_size: bool,
+    /// The locals' base takes the widest object's alignment (`frame_object_aligned`).
+    pub object_aligned: bool,
     /// The bytes below the stack pointer a leaf function's locals may use
     /// without a `sub`; 0 where the ABI has no red zone.
     pub red_zone: i64,
