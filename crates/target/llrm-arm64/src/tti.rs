@@ -391,8 +391,14 @@ impl Tti for AArch64 {
     /// clocks, the median of the -O2/-O3 cells where inlining grew the code
     /// (w15-arm64-rate-proposal-11-03.md; widened to 30 clean cells by 11-12),
     /// fitted with one byte a unit. Stated per byte of the 4-byte unit, so the
-    /// decisions are those of the fit; the refit to the scoring rate is its own
-    /// change.
+    /// decisions are those of the fit.
+    ///
+    /// Refit scan (2026-11-08, 34 programs at -O2/-O3, release/next 8d22165d6d):
+    /// 30 and 10 clk/B change no cell against 62.5; 3 changes jpeg_fixed and
+    /// jpeg_single only (+84 B, -1.6k instructions); the scoring rate 0.3 makes
+    /// both worse in bytes and instructions (+540 B, +688k instructions on
+    /// jpeg_single -O2). Worse-than-best cells: 9 (-O2) and 10 (-O3) at 62.5, 9
+    /// and 10 at 3, 10 and 12 at 0.3. Kept at the fitted rate.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         INLINE_MILLICLOCKS_PER_UNIT * 1000 / BYTES_PER_COST_UNIT_MILLI
     }
