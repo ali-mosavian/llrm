@@ -16,8 +16,8 @@
 12 crates/backend/llrm-dagisel/src/x86_hooks.rs
 1 crates/backend/llrm-dagisel/src/x86_test.rs
 1 crates/backend/llrm-iselgen/src/build.rs
-12 crates/codegen/llrm-codegen/examples/builder_refusals.rs
-12 crates/codegen/llrm-codegen/examples/select_shadow.rs
+10 crates/codegen/llrm-codegen/examples/builder_refusals.rs
+10 crates/codegen/llrm-codegen/examples/select_shadow.rs
 4 crates/codegen/llrm-codegen/src/abi/qb.rs
 4 crates/codegen/llrm-codegen/src/backend/arithmetic.rs
 1 crates/codegen/llrm-codegen/src/backend/arrival.rs
@@ -49,12 +49,12 @@
 12 crates/codegen/llrm-codegen/src/backend/peephole.rs
 2 crates/codegen/llrm-codegen/src/backend/pushfold.rs
 1 crates/codegen/llrm-codegen/src/backend/rewriter.rs
-17 crates/codegen/llrm-codegen/src/backend/selectiondag/builder.rs
+13 crates/codegen/llrm-codegen/src/backend/selectiondag/builder.rs
 14 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/memops.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/switch.rs
 3 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/tailcall.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dag.rs
-29 crates/codegen/llrm-codegen/src/backend/selectiondag/dag_function.rs
+26 crates/codegen/llrm-codegen/src/backend/selectiondag/dag_function.rs
 55 crates/codegen/llrm-codegen/src/backend/selectiondag/dagisel_adapter.rs
 2 crates/codegen/llrm-codegen/src/backend/selectiondag/div_combine.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dump.rs

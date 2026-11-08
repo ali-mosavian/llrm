@@ -1020,9 +1020,9 @@ fn selected_in(
         }
     }
     let (builder_target, address_mode) = match bitness {
-        16 => (BuilderTarget::m16(), AddrMode::Real16),
-        64 => (BuilderTarget::m64(), AddrMode::Flat64),
-        _ => (BuilderTarget::m32(), AddrMode::Flat32),
+        16 => (BuilderTarget::for_pointer_bits(16), AddrMode::Real16),
+        64 => (BuilderTarget::for_pointer_bits(64), AddrMode::Flat64),
+        _ => (BuilderTarget::for_pointer_bits(32), AddrMode::Flat32),
     };
     let mut builder_target = builder_target;
     // Static code: every symbol is `dso_local`. A 64-bit PIE reaches a symbol
