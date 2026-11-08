@@ -304,6 +304,38 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// `memset.pattern` is 4 in the pin ("the cost of the `memset_pattern16`
+    /// libcall"), but this target has no such routine: `PreISelIntrinsicLowering`
+    /// expands it into a loop after inlining has priced it. In code size it is
+    /// that loop: a guard on the count, the pointers, a store a byte of the
+    /// pattern, the test and the branch back (a 2-word store inlined twice was
+    /// +82 B at -Os while the callees stayed).
+    ///
+    /// DEVIATE: other kinds keep the pin's 4. Reason: the unroller and the
+    /// speed bound are tuned on it. Exit: price the loop's clocks.
+    fn intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        args: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        const MEMSET_PATTERN: &str = "llvm.experimental.memset.pattern";
+        let pattern = name == MEMSET_PATTERN || name.strip_prefix(MEMSET_PATTERN).is_some_and(|rest| rest.starts_with('.'));
+        if let (true, CostKind::CodeSize, Some(Ty::Int(bits))) = (pattern, kind, args.get(1).copied()) {
+            let (skeleton, _) = sum(&[
+                "ld b;c", "or b", "jr nz;e", "ld hl;nn", "add hl;bc", "ld b;c", "ld b;c", "or b", "sbc hl;bc",
+                "add hl;bc", "jr nz;e",
+            ]);
+            let (each_byte, _) = sum(&["ld (hl);b", "inc bc"]);
+            let (each_word, _) = sum(&["ld bc;nn"]);
+            let bytes = i64::from(bits.div_ceil(8));
+            return Cost::of(skeleton + each_byte * bytes + each_word * ((bytes + 1) / 2));
+        }
+        let _ = ret;
+        if llrm_mir::tti::is_free_intrinsic(name) { Cost::FREE } else { llrm_mir::tti::base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
+    }
+
     /// SZ1, rule 1: a size build keeps a callee bigger than its call. The pin's
     /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
     /// call is 3.
@@ -314,7 +346,7 @@ impl Tti for Z80Tti {
     /// Where the pin's own cost is negative the inline shrinks the caller (a
     /// wrapper, a callee that folds away): the bound stands down.
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
-        true
+        false
     }
 
     /// The pin counts a call as one unit and one per argument; here a unit is a

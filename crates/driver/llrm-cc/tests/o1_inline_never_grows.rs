@@ -69,3 +69,18 @@ fn test_m32_o1_growth_is_priced_in_bytes_not_size_units() {
     let (_, size) = compile("units", &source, "-O1");
     assert!(size < 23_000, "object is {size} B; the unscaled growth gave 23,432");
 }
+
+/// The bottom-up walk priced `sf32_pack` in `mul_core` at the site's own
+/// frequency (1.0), though the soft-float multiply runs in a loop of the
+/// kernel 30 times per call: it stayed a call and x_sf_mul ran 88263 clk
+/// against 82587 with it inlined (gcc/clang 88107). The check weighs a site by
+/// how often its function runs, up the call graph.
+#[test]
+fn test_m32_o1_inline_weighs_how_often_the_caller_runs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let source =
+        std::fs::read_to_string(root.join("crates/target/llrm-x86-m32/vsgcc/kernels/x_sf_mul/x_sf_mul.c")).unwrap();
+    let (listing, _) = compile("entry", &source, "-O1");
+    let calls = listing.lines().filter(|line| line.contains("call") && line.contains("sf32_pack")).count();
+    assert!(calls <= 2, "{calls} calls of sf32_pack: the hot caller's copies were not made (3 without the weight)");
+}

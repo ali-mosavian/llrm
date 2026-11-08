@@ -665,6 +665,10 @@ impl Tti for X86 {
         self.tuning.unroll_never_grows_at_o1
     }
 
+    fn second_ipsccp(&self) -> bool {
+        self.tuning.second_ipsccp
+    }
+
     fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
         self.tuning.unroll_o1_analyzed_trips
     }
@@ -679,6 +683,10 @@ impl Tti for X86 {
 
     fn inline_never_grows_without_rate(&self) -> bool {
         self.tuning.inline_never_grows_without_rate
+    }
+
+    fn inline_o1_weighs_entry(&self) -> bool {
+        self.tuning.inline_o1_weighs_entry
     }
 
     fn inline_o1_unit_bytes_milli(&self) -> i64 {

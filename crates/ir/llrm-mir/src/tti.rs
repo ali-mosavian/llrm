@@ -737,6 +737,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::second_ipsccp`.
+    fn second_ipsccp(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_o1_analyzed_trips`.
     fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
         None
@@ -754,6 +759,11 @@ pub trait Tti {
 
     /// DEVIATE INL-O1: `Tuning::inline_never_grows_without_rate`.
     fn inline_never_grows_without_rate(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::inline_o1_weighs_entry`.
+    fn inline_o1_weighs_entry(&self) -> bool {
         false
     }
 

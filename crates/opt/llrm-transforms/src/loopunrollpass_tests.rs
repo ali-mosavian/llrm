@@ -1006,3 +1006,79 @@ out:
     );
     assert_eq!(llrm_analysis::cfg::shapes_derived(), before, "a shape was made again");
 }
+
+/// Compile time: the unroll pass closed its function's SSA form through a
+/// dominator tree and loops of its own (755 calls, 748 M Ir on memexp -O2,
+/// every one of them a no-op) while the manager held both. A function the
+/// pass left as it found it makes none.
+#[test]
+fn test_the_unroll_pass_closes_over_the_managers_tree_and_loops() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %next
+}
+",
+    );
+    crate::lcssa::TREES_MADE.with(|count| count.set(0));
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            created: Default::default(),
+        },
+    );
+    assert_eq!(crate::lcssa::TREES_MADE.with(std::cell::Cell::get), 0, "a tree was made again");
+}
+
+/// Compile time: a full unroll run for one loop of the loop pass manager
+/// (`loopfilter::only`) still put the whole function in simplified and closed
+/// form first, 755 runs, 403 of them over one function of 403 loops (a
+/// quadratic 1.1 B Ir on memexp -O2). The pin's `LoopFullUnrollPass` does
+/// neither: no loop is asked, no shape made.
+#[test]
+fn test_a_full_unroll_for_one_loop_does_not_re_form_the_function() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %next
+}
+",
+    );
+    let _scope = crate::loopfilter::only(&[llrm_mir::module::BlockId(1)]);
+    crate::lcssa::LOOPS_FORMED.with(|count| count.set(0));
+    let shapes = llrm_analysis::cfg::shapes_derived();
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            created: Default::default(),
+        },
+    );
+    assert_eq!(crate::lcssa::LOOPS_FORMED.with(std::cell::Cell::get), 0, "the function was closed again");
+    assert_eq!(llrm_analysis::cfg::shapes_derived(), shapes, "a shape was made again");
+}
