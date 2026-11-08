@@ -202,6 +202,27 @@ impl Printer<'_> {
         }
     }
 
+    /// Whether `a` holds 0 or 255 here: the last write to it in this straight line is `sbc a, a`, and the lines
+    /// since only store it.
+    fn a_is_mask(&self) -> bool {
+        for line in self.out.iter().rev() {
+            match line {
+                Line::Loc(_) => continue,
+                Line::Label(_) => return false,
+                Line::Inst(text) if text == "sbc a, a" => return true,
+                Line::Inst(text) => {
+                    let stores = text.strip_prefix("ld ").and_then(|rest| rest.split_once(", ")).is_some_and(
+                        |(to, from)| from == "a" && to != "a" && (to.len() == 1 || to.starts_with('(')),
+                    );
+                    if !stores {
+                        return false;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Whether byte register `lane` holds 0 here: its last write in this straight line is `ld lane, #0`, and
     /// nothing since names its pair, jumps, calls or enters a label.
     fn lane_is_zero(
@@ -382,8 +403,11 @@ impl Printer<'_> {
                 let (pair, _) = (self.register(inst, 0)?, self.register(inst, 1)?);
                 let (dl, dh) = lanes(pair)?;
                 self.push(format!("ld {}, a", name(dl)));
-                self.push("rla");
-                self.push("sbc a, a");
+                // `a` is 0 or 255 already: its sign is itself
+                if !self.a_is_mask() {
+                    self.push("rla");
+                    self.push("sbc a, a");
+                }
                 self.push(format!("ld {}, a", name(dh)));
             }
             "SUBZX8" => {

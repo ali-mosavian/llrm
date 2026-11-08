@@ -2130,3 +2130,12 @@ fn a_widened_byte_combined_with_a_word_skips_its_zero_lane() {
     let both = ors("and_word");
     assert_eq!(both.matches("and a,").count(), 1, "only the low lane: {both}");
 }
+
+/// The sign of a sign mask is the mask: widening `a` right after `sbc a, a` (0 or 255) ran `rla; sbc a, a` again
+/// (high_byte's signed_high, 2 B and 8 T).
+#[test]
+fn a_sign_mask_widens_without_taking_its_sign_again() {
+    let ir = include_str!("kernels/ir/high_byte.ll");
+    let out = text(ir, "signed_high", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("rla").count(), 1, "{out}");
+}
