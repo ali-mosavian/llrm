@@ -119,6 +119,10 @@ pub struct Options {
     /// A callee called again and again is called through an address register
     /// where that makes the function cheaper ([`crate::calltarget`]).
     pub call_targets: bool,
+    /// A call of a function this module defines is `jsr (name,%pc)`, 4 B for the
+    /// 6 of `jsr name`. Only for a driver that has checked the module's code
+    /// is within 16-bit reach of itself ([`crate::driver`]).
+    pub pc_calls: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -143,6 +147,7 @@ impl Options {
         rematerialize_arguments: false,
         loop_top_by_jumps: false,
         call_targets: false,
+        pc_calls: false,
         debug: false,
     };
 }
@@ -166,6 +171,7 @@ impl Default for Options {
             rematerialize_arguments: true,
             loop_top_by_jumps: true,
             call_targets: true,
+            pc_calls: false,
             debug: false,
         }
     }
@@ -313,6 +319,9 @@ pub fn items_with(
             options.push_arguments.then_some(price),
         )
     };
+    if options.short && options.pc_calls {
+        crate::pccall::local_calls(&mut function, |callee| is_local_callee(module, callee));
+    }
     if options.short && options.call_targets {
         let chosen = crate::calltarget::choose(&function, &assignment, cpu, price, expand)?;
         crate::calltarget::through_registers(&mut function, &chosen)?;
@@ -325,6 +334,19 @@ pub fn items_with(
         });
     }
     Ok(out)
+}
+
+/// Whether `callee` is a function `module` defines that no other definition
+/// replaces at link time: a weak or linkonce one can be.
+fn is_local_callee(
+    module: &Module,
+    callee: &str,
+) -> bool {
+    module.named(callee).is_some_and(|id| {
+        let global = module.global(id);
+        global.function().is_some_and(|one| !one.is_declaration())
+            && !matches!(llrm_mir::image::Export::of(global.linkage), llrm_mir::image::Export::Weak)
+    })
 }
 
 /// The IR's branch probabilities by `(from, to)` block number
@@ -376,14 +398,22 @@ pub fn text_with(
     cpu: Cpu,
     options: Options,
 ) -> Result<String, String> {
+    printed(items_with(module, name, cpu, options)?, options.debug)
+}
+
+/// `items` as assembly text, the `.loc` rows only with `debug`.
+pub fn printed(
+    items: Vec<Item>,
+    debug: bool,
+) -> Result<String, String> {
     let mut out = String::new();
     let mut previous = None;
-    for item in items_with(module, name, cpu, options)? {
+    for item in items {
         match item {
             Item::Label(label) => out.push_str(&format!("{label}:\n")),
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
             Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
-            Item::Loc(row) if options.debug => {
+            Item::Loc(row) if debug => {
                 // A row on the line the one before it was on does not start a
                 // statement.
                 let flags = format!(

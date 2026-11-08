@@ -9,6 +9,7 @@ pub mod amiga;
 pub mod atari;
 pub mod callpush;
 pub mod calltarget;
+pub mod pccall;
 pub mod ccr;
 pub mod chain;
 pub mod cmpdup;

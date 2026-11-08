@@ -47,7 +47,7 @@ pub fn repeated(function: &MFunction) -> Vec<String> {
     let mut count: HashMap<&str, usize> = HashMap::new();
     let mut order: Vec<&str> = Vec::new();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
-        if let (Kind::Op("CALLb"), Some(Operand::Symbol(name, 0))) = (inst.kind, inst.operands.first()) {
+        if let (Kind::Op("CALLb" | "CALLq"), Some(Operand::Symbol(name, 0))) = (inst.kind, inst.operands.first()) {
             let seen = count.entry(name).or_insert(0);
             if *seen == 0 {
                 order.push(name);
@@ -99,7 +99,9 @@ pub fn through_registers(
         loads.push(op_inst("LEA32b", desc, vec![Operand::Def(Reg::Phys(*register)), Operand::Symbol(name.clone(), 0)]));
     }
     for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
-        let (Kind::Op("CALLb"), Some(Operand::Symbol(name, 0))) = (inst.kind, inst.operands.first()) else { continue };
+        let (Kind::Op("CALLb" | "CALLq"), Some(Operand::Symbol(name, 0))) = (inst.kind, inst.operands.first()) else {
+            continue;
+        };
         let Some((_, register)) = targets.iter().find(|(target, _)| target == name) else { continue };
         inst.kind = Kind::Op("CALLj");
         inst.operands[0] = Operand::Use(Reg::Phys(*register));
