@@ -24,6 +24,7 @@ fn lowered(code: CondCode) -> (SelectionDAG, SDValue) {
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
         &llrm_x86_m32::M32,

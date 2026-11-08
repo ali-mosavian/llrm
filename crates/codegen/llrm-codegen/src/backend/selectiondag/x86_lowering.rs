@@ -161,6 +161,9 @@ pub struct X86Lowering<'a> {
     pub sext_load: bool,
     /// `X86TargetLowering::isZExtFree(i32, i64)`: `Subtarget.is64Bit()`.
     pub zext_free: bool,
+    /// DEVIATE SELB: a select of two constants without a `cmov` stays a select
+    /// (a branch), not `setcc` arithmetic.
+    pub branch_constant_selects: bool,
     /// What prices a constant multiply that `combineMul` leaves an `imul`
     /// (DEVIATE SD446); none keeps the pin's `imul`.
     pub profile: Option<MulPricing<'a>>,
@@ -182,6 +185,13 @@ pub struct MulPricing<'a> {
     pub price_pin: bool,
 }
 
+impl X86Lowering<'_> {
+    /// SELB applies: no `cmov` to select between the constants with.
+    fn branch_constants(&self) -> bool {
+        self.branch_constant_selects && !self.cmov
+    }
+}
+
 impl CombineHooks for X86Lowering<'_> {
     /// `X86TargetLowering::shouldNormalizeToSelectSequence` is true unless CCMP
     /// (APX) keeps the `and`/`or` tree.
@@ -197,6 +207,14 @@ impl CombineHooks for X86Lowering<'_> {
         _cond_vt: EVT,
     ) -> bool {
         self.cmov
+    }
+
+    /// `convertSelectOfConstantsToMath`: false where SELB keeps the select.
+    fn convert_select_of_constants_to_math(
+        &self,
+        _vt: EVT,
+    ) -> bool {
+        !self.branch_constants()
     }
 
     /// `X86TargetLowering::mergeStoresAfterLegalization`: `!MemVT.isVector()`.
@@ -494,6 +512,7 @@ impl CombineHooks for X86Lowering<'_> {
             ISD::Sub => combine_sub(dag, node, self.three_address_adds),
             ISD::FAdd | ISD::FSub => combine_shared_product(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
+            ISD::Select | x86isd::CMOV if self.branch_constants() => None,
             ISD::Select => combine_select_of_two_constants(dag, node, self.zext_free),
             x86isd::CMOV => combine_cmov(dag, node),
             x86isd::SETCC => combine_setcc(dag, node),

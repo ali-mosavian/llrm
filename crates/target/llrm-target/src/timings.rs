@@ -34,8 +34,8 @@ pub struct CpuTable {
     /// tail duplication (`TailDupPlacementThreshold`), where the target states
     /// a smaller bound than the pin's (2, 4 at -O3); `None`: the pin's.
     pub tail_dup_placement_threshold: Option<i64>,
-    /// DEVIATE TAILDUP-HOT (owner x86-m32, exit: profile-fed frequencies; stated cost
-    /// x_jpeg_fixed/x_jpeg_single -O2 +32 B at 0 clk): the most
+    /// DEVIATE TAILDUP-HOT (owner x86-m32, exit: profile-fed frequencies;
+    /// stated cost x_jpeg_fixed/x_jpeg_single -O2 +32 B at 0 clk): the most
     /// instructions a block may hold above the pin's bound and still be copied
     /// when the clocks of the jump the copy saves, over the block's executions,
     /// outweigh the bytes of the copy at the speed rate (gcc's `copy_bb_p`,
@@ -54,6 +54,19 @@ pub struct CpuTable {
     /// greedy-subreg, exit 2026-11-12): on at m64 only; m32/m16 stay off until
     /// their sfm16 rows (+16/+4 B) are explained; the pin runs it everywhere.
     pub post_ra_tail_duplicate: bool,
+    /// Runs of equal literal stores share a register at -O1 to -O3 too, where
+    /// the bytes outweigh the clock of loading it (DEVIATE ISS1, owner
+    /// x86-m32, exit 2026-11-30): -Os does it everywhere. Off: the pin's
+    /// `MOV32mi`s.
+    pub share_literal_stores: bool,
+    /// A select of two constants on a CPU with no `cmov` is a branch, not
+    /// `setcc` and arithmetic on its flag (DEVIATE SELB, owner x86-m32,
+    /// exit 2026-11-30): `xor r,r; cmp; setcc; lea` is 7-9 clocks on the 486
+    /// where `mov; jcc; mov` is 3-5. The scalar is the least block
+    /// frequency over the entry's (0: off, the pin's
+    /// `foldSelectOfConstants`/`combineCMov`): the branch is bigger, so only
+    /// code run at least that often pays it.
+    pub branch_constant_selects: u32,
     /// Clocks a mispredicted branch costs (`MCSchedModel::MispredictPenalty`);
     /// `None`: the target states none.
     pub mispredict_penalty: Option<i64>,
@@ -202,6 +215,8 @@ impl Timings {
                     ("scalars", "mispredict_penalty_size") => table.mispredict_penalty_size = Some(number()?),
                     ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,
                     ("scalars", "post_ra_tail_duplicate") => table.post_ra_tail_duplicate = number()? != 0,
+                    ("scalars", "share_literal_stores") => table.share_literal_stores = number()? != 0,
+                    ("scalars", "branch_constant_selects") => table.branch_constant_selects = number()? as u32,
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),
                     (_, form) => table.latency.push((form.to_owned(), number()?)),

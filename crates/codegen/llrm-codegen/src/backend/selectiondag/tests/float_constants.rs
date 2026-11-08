@@ -23,6 +23,7 @@ fn legalized(
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
     )
@@ -90,6 +91,7 @@ fn equal_constants_share_a_pool_entry() {
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
     )
@@ -122,6 +124,7 @@ fn a_target_that_takes_every_float_constant_keeps_it() {
                 i16_mul_chains: false,
                 sext_load: false,
                 zext_free: false,
+                branch_constant_selects: false,
                 profile: None,
             },
         )

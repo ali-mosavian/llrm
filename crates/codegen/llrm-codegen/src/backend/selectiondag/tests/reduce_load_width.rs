@@ -39,6 +39,7 @@ fn combined_with(
         i16_mul_chains: false,
         sext_load,
         zext_free: false,
+        branch_constant_selects: false,
         profile: None,
     };
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
