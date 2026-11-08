@@ -58,7 +58,7 @@ use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_codegen::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 use llrm_codegen::model::lir::{Insn, PairKind, Phi};
 use llrm_dagisel::addr::AddrMode;
-use llrm_dagisel::instr::{self, InstrDesc, operand_type};
+use llrm_dagisel::instr::{InstrDesc, operand_type};
 use llrm_lir::registers::RegId;
 use llrm_support::hash::HashMap;
 use llrm_x86_dagisel::x86_classes::{Role, class_tag};
@@ -1144,7 +1144,7 @@ impl Emitter<'_, '_> {
         // `mov` here, which a later pass makes an `xor` only where they are
         // dead.
         let writes_flags = self.ctx.names.get(&(opcode as u16)).is_none_or(|name| *name != "MOV32r0")
-            && instr::desc(opcode as u16)
+            && llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16)
                 .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS));
         let previous = self.flags_now.filter(|&p| p != n);
         // The scheduler may put two `CopyToReg ES` ahead of the cells that read
@@ -1442,8 +1442,8 @@ impl Emitter<'_, '_> {
         if let Some(done) = self.special(n, name)? {
             return Ok(done);
         }
-        let desc =
-            instr::desc(opcode as u16).ok_or_else(|| EmitError::Unsupported(format!("{name}: no descriptor")))?;
+        let desc = llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16)
+            .ok_or_else(|| EmitError::Unsupported(format!("{name}: no descriptor")))?;
         if name == "JMP_1" || name == "JCC_1" {
             return self.jump(n, name == "JCC_1");
         }
@@ -1823,7 +1823,7 @@ impl Emitter<'_, '_> {
         // The implicit results follow the explicit ones, in the order the
         // description lists them: `MUL8r` has AX before EFLAGS, and AX is not
         // flags.
-        instr::desc(op as u16).is_some_and(|d| {
+        llrm_x86_dagisel::generated::instrinfo::desc(op as u16).is_some_and(|d| {
             usize::from(value.res)
                 .checked_sub(usize::from(d.num_defs))
                 .and_then(|implicit| d.implicit_defs.get(implicit))
