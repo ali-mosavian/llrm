@@ -281,7 +281,8 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         one: &Insn,
         value: u32,
     ) -> f32 {
-        if self.bits != 16 {
+        // Only where fewer registers can make an address than can hold a value.
+        if self.classes.addressing.len() >= self.classes.available.len() {
             return 1.0;
         }
         let Some(what) = one.what.as_ref() else { return 1.0 };
@@ -818,10 +819,12 @@ mod tests {
         };
         let insn = Insn::new(0, None, Some(load), vec![8], vec![7]);
         let m16 = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false };
-        let flat = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false };
+        let flat = X86InstrInfo { bits: 32, classes: &RegisterClasses::of(&llrm_x86_m32::M32), basic_semantics: false };
         assert!(m16.reference_weight(&insn, 7) > 1.0, "the base of the cell");
         assert_eq!(m16.reference_weight(&insn, 8), 1.0, "the loaded value");
         assert_eq!(flat.reference_weight(&insn, 7), 1.0, "flat code weighs the pin's way");
+        let long = X86InstrInfo { bits: 64, classes: &RegisterClasses::of(&llrm_x86_m64::M64), basic_semantics: false };
+        assert_eq!(long.reference_weight(&insn, 7), 1.0, "long mode weighs the pin's way");
     }
 
     fn x87_body(insns: Vec<Arc<Insn>>) -> crate::model::lir::LirBody {
