@@ -730,6 +730,7 @@ dependencies = [
  "iced-x86",
  "llrm-codeview",
  "llrm-coff",
+ "llrm-dagisel",
  "llrm-debug",
  "llrm-dwarf",
  "llrm-elf",
