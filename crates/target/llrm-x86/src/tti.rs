@@ -1443,6 +1443,14 @@ impl Tti for X86 {
         self.real_mode.is_none()
     }
 
+    /// DEVIATE LU3e: real mode prices a spill by the references to it (A/B
+    /// 2026-11-08: m16 grep -11/-6/-6 B at -O1/-O2/-O3, no cell worse; m32 is
+    /// mixed, 12 better and 6 worse, so it keeps the pin's one instruction).
+    /// owner: w12, exit: 2026-11-20, with LU3b.
+    fn lsr_prices_spills(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     /// Real mode forms a scaled index with an address-size prefix.
     fn lsr_drops_spilling_solution(&self) -> bool {
         self.real_mode.is_some()
