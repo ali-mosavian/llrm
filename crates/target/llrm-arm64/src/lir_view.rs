@@ -108,11 +108,11 @@ fn label_of(inst: &Inst) -> Option<&str> {
 /// The name of the definition of zero (`mov xd, xzr`).
 const ZERO: &str = "Zero";
 
-/// `isReMaterializable && isAsCheapAsAMove` for an `ADD`/`SUB`: the pin flags every
-/// form of `AddSub` (AArch64InstrFormats.td#L3098), and `isAsCheapAsAMove` keeps the
-/// immediate and the unshifted register forms (`SUBWrs`/`ADDWrs` only with
-/// `hasALULSLFast`, the extended forms not). A flag-setting form has an
-/// `$nzcv` def and is not.
+/// `isReMaterializable && isAsCheapAsAMove` for an `ADD`/`SUB`: the pin flags
+/// every form of `AddSub` (AArch64InstrFormats.td#L3098), and
+/// `isAsCheapAsAMove` keeps the immediate and the unshifted register forms
+/// (`SUBWrs`/`ADDWrs` only with `hasALULSLFast`, the extended forms not). A
+/// flag-setting form has an `$nzcv` def and is not.
 fn cheap_alu(op: &Op) -> bool {
     match op {
         Op::I(Inst::AddSubImm { op, .. }) => !op.set_flags,
@@ -120,7 +120,8 @@ fn cheap_alu(op: &Op) -> bool {
         _ => false,
     }
 }
-/// A constant one instruction makes (`movz`, `movn` or a logical immediate): the size of the copy it replaces.
+/// A constant one instruction makes (`movz`, `movn` or a logical immediate):
+/// the size of the copy it replaces.
 const ONE_INSN_IMM: &str = "Imm1";
 
 fn is_zero_copy(op: &Op) -> bool {
@@ -245,7 +246,11 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 ),
                 Op::Copy { .. } => (Kind::Copy, false, false, false),
                 Op::Imm { bits, value, dst } => (
-                    Kind::Op(if crate::expand_imm::mov_imm(*value, *bits, *dst).len() == 1 { ONE_INSN_IMM } else { "Imm" }),
+                    Kind::Op(if crate::expand_imm::mov_imm(*value, *bits, *dst).len() == 1 {
+                        ONE_INSN_IMM
+                    } else {
+                        "Imm"
+                    }),
                     false,
                     false,
                     false,
@@ -792,7 +797,14 @@ impl AllocTarget for Arm64 {
     /// `stp`/`ldp` save two registers in 4 bytes; a spill is one 4-byte
     /// `str`/`ldr`; a made-again constant is a `movz` or an `adrp`+`add`.
     fn size_bytes() -> Option<llrm_codegen::greedy::targetinfo::SizeBytes> {
-        Some(llrm_codegen::greedy::targetinfo::SizeBytes { push: 2, pop: 2, load: 4, store: 4, constant: 4, extended_prefix: 0 })
+        Some(llrm_codegen::greedy::targetinfo::SizeBytes {
+            push: 2,
+            pop: 2,
+            load: 4,
+            store: 4,
+            constant: 4,
+            extended_prefix: 0,
+        })
     }
 
     fn spill_store(

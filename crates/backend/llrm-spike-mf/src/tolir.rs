@@ -2224,8 +2224,9 @@ pub fn from_lir<T: Target>(
                     .find_map(|loc| if let Loc::Held(held) = loc { Some(*held) } else { None })
                     .ok_or("a spill of no value")?;
                 let numbered = number(value, &mut classes);
-                // A pinned value is no virtual register: its class is one that holds its register
-                // (vreg 0's class made a spill of `hl` a byte store, `ld -4(ix), hl`).
+                // A pinned value is no virtual register: its class is one that
+                // holds its register (vreg 0's class made a
+                // spill of `hl` a byte store, `ld -4(ix), hl`).
                 let class = match numbered {
                     Reg::Virt(v) => classes[v as usize],
                     Reg::Phys(register) => classes

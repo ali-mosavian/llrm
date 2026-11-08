@@ -2,10 +2,10 @@
 //! the registers that function writes, not every caller-saved one.
 //!
 //! Translates LLVM's `RegUsageInfoCollector` (what each function leaves
-//! different, recorded once it is allocated) and the use `RegUsageInfoPropagate`
-//! gives it at the call (the call's register mask). The pin has it off
-//! (`-enable-ipra`); GCC's `-fipa-ra` is on from -O1. Opt-in per target
-//! (`Tti::interprocedural_register_use`).
+//! different, recorded once it is allocated) and the use
+//! `RegUsageInfoPropagate` gives it at the call (the call's register mask). The
+//! pin has it off (`-enable-ipra`); GCC's `-fipa-ra` is on from -O1. Opt-in per
+//! target (`Tti::interprocedural_register_use`).
 //!
 //! Functions are compiled callees first. A call inside a cycle of calls keeps
 //! the convention's answer. So does a function's call to itself: a value kept
@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::lir_view::{caller_saved, id, Class};
+use crate::lir_view::{Class, caller_saved, id};
 use crate::mfunc::{Callee, MFunc, Op};
 
 /// What a function writes of the registers its caller may not rely on.

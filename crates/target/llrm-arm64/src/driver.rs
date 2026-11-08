@@ -227,7 +227,8 @@ fn dag_select(
 /// the target opts in, `LLRM_ARM64_NO_IPRA` not set.
 fn interprocedural_register_use(platform: Platform) -> bool {
     use llrm_mir::tti::Tti;
-    crate::tti::AArch64::of_cpu(platform.cpu()).is_some_and(|tti| tti.interprocedural_register_use()) && !llrm_support::env_flag!("LLRM_ARM64_NO_IPRA")
+    crate::tti::AArch64::of_cpu(platform.cpu()).is_some_and(|tti| tti.interprocedural_register_use())
+        && !llrm_support::env_flag!("LLRM_ARM64_NO_IPRA")
 }
 
 /// One defined function of `program`'s module, selected, allocated and
@@ -260,8 +261,7 @@ fn lower_function(
             return Err(format!("@{name}: read before written: {undefined:?}"));
         }
     }
-    machine.frame_pointer =
-        llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
+    machine.frame_pointer = llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
     let optsize = function
         .attrs
         .iter()
@@ -348,14 +348,17 @@ fn lower_function(
     let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
     crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
     let written = crate::ipra::written(&machine);
-    Ok((crate::emit::Function {
-        tables,
-        symbol: crate::data::symbol_name(platform, &name),
-        binding: crate::data::binding_of(global.linkage),
-        blocks,
-        variables,
-        pool: machine.pool.clone(),
-    }, written))
+    Ok((
+        crate::emit::Function {
+            tables,
+            symbol: crate::data::symbol_name(platform, &name),
+            binding: crate::data::binding_of(global.linkage),
+            blocks,
+            variables,
+            pool: machine.pool.clone(),
+        },
+        written,
+    ))
 }
 
 /// Every defined function of `program`'s one module, selected, allocated and
@@ -394,7 +397,15 @@ pub fn functions_with(
                 continue;
             }
             let name = global.name.owned().ok_or("an unnamed function")?;
-            let optnone = function.attrs.iter().any(|attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == "optnone"));
+            let optnone = function
+                .attrs
+                .iter()
+                .any(
+                    |attr| matches!(
+                        attr,
+                        llrm_mir::opcode::Attribute::Flag(flag) if flag == "optnone"
+                    ),
+                );
             let usable = !optnone && !global.linkage.is_interposable();
             let (done, written) = lower_function(program, id, platform, lines)?;
             if usable {
