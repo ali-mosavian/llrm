@@ -1276,6 +1276,7 @@ fn staged(
         saved: pushed,
         vector_saved,
         red_zone: entry.map_or(base.red_zone, |one| one.frame_red_zone),
+        slot_scratch: entry.and_then(|one| target.arch.frame_slot_scratch_of(one)).or(base.slot_scratch),
         ..base
     };
     // The convention's entry functions (`entry_clobbers_all`) keep nothing for

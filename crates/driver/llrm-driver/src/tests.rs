@@ -4855,3 +4855,17 @@ fn a_float_bits_zero_extended_at_m64_is_one_movd() {
     assert!(listing.contains("movd"), "{listing}");
     assert!(!listing.contains("movzx"), "{listing}");
 }
+
+/// A float `==` used as a value was `ucomiss; setnp; sete; and; movzx` (the pin: `cmpeqss; movd; and 1`, one
+/// instruction fewer and no flag reads; the `combineCompareEqual` combine was not translated). int_compared_with_float
+/// -Os m64: 274 B against the pin's 268.
+#[test]
+fn a_float_equality_as_a_value_is_a_cmpss() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(float %a, float %b) {\n  %c = fcmp oeq float %a, %b\n  %z = zext i1 %c to i32\n  ret i32 %z\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("cmpss xmm0, xmm1, 0"), "{listing}");
+    assert!(!listing.contains("setnp") && !listing.contains("ucomiss"), "{listing}");
+}

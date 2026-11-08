@@ -248,6 +248,9 @@ impl std::fmt::Debug for ProductPrice {
 /// than read from a global.
 #[derive(Clone, Debug)]
 pub struct DagConfig {
+    /// The target nodes the shared passes recognize or create; the backend's
+    /// own where one is installed.
+    pub nodes: super::builder::LoweringNodes,
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
@@ -337,6 +340,7 @@ impl Default for DagConfig {
     /// for the default PIC model).
     fn default() -> DagConfig {
         DagConfig {
+            nodes: super::builder::LoweringNodes::installed(),
             boolean_contents: BooleanContents::ZeroOrOne,
             offset_folding: false,
             global_addresses_constant: false,

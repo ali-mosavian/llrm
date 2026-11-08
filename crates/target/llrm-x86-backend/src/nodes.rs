@@ -25,6 +25,11 @@ pub fn nodes() -> LoweringNodes {
         segment_of: Some(own::SEGMENT_OF),
         wrapper: Some(pin::WRAPPER),
         wrapper_rip: Some(pin::WRAPPER_RIP),
+        far_load_es: Some(pin::LES),
+        far_load_ds: Some(pin::LDS),
+        far_selector_register: Some(llrm_codegen::backend::selectiondag::x86_lowering::ES),
+        far_call: Some(own::LLRM_FARCALL),
+        flag_boolean: Some(pin::SETCC),
         asm: Some(own::LLRM_ASM),
         code: Some(own::LLRM_CODE),
     }
