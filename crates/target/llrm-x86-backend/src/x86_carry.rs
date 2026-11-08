@@ -14,10 +14,11 @@
 //! LLVM's `combineAddOrSubToADCOrSBB`
 //! ([L53776](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L53776)).
 
-use super::dag::{SDValue, SelectionDAG};
-use super::fold;
-use super::isd::{CondCode, ISD};
-use super::mvt::EVT;
+use llrm_codegen::backend::selectiondag::dag::{SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::fold;
+use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
+use llrm_codegen::backend::selectiondag::mvt::EVT;
+
 use super::x86_lowering::{cond, cond_code, lower_and_to_bt, x86isd};
 
 fn all_ones(

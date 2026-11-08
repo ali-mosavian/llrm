@@ -86,6 +86,14 @@ def test_a_program_written_for_one_abi_is_tagged_for_it():
     assert ct.applies("x86_32-dos", source) and not ct.applies("m68k-68000", source)
 
 
+def test_the_os_layer_programs_whose_out_is_dos_semantics_are_dos_only():
+    """os_files, os_find, os_names and os_console_in print the DOS layer's answers (error codes, ordering): on the POSIX layer ours
+    and host gcc agree with each other and both differ from the .out. os_execute runs COMSPEC. Unmarked, x86_32-linux read them as miscompiles."""
+    for name in ("os_files", "os_find", "os_names", "os_console_in", "os_execute"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not ct.applies("x86_32-linux", source) and not ct.applies("m68k-68020", source) and ct.applies("x86_32-dos", source)
+
+
 def test_an_lp64_program_is_only_for_targets_with_a_64_bit_long():
     """mulconst_i64's .out is LP64; the m68k executed sweep counted it as a failure on every compiler."""
     source = "// targets: lp64\nlong f(void);\n"

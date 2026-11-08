@@ -178,8 +178,15 @@ pub mod target_calling;
 #[cfg(test)]
 #[path = "../../../../target/llrm-x86-backend/src/unfold.rs"]
 pub mod unfold;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86_carry.rs"]
 pub mod x86_carry;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86_lowering.rs"]
 pub mod x86_lowering;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/nodes.rs"]
+pub mod x86_nodes;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use dag::{
