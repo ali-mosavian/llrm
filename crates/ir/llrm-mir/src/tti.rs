@@ -601,6 +601,13 @@ pub trait Tti {
         false
     }
 
+    /// INL-HOT: the least site frequency (over the caller's entry) at which a
+    /// call the pin's threshold alone refused is tried inlined at -O2/-O3 and
+    /// kept where the rate pays. Whole units of relative frequency. None: the threshold is final.
+    fn inline_hot_trial_frequency(&self) -> Option<i64> {
+        None
+    }
+
     /// Whether a full unroll's saving is counted over `ASSUMED_TRIPS` runs
     /// of each unknown-count loop around it, as the pin's branch weights
     /// say (up to two). False: such a loop counts once, the runs the

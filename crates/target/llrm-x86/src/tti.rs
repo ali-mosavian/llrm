@@ -721,6 +721,10 @@ impl Tti for X86 {
         self.tuning.speed_inline_rate_at_o1
     }
 
+    fn inline_hot_trial_frequency(&self) -> Option<i64> {
+        self.tuning.inline_hot_trial_frequency
+    }
+
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         self.tuning.speed_inline_milliclocks_per_byte
     }

@@ -98,6 +98,8 @@ pub struct Tuning {
     /// `Tti::speed_inline_rate_at_o1`: whether that rate binds at -O1 too
     /// (false by default; m32's -O1 has its own rule, INL-O1).
     pub speed_inline_rate_at_o1: bool,
+    /// `Tti::inline_hot_trial_frequency`.
+    pub inline_hot_trial_frequency: Option<i64>,
     /// DEVIATE SD-DIVMAG (owner x86-m32, exit 2026-11-22): a signed divide by a
     /// negative constant is the negation of the divide by its magnitude, so it
     /// shares the multiply-high of the remainder (`x % -c` is `x % c`); the
@@ -350,6 +352,7 @@ impl Tuning {
         speed_inline_milliclocks_per_byte: 0,
         sdiv_by_magnitude: false,
         speed_inline_rate_at_o1: false,
+        inline_hot_trial_frequency: None,
         call_sequence_fixed_clocks: 0,
         call_sequence_argument_clocks: 0,
         call_sequence_pop_clocks: 0,

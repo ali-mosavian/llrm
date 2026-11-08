@@ -180,6 +180,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // 99618 -> 19993 (962 -> 215 B), frames 5035113 -> 4585856;
         // depth 8 stays where it wins (-O3 rectwo 466986, x_hanoi2 155672).
         recursive_inlining_depth: Some((2, 8)),
+        // DEVIATE INL-HOT (owner m32, exit 2026-11-30): a call the pin's
+        // threshold alone refuses, at a site 16x the caller's entry or hotter,
+        // is tried inlined at -O2/-O3 and kept where the rate pays (x_sf_*:
+        // `__addsf3 -> add_bits` cost 445 over 250, growth 45 B, 31x).
+        inline_hot_trial_frequency: Some(16),
         // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion
         // (passes.def:97, then pass_ipa_inline :164). At -O3 the copies of the
         // loop beat the tree's (rectwo 1230664 -> 466986 clk, recchop,
