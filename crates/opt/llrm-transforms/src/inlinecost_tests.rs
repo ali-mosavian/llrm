@@ -938,7 +938,7 @@ b0:
 }
 
 /// A target that states only its `inline_policy`, and whether its rate binds at -O1.
-struct PolicyOnly(llrm_mir::tti::InlinePolicy, bool, bool);
+struct PolicyOnly(llrm_mir::tti::InlinePolicy, Option<bool>, bool);
 
 impl llrm_mir::tti::Tti for PolicyOnly {
     fn inline_policy(&self) -> llrm_mir::tti::InlinePolicy {
@@ -946,7 +946,7 @@ impl llrm_mir::tti::Tti for PolicyOnly {
     }
 
     fn speed_inline_rate_at_o1(&self) -> bool {
-        self.1
+        self.1.unwrap_or_else(|| llrm_mir::tti::Basic.speed_inline_rate_at_o1())
     }
 
     fn inline_hints_known_loop_bound(&self) -> bool {
@@ -1046,8 +1046,8 @@ impl llrm_mir::tti::Tti for PolicyOnly {
 fn the_inliner_reads_the_inline_policy_of_the_target() {
     use llrm_mir::tti::{InlinePolicy, Tti};
     let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
-    let pin = PolicyOnly(InlinePolicy::PIN, true, false);
-    let priced = PolicyOnly(InlinePolicy { by_rate: arm.inline_policy().by_rate, ..InlinePolicy::PIN }, true, false);
+    let pin = PolicyOnly(InlinePolicy::PIN, Some(true), false);
+    let priced = PolicyOnly(InlinePolicy { by_rate: arm.inline_policy().by_rate, ..InlinePolicy::PIN }, Some(true), false);
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&pin));
     assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&priced));
@@ -1061,8 +1061,8 @@ fn the_inliner_reads_the_inline_policy_of_the_target() {
 fn a_rate_that_binds_from_o2_leaves_o1_to_the_pin() {
     use llrm_mir::tti::InlinePolicy;
     let policy = InlinePolicy { by_rate: 250_000, ..InlinePolicy::PIN };
-    let from_o2 = PolicyOnly(policy, false, false);
-    let always = PolicyOnly(policy, true, false);
+    let from_o2 = PolicyOnly(policy, Some(false), false);
+    let always = PolicyOnly(policy, Some(true), false);
     let verdict = |tti: &dyn llrm_mir::tti::Tti, o1_bound| {
         let params = InlineParams { compute_full_inline_cost: true, o1_bound, ..InlineParams::from_level(2) };
         let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(tti), params, (2, false));
@@ -1071,6 +1071,17 @@ fn a_rate_that_binds_from_o2_leaves_o1_to_the_pin() {
     assert!(!verdict(&from_o2, false), "-O2 is priced");
     assert!(verdict(&from_o2, true), "-O1 keeps the pin's verdict");
     assert!(!verdict(&always, true), "a rate that binds at -O1 still does");
+}
+
+/// m32 -O1 moved (x_jpeg_fixed 5647 -> 6028 B) when a target that stated only a rate inherited the default
+/// "the rate binds at -O1": -O1 is strict, so a rate is opt-in there.
+#[test]
+fn a_target_stating_only_a_rate_leaves_o1_to_the_pin() {
+    use llrm_mir::tti::InlinePolicy;
+    let rate_only = PolicyOnly(InlinePolicy { by_rate: 250_000, ..InlinePolicy::PIN }, None, false);
+    let params = InlineParams { compute_full_inline_cost: true, o1_bound: true, ..InlineParams::from_level(2) };
+    let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&rate_only), params, (2, false));
+    assert!(cost < threshold, "the rate refused a copy at -O1");
 }
 
 const BOUNDED_LOOP: &str = "@dst = internal global [1200 x i8] zeroinitializer
@@ -1114,7 +1125,7 @@ b0:
 fn a_constant_loop_bound_exempts_a_copy_from_the_rate_where_the_target_hints_it() {
     use llrm_mir::tti::InlinePolicy;
     let policy = InlinePolicy { by_rate: 250_000, ..InlinePolicy::PIN };
-    let (hints, silent) = (PolicyOnly(policy, true, true), PolicyOnly(policy, true, false));
+    let (hints, silent) = (PolicyOnly(policy, Some(true), true), PolicyOnly(policy, Some(true), false));
     let inlined = |tti: &dyn llrm_mir::tti::Tti, at| {
         let (cost, threshold) = priced_with(BOUNDED_LOOP, at, false, CallerSize::Speed, Some(tti));
         cost < threshold

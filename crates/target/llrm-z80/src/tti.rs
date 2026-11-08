@@ -368,11 +368,6 @@ impl Tti for Z80Tti {
         true
     }
 
-    /// -O1 is strict on bytes and clocks: the pin's threshold alone, no rate.
-    fn speed_inline_rate_at_o1(&self) -> bool {
-        false
-    }
-
     /// SZ1, rule 1: a size build keeps a callee bigger than its call. The pin's
     /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
     /// call is 3.
