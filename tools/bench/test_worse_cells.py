@@ -15,8 +15,8 @@ def folder(root, name, expected=None, mark=None):
 def test_a_program_under_parity_finds_its_references(tmp_path):
     """The first table skipped the 11 parity programs: it looked for bench/parity/expected.toml, not bench/parity/<name>/."""
     folder(tmp_path, "parity/loop", "[ow.O2]\ncode_bytes = 171\nclocks = 900\n")
-    rows, none = worse_cells.worse({"parity/loop/c/O2": {"code_bytes": 202, "clocks": 800}}, tmp_path)
-    assert rows == [("parity/loop/c/O2", ["B 202 vs 171(ow) +18.1%"])] and none == []
+    rows, none = worse_cells.worse({"parity/loop/c/O2": {"code_bytes": 202, "clocks": 900}}, tmp_path)
+    assert rows == [("parity/loop/c/O2", ["+0 clk +31 B vs ow"])] and none == []
 
 
 def test_a_program_without_references_is_listed_as_no_ref(tmp_path):
@@ -29,3 +29,11 @@ def test_a_program_with_no_lookup_and_no_mark_fails_loudly(tmp_path):
     folder(tmp_path, "mystery")
     with pytest.raises(worse_cells.NoReferenceLookup):
         worse_cells.worse({"mystery/c/O2": {"code_bytes": 10, "clocks": 10}}, tmp_path)
+
+
+def test_at_o2_a_byte_for_two_clocks_is_a_trade_not_a_loss(tmp_path):
+    """parity/qlight O2 read +80.5% bytes (388 vs 215) beside the best clocks: -229 clk for +172 B passes at 500 milliclocks per byte."""
+    folder(tmp_path, "parity/qlight", "[bcc.O2]\ncode_bytes = 216\nclocks = 617\n[bcc.Os]\ncode_bytes = 216\nclocks = 617\n")
+    ours = {"code_bytes": 388, "clocks": 388}
+    assert worse_cells.worse({"parity/qlight/c/O2": ours}, tmp_path)[0] == []
+    assert worse_cells.worse({"parity/qlight/c/Os": ours}, tmp_path)[0] == [("parity/qlight/c/Os", ["B 388 vs 216(bcc) +79.6%"])]
