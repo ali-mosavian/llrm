@@ -47,6 +47,9 @@ pub struct MbbPriority {
     pub is_split: bool,
     /// Predecessors and successors.
     pub connectivity: usize,
+    /// DEVIATE C15: the copies that read a value live at the loop header
+    /// (always 0 where the target keeps the pin's order).
+    pub carried: usize,
 }
 
 /// `compareMBBPriority`: deeper loops first, then split edges, then the better
@@ -59,6 +62,7 @@ pub fn compare_mbb_priority(
         .cmp(&lhs.depth)
         .then_with(|| rhs.is_split.cmp(&lhs.is_split))
         .then_with(|| rhs.connectivity.cmp(&lhs.connectivity))
+        .then_with(|| rhs.carried.cmp(&lhs.carried))
         .then_with(|| lhs.block.cmp(&rhs.block))
 }
 
@@ -85,6 +89,45 @@ fn is_split_edge(
     lis.block_insns(block)
         .iter()
         .all(|one| pick(one).is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Jump))
+}
+
+/// The header of the innermost loop around `block`: the nearest block at or
+/// before it, of its depth, that a block at or after it jumps back to.
+fn loop_header(
+    lis: &LiveIntervals,
+    depth: &[u32],
+    block: usize,
+) -> Option<usize> {
+    if depth[block] == 0 {
+        return None;
+    }
+    (0..=block)
+        .rev()
+        .find(
+            |header| depth[*header] == depth[block]
+                && lis.cfg.preds[*header].iter().any(|pred| *pred >= block && depth[*pred] >= depth[block]),
+        )
+}
+
+/// DEVIATE C15: how many copies of `block` read a value live at the start of
+/// the loop header, that is carried around the loop.
+fn carried_copies(
+    lis: &mut LiveIntervals,
+    depth: &[u32],
+    block: usize,
+    pick: Pick,
+) -> usize {
+    let Some(header) = loop_header(lis, depth, block) else { return 0 };
+    let start = lis.indexes.get_mbb_start_idx(header);
+    let copies: Vec<InstrKey> =
+        lis.block_insns(block).iter().filter(|one| pick(one).is_some()).map(|one| one.id()).collect();
+    copies
+        .into_iter()
+        .filter(|copy| {
+            let Some((_, src)) = pick(lis.instr(*copy)) else { return false };
+            lis.interval_rc(src.value).live_at(&start)
+        })
+        .count()
 }
 
 /// `isLocalCopy`: the copy defines or uses a value that lives in one block.
@@ -303,8 +346,14 @@ pub fn run(
             depth: depth[block],
             is_split: is_split_edge(lis, block, pick_of(env)),
             connectivity: lis.cfg.preds[block].len() + lis.cfg.succs[block].len(),
+            carried: 0,
         })
         .collect();
+    if env.joins_loop_carried_first() {
+        for info in &mut order {
+            info.carried = carried_copies(lis, depth, info.block, pick_of(env));
+        }
+    }
     order.sort_by(compare_mbb_priority);
     let mut coalescer = Coalescer { lis, env, state: State::new(), work: Vec::new(), local: Vec::new(), joined: 0 };
     // Coalesce intervals in MBB priority order.

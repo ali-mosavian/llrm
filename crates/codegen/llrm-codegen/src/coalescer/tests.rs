@@ -686,6 +686,7 @@ fn test_a_constant_the_target_names_its_own_way_is_made_again() {
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: false,
+        joins_loop_carried_first: false,
         regs: None,
         kind_of: None,
         kinds: Default::default(),
@@ -726,6 +727,7 @@ fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: false,
+        joins_loop_carried_first: false,
         regs: None,
         kind_of: None,
         kinds: Default::default(),
@@ -801,6 +803,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: false,
+        joins_loop_carried_first: false,
         palettes: palettes.into(),
         pins: IndexMap::default(),
         size: false,
@@ -1160,8 +1163,9 @@ fn test_a_target_can_leave_every_copy_between_widths_unjoined() {
     assert_eq!(result, JoinResult::Rejected);
 }
 
-/// The driver sees a copy between widths whatever the target says (#7968): `join_copy` decides, so a
-/// narrow copy that lies inside its wide value joins even with the joins between widths off.
+/// The driver sees a copy between widths whatever the target says (#7968):
+/// `join_copy` decides, so a narrow copy that lies inside its wide value joins
+/// even with the joins between widths off.
 #[test]
 fn test_with_the_joins_between_widths_off_the_driver_still_sees_the_copy() {
     let (narrow, same) = (copy_at((2, 2), (1, 4)), copy_at((3, 4), (1, 4)));
@@ -1265,6 +1269,7 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: true,
+        joins_loop_carried_first: false,
         aliases: Default::default(),
         should_join: None,
         freq: Vec::new(),
@@ -1325,6 +1330,7 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
             freq: Vec::new(),
             joins_sub_registers: true,
             joins_lanes: false,
+            joins_loop_carried_first: false,
             regs: None,
             kind_of: None,
             kinds: Default::default(),
@@ -1719,6 +1725,7 @@ fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
             joins_pinned_copies: true,
             joins_sub_registers: true,
             joins_lanes: false,
+            joins_loop_carried_first: false,
             regs: None,
             kind_of: None,
             kinds: Default::default(),
@@ -1855,6 +1862,7 @@ fn size_copy_of_def_is_remade_after(
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: false,
+        joins_loop_carried_first: false,
         regs: None,
         kind_of: None,
         kinds: Default::default(),
