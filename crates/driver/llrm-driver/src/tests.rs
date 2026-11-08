@@ -4789,3 +4789,43 @@ fn a_memcpy_ending_a_function_is_a_tail_call_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("jmp memcpy") && !listing.contains("call memcpy"), "{listing}");
 }
+
+/// LSR's end-biased formulae count the pointer to zero (`lea rdi,[rdi+rsi*2]; neg rsi`, 89 B for this sum at -O1
+/// where the plain index loop is 76): at -O1 a function they enlarge is built again without them
+/// and the smaller kept (`-fend-biased-trial`, off by default: it doubles the mid-end).
+#[test]
+fn a_loop_whose_end_biased_form_is_larger_keeps_the_plain_index_at_m64_o1() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @sum(ptr %p, i32 %n) {\n\
+                entry:\n  %c = icmp sgt i32 %n, 0\n  br i1 %c, label %ph, label %exit\n\
+                ph:\n  %w = zext i32 %n to i64\n  br label %body\n\
+                body:\n  %i = phi i64 [ 0, %ph ], [ %i1, %body ]\n  %t = phi i64 [ 0, %ph ], [ %t2, %body ]\n  \
+                %g = getelementptr inbounds i16, ptr %p, i64 %i\n  %v = load i16, ptr %g\n  \
+                %x = sext i16 %v to i64\n  %m = mul i64 %t, 3\n  %a = add i64 %m, %x\n  \
+                %t2 = srem i64 %a, 1000003\n  %i1 = add nuw nsw i64 %i, 1\n  %e = icmp eq i64 %i1, %w\n  \
+                br i1 %e, label %exit, label %body\n\
+                exit:\n  %r = phi i64 [ 0, %entry ], [ %t2, %body ]\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag", "-fend-biased-trial"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("neg "), "{listing}");
+}
+
+/// `-fend-biased-trial` is off unless asked: the plain build keeps the end-biased form.
+#[test]
+fn the_end_biased_trial_is_off_by_default() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @sum(ptr %p, i32 %n) {\n\
+                entry:\n  %c = icmp sgt i32 %n, 0\n  br i1 %c, label %ph, label %exit\n\
+                ph:\n  %w = zext i32 %n to i64\n  br label %body\n\
+                body:\n  %i = phi i64 [ 0, %ph ], [ %i1, %body ]\n  %t = phi i64 [ 0, %ph ], [ %t2, %body ]\n  \
+                %g = getelementptr inbounds i16, ptr %p, i64 %i\n  %v = load i16, ptr %g\n  \
+                %x = sext i16 %v to i64\n  %m = mul i64 %t, 3\n  %a = add i64 %m, %x\n  \
+                %t2 = srem i64 %a, 1000003\n  %i1 = add nuw nsw i64 %i, 1\n  %e = icmp eq i64 %i1, %w\n  \
+                br i1 %e, label %exit, label %body\n\
+                exit:\n  %r = phi i64 [ 0, %entry ], [ %t2, %body ]\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("neg "), "{listing}");
+}

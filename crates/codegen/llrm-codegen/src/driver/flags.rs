@@ -255,6 +255,9 @@ pub struct Flags {
     pub abi: Option<String>,
     /// `-fstack-usage`.
     pub stack_usage: bool,
+    /// `-fend-biased-trial`: a function LSR's end-biased formulae enlarge (or cost) is built again without
+    /// them and the better kept (x86, 32 and 64 bits). Off: it doubles the mid-end.
+    pub end_biased_trial: bool,
     /// `-Wstack-usage=N`.
     pub stack_limit: Option<i64>,
     /// `-fno-inline=NAME`, each: the function NAME is `noinline`.
@@ -294,6 +297,7 @@ impl Default for Flags {
             dwarf_unversioned: false,
             object_format: None,
             stack_usage: false,
+            end_biased_trial: false,
             stack_limit: None,
             no_inline: Vec::new(),
             isel: None,
@@ -407,6 +411,7 @@ impl Flags {
             _ if flag.starts_with("-march=") => self.march = Some(flag["-march=".len()..].to_owned()),
             _ if flag.starts_with("-mtune=") => self.mtune = Some(flag["-mtune=".len()..].to_owned()),
             "-fstack-usage" => self.stack_usage = true,
+            "-fend-biased-trial" => self.end_biased_trial = true,
             "-fverify-ir" => llrm_support::debug::require_verification(),
             _ if flag.starts_with("-Wstack-usage=") => {
                 let limit = &flag["-Wstack-usage=".len()..];
@@ -587,6 +592,7 @@ impl Flags {
             debug_format,
             pipeline: self.pipeline(),
             stack_usage: self.stack_usage,
+            end_biased_trial: self.end_biased_trial,
             stack_limit: self.stack_limit,
             no_inline: self.no_inline.clone(),
             stack_check: self.sanitize.stack,

@@ -904,14 +904,18 @@ fn end_biased_pick(
         *pool.borrow_mut() = after_on;
         return Ok(on);
     };
-    let score = |made: &Machined, bytes: f64| {
+    let score = |made: &Machined, bytes: f64| -> Option<f64> {
         if target.cpu.bytes_strict() {
-            bytes
+            Some(bytes)
         } else {
-            executed::work(&made.body) + bytes * target.cpu.speed_milliclocks_per_byte() as f64 / 1000.0
+            executed::work(&made.body).map(|work| work + bytes * target.cpu.speed_milliclocks_per_byte() as f64 / 1000.0)
         }
     };
-    if score(&off, bytes_off) <= score(&on, bytes_on) {
+    let (Some(score_on), Some(score_off)) = (score(&on, bytes_on), score(&off, bytes_off)) else {
+        *pool.borrow_mut() = after_on;
+        return Ok(on);
+    };
+    if score_off <= score_on {
         Ok(off)
     } else {
         *pool.borrow_mut() = after_on;
@@ -926,13 +930,36 @@ const END_BIASED_FIRED: &str = llrm_transforms::lsr_pass::END_BIASED_FIRED;
 /// The bytes of a finished function's instructions, or none where one has no
 /// price.
 fn encoded_bytes(made: &Machined) -> Option<f64> {
-    made.body
-        .insns()
+    // The address cells of `lea` are spelled as the encoder reads them, and a
+    // frame cell at the displacement it will have: the frame is not laid out
+    // yet, and a cell past 127 bytes takes a four-byte displacement.
+    let body = addressvalues::converted(&made.body);
+    let regs = body.regs();
+    body.insns()
         .iter()
         .filter_map(|one| one.what.as_ref())
         .map(|what| {
-            let what = &stack_as_addressed(made.body.regs(), made.body.bits, what);
-            select::priced_in(made.body.bits, what, 0, None, false, false, None).map(|code| code.code.len() as f64)
+            let placed = |place: &Loc| {
+                place.map_address(|cell| match cell.addr {
+                    Some(addr) if addr.space == Space::Frame => {
+                        let above = if regs.is_stack(cell.through) { made.reserve } else { 0 };
+                        let disp = addr.disp + above + cell.offset;
+                        AddressRef { addr: None, offset: disp, disp_width: if (-128..128).contains(&disp) { 1 } else { 4 }, ..cell }
+                    }
+                    _ => cell,
+                })
+            };
+            let what = Semantics {
+                dests: what.dests.iter().map(placed).collect(),
+                sources: what.sources.iter().map(placed).collect(),
+                ..what.clone()
+            };
+            let what = stack_as_addressed(regs, body.bits, &what);
+            // A branch has no price here (its target is a block, not an address): its short form, which
+            // both builds of a function pay alike.
+            select::priced_in(body.bits, &what, 0, None, false, false, None)
+                .map(|code| code.code.len() as f64)
+                .or((what.op == crate::model::ir::Operation::Branch).then_some(2.0))
         })
         .sum()
 }

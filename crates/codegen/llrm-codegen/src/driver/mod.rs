@@ -424,29 +424,72 @@ fn end_biased_off(
     cpu: &Profile,
     options: &Options,
 ) -> Result<Option<Program>, String> {
-    let fired = |function: &llrm_mir::function::Function| {
+    let fired = |function: &llrm_mir::module::Function| {
         llrm_mir::memory::has(&function.attrs, llrm_transforms::lsr_pass::END_BIASED_FIRED)
     };
-    let flagged: std::collections::HashSet<&str> = built
+    let flagged: Vec<String> = built
         .globals
         .iter()
         .filter(|global| global.function().is_some_and(fired))
-        .filter_map(|global| global.name.as_deref())
+        .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
     if flagged.is_empty() {
         return Ok(None);
     }
-    for global in &mut unbuilt.globals {
-        if let (Some(name), Some(function)) = (global.name.as_deref(), global.function_mut()) {
-            if flagged.contains(name) {
-                function.attrs.push(llrm_mir::opcode::Attribute::Flag(llrm_transforms::lsr_pass::NO_END_BIASED.to_owned()));
-            }
+    for name in &flagged {
+        if let Some((_, function)) = unbuilt.function_mut(name) {
+            function.attrs.push(llrm_mir::opcode::Attribute::Flag(llrm_transforms::lsr_pass::NO_END_BIASED.into()));
         }
     }
     let mut program = Program::new(vec![unbuilt], cpu.target_under(&*options.arch, options.abi.as_deref()))?;
     optimized(&mut program, options)?;
-    let names = |module: &Module| module.globals.iter().map(|global| global.name.clone()).collect::<Vec<_>>();
-    Ok((names(&program.modules[0]) == names(built)).then_some(program))
+    Ok(aligned(program.modules.swap_remove(0), built).map(|module| Program { modules: vec![module], ..program }))
+}
+
+/// `other` with its globals numbered as `built`'s are, by name, so a function
+/// of it can be selected beside `built`'s: a declaration one has and the other
+/// has not (an idiom's `memcpy`, a pruned intrinsic) is placed past the end
+/// or stands in its own place. None where `other` defines a global `built`
+/// does not have, or one of them is a variable where the other is a function.
+fn aligned(
+    mut other: Module,
+    built: &Module,
+) -> Option<Module> {
+    let mut number: HashMap<GlobalId, GlobalId> = HashMap::default();
+    let mut extra = Vec::new();
+    for (at, global) in other.globals.iter().enumerate() {
+        let name = global.name.as_deref()?;
+        match built.named(name) {
+            Some(id) => {
+                if built.global(id).function().is_some() != global.function().is_some() {
+                    return None;
+                }
+                number.insert(GlobalId(at as u32), id);
+            }
+            None => {
+                let declared = global.function().is_some_and(|one| one.is_declaration());
+                if !declared {
+                    return None;
+                }
+                number.insert(GlobalId(at as u32), GlobalId((built.globals.len() + extra.len()) as u32));
+                extra.push(at);
+            }
+        }
+    }
+    let mut globals = built.globals.clone();
+    for (at, global) in other.globals.iter().enumerate() {
+        if let Some(id) = built.named(global.name.as_deref()?) {
+            globals[id.0 as usize] = global.clone();
+        } else {
+            let _ = at;
+        }
+    }
+    globals.extend(extra.iter().map(|&at| other.globals[at].clone()));
+    other.globals = globals;
+    other.global_metadata.clear();
+    other.context.renumber_globals(&|id| number.get(&id).copied());
+    other.symbols = Default::default();
+    Some(other)
 }
 
 /// What the spill model (`llrm_transforms::spill`) forecasts for each function

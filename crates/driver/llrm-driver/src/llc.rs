@@ -646,8 +646,8 @@ fn options_for(
         rounds_float_spills: true,
         ..bound.options(flags, machine)
     };
-    // 32- and 64-bit x86: LSR's end-biased formulae are tried both ways per function.
-    options.end_biased_trial = bound.target.name().starts_with("x86") && bound.target.layout().mode >= 32;
+    // `-fend-biased-trial` is for 32- and 64-bit x86.
+    options.end_biased_trial &= bound.target.name().starts_with("x86") && bound.target.layout().mode >= 32;
     let number = llrm_target::calling::Calling::number_of(default.cc.as_deref());
     let pattern = default.symbol.get(format).map_or("*", String::as_str);
     if let (Some(number), Some(description)) = (number, bound.target.runtime("c")) {
