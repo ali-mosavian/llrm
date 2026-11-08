@@ -757,6 +757,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::inline_o1_weighs_entry`.
+    fn inline_o1_weighs_entry(&self) -> bool {
+        false
+    }
+
     /// `Tuning::inline_o1_unit_bytes_milli`.
     fn inline_o1_unit_bytes_milli(&self) -> i64 {
         1000
