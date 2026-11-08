@@ -159,6 +159,10 @@ pub struct Convention {
     /// return with the late path (the exit then jumps over the epilogue). Left
     /// false where that jump outgrows its short form (QCport m16 -Os +9 B).
     pub frame_wrap_split_size: bool,
+    /// The locals' base takes the widest object's alignment and the call
+    /// alignment is met by a pad, as the pin's 64-bit `X86FrameLowering` lays
+    /// a frame out (`calculateFrameObjectOffsets`).
+    pub frame_object_aligned: bool,
     /// Bytes below the stack pointer the ABI keeps safe from signal handlers
     /// (the System V red zone): a leaf function's locals live there, with
     /// no `sub`.
@@ -289,6 +293,7 @@ const KEYS: &[&str] = &[
     "frame_saved_first",
     "frame_enter",
     "frame_wrap_split_size",
+    "frame_object_aligned",
     "frame_red_zone",
     "frame_slot_push",
     "frame_slot_pop",
@@ -772,6 +777,7 @@ impl Convention {
             frame_saved_first: flag("frame_saved_first")?,
             frame_enter: flag("frame_enter")?,
             frame_wrap_split_size: flag("frame_wrap_split_size")?,
+            frame_object_aligned: flag("frame_object_aligned")?,
             frame_red_zone: table
                 .contains_key("frame_red_zone")
                 .then(|| integer("frame_red_zone"))
