@@ -45,6 +45,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Attribute, Flags, IntPredicate, Opcode};
+use llrm_mir::types::Type as MirType;
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::valuetracking::guarantee::{Operator, has_poison_generating_flags, must_execute_ub_if_poison_on_path_to};
 use llrm_mir::valuetracking::pattern::match_simple_recurrence_of;
@@ -357,6 +358,9 @@ fn run_term_fold(
     }
     // Create new terminating value at loop preheader.
     rewriter.set_insert_point(function.terminator(preheader).expect("a terminator"));
+    if outer.target().tti().is_some_and(|tti| tti.ltf_reuses_dominating_values()) {
+        prime_dominating_values(context, function, se, env, preheader, fold.ty);
+    }
     let term_value = rewriter.expand_code_for(env, context, declared, function, se, fold.term_value, Some(fold.ty));
     // Create new terminating condition at loop latch.
     let (branch, old_cond) = branch_of(function, latch).expect("a conditional branch");
@@ -390,3 +394,39 @@ fn run_term_fold(
 #[cfg(test)]
 #[path = "looptermfold_tests.rs"]
 mod tests;
+
+/// DEVIATE LTF-1: the SCEV of each value of `ty` that dominates the end of
+/// `preheader` (the first `PRIME_LIMIT` of them), so the expander finds it.
+const PRIME_LIMIT: usize = 256;
+
+fn prime_dominating_values(
+    context: &Context,
+    function: &Function,
+    se: &mut ScalarEvolution,
+    env: &Env,
+    preheader: BlockId,
+    ty: Ty,
+) {
+    let cx = env.cx(context, function);
+    let at = function.terminator(preheader).expect("a terminator");
+    let mut seen = 0;
+    for &block in function.layout() {
+        for inst in function.iter_block(block) {
+            let Some(result) = function.instruction(inst).result else { continue };
+            let value = Operand::Value(result);
+            let same = match (cx.context.types.get(function.value(result).ty), ty) {
+                (MirType::Int(bits), Ty::Int(want)) => *bits == want,
+                (MirType::Pointer(space), Ty::Ptr(want)) => *space == want,
+                _ => false,
+            };
+            if !same || !cx.tree.instruction_dominates(function, inst, at) || !se.is_value_scevable(&cx, value) {
+                continue;
+            }
+            se.get_scev(&cx, value);
+            seen += 1;
+            if seen == PRIME_LIMIT {
+                return;
+            }
+        }
+    }
+}

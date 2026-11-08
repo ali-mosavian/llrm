@@ -175,6 +175,8 @@ pub struct Tuned {
     pub rep_fills: bool,
     /// `Tti::second_ipsccp`.
     pub second_ipsccp: bool,
+    /// `Tti::ltf_reuses_dominating_values`.
+    pub ltf_reuse: bool,
 }
 
 use llrm_mir::tti;
@@ -191,11 +193,16 @@ pub struct Flagged {
     pub no_cmov: bool,
     pub no_global_base: bool,
     pub second_ipsccp: bool,
+    pub ltf_reuse: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
     fn second_ipsccp(&self) -> bool {
         self.second_ipsccp
+    }
+
+    fn ltf_reuses_dominating_values(&self) -> bool {
+        self.ltf_reuse
     }
 
     fn have_fast_sqrt(
@@ -344,7 +351,8 @@ impl llrm_mir::target::Machine for Tuned {
             || self.no_global_base
             || self.cheap_ctlz
             || self.fast_sqrt
-            || self.second_ipsccp)
+            || self.second_ipsccp
+            || self.ltf_reuse)
             .then(|| {
             std::rc::Rc::new(Flagged {
                 exit_ne: self.exit_ne,
@@ -354,6 +362,7 @@ impl llrm_mir::target::Machine for Tuned {
                 cheap_ctlz: self.cheap_ctlz,
                 fast_sqrt: self.fast_sqrt,
                 second_ipsccp: self.second_ipsccp,
+                ltf_reuse: self.ltf_reuse,
             }) as _
         })
     }

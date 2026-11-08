@@ -1641,6 +1641,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LTF-1 (owner w2, exit 2026-12-20, upstream check: LoopTermFold.cpp
+    /// at each pin bump): `LoopTermFold` expands the exit value, which the pin
+    /// reuses only when its SCEV was already computed. Whether the pass first
+    /// computes the SCEV of the values dominating the preheader, so an existing
+    /// `&a[n-1]` is reused instead of rebuilt. Off: the pin's behaviour.
+    fn ltf_reuses_dominating_values(&self) -> bool {
+        false
+    }
+
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.
     fn can_macro_fuse_cmp(&self) -> bool {
         false
