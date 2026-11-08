@@ -54,8 +54,8 @@ def _prices():
 
 
 # Instructions a run may take before it is stopped: LLRM_ICOUNT_LIMIT raises it for a program the reference compiler makes slow (Turbo C's
-# 8086 long multiply: stft_fixed and jpeg_fixed run past 400 M).
-LIMIT = int(os.environ.get("LLRM_ICOUNT_LIMIT", 400_000_000))
+# 8086 long multiply: Turbo C's jpeg_fixed runs 431.9 M and Turbo C++'s 428.8 M, past the former 400 M).
+LIMIT = int(os.environ.get("LLRM_ICOUNT_LIMIT", 1_000_000_000))
 NEVER_ENTERED = "the region was never entered"
 
 

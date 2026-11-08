@@ -85,6 +85,15 @@ impl Pool {
         Self { first, count: 0, entries: IndexMap::default(), symbols: None }
     }
 
+    /// Whether a cell holding `bytes` exists already.
+    #[must_use]
+    pub fn holds(
+        &self,
+        bytes: &[u8],
+    ) -> bool {
+        self.entries.contains_key(bytes)
+    }
+
     /// The readonly cell holding `bytes`.
     pub fn cell(
         &mut self,
