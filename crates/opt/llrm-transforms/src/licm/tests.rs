@@ -2238,3 +2238,44 @@ fn test_a_loop_decided_without_edits_is_scanned_for_a_throwing_block_once() {
 fn test_what_was_found_of_a_loop_is_dropped_by_the_next_edit() {
     assert_eq!(safety_scans(&slot_loop("", "", "load i16, ptr %s"), true), 2);
 }
+
+/// `Instruction::willReturn` is false for any volatile operation, a load
+/// included: a loop with one may not reach its store, so the store to a global
+/// is not guaranteed and stays in the loop. LICM sank it after the loop and
+/// divided the loop's size by one unit the pin's did not: div_constants_long
+/// peeled twice, +137 B per function on wasm32.
+#[test]
+fn a_volatile_load_before_a_global_store_keeps_the_store_in_the_loop() {
+    for (volatile, stays) in [("", false), ("volatile ", true)] {
+        let text = format!(
+            "@g = global i16 5
+@h = global i16 7
+
+define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, 12
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %x = load i16, ptr @g
+  %v = load {volatile}i16, ptr @h
+  %y = add i16 %x, %v
+  store i16 %y, ptr @g
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = load i16, ptr @g
+  ret i16 %r
+}}
+"
+        );
+        let (_, after) = applied(&text, &trips());
+        let kept = block_of(&after, "b2").iter().any(|line| line.starts_with("store i16") && line.contains("@g"));
+        assert_eq!(kept, stays, "{volatile}: {after}");
+    }
+}
