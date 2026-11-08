@@ -508,6 +508,10 @@ struct Analyzer<'a> {
     single_bb: bool,
     decided_by_threshold: bool,
     blocked_by_bound: bool,
+    /// A loop's exit test compares against a bound that this site's arguments
+    /// make constant (gcc's `INLINE_HINT_loop_iterations`): the copy knows its
+    /// trip count.
+    loop_bound_known: bool,
     sroa_arg_costs: IdMap<ValueId, i64>,
 }
 
@@ -550,6 +554,7 @@ impl<'a> Analyzer<'a> {
             single_bb: true,
             decided_by_threshold: false,
             blocked_by_bound: false,
+            loop_bound_known: false,
             sroa_arg_costs: IdMap::new(),
         }
     }
@@ -1305,6 +1310,9 @@ impl<'a> Analyzer<'a> {
             return false;
         }
         let Some(result) = operation.result else { return false };
+        if matches!(operation.opcode, Opcode::ICmp(_)) && !self.loop_bound_known {
+            self.loop_bound_known = self.tests_a_loop_against_an_argument_bound(inst, lhs, rhs);
+        }
         if let Operand::Value(left) = lhs
             && let Some((base, left_offset)) = self.offsets.get(&left).copied()
             && let Operand::Value(right) = rhs
@@ -1331,6 +1339,24 @@ impl<'a> Analyzer<'a> {
             }
         }
         self.handle_sroa(lhs, null_rhs)
+    }
+
+    /// Whether the compare `inst` ends a loop trip (it sits in a loop header or in
+    /// a block that branches back to one) and one side is a value this site's
+    /// arguments made constant while the other is not.
+    fn tests_a_loop_against_an_argument_bound(
+        &self,
+        inst: InstId,
+        lhs: Operand,
+        rhs: Operand,
+    ) -> bool {
+        let from_arguments = |operand: Operand| matches!(operand, Operand::Value(_)) && self.constant(operand).is_some();
+        if from_arguments(lhs) == from_arguments(rhs) || (self.constant(lhs).is_some() && self.constant(rhs).is_some()) {
+            return false;
+        }
+        let Some(block) = self.callee.parent(inst) else { return false };
+        let headers = loop_headers(self.callee);
+        headers.contains(&block) || self.callee.successors(block).into_iter().any(|next| headers.contains(&next))
     }
 
     /// `isKnownNonNullInCallee` (:1974).
@@ -2192,11 +2218,14 @@ impl<'a> Analyzer<'a> {
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
-        let unpriced = self.site.caller_size == CallerSize::Speed
-            && self.params.o1_bound
+        let at_o1 = self.site.caller_size == CallerSize::Speed && self.params.o1_bound;
+        let unpriced = at_o1
             && self.site.tti.is_some_and(|tti| tti.inline_policy().by_rate == 0 && tti.inline_never_grows_without_rate());
-        let grows = if self.site.caller_size == CallerSize::Speed && !unpriced {
+        // -O1 keeps the pin's threshold alone where the target's rate binds at -O2 and -O3 only.
+        let rate_off = at_o1 && self.site.tti.is_some_and(|tti| !tti.speed_inline_rate_at_o1());
+        let grows = if self.site.caller_size == CallerSize::Speed && !unpriced && !rate_off {
             self.grows_more_than_it_saves()
+                && !(self.loop_bound_known && self.site.tti.is_some_and(|tti| tti.inline_hints_known_loop_bound()))
         } else if unpriced {
             // INL-O1: a growing inline stays only where the call's clocks, at
             // the site's frequency, pay for the bytes at the target's -O1 rate

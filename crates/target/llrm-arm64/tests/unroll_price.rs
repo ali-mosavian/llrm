@@ -63,11 +63,32 @@ fn an_init_nest_whose_arrays_stay_in_memory_is_not_unrolled() {
 
 /// matmul -O3: pricing the nest kept the multiply loop rolled, 4,148
 /// instructions run against 672 unrolled (clang 608), for 40 B. -O3 keeps the
-/// nest's decision: more instructions than the priced -O2 module.
+/// pin's decision: more instructions than the priced -O2 module.
 #[test]
 fn a_nest_is_not_priced_at_o3() {
     let ir = include_str!("data/bench_matmul.ll");
     assert!(instructions(ir, Level::O3) > instructions(ir, Level::O2));
+}
+
+/// matmul -O3: loops carried over from an earlier slot were unrolled unpriced
+/// at -O3 too: 700 -> 1,208 B. The pin prices them there: the module stays
+/// under 250 instructions (ungated: 311, gated: 184).
+#[test]
+fn loops_carried_between_slots_are_priced_at_o3() {
+    let insns = instructions(include_str!("data/bench_matmul.ll"), Level::O3);
+    assert!(insns < 250, "{insns} instructions");
+}
+
+/// nbody -O2: the last update loop is priced while the pair nest's copies are
+/// still rolled loops made by an earlier slot of the loop pass manager
+/// (#8054 runs the pass once for each loop). They were taken for readers that
+/// stay rolled, the array for one that stays in memory, and the update loop
+/// kept rolled: 472 B (128 instructions in the module). Decided with their nest: 424 B (116).
+/// Fewer than 120 instructions.
+#[test]
+fn loops_an_earlier_slot_unrolled_around_are_decided_with_their_nest() {
+    let insns = instructions(include_str!("data/bench_nbody.ll"), Level::O2);
+    assert!(insns < 120, "{insns} instructions");
 }
 
 /// nbody_single -O2: the 6-trip loops sit in a 1000-trip loop and were priced

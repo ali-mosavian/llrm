@@ -3008,6 +3008,16 @@ fn test_an_os_trial_that_grows_the_bytes_is_refused_though_the_count_accepts_it(
     assert!(super::trial_accepted(true, false, 57, 57, 4, 0, 12, 0, 756), "copies no larger than the caller are decided by the count");
 }
 
+/// z80 frame_address_stack_args -O2: `kernel` (external, so it stays) copied into `line` saved 123 clocks and 63 B, and
+/// the priced trial refused it for want of a callee that goes (455 T became 7,594 T). A copy that shrinks the module
+/// and the clocks stays; one that grows it without a callee going is still refused (jpeg `decode`, +441k instructions).
+#[test]
+fn test_a_priced_trial_that_shrinks_the_module_stays_without_a_dying_callee() {
+    assert!(super::trial_accepted(true, true, 72, 79, 0, 123, -63, 3000, 756));
+    assert!(!super::trial_accepted(true, true, 72, 79, 0, 123, 10, 3000, 756));
+    assert!(!super::trial_accepted(true, true, 72, 79, 0, 0, -63, 3000, 756), "no clocks saved, no copy");
+}
+
 /// Whether `self_calls` takes `name` of `text` as a tree recursion.
 fn is_tree(
     text: &str,
