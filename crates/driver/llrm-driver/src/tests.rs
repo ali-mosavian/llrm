@@ -2527,6 +2527,31 @@ fn m16_over_aligned_local_is_clamped_not_refused() {
     assert!(!listing.contains("and sp,"), "{listing}");
 }
 
+/// jwlink turns a far call to the same segment into `push cs; call near` plus
+/// a pad byte, a `ds` prefix at one parity and an executed `nop` at the other
+/// (0.60-0.85% of stft_fixed's executed instructions, 47 sites). The object
+/// writer states the near form itself where the callee is in the call's own
+/// segment: four bytes, no pad, nothing to execute.
+#[test]
+fn a_far_call_inside_its_own_segment_is_push_cs_and_a_near_call() {
+    let text = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+                define cc 1005 i32 @g(i32 %a) addrspace(1) noinline {\n  %r = mul i32 %a, 3\n  ret i32 %r\n}\n\
+                define cc 1005 i32 @f(i32 %a) addrspace(1) {\n  %r = call cc 1005 addrspace(1) i32 @g(i32 %a)\n  %s = add i32 %r, 1\n  ret i32 %s\n}\n";
+    let (built, format) = compiled(&flags(&["-m16", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let bytes = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m16::M16),
+    )
+    .unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|window| window == needle);
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!has(&[0x9A, 0, 0, 0, 0]), "a far call to g is left to the linker: {listing}");
+    assert!(has(&[0x0E, 0xE8]), "push cs; call near: {listing} {bytes:02x?}");
+}
+
 /// A callee-saved register pushed before the stack `sub` (the pin's order,
 /// `saved_first`) had no `.eh_frame`: the frame was left out of the declared
 /// ones. Its offset is declared after the `sub` (`def_cfa_offset n; offset
