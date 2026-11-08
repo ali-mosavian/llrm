@@ -1697,7 +1697,7 @@ pub fn read_copies_at_their_source(
 /// (`ld e, -8(ix)` / `ld d, -7(ix)` / `ld e, d` / `ld d, #0` is `ld e,
 /// -7(ix)` / `ld d, #0`). The pin folds a reload into its use where the
 /// target has the form (`InlineSpiller::foldMemoryOperand`); this is that
-/// form for the shift by 8.
+/// form for the shift by 8 or more (the shift left over runs on the byte).
 pub fn narrow_reload_for_byte_shift(
     function: &mut MFunction,
     assignment: &Assignment,
@@ -1714,12 +1714,13 @@ pub fn narrow_reload_for_byte_shift(
                 Kind::Op("RELOAD16"),
                 [Operand::Def(loaded), Operand::Frame(slot)],
                 Kind::Op(shift @ ("SHL16" | "SRL16")),
-                [Operand::Def(written), Operand::Use(read), Operand::Imm(8)],
+                [Operand::Def(written), Operand::Use(read), Operand::Imm(count @ 8..=15)],
             ) = (first.kind, &first.operands[..], second.kind, &second.operands[..])
             else {
                 at += 1;
                 continue;
             };
+            let rest = count - 8;
             let pair = register(*loaded);
             let Ok((lo, hi)) = expand::lanes(pair) else {
                 at += 1;
@@ -1741,9 +1742,19 @@ pub fn narrow_reload_for_byte_shift(
             };
             let clear = Inst::new(Kind::Op("LD8ri"), vec![Operand::Def(Reg::Phys(cleared)), Operand::Imm(0)]);
             let (a, b) = if shift == "SRL16" { (load, clear) } else { (clear, load) };
+            let left_over = (rest > 0).then(|| {
+                let mut one = second.clone();
+                one.kind = Kind::Op(if shift == "SRL16" { "SRL8" } else { "SHL8" });
+                one.operands = vec![Operand::Def(Reg::Phys(kept)), Operand::Use(Reg::Phys(kept)), Operand::Imm(rest)];
+                one
+            });
             block.insts[at] = a;
             block.insts[at + 1] = b;
             at += 2;
+            if let Some(one) = left_over {
+                block.insts.insert(at, one);
+                at += 1;
+            }
         }
     }
 }

@@ -1152,6 +1152,20 @@ fn a_spilled_word_shifted_right_by_a_byte_reloads_one_byte() {
     assert!(byte, "{out}");
 }
 
+/// `w >> 29` of a spilled long reloaded the whole high word (`ld e, -8(ix)` / `ld d, -7(ix)`), then `ld e, d` threw the
+/// low byte away: 3 B and 19 T a site, in every `shape == k ? w >> n` of div_constants. A shift of 8 or more reads one byte.
+#[test]
+fn a_spilled_word_shifted_right_by_more_than_a_byte_reloads_one_byte() {
+    let ir = include_str!("kernels/ir/reload_high_lane_far.ll");
+    let out = text(ir, "g", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    let dead = lines
+        .windows(4)
+        .any(|w| w[0].starts_with("ld e, -") && w[1].starts_with("ld d, -") && w[2] == "ld e, d" && w[3] == "ld d, #0");
+    assert!(!dead, "{out}");
+    assert!(lines.windows(3).any(|w| w[0].starts_with("ld e, -") && w[1] == "ld d, #0" && w[2] == "srl e"), "{out}");
+}
+
 /// `memory_expansion` at -Os was refused ("a conditional return in a function
 /// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
 /// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The
