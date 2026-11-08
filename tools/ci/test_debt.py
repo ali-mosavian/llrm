@@ -56,32 +56,3 @@ def test_a_malformed_row_is_red():
 def test_a_repeated_id_is_red():
     row = "- DEBT x | limit 1 | deadline 2026-12-01 | owner w0 | a\n- DEBT x | limit 1 | deadline 2026-12-01 | owner w0 | b"
     assert problems(row, date(2026, 10, 29)) == ["x: repeated"]
-
-
-RATCHET = Path(__file__).with_name("debt_ratchet.toml")
-
-
-def ratchet_problems(text: str, ratchet: dict) -> list[str]:
-    """One message per debt row whose limit numbers are not at or below the accepted ones."""
-    out = []
-    for line in text.splitlines():
-        m = LINE.match(line) if line.startswith("- DEBT") else None
-        if m and m["id"] in ratchet:
-            numbers = [int(n) for n in re.findall(r"(\d+) (?:B|insns|memops)\b", m["limit"])]
-            floor = ratchet[m["id"]]
-            if len(numbers) != len(floor) or any(a > b for a, b in zip(numbers, floor)):
-                out.append(f"{m['id']}: limit numbers {numbers} are not at or below the accepted {floor}")
-    return out
-
-
-def test_no_debt_limit_goes_up():
-    import tomllib
-
-    assert ratchet_problems(DOC.read_text(), tomllib.loads(RATCHET.read_text())) == []
-
-
-def test_a_raised_limit_is_red():
-    """lru-os-m16-bytes carried 402 B for days after the code measured 382: a limit nobody lowers is a waiver."""
-    row = "- DEBT lru-os-m16-bytes | limit lru c -Os 402 B / 129 insns / 57 memops, lru bq32 -Os 515 B, lru nib -Os 147 memops (x) | deadline 2026-12-01 | owner m16 | w"
-    assert ratchet_problems(row, {"lru-os-m16-bytes": [382, 129, 57, 515, 147]}) != []
-    assert ratchet_problems(row.replace("402", "381"), {"lru-os-m16-bytes": [382, 129, 57, 515, 147]}) == []

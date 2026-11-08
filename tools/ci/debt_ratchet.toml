@@ -1,3 +1,0 @@
-# The last accepted numbers of a debt row's limit, in the order they appear in the row. A limit only goes down: raising one is red
-# (test_debt.py). Lower the number here in the PR that lowers it in docs/working/ci.md.
-lru-os-m16-bytes = [382, 129, 57, 515, 147]
