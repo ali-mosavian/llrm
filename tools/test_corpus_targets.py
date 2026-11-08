@@ -108,3 +108,5 @@ def test_long_double_stride_is_not_run_on_the_sysv_rows():
     """Its .out is Watcom's 8-byte long double; x86_32-linux got 12/24/20/12 (gcc's too) and read as a miscompile."""
     source = (RUN / "long_double_stride.c").read_text()
     assert not ct.applies("x86_32-linux", source) and ct.applies("x86_32-dos", source) and ct.applies("m68k-68020", source)
+
+
