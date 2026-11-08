@@ -176,6 +176,7 @@ pub mod combine_select_into_op;
 pub mod combine_select_op_op;
 pub mod combine_select_spf;
 pub mod combine_select_tail;
+pub mod combine_select_to_cmp;
 #[cfg(test)]
 mod combine_semantics_tests;
 pub mod combine_shared;
@@ -376,7 +377,6 @@ pub mod reassociate_rank;
 pub mod reassociate_tree;
 pub mod remidiom;
 pub mod vastart;
-pub mod rotate;
 pub mod rpoattrs;
 pub mod runtimechecks;
 pub mod sccp;

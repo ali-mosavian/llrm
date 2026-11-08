@@ -736,15 +736,12 @@ b3:
     same(text, &[&[0]]);
 }
 
-/// Nothing is chosen twice: a loop `lsr` has counted is left alone, by it
-/// and by `Rotate`.
+/// Nothing is chosen twice: a loop `lsr` has counted is left alone by it.
 #[test]
 fn test_a_chosen_loop_is_settled() {
     let (_, once) = reduced(&symbolic(5));
     let (_, twice) = reduced(&once.replace(DOS, ""));
     assert_eq!(twice, once);
-    let mut module = parsed(&once);
-    assert_eq!(crate::testing::managed(&mut module, crate::rotate::Rotate { proven: true, copy: false }), once);
 }
 
 /// A loop whose body is two blocks.

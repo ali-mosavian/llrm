@@ -82,3 +82,51 @@ pub fn expand_funnel_shift(
     }
     dag.get_node(ISD::Or, vt, &[shx, shy])
 }
+
+/// `TargetLowering::expandROT`
+/// ([L8782](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L8782))
+/// for scalars: the operation legalizer's expansion of `ROTL` and `ROTR`.
+pub fn expand_rotate(
+    dag: &mut SelectionDAG,
+    tli: &TargetLowering,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let (x, amount) = (dag.operand(node, 0), dag.operand(node, 1));
+    let bits = vt.size_in_bits();
+    let shift_vt = dag.value_type(amount);
+    let op = dag.opcode(node);
+    let is_left = op == ISD::Rotl;
+
+    // If a rotate in the other direction is more supported, use it.
+    let reverse = if is_left { ISD::Rotr } else { ISD::Rotl };
+    if !tli.is_operation_legal_or_custom(op, vt) && tli.is_operation_legal_or_custom(reverse, vt) && bits.is_power_of_two()
+    {
+        let negated = dag.get_negative(amount, shift_vt);
+        return dag.get_node(reverse, vt, &[x, negated]);
+    }
+
+    let (shift_op, half_op) = if is_left { (ISD::Shl, ISD::Srl) } else { (ISD::Srl, ISD::Shl) };
+    let mask = dag.get_constant(u128::from(bits - 1), shift_vt);
+    let (shifted, halved);
+    if bits.is_power_of_two() {
+        // (rotl x, c) -> x << (c & (w - 1)) | x >> (-c & (w - 1))
+        // (rotr x, c) -> x >> (c & (w - 1)) | x << (-c & (w - 1))
+        let negated = dag.get_negative(amount, shift_vt);
+        let shift_amount = dag.get_node(ISD::And, shift_vt, &[amount, mask]);
+        shifted = dag.get_node(shift_op, vt, &[x, shift_amount]);
+        let half_amount = dag.get_node(ISD::And, shift_vt, &[negated, mask]);
+        halved = dag.get_node(half_op, vt, &[x, half_amount]);
+    } else {
+        // (rotl x, c) -> x << (c % w) | x >> 1 >> (w - 1 - (c % w))
+        // (rotr x, c) -> x >> (c % w) | x << 1 << (w - 1 - (c % w))
+        let width = dag.get_constant(u128::from(bits), shift_vt);
+        let shift_amount = dag.get_node(ISD::URem, shift_vt, &[amount, width]);
+        shifted = dag.get_node(shift_op, vt, &[x, shift_amount]);
+        let half_amount = dag.get_node(ISD::Sub, shift_vt, &[mask, shift_amount]);
+        let one = dag.get_constant(1, shift_vt);
+        let once = dag.get_node(half_op, vt, &[x, one]);
+        halved = dag.get_node(half_op, vt, &[once, half_amount]);
+    }
+    dag.get_node(ISD::Or, vt, &[shifted, halved])
+}

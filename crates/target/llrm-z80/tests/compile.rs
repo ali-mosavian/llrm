@@ -1166,6 +1166,17 @@ fn a_spilled_word_shifted_right_by_more_than_a_byte_reloads_one_byte() {
     assert!(lines.windows(3).any(|w| w[0].starts_with("ld e, -") && w[1] == "ld d, #0" && w[2] == "srl e"), "{out}");
 }
 
+/// A byte or word rotated (`llvm.fshl` of one value twice) was refused at -O2, `CannotSelect(Rotl)`: neither type had an
+/// action for the rotates, and the legalizer did not expand them. Both widths and both directions compile, to shifts and an `or`.
+#[test]
+fn a_byte_or_word_rotate_compiles_to_shifts() {
+    let ir = include_str!("kernels/ir/rotate_small.ll");
+    for name in ["rotl8", "rotr16", "rotr16_by_nine"] {
+        let out = text(ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{name}: {why}"));
+        assert!(out.contains("or a, "), "{name}: {out}");
+    }
+}
+
 /// `memory_expansion` at -Os was refused ("a conditional return in a function
 /// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
 /// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The
