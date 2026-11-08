@@ -991,6 +991,16 @@ impl Fast<'_> {
             let instruction = self.function.instruction(insts[at]).clone();
             at += 1;
             *declined = Some(Declined::At(insts[at - 1]));
+            // `++SDNodeOrder` and the instruction's `DebugLoc`, as `SelectionDAGBuilder::visit` does: the nodes
+            // built for it are of its line.
+            self.dag.cur_order += 1;
+            let order = self.dag.cur_order as usize;
+            if self.dag.lines.len() <= order {
+                self.dag.lines.resize(order + 1, None);
+            }
+            self.dag.lines[order] =
+                llrm_codegen::backend::isel::dbg_line(self.module, self.function, insts[at - 1]).filter(|at| at.line != 0);
+            self.dag.inst_order.push((insts[at - 1], self.dag.cur_order));
             self.export_ready()?;
             match &instruction.opcode {
                 Opcode::Phi => {
