@@ -9,10 +9,6 @@ arm64-linux tail_calls_edges | owner of the target (arm64), driver flag pass-thr
 wasm32 builtins_table | owner of the target (wasm32), llvm.is.constant PR | EXIT 2026-11-12 | llrm-wasm-llc: @classify: intrinsic call llvm.is.constant.i32
 wasm32 tail_calls_edges | owner of the target (wasm32), driver flag pass-through | EXIT 2026-11-20 | llrm-wasm-llc: unrecognized argument -fno-inline=sum5
 wasm32 widening_multiply | w9 (corpus tag or header) | EXIT 2026-11-12 | widening_multiply.c:3:10: fatal error: 'stdio.h' file not found
-m68k-68000 memcpy_runtime | m68k owner | EXIT 2026-11-20 | llrm-m68k-llc: .text: a value of 70016 does not fit its 2-byte field
-m68k-68000 memfuncs_runtime | m68k owner | EXIT 2026-11-20 | llrm-m68k-llc: .text: a value of 70100 does not fit its 2-byte field
-m68k-68020 memcpy_runtime | m68k owner | EXIT 2026-11-20 | llrm-m68k-llc: .text: a value of 70016 does not fit its 2-byte field
-m68k-68020 memfuncs_runtime | m68k owner | EXIT 2026-11-20 | llrm-m68k-llc: .text: a value of 70100 does not fit its 2-byte field
 6502-sim65 bitfield_overhang_init | w9 (corpus tag or header) | EXIT 2026-11-12 | bitfield_overhang_init.c:7:27: error: width of bit-field 'b' (24 bits) exceeds the width of its type (16 bits)
 6502-sim65 builtins_table | owner of the target (6502), llvm.is.constant PR | EXIT 2026-11-12 | llrm-6502-llc: intrinsic call llvm.is.constant.i16
 6502-sim65 fixed_point | z80/6502 owners | EXIT 2026-11-20 | llrm-6502-llc: Legalize("Unsupported { op: SMulFixSat, ty: Simple(I32), what: \"expand operand\" }")
@@ -36,3 +32,5 @@ z80-sdcc tail_calls_edges | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: RE
 z80-sdcc variadic | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @sum: CannotSelect("CannotSelect(\"VAStart\")")
 z80-sdcc widening_multiply | w9 (corpus tag or header) | EXIT 2026-11-12 | widening_multiply.c:3:10: fatal error: 'stdio.h' file not found
 z80-sdcc x87_arguments | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @main: 20 bytes of stack arguments
+m68k-68020 memcpy_runtime | m68k owner | EXIT 2026-11-20 | llrm-m68k-llc: .text: a value of 70016 does not fit its 2-byte field (with -mcmodel=medium; 68000 compiles)
+m68k-68020 memfuncs_runtime | m68k owner | EXIT 2026-11-20 | llrm-m68k-llc: .text: a value of 70100 does not fit its 2-byte field (with -mcmodel=medium; 68000 compiles)
