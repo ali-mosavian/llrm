@@ -243,7 +243,7 @@ impl DagTarget for M68kTarget<'_> {
     type Lowering = M68kLowering;
 
     fn phases(&mut self) -> Phases<'_, M68kLowering> {
-        Phases { tli: self.tli, lowering: &mut *self.lowering, arch: Some(&M68k) }
+        Phases { tli: self.tli, lowering: &mut *self.lowering, arch: Some(&M68k), opt_none: false }
     }
 
     fn selection(&mut self) -> (&dyn PinRegisters, &mut dyn Select) {
