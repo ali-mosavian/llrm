@@ -626,6 +626,12 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE Z80-ROT: whether -Oz rotates a loop whose copied header folds away in
+    /// the preheader, the pin's no-copy limit notwithstanding. False: the pin.
+    fn rotation_free_guard_at_minsize(&self) -> bool {
+        false
+    }
+
     /// The fewest calls a callee has in the module for the bound above to hold
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around
