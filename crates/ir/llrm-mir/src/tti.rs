@@ -737,6 +737,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::second_ipsccp`.
+    fn second_ipsccp(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_o1_analyzed_trips`.
     fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
         None

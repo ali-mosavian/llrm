@@ -155,6 +155,13 @@ pub struct TargetLowering {
     /// +155 B), so they keep the pin's form. Exit: when the allocator holds
     /// that pressure.
     byte_equality: bool,
+    /// DEVIATE ASSERT-SEXT-HI (owner z80, exit 2026-11-30): an `AssertSext`
+    /// inside the low half keeps the operand's high half when it is a copy
+    /// from a register, where the pin (`ExpandIntRes_AssertSext`) makes it
+    /// `sra(lo, bits-1)`. The value is the same; the register already holds it
+    /// (a call's result, an argument), and the shift is seven instructions on
+    /// an 8-bit machine.
+    assert_sext_keeps_high: bool,
 }
 
 impl TargetLowering {
@@ -174,6 +181,7 @@ impl TargetLowering {
             sext_cheaper_i32_i64: false,
             sdiv_pow2_cmov: None,
             byte_equality: false,
+            assert_sext_keeps_high: false,
         };
         table.set_default_integer_libcalls();
         // `TargetLoweringBase`: `VAARG` is expanded unless the target says
@@ -450,6 +458,17 @@ impl TargetLowering {
 
     pub fn byte_equality(&self) -> bool {
         self.byte_equality
+    }
+
+    pub fn set_assert_sext_keeps_high(
+        &mut self,
+        on: bool,
+    ) {
+        self.assert_sext_keeps_high = on;
+    }
+
+    pub fn assert_sext_keeps_high(&self) -> bool {
+        self.assert_sext_keeps_high
     }
 
     /// `DAG.shouldOptForSize()` for the function selected next.

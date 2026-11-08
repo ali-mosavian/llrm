@@ -2262,6 +2262,33 @@ fn forget_since(
     run.scev.forget_touched(&cx, &touched);
 }
 
+/// `forgetTopmostLoop(L)` of `UnrollLoop`, for a loop fully unrolled that held
+/// loops: what the expressions of its blocks and its loops' counts said of the
+/// nest is stale once the nest is straight-line code and copies.
+fn forget_nest(
+    run: &mut Run,
+    before: &Analyzed,
+    lp: Loop,
+) {
+    let mut top = lp;
+    while let Some(parent) = top.get_parent_loop() {
+        top = parent;
+    }
+    let headers: Vec<BlockId> =
+        before.loops.get_loops_in_preorder().iter().filter(|one| top.contains_loop(Some(**one))).map(|one| one.get_header()).collect();
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &before.loops,
+        tree: &before.tree,
+        assumptions: &before.assumptions,
+    };
+    run.scev.forget_loop_nest(&cx, top.get_blocks(), &headers);
+}
+
 /// The blocks `UnrollLoop` hands `simplifyLoopAfterUnroll`: the loop's own that
 /// remain (`body`) and those made since the function had `capacity` blocks.
 pub(crate) fn unrolled_blocks(
@@ -2372,6 +2399,9 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let peeled = result == Unrolled::Peeled;
         changed = true;
         forget_since(run, &analyzed, mark);
+        if result == Unrolled::Fully && holds_loops {
+            forget_nest(run, &analyzed, lp);
+        }
         // The pin's loop pass manager runs LPM2's whole list on a loop,
         // children before parents ([`L270`][pop]): a parent's IndVars
         // sees its child already unrolled. Here each pass runs over

@@ -1992,6 +1992,10 @@ impl<'a> TypeLegalizer<'a> {
         let narrow = self.dag.get_value_type_node(asserted);
         let lo = self.dag.get_node(code, half, &[lo, narrow]);
         let hi = if code == ISD::AssertSext {
+            // DEVIATE ASSERT-SEXT-HI (see `TargetLowering::assert_sext_keeps_high`)
+            if self.tli.assert_sext_keeps_high() && self.dag.opcode(hi) == ISD::CopyFromReg {
+                return (lo, hi);
+            }
             let sign = self.shift_const(u128::from(half_bits - 1), half);
             self.dag.get_node(ISD::Sra, half, &[lo, sign])
         } else {

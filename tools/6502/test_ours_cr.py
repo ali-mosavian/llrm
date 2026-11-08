@@ -35,6 +35,21 @@ class HeaderFlags(unittest.TestCase):
     def test_no_header_no_flags(self):
         self.assertEqual(header_flags_fn()(self.write("int x;")), [])
 
+class PadSpan(unittest.TestCase):
+    """The A/B scan ran with OURS_PADS=0,1,2,3: four copies of one layout. wide_shift_by_one read +3,377 clocks for -44 B,
+    a page-crossing cliff (607,141 at pads 0..16, 619,097 at 200) that four neighbouring pads cannot see (2026-11-08)."""
+    def pads(self, value):
+        env = {k: v for k, v in os.environ.items()}
+        env.update(OURS_RT="/nonexistent", OURS_PADS=value)
+        return subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), "/nonexistent/llrm-cc", "O2", "/dev/null", "__empty__"],
+                              capture_output=True, text=True, env=env, timeout=120)
+    def test_neighbouring_pads_are_refused(self):
+        r = self.pads("0,1,2,3")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("span", r.stderr)
+    def test_spread_pads_are_accepted(self):
+        self.assertNotIn("span", self.pads("0,37,101,200").stderr)
+
 class OursCr(unittest.TestCase):
     def test_refuses_without_ours_rt(self):
         r = run(None)

@@ -353,6 +353,14 @@ impl Info {
         })
     }
 
+    /// The register the description calls `name`, in any case.
+    pub fn by_name(
+        &self,
+        name: &str,
+    ) -> Option<RegId> {
+        self.table.iter().flatten().find(|one| one.name.eq_ignore_ascii_case(name)).map(|one| one.id)
+    }
+
     /// Whether the description lists `register`.
     pub fn known(
         &self,
