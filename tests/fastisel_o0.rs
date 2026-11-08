@@ -713,3 +713,51 @@ fn fast_isel_takes_the_blocks_it_can_of_a_function() {
         assert!(log.contains("fast took") && !log.contains("fast took 0"), "{target}: no block taken: {log}");
     }
 }
+
+/// A block that starts with a phi was declined ("a value another block reads that is not a register
+/// value: Phi"): 241 blocks of the tests/run/c corpus, `h` took 3 of its 4 blocks.
+#[test]
+fn fast_isel_takes_the_block_a_phi_starts() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(int a, int b)\n{\n    return a ? b + 1 : b + 2;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_DEBUG", "isel")
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let log = String::from_utf8_lossy(&out.stderr);
+        assert!(log.contains("fast took 4 of 4 blocks"), "{target}: {log}");
+    }
+}
+
+/// `char` and `short` values (loads, stores, extensions, truncations, parameters) sent their function to the DAG:
+/// 145 + 145 loads, 86 truncs and 57 parameters of the tests/run/c corpus.
+#[test]
+fn fast_isel_takes_char_and_short_values() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(
+            scratch.path().join("a.c"),
+            "int h(short a, unsigned char c, char *p)\n{\n    short t = a;\n    *p = (char)t;\n    return t + *p + c + (unsigned short)a;\n}\n",
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+    }
+}
