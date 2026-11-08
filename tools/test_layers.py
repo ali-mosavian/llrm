@@ -44,8 +44,6 @@ ALLOWED: set[tuple[str, str]] = {
     ("llrm-bcdriver", "llrm-bcobj"),
     # target facts read from a concrete target: machine facts should be passed in (one machine description)
     ("llrm-codegen", "llrm-x86"),
-    # dag_select.rs and dagisel_adapter.rs still read the x86 tables: they move to llrm-x86-backend (placement step 3)
-    ("llrm-codegen", "llrm-x86-dagisel"),
     ("llrm-hir", "llrm-target"),
     ("llrm-lir", "llrm-omf"),
 }

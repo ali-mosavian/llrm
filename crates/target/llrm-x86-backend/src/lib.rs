@@ -13,10 +13,14 @@ use llrm_lir::registers::RegId;
 
 pub mod dag_function;
 pub mod emit;
-pub mod fastisel;
 #[cfg(test)]
 mod emit_tests;
+pub mod fastisel;
 pub mod mirprint;
+pub mod postprocess;
+pub mod preprocess;
+pub mod select;
+pub mod unfold;
 
 struct X86;
 
