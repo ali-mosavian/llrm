@@ -119,13 +119,15 @@ pub trait SplitEnv {
     /// `LiveRangeEdit::canRematerializeAt` and `rematerializeAt`: `def`, the
     /// definition of `parent`, made again as a definition of `to`, beside
     /// `beside` (as `build_copy`), or None when it cannot be (not
-    /// rematerializable, or it reads a register).
+    /// rematerializable, or it reads a register, or the target copies it:
+    /// `entering` is the value starting a new piece).
     fn rematerialize(
         &self,
         _def: &Insn,
         _to: u32,
         _parent: u32,
         _beside: Option<&Insn>,
+        _entering: bool,
     ) -> Option<Arc<Insn>> {
         None
     }
