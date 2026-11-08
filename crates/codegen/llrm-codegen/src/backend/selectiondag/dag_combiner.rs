@@ -960,6 +960,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Add => self.visit_add(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sub => self.visit_sub(node),
             ISD::UAddO => self.visit_uaddo(node),
+            ISD::UMulO | ISD::SMulO => self.visit_mulo(node),
             ISD::UAddOCarry => self.visit_uaddo_carry(node),
             ISD::FAdd => self.visit_fadd(node),
             ISD::FSub => self.visit_fsub(node),
@@ -3649,6 +3650,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(split) = self.split_pair_store(node) {
             return Some(split);
         }
+        if let Some(truncating) = self.store_of_trunc(chain, value, ptr, info) {
+            return Some(truncating);
+        }
         // "There can be multiple store sequences on the same chain. Keep trying
         // to merge store sequences until we are unable to do so or until we
         // merge the last store on the chain": the merged stores are dead, and
@@ -3753,6 +3757,32 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_store(chain, shorter, ptr, info));
         }
         None
+    }
+
+    /// `visitSTORE`'s "if this is an FP_ROUND or TRUNC followed by a store,
+    /// fold this into a truncating store"
+    /// ([L24881](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L24881)),
+    /// with `canCombineTruncStore`: the target takes that truncating store
+    /// (legal, or legal or custom before operations are legalized).
+    fn store_of_trunc(
+        &mut self,
+        chain: SDValue,
+        value: SDValue,
+        ptr: SDValue,
+        info: MemInfo,
+    ) -> Option<SDValue> {
+        if !matches!(self.dag.opcode(value), ISD::Truncate | ISD::FpRound)
+            || !self.dag.has_one_use(value.node)
+            || info.ordering.is_some()
+        {
+            return None;
+        }
+        let tli = self.tli?;
+        let source = self.dag.operand(value, 0);
+        let (EVT::Simple(wide), EVT::Simple(narrow)) = (self.dag.value_type(source), info.mem_vt) else { return None };
+        let action = tli.trunc_store_action(wide, narrow);
+        let takes = action == Action::Legal || (!self.legal_operations() && action == Action::Custom);
+        takes.then(|| self.dag.get_store(chain, source, ptr, info))
     }
 
     /// `splitMergedValStore`, for the `BUILD_PAIR` the builder makes before
