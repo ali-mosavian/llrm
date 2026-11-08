@@ -74,6 +74,8 @@ const SOURCE_ORDER: Options = Options {
     sext_adds: false,
     return_dup: false,
     class_split: false,
+    global_copies: true,
+    loop_carried_first: false,
     debug: false,
 };
 
