@@ -336,6 +336,7 @@ impl ProgramPass for Walk {
                                     size != crate::inlinecost::CallerSize::Speed
                                         || (tti.inline_policy().by_rate > 0
                                             && (self.speed_rate || tti.speed_inline_rate_at_o1()))
+                                        || (!self.speed_rate && tti.inline_trials_at_o1())
                                 }))
                                 .then_some(&mut trials),
                             )
@@ -455,7 +456,7 @@ impl ProgramPass for Walk {
                         // a caller of
                         // at most `TRIAL_CALLER` instructions.
                         let spliced_body = (!trials.is_empty()
-                            && function_mut(module, id).1.walk().count() <= TRIAL_CALLER)
+                            && function_mut(module, id).1.walk().count() <= tti.as_deref().map_or(TRIAL_CALLER, |tti| tti.inline_trial_caller_limit()))
                             .then(|| function_mut(module, id).1.clone());
                         let mid = calls_of(&module.context, module.global(id).function().expect("a procedure"));
                         // The calls the splice brought go to the inliner's
@@ -1228,7 +1229,8 @@ impl SelfInline {
 #[path = "walk_tests.rs"]
 mod tests;
 
-/// SZ2: the largest caller, in instructions, whose refused sites are tried.
+/// SZ2: the largest caller, in instructions, whose refused sites are tried
+/// (`Tti::inline_trial_caller_limit` where a target states one).
 const TRIAL_CALLER: usize = 300;
 
 /// SZ2: the bytes `function` becomes, by the target's byte prices

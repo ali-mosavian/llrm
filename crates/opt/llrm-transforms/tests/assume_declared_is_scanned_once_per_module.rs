@@ -68,6 +68,7 @@ fn test_the_loop_passes_do_not_scan_the_globals_for_each_loop() {
             only_when_forced: false,
             target_unrolling: true,
             created: Default::default(),
+            decided: Default::default(),
         });
         manager.add(SimpleLoopUnswitch { non_trivial: true });
         let before = assume_scans();

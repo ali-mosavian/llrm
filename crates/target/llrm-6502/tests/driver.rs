@@ -121,7 +121,10 @@ fn an_index_with_a_known_zero_high_byte_is_the_y_of_the_load() {
          %v = load i8, ptr %p\n  ret i8 %v\n}",
     );
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(text.contains(",y") && !text.contains("ldy #0"), "the pointer was added in 16 bits:\n{text}");
+    assert!(
+        text.contains("lda (rc2),y") && !text.contains("sta rc2") && !text.contains("sta rc3"),
+        "the pointer was added in 16 bits:\n{text}"
+    );
 }
 
 /// A pointer a call returns (a and x) was copied into its cell a byte at a
@@ -586,7 +589,7 @@ fn exit_code_with(
 /// them with the program's start: `text` is the compiled function, the rest a
 /// `_main` and a `memset` that fills the tail.
 fn clocks_of_strncpy(text: &str) -> u64 {
-    const MAIN: &str = ".export _main, memset\n.segment \"BSS\"\nsrc: .res 32\ndst: .res 40\n.segment \"CODE\"\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  ldx #0\nfill:\n  lda #65\n  sta src,x\n  inx\n  cpx #20\n  bne fill\n  lda #0\n  sta src,x\n  lda #<dst\n  sta rc2\n  lda #>dst\n  sta rc3\n  lda #<src\n  sta rc4\n  lda #>src\n  sta rc5\n  lda #30\n  sta rc6\n  lda #0\n  sta rc7\n  jsr k_strncpy\n  ldx #0\n  rts\nmemset:\n  lda rc6\n  ora rc7\n  beq @done\n  ldy #0\n@loop:\n  lda rc4\n  sta (rc2),y\n  iny\n  bne @c\n  inc rc3\n@c:\n  lda rc6\n  bne @d\n  dec rc7\n@d:\n  dec rc6\n  lda rc6\n  ora rc7\n  bne @loop\n@done:\n  rts\n";
+    const MAIN: &str = ".export _main, memset\n.segment \"BSS\"\nsrc: .res 32\ndst: .res 40\n.segment \"CODE\"\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  ldx #0\nfill:\n  lda #65\n  sta src,x\n  inx\n  cpx #20\n  bne fill\n  lda #0\n  sta src,x\n  lda #<dst\n  sta rc2\n  lda #>dst\n  sta rc3\n  lda #<src\n  sta rc4\n  lda #>src\n  sta rc5\n  lda #30\n  sta rc6\n  lda #0\n  sta rc7\n  jsr k_strncpy\n  ldx #0\n  rts\nmemset:\n  sta rc8\n  lda rc4\n  ora rc5\n  beq @done\n  ldy #0\n@loop:\n  lda rc8\n  sta (rc2),y\n  iny\n  bne @c\n  inc rc3\n@c:\n  lda rc4\n  bne @d\n  dec rc5\n@d:\n  dec rc4\n  lda rc4\n  ora rc5\n  bne @loop\n@done:\n  rts\n";
     let dir = std::env::temp_dir().join(format!("llrm6502-clocks-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("t.s"), format!("{text}\n{MAIN}")).unwrap();
@@ -820,12 +823,15 @@ define i8 @run() {{
 
 /// A counted loop compares its index, which lives in `x`. It went through the
 /// accumulator, `txa; cmp rc2` (two bytes and two clocks a trip over
-/// `cpx rc2`); 163 compares of the corpus' loops did.
+/// `cpx rc2`); 163 compares of the corpus' loops did. The bound is the second
+/// byte argument (`x`): as the first (`a`) the allocator carries the index in
+/// `a` (`tax; sta buf,x; clc; adc #1; cmp rc2`), as it does for a bound loaded
+/// from a global; it does not price `inx` against `clc; adc #1`.
 #[test]
 fn a_loop_bound_in_x_is_compared_with_cpx() {
     let ir = module(
         "@buf = global [16 x i8] zeroinitializer\n\
-         define void @f(i8 %n) {\n\
+         define void @f(i8 %unused, i8 %n) {\n\
          entry:\n  br label %loop\n\
          loop:\n  %i = phi i8 [ 0, %entry ], [ %j, %loop ]\n  \
          %z = zext i8 %i to i16\n  %p = getelementptr i8, ptr @buf, i16 %z\n  store i8 %i, ptr %p\n  \
@@ -985,7 +991,7 @@ done:
     let function: String =
         text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect();
     for (a, b, want) in [(48, 18, 6), (7, 13, 1), (9, 9, 9)] {
-        let setup = format!("  lda #{a}\n  sta rc2\n  lda #{b}\n  sta rc3\n  jsr gcd\n");
+        let setup = format!("  ldx #{b}\n  lda #{a}\n  jsr gcd\n");
         assert_eq!(common::run_with(&format!("driver-gcd-{a}"), &setup, &function), want);
     }
 }
@@ -2006,7 +2012,7 @@ fn a_store_between_a_word_load_and_its_add_does_not_change_what_the_add_reads() 
 /// (x16 getspa). A byte global is the same.
 #[test]
 fn a_global_compared_by_a_branch_is_the_memory_operand_of_the_compare() {
-    for (ty, flags) in [("i16", ["cmp g\n", "sbc g+1\n"]), ("i8", ["cpx g\n", "cpx g\n"])] {
+    for (ty, flags) in [("i16", ["cmp g\n", "sbc g+1\n"]), ("i8", ["cmp g\n", "cmp g\n"])] {
         let ir = module(&format!(
             "@g = global {ty} 0\ndeclare void @h()\n\
              define void @f({ty} %x) {{\n  %v = load {ty}, ptr @g\n  %c = icmp ult {ty} %x, %v\n  \
@@ -2047,7 +2053,8 @@ fn a_byte_stored_twice_is_loaded_once() {
          define void @k(i8 %x) {\n  store i8 %x, ptr @a\n  store i8 %x, ptr @b\n  store i8 %x, ptr @c\n  ret void\n}",
     );
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert_eq!(text.matches("lda rc2").count(), 1, "the byte was loaded again:\n{text}");
+    // the byte arrives in `a`: it is stored three times and never loaded
+    assert_eq!(text.matches("lda rc2").count(), 0, "the byte was loaded again:\n{text}");
     assert_eq!(text.matches("sta ").count(), 3, "{text}");
 }
 

@@ -119,6 +119,7 @@ impl FunctionPass for SwitchLower {
     ) -> PreservedAnalyses {
         let mut threshold = None;
         let mut costs: Option<OperationCosts> = None;
+        let shift_legal = analyses.outer().target().variable_shift_legal();
         let word = unit.layout.largest_legal_integer().min(64);
         let pointer = unit.layout.pointer(0).bits;
         let mut changed = false;
@@ -143,6 +144,7 @@ impl FunctionPass for SwitchLower {
                 word,
                 pointer,
                 threshold,
+                shift_legal,
                 costs,
                 size: self.size,
                 flip: 0,
@@ -224,6 +226,8 @@ struct Lowering<'a, 'b> {
     /// The fewest cases of a jump table, 0 where the target has none, and
     /// whether the code is tuned for size.
     threshold: i64,
+    /// `isOperationLegal(SHL, pointer)`: bit tests need it.
+    shift_legal: bool,
     /// What the target prices the operations at, in clocks or, tuned for
     /// size, bytes: asked only to decide a lookup table.
     costs: Option<OperationCosts>,
@@ -576,6 +580,7 @@ impl Lowering<'_, '_> {
         self.fallthrough_unreachable = self.default_is_unreachable();
         let target = SwitchTarget {
             jump_tables: self.threshold != 0,
+            shift_legal: self.shift_legal,
             optimize_for_size: self.size,
             ..SwitchTarget::x86(self.pointer)
         };

@@ -45,8 +45,8 @@ pub fn layout() -> llrm_target::layout::Layout {
 pub struct M32;
 
 /// The registers and the address forms the descriptions state.
-static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> =
-    LazyLock::new(|| llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"));
+static REGISTERS: LazyLock<std::sync::Arc<Vec<llrm_target::registers::Register>>> =
+    LazyLock::new(|| llrm_target::registers::file(include_str!("registers.regs")).expect("registers.regs parses"));
 
 /// How flat operations are priced from the instruction forms: `opcosts.txt`.
 static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
@@ -116,7 +116,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         inline_o1_milliclocks_per_byte: per_byte,
         inline_o1_unit_bytes_milli: 3500,
         speed_inline_milliclocks_per_byte: per_byte,
-        speed_inline_rate_at_o1: false,
+        sdiv_by_magnitude: true,
         call_sequence_fixed_clocks: costs.call + costs.return_,
         call_sequence_argument_clocks: costs.argument,
         call_sequence_pop_clocks: costs.adjust,

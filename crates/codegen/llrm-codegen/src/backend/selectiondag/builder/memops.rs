@@ -452,6 +452,17 @@ impl Builder<'_> {
         self.dag.constant(size).map(|bits| bits as u64)
     }
 
+    /// A 16-byte piece of a volatile copy or fill is a volatile access: its loads and stores keep the mark
+    /// (`x86_memop128`).
+    fn mark_volatile_piece(
+        &mut self,
+        piece: SDValue,
+    ) {
+        if self.volatile_memory {
+            self.dag.volatile_accesses.insert(piece.node);
+        }
+    }
+
     /// `X86TargetLowering::getOptimalMemOpType` without SSE or 64-bit mode:
     /// `i32` outside 64-bit mode, `-m16` included (a dword store is a prefix
     /// away).
@@ -475,8 +486,9 @@ impl Builder<'_> {
     /// `getOptimalMemOpType` with SSE2: 16 bytes (`v4i32`, a `movups`/`movaps`
     /// pair; a zero is `xorps`) for a piece of 16 or more bytes, else
     /// [`Self::widest_mem_op`]. `integer_only` keeps the integer width: a
-    /// fill that is no zero, a volatile access or a constant source (stored as
-    /// immediates). x86-64 has SSE2 in its baseline; the 32-bit targets follow
+    /// fill that is no zero, a volatile move or a constant source (stored as
+    /// immediates). A volatile copy or fill keeps its 16-byte pieces, each a
+    /// volatile access (`MachineMemOperand`). x86-64 has SSE2 in its baseline; the 32-bit targets follow
     /// with their CPU's feature set.
     fn widest_mem_op_sse(
         &self,
@@ -484,7 +496,7 @@ impl Builder<'_> {
         integer_only: bool,
     ) -> u64 {
         let sse2 = self.target.dag.pointer.size_in_bits() == 64 && self.target.target_nodes.is_none();
-        if sse2 && !integer_only && !self.volatile_memory && size >= 16 { 16 } else { self.widest_mem_op(size) }
+        if sse2 && !integer_only && size >= 16 { 16 } else { self.widest_mem_op(size) }
     }
 
     /// `Tuning::x87_zero_fill_at_size` of this target's cost model.
@@ -577,6 +589,7 @@ impl Builder<'_> {
                 let from = self.dag.get_object_ptr_offset(src, src_off as i64);
                 let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
                 let copy = self.dag.get_node(x86isd::LLRM_COPY128, EVT::OTHER, &[order, to, from, align]);
+                self.mark_volatile_piece(copy);
                 if self.target.ordered_copies {
                     order = copy;
                 }
@@ -660,7 +673,7 @@ impl Builder<'_> {
         dst_align: u64,
         src_align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        let widest = self.widest_mem_op_sse(size, false);
+        let widest = self.widest_mem_op_sse(size, self.volatile_memory);
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
         if ops.contains(&16) {
             // DEVIATE SD540 (see `LLRM_MOVE128`): the pin's `v4i32` pieces are
@@ -938,6 +951,7 @@ impl Builder<'_> {
                         .get_node(super::super::x86_lowering::wrapper_kind(&self.dag, pointer), pointer, &[pool]);
                     self.dag.get_node(x86isd::LLRM_COPY128, EVT::OTHER, &[chain, to, from, align])
                 };
+                self.mark_volatile_piece(node);
                 chains.push(node);
                 off += width;
                 left = left.saturating_sub(width);

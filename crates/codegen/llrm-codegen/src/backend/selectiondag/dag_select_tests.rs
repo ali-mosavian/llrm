@@ -9,7 +9,7 @@ use llrm_target::Target;
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, build_block};
 use super::dag_select::select_block;
-use super::emit::{EmitContext, FrameMap};
+use super::emit_api::{EmitContext, FrameMap};
 use super::function_lowering::FunctionLoweringInfo;
 use super::mvt::MVT;
 use super::opcodes::OpcodeMap;
@@ -20,7 +20,7 @@ use crate::model::ir::{Addr, Mem, Space};
 
 struct NoGlobals;
 
-impl super::emit::GlobalMap for NoGlobals {
+impl super::emit_api::GlobalMap for NoGlobals {
     fn segment(
         &self,
         _symbol: Option<u32>,
@@ -109,7 +109,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
     let module = llrm_mir::parse::module(text).expect("parses");
     let layout =
         module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).expect("layout"));
-    let target = BuilderTarget::m32();
+    let target = BuilderTarget::for_pointer_bits(32);
     let machine = llrm_x86_m32::M32;
     let map = OpcodeMap::new(llrm_target::instr::parse(&machine.forms_text(), machine.dialect()).expect("x86.instr"));
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
@@ -124,8 +124,8 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         x87_prices: None,
         tables: &[],
         caller_saved: &Default::default(),
-        conventions: &super::emit::NoConventions,
-        constants: &super::emit::NoConstants,
+        conventions: &super::emit_api::NoConventions,
+        constants: &super::emit_api::NoConstants,
         stack_pointer: RegId::SP,
         strings: None,
         registers: llrm_target::Target::registers(&machine),
@@ -165,7 +165,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
             &mut hooks(),
             &Info,
             &ctx,
-            &mut super::emit::EmitState::default(),
+            &mut super::emit_api::EmitState::default(),
             0,
             &machine,
             &mut NoTemps,
@@ -227,7 +227,7 @@ fn the_combiner_runs_between_the_legalizers() {
     let mut info = FunctionLoweringInfo::new(function);
     let block = function.layout()[0];
     let mut built =
-        build_block(&module, function, &layout, &BuilderTarget::m32(), &machine, &convention, &mut info, block)
+        build_block(&module, function, &layout, &BuilderTarget::for_pointer_bits(32), &machine, &convention, &mut info, block)
             .expect("builds");
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     super::dag_select::legalized(
@@ -351,7 +351,7 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
             &module,
             function,
             &layout,
-            &BuilderTarget::m32(),
+            &BuilderTarget::for_pointer_bits(32),
             &machine,
             &convention,
             &mut info,

@@ -20,4 +20,7 @@ echo "$out" | awk '$1=="float"' | head -1 | awk '{ if ($3 != "fpu" || $7 == "fpu
 # cmp: compiler-rt's compare object holds __unord*f2 as well, so ours is cmp.c plus unord.c (wasm32 -Os f32: 185 B read as the whole set, 220 with unord)
 out=$(ROWS_ONLY=cmp bash ./rows_bytes.sh wasm32) || exit 2
 echo "$out" | awk '$1=="cmp"' | head -1 | awk '{ if ($6 < 200) { print "FAIL: wasm32 -Os f32 cmp ours " $6 " B leaves out unord.c"; exit 1 } }' || bad=1
+# gcc -O2 pads loops, jumps and labels with .p2align inside .text: libgcc fix_usi -O2 read 107 (f32) / 139 (f64) B, 88 / 113 unpadded; the column must count code, not nops
+out=$(ROWS_ONLY=fix_usi bash ./rows_bytes.sh m32) || exit 2
+echo "$out" | awk '$1=="fix_usi"' | tail -1 | awk '{ if ($4 > 113 || $8 > 88) { print "FAIL: m32 -O2 libgcc fix_usi " $4 " | " $8 " B include alignment padding (want 113 | 88)"; exit 1 } }' || bad=1
 [ $bad = 0 ] && echo "rows_bytes ok"; exit $bad

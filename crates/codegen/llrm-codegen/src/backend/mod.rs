@@ -178,7 +178,6 @@ pub mod framelowering;
 pub mod frameobjects;
 pub mod funnel;
 pub mod globals;
-pub mod inline_asm;
 pub mod isel;
 pub mod liverows;
 pub mod masks;
@@ -243,7 +242,7 @@ mod memcpycall_tests;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
-pub mod mirprint;
+pub mod hooks;
 pub mod nativeframe;
 pub mod nearcode;
 pub mod needs;

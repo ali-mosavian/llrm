@@ -18,6 +18,8 @@
 //! - [`drop_known_loads`]: `ldx #n` of what the register already holds, tracked
 //!   through immediates and transfers, forgotten at a label, a call or an
 //!   instruction not listed.
+//! - [`zero_test_through_an_index`]: `cmp #0` of `a` before a branch on zero or
+//!   sign is `tax` (`tay`) when that register and the carry are dead.
 //! - [`drop_zero_compares`]: `cmp #0` (likewise `cpx`, `cpy`) before a branch
 //!   on zero or sign, after an instruction that set those flags from that
 //!   register. Labels between the two do not matter: a path that jumps to one
@@ -129,6 +131,7 @@ pub fn run_with(
     hoist_loop_constant(asm);
     sink_step_to_compare(asm);
     drop_zero_compares(asm);
+    zero_test_through_an_index(asm);
     step_in_place(asm);
     shift_in_place(asm);
     load_straight_into_a(asm);
@@ -139,6 +142,8 @@ pub fn run_with(
     crate::peephole_cells::arithmetic_chain_in_a(asm);
     crate::peephole_cells::chain_ends_in_a(asm);
     crate::peephole_cells::forward_cell_copy(asm);
+    crate::peephole_cells::carry_holds_the_bit(asm);
+    crate::peephole_cells::coalesce_copy(asm);
     // the chain's load can follow the store it was loaded from
     drop_reloads(asm);
     crate::peephole_cells::drop_dead_stores(asm);
@@ -744,6 +749,28 @@ pub fn drop_zero_compares(asm: &mut Asm) {
         })
         .collect();
     retain(asm, &keep);
+}
+
+/// `cmp #0` of `a` before a branch on zero or sign, with `x` (else `y`) and the
+/// carry dead after it: `tax` (`tay`) sets the same flags in a byte less. A
+/// byte argument arrives in `a` with no flags set.
+pub fn zero_test_through_an_index(asm: &mut Asm) {
+    for at in 0..asm.lines.len() {
+        let Line::Inst(Inst { op: Op::Cmp, operand: Operand::Imm(zero), place }) = &asm.lines[at] else { continue };
+        let place = *place;
+        let branch = next_instruction(&asm.lines, at + 1)
+            .is_some_and(|next| matches!(next.op, Op::Beq | Op::Bne | Op::Bmi | Op::Bpl));
+        if zero != "0" || !branch || !carry_dead_from(&asm.lines, at + 1, &mut HashSet::default()) {
+            continue;
+        }
+        let exits = Exits::of(asm);
+        let free = [(Registers::X, Op::Tax), (Registers::Y, Op::Tay)]
+            .into_iter()
+            .find(|(register, _)| dead_from(&asm.lines, at + 1, *register, &mut HashSet::default(), exits));
+        if let Some((_, transfer)) = free {
+            asm.lines[at] = Line::Inst(Inst { op: transfer, operand: Operand::None, place });
+        }
+    }
 }
 
 /// The lines of `asm` whose entry in `keep` is true.

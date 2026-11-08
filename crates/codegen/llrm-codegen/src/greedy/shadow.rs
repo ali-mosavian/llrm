@@ -279,6 +279,27 @@ impl GreedyEnv for BodyEnv<'_> {
         self.tii.encoding_class(phys)
     }
 
+    fn csr_spill_costs_less(
+        &self,
+        virt: u32,
+        phys: RegId,
+        reads: u32,
+        writes: u32,
+        def_reads_registers: bool,
+    ) -> Option<bool> {
+        let bytes = self.tri.size_bytes()?;
+        let hold = bytes.save_restore(phys);
+        // A rematerialized value is made again at each use but one, which
+        // takes the place of its definition; one whose definition reads a
+        // register is made again only where that register holds, which the
+        // spill cannot count on.
+        Some(if !def_reads_registers && self.orders.remat.borrow().contains(&virt) {
+            reads.saturating_sub(1) * bytes.constant < hold
+        } else {
+            reads * bytes.load + writes * bytes.store < hold
+        })
+    }
+
     fn reg_cost(
         &self,
         phys: RegId,
@@ -1222,7 +1243,10 @@ pub fn decide_with_split(
     }
     crate::greedy::greedy::OPT_SIZE.with(|size| size.set(inputs.size));
     if llrm_support::env_var("LLRM_MIR_PRINT").is_some_and(|n| n == &*body.name) {
-        match crate::backend::mirprint::mir(body, inputs.pins) {
+        match crate::backend::hooks::installed()
+            .ok_or_else(|| "no backend installed".to_owned())
+            .and_then(|hooks| hooks.mir_print(body, inputs.pins))
+        {
             Ok(text) => eprintln!("{text}"),
             Err(why) => eprintln!("MIR-PRINT-REFUSED {}: {why}", body.name),
         }

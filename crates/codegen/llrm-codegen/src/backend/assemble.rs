@@ -1313,7 +1313,7 @@ fn staged(
         && !crate::backend::framefree::has_fp(
             &body,
             &registers,
-            &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),
+            &pops.iter().map(|(at, bytes)| (*at, *bytes)).chain(body.call_pops.iter().map(|(at, bytes)| (*at, *bytes))).collect(),
             // Tuned for size any inline code keeps the frame register until
             // masm has compared the two forms; x87 register operations alone
             // do not otherwise.

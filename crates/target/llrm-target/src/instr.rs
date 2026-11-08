@@ -305,11 +305,41 @@ pub fn pinned(
     parse_rows(text, dialect, |pinned| pinned != "-")
 }
 
+thread_local! {
+    static PARSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has read a forms text, for the test that a
+/// text is read once however many readers ask.
+pub fn parsed() -> usize {
+    PARSED.with(std::cell::Cell::get)
+}
+
+/// [`parse`], once per distinct text: the DAG tables and the register classes
+/// each read the same forms (the classes only the pinned rows, through
+/// [`pinned`], a second scan of every row for 0.6 M Ir). A target's text is
+/// read with its own dialect.
+pub fn shared(
+    text: &str,
+    dialect: &Dialect,
+) -> Result<std::sync::Arc<Vec<Form>>, String> {
+    static FORMS: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Vec<Form>>>>,
+    > = std::sync::LazyLock::new(Default::default);
+    if let Some(found) = FORMS.lock().expect("the forms lock").get(text) {
+        return Ok(std::sync::Arc::clone(found));
+    }
+    let forms = std::sync::Arc::new(parse(text, dialect)?);
+    FORMS.lock().expect("the forms lock").insert(text.to_owned(), std::sync::Arc::clone(&forms));
+    Ok(forms)
+}
+
 fn parse_rows(
     text: &str,
     d: &Dialect,
     keep: impl Fn(&str) -> bool,
 ) -> Result<Vec<Form>, String> {
+    PARSED.with(|count| count.set(count.get() + 1));
     let file = &d.file;
     let mut forms = Vec::new();
     for (index, raw) in text.lines().enumerate() {
@@ -399,6 +429,19 @@ mod tests {
              [flags]\nCF = 16\nZF = 4\n",
         )
         .expect("a dialect")
+    }
+
+    /// The DAG tables and the register classes each read the x86 forms: two
+    /// reads of one text per compile. However often a text is asked, it is
+    /// read once.
+    #[test]
+    fn test_a_forms_text_is_read_once_however_often_it_is_asked() {
+        let text = "forms_once_probe binary r/r,r 32 alu_rr - - - -/- Add_{w}";
+        let before = parsed();
+        for _ in 0..20 {
+            assert_eq!(shared(text, &dialect()).expect("parses").len(), 1);
+        }
+        assert_eq!(parsed() - before, 1);
     }
 
     /// A shift, condition or extension operand was refused as "not made of the

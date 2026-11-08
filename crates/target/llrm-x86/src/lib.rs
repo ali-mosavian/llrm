@@ -30,11 +30,7 @@ pub mod calling {
 
     /// `name` (`ebx`, `si`, `st0`), as the family spells it.
     pub fn register(name: &str) -> RegId {
-        static NAMES: std::sync::LazyLock<llrm_support::hash::HashMap<String, RegId>> =
-            std::sync::LazyLock::new(|| {
-                RegId::values().map(|one| (format!("{one:?}").to_ascii_lowercase(), one)).collect()
-            });
-        *NAMES.get(name).unwrap_or_else(|| panic!("calling.toml names no x86 register {name}"))
+        RegId::named(name).unwrap_or_else(|| panic!("calling.toml names no x86 register {name}"))
     }
 
     /// The most bytes `ret imm16` (and `retf imm16`) removes: the immediate is
@@ -210,6 +206,8 @@ pub mod registers {
 /// is made of: `[base+index+disp]` with a base from BX or BP and an index from
 /// SI or DI. The architecture's, the same in every 16-bit target.
 pub mod asm;
+pub mod inline_asm;
+pub mod pinregs;
 pub mod helpers;
 
 pub mod addressing16 {

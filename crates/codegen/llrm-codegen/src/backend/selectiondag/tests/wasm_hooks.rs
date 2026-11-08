@@ -174,7 +174,7 @@ fn built(
             big_endian: false,
             calling: Some(probe),
         }),
-        ..BuilderTarget::m32()
+        ..BuilderTarget::for_pointer_bits(32)
     };
     options(&mut target);
     let done =

@@ -119,13 +119,16 @@ pub struct Options {
     /// A callee called again and again is called through an address register
     /// where that makes the function cheaper ([`crate::calltarget`]).
     pub call_targets: bool,
-    /// A call of a function this module defines is `jsr (name,%pc)`, 4 B for the
-    /// 6 of `jsr name`. Only for a driver that has checked the module's code
-    /// is within 16-bit reach of itself ([`crate::driver`]).
+    /// A call of a function this module defines is `jsr (name,%pc)`, 4 B for
+    /// the 6 of `jsr name`. Only for a driver that has checked the module's
+    /// code is within 16-bit reach of itself ([`crate::driver`]).
     pub pc_calls: bool,
     /// A sum in an address register adds a sign-extended word with `adda.w`
     /// ([`crate::sextacc`]).
     pub sext_adds: bool,
+    /// A block that only returns is copied into the predecessors that go only
+    /// there (`TailDuplicator`); kept when the function is cheaper for it.
+    pub return_dup: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -152,6 +155,7 @@ impl Options {
         call_targets: false,
         pc_calls: false,
         sext_adds: false,
+        return_dup: false,
         debug: false,
     };
 }
@@ -177,6 +181,7 @@ impl Default for Options {
             call_targets: true,
             pc_calls: false,
             sext_adds: true,
+            return_dup: true,
             debug: false,
         }
     }
@@ -193,6 +198,10 @@ pub fn items(
 }
 
 /// [`items`] with `options`.
+///
+/// A function an optional rewrite touched (the `adda`/`suba` fold, the copy of
+/// a return block into its predecessors) is also built without it, and the
+/// cheaper kept (`crate::trial`): each is priced before the code is known.
 pub fn items_with(
     module: &Module,
     name: &str,
@@ -206,6 +215,55 @@ pub fn items_with(
     } else {
         module
     };
+    let mut options = Options { mid_end: false, ..options };
+    let (mut kept, touched) = items_once(module, name, cpu, options)?;
+    if !touched.any() {
+        return Ok(kept);
+    }
+    let wants_size = options.size
+        || module
+            .named(name)
+            .and_then(|id| module.global(id).function())
+            .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
+    let price = crate::timing::Price::of(wants_size, options.strict);
+    if touched.sext_adds {
+        let without = Options { sext_adds: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
+    if touched.return_dup {
+        let without = Options { return_dup: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+        }
+    }
+    Ok(kept)
+}
+
+/// The optional rewrites a build used.
+#[derive(Clone, Copy, Default)]
+struct Touched {
+    sext_adds: bool,
+    return_dup: bool,
+}
+
+impl Touched {
+    fn any(self) -> bool {
+        self.sext_adds || self.return_dup
+    }
+}
+
+/// One build of the function, and the optional rewrites that changed it.
+fn items_once(
+    module: &Module,
+    name: &str,
+    cpu: Cpu,
+    options: Options,
+) -> Result<(Vec<Item>, Touched), String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let number =
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
@@ -222,6 +280,7 @@ pub fn items_with(
         wants_size,
     )?;
     let mut function = emit(name, &blocks)?;
+    let mut touched = Touched::default();
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
@@ -239,7 +298,11 @@ pub fn items_with(
         }
         crate::addrroles::address_roles(&mut function);
         if options.sext_adds {
-            crate::sextacc::sign_extended_words(&mut function, cpu, crate::timing::Price::of(wants_size, options.strict));
+            touched.sext_adds = crate::sextacc::sign_extended_words(
+                &mut function,
+                cpu,
+                crate::timing::Price::of(wants_size, options.strict),
+            ) > 0;
         }
         if cpu.at_least(Cpu::M68020) {
             crate::scaledindex::scale_indexes(&mut function);
@@ -301,6 +364,9 @@ pub fn items_with(
     branch_fold(&mut function, &assignment);
     if options.tail_duplicate && !wants_size {
         llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
+        if options.return_dup {
+            touched.return_dup = llrm_spike_mf::taildup::duplicate_returns(&mut function, 2);
+        }
     }
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size, options.loop_top_by_jumps);
     let mut out = vec![Item::Label(name.to_owned())];
@@ -341,7 +407,7 @@ pub fn items_with(
             Line::Loc(place) => Item::Loc(place),
         });
     }
-    Ok(out)
+    Ok((out, touched))
 }
 
 /// Whether `callee` is a function `module` defines that no other definition
@@ -350,11 +416,18 @@ fn is_local_callee(
     module: &Module,
     callee: &str,
 ) -> bool {
-    module.named(callee).is_some_and(|id| {
-        let global = module.global(id);
-        global.function().is_some_and(|one| !one.is_declaration())
-            && !matches!(llrm_mir::image::Export::of(global.linkage), llrm_mir::image::Export::Weak)
-    })
+    module
+        .named(callee)
+        .is_some_and(
+            |id| {
+                let global = module.global(id);
+                global.function().is_some_and(|one| !one.is_declaration())
+                    && !matches!(
+                        llrm_mir::image::Export::of(global.linkage),
+                        llrm_mir::image::Export::Weak
+                    )
+            },
+        )
 }
 
 /// The IR's branch probabilities by `(from, to)` block number

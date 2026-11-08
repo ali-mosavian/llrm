@@ -224,7 +224,7 @@ pub fn duplicated(
 
 /// How many callee-saved registers the body writes: the pops its returns will
 /// take (`masm::saved_of`, without the interrupt and runtime-entry cases). A
-fn saved_count(
+pub(crate) fn saved_count(
     body: &LirBody,
     saved: &[RegId],
     free: bool,

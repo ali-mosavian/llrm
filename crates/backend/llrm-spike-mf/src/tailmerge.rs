@@ -689,7 +689,12 @@ impl<C, J> Mf<'_, C, J> {
     }
 }
 
+/// The block a jump names; none for a return or a multiway indirect branch
+/// (a table jump names every block of its table).
 fn targets(inst: &Inst) -> Option<u32> {
+    if fold::names_many(inst) {
+        return None;
+    }
     inst.operands
         .iter()
         .find_map(

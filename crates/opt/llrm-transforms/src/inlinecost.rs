@@ -2145,16 +2145,88 @@ impl<'a> Analyzer<'a> {
     /// `(k - 1) * size > k * call` (two calls of a 19-unit callee, 10-unit
     /// calls: 19 > 20 does not grow).
     fn grows_the_code(&self) -> bool {
-        let (size, call, k) = (self.size_units, self.call_size(), self.site.callee_calls);
+        let (size, call, k) = (self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls);
         // the callee's frame goes once, with the callee
         let frame = self.callee_frame(llrm_mir::tti::CostKind::CodeSize);
         if self.site.callee_dies && k >= 2 { (k - 1) * size > k * call + frame } else { size > call }
     }
 
+    /// Bytes of the caller's stores into a local that the callee reads only
+    /// through uses SROA resolves (`enabled_sroa` at the end of the walk): once
+    /// inlined they have no reader, as `getCallerAllocaCost`'s sibling
+    /// `SROACostSavings` counts on the callee's side. Only a local whose every
+    /// use in the caller is a store, an offset of it, this call or a lifetime
+    /// marker: any other use keeps the stores.
+    fn folded_caller_stores(&self) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        let view = tti.inline_size_view();
+        let caller = self.site.caller;
+        let mut total = 0;
+        for root in self.enabled_sroa.iter() {
+            let mut derived = IdSet::<ValueId>::new();
+            derived.insert(root);
+            let mut stores = Vec::new();
+            let mut sound = true;
+            loop {
+                let before = derived.len();
+                stores.clear();
+                for &block in caller.layout() {
+                    for inst in caller.iter_block(block) {
+                        let operation = caller.instruction(inst);
+                        let uses = |derived: &IdSet<ValueId>| {
+                            operation.operands.iter().any(|one| matches!(one, Operand::Value(v) if derived.contains(v)))
+                        };
+                        if !uses(&derived) {
+                            continue;
+                        }
+                        match &operation.opcode {
+                            Opcode::GetElementPtr { .. } => {
+                                if let Some(result) = operation.result {
+                                    derived.insert(result);
+                                }
+                            }
+                            Opcode::Store { volatile: false, .. }
+                                if matches!(operation.operands[1], Operand::Value(v) if derived.contains(&v))
+                                    && !matches!(operation.operands[0], Operand::Value(v) if derived.contains(&v)) =>
+                            {
+                                stores.push(inst);
+                            }
+                            Opcode::Call(_) if inst == self.site.call => {}
+                            Opcode::Call(_)
+                                if llrm_mir::memory::callee(self.context, caller, inst).is_some_and(|callee| {
+                                    self.site.module.global(callee).name.as_deref().is_some_and(|name| name.starts_with("llvm.lifetime."))
+                                }) => {}
+                            _ => sound = false,
+                        }
+                    }
+                }
+                if !sound || derived.len() == before {
+                    break;
+                }
+            }
+            if !sound {
+                continue;
+            }
+            for &inst in &stores {
+                total += llrm_mir::instructioncost::instruction_cost(
+                    view.as_deref().unwrap_or(tti),
+                    self.context,
+                    self.site.layout,
+                    &self.site.module.globals,
+                    caller,
+                    inst,
+                    llrm_mir::tti::CostKind::CodeSize,
+                )
+                .value;
+            }
+        }
+        total
+    }
+
     /// Bytes one inlined site adds to the module: the callee's unfolded size
     /// less the call, spread over the sites when the callee dies with them.
     fn growth_per_site(&self) -> i64 {
-        let (size, call, k) = (self.size_units, self.call_size(), self.site.callee_calls);
+        let (size, call, k) = (self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls);
         let frame = self.callee_frame(llrm_mir::tti::CostKind::CodeSize);
         if self.site.callee_dies && k >= 2 { ((k - 1) * size - k * call - frame) / k } else { size - call }
     }

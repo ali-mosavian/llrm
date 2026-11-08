@@ -61,7 +61,14 @@ fn declined_text(module: &Module, function: &Function, declined: Option<Declined
         None => String::new(),
         Some(Declined::At(id)) => {
             let instruction = function.instruction(id);
-            format!("{:?} {}", instruction.opcode, module.context.types.display(instruction.ty))
+            let callee = match (&instruction.opcode, instruction.operands.last()) {
+                (Opcode::Call(_), Some(Operand::Constant(callee))) => match module.context.get(*callee).kind {
+                    ConstantKind::Global(global) => format!(" {}", module.global(global).name.as_deref().unwrap_or("?")),
+                    _ => " indirect".to_owned(),
+                },
+                _ => String::new(),
+            };
+            format!("{:?}{callee} {}", instruction.opcode, module.context.types.display(instruction.ty))
         }
         Some(Declined::Export(value)) => {
             let def = match function.value(value).def {
@@ -558,8 +565,17 @@ impl Fast<'_> {
 
     /// `[base, scale, index, disp, segment]` of a GEP's parts: a frame object or a register as the base.
     fn address_of(&mut self, (base, index, displacement): Gep) -> Option<Vec<SDValue>> {
+        let global = self.narrow_global(base);
+        let (global, offset) = global.map_or((None, 0), |(global, offset)| (Some(global), offset));
         let mut ops = match base {
             Operand::Value(value) if self.info.static_allocas.contains_key(&value) => self.frame(self.info.static_allocas[&value]),
+            _ if global.is_some() => vec![
+                self.dag.get_register(EVT::I32, 0),
+                self.dag.get_constant_with(1, EVT::I8, true, false),
+                self.dag.get_register(EVT::I32, 0),
+                self.dag.get_constant_with(0, EVT::I32, true, false),
+                self.dag.get_register(EVT::I16, 0),
+            ],
             _ => {
                 let register = if self.narrow { EVT::I32 } else { EVT::I64 };
                 vec![
@@ -575,8 +591,53 @@ impl Fast<'_> {
             ops[1] = self.dag.get_constant_with(u128::from(scale), EVT::I8, true, false);
             ops[2] = self.value(index)?;
         }
-        ops[3] = self.dag.get_constant_with(displacement as u32 as u128, EVT::I32, true, false);
+        ops[3] = match global {
+            // the pin's `X86SelectAddress` folds a global and the constant offset into one displacement
+            Some(global) => self.dag.get_target_global_address(EVT::I32, global, offset + i64::from(displacement)),
+            None => self.dag.get_constant_with(displacement as u32 as u128, EVT::I32, true, false),
+        };
         Some(ops)
+    }
+
+    /// The global `operand` names at narrow, where its address is an absolute displacement
+    /// (m64 reaches a global through `rip`).
+    /// A constant `getelementptr` of it is the global and the offset (`X86SelectAddress` folds both).
+    fn narrow_global(&self, operand: Operand) -> Option<(u32, i64)> {
+        let Operand::Constant(id) = operand else { return None };
+        if !self.narrow {
+            return None;
+        }
+        self.global_offset(id)
+    }
+
+    fn global_offset(&self, id: llrm_mir::context::ConstantId) -> Option<(u32, i64)> {
+        use llrm_mir::context::ConstantExpr;
+        let types = &self.module.context.types;
+        match &self.module.context.get(id).kind {
+            ConstantKind::Global(global) => Some((global.0, 0)),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => {
+                let (&base, indices) = operands.split_first()?;
+                let (global, offset) = self.global_offset(base)?;
+                let constants: Option<Vec<Option<i128>>> = indices
+                    .iter()
+                    .map(|&one| {
+                        let constant = self.module.context.get(one);
+                        match constant.kind {
+                            ConstantKind::Int(value) => {
+                                let bits = types.int_bits(constant.ty)?;
+                                let shift = 128 - bits;
+                                Some(Some(((value << shift) as i128) >> shift))
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect();
+                let (constant, variable) = self.layout.collect_offset(types, *source, &constants?);
+                variable.is_empty().then_some(())?;
+                Some((global, offset + i64::try_from(constant).ok()?))
+            }
+            _ => None,
+        }
     }
 
     /// Whether the one use of `value` is a load or store in `block` that takes it as its address.
@@ -607,6 +668,15 @@ impl Fast<'_> {
                 return None;
             }
             return Some(self.frame(object));
+        }
+        if let Some((global, offset)) = self.narrow_global(pointer) {
+            return Some(vec![
+                self.dag.get_register(EVT::I32, 0),
+                self.dag.get_constant_with(1, EVT::I8, true, false),
+                self.dag.get_register(EVT::I32, 0),
+                self.dag.get_target_global_address(EVT::I32, global, offset),
+                self.dag.get_register(EVT::I16, 0),
+            ]);
         }
         let base = self.value(pointer)?;
         let pointer = if self.narrow { EVT::I32 } else { EVT::I64 };
@@ -772,6 +842,12 @@ impl Fast<'_> {
                 let noreg = self.dag.get_register(EVT::I64, 0);
                 let segment = self.dag.get_register(EVT::I16, 0);
                 Some(self.node(self.names.lea64?, &[EVT::I64], &[rip, one, noreg, target, segment]))
+            }
+            Operand::Constant(_) if self.narrow_global(operand).is_some() => {
+                // the address of a global at narrow: `mov r, offset g`
+                let (global, offset) = self.narrow_global(operand)?;
+                let target = self.dag.get_target_global_address(EVT::I32, global, offset);
+                Some(self.node(self.names.mov_ri, &[EVT::I32], &[target]))
             }
             Operand::Constant(_) => {
                 // a zero is `MOV32ri` here and `xor` after allocation, where the flags are dead (`Peephole` at -O0)
