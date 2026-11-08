@@ -242,7 +242,7 @@ mod memcpycall_tests;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
-pub mod mirprint;
+pub mod hooks;
 pub mod nativeframe;
 pub mod nearcode;
 pub mod needs;
