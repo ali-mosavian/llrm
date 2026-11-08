@@ -2139,3 +2139,15 @@ fn a_sign_mask_widens_without_taking_its_sign_again() {
     let out = text(ir, "signed_high", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
     assert_eq!(out.matches("rla").count(), 1, "{out}");
 }
+
+/// A dense switch of three targets became bit tests, `1 << x` and a mask per target, and the Z80's shift by a variable
+/// count is a call: two `__ashlhi3` calls (each tens of clocks) to pick among eight cases. `isOperationLegal(SHL)`
+/// is false here, so the pin builds no bit tests.
+#[test]
+fn a_dense_switch_builds_no_bit_tests_where_a_variable_shift_is_a_call() {
+    let ir = include_str!("kernels/ir/switch_dense_bit_tests.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("__ashlhi3"), "{out}");
+    }
+}
