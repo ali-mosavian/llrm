@@ -165,8 +165,22 @@ impl Tti for Wasm {
     /// SZ1: a size build keeps a callee that inlining would copy into
     /// several callers (sfm16_dbg -Os: `cmp_bits`, 101 B once or 7 x 105 B).
     /// The pin's `OptSizeThreshold` 50 allows the growth.
-    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-20): the pin inlines it.
+    /// DEVIATE SZ1 (2026-11-07, owner wasm, review 2026-12-20: find the
+    /// pin-faithful rule or confirm the deviation stands): the pin inlines it.
     fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// SZ1 stands down for a callee the pin's own cost counts as shrinking
+    /// the caller: the cost nets the removed call
+    /// (`addCost(-getCallsiteCost(..))`, InlineCost.cpp#L1184 at d1106deb71cc) against
+    /// the body, and a negative cost passes `Cost < Threshold` (InlineCost.h#L138)
+    /// at any threshold. Seven -Os cells grow against SZ1 without it and stay
+    /// at or below the pin: recsum +43, memmove_overlap +74, qlight +89,
+    /// write_through_parameter +18, shift_int64_masked_amount +11,
+    /// jpeg_single +19, jpeg_fixed +8; 10 move to the pin or below
+    /// (-352 B in all).
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
 
