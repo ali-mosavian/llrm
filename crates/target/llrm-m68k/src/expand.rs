@@ -450,6 +450,9 @@ pub fn finish_with(
     // the push of argument store `store`, `pushed` bytes down: of its value,
     // or of the memory the load folded into it reads
     let push_for = |store: usize, pushed: i64| -> Result<mc::Inst, String> {
+        if let Some((base, offset)) = pushes.address_push(store) {
+            return Ok(crate::callpush::address_push(base, offset));
+        }
         match pushes.folded_load(store) {
             Some(load) => {
                 let Kind::Op(name) = insts[load].kind else { return Err("a folded load is an instruction".to_owned()) };
