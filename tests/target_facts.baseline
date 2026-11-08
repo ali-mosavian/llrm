@@ -1,4 +1,5 @@
 # Copies of target facts left in shared code, per file: count path. Only shrinks.
+# Exit 2026-11-22 (re-dated only by oversight): Selector::Old and isel.rs are deleted at DAG switch-over, condition: Selector::default() = Dag at m16/m32/m64 and every x86 corpus cell identical-or-better. The old-selector files (backend/isel*.rs, peephole.rs, peep/*, selects.rs, pushfold.rs, storecombine.rs, arithmetic.rs, floatassign.rs, intbits.rs, verify.rs, fixupleas.rs) leave this list then, not by moving.
 1 crates/backend/llrm-dagisel-gen/src/inc.rs
 8 crates/backend/llrm-dagisel-gen/src/main.rs
 2 crates/backend/llrm-dagisel/src/aarch64_predicates.rs
