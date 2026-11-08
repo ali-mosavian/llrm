@@ -491,6 +491,8 @@ pub struct Rating<'a, 'b> {
     pub as_written: bool,
     /// Registers held across the loop by values LSR does not manage.
     pub other_register_units: u32,
+    /// `other_register_units` before LU3b's retry drops it (LU3e).
+    pub real_register_units: u32,
     /// The compile is for size.
     pub size: bool,
     /// The loop calls, and the target's call takes every register (LU13).
@@ -515,6 +517,12 @@ pub struct Cost {
     /// DEVIATE LSR-SIZE: x86 bytes of the displacements, adds and setup the
     /// formulae need, where the target sizes by `Tti::lsr_size_order`.
     pub size_bytes: u32,
+    /// References to registers so far, repeats included (DEVIATE LU3e).
+    reg_uses: u32,
+    /// DEVIATE LU3e: reloads of registers past the budget beyond the one
+    /// instruction each that `c.insns` counts. Ranks solutions only: the test
+    /// against the loop as it stands reads `c`.
+    pub spill_extra: u32,
 }
 
 impl Cost {
@@ -550,6 +558,15 @@ impl Cost {
         tti: &dyn Tti,
         other: &Cost,
     ) -> bool {
+        if self.spill_extra != 0 || other.spill_extra != 0 {
+            let plain = |x: &Cost| {
+                let mut one = x.clone();
+                one.c.insns = one.c.insns.saturating_add(one.spill_extra);
+                one.spill_extra = 0;
+                one
+            };
+            return plain(self).is_less(tti, &plain(other));
+        }
         // DEVIATE LU8: where the address forms name fewer registers than the
         // target has (m16: bx, si, di), a solution that fits them beats one
         // that does not, whatever the model counts: the registers past the
@@ -755,12 +772,22 @@ impl Cost {
         // taken twice.
         let reserve = if r.other_register_units == 0 { 1 } else { r.tti.lsr_reserved_registers() };
         let target_regs = (r.tti.number_of_gpr_registers() - reserve).saturating_sub(r.other_register_units);
+        let mut charged = 0;
         if self.c.num_regs > target_regs {
             // Already past: only the newly added registers add instructions.
-            if prev_regs > target_regs {
-                self.c.insns += self.c.num_regs - prev_regs;
-            } else {
-                self.c.insns += self.c.num_regs - target_regs;
+            charged = if prev_regs > target_regs { self.c.num_regs - prev_regs } else { self.c.num_regs - target_regs };
+            self.c.insns += charged;
+        }
+        // DEVIATE LU3e: a register past the loop's real budget is spilled and
+        // reloaded at each reference to it: the references per register so
+        // far, where the pin counts one instruction.
+        if r.real_register_units > 0 && r.tti.lsr_prices_spills() {
+            let real =
+                (r.tti.number_of_gpr_registers() - r.tti.lsr_reserved_registers()).saturating_sub(r.real_register_units);
+            if self.c.num_regs > real {
+                let added = if prev_regs > real { self.c.num_regs - prev_regs } else { self.c.num_regs - real };
+                let reloads = added * (self.reg_uses / self.c.num_regs.max(1)).max(1);
+                self.spill_extra += reloads.saturating_sub(charged);
             }
         }
 
@@ -799,6 +826,7 @@ impl Cost {
             self.lose();
             return;
         }
+        self.reg_uses += 1;
         if regs.insert(reg) {
             self.rate_register(r, f, reg, regs, lu);
             if let Some(losers) = losers
