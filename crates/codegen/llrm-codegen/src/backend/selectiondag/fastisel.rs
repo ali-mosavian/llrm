@@ -584,7 +584,12 @@ impl Fast<'_> {
                 let immediate = if wide { self.int_signed(user.operands[1]) } else { self.int(user.operands[1]) };
                 immediate.is_some_and(|imm| !(imm > 0 && (imm & (imm - 1)) == 0))
             }
-            Opcode::Binary(Add | Sub | And | Or | Xor | Mul) => second(self) && wide_kind(&self.module.context.types, user.ty, self.m32) == Some(wide),
+            Opcode::Binary(Sub) => second(self) && wide_kind(&self.module.context.types, user.ty, self.m32) == Some(wide),
+            Opcode::Binary(Add | And | Or | Xor | Mul) => {
+                // a commutative user swaps a first-operand load to the second, as the pin's `foldMemoryOperand` commutes
+                let first = user.operands[0] == Operand::Value(result) && matches!(user.operands[1], Operand::Value(_)) && self.is_wide(user.operands[1]) == Some(wide);
+                (second(self) || first) && wide_kind(&self.module.context.types, user.ty, self.m32) == Some(wide)
+            }
             Opcode::ICmp(_) if user.operands[0] == Operand::Value(result) => {
                 // `cmp m, imm`
                 (if wide { self.int_signed(user.operands[1]) } else { self.int(user.operands[1]) }).is_some()
@@ -1216,11 +1221,18 @@ impl Fast<'_> {
                         self.values.insert(instruction.result?, done);
                         continue;
                     }
+                    let mut operands = [instruction.operands[0], instruction.operands[1]];
+                    if matches!(op, Add | And | Or | Xor | Mul)
+                        && matches!(operands[1], Operand::Value(_))
+                        && self.folded.as_ref().is_some_and(|(held, _)| Operand::Value(*held) == operands[0])
+                    {
+                        operands.swap(0, 1);
+                    }
                     if matches!(op, Mul) {
                         // the pin's `fastEmit_ri_`: a power of two is `shl r, k`, any other constant
                         // `imul r, r, imm`; a constant on the left is swapped to the right
                         let constant = |this: &Self, one| if wide { this.int_signed(one) } else { this.int(one) };
-                        let (a, b) = (instruction.operands[0], instruction.operands[1]);
+                        let (a, b) = (operands[0], operands[1]);
                         let (register, imm) = match (constant(&self, a), constant(&self, b)) {
                             (_, Some(imm)) => (a, Some(imm)),
                             (Some(imm), None) => (b, Some(imm)),
@@ -1277,8 +1289,8 @@ impl Fast<'_> {
                         _ => return None,
                     };
                     let (rr, ri) = alu[which];
-                    let left = self.value(instruction.operands[0])?;
-                    if let Some(mut address) = self.take_fold(instruction.operands[1]) {
+                    let left = self.value(operands[0])?;
+                    if let Some(mut address) = self.take_fold(operands[1]) {
                         let rm = if wide { self.names.wide.as_ref()?.mem.alu[which] } else { self.names.mem.alu[which] };
                         let mut ops = vec![left];
                         ops.append(&mut address);
@@ -1288,12 +1300,12 @@ impl Fast<'_> {
                         self.values.insert(instruction.result?, SDValue { node: done.node, res: 0 });
                         continue;
                     }
-                    let immediate = if wide { self.int_signed(instruction.operands[1]) } else { self.int(instruction.operands[1]) };
+                    let immediate = if wide { self.int_signed(operands[1]) } else { self.int(operands[1]) };
                     let done = if let Some(imm) = immediate {
                         let imm = self.dag.get_constant_with(imm as u128, vt, true, false);
                         self.node(ri, &[vt, EVT::I32], &[left, imm])
                     } else {
-                        let right = self.value(instruction.operands[1])?;
+                        let right = self.value(operands[1])?;
                         self.node(rr, &[vt, EVT::I32], &[left, right])
                     };
                     self.values.insert(instruction.result?, done);
