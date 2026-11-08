@@ -17,10 +17,14 @@ pub mod emit;
 mod emit_tests;
 pub mod fastisel;
 pub mod mirprint;
+pub mod nodes;
 pub mod postprocess;
 pub mod preprocess;
 pub mod select;
 pub mod unfold;
+pub mod x86_carry;
+pub mod x86_lowering;
+pub mod x86isd;
 
 struct X86;
 
@@ -57,6 +61,10 @@ impl BackendHooks for X86 {
         dag_function::selected_in_pool(module, name, arch, cpu, libcalls, contracts, pool)
     }
 
+    fn lowering_nodes(&self) -> llrm_codegen::backend::selectiondag::builder::LoweringNodes {
+        nodes::nodes()
+    }
+
     fn take_fast_took(&self) -> bool {
         fastisel::take_took()
     }
@@ -66,6 +74,7 @@ static X86_HOOKS: X86 = X86;
 
 /// Installs x86's backend code into the shared backend.
 pub fn install() {
+    llrm_codegen::backend::selectiondag::target_names::install(&x86isd::NAMES);
     hooks::install(&X86_HOOKS);
 }
 

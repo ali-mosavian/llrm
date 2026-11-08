@@ -118,7 +118,7 @@ pub struct Options {
     /// `CodeSize` of the branches the rotation removes, the loop-closing jump
     /// and the header's exit test.
     pub priced_at_size: bool,
-    /// DEVIATE RS1 (size builds, target opt-in, owner m64, exit 2026-11-20):
+    /// DEVIATE RS1 (size builds, target opt-in, owners m64 and arm64, exit 2026-11-20):
     /// a loop is rotated only if the copied exit test folds in the
     /// preheader. gcc's `ch_base::copy_headers` copies at `-Os` only when the
     /// code does not grow; an unfolded guard is a compare and a branch

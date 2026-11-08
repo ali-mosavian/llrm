@@ -131,10 +131,13 @@ pub fn sign_extended_words(
         |block: usize, here: usize| block == here || !reach[here][here] || (reach[block][here] && reach[here][block]);
     // How many moves to or from data registers `v` needs as an address
     // register; `None` when a use of it cannot take one.
-    let free_uses = |v: usize, function: &MFunction, here: usize| -> Option<usize> {
+    let free_uses = |v: usize, function: &MFunction, here: usize, folding: usize| -> Option<usize> {
         let mut moves = 0;
-        for (at, inst) in
-            function.blocks.iter().enumerate().flat_map(|(at, block)| block.insts.iter().map(move |inst| (at, inst)))
+        for (at, index, inst) in function
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(at, block)| block.insts.iter().enumerate().map(move |(index, inst)| (at, index, inst)))
         {
             for (position, operand) in inst.operands.iter().enumerate() {
                 let (Operand::Def(Reg::Virt(r)) | Operand::Use(Reg::Virt(r))) = operand else { continue };
@@ -159,7 +162,10 @@ pub fn sign_extended_words(
                         let free = matches!(operand_class(name, position), Some(Class::Ar32))
                             || name.starts_with("MOV32")
                             || name == "MOVI32ri"
-                            || row_of(name).is_some();
+                            // only the add being folded: another add keeps its
+                            // data operands, and an address register there is
+                            // assembled as a data register
+                            || (row_of(name).is_some() && at == here && index == folding);
                         if !free {
                             return None;
                         }
@@ -175,7 +181,7 @@ pub fn sign_extended_words(
     // sources, one reached as a user to its users. Each join to one that does
     // not take an address register costs a move, which counts when it runs as
     // often as the add (`counts`).
-    let flexible = |v: usize, function: &MFunction, here: usize| -> Option<usize> {
+    let flexible = |v: usize, function: &MFunction, here: usize, folding: usize| -> Option<usize> {
         // (user, source, whether the move runs as often as the add)
         let mut joins: Vec<(usize, usize, bool)> = Vec::new();
         for (b, block) in function.blocks.iter().enumerate() {
@@ -211,7 +217,7 @@ pub fn sign_extended_words(
         while at < web.len() {
             let (current, up, down) = web[at];
             at += 1;
-            moves += free_uses(current, function, here)?;
+            moves += free_uses(current, function, here, folding)?;
             for &(user, source, runs) in &joins {
                 let (other, as_source) = if up && user == current {
                     (source, true)
@@ -223,7 +229,7 @@ pub fn sign_extended_words(
                 if web.iter().any(|&(member, ..)| member == other) {
                     continue;
                 }
-                if free_uses(other, function, here).is_some() {
+                if free_uses(other, function, here, folding).is_some() {
                     web.push((other, as_source, !as_source));
                 } else {
                     moves += usize::from(runs);
@@ -265,7 +271,8 @@ pub fn sign_extended_words(
             if !settled {
                 continue;
             }
-            let (Some(into), Some(out)) = (flexible(acc as usize, function, b), flexible(sum as usize, function, b))
+            let (Some(into), Some(out)) =
+                (flexible(acc as usize, function, b, at), flexible(sum as usize, function, b, at))
             else {
                 continue;
             };

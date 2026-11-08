@@ -685,6 +685,10 @@ impl Tti for X86 {
         self.tuning.inline_never_grows_without_rate
     }
 
+    fn unroll_object_bound(&self) -> Option<u32> {
+        self.tuning.unroll_object_bound
+    }
+
     fn inline_o1_weighs_entry(&self) -> bool {
         self.tuning.inline_o1_weighs_entry
     }
@@ -1449,6 +1453,14 @@ impl Tti for X86 {
     /// the pin's X86 leaves off). Six registers and a prefix on every scaled
     /// index make the model's best answer a loss in bytes and clocks too.
     fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    /// DEVIATE LU14: real mode searches both use orders (rcflip's RAMP loop:
+    /// 4 instructions in the pin's order, 2 in the other). owner:
+    /// llrm-target-x86-m16, exit: 2026-11-30, or when the pin's search is
+    /// order-free.
+    fn lsr_solves_both_use_orders(&self) -> bool {
         self.real_mode.is_some()
     }
 

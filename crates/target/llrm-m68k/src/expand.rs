@@ -415,7 +415,8 @@ pub fn finish_with(
     let mut last_block = 0usize;
     // the values of the stores whose pushes wait for the call, by offset
     let mut waiting: Vec<(i64, usize)> = Vec::new();
-    let mut block_of = kept.iter().map(|(at, _)| *at).peekable();
+    let blocks: Vec<usize> = kept.iter().map(|(at, _)| *at).collect();
+    let mut block_of = blocks.iter().copied().peekable();
     let mut shown = 0usize;
     // the operands of `inst` as the printer has them, with `pushed` bytes
     // more on the stack than the frame accounts for
@@ -471,6 +472,37 @@ pub fn finish_with(
             }
         }
     };
+    // Whether the stack pointer must be as the frame has it before the call
+    // that takes the arguments pushed at `from`: a block change or such an
+    // instruction comes first, and the cleanups owed would then pop these
+    // arguments instead of the earlier call's.
+    let pays_before_call = |from: usize| -> bool {
+        for next in from..insts.len() {
+            if blocks[next] != blocks[from] {
+                return true;
+            }
+            let inst = insts[next];
+            if inst.call {
+                return false;
+            }
+            if pushes.is_dropped(next)
+                || pushes.is_push(next)
+                || pushes.is_down(next)
+                || pushes.deferred_offset(next).is_some()
+                || pushes.cleanup(next).is_some()
+            {
+                continue;
+            }
+            if inst.terminator
+                || inst.barrier
+                || matches!(inst.kind, Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN"))
+                || crate::callpush::names_sp(inst, assignment)
+            {
+                return true;
+            }
+        }
+        true
+    };
     for (index, inst) in insts.iter().copied().enumerate() {
         let at = block_of.next().expect("a block per instruction");
         if owed > 0 && at != last_block {
@@ -503,6 +535,12 @@ pub fn finish_with(
         block_top = false;
         if inst.origin != 0 {
             last_origin = inst.origin;
+        }
+        if owed > 0 && (pushes.is_push(index) || (pushes.flushes(index) && !waiting.is_empty())) && pays_before_call(index)
+        {
+            frame_op(&FrameOp::AddSp(owed), &mut out, short);
+            pushed -= owed;
+            owed = 0;
         }
         if pushes.flushes(index) {
             waiting.sort_by(|a, b| b.0.cmp(&a.0));
