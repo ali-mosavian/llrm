@@ -63,9 +63,9 @@ def test_ours_is_flagless_pie_and_the_externals_beside_it_are_fpie(tmp_path):
         return native.compile_command(column, tmp_path, tmp_path / "a.c", "O2", tmp_path / "a.o", tmp_path)[0]
 
     assert "-fno-pic" not in command(native.OURS)
-    assert all("-fno-pic" not in command(column) for column in (native.OURS, *native.REPORTED))
+    assert all("-fno-pic" not in command(column) for column in (native.OURS, *(c for c in native.REPORTED if c != native.NOPIC)))
     assert all("-fPIE" in command(column) for column in native.REPORTED if column != native.NOPIC)
-    assert command(native.NOPIC)[0] == command(native.OURS)[0]
+    assert "-fno-pic" in command(native.NOPIC), "NOPIC, not the bar: ours -fno-pic stays reported"
 
 
 def test_one_binary_measured_twice_reads_the_same_count_to_the_rounding(tmp_path):
