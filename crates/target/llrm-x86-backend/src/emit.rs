@@ -2446,7 +2446,7 @@ impl Emitter<'_, '_> {
                 };
                 // Flat 32-bit: the pin's pseudos, which `callframe.rs` turns
                 // into pushes or `sub`/`add` (DEVIATE CF4).
-                if self.ctx.address_mode == AddrMode::Flat32 || self.ctx.reserved_calls {
+                if self.ctx.address_mode != AddrMode::Real16 || self.ctx.reserved_calls {
                     if bytes != 0 {
                         let width = if self.ctx.address_mode == AddrMode::Flat64 { 8 } else { 4 };
                         let imm = |value: i64| Loc::Imm(Imm { value, width, address: None });
