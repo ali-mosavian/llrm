@@ -4,11 +4,12 @@ use llrm_lir::registers::RegId;
 use llrm_support::hash::HashMap;
 use llrm_target::Target;
 
-use super::emit::{EmitContext, EmitError, emit};
-use super::opcodes::OpcodeMap;
-use super::schedule::{SchedInfo, schedule};
-use super::*;
-use crate::model::ir::{Loc, Reg};
+use crate::emit::emit;
+use llrm_codegen::backend::selectiondag::emit_api::{EmitContext, EmitError};
+use llrm_codegen::backend::selectiondag::opcodes::OpcodeMap;
+use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, schedule};
+use llrm_codegen::backend::selectiondag::*;
+use llrm_codegen::model::ir::{Loc, Reg};
 
 const EAX: u32 = u32::MAX;
 const NO_FLAGS: &[u16] = &[];
@@ -40,34 +41,34 @@ impl SchedInfo for Info {
 
 struct NoGlobals;
 
-impl super::emit::GlobalMap for NoGlobals {
+impl llrm_codegen::backend::selectiondag::emit_api::GlobalMap for NoGlobals {
     fn segment(
         &self,
         _symbol: Option<u32>,
-    ) -> crate::model::ir::Addr {
-        crate::model::ir::Addr::new(crate::model::ir::Space::Group, 0)
+    ) -> llrm_codegen::model::ir::Addr {
+        llrm_codegen::model::ir::Addr::new(llrm_codegen::model::ir::Space::Group, 0)
     }
 
     fn address(
         &self,
         symbol: u32,
         offset: i64,
-    ) -> crate::model::ir::Addr {
-        crate::model::ir::Addr {
+    ) -> llrm_codegen::model::ir::Addr {
+        llrm_codegen::model::ir::Addr {
             index: i64::from(symbol),
-            ..crate::model::ir::Addr::new(crate::model::ir::Space::Segment, offset)
+            ..llrm_codegen::model::ir::Addr::new(llrm_codegen::model::ir::Space::Segment, offset)
         }
     }
 }
 
 struct NoFrame;
 
-impl super::emit::FrameMap for NoFrame {
+impl llrm_codegen::backend::selectiondag::emit_api::FrameMap for NoFrame {
     fn cell(
         &self,
         _index: i32,
         _width: u32,
-    ) -> Option<crate::model::ir::Mem> {
+    ) -> Option<llrm_codegen::model::ir::Mem> {
         None
     }
 }
@@ -92,8 +93,8 @@ fn context_in(
         x87_prices: None,
         tables: &[],
         caller_saved: &Default::default(),
-        conventions: &super::emit::NoConventions,
-        constants: &super::emit::NoConstants,
+        conventions: &llrm_codegen::backend::selectiondag::emit_api::NoConventions,
+        constants: &llrm_codegen::backend::selectiondag::emit_api::NoConstants,
         stack_pointer: RegId::SP,
         strings: None,
         registers: llrm_target::Target::registers(&target),
@@ -109,7 +110,7 @@ fn context_in(
     });
 }
 
-fn text(insns: &[std::sync::Arc<crate::model::lir::Insn>]) -> Vec<String> {
+fn text(insns: &[std::sync::Arc<llrm_codegen::model::lir::Insn>]) -> Vec<String> {
     insns
         .iter()
         .map(|one| {

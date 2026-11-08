@@ -41,7 +41,12 @@ pub fn builder_target() -> BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
         soft_float: true,
-        jump_tables: false,
+        jump_tables: true,
+        // An entry is 2 B, a 16-bit compare-and-branch about 6: a table pays
+        // from a third of its range filled, at speed as well as size.
+        min_jump_table_density: Some(40),
+        preselection_blocks: Some(crate::prepare::PHI_EDGE),
+        variable_shift_legal: false,
         string_instructions: false,
         // the runtime's own routines (runtime/z80_rt.s). `memcpy` and `memmove`
         // take the C library's registers. The compiler's `memset` has the byte
@@ -123,6 +128,8 @@ pub struct Selection {
     /// (`BlockFrequencyInfo` over `BranchProbabilityInfo`), by block number: what
     /// the prices that choose between variants of the function weigh by.
     pub frequencies: Vec<(u32, f64)>,
+    /// The jump tables: the block of each entry, by table.
+    pub tables: Vec<Vec<u32>>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -232,8 +239,9 @@ pub fn select_function_with(
             module.global(id).linkage,
             llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
         );
+    let tables = info.jump_tables.clone();
     let frequencies = crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, unreachable, frequencies })
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, unreachable, frequencies, tables })
 }
 
 /// The variables of `function` (after the debug import): parameters in the

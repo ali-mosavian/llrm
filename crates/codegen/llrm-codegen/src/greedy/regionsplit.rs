@@ -1005,6 +1005,34 @@ impl Splitter<'_, '_> {
         BlockFrequency(cost)
     }
 
+    /// How many instructions read `virt` and how many write it, each counted
+    /// once (the sizes `calcSpillCost` weighs by frequency), and whether a
+    /// definition of it reads a register: such a value is made again only
+    /// where that register still holds it.
+    pub fn static_accesses(
+        &self,
+        virt: &Rc<LiveInterval>,
+    ) -> (u32, u32, bool) {
+        let mut seen: Vec<(InstrKey, bool, bool)> = Vec::new();
+        let mut def_reads_registers = false;
+        for operand in self.lis.operands(virt.reg()) {
+            let reads = operand.reads_reg || !operand.is_def;
+            if operand.is_def {
+                def_reads_registers |= !self.lis.instr(operand.instr).uses.is_empty();
+            }
+            match seen.iter_mut().find(|(key, ..)| *key == operand.instr) {
+                Some(one) => {
+                    one.1 |= reads;
+                    one.2 |= operand.is_def;
+                }
+                None => seen.push((operand.instr, reads, operand.is_def)),
+            }
+        }
+        let reads = seen.iter().filter(|one| one.1).count();
+        let writes = seen.iter().filter(|one| one.2).count();
+        (reads as u32, writes as u32, def_reads_registers)
+    }
+
     /// The `RS_Spill` half of `tryAssignCSRFirstTime`
     /// (RegAllocGreedy.cpp#L2388): whether the callee-saved register is used
     /// (the spill costs `csr_cost` or more), else `virt` is spilled.

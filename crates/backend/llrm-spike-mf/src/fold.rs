@@ -56,12 +56,25 @@ fn target(inst: &Inst) -> Option<u32> {
         )
 }
 
+/// A jump through a table names every block of it: `analyzeBranch` knows no such terminator.
+pub(crate) fn names_many(inst: &Inst) -> bool {
+    inst.operands.iter().filter(|operand| matches!(operand, Operand::Block(_))).count() > 1
+}
+
+/// Whether a terminator names block `id` anywhere in its operands.
+fn names(
+    inst: &Inst,
+    id: u32,
+) -> bool {
+    inst.terminator && inst.operands.iter().any(|operand| *operand == Operand::Block(id))
+}
+
 fn is_jump(inst: &Inst) -> bool {
-    inst.terminator && inst.barrier && target(inst).is_some()
+    inst.terminator && inst.barrier && target(inst).is_some() && !names_many(inst)
 }
 
 fn is_conditional(inst: &Inst) -> bool {
-    inst.terminator && !inst.barrier && target(inst).is_some()
+    inst.terminator && !inst.barrier && target(inst).is_some() && !names_many(inst)
 }
 
 fn same_branch(
@@ -96,7 +109,7 @@ pub(crate) fn remove_branch<C>(
     at: usize,
 ) {
     let insts = &mut function.blocks[at].insts;
-    while insts.last().is_some_and(|inst| inst.terminator && target(inst).is_some()) {
+    while insts.last().is_some_and(|inst| inst.terminator && target(inst).is_some() && !names_many(inst)) {
         insts.pop();
     }
 }
@@ -166,7 +179,7 @@ fn predecessors<C>(
     let at = position(function, id);
     (0..function.blocks.len())
         .filter(|&other| {
-            function.blocks[other].insts.iter().any(|inst| inst.terminator && target(inst) == Some(id))
+            function.blocks[other].insts.iter().any(|inst| names(inst, id))
                 || (other + 1 == at && can_fall_through(function, other))
         })
         .collect()
@@ -178,7 +191,7 @@ fn is_successor<C>(
     from: usize,
     id: u32,
 ) -> bool {
-    function.blocks[from].insts.iter().any(|inst| inst.terminator && target(inst) == Some(id))
+    function.blocks[from].insts.iter().any(|inst| names(inst, id))
         || (can_fall_through(function, from) && function.blocks[from + 1].id == id)
 }
 
@@ -354,7 +367,7 @@ impl<C, J: Jump> Folder<'_, C, J> {
                 if self.function.blocks[at]
                     .insts
                     .first()
-                    .is_some_and(|first| first.terminator && target(first).is_some())
+                    .is_some_and(|first| first.terminator && target(first).is_some() && !names_many(first))
                     && taken != id
                 {
                     remove_branch(self.function, at);
@@ -501,7 +514,7 @@ fn is_branching<C>(
     function: &MFunction<C>,
     at: usize,
 ) -> bool {
-    function.blocks[at].insts.last().is_some_and(|last| last.terminator && target(last).is_some())
+    function.blocks[at].insts.last().is_some_and(|last| last.terminator && target(last).is_some() && !names_many(last))
 }
 
 /// A register or the status flags, as an instruction reads or writes them.

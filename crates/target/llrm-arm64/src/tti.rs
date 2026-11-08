@@ -331,6 +331,13 @@ impl Tti for AArch64 {
         250_000
     }
 
+    /// DEVIATE ARM64-IPRA (owner w15, exit 2026-11-30): the pin has
+    /// `-enable-ipra` off; GCC's `-fipa-ra` is on from -O1 and its recpow -Os
+    /// is 32 B smaller for it.
+    fn interprocedural_register_use(&self) -> bool {
+        true
+    }
+
     /// 250 clocks a byte (the bar's price, as UP1 and the speed inline rate).
     fn speed_milliclocks_per_byte(&self) -> i64 {
         250_000

@@ -248,6 +248,10 @@ def CMOV16 : Z80Inst<(outs GR16:$d), (ins GR16:$f0, GR16:$t, i8imm:$cc, Flags:$f
 let isBranch = 1, isTerminator = 1, isBarrier = 1 in
   def JP : Z80Inst<(outs), (ins brtarget:$t), "jp $t", [(br bb:$t)]>;
 
+// A jump through a table: the word loaded from it is in HL.
+let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in
+  def JPHL : Z80Inst<(outs), (ins HLR:$p), "jp ($p)", [(brind i16:$p)]>;
+
 let isCall = 1 in
   def CALL : Z80Inst<(outs), (ins calltarget:$t), "call $t", [(Z80call tglobaladdr:$t)]>;
 // a routine the selector names itself (the libcall of a fill or copy of unknown size)
@@ -327,6 +331,7 @@ let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in
 
 // A global's address is a 16-bit immediate the linker fills in.
 def : Pat<(i16 (Z80wrapper tglobaladdr:$a)), (LD16ri tglobaladdr:$a)>;
+def : Pat<(i16 (Z80wrapper tjumptable:$a)), (LD16ri tjumptable:$a)>;
 
 // The builder joins two bytes as `lo | (hi << 8)` over either kind of extension: that is the pair.
 def ext8 : PatFrags<(ops node:$a), [(zext node:$a), (anyext node:$a)]>;

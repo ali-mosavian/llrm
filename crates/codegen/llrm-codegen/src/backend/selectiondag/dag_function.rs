@@ -48,7 +48,7 @@ use llrm_target::routines::Used;
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, RuntimeAnswer, SizeTrade, build_block};
 use super::dag_select::select_block;
-use super::emit::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
+use super::emit_api::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
 use super::function_lowering::FunctionLoweringInfo;
 use super::mvt::MVT;
 use super::opcodes::OpcodeMap;
@@ -190,7 +190,7 @@ impl FrameObjects for Temporaries<'_> {
 /// The module's globals by `GlobalId`: where each symbol is.
 struct Globals<'a>(&'a Module, llrm_mir::spaces::Spaces);
 
-impl super::emit::GlobalMap for Globals<'_> {
+impl super::emit_api::GlobalMap for Globals<'_> {
     fn segment(
         &self,
         symbol: Option<u32>,
@@ -427,7 +427,7 @@ impl CallConventions<'_> {
     }
 }
 
-impl super::emit::Conventions for CallConventions<'_> {
+impl super::emit_api::Conventions for CallConventions<'_> {
     fn effects(
         &self,
         callee: Option<&Callee>,
@@ -585,14 +585,14 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
     slots
         .entry(bits)
         .or_insert_with(|| {
-            let forms = llrm_target::instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
+            let forms = llrm_target::instr::shared(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
             let opcodes = match bits {
                 16 => x86_m16::MACHINE_OPCODES,
                 64 => x86_x64::MACHINE_OPCODES,
                 _ => x86_i486::MACHINE_OPCODES,
             };
             std::sync::Arc::new(Tables {
-                map: OpcodeMap::new(forms),
+                map: OpcodeMap::shared(forms),
                 names: opcodes
                     .iter()
                     .copied()
@@ -819,7 +819,7 @@ pub fn selected_in_pool(
 /// The module's constant pool as the emitter asks it.
 struct PoolCells<'a>(std::cell::RefCell<&'a mut Pool>);
 
-impl super::emit::ConstantCells for PoolCells<'_> {
+impl super::emit_api::ConstantCells for PoolCells<'_> {
     fn cell(
         &self,
         bytes: Vec<u8>,
@@ -835,7 +835,7 @@ impl super::emit::ConstantCells for PoolCells<'_> {
 fn narrow_divide_live(
     module: &llrm_mir::module::Module,
     function: &llrm_mir::module::Function,
-) -> HashMap<BlockId, u32> {
+) -> llrm_mir::dense::IdMap<BlockId, u32> {
     use llrm_mir::opcode::{BinaryOp, Opcode};
     let narrow = |inst: llrm_mir::module::InstId| {
         let op = function.instruction(inst);
@@ -845,7 +845,7 @@ fn narrow_divide_live(
     };
     let blocks: Vec<BlockId> =
         function.layout().iter().copied().filter(|&block| function.iter_block(block).any(narrow)).collect();
-    let mut live = HashMap::default();
+    let mut live = llrm_mir::dense::IdMap::new();
     if blocks.is_empty() {
         return live;
     }
@@ -1163,7 +1163,7 @@ fn selected_in(
         } else {
             Cpu::I486
         },
-        opt_none: false,
+        opt_none: !cpu.optimized,
         opt_for_size: cpu.size,
         min_size: llrm_mir::memory::has(&function.attrs, "minsize"),
         has_frame_pointer: true,
@@ -1264,7 +1264,7 @@ fn selected_in(
     let x87_prices = (!arch.scalar_sse())
         .then(|| {
             let cost = |name: &str| cpu.cost(name).ok();
-            Some(super::emit::X87Prices {
+            Some(super::emit_api::X87Prices {
                 load: cost("x87_load")?,
                 add: cost("x87_add")?,
                 add_m: cost("x87_add_m")?,
@@ -1349,7 +1349,7 @@ fn selected_in(
         llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
     });
     let div_live = if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 };
-    let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { HashMap::default() };
+    let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { llrm_mir::dense::IdMap::new() };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
         if cpu.optimized && !fast_ids.contains(&block.0) && block == parent {
@@ -2010,6 +2010,21 @@ pub(super) fn set_odds(
             continue;
         };
         *stated.entry((at, to_at)).or_insert(0) += u64::from(probability);
+    }
+    // The machine CFG lists successors in `addSuccessor` order, true edge
+    // first, whichever side the jump ends up on; placement breaks ties by it.
+    let mut order: IndexMap<i64, Vec<i64>> = IndexMap::default();
+    for &(at, to_at) in stated.keys() {
+        order.entry(at).or_default().push(to_at);
+    }
+    for block in &mut body.blocks {
+        let Some(stated_order) = order.get(&block.at).filter(|_| block.succ.len() > 1) else { continue };
+        let mut reordered: Vec<i64> = stated_order.iter().copied().filter(|to| block.succ.contains(to)).collect();
+        let rest: Vec<i64> = block.succ.iter().copied().filter(|to| !reordered.contains(to)).collect();
+        reordered.extend(rest);
+        if reordered[..] != block.succ[..] {
+            block.succ = reordered.into();
+        }
     }
     // `normalizeSuccProbs`: the edges of a block share one.
     let mut total: IndexMap<i64, u64> = IndexMap::default();

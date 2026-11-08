@@ -367,7 +367,13 @@ pub fn machine_with<'a>(
         }),
         // Last: this physical order decides which explicit edge is now
         // fall-through.
-        Box::new(jumps::ControlFlow { cpu: target, calls: calls.cloned() }),
+        Box::new(jumps::ControlFlow {
+            cpu: target,
+            calls: calls.cloned(),
+            saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+            free: registers.free,
+            pointer: registers.pointer,
+        }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
     ];

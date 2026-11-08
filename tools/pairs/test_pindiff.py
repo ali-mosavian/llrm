@@ -438,3 +438,17 @@ def test_a_pin_llc_that_exits_zero_without_output_is_refused_not_read_from_the_l
     src.write_text("void f(void){}\n")
     result = pindiff.one(src, "m32", "O2", "llc", tmp_path, False)
     assert isinstance(result, str) and result.startswith("pin llc:"), result
+
+
+def test_lea_padding_counts_as_padding_not_code():
+    """Ours aligns with `lea esi,[esi+eiz*1+0x0]`; the nop-only filter left ~1.7 KB of it in memory_expansion's "padding-free" bytes (m32 -O1:
+    ours 31083 B read 31006 against the pin's 30095), and the code-B gap of every m32 row came out too large (2026-11-08)."""
+    pindiff = load("pindiff")
+    listing = (
+        "   0:\tb8 01 00 00 00       \tmov    eax,0x1\n"
+        "   5:\t8d b4 26 00 00 00 00 \tlea    esi,[esi+eiz*1+0x0]\n"
+        "   c:\t8d 76 00             \tlea    esi,[esi+0x0]\n"
+        "   f:\t8d 04 06             \tlea    eax,[esi+eax*1]\n"
+        "  12:\t90                   \tnop\n"
+    )
+    assert pindiff.nop_bytes(listing) == 7 + 3 + 1

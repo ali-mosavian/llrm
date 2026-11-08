@@ -87,6 +87,12 @@ pub trait Target {
     ) -> bool {
         one == other
     }
+    /// The two byte registers a pair register is made of. Liveness follows
+    /// the bytes: a pair read after its bytes were written is not live from
+    /// the entry.
+    fn lanes_of(_register: RegId) -> Option<[RegId; 2]> {
+        None
+    }
     /// Whether a register worth `weight` (its mentions, each scaled by its loop
     /// depth) should take `root`, when `first_use` says no other register
     /// of the function has taken it yet. A target whose registers cost
@@ -143,6 +149,12 @@ pub trait Target {
     /// on entry and restored on exit (`getCSRFirstUseCost`).
     fn csr_first_use_cost() -> u32 {
         0
+    }
+
+    /// What a callee-saved register and a spill cost in bytes, where `-Os`
+    /// prices the first use of a callee-saved register by them (DEVIATE CSR5).
+    fn size_bytes() -> Option<llrm_codegen::greedy::targetinfo::SizeBytes> {
+        None
     }
 
     /// The percentage of that cost greedy charges (LLVM's default 30 prices
@@ -687,6 +699,19 @@ struct Nodes {
 }
 
 impl Nodes {
+    /// The nodes a register stands for: a physical pair is its two bytes.
+    fn all<T: Target>(
+        &mut self,
+        register: Reg,
+    ) -> Vec<usize> {
+        if let Reg::Phys(p) = register
+            && let Some(lanes) = T::lanes_of(T::root(p))
+        {
+            return lanes.iter().map(|lane| self.of::<T>(Reg::Phys(*lane))).collect();
+        }
+        vec![self.of::<T>(register)]
+    }
+
     fn of<T: Target>(
         &mut self,
         register: Reg,
@@ -721,8 +746,8 @@ fn effects<T: Target>(
     let mut uses = Vec::new();
     for operand in &inst.operands {
         match operand {
-            Operand::Def(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => defs.push(nodes.of::<T>(*r)),
-            Operand::Use(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => uses.push(nodes.of::<T>(*r)),
+            Operand::Def(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => defs.extend(nodes.all::<T>(*r)),
+            Operand::Use(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => uses.extend(nodes.all::<T>(*r)),
             _ => {}
         }
     }

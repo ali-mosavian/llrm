@@ -45,8 +45,8 @@ pub fn layout() -> llrm_target::layout::Layout {
 pub struct M32;
 
 /// The registers and the address forms the descriptions state.
-static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> =
-    LazyLock::new(|| llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"));
+static REGISTERS: LazyLock<std::sync::Arc<Vec<llrm_target::registers::Register>>> =
+    LazyLock::new(|| llrm_target::registers::file(include_str!("registers.regs")).expect("registers.regs parses"));
 
 /// How flat operations are priced from the instruction forms: `opcosts.txt`.
 static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
