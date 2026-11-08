@@ -238,6 +238,10 @@ impl llrm_target::Target for M64 {
         CALLING.native().frame_wrap_split_size
     }
 
+    fn frame_object_aligned(&self) -> bool {
+        CALLING.native().frame_object_aligned
+    }
+
     fn frame_red_zone(&self) -> i64 {
         CALLING.native().frame_red_zone
     }

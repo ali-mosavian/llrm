@@ -337,6 +337,7 @@ fn a_full_unroll_hands_over_the_loops_it_made() {
             only_when_forced: false,
             target_unrolling: false,
             created: std::rc::Rc::clone(&created),
+            decided: Default::default(),
         },
     );
     assert!(!text.contains("%i = phi"), "the outer loop is gone: {text}");
@@ -360,6 +361,7 @@ fn a_full_unroll_hands_over_the_inner_loop_of_its_first_trip() {
             only_when_forced: false,
             target_unrolling: false,
             created: std::rc::Rc::clone(&created),
+            decided: Default::default(),
         },
     );
     // The text has five blocks, b0 to out: a loop headed by one of them is the
@@ -935,6 +937,7 @@ fn test_a_function_the_unroll_leaves_alone_makes_no_loop_analyses() {
             only_when_forced: false,
             target_unrolling: false,
             created: Default::default(),
+            decided: Default::default(),
         },
     );
     let made = get(Event::LoopAnalyses) - before;
@@ -1002,6 +1005,7 @@ out:
             only_when_forced: false,
             target_unrolling: false,
             created: Default::default(),
+            decided: Default::default(),
         },
     );
     assert_eq!(llrm_analysis::cfg::shapes_derived(), before, "a shape was made again");
@@ -1038,6 +1042,7 @@ out:
             only_when_forced: false,
             target_unrolling: false,
             created: Default::default(),
+            decided: Default::default(),
         },
     );
     assert_eq!(crate::lcssa::TREES_MADE.with(std::cell::Cell::get), 0, "a tree was made again");
@@ -1077,6 +1082,7 @@ out:
             only_when_forced: false,
             target_unrolling: false,
             created: Default::default(),
+            decided: Default::default(),
         },
     );
     assert_eq!(crate::lcssa::LOOPS_FORMED.with(std::cell::Cell::get), 0, "the function was closed again");
@@ -1136,6 +1142,6 @@ out:
 ";
     let mut module = parsed(text);
     let created = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let out = crate::testing::managed(&mut module, super::LoopFullUnroll { opt_level: 3, opt_size: false, only_when_forced: false, target_unrolling: false, created });
+    let out = crate::testing::managed(&mut module, super::LoopFullUnroll { opt_level: 3, opt_size: false, only_when_forced: false, target_unrolling: false, created, decided: Default::default() });
     assert!(!out.contains("%i = phi"), "the outer loop is gone: {out}");
 }
