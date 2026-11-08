@@ -2103,3 +2103,39 @@ fn a_byte_shifted_far_rotates_through_a_and_masks() {
         assert!(out.contains(rotates) && !out.contains("sla") && !out.contains("add a, a"), "{op} {ty} {n}\n{out}");
     }
 }
+
+/// A test that tail-calls one function or falls on to a second test was `jr nz, L; L1: jp _h; L:` (sibling_call_callees:
+/// 5 B where `jp z, _h` is 3).
+#[test]
+fn a_branch_over_a_tail_call_is_the_tail_call_on_the_opposite_condition() {
+    let ir = include_str!("kernels/ir/sibling_call_callees.ll");
+    let out = text(ir, "g", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("jp z, _h") && !out.contains("jr nz") && !out.contains("jp nz"), "{out}");
+}
+
+/// A byte widened and combined with a word (`or`, `and`, `xor`, with a register or a constant) ran the zero high
+/// lane through `a` (`ld b, #0; ld a, b; or a, #129; ld b, a`): volatile_bitfield's bit-field inserts, 4 instructions
+/// where `ld b, #129` does.
+#[test]
+fn a_widened_byte_combined_with_a_word_skips_its_zero_lane() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i16 @or_const(i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %z, 33280\n  ret i16 %r\n}\n\
+              define i16 @or_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %x, %z\n  ret i16 %r\n}\n\
+              define i16 @and_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = and i16 %x, %z\n  ret i16 %r\n}\n";
+    let ors = |name| text(ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let constant = ors("or_const");
+    assert!(constant.contains("#130") && !constant.contains("or a,"), "{constant}");
+    let word = ors("or_word");
+    assert_eq!(word.matches("or a,").count(), 1, "only the low lane: {word}");
+    let both = ors("and_word");
+    assert_eq!(both.matches("and a,").count(), 1, "only the low lane: {both}");
+}
+
+/// The sign of a sign mask is the mask: widening `a` right after `sbc a, a` (0 or 255) ran `rla; sbc a, a` again
+/// (high_byte's signed_high, 2 B and 8 T).
+#[test]
+fn a_sign_mask_widens_without_taking_its_sign_again() {
+    let ir = include_str!("kernels/ir/high_byte.ll");
+    let out = text(ir, "signed_high", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("rla").count(), 1, "{out}");
+}

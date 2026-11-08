@@ -25,6 +25,13 @@
 //! CF1). The pin skips it where `slowTwoMemOps` holds; the i486 and the 8086 do
 //! not set it.
 //!
+//! DEVIATE CF2 (no number): a volatile load is not folded. The pin's
+//! [`canFoldIntoRegPush`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L603)
+//! asks only `isLoadFoldBarrier`, so it pushes `loc[0]` before it loads
+//! `loc[5]`: volatile loads reordered, a pin miscompile
+//! (`os_locals_between_pushes`, +18 B on `probe` -Os). Exit: none, program
+//! order beats bytes.
+//!
 //! DEVIATE CF1 (no number): the pin's input is `mov [esp+k], r` stores into a
 //! reserved frame, converted to pushes and folded in one pass; ours has pushes
 //! from selection, so the conversion has no input and `isProfitable` (its

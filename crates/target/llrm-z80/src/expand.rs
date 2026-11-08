@@ -202,6 +202,63 @@ impl Printer<'_> {
         }
     }
 
+    /// Whether `a` holds 0 or 255 here: the last write to it in this straight line is `sbc a, a`, and the lines
+    /// since only store it.
+    fn a_is_mask(&self) -> bool {
+        for line in self.out.iter().rev() {
+            match line {
+                Line::Loc(_) => continue,
+                Line::Label(_) => return false,
+                Line::Inst(text) if text == "sbc a, a" => return true,
+                Line::Inst(text) => {
+                    let stores = text.strip_prefix("ld ").and_then(|rest| rest.split_once(", ")).is_some_and(
+                        |(to, from)| from == "a" && to != "a" && (to.len() == 1 || to.starts_with('(')),
+                    );
+                    if !stores {
+                        return false;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether byte register `lane` holds 0 here: its last write in this straight line is `ld lane, #0`, and
+    /// nothing since names its pair, jumps, calls or enters a label.
+    fn lane_is_zero(
+        &self,
+        lane: RegId,
+    ) -> bool {
+        let want = name(lane);
+        let pair = match want {
+            "b" | "c" => "bc",
+            "d" | "e" => "de",
+            "h" | "l" => "hl",
+            _ => return false,
+        };
+        for line in self.out.iter().rev() {
+            match line {
+                Line::Loc(_) => continue,
+                Line::Label(_) => return false,
+                Line::Inst(text) => {
+                    if text == &format!("ld {want}, #0") {
+                        return true;
+                    }
+                    // the other byte of the pair may be read or written; this one and the pair may not be named
+                    let named = text
+                        .split([' ', ',', '(', ')', '+'])
+                        .filter(|word| !word.is_empty())
+                        .skip(1)
+                        .any(|word| word == want || word == pair);
+                    if named || HIDDEN.contains(&text.split(' ').next().unwrap_or("")) {
+                        return false;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// A copy: bytes with `ld`, a pair as its two bytes.
     fn copy(
         &mut self,
@@ -346,8 +403,11 @@ impl Printer<'_> {
                 let (pair, _) = (self.register(inst, 0)?, self.register(inst, 1)?);
                 let (dl, dh) = lanes(pair)?;
                 self.push(format!("ld {}, a", name(dl)));
-                self.push("rla");
-                self.push("sbc a, a");
+                // `a` is 0 or 255 already: its sign is itself
+                if !self.a_is_mask() {
+                    self.push("rla");
+                    self.push("sbc a, a");
+                }
                 self.push(format!("ld {}, a", name(dh)));
             }
             "SUBZX8" => {
@@ -643,6 +703,11 @@ impl Printer<'_> {
                 };
                 let ((dl, dh), (al, ah)) = (lanes(to)?, lanes(a)?);
                 for (d, x, byte) in [(dl, al, mask & 0xFF), (dh, ah, (mask >> 8) & 0xFF)] {
+                    // a lane known to be 0: `and` is 0, `or`/`xor` the mask byte itself
+                    if self.lane_is_zero(x) {
+                        self.push(format!("ld {}, #{}", name(d), if mnemonic == "and" { 0 } else { byte }));
+                        continue;
+                    }
                     match (mnemonic.as_str(), byte) {
                         ("and", 0xFF) | ("or", 0) | ("xor", 0) => self.byte_move(d, x),
                         ("and", 0) => self.push(format!("ld {}, #0", name(d))),
@@ -660,6 +725,16 @@ impl Printer<'_> {
                 let (to, a, b) = (self.register(inst, 0)?, self.register(inst, 1)?, self.register(inst, 2)?);
                 let ((dl, dh), (al, ah), (bl, bh)) = (lanes(to)?, lanes(a)?, lanes(b)?);
                 for (d, x, y) in [(dl, al, bl), (dh, ah, bh)] {
+                    // a lane known to be 0: `and` is 0, `or`/`xor` the other lane
+                    let (zero_x, zero_y) = (self.lane_is_zero(x), self.lane_is_zero(y));
+                    if mnemonic == "and" && (zero_x || zero_y) {
+                        self.push(format!("ld {}, #0", name(d)));
+                        continue;
+                    }
+                    if mnemonic != "and" && (zero_x || zero_y) {
+                        self.byte_move(d, if zero_y { x } else { y });
+                        continue;
+                    }
                     self.push(format!("ld a, {}", name(x)));
                     self.push(format!("{mnemonic} a, {}", name(y)));
                     self.push(format!("ld {}, a", name(d)));
@@ -1866,7 +1941,57 @@ pub fn finish(
 /// The post-printer passes. `forward_high_bytes` runs before `drop_overwritten_byte_stores`: the latter drops the
 /// `ld R1, S1` the former needs to see.
 fn tidy(lines: Vec<Line>) -> Vec<Line> {
-    drop_unreachable(drop_overwritten_byte_stores(forward_byte_copies(forward_high_bytes(cancel_steps(lines)))))
+    branch_over_tail_jump(drop_unreachable(drop_overwritten_byte_stores(forward_byte_copies(forward_high_bytes(cancel_steps(lines))))))
+}
+
+/// `jp cc, L; M: jp SYMBOL; L:` with nothing else naming `M` is `jp !cc, SYMBOL; L:`: the conditional jump over a
+/// tail call is the tail call's own condition (the pin's branch folder reverses a branch over an unconditional one).
+fn branch_over_tail_jump(lines: Vec<Line>) -> Vec<Line> {
+    let named = |lines: &[Line], label: &str| {
+        lines.iter().any(|line| matches!(line, Line::Inst(text) if text.rsplit([' ', ',']).next() == Some(label)))
+    };
+    let opposite = |cc: &str| match cc {
+        "nz" => Some("z"),
+        "z" => Some("nz"),
+        "nc" => Some("c"),
+        "c" => Some("nc"),
+        _ => None,
+    };
+    let mut at = 0;
+    let mut lines = lines;
+    while at < lines.len() {
+        let folded = (|| {
+            let Line::Inst(branch) = &lines[at] else { return None };
+            let (cc, target) = branch.strip_prefix("jp ")?.split_once(", ")?;
+            let cc = opposite(cc)?;
+            let mut next = at + 1;
+            let mut step = |next: &mut usize| {
+                while matches!(lines.get(*next), Some(Line::Loc(_))) {
+                    *next += 1;
+                }
+            };
+            step(&mut next);
+            let Some(Line::Label(middle)) = lines.get(next) else { return None };
+            next += 1;
+            step(&mut next);
+            let Some(Line::Inst(jump)) = lines.get(next) else { return None };
+            let symbol = jump.strip_prefix("jp ")?;
+            if symbol.contains(',') || block_of(symbol).is_some() || symbol.ends_with('$') {
+                return None;
+            }
+            let jump_at = next;
+            next += 1;
+            step(&mut next);
+            let Some(Line::Label(after)) = lines.get(next) else { return None };
+            (after == target && !named(&lines, middle)).then(|| (format!("jp {cc}, {symbol}"), jump_at))
+        })();
+        if let Some((text, jump_at)) = folded {
+            lines[at] = Line::Inst(text);
+            lines.drain(at + 1..=jump_at);
+        }
+        at += 1;
+    }
+    lines
 }
 
 /// Whether `text` ends the flow: `ret`, `jp L` or `jr L` with no condition.
