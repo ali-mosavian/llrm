@@ -365,7 +365,12 @@ mod tests {
             let whole = classes.registers.root(classes.frame);
             let word = llrm_x86::registers::word_of(whole);
             assert!(word.is_some(), "{}: the frame has a word", arch.name());
-            assert!(free.word_bases.contains(&word.unwrap()) && free.word_indexes.contains(&word.unwrap()));
+            let word = word.unwrap();
+            // The old sets plus the frame's word, exactly.
+            let (mut bases, mut indexes) = (classes.word_bases.clone(), classes.word_indexes.clone());
+            bases.insert(word);
+            indexes.insert(word);
+            assert_eq!((free.word_bases, free.word_indexes), (bases, indexes), "{}", arch.name());
         }
     }
 
