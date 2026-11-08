@@ -757,6 +757,10 @@ impl Tti for X86 {
         self.tuning.imul_at_size
     }
 
+    fn rep_stos_at_size(&self) -> bool {
+        self.tuning.rep_stos_at_size
+    }
+
     fn has_cmov(&self) -> bool {
         self.cmov
     }
