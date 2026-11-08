@@ -13,7 +13,7 @@ fn compile(
     env: &[(&str, &str)],
     flags: &[&str],
 ) -> Option<(Output, std::path::PathBuf)> {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
         eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return None;
     }

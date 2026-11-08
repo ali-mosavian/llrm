@@ -22,7 +22,7 @@ fn asm_of(
     tag: &str,
 ) -> String {
     assert!(
-        llrm_cc::ow_tree().is_dir(),
+        llrm_cc::ow_present(),
         "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
     );
     assert!(
@@ -55,7 +55,7 @@ fn peels_source(
     level: &str,
 ) -> bool {
     assert!(
-        llrm_cc::ow_tree().is_dir(),
+        llrm_cc::ow_present(),
         "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
     );
     assert!(
