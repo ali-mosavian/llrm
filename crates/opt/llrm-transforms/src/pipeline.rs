@@ -936,7 +936,7 @@ pub(crate) fn llvm_order(
                         },
                     }),
                 ),
-                // DEVIATE VASTART-PROMOTE: a one-pointer `va_list` is a slot SROA can promote.
+                // DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27): a one-pointer `va_list` is a slot SROA can promote.
                 slot("vastart@1178", Box::new(crate::vastart::VaStart)),
                 sroa("sroa@1179"),
                 earlycse("earlycse@1180", false),
