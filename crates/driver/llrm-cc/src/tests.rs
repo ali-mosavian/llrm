@@ -273,6 +273,15 @@ fn fverify_ir_reaches_the_backend() {
     assert!(one.clang.is_empty(), "{:?}", one.clang);
 }
 
+/// `-fend-biased-trial` went to clang as an unknown argument: the A/B of the
+/// trial compiled nothing.
+#[test]
+fn fend_biased_trial_reaches_the_backend() {
+    let one = built("-fend-biased-trial -c x.c");
+    assert_eq!(one.llc, words("-fend-biased-trial"));
+    assert!(one.clang.is_empty(), "{:?}", one.clang);
+}
+
 /// The m16 datalayout is stated in the target's `datalayout.toml` and again in
 /// every m16 row of the table, and clang's own (the fork's `I8086.h`). A row
 /// that drifted compiled with another `long double` layout than the backend

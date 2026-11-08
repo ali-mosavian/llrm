@@ -423,6 +423,7 @@ const LLC_FLAGS: &[&str] = &[
     "-fstack-usage",
     "-ffloat-store",
     "-fverify-ir",
+    "-fend-biased-trial",
     "-fno-float-store",
     "-ffunction-sections",
     "-fno-function-sections",
