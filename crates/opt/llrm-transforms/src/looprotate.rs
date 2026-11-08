@@ -118,6 +118,11 @@ pub struct Options {
     /// `CodeSize` of the branches the rotation removes, the loop-closing jump
     /// and the header's exit test.
     pub priced_at_size: bool,
+    /// DEVIATE ROT-CARRY (size builds, target opt-in, owner arm64, exit 2026-11-30):
+    /// the header's price also counts each header phi the loop exits with, one
+    /// instruction apiece in the guard's exit (recsum, recfloat -Os: +8 B each
+    /// against gcc, which does not rotate). Needs `priced_at_size`.
+    pub priced_exit_carries: bool,
     /// DEVIATE RS1 (size builds, target opt-in, owners m64 and arm64, exit 2026-11-20):
     /// a loop is rotated only if the copied exit test folds in the
     /// preheader. gcc's `ch_base::copy_headers` copies at `-Os` only when the
@@ -616,6 +621,34 @@ fn split_critical_edge(
     Some(split)
 }
 
+/// How many phis in the loop's exit blocks take a header phi from the header
+/// (`priced_at_size`): the rotated guard's exit must produce each of them.
+fn exit_phis_of_header_phis(
+    function: &Function,
+    lp: Loop,
+    header: BlockId,
+) -> i64 {
+    let mut count = 0;
+    let header_phis: Vec<_> = function
+        .iter_block(header)
+        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+        .filter_map(|inst| function.instruction(inst).result)
+        .collect();
+    for exit in function.successors(header).into_iter().filter(|&block| !lp.contains(block)) {
+        for inst in function.iter_block(exit) {
+            if function.instruction(inst).opcode != Opcode::Phi {
+                break;
+            }
+            for (value, from) in arms(function, inst) {
+                if from == header && matches!(value, Operand::Value(one) if header_phis.contains(&one)) {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
 /// Whether the header's exit count is computable (RS1): a counted loop keeps
 /// its rotated form, which the induction variable passes after it read.
 fn header_exit_count_known(
@@ -804,7 +837,11 @@ fn rotate_loop(
                 .value
             };
             let latch_end = function.terminator(orig_latch).expect("a latch ends in a terminator");
-            if metrics.num_insts.value > size(header_end) + size(latch_end) {
+            // The guard's own exit also carries each header phi the loop
+            // exits with: one more instruction apiece in the preheader.
+            let carried =
+                if run.options.priced_exit_carries { exit_phis_of_header_phis(function, lp, orig_header) } else { 0 };
+            if metrics.num_insts.value + carried > size(header_end) + size(latch_end) {
                 return None;
             }
         }
@@ -1236,6 +1273,7 @@ impl FunctionPass for LoopRotate {
         let options = Options {
             max_header_size: header_limit(self.duplicate_headers, self.size, outer.target(), &*tti),
             priced_at_size: self.size && tti.rotation_header_priced_at_size(),
+            priced_exit_carries: self.size && tti.rotation_prices_exit_carries(),
             guard_must_fold: self.size && tti.rotation_guard_must_fold_at_size(),
             free_guard: self.free_guard && self.size && !self.duplicate_headers && tti.rotation_free_guard_at_minsize(),
             rotation_only: false,

@@ -17,6 +17,7 @@ fn rotated(module: &mut Module) -> bool {
     let options = Options {
         max_header_size: 16,
         priced_at_size: false,
+        priced_exit_carries: false,
         guard_must_fold: false,
         free_guard: false,
         rotation_only: false,
@@ -214,6 +215,7 @@ declare i16 @late(i16)
     let options = Options {
         max_header_size: 16,
         priced_at_size: false,
+        priced_exit_carries: false,
         guard_must_fold: false,
         free_guard: false,
         rotation_only: false,
@@ -384,6 +386,7 @@ fn rotated_priced(module: &mut Module) -> bool {
     let options = Options {
         max_header_size: 16,
         priced_at_size: true,
+        priced_exit_carries: false,
         guard_must_fold: false,
         free_guard: false,
         rotation_only: false,
@@ -441,6 +444,7 @@ fn rotated_checking(check_exit_count: bool) -> bool {
     let options = Options {
         max_header_size: 16,
         priced_at_size: false,
+        priced_exit_carries: false,
         guard_must_fold: false,
         free_guard: false,
         rotation_only: false,
@@ -482,6 +486,7 @@ fn test_check_exit_count_asks_with_one_session_for_all_the_loops_it_leaves() {
     let options = Options {
         max_header_size: 16,
         priced_at_size: false,
+        priced_exit_carries: false,
         guard_must_fold: false,
         free_guard: false,
         rotation_only: false,
@@ -580,6 +585,7 @@ fn rotated_guard_must_fold(text: &str) -> bool {
     let options = Options {
         max_header_size: 16,
         priced_at_size: false,
+        priced_exit_carries: false,
         guard_must_fold: true,
         free_guard: false,
         rotation_only: false,
@@ -659,6 +665,7 @@ fn rotated_at_minsize(
     let options = Options {
         max_header_size: 0,
         priced_at_size: false,
+        priced_exit_carries: false,
         guard_must_fold: false,
         free_guard,
         rotation_only: false,
@@ -680,4 +687,34 @@ fn test_minsize_rotates_a_loop_whose_copied_header_folds_away_only() {
     assert!(!rotated_at_minsize(COUNTED, true), "`0 < n` stays a compare and a branch");
     let wide = folded.replace("i16", "i64");
     assert!(!rotated_at_minsize(&wide, true), "a counter wider than a register keeps its test above the body");
+}
+
+/// -Os arm64 with the exit carries priced: COUNTED exits with `%acc`, a header
+/// phi, so its guard's exit would need one more instruction than the branches
+/// rotation removes (recsum, recfloat: +8 B each against gcc).
+#[test]
+fn test_a_size_build_prices_the_header_phis_the_guard_exit_carries() {
+    let rotate = |source: &str, carries: bool| {
+        let mut module = parsed(source);
+        let function = module.function_mut("f").expect("@f").1;
+        crate::loopsimplify::simplified(function);
+        crate::testing::closed(&mut module).expect("closes");
+        let tti = llrm_arm64::tti::AArch64::of_cpu("generic").expect("a cpu");
+        let options = Options {
+            max_header_size: 16,
+            priced_at_size: true,
+            priced_exit_carries: carries,
+            guard_must_fold: false,
+            free_guard: false,
+            rotation_only: false,
+            is_util_mode: false,
+            prepare_for_lto: false,
+            check_exit_count: false,
+        };
+        rotate_function(&mut module, "f", &tti, options).expect("rotates")
+    };
+    assert!(rotate(COUNTED, false), "premise: unpriced, the loop rotates");
+    assert!(!rotate(COUNTED, true));
+    let nothing_carried = COUNTED.replace("  %r = phi i16 [ %acc, %b1 ]\n  ret i16 %r", "  ret i16 %n");
+    assert!(rotate(&nothing_carried, true), "no header phi leaves the loop: still rotated");
 }

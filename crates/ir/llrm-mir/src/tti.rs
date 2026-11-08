@@ -658,6 +658,11 @@ pub trait Tti {
         false
     }
 
+    /// Whether that price also counts each header phi the loop exits with.
+    fn rotation_prices_exit_carries(&self) -> bool {
+        false
+    }
+
     /// `Tuning::size_rotation_header_limit`.
     fn size_rotation_header_limit(&self) -> Option<u32> {
         None

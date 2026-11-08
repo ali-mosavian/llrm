@@ -364,6 +364,11 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE ROT-CARRY (owner w15, exit 2026-11-30): see `Options::priced_exit_carries`.
+    fn rotation_prices_exit_carries(&self) -> bool {
+        true
+    }
+
     /// DEVIATE LICM-FRAME (owner w15, exit 2026-11-30): rectwo -Os (+25%
     /// instructions against clang): `n - 1`, hoisted into the unguarded entry
     /// because rotation was refused, lived in x19 across the recursive call and

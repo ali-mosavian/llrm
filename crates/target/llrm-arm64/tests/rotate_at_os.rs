@@ -29,3 +29,30 @@ fn the_base_case_of_a_recursive_loop_returns_before_the_frame_is_built_at_os() {
     assert!(first_frame.is_some() && first_test.is_some(), "premise: a framed function:\n{asm}");
     assert!(first_test < first_frame, "the frame is built before the n == 0 test:\n{asm}");
 }
+
+fn instructions(asm: &str) -> usize {
+    asm.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count()
+}
+
+/// recsum -Os (+8 B against gcc): the rotated loop's guard exit had to carry
+/// the accumulator's start (`mov x0, xzr; ret`) beside the loop's own `ret`.
+/// Unrotated, the two share one `ret`.
+#[test]
+fn a_loop_whose_guard_exit_must_carry_a_header_phi_is_not_rotated_at_os() {
+    let asm = driver::assembly(include_str!("data/recsum_os.ll"), Platform::Linux, Level::Os).expect("lowers");
+    let body: Vec<&str> = asm.lines().skip_while(|line| *line != "bench_recsum:").take_while(|line| *line != "main:").collect();
+    assert!(body.len() > 5, "premise: the function is lowered:\n{asm}");
+    let rets = body.iter().filter(|line| line.trim().starts_with("ret")).count();
+    assert_eq!(rets, 1, "{rets} returns:\n{asm}");
+}
+
+/// The same price on another shape: a pointer walk into a total that starts
+/// at 5. Rotated, the guard branch and a closing `cbnz` cost an instruction
+/// more than the top-tested loop.
+#[test]
+fn a_walk_whose_guard_exit_must_carry_its_total_is_not_rotated_at_os() {
+    let asm = driver::assembly(include_str!("data/walk_os.ll"), Platform::Linux, Level::Os).expect("lowers");
+    let body: Vec<&str> = asm.lines().skip_while(|line| *line != "walk:").take_while(|line| !line.starts_with("main")).collect();
+    assert!(instructions(&body.join("\n")) > 4, "premise: the function is lowered:\n{asm}");
+    assert!(!body.iter().any(|line| line.trim().starts_with("cbnz")), "rotated:\n{asm}");
+}
