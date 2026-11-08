@@ -264,7 +264,11 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::floatunhoist::FloatUnhoist { cpu: target, basic_semantics }),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
-        Box::new(crate::backend::floatfold::FloatFold { cpu: target, registers: classes.available.len() }),
+        Box::new(crate::backend::floatfold::FloatFold {
+            cpu: target,
+            pool: pool.clone(),
+            registers: classes.available.len(),
+        }),
         // A float load waits for its reader where that saves an exchange.
         Box::new(crate::backend::floatsink::FloatSink { cpu: target, basic_semantics }),
         // After phi elimination: a phi's copies are where the stack shuffles.
