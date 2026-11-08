@@ -245,4 +245,18 @@ mod accumulator {
         commute_accumulator::<Acc>(&mut f);
         assert_eq!(f.blocks[1].insts, before);
     }
+
+    /// The other source is a lane an instruction computes (`unpack`), not a
+    /// copy: giving it the memory place moved it there through the
+    /// accumulator the swap keeps `second` in (`phi_slot_unknown_arm`: +3 B and
+    /// 22k clocks, 2026-11-08).
+    #[test]
+    fn a_source_an_instruction_computes_is_not_moved_into_the_place() {
+        let mut f = function(Reg::Virt(1), Reg::Virt(0));
+        f.blocks[0].insts[1] =
+            Inst::new(Kind::Op("unpack"), vec![Operand::Def(Reg::Virt(1)), Operand::Use(Reg::Virt(2))]);
+        let before = f.blocks[1].insts.clone();
+        commute_accumulator::<Acc>(&mut f);
+        assert_eq!(f.blocks[1].insts, before);
+    }
 }
