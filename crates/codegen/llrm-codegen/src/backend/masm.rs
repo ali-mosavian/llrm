@@ -589,9 +589,11 @@ pub fn jump_tables(
             let name = format!("$J{index}");
             names.insert((Space::Segment, index), name.clone());
             out.push(Datum::Object(Label { name }));
-            // A table read through a register is position independent: its
-            // entries are offsets from the table.
-            let relative = what.table_id.is_some() && !matches!(what.sources.first(), Some(Loc::Mem(_)));
+            // A table read through a register is position independent at 64
+            // bits: its entries are offsets from the table. At 16 and 32 bits
+            // the register holds the entry, an address (`-O0`'s `mov eax,
+            // [table+4*i]; jmp eax`).
+            let relative = bytes == 8 && what.table_id.is_some() && !matches!(what.sources.first(), Some(Loc::Mem(_)));
             out.extend(what.table.iter().map(|&target| {
                 if relative {
                     Datum::Difference(Difference { name: label(number, target), base: format!("$J{index}") })
