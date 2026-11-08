@@ -105,6 +105,39 @@ pub fn laid_again(
     Some((machined, again))
 }
 
+/// How many frame cells of `first` a one-byte displacement would not reach in
+/// the layout [`laid_again`] makes, counted by moving each cell's displacement
+/// and nothing else: the second body is not built to be compared and dropped.
+/// `sp` says whether the frame is addressed from the stack pointer, as
+/// `assemble::far_frame`. None where `laid_again` is None.
+pub fn far_again(
+    first: &Machined,
+    frame: &Frame,
+    hole: i64,
+    sp: bool,
+) -> Option<usize> {
+    if frame.native.is_some() || frame.hole != 0 {
+        return None;
+    }
+    let (again, homes) = replayed(frame, hole)?;
+    let moved = Moves { frame: Some(frame), homes: &homes, hole };
+    let reserve = -std::cmp::min(again.slots.values().copied().min().unwrap_or(0), again.floor) + frame.call_area;
+    let above = if sp { reserve } else { 0 };
+    let mut far = 0;
+    for insn in first.body.insns() {
+        let Some(what) = insn.what.as_ref() else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            let Some(addr) = place.address().and_then(|one| one.addr) else { continue };
+            if addr.space != Space::Frame {
+                continue;
+            }
+            let (new, _) = moved.addr(addr, 0)?;
+            far += usize::from(!(-128..128).contains(&(new.disp + above)));
+        }
+    }
+    Some(far)
+}
+
 /// `first` with every cell, inline-code displacement and debug home moved by
 /// `moved`; its reserve is the caller's to set.
 fn shifted(
@@ -402,6 +435,15 @@ struct Moves<'a> {
     hole: i64,
 }
 
+/// Whether `place` is a cell of the frame, the only kind a move changes.
+fn in_frame(place: &Loc) -> bool {
+    match place {
+        Loc::Mem(cell) => cell.addr.is_some_and(|addr| addr.space == Space::Frame),
+        Loc::Address(cell) => cell.addr.is_some_and(|addr| addr.space == Space::Frame),
+        _ => false,
+    }
+}
+
 impl Moves<'_> {
     /// The first byte of the slot `home` in the new layout: what a cell moved
     /// out of it is tagged with.
@@ -505,6 +547,7 @@ impl Moves<'_> {
         // Most instructions name no cell that moves: they are shared as they
         // are, without a copy of their semantics.
         let what = match &one.what {
+            Some(what) if !what.dests.iter().chain(&what.sources).any(in_frame) => None,
             Some(what) => {
                 let dests: Vec<Loc> = what.dests.iter().map(|place| self.loc(place)).collect::<Option<_>>()?;
                 let sources: Vec<Loc> = what.sources.iter().map(|place| self.loc(place)).collect::<Option<_>>()?;
@@ -910,6 +953,28 @@ mod tests {
         let lowest = again.slots.values().copied().chain([again.floor]).min().expect("a floor");
         assert_eq!(again.call_area, 12);
         assert_eq!(done.reserve, -lowest + 12, "the locals lie above the outgoing area");
+    }
+
+    /// The second layout was built, and dropped, in every one of a -O0 compile's
+    /// functions that had far cells and a spill area: 10.5 M of 207 M
+    /// instructions. Its far cells are counted from the moved displacements
+    /// alone, and the count is the one of the body `laid_again` builds.
+    #[test]
+    fn test_the_far_cells_of_the_second_layout_are_counted_without_building_it() {
+        use super::{far_again, laid_again};
+        use crate::backend::assemble::far_frame;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(-304);
+        frame.align = 4;
+        frame.extents = vec![(-300, 300)];
+        let home = frame.slot(7_i64, 4).expect("a spill slot");
+        let first = machined(reading(&[(home, home), (home, home), (-300, -300)]));
+        for sp in [false, true] {
+            let (done, _) = laid_again(&first, &frame, 8).expect("it can be laid again");
+            assert_eq!(far_again(&first, &frame, 8, sp), Some(far_frame(&done, sp)), "sp {sp}");
+        }
+        let (done, _) = laid_again(&first, &frame, 8).unwrap();
+        assert_ne!(far_frame(&done, false), far_frame(&first, false), "the premise: the layout moves cells");
     }
 
     /// matmul bq32 -O2 (no frame pointer) laid its hot spill slots at the top
