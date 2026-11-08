@@ -4024,9 +4024,7 @@ impl Emitter<'_, '_> {
         if self.ctx.opt_size {
             return true;
         }
-        let rate = p.milliclocks_per_byte;
-        let (mut fold, mut shared) = (0i64, p.load * 1000 + p.memory_bytes * rate);
-        for user in self.dag.users(value) {
+        let readers = self.dag.users(value).map(|user| {
             let reads =
                 self.dag.node(SDValue { node: user, res: 0 }).ops.iter().filter(|op| **op == value).count() as i64;
             let name = match self.dag.opcode(SDValue { node: user, res: 0 }) {
@@ -4040,12 +4038,9 @@ impl Emitter<'_, '_> {
             } else {
                 (p.add, p.add_m)
             };
-            fold += reads * (memory * 1000 + p.memory_bytes * rate);
-            shared += reads * (register * 1000 + 2 * rate);
-        }
-        // The tables hold whole clocks: a difference under one is rounding,
-        // and the old shape (a memory operand at each reader) stays.
-        shared + 1000 <= fold
+            (reads, register, memory)
+        });
+        shared_load_pays(&p, readers)
     }
 
     fn operand(
@@ -4337,3 +4332,29 @@ fn is_gpr_copy(name: &str) -> bool {
     let name = name.strip_suffix("_REV").unwrap_or(name);
     matches!(name, "MOV8rr" | "MOV16rr" | "MOV32rr" | "MOV64rr")
 }
+/// Whether a pool constant read by `readers` (reads, register-form clocks,
+/// memory-form clocks) is loaded once rather than read as a memory operand at
+/// each. Where bytes are strict (`-O1`, `-Os`) the bytes decide, as at -Os
+/// (the load and a register form each read, against a memory form each) and
+/// clocks only break a tie; elsewhere clocks and bytes at the rate.
+pub(crate) fn shared_load_pays(
+    p: &llrm_codegen::backend::selectiondag::emit_api::X87Prices,
+    readers: impl Iterator<Item = (i64, i64, i64)>,
+) -> bool {
+    let rate = p.milliclocks_per_byte;
+    let (mut fold, mut shared) = (0i64, p.load * 1000 + p.memory_bytes * rate);
+    let (mut fold_bytes, mut shared_bytes) = (0i64, p.memory_bytes);
+    for (reads, register, memory) in readers {
+        fold += reads * (memory * 1000 + p.memory_bytes * rate);
+        shared += reads * (register * 1000 + 2 * rate);
+        fold_bytes += reads * p.memory_bytes;
+        shared_bytes += reads * 2;
+    }
+    if p.bytes_strict && shared_bytes != fold_bytes {
+        return shared_bytes < fold_bytes;
+    }
+    // The tables hold whole clocks: a difference under one is rounding,
+    // and the old shape (a memory operand at each reader) stays.
+    shared + 1000 <= fold
+}
+
