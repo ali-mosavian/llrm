@@ -317,16 +317,31 @@ fn fold_constants(
             // bytes (x_nbody_f -O3 m32: +378 clocks, a nest laid out again;
             // x_ld_axpy -O2: `fld [K]` for `fld1`).
             let other = if cell_is_left { right.value } else { left.value };
-            let newest = insns[..reader].iter().rev().enumerate().find_map(|(back, earlier)| {
-                if reader - 1 - back == at {
-                    return None;
-                }
-                let what = earlier.what.as_ref()?;
-                what.dests.iter().find_map(|dest| match dest {
-                    Loc::Held(held) if held.width == 10 && earlier.defines.contains(&held.value) => Some(held.value),
-                    _ => None,
-                })
-            });
+            // Only a value still read at or after the reader is on the stack:
+            // one a `fistp` or a popping operation consumed is gone (x_ldconv
+            // -O2: the folds counted as exchanges lost 3,999 clocks).
+            let newest = insns[..reader]
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(
+                    |(index, earlier)| {
+                        if index == at {
+                            return None;
+                        }
+                        let what = earlier.what.as_ref()?;
+                        what.dests.iter().find_map(|dest| match dest {
+                            Loc::Held(held) if held.width == 10 && earlier.defines.contains(&held.value) => {
+                                let read_between = insns[index + 1..reader]
+                                    .iter()
+                                    .filter(|between| between.uses.contains(&held.value))
+                                    .count();
+                                (uses.get(&held.value).copied().unwrap_or(0) > read_between).then_some(held.value)
+                            }
+                            _ => None,
+                        })
+                    },
+                );
             if newest != Some(other) {
                 at += 1;
                 continue;
@@ -998,6 +1013,24 @@ mod tests {
         ]);
         let done = names(&constants_folded(&body, cpu));
         assert!(done.contains(&"fld1".to_owned()), "{done:?}");
+    }
+
+    /// x_ldconv -O2 m32: a float defined after the other operand but already
+    /// consumed (stored) is not on the stack, so the operand is the top and the
+    /// memory form needs no exchange.
+    #[test]
+    fn test_a_constant_folds_past_a_newer_value_already_consumed() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            fld(1, 4, global(8, 0)),
+            fstp(2, 4, global(16, 0)),
+            insn(3, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(4, "fadd", 3, 1, 2),
+            fstp(5, 3, global(0, 0)),
+        ]);
+        let done = names(&constants_folded(&body, cpu));
+        assert!(!done.contains(&"fld1".to_owned()), "{done:?}");
     }
 
     /// A constant that two instructions read stays loaded: one `fld1` serves

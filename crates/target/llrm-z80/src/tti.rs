@@ -356,6 +356,12 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// DEVIATE Z80-ROT (owner z80, exit 2026-11-21): -Oz keeps a counted loop proven to run bottom-tested (`djnz`, no
+    /// test above the body), as the gcc tail rotate did until its deletion (#8017): 27 -Oz cells grew, sum4 +4 B.
+    fn rotation_free_guard_at_minsize(&self) -> bool {
+        true
+    }
+
     /// -O1 is strict on bytes and clocks: the pin's threshold alone, no rate.
     fn speed_inline_rate_at_o1(&self) -> bool {
         false

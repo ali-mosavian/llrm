@@ -84,3 +84,17 @@ fn test_m32_o1_inline_weighs_how_often_the_caller_runs() {
     let calls = listing.lines().filter(|line| line.contains("call") && line.contains("sf32_pack")).count();
     assert!(calls <= 2, "{calls} calls of sf32_pack: the hot caller's copies were not made (3 without the weight)");
 }
+
+/// m32 -O2 (INL-O2 RATE): a growing inline stays where the call sequence's
+/// clocks, at the site's run count, pay for the bytes at the 486's rate. The
+/// call was priced as one instruction (4 clocks of the 15 it costs, with its
+/// pushes, `ret` and `add esp`) and a helper called from a hot loop up the
+/// graph kept its call: x_sf_add -O2 object: 22,860 B before, 22,572 B priced.
+#[test]
+fn test_m32_o2_inline_prices_the_call_sequence_and_the_caller_s_run_count() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let source =
+        std::fs::read_to_string(root.join("crates/target/llrm-x86-m32/vsgcc/kernels/x_sf_add/x_sf_add.c")).unwrap();
+    let (_, size) = compile("o2rate", &source, "-O2");
+    assert!(size < 22_700, "object is {size} B; the call priced as one instruction gave 22,860");
+}

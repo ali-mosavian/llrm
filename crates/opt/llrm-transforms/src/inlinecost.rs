@@ -2165,7 +2165,7 @@ impl<'a> Analyzer<'a> {
     /// not trade bytes for clocks.
     fn grows_more_than_it_saves(&self) -> bool {
         let Some(tti) = self.site.tti else { return false };
-        self.grows_more_than_it_saves_at(tti.inline_policy().by_rate, 1000, false)
+        self.grows_more_than_it_saves_at(tti.inline_policy().by_rate, tti.inline_o1_unit_bytes_milli(), tti.inline_o1_weighs_entry())
     }
 
     /// [`Self::grows_more_than_it_saves`] at a byte rate of the caller's
@@ -2179,7 +2179,10 @@ impl<'a> Analyzer<'a> {
             return false;
         }
         let saved = self
+            // -O1 keeps the flat price of the call: its rate was fitted to it
+            // (INL-O1) and the level is strict on bytes.
             .call_sequence(llrm_mir::tti::CostKind::Latency)
+            .filter(|_| !self.params.o1_bound)
             .unwrap_or_else(|| {
                 llrm_mir::instructioncost::instruction_cost(
                     tti,
@@ -2219,8 +2222,7 @@ impl<'a> Analyzer<'a> {
         // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
         let at_o1 = self.site.caller_size == CallerSize::Speed && self.params.o1_bound;
-        let unpriced = at_o1
-            && self.site.tti.is_some_and(|tti| tti.inline_policy().by_rate == 0 && tti.inline_never_grows_without_rate());
+        let unpriced = at_o1 && self.site.tti.is_some_and(|tti| tti.inline_never_grows_without_rate());
         // -O1 keeps the pin's threshold alone where the target's rate binds at -O2 and -O3 only.
         let rate_off = at_o1 && self.site.tti.is_some_and(|tti| !tti.speed_inline_rate_at_o1());
         let grows = if self.site.caller_size == CallerSize::Speed && !unpriced && !rate_off {
