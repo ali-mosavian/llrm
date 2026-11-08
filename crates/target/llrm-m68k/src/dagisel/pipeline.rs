@@ -276,7 +276,7 @@ impl Temporaries {
     }
 }
 
-impl llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects for Temporaries {
+impl llrm_codegen::backend::selectiondag::dag_target::FrameObjects for Temporaries {
     fn objects(&self) -> i32 {
         self.next
     }

@@ -84,3 +84,15 @@ def test_the_word_order_programs_pick_words_by_significance_not_index():
 def test_a_program_written_for_one_abi_is_tagged_for_it():
     source = (RUN / "i64_param_home.c").read_text()
     assert ct.applies("x86_32-dos", source) and not ct.applies("m68k-68000", source)
+
+
+def test_an_lp64_program_is_only_for_targets_with_a_64_bit_long():
+    """mulconst_i64's .out is LP64; the m68k executed sweep counted it as a failure on every compiler."""
+    source = "// targets: lp64\nlong f(void);\n"
+    assert ct.applies("x86_64-linux", source) and ct.applies("arm64-linux", source)
+    assert not any(ct.applies(t, source) for t in ("m68k-68020", "x86_32-linux", "x86_16-dos", "wasm32", "z80-sdcc", "6502-sim65"))
+
+
+def test_the_mulconst_i64_program_is_not_run_on_m68k():
+    source = (Path(__file__).parent.parent / "tests/run/c/mulconst_i64.c").read_text()
+    assert not ct.applies("m68k-68020", source) and ct.applies("x86_64-linux", source)

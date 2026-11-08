@@ -11,12 +11,11 @@
 //! DEVIATE: the vector `KORTEST` and `SUBREG_TO_REG` cases are not translated:
 //! no vector types (SD13). Review 2026-11-22.
 
+use llrm_codegen::backend::selectiondag::dag::SelectionDAG;
+use llrm_codegen::backend::selectiondag::dagisel_adapter::DagisAdapter;
+use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_dagisel::dag::{Dag, SDValue as PinValue};
 use llrm_dagisel::generated::ids::mvt;
-
-use super::dag::SelectionDAG;
-use super::dagisel_adapter::DagisAdapter;
-use super::isd::ISD;
 
 /// (`TESTrr`, `ANDrr`) of the four widths.
 const PAIRS: [(u32, u32); 4] = [(5025, 949), (5010, 834), (5015, 875), (5020, 916)];
@@ -36,7 +35,8 @@ pub fn postprocess(dag: &mut SelectionDAG) {
             continue;
         }
         let and_opcode = adapter.dag.nodes()[first.node as usize].opcode;
-        if let Some(&(_, _, test_code)) = MEMORY.iter().find(|(test, and, _)| *test == code && ISD::Machine(*and) == and_opcode)
+        if let Some(&(_, _, test_code)) =
+            MEMORY.iter().find(|(test, and, _)| *test == code && ISD::Machine(*and) == and_opcode)
         {
             // (reg, base, scale, index, disp, segment, chain) -> (base, scale,
             // index, disp, segment, reg, chain); the flags are result 1.

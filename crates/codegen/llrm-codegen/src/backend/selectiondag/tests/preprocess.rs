@@ -1,4 +1,5 @@
-use super::super::x86_preprocess::{FrameObjects, preprocess};
+use super::super::dag_target::FrameObjects;
+use super::super::preprocess::preprocess;
 use super::*;
 use crate::backend::selectiondag::MemBase;
 

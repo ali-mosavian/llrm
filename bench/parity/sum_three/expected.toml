@@ -1,25 +1,47 @@
-reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
-blessed = "2026-10-15"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
+corpus = "47b374cff4a8101330e52456301396e7"
+
+[ow.O1]
+instructions = 132
+memory_operands = 71
+clocks = 239
+code_bytes = 175
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.0023
 
 [ow.O2]
 instructions = 123
 memory_operands = 62
+clocks = 208
 code_bytes = 185
 data_bytes = 24
 bss_bytes = 0
-kernel_ms = 0.0024
+kernel_ms = 0.0022
 
 [ow.Os]
 instructions = 132
 memory_operands = 71
+clocks = 239
 code_bytes = 175
 data_bytes = 24
 bss_bytes = 0
-kernel_ms = 0.0025
+kernel_ms = 0.0023
+
+[bcc.O1]
+instructions = 128
+memory_operands = 58
+clocks = 230
+code_bytes = 178
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.0024
 
 [bcc.O2]
 instructions = 113
 memory_operands = 50
+clocks = 179
 code_bytes = 181
 data_bytes = 24
 bss_bytes = 0
@@ -28,14 +50,25 @@ kernel_ms = 0.0022
 [bcc.Os]
 instructions = 128
 memory_operands = 58
+clocks = 230
 code_bytes = 178
 data_bytes = 24
 bss_bytes = 0
 kernel_ms = 0.0024
 
+[tc.O1]
+instructions = 143
+memory_operands = 94
+clocks = 276
+code_bytes = 194
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.0026
+
 [tc.O2]
 instructions = 147
 memory_operands = 94
+clocks = 254
 code_bytes = 199
 data_bytes = 24
 bss_bytes = 0
@@ -44,14 +77,25 @@ kernel_ms = 0.0026
 [tc.Os]
 instructions = 143
 memory_operands = 94
+clocks = 276
 code_bytes = 194
 data_bytes = 24
 bss_bytes = 0
 kernel_ms = 0.0026
 
+[tcpp.O1]
+instructions = 131
+memory_operands = 58
+clocks = 236
+code_bytes = 178
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.0024
+
 [tcpp.O2]
 instructions = 133
 memory_operands = 58
+clocks = 225
 code_bytes = 180
 data_bytes = 24
 bss_bytes = 0
@@ -60,6 +104,7 @@ kernel_ms = 0.0024
 [tcpp.Os]
 instructions = 131
 memory_operands = 58
+clocks = 236
 code_bytes = 178
 data_bytes = 24
 bss_bytes = 0
