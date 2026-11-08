@@ -9,9 +9,9 @@
 # Clocks: LLRM_ISEL=old|dag tools/bench/bench.py (tools/bench/dosbatch.py with_isel).
 set -u
 root=$(git rev-parse --show-toplevel); target=$1; flags=$2; levels=${3:-"-O1 -O2 -Os"}
-bin=$root/target/debug; [ -x "$bin/llrm-cc-bin" ] || bin=$root/target/release
+bin=${LLRM_BIN:-$root/target/release}  # never debug: a stale debug build is not the tip
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
-echo "tip $(git -C "$root" rev-parse HEAD) llrm-llc md5 $(md5sum "$bin/llrm-llc" | cut -c1-12) target $target flags $flags $(date -u +%FT%H:%MZ)"
+echo "bin $bin tip $(git -C "$root" rev-parse HEAD) llrm-llc md5 $(md5sum "$bin/llrm-llc" | cut -c1-12) target $target flags $flags $(date -u +%FT%H:%MZ)"
 one() { # SRC LEVEL ISEL
     local n out t
     n=$(basename "$1" .c)_$(echo "$1" | md5sum | cut -c1-6); out=$work/${n}_$2_$3.o
