@@ -80,10 +80,10 @@ impl Cpu {
 /// clock and runs 3-4 instructions a clock, so an instruction is about 0.3).
 /// The saving the model counts is the loop control and the folded operands
 /// only, and every byte also takes a place in the instruction cache and the
-/// branch predictor; 1 clock a byte is where no cell of the corpus (34 programs,
-/// 2026-11-08) grew bytes for no instruction gain, and it keeps the unrolls
-/// that save 0.8-23 clocks a byte. It was 250, the median of the cells where
-/// gcc and clang differed, against a saving counted over assumed runs.
+/// branch predictor; 1 clock a byte is where no cell of the corpus (34
+/// programs, 2026-11-08) grew bytes for no instruction gain, and it keeps the
+/// unrolls that save 0.8-23 clocks a byte. It was 250, the median of the cells
+/// where gcc and clang differed, against a saving counted over assumed runs.
 const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 1000;
 
 /// AArch64's scalar profile.
@@ -353,6 +353,13 @@ impl Tti for AArch64 {
     /// DEVIATE ARM64-IPRA (owner w15, exit 2026-11-30): the pin has
     /// `-enable-ipra` off; GCC's `-fipa-ra` is on from -O1 and its recpow -Os
     /// is 32 B smaller for it.
+    ///
+    /// DEVIATE ARM64-IPRA-OS (owner w15, exit 2026-11-15): jpeg_single -Os is
+    /// 20 B larger (3,544 -> 3,564 kernel, +4 B object) with 2% fewer
+    /// executed instructions: the greedy re-allocates the whole function and
+    /// places 3 more moves and 2 more constant rematerializations. No single
+    /// cause; the Os corpus is 40 B smaller in all. Linked to the Os jpeg
+    /// register-allocation card (anyisa); re-measure when it lands.
     fn interprocedural_register_use(&self) -> bool {
         true
     }
