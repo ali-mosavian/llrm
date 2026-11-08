@@ -102,7 +102,7 @@
 //! `FoldSetCC`
 //! ([L2698](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L2698)).
 
-pub use llrm_sdag::{actions, isd, libcalls, lowering, mvt, x86isd};
+pub use llrm_sdag::{actions, isd, libcalls, lowering, mvt, target_names};
 pub mod abs_combine;
 pub mod address_analysis;
 pub mod bitcast_combine;
@@ -178,6 +178,9 @@ pub mod target_calling;
 #[cfg(test)]
 #[path = "../../../../target/llrm-x86-backend/src/unfold.rs"]
 pub mod unfold;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86isd.rs"]
+pub mod x86isd;
 #[cfg(test)]
 #[path = "../../../../target/llrm-x86-backend/src/x86_carry.rs"]
 pub mod x86_carry;
