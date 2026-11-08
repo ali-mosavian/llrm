@@ -39,7 +39,7 @@ impl Builder<'_> {
         let node = self
             .dag
             .get_node_multi(
-                LoweringNodes::need(self.target.nodes.code, "inline code")?,
+                LoweringNodes::need(self.target.dag.nodes.code, "inline code")?,
                 &[EVT::OTHER, EVT::GLUE],
                 &ops,
             );

@@ -4824,6 +4824,18 @@ fn a_memcpy_ending_a_function_is_a_tail_call_at_m64() {
     assert!(listing.contains("jmp memcpy") && !listing.contains("call memcpy"), "{listing}");
 }
 
+/// `x_matmul_f` (the m32 vsgcc kernel behind a volatile pointer, clang IR before the passes): its
+/// innermost loop indexes `B[k][j]` of `double B[12][12]`, so it makes at most 12 trips. gcc peels it;
+/// the pin cannot know the bound and kept 3 `fmul` (392 B, about 7,000 clocks over gcc at -O3).
+#[test]
+fn a_loop_bounded_by_the_object_it_indexes_is_peeled_at_m32_o3() {
+    let text = include_str!("tests_data/matmul_f.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O3", "-march=i486"]), text, "bench_x_matmul_f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let bench = listing.split("bench_x_matmul_f_ proc").nth(1).and_then(|rest| rest.split("endp").next()).expect(&listing);
+    assert!(bench.matches("fmul").count() >= 12, "{listing}");
+}
+
 /// `cvtsi2ss xmm1, eax` in a loop rewrote only the low lane of `xmm1`, so each
 /// iteration waited for the last one's result (the pin: `xorps xmm1, xmm1`
 /// first, BreakFalseDeps). sfm16_float_i2f m64 -O2: 9 converts, no `xorps`.
@@ -4854,4 +4866,18 @@ fn a_float_bits_zero_extended_at_m64_is_one_movd() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("movd"), "{listing}");
     assert!(!listing.contains("movzx"), "{listing}");
+}
+
+/// A float `==` used as a value was `ucomiss; setnp; sete; and; movzx` (the pin: `cmpeqss; movd; and 1`, one
+/// instruction fewer and no flag reads; the `combineCompareEqual` combine was not translated). int_compared_with_float
+/// -Os m64: 274 B against the pin's 268.
+#[test]
+fn a_float_equality_as_a_value_is_a_cmpss() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(float %a, float %b) {\n  %c = fcmp oeq float %a, %b\n  %z = zext i1 %c to i32\n  ret i32 %z\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("cmpss xmm0, xmm1, 0"), "{listing}");
+    assert!(!listing.contains("setnp") && !listing.contains("ucomiss"), "{listing}");
 }

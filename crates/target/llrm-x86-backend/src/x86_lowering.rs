@@ -11,7 +11,8 @@
 //! (`EmitLoweredSelect`).
 //!
 //! # Runs
-//! As `Hooks::lower_operation` of [`super::legalize_dag::DagLegalizer`] for
+//! As `Hooks::lower_operation` of
+//! [`llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer`] for
 //! the nodes the action table makes Custom (integer types only here; floats
 //! are B1d). A global address is the static, non-PIC form (`Wrapper` of the
 //! target address); the GOT, PIC, DLL-import and TLS forms are not here, and
@@ -35,17 +36,17 @@
 //! `EmitCmp`
 //! ([L24085](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24085)).
 
-use super::actions::TargetLowering;
-use super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue, SelectionDAG};
-use super::dag_combiner::{CombineHooks, CombineLevel};
-use super::isd::{CondCode, ISD};
-use super::legalize_dag::Hooks;
-use super::mvt::{EVT, MVT};
+use llrm_codegen::backend::selectiondag::actions::TargetLowering;
+use llrm_codegen::backend::selectiondag::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
+use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
+use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
+use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 
 /// The pin's `X86ISD` numbers, as the matcher table (`llrm-dagisel`) names
 /// them.
 pub mod x86isd {
-    use super::ISD;
+    use llrm_codegen::backend::selectiondag::ISD;
 
     pub const ADC: ISD = ISD::Target(477);
     pub const FSHL: ISD = ISD::Target(625);
@@ -98,6 +99,9 @@ pub mod x86isd {
     /// `X86ISD::FCMP`: the flags of an x87 compare (`fucom`, `fnstsw`,
     /// `sahf` on a 486).
     pub const FCMP: ISD = ISD::Target(576);
+    /// `X86ISD::FSETCC`: `cmpss`/`cmpsd` with an immediate predicate, all
+    /// ones or all zeros in the scalar.
+    pub const FSETCC: ISD = ISD::Target(622);
     pub const XOR: ISD = ISD::Target(955);
     /// `X86ISD::FAND`/`FOR`/`FXOR`: `andps`/`orps`/`xorps` on a scalar float
     /// and a 16-byte pool mask.
@@ -172,7 +176,7 @@ pub struct X86Lowering<'a> {
 /// The sheet, the target and the block a constant multiply is priced against.
 #[derive(Clone, Copy)]
 pub struct MulPricing<'a> {
-    pub cpu: &'a crate::backend::cpu::Profile,
+    pub cpu: &'a llrm_codegen::backend::cpu::Profile,
     pub arch: &'a dyn llrm_target::Target,
     /// The block's frequency over the entry's.
     pub freq: f64,
@@ -465,6 +469,7 @@ impl CombineHooks for X86Lowering<'_> {
             || op == ISD::Select
             || op == ISD::Add
             || op == ISD::Or
+            || op == ISD::And
             || op == ISD::Sub
             || op == x86isd::ADD
             || op == x86isd::SUB
@@ -508,7 +513,8 @@ impl CombineHooks for X86Lowering<'_> {
             ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
             ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
-            ISD::Or => combine_or(dag, node),
+            ISD::Or => combine_compare_equal(dag, node, self.sse2, self.zext_free).or_else(|| combine_or(dag, node)),
+            ISD::And => combine_compare_equal(dag, node, self.sse2, self.zext_free),
             ISD::Sub => combine_sub(dag, node, self.three_address_adds),
             ISD::FAdd | ISD::FSub => combine_shared_product(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
@@ -564,7 +570,7 @@ fn x86_shrink_demanded_constant(
         return None;
     }
     let width = active.max(8).next_power_of_two().min(vt.size_in_bits());
-    let zero_extend = super::fold::mask(width);
+    let zero_extend = llrm_codegen::backend::selectiondag::fold::mask(width);
     if zero_extend == mask {
         return Some(None);
     }
@@ -744,7 +750,7 @@ fn cond_of(
     setcc: SDValue,
 ) -> CondCode {
     match dag.node(setcc).data {
-        super::dag::NodeData::CondCode(cc) => cc,
+        llrm_codegen::backend::selectiondag::dag::NodeData::CondCode(cc) => cc,
         other => unreachable!("a condition code operand, not {other:?}"),
     }
 }
@@ -758,7 +764,7 @@ fn translate_cc(
 ) -> u128 {
     if let Some(bits) = dag.constant(*rhs) {
         let vt = dag.value_type(*rhs);
-        let all_ones = bits == super::fold::mask(vt.size_in_bits());
+        let all_ones = bits == llrm_codegen::backend::selectiondag::fold::mask(vt.size_in_bits());
         match cc {
             CondCode::SetGt if all_ones => {
                 *rhs = dag.get_constant(0, vt);
@@ -807,7 +813,7 @@ fn is_non_ext_load(
     dag.opcode(value) == ISD::Load
         && matches!(
             dag.node(value).data,
-            super::dag::NodeData::Mem(info) if info.ext.is_none()
+            llrm_codegen::backend::selectiondag::dag::NodeData::Mem(info) if info.ext.is_none()
         )
 }
 
@@ -941,7 +947,7 @@ fn emit_cmp(
 ) -> SDValue {
     if dag.is_null_constant(op1) {
         // a runtime routine's answer in the flags: they are already set
-        if dag.opcode(op0) == super::x86isd::LLRM_CALL_FLAGS {
+        if dag.opcode(op0) == llrm_codegen::backend::selectiondag::x86isd::LLRM_CALL_FLAGS {
             return dag.operand(op0, 0);
         }
         return emit_test(dag, op0, code);
@@ -1006,7 +1012,7 @@ pub(super) fn lower_and_to_bt(
     };
     let mut cc = cc;
     // A bit flip folds into the condition.
-    let ones = super::fold::mask(dag.value_type(src).size_in_bits());
+    let ones = llrm_codegen::backend::selectiondag::fold::mask(dag.value_type(src).size_in_bits());
     if dag.opcode(src) == ISD::Xor && dag.constant(dag.operand(src, 1)) == Some(ones) {
         src = dag.operand(src, 0);
         cc = if cc == CondCode::SetEq { CondCode::SetNe } else { CondCode::SetEq };
@@ -1046,7 +1052,8 @@ fn emit_flags_for_setcc(
     // is `x == 0`, which `x + -1` carries out of unless it is 0 (`dec; cmp -1`
     // was two instructions, `add -1; jb` is one).
     if matches!(cc, CondCode::SetEq | CondCode::SetNe)
-        && dag.constant(op1) == Some(super::fold::mask(dag.value_type(op1).size_in_bits()))
+        && dag.constant(op1)
+            == Some(llrm_codegen::backend::selectiondag::fold::mask(dag.value_type(op1).size_in_bits()))
         && dag.opcode(op0) == ISD::Add
         && dag.operand(op0, 1) == op1
         && is_profitable_to_use_flag_op(dag, op0)
@@ -1083,7 +1090,7 @@ fn lower_setcc(
         let vt = dag.value_type(op1);
         let width = vt.size_in_bits();
         let max_signed = (1u128 << (width - 1)) - 1;
-        let max_unsigned = super::fold::mask(width);
+        let max_unsigned = llrm_codegen::backend::selectiondag::fold::mask(width);
         let widens = (cc == CondCode::SetGt && bits != max_signed) || (cc == CondCode::SetUGt && bits != max_unsigned);
         // The constant plus one must be a 32-bit signed immediate, and a byte
         // one if the original was.
@@ -1153,7 +1160,9 @@ fn select_with_cmp_zero(
         };
         dag.get_negative(neg, splat_vt)
     };
-    let all_ones = |dag: &SelectionDAG, v: SDValue| dag.constant(v) == Some(super::fold::mask(dag.width(v)));
+    let all_ones = |dag: &SelectionDAG, v: SDValue| {
+        dag.constant(v) == Some(llrm_codegen::backend::selectiondag::fold::mask(dag.width(v)))
+    };
     if dag.is_null_constant(lhs) && all_ones(dag, rhs) {
         return Some(splat_lsb(dag, vt));
     }
@@ -1237,7 +1246,7 @@ fn lower_select(
     // DEVIATE SD239: where the pointer is a word (m16) an `i16` select stays
     // a word: widened to `i32` every move takes an operand-size prefix. Owner
     // w10. Exit: none (machine fact). Review 2026-12-10.
-    let word16 = dag.config.pointer == EVT::I16;
+    let word16 = dag.config().pointer == EVT::I16;
     let (op1, op2, result_vt) = if (vt == EVT::I8 && can_cmov)
         || (vt == EVT::I16 && !word16 && !may_fold_load(dag, op1) && !may_fold_load(dag, op2))
     {
@@ -1500,8 +1509,9 @@ fn combine_integer_setcc(
     if !legal {
         return None;
     }
-    let upper = super::fold::mask(source_vt.size_in_bits()) & !super::fold::mask(op_vt.size_in_bits());
-    if !super::known_bits::masked_value_is_zero(dag, source, upper) {
+    let upper = llrm_codegen::backend::selectiondag::fold::mask(source_vt.size_in_bits())
+        & !llrm_codegen::backend::selectiondag::fold::mask(op_vt.size_in_bits());
+    if !llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero(dag, source, upper) {
         return None;
     }
     let constant = dag.get_zext_or_trunc(rhs, source_vt);
@@ -1532,7 +1542,9 @@ fn carry_through_add(
         return None;
     }
     let minus_one = dag.operand(flags, 1);
-    if dag.constant(minus_one) != Some(super::fold::mask(dag.value_type(minus_one).size_in_bits())) {
+    if dag.constant(minus_one)
+        != Some(llrm_codegen::backend::selectiondag::fold::mask(dag.value_type(minus_one).size_in_bits()))
+    {
         return None;
     }
     let mut carry = dag.operand(flags, 0);
@@ -1596,7 +1608,7 @@ fn combine_adc_sbb(
         {
             let ty = dag.value_type(lhs);
             let width = ty.size_in_bits();
-            let mask = super::fold::mask(width);
+            let mask = llrm_codegen::backend::selectiondag::fold::mask(width);
             let sum = (c1 + c2) & mask;
             let signed = |v: u128| ((v << (128 - width)) as i128) >> (128 - width);
             let unsigned_overflow = c1 + c2 > mask;
@@ -1647,6 +1659,69 @@ fn combine_brcond(
     let code = cond_code(dag, code);
     let (chain, dest) = (dag.operand(node, 0), dag.operand(node, 1));
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
+}
+
+/// `combineCompareEqual`: `oeq` (`sete` and `setnp`) or `une` (`setne` or `setp`)
+/// of one float compare, used as a value, is `cmpeqss`/`cmpneqss`, a `movd`
+/// and an `and 1`: three instructions, no flags and no branch. A user that
+/// might want the flags (a branch, a select, anything but a register copy or
+/// an extend) keeps the `setcc` pair.
+///
+/// DEVIATE CE1: the pin's AVX-512 form (`FSETCCM`, mask register) and its
+/// 32-bit `f64` form (`SCALAR_TO_VECTOR`, a `v4f32` bitcast) are not
+/// translated; the first has no target here, the second leaves the pair at
+/// m32 SSE2 doubles. Exit 2026-12-08, owner m64.
+fn combine_compare_equal(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    sse2: bool,
+    is_64bit: bool,
+) -> Option<SDValue> {
+    if !sse2 {
+        return None;
+    }
+    let (left, right) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.opcode(left) != x86isd::SETCC
+        || dag.opcode(right) != x86isd::SETCC
+        || !dag.has_one_use(left.node)
+        || !dag.has_one_use(right.node)
+    {
+        return None;
+    }
+    let (cmp0, cmp1) = (dag.operand(left, 1), dag.operand(right, 1));
+    if dag.opcode(cmp0) != x86isd::FCMP || cmp0 != cmp1 {
+        return None;
+    }
+    let (lhs, rhs) = (dag.operand(cmp0, 0), dag.operand(cmp0, 1));
+    let vt = dag.value_type(lhs);
+    if vt != EVT::Simple(MVT::F32) && !(vt == EVT::Simple(MVT::F64) && is_64bit) {
+        return None;
+    }
+    let wants_flags = dag.users(node).any(|user| {
+        !matches!(
+            dag.opcode(SDValue { node: user, res: 0 }),
+            ISD::CopyToReg | ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend
+        )
+    });
+    if wants_flags {
+        return None;
+    }
+    let (mut cc0, mut cc1) = (dag.constant(dag.operand(left, 0))?, dag.constant(dag.operand(right, 0))?);
+    if cc1 == cond::E || cc1 == cond::NE {
+        std::mem::swap(&mut cc0, &mut cc1);
+    }
+    let predicate = match (cc0, cc1) {
+        (cond::E, cond::NP) => 0,
+        (cond::NE, cond::P) => 4,
+        _ => return None,
+    };
+    let imm = dag.get_constant_with(predicate, EVT::I8, true, false);
+    let ones_or_zeros = dag.get_node(x86isd::FSETCC, vt, &[lhs, rhs, imm]);
+    let int = if vt == EVT::Simple(MVT::F64) { EVT::I64 } else { EVT::I32 };
+    let bits = dag.get_node(ISD::BitCast, int, &[ones_or_zeros]);
+    let one = dag.get_constant(1, int);
+    let anded = dag.get_node(ISD::And, int, &[bits, one]);
+    Some(dag.get_node(ISD::Truncate, EVT::I8, &[anded]))
 }
 
 /// `combineOr`'s tail: `combineAddOrSubToADCOrSBB` of a disjoint `or`, which is
@@ -1747,7 +1822,7 @@ fn combine_x86_add_sub(
     }
     match_generic_op(dag, generic, node, lhs, rhs, false);
     match_generic_op(dag, generic, node, rhs, lhs, is_sub);
-    let mask = super::fold::mask(vt.size_in_bits());
+    let mask = llrm_codegen::backend::selectiondag::fold::mask(vt.size_in_bits());
     if let Some(c) = dag.constant(rhs) {
         let negated = dag.get_constant(c.wrapping_neg() & mask, vt);
         if is_sub {
@@ -1774,7 +1849,7 @@ fn combine_uint_to_fp(
     let vt = dag.value_type(node);
     let bits = dag.value_type(value).size_in_bits();
     let non_neg = dag.node(node).flags.has(SDNodeFlags::NON_NEG)
-        || super::known_bits::known_bits(dag, value).zero >> (bits - 1) & 1 == 1;
+        || llrm_codegen::backend::selectiondag::known_bits::known_bits(dag, value).zero >> (bits - 1) & 1 == 1;
     non_neg.then(|| dag.get_node(ISD::SIntToFp, vt, &[value]))
 }
 
@@ -1802,7 +1877,7 @@ fn combine_sub_carry(
         return Some(dag.get_node(ISD::Sub, vt, &[adc, y]));
     }
     let not_of = |dag: &SelectionDAG, value: SDValue| -> Option<SDValue> {
-        let all_ones = super::fold::mask(dag.value_type(value).size_in_bits());
+        let all_ones = llrm_codegen::backend::selectiondag::fold::mask(dag.value_type(value).size_in_bits());
         (dag.opcode(value) == ISD::Xor && dag.constant(dag.operand(value, 1)) == Some(all_ones) && one_use(dag, value))
             .then(|| dag.operand(value, 0))
     };
@@ -1852,8 +1927,8 @@ fn combine_masked_xor_difference(
     if m == 0 || m & m.wrapping_add(1) != 0 {
         return None;
     }
-    let mask = super::fold::mask(vt.size_in_bits());
-    if (m | super::known_bits::known_bits(dag, x).zero) & mask != mask {
+    let mask = llrm_codegen::backend::selectiondag::fold::mask(vt.size_in_bits());
+    if (m | llrm_codegen::backend::selectiondag::known_bits::known_bits(dag, x).zero) & mask != mask {
         return None;
     }
     let delta = dag.get_constant(c.wrapping_sub(m) & mask, vt);
@@ -1921,7 +1996,7 @@ fn combine_select_of_two_constants(
         return None;
     }
     let bits = vt.size_in_bits();
-    let mask = super::fold::mask(bits);
+    let mask = llrm_codegen::backend::selectiondag::fold::mask(bits);
     let signed = |value: u128| -> i128 {
         let shift = 128 - bits;
         ((value << shift) as i128) >> shift
@@ -2017,7 +2092,7 @@ fn combine_cmov(
         std::mem::swap(&mut true_c, &mut false_c);
         std::mem::swap(&mut true_op, &mut false_op);
     }
-    let mask = super::fold::mask(vt.size_in_bits());
+    let mask = llrm_codegen::backend::selectiondag::fold::mask(vt.size_in_bits());
     let difference = true_c.wrapping_sub(false_c) & mask;
     let widened = |dag: &mut SelectionDAG| {
         let code = cond_code(dag, code);
@@ -2471,7 +2546,7 @@ fn lower_int_to_fp(
         align: 8,
         volatile: false,
         base: MemBase::ConstantPool(entry),
-        ext: Some(super::actions::LoadExt::ExtLoad),
+        ext: Some(llrm_codegen::backend::selectiondag::actions::LoadExt::ExtLoad),
         space: 0,
         ordering: None,
     };
@@ -2656,7 +2731,7 @@ fn combine_mul(
     if bits == 0 {
         return Some(dag.get_constant(0, vt));
     }
-    if bits == super::fold::mask(width) {
+    if bits == llrm_codegen::backend::selectiondag::fold::mask(width) {
         return Some(dag.get_negative(x, vt));
     }
     // An imul is usually smaller than the alternative sequence.
@@ -2715,7 +2790,7 @@ fn combine_mul(
         value = if is_pow2(second) { shift(dag, value, log2(second)) } else { mul_imm(dag, value, second) };
         new_mul = Some(negate(dag, value));
     } else {
-        new_mul = combine_mul_special(dag, x, bits & super::fold::mask(width), vt);
+        new_mul = combine_mul_special(dag, x, bits & llrm_codegen::backend::selectiondag::fold::mask(width), vt);
     }
     if new_mul.is_none() {
         if is_pow2(abs - 1) {
@@ -2767,7 +2842,7 @@ fn priced_chain(
     vt: EVT,
     pricing: MulPricing<'_>,
 ) -> Option<SDValue> {
-    use crate::backend::arithmetic;
+    use llrm_codegen::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
     let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin } = pricing;
     let chain = if by_clocks {
@@ -2921,12 +2996,12 @@ fn is_known_never_zero(
     dag: &SelectionDAG,
     value: SDValue,
 ) -> bool {
-    super::known_bits::known_bits(dag, value).one != 0
+    llrm_codegen::backend::selectiondag::known_bits::known_bits(dag, value).one != 0
 }
 
 /// `KnownBits::countMinLeadingZeros`.
-fn min_leading_zeros(known: &super::known_bits::KnownBits) -> u32 {
-    (!known.zero & super::fold::mask(known.width)).leading_zeros() - (128 - known.width)
+fn min_leading_zeros(known: &llrm_codegen::backend::selectiondag::known_bits::KnownBits) -> u32 {
+    (!known.zero & llrm_codegen::backend::selectiondag::fold::mask(known.width)).leading_zeros() - (128 - known.width)
 }
 
 /// `LowerFABSorFNEG` for a scalar: no scalar bitwise SSE instruction exists, so
@@ -3142,7 +3217,7 @@ fn lower_parity(
 ) -> SDValue {
     let vt = dag.value_type(node);
     let mut x = dag.operand(node, 0);
-    let known = super::known_bits::known_bits(dag, x);
+    let known = llrm_codegen::backend::selectiondag::known_bits::known_bits(dag, x);
     let active = known.width - min_leading_zeros(&known);
     let not_parity = |dag: &mut SelectionDAG, flags: SDValue| {
         let code = cond_code(dag, cond::NP);
@@ -3182,7 +3257,7 @@ fn lower_ctpop(
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     let mut op = dag.operand(node, 0);
-    let known = super::known_bits::known_bits(dag, op);
+    let known = llrm_codegen::backend::selectiondag::known_bits::known_bits(dag, op);
     if known.is_constant() {
         return Some(dag.get_constant(u128::from(known.one.count_ones()), vt));
     }

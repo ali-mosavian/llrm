@@ -1,4 +1,5 @@
 // flags: -O0 | -O2 | -Os
+// targets: !x86-m16
 // A select of two constants (c/c+1, 0/-1, 1/0, powers of two apart, 8..64 bit, four conditions) folds to a setcc and shift/add:
 // a wrong constant pair or sense changes the hash of one row.
 extern void report(long value);
