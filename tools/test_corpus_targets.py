@@ -96,3 +96,15 @@ def test_an_lp64_program_is_only_for_targets_with_a_64_bit_long():
 def test_the_mulconst_i64_program_is_not_run_on_m68k():
     source = (Path(__file__).parent.parent / "tests/run/c/mulconst_i64.c").read_text()
     assert not ct.applies("m68k-68020", source) and ct.applies("x86_64-linux", source)
+
+
+def test_a_negated_token_excludes_only_those_targets():
+    source = "// targets: !linux\nlong double f(void);\n"
+    assert not ct.applies("x86_32-linux", source) and not ct.applies("x86_64-linux", source)
+    assert ct.applies("x86_32-dos", source) and ct.applies("m68k-68020", source) and ct.applies("x86_16-wat", source)
+
+
+def test_long_double_stride_is_not_run_on_the_sysv_rows():
+    """Its .out is Watcom's 8-byte long double; x86_32-linux got 12/24/20/12 (gcc's too) and read as a miscompile."""
+    source = (RUN / "long_double_stride.c").read_text()
+    assert not ct.applies("x86_32-linux", source) and ct.applies("x86_32-dos", source) and ct.applies("m68k-68020", source)
