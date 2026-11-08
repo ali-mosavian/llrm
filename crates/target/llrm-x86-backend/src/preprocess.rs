@@ -22,22 +22,10 @@
 //! ([L988](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L988)),
 //! its `FP_ROUND`/`FP_EXTEND` case at L1454 and the callee-load move at L1425.
 
-use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
-use super::isd::ISD;
-use super::mvt::{EVT, MVT};
-
-/// `CreateStackTemporary`: where the stack slots come from.
-pub trait FrameObjects {
-    /// How many frame objects there are: the index the next one gets.
-    fn objects(&self) -> i32;
-
-    /// A new frame object of `size` bytes, aligned to `align`; its index.
-    fn create_stack_temporary(
-        &mut self,
-        size: u32,
-        align: u32,
-    ) -> i32;
-}
+use llrm_codegen::backend::selectiondag::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::dag_target::FrameObjects;
+use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 
 fn is_x87(vt: EVT) -> bool {
     matches!(vt, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80))
@@ -143,7 +131,7 @@ pub fn preprocess(
         let reloaded = if mem == to {
             dag.get_load(to, store, slot, info)
         } else {
-            dag.get_ext_load(super::actions::LoadExt::ExtLoad, to, store, slot, info)
+            dag.get_ext_load(llrm_codegen::backend::selectiondag::actions::LoadExt::ExtLoad, to, store, slot, info)
         };
         dag.replace_all_uses_with(value, reloaded);
         rewritten += 1;
@@ -300,17 +288,20 @@ pub fn move_callee_loads(
             continue;
         }
         let opcode = dag.opcode(call);
-        let call_ok = opcode == super::x86isd::CALL && !facts.slow_two_mem_ops && !facts.slow_indirect_call;
-        let tail_ok = opcode == super::x86isd::TC_RETURN && (facts.is_64 || !facts.position_independent);
+        let call_ok = opcode == llrm_codegen::backend::selectiondag::x86isd::CALL
+            && !facts.slow_two_mem_ops
+            && !facts.slow_indirect_call;
+        let tail_ok = opcode == llrm_codegen::backend::selectiondag::x86isd::TC_RETURN
+            && (facts.is_64 || !facts.position_independent);
         if !call_ok && !tail_ok || dag.node(call).ops.len() < 2 {
             continue;
         }
         let mut chain = dag.operand(call, 0);
         let load = dag.operand(call, 1);
-        if !is_callee_load(dag, load, &mut chain, opcode == super::x86isd::CALL) {
+        if !is_callee_load(dag, load, &mut chain, opcode == llrm_codegen::backend::selectiondag::x86isd::CALL) {
             continue;
         }
-        if opcode == super::x86isd::TC_RETURN && !enough_regs(dag, node) {
+        if opcode == llrm_codegen::backend::selectiondag::x86isd::TC_RETURN && !enough_regs(dag, node) {
             continue;
         }
         move_below_orig_chain(dag, load, call, chain);
