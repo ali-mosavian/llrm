@@ -53,6 +53,15 @@ fn word(types: &llrm_mir::types::Types, ty: llrm_mir::types::TypeId, m32: bool) 
     types.int_bits(ty) == Some(32) || (m32 && matches!(types.get(ty), llrm_mir::types::Type::Pointer(0)))
 }
 
+/// `Some(0)` for `i8`, `Some(1)` for `i16`: the types FastISel holds in a byte or word register.
+fn narrow_kind(types: &llrm_mir::types::Types, ty: llrm_mir::types::TypeId) -> Option<usize> {
+    match types.int_bits(ty) {
+        Some(8) => Some(0),
+        Some(16) => Some(1),
+        _ => None,
+    }
+}
+
 /// Whether a value of `ty` lives in a 64-bit register (`Some(true)`), a 32-bit one
 /// (`Some(false)`), or is not a type FastISel holds: `i32`; at m64 also `i64` and a pointer.
 fn wide_kind(types: &llrm_mir::types::Types, ty: llrm_mir::types::TypeId, m32: bool) -> Option<bool> {
@@ -86,7 +95,7 @@ pub fn build_all(
         return declined_all("a variadic function or another width");
     }
     // every parameter is a 4-byte stack cell: fixed object -(n + 1)
-    let int32 = |ty| wide_kind(&module.context.types, ty, m32).is_some();
+    let int32 = |ty| wide_kind(&module.context.types, ty, m32).is_some() || narrow_kind(&module.context.types, ty).is_some();
     let (returns, parameters, _) = module.signature(function.ty);
     // m32: a 4-byte stack cell; m64: one register
     let arrives = |one: &crate::backend::isel::Parameter| match one {
@@ -204,8 +213,21 @@ struct Wide {
     mem: Mem,
 }
 
+/// The `i8` (index 0) and `i16` (index 1) forms.
+struct Narrow {
+    mov_rm: [u16; 2],
+    mov_mr: [u16; 2],
+    mov_mi: [u16; 2],
+    /// `movzx r32, r8/r16` and `movsx r32, r8/r16`.
+    movzx32: [u16; 2],
+    movsx32: [u16; 2],
+    /// m64: `movsx r64, r8/r16`.
+    movsx64: Option<[u16; 2]>,
+}
+
 /// The machine opcodes FastISel emits.
 struct Names {
+    narrow: Option<Narrow>,
     wide: Option<Wide>,
     mem: Mem,
     /// m64: `movsxd r64, m32`.
@@ -298,7 +320,19 @@ impl Names {
                 mem: mem("64")?,
             })
         })();
+        let narrow = (|| {
+            let both = |a: &str, b: &str| Some([opcode(a)?, opcode(b)?]);
+            Some(Narrow {
+                mov_rm: both("MOV8rm", "MOV16rm")?,
+                mov_mr: both("MOV8mr", "MOV16mr")?,
+                mov_mi: both("MOV8mi", "MOV16mi")?,
+                movzx32: both("MOVZX32rr8", "MOVZX32rr16")?,
+                movsx32: both("MOVSX32rr8", "MOVSX32rr16")?,
+                movsx64: both("MOVSX64rr8", "MOVSX64rr16"),
+            })
+        })();
         Some(Names {
+            narrow,
             wide,
             mem: mem("32")?,
             movsx64_rm: opcode("MOVSX64rm32"),
@@ -433,7 +467,7 @@ impl Fast<'_> {
         {
             let ValueDef::Instruction(def) = self.function.value(value).def else { return None };
             let Opcode::Alloca { allocated, .. } = self.function.instruction(def).opcode else { return None };
-            if wide_kind(&self.module.context.types, allocated, self.m32).is_none() {
+            if wide_kind(&self.module.context.types, allocated, self.m32).is_none() && narrow_kind(&self.module.context.types, allocated).is_none() {
                 return None;
             }
             return Some(self.frame(object));
@@ -634,17 +668,30 @@ impl Fast<'_> {
                         return None;
                     }
                     let (_, vreg) = *self.arg_regs.get(n as usize)?;
-                    let vt = if self.is_wide(Operand::Value(value))? { EVT::I64 } else { EVT::I32 };
+                    let narrow = narrow_kind(&self.module.context.types, self.function.value(value).ty);
+                    let vt = if narrow.is_none() && self.is_wide(Operand::Value(value))? { EVT::I64 } else { EVT::I32 };
                     let copy = self.dag.get_copy_from_reg(self.chain, vreg, vt);
                     self.chain = SDValue { node: copy.node, res: 1 };
-                    let copy = SDValue { node: copy.node, res: 0 };
+                    let mut copy = SDValue { node: copy.node, res: 0 };
+                    if let Some(kind) = narrow {
+                        // the register holds the whole `edi`; the parameter is its low byte or word
+                        let (_, extract) = self.names.subreg?;
+                        let index = self.dag.get_constant_with([1, 4][kind], EVT::I32, true, false);
+                        copy = self.node(extract, &[[EVT::I8, EVT::I16][kind]], &[copy, index]);
+                    }
                     self.values.insert(value, copy);
                     return Some(copy);
                 }
                 let mut ops = self.frame(-(n as i32) - 1);
                 ops.push(self.chain);
-                let load = self.node(self.names.mov_rm, &[EVT::I32, EVT::OTHER], &ops);
+                let narrow = narrow_kind(&self.module.context.types, self.function.value(value).ty);
+                let (opcode, vt) = match narrow {
+                    Some(kind) => (self.names.narrow.as_ref()?.mov_rm[kind], [EVT::I8, EVT::I16][kind]),
+                    None => (self.names.mov_rm, EVT::I32),
+                };
+                let load = self.node(opcode, &[vt, EVT::OTHER], &ops);
                 self.chain = SDValue { node: load.node, res: 1 };
+                let load = SDValue { node: load.node, res: 0 };
                 self.values.insert(value, load);
                 Some(load)
             }
@@ -708,6 +755,7 @@ impl Fast<'_> {
         let insts: Vec<_> = self.function.iter_block(block).collect();
         self.exports = insts
             .iter()
+            .filter(|&&id| self.function.instruction(id).opcode != Opcode::Phi)
             .filter_map(|&id| self.function.instruction(id).result)
             .filter(|result| self.info.value_regs.contains_key(result))
             .collect();
@@ -715,7 +763,7 @@ impl Fast<'_> {
         while at < insts.len() {
             let instruction = self.function.instruction(insts[at]).clone();
             at += 1;
-            *declined = format!("{:?}", instruction.opcode);
+            *declined = format!("{:?} {}", instruction.opcode, self.module.context.types.display(instruction.ty));
             self.export_ready()?;
             match &instruction.opcode {
                 Opcode::Phi => {
@@ -725,6 +773,82 @@ impl Fast<'_> {
                 Opcode::Alloca { .. } => {
                     // a static alloca is its frame object
                     self.info.static_allocas.get(&instruction.result?)?;
+                }
+                Opcode::Load { .. } if narrow_kind(&self.module.context.types, instruction.ty).is_some() => {
+                    let kind = narrow_kind(&self.module.context.types, instruction.ty)?;
+                    let mut ops = self.address(instruction.operands[0])?;
+                    ops.push(self.chain);
+                    let vt = [EVT::I8, EVT::I16][kind];
+                    let load = self.node(self.names.narrow.as_ref()?.mov_rm[kind], &[vt, EVT::OTHER], &ops);
+                    self.chain = SDValue { node: load.node, res: 1 };
+                    self.values.insert(instruction.result?, SDValue { node: load.node, res: 0 });
+                }
+                Opcode::Store { .. }
+                    if self
+                        .function
+                        .operand_type(&self.module.context, instruction.operands[0])
+                        .is_some_and(|ty| narrow_kind(&self.module.context.types, ty).is_some()) =>
+                {
+                    let ty = self.function.operand_type(&self.module.context, instruction.operands[0])?;
+                    let kind = narrow_kind(&self.module.context.types, ty)?;
+                    let vt = [EVT::I8, EVT::I16][kind];
+                    let narrow = self.names.narrow.as_ref()?;
+                    let (mov_mr, mov_mi) = (narrow.mov_mr[kind], narrow.mov_mi[kind]);
+                    let mut ops = self.address(instruction.operands[1])?;
+                    let op = if let Some(imm) = self.int(instruction.operands[0]) {
+                        let mask = if kind == 0 { 0xff } else { 0xffff };
+                        ops.push(self.dag.get_constant_with(imm as u128 & mask, vt, true, false));
+                        mov_mi
+                    } else {
+                        let value = self.value(instruction.operands[0])?;
+                        ops.push(value);
+                        mov_mr
+                    };
+                    ops.push(self.chain);
+                    self.chain = self.node(op, &[EVT::OTHER], &ops);
+                }
+                Opcode::Cast(op @ (llrm_mir::opcode::CastOp::ZExt | llrm_mir::opcode::CastOp::SExt))
+                    if self
+                        .function
+                        .operand_type(&self.module.context, instruction.operands[0])
+                        .is_some_and(|ty| narrow_kind(&self.module.context.types, ty).is_some()) =>
+                {
+                    // i8/i16 to i32 or i64: `movzx`/`movsx`, a zero extension to 64 bits is the 32-bit one and `SUBREG_TO_REG`
+                    let from = self.function.operand_type(&self.module.context, instruction.operands[0])?;
+                    let kind = narrow_kind(&self.module.context.types, from)?;
+                    let signed = matches!(op, llrm_mir::opcode::CastOp::SExt);
+                    let to = self.module.context.types.int_bits(instruction.ty)?;
+                    let value = self.value(instruction.operands[0])?;
+                    let narrow = self.names.narrow.as_ref()?;
+                    let done = match (to, signed) {
+                        (32, false) => self.node(narrow.movzx32[kind], &[EVT::I32], &[value]),
+                        (32, true) => self.node(narrow.movsx32[kind], &[EVT::I32], &[value]),
+                        (64, true) if !self.m32 => self.node(narrow.movsx64?[kind], &[EVT::I64], &[value]),
+                        (64, false) if !self.m32 => {
+                            let low = self.node(narrow.movzx32[kind], &[EVT::I32], &[value]);
+                            let (to_reg, _) = self.names.subreg?;
+                            let index = self.dag.get_constant_with(6, EVT::I32, true, false);
+                            self.node(to_reg, &[EVT::I64], &[low, index])
+                        }
+                        _ => return None,
+                    };
+                    self.values.insert(instruction.result?, done);
+                }
+                Opcode::Cast(llrm_mir::opcode::CastOp::Trunc)
+                    if narrow_kind(&self.module.context.types, instruction.ty).is_some() && self.names.subreg.is_some() =>
+                {
+                    // i32 or i64 to i8/i16: the low byte or word, `EXTRACT_SUBREG` (`sub_8bit` = 1, `sub_16bit` = 4)
+                    let kind = narrow_kind(&self.module.context.types, instruction.ty)?;
+                    let from = self.function.operand_type(&self.module.context, instruction.operands[0])?;
+                    // from i32 or i64, or i16 to i8
+                    if wide_kind(&self.module.context.types, from, self.m32).is_none() && !(kind == 0 && narrow_kind(&self.module.context.types, from) == Some(1)) {
+                        return None;
+                    }
+                    let (_, extract) = self.names.subreg?;
+                    let value = self.value(instruction.operands[0])?;
+                    let index = self.dag.get_constant_with([1, 4][kind], EVT::I32, true, false);
+                    let done = self.node(extract, &[[EVT::I8, EVT::I16][kind]], &[value, index]);
+                    self.values.insert(instruction.result?, done);
                 }
                 Opcode::Load { volatile, .. } => {
                     let wide = wide_kind(&self.module.context.types, instruction.ty, self.m32)?;
@@ -1214,7 +1338,11 @@ impl Fast<'_> {
             }
         }
         if !self.exports.is_empty() {
-            *declined = "a value another block reads that is not a register value".to_owned();
+            let def = match self.function.value(self.exports[0]).def {
+                ValueDef::Instruction(id) => format!("{:?}", self.function.instruction(id).opcode),
+                _ => "an argument".to_owned(),
+            };
+            *declined = format!("a value another block reads that is not a register value: {def}");
             return None;
         }
         self.dag.set_root(self.chain);
