@@ -1532,16 +1532,15 @@ fn a_jump_outside_every_loop_is_jr_even_when_speed_comes_first() {
 
 /// The driver turned the unroller off: sum4's four-trip loop ran 160 clocks at
 /// -O2, 104 unrolled. A loop of four trips is copied out where speed comes
-/// first, and stays a loop at -Oz. At -Oz the loop is not rotated (the pin's
-/// LoopRotate copies no header there, #8017 deleted the gcc tail rotate), so
-/// it is a top-tested loop, not a `djnz` one.
+/// first, and stays a loop at -Oz. At -Oz the late LoopRotate (#8138, Z80-ROT)
+/// rotates it where the guard folds away: a `djnz` loop.
 #[test]
 fn a_four_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
     let ir = include_str!("kernels/ir/sum4.ll");
     let fast = text(ir, "sum4", 0, &Request::new(Level::O2)).expect("compiles");
     let small = text(ir, "sum4", 0, &Request::new(Level::Oz)).expect("compiles");
     assert!(!fast.contains("djnz") && !fast.contains(" L0_"), "{fast}");
-    assert!(small.contains("L0_1:") && small.contains("jr L0_1"), "{small}");
+    assert!(small.contains("djnz"), "{small}");
 }
 
 /// lz4's match copy kept the source as `dst + offset` (a base add, `pop bc;
