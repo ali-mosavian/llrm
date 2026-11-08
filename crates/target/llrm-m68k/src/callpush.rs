@@ -674,6 +674,11 @@ fn sequences(
                 }
             }
         }
+        // a push sets the codes: made between an instruction that set them and
+        // the one that reads them, it would change what the reader sees
+        if !in_order && flush < call && codes_live_across(insts, blocks, flush) {
+            keeps_values = false;
+        }
         let mut priced = ((0usize, 0u32), (0usize, 0u32));
         let mut folds = Vec::new();
         let mut addresses = Vec::new();
@@ -726,6 +731,25 @@ fn sequences(
         });
     }
     Ok((found, others))
+}
+
+/// Whether the codes an instruction before `at` set, in its block, are read by
+/// the first instruction at or after `at` that touches them.
+fn codes_live_across(
+    insts: &[&Inst],
+    blocks: &[usize],
+    at: usize,
+) -> bool {
+    let set_before = (0..at)
+        .rev()
+        .take_while(|&i| blocks[i] == blocks[at])
+        .find(|&i| insts[i].sets_flags || insts[i].call)
+        .is_some_and(|i| insts[i].sets_flags && !insts[i].call);
+    set_before
+        && (at..insts.len())
+            .take_while(|&i| blocks[i] == blocks[at])
+            .find(|&i| insts[i].reads_flags || insts[i].sets_flags || insts[i].call)
+            .is_some_and(|i| insts[i].reads_flags && !insts[i].call)
 }
 
 /// The pushes to make in `insts`. `frame_price(n)` is the price of the
