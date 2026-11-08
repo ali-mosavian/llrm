@@ -1271,6 +1271,7 @@ fn selected_in(
                 div_m: cost("x87_div_m")?,
                 milliclocks_per_byte: cpu.speed_milliclocks_per_byte_on(&*machine),
                 memory_bytes: if matches!(address_mode, AddrMode::Real16) { 4 } else { 6 },
+                bytes_strict: cpu.bytes_strict(),
             })
         })
         .flatten();
