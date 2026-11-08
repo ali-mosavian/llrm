@@ -47,7 +47,7 @@ for O in Os O2; do
       for r in ${list//,/ }; do
         if $cl $extra -$O -w -I$CRT -c $CRT/$r.c -o $T/c.o 2>/dev/null; then c=$((c + $(bytes $T/c.o))); else c=ERR; break; fi
         if [ $tgt = m32 ]; then
-          if gcc -m32 -march=i486 -$O -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables -msoft-float -w -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$r.c -o $T/g.o 2>/dev/null; then [ $g != ERR ] && g=$((g + $(bytes $T/g.o))); else g=ERR; fi
+          if gcc -m32 -march=i486 -$O -falign-functions=1 -falign-jumps=1 -falign-loops=1 -falign-labels=1 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables -msoft-float -w -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$r.c -o $T/g.o 2>/dev/null; then [ $g != ERR ] && g=$((g + $(bytes $T/g.o))); else g=ERR; fi
         else g=-; fi
       done
       # m32 compiler-rt int->float is x87 arithmetic (fild/fmul/fadd), not a soft-float routine: no rank
