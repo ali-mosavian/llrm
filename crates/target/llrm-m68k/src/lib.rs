@@ -45,6 +45,7 @@ pub mod opcosts;
 pub mod regalloc;
 pub mod scaledindex;
 pub mod shiftadd;
+pub mod spillmove;
 pub mod sizes;
 pub mod target;
 pub mod timing;

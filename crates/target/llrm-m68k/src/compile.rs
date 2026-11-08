@@ -276,6 +276,12 @@ pub fn items_with(
     );
     if options.short {
         crate::cmpdup::drop_repeated_compares(&mut function, &assignment);
+        crate::spillmove::spills_as_moves(
+            &mut function,
+            &assignment,
+            cpu,
+            crate::timing::Price::of(wants_size, options.strict),
+        );
     }
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
