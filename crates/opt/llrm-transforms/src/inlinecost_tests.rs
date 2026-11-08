@@ -80,6 +80,7 @@ fn priced_params(
         caller_recursive: false,
         caller_size: size,
         relative_frequency: None,
+        entry_weight: None,
         tti,
     };
     match inline_cost(&site, params) {
@@ -248,6 +249,15 @@ b0:
 }
 ";
 
+/// The 64-bit target the pinned costs below were measured on: a position
+/// dependent one. PIE (the default since #7955) prices a global beside an
+/// index higher, 55 for COMPARE_LOOP against the pin's 45.
+fn x86_64_non_pie() -> llrm_x86::tti::X86 {
+    let tti = llrm_x86::tti::X86::of_cpu("x86-64").unwrap();
+    tti.position_independent.set(false);
+    tti
+}
+
 /// D11 at the 64-bit target: an `optsize` caller does not copy a callee that
 /// stays when the copy grows the code, whatever the pin's threshold says (cost
 /// 45 against 50: the compare loop of memory_expansion's `check`, 186 sites,
@@ -255,8 +265,7 @@ b0:
 #[test]
 fn test_an_optsize_caller_keeps_a_compare_loop_with_many_sites_when_the_target_guards_size() {
     let tti = |guard: bool| {
-        llrm_x86::tti::X86::of_cpu("x86-64")
-            .unwrap()
+        x86_64_non_pie()
             .with_tuning(llrm_mir::target::Tuning { inline_size_guard_at_size: guard, ..llrm_mir::target::Tuning::PIN })
     };
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::OptSize, Some(&tti(false)));
@@ -271,7 +280,7 @@ fn test_an_optsize_caller_keeps_a_compare_loop_with_many_sites_when_the_target_g
 #[test]
 fn test_an_optsize_caller_keeps_a_callee_with_one_site_when_the_target_guards_single_sites() {
     let tti = |single: bool| {
-        llrm_x86::tti::X86::of_cpu("x86-64").unwrap().with_tuning(llrm_mir::target::Tuning {
+        x86_64_non_pie().with_tuning(llrm_mir::target::Tuning {
             inline_size_guard_at_size: true,
             inline_size_guard_single_site: single,
             ..llrm_mir::target::Tuning::PIN
@@ -545,6 +554,7 @@ fn a_noipa_callee_is_never_inlined_by_cost() {
             caller_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
+            entry_weight: None,
             tti: None,
         };
         let verdict = inline_cost(&site, InlineParams::from_level(2));
@@ -588,6 +598,7 @@ fn an_interposable_callee_is_not_inlined() {
             caller_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
+            entry_weight: None,
             tti: None,
         };
         let verdict = inline_cost(&site, InlineParams::from_level(2));
@@ -825,6 +836,7 @@ b0:
         caller_recursive: false,
         caller_size: CallerSize::Speed,
         relative_frequency: None,
+        entry_weight: None,
         tti: None,
     };
     let verdict = inline_cost(&site, InlineParams::from_level(2));
@@ -886,6 +898,7 @@ b0:
             caller_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
+            entry_weight: None,
             tti: None,
         };
         let params =

@@ -186,7 +186,15 @@ pub fn lowered_with(
             }
         }
     }
-    let widths = phielim::_widths(body);
+    // The values phis name: the only ones the widths and the undefined scan
+    // below are asked about.
+    let phi_values: crate::support::hash::HashSet<u32> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.phis.iter())
+        .flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|&(_, value)| value)))
+        .collect();
+    let widths = phielim::_widths_of(body, Some(&phi_values));
     let kept_phis = |body: &LirBody| -> IndexMap<i64, Vec<Phi>> {
         body.blocks.iter().map(|block| (block.at, block.phis.to_vec())).collect()
     };
@@ -215,7 +223,7 @@ pub fn lowered_with(
         let mut seen: HashMap<u32, (usize, usize)> = HashMap::default();
         for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
             let implicit = crate::processimpdefs::implicit_def_of(one).is_some();
-            for &value in &one.defines {
+            for &value in one.defines.iter().filter(|value| phi_values.contains(value)) {
                 let entry = seen.entry(value).or_insert((0, 0));
                 entry.0 += 1;
                 entry.1 += usize::from(implicit);
@@ -662,6 +670,26 @@ mod tests {
         assert_eq!(now.blocks.len(), 4, "a block was made on the edge at -O0");
         assert_eq!(ROWS_SOLVED.with(std::cell::Cell::get), before, "rows solved at -O0");
         assert_eq!(copies(&now.blocks[0]).len(), 1, "the copy stays in the predecessor");
+    }
+
+    /// The widths were found for every value of the body, though a phi's
+    /// widths join only the values of its own phis: whole-body work for the
+    /// few values asked (1.2 M Ir in `lowered` on div_constants_short at -O0).
+    #[test]
+    fn test_only_the_values_phis_name_are_given_a_width() {
+        use crate::backend::phielim::WIDTHS_KEPT;
+        let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (1, 12)] }];
+        let mut defs: Vec<_> = (100..150).map(def).collect();
+        defs.insert(0, def(1));
+        defs.push(jump(1));
+        let was = body(vec![
+            block(0, defs, &[1], vec![]),
+            block(1, vec![def(12), read(10), branch(1)], &[1, 2], phis),
+            block(2, vec![read(10)], &[], vec![]),
+        ]);
+        WIDTHS_KEPT.with(|kept| kept.set(0));
+        lowered(&was).expect("lowers");
+        assert_eq!(WIDTHS_KEPT.with(std::cell::Cell::get), 3, "a width for each of 10, 1 and 12 only");
     }
 
     /// The rows of liveness were solved for every value of every body with a

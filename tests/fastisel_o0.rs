@@ -1,5 +1,4 @@
-//! -O0 can select with FastISel (`backend::selectiondag::fastisel`), off unless
-//! `LLRM_FAST_ISEL=1`.
+//! -O0 selects with FastISel (`backend::selectiondag::fastisel`) unless `LLRM_FAST_ISEL=0`.
 
 use std::process::Command;
 
@@ -21,9 +20,7 @@ fn built(
         .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
         .current_dir(scratch.path())
         .args([level, "-c", "a.c", "-o", "a.o"]);
-    if fast {
-        command.env("LLRM_FAST_ISEL", "1");
-    }
+    command.env("LLRM_FAST_ISEL", if fast { "1" } else { "0" });
     let output = command.output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let object = std::fs::read(scratch.path().join("a.o")).unwrap();
@@ -48,7 +45,7 @@ fn fast_isel_on_main_alone_leaves_the_dag_object() {
 
 /// `five` is `ret i32 5`: at -O0 with the flag it is selected by FastISel
 /// (the report says `fast`); at -O1 the flag does nothing and the DAG path
-/// selects it. Off by default.
+/// selects it. `LLRM_FAST_ISEL=0` turns it off at -O0.
 #[test]
 fn fast_isel_takes_a_constant_return_at_o0_and_not_at_o1() {
     for target in ["x86_64-linux", "x86_32-linux"] {
@@ -60,7 +57,7 @@ fn fast_isel_takes_a_constant_return_at_o0_and_not_at_o1() {
         let (_, report, _) = built(target, "-O1", true);
         assert!(named(&report, "dag") && !report.contains(" fast"), "{target}: -O1 took FastISel: {report}");
         let (_, report, _) = built(target, "-O0", false);
-        assert!(!report.contains(" fast"), "{target}: FastISel on by default: {report}");
+        assert!(!report.contains(" fast"), "{target}: FastISel on with LLRM_FAST_ISEL=0: {report}");
     }
 }
 
@@ -814,5 +811,158 @@ fn fast_isel_folds_a_narrow_load_into_its_extension() {
         let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
         assert!(asm.contains("movsx eax, word ptr [") || asm.contains("movsx ecx, word ptr ["), "{target}: {asm}");
         assert!(asm.contains("movzx eax, byte ptr [") || asm.contains("movzx ecx, byte ptr ["), "{target}: {asm}");
+    }
+}
+
+/// `0 - *p` read the operand into a register before the `sub` (the fold wanted a register on the left):
+/// the pin folds the load whatever the left operand is (`abs` of `builtins_table`, +11% `.text`).
+#[test]
+fn fast_isel_folds_a_load_whose_left_operand_is_a_constant() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(int *p)\n{\n    return 100 - *p;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "-masm=intel", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(asm.contains("sub eax, dword ptr ["), "{target}: {asm}");
+    }
+}
+
+/// The pin's -O0 selects with FastISel; ours kept the DAG unless asked (`-O0` compiles cost 3261 M instructions
+/// on the 61-program corpus against 3021 M). With no environment variable `five` is selected by FastISel.
+#[test]
+fn fast_isel_is_the_default_at_o0() {
+    for target in ["x86_64-linux", "x86_32-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env_remove("LLRM_FAST_ISEL")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-c", "a.c", "-o", "a.o"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "five fast" || line == "_five fast"), "{target}: {report}");
+    }
+}
+
+/// `*p += x` read `*p` into a register and added: only a load on the right folded. The pin commutes a
+/// commutative operation to fold a load on the left, the one just before it (`foldMemoryOperand`): `add r, [m]`.
+#[test]
+fn fast_isel_folds_a_load_that_is_the_first_operand_of_a_commutative_operation() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(
+            scratch.path().join("a.c"),
+            "void h(int *p, int x)\n{\n    *p += x;\n    *p &= x;\n}\n",
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "-masm=intel", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        for form in ["add e", "and e"] {
+            assert!(asm.lines().any(|line| line.trim_start().starts_with(form) && line.contains("dword ptr [")), "{target}: no `{form}` on memory: {asm}");
+        }
+    }
+}
+
+/// A zero was `mov eax, 0` at -O0 (5 B): the pin's `ExpandPostRAPseudos` makes `xor eax, eax` (2 B) where the
+/// flags are dead, and ours ran no such pass at -O0 (`Peephole` was left out whole): 7 `xor` in the pin's
+/// `div_constants_short` against none.
+#[test]
+fn o0_makes_a_zero_with_xor_on_both_selectors() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        for fast in ["0", "1"] {
+            let scratch = tempfile::tempdir().unwrap();
+            std::fs::write(scratch.path().join("a.c"), "int h(void)\n{\n    return 0;\n}\n").unwrap();
+            let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+                .env("LLRM_CC_TARGET", target)
+                .env("LLRM_FAST_ISEL", fast)
+                .env("LLRM_VERIFY", "1")
+                .current_dir(scratch.path())
+                .args(["-O0", "-S", "-masm=intel", "a.c", "-o", "a.s"])
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+            assert!(asm.contains("xor eax, eax"), "{target} fast={fast}: {asm}");
+            assert!(!asm.contains("mov eax, 0"), "{target} fast={fast}: {asm}");
+        }
+    }
+}
+
+/// The reason a block was declined was formatted for every instruction, the
+/// `isel` channel on or off: 4.7 M of a 196 M compile. It is made only when the
+/// channel is on, and says where the block was declined.
+#[test]
+fn the_decline_reason_is_made_for_the_isel_channel_and_names_the_instruction() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), "int h(int x)\n{\n    return (int)(x * 1.5);\n}\n").unwrap();
+    let said = |channel: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
+        command.env("LLRM_CC_TARGET", "x86_32-linux").current_dir(scratch.path()).args(["-O0", "-c", "a.c", "-o", "a.o"]);
+        if let Some(channel) = channel {
+            command.env("LLRM_DEBUG", channel);
+        }
+        let out = command.output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    assert!(said(Some("isel")).contains("fast declined at Cast(SIToFP) double"));
+    assert!(!said(None).contains("declined"));
+}
+
+/// FastISel's conditional branch ended in a `jmp` to the false block even when
+/// that block comes next, and `ControlFlow` (the pin has no BranchFolder at
+/// -O0) ran to remove it: 5.2 M of a 179 M compile. A function FastISel
+/// selects whole has no jump to the next block, and no such phase.
+#[test]
+fn a_function_fastisel_selects_has_no_jump_to_the_next_block_and_no_control_flow_phase() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "int f(int x)\n{\n    int s = 0;\n    while (x > 0) {\n        if (x & 1)\n            s += x;\n        else\n            s -= 1;\n        x--;\n    }\n    return s;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_DEBUG", "time")
+        .env("LLRM_TIME_TOP", "100000")
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!said.contains("lir jumps"), "{said}");
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = asm.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    for pair in lines.windows(2) {
+        if let Some(target) = pair[0].strip_prefix("jmp ") {
+            assert_ne!(pair[1], format!("{target}:"), "a jump to the next block:\n{asm}");
+        }
     }
 }
