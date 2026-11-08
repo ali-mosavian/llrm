@@ -55,6 +55,8 @@ pub struct Returned {
 pub struct CallEnv<'a> {
     pub arch: &'a dyn llrm_target::Target,
     pub pointer: EVT,
+    /// The target's call node.
+    pub call: ISD,
 }
 
 /// The nodes of the call: the chain after it, and the value read from each
@@ -115,7 +117,7 @@ pub fn lib_call(
     }
     ops.push(dag.get_register_mask_clobbering(clobbers));
     ops.extend(glue);
-    let call = dag.get_node_multi(x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &ops);
+    let call = dag.get_node_multi(env.call, &[EVT::OTHER, EVT::GLUE], &ops);
     let end = dag.get_callseq_end(
         SDValue { node: call.node, res: 0 },
         stack_bytes,

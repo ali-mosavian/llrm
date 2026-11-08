@@ -7,6 +7,7 @@ use llrm_mir::module::{Instruction, Operand, ValueDef};
 use llrm_mir::opcode::{CastOp, Opcode};
 
 use super::super::inline_asm::lower_asm;
+use super::LoweringNodes;
 use super::{Builder, Refused};
 
 impl Builder<'_> {
@@ -59,7 +60,15 @@ impl Builder<'_> {
             outputs.push((self.sized_register(self.arch.register_named(register), vt), vt));
         }
         let root = self.root();
-        let (chain, results) = lower_asm(&mut self.dag, root, name, &fixups, &registers, &outputs);
+        let (chain, results) = lower_asm(
+            &mut self.dag,
+            LoweringNodes::need(self.target.nodes.asm, "inline asm")?,
+            root,
+            name,
+            &fixups,
+            &registers,
+            &outputs,
+        );
         self.dag.set_root(chain);
         if let Some(result) = instruction.result {
             if results.len() > 1 {
