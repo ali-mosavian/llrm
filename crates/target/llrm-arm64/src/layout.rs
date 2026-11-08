@@ -347,6 +347,67 @@ fn effects(inst: &Inst) -> Option<(Vec<Item>, Vec<Item>)> {
     Some((written, uses.into_iter().map(Item::Register).collect()))
 }
 
+/// DEVIATE (2026-11-08, owner w15, exit 2026-11-30): the pin hoists only the
+/// leading run both ways of a branch share; this also lifts an instruction both
+/// begin with later (x86's HC1), so that the run reaches it. recchop -Os kept
+/// 62 instructions for want of it. Off: the pin's rule alone.
+const LIFT_NON_LEADING: bool = true;
+
+/// The order in which the two ways' instructions put the ones both have, equal
+/// and free of anything ahead of them, first (after the leading run): a
+/// register-only instruction that reads and writes nothing an earlier one of
+/// its block touches, with no call before it. The tail both end with stays.
+fn lifted_order(
+    first: &[Inst],
+    second: &[Inst],
+) -> (Vec<usize>, Vec<usize>) {
+    let tail = first.iter().rev().zip(second.iter().rev()).take_while(|(a, b)| a == b).count();
+    let free = |insts: &[Inst]| -> Vec<usize> {
+        let open = insts.len().saturating_sub(tail);
+        let (mut read, mut written): (HashSet<Item>, HashSet<Item>) = (HashSet::default(), HashSet::default());
+        let mut found = Vec::new();
+        for (at, inst) in insts.iter().enumerate().take(open) {
+            if matches!(inst, Inst::Branch { link: true, .. } | Inst::BranchReg { link: true, .. }) {
+                break;
+            }
+            let (defs, uses) = inst.defs_and_uses();
+            let (defs, uses): (Vec<Item>, Vec<Item>) =
+                (defs.into_iter().map(Item::Register).collect(), uses.into_iter().map(Item::Register).collect());
+            if movable(inst) == Some(false) {
+                if let Some((w, r)) = effects(inst) {
+                    if w.iter().all(|one| !read.contains(one) && !written.contains(one))
+                        && r.iter().all(|one| !written.contains(one))
+                    {
+                        found.push(at);
+                    }
+                }
+            }
+            read.extend(uses);
+            written.extend(defs);
+            if matches!(inst, Inst::BranchCond { .. } | Inst::CompareBranch { .. } | Inst::TestBranch { .. }) {
+                break;
+            }
+        }
+        found
+    };
+    let (ours, theirs) = (free(first), free(second));
+    let mut taken = vec![false; theirs.len()];
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for &at in &ours {
+        let hit = (0..theirs.len()).find(|&slot| !taken[slot] && first[at] == second[theirs[slot]]);
+        if let Some(slot) = hit {
+            taken[slot] = true;
+            pairs.push((at, theirs[slot]));
+        }
+    }
+    let front = |len: usize, picks: Vec<usize>| -> Vec<usize> {
+        let mut order = picks.clone();
+        order.extend((0..len).filter(|at| !picks.contains(at)));
+        order
+    };
+    (front(first.len(), pairs.iter().map(|p| p.0).collect()), front(second.len(), pairs.iter().map(|p| p.1).collect()))
+}
+
 /// The pin's `HoistCommonCodeInSuccs`
 /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L2043>):
 /// the instructions two successors of a conditional branch both begin with go
@@ -445,10 +506,9 @@ fn hoist_in_successors(
             place -= 1;
         }
     }
-    let mut active: HashSet<Item> = HashSet::default();
-    let mut run = 0;
-    {
-        let (first, second) = (&blocks[one].insts, &blocks[two].insts);
+    let leading = |first: &[Inst], second: &[Inst]| -> usize {
+        let mut active: HashSet<Item> = HashSet::default();
+        let mut run = 0;
         while let (Some(a), Some(b)) = (first.get(run), second.get(run)) {
             if a != b || movable(a) != Some(false) {
                 break;
@@ -461,6 +521,21 @@ fn hoist_in_successors(
             }
             active.extend(written);
             run += 1;
+        }
+        run
+    };
+    let mut run = leading(&blocks[one].insts, &blocks[two].insts);
+    if LIFT_NON_LEADING {
+        let (order_one, order_two) = lifted_order(&blocks[one].insts, &blocks[two].insts);
+        let reorder = |insts: &[Inst], order: &[usize]| -> Vec<Inst> { order.iter().map(|&at| insts[at].clone()).collect() };
+        let lifted = leading(&reorder(&blocks[one].insts, &order_one), &reorder(&blocks[two].insts, &order_two));
+        if lifted > run {
+            for (block, order) in [(one, order_one), (two, order_two)] {
+                let locs: Vec<_> = order.iter().map(|&at| blocks[block].locs[at]).collect();
+                blocks[block].insts = reorder(&blocks[block].insts, &order);
+                blocks[block].locs = locs;
+            }
+            run = lifted;
         }
     }
     if run == 0 {
@@ -857,6 +932,36 @@ mod tests {
         assert_eq!(blocks[1].insts, vec![go("j")], "{blocks:?}");
         assert_eq!(blocks[2].insts, vec![Inst::Nop, go("j")], "{blocks:?}");
         assert_eq!(blocks[0].locs.len(), blocks[0].insts.len());
+    }
+
+    /// Both ways held `mov x9, #7` but not first (recchop -Os kept 62
+    /// instructions): it is independent of what comes before it, so it is
+    /// lifted to the front and hoisted above the branch (HC1, DEVIATE).
+    #[test]
+    fn an_identical_instruction_not_leading_in_both_ways_is_hoisted() {
+        let mut blocks = vec![
+            block("g", vec![compare(0, 1), if_hs("t"), go("f")]),
+            block("t", vec![movz(10, 1), movz(9, 7), movz(12, 3), go("j")]),
+            block("f", vec![movz(11, 2), movz(9, 7), movz(13, 4), go("j")]),
+            block("j", vec![Inst::Ret { rn: Gpr(30) }]),
+        ];
+        assert!(hoist_common_code(&mut blocks, &[]));
+        assert_eq!(blocks[0].insts[0], movz(9, 7), "{blocks:?}");
+        assert_eq!(blocks[1].insts, vec![movz(10, 1), movz(12, 3), go("j")], "{blocks:?}");
+        assert_eq!(blocks[2].insts, vec![movz(11, 2), movz(13, 4), go("j")], "{blocks:?}");
+    }
+
+    /// An instruction that reads what an earlier one of its way writes is not
+    /// lifted past it.
+    #[test]
+    fn an_instruction_that_depends_on_one_before_it_is_not_lifted() {
+        let mut blocks = vec![
+            block("g", vec![compare(0, 1), if_hs("t"), go("f")]),
+            block("t", vec![movz(9, 1), movz(9, 7), movz(12, 3), go("j")]),
+            block("f", vec![movz(11, 2), movz(9, 7), movz(13, 4), go("j")]),
+            block("j", vec![Inst::Ret { rn: Gpr(30) }]),
+        ];
+        assert!(!hoist_common_code(&mut blocks, &[]));
     }
 
     /// The hoisted `mov x0, #7` would change what the compare reads: it stays
