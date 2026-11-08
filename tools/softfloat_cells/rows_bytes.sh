@@ -26,10 +26,10 @@ if [ $tgt = m32 ]; then
   shim64=$(( $(sz w64) - $(sz b64) )); shim32=$(( $(sz w32) - $(sz b32) ))
 fi
 # op: ours file | crt routines (summed) | libgcc routines (summed)
-ops="add+sub:add_sub:adddf3,subdf3:addsf3,subsf3 mul:mul:muldf3:mulsf3 div:div:divdf3:divsf3 neg:neg:negdf2:negsf2 fix_si:fix_si:fixdfsi:fixsfsi fix_usi:fix_usi:fixunsdfsi:fixunssfsi float:float:floatsidf,floatunsidf,floatdidf,floatundidf:floatsisf cmp:cmp:comparedf2:comparesf2"
+ops="add+sub:add_sub:adddf3,subdf3:addsf3,subsf3 mul:mul:muldf3:mulsf3 div:div:divdf3:divsf3 neg:neg:negdf2:negsf2 fix_si:fix_si:fixdfsi:fixsfsi fix_usi:fix_usi:fixunsdfsi:fixunssfsi float:float:floatsidf,floatunsidf,floatdidf,floatundidf:floatsisf cmp:cmp:comparedf2:comparesf2:eqdf2,ledf2,gedf2,unorddf2:eqsf2,lesf2,gesf2,unordsf2"
 for O in Os O2; do
   echo "== $tgt -$O (bytes)"; printf "%-9s %7s %7s %7s | %7s %7s %7s | %9s %9s\n" op ours64 crt64 gcc64 ours32 crt32 gcc32 ours64+x87 ours32+x87
-  for spec in $ops; do IFS=: read name file c64 c32 <<<"$spec"
+  for spec in $ops; do IFS=: read name file c64 c32 g64 g32 <<<"$spec"
     [ -z "${ROWS_ONLY:-}" ] || [ "$name" = "$ROWS_ONLY" ] || continue
     row=()
     for w in 64 32; do
@@ -43,13 +43,17 @@ for O in Os O2; do
         [ "$u" = ERR ] && o=ERR || o=$((o + u))
       fi
       list=$c64; [ $w = 32 ] && list=$c32
+      glist=${g64:-$c64}; [ $w = 32 ] && glist=${g32:-$c32}
       c=0; g=0
       for r in ${list//,/ }; do
         if $cl $extra -$O -w -I$CRT -c $CRT/$r.c -o $T/c.o 2>/dev/null; then c=$((c + $(bytes $T/c.o))); else c=ERR; break; fi
-        if [ $tgt = m32 ]; then
-          if gcc -m32 -march=i486 -$O -falign-functions=1 -falign-jumps=1 -falign-loops=1 -falign-labels=1 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables -msoft-float -w -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$r.c -o $T/g.o 2>/dev/null; then [ $g != ERR ] && g=$((g + $(bytes $T/g.o))); else g=ERR; fi
-        else g=-; fi
       done
+      # libgcc has no comparedf2: its compare set is eq, le, ge (ne, lt, gt reuse them) and unord, so cmp takes its own list (glist)
+      if [ $tgt = m32 ]; then
+        for r in ${glist//,/ }; do
+          if gcc -m32 -march=i486 -$O -falign-functions=1 -falign-jumps=1 -falign-loops=1 -falign-labels=1 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables -msoft-float -w -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$r.c -o $T/g.o 2>/dev/null; then [ $g != ERR ] && g=$((g + $(bytes $T/g.o))); else g=ERR; fi
+        done
+      else g=-; fi
       # m32 compiler-rt int->float is x87 arithmetic (fild/fmul/fadd), not a soft-float routine: no rank
       [ $tgt = m32 ] && [ $name = float ] && c=fpu
       # wasm32 compiler-rt floatdidf/floatundidf use f64.convert, f64.mul and f64.add (the machine has an FPU): the f64 cell is not a soft-float rank
