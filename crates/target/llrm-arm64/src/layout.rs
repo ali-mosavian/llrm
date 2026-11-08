@@ -344,7 +344,21 @@ fn effects(inst: &Inst) -> Option<(Vec<Item>, Vec<Item>)> {
     if sets_flags {
         written.push(Item::Flags);
     }
-    Some((written, uses.into_iter().map(Item::Register).collect()))
+    // Register 31 in the source of these forms is the zero register, not the
+    // stack pointer a pre-indexed store writes: `mov x11, xzr` reads nothing.
+    let zero_sources = matches!(
+        inst,
+        Inst::LogicShifted { .. }
+            | Inst::LogicImm { .. }
+            | Inst::AddSubShifted { .. }
+            | Inst::Divide { .. }
+            | Inst::OneSource { .. }
+            | Inst::ThreeSource { .. }
+            | Inst::Extract { .. }
+            | Inst::BitfieldMove { .. }
+    );
+    let read = uses.into_iter().filter(|one| !(zero_sources && *one == zero)).map(Item::Register).collect();
+    Some((written, read))
 }
 
 /// DEVIATE (2026-11-08, owner w15, exit 2026-11-30): the pin hoists only the
@@ -932,6 +946,36 @@ mod tests {
         assert_eq!(blocks[1].insts, vec![go("j")], "{blocks:?}");
         assert_eq!(blocks[2].insts, vec![Inst::Nop, go("j")], "{blocks:?}");
         assert_eq!(blocks[0].locs.len(), blocks[0].insts.len());
+    }
+
+    /// recpow -Os: `mov x11, xzr` begins the loop's preheader behind the
+    /// prologue's pre-indexed `stp` (which writes register 31, the stack
+    /// pointer) and is the whole guard-bypass block. `xzr` was taken for that
+    /// register: the move was held below the branch, an exit block of 8 B (gcc 4).
+    #[test]
+    fn a_move_from_the_zero_register_is_not_held_by_a_write_of_the_stack_pointer() {
+        use crate::mc::inst::{Addr, Memory};
+        let int = |reg| Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(reg) };
+        let prologue = Inst::StorePair { first: int(29), second: int(30), addr: Addr::Pre { base: Gpr(31), imm: -16 } };
+        let zero_x11 = Inst::LogicShifted {
+            op: crate::mc::inst::Logic::Orr,
+            invert: false,
+            width: Width::X,
+            rd: Gpr(11),
+            rn: Gpr(31),
+            rm: Gpr(31),
+            shift: crate::mc::inst::Shift::Lsl,
+            amount: 0,
+        };
+        let mut blocks = vec![
+            block("g", vec![compare(0, 1), if_hs("t"), go("f")]),
+            block("t", vec![prologue, zero_x11.clone(), go("l")]),
+            block("f", vec![zero_x11.clone(), go("j")]),
+            block("l", vec![go("j")]),
+            block("j", vec![Inst::Ret { rn: Gpr(30) }]),
+        ];
+        assert!(hoist_common_code(&mut blocks, &[]));
+        assert_eq!(blocks[0].insts[0], zero_x11, "{blocks:?}");
     }
 
     /// Both ways held `mov x9, #7` but not first (recchop -Os kept 62
