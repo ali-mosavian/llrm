@@ -676,7 +676,7 @@ impl Printer<'_> {
                 // half-carry flags, which no branch here reads.
                 self.push(if value == "#0" { "or a, a".to_owned() } else { format!("cp a, {value}") });
             }
-            "CP16" | "CP16i" | "CP16C" | "CP16Ci" => self.compare16(inst, rest)?,
+            "CP16" | "CP16i" | "CP16C" | "CP16Ci" | "CP16S" => self.compare16(inst, rest)?,
             // `ld` leaves the flags alone: the byte is 1, and 0 when the
             // condition fails
             "SETCC8" => {
@@ -1266,6 +1266,23 @@ impl Printer<'_> {
                 self.out.push(Line::Label(fixed));
                 self.push("rlca");
             }
+            return Ok(());
+        }
+        // a signed order of two words: the sign of the difference, corrected
+        // where the subtract overflowed, into the carry
+        if matches!(inst.kind, Kind::Op("CP16S")) {
+            if zero {
+                return Err("CP16S read for zero".into());
+            }
+            self.push(format!("ld a, {}", name(al)));
+            self.push(format!("sub a, {bl}"));
+            self.push(format!("ld a, {}", name(ah)));
+            self.push(format!("sbc a, {bh}"));
+            let fixed = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count() + 1);
+            self.push(format!("jp po, {fixed}"));
+            self.push("xor a, #128");
+            self.out.push(Line::Label(fixed));
+            self.push("rlca");
             return Ok(());
         }
         let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
