@@ -1896,34 +1896,34 @@ impl Builder<'_> {
             if name == "memset" { types.int(self.dag.value_type(first_two[1]).size_in_bits()) } else { pointer_type };
         let arg_types = [pointer_type, value_type, word];
         let first = self.full_arch()?.first_argument_offset(false);
-        // `getMemcpy`'s `RetTy` is void: the routine's result is dropped, so a call ending the function is a tail
-        // call (`jmp memmove`).
+        // `getMemcpy`'s `RetTy` is the destination's type: a call that is not a tail call reads the returned
+        // pointer and drops it (`CopyFromReg $eax` in the initial DAG); one ending the function is a tail call
+        // (`jmp memmove`), which returns nothing, so its plan is the void one the sibling-call check compares with
+        // the caller's.
         let void = types.void();
-        let plan: Convention = convention_for(
-            self.module,
-            self.layout,
-            self.full_arch()?,
-            first,
-            convention,
-            void,
-            false,
-            &arg_types,
-            &[],
-        )
-        .map_err(|_| Refused("libcall the convention does not describe"))?;
+        let plan_of = |this: &Self, returns| {
+            convention_for(this.module, this.layout, this.full_arch()?, first, convention, returns, false, &arg_types, &[])
+                .map_err(|_| Refused("libcall the convention does not describe"))
+        };
+        let tail_plan = plan_of(self, void)?;
         let target_symbol = self.dag.get_target_external_symbol(self.target.dag.pointer, &routine_symbol);
         let _ = symbol;
         let values = vec![first_two[0], first_two[1], size];
         self.dag.set_root(chain_in);
         let extends = [ISD::AnyExtend; 3];
         // `isTailCall`: the intrinsic is marked `tail` and ends the function, and the target takes the sibling call.
-        if let Some(tail) = self.tail_candidate.take()
-            && self.eligible_for_sibling_call(info, &plan, false, None, first, &[])
-        {
+        let tail = match self.tail_candidate.take() {
+            Some(tail) if self.eligible_for_sibling_call(info, &tail_plan, false, None, first, &[]) => Some(tail),
+            _ => None,
+        };
+        if let Some(tail) = tail {
             self.tail_calls.push(tail);
             self.sibcall = self.target.tail_calls;
+            let _ = self.lower_call(target_symbol, values, &extends, &[], &tail_plan, first, void, false)?;
+        } else {
+            let plan = plan_of(self, pointer_type)?;
+            let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
         }
-        let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, void, false)?;
         Ok(self.dag.get_root())
     }
 
