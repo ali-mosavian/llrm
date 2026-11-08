@@ -222,6 +222,8 @@ impl TargetLowering {
         // i128, no cttz and no i16. DEVIATE BC1 (owner softfloat, exit 2026-11-30): `__ctz*2` for a zero-poison
         // cttz, and libgcc's `__clzhi2`, `__ctzhi2`, `__popcounthi2` for the 8-bit targets' i16. A name is
         // only called where the target's action for the op and type is `LibCall`.
+        // Upstream check: at each pin bump, grep RuntimeLibcalls.td for CTTZ and an i16 count; where the pin names
+        // one, take its name and drop the row. Exit: 2026-11-30 (decide: keep as a recorded deviation or drop).
         let counts: [(MVT, [&'static str; 3]); 4] = [
             (MVT::I16, ["__clzhi2", "__popcounthi2", "__ctzhi2"]),
             (MVT::I32, ["__clzsi2", "__popcountsi2", "__ctzsi2"]),
