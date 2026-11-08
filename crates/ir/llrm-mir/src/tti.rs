@@ -570,6 +570,13 @@ pub trait Tti {
         false
     }
 
+    /// Whether a callee the -O1 size bound refused is tried inline as at -Os (SZ2: the copy
+    /// stays if the caller comes out smaller), where -O1 prices no byte in clocks. False: the
+    /// bound's verdict stands.
+    fn inline_trials_at_o1(&self) -> bool {
+        false
+    }
+
     /// Whether `speed_inline_milliclocks_per_byte` also binds at -O1. False:
     /// -O1 prices no byte in clocks and keeps the pin's threshold alone.
     fn speed_inline_rate_at_o1(&self) -> bool {
