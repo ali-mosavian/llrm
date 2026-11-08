@@ -252,7 +252,7 @@ fn priority(
     is_split: bool,
     connectivity: usize,
 ) -> MbbPriority {
-    MbbPriority { block, depth, is_split, connectivity }
+    MbbPriority { block, depth, is_split, connectivity, carried: 0 }
 }
 
 /// `compareMBBPriority`: the deeper loop, then the split edge, then the better
@@ -268,6 +268,18 @@ fn test_blocks_are_ordered_by_depth_then_split_edge_then_connectivity_then_numbe
     ];
     blocks.sort_by(compare_mbb_priority);
     assert_eq!(blocks.iter().map(|one| one.block).collect::<Vec<_>>(), vec![2, 3, 4, 1, 0]);
+}
+
+/// DEVIATE C15: of two blocks the pin orders alike, the one that reads more
+/// loop-carried values goes first; depth, split edge and connectivity still
+/// rank above it.
+#[test]
+fn test_a_carried_value_breaks_only_a_tie_of_depth_split_edge_and_connectivity() {
+    let carried =
+        |block, depth, connectivity, carried| MbbPriority { carried, ..priority(block, depth, false, connectivity) };
+    let mut blocks = vec![carried(1, 1, 2, 0), carried(2, 1, 2, 3), carried(3, 1, 4, 0), carried(4, 0, 2, 9)];
+    blocks.sort_by(compare_mbb_priority);
+    assert_eq!(blocks.iter().map(|one| one.block).collect::<Vec<_>>(), vec![3, 2, 1, 4]);
 }
 
 /// A chain of copies in one block is all joined by one round: one value stays.
