@@ -209,7 +209,7 @@ pub struct Procedure {
     pub callees: IndexMap<i64, Callee>,
     /// An interrupt handler's data group, whose selector it loads into DS
     /// and ES; `None` for a procedure entered by a call.
-    pub interrupt: Option<Addr>,
+    pub interrupt: Option<Interrupt>,
     /// Tuned for size (-Os): the jumps `objbuild` lays out.
     pub size: bool,
     /// Bytes the runtime's entry call (B$ENSA) takes below BP, which no
@@ -1754,8 +1754,8 @@ fn parts(
     }
     enter.extend(stack_check(procedure, reserve));
     enter.extend(saved.iter().map(|one| semantics(Operation::Push, "push", vec![], vec![reg(*one)])));
-    if let Some(group) = procedure.interrupt {
-        let (before, after) = _interrupt_parts(group);
+    if let Some(entry) = &procedure.interrupt {
+        let (before, after) = _interrupt_parts(entry);
         enter.splice(0..0, before);
         leave.extend(after);
     }
@@ -1850,13 +1850,43 @@ fn zone_costs_bytes(
     added > saved
 }
 
+/// An interrupt handler's entry, as the target's `calling.toml` states it
+/// (`interrupt_saves`, `interrupt_data`): the data group the handler loads, the
+/// registers pushed after PUSHAD in push order, and the ones loaded with the
+/// group's selector.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Interrupt {
+    pub group: Addr,
+    pub saves: Vec<RegId>,
+    pub data: Vec<RegId>,
+}
+
+impl Interrupt {
+    /// The entry `arch`'s interrupt convention states, over `group`.
+    pub fn of(
+        arch: &dyn llrm_target::Target,
+        group: Addr,
+    ) -> Self {
+        let calling = arch.calling();
+        let convention = calling.interrupt().expect("a target with interrupt handlers states their frame");
+        let registers = arch.registers();
+        let named = |names: &[String]| -> Vec<RegId> {
+            names
+                .iter()
+                .map(|name| registers.by_name(name).unwrap_or_else(|| panic!("calling.toml names {name}, not a register")))
+                .collect()
+        };
+        Self { group, saves: named(&convention.interrupt_saves), data: named(&convention.interrupt_data) }
+    }
+}
+
 /// Where the frame an interrupt handler saved starts above its own BP: the
 /// last register it saved, past what its entry pushes after those and the BP
 /// its frame pushes. the target's `interrupt_frame` (calling.toml) is the
 /// frame.
-pub fn interrupt_parameters() -> i64 {
-    let (enter, _) = _interrupt_parts(Addr::new(Space::Group, 0));
-    let pushed: i64 = enter[INTERRUPT_SAVED..]
+pub fn interrupt_parameters(entry: &Interrupt) -> i64 {
+    let (enter, _) = _interrupt_parts(entry);
+    let pushed: i64 = enter[1 + entry.saves.len()..]
         .iter()
         .map(|one| match (one.op, one.name.as_deref()) {
             (_, Some("pushad")) => 32,
@@ -1868,10 +1898,6 @@ pub fn interrupt_parameters() -> i64 {
     pushed + 2
 }
 
-/// The entry's first instructions, which save the frame: PUSHAD, then the
-/// segments, so the last one pushed is the lowest slot.
-const INTERRUPT_SAVED: usize = 5;
-
 /// `StackProbeSize`: a frame of this many bytes or more is probed.
 const STACK_PROBE_PAGE: u64 = 4096;
 
@@ -1881,28 +1907,22 @@ const STACK_PROBE_PAGE: u64 = 4096;
 /// code what it assumes: DGROUP in DS and ES, the direction flag clear. A
 /// handler's register parameters are slots of that frame, so what it writes to
 /// them is what POPAD or `iret` goes back with. The x87 state is not saved.
-fn _interrupt_parts(group: Addr) -> (Vec<Semantics>, Vec<Semantics>) {
+fn _interrupt_parts(entry: &Interrupt) -> (Vec<Semantics>, Vec<Semantics>) {
     let push = |one: Loc| semantics(Operation::Push, "push", vec![], vec![one]);
     let pop = |one: RegId| semantics(Operation::Pop, "pop", vec![reg(one)], vec![]);
-    let enter = vec![
-        semantics(Operation::Nothing, "pushad", vec![], vec![]),
-        push(reg(RegId::DS)),
-        push(reg(RegId::ES)),
-        push(reg(RegId::FS)),
-        push(reg(RegId::GS)),
-        push(Loc::Imm(ir::Imm { value: 0, width: 2, address: Some(group) })),
-        pop(RegId::DS),
-        push(reg(RegId::DS)),
-        pop(RegId::ES),
-        semantics(Operation::Nothing, "cld", vec![], vec![]),
-    ];
-    let leave = vec![
-        pop(RegId::GS),
-        pop(RegId::FS),
-        pop(RegId::ES),
-        pop(RegId::DS),
-        semantics(Operation::Nothing, "popad", vec![], vec![]),
-    ];
+    let mut enter = vec![semantics(Operation::Nothing, "pushad", vec![], vec![])];
+    enter.extend(entry.saves.iter().map(|&one| push(reg(one))));
+    enter.push(push(Loc::Imm(ir::Imm { value: 0, width: 2, address: Some(entry.group) })));
+    // The group's selector into the first, which the next is loaded from.
+    for (at, &one) in entry.data.iter().enumerate() {
+        if at != 0 {
+            enter.push(push(reg(entry.data[at - 1])));
+        }
+        enter.push(pop(one));
+    }
+    enter.push(semantics(Operation::Nothing, "cld", vec![], vec![]));
+    let mut leave: Vec<Semantics> = entry.saves.iter().rev().map(|&one| pop(one)).collect();
+    leave.push(semantics(Operation::Nothing, "popad", vec![], vec![]));
     (enter, leave)
 }
 
@@ -4249,9 +4269,10 @@ mod tests {
     /// What the interrupt entry saves, lowest slot first: each push's register
     /// name, PUSHAD's eight dwords (EDI lowest) in its place.
     fn saved_by_the_entry() -> Vec<(String, i64)> {
-        let (enter, _) = _interrupt_parts(Addr::new(Space::Group, 0));
+        let entry = Interrupt::of(&llrm_x86_m16::M16, Addr::new(Space::Group, 0));
+        let (enter, _) = _interrupt_parts(&entry);
         let mut pushed = Vec::new();
-        for one in &enter[..INTERRUPT_SAVED] {
+        for one in &enter[..1 + entry.saves.len()] {
             match (one.op, one.name.as_deref(), one.sources.first()) {
                 (_, Some("pushad"), _) => pushed.push(
                     vec!["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"]
@@ -4291,6 +4312,21 @@ mod tests {
         );
     }
 
+    /// The segments the entry saves are the target's `interrupt_saves`, not a
+    /// list in the printer: a target saving only DS pushes one segment, and
+    /// pops it on the way out (17 target-fact copies in this file named
+    /// DS/ES/FS/GS).
+    #[test]
+    fn test_the_entry_saves_the_segments_the_target_states() {
+        let group = Addr::new(Space::Group, 0);
+        let entry = Interrupt { group, saves: vec![RegId::DS], data: vec![RegId::DS] };
+        let (enter, leave) = _interrupt_parts(&entry);
+        let names: Vec<_> = enter.iter().filter_map(|one| one.name.as_deref()).collect();
+        assert_eq!(names, ["pushad", "push", "push", "pop", "cld"], "{names:?}");
+        assert_eq!(leave.len(), 2);
+        assert_eq!(interrupt_parameters(&entry), 2);
+    }
+
     /// The frame the target's calling.toml states (`interrupt_frame`) is the
     /// one the entry builds, so a handler's parameters read the registers
     /// they name.
@@ -4299,7 +4335,7 @@ mod tests {
         let calling = llrm_target::Target::calling(&llrm_x86_m16::M16);
         let stated = calling.interrupt().expect("an interrupt convention").interrupt_frame.clone();
         assert_eq!(saved_by_the_entry()[..], stated[..12]);
-        assert_eq!(interrupt_parameters(), 2);
+        assert_eq!(interrupt_parameters(&Interrupt::of(&llrm_x86_m16::M16, Addr::new(Space::Group, 0))), 2);
         assert_eq!(llrm_x86::calling::interrupt_slot(calling.interrupt().unwrap(), "ax"), Some(36));
         assert_eq!(llrm_x86::calling::interrupt_slot(calling.interrupt().unwrap(), "ds"), Some(6));
     }

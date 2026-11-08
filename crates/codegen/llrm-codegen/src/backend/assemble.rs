@@ -414,7 +414,7 @@ pub fn assembled_by(
                 let interrupt = (function.calling_convention == llrm_mir::opcode::X86_INTR).then(|| {
                     let (space, index) = crate::hir::symbols::DGROUP;
                     names.insert((space, index), globals::DGROUP.to_owned());
-                    Addr { index, ..Addr::new(space, 0) }
+                    masm::Interrupt::of(arch, Addr { index, ..Addr::new(space, 0) })
                 });
                 if is_weak(global.linkage) {
                     weak.insert(names[&(Space::Segment, at as i64)].clone());

@@ -195,6 +195,13 @@ pub struct Convention {
     /// For an interrupt handler: what its frame pointer addresses, lowest
     /// address first, each slot's register and bytes. Empty for the rest.
     pub interrupt_frame: Vec<(String, i64)>,
+    /// For an interrupt handler: the registers its entry pushes after the
+    /// general ones, in push order (the frame holds them in reverse).
+    pub interrupt_saves: Vec<String>,
+    /// For an interrupt handler: the registers its entry loads with the data
+    /// group's selector, the first from the group, each next from the one
+    /// before.
+    pub interrupt_data: Vec<String>,
 }
 
 /// A target's description of its conventions, by its address: one per target,
@@ -302,6 +309,8 @@ const KEYS: &[&str] = &[
     "va_list",
     "like",
     "interrupt_frame",
+    "interrupt_saves",
+    "interrupt_data",
 ];
 
 impl Calling {
@@ -786,6 +795,14 @@ impl Convention {
                 .then(|| text("variadic_vector_register"))
                 .transpose()?,
             va_list: table.contains_key("va_list").then(|| text("va_list")).transpose()?,
+            interrupt_saves: match table.get("interrupt_saves") {
+                Some(_) => names(table.get("interrupt_saves"), "interrupt_saves")?,
+                None => Vec::new(),
+            },
+            interrupt_data: match table.get("interrupt_data") {
+                Some(_) => names(table.get("interrupt_data"), "interrupt_data")?,
+                None => Vec::new(),
+            },
             interrupt_frame: match table.get("interrupt_frame") {
                 None => Vec::new(),
                 Some(rows) => rows
