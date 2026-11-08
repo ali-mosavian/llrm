@@ -46,13 +46,6 @@
 //! no longer tells them apart (stft_fixed c -Os, +11 B). Exit: a pressure model
 //! on the pin's MachineLICM/RegisterPressure terms, by 2026-11-20, or when the
 //! allocator's spill cost is priced in the comparator.
-//!
-//! DEVIATE LU3e: beside the count (one instruction for each register past the
-//! budget) a solution carries `Cost::spill_extra`: each such register is
-//! reloaded at every reference to it, the references per register so far, and
-//! the loop's real pressure counts there even when LU3b's retry drops the cut.
-//! It ranks solutions; the test against the loop as it stands does not read it
-//! (m16 grep -O1 -11 B, -O2/-O3 -6 B). Same exit as LU3b.
 
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::expr::Scev;
@@ -257,7 +250,6 @@ impl Collection<'_, '_> {
         for (at, &chosen) in solution.iter().enumerate() {
             llrm_support::debug!("lsr", "  use {at} {:?}: {:?}", self.uses[at].kind, self.uses[at].formulae[chosen]);
         }
-        solution_cost.spill_extra = 0;
         // DEVIATE LU3: a rewrite that needs more registers than the loop and
         // than the target has, and costs two instructions more, is dropped.
         let budget = self.tti.number_of_gpr_registers().saturating_sub(1).saturating_sub(self.pressure_units());

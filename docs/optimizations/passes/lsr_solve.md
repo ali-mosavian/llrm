@@ -58,11 +58,3 @@ dropped and the search runs again without it: every one spills and the count
 no longer tells them apart (stft_fixed c -Os, +11 B). Exit: a pressure model
 on the pin's MachineLICM/RegisterPressure terms, by 2026-11-20, or when the
 allocator's spill cost is priced in the comparator.
-
-DEVIATE LU3e (real mode, `Tti::lsr_prices_spills`): a register past the
-loop's real budget costs the references per register so far
-(`Cost::spill_extra`), not the pin's one instruction, and the loop's real
-pressure counts there even when LU3b's retry drops the cut. It ranks
-solutions; the test against the loop as it stands does not read it. m16 grep
--11/-6/-6 B at -O1/-O2/-O3, no m16 cell worse. m32 (12 better, 6 worse) and
-m64 keep the pin's one. owner: w12, exit: 2026-11-20, with LU3b.
