@@ -32,10 +32,23 @@ pub enum Item {
 
 /// The pin's code model (`-mcmodel`), which decides how a global is reached
 /// (`M68kSubtarget::classifyGlobalReference`, without PIC): small, PC-relative
-/// with a 16-bit displacement; medium, absolute on the 68000 and 68010 and
-/// PC-relative from the 68020; large, absolute. The assembler relaxes only
-/// branches, so data farther than 32 KiB from the code needs medium on the
-/// 68000 or large.
+/// with a 16-bit displacement; medium and large, absolute. The assembler
+/// relaxes only branches, so data farther than 32 KiB from the code needs
+/// medium or large.
+///
+/// DEVIATE: medium is absolute on the 68020 and later as well. The pin picks
+/// PC-relative there, "any data offset fits"
+/// (`M68kSubtarget::classifyLocalReference`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kSubtarget.cpp>),
+/// but our table has only the 16-bit displacement form, so a global past 32 KiB
+/// (`memcpy_runtime`'s 70016-byte arrays) failed with "does not fit its 2-byte
+/// field". Reason: medium has to reach any offset at every cpu; `(bd32,%pc)` is
+/// 2 B longer than `abs.l` and needs a new encoding. Position independence is
+/// not modelled (`-fPIC` is ignored, as the small model's PC-relative data
+/// already is position independent): the pin's PIC medium is PC-relative from
+/// the 68020 and `@GOTOFF` below it. Owner: m68k. Exit: 2026-12-15, add the
+/// `(bd32,%pc)` form and the PIC model; medium is PC-relative again from the
+/// 68020 where PIC is asked for.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum CodeModel {
     #[default]
@@ -55,15 +68,11 @@ impl CodeModel {
         }
     }
 
-    /// Whether a global's address is an absolute one on `cpu`.
-    pub fn absolute_data(
-        self,
-        cpu: Cpu,
-    ) -> bool {
+    /// Whether a global's address is an absolute one.
+    pub fn absolute_data(self) -> bool {
         match self {
             CodeModel::Small => false,
-            CodeModel::Medium => !cpu.at_least(Cpu::M68020),
-            CodeModel::Large => true,
+            CodeModel::Medium | CodeModel::Large => true,
         }
     }
 }
@@ -334,7 +343,7 @@ fn items_once(
         options.source_order,
         options.indexed,
         options.short,
-        options.code_model.absolute_data(cpu),
+        options.code_model.absolute_data(),
         wants_size,
     )?;
     let mut function = emit(name, &blocks)?;
