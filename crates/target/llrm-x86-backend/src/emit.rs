@@ -2391,7 +2391,7 @@ impl Emitter<'_, '_> {
             !matches!(
                 name,
                 "COPY" | "COPY_TO_REGCLASS" | "EXTRACT_SUBREG" | "INSERT_SUBREG" | "SUBREG_TO_REG" | "IMPLICIT_DEF"
-            ) && !(name.starts_with("MOV") && name.ends_with("rr"))
+            ) && !is_gpr_copy(name)
         })
     }
 
@@ -4322,4 +4322,11 @@ fn sign_extend(
 ) -> i64 {
     let shift = 128 - width.clamp(1, 128);
     (((bits << shift) as i128) >> shift) as i64
+}
+
+/// A register-to-register `mov` of one general class (`MOV32rr`, `MOV64rr_REV`): emitted as a `Move` the coalescer
+/// joins away. `MOVPDI2DIrr` (`movd r32, xmm`) and its kin write a register of another class, a real write.
+fn is_gpr_copy(name: &str) -> bool {
+    let name = name.strip_suffix("_REV").unwrap_or(name);
+    matches!(name, "MOV8rr" | "MOV16rr" | "MOV32rr" | "MOV64rr")
 }

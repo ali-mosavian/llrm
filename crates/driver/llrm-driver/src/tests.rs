@@ -4798,3 +4798,17 @@ fn a_memcpy_ending_a_function_is_a_tail_call_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("jmp memcpy") && !listing.contains("call memcpy"), "{listing}");
 }
+
+/// `movd eax, xmm0` writes the whole of `rax`, but the zero extension that followed was `mov eax, eax` (the pin: none).
+/// The check took every `MOV*rr` for a register copy, `MOVPDI2DIrr` among them: 2 in sfm16_float_i2f's loop, 4 per
+/// iteration there.
+#[test]
+fn a_float_bits_zero_extended_at_m64_is_one_movd() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(float %x) {\n  %u = bitcast float %x to i32\n  %z = zext i32 %u to i64\n  ret i64 %z\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("movd"), "{listing}");
+    assert!(!listing.contains("movzx"), "{listing}");
+}
