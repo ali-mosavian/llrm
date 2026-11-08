@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""A program that does not compile at -O0 on a target it applies to is a tier-1 row.
+"""A program that does not compile on a target it applies to, at any level, is a tier-1 row.
 
-o0_sweep.py [TARGET...]: compile every tests/run/c program at -O0 (`-c`) for each target `corpus_targets.applies` lets it on, and print per
-target: programs (applicable), compiled (the object exists), refused (llrm-cc failed, with the first error line), n/a. Counting
-the successes, not the non-failures: a compiler that is not there, or a target that compiled nothing, is red.
+o0_sweep.py [--levels O0,O1,O2,Os,O3] [TARGET...]: compile every tests/run/c program (`-c`) for each target `corpus_targets.applies` lets it on, at each
+level (default: all five), and print per target and level: programs (applicable), compiled (the object exists), refused (llrm-cc failed, with the
+first error line), n/a (the program's `// targets:` header excludes the target: not run, not a refusal; a refusal is a program that applies and
+that the compiler could not build). Counting the successes, not the non-failures: a compiler that is not there, or a target and level that compiled
+nothing, is red. `Legalize Unsupported { op, ty, what }` refusals are listed as op/type/what.
 
 Flags from the program's first `// flags:` configuration: its `-D` and `-f` tokens, and at x86 targets its feature `-m` tokens (`-mlong-double-80`), not `-O*` or the
 CPU/ABI/model ones (`-march`, `-mabi`, `-mcmodel`, `-m32`), which the target row and this sweep fix. `-I` the POSIX OS layer. LLRM_BIN picks the binaries; JOBS the parallelism (default 4).
 Exit 1: a target with no applicable program (a broken `applies` filter) or none compiled, or a refusal not in tools/o0-sweep.baseline.
-The baseline is a ratchet that only shrinks, one entry per line: `TARGET PROGRAM | OWNER | EXIT YYYY-MM-DD | ERROR LINE`. An entry missing a field, or past its
-exit date, is red: a list of known refusals must not hide a tier-1 row.
+The baseline is a ratchet that only shrinks, one entry per line: `TARGET LEVELS PROGRAM | OWNER | EXIT YYYY-MM-DD | ERROR LINE`, LEVELS a comma list
+(`O1,O2`) or `all`. An entry missing a field, past its exit date, that now compiles, or that names a run that did not happen (a program the target
+does not apply to, a level not swept in this run is skipped) is red: a list of known refusals must not hide a tier-1 row.
 """
 import os
 import re
@@ -25,6 +28,7 @@ sys.path.insert(0, str(HERE))
 import corpus_targets as ct  # noqa: E402
 
 TARGETS = ["x86_16-wat", "x86_32-wat", "x86_32-linux", "x86_64-linux", "arm64-linux", "wasm32", "m68k-68000", "m68k-68020", "6502-sim65", "z80-sdcc"]
+LEVELS = ["O0", "O1", "O2", "Os", "O3"]
 TIMEOUT = 180
 CPU_OR_ABI = ("-march", "-mcpu", "-mtune", "-mabi", "-mcmodel")  # named by the target row
 
@@ -56,12 +60,12 @@ def cc_env() -> dict[str, str]:
     return llrmbin.cc_environment()
 
 
-def compile_one(cc: str, target: str, path: Path, workdir: Path) -> tuple[str, str]:
+def compile_one(cc: str, target: str, path: Path, workdir: Path, level: str = "O0") -> tuple[str, str]:
     """("ok", "") when an object was written, else ("refused", first error line)."""
-    out = workdir / f"{target}.{path.stem}.o"
+    out = workdir / f"{target}.{level}.{path.stem}.o"
     # The DOS rows find their own llrm_os.h (Watcom's); the POSIX layer's would shadow it.
     posix = [] if target.endswith("-wat") or target.endswith("-dos") else ["-I", str(ROOT / "runtime/shared/posix")]
-    cmd = [cc, "-O0", "-w", "-c", *flags_of(path.read_text(), target), *posix, "-o", str(out), str(path)]
+    cmd = [cc, f"-{level}", "-w", "-c", *flags_of(path.read_text(), target), *posix, "-o", str(out), str(path)]
     try:
         run = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT, env={**os.environ, **cc_env(), "LLRM_CC_TARGET": target})
     except subprocess.TimeoutExpired:
@@ -74,52 +78,79 @@ def compile_one(cc: str, target: str, path: Path, workdir: Path) -> tuple[str, s
     return "refused", ((errors or lines or [f"exit {run.returncode}, no object"])[0])[:200]
 
 
-def sweep(targets: list[str], programs: list[Path], cc: str, jobs: int) -> dict[str, dict]:
-    result = {}
+def sweep(targets: list[str], programs: list[Path], cc: str, jobs: int, levels: list[str] | None = None) -> dict[str, dict[str, dict]]:
+    """result[target][level] = programs / n/a / compiled / refused {program: first error line}."""
+    result: dict[str, dict[str, dict]] = {}
     with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor(jobs) as pool:
         for target in targets:
             applicable = [p for p in programs if ct.applies(target, p.read_text())]
-            rows = list(pool.map(lambda p: (p.stem, *compile_one(cc, target, p, Path(tmp))), applicable))
-            result[target] = {
-                "programs": len(applicable),
-                "na": len(programs) - len(applicable),
-                "compiled": sum(1 for _, s, _ in rows if s == "ok"),
-                "refused": {n: m for n, s, m in rows if s == "refused"},
-            }
+            for level in levels or ["O0"]:
+                rows = list(pool.map(lambda p: (p.stem, *compile_one(cc, target, p, Path(tmp), level)), applicable))
+                result.setdefault(target, {})[level] = {
+                    "programs": len(applicable),
+                    "na": len(programs) - len(applicable),
+                    "compiled": sum(1 for _, s, _ in rows if s == "ok"),
+                    "refused": {n: m for n, s, m in rows if s == "refused"},
+                    "applicable": sorted(p.stem for p in applicable),
+                }
     return result
 
 
-def parse_baseline(text: str, today: str) -> tuple[set[str], list[str]]:
-    """(the TARGET PROGRAM keys that are excused, the entries that are malformed or past their exit date)."""
+LEGALIZE = re.compile(r"Unsupported \{ op: (?P<op>\w+), ty: (?:Simple\()?(?P<ty>\w+)\)?, what: \\?\"(?P<what>[^\"\\]+)")
+
+
+def explain(message: str) -> str:
+    """`op ty what` of a `Legalize Unsupported` refusal; any other refusal keeps its first error line."""
+    m = LEGALIZE.search(message)
+    return f"Legalize Unsupported {m['op']} {m['ty']} ({m['what']})" if m else message
+
+
+def parse_baseline(text: str, today: str) -> tuple[set[tuple[str, str, str]], list[str]]:
+    """({(target, level, program)} that are excused, the entries that are malformed or past their exit date)."""
     keys, bad = set(), []
     for line in text.splitlines():
         if not line.strip() or line.startswith("#"):
             continue
         fields = [f.strip() for f in line.split("|")]
         date = fields[2].removeprefix("EXIT ").strip() if len(fields) == 4 else ""
-        if len(fields) != 4 or not all(fields) or not re.fullmatch(r"\d{4}-\d\d-\d\d", date):
-            bad.append(f"baseline entry needs 'TARGET PROGRAM | OWNER | EXIT YYYY-MM-DD | ERROR': {line}")
+        head = fields[0].split() if fields else []
+        levels = (LEVELS if head[1:2] == ["all"] else head[1].split(",")) if len(head) == 3 else []
+        if len(fields) != 4 or not all(fields) or len(head) != 3 or not set(levels) <= set(LEVELS) or not re.fullmatch(r"\d{4}-\d\d-\d\d", date):
+            bad.append(f"baseline entry needs 'TARGET LEVELS PROGRAM | OWNER | EXIT YYYY-MM-DD | ERROR' (LEVELS O0,O1,O2,Os,O3 or all): {line}")
         elif date < today:
             bad.append(f"baseline entry past its exit date {date}: {fields[0]}")
         else:
-            keys.add(fields[0])
+            keys |= {(head[0], level, head[2]) for level in levels}
     return keys, bad
 
 
-def verdict(result: dict[str, dict], baseline: set[str]) -> list[str]:
-    """What is red: a target with no applicable program, one that compiled nothing, a refusal outside the baseline."""
+def verdict(result: dict[str, dict[str, dict]], baseline: set[tuple[str, str, str]]) -> list[str]:
+    """What is red: a target and level with no applicable program or that compiled nothing, a refusal outside the baseline, a baseline row that
+    compiled now or never ran (a program the target does not apply to). A level not swept in this run leaves its rows alone."""
     bad = []
-    for target, row in result.items():
-        if row["programs"] == 0:
-            bad.append(f"{target}: 0 applicable programs (a broken applies filter?)")
-        elif row["compiled"] == 0:
-            bad.append(f"{target}: compiled 0 of {row['programs']} programs")
-        bad += [f"{target} {name}: {msg}" for name, msg in row["refused"].items() if f"{target} {name}" not in baseline]
+    for target, levels in result.items():
+        for level, row in levels.items():
+            at = f"{target} {level}"
+            if row["programs"] == 0:
+                bad.append(f"{at}: 0 applicable programs (a broken applies filter?)")
+            elif row["compiled"] == 0:
+                bad.append(f"{at}: compiled 0 of {row['programs']} programs")
+            bad += [f"{at} {name}: {explain(msg)}" for name, msg in row["refused"].items() if (target, level, name) not in baseline]
+            for t, l, name in sorted(baseline):
+                if (t, l) != (target, level):
+                    continue
+                if name not in row["applicable"]:
+                    bad.append(f"{at} {name}: in the baseline but never ran (not an applicable program): remove the row")
+                elif name not in row["refused"]:
+                    bad.append(f"{at} {name}: in the baseline but compiled: remove the row")
     return bad
 
 
 def main(argv: list[str]) -> int:
-    targets = argv[1:] or TARGETS
+    args, levels = argv[1:], LEVELS
+    if args[:1] == ["--levels"]:
+        levels, args = args[1].split(","), args[2:]
+    targets = args or TARGETS
     programs = sorted((ROOT / "tests/run/c").glob("*.c"))
     baseline_file = HERE / "o0-sweep.baseline"
     import datetime
@@ -128,12 +159,13 @@ def main(argv: list[str]) -> int:
     if not Path(cc).exists():
         print(f"o0_sweep: no compiler at {cc}", file=sys.stderr)
         return 2
-    print(f"o0_sweep: {cc} {len(programs)} programs, targets {' '.join(targets)}")
-    result = sweep(targets, programs, cc, int(os.environ.get("JOBS", "4")))
-    for target, row in result.items():
-        print(f"{target}: programs {row['programs']} compiled {row['compiled']} refused {len(row['refused'])} n/a {row['na']}")
-        for name, msg in sorted(row["refused"].items()):
-            print(f"  REFUSED {name}: {msg}")
+    print(f"o0_sweep: {cc} {len(programs)} programs, targets {' '.join(targets)}, levels {' '.join(levels)}")
+    result = sweep(targets, programs, cc, int(os.environ.get("JOBS", "4")), levels)
+    for target, by_level in result.items():
+        for level, row in by_level.items():
+            print(f"{target} {level}: programs {row['programs']} compiled {row['compiled']} refused {len(row['refused'])} n/a {row['na']}")
+            for name, msg in sorted(row["refused"].items()):
+                print(f"  REFUSED {name}: {explain(msg)}")
     bad = baseline_bad + verdict(result, baseline)
     for line in bad:
         print("RED", line)

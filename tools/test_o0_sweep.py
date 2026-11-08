@@ -35,42 +35,68 @@ def programs(tmp_path, **bodies):
 
 def test_refusals_are_counted_with_their_message_and_successes_are_counted(tmp_path, stub):
     progs = programs(tmp_path, good="int main(void){return 0;}\n", bad="/*REFUSE*/ int main(void){return 0;}\n")
-    row = sweep.sweep(["x86_32-linux"], progs, stub, 1)["x86_32-linux"]
+    row = sweep.sweep(["x86_32-linux"], progs, stub, 1)["x86_32-linux"]["O0"]
     assert (row["programs"], row["compiled"], list(row["refused"])) == (2, 1, ["bad"])
     assert "Unmapped" in row["refused"]["bad"]
 
 
 def test_a_program_that_does_not_apply_is_n_a_not_compiled(tmp_path, stub):
     progs = programs(tmp_path, dos="// targets: dos\nint main(void){return 0;}\n", any="int main(void){return 0;}\n")
-    row = sweep.sweep(["x86_64-linux"], progs, stub, 1)["x86_64-linux"]
+    row = sweep.sweep(["x86_64-linux"], progs, stub, 1)["x86_64-linux"]["O0"]
     assert (row["programs"], row["na"], row["compiled"]) == (1, 1, 1)
 
 
 def test_exit_zero_without_an_object_is_a_refusal(tmp_path, stub):
     """A compiler that exits 0 and writes nothing read as a clean compile: the sweep counted the exit code, not the object."""
     progs = programs(tmp_path, good="int main(void){return 0;}\n")
-    row = sweep.sweep(["silent"], progs, stub, 1)["silent"]
+    row = sweep.sweep(["silent"], progs, stub, 1)["silent"]["O0"]
     assert (row["compiled"], len(row["refused"])) == (0, 1)
+
+
+def level(programs, compiled, refused=None, applicable=("bad", "good")):
+    return {"programs": programs, "na": 0, "compiled": compiled, "refused": refused or {}, "applicable": list(applicable)}
 
 
 def test_a_target_with_no_applicable_program_is_red_and_so_is_one_that_compiled_nothing():
     """0 applicable programs is a broken applies filter, 0 compiled a broken compiler: both loud, and told apart."""
-    none = sweep.verdict({"z80-sdcc": {"programs": 0, "na": 5, "compiled": 0, "refused": {}}}, set())
-    nothing = sweep.verdict({"z80-sdcc": {"programs": 5, "na": 0, "compiled": 0, "refused": {}}}, set())
+    none = sweep.verdict({"z80-sdcc": {"O1": level(0, 0)}}, set())
+    nothing = sweep.verdict({"z80-sdcc": {"O1": level(5, 0)}}, set())
     assert "0 applicable" in none[0] and "compiled 0 of 5" in nothing[0]
+    assert none[0].startswith("z80-sdcc O1:")
 
 
 def test_a_baseline_entry_needs_an_owner_an_exit_date_and_the_error_and_expires():
-    good = "wasm32 builtins_table | wasm owner | EXIT 2026-11-20 | llvm.is.constant unsupported"
-    assert sweep.parse_baseline(good, "2026-11-10") == ({"wasm32 builtins_table"}, [])
-    assert sweep.parse_baseline("wasm32 builtins_table\n", "2026-11-10")[1], "no owner, date or error: red"
+    good = "wasm32 O1,O2 builtins_table | wasm owner | EXIT 2026-11-20 | llvm.is.constant unsupported"
+    assert sweep.parse_baseline(good, "2026-11-10") == ({("wasm32", "O1", "builtins_table"), ("wasm32", "O2", "builtins_table")}, [])
+    assert len(sweep.parse_baseline(good.replace("O1,O2", "all"), "2026-11-10")[0]) == 5
+    assert sweep.parse_baseline("wasm32 O1 builtins_table\n", "2026-11-10")[1], "no owner, date or error: red"
+    assert sweep.parse_baseline(good.replace("O1,O2", "O9"), "2026-11-10")[1], "an unknown level: red"
+    assert sweep.parse_baseline(good.replace("O1,O2 ", ""), "2026-11-10")[1], "the old two-word key has no level: red"
     assert sweep.parse_baseline(good, "2026-11-21")[1], "past its exit date: red"
 
 
 def test_a_refusal_outside_the_baseline_is_red_and_one_inside_is_not():
-    row = {"programs": 2, "na": 0, "compiled": 1, "refused": {"bad": "m"}}
-    assert sweep.verdict({"wasm32": row}, set()) == ["wasm32 bad: m"]
-    assert sweep.verdict({"wasm32": row}, {"wasm32 bad"}) == []
+    """Removing a row from the baseline turns the sweep red: the ratchet's fail-first. A plain refusal and a Legalize one."""
+    row = level(2, 1, {"bad": "m"})
+    assert sweep.verdict({"wasm32": {"O2": row}}, set()) == ["wasm32 O2 bad: m"]
+    assert sweep.verdict({"wasm32": {"O2": row}}, {("wasm32", "O2", "bad")}) == []
+    legal = level(2, 1, {"bad": 'llrm-llc: Legalize("Unsupported { op: Rotr, ty: Simple(I8), what: \\"promote result\\" }")'})
+    assert sweep.verdict({"arm64-linux": {"O2": legal}}, set()) == ["arm64-linux O2 bad: Legalize Unsupported Rotr I8 (promote result)"]
+    assert sweep.verdict({"arm64-linux": {"O2": legal}}, {("arm64-linux", "O2", "bad")}) == []
+
+
+def test_a_refusal_at_one_level_is_not_excused_by_a_row_for_another():
+    """rotate_small refused at -O2 and -Os on arm64 but compiled at -O0: a row for -O0 must not cover them."""
+    row = level(2, 1, {"bad": "m"})
+    assert sweep.verdict({"arm64-linux": {"O2": row}}, {("arm64-linux", "O0", "bad")}) == ["arm64-linux O2 bad: m"]
+
+
+def test_a_baseline_row_that_compiled_or_never_ran_is_red_and_an_unswept_level_is_left_alone():
+    """A listed row is a refusal only if the program ran and the compiler refused it; one that compiled or does not apply is stale."""
+    fine = level(2, 2)
+    assert sweep.verdict({"wasm32": {"O1": fine}}, {("wasm32", "O1", "bad")}) == ["wasm32 O1 bad: in the baseline but compiled: remove the row"]
+    assert "never ran" in sweep.verdict({"wasm32": {"O1": fine}}, {("wasm32", "O1", "absent")})[0]
+    assert sweep.verdict({"wasm32": {"O1": fine}}, {("wasm32", "O3", "bad")}) == []
 
 
 def test_only_feature_flags_of_the_first_configuration_are_kept():
@@ -79,8 +105,8 @@ def test_only_feature_flags_of_the_first_configuration_are_kept():
         "-DREAL_MODE", "-fno-inline", "-mlong-double-80"]
 
 
-@pytest.mark.skipif(not __import__("os").environ.get("LLRM_O0_SWEEP"), reason="the corpus gate: set LLRM_O0_SWEEP=1 (minutes, every target)")
-def test_the_corpus_compiles_at_o0_on_every_target():
+@pytest.mark.skipif(not __import__("os").environ.get("LLRM_O0_SWEEP"), reason="the corpus gate: set LLRM_O0_SWEEP=1 (hours: every target and level)")
+def test_the_corpus_compiles_at_every_level_on_every_target():
     assert sweep.main(["o0_sweep.py"]) == 0
 
 
