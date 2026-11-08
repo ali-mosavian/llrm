@@ -1,8 +1,7 @@
 //! A count of leading or trailing zeros or of set bits was expanded inline (a 216 and a 162 byte
 //! function for `clzll` and `ctzll` at `-Os`, 68000); the shared compiler-rt routines are 28 to 78
-//! bytes each. gcc calls libgcc for all six on the 68000 and 68010; from the 68020 it keeps a 32-bit
-//! `clz`, a 64-bit `clz` and a 32-bit `ctz` inline with `bfffo`, so those stay inline here. The
-//! routines are called, not run.
+//! bytes each. gcc calls libgcc for all six on the 68000 and 68010, and so does this; from the 68020 the
+//! count stays inline. The routines are called, not run.
 
 use llrm_m68k::compile::{Options, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
@@ -41,17 +40,14 @@ fn every_count_calls_the_runtime_on_the_68000_and_68010() {
     }
 }
 
+/// Our routines cost more clocks than the inline code from the 68020 on (u64 -O2: -540 B, +4000 clk, gcc 15542 vs
+/// our 21162): no count is a call there until `bfffo` and faster routines exist.
 #[test]
-fn the_68020_calls_popcount_and_the_64_bit_ctz_and_keeps_the_rest_inline() {
-    for (name, bits, routine, call) in [
-        ("ctlz", 32, "__clzsi2", false),
-        ("ctlz", 64, "__clzdi2", false),
-        ("cttz", 32, "__ctzsi2", false),
-        ("cttz", 64, "__ctzdi2", true),
-        ("ctpop", 32, "__popcountsi2", true),
-        ("ctpop", 64, "__popcountdi2", true),
-    ] {
-        let out = text(name, bits, Cpu::M68020);
-        assert_eq!(out.contains(&format!("jsr\t{routine}")), call, "{name}.i{bits}:\n{out}");
+fn no_count_is_a_call_from_the_68020_on() {
+    for cpu in [Cpu::M68020, Cpu::M68040] {
+        for (name, bits) in [("ctlz", 32), ("ctlz", 64), ("cttz", 32), ("cttz", 64), ("ctpop", 32), ("ctpop", 64)] {
+            let out = text(name, bits, cpu);
+            assert!(!out.contains("jsr\t__clz") && !out.contains("jsr\t__ctz") && !out.contains("jsr\t__popcount"), "{cpu:?} {name}.i{bits}:\n{out}");
+        }
     }
 }
