@@ -324,7 +324,10 @@ impl Tti for AArch64 {
     /// (jpeg_single 3592 -> 3608 B, jpeg_fixed 3516 -> 3484 B; the sum is the same). Re-running
     /// near misses with the whole list swaps the +16 B between the cells at 2.05 G Ir (parked,
     /// #8278): `extend` and `receive` read alike in both and pay in one only. Exit: a trial
-    /// estimate that predicts the final bytes of those two.
+    /// estimate that predicts the final bytes of those two. Exception (w15): at speed a trial of a
+    /// callee with a loop uses the whole list, as the cleanup list has no loop passes (vla -O2:
+    /// the 8-site copy priced +644 B, the unrolled and folded one is -40 B); at size the cleanup
+    /// list stays (jpeg -Os +32 B with the whole one).
     fn inline_trial_light_simplify(&self) -> bool {
         true
     }
