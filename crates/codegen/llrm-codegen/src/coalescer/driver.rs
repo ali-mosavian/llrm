@@ -35,7 +35,7 @@ use std::cmp::Ordering;
 use super::pair::{CoalescerEnv, full_copy, move_copy};
 use super::register_coalescer::{JoinResult, State, join_copy};
 use crate::liveness::liveintervals::LiveIntervals;
-use crate::liveness::slotindex::InstrKey;
+use crate::liveness::slotindex::{InstrKey, SlotIndex};
 use crate::model::ir::Operation;
 use crate::support::hash::HashSet;
 
@@ -109,8 +109,36 @@ fn loop_header(
         )
 }
 
-/// DEVIATE C15: how many copies of `block` read a value live at the start of
-/// the loop header, that is carried around the loop.
+/// Whether `reg` is live at `start`, or is a copy, however many, of such a
+/// value: the header's own copy of a loop-carried value (what phi lowering
+/// leaves at the top of the header) is that value too.
+fn is_carried(
+    lis: &mut LiveIntervals,
+    reg: u32,
+    start: &SlotIndex,
+    pick: Pick,
+) -> bool {
+    let mut reg = reg;
+    // a chain of copies at the top of a header is short
+    for _ in 0..4 {
+        if lis.interval_rc(reg).live_at(start) {
+            return true;
+        }
+        let defs: Vec<u32> = lis
+            .operands(reg)
+            .iter()
+            .filter_map(|one| pick(lis.instr(one.instr)).filter(|(dst, _)| dst.value == reg).map(|(_, src)| src.value))
+            .collect();
+        match defs[..] {
+            [src] => reg = src,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// DEVIATE C15: how many copies of `block` read a value carried around the
+/// loop that starts at its header.
 fn carried_copies(
     lis: &mut LiveIntervals,
     depth: &[u32],
@@ -123,10 +151,7 @@ fn carried_copies(
         lis.block_insns(block).iter().filter(|one| pick(one).is_some()).map(|one| one.id()).collect();
     copies
         .into_iter()
-        .filter(|copy| {
-            let Some((_, src)) = pick(lis.instr(*copy)) else { return false };
-            lis.interval_rc(src.value).live_at(&start)
-        })
+        .filter(|copy| pick(lis.instr(*copy)).is_some_and(|(_, src)| is_carried(lis, src.value, &start, pick)))
         .count()
 }
 
