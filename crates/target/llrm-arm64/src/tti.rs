@@ -340,6 +340,11 @@ impl Tti for AArch64 {
         self.unroll_rate
     }
 
+    /// DEVIATE IND-MASK (arm64, owner w15, exit 2026-11-30): see the trait.
+    fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
+        true
+    }
+
     /// DEVIATE ARM64-UNROLL-PRICE (owner w15, exit 2026-11-30): see the trait.
     fn unroll_credits_immediate_operands(&self) -> bool {
         false

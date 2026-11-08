@@ -960,6 +960,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Add => self.visit_add(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sub => self.visit_sub(node),
             ISD::UAddO => self.visit_uaddo(node),
+            ISD::UMulO | ISD::SMulO => self.visit_mulo(node),
             ISD::UAddOCarry => self.visit_uaddo_carry(node),
             ISD::FAdd => self.visit_fadd(node),
             ISD::FSub => self.visit_fsub(node),
@@ -1449,15 +1450,16 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let flipped = self.dag.operand(n0, 0);
             return Some(self.dag.get_select(vt, flipped, n2, n1));
         }
-        if cond_vt != EVT::I1 {
-            return None;
-        }
         // The pin reaches the sign mask through `or (sext (setle x, -1)), 1`:
         // `SimplifySetCC` makes the compare `x < 0` and `visitSIGN_EXTEND`
         // folds `sext (setlt x, 0)` to `sra`. Neither is translated, so the
-        // sign folds run first, with the same result.
+        // sign folds run first, with the same result. Whatever the width of
+        // the condition (wasm's compare is an `i32`).
         if let Some(mask) = self.select_sign_folds(n0, n1, n2) {
             return Some(mask);
+        }
+        if cond_vt != EVT::I1 {
+            return None;
         }
         if let Some(math) = self.fold_select_of_constants(n0, n1, n2, vt) {
             return Some(math);
@@ -2025,9 +2027,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let NodeData::Mem(info) = self.dag.node(load).data else { return None };
-        if info.volatile {
-            return None;
-        }
         let op = self.dag.opcode(node);
         let wanted = match op {
             ISD::ZeroExtend => LoadExt::ZExtLoad,
@@ -2044,14 +2043,22 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let wide = self.dag.value_type(node);
         let others: Vec<u32> = self.dag.users(load).filter(|&user| user != node.node).collect();
         let mut compares = Vec::new();
+        let legal = match (wide, info.mem_vt) {
+            (EVT::Simple(wide_mvt), EVT::Simple(mem_mvt)) => {
+                self.tli.is_some_and(|tli| tli.load_ext_action(ext, wide_mvt, mem_mvt) == Action::Legal)
+            }
+            _ => false,
+        };
+        // `tryToFoldExtOfLoad`: a volatile (not simple) load is widened only
+        // when the extending load is legal.
+        if info.volatile && !legal {
+            return None;
+        }
         if !others.is_empty() {
             // `isLoadExtLegal`, and `ExtendUsesToFormExtLoad`: the other
             // readers are compares against a constant, which can be
             // widened, or take the value back through a (free)
             // truncate.
-            let EVT::Simple(wide_mvt) = wide else { return None };
-            let EVT::Simple(mem_mvt) = info.mem_vt else { return None };
-            let legal = self.tli.is_some_and(|tli| tli.load_ext_action(ext, wide_mvt, mem_mvt) == Action::Legal);
             if info.ext.is_some() || !legal || !self.extend_uses(node, load, op, &others, &mut compares) {
                 return None;
             }
@@ -3649,6 +3656,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(split) = self.split_pair_store(node) {
             return Some(split);
         }
+        if let Some(truncating) = self.store_of_trunc(chain, value, ptr, info) {
+            return Some(truncating);
+        }
         // "There can be multiple store sequences on the same chain. Keep trying
         // to merge store sequences until we are unable to do so or until we
         // merge the last store on the chain": the merged stores are dead, and
@@ -3753,6 +3763,32 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_store(chain, shorter, ptr, info));
         }
         None
+    }
+
+    /// `visitSTORE`'s "if this is an FP_ROUND or TRUNC followed by a store,
+    /// fold this into a truncating store"
+    /// ([L24881](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L24881)),
+    /// with `canCombineTruncStore`: the target takes that truncating store
+    /// (legal, or legal or custom before operations are legalized).
+    fn store_of_trunc(
+        &mut self,
+        chain: SDValue,
+        value: SDValue,
+        ptr: SDValue,
+        info: MemInfo,
+    ) -> Option<SDValue> {
+        if !matches!(self.dag.opcode(value), ISD::Truncate | ISD::FpRound)
+            || !self.dag.has_one_use(value.node)
+            || info.ordering.is_some()
+        {
+            return None;
+        }
+        let tli = self.tli?;
+        let source = self.dag.operand(value, 0);
+        let (EVT::Simple(wide), EVT::Simple(narrow)) = (self.dag.value_type(source), info.mem_vt) else { return None };
+        let action = tli.trunc_store_action(wide, narrow);
+        let takes = action == Action::Legal || (!self.legal_operations() && action == Action::Custom);
+        takes.then(|| self.dag.get_store(chain, source, ptr, info))
     }
 
     /// `splitMergedValStore`, for the `BUILD_PAIR` the builder makes before
@@ -4064,7 +4100,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let NodeData::Mem(info) = self.dag.node(load).data else { return None };
-        if info.mem_vt != ext || info.volatile {
+        if info.mem_vt != ext {
             return None;
         }
         let legal = match (vt, ext) {
@@ -4075,8 +4111,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         };
         let one_use = self.dag.has_one_use(load.node);
         let fold = match info.ext {
-            Some(LoadExt::ExtLoad) => (!self.legal_operations() && one_use) || legal,
-            Some(LoadExt::ZExtLoad) => one_use && !self.legal_operations() && legal,
+            Some(LoadExt::ExtLoad) => (!self.legal_operations() && !info.volatile && one_use) || legal,
+            Some(LoadExt::ZExtLoad) => one_use && !self.legal_operations() && !info.volatile && legal,
             _ => false,
         };
         if !fold {

@@ -66,7 +66,7 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
             calling: Some(if platform == Platform::Linux { &*LINUX } else { &*DARWIN }),
         }),
         legal_f128: true,
-        ..BuilderTarget::m64()
+        ..BuilderTarget::for_pointer_bits(64)
     }
 }
 

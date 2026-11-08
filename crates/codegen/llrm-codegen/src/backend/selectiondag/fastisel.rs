@@ -61,7 +61,14 @@ fn declined_text(module: &Module, function: &Function, declined: Option<Declined
         None => String::new(),
         Some(Declined::At(id)) => {
             let instruction = function.instruction(id);
-            format!("{:?} {}", instruction.opcode, module.context.types.display(instruction.ty))
+            let callee = match (&instruction.opcode, instruction.operands.last()) {
+                (Opcode::Call(_), Some(Operand::Constant(callee))) => match module.context.get(*callee).kind {
+                    ConstantKind::Global(global) => format!(" {}", module.global(global).name.as_deref().unwrap_or("?")),
+                    _ => " indirect".to_owned(),
+                },
+                _ => String::new(),
+            };
+            format!("{:?}{callee} {}", instruction.opcode, module.context.types.display(instruction.ty))
         }
         Some(Declined::Export(value)) => {
             let def = match function.value(value).def {
@@ -129,10 +136,10 @@ pub fn build_all(
     // every parameter is a 4-byte stack cell: fixed object -(n + 1)
     let int32 = |ty| wide_kind(&module.context.types, ty, narrow).is_some() || narrow_kind(&module.context.types, ty).is_some();
     let (returns, parameters, _) = module.signature(function.ty);
-    // narrow: a 4-byte stack cell; m64: one register
+    // a 4-byte stack cell (narrow only) or one register
     let arrives = |one: &crate::backend::isel::Parameter| match one {
         crate::backend::isel::Parameter::Cell(_) => narrow,
-        crate::backend::isel::Parameter::Registers(regs) => !narrow && regs.len() == 1,
+        crate::backend::isel::Parameter::Registers(regs) => regs.len() == 1,
         _ => false,
     };
     if parameters.iter().any(|&ty| !int32(ty))
@@ -141,17 +148,23 @@ pub fn build_all(
     {
         return declined_all("a parameter that is not a 4-byte stack cell or one register");
     }
-    let arg_regs: Vec<(llrm_lir::registers::RegId, u32)> = match narrow {
-        true => Vec::new(),
-        false => convention
-            .parameters
-            .iter()
-            .filter_map(|one| match one {
-                crate::backend::isel::Parameter::Registers(regs) => Some((regs[0], info.new_reg())),
-                _ => None,
-            })
-            .collect(),
-    };
+    // Where each parameter is read from; a cell is the fixed object the builder numbers by the cells before it.
+    let mut arg_regs: Vec<(llrm_lir::registers::RegId, u32)> = Vec::new();
+    let mut sources: Vec<Source> = Vec::new();
+    let mut cells = 0;
+    for one in &convention.parameters {
+        match one {
+            crate::backend::isel::Parameter::Registers(regs) => {
+                let vreg = info.new_reg();
+                arg_regs.push((regs[0], vreg));
+                sources.push(Source::Register(vreg));
+            }
+            _ => {
+                cells += 1;
+                sources.push(Source::Cell(-cells));
+            }
+        }
+    }
     let returns_int = int32(returns);
     if !returns_int && !module.context.types.is_void(returns) {
         return declined_all("a result that is not an int, a pointer or void");
@@ -189,10 +202,15 @@ pub fn build_all(
         let dag = fresh_dag(module, function, target, info, block, None);
         let chain = dag.entry_node();
         let mut declined = None;
-        let dag = Fast { layout: data_layout, module, function, info: &mut *info, names: &names, eax, any_eax: view(low, 4), esp: arch.stack_pointer(), arg_regs: &arg_regs, entry: layout[0] == block, sysv: &sysv, al, edx: view(high, 4), rax: view(low, 8), rdx: view(high, 8), narrow, dag, chain, values: Default::default(), next, uses: &uses, folded: None, exports: Vec::new(), phi_updates: Vec::new(), geps: Default::default() }
+        let dag = Fast { layout: data_layout, module, function, info: &mut *info, names: &names, eax, any_eax: view(low, 4), esp: arch.stack_pointer(), sources: &sources, entry: layout[0] == block, sysv: &sysv, al, edx: view(high, 4), rax: view(low, 8), rdx: view(high, 8), narrow, dag, chain, values: Default::default(), next, uses: &uses, folded: None, exports: Vec::new(), phi_updates: Vec::new(), geps: Default::default() }
             .block(block, &mut declined);
         let Some((dag, phi_updates)) = dag else {
-            llrm_support::debug!("isel", "fast declined at {}", declined_text(module, function, declined));
+            llrm_support::debug!(
+                "isel",
+                "fast declined at {} insns={}",
+                declined_text(module, function, declined),
+                function.iter_block(block).count()
+            );
             blocks.push(None);
             continue;
         };
@@ -267,6 +285,13 @@ struct Narrow {
     movzx32_rm: [u16; 2],
     movsx32_rm: [u16; 2],
     movsx64_rm: Option<[u16; 2]>,
+}
+
+/// Where a parameter arrives: the virtual register its register is copied into at entry, or a fixed object.
+#[derive(Clone, Copy)]
+enum Source {
+    Register(u32),
+    Cell(i32),
 }
 
 /// The machine opcodes FastISel emits.
@@ -448,8 +473,8 @@ struct Fast<'a> {
     eax: Option<llrm_lir::registers::RegId>,
     any_eax: llrm_lir::registers::RegId,
     esp: llrm_lir::registers::RegId,
-    /// m64: the register each parameter arrives in and the virtual register it is copied to.
-    arg_regs: &'a [(llrm_lir::registers::RegId, u32)],
+    /// Where each parameter is read from.
+    sources: &'a [Source],
     entry: bool,
     /// m64: the argument registers (`edi`.. as 4-byte, `rdi`.. as 8-byte views), and `al`.
     sysv: &'a [[llrm_lir::registers::RegId; 2]],
@@ -540,8 +565,17 @@ impl Fast<'_> {
 
     /// `[base, scale, index, disp, segment]` of a GEP's parts: a frame object or a register as the base.
     fn address_of(&mut self, (base, index, displacement): Gep) -> Option<Vec<SDValue>> {
+        let global = self.narrow_global(base);
+        let (global, offset) = global.map_or((None, 0), |(global, offset)| (Some(global), offset));
         let mut ops = match base {
             Operand::Value(value) if self.info.static_allocas.contains_key(&value) => self.frame(self.info.static_allocas[&value]),
+            _ if global.is_some() => vec![
+                self.dag.get_register(EVT::I32, 0),
+                self.dag.get_constant_with(1, EVT::I8, true, false),
+                self.dag.get_register(EVT::I32, 0),
+                self.dag.get_constant_with(0, EVT::I32, true, false),
+                self.dag.get_register(EVT::I16, 0),
+            ],
             _ => {
                 let register = if self.narrow { EVT::I32 } else { EVT::I64 };
                 vec![
@@ -557,8 +591,53 @@ impl Fast<'_> {
             ops[1] = self.dag.get_constant_with(u128::from(scale), EVT::I8, true, false);
             ops[2] = self.value(index)?;
         }
-        ops[3] = self.dag.get_constant_with(displacement as u32 as u128, EVT::I32, true, false);
+        ops[3] = match global {
+            // the pin's `X86SelectAddress` folds a global and the constant offset into one displacement
+            Some(global) => self.dag.get_target_global_address(EVT::I32, global, offset + i64::from(displacement)),
+            None => self.dag.get_constant_with(displacement as u32 as u128, EVT::I32, true, false),
+        };
         Some(ops)
+    }
+
+    /// The global `operand` names at narrow, where its address is an absolute displacement
+    /// (m64 reaches a global through `rip`).
+    /// A constant `getelementptr` of it is the global and the offset (`X86SelectAddress` folds both).
+    fn narrow_global(&self, operand: Operand) -> Option<(u32, i64)> {
+        let Operand::Constant(id) = operand else { return None };
+        if !self.narrow {
+            return None;
+        }
+        self.global_offset(id)
+    }
+
+    fn global_offset(&self, id: llrm_mir::context::ConstantId) -> Option<(u32, i64)> {
+        use llrm_mir::context::ConstantExpr;
+        let types = &self.module.context.types;
+        match &self.module.context.get(id).kind {
+            ConstantKind::Global(global) => Some((global.0, 0)),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => {
+                let (&base, indices) = operands.split_first()?;
+                let (global, offset) = self.global_offset(base)?;
+                let constants: Option<Vec<Option<i128>>> = indices
+                    .iter()
+                    .map(|&one| {
+                        let constant = self.module.context.get(one);
+                        match constant.kind {
+                            ConstantKind::Int(value) => {
+                                let bits = types.int_bits(constant.ty)?;
+                                let shift = 128 - bits;
+                                Some(Some(((value << shift) as i128) >> shift))
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect();
+                let (constant, variable) = self.layout.collect_offset(types, *source, &constants?);
+                variable.is_empty().then_some(())?;
+                Some((global, offset + i64::try_from(constant).ok()?))
+            }
+            _ => None,
+        }
     }
 
     /// Whether the one use of `value` is a load or store in `block` that takes it as its address.
@@ -589,6 +668,15 @@ impl Fast<'_> {
                 return None;
             }
             return Some(self.frame(object));
+        }
+        if let Some((global, offset)) = self.narrow_global(pointer) {
+            return Some(vec![
+                self.dag.get_register(EVT::I32, 0),
+                self.dag.get_constant_with(1, EVT::I8, true, false),
+                self.dag.get_register(EVT::I32, 0),
+                self.dag.get_target_global_address(EVT::I32, global, offset),
+                self.dag.get_register(EVT::I16, 0),
+            ]);
         }
         let base = self.value(pointer)?;
         let pointer = if self.narrow { EVT::I32 } else { EVT::I64 };
@@ -755,6 +843,12 @@ impl Fast<'_> {
                 let segment = self.dag.get_register(EVT::I16, 0);
                 Some(self.node(self.names.lea64?, &[EVT::I64], &[rip, one, noreg, target, segment]))
             }
+            Operand::Constant(_) if self.narrow_global(operand).is_some() => {
+                // the address of a global at narrow: `mov r, offset g`
+                let (global, offset) = self.narrow_global(operand)?;
+                let target = self.dag.get_target_global_address(EVT::I32, global, offset);
+                Some(self.node(self.names.mov_ri, &[EVT::I32], &[target]))
+            }
             Operand::Constant(_) => {
                 // a zero is `MOV32ri` here and `xor` after allocation, where the flags are dead (`Peephole` at -O0)
                 let wide = self.is_wide(operand)?;
@@ -794,26 +888,28 @@ impl Fast<'_> {
                     return Some(address);
                 }
                 let ValueDef::Argument(n) = self.function.value(value).def else { return None };
-                if !self.narrow {
-                    if !self.entry {
-                        return None;
+                let object = match *self.sources.get(n as usize)? {
+                    Source::Cell(object) => object,
+                    Source::Register(vreg) => {
+                        if !self.entry {
+                            return None;
+                        }
+                        let narrow = narrow_kind(&self.module.context.types, self.function.value(value).ty);
+                        let vt = if narrow.is_none() && self.is_wide(Operand::Value(value))? { EVT::I64 } else { EVT::I32 };
+                        let copy = self.dag.get_copy_from_reg(self.chain, vreg, vt);
+                        self.chain = SDValue { node: copy.node, res: 1 };
+                        let mut copy = SDValue { node: copy.node, res: 0 };
+                        if let Some(kind) = narrow {
+                            // the register holds the whole dword; the parameter is its low byte or word
+                            let (_, extract) = self.names.subreg?;
+                            let index = self.dag.get_constant_with([1, 4][kind], EVT::I32, true, false);
+                            copy = self.node(extract, &[[EVT::I8, EVT::I16][kind]], &[copy, index]);
+                        }
+                        self.values.insert(value, copy);
+                        return Some(copy);
                     }
-                    let (_, vreg) = *self.arg_regs.get(n as usize)?;
-                    let narrow = narrow_kind(&self.module.context.types, self.function.value(value).ty);
-                    let vt = if narrow.is_none() && self.is_wide(Operand::Value(value))? { EVT::I64 } else { EVT::I32 };
-                    let copy = self.dag.get_copy_from_reg(self.chain, vreg, vt);
-                    self.chain = SDValue { node: copy.node, res: 1 };
-                    let mut copy = SDValue { node: copy.node, res: 0 };
-                    if let Some(kind) = narrow {
-                        // the register holds the whole `edi`; the parameter is its low byte or word
-                        let (_, extract) = self.names.subreg?;
-                        let index = self.dag.get_constant_with([1, 4][kind], EVT::I32, true, false);
-                        copy = self.node(extract, &[[EVT::I8, EVT::I16][kind]], &[copy, index]);
-                    }
-                    self.values.insert(value, copy);
-                    return Some(copy);
-                }
-                let mut ops = self.frame(-(n as i32) - 1);
+                };
+                let mut ops = self.frame(object);
                 ops.push(self.chain);
                 let narrow = narrow_kind(&self.module.context.types, self.function.value(value).ty);
                 let (opcode, vt) = match narrow {

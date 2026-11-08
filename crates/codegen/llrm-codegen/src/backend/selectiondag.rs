@@ -113,6 +113,7 @@ pub mod chain_combine;
 pub mod combine_andnot;
 pub mod combine_funnel;
 pub mod combine_lifetime_end;
+pub mod combine_mulo;
 pub mod combine_load;
 pub mod combine_load_combine;
 pub mod combine_store_merge;
@@ -162,6 +163,7 @@ pub mod switchcg;
 pub mod target_calling;
 pub mod x86_carry;
 pub mod x86_lowering;
+pub mod x86_postprocess;
 pub mod x86_preprocess;
 pub mod x86_unfold;
 

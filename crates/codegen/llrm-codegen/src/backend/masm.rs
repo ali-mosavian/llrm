@@ -1311,7 +1311,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // A 64-bit frame aligns the locals' base to the widest object, as the pin
     // aligns each object to its own and only the total to the stack
     // (`calculateFrameObjectOffsets`); the call alignment is `frame`'s below.
-    let align = if procedure.body.bits == 64 && procedure.body.object_align > 0 {
+    let align = if procedure.registers.object_aligned && procedure.body.object_align > 0 {
         procedure.body.object_align.min(align)
     } else {
         align
@@ -1349,7 +1349,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // `[rsp+pad]`, a disp8 more than ours. Where the frame register is
     // omitted the pad goes above the locals instead, as the base layout had it,
     // unless that moves them off the widest object's alignment (below).
-    let pad = if procedure.body.bits == 64 && dropped && procedure.reserve != 0 && aligns_for_calls(&procedure) {
+    let pad = if procedure.registers.object_aligned && dropped && procedure.reserve != 0 && aligns_for_calls(&procedure) {
         let call = procedure.registers.align;
         let rounded = (procedure.reserve + slot - 1) / slot * slot;
         (call - (slot + pushed + gap + rounded) % call) % call
@@ -1638,7 +1638,6 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
 fn aligns_for_calls(procedure: &Procedure) -> bool {
     let (slot, align) = (procedure.registers.slot, procedure.registers.align);
     let calls = align > slot
-        && procedure.body.bits >= 32
         && !procedure.far
         && procedure.interrupt.is_none()
         && procedure.entry == 0
@@ -3049,7 +3048,6 @@ fn stack_addressed_by(
         || procedure.far
         || procedure.interrupt.is_some()
         || procedure.entry != 0
-        || procedure.body.bits < 32
         || (!procedure.body.variables.is_empty() && !procedure.body.cfa_variables)
         || realign_of(&procedure.body) != 0
         || procedure.callees.values().any(|one| !inert(one))
@@ -3970,7 +3968,7 @@ pub fn _memory(
     let disp = _signed(address.disp);
     match address.space {
         Space::Frame => {
-            return Ok(format!("{size}[{}{disp}]", if registers.is_empty() { "bp" } else { &registers }));
+            return Ok(format!("{size}[{}{disp}]", if registers.is_empty() { target::name_of(regs, regs.frame) } else { registers }));
         }
         Space::Segment | Space::External => {
             let symbol = named(names, address);
@@ -3995,8 +3993,9 @@ pub fn _memory(
         // A direct address, as `[disp16]` (`[disp32]` where the cell says its
         // displacement is a dword): the offset is unsigned.
         Space::Literal if registers.is_empty() && address.segment == (RegId::None).iced() => {
-            let kept = if cell.disp_width >= 4 { 0xFFFF_FFFF } else { 0xFFFF };
-            return Ok(format!("{size}[{}]", address.disp & kept));
+            // A direct address is at least a word, the cell's displacement width otherwise.
+            let bits = 8 * cell.disp_width.max(2);
+            return Ok(format!("{size}[{}]", address.disp & ((1i64 << bits) - 1)));
         }
         Space::Far if address.segment != (RegId::None).iced() => {
             let inside = if registers.is_empty() { address.disp.to_string() } else { format!("{registers}{disp}") };
@@ -4244,6 +4243,23 @@ mod tests {
             ..ir::AddressRef::new(Some(Addr::new(Space::Frame, -10)))
         });
         assert_eq!(_operand(regs, &placed, &no_names()).unwrap(), "[bp-10]");
+    }
+
+    /// A frame cell with no register and a direct address were printed with
+    /// BP and a 16-bit mask whatever the target: an m32 cell named `bp`, and a
+    /// dword displacement is not cut to 16 bits.
+    #[test]
+    fn test_frame_cell_and_direct_address_follow_the_target_registers() {
+        let m32 = crate::backend::registerinfo::Regs(llrm_target::Target::registers(&llrm_x86_m32::M32));
+        let frame = ir::Mem::new(Some(Addr::new(Space::Frame, -8)), 4);
+        assert_eq!(_memory(m32, &frame, &no_names()).unwrap(), "dword ptr [ebp-8]");
+        let m16 = crate::backend::registerinfo::test_regs();
+        let direct = |regs, width| {
+            let cell = ir::Mem { disp_width: width, ..ir::Mem::new(Some(Addr::new(Space::Literal, -2)), 1) };
+            _memory(regs, &cell, &no_names()).unwrap()
+        };
+        assert_eq!(direct(m16, 2), "byte ptr [65534]");
+        assert_eq!(direct(m16, 4), "byte ptr [4294967294]");
     }
 
     /// `es:[bx+si+4]` for field 2 of a 3-byte record: pal_install copied the
@@ -4948,6 +4964,7 @@ mod tests {
             optional: false,
             enter: false,
             wrap_split_size: false,
+            object_aligned: false,
             red_zone: 0,
             slot_scratch: Some((RegId::EAX, RegId::ECX)),
             free: false,
@@ -5001,6 +5018,7 @@ mod tests {
             optional: false,
             enter: false,
             wrap_split_size: false,
+            object_aligned: false,
             red_zone: 0,
             slot_scratch: None,
             free: false,
@@ -5058,6 +5076,7 @@ mod tests {
                 optional: false,
                 enter,
                 wrap_split_size: false,
+                object_aligned: false,
                 red_zone: 0,
                 slot_scratch: None,
                 free: false,
@@ -5134,6 +5153,7 @@ mod tests {
             optional,
             enter: false,
             wrap_split_size: false,
+            object_aligned: false,
             red_zone: 0,
             slot_scratch: None,
             free: false,
@@ -5312,6 +5332,7 @@ mod tests {
             optional: false,
             enter: false,
             wrap_split_size: false,
+            object_aligned: false,
             red_zone: 0,
             slot_scratch: None,
             free: false,
@@ -5501,6 +5522,7 @@ mod tests {
                 optional: false,
                 enter: false,
                 wrap_split_size: false,
+                object_aligned: false,
                 slot_scratch: None,
                 free: false,
                 kept: false,

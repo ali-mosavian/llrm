@@ -87,7 +87,12 @@ impl<'p> DagTarget for X86Target<'_, 'p> {
     type Lowering = X86Lowering<'p>;
 
     fn phases(&mut self) -> Phases<'_, X86Lowering<'p>> {
-        Phases { tli: self.tli, lowering: &mut *self.lowering, arch: Some(self.arch) }
+        Phases {
+            tli: self.tli,
+            lowering: &mut *self.lowering,
+            arch: Some(self.arch),
+            opt_none: self.chooser.hooks.options.opt_none,
+        }
     }
 
     fn selection(&mut self) -> (&dyn PinRegisters, &mut dyn Select) {
@@ -101,6 +106,16 @@ impl<'p> DagTarget for X86Target<'_, 'p> {
         dag: &mut SelectionDAG,
     ) {
         super::live_out::assert_live_out_copies(dag, self.live);
+    }
+
+    /// `PostprocessISelDAG`; skipped at -O0 like the pin's.
+    fn postprocess(
+        &mut self,
+        dag: &mut SelectionDAG,
+    ) {
+        if !self.chooser.hooks.options.opt_none {
+            super::x86_postprocess::postprocess(dag);
+        }
     }
 
     fn preprocess(
@@ -192,7 +207,7 @@ pub fn legalized(
     lowering: &mut X86Lowering<'_>,
     arch: &dyn llrm_target::Target,
 ) -> Result<(), Refusal> {
-    legalized_with(dag, tli, lowering, Some(arch))
+    legalized_with(dag, tli, lowering, Some(arch), false)
 }
 
 /// [`legalized`] for any target's lowering hooks. `arch` is the target whose
@@ -202,18 +217,23 @@ pub fn legalized_with<L: CombineHooks + legalize_dag::Hooks>(
     tli: &TargetLowering,
     lowering: &mut L,
     arch: Option<&dyn llrm_target::Target>,
+    opt_none: bool,
 ) -> Result<(), Refusal> {
-    DagCombiner::new(dag, lowering, CombineLevel::BeforeLegalizeTypes).with_tli(tli).run();
+    let combiner = |dag: &mut SelectionDAG, lowering: &mut L, level| {
+        let combiner = DagCombiner::new(dag, lowering, level).with_tli(tli);
+        if opt_none { combiner.with_opt_none() } else { combiner }.run();
+    };
+    combiner(dag, lowering, CombineLevel::BeforeLegalizeTypes);
     let mut types = TypeLegalizer::new(dag, tli);
     if let Some(arch) = arch {
         types = types.with_target(arch);
     }
     let types = types.with_hooks(lowering).run();
     types.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
-    DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeTypes).with_tli(tli).run();
+    combiner(dag, lowering, CombineLevel::AfterLegalizeTypes);
     let legal = DagLegalizer::new(dag, tli, lowering).run();
     legal.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
-    DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).with_tli(tli).run();
+    combiner(dag, lowering, CombineLevel::AfterLegalizeDag);
     // `LLRM_DAGDUMP=all` prints every block's DAG as selection will see it.
     if llrm_support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
         eprintln!("legalized:\n{}", dag.dump());

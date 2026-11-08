@@ -759,9 +759,7 @@ fn general_registers(arch: &dyn Target) -> Vec<RegId> {
     llrm_target::registers::of_class(&file, "gpr")
         .into_iter()
         .map(|name| {
-            RegId::values()
-                .find(|one| format!("{one:?}").eq_ignore_ascii_case(name))
-                .unwrap_or_else(|| panic!("no register {name}"))
+            RegId::named(name).unwrap_or_else(|| panic!("no register {name}"))
         })
         .collect()
 }

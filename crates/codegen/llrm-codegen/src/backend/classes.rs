@@ -116,7 +116,7 @@ impl RegisterClasses {
                 .fixed
                 .iter()
                 .filter(|(side, index, root)| !chosen(*side, *index, root))
-                .map(|(side, index, root)| (*side, *index, root_register(root)))
+                .map(|(side, index, root)| (*side, *index, root_register(arch.registers(), root)))
                 .collect();
             pins.entry((form.name.clone(), operations[form.operation.as_str()], form.dests.len(), form.sources.len()))
                 .or_insert(required);
@@ -276,34 +276,31 @@ impl RegisterClasses {
     }
 }
 
-/// The register a form's `fixed` column names by its root: `ax` is EAX.
-fn root_register(root: &str) -> RegId {
-    match root {
-        "ax" => RegId::EAX,
-        "bx" => RegId::EBX,
-        "cx" => RegId::ECX,
-        "dx" => RegId::EDX,
-        "si" => RegId::ESI,
-        "di" => RegId::EDI,
-        "bp" => RegId::EBP,
-        "sp" => RegId::ESP,
-        "es" => RegId::ES,
-        "ds" => RegId::DS,
-        "fs" => RegId::FS,
-        "gs" => RegId::GS,
-        other => unreachable!("x86.instr names no register `{other}`"),
-    }
+/// The register a form's `fixed` column names by its root: `ax` is EAX, and a
+/// register with no wider one (`es`) is itself.
+fn root_register(
+    registers: &llrm_lir::registers::Info,
+    root: &str,
+) -> RegId {
+    registers.by_name(root).unwrap_or_else(|| panic!("the target names no register `{root}`")).full_register32()
 }
 
 /// The iced register a description names.
 fn iced(name: &str) -> RegId {
-    RegId::values()
-        .find(|one| format!("{one:?}").eq_ignore_ascii_case(name))
-        .unwrap_or_else(|| panic!("no register {name}"))
+    RegId::named(name).unwrap_or_else(|| panic!("no register {name}"))
 }
 
 #[cfg(test)]
 mod tests {
+    /// A fixed root names its full register, found from the register, not a
+    /// table of x86 names: `ax` is EAX, `es` stays ES.
+    #[test]
+    fn test_a_root_names_its_full_register() {
+        for (root, full) in [("ax", RegId::EAX), ("sp", RegId::ESP), ("bp", RegId::EBP), ("es", RegId::ES), ("gs", RegId::GS)] {
+            assert_eq!(root_register(llrm_target::Target::registers(&llrm_x86_m16::M16), root), full, "{root}");
+        }
+    }
+
     use super::*;
 
     /// What `registers.regs` says of m16 is what the allocator's statics and

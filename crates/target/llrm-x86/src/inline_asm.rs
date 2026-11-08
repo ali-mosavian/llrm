@@ -27,10 +27,10 @@
 //! `abi/qb.rs` and the nib frontend (`llrm-nib` `semantic/assembly.rs`).
 
 use llrm_lir::registers::RegId;
-use llrm_x86::asm::REGISTERS;
-pub use llrm_x86::asm::{Mode, Refusal, assembled};
+use llrm_qbruntime::Reg;
 
-use crate::abi::runtime::Reg;
+use crate::asm::REGISTERS;
+pub use crate::asm::{Mode, Refusal, assembled};
 
 /// The part of its 16-bit register an operand register is.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,7 +93,7 @@ pub fn view(name: &str) -> Option<(Reg, u32)> {
     }
     // The 16-bit register of the root: asm names are x86's, whatever the
     // target.
-    let sixteen = llrm_x86::registers::word_of(RegId::from(register.full_register32()))?;
+    let sixteen = crate::registers::word_of(RegId::from(register.full_register32()))?;
     let bits = if register.is_gpr8() {
         8
     } else if register.is_gpr16() {

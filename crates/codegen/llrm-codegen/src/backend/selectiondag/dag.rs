@@ -281,6 +281,11 @@ pub struct DagConfig {
     /// `TargetLowering::BuildSDIVPow2`'s default under `isIntDivCheap`: an
     /// `sdiv` by a power of two stays an `sdiv`.
     pub sdiv_pow2_stays: bool,
+    /// A signed divide by a negative constant is the negation of the divide by
+    /// its magnitude (gcc's `expand_divmod`; the pin's `BuildSDIV` multiplies by
+    /// the negative divisor's own magic), so the quotient and the remainder
+    /// (`x % -c` is `x % c`) share one multiply-high. DEVIATE SD-DIVMAG.
+    pub sdiv_by_magnitude: bool,
     /// The function evaluates floats at the x87's extended precision
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
     /// as the IR's folder does.
@@ -342,6 +347,7 @@ impl Default for DagConfig {
             div_live: 0,
             div_prices: None,
             sdiv_pow2_stays: false,
+            sdiv_by_magnitude: false,
             fp_extended: false,
             fp_stack: true,
             known_bits_for_target_node: None,

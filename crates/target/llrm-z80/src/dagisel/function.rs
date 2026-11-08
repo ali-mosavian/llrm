@@ -64,8 +64,8 @@ pub fn builder_target() -> BuilderTarget {
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
         // all addressing is absolute: `&buf[6]` is the symbol and 6, whatever
         // the symbol's linkage (`isOffsetFoldingLegal`)
-        dag: DagConfig { dso_local_symbols: true, ..BuilderTarget::m16().dag },
-        ..BuilderTarget::m16()
+        dag: DagConfig { dso_local_symbols: true, ..BuilderTarget::for_pointer_bits(16).dag },
+        ..BuilderTarget::for_pointer_bits(16)
     }
 }
 

@@ -414,6 +414,7 @@ dependencies = [
  "llrm-object",
  "llrm-target",
  "llrm-x86",
+ "llrm-x86-backend",
  "llrm-x86-m16",
  "llrm-x86-m16-select",
  "llrm-x86-m32",
@@ -535,6 +536,7 @@ dependencies = [
  "llrm-object",
  "llrm-target",
  "llrm-transforms",
+ "llrm-x86",
  "llrm-x86-m16",
  "llrm-x86-m32",
  "num-bigint",
@@ -728,6 +730,7 @@ dependencies = [
  "iced-x86",
  "llrm-codeview",
  "llrm-coff",
+ "llrm-dagisel",
  "llrm-debug",
  "llrm-dwarf",
  "llrm-elf",
@@ -736,11 +739,21 @@ dependencies = [
  "llrm-mir",
  "llrm-object",
  "llrm-omf",
+ "llrm-qbruntime",
  "llrm-sdag",
  "llrm-support",
  "llrm-target",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "llrm-x86-backend"
+version = "0.1.0"
+dependencies = [
+ "llrm-codegen",
+ "llrm-lir",
+ "llrm-x86",
 ]
 
 [[package]]
