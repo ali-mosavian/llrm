@@ -313,6 +313,42 @@ mod tests {
         assert!(!cheaper(Level::O2, (4505, 85_000), (4444, 85_107)));
         assert!(cheaper(Level::O2, (4440, 85_000), (4444, 85_107)));
     }
+
+    /// A select side made by an instruction that sets the flags, named in its
+    /// operands or not (`XOR16i`), was sunk into the arm ahead of a second
+    /// select that still read the compare: i64 `ssub.sat` in a loop gave 0 for
+    /// the saturated -1. Neither form may sink.
+    #[test]
+    fn a_flag_setting_select_side_is_not_sunk_ahead_of_another_select() {
+        let flags = Reg::Phys(crate::reg::FLAGS);
+        let cmov = |result: u32, on_true: u32| {
+            let mut inst = Inst::new(
+                Kind::Op("CMOV16"),
+                vec![
+                    Operand::Def(Reg::Virt(result)),
+                    Operand::Use(Reg::Virt(9)),
+                    Operand::Use(Reg::Virt(on_true)),
+                    Operand::Imm(0),
+                    Operand::Use(flags),
+                ],
+            );
+            inst.reads_flags = true;
+            inst
+        };
+        for named in [false, true] {
+            let mut compare = Inst::new(Kind::Op("BIT7_16"), vec![Operand::Def(flags), Operand::Use(Reg::Virt(8))]);
+            compare.sets_flags = true;
+            let mut operands = vec![Operand::Def(Reg::Virt(1)), Operand::Use(Reg::Virt(8))];
+            if named {
+                operands.push(Operand::Def(flags));
+            }
+            let mut side = Inst::new(Kind::Op("XOR16i"), operands);
+            side.sets_flags = true;
+            let mut function = MFunction::new("f");
+            function.blocks.push(Block { id: 0, insts: vec![compare, side, cmov(2, 1), cmov(3, 8)], phis: Vec::new() });
+            assert!(sunk_operand(&function, 0, 2, Reg::Virt(1)).is_none(), "flag operand named: {named}");
+        }
+    }
 }
 
 /// Allocates `function`; where the first allocation fails, once more with the
@@ -2340,13 +2376,15 @@ fn sunk_operand(
     // after the diamond sees what the slice leaves only if the slice leaves
     // none
     let flags = Reg::Phys(crate::reg::FLAGS);
-    let makes_flags = slice.iter().any(|&at| touches(&insts[at], flags));
+    // an instruction that sets the flags may not name them (`XOR16i`)
+    let sets = |inst: &Inst| inst.sets_flags || touches(inst, flags);
+    let makes_flags = slice.iter().any(|&at| sets(&insts[at]));
     if makes_flags {
-        if insts.iter().rposition(|inst| touches(inst, flags)).is_some_and(|last| slice.contains(&last)) {
+        if insts.iter().rposition(sets).is_some_and(|last| slice.contains(&last)) {
             return None;
         }
         let tail = &function.blocks[block].insts[p + 1..];
-        let wanted = tail.iter().find(|inst| inst.reads_flags || touches(inst, flags));
+        let wanted = tail.iter().find(|inst| inst.reads_flags || sets(inst));
         if wanted.is_some_and(|inst| inst.reads_flags) {
             return None;
         }

@@ -140,8 +140,9 @@ pub fn expand_shl_sat(
     let vt = dag.value_type(node);
     let bits = vt.size_in_bits();
     let bool_vt = tli.types.set_cc_result_type(vt);
-    // The shift amount is a byte.
-    let amount = dag.get_node(ISD::Truncate, EVT::I8, &[rhs]);
+    // The amount is the node's own: the builder gave it the target's shift
+    // type (a byte on x86, the value's width on wasm).
+    let amount = rhs;
     let result = dag.get_node(ISD::Shl, vt, &[lhs, amount]);
     let original = dag.get_node(if signed { ISD::Sra } else { ISD::Srl }, vt, &[result, amount]);
     let saturated = if signed {

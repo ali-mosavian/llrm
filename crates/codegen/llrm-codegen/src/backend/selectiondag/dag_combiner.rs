@@ -1085,7 +1085,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // `ExpandSetCCOperands`: a pair equals a constant when both halves do
         // (`(lo ^ c.lo) | (hi ^ c.hi)` is zero), so a long a call returned in
         // dx:ax is compared by halves, not joined into one dword first.
-        if matches!(cond, CondCode::SetEq | CondCode::SetNe) && self.dag.opcode(n0) == ISD::BuildPair {
+        if matches!(cond, CondCode::SetEq | CondCode::SetNe)
+            && self.dag.opcode(n0) == ISD::BuildPair
+            && !self.tli.is_some_and(|tli| tli.byte_equality())
+        {
             let (low, high) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
             let half = self.dag.value_type(low);
             let bits = half.size_in_bits();
@@ -3646,10 +3649,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(split) = self.split_pair_store(node) {
             return Some(split);
         }
-        // "Keep trying to merge store sequences until we are unable to do so":
-        // the merged stores are dead, the node is returned as handled.
-        if self.merge_consecutive_stores(node) {
-            return Some(node);
+        // "There can be multiple store sequences on the same chain. Keep trying
+        // to merge store sequences until we are unable to do so or until we
+        // merge the last store on the chain": the merged stores are dead, and
+        // the node is returned as handled once it is one of them.
+        while self.merge_consecutive_stores(node) {
+            if self.is_dead(node.node) {
+                return Some(node);
+            }
         }
         if let Some(done) = self.truncating_store_demanded_bits(node, chain, value, ptr, info) {
             return Some(done);

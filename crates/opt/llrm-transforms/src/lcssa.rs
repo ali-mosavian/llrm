@@ -147,15 +147,23 @@ pub fn closed(
     layout: &DataLayout,
     function: &mut Function,
 ) -> Result<bool, String> {
+    #[cfg(test)]
+    TREES_MADE.with(|count| count.set(count.get() + 1));
     let tree = DomTree::of(function);
-    let info = LoopInfo::analyze(&*function, || DomTree::of(function));
+    let info = LoopInfo::analyze(&*function, || &tree);
     form_on_all_loops(context, layout, function, &tree, &info)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Dominator trees [`closed`] has made on this thread.
+    pub(crate) static TREES_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `formLCSSAOnAllLoops`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LCSSA.cpp#L477>
-fn form_on_all_loops(
+pub(crate) fn form_on_all_loops(
     context: &Context,
     layout: &DataLayout,
     function: &mut Function,
