@@ -148,7 +148,7 @@ fn physical(
     }
 }
 
-fn names_sp(
+pub(crate) fn names_sp(
     inst: &Inst,
     assignment: &Assignment,
 ) -> bool {
