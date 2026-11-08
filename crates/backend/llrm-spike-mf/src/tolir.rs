@@ -561,6 +561,7 @@ pub fn to_lir<T: Target>(
         tri: SpikeRegisterInfo {
             copy_cost: 1,
             csr_first_use_cost: T::csr_first_use_cost(),
+            size_bytes: T::size_bytes(),
             csr_cost_scale: T::csr_cost_scale(),
             csr_spill_first: T::csr_spill_first(),
             register_cost: T::register_cost,
@@ -1841,6 +1842,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
 pub struct SpikeRegisterInfo {
     pub copy_cost: u32,
     pub csr_first_use_cost: u32,
+    pub size_bytes: Option<llrm_codegen::greedy::targetinfo::SizeBytes>,
     pub csr_cost_scale: u32,
     pub csr_spill_first: bool,
     pub register_cost: fn(RegId) -> u8,
@@ -1860,6 +1862,10 @@ impl TargetRegisterInfo for SpikeRegisterInfo {
 
     fn csr_cost_scale(&self) -> u32 {
         self.csr_cost_scale
+    }
+
+    fn size_bytes(&self) -> Option<&llrm_codegen::greedy::targetinfo::SizeBytes> {
+        self.size_bytes.as_ref()
     }
 
     fn csr_spill_first(&self) -> bool {

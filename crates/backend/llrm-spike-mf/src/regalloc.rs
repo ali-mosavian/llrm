@@ -145,6 +145,12 @@ pub trait Target {
         0
     }
 
+    /// What a callee-saved register and a spill cost in bytes, where `-Os`
+    /// prices the first use of a callee-saved register by them (DEVIATE CSR5).
+    fn size_bytes() -> Option<llrm_codegen::greedy::targetinfo::SizeBytes> {
+        None
+    }
+
     /// The percentage of that cost greedy charges (LLVM's default 30 prices
     /// it below its own spill weights).
     fn csr_cost_scale() -> u32 {
