@@ -264,6 +264,28 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         super::inlinespiller::remat_shape(one)
     }
 
+    /// DEVIATE RA-CLK (real mode, POC): a reference the instruction can take
+    /// from memory (a source operand of an ALU op or compare) costs a few
+    /// clocks if the value is spilled; any other reference costs a reload
+    /// and its use. Half the weight to the first, so eviction leaves in
+    /// memory the values whose references fold.
+    fn reference_weight(
+        &self,
+        one: &Insn,
+        value: u32,
+    ) -> f32 {
+        if self.bits != 16 || std::env::var_os("LLRM_RACLK_OFF").is_some() {
+            return 1.0;
+        }
+        let Some(what) = one.what.as_ref() else { return 1.0 };
+        let folds = matches!(
+            what.name.as_deref(),
+            Some("add" | "sub" | "and" | "or" | "xor" | "cmp" | "test" | "adc" | "sbb")
+        );
+        let read_whole = what.sources.iter().any(|loc| matches!(loc, Loc::Held(held) if held.value == value));
+        if folds && read_whole { std::env::var("LLRM_RACLK").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5) } else { 1.0 }
+    }
+
     fn encoding_bytes(
         &self,
         one: &Insn,
