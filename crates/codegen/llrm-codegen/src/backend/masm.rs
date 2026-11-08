@@ -1484,7 +1484,7 @@ fn stack_check(
 /// A `saved_first` frame's entry and return sequences, the pin's
 /// (`framelowering`): `push bp; mov bp, sp`, the registers, `sub sp, N`; and
 /// `add sp, N` (`lea sp, [bp - registers]` after an `alloca`), the pops, `pop
-/// bp`. DEVIATE PE1 (owner compile-time-bench, 2026-11-27): a one-slot adjustment stays a
+/// bp`. DEVIATE PE1 (owner object-refactor, 2026-11-27): a one-slot adjustment stays a
 /// `sub`/`add`, not the pin's `push eax`/`pop`: the register the push may
 /// clobber is not asked of the entry's live-ins here.
 fn lowered(

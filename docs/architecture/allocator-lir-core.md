@@ -166,7 +166,7 @@ One function, the largest (`D_DRAW_FACES`), one family of decisions, end to end:
 
 ## 5. Steps
 
-Plan block format, steps 3.3.a to 3.3.c for my half (no owner (was ssa-spill-m16, unplaced 2026-11-09)):
+Plan block format, steps 3.3.a to 3.3.c for my half (owner anyisa):
 
 | step | effect | early probe | exit |
 |---|---|---|---|
@@ -174,7 +174,7 @@ Plan block format, steps 3.3.a to 3.3.c for my half (no owner (was ssa-spill-m16
 | 3.3.b per-block versions | about 8 M | blocks examined | counted: blocks examined per ask at most the changed blocks |
 | 3.3.c tables O(touched) | about 12 M | entries visited | counted: entries visited per update at most 4 x touched |
 
-Steps 3.3.d and 3.3.e for the split path (no owner (was greedy-port, unplaced 2026-11-09)):
+Steps 3.3.d and 3.3.e for the split path (owner anyisa):
 
 | step | effect | early probe | exit |
 |---|---|---|---|

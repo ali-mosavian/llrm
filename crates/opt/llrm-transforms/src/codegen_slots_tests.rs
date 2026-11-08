@@ -332,7 +332,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "jumps/ (late tail duplication only)",
         "-disable-early-taildup",
-        "CG3: translated (backend/earlytaildup.rs, slot earlytaildup@1, directly after selection, before farcall): shouldTailDuplicate and isSimpleBB / canCompletelyDuplicateBB / canTailDuplicate pre-RA, tailDuplicate with the SSA update of what the tail defines (processPHI, updateSuccessorsPHIs, MachineSSAUpdater), duplicateSimpleBB; DEVIATE ET1 (none), ET2 (duplicable: group, barrier, data; no EH pads or INLINEASM_BR), ET3 (the pin's merge into the layout predecessor is the same result: the jump to the next block is explicit here); no owner (was w-1, unplaced 2026-11-09). Slot earlytaildup@1 (Partial in the registry). On our IR at m32 -O2 the pin's pass is worth 2431 of 32191215 clocks (0.008%), 559 taken branches and 912 instructions of 70 bench programs. Pin: changed code in 23 (-O2) and 18 (-Os) of 77 IRs; -disable-early-taildup -O2: -34 instr, -131 B, 9 IRs differ; -disable-early-taildup -Os: +14 instr, -4 B, 8 IRs differ Layout-mode part: placement/taildup.rs (late, after allocation).",
+        "CG3: translated (backend/earlytaildup.rs, slot earlytaildup@1, directly after selection, before farcall): shouldTailDuplicate and isSimpleBB / canCompletelyDuplicateBB / canTailDuplicate pre-RA, tailDuplicate with the SSA update of what the tail defines (processPHI, updateSuccessorsPHIs, MachineSSAUpdater), duplicateSimpleBB; DEVIATE ET1 (none), ET2 (duplicable: group, barrier, data; no EH pads or INLINEASM_BR), ET3 (the pin's merge into the layout predecessor is the same result: the jump to the next block is explicit here); owner x86-m64. Slot earlytaildup@1 (Partial in the registry). On our IR at m32 -O2 the pin's pass is worth 2431 of 32191215 clocks (0.008%), 559 taken branches and 912 instructions of 70 bench programs. Pin: changed code in 23 (-O2) and 18 (-Os) of 77 IRs; -disable-early-taildup -O2: -34 instr, -131 B, 9 IRs differ; -disable-early-taildup -Os: +14 instr, -4 B, 8 IRs differ Layout-mode part: placement/taildup.rs (late, after allocation).",
     ),
     row(
         "Optimize machine instruction PHIs",
@@ -446,7 +446,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "pushfold.rs",
         "",
-        "CG6: callframe.rs translates the pass function by function (registry callframe@5), tested on hand-built call frames against llc -run-pass=x86-cf-opt; its input, stores into a reserved call frame, is made by no selector yet (llrm pushes at selection), so it finds none; pushfold.rs keeps the load fold for selection's pushes (CF1); reason: the producer is the SelectionDAG call lowering (sdag-a) and the reserved frame is laid out by prologue insertion (row 80, 2026-11-13); cost: none; exit: both landed and pushfold.rs deleted; no owner (was w-5, unplaced 2026-11-09); review 2026-11-13. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
+        "CG6: callframe.rs translates the pass function by function (registry callframe@5), tested on hand-built call frames against llc -run-pass=x86-cf-opt; its input, stores into a reserved call frame, is made by no selector yet (llrm pushes at selection), so it finds none; pushfold.rs keeps the load fold for selection's pushes (CF1); reason: the producer is the SelectionDAG call lowering (sdag-a) and the reserved frame is laid out by prologue insertion (row 80, 2026-11-13); cost: none; exit: both landed and pushfold.rs deleted; owner x86-m32; review 2026-11-13. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
     ),
     row(
         "X86 Avoid Store Forwarding Blocks",
@@ -660,7 +660,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "prologue.rs, masm.rs; frameobjects.rs (calculateFrameObjectOffsets, FO-1) and framelowering.rs (emitPrologue, emitEpilogue, emitSPUpdate), not yet called: CG7",
         "",
-        "CG7: the pin lays out frame objects and fills offsets after allocation (frame indices, `replaceFrameIndices`); `frame.rs` hands out a displacement at spill time; so PEI is translated as pure functions (frameobjects.rs: calculateFrameObjectOffsets; emitPrologue/emitEpilogue and the callee-saved spills to follow) that nothing calls; cost: none measured; exit: row FI-1 (frame indices in `frame.rs`, docs/working/pei-plan.md), then the functions replace prologue.rs and masm::parts; no owner (was w-6, unplaced 2026-11-09); review 2026-11-20. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "CG7: the pin lays out frame objects and fills offsets after allocation (frame indices, `replaceFrameIndices`); `frame.rs` hands out a displacement at spill time; so PEI is translated as pure functions (frameobjects.rs: calculateFrameObjectOffsets; emitPrologue/emitEpilogue and the callee-saved spills to follow) that nothing calls; cost: none measured; exit: row FI-1 (frame indices in `frame.rs`, docs/working/pei-plan.md), then the functions replace prologue.rs and masm::parts; owner object-refactor; review 2026-11-20. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Machine Late Instructions Cleanup Pass",
@@ -795,7 +795,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "fixupleas.rs",
         "",
-        "CG6: `optTwoAddrLEA` is translated in fixupleas.rs (permalinks in docs/working/lea-fixup-plan.md): cases 1 and 2 (add, inc, dec) for every spelling of the address, the pin's LEA32r rule applied to our word LEAs too, which the pin leaves alone; case 3 (`optLEAALU`) is translated in fixupleas.rs as the pin has it, the add or sub within five instructions (PR 3; the one-instruction peephole rule is gone); the objects it changes over the 71 bench programs x 2 targets x 4 levels are 5, -24 B in all (lru m16 O1 -2, nbody_fixed m16 O2 and O3 -10 each, x_list m16 O3 -2, matmul m32 O3 +0); no owner (was w-8, unplaced 2026-11-09); review 2026-11-30. Pin: changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
+        "CG6: `optTwoAddrLEA` is translated in fixupleas.rs (permalinks in docs/working/lea-fixup-plan.md): cases 1 and 2 (add, inc, dec) for every spelling of the address, the pin's LEA32r rule applied to our word LEAs too, which the pin leaves alone; case 3 (`optLEAALU`) is translated in fixupleas.rs as the pin has it, the add or sub within five instructions (PR 3; the one-instruction peephole rule is gone); the objects it changes over the 71 bench programs x 2 targets x 4 levels are 5, -24 B in all (lru m16 O1 -2, nbody_fixed m16 O2 and O3 -10 each, x_list m16 O3 -2, matmul m32 O3 +0); owner anyisa; review 2026-11-30. Pin: changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
     ),
     row(
         "X86 Fixup Inst Tuning",
