@@ -75,6 +75,8 @@ pub struct Tuning {
     /// stated (-O1), an inline that stays is held to the -Os bound (the callee
     /// copied only if it does not grow the code); false: the pin's threshold.
     pub inline_never_grows_without_rate: bool,
+    /// DEVIATE OB1: see `Tti::unroll_object_bound`.
+    pub unroll_object_bound: Option<u32>,
     /// With `inline_never_grows_without_rate`: what a byte of growth costs an
     /// -O1 inline, in thousandths of a clock, against the call's latency at
     /// the site's frequency. m32: half the -O2 rate (-O1 weighs code size).
@@ -351,6 +353,7 @@ impl Tuning {
         branch_compare_trees_at_size: false,
         unroll_never_grows_at_o1: false,
         inline_never_grows_without_rate: false,
+        unroll_object_bound: None,
         inline_o1_milliclocks_per_byte: 0,
         inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: 0,
