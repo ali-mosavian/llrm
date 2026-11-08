@@ -342,6 +342,16 @@ impl Tti for Z80Tti {
         3000
     }
 
+    /// A loop whose bound the call's constants fix unrolls and folds in the copy, which the call's latency does not
+    /// show (loop_fusion -O3 39,020 T became 299,430 T without it).
+    /// DEVIATE Z80-RATE (owner z80, exit 2026-11-21): the rate sees the call's latency and no other gain of a copy.
+    /// Two cells stay net worse at 1 B = 3 T: loop_fusion -O2 (`clear` kept as 11 calls, +40,010 T for -869 B; the
+    /// copies would meet the overwriting loops) and memmove_overlap -O3 (`fill` kept, +718 T for -100 B; the estimate
+    /// saves 57 clocks, the copies fold more).
+    fn inline_hints_known_loop_bound(&self) -> bool {
+        true
+    }
+
     /// -O1 is strict on bytes and clocks: the pin's threshold alone, no rate.
     fn speed_inline_rate_at_o1(&self) -> bool {
         false

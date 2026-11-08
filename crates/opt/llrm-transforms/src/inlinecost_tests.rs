@@ -938,7 +938,7 @@ b0:
 }
 
 /// A target that states only its `inline_policy`, and whether its rate binds at -O1.
-struct PolicyOnly(llrm_mir::tti::InlinePolicy, bool);
+struct PolicyOnly(llrm_mir::tti::InlinePolicy, bool, bool);
 
 impl llrm_mir::tti::Tti for PolicyOnly {
     fn inline_policy(&self) -> llrm_mir::tti::InlinePolicy {
@@ -947,6 +947,10 @@ impl llrm_mir::tti::Tti for PolicyOnly {
 
     fn speed_inline_rate_at_o1(&self) -> bool {
         self.1
+    }
+
+    fn inline_hints_known_loop_bound(&self) -> bool {
+        self.2
     }
 
     fn cmp_sel_cost(
@@ -1042,8 +1046,8 @@ impl llrm_mir::tti::Tti for PolicyOnly {
 fn the_inliner_reads_the_inline_policy_of_the_target() {
     use llrm_mir::tti::{InlinePolicy, Tti};
     let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
-    let pin = PolicyOnly(InlinePolicy::PIN, true);
-    let priced = PolicyOnly(InlinePolicy { by_rate: arm.inline_policy().by_rate, ..InlinePolicy::PIN }, true);
+    let pin = PolicyOnly(InlinePolicy::PIN, true, false);
+    let priced = PolicyOnly(InlinePolicy { by_rate: arm.inline_policy().by_rate, ..InlinePolicy::PIN }, true, false);
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&pin));
     assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
     let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&priced));
@@ -1057,8 +1061,8 @@ fn the_inliner_reads_the_inline_policy_of_the_target() {
 fn a_rate_that_binds_from_o2_leaves_o1_to_the_pin() {
     use llrm_mir::tti::InlinePolicy;
     let policy = InlinePolicy { by_rate: 250_000, ..InlinePolicy::PIN };
-    let from_o2 = PolicyOnly(policy, false);
-    let always = PolicyOnly(policy, true);
+    let from_o2 = PolicyOnly(policy, false, false);
+    let always = PolicyOnly(policy, true, false);
     let verdict = |tti: &dyn llrm_mir::tti::Tti, o1_bound| {
         let params = InlineParams { compute_full_inline_cost: true, o1_bound, ..InlineParams::from_level(2) };
         let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(tti), params, (2, false));
@@ -1067,6 +1071,57 @@ fn a_rate_that_binds_from_o2_leaves_o1_to_the_pin() {
     assert!(!verdict(&from_o2, false), "-O2 is priced");
     assert!(verdict(&from_o2, true), "-O1 keeps the pin's verdict");
     assert!(!verdict(&always, true), "a rate that binds at -O1 still does");
+}
+
+const BOUNDED_LOOP: &str = "@dst = internal global [1200 x i8] zeroinitializer
+@ref = internal global [1200 x i8] zeroinitializer
+@sum = internal global i16 0
+define internal void @callee(i16 %n) nounwind {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %loop ]
+  %pa = getelementptr inbounds nuw i8, ptr @dst, i16 %i
+  %va = load i8, ptr %pa, align 1
+  %pb = getelementptr inbounds nuw i8, ptr @ref, i16 %i
+  %vb = load i8, ptr %pb, align 1
+  %m = mul i8 %va, %vb
+  %w = zext i8 %m to i16
+  %old = load i16, ptr @sum, align 2
+  %new = add i16 %old, %w
+  store i16 %new, ptr @sum, align 2
+  %next = add nuw nsw i16 %i, 1
+  %end = icmp eq i16 %next, %n
+  br i1 %end, label %done, label %loop
+
+done:
+  ret void
+}
+
+define void @f(i16 %k) {
+b0:
+  call void @callee(i16 noundef 10)
+  call void @callee(i16 noundef %k)
+  ret void
+}
+";
+
+/// z80 loop_fusion -O3: `same(10)` was no longer copied into `main` at 3 T a byte, and the loops it holds no longer
+/// met their constant trip count (39,020 T became 299,430 T). A copy that gives a loop a constant bound is exempt
+/// from the rate, where the target says so; an unknown bound is not.
+#[test]
+fn a_constant_loop_bound_exempts_a_copy_from_the_rate_where_the_target_hints_it() {
+    use llrm_mir::tti::InlinePolicy;
+    let policy = InlinePolicy { by_rate: 250_000, ..InlinePolicy::PIN };
+    let (hints, silent) = (PolicyOnly(policy, true, true), PolicyOnly(policy, true, false));
+    let inlined = |tti: &dyn llrm_mir::tti::Tti, at| {
+        let (cost, threshold) = priced_with(BOUNDED_LOOP, at, false, CallerSize::Speed, Some(tti));
+        cost < threshold
+    };
+    assert!(!inlined(&silent, 0), "the premise: the rate refuses the copy");
+    assert!(inlined(&hints, 0), "a constant bound");
+    assert!(!inlined(&hints, 1), "an unknown bound");
 }
 
 /// A target that states its rules through the older hooks gets the policy they

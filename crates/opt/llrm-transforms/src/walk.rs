@@ -1348,7 +1348,8 @@ fn trial_accepted(
     kept_bytes: i64,
 ) -> bool {
     if priced {
-        return credit > 0 && growth * rate <= saved * 1000;
+        // A copy that leaves the module no larger and runs in fewer clocks needs no callee to go with it.
+        return (credit > 0 || (growth <= 0 && saved > 0)) && growth * rate <= saved * 1000;
     }
     (if byte_gate { tried <= best || (tried <= best + credit && growth <= 0) } else { tried <= best + credit })
         || (saved > 0 && growth * rate <= saved * 1000)
