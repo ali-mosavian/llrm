@@ -129,7 +129,7 @@ impl RegisterClasses {
             by_name.entry(name).or_default().push((operation, dests, sources, required));
         }
         let pins = by_name;
-        let file = llrm_target::registers::parse(&arch.registers_text()).expect("the target's registers parse");
+        let file = llrm_target::registers::file(&arch.registers_text()).expect("the target's registers parse");
         let named = |name: &str| iced(name);
         // The word view of each root, the first the file names: a scan of the file for every root of
         // every class was most of this function.
