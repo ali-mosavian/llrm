@@ -31,7 +31,7 @@ def program_of(key: str) -> str:
     return key.rsplit("/", 2)[0]
 
 
-def references(bench: Path, program: str, language: str, level: str) -> dict[str, dict] | None:
+def references(bench: Path, program: str, language: str, level: str) -> dict[str, dict] | None:  # noqa: C901
     """{compiler: its numbers} for the program at the level; None if the program says `references = false`."""
     folder = bench / program
     marked = tomllib.loads((folder / "bench.toml").read_text()) if (folder / "bench.toml").exists() else {}
@@ -44,10 +44,11 @@ def references(bench: Path, program: str, language: str, level: str) -> dict[str
     return {name: table[name][level] for name in REFERENCES[language] if level in table.get(name, {})}
 
 
-def worse(results: dict, bench: Path, price: int | None = None) -> tuple[list[tuple], list[str]]:
-    """([(key, [axis findings])], [programs without references])."""
+def worse(results: dict, bench: Path, price: int | None = None) -> tuple[list[tuple], list[str], list[str]]:
+    """([(key, [axis findings])], [programs without references], [`key: reference compilers with no stored cell`]). A missing column
+    is reported, never skipped: the next-best column would stand in for the best one and understate the gap."""
     price = rate() if price is None else price
-    rows, none = [], []
+    rows, none, missing = [], [], []
     for key, ours in results.items():
         program, language, level = program_of(key), key.split("/")[-2], key.split("/")[-1]
         if language not in REFERENCES or "code_bytes" not in ours:
@@ -56,6 +57,9 @@ def worse(results: dict, bench: Path, price: int | None = None) -> tuple[list[tu
         if found is None:
             none.append(program)
             continue
+        absent = [name for name in REFERENCES[language] if name not in found]
+        if absent:
+            missing.append(f"{key}: no stored {', '.join(absent)}")
         findings = []
         if level == "O2":
             for name, numbers in sorted(found.items()):
@@ -70,7 +74,7 @@ def worse(results: dict, bench: Path, price: int | None = None) -> tuple[list[tu
                     findings.append(f"{label} {ours[axis]} vs {best[0]}({best[1]}) {100 * (ours[axis] - best[0]) / best[0]:+.1f}%")
         if findings:
             rows.append((key, findings))
-    return rows, sorted(set(none))
+    return rows, sorted(set(none)), missing
 
 
 if __name__ == "__main__":
@@ -81,8 +85,13 @@ if __name__ == "__main__":
     if "--bench" in sys.argv:
         bench = Path(sys.argv[sys.argv.index("--bench") + 1])
         files = [file for file in files if file != str(bench)]
+    failed = False
     for file in files:
-        rows, none = worse(json.loads(Path(file).read_text()), bench)
+        rows, none, missing = worse(json.loads(Path(file).read_text()), bench)
         for key, findings in rows:
             print(key, "; ".join(findings))
         print("no ref:", ", ".join(none) or "-")
+        for line in missing:
+            print("MISSING", line)
+        failed = failed or bool(missing)
+    sys.exit(2 if failed else 0)
