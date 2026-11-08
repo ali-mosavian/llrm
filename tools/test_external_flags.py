@@ -18,8 +18,9 @@ DISTRO = ["-fno-omit-frame-pointer", "-fstack-protector-all", "-fcf-protection=f
 
 
 def compilers():
-    pin = os.environ.get("LLRM_PIN_CLANG") or shutil.which("clang")
-    return [(name, path) for name, path in (("gcc", shutil.which("gcc")), ("pin", pin)) if path]
+    pinned = os.environ.get("LLRM_PIN_CLANG")  # the host's clang is a different compiler: it is labelled so, not passed off as the pin
+    clang = (("pin", pinned),) if pinned else (("host-clang", shutil.which("clang")),)
+    return [(name, path) for name, path in (("gcc", shutil.which("gcc")), *clang) if path]
 
 
 def markers(frame):
