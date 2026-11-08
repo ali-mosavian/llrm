@@ -399,8 +399,7 @@ impl Tti for AArch64 {
     /// 30 and 10 clk/B change no cell against 62.5; 3 changes jpeg_fixed and
     /// jpeg_single only (+84 B, -1.6k instructions); the scoring rate 0.3 makes
     /// both worse in bytes and instructions (+540 B, +688k instructions on
-    /// jpeg_single -O2). Worse-than-best cells: 9 (-O2) and 10 (-O3) at 62.5, 9
-    /// and 10 at 3, 10 and 12 at 0.3. Kept at the fitted rate.
+    /// jpeg_single -O2). Kept at the fitted rate.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         INLINE_MILLICLOCKS_PER_UNIT * 1000 / BYTES_PER_COST_UNIT_MILLI
     }
