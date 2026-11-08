@@ -610,3 +610,54 @@ fn fast_isel_takes_a_function_with_lifetime_markers() {
     let report = std::fs::read_to_string(scratch.path().join("report")).unwrap_or_default();
     assert!(report.lines().any(|line| line == "marked fast"), "{report}");
 }
+
+/// A `memset` or `memcpy` of an aggregate left its function to the DAG (126 of 494 functions of
+/// the tests/run/c corpus declined first at one): the pin makes them library calls.
+#[test]
+fn fast_isel_takes_memset_and_memcpy_as_library_calls() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(
+            scratch.path().join("a.c"),
+            "struct big { int a[40]; };\nint h(struct big *p, struct big *q)\n{\n    struct big local;\n    __builtin_memset(&local, 0, sizeof local);\n    *p = local;\n    __builtin_memcpy(q, p, sizeof *q);\n    return 0;\n}\n",
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(asm.contains("memset") && asm.contains("memcpy"), "{target}: {asm}");
+    }
+}
+
+/// Every function looked its opcodes up by name again (about 4 M instructions each): on the 225
+/// functions of `memory_expansion` a FastISel compile cost 1709 M instructions, the DAG's 839 M.
+#[test]
+fn fast_isel_looks_its_opcodes_up_once_per_compile() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "int a(int x) { return x + 1; }\nint b(int x) { return x + 2; }\nint c(int x) { return x + 3; }\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_DEBUG", "isel")
+        .current_dir(scratch.path())
+        .args(["-O0", "-c", "a.c", "-o", "a.o"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let log = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(log.matches("fast names built").count(), 1, "{log}");
+}
