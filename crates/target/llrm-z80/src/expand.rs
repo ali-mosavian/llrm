@@ -202,6 +202,42 @@ impl Printer<'_> {
         }
     }
 
+    /// Whether byte register `lane` holds 0 here: its last write in this straight line is `ld lane, #0`, and
+    /// nothing since names its pair, jumps, calls or enters a label.
+    fn lane_is_zero(
+        &self,
+        lane: RegId,
+    ) -> bool {
+        let want = name(lane);
+        let pair = match want {
+            "b" | "c" => "bc",
+            "d" | "e" => "de",
+            "h" | "l" => "hl",
+            _ => return false,
+        };
+        for line in self.out.iter().rev() {
+            match line {
+                Line::Loc(_) => continue,
+                Line::Label(_) => return false,
+                Line::Inst(text) => {
+                    if text == &format!("ld {want}, #0") {
+                        return true;
+                    }
+                    // the other byte of the pair may be read or written; this one and the pair may not be named
+                    let named = text
+                        .split([' ', ',', '(', ')', '+'])
+                        .filter(|word| !word.is_empty())
+                        .skip(1)
+                        .any(|word| word == want || word == pair);
+                    if named || HIDDEN.contains(&text.split(' ').next().unwrap_or("")) {
+                        return false;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// A copy: bytes with `ld`, a pair as its two bytes.
     fn copy(
         &mut self,
@@ -643,6 +679,11 @@ impl Printer<'_> {
                 };
                 let ((dl, dh), (al, ah)) = (lanes(to)?, lanes(a)?);
                 for (d, x, byte) in [(dl, al, mask & 0xFF), (dh, ah, (mask >> 8) & 0xFF)] {
+                    // a lane known to be 0: `and` is 0, `or`/`xor` the mask byte itself
+                    if self.lane_is_zero(x) {
+                        self.push(format!("ld {}, #{}", name(d), if mnemonic == "and" { 0 } else { byte }));
+                        continue;
+                    }
                     match (mnemonic.as_str(), byte) {
                         ("and", 0xFF) | ("or", 0) | ("xor", 0) => self.byte_move(d, x),
                         ("and", 0) => self.push(format!("ld {}, #0", name(d))),
@@ -660,6 +701,16 @@ impl Printer<'_> {
                 let (to, a, b) = (self.register(inst, 0)?, self.register(inst, 1)?, self.register(inst, 2)?);
                 let ((dl, dh), (al, ah), (bl, bh)) = (lanes(to)?, lanes(a)?, lanes(b)?);
                 for (d, x, y) in [(dl, al, bl), (dh, ah, bh)] {
+                    // a lane known to be 0: `and` is 0, `or`/`xor` the other lane
+                    let (zero_x, zero_y) = (self.lane_is_zero(x), self.lane_is_zero(y));
+                    if mnemonic == "and" && (zero_x || zero_y) {
+                        self.push(format!("ld {}, #0", name(d)));
+                        continue;
+                    }
+                    if mnemonic != "and" && (zero_x || zero_y) {
+                        self.byte_move(d, if zero_y { x } else { y });
+                        continue;
+                    }
                     self.push(format!("ld a, {}", name(x)));
                     self.push(format!("{mnemonic} a, {}", name(y)));
                     self.push(format!("ld {}, a", name(d)));

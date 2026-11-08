@@ -2103,3 +2103,21 @@ fn a_byte_shifted_far_rotates_through_a_and_masks() {
         assert!(out.contains(rotates) && !out.contains("sla") && !out.contains("add a, a"), "{op} {ty} {n}\n{out}");
     }
 }
+
+/// A byte widened and combined with a word (`or`, `and`, `xor`, with a register or a constant) ran the zero high
+/// lane through `a` (`ld b, #0; ld a, b; or a, #129; ld b, a`): volatile_bitfield's bit-field inserts, 4 instructions
+/// where `ld b, #129` does.
+#[test]
+fn a_widened_byte_combined_with_a_word_skips_its_zero_lane() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i16 @or_const(i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %z, 33280\n  ret i16 %r\n}\n\
+              define i16 @or_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %x, %z\n  ret i16 %r\n}\n\
+              define i16 @and_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = and i16 %x, %z\n  ret i16 %r\n}\n";
+    let ors = |name| text(ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let constant = ors("or_const");
+    assert!(constant.contains("#130") && !constant.contains("or a,"), "{constant}");
+    let word = ors("or_word");
+    assert_eq!(word.matches("or a,").count(), 1, "only the low lane: {word}");
+    let both = ors("and_word");
+    assert_eq!(both.matches("and a,").count(), 1, "only the low lane: {both}");
+}
