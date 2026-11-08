@@ -15,14 +15,14 @@ use std::collections::BTreeMap;
 
 use llrm_codegen::backend::selectiondag::actions::{Features, TargetLowering};
 use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, build_block};
-use llrm_codegen::backend::selectiondag::dag_select::legalized;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::DagisAdapter;
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
-use llrm_codegen::backend::selectiondag::x86_lowering::X86Lowering;
 use llrm_codegen::backend::selectiondag::{ISD, MVT, SDValue};
 use llrm_dagisel::addr::AddrMode;
 use llrm_dagisel::interp::{Outcome, Selector};
 use llrm_mir::datalayout::DataLayout;
+use llrm_x86_backend::select::legalized;
+use llrm_x86_backend::x86_lowering::X86Lowering;
 use llrm_x86_dagisel::generated::x86_i486 as table;
 use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_x86_dagisel::x86_select::select_node;

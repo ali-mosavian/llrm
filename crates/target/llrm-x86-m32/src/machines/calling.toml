@@ -34,6 +34,9 @@ wide_pairs = [["eax", "edx"], ["ebx", "ecx"]]
 backfill = true
 arguments_clobbered = true
 results_clobbered = true
+# A one-slot frame is `push eax` / `pop ecx` (X86FrameLowering emitSPUpdate); ecx carries no result.
+frame_slot_push = "eax"
+frame_slot_pop = "ecx"
 variadic = "cdecl32"
 return_address_bytes = 4
 first_argument_offset = 8
@@ -159,6 +162,9 @@ cc = "sysv"
 stack_alignment = 16
 aggregate_in_register_bytes = []
 aggregate_pointer_popped_by = "callee"
+# A one-slot frame is `push eax` / `pop ecx` (X86FrameLowering emitSPUpdate); ecx carries no result.
+frame_slot_push = "eax"
+frame_slot_pop = "ecx"
 
 [sysv32.symbol]
 omf = "_*"

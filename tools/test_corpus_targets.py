@@ -84,3 +84,62 @@ def test_the_word_order_programs_pick_words_by_significance_not_index():
 def test_a_program_written_for_one_abi_is_tagged_for_it():
     source = (RUN / "i64_param_home.c").read_text()
     assert ct.applies("x86_32-dos", source) and not ct.applies("m68k-68000", source)
+
+
+def test_the_os_layer_programs_whose_out_is_dos_semantics_are_dos_only():
+    """os_files, os_find, os_names and os_console_in print the DOS layer's answers (error codes, ordering): on the POSIX layer ours
+    and host gcc agree with each other and both differ from the .out. os_execute runs COMSPEC. Unmarked, x86_32-linux read them as miscompiles."""
+    for name in ("os_files", "os_find", "os_names", "os_console_in", "os_execute"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not ct.applies("x86_32-linux", source) and not ct.applies("m68k-68020", source) and ct.applies("x86_32-dos", source)
+
+
+def test_an_lp64_program_is_only_for_targets_with_a_64_bit_long():
+    """mulconst_i64's .out is LP64; the m68k executed sweep counted it as a failure on every compiler."""
+    source = "// targets: lp64\nlong f(void);\n"
+    assert ct.applies("x86_64-linux", source) and ct.applies("arm64-linux", source)
+    assert not any(ct.applies(t, source) for t in ("m68k-68020", "x86_32-linux", "x86_16-dos", "wasm32", "z80-sdcc", "6502-sim65"))
+
+
+def test_the_mulconst_i64_program_is_not_run_on_m68k():
+    source = (Path(__file__).parent.parent / "tests/run/c/mulconst_i64.c").read_text()
+    assert not ct.applies("m68k-68020", source) and ct.applies("x86_64-linux", source)
+
+
+def test_a_negated_token_excludes_only_those_targets():
+    source = "// targets: !linux\nlong double f(void);\n"
+    assert not ct.applies("x86_32-linux", source) and not ct.applies("x86_64-linux", source)
+    assert ct.applies("x86_32-dos", source) and ct.applies("m68k-68020", source) and ct.applies("x86_16-wat", source)
+
+
+def test_long_double_stride_is_not_run_on_the_sysv_rows():
+    """Its .out is Watcom's 8-byte long double; x86_32-linux got 12/24/20/12 (gcc's too) and read as a miscompile."""
+    source = (RUN / "long_double_stride.c").read_text()
+    assert not ct.applies("x86_32-linux", source) and ct.applies("x86_32-dos", source) and ct.applies("m68k-68020", source)
+
+
+def test_the_stack_sanitizer_programs_are_dos_only():
+    """stackdeep and stackover link the DOS runtime's LL$STACK_LOW and __STKOVERFLOW; tagged x86-m32 they ran on x86_32-linux and failed to link."""
+    for name in ("stackdeep", "stackover"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not ct.applies("x86_32-linux", source) and ct.applies("x86_32-dos", source) and ct.applies("x86_16-dos", source)
+
+
+
+
+def test_stft_single_has_an_expected_output_per_float_model():
+    """The DOS .out is x87 excess precision. Strict single (m68k, m64) and arm64's fused multiply-add give other checksums; each target
+    compared with the x87 .out read as a miscompile."""
+    source = HERE.parent / "bench/stft_single/stft_single.c"
+    want = {"m68k-68020": "502187692", "x86_64-linux": "502187692", "arm64-linux": "40144774", "x86_32-dos": "78803551", "wasm32": "502187692"}
+    for target, value in want.items():
+        assert ct.expected_output(source, target).read_text().strip() == value, target
+
+
+def test_programs_that_assume_a_32_bit_int_are_not_run_at_m16():
+    """select_of_constants and shl_of_a_zero_extended_dividend hash values wider than m16's 16-bit int: the m16 run read as a miscompile (6528 for 880220544; a 200000-iteration run past the 120 s limit). Host gcc -m32 matches their .out."""
+    for name in ("select_of_constants", "shl_of_a_zero_extended_dividend"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not ct.applies("x86_16-dos", source) and ct.applies("x86_32-linux", source) and ct.applies("x86_64-linux", source)
+
+

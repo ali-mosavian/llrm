@@ -84,10 +84,6 @@ pub fn installed() -> Option<&'static dyn BackendHooks> {
 mod x86_emit;
 
 #[cfg(test)]
-#[path = "../../../../target/llrm-x86-backend/src/nodes.rs"]
-mod x86_nodes;
-
-#[cfg(test)]
 mod in_tests {
     use super::*;
 
@@ -134,7 +130,7 @@ mod in_tests {
         }
 
         fn lowering_nodes(&self) -> crate::backend::selectiondag::builder::LoweringNodes {
-            super::x86_nodes::nodes()
+            crate::backend::selectiondag::x86_nodes::nodes()
         }
     }
 }
