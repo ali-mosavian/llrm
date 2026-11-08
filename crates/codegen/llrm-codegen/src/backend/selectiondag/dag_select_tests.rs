@@ -9,7 +9,7 @@ use llrm_target::Target;
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, build_block};
 use super::dag_select::select_block;
-use super::emit::{EmitContext, FrameMap};
+use super::emit_api::{EmitContext, FrameMap};
 use super::function_lowering::FunctionLoweringInfo;
 use super::mvt::MVT;
 use super::opcodes::OpcodeMap;
@@ -20,7 +20,7 @@ use crate::model::ir::{Addr, Mem, Space};
 
 struct NoGlobals;
 
-impl super::emit::GlobalMap for NoGlobals {
+impl super::emit_api::GlobalMap for NoGlobals {
     fn segment(
         &self,
         _symbol: Option<u32>,
@@ -124,8 +124,8 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         x87_prices: None,
         tables: &[],
         caller_saved: &Default::default(),
-        conventions: &super::emit::NoConventions,
-        constants: &super::emit::NoConstants,
+        conventions: &super::emit_api::NoConventions,
+        constants: &super::emit_api::NoConstants,
         stack_pointer: RegId::SP,
         strings: None,
         registers: llrm_target::Target::registers(&machine),
@@ -165,7 +165,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
             &mut hooks(),
             &Info,
             &ctx,
-            &mut super::emit::EmitState::default(),
+            &mut super::emit_api::EmitState::default(),
             0,
             &machine,
             &mut NoTemps,
