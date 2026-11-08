@@ -102,7 +102,10 @@ def pin_text_size(obj: Path) -> int:
     return elfsize.text_bytes(out)
 
 
-NOP = re.compile(r"^(nop\w*|data16|cs nop\w*|xchg\s+ax,ax|xchg\s+eax,eax)\b")
+# Ours pads with the 386 multi-byte forms `lea esi,[esi+0x0]` and `lea esi,[esi+eiz*1+0x0]` as well as `nop`.
+NOP = re.compile(
+    r"^(nop\w*|data16|cs nop\w*|xchg\s+ax,ax|xchg\s+eax,eax|lea\s+(?P<r>e?[sd]i),\[(?P=r)(\+eiz\*1)?\+0x0\])(\s|$)"
+)
 
 
 def nop_bytes(listing: str) -> int:

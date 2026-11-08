@@ -398,15 +398,16 @@ fn expected(edit: impl FnOnce(&mut [u8])) -> i32 {
 }
 
 /// `routine(buf + dst, buf + src, n)` for memcpy and memmove, `routine(buf +
-/// dst, c, n)` for memset.
+/// dst, c, n)` for memset (`c` in A, `n` in rs2).
 fn mem_call(
     routine: &str,
     dst: usize,
     second: &str,
     n: usize,
 ) -> String {
+    let (low, high) = if routine == "memset" { (4, 5) } else { (6, 7) };
     format!(
-        "  lda #<(buf+{dst})\n  sta rc2\n  lda #>(buf+{dst})\n  sta rc3\n{second}  lda #{}\n  sta rc6\n  lda #{}\n  sta rc7\n  jsr {routine}\n",
+        "  lda #<(buf+{dst})\n  sta rc2\n  lda #>(buf+{dst})\n  sta rc3\n  lda #{}\n  sta rc{low}\n  lda #{}\n  sta rc{high}\n{second}  jsr {routine}\n",
         n & 0xFF,
         n >> 8
     )
@@ -421,7 +422,7 @@ fn source(src: usize) -> String {
 #[test]
 fn memset_fills_exactly_n_bytes() {
     for (dst, n) in [(10, 0), (10, 1), (10, 255), (10, 256), (10, 257), (10, 300), (0, 768)] {
-        let call = mem_call("memset", dst, "  lda #$EE\n  sta rc4\n", n);
+        let call = mem_call("memset", dst, "  lda #$EE\n", n);
 
         let got = memory_checksum(&format!("memset-{dst}-{n}"), &call);
 
@@ -468,7 +469,7 @@ fn memmove_handles_overlap_in_both_directions() {
 #[test]
 fn the_memory_routines_return_the_destination() {
     for routine in ["memset", "memcpy", "memmove"] {
-        let second = if routine == "memset" { "  lda #1\n  sta rc4\n".to_owned() } else { source(400) };
+        let second = if routine == "memset" { "  lda #1\n".to_owned() } else { source(400) };
         let call = mem_call(routine, 10, &second, 300);
         let check = "  sec\n  sbc #<(buf+10)\n  sta rc8\n  txa\n  sbc #>(buf+10)\n  ora rc8\n";
 

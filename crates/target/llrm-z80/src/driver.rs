@@ -109,6 +109,12 @@ pub fn program(
         // No zero- or sign-extending load: the compare of a loaded byte stays a
         // byte compare (`cp #255`), not a word compare of its extension.
         options.extload = false;
+        // The DAG builder plans the switch (clusters, table header), as the pin does.
+        // DEVIATE Z80-SWITCH-ROWS (owner z80, exit 2026-11-15): against the
+        // mid-end lowering, switch_jump_table Os +4 B, switch_table_holes Os
+        // +2 B and Oz +82k T, compound_assignment_types Os/Oz +2 B. Layout
+        // and allocation noise after the pin's own plan; no pass is wrong.
+        options.lower_switches = false;
         // The runtime's `strlen` (`cpir`): LoopIdiomRecognize may form a call.
         // and `memcmp` (SDCC's libc has no `bcmp`).
         options.library = llrm_mir::libfunc::Routine::stated(["strlen", "memcmp"], |name| format!("_{name}"), 0);
@@ -221,7 +227,7 @@ impl llrm_mir::target::Machine for Z80Machine {
     }
 
     fn costs(&self) -> llrm_mir::target::OperationCosts {
-        llrm_mir::target::Neutral.costs()
+        llrm_mir::target::OperationCosts { jump_table: 4, ..llrm_mir::target::Neutral.costs() }
     }
 
     /// Real code bytes for the decisions weighed at a rate (`opcosts.txt`).

@@ -92,9 +92,24 @@ pub fn float_facts(text: &str) -> (usize, bool) {
     if let Some(&found) = FACTS.lock().expect("the facts lock").get(text) {
         return found;
     }
-    let facts = parse(text).map_or((0, false), |all| (of_class(&all, "x87").len(), !of_class(&all, "xmm").is_empty()));
+    let facts = file(text).map_or((0, false), |all| (of_class(&all, "x87").len(), !of_class(&all, "xmm").is_empty()));
     FACTS.lock().expect("the facts lock").insert(text.to_owned(), facts);
     facts
+}
+
+/// [`parse`], once per distinct text: the register file is read by the class
+/// table, the cpu table and the float facts of one compile, and each parsed it
+/// again (0.9 M Ir of a 17 M compile).
+pub fn file(text: &str) -> Result<std::sync::Arc<Vec<Register>>, String> {
+    static FILES: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Vec<Register>>>>,
+    > = std::sync::LazyLock::new(Default::default);
+    if let Some(found) = FILES.lock().expect("the files lock").get(text) {
+        return Ok(std::sync::Arc::clone(found));
+    }
+    let parsed = std::sync::Arc::new(parse(text)?);
+    FILES.lock().expect("the files lock").insert(text.to_owned(), std::sync::Arc::clone(&parsed));
+    Ok(parsed)
 }
 
 pub fn parse(text: &str) -> Result<Vec<Register>, String> {
@@ -405,5 +420,21 @@ mod source_tests {
                 .unwrap()
                 .contains("bytes: &'static [Reg] = &[Reg::AL, Reg::AH]")
         );
+    }
+}
+
+#[cfg(test)]
+mod file_tests {
+    /// Each of the class table, the cpu table and the float facts parsed the
+    /// register file again: four parses of one text per compile. However
+    /// often a text is asked, it is parsed once.
+    #[test]
+    fn test_a_register_file_is_parsed_once_however_often_it_is_asked() {
+        let text = "regfile_once_probe 8 regfile_once_probe 0 gpr - -\n";
+        let before = super::parsed();
+        for _ in 0..20 {
+            assert_eq!(super::file(text).expect("parses").len(), 1);
+        }
+        assert_eq!(super::parsed() - before, 1);
     }
 }

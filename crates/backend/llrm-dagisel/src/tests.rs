@@ -2295,3 +2295,35 @@ fn a_target_that_is_not_x86_implements_hooks_alone() {
         "the matcher asks `Hooks` and nothing more"
     );
 }
+
+mod memop128 {
+    use super::*;
+    use crate::generated::ids::x86isd;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_memop128::select_mem128;
+
+    /// A volatile 16-byte copy kept no mark on its SSE load and store (`set_node_mem_refs` was never called), so the
+    /// LIR instructions they became were ordinary accesses a pass could drop or merge; the pin's `MachineMemOperand`s
+    /// carry the flag on both.
+    #[test]
+    fn the_load_and_the_store_of_a_16_byte_copy_keep_the_copy_s_memory_reference() {
+        let mut dag = TestDag::new();
+        let (to, from) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let align = dag.make_constant(16, mvt::i32);
+        let copy = dag.node(x86isd::LLRM_COPY128, &[mvt::Other], &[SDValue::new(0, 0), to, from, align]);
+        let hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            multiply_early_out: false,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert!(select_mem128(&mut dag, &hooks, copy));
+        let marked: Vec<&Vec<u32>> = dag.mem_refs.iter().map(|(_, mems)| mems).collect();
+        assert_eq!(marked.len(), 2, "the load and the store: {:?}", dag.mem_refs);
+        assert!(marked.iter().all(|mems| mems.as_slice() == [copy]), "{:?}", dag.mem_refs);
+    }
+}

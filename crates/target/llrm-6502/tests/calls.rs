@@ -1,6 +1,6 @@
 //! The 6502 call, argument and return lowering on hand-built DAGs. Expected
 //! registers are worked out by hand from `machines/calling.toml`: a byte takes
-//! the first free byte from rc2, a word the first free pair, a byte result
+//! the first free of `a`, `x`, rc2.., a word the first free pair, a byte result
 //! leaves in `a`, a word in `a:x`.
 
 use llrm_6502::dagisel::call::{CALL, Ext, In, Out, RET_GLUE, lower_call, lower_formal_arguments, lower_return};
@@ -20,10 +20,10 @@ fn phys(
     }
 }
 
-/// `f(i8 a, i16 b)` returning `i16`: `a` goes to rc2, `b` to the first free
-/// pair, rc4:rc5 (rs2); the word comes back as `a` (low) and `x` (high) joined.
+/// `f(i8 a, i16 b)` returning `i16`: `a` goes to `a`, `b` to the first free
+/// pair, rc2:rc3 (rs1); the word comes back as `a` (low) and `x` (high) joined.
 #[test]
-fn a_call_passes_a_byte_in_rc2_and_a_word_in_rs2() {
+fn a_call_passes_a_byte_in_a_and_a_word_in_rs1() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let a = dag.get_register(EVT::I8, 1);
@@ -71,7 +71,7 @@ fn a_call_passes_a_byte_in_rc2_and_a_word_in_rs2() {
     assert_eq!(dag.opcode(call), CALL);
     assert_eq!(dag.opcode(dag.operand(call, 1)), ISD::TargetGlobalAddress);
     // chain, callee, then the two argument registers in order
-    assert_eq!((phys(&dag, dag.operand(call, 2)), phys(&dag, dag.operand(call, 3))), (reg::RC2, reg::RS2));
+    assert_eq!((phys(&dag, dag.operand(call, 2)), phys(&dag, dag.operand(call, 3))), (reg::A, reg::RS1));
 }
 
 /// Three words fit rc2..rc7; the fourth fits no register and is stored on the
@@ -135,10 +135,10 @@ fn a_fourth_formal_word_is_loaded_from_a_fixed_object() {
     assert_eq!(dag.opcode(args[0]), ISD::CopyFromReg);
 }
 
-/// `g(i8, i16)` is live-in at rc2 and rs2, each read from the virtual register
+/// `g(i8, i16)` is live-in at `a` and rs1, each read from the virtual register
 /// it arrives in.
 #[test]
-fn formal_arguments_are_live_in_at_rc2_and_rs2() {
+fn formal_arguments_are_live_in_at_a_and_rs1() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let mut live_ins = Vec::new();
@@ -153,7 +153,7 @@ fn formal_arguments_are_live_in_at_rc2_and_rs2() {
     ];
     let args = lower_formal_arguments(&mut dag, entry, &ins, &mut |_, _, _| 0, &mut live_in).unwrap();
 
-    assert_eq!(live_ins, [reg::RC2, reg::RS2]);
+    assert_eq!(live_ins, [reg::A, reg::RS1]);
     assert_eq!((dag.value_type(args[0]), dag.value_type(args[1])), (EVT::I8, EVT::I16));
     assert!(matches!(dag.node(dag.operand(args[1], 1)).data, NodeData::Register(4097)));
 }

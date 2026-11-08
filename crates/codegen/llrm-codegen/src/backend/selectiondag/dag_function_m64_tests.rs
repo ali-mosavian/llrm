@@ -25,6 +25,28 @@ entry:
     assert!(add.dests.iter().all(|d| matches!(d, crate::model::ir::Loc::Held(h) if h.width == 8)), "{add:?}");
 }
 
+/// `s * 7 + b` on a quadword was `lea [s*8+0]; sub; add` (three, and a lea with
+/// a four-byte displacement): `combineAdd`'s hidden LEA was translated for
+/// `i32` only, the pin has it for `i32` and `i64`. It is `lea [b+s*8]; sub s`
+/// (switch_table_holes m64 -O2, +39 B).
+#[test]
+fn an_m64_shifted_difference_plus_a_value_is_a_lea_and_a_sub() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+define i64 @f(i64 %s, i64 %b) {
+  %m = mul i64 %s, 7
+  %t = add i64 %m, %b
+  ret i64 %t
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(!names.iter().any(|n| n == "add"), "the add is folded into the lea: {names:?}");
+    assert!(names.iter().any(|n| n == "lea") && names.iter().any(|n| n == "sub"), "{names:?}");
+}
+
 /// A seven-argument call at m64 came out with 4-byte values and the 32-bit
 /// `ESP` (`mov r, ESP`), and was refused. It now passes six arguments in the
 /// registers `calling.toml` lists and the seventh on the stack at `RSP`.

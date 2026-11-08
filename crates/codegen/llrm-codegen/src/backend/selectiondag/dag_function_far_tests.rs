@@ -47,8 +47,9 @@ fn a_loop_is_blocks_with_phis_and_branches() {
         assert!(block.succ.iter().all(|at| addresses.contains(at)), "{block:#?}");
     }
     // The builder swaps a branch whose true edge is the next block: it jumps to
-    // `done` and falls into the body.
-    assert_eq!(header.succ.iter().copied().collect::<Vec<_>>(), [addresses[3], addresses[2]]);
+    // `done` and falls into the body. The successors stay in `addSuccessor`
+    // order, true edge (the body) first.
+    assert_eq!(header.succ.iter().copied().collect::<Vec<_>>(), [addresses[2], addresses[3]]);
     assert_eq!(blocks[2].succ.iter().copied().collect::<Vec<_>>(), [addresses[1]]);
     assert!(blocks[3].succ.is_empty());
 }
