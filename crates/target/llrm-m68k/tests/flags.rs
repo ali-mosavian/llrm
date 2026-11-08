@@ -181,3 +181,17 @@ fn the_codes_are_read_with_move_from_sr_on_the_68000_only() {
         assert_eq!(pushed_opcode(cpu), "MOV16ec", "-mcpu={cpu}");
     }
 }
+
+/// `add d0; move.l (64,%sp),d3; bpl` branched on the load's codes: the
+/// allocator makes an argument's load again beside any instruction. soft-float
+/// `__adddf3` at -O2 on the 68000 returned sums one unit in the last place off.
+#[test]
+fn a_frame_load_between_the_setter_and_the_reader_moves_above_the_setter() {
+    let mut f = function(vec![
+        op("ADD32dr", vec![Operand::Def(v(0)), Operand::Use(v(0)), Operand::Use(v(1))], true, false),
+        op("MOV32rp", vec![Operand::Def(v(3)), Operand::Imm(64), Operand::Frame(-1)], false, false),
+        op("Bpl8", vec![], false, true),
+    ]);
+    preserve_flags(&mut f, &assignment()).unwrap();
+    assert_eq!(kinds(&f), [Kind::Op("MOV32rp"), Kind::Op("ADD32dr"), Kind::Op("Bpl8")]);
+}
