@@ -1084,6 +1084,9 @@ struct Staged {
     /// The register classes the routes allocate from: the target's, with the
     /// frame register a value register where the function needs none.
     classes: Rc<RegisterClasses>,
+    /// Every block was selected by FastISel, which leaves out the jump to the
+    /// next block (`fastEmitBranch`) as the pin's does.
+    fast: bool,
 }
 
 impl Staged {
@@ -1196,9 +1199,11 @@ fn staged(
             }
         }
     };
+    let mut fast = false;
     let selected = if let Some(done) = dag {
         if done.is_ok() {
             if crate::backend::selectiondag::fastisel::take_took() {
+                fast = true;
                 shadow::record_fast(name);
             } else {
                 shadow::record(name, Selector::Dag);
@@ -1391,6 +1396,7 @@ fn staged(
         landing,
         registers,
         classes,
+        fast,
     })
 }
 
@@ -1428,6 +1434,10 @@ fn phased(
     )? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
+            continue;
+        }
+        // The pin's -O0 has no BranchFolder, and what FastISel selects has no jump to the next block.
+        if staged.fast && !target.cpu.optimized && phase.class_name() == "ControlFlow" {
             continue;
         }
         if phase.class_name() == "PhiElimination" {
