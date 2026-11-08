@@ -113,6 +113,15 @@ pub struct Target {
     pub llc_level: bool,
     /// Why the backend takes no `-O<n>`; required where `llc_level` is false.
     pub llc_level_reason: Option<String>,
+    /// Whether the backend takes the `-f[no-]PASS` switches (`BACKEND_PASSES`,
+    /// `-f[no-]unroll-loops`). Where it does not, the driver leaves them out
+    /// and says so: the pin's clang writes `noinline` and the loop hints into
+    /// the IR, and the backend reads them there.
+    #[serde(default = "yes")]
+    pub llc_passes: bool,
+    /// Why the backend takes no pass switch; required where `llc_passes` is
+    /// false.
+    pub llc_passes_reason: Option<String>,
     /// Whether the backend takes `-mcmodel=` (the pin's `llc -code-model`) and
     /// clang does not: the driver gives the flag to the backend alone.
     #[serde(default)]
@@ -150,6 +159,49 @@ const PIN_FILE: &str = include_str!("../../../../toolchain/clang/pin");
 fn pin() -> &'static str {
     PIN_FILE.lines().next().unwrap_or_default().trim()
 }
+const OW_COMMIT_FILE: &str = include_str!("../../../../toolchain/owshim/ow-commit");
+
+/// The Open Watcom tree `{ow}` names: `llrm/ow-src-<commit>` under `cache`, the commit toolchain/owshim/ow-commit pins. tools/ow-fetch.sh makes
+/// it; llrm-cc never does.
+pub fn ow_tree_in(cache: &Path) -> PathBuf {
+    cache.join("llrm").join(format!("ow-src-{}", OW_COMMIT_FILE.trim()))
+}
+
+/// The Open Watcom tree on this machine (`ow_tree_in` of the cache directory).
+pub fn ow_tree() -> PathBuf {
+    ow_tree_in(&cache_dir())
+}
+
+/// `$XDG_CACHE_HOME`, else `~/.cache`: where toolchain/owclib.sh puts the tree.
+fn cache_dir() -> PathBuf {
+    std::env::var_os("XDG_CACHE_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".cache"))
+}
+
+/// `word` with `{ow}` replaced by the tree under `cache` where it is complete
+/// (toolchain/cache.sh writes `.complete` last); where it is not the word
+/// stays, and `missing_ow` says so.
+fn with_ow(
+    word: &str,
+    cache: &Path,
+) -> String {
+    let tree = ow_tree_in(cache);
+    if word.contains("{ow}") && tree.join(".complete").is_file() {
+        word.replace("{ow}", &tree.display().to_string())
+    } else {
+        word.to_owned()
+    }
+}
+
+fn missing_ow(cache: &Path) -> String {
+    format!(
+        "llrm-cc: the Open Watcom tree {} is missing: run tools/ow-fetch.sh to make it",
+        ow_tree_in(cache).display()
+    )
+}
+
 /// The llrm checkout this driver was built in, for the tools the recipes name.
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
 const DEFAULT_TARGET: &str = "x86_64-linux";
@@ -294,7 +346,7 @@ pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
             *word = with_root(word);
         }
         for word in target.clang.iter_mut().chain(&mut target.llc).chain(&mut target.link) {
-            *word = with_environment(word);
+            *word = with_ow(&with_environment(word), &cache_dir());
         }
     }
     Ok(table)
@@ -458,7 +510,7 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
         } else if let Some(list) = flag.strip_prefix("-fsanitize=").or_else(|| flag.strip_prefix("-fno-sanitize="))
             && list.split(',').all(|name| matches!(name, "bounds" | "stack"))
         {
-            // The checks are the backend's (gcc's names, as llrm-c took them):
+            // The checks are the backend's (gcc's names, as llrm-cc took them):
             // `stack` checks SP on entry; `bounds` checks nothing in IR, which
             // carries no subscripts.
             build.llc.push(flag.to_owned());
@@ -513,7 +565,7 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
         } else if LLC_FLAGS.contains(&flag) || LLC_PREFIXES.iter().any(|one| flag.starts_with(one)) {
             build.llc.push(flag.to_owned());
         } else if flag == "--dump" {
-            // llrm-c's switch: each backend stage written to the directory.
+            // llrm-cc's switch: each backend stage written to the directory.
             build.llc.push(flag.to_owned());
             build.llc.push(value(&mut at)?);
         } else if flag.starts_with("--dump=") {
@@ -586,6 +638,10 @@ pub fn clang_flags(
     if unrolls_at_o1(target, build) {
         flags.push("-funroll-loops".into());
     }
+    // Clang takes `-fexcess-precision=` where the backend does not.
+    if !target.llc_passes {
+        flags.extend(build.llc.iter().filter(|flag| flag.starts_with("-fexcess-precision=")).cloned());
+    }
     flags
 }
 
@@ -600,6 +656,25 @@ fn unrolls_at_o1(
         && !build.clang.iter().any(|flag| flag == "-funroll-loops" || flag == "-fno-unroll-loops")
 }
 
+/// Whether `flag` is one of the backend pipeline's `-f[no-]PASS` switches.
+fn is_pass_switch(flag: &str) -> bool {
+    backend_pass(flag).is_some()
+        || flag == "-funroll-loops"
+        || flag == "-fno-unroll-loops"
+        || flag.starts_with("-fexcess-precision=")
+}
+
+/// The build's switches that the target's backend does not take.
+pub fn dropped_pass_switches<'a>(
+    target: &Target,
+    build: &'a Build,
+) -> Vec<&'a str> {
+    if target.llc_passes {
+        return vec![];
+    }
+    build.llc.iter().map(String::as_str).filter(|flag| is_pass_switch(flag)).collect()
+}
+
 pub fn llc_args(
     target: &Target,
     build: &Build,
@@ -611,7 +686,8 @@ pub fn llc_args(
         args.push(format!("-O{}", build.level));
     }
     args.extend(target.llc.iter().cloned());
-    args.extend(build.llc.iter().cloned());
+    let dropped = dropped_pass_switches(target, build);
+    args.extend(build.llc.iter().filter(|flag| !dropped.contains(&flag.as_str())).cloned());
     if unrolls_at_o1(target, build) {
         args.push("-funroll-loops".into());
     }
@@ -663,10 +739,31 @@ pub fn link_command(
     if let Some(open) = command.iter().find(|word| word.contains("{env:")) {
         return Err(unset(open));
     }
+    if command.iter().any(|word| word.contains("{ow}")) {
+        return Err(missing_ow(&cache_dir()));
+    }
     if command.is_empty() {
         return Err("empty link recipe".into());
     }
     Ok(command)
+}
+
+/// The error for a clang whose datalayout differs from the table's. A row with a `clang_env` takes the fork's clang from that variable, and
+/// falls back to the pin's, which has no 16-bit layout: the message names the variable when it is unset.
+fn layout_mismatch(
+    path: &str,
+    printed: &str,
+    target: &Target,
+    var: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> String {
+    let mut message = format!(
+        "{path}: clang's datalayout `{printed}` lays types out differently from the table's `{}`",
+        target.datalayout
+    );
+    if let Some(name) = target.clang_env.as_deref().filter(|name| var(name).is_none()) {
+        message.push_str(&format!(" (this row needs the fork's clang: set {name}; the pin's clang was used)"));
+    }
+    message
 }
 
 fn clang_path(target: &Target) -> PathBuf {
@@ -745,6 +842,19 @@ fn stem(input: &str) -> String {
     Path::new(input).file_stem().and_then(|one| one.to_str()).unwrap_or("a").to_owned()
 }
 
+/// What the target's clang and llc words still name that this machine lacks: an
+/// unset `{env:NAME}` or the Open Watcom tree `{ow}`. Said before anything
+/// runs, so a missing tree never reads as a failed compile.
+fn unresolved(target: &Target) -> Option<String> {
+    let words = || target.clang.iter().chain(&target.llc);
+    if let Some(open) = words().find(|word| word.contains("{env:")) {
+        return Some(unset(open).trim_start_matches("llrm-cc: ").to_owned());
+    }
+    words()
+        .any(|word| word.contains("{ow}"))
+        .then(|| missing_ow(&cache_dir()).trim_start_matches("llrm-cc: ").to_owned())
+}
+
 fn build(
     target: &Target,
     build: &Build,
@@ -755,8 +865,8 @@ fn build(
         eprintln!("llrm-cc: {why}");
         1
     };
-    if let Some(open) = target.clang.iter().chain(&target.llc).find(|word| word.contains("{env:")) {
-        return Err(fail(unset(open)));
+    if let Some(why) = unresolved(target) {
+        return Err(fail(why));
     }
     if build.output.is_some() && build.stop != Stop::Executable && build.inputs.len() > 1 {
         return Err(fail("cannot specify -o with -c or -S and several inputs".into()));
@@ -816,10 +926,7 @@ fn build(
                 let printed = datalayout_of(&text).unwrap_or_default();
                 let expected = target.clang_datalayout.as_deref().unwrap_or(&target.datalayout);
                 if printed != expected && layout_facts(printed) != layout_facts(&target.datalayout) {
-                    return Err(fail(format!(
-                        "{path}: clang's datalayout `{printed}` lays types out differently from the table's `{}`",
-                        target.datalayout
-                    )));
+                    return Err(fail(layout_mismatch(path, printed, target, |name| std::env::var_os(name))));
                 }
                 if printed != target.datalayout {
                     let line = format!("target datalayout = \"{printed}\"");
@@ -855,6 +962,13 @@ fn build(
                     std::fs::write(&ir, translated).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
                 let object = want(if build.stop == Stop::Assembly { "s" } else { "o" });
+                // A switch clang got as well is taken there.
+                let taken = clang_flags(target, build);
+                for flag in
+                    dropped_pass_switches(target, build).into_iter().filter(|flag| !taken.iter().any(|one| one == flag))
+                {
+                    eprintln!("llrm-cc: warning: {flag} is not a switch of this target's backend: ignored");
+                }
                 run(&llc_path(&target.llc_program), &llc_args(target, build, &ir, Path::new(&object)))?;
                 objects.push(object);
             }
@@ -938,6 +1052,10 @@ pub fn run_main(argv: &[String]) -> i32 {
             eprintln!("llrm-cc: {why}");
             1
         })?;
+        if let Some(why) = unresolved(target) {
+            eprintln!("llrm-cc: {why}");
+            return Err(1);
+        }
         check_pin(&clang_path(target)).map_err(|why| {
             eprintln!("llrm-cc: {why}");
             1

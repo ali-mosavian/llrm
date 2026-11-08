@@ -71,7 +71,7 @@ pub struct Options {
     /// rounds to its type.
     pub float_store: bool,
     /// Whether a spill of a float rounds to the float's type (`Profile`'s
-    /// `rounds_float_spills`): set by llrm-c, which follows the pin.
+    /// `rounds_float_spills`): set by llrm-cc, which follows the pin.
     pub rounds_float_spills: bool,
     /// Whether a spill of an x87 value keeps its 80 bits (`Profile`'s
     /// `spills_extended`): set by llrm-qb, which follows real BC.
@@ -655,7 +655,19 @@ pub fn optimized(
                 let wanted = |ty: &str| {
                     layout.expands_for("select", ty) && !crate::backend::selects::kept_for_isel(options.isel, ty)
                 };
-                crate::backend::selects::priced(module, &*tti, &wanted, &|name| profile.cost(name).ok())
+                // DEVIATE SETCC-TREE-BRANCH: at -Os only, where the table is bytes.
+                let trees = |ty: &str| {
+                    options.pipeline.prefers_size()
+                        && tti.branch_compare_trees_at_size()
+                        && layout.expands_for("select", ty)
+                };
+                crate::backend::selects::priced_with_trees(
+                    module,
+                    &*tti,
+                    &wanted,
+                    &|name| profile.cost(name).ok(),
+                    &trees,
+                )
             })
         })?;
     }

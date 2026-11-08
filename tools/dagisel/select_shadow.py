@@ -236,7 +236,7 @@ def main() -> int:
     parser.add_argument("shadow")
     parser.add_argument("--src", default=str(Path(os.environ.get("ROWS_WORK", Path.home() / "scratch/rows")) / "base/b"))
     parser.add_argument("--programs", default="")
-    parser.add_argument("--ir", default="", help="compare one IR file the pin and the example both read (no llrm-c)")
+    parser.add_argument("--ir", default="", help="compare one IR file the pin and the example both read (no llrm-cc)")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
     parser.add_argument("--out", default="")
     parser.add_argument("--level", default="-O2", choices=["-O2", "-Os"])

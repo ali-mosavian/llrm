@@ -18,6 +18,10 @@ TYPES = [f"-D__{n}_TYPE__={t}" for n, t in (("INT8", "signed char"), ("UINT8", "
 INSNS = os.environ.get("SIM65_INSNS", os.path.expanduser("~/scratch/cc65-v2.19-src/sim65-insns"))
 PADS = [int(x) for x in os.environ.get("OURS_PADS", os.environ.get("OURS_PAD", "0")).split(",")]
 PAD = PADS[0]
+if len(PADS) > 1 and max(PADS) - min(PADS) < 64:
+    # sim65 charges a cycle per page crossing, which moves with the code's address: pads within a few bytes of
+    # each other see one layout (wide_shift_by_one: 607,141 at pads 0..16 and 619,097 at 200, 2026-11-08)
+    sys.exit(f"OURS_PADS={PADS}: the pads span {max(PADS) - min(PADS)} bytes; they must span 64 or more to sample page crossings")
 # the runtime (mos_rt.s) of the tree under test: there is no default, a stale one hid 8 link failures and could skew an A/B
 if not os.environ.get("OURS_RT"):
     sys.exit("ours_cr: OURS_RT is not set: name the mos_rt.s of the tree under test (one per side of an A/B)")
@@ -160,6 +164,19 @@ def resolve(w, asm_text, cc, flags):  # asm_text(mods) = the program, plus the r
             if a.returncode: return objs, "ca65 " + stem + ": " + a.stderr[-150:]
             objs.append(stem + ".o")
     return objs, "no fixpoint"
+X86_ONLY = re.compile(r"-(m32|m16|march=.*|mabi=.*|mlong-double-80|mregparm=.*)$")
+def header_flags(path):
+    """The `// flags:` -f options of a program (alternatives split by `|`), x86-only -m options dropped.
+    Any other token is an error: a flag the harness cannot honor must not be measured as if it were."""
+    first = open(path).readline()
+    if not first.startswith("// flags:"): return []
+    out = []
+    for alt in first[len("// flags:"):].split("|"):
+        for t in alt.split():
+            if re.fullmatch(r"-O\w+", t) or t.startswith("-W") or X86_ONLY.fullmatch(t): continue
+            if not t.startswith(("-f", "-D")): raise SystemExit(f"{path}: header flag {t} is not handled by the harness")
+            if t not in out: out.append(t)
+    return out
 def one(job):
     path, level, lib = job
     name = path.stem; w = Path(tempfile.mkdtemp(prefix=f"o6-{name}-", dir=WORK))
@@ -167,7 +184,7 @@ def one(job):
     (w / "d.s").write_text(driver())
     flag = {"O0": "-O0", "O1": "-O1", "O2": "-O2", "O3": "-O3", "Os": "-Os"}[level]
     try:
-        c = sh([OURS, "--target=6502-sim65", flag, "-S", "-w", "-fsigned-char", "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
+        c = sh([OURS, "--target=6502-sim65", flag, "-S", "-w", "-fsigned-char", *header_flags(path), "-I", str(HERE / "inc"), str(path), "-o", "o.s"], w, timeout=300)
     except subprocess.TimeoutExpired:
         return name, "SLOW", "llrm-cc over 300 s"
     if c.returncode:

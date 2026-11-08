@@ -1713,6 +1713,17 @@ pub fn compare_registers(
     _assemble(&raised(create_reg_reg(code, one, other)), at, true)
 }
 
+/// `test [cell], reg`.
+pub fn test_mem_reg(cell: &ir::Mem, source: RegId, at: At) -> Option<Emitted> {
+    let width = width_of(source)?;
+    let (r#where, relocated) = operand_of(cell, at.bits)?;
+    if i64::from(cell.width) != width {
+        return None;
+    }
+    let code = code_of!("TEST_RM", width * 8, "_R", width * 8)?;
+    _assemble(&raised(create_mem_reg(code, r#where, source)), at, relocated)
+}
+
 /// `cmp dest,[cell]`. Flags are the whole result, so there is no dest.
 pub fn compare_mem(
     dest: RegId,
@@ -2001,7 +2012,8 @@ pub fn divide_mem(
         return None;
     }
     let built = operand_of(cell, at.bits);
-    if built.is_none() || !memory_widths(at).contains(&cell.width) {
+    // `div m8` takes AX by a byte divisor, which `memory_widths` leaves out.
+    if built.is_none() || (cell.width != 1 && !memory_widths(at).contains(&cell.width)) {
         return None;
     }
     let (r#where, relocated) = built?;
@@ -2356,6 +2368,22 @@ fn scalar_sse(
         ("mov", Operation::Move, _) => "movaps",
         _ => name,
     };
+    // `cmpss xmm0, xmm1, 0`: the predicate rides as an immediate byte.
+    if let ([Loc::Reg(into)], [_, source, Loc::Imm(predicate)]) = (dests.as_slice(), sources.as_slice()) {
+        let upper = Upper(name);
+        let bits = if name.ends_with("sd") { 64 } else { 32 };
+        let code = code_of!(upper, "_XMM_XMMM", bits, "_IMM8")?;
+        return match source {
+            Loc::Reg(outof) => {
+                _assemble(&raised(create_reg_reg_i32(code, into.register, outof.register, predicate.value)), at, true)
+            }
+            Loc::Mem(cell) => {
+                let (built, relocated) = operand_of(cell, at.bits)?;
+                _assemble(&raised(create_reg_mem_i32(code, into.register, built, predicate.value)), at, relocated)
+            }
+            _ => None,
+        };
+    }
     let (first, second) = match (dests.len(), sources.len()) {
         (1, 2) => (&dests[0], &sources[1]),
         (1, 1) => (&dests[0], &sources[0]),
@@ -2950,8 +2978,9 @@ pub fn emit_in(
             (Loc::Reg(into), Loc::Mem(cell)) if named == "cmp" => compare_mem(into.register, cell, at),
             (Loc::Reg(into), Loc::Reg(outof)) => compare_registers(named, into.register, outof.register, at),
             (Loc::Mem(cell), Loc::Reg(outof)) => {
-                // Only `cmp` here: `test` against memory has its own shapes
-                // and BC writes none of them.
+                if named == "test" {
+                    return test_mem_reg(cell, outof.register, at);
+                }
                 if named != "cmp" {
                     return None;
                 }

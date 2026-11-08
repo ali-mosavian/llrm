@@ -311,6 +311,11 @@ pub fn greedy_rewritten(
         tri: &crate::greedy::targetinfo::X86RegisterInfo,
         size: crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get),
         lane_pins: false,
+        carry_slot_indexes: targets::profile(cpu).map_or(true, |profile| {
+            // m16 states its table on the machine, m32 and m64 on the TTI.
+            let machine = profile.target();
+            machine.tuning().carry_slot_indexes && machine.tti().map_or(true, |tti| tti.carries_slot_indexes())
+        }),
     };
     let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame };
     let decided = crate::greedy::shadow::decide_with(&inputs, mode);

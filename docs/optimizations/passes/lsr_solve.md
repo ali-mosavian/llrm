@@ -40,17 +40,12 @@ L3988, L4735, L5196, L5609 and `getFixupInsertPos` (L6190,
 `I->getType()` is `void` for it). DEVIATE LU3: see `solve`, the drop of a
 rewrite that spills (real mode).
 
-DEVIATE LS1: the pin's rule that a single-register formula of the first
-use is "visited" (formulae later in the search that name it lose) is off.
-It keeps the search short, but the narrowing already holds the space under
-`ComplexityLimit` and the search is pruned by the best cost, so the work
-stays bounded by the same limit times the uses
-(`the_whole_search_is_linear_in_the_uses`). With the rule on, a counter
-that serves two uses is hidden from the second by the first's other
-formulae: a loop that sums `a[i] * (i + 1)` keeps a pointer beside the
-counter and a `cmp`, where the byte index ending at zero shares the
-counter and saves the `cmp`. Exit: none while the pin's rule picks the
-worse solution under its own cost model.
+DEVIATE LS1: real mode (m16) skips the pin's `VisitedRegs` rule (a
+one-register formula of the first use makes its register a loser for the
+later uses; `Tti::lsr_visited_registers_lose`). With the rule on, m16 is
++1..+8 B in 41 of 192 bench cells and better in none (histo's sum loop
+keeps a pointer beside the counter and a `cmp`). Every other target runs the
+pin's rule. owner: w12, exit: 2026-11-30.
 
 DEVIATE LU3b: the registers the loop keeps live beside its recurrences (the
 values its body defines that SCEV does not make a recurrence, in registers

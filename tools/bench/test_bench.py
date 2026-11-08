@@ -61,7 +61,7 @@ class GateTests(unittest.TestCase):
 
 class LinkTests(unittest.TestCase):
     def test_a_nib_benchmark_links_the_files_its_link_header_names_resolved(self):
-        """`link: @c-runtime` went to nib-build.sh as a file name (llrm-c: wccq failed on .../@c-runtime) for parity and scalar."""
+        """`link: @c-runtime` went to nib-build.sh as a file name (llrm-cc: wccq failed on .../@c-runtime) for parity and scalar."""
         extras = bench.nib_extras(bench.ROOT / "bench/parity/parity/parity.nib")
         self.assertEqual(extras, [str(bench.ROOT / "runtime/c/x86-m16/ext.asm")])
 
@@ -226,7 +226,7 @@ class ReferenceFloatTests(unittest.TestCase):
             got = self._counts(lambda variant, where: bench.build_watcom(variant, "O2", where, "F000"), name)
             self.assertGreater(got.get("instructions", 0), 0, got)
 
-    @unittest.skipUnless(bench.DOSERROR_OBJ.exists(), "needs error086.obj from an Open Watcom v2 clib build under LLRM_OW")
+    @unittest.skipUnless(bench.DOSERROR_OBJ.exists(), "needs error086.obj from an Open Watcom v2 clib build in the tree tools/ow-fetch.sh makes")
     def test_watcom_gives_a_program_with_much_data_the_stack_that_is_left(self):
         """stft_single (7K of data) did not link with the 60K stack: DGROUP exceeds 64k by 2000 bytes. The stack shrinks by what is over."""
         import tempfile
@@ -308,6 +308,26 @@ class SizeTests(unittest.TestCase):
         """llrm's code grew 200 -> 260 against BCC's 300: the ratio went 0.67 -> 0.87."""
         problems = bench.ratio_problems("x", "bcc", SIZED | {"code_bytes": 260}, SIZED, SIZED | {"code_bytes": 300})
         self.assertTrue(any("code_bytes vs bcc" in one for one in problems), problems)
+
+    def test_the_clock_ratio_to_a_reference_may_not_worsen(self):
+        """m16 clock rows had no stored reference clocks: every clock comparison needed a rerun of the externals."""
+        timed = SIZED | {"clocks": 1000}
+        problems = bench.ratio_problems("x", "ow", timed | {"clocks": 1300}, timed, timed | {"clocks": 2000})
+        self.assertTrue(any("clocks vs ow" in one for one in problems), problems)
+
+    def test_a_clock_row_against_a_reference_without_stored_clocks_fails_loudly(self):
+        timed = SIZED | {"clocks": 1000}
+        problems = bench.ratio_problems("x", "ow", timed, timed, SIZED)
+        self.assertTrue(any("no stored clocks" in one for one in problems), problems)
+
+    def test_the_reference_stamp_names_compilers_switches_and_load(self):
+        stamp = bench.reference_stamp()
+        self.assertEqual({"date", "load_average", "compilers_md5", "switches"}, set(stamp))
+        self.assertEqual({"ow", "bcc", "tc", "tcpp"}, set(stamp["compilers_md5"]))
+
+    def test_a_reference_whose_clocks_moved_fails(self):
+        problems = bench.drift_problems("x ow -O2", SIZED | {"clocks": 1100}, SIZED | {"clocks": 1000})
+        self.assertIn("clocks 1100 != stored 1000", problems[0])
 
     def test_a_reference_whose_size_moved_fails(self):
         problems = bench.drift_problems("x bcc -O2", SIZED | {"code_bytes": 210}, SIZED)
@@ -520,7 +540,7 @@ def test_reference_builds_find_bench_io_in_the_volume_root(tmp_path):
 
 
 def test_a_c_benches_os_layer_header_is_the_rows_not_a_stale_one(tmp_path):
-    """A `-I` for llrm-c's llrm_os.h shadowed llrm-cc's: jpeg and stft (the file readers) built, then printed 0 and -1 (a failed open)."""
+    """A `-I` for llrm-cc's llrm_os.h shadowed llrm-cc's: jpeg and stft (the file readers) built, then printed 0 and -1 (a failed open)."""
     if not (bench.BIN / "llrm-cc").is_file():
         pytest.skip("no llrm-cc in the dist")
     variant = next(one for one in bench.variants(bench.BENCH / "stft_fixed") if one.language == "c")
@@ -1085,7 +1105,7 @@ def test_the_parity_kernels_that_folded_to_a_constant_read_their_inputs_at_run_t
 
 
 def test_a_c_bench_row_builds_and_links(tmp_path):
-    """llrm-c built C benches that dosbatch then linked for llrm-cc's `main_` (6524193a71): all 48 `c` rows failed with `main_` undefined in start.asm."""
+    """llrm-cc built C benches that dosbatch then linked for llrm-cc's `main_` (6524193a71): all 48 `c` rows failed with `main_` undefined in start.asm."""
     if not (bench.BIN / "llrm-cc").is_file():
         pytest.skip("no llrm-cc in the dist")
     variant = next(one for one in bench.variants(bench.BENCH / "bintree") if one.language == "c")

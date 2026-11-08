@@ -7,7 +7,7 @@ use llrm_spike_mf::regalloc::{Assignment, Target, eliminate_phis_with, two_addre
 use llrm_spike_mf::tolir::allocate_greedy;
 
 use crate::driver::Level;
-use crate::driver::{Request, selections_both};
+use crate::driver::{Request, selections_with_alternatives};
 use crate::expand::{self, Line, finish};
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, emit};
 use crate::regalloc::Z80Registers;
@@ -49,6 +49,9 @@ pub fn take_text_compares() -> usize {
 /// that module in turn ([`text_in`]): no comparison of its text per function.
 pub struct Prepared {
     selections: Selections,
+    /// The functions that call `__mulsi3`, selected with the multiplies
+    /// decomposed.
+    alternatives: Selections,
     /// With `-g`: the source file and start line of each function, from one
     /// parse of the module.
     sources: llrm_support::hash::HashMap<String, (String, Option<u32>)>,
@@ -68,7 +71,8 @@ pub fn prepare(
 ) -> Result<Prepared, String> {
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
     let sources = if request.debug { crate::driver::sources_of(ir) } else { Default::default() };
-    Ok(Prepared { selections: Selections::new(selections_both(ir, request)?), sources })
+    let (selections, alternatives) = selections_with_alternatives(ir, request)?;
+    Ok(Prepared { selections: Selections::new(selections), alternatives: Selections::new(alternatives), sources })
 }
 
 type SelectionKey = (String, Vec<(String, String)>);
@@ -85,7 +89,7 @@ type Selections = std::rc::Rc<
 thread_local! {
     /// The module most recently run through the mid-end and selection, with
     /// what it was run for.
-    static SELECTED: std::cell::RefCell<Option<(String, SelectionKey, Selections)>> =
+    static SELECTED: std::cell::RefCell<Option<(String, SelectionKey, Selections, Selections)>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -97,6 +101,15 @@ fn cached_selections(
     ir: &str,
     request: &Request,
 ) -> Result<Selections, String> {
+    cached_both(ir, request).map(|(selected, _)| selected)
+}
+
+/// [`cached_selections`] and the alternatives of the functions that call
+/// `__mulsi3`.
+fn cached_both(
+    ir: &str,
+    request: &Request,
+) -> Result<(Selections, Selections), String> {
     // everything the result reads: the text, the request, and the LLRM_ and
     // Z80_ switches of the environment. Compared whole: hashing the text of a
     // large module for each of its functions was a tenth of the compile.
@@ -109,15 +122,16 @@ fn cached_selections(
         environment,
     );
     let held = SELECTED.with(|held| {
-        held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(_, _, one)| one.clone())
+        held.borrow().as_ref().filter(|(text, was, ..)| text == ir && *was == key).map(|(_, _, one, other)| (one.clone(), other.clone()))
     });
     if let Some(one) = held {
         return Ok(one);
     }
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
-    let one = Selections::new(selections_both(ir, request)?);
-    SELECTED.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, one.clone())));
-    Ok(one)
+    let (main, alternatives) = selections_with_alternatives(ir, request)?;
+    let (one, other) = (Selections::new(main), Selections::new(alternatives));
+    SELECTED.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, one.clone(), other.clone())));
+    Ok((one, other))
 }
 
 /// [`machine_function`], with or without the return blocks copied into their
@@ -298,6 +312,42 @@ mod tests {
     fn a_bigger_variant_does_not_win_on_fewer_clocks_alone() {
         assert!(!cheaper(Level::O2, (4505, 85_000), (4444, 85_107)));
         assert!(cheaper(Level::O2, (4440, 85_000), (4444, 85_107)));
+    }
+
+    /// A select side made by an instruction that sets the flags, named in its
+    /// operands or not (`XOR16i`), was sunk into the arm ahead of a second
+    /// select that still read the compare: i64 `ssub.sat` in a loop gave 0 for
+    /// the saturated -1. Neither form may sink.
+    #[test]
+    fn a_flag_setting_select_side_is_not_sunk_ahead_of_another_select() {
+        let flags = Reg::Phys(crate::reg::FLAGS);
+        let cmov = |result: u32, on_true: u32| {
+            let mut inst = Inst::new(
+                Kind::Op("CMOV16"),
+                vec![
+                    Operand::Def(Reg::Virt(result)),
+                    Operand::Use(Reg::Virt(9)),
+                    Operand::Use(Reg::Virt(on_true)),
+                    Operand::Imm(0),
+                    Operand::Use(flags),
+                ],
+            );
+            inst.reads_flags = true;
+            inst
+        };
+        for named in [false, true] {
+            let mut compare = Inst::new(Kind::Op("BIT7_16"), vec![Operand::Def(flags), Operand::Use(Reg::Virt(8))]);
+            compare.sets_flags = true;
+            let mut operands = vec![Operand::Def(Reg::Virt(1)), Operand::Use(Reg::Virt(8))];
+            if named {
+                operands.push(Operand::Def(flags));
+            }
+            let mut side = Inst::new(Kind::Op("XOR16i"), operands);
+            side.sets_flags = true;
+            let mut function = MFunction::new("f");
+            function.blocks.push(Block { id: 0, insts: vec![compare, side, cmov(2, 1), cmov(3, 8)], phis: Vec::new() });
+            assert!(sunk_operand(&function, 0, 2, Reg::Virt(1)).is_none(), "flag operand named: {named}");
+        }
     }
 }
 
@@ -1683,7 +1733,7 @@ pub fn read_copies_at_their_source(
 /// (`ld e, -8(ix)` / `ld d, -7(ix)` / `ld e, d` / `ld d, #0` is `ld e,
 /// -7(ix)` / `ld d, #0`). The pin folds a reload into its use where the
 /// target has the form (`InlineSpiller::foldMemoryOperand`); this is that
-/// form for the shift by 8.
+/// form for the shift by 8 or more (the shift left over runs on the byte).
 pub fn narrow_reload_for_byte_shift(
     function: &mut MFunction,
     assignment: &Assignment,
@@ -1700,12 +1750,13 @@ pub fn narrow_reload_for_byte_shift(
                 Kind::Op("RELOAD16"),
                 [Operand::Def(loaded), Operand::Frame(slot)],
                 Kind::Op(shift @ ("SHL16" | "SRL16")),
-                [Operand::Def(written), Operand::Use(read), Operand::Imm(8)],
+                [Operand::Def(written), Operand::Use(read), Operand::Imm(count @ 8..=15)],
             ) = (first.kind, &first.operands[..], second.kind, &second.operands[..])
             else {
                 at += 1;
                 continue;
             };
+            let rest = count - 8;
             let pair = register(*loaded);
             let Ok((lo, hi)) = expand::lanes(pair) else {
                 at += 1;
@@ -1727,9 +1778,19 @@ pub fn narrow_reload_for_byte_shift(
             };
             let clear = Inst::new(Kind::Op("LD8ri"), vec![Operand::Def(Reg::Phys(cleared)), Operand::Imm(0)]);
             let (a, b) = if shift == "SRL16" { (load, clear) } else { (clear, load) };
+            let left_over = (rest > 0).then(|| {
+                let mut one = second.clone();
+                one.kind = Kind::Op(if shift == "SRL16" { "SRL8" } else { "SHL8" });
+                one.operands = vec![Operand::Def(Reg::Phys(kept)), Operand::Use(Reg::Phys(kept)), Operand::Imm(rest)];
+                one
+            });
             block.insts[at] = a;
             block.insts[at + 1] = b;
             at += 2;
+            if let Some(one) = left_over {
+                block.insts.insert(at, one);
+                at += 1;
+            }
         }
     }
 }
@@ -1875,7 +1936,8 @@ pub fn lines(
     number: usize,
     request: &Request,
 ) -> Result<Vec<Line>, String> {
-    lines_in(&cached_selections(ir, request)?, name, number, request)
+    let (selected, alternatives) = cached_both(ir, request)?;
+    lines_in(&selected, &alternatives, name, number, request)
 }
 
 /// The block frequencies of function `name`, relative to its entry.
@@ -1898,13 +1960,189 @@ pub fn weighted_lines(
     name: &str,
     request: &Request,
 ) -> Result<Vec<(Line, f64)>, String> {
-    let selected = cached_selections(ir, request)?;
-    let lines = lines_in(&selected, name, 0, request)?;
+    let (selected, alternatives) = cached_both(ir, request)?;
+    let lines = lines_in(&selected, &alternatives, name, 0, request)?;
     let frequencies = frequencies_of(&selected, name).into_iter().collect();
     Ok(expand::weighted(&lines, &frequencies))
 }
 
+/// The lines of function `name`. A function that calls `__mulsi3` for its long
+/// multiplies is also built with them left as shifts and adds, and the form
+/// the module's plan names stays ([`decomposes`]).
 fn lines_in(
+    selected: &Selections,
+    alternatives: &Selections,
+    name: &str,
+    number: usize,
+    request: &Request,
+) -> Result<Vec<Line>, String> {
+    if alternatives.iter().any(|(one, ..)| one == name) && decomposes(selected, alternatives, name, request) {
+        return lines_of(alternatives, name, number, request);
+    }
+    lines_of(selected, name, number, request)
+}
+
+thread_local! {
+    /// The functions of the module whose alternatives are `__mulsi3`'s
+    /// (by the address of that list) that keep the shifts and adds.
+    static DECOMPOSED: std::cell::RefCell<Option<(usize, std::rc::Rc<std::collections::HashSet<String>>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Whether `name` keeps its long multiplies as shifts and adds. Whether the
+/// call beats the copies depends on what the function keeps live across it,
+/// which the selection cannot see (div_constants_long -Os: 28 calls, +177 B
+/// over the copies; mul_constants the other way, -227 B), so each function is
+/// built both ways and priced. The module is what is priced: its functions'
+/// bytes and the runtime routines they reach, each linked once (`__mulsi3`
+/// 57 B for the calls, the shift routines the copies call), so the functions
+/// the call makes smaller keep it only where together they save what the
+/// routines cost (switch_table_holes -Os: 40 B saved, 57 B routine).
+/// DEVIATE z80-mul-function-price: the pin's `decomposeMulByConstant` has no
+/// such choice. Owner z80. Every runtime routine a variant reaches is already
+/// priced (`runtime_size`), so no libcall is left out of the total.
+fn decomposes(
+    selected: &Selections,
+    alternatives: &Selections,
+    name: &str,
+    request: &Request,
+) -> bool {
+    let key = std::rc::Rc::as_ptr(alternatives) as usize;
+    let held = DECOMPOSED.with(|held| {
+        held.borrow().as_ref().filter(|(was, _)| *was == key).map(|(_, set)| set.clone())
+    });
+    let set = held.unwrap_or_else(|| {
+        let set = std::rc::Rc::new(decomposed_functions(selected, alternatives, request));
+        DECOMPOSED.with(|held| *held.borrow_mut() = Some((key, set.clone())));
+        set
+    });
+    set.contains(name)
+}
+
+/// The priced forms of the module's functions: those with one form, and
+/// those that call `__mulsi3` with the form built with shifts and adds too
+/// (bytes, runtime routines reached).
+type Priced = (u32, std::collections::HashSet<String>);
+type Variants = (Vec<Priced>, Vec<(String, Priced, Option<Priced>)>);
+
+fn variants(
+    selected: &Selections,
+    alternatives: &Selections,
+    request: &Request,
+) -> Variants {
+    let speed = !matches!(request.level, Level::Os | Level::Oz);
+    // the printed form of every function, and for those with an alternative
+    // the form with the shifts
+    let priced = |lines: Vec<Line>| {
+        let bytes = expand::price_emitted(&lines, speed).0;
+        (bytes, crate::runtime_size::referenced(&lines))
+    };
+    let mut fixed: Vec<Priced> = Vec::new();
+    let mut either: Vec<(String, Priced, Option<Priced>)> = Vec::new();
+    for (one, ..) in selected.iter() {
+        let call = lines_of(selected, one, 0, request).ok().map(priced);
+        let Some(call) = call else { continue };
+        if !alternatives.iter().any(|(other, ..)| other == one) {
+            fixed.push(call);
+            continue;
+        }
+        let differs = {
+            let (a, b) = (machine_function_with(selected, one, true), machine_function_with(alternatives, one, true));
+            !matches!((a, b), (Ok(a), Ok(b)) if format!("{a:?}") == format!("{b:?}"))
+        };
+        let decomposed = if differs { lines_of(alternatives, one, 0, request).ok().map(priced) } else { None };
+        either.push((one.clone(), call, decomposed));
+    }
+    (fixed, either)
+}
+
+/// The module's bytes with the functions of `decomposes` built with shifts
+/// and adds: theirs and the runtime routines reached, each linked once.
+fn module_price(
+    (fixed, either): &Variants,
+    decomposes: &std::collections::HashSet<usize>,
+) -> u32 {
+    use std::collections::HashSet;
+    let mut reached: HashSet<String> = HashSet::new();
+    let mut bytes = 0;
+    for (one_bytes, refs) in fixed {
+        bytes += one_bytes;
+        reached.extend(refs.iter().cloned());
+    }
+    for (at, (_, call, decomposed)) in either.iter().enumerate() {
+        let (one_bytes, refs) = match decomposed {
+            Some(decomposed) if decomposes.contains(&at) => decomposed,
+            _ => call,
+        };
+        bytes += one_bytes;
+        reached.extend(refs.iter().cloned());
+    }
+    bytes + crate::runtime_size::reached(&reached)
+}
+
+/// The module's bytes with every function calling `__mulsi3` and with every
+/// one that has the other form built with shifts and adds.
+pub fn module_prices(
+    ir: &str,
+    request: &Request,
+) -> Result<(u32, u32), String> {
+    let (selected, alternatives) = cached_both(ir, request)?;
+    let variants = variants(&selected, &alternatives, request);
+    let every = (0..variants.1.len()).filter(|at| variants.1[*at].2.is_some()).collect();
+    Ok((module_price(&variants, &std::collections::HashSet::new()), module_price(&variants, &every)))
+}
+
+/// The functions of the module that call `__mulsi3`, built with the shifts
+/// and adds where the module is smaller for it (bytes first at the size
+/// levels).
+fn decomposed_functions(
+    selected: &Selections,
+    alternatives: &Selections,
+    request: &Request,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    let variants = variants(selected, alternatives, request);
+    let either = &variants.1;
+    let total = |decomposes: &HashSet<usize>| module_price(&variants, decomposes);
+    // descend from all shifts and from all calls (two functions may together
+    // pay for a routine neither pays for alone); the smaller module wins, a tie
+    // goes to the shifts
+    let every: HashSet<usize> = (0..either.len()).filter(|at| either[*at].2.is_some()).collect();
+    let descend = |start: HashSet<usize>| {
+        let mut chosen = start;
+        let mut best = total(&chosen);
+        for _ in 0..3 {
+            let mut moved = false;
+            for at in 0..either.len() {
+                if either[at].2.is_none() {
+                    continue;
+                }
+                let mut other = chosen.clone();
+                if !other.remove(&at) {
+                    other.insert(at);
+                }
+                let price = total(&other);
+                if price < best {
+                    (chosen, best, moved) = (other, price, true);
+                }
+            }
+            if !moved {
+                break;
+            }
+        }
+        (best, chosen)
+    };
+    let (from_shifts, from_calls) = (descend(every), descend(HashSet::new()));
+    let chosen = if from_calls.0 < from_shifts.0 { from_calls.1 } else { from_shifts.1 };
+    either
+        .iter()
+        .enumerate()
+        .filter(|(at, (_, _, decomposed))| decomposed.is_some() && chosen.contains(at))
+        .map(|(_, (one, ..))| one.clone())
+        .collect()
+}
+
+fn lines_of(
     selected: &Selections,
     name: &str,
     number: usize,
@@ -1961,7 +2199,8 @@ pub fn text(
     request: &Request,
 ) -> Result<String, String> {
     let source = request.debug.then(|| crate::driver::source_of(ir, name)).flatten();
-    text_of(source, &cached_selections(ir, request)?, name, number, request)
+    let (selected, alternatives) = cached_both(ir, request)?;
+    text_of(source, &selected, &alternatives, name, number, request)
 }
 
 /// [`text`] of a function of a [`Prepared`] module.
@@ -1972,12 +2211,13 @@ pub fn text_in(
     request: &Request,
 ) -> Result<String, String> {
     let source = prepared.sources.get(name).cloned();
-    text_of(source, &prepared.selections, name, number, request)
+    text_of(source, &prepared.selections, &prepared.alternatives, name, number, request)
 }
 
 fn text_of(
     source: Option<(String, Option<u32>)>,
     selected: &Selections,
+    alternatives: &Selections,
     name: &str,
     number: usize,
     request: &Request,
@@ -2001,7 +2241,7 @@ fn text_of(
         .find(|(one, ..)| one == name)
         .is_some_and(|(_, source, _)| source.as_ref().is_ok_and(|s| s.local));
     out.push_str(&format!("{}{}\n", crate::data::symbol(name), if local { ":" } else { "::" }));
-    for line in lines_in(selected, name, number, request)? {
+    for line in lines_in(selected, alternatives, name, number, request)? {
         match line {
             Line::Label(label) => out.push_str(&format!("{label}:\n")),
             Line::Inst(text) => out.push_str(&format!("\t{text}\n")),
@@ -2172,13 +2412,15 @@ fn sunk_operand(
     // after the diamond sees what the slice leaves only if the slice leaves
     // none
     let flags = Reg::Phys(crate::reg::FLAGS);
-    let makes_flags = slice.iter().any(|&at| touches(&insts[at], flags));
+    // an instruction that sets the flags may not name them (`XOR16i`)
+    let sets = |inst: &Inst| inst.sets_flags || touches(inst, flags);
+    let makes_flags = slice.iter().any(|&at| sets(&insts[at]));
     if makes_flags {
-        if insts.iter().rposition(|inst| touches(inst, flags)).is_some_and(|last| slice.contains(&last)) {
+        if insts.iter().rposition(sets).is_some_and(|last| slice.contains(&last)) {
             return None;
         }
         let tail = &function.blocks[block].insts[p + 1..];
-        let wanted = tail.iter().find(|inst| inst.reads_flags || touches(inst, flags));
+        let wanted = tail.iter().find(|inst| inst.reads_flags || sets(inst));
         if wanted.is_some_and(|inst| inst.reads_flags) {
             return None;
         }

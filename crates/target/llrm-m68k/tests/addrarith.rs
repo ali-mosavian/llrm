@@ -44,15 +44,28 @@ fn text(
     text_with(&module(ir), "f", cpu, Options::default()).expect("compiles")
 }
 
+/// The address register that `text`'s loop sums through: `add.l (%aN), %d0`.
+fn pointer(text: &str) -> &str {
+    let (_, rest) = text.split_once("add.l\t(").expect("the loop adds through a pointer");
+    rest.split_once(')').expect("a closing parenthesis").0
+}
+
 /// The step is added in the address register: `addq` for 1 to 8, `lea` up to
-/// 16 bits, `adda` beyond; the counter's `add #-1` is `subq`.
+/// 16 bits, `adda` beyond; the counter's `add #-1` is `subq`. Which address
+/// register holds the pointer is the allocator's choice (`%a1` since the
+/// scratch order changed; the test said `%a0`), so it is read off the load.
 #[test]
 fn a_pointer_step_is_one_instruction_in_the_address_register() {
     for cpu in [Cpu::M68000, Cpu::M68020] {
-        for (stride, want) in [(6, "addq.l\t#6, %a0"), (12, "lea\t(12,%a0), %a0"), (40000, "adda.l\t#40000, %a0")] {
+        for (stride, step) in [(6, "addq.l\t#6, "), (12, "lea\t(12,"), (40000, "adda.l\t#40000, ")] {
             let out = text(&walk(stride), cpu);
-            assert!(out.contains(want), "{cpu:?} stride {stride}: want {want}:\n{out}");
-            assert!(!out.contains("%a0, %d") && !out.contains(", %a0\n\tmove"), "{cpu:?} stride {stride}:\n{out}");
+            let a = pointer(&out);
+            let want = if step.starts_with("lea") { format!("{step}{a}), {a}") } else { format!("{step}{a}") };
+            assert!(out.contains(&want), "{cpu:?} stride {stride}: want {want}:\n{out}");
+            assert!(
+                !out.contains(&format!("{a}, %d")) && !out.contains(&format!(", {a}\n\tmove")),
+                "{cpu:?} stride {stride}:\n{out}"
+            );
         }
         let out = text(&walk(6), cpu);
         assert!(out.contains("subq.l\t#1, %d1") && !out.contains("add.l\t#-1"), "{cpu:?}:\n{out}");
@@ -174,6 +187,20 @@ fn as_lea(text: &str) -> String {
         .join("\n")
 }
 
+/// What the allocation shows, without what each CPU prices on its own after
+/// it: the call form (`jsr (%aN)` through a register loaded once, or `jsr
+/// (name,%pc)`) and the frame's save and restore, which holds that register.
+/// The 68040 and the 68020 price a call target differently
+/// (`calltarget.rs`), so their text differs there by design.
+fn allocation(text: &str) -> String {
+    let own_pricing = |line: &&str| {
+        line.starts_with("\tjsr")
+            || (line.starts_with("\tmovem.l\t") && (line.ends_with("-(%sp)") || line.contains("(%sp)+")))
+            || line.strip_prefix("\tlea\t").is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_alphabetic()))
+    };
+    as_lea(text).lines().filter(|line| !own_pricing(line)).collect::<Vec<_>>().join("\n")
+}
+
 /// On the 68040 `adda.l #N` costs one clock and `lea (N,An)` two, and the
 /// tied `adda` was chosen before allocation: it changed the allocation of the
 /// whole function, and seed 277 came out 18 bytes larger and 8 clocks slower
@@ -188,7 +215,7 @@ fn the_cpu_that_prefers_adda_to_lea_allocates_as_the_one_that_does_not() {
     let on = |cpu: &str| assembly(ir, cpu_of(cpu).unwrap(), Level::O2).expect("compiles");
     let (m68020, m68040) = (on("68020"), on("68040"));
     assert!(m68040.contains("adda.l"), "the 68040 takes adda somewhere");
-    assert_eq!(as_lea(&m68040), as_lea(&m68020));
+    assert_eq!(allocation(&m68040), allocation(&m68020));
 }
 
 /// A pointer plus a register that only addresses read was added in a data

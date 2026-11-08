@@ -188,7 +188,7 @@ def test_the_second_arm_is_called_new_in_every_printed_line_and_the_arms_are_sta
     import json
 
     work = load(tmp_path, monkeypatch)
-    (work / "arms.txt").write_text("arms: base=sbp-base llrm-c md5 aaaa exit 0; new=sbp-new llrm-c md5 bbbb exit 0")
+    (work / "arms.txt").write_text("arms: base=sbp-base llrm-cc md5 aaaa exit 0; new=sbp-new llrm-cc md5 bbbb exit 0")
     levels = ("O1", "O2", "O3", "Os")
     for name in ("base", "main"):
         lines = ""
@@ -207,4 +207,4 @@ def test_the_second_arm_is_called_new_in_every_printed_line_and_the_arms_are_sta
     spec.loader.exec_module(module)
     text = "\n".join(module.out)
     assert "failed in new" in text and "failed in main" not in text
-    assert text.startswith("arms: base=sbp-base llrm-c md5 aaaa exit 0; new=sbp-new llrm-c md5 bbbb exit 0")
+    assert text.startswith("arms: base=sbp-base llrm-cc md5 aaaa exit 0; new=sbp-new llrm-cc md5 bbbb exit 0")

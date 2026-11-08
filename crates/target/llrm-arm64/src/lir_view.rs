@@ -11,7 +11,6 @@ use llrm_spike_mf::regalloc::{Assignment, Target as AllocTarget};
 use llrm_spike_mf::tolir::allocate_greedy;
 use llrm_support::hash::HashMap;
 
-use crate::flagcse::writes_flags;
 use crate::mc::inst::{Gpr, Inst, Shift, Target, Vreg, Wide};
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{MFunc, Op};
@@ -29,7 +28,7 @@ pub enum Class {
 
 /// The register file's id of machine register `n` of a class: `x0..x30` and
 /// `xzr` (31, also `sp`), `v0..v31`.
-fn id(
+pub(crate) fn id(
     class: Class,
     n: u32,
 ) -> RegId {
@@ -40,7 +39,20 @@ fn id(
     }
 }
 
-fn to_lir(register: Reg) -> LirReg {
+/// The register file's id of a physical machine register.
+pub(crate) fn lir_id(register: Reg) -> RegId {
+    match to_lir(register) {
+        LirReg::Phys(register) => register,
+        LirReg::Virt(_) => unreachable!("a virtual register after allocation"),
+    }
+}
+
+/// The registers a call destroys by the convention.
+pub(crate) fn caller_saved() -> Vec<RegId> {
+    <Arm64 as AllocTarget>::caller_saved()
+}
+
+pub(crate) fn to_lir(register: Reg) -> LirReg {
     match register {
         Reg::Gpr(Gpr(n)) if n < Gpr::FIRST_VIRTUAL => LirReg::Phys(id(Class::Gpr, n)),
         Reg::Fpr(Vreg(n)) if n < Gpr::FIRST_VIRTUAL => LirReg::Phys(id(Class::Fpr, n)),
@@ -48,7 +60,7 @@ fn to_lir(register: Reg) -> LirReg {
     }
 }
 
-fn from_lir(
+pub(crate) fn from_lir(
     register: LirReg,
     class: Class,
 ) -> Reg {
@@ -63,19 +75,12 @@ fn from_lir(
 }
 
 /// The instruction's name for the allocator: its variant (`AddSubImm`).
-fn name_of(inst: &Inst) -> &'static str {
+pub(crate) fn name_of(inst: &Inst) -> &'static str {
     static NAMES: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
     let debug = format!("{inst:?}");
     let variant = debug.split([' ', '(', '{']).next().unwrap_or_default().to_owned();
     let mut names = NAMES.get_or_init(Default::default).lock().unwrap();
     names.entry(variant.clone()).or_insert_with(|| Box::leak(variant.into_boxed_str()))
-}
-
-fn reads_flags(op: &Op) -> bool {
-    matches!(
-        op,
-        Op::I(Inst::BranchCond { .. } | Inst::CondSelect { .. } | Inst::CondCompare { .. } | Inst::FpSelect { .. })
-    )
 }
 
 fn label_of(inst: &Inst) -> Option<&str> {
@@ -95,11 +100,11 @@ fn label_of(inst: &Inst) -> Option<&str> {
 /// The name of the definition of zero (`mov xd, xzr`).
 const ZERO: &str = "Zero";
 
-/// `isReMaterializable && isAsCheapAsAMove` for an `ADD`/`SUB`: the pin flags every
-/// form of `AddSub` (AArch64InstrFormats.td#L3098), and `isAsCheapAsAMove` keeps the
-/// immediate and the unshifted register forms (`SUBWrs`/`ADDWrs` only with
-/// `hasALULSLFast`, the extended forms not). A flag-setting form has an
-/// `$nzcv` def and is not.
+/// `isReMaterializable && isAsCheapAsAMove` for an `ADD`/`SUB`: the pin flags
+/// every form of `AddSub` (AArch64InstrFormats.td#L3098), and
+/// `isAsCheapAsAMove` keeps the immediate and the unshifted register forms
+/// (`SUBWrs`/`ADDWrs` only with `hasALULSLFast`, the extended forms not). A
+/// flag-setting form has an `$nzcv` def and is not.
 fn cheap_alu(op: &Op) -> bool {
     match op {
         Op::I(Inst::AddSubImm { op, .. }) => !op.set_flags,
@@ -107,7 +112,8 @@ fn cheap_alu(op: &Op) -> bool {
         _ => false,
     }
 }
-/// A constant one instruction makes (`movz`, `movn` or a logical immediate): the size of the copy it replaces.
+/// A constant one instruction makes (`movz`, `movn` or a logical immediate):
+/// the size of the copy it replaces.
 const ONE_INSN_IMM: &str = "Imm1";
 
 fn is_zero_copy(op: &Op) -> bool {
@@ -180,6 +186,7 @@ fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
 /// from zero.
 pub fn view(function: &MFunc) -> MFunction<Class> {
     let mut lir = MFunction::<Class>::new(&function.name);
+    lir.odds = function.alloc_odds.clone();
     lir.classes = vec![Class::Gpr; (function.next_register - Gpr::FIRST_VIRTUAL) as usize];
     lir.locals =
         function.slots.iter().enumerate().map(|(at, slot)| (at as i32, slot.size as i64, slot.align as i64)).collect();
@@ -231,7 +238,11 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 ),
                 Op::Copy { .. } => (Kind::Copy, false, false, false),
                 Op::Imm { bits, value, dst } => (
-                    Kind::Op(if crate::expand_imm::mov_imm(*value, *bits, *dst).len() == 1 { ONE_INSN_IMM } else { "Imm" }),
+                    Kind::Op(if crate::expand_imm::mov_imm(*value, *bits, *dst).len() == 1 {
+                        ONE_INSN_IMM
+                    } else {
+                        "Imm"
+                    }),
                     false,
                     false,
                     false,
@@ -291,21 +302,16 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             inst.terminator = terminator;
             inst.barrier = barrier;
             inst.call = call;
-            inst.sets_flags = writes_flags(&op);
-            inst.reads_flags = reads_flags(&op);
-            inst.may_load = matches!(
-                op,
-                Op::I(Inst::Load { .. } | Inst::LoadPair { .. } | Inst::Atomic { .. } | Inst::Prefetch { .. })
-            );
-            inst.may_store = matches!(
-                op,
-                Op::I(Inst::Store { .. } | Inst::StorePair { .. } | Inst::Atomic { .. })
-            );
-            inst.side_effects = matches!(
-                op,
-                Op::I(Inst::Svc { .. } | Inst::Dmb { .. } | Inst::Atomic { .. })
-            );
-            inst.early_clobber = matches!(op, Op::I(Inst::Atomic { .. }) | Op::JumpTable { .. });
+            if let Op::Call { callee: crate::mfunc::Callee::Symbol(name), .. } = &op {
+                inst.call_clobbers = crate::ipra::known(name);
+            }
+            let facts = crate::facts::of(&op);
+            inst.sets_flags = facts.sets_flags;
+            inst.reads_flags = facts.reads_flags;
+            inst.may_load = facts.may_load;
+            inst.may_store = facts.may_store;
+            inst.side_effects = facts.side_effects;
+            inst.early_clobber = facts.early_clobber;
             inst.rematerializable = fused
                 || zero
                 || cheap_alu(&op)
@@ -772,6 +778,19 @@ impl AllocTarget for Arm64 {
         1
     }
 
+    /// `stp`/`ldp` save two registers in 4 bytes; a spill is one 4-byte
+    /// `str`/`ldr`; a made-again constant is a `movz` or an `adrp`+`add`.
+    fn size_bytes() -> Option<llrm_codegen::greedy::targetinfo::SizeBytes> {
+        Some(llrm_codegen::greedy::targetinfo::SizeBytes {
+            push: 2,
+            pop: 2,
+            load: 4,
+            store: 4,
+            constant: 4,
+            extended_prefix: 0,
+        })
+    }
+
     fn spill_store(
         _class: Class,
         register: LirReg,
@@ -840,6 +859,19 @@ mod tests {
                 },
             );
         function
+    }
+
+    /// The allocator's function carried no branch odds on arm64, so greedy
+    /// weighed every branch but a loop's even: the zero-compare 20:12 the pin
+    /// uses was 16:16, and idioms `main` -O1 ranked its loop counter below an
+    /// address constant (block frequencies 16/512 against the pin's 20/640).
+    #[test]
+    fn the_irs_branch_odds_reach_the_allocators_function() {
+        use llrm_spike_mf::placement::Odds;
+        let mut function = sample();
+        let odds: Odds = [((0, 1), (llrm_mir::blockfrequency::BranchProbability::new(5, 8), 0))].into_iter().collect();
+        function.alloc_odds = Some(odds.clone());
+        assert_eq!(view(&function).odds, Some(odds));
     }
 
     /// `movk` reads and writes its register: the view needs a def, a use and a

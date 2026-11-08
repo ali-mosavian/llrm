@@ -6,6 +6,22 @@
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{self, Level, Request};
 
+/// The `-f` switches the backend takes besides the shared ones.
+const OWN_SWITCHES: &[&str] = &["-fno-second-inline", "-fno-static-locals"];
+
+/// Whether `switch` is one the shared flag parser knows or the backend's own;
+/// an unknown `-f` was taken silently before (2026-11-08: `-fno-bogus`).
+fn known_switch(switch: &str) -> Result<(), String> {
+    if OWN_SWITCHES.contains(&switch) {
+        return Ok(());
+    }
+    let mut at = 0;
+    match llrm_codegen::driver::flags::Flags::default().take(&[switch.to_owned()], &mut at)? {
+        true => Ok(()),
+        false => Err(format!("unrecognized argument {switch}")),
+    }
+}
+
 fn main() {
     // The mid-end recurses along dependency chains: run on a thread with room.
     let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(run).expect("a thread");
@@ -37,7 +53,13 @@ fn run() -> i32 {
                     return 2;
                 }
             },
-            other if other.starts_with("-f") => request.passes.push(other.to_owned()),
+            other if other.starts_with("-f") => match known_switch(other) {
+                Ok(()) => request.passes.push(other.to_owned()),
+                Err(why) => {
+                    eprintln!("llrm-6502-llc: {why}");
+                    return 2;
+                }
+            },
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
             other if llrm_debug::is_debug_flag(other) => request.debug = true,
             other => {

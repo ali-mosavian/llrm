@@ -3,7 +3,7 @@
 //! # How it works
 //! Each count is a plain integer in a thread-local cell, bumped where the event
 //! happens: no atomic, no lock, no clock. `LLRM_DEBUG=counts` prints them when
-//! `llrm-c` ends; a test reads them from the process it ran or from that
+//! `llrm-cc` ends; a test reads them from the process it ran or from that
 //! output. The analysis manager's hits and misses are kept by name.
 //!
 //! A count is exact and the same on every host, so a budget can be a ratio of
@@ -11,7 +11,7 @@
 //! once for the function must not be asked once for each loop.
 //!
 //! # Example
-//! `LLRM_DEBUG=counts llrm-c -O2 f.c` ends with lines such as
+//! `LLRM_DEBUG=counts llrm-cc -O2 f.c` ends with lines such as
 //! `[counts] function_clones 3` and `[counts] analysis dominators 41 hits 7
 //! misses`.
 //!

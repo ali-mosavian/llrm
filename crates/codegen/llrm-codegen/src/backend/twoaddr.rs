@@ -82,6 +82,10 @@ pub struct TwoAddress {
     pub lea: crate::twoaddress::ThreeAddress,
     /// DEVIATE TA-LC (`Profile::commute_loop_carried`).
     pub loop_carried: bool,
+    /// -O0: only the copies that untie, no liveness (the pin's
+    /// `tryInstructionTransform` returns at `CodeGenOptLevel::None`,
+    /// TwoAddressInstructionPass.cpp#L1352-L1354).
+    pub unoptimized: bool,
 }
 
 impl TwoAddress {
@@ -101,8 +105,31 @@ impl LIRTransform for TwoAddress {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(tied_with(&body, self.lea, self.loop_carried))
+        Ok(if self.unoptimized { untied_only(&body) } else { tied_with(&body, self.lea, self.loop_carried) })
     }
+}
+
+/// `body` with a copy before every tied instruction that does not read what
+/// it writes, and nothing else: the pass at -O0, which has no `LiveVariables`
+/// or `LiveIntervals` to ask.
+pub fn untied_only(body: &LirBody) -> LirBody {
+    let mut counter = body.next_value();
+    let mut mint = || {
+        counter += 1;
+        counter - 1
+    };
+    let mut done = body.clone();
+    for block in &mut done.blocks {
+        let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len() + block.insns.len() / 4);
+        for one in block.insns.iter() {
+            match _untied(one, &mut mint) {
+                Some(fix) => insns.extend(fix),
+                None => insns.push(Arc::clone(one)),
+            }
+        }
+        block.insns = insns.into();
+    }
+    done
 }
 
 /// `body` with every tied instruction reading what it writes.
@@ -830,6 +857,24 @@ mod tests {
     /// returned in EAX. The add took `b` for its tied operand and the sum
     /// stayed in EDX: a `mov eax, edx` at the end (LLVM commutes it the other
     /// way, `TwoAddressInstructionPass::isProfitableToCommute`).
+    /// The pin's TwoAddress at -O0 has no `LiveVariables` and commutes and
+    /// reschedules nothing. Ours solved the dataflow for every body (4.9 M Ir
+    /// of 16.9 M on div_constants_short) and still only untied.
+    #[test]
+    fn test_the_o0_pass_solves_no_liveness_and_still_unties() {
+        use crate::liveness::livevariables::BUILT;
+        use crate::model::passes::LIRTransform;
+        let insns = vec![imm_def(0, 1), imm_def(1, 2), sum_into(2, 3, 1, 2), read(3, 3)];
+        let body = LirBody::new("t", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        BUILT.with(|built| built.set(0));
+        let mut pass = super::TwoAddress { unoptimized: true, ..Default::default() };
+        let done = pass.transform(body).expect("the pass");
+        assert_eq!(BUILT.with(std::cell::Cell::get), 0, "-O0 solved liveness");
+        let names: Vec<_> =
+            done.blocks[0].insns.iter().map(|one| one.what.as_ref().and_then(|w| w.name.clone())).collect();
+        assert_eq!(names.iter().filter(|name| name.as_deref() == Some("mov")).count(), 3, "{names:?}");
+    }
+
     #[test]
     fn test_a_sum_returned_in_eax_is_tied_to_the_operand_that_arrives_there() {
         use llrm_lir::registers::RegId;

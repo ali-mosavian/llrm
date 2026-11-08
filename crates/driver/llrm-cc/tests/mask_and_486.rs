@@ -1,7 +1,7 @@
 //! On the 486 and the Pentium `movzx r32,r8` takes three clocks and `and
 //! r32,imm` one, so a byte mask is an `and` at speed and keeps the shorter
-//! `movzx` for size (MA1). Needs `LLRM_OW` and the m16 clang
-//! (`LLRM_CLANG_M16`).
+//! `movzx` for size (MA1). Needs the Open Watcom tree (tools/ow-fetch.sh) and
+//! the m16 clang (`LLRM_CLANG_M16`).
 
 use std::path::Path;
 use std::process::Command;
@@ -10,16 +10,18 @@ const SOURCE: &str = "unsigned mask(unsigned a, unsigned b) { return (a + b) & 2
 
 /// A missing tool path fails the test: a silent skip reported these tests
 /// green on 2026-11-04 without running them.
-fn require_env(is_set: impl Fn(&str) -> bool) {
-    for name in ["LLRM_OW", "LLRM_CLANG_M16"] {
-        assert!(is_set(name), "{name} is not set: this test needs it and does not skip");
-    }
+fn require_env(
+    is_set: impl Fn(&str) -> bool,
+    ow_tree: bool,
+) {
+    assert!(ow_tree, "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip");
+    assert!(is_set("LLRM_CLANG_M16"), "LLRM_CLANG_M16 is not set: this test needs it and does not skip");
 }
 
 #[test]
-#[should_panic(expected = "LLRM_OW is not set")]
+#[should_panic(expected = "the Open Watcom tree is missing")]
 fn a_missing_tool_path_fails_instead_of_skipping() {
-    require_env(|_| false);
+    require_env(|_| false, false);
 }
 
 fn asm(
@@ -28,7 +30,7 @@ fn asm(
     level: &str,
     tag: &str,
 ) -> Option<String> {
-    require_env(|name| std::env::var_os(name).is_some());
+    require_env(|name| std::env::var_os(name).is_some(), llrm_cc::ow_tree().is_dir());
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("maskand-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

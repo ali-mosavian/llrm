@@ -350,7 +350,7 @@ fn stated(
 
 /// This port's statement of each used parameter over every `.ll` in
 /// `$IPSCCP_DUMPS` (the module each corpus file has when `ipo-early` starts,
-/// `LLRM_DUMP_INPUTS=1 llrm-c --dump`) against the pin's `opt -passes=ipsccp`
+/// `LLRM_DUMP_INPUTS=1 llrm-cc --dump`) against the pin's `opt -passes=ipsccp`
 /// of the same files in `$IPSCCP_PIN`: each parameter where the two differ,
 /// and the totals.
 #[test]

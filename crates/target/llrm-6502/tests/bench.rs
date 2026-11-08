@@ -156,10 +156,29 @@ fn ours_level(default: &'static str) -> &'static str {
     std::env::var("BENCH_OURS").map_or(default, |level| &*Box::leak(level.into_boxed_str()))
 }
 
+/// The scratch directory of one cell. It is keyed by the run's `BENCH_OURS`
+/// level and `BENCH_PAD`: two runs sharing `bench/<name>` raced on `pad.c` and
+/// the link files, and external-compiler cells came out n/a at random
+/// (2026-11-08: 22 of them in one Os log, the pad merge refused the logs).
+fn work_dir(root: &Path, level: &str, pad: &str, name: &str) -> PathBuf {
+    root.join(format!("bench{level}-pad{pad}")).join(name)
+}
+
 fn work(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bench").join(name);
+    let level = std::env::var("BENCH_OURS").unwrap_or_default();
+    let pad = std::env::var("BENCH_PAD").unwrap_or_default();
+    let dir = work_dir(Path::new(env!("CARGO_TARGET_TMPDIR")), &level, &pad, name);
     std::fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+#[test]
+fn runs_at_different_levels_or_pads_do_not_share_a_work_dir() {
+    let root = Path::new("/t");
+    let base = work_dir(root, "-O2", "0", "slen");
+    assert_ne!(base, work_dir(root, "-Os", "0", "slen"));
+    assert_ne!(base, work_dir(root, "-O2", "37", "slen"));
+    assert_ne!(base, work_dir(root, "-O2", "0", "zero"));
 }
 
 /// Which compiler's convention the driver uses.
@@ -193,9 +212,10 @@ fn driver(
     }
     s.push_str(&format!("  lda #{calls}\n  sta cnt\nloop:\n"));
     let last = kernel.args.len().wrapping_sub(1);
-    // ours: bytes take the first free `rc` from `rc2`, words and pointers the
-    // first free pair (`backfill`)
-    let mut used = [false; 6];
+    // ours: a byte takes the first free of a, x, rc2.., a word or pointer the
+    // first free pair of rc2.. (`backfill`); a and x are loaded last
+    let mut used = [false; 8];
+    let (mut in_a, mut in_x) = (String::new(), String::new());
     for (i, &arg) in kernel.args.iter().enumerate() {
         let wide = !matches!(arg, B(_));
         let (lo, hi) = match arg {
@@ -212,20 +232,26 @@ fn driver(
             }
             Abi::Ours => {
                 let at = if wide {
-                    (0..3).map(|p| 2 * p).find(|&p| !used[p] && !used[p + 1]).expect("a free pair")
+                    (1..4).map(|p| 2 * p).find(|&p| !used[p] && !used[p + 1]).expect("a free pair")
                 } else {
-                    (0..6).find(|&p| !used[p]).expect("a free byte")
+                    (0..8).find(|&p| !used[p]).expect("a free byte")
                 };
                 used[at] = true;
                 if wide {
                     used[at + 1] = true;
-                    s.push_str(&format!("  lda {lo}\n  sta rc{}\n  lda {hi}\n  sta rc{}\n", 2 + at, 3 + at));
+                    s.push_str(&format!("  lda {lo}\n  sta rc{}\n  lda {hi}\n  sta rc{}\n", at, at + 1));
+                } else if at == 0 {
+                    in_a = format!("  lda {lo}\n");
+                } else if at == 1 {
+                    in_x = format!("  ldx {lo}\n");
                 } else {
-                    s.push_str(&format!("  lda {lo}\n  sta rc{}\n", 2 + at));
+                    s.push_str(&format!("  lda {lo}\n  sta rc{at}\n"));
                 }
             }
         }
     }
+    s.push_str(&in_x);
+    s.push_str(&in_a);
     s.push_str(&format!("  jsr {symbol}\n  dec cnt\n  bne loop\n"));
     if let Some(from) = kernel.hand.as_ref().and_then(|hand| hand.rel) {
         s.push_str(&format!("  sec\n  sbc #<{from}\n  pha\n  txa\n  sbc #>{from}\n  tax\n  pla\n"));

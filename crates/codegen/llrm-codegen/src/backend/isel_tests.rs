@@ -193,10 +193,11 @@ done:
     let got = listing(text, "sum");
     // The comparison stays flags beside its branch. m16's tail-duplication
     // threshold is 1 (#6827), so the test is not copied into the loop: it
-    // closes with `jmp` (the mid-end rotates real loops first). The scheduler may put
-    // the load of n and the two zeros in any order and register names, so the
-    // test pins the shape: three entry instructions (the load and two zeros),
-    // the test, and the loop with the registers its instructions name.
+    // closes with `jmp` (the mid-end rotates real loops first). The scheduler
+    // may put the load of n and the two zeros in any order and register
+    // names, so the test pins the shape: three entry instructions (the load
+    // and two zeros), the test, and the loop with the registers its
+    // instructions name.
     assert_eq!(&got[..3], ["push bp", "mov bp, sp", "L0_0:"], "{got:?}");
     let entry = &got[3..6];
     let load = entry.iter().find(|one| one.contains("[bp+6]")).unwrap_or_else(|| panic!("{got:?}"));
@@ -6114,8 +6115,10 @@ fn test_a_poison_float_or_address_is_zero() {
     let float = "define float @f(float %a) {\n  %v = fadd float poison, %a\n  ret float %v\n}\n";
     let address = "define i16 @g() addrspace(1) {\n  %v = load i16, ptr poison\n  ret i16 %v\n}\n";
     // As LLVM's X86FloatingPoint.cpp L1580: an IMPLICIT_DEF x87 register is
-    // loaded with `fldz`.
-    assert!(listing(float, "f").iter().any(|one| one == "fldz"), "{:?}", listing(float, "f"));
+    // loaded with `fldz`; FF2 reads the +0.0 from the pool as `fadd [K]`
+    // where that needs no exchange.
+    let zero = |one: &String| one == "fldz" || one.starts_with("fadd") && one.contains("$K");
+    assert!(listing(float, "f").iter().any(zero), "{:?}", listing(float, "f"));
     assert!(!listing(address, "g").is_empty());
 }
 

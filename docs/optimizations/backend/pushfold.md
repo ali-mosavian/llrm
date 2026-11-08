@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/pushfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/pushfold.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/pushfold.rs sha256:9f3b5a7c6cfce923e57849417076a292d553b2d52a2cd3dadc0401af81367493 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/pushfold.rs sha256:80fd31196ec2d2ab6e729b49c10703c792a6015ecc3c4b72bf05fc0eeaaffb90 -->
 
 # pushfold
 
@@ -25,17 +25,24 @@ A `push` whose one source is a value qualifies when:
   earlier pushes of the sequence move.
 
 The push then reads the cell and the load is deleted. The pin does this when
-it turns the stores of a reserved call frame into pushes; ours pushes at
-selection already, so the fold is all that is left of the pass (DEVIATE
-CF1). The pin skips it where `slowTwoMemOps` holds; the i486 and the 8086 do
+it turns the stores of a reserved call frame into pushes, which `callframe.rs`
+does here (DEVIATE CF1). The pin skips it where `slowTwoMemOps` holds; the i486 and the 8086 do
 not set it.
 
-DEVIATE CF1 (no number): the pin's input is `mov [esp+k], r` stores into a
-reserved frame, converted to pushes and folded in one pass; ours has pushes
-from selection, so the conversion has no input and `isProfitable` (its
-reserved-frame accounting) no question. Pin llc -m32 i486, -Os and -Oz:
-`movl %edi,(%esp); calll g`, no push, no cleanup per call. Exit: none, the
-form is not made (debt row call-frame-reserve, docs/working/ci.md).
+DEVIATE CF2 (no number): a volatile load is not folded. The pin's
+[`canFoldIntoRegPush`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L603)
+asks only `isLoadFoldBarrier`, so it pushes `loc[0]` before it loads
+`loc[5]`: volatile loads reordered, a pin miscompile
+(`os_locals_between_pushes`, +18 B on `probe` -Os). Exit: none, program
+order beats bytes.
+
+DEVIATE CF1 (no number): the pin's i386 linux triple has a 16-byte stack
+alignment, so `isProfitable` keeps one 4-byte argument a store into the
+reserved frame (`movl %edi,(%esp)`). `x86_32-wat` keeps a slot's alignment
+(`CalleeFacts::stack_alignment`: the target's only where it needs aligned
+calls), so the same translated pass pushes it, as the pin's would at that
+alignment (`one_push_is_not_worth_the_adjustments_but_two_are`). Exit:
+none, a target fact.
 
 ## Example
 `f(p->a, p->b, p->c)`, before (after `FloatFold`):

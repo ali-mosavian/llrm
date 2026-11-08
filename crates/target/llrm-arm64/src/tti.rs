@@ -74,18 +74,46 @@ impl Cpu {
     }
 }
 
+/// What a code byte costs a full unroll at -O2/-O3, in thousandths of a clock.
+/// A byte executed cold costs the refill of its 64 B line from L2, about 16
+/// clocks: 0.25 a byte, the floor (a Cortex-A72/M1-class core fetches 16 B a
+/// clock and runs 3-4 instructions a clock, so an instruction is about 0.3).
+/// The saving the model counts is the loop control and the folded operands
+/// only, so the price is set at twice the floor: 0.5 keeps every unroll that
+/// saves 0.5-23 clocks a byte, which the pin makes by size (150) alone
+/// (fpbench -O2 -33% instructions). It was 250, the median of the cells where
+/// gcc and clang differed, against a saving counted over assumed runs.
+///
+/// DEVIATE UP1 (exit 2026-11-20), cells that grow bytes for little, against 1.0
+/// (2026-11-08): nbody_fixed -O2 +32 B for -37 instructions and -O3 +20 B for
+/// -45; shellsort -O3 +704 B for -139; jpeg_fixed -O3 +152 B and jpeg_single
+/// +148 B for -722 and -168 instructions. A wash at the floor, and they run few times.
+/// jpeg -O2: +28 and +8 B for -33 and -42 instructions of 11.65 M and 8.49 M (measured, not
+/// 0): the 3-trip component loops of the header parse (`id[c] == want`, 16 B for 11 clocks a
+/// run) run once a program, so the saving is real and one-off. The model prices them right at
+/// 1.2 instructions a byte, above the 0.8 break-even; it cannot know the code is cold.
+const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 500;
+
+/// Bytes, in thousandths, one inliner cost unit (an instruction) stands for.
+const BYTES_PER_COST_UNIT_MILLI: i64 = 4000;
+
+/// Thousandths of a clock one unit of inline growth costs at -O2/-O3 (250 clocks).
+const INLINE_MILLICLOCKS_PER_UNIT: i64 = 250_000;
+
 /// AArch64's scalar profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AArch64 {
     pub cpu: Cpu,
+    /// `unroll_milliclocks_per_byte`; the tests' knob.
+    pub unroll_rate: i64,
 }
 
 impl AArch64 {
     /// The profile of a `-mcpu` llrm supports.
     pub fn of_cpu(cpu: &str) -> Option<AArch64> {
         match cpu {
-            "generic" => Some(AArch64 { cpu: Cpu::Generic }),
-            "apple-m1" => Some(AArch64 { cpu: Cpu::AppleM1 }),
+            "generic" => Some(AArch64 { cpu: Cpu::Generic, unroll_rate: UNROLL_MILLICLOCKS_PER_BYTE }),
+            "apple-m1" => Some(AArch64 { cpu: Cpu::AppleM1, unroll_rate: UNROLL_MILLICLOCKS_PER_BYTE }),
             _ => None,
         }
     }
@@ -280,6 +308,43 @@ fn intrinsic_prices() -> &'static Prices {
 }
 
 impl Tti for AArch64 {
+    /// SZ1: at -Os an inline that stays must not grow the code, as gcc's `-Os`
+    /// inlines only where the module shrinks. The pin's `OptSizeThreshold` 50
+    /// inlines jpeg_fixed's `put32` (a 4-trip store loop) into eight sites
+    /// and `message` into nine: +176 B against gcc.
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE (owner greedy-anyisa, exit 2026-11-15): the pin has no byte trial. At
+    /// -Os the trial that keeps `tmul`, `clamp`, `extend` inline (smaller in
+    /// bytes, the unit model refuses them) is bounded by the caller's size,
+    /// and jpeg_fixed's `bench_jpeg_fixed` is 600+ instructions. Cost: 16
+    /// trials of about 15 ms, jpeg_fixed -Os compiles in 0.38 s, not 0.14 s.
+    /// A callee rejected in one round is not tried in the next
+    /// (`inline_trial_skips_rejected`).
+    fn inline_trial_caller_limit(&self) -> usize {
+        20_000
+    }
+
+    /// DEVIATE (owner greedy-anyisa, exit 2026-11-30): the trial's copy goes through the cleanup
+    /// list, not the whole one: Ir of jpeg_fixed -Os 1.39 G, not 2.95 G (pre-trial 1.38 G). The
+    /// cleanup list misses a few simplifications, so some trials decide otherwise
+    /// (jpeg_single 3592 -> 3608 B, jpeg_fixed 3516 -> 3484 B; the sum is the same). Re-running
+    /// near misses with the whole list swaps the +16 B between the cells at 2.05 G Ir (parked,
+    /// #8278): `extend` and `receive` read alike in both and pay in one only. Exit: a trial
+    /// estimate that predicts the final bytes of those two. Exception (w15): at speed a trial of a
+    /// callee with a loop uses the whole list, as the cleanup list has no loop passes (vla -O2:
+    /// the 8-site copy priced +644 B, the unrolled and folded one is -40 B); at size the cleanup
+    /// list stays (jpeg -Os +32 B with the whole one).
+    fn inline_trial_light_simplify(&self) -> bool {
+        true
+    }
+
+    fn inline_trial_skips_rejected(&self) -> bool {
+        true
+    }
+
     /// `FSQRT` is legal on `f32` and `f64`.
     fn have_fast_sqrt(
         &self,
@@ -299,11 +364,58 @@ impl Tti for AArch64 {
         true
     }
 
-    /// 0.004 B/clock, provisional: one byte of growth is 250 frequency-weighted
-    /// clocks. The median of the -O2/-O3 cells where inlining grew the code
-    /// (w15-arm64-rate-proposal-11-03.md); widened to 30 clean cells by 11-12.
+    /// DEVIATE LICM-FRAME (owner w15, exit 2026-11-30): rectwo -Os (+25%
+    /// instructions against clang): `n - 1`, hoisted into the unguarded entry
+    /// because rotation was refused, lived in x19 across the recursive call and
+    /// kept the frame ahead of the base case.
+    fn licm_speculation_keeps_frame_late(&self) -> bool {
+        true
+    }
+
+    /// A loop is rotated at -Os only if the copied exit test folds in the
+    /// preheader (gcc's `copy_headers`): an unfolded guard also leaves a second
+    /// exit block (recsum, recfloat -Os: `mov x0, xzr; ret` beside the loop's).
+    fn rotation_guard_must_fold_at_size(&self) -> bool {
+        true
+    }
+
+    /// The inliner counts a callee's growth in cost units, one per instruction,
+    /// and prices it as `units * inline_o1_unit_bytes_milli / 1000` bytes: an
+    /// arm64 instruction is 4 bytes. (Left at 1000, a unit priced as a byte
+    /// and the rate below was fitted to that; x86-m32 sets 3500.)
+    fn inline_o1_unit_bytes_milli(&self) -> i64 {
+        BYTES_PER_COST_UNIT_MILLI
+    }
+
+    /// 0.004 B/clock, provisional: a unit of growth is 250 frequency-weighted
+    /// clocks, the median of the -O2/-O3 cells where inlining grew the code
+    /// (w15-arm64-rate-proposal-11-03.md; widened to 30 clean cells by 11-12),
+    /// fitted with one byte a unit. Stated per byte of the 4-byte unit, so the
+    /// decisions are those of the fit; the refit to the scoring rate is its own
+    /// change.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
-        250_000
+        INLINE_MILLICLOCKS_PER_UNIT * 1000 / BYTES_PER_COST_UNIT_MILLI
+    }
+
+    /// DEVIATE UP1-RUNS (owner w15, exit 2026-11-20): an unknown-count loop
+    /// around an unroll counts once, not 32 times (jpeg_fixed -O2 unrolled a
+    /// 16-trip loop for 49,152 assumed clocks; its instructions did not move).
+    fn unroll_assumes_unknown_loops_run(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE ARM64-IPRA (owner w15, exit 2026-11-30): the pin has
+    /// `-enable-ipra` off; GCC's `-fipa-ra` is on from -O1 and its recpow -Os
+    /// is 32 B smaller for it.
+    ///
+    /// DEVIATE ARM64-IPRA-OS (owner w15, exit 2026-11-15): jpeg_single -Os is
+    /// 20 B larger (3,544 -> 3,564 kernel, +4 B object) with 2% fewer
+    /// executed instructions: the greedy re-allocates the whole function and
+    /// places 3 more moves and 2 more constant rematerializations. No single
+    /// cause; the Os corpus is 40 B smaller in all. Linked to the Os jpeg
+    /// register-allocation card (anyisa); re-measure when it lands.
+    fn interprocedural_register_use(&self) -> bool {
+        true
     }
 
     /// 250 clocks a byte (the bar's price, as UP1 and the speed inline rate).
@@ -330,12 +442,21 @@ impl Tti for AArch64 {
         Some((3, 5))
     }
 
-    /// DEVIATE UP1 (arm64): a full unroll at -O2/-O3 must save 250 clocks for
-    /// each byte it adds, the bar's price (score = instructions + 250 per
-    /// byte). Without it matmul -O2 is 1560 B against gcc's 304 for 3x fewer
-    /// instructions. Exit: the per-target clock model (2026-11-20).
+    /// DEVIATE UP1 (arm64): a full unroll at -O2/-O3 must save
+    /// [`UNROLL_MILLICLOCKS_PER_BYTE`] for each byte it adds. Exit: the
+    /// per-target clock model (2026-11-20).
     fn unroll_milliclocks_per_byte(&self) -> i64 {
-        250_000
+        self.unroll_rate
+    }
+
+    /// DEVIATE IND-MASK (arm64, owner w15, exit 2026-11-30): see the trait.
+    fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE ARM64-UNROLL-PRICE (owner w15, exit 2026-11-30): see the trait.
+    fn unroll_credits_immediate_operands(&self) -> bool {
+        false
     }
 
     /// DEVIATE ARM64-UNROLL-PRICE (owner w15, exit 2026-11-30): see the

@@ -26,7 +26,9 @@
 //! their folds. Owner llrm-target-wasm, review 2026-12-10.
 //! Covered opcodes: `and`, `or`, `xor`, `shl`, `srl`, `rotl` and `rotr` by a
 //! constant, the three extensions' zero and any forms, `trunc`. The rest fall
-//! back to `computeKnownBits`.
+//! back to `computeKnownBits`. A right shift by one of a sum of two extended
+//! values is an `avgfloor` or `avgceil` of the narrow values where the target
+//! has the node (`combine_avg.rs`, DEVIATE SD600).
 //!
 //! `ShrinkDemandedOp` and the half-width shift rewrites run where the target
 //! hook `free_narrowing` says the casts are free (x86-64; at m32 the pin's
@@ -401,6 +403,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                         return Self::combine_to(tlo, op, not);
                     }
                 }
+                // "If we can't turn this into a 'not', try to shrink the
+                // constant."
+                if self.dag.constant(op1) != Some(all) {
+                    self.shrink_demanded_constant(op, demanded, tlo)?;
+                    if tlo.is_some() {
+                        return Err(());
+                    }
+                }
                 if demanded != all {
                     let (d0, d1) = (
                         self.simplify_multiple_use_demanded_bits(op0, demanded, depth + 1),
@@ -507,6 +517,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     if let Some(d0) = self.simplify_multiple_use_demanded_bits(op0, in_demanded, depth + 1) {
                         let new = self.dag.get_node(opcode, vt, &[d0, op1]);
                         return Self::combine_to(tlo, op, new);
+                    }
+                }
+                // "Try to match AVG patterns (after shift simplification)."
+                if !is_shl {
+                    if let Some(avg) = self.combine_shift_to_avg(op, demanded) {
+                        return Self::combine_to(tlo, op, avg);
                     }
                 }
                 if is_shl {

@@ -177,19 +177,20 @@ impl Tti for M68k {
         }
     }
 
-    /// The per-target override of `SCEVCheapExpansionBudget`: a limit that
-    /// costs any operation (`smax(n, 1)` for `i + 1 < n`) is not worth
-    /// replacing a compare with in a function built for size; the guard and
-    /// the second counter cost more bytes than the compare saved.
+    /// The per-target value of `SCEVCheapExpansionBudget`: one operation. A
+    /// limit that costs a single operation (`n - 1`) is repaid by the counter
+    /// that goes (`subq`+`bne` for `addq`+`cmp`+`blt`); one that costs more
+    /// (`smax(n, 1)`) is not. Measured at -Os on the matrix at 0, 1 and the
+    /// pin's 4: 1 shrinks partition and memset (4 and 2 B) and changes no
+    /// other cell; 4 grows arrmax, arrsum, copy, countgt, fib and sum by 6 to
+    /// 14 B. The same value serves every level, so no `optsize` split.
+    /// DEVIATE (value; owner m68k, exit none: a per-target table value; the
+    /// pin's budget is 4).
     fn lftr_expansion_budget(
         &self,
-        optsize: bool,
+        _optsize: bool,
     ) -> u32 {
-        // DEVIATE 18 (owner m68k, exit 2026-11-14; the pin's budget is 4): a
-        // guard that needs `smax` (sum, 8 B and a counter beside the limit) is
-        // not repaid, where one that costs a single operation still is
-        // (memset, partition: `subq`+`bne` for `addq`+`cmp`+`blt`).
-        if optsize { 0 } else { 1 }
+        1
     }
 
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer

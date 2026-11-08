@@ -73,12 +73,24 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 struct Prices {
     chain_add: i64,
     branch_add: i64,
+    set: i64,
+    ext: i64,
+    alu: i64,
+    branch: i64,
+}
+
+impl Prices {
+    /// `x + zext(c)` for a `c` of `leaves` compares joined by `and`/`or`: a
+    /// `setcc` each and a joining `alu` between, against a jump each.
+    fn tree_wins(&self, leaves: i64) -> bool {
+        self.set * leaves + self.alu * (leaves - 1) + self.ext + self.alu > self.branch * leaves + self.alu
+    }
 }
 
 fn prices(price: &dyn Fn(&str) -> Option<i64>) -> Option<Prices> {
     let (set, ext, alu) = (price("setcc")?, price("movzx")?, price("alu_rr")?);
     let branch = (price("jcc")? + price("jcc_not_taken")? + 1) / 2;
-    Some(Prices { chain_add: set + ext + alu, branch_add: branch + alu })
+    Some(Prices { chain_add: set + ext + alu, branch_add: branch + alu, set, ext, alu, branch })
 }
 
 /// The instruction defining `operand`, when it has `only` this user.
@@ -113,19 +125,42 @@ fn word_compare(
         })
 }
 
+/// How many word compares `value` joins by `and`/`or`, each node read only by
+/// the next; 0 when it is anything else.
+fn compare_tree(
+    context: &Context,
+    function: &Function,
+    value: Operand,
+    user: InstId,
+    word_bits: u32,
+) -> i64 {
+    let joins = |inst: InstId| {
+        matches!(function.instruction(inst).opcode, Opcode::Binary(BinaryOp::And | BinaryOp::Or))
+    };
+    if let Some(node) = defined_for(function, value, user).filter(|&node| joins(node)) {
+        let [left, right] = function.instruction(node).operands[..] else { return 0 };
+        let (left, right) = (
+            compare_tree(context, function, left, node, word_bits),
+            compare_tree(context, function, right, node, word_bits),
+        );
+        return if left > 0 && right > 0 { left + right } else { 0 };
+    }
+    i64::from(word_compare(context, function, value, word_bits))
+}
+
 /// The chains of `function` priced above a branch, made branches. How many.
+/// `trees`: the types whose sum with a join of compares is branched too
+/// (DEVIATE SETCC-TREE-BRANCH), even where a `select` of it is `wanted` no more.
 pub fn branched(
     context: &Context,
     function: &mut Function,
     price: &dyn Fn(&str) -> Option<i64>,
     wanted: &dyn Fn(&str) -> bool,
+    trees: &dyn Fn(&str) -> bool,
     word_bits: u32,
 ) -> Result<usize, String> {
     let Some(costs) = prices(price) else { return Ok(0) };
     let add_wins = costs.chain_add > costs.branch_add;
-    if !add_wins {
-        return Ok(0);
-    }
     let candidates: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
     // Each select made, and the instruction only its taken arm needs.
     let mut chains: Vec<(InstId, InstId, bool)> = Vec::new();
@@ -138,8 +173,10 @@ pub fn branched(
         let Some(result) = one.result else { continue };
         let bits = context.types.int_bits(ty);
         // add x, zext(c): x + 1 when c.
-        if add_wins && one.opcode == Opcode::Binary(BinaryOp::Add) && bits.is_some_and(|bits| bits > 1) {
-            if !wanted(&context.types.display(ty).to_string()) {
+        if one.opcode == Opcode::Binary(BinaryOp::Add) && bits.is_some_and(|bits| bits > 1) {
+            let name = context.types.display(ty).to_string();
+            let (single, tree) = (wanted(&name), trees(&name));
+            if !single && !tree {
                 continue;
             }
             let [left, right] = one.operands[..] else { continue };
@@ -153,7 +190,14 @@ pub fn branched(
                 if function.operand_type(context, flag).and_then(|ty| context.types.int_bits(ty)) != Some(1) {
                     continue;
                 }
-                if !word_compare(context, function, flag, word_bits)
+                let leaves = if tree { compare_tree(context, function, flag, zext, word_bits) } else { 0 };
+                if leaves >= 2 {
+                    if !costs.tree_wins(leaves) {
+                        continue;
+                    }
+                } else if !single || !add_wins {
+                    continue;
+                } else if !word_compare(context, function, flag, word_bits)
                     && !{
                         // c = !compare
                         defined_for(function, flag, zext)

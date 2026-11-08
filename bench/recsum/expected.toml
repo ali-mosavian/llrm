@@ -1,45 +1,111 @@
-reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
-blessed = "2026-11-05"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "260c731bf5d177126efcccb7979e74cf"
+
+[ow.O1]
+instructions = 42017
+memory_operands = 8004
+clocks = 152045
+code_bytes = 95
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.5612
+
+[ow.O2]
+instructions = 44018
+memory_operands = 6004
+clocks = 154043
+code_bytes = 97
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.5879
+
+[ow.Os]
+instructions = 42017
+memory_operands = 8004
+clocks = 152045
+code_bytes = 95
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.5612
+
+[bcc.O1]
+instructions = 44019
+memory_operands = 4003
+clocks = 174060
+code_bytes = 97
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.588
 
 [bcc.O2]
 instructions = 46018
 memory_operands = 4003
+clocks = 156057
 code_bytes = 100
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.6146
 
 [bcc.Os]
 instructions = 44019
 memory_operands = 4003
+clocks = 174060
 code_bytes = 97
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.588
+
+[tc.O1]
+instructions = 52022
+memory_operands = 6004
+clocks = 184062
+code_bytes = 93
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.6947
 
 [tc.O2]
 instructions = 52022
 memory_operands = 6004
+clocks = 184062
 code_bytes = 95
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.6947
 
 [tc.Os]
 instructions = 52022
 memory_operands = 6004
+clocks = 184062
 code_bytes = 93
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.6947
+
+[tcpp.O1]
+instructions = 56022
+memory_operands = 6004
+clocks = 184062
+code_bytes = 103
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.7481
 
 [tcpp.O2]
 instructions = 58022
 memory_operands = 6004
+clocks = 166062
 code_bytes = 106
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.7747
 
 [tcpp.Os]
 instructions = 56022
 memory_operands = 6004
+clocks = 184062
 code_bytes = 103
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.7481

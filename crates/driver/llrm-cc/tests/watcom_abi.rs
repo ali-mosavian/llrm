@@ -2,7 +2,7 @@
 //! bytes (m32 had literals of 4 beside a 2-byte `wchar_t`, so `wcslen(L"ab")`
 //! did not compile) and `long double` is 8 (clang gave 12 at m32, 10 at m16, to
 //! a libc that reads 8). Needs the fork's clang (`LLRM_CLANG_M16`) and the Open
-//! Watcom headers (`LLRM_OW`).
+//! Watcom headers (`{ow}`, tools/ow-fetch.sh).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -37,9 +37,9 @@ fn listing(
 }
 
 fn configured() -> bool {
-    let set = std::env::var_os("LLRM_CLANG_M16").is_some() && std::env::var_os("LLRM_OW").is_some();
+    let set = std::env::var_os("LLRM_CLANG_M16").is_some() && llrm_cc::ow_tree().is_dir();
     if !set {
-        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+        eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
     }
     set
 }

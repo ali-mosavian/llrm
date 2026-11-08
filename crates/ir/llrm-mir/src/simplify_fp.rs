@@ -44,10 +44,8 @@ fn value(
     if kind == FloatKind::X86Fp80 {
         return crate::fp80::value(&constant.kind);
     }
-    // An fp128 is not folded: ApFloat's quad arithmetic is not checked
-    // against the pin.
     if kind == FloatKind::F128 {
-        return None;
+        return crate::fp128::value(&constant.kind);
     }
     let (sem, bits): (Sem, u64) = match (kind, &constant.kind) {
         (FloatKind::Float, ConstantKind::Float(bits)) => (IEEE_SINGLE, *bits),

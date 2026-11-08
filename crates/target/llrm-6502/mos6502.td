@@ -108,6 +108,13 @@ multiclass Arith<string n, RegisterClass rc, ValueType vt> {
 }
 defm "" : Arith<"8", Imag8, i8>;
 defm "" : Arith<"16", Imag16, i16>;
+// The average of two bytes without losing the ninth bit: CLC (SEC for the ceiling); LDA a; ADC b; ROR A; STA d.
+let Defs = [P] in {
+  def AVGFLOORU8 : MOSInst<(outs Imag8:$d), (ins Imag8:$a, Imag8:$b), "avgflooru $d, $a, $b",
+                           [(set i8:$d, (avgflooru i8:$a, i8:$b))]>;
+  def AVGCEILU8 : MOSInst<(outs Imag8:$d), (ins Imag8:$a, Imag8:$b), "avgceilu $d, $a, $b",
+                          [(set i8:$d, (avgceilu i8:$a, i8:$b))]>;
+}
 // x + 1 and x - 1 in place: INX/INY/INC on a cell, INC A on the 65C02 (CLC; ADC #1 otherwise). The allocator
 // tells the register apart; the instruction is the same on every CPU.
 let Defs = [P], AddedComplexity = 10 in {
@@ -145,6 +152,11 @@ defm "" : Runtime<"16", Imag16, i16>;
 let Defs = [P] in
 def UMUL8X8 : MOSInst<(outs Imag16:$d), (ins Imag8:$a, Imag8:$b), "umul8x8 $d, $a, $b",
     [(set i16:$d, (mul (zext i8:$a), (zext i8:$b)))]>;
+
+// The same for two sign-extended bytes: the unsigned product with the high byte corrected.
+let Defs = [P] in
+def SMUL8X8 : MOSInst<(outs Imag16:$d), (ins Imag8:$a, Imag8:$b), "smul8x8 $d, $a, $b",
+    [(set i16:$d, (mul (sext i8:$a), (sext i8:$b)))]>;
 
 def LDI8 : MOSInst<(outs Imag8:$d), (ins i8imm:$v), "ldi $d, $v", [(set i8:$d, imm:$v)]>;
 def LDI16 : MOSInst<(outs Imag16:$d), (ins i16imm:$v), "ldi $d, $v", [(set i16:$d, imm:$v)]>;

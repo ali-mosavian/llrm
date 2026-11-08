@@ -1184,7 +1184,7 @@ pub fn visit_mul(
     // costs the move and the register (pack_ref -Os: m32 -18 B, m64 -7 B).
     // gcc's `expand_mult` shifts only a constant multiplier
     // (expmed.cc:3540-3560). A constant count stays.
-    let keeps_mul = c.env.fixed_shift_count && is_optsize(c.function);
+    let keeps_mul = c.env.hooks.fixed_shift_count && is_optsize(c.function);
     for (log_of, other) in [(op0, op1), (op1, op0)] {
         if keeps_mul && !matches!(log_of, Operand::Constant(_)) {
             continue;

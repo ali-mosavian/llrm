@@ -299,7 +299,7 @@ def test_bins_older_than_the_merged_tree_are_rebuilt_or_named_not_an_empty_refus
     """The merge rewrote files after the binaries were built: the smoke exited non-zero with an empty last line and the tool printed 'the fast set fails' with no reason."""
     import llrmbin
 
-    stale = [["llrm-c"]]
+    stale = [["llrm-cc"]]
     monkeypatch.setattr(llrmbin, "stale_binaries", lambda directory, repo=None: stale[0])
     monkeypatch.setattr(ps, "smoke_bins", lambda env=None: str(tmp_path))
     built = []
@@ -309,16 +309,16 @@ def test_bins_older_than_the_merged_tree_are_rebuilt_or_named_not_an_empty_refus
         stale[0] = []
 
     assert ps.ensure_bins(build=fresh) == "" and built == [1]
-    stale[0] = ["llrm-c", "llrm-qb"]
+    stale[0] = ["llrm-cc", "llrm-qb"]
     why = ps.ensure_bins(build=lambda: built.append(2))
-    assert "still older" in why and "llrm-c, llrm-qb" in why, why
+    assert "still older" in why and "llrm-cc, llrm-qb" in why, why
     stale[0] = []
     assert ps.ensure_bins(build=lambda: built.append(3)) == "" and 3 not in built
 
 
 def test_a_smoke_that_exits_non_zero_without_a_summary_line_names_its_stderr(monkeypatch):
     class Done:
-        returncode, stdout, stderr = 1, "", "stale binaries in /x: llrm-c older than the source\nrun cargo build"
+        returncode, stdout, stderr = 1, "", "stale binaries in /x: llrm-cc older than the source\nrun cargo build"
 
     monkeypatch.setattr(ps, "smoke_bins", lambda env=None: "/x")
     monkeypatch.setattr(ps, "run_streaming", lambda command, cwd: Done())
@@ -340,8 +340,8 @@ def test_a_refusal_after_a_rebuild_names_the_newest_source_the_oldest_binary_and
     import llrmbin
 
     monkeypatch.setattr(ps, "smoke_bins", lambda env=None: "/x")
-    monkeypatch.setattr(llrmbin, "stale_binaries", lambda directory, cwd=None: ["llrm-c", "llrm-qb"])
-    monkeypatch.setattr(llrmbin, "stale_found", lambda directory, repo=None: [("llrm-c", 100.0, "crates/a/src/x.rs", 160.0), ("llrm-qb", 90.0, "crates/b/src/y.rs", 130.0)])
+    monkeypatch.setattr(llrmbin, "stale_binaries", lambda directory, cwd=None: ["llrm-cc", "llrm-qb"])
+    monkeypatch.setattr(llrmbin, "stale_found", lambda directory, repo=None: [("llrm-cc", 100.0, "crates/a/src/x.rs", 160.0), ("llrm-qb", 90.0, "crates/b/src/y.rs", 130.0)])
 
     class Failed:
         returncode, stderr, stdout = 101, "error[E0425]: cannot find type\nerror: could not compile `llrm-nib`", ""
@@ -786,9 +786,9 @@ def _closure(path):
 
 
 def test_a_red_test_in_a_crate_that_depends_on_the_changed_one_is_refused():
-    """llrm-c's lib tests were red on parity while PRs merged: each PR changed a crate llrm-c depends on, and the fast tier ran the changed crates only."""
-    red = {"unit llrm-c::compile::tests::a_call_boundary_listing"}
-    on_merged = lambda packages: set(red) if "llrm-c" in packages else set()  # noqa: E731
+    """llrm-cc's lib tests were red on parity while PRs merged: each PR changed a crate llrm-cc depends on, and the fast tier ran the changed crates only."""
+    red = {"unit llrm-cc::compile::tests::a_call_boundary_listing"}
+    on_merged = lambda packages: set(red) if "llrm-cc" in packages else set()  # noqa: E731
     assert ps.new_lib_failures(["crates/codegen/llrm-codegen/src/backend/peephole.rs"], on_merged=on_merged, on_head=lambda by_package: set()) == red
 
 
@@ -1014,7 +1014,7 @@ def test_two_halves_that_build_apart_and_not_together_name_nobody_and_are_halved
     assert ps.build_offenders(group, lambda number: True, lambda: "") == []
 
 def test_a_change_to_llrm_hir_also_runs_llrm_cs_toolchain_lib_tests():
-    """#2936 changed the lowering and broke llrm-c's call-boundary test, which only the toolchain feature builds and no layer ran."""
+    """#2936 changed the lowering and broke llrm-cc's call-boundary test, which only the toolchain feature builds and no layer ran."""
     asked = []
 
     def on_merged(packages):
@@ -1023,12 +1023,12 @@ def test_a_change_to_llrm_hir_also_runs_llrm_cs_toolchain_lib_tests():
 
     ps.new_lib_failures(["crates/ir/llrm-hir/src/mir.rs"], on_merged=on_merged, on_head=lambda by_package: set())
     ps.new_lib_failures(["crates/opt/llrm-transforms/src/gvn.rs"], on_merged=on_merged, on_head=lambda by_package: set())
-    assert "llrm-c" in asked[0] and "llrm-hir" in asked[0]
-    assert "llrm-c" in asked[1]
+    assert "llrm-cc" in asked[0] and "llrm-hir" in asked[0]
+    assert "llrm-cc" in asked[1]
 
 
 def test_the_tool_modules_are_loaded_before_a_landing_can_change_them(tmp_path, monkeypatch):
-    """#3817 changed parity_smoke while the batch that held the old parity_squash was running: half old, half new tools refused the 15 known llrm-c reds as new."""
+    """#3817 changed parity_smoke while the batch that held the old parity_squash was running: half old, half new tools refused the 15 known llrm-cc reds as new."""
     (tmp_path / "fake_tool.py").write_text("VERSION = 1\n")
     monkeypatch.syspath_prepend(str(tmp_path))
     sys.modules.pop("fake_tool", None)
@@ -1871,7 +1871,7 @@ def test_a_scanner_refusal_names_the_prs_and_files_behind_it():
 
 def test_a_link_refusal_names_the_prs_touching_the_directory_of_the_file_that_panicked():
     """sqb-5413's link refusal said `panicked at greedy/spliteditor.rs:125` and no PR; it was #5486's change in the same directory, found by w13's bisect."""
-    unlinked = ["qb arena_type: llrm-c: thread 'main' (2594298) panicked at crates/codegen/llrm-codegen/src/greedy/spliteditor.rs:125:9:"]
+    unlinked = ["qb arena_type: llrm-cc: thread 'main' (2594298) panicked at crates/codegen/llrm-codegen/src/greedy/spliteditor.rs:125:9:"]
     members = lambda: {"5443": ["crates/codegen/llrm-codegen/src/greedy/spiller.rs"], "5486": ["crates/codegen/llrm-codegen/src/greedy/spill.rs"], "5409": ["crates/x/src/other.rs"]}
     got = ps.offender_detail(unlinked, members, near=True)
     assert got == " [offending files: crates/codegen/llrm-codegen/src/greedy/spliteditor.rs: same directory touched by #5443 #5486]", got
@@ -1927,15 +1927,15 @@ def test_the_tool_tests_wait_for_fresh_binaries_instead_of_dying_on_stale_ones(t
 
 
 def test_the_rebuild_asks_for_no_legacy_feature_even_when_the_directory_holds_a_leftover_llrm_c(tmp_path):
-    """A leftover llrm-c in coord-ps-target made the rebuild pass `--features wccq`, a feature that goes with the Watcom frontend."""
-    (tmp_path / "llrm-c").write_text("")
+    """A leftover llrm-cc in coord-ps-target made the rebuild pass `--features wccq`, a feature that goes with the Watcom frontend."""
+    (tmp_path / "llrm-cc").write_text("")
     assert "--features" not in ps.bins_command(tmp_path)
 
 
 def test_the_link_and_behavioural_build_asks_for_no_legacy_feature(tmp_path, monkeypatch):
     """_build_release must build with `--bins` alone: the wccq feature goes with the Watcom frontend."""
     (tmp_path / "release").mkdir()
-    (tmp_path / "release" / "llrm-c").write_text("")
+    (tmp_path / "release" / "llrm-cc").write_text("")
     monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path))
     monkeypatch.setattr(ps, "git", lambda *args, **kw: "tree")
     monkeypatch.setattr(ps, "_BUILT", set())

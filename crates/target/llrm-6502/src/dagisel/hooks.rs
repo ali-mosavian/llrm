@@ -6,11 +6,11 @@
 //! a byte offset for Y. `(add ptr, c)` with `0 <= c < 256` gives `ptr` and `c`;
 //! any other address is its own pointer at offset 0.
 
+use llrm_dagisel::addr::AddrDag;
+use llrm_dagisel::addr::find_non_imm_use;
 use llrm_dagisel::dag::{Dag, Hooks, PatternContext, SDValue};
 use llrm_dagisel::generated::ids::{isd, mvt};
 use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::x86_addr::AddrDag;
-use llrm_dagisel::x86_hooks::find_non_imm_use;
 
 use super::generated::{ids::isd as own, instrinfo, mos_mos6502, mos_w65c02};
 

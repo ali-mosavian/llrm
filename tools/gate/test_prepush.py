@@ -64,7 +64,7 @@ def test_a_stale_generated_doc_turns_it_red(damaged):
 
 @pytest.mark.skipif(shutil.which("rustup") is None, reason="needs the nightly rustfmt the fmt step uses")
 def test_a_badly_formatted_rust_file_turns_the_fmt_step_red(damaged):
-    source = damaged / "src/bin/llrm-c.rs"
+    source = damaged / "src/bin/llrm-cc.rs"
     source.write_text(source.read_text() + "\nfn   unformatted ( ) { let x   =  1 ; }\n")
     done = prepushed(damaged, "fmt")
     assert gate.load()["fmt"]["enforced"], "the fmt step must be enforced for prepush to be able to turn red on it"

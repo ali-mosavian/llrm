@@ -69,6 +69,10 @@ thread_local! {
     /// Set while a function is selected the second time, under `ILP`
     /// (DEVIATE Z80S1).
     pub static ILP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function that calls `__mulsi3` for its long multiplies is
+    /// selected the second time, with the shifts and adds of `x * (2^k +- 1)`
+    /// kept (`driver::selections_with_alternatives`).
+    pub static DECOMPOSE_MULS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// What the scheduler reads of the instruction descriptions.
@@ -154,6 +158,12 @@ struct Z80Combines {
     long_multiply: bool,
 }
 
+/// `2^k +- 1` (k up to 8): shifts and one add (`decompose_mul_by_constant`).
+fn near_power_factor(c: u128) -> bool {
+    let near_power = |n: u128| n.is_power_of_two() && n <= 256;
+    c >= 3 && (near_power(c - 1) || near_power(c + 1))
+}
+
 impl CombineHooks for Z80Combines {
     /// DEVIATE Z80-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the folded
     /// constant `c << n` is a `ld bc, #k` and an `add hl, bc` where the add of
@@ -166,6 +176,12 @@ impl CombineHooks for Z80Combines {
         _level: CombineLevel,
     ) -> bool {
         false
+    }
+
+    /// A shift is one `add hl, hl` or `sla`/`rl` pair a bit: `x * 36` is
+    /// `((x << 3) + x) << 2`, 5 shifted bits, not `(x << 5) + (x << 2)`, 7.
+    fn factor_trailing_zeros_of_mul(&self) -> bool {
+        true
     }
 
     /// A byte or word multiply by a constant is a library call (`__mulhi3`, a
@@ -183,10 +199,9 @@ impl CombineHooks for Z80Combines {
         vt: EVT,
         c: u128,
     ) -> bool {
-        let near_power = |n: u128| n.is_power_of_two() && n <= 256;
         match vt {
             EVT::I8 | EVT::I16 => true,
-            EVT::I32 => !self.long_multiply && c >= 3 && (near_power(c - 1) || near_power(c + 1)),
+            EVT::I32 => !self.long_multiply && near_power_factor(c),
             _ => false,
         }
     }
@@ -276,10 +291,15 @@ pub fn select_block(
 ) -> Result<Vec<Unit>, Refusal> {
     let mut tli = target_lowering();
     tli.set_opt_for_size(sized);
-    // a long multiply is a call in a function tuned for size, in a module with
-    // enough of them to pay for the routine (`prepare::mark_long_multiplies`)
+    // a long multiply is a call (`RTLIB::MUL_I32`) in a module with enough of
+    // them to pay for the routine (`prepare::mark_long_multiplies`), at every
+    // level: four word multiplies inline cost more bytes and more T-states
     if long_multiply {
         tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
+        if !sized {
+            tli.set_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
+        tli.set_inline_constant_mul(near_power_factor);
+        }
     }
     let mut lowering = Z80Lowering { sized };
     let mut combines = Z80Combines { long_multiply: sized && long_multiply };

@@ -50,10 +50,94 @@ pub struct Tuning {
     /// `div` pins eax, edx and the divisor's register, the narrow multiply
     /// sequence none.
     pub narrow_divide_live_limit: u32,
+    /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): at size, MachineSink
+    /// leaves an instruction where it is when moving it would replace its one
+    /// result by more operands that die at it, across a later instruction that
+    /// clobbers registers (more values spilled). false: the pin's sink.
+    pub sink_spares_ranges: bool,
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27): the target's
+    /// `va_list` is one pointer, so `llvm.va_start` of it is a store of the
+    /// first variadic argument's address (`llrm.vararg.address`) the mid-end
+    /// can keep in a register. false: the pin's `va_start`, which leaves the
+    /// list in memory.
+    pub promote_va_list: bool,
+    /// DEVIATE SETCC-TREE-BRANCH (owner x86-m32, exit 2026-12-05): at -Os a
+    /// sum `x + zext(c)` whose `c` is an `and`/`or` of two or more word
+    /// compares is a branch around `x + 1` (the byte price of the `setcc`
+    /// chain decides), where the pin keeps the `setcc`/`or`/`movzx` chain.
+    /// false: the pin's lowering.
+    pub branch_compare_trees_at_size: bool,
     /// At -O1 (`OptLevel` 1) a full unroll is made only where its cost after
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
     pub unroll_never_grows_at_o1: bool,
+    /// DEVIATE INL-O1 (owner x86-m32, exit 2026-11-24): where no byte rate is
+    /// stated (-O1), an inline that stays is held to the -Os bound (the callee
+    /// copied only if it does not grow the code); false: the pin's threshold.
+    pub inline_never_grows_without_rate: bool,
+    /// DEVIATE OB1: see `Tti::unroll_object_bound`.
+    pub unroll_object_bound: Option<u32>,
+    /// With `inline_never_grows_without_rate`: what a byte of growth costs an
+    /// -O1 inline, in thousandths of a clock, against the call's latency at
+    /// the site's frequency. m32: half the -O2 rate (-O1 weighs code size).
+    pub inline_o1_milliclocks_per_byte: i64,
+    /// Thousandths of a byte one unit of the inliner's code size is: the
+    /// units count instructions (one each, a call 3 to 5), the bytes a callee
+    /// takes are 3.5 to 5 times that on x86 (22 callees of the m32 O1 corpus:
+    /// median 3.99 bytes per unit). Scales the growth the -O1 bytes-vs-clocks
+    /// check compares with its per-byte rate; 1000: one byte a unit.
+    /// DEVIATE INL-O1 unit scale (owner x86-m32, exit 2026-12-05). Stated cost,
+    /// exit 2026-11-15 (strict -O1 clocks, not waived): x_sf_cmp64 81196 ->
+    /// 93965 clk (best gcc/clang 90307), x_sf_div 146540 -> 152986 (149453),
+    /// x_sf_mul 82587 -> 88263 (88107). Recovery: weigh callee size against
+    /// the site's frequency and loop depth.
+    pub inline_o1_unit_bytes_milli: i64,
+    /// DEVIATE INL-O2 RATE (owner x86-m32, exit 2026-11-22): what a byte of
+    /// growth is worth, in thousandths of a clock, to a speed caller's inline
+    /// (`Tti::speed_inline_milliclocks_per_byte`; the pin has no such rule).
+    /// 0: the pin's threshold alone.
+    pub speed_inline_milliclocks_per_byte: i64,
+    /// `Tti::speed_inline_rate_at_o1`: whether that rate binds at -O1 too
+    /// (false by default; m32's -O1 has its own rule, INL-O1).
+    pub speed_inline_rate_at_o1: bool,
+    /// `Tti::callee_saved_clocks`: (scratch registers, preserved registers,
+    /// clocks to save and restore one). None: not priced.
+    pub callee_saved: Option<(i64, i64, i64)>,
+    /// `Tti::inline_hot_trial_frequency`.
+    pub inline_hot_trial_frequency: Option<i64>,
+    /// `Tti::inline_hot_trial_at_o3`.
+    pub inline_hot_trial_at_o3: bool,
+    /// DEVIATE SD-DIVMAG (owner x86-m32, exit 2026-11-22): a signed divide by a
+    /// negative constant is the negation of the divide by its magnitude, so it
+    /// shares the multiply-high of the remainder (`x % -c` is `x % c`); the
+    /// pin multiplies twice (div_constants_long -O2 +4.1% clk over gcc).
+    /// false: the pin's `BuildSDIV`.
+    pub sdiv_by_magnitude: bool,
+    /// What one call costs in clocks when the inliner prices its latency
+    /// (`Tti::call_sequence_cost`): the call and return, each argument word
+    /// pushed, and the caller's pop of them. The pin prices the call as one
+    /// instruction (4 on x86), which at 486 prices (call 3, ret 5, a push and
+    /// a pop each) is a third of the sequence. 0 fixed: the pin's flat price.
+    pub call_sequence_fixed_clocks: i64,
+    pub call_sequence_argument_clocks: i64,
+    pub call_sequence_pop_clocks: i64,
+    /// DEVIATE INL-O1 ENTRY (owner x86-m32, exit 2026-11-15): the -O1
+    /// bytes-vs-clocks check weighs a site's frequency by how often its
+    /// function runs (the calls to it up the call graph), not by the
+    /// function's entry alone: the bottom-up walk prices a helper in the
+    /// function that calls it, which a hot loop up the graph runs 30 times
+    /// more. false: the site's own frequency. Costs at m32 -O1 (A/B
+    /// e09ff5f2a4^..e09ff5f2a4): x_jpeg_fixed +2.2% clk for -33% B (8415 ->
+    /// 5647), x_sf_mul +22 clk (0.03%) over the best external. Closes: jpeg
+    /// re-run against the best external (not yet measured); mul by the
+    /// frequency of the call's own loop depth, or the row stays to the exit.
+    pub inline_o1_weighs_entry: bool,
+    /// Trips the -O1 no-growth rule above analyses for folds: the pin's
+    /// `-unroll-max-iteration-count-to-analyze` (10) when `None`.
+    pub unroll_o1_analyzed_trips: Option<u32>,
+    /// IPSCCP runs a second time after ArgumentPromotion changed a body (the
+    /// pin runs it once; DEVIATE SD443, interprocedural.rs).
+    pub second_ipsccp: bool,
     /// A multiply by a constant is decomposed only where the chain's saved
     /// clocks pay for its extra bytes at `speed_milliclocks_per_byte`, the
     /// pin's own decompositions included (a tie keeps the `imul`); false:
@@ -61,6 +145,12 @@ pub struct Tuning {
     pub price_pin_multiplies: bool,
     /// At -Os a multiply by a constant stays an `imul` (the pin's `hasMinSize`
     /// rule, which the pin applies at -Oz only): the chain is no smaller.
+    /// A constant `memset` past the store limit is `rep stos` at `-Os`
+    /// (alignment or not), not the library call: the setup is 9-11 B against
+    /// the call's 12-16. DEVIATE REP-OS (owner w9, exit 2026-11-20): the pin
+    /// calls `memset` unless the destination is dword aligned and the size
+    /// within 128 bytes.
+    pub rep_stos_at_size: bool,
     pub imul_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
@@ -105,6 +195,14 @@ pub struct Tuning {
     /// wide (`slots::width_rule_allows`); false: the pin's `ColorSlot`,
     /// which shares any two slots whose ranges do not overlap.
     pub slots_loop_width_rule: bool,
+    /// DEVIATE CARRY-SI (x86 m16, m32, m64: owners the three x86 sessions, exit
+    /// 2026-11-21): the coalescer's slot indexes reach the allocator through the
+    /// pre-RA scheduler with the entries its erased and moved instructions left
+    /// empty (the pin's one `SlotIndexes`), so range sizes, and the dequeue and
+    /// spill weights that divide by them, are the pin's. false: the function
+    /// is numbered afresh after the scheduler, as the x86 numbers were tuned
+    /// (A/B 2026-11-07: x86_32 O1 14 cells +704 B worse).
+    pub carry_slot_indexes: bool,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
@@ -257,9 +355,29 @@ impl Tuning {
         multiply_by_clocks: false,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
+        sink_spares_ranges: false,
+        promote_va_list: false,
+        branch_compare_trees_at_size: false,
         unroll_never_grows_at_o1: false,
+        inline_never_grows_without_rate: false,
+        unroll_object_bound: None,
+        inline_o1_milliclocks_per_byte: 0,
+        inline_o1_unit_bytes_milli: 1000,
+        speed_inline_milliclocks_per_byte: 0,
+        sdiv_by_magnitude: false,
+        speed_inline_rate_at_o1: false,
+        inline_hot_trial_frequency: None,
+        inline_hot_trial_at_o3: false,
+        callee_saved: None,
+        call_sequence_fixed_clocks: 0,
+        call_sequence_argument_clocks: 0,
+        call_sequence_pop_clocks: 0,
+        inline_o1_weighs_entry: false,
+        unroll_o1_analyzed_trips: None,
+        second_ipsccp: false,
         price_pin_multiplies: false,
         imul_at_size: false,
+        rep_stos_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
@@ -271,6 +389,7 @@ impl Tuning {
         x87_share_negated_products: false,
         x87_zero_fill_at_size: false,
         slots_loop_width_rule: false,
+        carry_slot_indexes: true,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
@@ -372,17 +491,17 @@ pub trait Machine {
         false
     }
 
+    /// `isOperationLegal(ISD::SHL, pointer)`: whether a shift of a pointer-wide value by a variable
+    /// count is an instruction, not a call or a loop. False: a switch builds no bit tests
+    /// (`1 << x` and a mask).
+    fn variable_shift_legal(&self) -> bool {
+        true
+    }
+
     /// The target's tuning limits: the pin's values, with this target's
     /// overrides. A target with no entry here takes `Tuning::PIN`.
     fn tuning(&self) -> Tuning {
         Tuning::PIN
-    }
-
-    /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
-    /// (DEVIATE SD443, owner w2, exit 2026-11-15: interprocedural.rs). The pin
-    /// runs it once; a target that matches the pin's output turns it off.
-    fn second_ipsccp(&self) -> bool {
-        true
     }
 
     /// Clocks a byte of code is worth, in thousandths, where a decision is
@@ -1106,6 +1225,7 @@ mod tests {
         assert!(!pin.unroll_promotion_fits_x87_stack);
         assert!(!pin.x87_zero_fill_at_size);
         assert!(!pin.slots_loop_width_rule);
+        assert!(pin.carry_slot_indexes);
         assert_eq!(pin.inline_threshold, None);
     }
 }

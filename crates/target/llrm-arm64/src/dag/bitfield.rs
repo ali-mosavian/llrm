@@ -7,11 +7,11 @@
 //! # See also
 //! `isBitfieldPositioningOp`, `AArch64ISelDAGToDAG.cpp`, pin d1106deb71cc.
 
+use llrm_dagisel::addr::AddrDag;
 use llrm_dagisel::dag::SDValue as PinValue;
 use llrm_dagisel::generated::aarch64::ids::opcode as aarch64_ids;
 use llrm_dagisel::generated::ids::{isd, mvt};
 use llrm_dagisel::interp::Outcome;
-use llrm_dagisel::x86_addr::AddrDag;
 
 fn is_shifted_mask(x: u64) -> bool {
     x != 0 && {

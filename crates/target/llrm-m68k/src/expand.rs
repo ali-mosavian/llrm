@@ -409,9 +409,14 @@ pub fn finish_with(
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
     // pointer is that much further
     let mut pushed = 0i64;
+    // the bytes of finished calls' arguments still on the stack: their cleanups
+    // wait for the next instruction that needs the stack pointer as it is
+    let mut owed = 0i64;
+    let mut last_block = 0usize;
     // the values of the stores whose pushes wait for the call, by offset
     let mut waiting: Vec<(i64, usize)> = Vec::new();
-    let mut block_of = kept.iter().map(|(at, _)| *at).peekable();
+    let blocks: Vec<usize> = kept.iter().map(|(at, _)| *at).collect();
+    let mut block_of = blocks.iter().copied().peekable();
     let mut shown = 0usize;
     // the operands of `inst` as the printer has them, with `pushed` bytes
     // more on the stack than the frame accounts for
@@ -446,6 +451,9 @@ pub fn finish_with(
     // the push of argument store `store`, `pushed` bytes down: of its value,
     // or of the memory the load folded into it reads
     let push_for = |store: usize, pushed: i64| -> Result<mc::Inst, String> {
+        if let Some((base, offset)) = pushes.address_push(store) {
+            return Ok(crate::callpush::address_push(base, offset));
+        }
         match pushes.folded_load(store) {
             Some(load) => {
                 let Kind::Op(name) = insts[load].kind else { return Err("a folded load is an instruction".to_owned()) };
@@ -464,8 +472,46 @@ pub fn finish_with(
             }
         }
     };
+    // Whether the stack pointer must be as the frame has it before the call
+    // that takes the arguments pushed at `from`: a block change or such an
+    // instruction comes first, and the cleanups owed would then pop these
+    // arguments instead of the earlier call's.
+    let pays_before_call = |from: usize| -> bool {
+        for next in from..insts.len() {
+            if blocks[next] != blocks[from] {
+                return true;
+            }
+            let inst = insts[next];
+            if inst.call {
+                return false;
+            }
+            if pushes.is_dropped(next)
+                || pushes.is_push(next)
+                || pushes.is_down(next)
+                || pushes.deferred_offset(next).is_some()
+                || pushes.cleanup(next).is_some()
+            {
+                continue;
+            }
+            if inst.terminator
+                || inst.barrier
+                || matches!(inst.kind, Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN"))
+                || crate::callpush::names_sp(inst, assignment)
+            {
+                return true;
+            }
+        }
+        true
+    };
     for (index, inst) in insts.iter().copied().enumerate() {
         let at = block_of.next().expect("a block per instruction");
+        if owed > 0 && at != last_block {
+            // a block is entered with the stack as its predecessors left it
+            frame_op(&FrameOp::AddSp(owed), &mut out, short);
+            pushed -= owed;
+            owed = 0;
+        }
+        last_block = at;
         while shown <= at {
             if targeted.contains(&shown) {
                 flush(&mut out, &mut marks, &mut lines);
@@ -489,6 +535,12 @@ pub fn finish_with(
         block_top = false;
         if inst.origin != 0 {
             last_origin = inst.origin;
+        }
+        if owed > 0 && (pushes.is_push(index) || (pushes.flushes(index) && !waiting.is_empty())) && pays_before_call(index)
+        {
+            frame_op(&FrameOp::AddSp(owed), &mut out, short);
+            pushed -= owed;
+            owed = 0;
         }
         if pushes.flushes(index) {
             waiting.sort_by(|a, b| b.0.cmp(&a.0));
@@ -514,9 +566,28 @@ pub fn finish_with(
             continue;
         }
         if let Some(bytes) = pushes.cleanup(index) {
-            frame_op(&FrameOp::AddSp(bytes), &mut out, short);
-            pushed -= bytes;
+            if function.returns_twice {
+                frame_op(&FrameOp::AddSp(bytes), &mut out, short);
+                pushed -= bytes;
+            } else {
+                owed += bytes;
+            }
             continue;
+        }
+        // an instruction that reads the stack pointer as the frame has it, or
+        // leaves the block, finds the cleanups done
+        if owed > 0
+            && (inst.terminator
+                || inst.barrier
+                || matches!(
+                    inst.kind,
+                    Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN")
+                )
+                || crate::callpush::names_sp(inst, assignment))
+        {
+            frame_op(&FrameOp::AddSp(owed), &mut out, short);
+            pushed -= owed;
+            owed = 0;
         }
         match inst.kind {
             Kind::Copy => {

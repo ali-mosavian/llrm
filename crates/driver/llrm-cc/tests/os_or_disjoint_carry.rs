@@ -2,8 +2,8 @@
 //! lea`: the generic combiner makes the add a disjoint `or`, and the pin's
 //! `combineOr` ends in `combineAddOrSubToADCOrSBB`. Soft-float division's
 //! quotient loop (`q = q << 1 | (r >= d)`) had the setcc and the lea in all 28
-//! trips (sfm16_dbg -Os +207 B against gcc). Needs `LLRM_OW` and the m16 clang
-//! (`LLRM_CLANG_M16`).
+//! trips (sfm16_dbg -Os +207 B against gcc). Needs the Open Watcom tree
+//! (tools/ow-fetch.sh) and the m16 clang (`LLRM_CLANG_M16`).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -17,9 +17,14 @@ unsigned h(unsigned r, unsigned mb) { return (r << 1) | (r < mb); }
 
 #[test]
 fn test_m32_shifted_value_plus_a_compare_is_adc_or_sbb() {
-    for name in ["LLRM_OW", "LLRM_CLANG_M16"] {
-        assert!(std::env::var_os(name).is_some(), "{name} is not set: this test needs it and does not skip");
-    }
+    assert!(
+        llrm_cc::ow_tree().is_dir(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
+    assert!(
+        std::env::var_os("LLRM_CLANG_M16").is_some(),
+        "LLRM_CLANG_M16 is not set: this test needs it and does not skip"
+    );
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("orcarry-{}", std::process::id()));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let _ = std::fs::remove_dir_all(&dir);

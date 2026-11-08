@@ -191,7 +191,7 @@ fn _named_values(where_: &[Loc]) -> Vec<u32> {
 }
 
 /// The values an instruction writes: a destination that *is* a value.
-pub(crate) fn _written(dests: &[Loc]) -> Vec<u32> {
+pub fn _written(dests: &[Loc]) -> Vec<u32> {
     dests
         .iter()
         .filter_map(|one| match one {
@@ -204,7 +204,7 @@ pub(crate) fn _written(dests: &[Loc]) -> Vec<u32> {
 /// The values an instruction reads: its sources, and the addresses its
 /// destinations are reached by. Sized for what it holds: a list grown a push
 /// at a time was reallocated twice (107,000 growths in memory_expansion).
-pub(crate) fn _read(what: &ir::Semantics) -> Vec<u32> {
+pub fn _read(what: &ir::Semantics) -> Vec<u32> {
     let addressed = || what.dests.iter().filter(|where_| !matches!(where_, Loc::Held(_)));
     let count: usize = what.sources.iter().chain(addressed()).map(|operand| ir::values(operand).len()).sum();
     let mut out = Vec::with_capacity(count);
@@ -231,7 +231,7 @@ pub use matcher::Compiled;
 /// Each loop of `shape` with a trip count `induction` proves, as (the LIR
 /// address of its header, the trips): what the executed-work estimate scales
 /// the loop by. `header_at` names the LIR block a MIR block became.
-pub(crate) fn proven_trips(
+pub fn proven_trips(
     unit: &Unit,
     shape: &llrm_analysis::cfg::Shape,
     facts: &IndexMap<llrm_mir::module::ValueId, llrm_analysis::consts::Known>,
@@ -498,7 +498,10 @@ pub fn convention(
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
     let interrupt = function.calling_convention == llrm_mir::opcode::X86_INTR;
     let first = match () {
-        _ if interrupt => crate::backend::masm::interrupt_parameters(),
+        _ if interrupt => crate::backend::masm::interrupt_parameters(&crate::backend::masm::Interrupt::of(
+            arch,
+            crate::model::ir::Addr::new(crate::model::ir::Space::Group, 0),
+        )),
         _ => arch.first_argument_offset(far(global)?),
     };
     let param_types: Vec<TypeId> = function.parameters().iter().map(|&one| function.value(one).ty).collect();
@@ -1013,7 +1016,7 @@ pub(super) fn width_of(
 
 /// The alignment the hardware wants of an object of `ty`: its widest scalar's
 /// size, up to 8, whatever the data layout promises (it gives a double 1).
-pub(crate) fn natural_align(
+pub fn natural_align(
     types: &llrm_mir::types::Types,
     layout: &DataLayout,
     ty: TypeId,
@@ -1410,7 +1413,7 @@ pub fn selected_with<'c>(
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes
 /// them in.
-pub(crate) fn parameters(
+pub fn parameters(
     module: &Module,
     function: &Function,
     name: &str,
@@ -1695,7 +1698,7 @@ pub(crate) fn expression_note(
 /// from the MIR instruction it stands before; and each instruction that defines
 /// a value a note names is told so. A variable a note names that no frame cell
 /// holds is a variable of the body, found over the code from the notes.
-pub(crate) fn noted(
+pub fn noted(
     module: &Module,
     function: &Function,
     name: &str,
@@ -8482,7 +8485,7 @@ fn frame(
     Mem { through: RegId::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, disp)), width) }
 }
 
-pub(crate) fn semantics(
+pub fn semantics(
     op: Operation,
     name: &str,
     dests: Vec<Loc>,
@@ -8503,7 +8506,7 @@ fn insn_of(
     Insn::new(at, Some((at, at)), Some(what), defines, uses)
 }
 
-pub(crate) fn insn(
+pub fn insn(
     at: i64,
     what: Semantics,
 ) -> Arc<Insn> {

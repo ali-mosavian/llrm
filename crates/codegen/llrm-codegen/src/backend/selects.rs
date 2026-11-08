@@ -257,6 +257,18 @@ pub fn priced(
     wanted: &dyn Fn(&str) -> bool,
     price: &dyn Fn(&str) -> Option<i64>,
 ) -> Result<(), String> {
+    priced_with_trees(module, tti, wanted, price, &|_| false)
+}
+
+/// `priced`, and for the types `trees` names the sums with a join of compares
+/// (`booleans::branched`, DEVIATE SETCC-TREE-BRANCH).
+pub fn priced_with_trees(
+    module: &mut Module,
+    tti: &dyn Tti,
+    wanted: &dyn Fn(&str) -> bool,
+    price: &dyn Fn(&str) -> Option<i64>,
+    trees: &dyn Fn(&str) -> bool,
+) -> Result<(), String> {
     // A near pointer is one register: the width of a compare a chain may move.
     let word_bits = module
         .datalayout
@@ -285,7 +297,7 @@ pub fn priced(
                 }
             }
         }
-        crate::backend::booleans::branched(context, function, price, wanted, word_bits)?;
+        crate::backend::booleans::branched(context, function, price, wanted, trees, word_bits)?;
         // After the pricing: the pin keeps this `setcc` chain, it branches
         // none.
         crate::backend::selectconstants::inverted_setcc_sums(context, function)?;

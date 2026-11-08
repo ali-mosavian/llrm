@@ -14,6 +14,7 @@ use llrm_codegen::backend::selectiondag::legalize_dag::Hooks as LegalizeHooks;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
+use llrm_dagisel::addr::AddrDag;
 use llrm_dagisel::dag::SDValue as PinValue;
 use llrm_dagisel::generated::aarch64::aarch64_apple_m1 as table;
 use llrm_dagisel::generated::aarch64::ids::isd as aarch64_isd;
@@ -22,7 +23,6 @@ use llrm_dagisel::generated::aarch64::instrinfo::{self, flag};
 use llrm_dagisel::generated::ids::{isd, mvt};
 use llrm_dagisel::interp::Outcome;
 use llrm_dagisel::interp::Selector;
-use llrm_dagisel::x86_addr::AddrDag;
 use llrm_lir::registers::RegId;
 use llrm_sdag::actions::{Aarch64Features, TargetLowering};
 
@@ -546,7 +546,7 @@ pub fn select_block(
     tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
     llrm_codegen::backend::selectiondag::live_out::assert_live_out_copies(dag, info);
     let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone(), linux };
-    let legal = legalized_with(dag, &tli, &mut lowering, None);
+    let legal = legalized_with(dag, &tli, &mut lowering, None, false);
     // The reason the legalizer stopped is the Custom operation it could not
     // lower.
     if let Some(why) = lowering.custom {

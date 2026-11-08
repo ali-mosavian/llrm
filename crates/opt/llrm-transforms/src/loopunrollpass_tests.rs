@@ -337,6 +337,7 @@ fn a_full_unroll_hands_over_the_loops_it_made() {
             only_when_forced: false,
             target_unrolling: false,
             created: std::rc::Rc::clone(&created),
+            decided: Default::default(),
         },
     );
     assert!(!text.contains("%i = phi"), "the outer loop is gone: {text}");
@@ -360,6 +361,7 @@ fn a_full_unroll_hands_over_the_inner_loop_of_its_first_trip() {
             only_when_forced: false,
             target_unrolling: false,
             created: std::rc::Rc::clone(&created),
+            decided: Default::default(),
         },
     );
     // The text has five blocks, b0 to out: a loop headed by one of them is the
@@ -776,12 +778,28 @@ fn unrolled_o1(
     module: &mut Module,
     never_grows: bool,
 ) -> bool {
+    unrolled_o1_analysing(module, never_grows, None)
+}
+
+/// `unrolled_o1`, the target stating how many trips the no-growth rule
+/// analyses.
+fn unrolled_o1_analysing(
+    module: &mut Module,
+    never_grows: bool,
+    analyzed_trips: Option<u32>,
+) -> bool {
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
     crate::testing::closed(module).expect("closes");
     let tti = X86::of_cpu("i486")
         .expect("a cpu")
-        .with_tuning(llrm_mir::target::Tuning { unroll_never_grows_at_o1: never_grows, ..llrm_mir::target::Tuning::PIN });
+        .with_tuning(
+            llrm_mir::target::Tuning {
+                unroll_never_grows_at_o1: never_grows,
+                unroll_o1_analyzed_trips: analyzed_trips,
+                ..llrm_mir::target::Tuning::PIN
+            },
+        );
     let options = Options {
         opt_level: 1,
         opt_size: false,
@@ -825,6 +843,42 @@ fn test_at_o1_a_loop_whose_copies_cost_more_than_the_loop_stays_rolled() {
     assert!(!unrolled_o1(&mut parsed(&counted(8)), true), "eight copies of a multiply and an add grow");
 }
 
+/// float_in_memory_loop -O1 m32: sixteen trips of a load from a constant table
+/// and an add fold to nothing when copied (the analysis prices the copies at 0
+/// units against 4 rolled), but the -O1 guard analysed only the pin's first ten
+/// trips (`-unroll-max-iteration-count-to-analyze`), found nothing for sixteen
+/// and kept the loop: 64 -> 158 B. The pricing path analyses all the trips; so
+/// does the guard now.
+#[test]
+fn test_at_o1_a_loop_of_more_than_ten_trips_that_folds_away_is_unrolled() {
+    let table = (1..=16).map(|n| format!("i32 {n}")).collect::<Vec<_>>().join(", ");
+    let text = format!(
+        "@t = constant [16 x i32] [{table}]
+
+define i32 @f() {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi i32 [ 0, %b0 ], [ %s, %b1 ]
+  %q = getelementptr inbounds i32, ptr @t, i32 %i
+  %v = load i32, ptr %q
+  %s = add i32 %acc, %v
+  %next = add i32 %i, 1
+  %go = icmp ult i32 %next, 16
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i32 %s
+}}
+"
+    );
+    assert!(!unrolled_o1(&mut parsed(&text), true), "the pin's cap of ten analysed trips keeps it rolled");
+    let mut module = parsed(&text);
+    assert!(unrolled_o1_analysing(&mut module, true, Some(16)), "{}", printed(&module));
+}
+
 /// x_life O1 (gcc unrolls the dx loop and shrinks): three copies of a load
 /// and an add cost what the rolled loop's body and its branch do, so the
 /// size-neutral bar keeps this unroll.
@@ -841,7 +895,8 @@ fn nested(n: usize) -> String {
     );
     for k in 0..n {
         let next = if k + 1 == n { "latch".to_owned() } else { format!("l{}", k + 1) };
-        let (pre, init) = if k == 0 { ("o".to_owned(), "c0".to_owned()) } else { (format!("x{}", k - 1), format!("r{}", k - 1)) };
+        let (pre, init) =
+            if k == 0 { ("o".to_owned(), "c0".to_owned()) } else { (format!("x{}", k - 1), format!("r{}", k - 1)) };
         text += &format!(
             "l{k}:\n  %i{k} = phi i16 [ 0, %{pre} ], [ %n{k}, %l{k} ]\n  %a{k} = phi i16 [ %{init}, %{pre} ], [ %s{k}, %l{k} ]\n  %s{k} = add i16 %a{k}, %i{k}\n  %n{k} = add i16 %i{k}, 1\n  %g{k} = icmp slt i16 %n{k}, 4\n  br i1 %g{k}, label %l{k}, label %x{k}\n\nx{k}:\n  %r{k} = phi i16 [ %s{k}, %l{k} ]\n  br label %{next}\n\n",
         );
@@ -886,6 +941,7 @@ fn test_a_function_the_unroll_leaves_alone_makes_no_loop_analyses() {
             only_when_forced: false,
             target_unrolling: false,
             created: Default::default(),
+            decided: Default::default(),
         },
     );
     let made = get(Event::LoopAnalyses) - before;
@@ -920,4 +976,186 @@ fn test_partial_unrolls_in_sequence_build_one_dominator_tree_and_nest() {
     assert_eq!(printed(&module).matches("phi i16 [ 0,").count(), 8, "partial: the eight loops remain");
     let (trees, nests) = (get(Event::Dominators) - trees, get(Event::LoopAnalyses) - nests);
     assert!(trees <= 2 && nests <= 2, "{trees} dominator trees and {nests} nests built for 8 partial unrolls");
+}
+
+/// Compile time: the unroll pass looked at its function's loops through a
+/// shape made again (`Shape::of`: a dominator tree and loops, 484 K Ir a call
+/// on memexp -O2) while the manager held both. A function whose loops are in
+/// canonical form and stay rolled derives no shape of its own.
+#[test]
+fn test_the_unroll_pass_asks_the_managers_loops_not_a_new_shape() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %next
+}
+",
+    );
+    let before = llrm_analysis::cfg::shapes_derived();
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            created: Default::default(),
+            decided: Default::default(),
+        },
+    );
+    assert_eq!(llrm_analysis::cfg::shapes_derived(), before, "a shape was made again");
+}
+
+/// Compile time: the unroll pass closed its function's SSA form through a
+/// dominator tree and loops of its own (755 calls, 748 M Ir on memexp -O2,
+/// every one of them a no-op) while the manager held both. A function the
+/// pass left as it found it makes none.
+#[test]
+fn test_the_unroll_pass_closes_over_the_managers_tree_and_loops() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %next
+}
+",
+    );
+    crate::lcssa::TREES_MADE.with(|count| count.set(0));
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            created: Default::default(),
+            decided: Default::default(),
+        },
+    );
+    assert_eq!(crate::lcssa::TREES_MADE.with(std::cell::Cell::get), 0, "a tree was made again");
+}
+
+/// Compile time: a full unroll run for one loop of the loop pass manager
+/// (`loopfilter::only`) still put the whole function in simplified and closed
+/// form first, 755 runs, 403 of them over one function of 403 loops (a
+/// quadratic 1.1 B Ir on memexp -O2). The pin's `LoopFullUnrollPass` does
+/// neither: no loop is asked, no shape made.
+#[test]
+fn test_a_full_unroll_for_one_loop_does_not_re_form_the_function() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %next
+}
+",
+    );
+    let _scope = crate::loopfilter::only(&[llrm_mir::module::BlockId(1)]);
+    crate::lcssa::LOOPS_FORMED.with(|count| count.set(0));
+    let shapes = llrm_analysis::cfg::shapes_derived();
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            created: Default::default(),
+            decided: Default::default(),
+        },
+    );
+    assert_eq!(crate::lcssa::LOOPS_FORMED.with(std::cell::Cell::get), 0, "the function was closed again");
+    assert_eq!(llrm_analysis::cfg::shapes_derived(), shapes, "a shape was made again");
+}
+
+/// fib(20) at m64 -O3 with its copies priced panicked in ScalarEvolution ("the
+/// header of a loop"): ten outer trips round an inner loop started from the
+/// outer counter (`%start = %i - 1`). The full unroll of the outer loop kept
+/// `%start` with a constant, and its cached expression, an add recurrence of
+/// the gone outer loop, was read by the next inner loop's trip count.
+#[test]
+fn a_full_unroll_of_a_nest_forgets_the_expressions_of_its_kept_values() {
+    let text = "declare i32 @g(i32)
+
+define i32 @f(i32 %x) {
+b0:
+  br label %o
+
+o:
+  %i = phi i32 [ 20, %b0 ], [ %i.next, %ol ]
+  %acc = phi i32 [ 0, %b0 ], [ %r, %ol ]
+  %start = add nsw i32 %i, -1
+  %skip = icmp ult i32 %i, 3
+  br i1 %skip, label %ol, label %pre
+
+pre:
+  br label %h
+
+h:
+  %j = phi i32 [ %start, %pre ], [ %j.next, %h ]
+  %a = phi i32 [ 0, %pre ], [ %a.next, %h ]
+  %j1 = add nsw i32 %j, -1
+  %c = tail call i32 @g(i32 %j1)
+  %j.next = add nsw i32 %j, -2
+  %a.next = add i32 %c, %a
+  %low = icmp ult i32 %j, 4
+  br i1 %low, label %hx, label %h
+
+hx:
+  %jl = phi i32 [ %j.next, %h ]
+  %al = phi i32 [ %a.next, %h ]
+  br label %ol
+
+ol:
+  %m = phi i32 [ %start, %o ], [ %jl, %hx ]
+  %t = phi i32 [ 0, %o ], [ %al, %hx ]
+  %i.next = add nsw i32 %i, -2
+  %r1 = add i32 %m, %acc
+  %r = add i32 %r1, %t
+  %done = icmp eq i32 %i.next, 0
+  br i1 %done, label %out, label %o
+
+out:
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let created = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let out = crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 3,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            created,
+            decided: Default::default(),
+        },
+    );
+    assert!(!out.contains("%i = phi"), "the outer loop is gone: {out}");
 }

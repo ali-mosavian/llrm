@@ -103,6 +103,25 @@ impl Pool {
         Mem { disp_width: 2, ..Mem::new(Some(Addr { index: id, ..Addr::new(Space::Segment, 0) }), width) }
     }
 
+    /// The cells holding +0.0 or +1.0 (a float or a double), by the id of their
+    /// address, and the x87 instruction that loads the same value with no
+    /// memory operand: what an operation read from such a cell is made again
+    /// by when its memory form cannot stay (`fpstack`).
+    #[must_use]
+    pub fn x87_cells(&self) -> crate::support::hash::HashMap<i64, &'static str> {
+        self.entries
+            .iter()
+            .filter_map(|(bytes, &id)| {
+                let value = match bytes.len() {
+                    4 => f64::from(f32::from_le_bytes(bytes.as_slice().try_into().ok()?)),
+                    8 => f64::from_le_bytes(bytes.as_slice().try_into().ok()?),
+                    _ => return None,
+                };
+                x87_constant(value).filter(|(_, negated)| !negated).map(|(name, _)| (id, name))
+            })
+            .collect()
+    }
+
     /// Where the pool is now, for [`Pool::rewind`]: what a selection that is
     /// not kept asked for goes with it.
     #[must_use]

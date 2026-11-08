@@ -386,6 +386,9 @@ pub struct MFunc {
     /// when the selector kept none.
     pub block_ids: Vec<u32>,
     pub edge_probs: Vec<(u32, u32, u32)>,
+    /// The IR's edge odds the allocator reads (`MachineBranchProbabilityInfo`);
+    /// set just before allocation.
+    pub alloc_odds: Option<llrm_spike_mf::placement::Odds>,
 }
 
 /// A constant pool entry: `bytes` at `align`, under `label`.

@@ -173,6 +173,8 @@ pub struct Tuned {
     pub price_fills: bool,
     /// No constant memset is stored inline: every fill is a `rep stos`.
     pub rep_fills: bool,
+    /// `Tti::second_ipsccp`.
+    pub second_ipsccp: bool,
 }
 
 use llrm_mir::tti;
@@ -188,9 +190,14 @@ pub struct Flagged {
     pub fast_sqrt: bool,
     pub no_cmov: bool,
     pub no_global_base: bool,
+    pub second_ipsccp: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
+    fn second_ipsccp(&self) -> bool {
+        self.second_ipsccp
+    }
+
     fn have_fast_sqrt(
         &self,
         ty: tti::Ty,
@@ -332,7 +339,13 @@ impl llrm_mir::target::Machine for Tuned {
     }
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        (self.exit_ne || self.sinks_invariants || self.no_global_base || self.cheap_ctlz || self.fast_sqrt).then(|| {
+        (self.exit_ne
+            || self.sinks_invariants
+            || self.no_global_base
+            || self.cheap_ctlz
+            || self.fast_sqrt
+            || self.second_ipsccp)
+            .then(|| {
             std::rc::Rc::new(Flagged {
                 exit_ne: self.exit_ne,
                 sinks_invariants: self.sinks_invariants,
@@ -340,6 +353,7 @@ impl llrm_mir::target::Machine for Tuned {
                 no_global_base: self.no_global_base,
                 cheap_ctlz: self.cheap_ctlz,
                 fast_sqrt: self.fast_sqrt,
+                second_ipsccp: self.second_ipsccp,
             }) as _
         })
     }

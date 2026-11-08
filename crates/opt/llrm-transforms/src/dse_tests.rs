@@ -719,3 +719,36 @@ fn test_an_unknown_pointer_does_not_observe_a_private_cell() {
     );
     assert!(!after.contains("store"), "{after}");
 }
+
+/// `getLocForWrite`/`isRemovable` of a call: `six` kept `call @w(%m)` (+120 B
+/// in tests/run/c/over_aligned_local_after_even_pushes.c on wasm32) though `@w`
+/// only writes its argument, comes back, and `%m` is dead after `lifetime.end`.
+/// A call that may not come back, may read, or whose result is used stays.
+#[test]
+fn a_dead_call_that_only_writes_its_argument_is_removed() {
+    for (attrs, ret, kept) in [
+        ("willreturn memory(argmem: write)", "void", 0),
+        ("memory(argmem: write)", "void", 1),
+        ("willreturn memory(argmem: write)", "i16", 1),
+        ("willreturn memory(argmem: readwrite)", "void", 1),
+    ] {
+        let def = if ret == "void" { "" } else { "%r = " };
+        let ret_value = if ret == "void" { "%x" } else { "%r" };
+        let after = ran(&format!(
+            "declare {ret} @w(ptr) {attrs}
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+
+define i16 @f(i16 %x) {{
+b0:
+  %m = alloca [8 x i16]
+  call void @llvm.lifetime.start.p0(i64 16, ptr %m)
+  {def}call {ret} @w(ptr %m)
+  call void @llvm.lifetime.end.p0(i64 16, ptr %m)
+  ret i16 {ret_value}
+}}
+"
+        ));
+        assert_eq!(after.matches("@w(").count(), kept, "{attrs} {ret}: {after}");
+    }
+}

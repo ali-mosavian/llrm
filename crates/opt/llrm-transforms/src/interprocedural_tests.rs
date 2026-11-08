@@ -34,7 +34,10 @@ fn stepped(
     let roots = ids(module, roots).into_iter().map(|id| (0, id)).collect();
     let mut stages = Vec::new();
     let costs = OperationCosts { call, ..OperationCosts::default() };
-    let proved = Program::lend(module, std::rc::Rc::new(llrm_mir::target::Neutral), |program| {
+    // The second IPSCCP the promotion tests below rest on is a target's choice
+    // (SD443): a target that asks for it.
+    let target = crate::testing::Tuned { second_ipsccp: true, ..Default::default() };
+    let proved = Program::lend(module, std::rc::Rc::new(target), |program| {
         let mut modules = managers(program, &mut ProgramAnalyses::default());
         optimized_with::<String>(
             program,

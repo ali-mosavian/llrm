@@ -29,10 +29,10 @@
 //! coalescing the copies `eliminateRegSequence` makes
 //! (RegisterCoalescer.cpp#L464). Exit: the lane model, 2026-11-30.
 //!
-//! DEVIATE 2: the `MFunction` states no block odds. A branch with one edge
-//! that stays in its loop and one that leaves gets 31 in 32 to stay (LLVM's
-//! loop branch heuristic); every other branch is even. Exit: the odds the
-//! front end knows (the IR's branch weights).
+//! DEVIATE 2: a target whose `MFunction` states no odds (`odds` is `None`)
+//! gets 31 in 32 to stay on a branch with one edge that stays in its loop and
+//! one that leaves (LLVM's loop branch heuristic); every other branch is
+//! even. Exit: each target states the IR's edge probabilities.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -117,6 +117,7 @@ impl<T: Target> Converted<T> {
             joins_pinned,
             T::joins_sub_registers(),
             T::joins_lanes(),
+            T::joins_loop_carried_first(),
             registers,
             Some(Box::new(move |join| {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
@@ -388,6 +389,7 @@ impl<T: Target> Converted<T> {
             tri: &self.tri,
             lane_pins: true,
             size: false,
+            carry_slot_indexes: true,
         }
     }
 }
@@ -516,7 +518,10 @@ pub fn to_lir<T: Target>(
     let entry = if function.blocks.is_empty() { 0 } else { 0 };
     let mut body = LirBody::new(function.name.clone(), entry, blocks, IndexMap::default(), made.pins.clone());
     body.returns_twice = function.returns_twice;
-    loop_branch_odds(&mut body);
+    match &function.odds {
+        Some(odds) => stated_odds(&mut body, function, odds),
+        None => loop_branch_odds(&mut body),
+    }
     body.inputs = entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect();
     let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
     for (v, class) in function.classes.iter().enumerate() {
@@ -557,11 +562,30 @@ pub fn to_lir<T: Target>(
         tri: SpikeRegisterInfo {
             copy_cost: 1,
             csr_first_use_cost: T::csr_first_use_cost(),
+            size_bytes: T::size_bytes(),
             csr_cost_scale: T::csr_cost_scale(),
             csr_spill_first: T::csr_spill_first(),
             register_cost: T::register_cost,
         },
     })
+}
+
+/// The odds the `MFunction` states, by block number in `body`. An edge with
+/// none shares what the others leave (`getSuccProbability`).
+fn stated_odds<C>(
+    body: &mut LirBody,
+    function: &MFunction<C>,
+    odds: &crate::placement::Odds,
+) {
+    for block in body.blocks.iter() {
+        let from = function.blocks[block.at as usize].id;
+        for &to in block.succ.iter() {
+            let id = function.blocks[to as usize].id;
+            if let Some((probability, _)) = odds.get(&(from, id)) {
+                body.odds.taken.insert((block.at, to), probability.get_numerator());
+            }
+        }
+    }
 }
 
 /// The edge odds of a branch with one edge that stays in its innermost loop
@@ -864,7 +888,10 @@ impl<T: Target> Made<'_, T> {
             insn.early_clobbers = insn.defines.clone();
         }
         if inst.call {
-            insn.clobbers = T::caller_saved().into_iter().collect();
+            insn.clobbers = match &inst.call_clobbers {
+                Some(known) => known.as_ref().clone(),
+                None => T::caller_saved().into_iter().collect(),
+            };
             // The call writes each clobbered register it names: a value that
             // lives across it cannot be the register, and a read after it
             // sees what the call left.
@@ -1819,6 +1846,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
 pub struct SpikeRegisterInfo {
     pub copy_cost: u32,
     pub csr_first_use_cost: u32,
+    pub size_bytes: Option<llrm_codegen::greedy::targetinfo::SizeBytes>,
     pub csr_cost_scale: u32,
     pub csr_spill_first: bool,
     pub register_cost: fn(RegId) -> u8,
@@ -1838,6 +1866,10 @@ impl TargetRegisterInfo for SpikeRegisterInfo {
 
     fn csr_cost_scale(&self) -> u32 {
         self.csr_cost_scale
+    }
+
+    fn size_bytes(&self) -> Option<&llrm_codegen::greedy::targetinfo::SizeBytes> {
+        self.size_bytes.as_ref()
     }
 
     fn csr_spill_first(&self) -> bool {
@@ -2143,7 +2175,11 @@ pub fn from_lir<T: Target>(
             let (Some(what), Some(origin)) = (&insn.what, converted.origin.get((insn.at / 2) as usize)) else {
                 continue;
             };
-            if insn.defines.len() == 1 && insn.uses.is_empty() {
+            // A definition the target marks rematerializable may read a value
+            // (arm64's `add x, y, #n`): the spiller makes it again where it is
+            // read, and it is no less a definition for the register it uses.
+            let remakable = original.blocks[origin.0].insts[origin.1].rematerializable;
+            if insn.defines.len() == 1 && (insn.uses.is_empty() || remakable) {
                 definitions.entry(format!("{:?}{:?}", what.name, what.sources)).or_insert(*origin);
             }
         }
@@ -2189,8 +2225,9 @@ pub fn from_lir<T: Target>(
                     .find_map(|loc| if let Loc::Held(held) = loc { Some(*held) } else { None })
                     .ok_or("a spill of no value")?;
                 let numbered = number(value, &mut classes);
-                // A pinned value is no virtual register: its class is one that holds its register
-                // (vreg 0's class made a spill of `hl` a byte store, `ld -4(ix), hl`).
+                // A pinned value is no virtual register: its class is one that
+                // holds its register (vreg 0's class made a
+                // spill of `hl` a byte store, `ld -4(ix), hl`).
                 let class = match numbered {
                     Reg::Virt(v) => classes[v as usize],
                     Reg::Phys(register) => classes

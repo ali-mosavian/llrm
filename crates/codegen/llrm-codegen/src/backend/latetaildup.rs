@@ -146,6 +146,8 @@ fn tail_duplicate(
             continue;
         }
         if chosen.contains(&place) {
+            // A predecessor with no instruction at all (it only falls into the tail) is
+            // given a stand-in at its own place to anchor the copy's addresses.
             let jump = old
                 .insns
                 .iter()
@@ -156,7 +158,7 @@ fn tail_duplicate(
                 })
                 .cloned()
                 .or_else(|| old.insns.last().cloned())
-                .expect("a block with an instruction");
+                .unwrap_or_else(|| Arc::new(Insn::new(old.at, Some((old.at, old.at)), None, Vec::new(), Vec::new())));
             // A predecessor that falls into the tail has no jump to drop: its last
             // instruction stays (it was lost, `add eax, 32` of __clzdi2).
             let jumps = operation(&jump) == Some(Operation::Jump)
@@ -224,7 +226,7 @@ pub fn duplicated(
 
 /// How many callee-saved registers the body writes: the pops its returns will
 /// take (`masm::saved_of`, without the interrupt and runtime-entry cases). A
-fn saved_count(
+pub(crate) fn saved_count(
     body: &LirBody,
     saved: &[RegId],
     free: bool,
@@ -413,5 +415,21 @@ mod tests {
         let done = dup(shape, false);
         assert_eq!(names(at(&done, 1)), ["mov", "mov", "jmp"]);
         assert!(done.blocks.iter().any(|block| block.at == 3), "block 0 still reaches the tail");
+    }
+    /// sfm16_float_i2f `-m64 -O1` (any of six softfloat helpers together): a predecessor with no
+    /// instruction that only falls into the tail was chosen to take the copy and the compile
+    /// panicked with "a block with an instruction". It takes the copy like the other arm.
+    #[test]
+    fn test_an_empty_predecessor_that_falls_into_the_tail_takes_the_copy() {
+        let shape = body(vec![
+            block(0, vec![of("jne", Operation::Branch, Some(2)), jump(1)], &[1, 2]),
+            block(1, Vec::new(), &[3]),
+            block(3, vec![work(3), jump(9)], &[9]),
+            block(2, vec![work(2), jump(3)], &[3]),
+            block(9, vec![work(8), work(9), of("ret", Operation::Return, None)], &[]),
+        ]);
+        let done = dup(shape, false);
+        assert_eq!(names(at(&done, 1)), ["mov", "jmp"]);
+        assert_eq!(names(at(&done, 2)), ["mov", "mov", "jmp"]);
     }
 }

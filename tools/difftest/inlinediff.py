@@ -2,7 +2,7 @@
 """Which call sites llrm inlines and LLVM's inliner inlines, on the same module, with the cost LLVM saw.
 
     tools/difftest/inlinediff.py BEFORE.ll REMARKS [--pipeline inline|default<O2>] [--threshold N]
-    tools/difftest/inlinediff.py dumps DIR... [--pipeline P] [--threshold N]     `llrm-c --dump DIR` with its stderr in DIR/remarks.txt
+    tools/difftest/inlinediff.py dumps DIR... [--pipeline P] [--threshold N]     `llrm-cc --dump DIR` with its stderr in DIR/remarks.txt
 
 BEFORE is the module before llrm's inline stage (in a dump: the second of the three NN-pipeline.ll) and REMARKS llrm's stderr under
 `LLRM_EXP_INLINEDECIDE=1 LLRM_INLINE_REMARKS=1`. Both sides are read from their remarks ('callee' inlined into 'caller' with (cost=C,
@@ -148,7 +148,7 @@ def table(report: dict, examples: int = 6) -> str:
 
 
 def stage_files(directory: Path) -> tuple[Path, Path] | None:
-    """(before, remarks) of an `llrm-c --dump` directory: the second of three consecutive NN-pipeline.ll, and remarks.txt."""
+    """(before, remarks) of an `llrm-cc --dump` directory: the second of three consecutive NN-pipeline.ll, and remarks.txt."""
     named = sorted(directory.glob("[0-9]*-*.ll"), key=lambda p: int(re.match(r"\d+", p.name)[0]))
     pipeline = [p for p in named if p.name.endswith("-pipeline.ll")]
     remarks = directory / "remarks.txt"

@@ -187,6 +187,10 @@ pub enum Intrinsic {
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
+    /// `llrm.vararg.address`: the address of the calling function's first
+    /// variadic argument, the value `va_start` writes into a list that is one
+    /// pointer (DEVIATE VASTART-PROMOTE).
+    VarargAddress,
     /// `llvm.va_end`: the list its argument points to is no longer read. It
     /// does nothing where the list owns no resource.
     VaEnd,
@@ -564,7 +568,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 85] = [
+const TABLE: [Spec; 86] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -864,6 +868,14 @@ const TABLE: [Spec; 85] = [
         own: None,
     },
     Spec {
+        name: "llrm.vararg.address",
+        intrinsic: Intrinsic::VarargAddress,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
+    },
+    Spec {
         name: "llvm.va_end",
         intrinsic: Intrinsic::VaEnd,
         overloads: &[Kind::Pointer],
@@ -1020,7 +1032,7 @@ pub fn is_wide_divide(name: &str) -> bool {
 }
 
 pub fn is_reserved(name: &str) -> bool {
-    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias")
+    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias") || name.starts_with("llrm.vararg.")
 }
 
 /// The type suffix LLVM mangles an overloaded type into.

@@ -14,8 +14,8 @@ Open Watcom's `wccq`, `jwasm`, `jwlink` and DOSBox-X.
 
 ```sh
 tools/identity.sh nib  BASE/llrm-nib target/release/llrm-nib
-tools/identity.sh c    BASE/llrm-c   target/release/llrm-c [-m32]
-QCPORT=... QCPORT_INC=... tools/identity.sh qcport BASE/llrm-c target/release/llrm-c
+tools/identity.sh c    BASE/llrm-cc   target/release/llrm-cc [-m32]
+QCPORT=... QCPORT_INC=... tools/identity.sh qcport BASE/llrm-cc target/release/llrm-cc
 ```
 
 It prints how many programs came out SAME, and each one that is not: `DIFF` (the objects differ),
@@ -31,4 +31,4 @@ keeps the instrument honest.
 The cost is user-space instructions (`perf stat -e instructions:u`, children included) with the binary on a
 fixed-length path and a constant-size environment (`llrmbin.pinned`, `measured_environment`), so a loaded host does not
 move it. A step's own cost is `llrm-llc`'s `LLRM_DEBUG=time` `[instr]` rows. A target is a row of `llrm-cc`'s table
-(`llrmbin.c_args`); it needs `LLRM_PIN_CLANG`, `LLRM_OW` and, at 16 bits, `LLRM_CLANG_M16`.
+(`llrmbin.c_args`); it needs `LLRM_PIN_CLANG`, the Open Watcom tree (`tools/ow-fetch.sh`) and, at 16 bits, `LLRM_CLANG_M16`.

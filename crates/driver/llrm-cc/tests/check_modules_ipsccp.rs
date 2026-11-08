@@ -1,7 +1,8 @@
-//! `LLRM_CHECK_MODULES` panicked ("declarations: the result kept is not what working it out again
-//! gives") where the second IPSCCP restated the attributes of two bodies and re-ran the first before
-//! the other was told changed (`tests/run/c/memory_expansion.c`, 1 of ~210 sources). Needs `LLRM_OW`
-//! and `LLRM_PIN_CLANG`.
+//! `LLRM_CHECK_MODULES` panicked ("declarations: the result kept is not what
+//! working it out again gives") where the second IPSCCP restated the attributes
+//! of two bodies and re-ran the first before the other was told changed
+//! (`tests/run/c/memory_expansion.c`, 1 of ~210 sources). Needs the Open Watcom
+//! tree (tools/ow-fetch.sh) and `LLRM_PIN_CLANG`.
 
 use std::path::Path;
 use std::process::Command;
@@ -10,9 +11,14 @@ const SOURCE: &str = "static unsigned char src[700];\nstatic int bad;\n__attribu
 
 #[test]
 fn bodies_the_second_ipsccp_restated_are_all_told_changed_before_the_first_runs_again() {
-    for name in ["LLRM_OW", "LLRM_PIN_CLANG"] {
-        assert!(std::env::var_os(name).is_some(), "{name} is not set: this test needs it and does not skip");
-    }
+    assert!(
+        llrm_cc::ow_tree().is_dir(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
+    assert!(
+        std::env::var_os("LLRM_PIN_CLANG").is_some(),
+        "LLRM_PIN_CLANG is not set: this test needs it and does not skip"
+    );
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("checkmodules-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

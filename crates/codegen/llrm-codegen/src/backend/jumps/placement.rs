@@ -94,10 +94,18 @@ struct Placer {
     dead: Vec<bool>,
     /// The tail-duplication threshold in instructions (`TailDupSize`).
     dup_size: usize,
+    /// DEVIATE TAILDUP-HOT: blocks above `dup_size` copied where it pays.
+    hot: Option<HotTailDup>,
+    /// The blocks that jump back to a loop header: copying one into its
+    /// predecessors would give the loop several back edges.
+    latch: Vec<bool>,
     postdom: postdom::PostDom,
     /// Edges rerouted by copies, for the odds: (from, its successors before,
     /// the tail, the tail's successors with their chances).
     rerouted: Vec<(i64, Vec<i64>, i64, Vec<(i64, f64)>)>,
+    /// Instructions of frame teardown a return block will carry: the pin
+    /// places after the epilogue is in (DEVIATE: counted, not emitted yet).
+    epilogue: usize,
 }
 
 fn succ_seen(
@@ -106,6 +114,36 @@ fn succ_seen(
     to: i64,
 ) -> bool {
     index.get(&to).is_some_and(|to| seen.contains(to))
+}
+
+/// DEVIATE TAILDUP-HOT (owner x86-m32, exit 2026-12-05): a block of up to
+/// `size` instructions above the pin's bound is copied into a predecessor when
+/// the jump the copy saves, on half the block's executions, is worth more
+/// than the copy's bytes at the speed rate.
+#[derive(Clone, Copy, Debug)]
+pub struct HotTailDup {
+    pub size: usize,
+    /// Clocks of the unconditional jump the copy removes.
+    pub jump_clocks: f64,
+    /// Clocks a byte of code is worth at speed.
+    pub clocks_per_byte: f64,
+}
+
+/// Bytes of an x86 instruction on average, to price a copy by its length in
+/// instructions.
+const AVERAGE_INSN_BYTES: f64 = 3.0;
+
+impl HotTailDup {
+    /// Whether a block of `count` instructions run `frequency` times per call
+    /// is worth copying.
+    pub(super) fn pays(
+        &self,
+        count: usize,
+        frequency: f64,
+    ) -> bool {
+        count <= self.size
+            && frequency * self.jump_clocks / 2.0 >= count as f64 * AVERAGE_INSN_BYTES * self.clocks_per_byte
+    }
 }
 
 /// The blocks of `blocks` in the order `MachineBlockPlacement` lays them out,
@@ -120,10 +158,21 @@ pub(super) fn order(
     size: bool,
     aggressive: bool,
     tail_dup: Option<usize>,
+    hot: Option<HotTailDup>,
+    epilogue: usize,
 ) -> (Vec<Block>, BlockOdds) {
     let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(place, block)| (block.at, place)).collect();
     let entry = index.get(&entry).copied().unwrap_or(0);
-    let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, tail_dup, entry);
+    let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, tail_dup, hot, entry);
+    placer.epilogue = epilogue;
+    for found in natural {
+        let Some(&header) = index.get(&found.header) else { continue };
+        for at in found.body.to_set().iter() {
+            if let Some(&member) = index.get(at).filter(|&&member| placer.succ[member].contains(&header)) {
+                placer.latch[member] = true;
+            }
+        }
+    }
     let order = placer.build(natural, &index);
     let mut out = odds.clone();
     for (from, succ, tail, into) in &placer.rerouted {
@@ -143,6 +192,7 @@ impl Placer {
         size: bool,
         aggressive: bool,
         tail_dup: Option<usize>,
+        hot: Option<HotTailDup>,
         entry: usize,
     ) -> Self {
         let n = blocks.len();
@@ -163,6 +213,13 @@ impl Placer {
                 edge.insert((from, to), probability);
                 pred[to].push(from);
             }
+        }
+        // `predecessors()` lists a block's predecessors in the order isel made
+        // their edges: it visits the blocks in reverse post-order, so a
+        // branch's last successor first. Ties between trellis edges follow it.
+        let rank = reverse_post_order(&succ, entry);
+        for list in &mut pred {
+            list.sort_by_key(|from| rank[*from]);
         }
         let postdom = postdom::PostDom::of(&succ, &pred);
         Self {
@@ -195,7 +252,10 @@ impl Placer {
             } else {
                 TAIL_DUPLICATION
             }),
+            hot: hot.filter(|_| !size),
+            latch: vec![false; n],
             rerouted: Vec::new(),
+            epilogue: 0,
         }
     }
 
@@ -965,4 +1025,34 @@ impl Placer {
         }
         self.chains[chain].blocks.rotate_left(at + 1);
     }
+}
+
+/// Each block's place in the reverse post-order of a walk from `entry` that
+/// takes successors in order; blocks it does not reach come last.
+fn reverse_post_order(
+    succ: &[Vec<usize>],
+    entry: usize,
+) -> Vec<usize> {
+    let n = succ.len();
+    let mut done = vec![false; n];
+    let mut post = Vec::with_capacity(n);
+    let mut stack = vec![(entry, 0usize)];
+    done[entry] = true;
+    while let Some(&mut (block, ref mut next)) = stack.last_mut() {
+        if let Some(&to) = succ[block].get(*next) {
+            *next += 1;
+            if !done[to] {
+                done[to] = true;
+                stack.push((to, 0));
+            }
+        } else {
+            post.push(block);
+            stack.pop();
+        }
+    }
+    let mut rank = vec![n; n];
+    for (place, block) in post.iter().rev().enumerate() {
+        rank[*block] = place;
+    }
+    rank
 }

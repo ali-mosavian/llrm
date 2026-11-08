@@ -70,6 +70,16 @@ fn every_cmpa_form_encodes_as_binutils_does() {
     }
 }
 
+/// `cmpa.w #imm, %an` is opmode 011 with a 16-bit immediate.
+#[test]
+fn the_word_immediate_compare_encodes_as_binutils_does() {
+    let inst = Inst { opcode: "CMPA16i", operands: vec![Operand::Imm(-2), Operand::Reg(reg::A2)] };
+    let text = print(&inst).unwrap();
+    assert!(text.starts_with("cmpa.w"), "{text}");
+    let Some(want) = assembled(&text.replace('$', "0x")) else { return };
+    assert_eq!(encode(&inst).unwrap().bytes, want, "{text}");
+}
+
 const POINTERS: &str = "
 define i32 @f(ptr %p, ptr %e) {
 entry:

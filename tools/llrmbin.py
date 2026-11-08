@@ -17,7 +17,7 @@ STAMPED = ("llrm-llc",)
 
 # llrm-cc's table row and CPU for a C compile at `bits`, and the variables it reads to find its clang and Open Watcom headers.
 C_ROWS = {16: ("x86_16-wat", "-march=i386"), 32: ("x86_32-wat", "-march=i486")}
-CC_ENV = ("LLRM_OW", "LLRM_PIN_CLANG", "LLRM_CLANG_M16")
+CC_ENV = ("LLRM_PIN_CLANG", "LLRM_CLANG_M16")
 
 
 def c_args(bits: int) -> list[str]:
@@ -26,10 +26,16 @@ def c_args(bits: int) -> list[str]:
     return [f"--target={row}", cpu]
 
 
+def ow_tree() -> Path:
+    """The Open Watcom tree llrm-cc's `{ow}` names: $XDG_CACHE_HOME (else ~/.cache)/llrm/ow-src-<commit>, the commit toolchain/owshim/ow-commit pins. tools/ow-fetch.sh makes it."""
+    commit = (REPO / "toolchain/owshim/ow-commit").read_text().strip()
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return cache / "llrm" / f"ow-src-{commit}"
+
+
 def cc_environment() -> dict[str, str]:
-    """The variables llrm-cc needs, from the caller's, with the usual default for the Open Watcom tree."""
+    """The variables llrm-cc needs, from the caller's (the Open Watcom tree is `ow_tree()`, no variable)."""
     env = {name: os.environ[name] for name in CC_ENV if name in os.environ}
-    env.setdefault("LLRM_OW", str(Path.home() / "scratch/ow-src"))
     pin = REPO / "toolchain/clang/pin"
     lines = pin.read_text().splitlines() if pin.exists() else []
     if len(lines) > 1 and "LLRM_CLANG_M16" not in env and (m16 := Path.home() / "scratch/clang-by-sha" / lines[1].split()[0] / "bin/clang").exists():
@@ -74,8 +80,8 @@ def stamped(found: Path) -> None:
 
 
 def declared(repo: Path) -> set[str]:
-    """The binaries a plain `cargo build --bins` builds: the root package's [[bin]] names whose `required-features` the default features enable (others in target/ are leftovers: llrm-c
-    needs `c-legacy`, so the runner's rebuild left a day-old llrm-c in place and refused every PR as "binaries still older than the merged tree after a rebuild")."""
+    """The binaries a plain `cargo build --bins` builds: the root package's [[bin]] names whose `required-features` the default features enable (others in target/ are leftovers: llrm-cc
+    needs `c-legacy`, so the runner's rebuild left a day-old llrm-cc in place and refused every PR as "binaries still older than the merged tree after a rebuild")."""
     import tomllib
 
     manifest = repo / "Cargo.toml"

@@ -47,7 +47,10 @@
 //! outside a block that runs every trip, where the `constant` path above
 //! already hoists what the allocator can make again.
 //!
-//! DEVIATE ML2, exit 2026-11-20: the pin's `FLD1` and `FLDZ` read `$fpcw`,
+//! DEVIATE ML2 (owner x87, exit 2026-12-08), 11-08 re-check: the pin keeps
+//! `fld1; fchs` inside the loops of x_ld_abs -O2 (`-march=i486`, the pinned
+//! clang's listing) and gcc carries the constant on the stack (`fsub st, st(1)`),
+//! so neither exit holds. The pin's `FLD1` and `FLDZ` read `$fpcw`,
 //! which the function's `FLDCW` (for an `fptosi`) writes, so nothing moves and
 //! `fld1; fchs; faddp` (18 clk) is made on every trip of a loop that adds
 //! `-1.0`. Both and `fchs` are exact under any rounding control. A constant
@@ -160,7 +163,9 @@ fn constant_load(one: &Insn) -> bool {
 
 /// `fld m80` of a constant-pool entry (`Insn::invariant`): the value is made
 /// again on every trip, where gcc's reg-stack leaves it on the x87 stack.
-/// DEVIATE X1, exit 2026-11-20: the load reads `$fpcw`, which the pin's
+/// DEVIATE X1 (owner x87, exit 2026-12-08), 11-08 re-check: for `s += a[i] * 0.1L + 0.3L`
+/// the pinned clang loads both m80 constants every trip, gcc carries one and ours
+/// both. The load reads `$fpcw`, which the pin's
 /// `IsLoopInvariantInst` accepts only where nothing in the function writes it
 /// (`fisttp` here does); `fld` of an extended constant does not depend on the
 /// rounding control, so it moves regardless and the stack carries it as it
@@ -357,11 +362,15 @@ impl licm::Inst for Wrapped {
         other: &Self,
     ) -> bool {
         let (Some(one), Some(two)) = (&self.0.what, &other.0.what) else { return false };
-        // DEVIATE X2 (owner m64, exit 2026-11-20): an x87 value is a stack
+        // DEVIATE X2 (owner m64, exit 2026-12-20): an x87 value is a stack
         // entry and the allocator gives each loop-carried entry its own
         // definition; the pin's RFP registers are virtual until the stackifier
         // (X86FloatingPoint), which copes with one register feeding two. Two
-        // `fldz` stay two values.
+        // `fldz` stay two values. Removed (2026-11-08): no object of 80 x87
+        // size cells (m32, m64, O2/Os) changes and 52 run outputs are equal, so
+        // the corpus never holds two equal hoistable x87 constants; the unit
+        // test below differs (the merge is real), and no program shows the
+        // stackifier coping. Delete once one does.
         if one.dests.iter().any(|place| matches!(place, Loc::Held(held) if held.width == 10)) {
             return false;
         }

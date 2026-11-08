@@ -67,10 +67,10 @@ fn a_function_with_a_frame_record_states_where_its_caller_is() {
         rules(&object),
         [[
             "DW_CFA_def_cfa_offset: 16",
-            "DW_CFA_def_cfa_register: r29 (x29)",
+            "DW_CFA_def_cfa: r29 (x29) ofs 16",
             "DW_CFA_offset: r30 (x30) at cfa-8",
             "DW_CFA_offset: r29 (x29) at cfa-16",
-            "DW_CFA_def_cfa_register: r31 (sp)",
+            "DW_CFA_def_cfa: r31 (sp) ofs 16",
             "DW_CFA_def_cfa_offset: 0",
             "DW_CFA_restore: r30 (x30)",
             "DW_CFA_restore: r29 (x29)",

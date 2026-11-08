@@ -161,9 +161,13 @@ pub struct Profile {
     /// target states a smaller bound than the pin's (`timings.times`);
     /// none: the pin's.
     pub tail_dup_threshold: Option<usize>,
+    /// `tail_dup_hot_threshold` of the target's table (DEVIATE TAILDUP-HOT).
+    pub tail_dup_hot_size: Option<usize>,
     /// Commuting prefers the operand the result is copied back into
     /// (DEVIATE TA-LC, from the target's table; off: the pin's order).
     pub commute_loop_carried: bool,
+    /// DEVIATE PHI-SHARE on (`CpuTable::share_congruent_phis`).
+    pub share_congruent_phis: bool,
     /// Clocks a mispredicted branch costs, where the target states it.
     pub mispredict_penalty: Option<i64>,
     /// `mispredict_penalty` at -O1, -Os and -Oz, where the target states one.
@@ -193,6 +197,13 @@ pub struct Profile {
     /// allocation (`TailDuplicator`, `PreRegAlloc` clear); on only where its
     /// A/B has been made (`TailDuplicate` slot).
     pub post_ra_tail_duplicate: bool,
+    /// Equal literal stores share a register at the speed levels too
+    /// (`TimingTable::share_literal_stores`).
+    pub share_literal_stores: bool,
+    /// A select of two constants in a block at least this often run is a branch
+    /// on a CPU with no `cmov`; 0 is off
+    /// (`TimingTable::branch_constant_selects`).
+    pub branch_constant_selects: u32,
     /// A spill of an x87 value keeps the register's 80 bits (`fstp tbyte`),
     /// as real BC keeps a temporary (BASIC). DEVIATE D-RFP5, exit: none, the
     /// pin rounds; QB follows real BC text.
@@ -390,7 +401,9 @@ impl Profile {
             optimized: true,
             aggressive: false,
             tail_dup_threshold: None,
+            tail_dup_hot_size: None,
             commute_loop_carried: false,
+            share_congruent_phis: false,
             mispredict_penalty: None,
             mispredict_penalty_size: None,
             float_store: false,
@@ -399,6 +412,8 @@ impl Profile {
             min_size: false,
             speed_rate: true,
             post_ra_tail_duplicate: false,
+            share_literal_stores: false,
+            branch_constant_selects: 0,
             spills_extended: false,
             exhaustive: false,
             model: arch.cost_model(),
@@ -426,6 +441,12 @@ impl Profile {
         self.optimized && !(self.size || self.min_size)
     }
 
+    /// Optimized code whose bytes are not traded for clocks: -O1 and size (no
+    /// speed rate), where a smaller routine of the same result wins.
+    pub fn bytes_strict(&self) -> bool {
+        self.optimized && (!self.has_speed_goal() || !self.speed_rate)
+    }
+
     /// Clocks a byte of code is worth at speed, in thousandths: the target's
     /// rate at -O2 and -O3, none at -O1 and for size.
     pub fn speed_milliclocks_per_byte(&self) -> i64 {
@@ -445,6 +466,20 @@ impl Profile {
             return 0;
         }
         machine.tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+    }
+
+    /// What placement's tail duplication may copy above the pin's bound
+    /// (DEVIATE TAILDUP-HOT): only where bytes are priced at speed (-O2, -O3),
+    /// by the jump a copy saves (`jmp_short`) against the rate.
+    pub fn tail_dup_hot(&self) -> Option<crate::backend::jumps::placement::HotTailDup> {
+        let size = self.tail_dup_hot_size?;
+        let per_byte = self.speed_milliclocks_per_byte();
+        let jump = self.cost("jmp_short").ok()?;
+        (per_byte > 0 && jump > 0).then_some(crate::backend::jumps::placement::HotTailDup {
+            size,
+            jump_clocks: jump as f64,
+            clocks_per_byte: per_byte as f64 / 1000.0,
+        })
     }
 
     /// Clocks a mispredicted branch costs in this function: the size row at
@@ -615,8 +650,12 @@ fn _profile(
         _latencies: std::sync::Arc::new(table.latency.clone()),
         address_prefix_stall: table.lcp_stall,
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
+        tail_dup_hot_size: table.tail_dup_hot_threshold.map(|n| n.max(0) as usize),
         commute_loop_carried: table.commute_loop_carried,
+        share_congruent_phis: table.share_congruent_phis,
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
+        share_literal_stores: table.share_literal_stores,
+        branch_constant_selects: table.branch_constant_selects,
         mispredict_penalty: table.mispredict_penalty,
         mispredict_penalty_size: table.mispredict_penalty_size,
         ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
@@ -731,14 +770,10 @@ pub fn tuned_optimizing(
 
 /// The registers a value may be placed in: the description's `gpr` class.
 fn general_registers(arch: &dyn Target) -> Vec<RegId> {
-    let file = llrm_target::registers::parse(&arch.registers_text()).expect("the target's registers parse");
+    let file = llrm_target::registers::file(&arch.registers_text()).expect("the target's registers parse");
     llrm_target::registers::of_class(&file, "gpr")
         .into_iter()
-        .map(|name| {
-            RegId::values()
-                .find(|one| format!("{one:?}").eq_ignore_ascii_case(name))
-                .unwrap_or_else(|| panic!("no register {name}"))
-        })
+        .map(|name| RegId::named(name).unwrap_or_else(|| panic!("no register {name}")))
         .collect()
 }
 
@@ -1177,5 +1212,22 @@ mod loop_carried_tests {
         assert!(!loop_carried_applies(true, true, false), "-Os");
         assert!(!loop_carried_applies(true, false, true), "-Oz");
         assert!(!loop_carried_applies(false, false, false), "no key: the pin's order");
+    }
+}
+
+#[cfg(test)]
+mod bytes_strict_tests {
+    use super::*;
+
+    /// nbody_fixed at -O1 kept a 313-byte inline divide because only `size`
+    /// asked for the small routine; -O1 trades no bytes for clocks either.
+    #[test]
+    fn o1_and_size_are_bytes_strict_and_o2_and_o0_are_not() {
+        let base = tuned("486", false).expect("a profile").clone();
+        let at = |optimized, size, speed_rate| Profile { optimized, size, speed_rate, ..base.clone() };
+        assert!(at(true, false, false).bytes_strict(), "-O1: no speed rate");
+        assert!(at(true, true, true).bytes_strict(), "-Os");
+        assert!(!at(true, false, true).bytes_strict(), "-O2 and -O3 price bytes in clocks");
+        assert!(!at(false, false, false).bytes_strict(), "-O0 is not tuned");
     }
 }

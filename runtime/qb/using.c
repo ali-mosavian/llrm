@@ -573,7 +573,7 @@ static void using_string(SD *item)
         while (shown++ < width)
             cn_putc(' ');
     }
-    str_tmp_free(item);
+    str_free_if_tmp(item);
 }
 
 static const UsingOps ops = {using_integer, using_real, using_currency, using_string, using_end};
@@ -584,6 +584,6 @@ static const UsingOps ops = {using_integer, using_real, using_currency, using_st
 void B_USNG(SD *format)
 {
     using_begin(format);
-    str_tmp_free(format);
+    str_free_if_tmp(format);
     using_ops = &ops;
 }

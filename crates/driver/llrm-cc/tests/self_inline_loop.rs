@@ -1,5 +1,6 @@
 //! A recursion with one call of itself in a loop is copied into itself at -O3
-//! (queens `place`). Needs `LLRM_OW` and the m16 clang (`LLRM_CLANG_M16`).
+//! (queens `place`). Needs the Open Watcom tree (tools/ow-fetch.sh) and the m16
+//! clang (`LLRM_CLANG_M16`).
 
 use std::path::Path;
 use std::process::Command;
@@ -40,10 +41,19 @@ int main(void)
 ";
 
 fn listing_lines(level: &str) -> usize {
-    for name in ["LLRM_OW", "LLRM_CLANG_M16"] {
-        assert!(std::env::var_os(name).is_some(), "{name} is not set: this test needs it and does not skip");
-    }
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("selfloop-{}-{}", level.trim_start_matches('-'), std::process::id()));
+    assert!(
+        llrm_cc::ow_tree().is_dir(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
+    assert!(
+        std::env::var_os("LLRM_CLANG_M16").is_some(),
+        "LLRM_CLANG_M16 is not set: this test needs it and does not skip"
+    );
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "selfloop-{}-{}",
+        level.trim_start_matches('-'),
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("q.c"), SOURCE).unwrap();

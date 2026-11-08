@@ -112,12 +112,6 @@ impl Machine for WasmMachine {
     fn tuning(&self) -> Tuning {
         TUNING
     }
-
-    /// SD443: the pin's IPSCCP runs once; a second run specialised the
-    /// arguments of a function whose address was taken before inlining.
-    fn second_ipsccp(&self) -> bool {
-        false
-    }
 }
 
 /// `TargetLoweringBase`'s defaults, which WebAssemblyISelLowering does not
@@ -168,7 +162,19 @@ impl Tti for Wasm {
         "WebAssembly"
     }
 
+    /// SZ1: a size build keeps a callee that inlining would copy into
+    /// several callers (sfm16_dbg -Os: `cmp_bits`, 101 B once or 7 x 105 B).
+    /// The pin's `OptSizeThreshold` 50 allows the growth.
+    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-20): the pin inlines it.
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
     /// The pin's `sinkUnusedInvariants` (grep -O2, stft_fixed -O1).
+    fn folds_select_to_cmp(&self) -> bool {
+        true
+    }
+
     fn sinks_unused_invariants(&self) -> bool {
         true
     }

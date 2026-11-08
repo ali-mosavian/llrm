@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Whether two llrm-c builds write the same object bytes over the vsgcc programs, per target and level.
+"""Whether two llrm-cc builds write the same object bytes over the vsgcc programs, per target and level.
 
     [OBJSWEEP_FLAGS="--isel=dag"] tools/pairs/objsweep.py OLD_LLRM_C NEW_LLRM_C [--src DIR] [--levels O1,O2,O3,Os] [--targets m32,m16] [--jobs N]
 
@@ -45,7 +45,7 @@ def changed_files(old_sha: str, new_sha: str) -> list[str] | None:
 
 CC_TARGETS = {"m32": "x86_32-wat", "m16": "x86_16-wat", "a64": "arm64-linux", "m68k": "m68k-68000", "mos": "6502-sim65", "z80": "z80-sdcc", "wasm": "wasm32"}  # llrm-cc's LLRM_CC_TARGET rows
 NO_ISEL = {"m68k", "mos", "z80", "wasm"}  # their llc has one selector and takes no --isel
-FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"], "m64": ["-m64"], "a64": [], "m68k": [], "mos": [], "z80": [], "wasm": []}  # llrm-c rejects -march=i286 on m16, and takes no -m64: name it only for llrm-cc
+FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"], "m64": ["-m64"], "a64": [], "m68k": [], "mos": [], "z80": [], "wasm": []}  # llrm-cc rejects -march=i286 on m16, and takes no -m64: name it only for llrm-cc
 
 
 # The -g leg: the debug formats each target writes. An object holds its debug sections, so comparing whole objects compares them.
@@ -91,7 +91,7 @@ def run_compiler(command: list[str], out: Path, writers: dict[str, str] | None, 
 
 
 def compile_one(binary: str, source: Path, target: str, level: str, out: Path, isel: str = "old", writers: dict[str, str] | None = None, extra: list[str] | None = None) -> tuple[bytes | None, str]:
-    """(object bytes, '') or (None, first line of stderr). `out` ends in `.o`: llrm-c writes any other name as assembly text."""
+    """(object bytes, '') or (None, first line of stderr). `out` ends in `.o`: llrm-cc writes any other name as assembly text."""
     cc = Path(binary).name == "llrm-cc"
     # llrm-cc links without -c, takes its Watcom target from LLRM_CC_TARGET (none at m64) and the m16 clang only at m16.
     environment = None

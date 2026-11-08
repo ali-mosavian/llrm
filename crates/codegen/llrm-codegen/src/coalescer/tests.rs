@@ -252,7 +252,7 @@ fn priority(
     is_split: bool,
     connectivity: usize,
 ) -> MbbPriority {
-    MbbPriority { block, depth, is_split, connectivity }
+    MbbPriority { block, depth, is_split, connectivity, carried: 0 }
 }
 
 /// `compareMBBPriority`: the deeper loop, then the split edge, then the better
@@ -268,6 +268,18 @@ fn test_blocks_are_ordered_by_depth_then_split_edge_then_connectivity_then_numbe
     ];
     blocks.sort_by(compare_mbb_priority);
     assert_eq!(blocks.iter().map(|one| one.block).collect::<Vec<_>>(), vec![2, 3, 4, 1, 0]);
+}
+
+/// DEVIATE C15: of two blocks the pin orders alike, the one that reads more
+/// loop-carried values goes first; depth, split edge and connectivity still
+/// rank above it.
+#[test]
+fn test_a_carried_value_breaks_only_a_tie_of_depth_split_edge_and_connectivity() {
+    let carried =
+        |block, depth, connectivity, carried| MbbPriority { carried, ..priority(block, depth, false, connectivity) };
+    let mut blocks = vec![carried(1, 1, 2, 0), carried(2, 1, 2, 3), carried(3, 1, 4, 0), carried(4, 0, 2, 9)];
+    blocks.sort_by(compare_mbb_priority);
+    assert_eq!(blocks.iter().map(|one| one.block).collect::<Vec<_>>(), vec![3, 2, 1, 4]);
 }
 
 /// A chain of copies in one block is all joined by one round: one value stays.
@@ -686,6 +698,7 @@ fn test_a_constant_the_target_names_its_own_way_is_made_again() {
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: false,
+        joins_loop_carried_first: false,
         regs: None,
         kind_of: None,
         kinds: Default::default(),
@@ -726,6 +739,7 @@ fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: false,
+        joins_loop_carried_first: false,
         regs: None,
         kind_of: None,
         kinds: Default::default(),
@@ -801,6 +815,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: false,
+        joins_loop_carried_first: false,
         palettes: palettes.into(),
         pins: IndexMap::default(),
         size: false,
@@ -1160,17 +1175,15 @@ fn test_a_target_can_leave_every_copy_between_widths_unjoined() {
     assert_eq!(result, JoinResult::Rejected);
 }
 
-/// With the joins between widths off, the driver sees no copy between widths:
-/// before, such a copy sat in the work lists and the terminal rule counted
-/// it, which moved a register choice in m68k's phi_slot_unknown_arm (-O1)
-/// though no join differed.
+/// The driver sees a copy between widths whatever the target says (#7968):
+/// `join_copy` decides, so a narrow copy that lies inside its wide value joins
+/// even with the joins between widths off.
 #[test]
-fn test_with_the_joins_between_widths_off_the_driver_sees_no_such_copy() {
+fn test_with_the_joins_between_widths_off_the_driver_still_sees_the_copy() {
     let (narrow, same) = (copy_at((2, 2), (1, 4)), copy_at((3, 4), (1, 4)));
-    let pick = super::driver::pick_of(&NoSubRegisterJoins);
-    assert!(pick(&narrow).is_none() && pick(&same).is_some());
-    let pick = super::driver::pick_of(&SubRegisters);
-    assert!(pick(&narrow).is_some() && pick(&same).is_some());
+    for pick in [super::driver::pick_of(&NoSubRegisterJoins), super::driver::pick_of(&SubRegisters)] {
+        assert!(pick(&narrow).is_some() && pick(&same).is_some());
+    }
 }
 
 /// `v1:4 := def; v2:2 := mov v1:4; read v2:2`, the truncating copy of a
@@ -1268,6 +1281,7 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: true,
+        joins_loop_carried_first: false,
         aliases: Default::default(),
         should_join: None,
         freq: Vec::new(),
@@ -1328,6 +1342,7 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
             freq: Vec::new(),
             joins_sub_registers: true,
             joins_lanes: false,
+            joins_loop_carried_first: false,
             regs: None,
             kind_of: None,
             kinds: Default::default(),
@@ -1722,6 +1737,7 @@ fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
             joins_pinned_copies: true,
             joins_sub_registers: true,
             joins_lanes: false,
+            joins_loop_carried_first: false,
             regs: None,
             kind_of: None,
             kinds: Default::default(),
@@ -1858,6 +1874,7 @@ fn size_copy_of_def_is_remade_after(
         joins_pinned_copies: true,
         joins_sub_registers: true,
         joins_lanes: false,
+        joins_loop_carried_first: false,
         regs: None,
         kind_of: None,
         kinds: Default::default(),

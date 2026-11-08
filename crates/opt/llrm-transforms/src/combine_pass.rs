@@ -97,7 +97,10 @@ impl FunctionPass for Combine {
             unit.layout,
             unit.function,
             unit.declared,
-            outer.target().tti().is_some_and(|tti| tti.variable_shift_count_in_fixed_register()),
+            combine::TargetHooks {
+                fixed_shift_count: outer.target().tti().is_some_and(|tti| tti.variable_shift_count_in_fixed_register()),
+                select_to_cmp: outer.target().tti().is_some_and(|tti| tti.folds_select_to_cmp()),
+            },
         );
         last.instcombine.set(true);
         if changed {

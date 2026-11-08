@@ -109,8 +109,9 @@ impl FunctionPass for SroaModifyCfg {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        let before = unit.function.mark();
         let changed = State::new(unit, analyses, false).run_sroa();
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        llrm_mir::depends::kept_after(unit.context, unit.function, before, changed)
     }
 }
 
@@ -137,8 +138,9 @@ impl FunctionPass for Sroa {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        let before = unit.function.mark();
         let changed = State::new(unit, analyses, true).run_sroa();
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        llrm_mir::depends::kept_after(unit.context, unit.function, before, changed)
     }
 }
 

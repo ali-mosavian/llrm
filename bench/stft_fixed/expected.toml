@@ -1,18 +1,33 @@
-reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
-blessed = "2026-11-07"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "eb383f0f0548ff64ed7bdba1160a0d4d"
 
-[bcc.O2]
-code_bytes = 1190
-data_bytes = 15
-bss_bytes = 5122
-kernel_ms = 545.52
-
-[bcc.Os]
+[bcc.O1]
+instructions = 59110805
+memory_operands = 22602916
+clocks = 293949463
 code_bytes = 1224
 data_bytes = 15
 bss_bytes = 5122
-kernel_ms = 820.6333
+kernel_ms = 820.7552
+
+[bcc.O2]
+instructions = 38476628
+memory_operands = 21472587
+clocks = 240986211
+code_bytes = 1190
+data_bytes = 15
+bss_bytes = 5122
+kernel_ms = 545.3988
+
+[bcc.Os]
+instructions = 59110805
+memory_operands = 22602916
+clocks = 293949463
+code_bytes = 1224
+data_bytes = 15
+bss_bytes = 5122
+kernel_ms = 820.6329
 
 [tcpp.O2]
 code_bytes = 1597

@@ -53,6 +53,8 @@ def Z80cmp : SDNode<"Z80ISD::CMP", SDTZ80Cmp>;
 // operand is 1 for a signed order, which the carry is then made to hold.
 def SDTZ80Cmpc : SDTypeProfile<1, 4, [SDTCisVT<0, i8>, SDTCisSameAs<1, 2>, SDTCisVT<3, i8>, SDTCisVT<4, i8>]>;
 def Z80cmpc : SDNode<"Z80ISD::CMPC", SDTZ80Cmpc>;
+// The signed order of two words: the carry holds the sign of a - b corrected for overflow.
+def Z80cmps : SDNode<"Z80ISD::CMPS", SDTZ80Cmp>;
 def Z80brcond : SDNode<"Z80ISD::BRCOND", SDTZ80Brcond, [SDNPHasChain]>;
 def SDT_Z80CallSeqStart : SDCallSeqStart<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
 def SDT_Z80CallSeqEnd : SDCallSeqEnd<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
@@ -248,6 +250,10 @@ def CMOV16 : Z80Inst<(outs GR16:$d), (ins GR16:$f0, GR16:$t, i8imm:$cc, Flags:$f
 let isBranch = 1, isTerminator = 1, isBarrier = 1 in
   def JP : Z80Inst<(outs), (ins brtarget:$t), "jp $t", [(br bb:$t)]>;
 
+// A jump through a table: the word loaded from it is in HL.
+let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in
+  def JPHL : Z80Inst<(outs), (ins HLR:$p), "jp ($p)", [(brind i16:$p)]>;
+
 let isCall = 1 in
   def CALL : Z80Inst<(outs), (ins calltarget:$t), "call $t", [(Z80call tglobaladdr:$t)]>;
 // a routine the selector names itself (the libcall of a fill or copy of unknown size)
@@ -327,6 +333,7 @@ let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in
 
 // A global's address is a 16-bit immediate the linker fills in.
 def : Pat<(i16 (Z80wrapper tglobaladdr:$a)), (LD16ri tglobaladdr:$a)>;
+def : Pat<(i16 (Z80wrapper tjumptable:$a)), (LD16ri tjumptable:$a)>;
 
 // The builder joins two bytes as `lo | (hi << 8)` over either kind of extension: that is the pair.
 def ext8 : PatFrags<(ops node:$a), [(zext node:$a), (anyext node:$a)]>;
@@ -351,3 +358,7 @@ let Defs = [A] in {
   def CP16C : Z80Inst<(outs Flags:$f), (ins GR16:$a, GR16:$b, Flags:$c, i8imm:$s), "cp16c $a, $b", [(set i8:$f, (Z80cmpc i16:$a, i16:$b, i8:$c, (i8 imm:$s)))]>;
   def CP16Ci : Z80Inst<(outs Flags:$f), (ins GR16:$a, i16imm:$b, Flags:$c, i8imm:$s), "cp16c $a, $b", [(set i8:$f, (Z80cmpc i16:$a, (i16 imm:$b), i8:$c, (i8 imm:$s)))]>;
 }
+
+// A signed word compare of two registers: the sign of a - b, corrected where the subtract overflowed, into the carry.
+let Defs = [A] in
+  def CP16S : Z80Inst<(outs Flags:$f), (ins GR16:$a, GR16:$b), "cp16s $a, $b", [(set i8:$f, (Z80cmps i16:$a, i16:$b))]>;

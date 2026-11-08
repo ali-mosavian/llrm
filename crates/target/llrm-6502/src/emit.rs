@@ -222,6 +222,14 @@ pub fn expand(
             };
             byte3(&mut out, "clc", "adc", &d, &a, &b);
         }
+        // the ninth bit of the sum is C: `ror` brings it back as bit 7
+        op::AVGFLOORU8 | op::AVGCEILU8 => {
+            let (d, a, b) = simple(o)?;
+            writeln!(out, "  {}", if inst.opcode == op::AVGFLOORU8 { "clc" } else { "sec" }).unwrap();
+            copy_byte(&mut out, "a", &a);
+            writeln!(out, "  adc {b}\n  ror a").unwrap();
+            copy_byte(&mut out, &d, "a");
+        }
         op::SUB8 | op::SUBO8 => {
             let (d, a, b) = if inst.opcode == op::SUB8 {
                 simple(o)?
@@ -463,11 +471,12 @@ pub fn expand(
             copy_byte(&mut out, &rl, "rc6");
             copy_byte(&mut out, &rh, "rc7");
         }
-        op::UMUL8X8 => {
+        op::UMUL8X8 | op::SMUL8X8 => {
             let (dl, dh) = word(&o[0])?;
             copy_byte(&mut out, "rc2", reg(&o[1])?);
             copy_byte(&mut out, "rc3", reg(&o[2])?);
-            writeln!(out, "  jsr __umulqihi3").unwrap();
+            let routine = if inst.opcode == op::SMUL8X8 { "__mulqihi3" } else { "__umulqihi3" };
+            writeln!(out, "  jsr {routine}").unwrap();
             copy_byte(&mut out, &dl, "a");
             copy_byte(&mut out, &dh, "x");
         }

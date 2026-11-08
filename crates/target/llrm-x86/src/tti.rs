@@ -665,12 +665,102 @@ impl Tti for X86 {
         self.tuning.unroll_never_grows_at_o1
     }
 
+    fn second_ipsccp(&self) -> bool {
+        self.tuning.second_ipsccp
+    }
+
+    fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
+        self.tuning.unroll_o1_analyzed_trips
+    }
+
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
     }
 
     fn narrow_divide_live_limit(&self) -> u32 {
         self.tuning.narrow_divide_live_limit
+    }
+
+    fn inline_never_grows_without_rate(&self) -> bool {
+        self.tuning.inline_never_grows_without_rate
+    }
+
+    fn unroll_object_bound(&self) -> Option<u32> {
+        self.tuning.unroll_object_bound
+    }
+
+    fn inline_o1_weighs_entry(&self) -> bool {
+        self.tuning.inline_o1_weighs_entry
+    }
+
+    fn call_sequence_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let tuning = &self.tuning;
+        if kind != CostKind::Latency || tuning.call_sequence_fixed_clocks == 0 {
+            return None;
+        }
+        let words: i64 = shape
+            .arguments
+            .iter()
+            .map(|argument| match (argument.byval_bytes, argument.ty) {
+                (Some(bytes), _) => (bytes as i64 + 3) / 4,
+                (None, Some(Ty::Int(bits))) => i64::from(bits.div_ceil(32).max(1)),
+                (None, Some(Ty::Double)) => 2,
+                (None, Some(Ty::X87)) => 3,
+                _ => 1,
+            })
+            .sum();
+        let pop = if words > 0 { tuning.call_sequence_pop_clocks } else { 0 };
+        Some(Cost::of(tuning.call_sequence_fixed_clocks + words * tuning.call_sequence_argument_clocks + pop))
+    }
+
+    fn sdiv_by_magnitude(&self) -> bool {
+        self.tuning.sdiv_by_magnitude
+    }
+
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        self.tuning.speed_inline_rate_at_o1
+    }
+
+    fn callee_saved_clocks(&self, peak: usize) -> i64 {
+        self.tuning.callee_saved.map_or(0, |(scratch, preserved, clocks)| {
+            (i64::try_from(peak).unwrap_or(i64::MAX) - scratch).clamp(0, preserved) * clocks
+        })
+    }
+
+    fn inline_hot_trial_at_o3(&self) -> bool {
+        self.tuning.inline_hot_trial_at_o3
+    }
+
+    fn inline_hot_trial_frequency(&self) -> Option<i64> {
+        self.tuning.inline_hot_trial_frequency
+    }
+
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.speed_inline_milliclocks_per_byte
+    }
+
+    fn inline_o1_unit_bytes_milli(&self) -> i64 {
+        self.tuning.inline_o1_unit_bytes_milli
+    }
+
+    fn inline_o1_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.inline_o1_milliclocks_per_byte
+    }
+
+    fn promote_va_list(&self) -> bool {
+        self.tuning.promote_va_list
+    }
+
+    fn branch_compare_trees_at_size(&self) -> bool {
+        self.tuning.branch_compare_trees_at_size
+    }
+
+    fn sink_spares_ranges(&self) -> bool {
+        self.tuning.sink_spares_ranges
     }
 
     fn divide_by_bytes(&self) -> bool {
@@ -683,6 +773,10 @@ impl Tti for X86 {
 
     fn imul_at_size(&self) -> bool {
         self.tuning.imul_at_size
+    }
+
+    fn rep_stos_at_size(&self) -> bool {
+        self.tuning.rep_stos_at_size
     }
 
     fn has_cmov(&self) -> bool {
@@ -769,6 +863,10 @@ impl Tti for X86 {
 
     fn peels_folded_entry(&self) -> bool {
         self.tuning.peel_folded_entry
+    }
+
+    fn carries_slot_indexes(&self) -> bool {
+        self.tuning.carry_slot_indexes
     }
 
     fn sinks_select_arms(&self) -> bool {
@@ -1235,8 +1333,11 @@ impl Tti for X86 {
         // (`isPositionIndependent() && is64Bit()`), so `@sym + reg` is one
         // address to it; the backend forms the symbol with a `lea` at every
         // use, which the metric never saw (histo -O2 -80 B, jpeg_fixed -O1
-        // -832 B, objects of m32 and non-PIE unchanged). Owner w12, exit
-        // 2026-11-30.
+        // -832 B, objects of m32 and non-PIE unchanged). 2026-11-08, same-tree
+        // A/B over 171 m64 cells with it off: 6 better (-162 B), 42 worse (+2712 B:
+        // particle O2 +396, scroll +121, stft_single +112, jpeg_single O2 +256).
+        // Exit: the backend shares one `lea sym` per loop (MachineLICM/CSE of
+        // the symbol), then the pin's legality; owner w12, exit 2026-12-15.
         if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale != 0 || has_base_reg) {
             return false;
         }
@@ -1355,12 +1456,28 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    /// DEVIATE LU14: real mode searches both use orders (rcflip's RAMP loop:
+    /// 4 instructions in the pin's order, 2 in the other). owner:
+    /// llrm-target-x86-m16, exit: 2026-11-30, or when the pin's search is
+    /// order-free.
+    fn lsr_solves_both_use_orders(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
         self.real_mode.is_some()
     }
 
     fn mirrors_conditional_counters(&self) -> bool {
         self.real_mode.is_some()
+    }
+
+    /// DEVIATE LS1: real mode keeps every formula of the first use in play
+    /// (A/B 2026-11-07: the pin's rule is +1..+8 B in 41 of 192 m16 cells, in
+    /// none better; m32 -37 B net, m64 0). owner: w12, exit: 2026-11-30, when
+    /// the m16 cause cards close.
+    fn lsr_visited_registers_lose(&self) -> bool {
+        self.real_mode.is_none()
     }
 
     /// Real mode forms a scaled index with an address-size prefix.

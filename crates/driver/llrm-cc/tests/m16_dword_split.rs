@@ -1,6 +1,6 @@
 //! A dword read only as its two words is two word loads (DEVIATE LS1), where
 //! the pin keeps one dword load and `shld`. Needs the pinned clang
-//! (`LLRM_CLANG_M16`) and the Open Watcom headers (`LLRM_OW`).
+//! (`LLRM_CLANG_M16`) and the Open Watcom headers (`{ow}`, tools/ow-fetch.sh).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -41,9 +41,9 @@ fn compile(
 }
 
 fn available() -> bool {
-    let set = std::env::var_os("LLRM_CLANG_M16").is_some() && std::env::var_os("LLRM_OW").is_some();
+    let set = std::env::var_os("LLRM_CLANG_M16").is_some() && llrm_cc::ow_tree().is_dir();
     if !set {
-        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+        eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
     }
     set
 }
