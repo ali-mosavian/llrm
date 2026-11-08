@@ -1420,6 +1420,10 @@ pub struct LirBody {
     /// frame register was omitted (`true`) or kept (`false`)
     /// (`masm::exits_inserted`); the printer adds nothing at a return.
     pub frame_exit: Option<bool>,
+    /// Whether the body can be addressed through the stack pointer, as
+    /// `masm::saved_first` found it: `masm::exits_inserted` takes it up
+    /// instead of asking again of the same body. Cleared once read.
+    pub stack_checked: Option<bool>,
     /// The registers the frame saved, found before its exit was made: the
     /// exit's own pops name them and the frame register.
     pub frame_saved: Option<Vec<RegId>>,
@@ -1631,6 +1635,7 @@ impl LirBody {
             object_align: 0,
             over_aligned: Vec::new(),
             frame_exit: None,
+            stack_checked: None,
             frame_saved: None,
             vector_saves: Vec::new(),
             notes: Arc::default(),
@@ -1706,6 +1711,7 @@ impl LirBody {
             object_align: self.object_align,
             over_aligned: self.over_aligned.clone(),
             frame_exit: self.frame_exit,
+            stack_checked: self.stack_checked,
             frame_saved: self.frame_saved.clone(),
             vector_saves: self.vector_saves.clone(),
             notes: Arc::clone(&self.notes),

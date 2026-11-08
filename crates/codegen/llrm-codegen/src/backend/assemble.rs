@@ -895,8 +895,15 @@ fn machined_once(
     // backend again; `LLRM_CHECK_FRAME=1` runs it again beside, and the two
     // must be the same function. A frame that cannot be moved keeps its first
     // layout.
-    let laid = timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled));
-    if llrm_support::env_flag!("LLRM_CHECK_FRAME") {
+    // Built only where it has fewer far cells, which is told by counting them.
+    let check = llrm_support::env_flag!("LLRM_CHECK_FRAME");
+    let worth = check || crate::backend::relayout::far_again(&first, &frame, spilled, sp).is_none_or(|again| again < far);
+    let laid = if worth {
+        timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled))
+    } else {
+        None
+    };
+    if check {
         let (again, _) = cheaper(&staged(module, name, abi, pool, target, spilled)?, name, pool, target)?;
         match &laid {
             Some((laid, _)) => {
@@ -1077,6 +1084,9 @@ struct Staged {
     /// The register classes the routes allocate from: the target's, with the
     /// frame register a value register where the function needs none.
     classes: Rc<RegisterClasses>,
+    /// Every block was selected by FastISel, which leaves out the jump to the
+    /// next block (`fastEmitBranch`) as the pin's does.
+    fast: bool,
 }
 
 impl Staged {
@@ -1189,9 +1199,11 @@ fn staged(
             }
         }
     };
+    let mut fast = false;
     let selected = if let Some(done) = dag {
         if done.is_ok() {
             if crate::backend::selectiondag::fastisel::take_took() {
+                fast = true;
                 shadow::record_fast(name);
             } else {
                 shadow::record(name, Selector::Dag);
@@ -1384,6 +1396,7 @@ fn staged(
         landing,
         registers,
         classes,
+        fast,
     })
 }
 
@@ -1421,6 +1434,10 @@ fn phased(
     )? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
+            continue;
+        }
+        // The pin's -O0 has no BranchFolder, and what FastISel selects has no jump to the next block.
+        if staged.fast && !target.cpu.optimized && phase.class_name() == "ControlFlow" {
             continue;
         }
         if phase.class_name() == "PhiElimination" {

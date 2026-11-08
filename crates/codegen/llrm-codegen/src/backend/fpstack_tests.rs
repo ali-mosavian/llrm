@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use super::converted;
+use super::{converted, converted_with};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::floatalloc::_truncating;
 use crate::backend::floatalloc::tests::{
@@ -421,6 +421,39 @@ fn test_a_memory_form_below_the_top_is_a_load_and_a_popping_op_where_exchange_co
     let (result, stores) = memory_form_below_the_top("486");
     assert_eq!(stores, vec![100.0, 100.0, 3.0, -90.0], "{:?}", names(&result));
     assert_eq!(count(&result, "fxch"), 0, "{:?}", names(&result));
+}
+
+/// x_ld_axpy -O2 m32 with FF2: `r += 1` is `fadd [K]` (1.0 in the pool) on a
+/// `r` below the top, made `fld [K]; faddp st(2)`: a load of 6 bytes and 5
+/// clocks where the constant's own `fld1` is 2 and 4 (+8 clocks, +4 B over the
+/// program). A pool cell holding 1.0 or 0.0 is loaded by `fld1` or `fldz`.
+fn memory_form_of_a_constant_below_the_top(constants: bool) -> LirBody {
+    let cells = [frame_cell(-8, 8), frame_cell(-16, 8), frame_cell(-24, 8), frame_cell(-32, 8), frame_cell(-40, 8)];
+    let mut pool = crate::backend::constpool::Pool::new(1000);
+    let one = pool.cell(1.0_f32.to_le_bytes().to_vec());
+    let body = _body(vec![
+        _load(1, &cells[0]),
+        _load(2, &cells[1]),
+        _load(3, &cells[2]),
+        _store(&cells[0], 3),
+        _store(&cells[1], 3),
+        sem(Operation::FloatArith, "fadd", vec![fl(4)], vec![fl(1), m(&one)]),
+        _store(&cells[4], 2),
+        _store(&cells[3], 4),
+    ]);
+    let lowered = crate::phielimination::lowered(&body).unwrap();
+    let cpu = crate::backend::cpu::profile("486").expect("a profile");
+    let cells = if constants { pool.x87_cells() } else { Default::default() };
+    let stacked = converted_with(&lowered, &RegisterClasses::of(&llrm_x86_m16::M16), Some(cpu), &cells).unwrap();
+    _truncating(&stacked, Some(&mut Frame::new(-64))).unwrap()
+}
+
+#[test]
+fn test_a_pool_constant_made_a_load_again_is_loaded_by_its_own_instruction() {
+    let kept = memory_form_of_a_constant_below_the_top(true);
+    assert_eq!((count(&kept, "fld1"), count(&kept, "fxch")), (1, 0), "{:?}", names(&kept));
+    let plain = memory_form_of_a_constant_below_the_top(false);
+    assert_eq!((count(&plain, "fld1"), count(&plain, "fxch")), (0, 0), "{:?}", names(&plain));
 }
 
 /// A P5 pairs `fxch` with the operation: the memory form keeps it.

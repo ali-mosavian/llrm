@@ -51,6 +51,72 @@ impl Level {
     }
 }
 
+/// What a driver flag asks of the mid-end past the level: gcc's `-f` pass
+/// flags (`-fno-inline-functions`, `-fno-unroll-loops`...) and
+/// `-fno-inline=NAME`, as `llrm-cc` passes them on.
+#[derive(Clone, Debug, Default)]
+pub struct Policy {
+    passes: Vec<String>,
+    no_inline: Vec<String>,
+}
+
+impl Policy {
+    /// Takes `flag` when it is one of these; false leaves it to the caller.
+    /// `-fexcess-precision` and `-ffloat-store` are taken and change nothing:
+    /// the software float of m68k rounds every operation to its type, so there
+    /// is no wider register to keep a value in.
+    pub fn take(
+        &mut self,
+        flag: &str,
+    ) -> bool {
+        if let Some(name) = flag.strip_prefix("-fno-inline=") {
+            self.no_inline.push(name.to_owned());
+        } else if matches!(flag, "-fexcess-precision=standard" | "-fexcess-precision=fast" | "-ffloat-store" | "-fno-float-store") {
+        } else if llrm_codegen::driver::flags::apply_pass_flag(&mut MidEnd::default(), flag) {
+            self.passes.push(flag.to_owned());
+        } else {
+            return false;
+        }
+        true
+    }
+
+    fn apply(
+        &self,
+        options: &mut MidEnd,
+    ) {
+        for flag in &self.passes {
+            llrm_codegen::driver::flags::apply_pass_flag(options, flag);
+        }
+    }
+
+    /// Each function of `program` that `-fno-inline=` names marked `noinline`;
+    /// a name that no function defines is an error, not a flag that did
+    /// nothing.
+    fn mark(
+        &self,
+        program: &mut Program,
+    ) -> Result<(), String> {
+        for name in &self.no_inline {
+            let mut found = false;
+            for global in program.modules.iter_mut().flat_map(|module| &mut module.globals) {
+                if global.name.as_deref() != Some(name.as_str()) {
+                    continue;
+                }
+                if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
+                    && !function.is_declaration()
+                {
+                    function.attrs.push(llrm_mir::facts::Fact::Inline(llrm_mir::facts::Inlining::Never).carrier());
+                    found = true;
+                }
+            }
+            if !found {
+                return Err(format!("-fno-inline={name}: the program defines no function of that name"));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The CPU `-mcpu=` names.
 pub fn cpu_of(name: &str) -> Result<Cpu, String> {
     match name {
@@ -145,9 +211,12 @@ fn lowered(
     cpu: Cpu,
     level: Level,
     dump: Option<&std::path::Path>,
+    policy: &Policy,
 ) -> Result<Module, String> {
     let mut program = program_for(text, cpu)?;
-    let options = MidEnd { library: c_library(), ..level.mid_end() };
+    policy.mark(&mut program)?;
+    let mut options = MidEnd { library: c_library(), ..level.mid_end() };
+    policy.apply(&mut options);
     if let Some(dump) = dump {
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
     }
@@ -182,7 +251,20 @@ pub fn assembly_in(
     dump: Option<&std::path::Path>,
     model: CodeModel,
 ) -> Result<String, String> {
-    let optimized = lowered(text, cpu, level, dump)?;
+    assembly_flagged(text, cpu, level, debug, dump, model, &Policy::default())
+}
+
+/// [`assembly_in`] with the mid-end flags in `policy`.
+pub fn assembly_flagged(
+    text: &str,
+    cpu: Cpu,
+    level: Level,
+    debug: bool,
+    dump: Option<&std::path::Path>,
+    model: CodeModel,
+    policy: &Policy,
+) -> Result<String, String> {
+    let optimized = lowered(text, cpu, level, dump, policy)?;
     let module = &optimized;
     let backend = Options {
         size: matches!(level, Level::Os | Level::Oz),
@@ -231,6 +313,18 @@ pub fn object_in(
     name: &str,
     model: CodeModel,
 ) -> Result<Vec<u8>, String> {
+    object_flagged(text, cpu, level, name, model, &Policy::default())
+}
+
+/// [`object_in`] with the mid-end flags in `policy`.
+pub fn object_flagged(
+    text: &str,
+    cpu: Cpu,
+    level: Level,
+    name: &str,
+    model: CodeModel,
+    policy: &Policy,
+) -> Result<Vec<u8>, String> {
     // The file symbol is the module's own `source_filename`, as the pin's: the
     // path of a scratch IR file would differ between two compiles of one
     // source.
@@ -238,7 +332,7 @@ pub fn object_in(
         .lines()
         .find_map(|line| line.strip_prefix("source_filename = \"")?.strip_suffix('"'))
         .map_or_else(|| name.rsplit('/').next().unwrap_or(name), |one| one);
-    let module = lowered(text, cpu, level, None)?;
+    let module = lowered(text, cpu, level, None, policy)?;
     let backend = Options {
         size: matches!(level, Level::Os | Level::Oz),
         strict: level == Level::O1,

@@ -551,6 +551,29 @@ impl super::emit::Conventions for CallConventions<'_> {
 struct Tables {
     map: OpcodeMap,
     names: HashMap<u16, &'static str>,
+    /// `names` the other way, by the part before the first `|`; the first of a repeated name wins.
+    /// Built at the first lookup: a scan per name cost 4.9 M instructions in a compile of 3 K.
+    by_name: std::sync::OnceLock<HashMap<&'static str, u16>>,
+}
+
+impl Tables {
+    fn opcode_named(
+        &self,
+        wanted: &str,
+    ) -> Option<u16> {
+        self.by_name
+            .get_or_init(|| {
+                let mut ordered: Vec<_> = self.names.iter().map(|(op, name)| (*op, *name)).collect();
+                ordered.sort_unstable_by_key(|(op, _)| *op);
+                let mut by_name = HashMap::default();
+                for (op, name) in ordered {
+                    by_name.entry(name.split('|').next().unwrap_or(name)).or_insert(op);
+                }
+                by_name
+            })
+            .get(wanted)
+            .copied()
+    }
 }
 
 /// One per target width.
@@ -593,6 +616,7 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                         (llrm_dagisel::x86_llrm::LLRM_ASM_OPCODE, "CALL_ASM"),
                     ])
                     .collect(),
+                by_name: Default::default(),
             })
         })
         .clone()
@@ -1171,25 +1195,28 @@ fn selected_in(
                 module,
                 function,
                 &builder_target,
-                &|wanted: &str| {
-                    tables.names.iter().find(|(_, name)| name.split('|').next() == Some(wanted)).map(|(op, _)| *op)
-                },
+                &|wanted: &str| tables.opcode_named(wanted),
                 &layout,
                 &convention,
                 arch,
                 &mut info,
             )
         })
-        .flatten()
         .unwrap_or_default();
-    let fast = !fast_blocks.is_empty();
-    super::fastisel::note(fast);
-    for &block in function.layout() {
-        let mut built = if fast {
-            fast_blocks.remove(0).1
-        } else {
-            build_block(module, function, &layout, &builder_target, &arch, &convention, &mut info, block)
-                .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?
+    let taken = fast_blocks.iter().flatten().count();
+    super::fastisel::note(taken > 0 && taken == function.layout().len());
+    if taken > 0 {
+        llrm_support::debug!("isel", "fast took {taken} of {} blocks", function.layout().len());
+    }
+    let mut fast_ids = llrm_support::hash::HashSet::default();
+    for (at, &block) in function.layout().iter().enumerate() {
+        let mut built = match fast_blocks.get_mut(at).and_then(Option::take) {
+            Some(built) => {
+                fast_ids.insert(block.0);
+                built
+            }
+            None => build_block(module, function, &layout, &builder_target, &arch, &convention, &mut info, block)
+                .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?,
         };
         let extras = std::mem::take(&mut built.extra);
         work.push((block, block, built));
@@ -1324,7 +1351,7 @@ fn selected_in(
     let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { HashMap::default() };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
-        if cpu.optimized && !fast && block == parent {
+        if cpu.optimized && !fast_ids.contains(&block.0) && block == parent {
             // `SelectAllBasicBlocks`: a phi knows what its incoming values do
             // once all its predecessors are selected.
             let ready = function.predecessors(block).iter().all(|pred| selected_blocks.contains(pred));
@@ -1359,7 +1386,7 @@ fn selected_in(
         built.dag.set_divide_live(div_live.get(&parent).copied().unwrap_or(0));
         built.dag.live_in_phys = built.live_ins.iter().map(|&(register, vreg)| (vreg, register)).collect();
         let arrived = arrival_widths(&built.dag, &built.live_ins);
-        let done = if fast {
+        let done = if fast_ids.contains(&block.0) {
             super::dag_select::select_block_fast(
                 &mut built.dag,
                 &Info { source_order: true, m64 },
@@ -2126,5 +2153,22 @@ mod lowering_cache_tests {
             TargetLowering::x86_64(other, MVT::I64)
         });
         assert_eq!(built.get(), 2, "another feature set is another table");
+    }
+
+    /// FastISel's table of opcode names found each of its 51 names by scanning every opcode: 4.9 M
+    /// instructions in a 207 M compile of 3 K instructions. One index, built at the first lookup,
+    /// and the lowest opcode of a repeated name, not whichever the hash order met first.
+    #[test]
+    fn test_opcodes_are_found_by_name_through_one_index() {
+        let tables = Tables {
+            map: OpcodeMap::new(Default::default()),
+            names: HashMap::from_iter([(7, "ADD|x"), (3, "ADD"), (9, "SUB")]),
+            by_name: Default::default(),
+        };
+        assert!(tables.by_name.get().is_none(), "built at the first lookup, not before");
+        assert_eq!(tables.opcode_named("ADD"), Some(3));
+        assert_eq!(tables.opcode_named("SUB"), Some(9));
+        assert_eq!(tables.opcode_named("MUL"), None);
+        assert!(tables.by_name.get().is_some(), "a lookup is a search of the index, not of the names");
     }
 }

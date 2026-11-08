@@ -99,6 +99,8 @@ pub fn target_lowering() -> TargetLowering {
     set(&[MulHS, MulHU, UMulLoHi, SMulLoHi], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[SDivRem, UDivRem], &[MVT::I8], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], &[MVT::I8, MVT::I16], Action::Expand);
+    // no rotate or funnel shift instruction: shifts and an or (`expandROT`, `expandFunnelShift`)
+    set(&[Rotl, Rotr, FShl, FShr], &[MVT::I8, MVT::I16], Action::Expand);
     // the action is by the type extended from (`LegalizeDAG`): a word from a
     // byte is the byte sign-extended (`lower_sign_extend_inreg`)
     set(&[SignExtendInReg], &[MVT::I1, MVT::I16], Action::Expand);
@@ -168,6 +170,8 @@ pub fn target_lowering() -> TargetLowering {
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
+    // equality of a long is the bytes' xors or-ed in the accumulator
+    tl.set_byte_equality(true);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
     tl
 }
@@ -833,6 +837,11 @@ fn condition_byte(
                 let one = dag.get_constant(1, EVT::I8);
                 dag.get_node(ISD::And, EVT::I8, &[byte, one])
             }
+            // a bit loaded and tested at once: the byte read, masked
+            ISD::Load => match lower_bit_load(dag, value) {
+                Some(lowered) => condition_byte(dag, lowered),
+                None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
+            },
             ISD::Freeze => {
                 let bit = dag.operand(value, 0);
                 condition_byte(dag, bit)

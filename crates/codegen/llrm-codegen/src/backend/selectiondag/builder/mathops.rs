@@ -82,7 +82,11 @@ impl Builder<'_> {
                 self.dag.get_node(code, dest, &[first, second, scale])
             }
             Intrinsic::ShiftSat { signed } => {
-                let second = self.get_value(instruction.operands[1])?;
+                // The amount in the target's shift type, as the pin coerces
+                // it (SelectionDAGBuilder.cpp#L7608).
+                let amount = self.get_value(instruction.operands[1])?;
+                let second =
+                    self.dag.get_zext_or_trunc(amount, self.target.shift_amount_for(self.dag.value_type(first)));
                 self.dag.get_node(if *signed { ISD::SShlSat } else { ISD::UShlSat }, dest, &[first, second])
             }
             Intrinsic::Saturating { op, signed } => {

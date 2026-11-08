@@ -60,7 +60,6 @@ pub fn machine<'a>(
 /// The phases -O0 leaves out: each only makes code better.
 const UNOPTIMIZED: &[&str] = &[
     "EarlyTailDuplicate",
-    "Peephole",
     "LoopSlots",
     "Scheduler",
     "Coalescer",
@@ -268,7 +267,7 @@ pub fn machine_with<'a>(
         // instruction that clobbers them become a byte per condition
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
-        Box::new(phielim::PhiElimination),
+        Box::new(phielim::PhiElimination { unoptimized: !target.optimized }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
@@ -277,17 +276,21 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::floatunhoist::FloatUnhoist { cpu: target, basic_semantics }),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
-        Box::new(crate::backend::floatfold::FloatFold { cpu: target, registers: classes.available.len() }),
+        Box::new(crate::backend::floatfold::FloatFold {
+            cpu: target,
+            pool: pool.clone(),
+            registers: classes.available.len(),
+        }),
         // A float load waits for its reader where that saves an exchange.
         Box::new(crate::backend::floatsink::FloatSink { cpu: target, basic_semantics }),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatPrep {
             frame: frame.clone(),
-            pool,
+            pool: pool.clone(),
             basic_semantics,
             status_word: classes.status_word(),
         }),
-        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target) }),
+        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target), pool }),
         Box::new(twoaddr::TwoAddress {
             lea: target.three_address_for(target.size || target.min_size),
             loop_carried: target.commutes_loop_carried(),

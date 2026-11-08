@@ -179,6 +179,35 @@ fn a_row_without_a_level_and_without_a_reason_is_found() {
     assert!(rows_dropping_the_level(&said).is_empty());
 }
 
+/// `-fno-inline-functions-called-once` (tests/run/c headers, 38 programs carry
+/// `-fno-inline-functions`) reached llrm-wasm-llc, which answered
+/// "unrecognized argument" and refused the compile; the pin's clang takes the
+/// switches itself and writes `noinline` into the IR.
+#[test]
+fn a_pass_switch_stays_away_from_a_backend_that_takes_none() {
+    let table = targets(TARGETS).unwrap();
+    let one = built("-fno-inline-functions-called-once -fno-unroll-loops -c x.c");
+    let args = |name: &str| llc_args(&table[name], &one, Path::new("x.ll"), Path::new("x.o"));
+    for name in ["wasm32", "z80-sdcc"] {
+        assert!(args(name).iter().all(|flag| !flag.starts_with("-fno-")), "{name}: {:?}", args(name));
+    }
+    // m68k's llc takes them (its program headers' `-fno-inline-functions` made 19 programs fail)
+    for name in ["x86_32-linux", "m68k-68000", "m68k-68020"] {
+        let kept = args(name);
+        assert!(kept.contains(&"-fno-inline-functions-called-once".to_owned()), "{name}: {kept:?}");
+        assert!(kept.contains(&"-fno-unroll-loops".to_owned()), "{name}: {kept:?}");
+    }
+}
+
+#[test]
+fn a_row_that_takes_no_pass_switch_says_why() {
+    let table = targets(TARGETS).unwrap();
+    for (name, row) in &table {
+        let reasoned = row.llc_passes_reason.as_deref().is_some_and(|why| !why.is_empty());
+        assert!(row.llc_passes || reasoned, "{name}");
+    }
+}
+
 /// The Watcom front end's tests pass the backend's switches (`-march`,
 /// `-fno-inline-functions-called-once`, `-mcode-segment=`) with the source;
 /// clang took them all and the backend saw none, so a program built with them
