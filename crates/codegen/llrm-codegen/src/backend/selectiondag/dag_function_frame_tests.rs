@@ -39,7 +39,7 @@ fn a_load_of_a_global_names_its_symbol() {
 #[test]
 fn stack_temporaries_are_cells_below_the_frame_pointer() {
     use super::dag_function::{Frame, Temporaries};
-    use super::emit::FrameMap;
+    use super::emit_api::FrameMap;
     use super::x86_preprocess::FrameObjects;
     let frame = Frame::new(vec![8, 12], 0);
     let mut temps = Temporaries(&frame);

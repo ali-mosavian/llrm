@@ -14,6 +14,7 @@ pub mod emit;
 pub mod expand_imm;
 pub mod flagcse;
 pub mod frame;
+pub mod ipra;
 pub mod isel;
 pub mod jumptable;
 pub mod layout;

@@ -71,9 +71,9 @@ pub struct FunctionLoweringInfo {
     /// The names and locality of the module's globals and the function's
     /// blocks, made at the first block and shared by the DAGs of the rest
     /// (a table per block was a quadratic share of the compile).
-    pub(super) tables: Option<Tables>,
+    pub tables: Option<Tables>,
     /// The module's part of the tables, when an earlier function made it.
-    pub(super) module_tables: Option<crate::backend::constpool::Symbols>,
+    pub module_tables: Option<crate::backend::constpool::Symbols>,
 }
 
 /// How many times [`module_tables`] ran: a test hook.
@@ -115,7 +115,7 @@ pub fn module_tables(
 
 /// What every block's DAG reads about the module and the function.
 #[derive(Clone)]
-pub(super) struct Tables {
+pub struct Tables {
     pub global_names: std::rc::Rc<Vec<String>>,
     pub local_symbols: std::rc::Rc<Vec<bool>>,
     pub block_names: std::rc::Rc<Vec<String>>,
