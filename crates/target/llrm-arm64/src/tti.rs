@@ -84,9 +84,11 @@ impl Cpu {
 /// (fpbench -O2 -33% instructions). It was 250, the median of the cells where
 /// gcc and clang differed, against a saving counted over assumed runs.
 ///
-/// DEVIATE UP1 (exit 2026-11-20), cells that grow bytes for little: nbody_fixed
-/// -O2 +32 B for -37 instructions, shellsort -O3 +704 B for -139; both are
-/// priced a wash at the floor, and run few times.
+/// DEVIATE UP1 (exit 2026-11-20), cells that grow bytes for little, against 1.0
+/// (2026-11-08): nbody_fixed -O2 +32 B for -37 instructions and -O3 +20 B for
+/// -45; shellsort -O3 +704 B for -139; jpeg_fixed -O3 +152 B and jpeg_single
+/// +148 B for -722 and -168 instructions (-O2 +24 and +8 B, 0 instructions).
+/// A wash at the floor, and they run few times.
 const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 500;
 
 /// AArch64's scalar profile.
