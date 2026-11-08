@@ -114,7 +114,7 @@ use llrm_mir::blockfrequency::BranchProbability;
 use crate::backend::liveness;
 use crate::liveness::blockfrequency::{Graph, MachineBlockFrequencyInfo, MachineBranchProbabilityInfo};
 use crate::liveness::cfg::{Cfg, DomTree};
-use crate::model::ir::{Imm, Loc, Operation};
+use crate::model::ir::{Held, Imm, Loc, Operation};
 use crate::model::lir::{Block, Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap};
@@ -251,7 +251,10 @@ pub(crate) fn may_store(one: &Insn) -> bool {
         )
 }
 
-/// `TII->isAsCheapAsAMove`: a copy or a move of a constant.
+/// `TII->isAsCheapAsAMove`: a copy or a move of a constant. Not the 64-bit
+/// immediate that neither a sign-extended nor a zero-extended dword makes:
+/// `MOV64ri` (`movabs`) is rematerializable but not `isAsCheapAsAMove`
+/// (X86InstrMisc.td, outside the `MOV8ri`..`MOV64ri32` block).
 pub(crate) fn as_cheap_as_a_move(one: &Insn) -> bool {
     one.what
         .as_ref()
@@ -259,9 +262,22 @@ pub(crate) fn as_cheap_as_a_move(one: &Insn) -> bool {
             |what| what.op == Operation::Move
                 && matches!(
                     (what.dests.as_slice(), what.sources.as_slice()),
-                    ([Loc::Held(_)], [Loc::Held(_) | Loc::Imm(Imm { address: None, .. })])
+                    ([Loc::Held(dest)], [Loc::Held(_)])
+                        | ([Loc::Held(dest)], [Loc::Imm(Imm { address: None, .. })]) if !wide_immediate(dest, &what.sources[0])
                 ),
         )
+}
+
+/// A `movabs`: an immediate into a qword that does not fit `MOV64ri32` or
+/// `MOV32ri`.
+fn wide_immediate(
+    dest: &Held,
+    source: &Loc,
+) -> bool {
+    matches!(
+        source,
+        Loc::Imm(Imm { value, address: None, .. }) if dest.width == 8 && !(i64::from(i32::MIN)..=i64::from(u32::MAX)).contains(value)
+    )
 }
 
 thread_local! {
