@@ -268,7 +268,7 @@ pub fn machine_with<'a>(
         // instruction that clobbers them become a byte per condition
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
-        Box::new(phielim::PhiElimination),
+        Box::new(phielim::PhiElimination { unoptimized: !target.optimized }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
