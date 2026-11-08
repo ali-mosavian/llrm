@@ -50,7 +50,7 @@ Most data exists already. Estimate -> actual, source in brackets:
 - `calling.toml` ~200 -> 54 existing + 2 lines (`float_argument_registers`, `result.float`; floats went to the stack before). Darwin convention, vector-saved d8-d15 and red zone are not stated yet (Darwin and `frame_red_zone` follow with the frame stage).
 - `datalayout.toml`, `object.toml` (+ Darwin twins): existing, parse under `llrm_target` unchanged.
 - `arm64.instr` ~250 forms -> 137 lines exist; `dialect.toml` exists (44 lines). The selector's ~250 form names remain (due 2026-11-12).
-- Stubs (7): `march`, `marches`, `cpu_table`, `multiply_immediate_bytes`, `divide_routine`, `huge_*` (Err by design), prices from `machine.rs`.
+- Stubs: `multiply_immediate_bytes` (8). `march`, `marches`, `cpu_table`, `divide_routine`, `huge_*`, `float_width` are the trait defaults since #8424; `operation_costs` and `address_forms` come from `Arm64Machine` (the private driver's, one source).
 Total: 318 lines of Rust and 2 of data, against 1,000 and 560 estimated. The estimate missed `src/machines/*.toml` and `arm64.instr`.
 
 ## Round 1 from the other targets (6502, wasm, z80; m68k due 23:20Z)
@@ -65,5 +65,5 @@ Total: 318 lines of Rust and 2 of data, against 1,000 and 560 estimated. The est
 - x86-coupled lines by stage file (grep for `llrm_x86`, `RegId::<NAME>`, `full_register32`; a proxy, not a run): allocate 53, constrain 42, liveness 26, classes 21, loopslots 12, cpu 10, lanes 9, regclass 7, flow 4, peephole 3, assemble 2, floatalloc 1, sharedstores 0.
 
 ## Deviations expected
-- `cpu_table`/`operation_costs` empty: arm64 prices from `tti.rs` (the pin's cost model), not `timings.times`. DEVIATE, exit when the cost model is data.
+- No `timings.times`: `cpu_table` is the trait default (None) and prices come from `tti.rs` (the pin's cost model) through `Arm64Machine`. DEVIATE, owner w15, exit when the cost model is data.
 - Everything else follows the pin 1:1; a hook that cannot gets its row when written.
