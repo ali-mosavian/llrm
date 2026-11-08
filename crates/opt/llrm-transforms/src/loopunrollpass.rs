@@ -2278,22 +2278,30 @@ pub(crate) fn unrolled_blocks(
 /// loop was unrolled.
 pub fn unroll_loops(run: &mut Run) -> bool {
     // `LoopUnrollPass::run` (L1762): every loop is put in simplified form and
-    // LCSSA first, whether or not anything is unrolled.
-    // The manager's tree and loops stand for the function as it is: the first
-    // look at its loops asks them, not a tree made again.
-    let held = run.cached.as_ref().map(|(tree, loops)| llrm_analysis::cfg::Shape {
-        dominance: llrm_analysis::cfg::Dominance::new(std::rc::Rc::clone(tree)),
-        loops: llrm_analysis::cfg::natural(run.function, loops),
-    });
-    let simplified = crate::loopsimplify::simplified_given(run.function, held);
-    // Nothing was reshaped: the manager's tree and loops are the function's.
-    let closed = match &run.cached {
-        Some((tree, loops)) if !simplified => {
-            crate::lcssa::form_on_all_loops(run.context, run.layout, run.function, tree, loops)
+    // LCSSA first, whether or not anything is unrolled. `LoopFullUnrollPass`
+    // runs on one loop of a loop pass manager whose loops the slots before it
+    // left in both forms and does neither: a run narrowed to one loop
+    // (`loopfilter`) skips them.
+    let (simplified, closed) = if run.options.target_unrolling || !crate::loopfilter::scoped() {
+        // The manager's tree and loops stand for the function as it is: the
+        // first look at its loops asks them, not a tree made again.
+        let held = run.cached.as_ref().map(|(tree, loops)| llrm_analysis::cfg::Shape {
+            dominance: llrm_analysis::cfg::Dominance::new(std::rc::Rc::clone(tree)),
+            loops: llrm_analysis::cfg::natural(run.function, loops),
+        });
+        let simplified = crate::loopsimplify::simplified_given(run.function, held);
+        // Nothing was reshaped: the manager's tree and loops are the function's.
+        let closed = match &run.cached {
+            Some((tree, loops)) if !simplified => {
+                crate::lcssa::form_on_all_loops(run.context, run.layout, run.function, tree, loops)
+            }
+            _ => crate::lcssa::closed(run.context, run.layout, run.function),
         }
-        _ => crate::lcssa::closed(run.context, run.layout, run.function),
-    }
-    .unwrap_or(false);
+        .unwrap_or(false);
+        (simplified, closed)
+    } else {
+        (false, false)
+    };
     let mut analyzed = Analyzed::entry(run, !simplified && !closed);
     let at_first: IdSet<BlockId> = analyzed.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
     run.first = at_first.clone();

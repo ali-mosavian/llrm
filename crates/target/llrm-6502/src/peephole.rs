@@ -70,8 +70,8 @@ pub(crate) fn flags_unread_after(
     from: usize,
 ) -> bool {
     for line in &lines[from..] {
-        // control falling through a label carries these flags on; the other ways
-        // in bring their own
+        // control falling through a label carries these flags on; the other
+        // ways in bring their own
         if matches!(line, Line::Label(_)) {
             continue;
         }
@@ -138,6 +138,7 @@ pub fn run_with(
     crate::peephole_cells::fold_temp_operand(asm);
     crate::peephole_cells::arithmetic_chain_in_a(asm);
     crate::peephole_cells::chain_ends_in_a(asm);
+    crate::peephole_cells::forward_cell_copy(asm);
     // the chain's load can follow the store it was loaded from
     drop_reloads(asm);
     crate::peephole_cells::drop_dead_stores(asm);
@@ -190,16 +191,18 @@ fn hoistable(
 }
 
 /// The instructions both paths of a conditional branch start with run before
-/// the branch, once: `bcs b20 / b23: lda #1; sta rc8; jmp b3 / b20: lda #1; sta rc8`
-/// is `lda #1; sta rc8; bcs b20 / b23: jmp b3 / b20:`. Each path has only the
-/// branch for a predecessor. The pin's `BranchFolder::HoistCommonCode`
+/// the branch, once: `bcs b20 / b23: lda #1; sta rc8; jmp b3 / b20: lda #1; sta
+/// rc8` is `lda #1; sta rc8; bcs b20 / b23: jmp b3 / b20:`. Each path has only
+/// the branch for a predecessor. The pin's `BranchFolder::HoistCommonCode`
 /// ([BranchFolding.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L1980)),
 /// which also stops at an instruction that touches what the branch reads.
 pub fn hoist_common_successor_code(asm: &mut Asm) {
     let mut at = 0;
     while at < asm.lines.len() {
         at += 1;
-        let Some((hoisted, fall, target, insert)) = common_successor_code(&asm.lines, at - 1, Exits::of(asm)) else { continue };
+        let Some((hoisted, fall, target, insert)) = common_successor_code(&asm.lines, at - 1, Exits::of(asm)) else {
+            continue;
+        };
         let count = hoisted.len();
         let mut lines = Vec::with_capacity(asm.lines.len());
         for (index, line) in asm.lines.drain(..).enumerate() {
@@ -242,7 +245,9 @@ fn common_successor_code(
     }
     let target = target_label + 1;
     let mut hoisted = Vec::new();
-    while let (Some(Line::Inst(one)), Some(Line::Inst(other))) = (lines.get(fall + hoisted.len()), lines.get(target + hoisted.len())) {
+    while let (Some(Line::Inst(one)), Some(Line::Inst(other))) =
+        (lines.get(fall + hoisted.len()), lines.get(target + hoisted.len()))
+    {
         if one.op != other.op || one.operand != other.operand || !hoistable(one, flag) {
             break;
         }
@@ -264,9 +269,9 @@ fn plain_operand(inst: &Inst) -> bool {
 /// loads write the flags the branch reads, so they cannot sit between the test
 /// and the branch): the copy goes before the loads that make the flags
 /// (`lda rc6; ora rc7; bne`), which read none of the cells the copy stores.
-/// The copy leaves `a` and `n`/`z` set by its last load, and the setup then sets
-/// both, so neither successor may read `a`, `n` or `z` before writing them.
-/// Returns the copy and the index of the setup's first instruction.
+/// The copy leaves `a` and `n`/`z` set by its last load, and the setup then
+/// sets both, so neither successor may read `a`, `n` or `z` before writing
+/// them. Returns the copy and the index of the setup's first instruction.
 fn hoist_above_flag_setup(
     lines: &[Line],
     at: usize,
@@ -279,8 +284,11 @@ fn hoist_above_flag_setup(
         return None;
     }
     let mut copy = Vec::new();
-    while let (Some(Line::Inst(one)), Some(Line::Inst(other))) = (lines.get(fall + copy.len()), lines.get(target + copy.len())) {
-        let cell = matches!(one.op, Op::Sta) && one.operand.is_cell() || matches!(one.op, Op::Lda) && (one.operand.is_cell() || matches!(one.operand, Operand::Imm(_)));
+    while let (Some(Line::Inst(one)), Some(Line::Inst(other))) =
+        (lines.get(fall + copy.len()), lines.get(target + copy.len()))
+    {
+        let cell = matches!(one.op, Op::Sta) && one.operand.is_cell()
+            || matches!(one.op, Op::Lda) && (one.operand.is_cell() || matches!(one.operand, Operand::Imm(_)));
         if one.op != other.op || one.operand != other.operand || !cell {
             break;
         }
@@ -289,7 +297,8 @@ fn hoist_above_flag_setup(
     if copy.first().is_none_or(|first| first.op != Op::Lda) {
         return None;
     }
-    // the setup: plain loads and logic right before the branch, from its last `lda`
+    // the setup: plain loads and logic right before the branch, from its last
+    // `lda`
     let mut start = at;
     while let Some(Line::Inst(inst)) = start.checked_sub(1).map(|b| &lines[b]) {
         if !matches!(inst.op, Op::Lda | Op::Ora | Op::And | Op::Eor) || !plain_operand(inst) {
@@ -308,14 +317,15 @@ fn hoist_above_flag_setup(
         return None;
     }
     let count = copy.len();
-    let leaves_a_and_flags_unread =
-        |from: usize| dead_from(lines, from, Registers::A, &mut HashSet::default(), exits) && !reads_nz_first(lines, from);
+    let leaves_a_and_flags_unread = |from: usize| {
+        dead_from(lines, from, Registers::A, &mut HashSet::default(), exits) && !reads_nz_first(lines, from)
+    };
     (leaves_a_and_flags_unread(fall + count) && leaves_a_and_flags_unread(target + count)).then_some((copy, start))
 }
 
 /// Whether a branch on `n` or `z` runs before anything writes them, straight on
-/// from `from` (a jump, a call or raw text that is not preceded by a write stops
-/// the search as unsafe).
+/// from `from` (a jump, a call or raw text that is not preceded by a write
+/// stops the search as unsafe).
 fn reads_nz_first(
     lines: &[Line],
     from: usize,
@@ -329,8 +339,25 @@ fn reads_nz_first(
         };
         match inst.op {
             Op::Beq | Op::Bne | Op::Bmi | Op::Bpl => return true,
-            Op::Lda | Op::Ldx | Op::Ldy | Op::Tax | Op::Tay | Op::Txa | Op::Tya | Op::Cmp | Op::Cpx | Op::Cpy | Op::And
-            | Op::Ora | Op::Eor | Op::Adc | Op::Sbc | Op::Inx | Op::Iny | Op::Dex | Op::Dey => return false,
+            Op::Lda
+            | Op::Ldx
+            | Op::Ldy
+            | Op::Tax
+            | Op::Tay
+            | Op::Txa
+            | Op::Tya
+            | Op::Cmp
+            | Op::Cpx
+            | Op::Cpy
+            | Op::And
+            | Op::Ora
+            | Op::Eor
+            | Op::Adc
+            | Op::Sbc
+            | Op::Inx
+            | Op::Iny
+            | Op::Dex
+            | Op::Dey => return false,
             Op::Sta | Op::Stx | Op::Sty | Op::Stz | Op::Clc | Op::Sec => {}
             _ => return true,
         }
@@ -349,10 +376,15 @@ pub fn branch_over_jump(asm: &mut Asm) {
             continue;
         }
         let mut jump = at;
-        while matches!(&asm.lines[jump..], [Line::Label(name), ..] if references(&asm.lines, name) == 0) {
+        while matches!(
+            &asm.lines[jump..],
+            [Line::Label(name), ..] if references(&asm.lines, name) == 0
+        ) {
             jump += 1;
         }
-        let (Some(Line::Inst(jmp)), Some(Line::Label(over))) = (asm.lines.get(jump), asm.lines.get(jump + 1)) else { continue };
+        let (Some(Line::Inst(jmp)), Some(Line::Label(over))) = (asm.lines.get(jump), asm.lines.get(jump + 1)) else {
+            continue;
+        };
         if jmp.op != Op::Jmp || branch.operand != Operand::Direct(over.clone()) {
             continue;
         }
@@ -369,7 +401,8 @@ pub fn drop_flag_reload(asm: &mut Asm) {
     let exits = Exits::of(asm);
     let keep: Vec<bool> = (0..asm.lines.len())
         .map(|at| {
-            let (Some(Line::Inst(step)), Line::Inst(load)) = (at.checked_sub(1).map(|b| &asm.lines[b]), &asm.lines[at]) else {
+            let (Some(Line::Inst(step)), Line::Inst(load)) = (at.checked_sub(1).map(|b| &asm.lines[b]), &asm.lines[at])
+            else {
                 return true;
             };
             let reload = load.op == Op::Lda
@@ -390,7 +423,9 @@ pub fn drop_dead_repeat_load(asm: &mut Asm) {
     let exits = Exits::of(asm);
     let keep: Vec<bool> = (0..asm.lines.len())
         .map(|at| {
-            let (Some(Line::Inst(first)), Line::Inst(second)) = (at.checked_sub(1).map(|b| &asm.lines[b]), &asm.lines[at]) else {
+            let (Some(Line::Inst(first)), Line::Inst(second)) =
+                (at.checked_sub(1).map(|b| &asm.lines[b]), &asm.lines[at])
+            else {
                 return true;
             };
             let register = |op: Op| match op {
@@ -399,8 +434,10 @@ pub fn drop_dead_repeat_load(asm: &mut Asm) {
                 Op::Ldy => Some(Registers::Y),
                 _ => None,
             };
-            let repeat = matches!((register(first.op), register(second.op)), (Some(one), Some(two)) if one != two)
-                && first.operand.is_cell()
+            let repeat = matches!(
+                (register(first.op), register(second.op)),
+                (Some(one), Some(two)) if one != two
+            ) && first.operand.is_cell()
                 && first.operand == second.operand
                 && dead_from(&asm.lines, at + 1, register(second.op).unwrap(), &mut HashSet::default(), exits);
             !repeat
@@ -418,7 +455,9 @@ pub fn hoist_loop_constant(asm: &mut Asm) {
     while at < asm.lines.len() {
         at += 1;
         let Line::Label(label) = &asm.lines[at - 1] else { continue };
-        let (Some(Line::Inst(load)), Some(Line::Inst(next))) = (asm.lines.get(at), asm.lines.get(at + 1)) else { continue };
+        let (Some(Line::Inst(load)), Some(Line::Inst(next))) = (asm.lines.get(at), asm.lines.get(at + 1)) else {
+            continue;
+        };
         let writes = match load.op {
             Op::Ldy => [Op::Ldy, Op::Tay, Op::Iny, Op::Dey],
             Op::Ldx => [Op::Ldx, Op::Tax, Op::Inx, Op::Dex],
@@ -427,9 +466,15 @@ pub fn hoist_loop_constant(asm: &mut Asm) {
         if !matches!(load.operand, Operand::Imm(_)) || !matches!(next.op.flags(&next.operand), Flags::Of(_)) {
             continue;
         }
-        // the entry falls into the label, and every other reference is a branch back from the loop
+        // the entry falls into the label, and every other reference is a branch
+        // back from the loop
         let mut before = at - 1;
-        while before > 0 && matches!(&asm.lines[before - 1], Line::Label(name) if references(&asm.lines, name) == 0) {
+        while before > 0
+            && matches!(
+                &asm.lines[before - 1],
+                Line::Label(name) if references(&asm.lines, name) == 0
+            )
+        {
             before -= 1;
         }
         let Some(Line::Inst(entry)) = before.checked_sub(1).map(|index| &asm.lines[index]) else { continue };
@@ -453,11 +498,16 @@ pub fn hoist_loop_constant(asm: &mut Asm) {
         if !closed || last == at {
             continue;
         }
-        let quiet = asm.lines[at + 1..=last].iter().all(|line| match line {
-            Line::Inst(inst) => !writes.contains(&inst.op) && inst.op != Op::Jsr,
-            Line::Label(_) => true,
-            Line::Raw(_) => false,
-        });
+        let quiet = asm
+            .lines[at + 1..=last]
+            .iter()
+            .all(
+                |line| match line {
+                    Line::Inst(inst) => !writes.contains(&inst.op) && inst.op != Op::Jsr,
+                    Line::Label(_) => true,
+                    Line::Raw(_) => false,
+                },
+            );
         if !quiet {
             continue;
         }
@@ -523,7 +573,9 @@ pub fn drop_dead_writes(asm: &mut Asm) {
         let Line::Inst(inst) = &asm.lines[at] else { continue };
         let Some(writes) = pure_writes(inst) else { continue };
         let exits = Exits::of(asm);
-        let dead = writes.register.is_none_or(|register| dead_from(&asm.lines, at + 1, register, &mut HashSet::default(), exits))
+        let dead = writes
+            .register
+            .is_none_or(|register| dead_from(&asm.lines, at + 1, register, &mut HashSet::default(), exits))
             && (!writes.carry || carry_dead_from(&asm.lines, at + 1, &mut HashSet::default()))
             && (!writes.nz || nz_dead_from(&asm.lines, at + 1, &mut HashSet::default()));
         if dead {
@@ -539,7 +591,8 @@ fn nz_dead_from(
     from: usize,
     seen: &mut HashSet<usize>,
 ) -> bool {
-    let to = |inst: &Inst| inst.target().and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())));
+    let to =
+        |inst: &Inst| inst.target().and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())));
     let mut at = from;
     while let Some(line) = lines.get(at) {
         if !seen.insert(at) {
@@ -609,7 +662,10 @@ pub fn sink_step_to_compare(asm: &mut Asm) {
                 Some(Line::Inst(inst))
                     if inst.op == compare && matches!(&inst.operand, Operand::Imm(v) if v == "0") =>
                 {
-                    break matches!(next_instruction(&asm.lines, end + 1), Some(next) if matches!(next.op, Op::Beq | Op::Bne | Op::Bmi | Op::Bpl));
+                    break matches!(
+                        next_instruction(&asm.lines, end + 1),
+                        Some(next) if matches!(next.op, Op::Beq | Op::Bne | Op::Bmi | Op::Bpl)
+                    );
                 }
                 Some(Line::Inst(inst)) if leaves_index_alone(inst, index) => end += 1,
                 _ => break false,
@@ -1233,7 +1289,8 @@ pub fn drop_cancelling_transfers(asm: &mut Asm) {
 /// it returns the constant (`dotx`: `lda #0; sta rc7; jmp b3` and `b3: lda rc7;
 /// rts` become `lda #0; rts` once the load and the store are dropped). The
 /// pin's `TailDuplicator` copies a return block into its predecessors the
-/// same way ([TailDuplicator.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L545)).
+/// same way
+/// ([TailDuplicator.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L545)).
 /// A block nothing reaches afterwards is dropped.
 pub fn duplicate_return_tail(asm: &mut Asm) {
     let mut at = 0;
@@ -1258,7 +1315,18 @@ pub fn duplicate_return_tail(asm: &mut Asm) {
             let Line::Inst(inst) = line else { break };
             let straight = matches!(
                 inst.op,
-                Op::Lda | Op::Ldx | Op::Ldy | Op::Sta | Op::Stx | Op::Sty | Op::Tax | Op::Tay | Op::Txa | Op::Tya | Op::Clc | Op::Sec
+                Op::Lda
+                    | Op::Ldx
+                    | Op::Ldy
+                    | Op::Sta
+                    | Op::Stx
+                    | Op::Sty
+                    | Op::Tax
+                    | Op::Tay
+                    | Op::Txa
+                    | Op::Tya
+                    | Op::Clc
+                    | Op::Sec
             );
             if inst.op == Op::Rts {
                 returns = true;
@@ -1289,8 +1357,14 @@ pub fn duplicate_return_tail(asm: &mut Asm) {
 fn drop_unreached_blocks(asm: &mut Asm) {
     let mut at = 1;
     while at < asm.lines.len() {
-        let after_exit = matches!(&asm.lines[at - 1], Line::Inst(inst) if matches!(inst.op, Op::Jmp | Op::Bra | Op::Rts));
-        let unnamed = matches!(&asm.lines[at], Line::Label(name) if references(&asm.lines, name) == 0);
+        let after_exit = matches!(
+            &asm.lines[at - 1],
+            Line::Inst(inst) if matches!(inst.op, Op::Jmp | Op::Bra | Op::Rts)
+        );
+        let unnamed = matches!(
+            &asm.lines[at],
+            Line::Label(name) if references(&asm.lines, name) == 0
+        );
         if after_exit && unnamed {
             let mut end = at + 1;
             while matches!(asm.lines.get(end), Some(Line::Inst(_))) {

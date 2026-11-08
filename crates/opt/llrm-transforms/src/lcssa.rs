@@ -156,6 +156,12 @@ pub fn closed(
 
 #[cfg(test)]
 thread_local! {
+    /// Loops `formLCSSAImpl` has been asked of on this thread.
+    pub(crate) static LOOPS_FORMED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
     /// Dominator trees [`closed`] has made on this thread.
     pub(crate) static TREES_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -223,6 +229,8 @@ impl Form<'_> {
         &mut self,
         loop_: Loop,
     ) -> Result<bool, String> {
+        #[cfg(test)]
+        LOOPS_FORMED.with(|count| count.set(count.get() + 1));
         let exits = self.exits_of(loop_);
         if exits.is_empty() {
             return Ok(false);

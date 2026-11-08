@@ -1424,9 +1424,13 @@ impl Fast<'_> {
                     let dest = self.dag.get_basic_block(on_true.0);
                     let cc = self.dag.get_constant_with(u128::from(code), EVT::I8, true, false);
                     let jcc = self.node(self.names.jcc, &[EVT::OTHER], &[dest, cc, flags, glue]);
-                    let fall = self.dag.get_basic_block(on_false.0);
-                    let jmp = self.node(self.names.jmp, &[EVT::OTHER], &[fall, jcc]);
-                    self.chain = jmp;
+                    // `finishCondBranch` ends in `fastEmitBranch`: no jump to the next block.
+                    self.chain = if Some(on_false) == self.next {
+                        jcc
+                    } else {
+                        let fall = self.dag.get_basic_block(on_false.0);
+                        self.node(self.names.jmp, &[EVT::OTHER], &[fall, jcc])
+                    };
                     at += 1;
                 }
                 Opcode::Cast(llrm_mir::opcode::CastOp::ZExt) if !self.m32 && self.is_wide(instruction.operands[0]) == Some(false) && self.module.context.types.int_bits(instruction.ty) == Some(64) => {
