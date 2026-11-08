@@ -2,7 +2,9 @@
 //! loads costs the caller's stores nothing once inlined, so its growth is the
 //! callee's size less those stores. `kernel(&l)` of frame_address_stack_args
 //! was kept as a call (+8 B counted against a 2-clock call), `main` stayed 130 B
-//! against the pin's 53 B and the row ran +93 B over clang (2026-11-08).
+//! against the pin's 53 B and the row ran +93 B over clang (2026-11-08). The
+//! stores of a callee inlined before it (`terms(&l)`) count too: the sweep
+//! decides the sites in order and the later one sees the earlier planned.
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -30,11 +32,11 @@ fn test_o1_inlines_a_callee_whose_local_dies_with_the_call() {
         .unwrap();
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     let asm = std::fs::read_to_string(dir.join("d.s")).unwrap();
-    let main: Vec<&str> = asm
-        .lines()
-        .skip_while(|line| !line.starts_with("main proc"))
-        .take_while(|line| !line.starts_with("main endp"))
-        .collect();
-    let calls: Vec<&str> = main.iter().filter(|line| line.trim_start().starts_with("call")).copied().collect();
-    assert!(!calls.is_empty() && calls.iter().all(|line| line.trim_end().ends_with("report")), "main still calls its callees:\n{}", main.join("\n"));
+    // every function, `line` too: the pin leaves only `report` calls
+    let calls: Vec<&str> = asm.lines().filter(|line| line.trim_start().starts_with("call")).collect();
+    assert!(
+        !calls.is_empty() && calls.iter().all(|line| line.trim_end().ends_with("report")),
+        "a callee with a local that dies with the call was kept as a call:\n{}",
+        calls.join("\n")
+    );
 }
