@@ -1584,7 +1584,7 @@ pub fn recorded(
         manager.add(window::Window { size: applied.options.prefers_size() });
     }
     // DEVIATE Z80-ROT: after every loop pass, as the gcc tail rotate was, a counted loop
-    // proven to run is entered at its body at -Oz (target opt-in).
+    // proven to run is entered at its body at -Oz (target opt-in). Owner z80, exit 2026-11-30.
     if applied.options.has_min_size {
         manager.add(looprotate::LoopRotate {
             duplicate_headers: false,
