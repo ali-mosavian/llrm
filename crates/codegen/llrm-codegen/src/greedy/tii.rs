@@ -74,13 +74,15 @@ pub trait TargetInstrInfo {
         one: &Insn,
     ) -> bool;
 
-    /// `isAsCheapAsAMove`: whether making `def` again costs no more than a
-    /// copy, which `SplitEditor::defFromParent` asks before it remakes a value
-    /// at a split (SplitKit.cpp#L658). The spiller's `isTriviallyReMaterializable`
-    /// does not ask: `LEA64r` of a symbol is remade there and copied here.
-    fn as_cheap_as_a_move(
+    /// Whether a live range split makes `def` again, not copies it: `entering`
+    /// is the value starting a new piece, else it returns to the complement.
+    /// The pin asks `isAsCheapAsAMove` at both (SplitKit.cpp#L658), so the
+    /// default says yes to a literal; the spiller's `isTriviallyReMaterializable`
+    /// is another question.
+    fn remake_at_split(
         &self,
         _def: &Insn,
+        _entering: bool,
     ) -> bool {
         true
     }
@@ -279,16 +281,25 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         super::inlinespiller::remat_shape(one)
     }
 
-    /// A quadword symbol address is `LEA64r $rip` (`isReMaterializable` only,
-    /// no `isAsCheapAsAMove`); a dword one is `MOV32ri`. A large code model's
-    /// `MOV64ri` is not modelled.
-    fn as_cheap_as_a_move(
+    /// DEVIATE SPLIT-REMAT-ENTER (owner greedy-anyisa, exit 2026-12-08): a
+    /// quadword symbol address (`LEA64r $rip`: `isReMaterializable` but not
+    /// `isAsCheapAsAMove`, so the pin copies it) is made again where a piece
+    /// starts and copied where it returns. Remade at both, as the code was,
+    /// memory_expansion -O1 held 450 rip-leas to the pin's 318; copied at
+    /// both, as the pin does, stft_fixed grew 37-61 B at every level (the
+    /// pin itself is 49 B above the code that remade). Remade at the start
+    /// only: stft_fixed, jpeg_fixed and memory_expansion are all at or under both.
+    /// Exit: a priced remake (the copy's register against the lea's bytes)
+    /// that reaches these without naming the entry and the exit apart.
+    fn remake_at_split(
         &self,
         def: &Insn,
+        entering: bool,
     ) -> bool {
-        !def.what.as_ref().is_some_and(|what| {
+        let address = def.what.as_ref().is_some_and(|what| {
             what.sources.iter().any(|source| matches!(source, Loc::Imm(imm) if imm.address.is_some() && imm.width == 8))
-        })
+        });
+        entering || !address
     }
 
     /// DEVIATE RA-CLK (real mode; owner x86-m16, exit 2026-11-29): a value that
