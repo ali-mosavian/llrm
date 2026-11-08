@@ -59,13 +59,18 @@ rep_movs_cell = 4
 mul_r32 = 38
 leave = 6
 # x87 rows: the Intel486 DX timings (order no. 240440-002, FPU on the die), the table the vsgcc harness
-# bars use; -march=i386 is the only flag m16 can state and no 386 with a 387 is a target.
+# bars use; -march=i386 is the only flag m16 can state and no 386 with a 387 is a target. By the user's
+# 486/P5 rule (price and default for 486/P5, nobody uses the 386): do not set these back to 387 numbers.
 x87_load = 3
 x87_exchange = 4
 x87_copy = 4
 x87_store = 8
 x87_convert_store = 35
 x87_add = 8
+# DEVIATE X87ROTATE-ADDM (owner x87, exit 2026-12-08): with add_m = add the spiller folds a reload into `fadd`, so
+# tests/run/c/x87rotate.c m16 -O2 spills 8 slots, not 5: 313 B / 1281 clk against 272 B / 1272 clk at 7 trips (-5 clk
+# a trip, +44 clk fixed, break-even ~9 trips, ~13 at 1 clk = 2 B). The row is the Intel number and stays; fix class:
+# spill choice priced on the whole carried set (~/scratch/handoff/x87rotate-allocator-card-2026-11-08.md).
 x87_add_m = 8
 x87_mul = 16
 x87_mul_m = 14
