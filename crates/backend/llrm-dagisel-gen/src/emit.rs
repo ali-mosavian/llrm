@@ -39,17 +39,22 @@ pub struct Style {
 }
 
 impl Style {
+    /// The x86 tables, which live in `llrm-x86-dagisel` over `llrm-dagisel`.
     pub const X86: Style = Style {
-        dagisel: "crate",
-        predicates: "crate::predicates",
+        dagisel: "llrm_dagisel",
+        predicates: "llrm_dagisel::predicates",
         ns: "X86::",
         title: "x86-32",
         regen: "tools/dagisel/regen.sh",
-        desc: "crate::instr::desc",
+        desc: "llrm_dagisel::instr::desc",
         local_desc: false,
         hooks: "X86Predicates",
         listed_predicates: false,
     };
+
+    /// The x86 instruction descriptors, which live in `llrm-dagisel` itself.
+    pub const X86_INSTR: Style =
+        Style { dagisel: "crate", predicates: "crate::predicates", desc: "crate::instr::desc", ..Style::X86 };
 }
 
 pub struct Source<'a> {

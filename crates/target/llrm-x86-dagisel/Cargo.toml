@@ -1,0 +1,9 @@
+[package]
+name = "llrm-x86-dagisel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "x86's DAG instruction selector: the pin's matcher tables, FastISel rows and X86DAGToDAGISel's hooks, over the llrm-dagisel interpreter"
+
+[dependencies]
+llrm-dagisel = { path = "../../backend/llrm-dagisel" }

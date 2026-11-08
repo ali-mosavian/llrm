@@ -29,6 +29,7 @@ LAYERS = [
         [
             "llrm-x86", "llrm-x86-m16", "llrm-x86-m32", "llrm-x86-m64", "llrm-x86-m16-select", "llrm-x86-m32-select",
             "llrm-x86-m64-select", "llrm-arm64", "llrm-6502", "llrm-m68k", "llrm-wasm",
+            "llrm-x86-backend", "llrm-x86-dagisel",
         ],
     ),
     ("driver", ["llrm-driver", "llrm-cc", "llrm-bcdriver", "llrm-opt"]),
@@ -43,6 +44,8 @@ ALLOWED: set[tuple[str, str]] = {
     ("llrm-bcdriver", "llrm-bcobj"),
     # target facts read from a concrete target: machine facts should be passed in (one machine description)
     ("llrm-codegen", "llrm-x86"),
+    # dag_select.rs and dagisel_adapter.rs still read the x86 tables: they move to llrm-x86-backend (placement step 3)
+    ("llrm-codegen", "llrm-x86-dagisel"),
     ("llrm-hir", "llrm-target"),
     ("llrm-lir", "llrm-omf"),
 }

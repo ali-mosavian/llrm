@@ -21,11 +21,11 @@ use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo
 use llrm_codegen::backend::selectiondag::x86_lowering::X86Lowering;
 use llrm_codegen::backend::selectiondag::{ISD, MVT, SDValue};
 use llrm_dagisel::addr::AddrMode;
-use llrm_dagisel::generated::x86_i486 as table;
 use llrm_dagisel::interp::{Outcome, Selector};
-use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
-use llrm_dagisel::x86_select::select_node;
 use llrm_mir::datalayout::DataLayout;
+use llrm_x86_dagisel::generated::x86_i486 as table;
+use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
+use llrm_x86_dagisel::x86_select::select_node;
 
 /// The runtime routines both targets' `c.toml` list: a large
 /// `memset`/`memcpy`/`memmove` calls one. Without them the builder refuses the
@@ -89,7 +89,7 @@ fn main() {
             AddrMode::Flat32,
         )
     };
-    let selector = Selector::new(if m16 { llrm_dagisel::generated::x86_m16::TABLE } else { table::TABLE });
+    let selector = Selector::new(if m16 { llrm_x86_dagisel::generated::x86_m16::TABLE } else { table::TABLE });
     let mut hooks = X86Hooks::new(Options {
         cpu,
         opt_none: false,

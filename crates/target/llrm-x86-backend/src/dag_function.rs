@@ -51,14 +51,14 @@ use llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects;
 use llrm_codegen::model::ir::{Addr, Held, Mem, Space};
 use llrm_codegen::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use llrm_dagisel::addr::AddrMode;
-use llrm_dagisel::generated::{x86_i486, x86_m16, x86_x64};
 use llrm_dagisel::interp::Selector;
-use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Module, ValueDef, ValueId};
 use llrm_support::hash::{HashMap, HashSet};
 use llrm_target::Target;
 use llrm_target::routines::Used;
+use llrm_x86_dagisel::generated::{x86_i486, x86_m16, x86_x64};
+use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 
 struct Info {
     source_order: bool,
@@ -582,22 +582,22 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                     .copied()
                     .chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied())
                     .chain([
-                        (llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
-                        (llrm_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
-                        (llrm_dagisel::x86_llrm::PORT_OPCODE, "PORT_IO"),
-                        (llrm_dagisel::x86_llrm::TC_RETURN_OPCODE, "TCRETURN_16"),
-                        (llrm_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
-                        (llrm_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
-                        (llrm_dagisel::x86_llrm::FLOG2_OPCODE, "LOG2_Fp80"),
-                        (llrm_dagisel::x86_llrm::FEXP2_OPCODE, "EXP2_Fp80"),
-                        (llrm_dagisel::x86_llrm::FSIN_OPCODE, "SIN_Fp80"),
-                        (llrm_dagisel::x86_llrm::FCOS_OPCODE, "COS_Fp80"),
-                        (llrm_dagisel::x86_llrm::FATAN_OPCODE, "ATAN_Fp80"),
-                        (llrm_dagisel::x86_llrm::FRINT_OPCODE, "RNDINT_Fp80"),
-                        (llrm_dagisel::x86_llrm::IST16_OPCODES[0], "IST_Fp16m32"),
-                        (llrm_dagisel::x86_llrm::IST16_OPCODES[1], "IST_Fp16m64"),
-                        (llrm_dagisel::x86_llrm::IST16_OPCODES[2], "IST_Fp16m80"),
-                        (llrm_dagisel::x86_llrm::LLRM_ASM_OPCODE, "CALL_ASM"),
+                        (llrm_x86_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
+                        (llrm_x86_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
+                        (llrm_x86_dagisel::x86_llrm::PORT_OPCODE, "PORT_IO"),
+                        (llrm_x86_dagisel::x86_llrm::TC_RETURN_OPCODE, "TCRETURN_16"),
+                        (llrm_x86_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FLOG2_OPCODE, "LOG2_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FEXP2_OPCODE, "EXP2_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FSIN_OPCODE, "SIN_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FCOS_OPCODE, "COS_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FATAN_OPCODE, "ATAN_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FRINT_OPCODE, "RNDINT_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::IST16_OPCODES[0], "IST_Fp16m32"),
+                        (llrm_x86_dagisel::x86_llrm::IST16_OPCODES[1], "IST_Fp16m64"),
+                        (llrm_x86_dagisel::x86_llrm::IST16_OPCODES[2], "IST_Fp16m80"),
+                        (llrm_x86_dagisel::x86_llrm::LLRM_ASM_OPCODE, "CALL_ASM"),
                     ])
                     .collect(),
                 by_name: Default::default(),
