@@ -212,6 +212,8 @@ mod codecall_tests;
 #[cfg(test)]
 mod combine_avg_tests;
 #[cfg(test)]
+mod combine_sext_inreg_tests;
+#[cfg(test)]
 mod dag_function_aggregates_tests;
 #[cfg(test)]
 mod dag_function_calls_tests;

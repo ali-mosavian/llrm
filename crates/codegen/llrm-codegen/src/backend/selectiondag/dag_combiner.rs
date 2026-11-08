@@ -4122,6 +4122,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(simplified) = self.simplify_demanded(node) {
             return Some(simplified);
         }
+        // `(sext_in_reg (srl X, c), VT)` is `(sra X, c)` where X is sign
+        // extended enough that the shift only moves copies of the sign.
+        if self.dag.opcode(n0) == ISD::Srl
+            && let Some(shift) = self.dag.constant(self.dag.operand(n0, 1))
+            && shift <= u128::from(bits - ext_bits)
+        {
+            let x = self.dag.operand(n0, 0);
+            if u128::from(bits - ext_bits) - shift < u128::from(super::known_bits::num_sign_bits(self.dag, x)) {
+                return Some(self.dag.get_node(ISD::Sra, vt, &[x, self.dag.operand(n0, 1)]));
+            }
+        }
         self.sext_in_reg_of_load(node, n0, vt, ext)
     }
 

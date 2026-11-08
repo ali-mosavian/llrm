@@ -96,6 +96,8 @@ prints the LIR after each machine phase (`=== PhiElimination`, `RegAlloc`, `Para
 
 `llrm-mir FILE` reads, verifies and prints a `.ll` back; `llrm-mir --run [--entry NAME] [--fuel N] FILE` interprets its `@main`, so a reduced MIR program can be run before and after a pass.
 
+`LLRM_DAGDUMP=stages` prints the SelectionDAG of each block after every stage (built, combined, types legalized, combined, legalized); `all` prints the legalized one. A fold the pin makes and ours misses shows as the stage where the two DAGs part; the pin's own order is `llc -debug-only=dagcombine` on an assertions build.
+
 ## 5. The regression test
 
 Reduce the module to the smallest source that still shows the fault, record the Watcom front end's output for it as the fixture's `.cgs`, and assert the symptom in the listing or the run. `tests/fixtures/c/nearviads.c` is one: near data read through SS, asserted by the absence of `ss:`, `lds` and `mov ds,` in the listing. Watch the test fail with the fix reverted.
