@@ -79,3 +79,29 @@ fn the_byte_trial_simplifies_its_copy_with_the_cleanup_list() {
     let whole: Vec<&&str> = trials.iter().filter(|line| !line.contains("cleanup list")).collect();
     assert!(whole.is_empty(), "trials on the whole list: {whole:?}");
 }
+
+/// vla -O2: one site of `vla` was rejected, and the trial of all its sites (the
+/// callee goes with them: more credit) was skipped as a retry, so the nest's
+/// calls with constant sizes were never priced as a whole.
+#[test]
+fn the_group_of_a_callees_sites_is_tried_after_one_site_was_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let ir = dir.path().join("vla.ll");
+    std::fs::write(&ir, include_str!("darwin/vla.ll")).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .env("LLRM_INLINE_REMARKS", "1")
+        .arg("-O2")
+        .arg("-o")
+        .arg(dir.path().join("o.o"))
+        .arg(&ir)
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&output.stderr);
+    let sizes: Vec<usize> = log
+        .lines()
+        .filter(|line| line.contains("SZ2 trial of") && line.contains("call(s) to 'vla'"))
+        .filter_map(|line| line.split("trial of ").nth(1)?.split(' ').next()?.parse().ok())
+        .collect();
+    assert!(sizes.contains(&1), "premise: a single site is tried\n{log}");
+    assert!(sizes.iter().any(|&n| n > 1), "no trial of the callee's group:\n{log}");
+}
