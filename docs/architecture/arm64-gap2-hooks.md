@@ -1,6 +1,6 @@
-# arm64 on `flow::machine_with`: gap 2 hooks (2026-11-08, v0)
+# arm64 on `flow::machine_with`: gap 2 hooks (2026-11-08, v0 (unrun))
 
-v0 is from reading the signatures, not from running the stages. Owner llrm-arm64-lir. Each hook mirrors the pin's name; a difference is a dated DEVIATE row.
+v0 is from reading the signatures, not from running the stages. Owner llrm-arm64-lir. Each hook mirrors the pin's name; a difference is a dated DEVIATE row at once. Hooks take the target description as data; no arm64 names in shared code. The deliverable that replaces this table is the list of the first x86 fact (file:line) each stage stops at, in stage order, with counts of programs reaching and stopped.
 
 | # | hook (shared side) | arm64 side today | pin |
 |---|---|---|---|
