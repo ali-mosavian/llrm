@@ -161,3 +161,53 @@ fn a_twin_taking_up_at_the_loop_is_the_function_reduced_without_the_formulae() {
     );
     assert!(function_text(&out, "f").contains("i32 400"), "{out}");
 }
+
+/// Two stack arrays xored into a global, two bytes a trip. The end-biased space
+/// picks the pin's formulae here, so the function was marked and twinned for
+/// nothing: memory_expansion made 65 twins at -O2, 63 of them this (+44% Ir).
+const SAME_AS_THE_PINS: &str = r#"target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+@x = internal global [700 x i8] zeroinitializer, align 16
+
+define void @f() {
+entry:
+  %a = alloca [700 x i8], align 16
+  %b = alloca [700 x i8], align 16
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %n, %loop ]
+  %pa = getelementptr inbounds nuw i8, ptr %a, i64 %i
+  %va = load i8, ptr %pa
+  %pb = getelementptr inbounds nuw i8, ptr %b, i64 %i
+  %vb = load i8, ptr %pb
+  %v = xor i8 %vb, %va
+  %px = getelementptr inbounds nuw i8, ptr @x, i64 %i
+  store i8 %v, ptr %px
+  %j = or disjoint i64 %i, 1
+  %qa = getelementptr inbounds nuw i8, ptr %a, i64 %j
+  %wa = load i8, ptr %qa
+  %qb = getelementptr inbounds nuw i8, ptr %b, i64 %j
+  %wb = load i8, ptr %qb
+  %w = xor i8 %wb, %wa
+  %qx = getelementptr inbounds nuw i8, ptr @x, i64 %j
+  store i8 %w, ptr %qx
+  %n = add nuw nsw i64 %i, 2
+  %c = icmp eq i64 %n, 700
+  br i1 %c, label %exit, label %loop
+exit:
+  ret void
+}
+"#;
+
+#[test]
+fn a_function_whose_end_biased_solution_is_the_pins_is_not_marked() {
+    use llrm_transforms::lsr_pass::Twin;
+    let mut module = llrm_mir::parse::module(SAME_AS_THE_PINS).unwrap_or_else(|why| panic!("{why:?}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    for twin in [Twin::Make, Twin::Only] {
+        manager.add(LoopStrengthReduce { size: false, twin });
+    }
+    manager.run_module(&mut module, Rc::new(Flat("x86-64"))).expect("runs");
+    let out = llrm_mir::print::module(&module);
+    assert!(!out.contains("llrm-end-biased") && !out.contains("llrm-twin"), "{out}");
+}
