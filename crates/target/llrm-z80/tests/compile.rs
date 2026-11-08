@@ -2247,3 +2247,12 @@ fn a_copy_of_hl_shifted_with_hl_dead_shifts_in_hl_first() {
         assert_eq!(out.matches("add hl, hl").count(), 5, "{level:?}: {out}");
     }
 }
+
+/// `llvm.is.constant` reached the backend at -O0 and the compile was refused
+/// (`intrinsic call llvm.is.constant.i16`; builtins_table -O0 failed).
+#[test]
+fn is_constant_is_lowered_at_o0() {
+    let ir = include_str!("kernels/ir/is_constant_o0.ll");
+    let out = text(ir, "f", 0, &Request::new(Level::O0)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ret"), "{out}");
+}

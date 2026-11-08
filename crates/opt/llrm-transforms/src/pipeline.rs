@@ -1292,6 +1292,35 @@ fn unroll_level(options: &Options) -> u32 {
     }
 }
 
+/// The `-O<text>` words every driver takes. A driver maps each to its own mid-end `Options`;
+/// `Omax` is `Options::aggressive()` there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LevelName {
+    O0,
+    O1,
+    O2,
+    O3,
+    Omax,
+    Os,
+    Oz,
+}
+
+impl LevelName {
+    /// The level `-O<text>` names; a bare `-O` is -O1, as in gcc.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        Ok(match text {
+            "0" => Self::O0,
+            "" | "1" => Self::O1,
+            "2" => Self::O2,
+            "3" => Self::O3,
+            "max" => Self::Omax,
+            "s" => Self::Os,
+            "z" => Self::Oz,
+            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Omax, -Os or -Oz")),
+        })
+    }
+}
+
 /// `program` through the pipeline.
 pub fn applied(
     program: &mut Program,
