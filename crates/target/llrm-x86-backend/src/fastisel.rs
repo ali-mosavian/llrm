@@ -991,6 +991,16 @@ impl Fast<'_> {
             let instruction = self.function.instruction(insts[at]).clone();
             at += 1;
             *declined = Some(Declined::At(insts[at - 1]));
+            // `++SDNodeOrder` and the instruction's `DebugLoc`, as `SelectionDAGBuilder::visit` does: the nodes
+            // built for it are of its line.
+            self.dag.cur_order += 1;
+            let order = self.dag.cur_order as usize;
+            if self.dag.lines.len() <= order {
+                self.dag.lines.resize(order + 1, None);
+            }
+            self.dag.lines[order] =
+                llrm_codegen::backend::isel::dbg_line(self.module, self.function, insts[at - 1]).filter(|at| at.line != 0);
+            self.dag.inst_order.push((insts[at - 1], self.dag.cur_order));
             self.export_ready()?;
             match &instruction.opcode {
                 Opcode::Phi => {
@@ -1207,6 +1217,11 @@ impl Fast<'_> {
                 // `FastISel::selectIntrinsicCall`: "at -O0 we don't care about the lifetime intrinsics", and
                 // `donothing`, `sideeffect`, `assume` and `noalias.scope.decl` emit nothing either.
                 Opcode::Call(_) if self.is_noop_intrinsic(&instruction) => {}
+                // `X86FastISel::fastLowerCall`: "Allow SelectionDAG isel to handle tail calls", a call marked
+                // `tail` that `FastISel::lowerCall` found in tail position (`isInTailCallPosition`).
+                Opcode::Call(_) if llrm_codegen::backend::selectiondag::builder::tail_position(self.function, insts[at - 1]) => {
+                    return None;
+                }
                 Opcode::Call(call) if !self.narrow && call.calling_convention == self.function.calling_convention => {
                     // SysV: up to six integer or pointer arguments in registers; `al` = 0 for a variadic callee
                     let (down, up, call_op, mov8) = self.names.calls64?;

@@ -59,6 +59,9 @@ pub struct Plan {
     pub iv_inc_insert_pos: InstId,
     /// The IV chains to generate.
     pub chains: Vec<crate::lsr_chain::IvChain>,
+    /// DEVIATE LG3: this plan has end-biased formulae the pin's solution does
+    /// not (the driver may build the function both ways and keep the smaller).
+    pub end_biased_differs: bool,
 }
 
 /// The phis that a fixup of `plan` rewrites, with the incoming edges whose
@@ -896,6 +899,7 @@ impl crate::lsr_collect::Collection<'_, '_> {
             swapped_compares: self.swapped_compares,
             iv_inc_insert_pos: self.iv_inc_insert_pos,
             chains: Vec::new(),
+            end_biased_differs: false,
         }
     }
 }
