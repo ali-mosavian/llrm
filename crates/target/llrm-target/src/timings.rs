@@ -34,7 +34,8 @@ pub struct CpuTable {
     /// tail duplication (`TailDupPlacementThreshold`), where the target states
     /// a smaller bound than the pin's (2, 4 at -O3); `None`: the pin's.
     pub tail_dup_placement_threshold: Option<i64>,
-    /// DEVIATE TAILDUP-HOT (owner x86-m32, exit 2026-12-05): the most
+    /// DEVIATE TAILDUP-HOT (owner x86-m32, exit: profile-fed frequencies; stated cost
+    /// x_jpeg_fixed/x_jpeg_single -O2 +32 B at 0 clk): the most
     /// instructions a block may hold above the pin's bound and still be copied
     /// when the clocks of the jump the copy saves, over the block's executions,
     /// outweigh the bytes of the copy at the speed rate (gcc's `copy_bb_p`,
