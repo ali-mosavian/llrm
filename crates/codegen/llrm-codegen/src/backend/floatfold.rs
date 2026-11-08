@@ -1161,6 +1161,23 @@ mod tests {
         assert_eq!(done, ["fld", "fimul+m", "fstp"], "{done:?}");
     }
 
+    /// The 386 column priced the integer memory form at the 387's numbers
+    /// (`fimul` 35 against `fild` 8 + `fmul` 27), where the pair saves
+    /// nothing and the pair stays: x87rotate-class m16 code was priced at
+    /// fxch 18 and fstp 8 while the bar is the 486 table (fxch 4, `fimul` 23
+    /// against 13 + 16).
+    #[test]
+    fn test_the_386_column_prices_the_integer_memory_form_at_the_486_numbers() {
+        let cpu = crate::backend::cpu::profile("386").expect("a profile");
+        let body = one_block(vec![
+            insn(0, Operation::FloatLoad, "fild", vec![held(1)], vec![Loc::Mem(frame(-4))]),
+            insn(1, Operation::FloatArith, "fmul", vec![held(3)], vec![held(1), Loc::Mem(global(8, 0))]),
+            fstp(2, 3, global(0, 0)),
+        ]);
+        let done = names(&folded(&body, cpu, REGISTERS));
+        assert_eq!(done, ["fld", "fimul+m", "fstp"], "{done:?}");
+    }
+
     /// A constant that two instructions read stays loaded: one `fld1` serves
     /// both, and each memory form would cost its bytes again.
     #[test]
