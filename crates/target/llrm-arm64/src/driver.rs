@@ -223,6 +223,141 @@ fn dag_select(
     crate::dag::emit::emit(name, &blocks, lines)
 }
 
+/// Whether calls are priced by what their callee writes (`crate::ipra`):
+/// the target opts in, `LLRM_ARM64_NO_IPRA` not set.
+fn interprocedural_register_use(platform: Platform) -> bool {
+    use llrm_mir::tti::Tti;
+    crate::tti::AArch64::of_cpu(platform.cpu()).is_some_and(|tti| tti.interprocedural_register_use()) && !llrm_support::env_flag!("LLRM_ARM64_NO_IPRA")
+}
+
+/// One defined function of `program`'s module, selected, allocated and
+/// lowered, with the registers a call to it destroys (`crate::ipra`).
+fn lower_function(
+    program: &Program,
+    id: llrm_mir::context::GlobalId,
+    platform: Platform,
+    lines: bool,
+) -> Result<(crate::emit::Function, crate::ipra::Written), String> {
+    let module = &program.modules[0];
+    let global = module.global(id);
+    let function = global.function().ok_or("not a function")?;
+    let name = global.name.owned().ok_or("an unnamed function")?;
+    let mut machine = match isel_mode() {
+        IselMode::Hand => crate::isel::selected(module, id, &program.layout, platform, lines),
+        IselMode::Dag => dag_select(module, &name, &program.layout, platform, lines),
+        // A refusal of the DAG path falls back to the hand selector,
+        // counted.
+        IselMode::Shadow => dag_select(module, &name, &program.layout, platform, lines).or_else(|why| {
+            eprintln!("isel-shadow: @{name}: {why}");
+            crate::isel::selected(module, id, &program.layout, platform, lines)
+        }),
+    }
+    .map_err(|why| format!("@{name}: {why}"))?;
+    dump("Select", &machine);
+    if llrm_support::env_flag!("LLRM_ARM64_VERIFY") {
+        let undefined = crate::mfunc::undefined_reads(&machine);
+        if !undefined.is_empty() {
+            return Err(format!("@{name}: read before written: {undefined:?}"));
+        }
+    }
+    machine.frame_pointer =
+        llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
+    let optsize = function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            ),
+        );
+    crate::prepass::run(&mut machine, optsize);
+    dump("Prepass", &machine);
+    if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
+        crate::combine::run(&mut machine, optsize);
+        dump("Combine", &machine);
+    }
+    crate::cmpzero::run(&mut machine);
+    dump("CmpZero", &machine);
+    crate::flagcse::run(&mut machine);
+    dump("FlagCse", &machine);
+    crate::memcluster::run(&mut machine);
+    dump("MemCluster", &machine);
+    crate::sibcall::run(&mut machine);
+    dump("SibCall", &machine);
+    crate::prepass::order_copies(&mut machine);
+    dump("OrderCopies", &machine);
+    // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
+    // linear scan; a function greedy refuses goes to the scan, reported.
+    // `x16`/`x17` are the lowerer's scratch pair where an offset does not
+    // encode; they are the allocator's while the frame stays small. A
+    // spill slot is at most 16 B, a register mostly 8: between the two
+    // bounds the allocation is kept only if the frame came out small.
+    let (tight, loose) = crate::frame::scratch_estimate(&machine);
+    let snapshot = (tight && !loose).then(|| machine.clone());
+    crate::lir_view::set_frame_pointer_free(
+        platform != Platform::Darwin
+            && !(machine.calls
+                || machine.dynamic
+                || llrm_codegen::backend::framefree::keeps_frame_pointer(
+                    machine.frame_pointer.as_deref(),
+                    machine.calls,
+                )),
+    );
+    machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
+    let allocate = |machine: &mut crate::mfunc::MFunc, scratch: bool| {
+        crate::lir_view::set_scratch_free(scratch);
+        // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for
+        // the linear scan; a function greedy refuses goes to the scan,
+        // reported.
+        let greedy =
+            (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(machine, optsize));
+        match greedy {
+            Some(Ok(allocation)) => allocation,
+            Some(Err(why)) => {
+                eprintln!("greedy: @{name}: {why}");
+                GREEDY_FALLBACKS.with(|count| count.set(count.get() + 1));
+                crate::regalloc::allocate(machine)
+            }
+            None => crate::regalloc::allocate(machine),
+        }
+    };
+    let mut allocation = allocate(&mut machine, tight);
+    if let Some(before) = snapshot
+        && crate::frame::frame_bound(&machine, 0) >= crate::frame::SCRATCH_FREE_BELOW
+    {
+        machine = before;
+        allocation = allocate(&mut machine, false);
+    }
+    dump("RegAlloc", &machine);
+    crate::copyprop::run(&mut machine);
+    crate::postrasink::run(&mut machine);
+    dump("PostRaSink", &machine);
+    let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin);
+    let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
+        .map_err(|why| format!("@{name}: {why}"))?;
+    let mut tables = crate::jumptable::tables_of(&machine);
+    let blocks = crate::layout::fold(
+        blocks,
+        &mut tables,
+        &crate::layout::edge_odds(module, function, &program.layout, &machine),
+        optsize,
+        &crate::mfunc::returned_registers(&machine),
+    );
+    let blocks = crate::pairs::fold(blocks);
+    let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
+    crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
+    let written = crate::ipra::written(&machine);
+    Ok((crate::emit::Function {
+        tables,
+        symbol: crate::data::symbol_name(platform, &name),
+        binding: crate::data::binding_of(global.linkage),
+        blocks,
+        variables,
+        pool: machine.pool.clone(),
+    }, written))
+}
+
 /// Every defined function of `program`'s one module, selected, allocated and
 /// lowered.
 pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String> {
@@ -237,125 +372,42 @@ pub fn functions_with(
     let module = &program.modules[0];
     let platform = platform_of_machine(program);
     crate::lir_view::set_darwin(platform == Platform::Darwin);
+    crate::ipra::clear();
+    if !interprocedural_register_use(platform) {
+        let mut out = Vec::new();
+        for (id, _, function) in module.functions() {
+            if function.is_declaration() {
+                continue;
+            }
+            out.push(lower_function(program, id, platform, lines)?.0);
+        }
+        return Ok(out);
+    }
+    // Callees first, so a call is priced by what its callee wrote.
+    let mut lowered: std::collections::HashMap<llrm_mir::context::GlobalId, crate::emit::Function> = Default::default();
+    let graph = llrm_mir::callgraph::CallGraph::new(module);
+    for (component, _) in graph.bottom_up_components() {
+        for id in component.iter().copied() {
+            let global = module.global(id);
+            let Some(function) = global.function() else { continue };
+            if function.is_declaration() {
+                continue;
+            }
+            let name = global.name.owned().ok_or("an unnamed function")?;
+            let optnone = function.attrs.iter().any(|attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == "optnone"));
+            let usable = !optnone && !global.linkage.is_interposable();
+            let (done, written) = lower_function(program, id, platform, lines)?;
+            if usable {
+                crate::ipra::record(&name, written);
+            }
+            lowered.insert(id, done);
+        }
+    }
     let mut out = Vec::new();
-    for (id, global, function) in module.functions() {
-        if function.is_declaration() {
-            continue;
+    for (id, _, function) in module.functions() {
+        if !function.is_declaration() {
+            out.push(lowered.remove(&id).ok_or("a function was not lowered")?);
         }
-        let name = global.name.owned().ok_or("an unnamed function")?;
-        let mut machine = match isel_mode() {
-            IselMode::Hand => crate::isel::selected(module, id, &program.layout, platform, lines),
-            IselMode::Dag => dag_select(module, &name, &program.layout, platform, lines),
-            // A refusal of the DAG path falls back to the hand selector,
-            // counted.
-            IselMode::Shadow => dag_select(module, &name, &program.layout, platform, lines).or_else(|why| {
-                eprintln!("isel-shadow: @{name}: {why}");
-                crate::isel::selected(module, id, &program.layout, platform, lines)
-            }),
-        }
-        .map_err(|why| format!("@{name}: {why}"))?;
-        dump("Select", &machine);
-        if llrm_support::env_flag!("LLRM_ARM64_VERIFY") {
-            let undefined = crate::mfunc::undefined_reads(&machine);
-            if !undefined.is_empty() {
-                return Err(format!("@{name}: read before written: {undefined:?}"));
-            }
-        }
-        machine.frame_pointer =
-            llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
-        let optsize = function
-            .attrs
-            .iter()
-            .any(
-                |attr| matches!(
-                    attr,
-                    llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-                ),
-            );
-        crate::prepass::run(&mut machine, optsize);
-        dump("Prepass", &machine);
-        if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
-            crate::combine::run(&mut machine, optsize);
-            dump("Combine", &machine);
-        }
-        crate::cmpzero::run(&mut machine);
-        dump("CmpZero", &machine);
-        crate::flagcse::run(&mut machine);
-        dump("FlagCse", &machine);
-        crate::memcluster::run(&mut machine);
-        dump("MemCluster", &machine);
-        crate::sibcall::run(&mut machine);
-        dump("SibCall", &machine);
-        crate::prepass::order_copies(&mut machine);
-        dump("OrderCopies", &machine);
-        // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
-        // linear scan; a function greedy refuses goes to the scan, reported.
-        // `x16`/`x17` are the lowerer's scratch pair where an offset does not
-        // encode; they are the allocator's while the frame stays small. A
-        // spill slot is at most 16 B, a register mostly 8: between the two
-        // bounds the allocation is kept only if the frame came out small.
-        let (tight, loose) = crate::frame::scratch_estimate(&machine);
-        let snapshot = (tight && !loose).then(|| machine.clone());
-        crate::lir_view::set_frame_pointer_free(
-            platform != Platform::Darwin
-                && !(machine.calls
-                    || machine.dynamic
-                    || llrm_codegen::backend::framefree::keeps_frame_pointer(
-                        machine.frame_pointer.as_deref(),
-                        machine.calls,
-                    )),
-        );
-        machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
-        let allocate = |machine: &mut crate::mfunc::MFunc, scratch: bool| {
-            crate::lir_view::set_scratch_free(scratch);
-            // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for
-            // the linear scan; a function greedy refuses goes to the scan,
-            // reported.
-            let greedy =
-                (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(machine, optsize));
-            match greedy {
-                Some(Ok(allocation)) => allocation,
-                Some(Err(why)) => {
-                    eprintln!("greedy: @{name}: {why}");
-                    GREEDY_FALLBACKS.with(|count| count.set(count.get() + 1));
-                    crate::regalloc::allocate(machine)
-                }
-                None => crate::regalloc::allocate(machine),
-            }
-        };
-        let mut allocation = allocate(&mut machine, tight);
-        if let Some(before) = snapshot
-            && crate::frame::frame_bound(&machine, 0) >= crate::frame::SCRATCH_FREE_BELOW
-        {
-            machine = before;
-            allocation = allocate(&mut machine, false);
-        }
-        dump("RegAlloc", &machine);
-        crate::copyprop::run(&mut machine);
-        crate::postrasink::run(&mut machine);
-        dump("PostRaSink", &machine);
-        let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin);
-        let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
-            .map_err(|why| format!("@{name}: {why}"))?;
-        let mut tables = crate::jumptable::tables_of(&machine);
-        let blocks = crate::layout::fold(
-            blocks,
-            &mut tables,
-            &crate::layout::edge_odds(module, function, &program.layout, &machine),
-            optsize,
-            &crate::mfunc::returned_registers(&machine),
-        );
-        let blocks = crate::pairs::fold(blocks);
-        let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
-        crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
-        out.push(crate::emit::Function {
-            tables,
-            symbol: crate::data::symbol_name(platform, &name),
-            binding: crate::data::binding_of(global.linkage),
-            blocks,
-            variables,
-            pool: machine.pool.clone(),
-        });
     }
     Ok(out)
 }

@@ -29,7 +29,7 @@ pub enum Class {
 
 /// The register file's id of machine register `n` of a class: `x0..x30` and
 /// `xzr` (31, also `sp`), `v0..v31`.
-fn id(
+pub(crate) fn id(
     class: Class,
     n: u32,
 ) -> RegId {
@@ -38,6 +38,19 @@ fn id(
         (Class::Gpr, n) => RegId::from_raw(crate::reg::X0.index() as u8 + n as u8),
         (Class::Fpr | Class::Quad, n) => RegId::from_raw(crate::reg::V0.index() as u8 + n as u8),
     }
+}
+
+/// The register file's id of a physical machine register.
+pub(crate) fn lir_id(register: Reg) -> RegId {
+    match to_lir(register) {
+        LirReg::Phys(register) => register,
+        LirReg::Virt(_) => unreachable!("a virtual register after allocation"),
+    }
+}
+
+/// The registers a call destroys by the convention.
+pub(crate) fn caller_saved() -> Vec<RegId> {
+    <Arm64 as AllocTarget>::caller_saved()
 }
 
 fn to_lir(register: Reg) -> LirReg {
@@ -292,6 +305,9 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             inst.terminator = terminator;
             inst.barrier = barrier;
             inst.call = call;
+            if let Op::Call { callee: crate::mfunc::Callee::Symbol(name), .. } = &op {
+                inst.call_clobbers = crate::ipra::known(name);
+            }
             inst.sets_flags = writes_flags(&op);
             inst.reads_flags = reads_flags(&op);
             inst.may_load = matches!(

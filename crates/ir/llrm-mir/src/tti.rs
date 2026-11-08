@@ -589,6 +589,13 @@ pub trait Tti {
         false
     }
 
+    /// Whether a call to a function of the module destroys what that function
+    /// writes, not every caller-saved register (`-enable-ipra`; off in the
+    /// pin, on in GCC from -O1).
+    fn interprocedural_register_use(&self) -> bool {
+        false
+    }
+
     /// Whether one wider store of constants may start off its own size
     /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
     /// at a multiple of its size.
