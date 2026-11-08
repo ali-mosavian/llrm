@@ -43,6 +43,16 @@ So no `llrm-target` edit blocks arm64. The defaults only save m68k, wasm, z80 an
 - **Large, 2:** `forms_text` (the instruction file; arm64 about 250 names), `cost_model` (a `Machine` impl; arm64 has `tti.rs`, 1183 lines, a target without a TTI pays this).
 - Shared cost of a second target beyond these: its `RegisterClasses` pins live in the same forms file, its `Frame` facts in `FrameRegisters`.
 
+## Size of the arm64 description (from the m64 template)
+`llrm-x86-m64` is 598 lines of Rust plus `calling.toml` (149), `datalayout.toml` (66), `object.toml` (13), `registers.regs`, `opcosts.txt`, `timings.times` and an instruction file, and it leans on `llrm_x86::calling::{results, callee_saved, register, frame, stack, first_argument_offset, return_address_bytes}` (x86-crate helpers over a `Convention`). Estimate for arm64, source in brackets:
+- `description.rs` about 450 lines (the 39 methods, the `frame_*` facts, `pref_*_alignment`, `move_bytes`) [own, mostly P].
+- an arm64 `calling` helper module about 150 lines, same shape as x86's [own].
+- `calling.toml` about 200 lines (AAPCS64 and Darwin: x0-x7/v0-v7, x19-x28 and d8-d15 preserved, no red zone on Darwin, 128 on Linux per the pin's `AArch64FrameLowering`) [P].
+- `datalayout.toml` about 50, `object.toml` about 30 [P].
+- `arm64.instr` about 250 forms and `dialect.toml` about 30 [P: `AArch64InstrInfo.td` names; own: operand kinds].
+- Non-required methods with x86-flavoured answers it will also need (`frame_optional`, `frame_saved_first`, `frame_enter`, `frame_slot_scratch`, `frame_wrap_split_size`, `frame_object_aligned`, `frame_red_zone`, `aligned_calls`, `stack_alignment`, `selects_by_dag`, `string_roots`, `x87_stack_top`): these feed `FrameRegisters`; each reads `calling.toml`, none needs a shared edit.
+Total about 1,000 lines of Rust and 560 of data, before the first stage runs.
+
 ## Deviations expected
 - `cpu_table`/`operation_costs` empty: arm64 prices from `tti.rs` (the pin's cost model), not `timings.times`. DEVIATE, exit when the cost model is data.
 - Everything else follows the pin 1:1; a hook that cannot gets its row when written.
