@@ -1324,7 +1324,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     let dropped = matches!(procedure.body.bits, 64) && {
         let held = frame_held(&procedure);
         (!procedure.size || held || procedure.registers.free) && {
-            let addressed = stack_addressed(&procedure, 0).is_some();
+            let addressed = stack_addressable(&procedure, 0);
             checked = Some(addressed);
             addressed
         }
@@ -1400,7 +1400,7 @@ pub fn exits_inserted(procedure: Procedure) -> Procedure {
     let decided = procedure.body.stack_checked.filter(|_| !procedure.size || held || procedure.registers.free);
     let omit = match decided {
         Some(addressed) => addressed,
-        None => frame_omitted(&procedure, 0, held).is_some(),
+        None => frame_omits(&procedure, held),
     };
     let procedure = if decided.is_some() {
         Procedure { body: lir::LirBody { stack_checked: None, ..procedure.body.clone() }, ..procedure }
@@ -1627,7 +1627,7 @@ fn may_address_frame(parts: &[InlinePart]) -> bool {
 
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
-    parts(procedure, frame_omitted(procedure, 0, frame_held(procedure)).is_some())
+    parts(procedure, frame_omits(procedure, frame_held(procedure)))
 }
 
 /// `_frame_parts`, with no frame register where `omit`: the entry sets none and
@@ -2894,6 +2894,19 @@ fn below_top(
     }))
 }
 
+/// Whether [`frame_omitted`] has an answer, which asks nothing of the items
+/// where the register file alone decides.
+fn frame_omits(
+    procedure: &Procedure,
+    held: bool,
+) -> bool {
+    if procedure.body.frame_exit == Some(true) || !procedure.size || held || procedure.registers.free {
+        stack_addressable(procedure, 0)
+    } else {
+        frame_omitted(procedure, 0, held).is_some()
+    }
+}
+
 /// `stack_addressed`, but tuned for size only where it is no longer: `[esp+d]`
 /// is a byte longer than `[ebp+d]`, and a displacement past 127 three more,
 /// which a large frame's cells can cost more than the entry and return save.
@@ -2977,6 +2990,8 @@ fn inert(callee: &Callee) -> bool {
 thread_local! {
     /// Times `stack_addressed` ran: the work, for the once-per-frame test.
     static ADDRESSED_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Items `addressed_pass` copied to rewrite.
+    static REWRITTEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The items of a procedure that needs no frame register, its cells addressed
@@ -2990,7 +3005,23 @@ thread_local! {
 fn stack_addressed(
     procedure: &Procedure,
     number: usize,
-) -> Option<Vec<Item>> {
+) -> Option<Vec<Item<'_>>> {
+    stack_addressed_by(procedure, number, true)
+}
+
+/// Whether [`stack_addressed`] has an answer, with no item rewritten.
+fn stack_addressable(
+    procedure: &Procedure,
+    number: usize,
+) -> bool {
+    stack_addressed_by(procedure, number, false).is_some()
+}
+
+fn stack_addressed_by(
+    procedure: &Procedure,
+    number: usize,
+    rewrite: bool,
+) -> Option<Vec<Item<'_>>> {
     #[cfg(test)]
     ADDRESSED_RUNS.with(|runs| runs.set(runs.get() + 1));
     let registers = &procedure.registers;
@@ -3051,7 +3082,7 @@ fn stack_addressed(
             // A label taken for dead that a later branch reached was addressed
             // at the wrong depth: again, with what that branch taught.
             Ok(assumed) if assumed.iter().all(|one| !known.contains_key(one)) => {
-                return addressed_pass(procedure, number, &mut items, &mut known, dead, &after_dead_end, true)
+                return addressed_pass(procedure, number, &mut items, &mut known, dead, &after_dead_end, rewrite)
                     .ok()
                     .map(|_| items);
             }
@@ -3172,6 +3203,8 @@ fn addressed_pass(
                     }
                 }
                 if !rewrites.is_empty() {
+                    #[cfg(test)]
+                    REWRITTEN.with(|count| count.set(count.get() + 1));
                     let owned = what.to_mut();
                     let split = owned.dests.len();
                     for (index, placed) in rewrites {
@@ -4401,6 +4434,42 @@ mod tests {
             _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
         assert!(lines.iter().any(|one| one == "jmp _other"), "{lines:?}");
         assert!(!lines.iter().any(|one| one == "ret"), "{lines:?}");
+    }
+
+    /// memexp -O2 m64: the check of whether the stack pointer can address a
+    /// frame rewrote (copied) every instruction with a frame cell, and threw
+    /// the rewrite away. A check copies nothing.
+    #[test]
+    fn test_the_stack_addressing_check_copies_no_instruction() {
+        let rbx = Loc::Reg(ir::Reg { register: RegId::RBX, width: 8 });
+        let cell = Loc::Mem(ir::Mem::new(Some(Addr::new(Space::Frame, -8)), 8));
+        let load = insn(0, semantics(Operation::Move, "mov", vec![rbx], vec![cell]));
+        let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
+        let blocks = vec![lir::LirBlock::new(1, vec![load, leave])];
+        let body = lir::LirBody {
+            bits: 64,
+            ..lir::LirBody::new("get", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default())
+        };
+        let procedure = Procedure {
+            name: "get".into(),
+            public: true,
+            far: false,
+            body,
+            reserve: 0,
+            callees: IndexMap::default(),
+            interrupt: None,
+            size: false,
+            entry: 0,
+            stack_check: None,
+            probe_stack: None,
+            registers: llrm_target::Target::frame_registers(&llrm_x86_m64::M64),
+        };
+        REWRITTEN.with(|count| count.set(0));
+        assert!(stack_addressed(&procedure, 0).is_some(), "premise: the frame can be addressed from the stack");
+        assert!(REWRITTEN.with(|count| count.get()) > 0, "premise: the cell is rewritten when the items are wanted");
+        REWRITTEN.with(|count| count.set(0));
+        assert!(stack_addressable(&procedure, 0));
+        assert_eq!(REWRITTEN.with(|count| count.get()), 0, "the check copied an instruction to rewrite it");
     }
 
     /// memexp -O2 m64: `built` cloned every instruction's `Semantics` into its
