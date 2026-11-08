@@ -26,11 +26,16 @@
 //!   writes `s` or `t` and the copy `t` is dead after: a value copied to a cell
 //!   to be loaded again, one instruction early, costs the store and the cell.
 //!
+//! - [`fold_index_temp_operand`]: `ldy m; sty t; sbc t` (likewise `x`, and the
+//!   other ALU instructions) is `sbc m` when `t` and the index register are
+//!   dead after it: an operand loaded through an index register into a cell.
+//!
 //! Runs from [`crate::peephole::run`].
 
 use std::collections::BTreeSet;
 
-use crate::asm::{Asm, Index, Inst, Line, Op, Operand};
+use crate::asm::{Asm, Index, Inst, Line, Op, Operand, Registers};
+use crate::peephole::{Exits, dead_from};
 
 fn cell_number(name: &str) -> Option<u8> {
     name.strip_prefix("rc")?.parse().ok()
@@ -248,6 +253,55 @@ fn temp_operand_once(asm: &mut Asm) -> bool {
             continue;
         }
         let operand = first.operand.clone();
+        asm.lines[op_at] = Line::Inst(Inst { op: user.op, operand, place: user.place });
+        asm.lines.drain(at..at + 2);
+        return true;
+    }
+    false
+}
+
+pub fn fold_index_temp_operand(asm: &mut Asm) {
+    while index_temp_operand_once(asm) {}
+}
+
+/// `ldy m; sty t; <alu> t` with `t` and `y` dead after: `<alu> m`. The ALU
+/// instruction sets the zero and sign flags the load did.
+fn index_temp_operand_once(asm: &mut Asm) -> bool {
+    let lines = &asm.lines;
+    for at in 0..lines.len().saturating_sub(2) {
+        let (Line::Inst(load), Line::Inst(store)) = (&lines[at], &lines[at + 1]) else { continue };
+        let (register, Op::Sty | Op::Stx) = (
+            match load.op {
+                Op::Ldy => Registers::Y,
+                Op::Ldx => Registers::X,
+                _ => continue,
+            },
+            store.op,
+        ) else {
+            continue;
+        };
+        if (load.op == Op::Ldy) != (store.op == Op::Sty) {
+            continue;
+        }
+        let Operand::Direct(t) = &store.operand else { continue };
+        if !matches!(load.operand, Operand::Direct(_) | Operand::Imm(_)) || load.operand.name() == Some(t.as_str()) {
+            continue;
+        }
+        let mut op_at = at + 2;
+        while matches!(lines.get(op_at), Some(Line::Inst(Inst { op: Op::Clc | Op::Sec, .. }))) {
+            op_at += 1;
+        }
+        let Some(Line::Inst(user)) = lines.get(op_at) else { continue };
+        if !alu(user.op) || user.operand != Operand::Direct(t.clone()) {
+            continue;
+        }
+        let exits = Exits::of(asm);
+        if !cell_dead_from(lines, op_at + 1, t, &asm.result_cells, &mut BTreeSet::new())
+            || !dead_from(lines, op_at + 1, register, &mut Default::default(), exits)
+        {
+            continue;
+        }
+        let operand = load.operand.clone();
         asm.lines[op_at] = Line::Inst(Inst { op: user.op, operand, place: user.place });
         asm.lines.drain(at..at + 2);
         return true;
