@@ -713,6 +713,10 @@ impl Tti for X86 {
         Some(Cost::of(tuning.call_sequence_fixed_clocks + words * tuning.call_sequence_argument_clocks + pop))
     }
 
+    fn sdiv_by_magnitude(&self) -> bool {
+        self.tuning.sdiv_by_magnitude
+    }
+
     fn speed_inline_rate_at_o1(&self) -> bool {
         self.tuning.speed_inline_rate_at_o1
     }
@@ -1441,14 +1445,6 @@ impl Tti for X86 {
     /// the m16 cause cards close.
     fn lsr_visited_registers_lose(&self) -> bool {
         self.real_mode.is_none()
-    }
-
-    /// DEVIATE LU3e: real mode prices a spill by the references to it (A/B
-    /// 2026-11-08: m16 grep -11/-6/-6 B at -O1/-O2/-O3, no cell worse; m32 is
-    /// mixed, 12 better and 6 worse, so it keeps the pin's one instruction).
-    /// owner: w12, exit: 2026-11-20, with LU3b.
-    fn lsr_prices_spills(&self) -> bool {
-        self.real_mode.is_some()
     }
 
     /// Real mode forms a scaled index with an address-size prefix.

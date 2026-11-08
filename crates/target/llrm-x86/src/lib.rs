@@ -207,6 +207,7 @@ pub mod registers {
 /// SI or DI. The architecture's, the same in every 16-bit target.
 pub mod asm;
 pub mod inline_asm;
+pub mod pinregs;
 pub mod helpers;
 
 pub mod addressing16 {

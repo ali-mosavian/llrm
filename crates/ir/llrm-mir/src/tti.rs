@@ -580,6 +580,11 @@ pub trait Tti {
     /// Whether `speed_inline_milliclocks_per_byte` also binds at -O1. False
     /// (the default; -O1 is strict): -O1 prices no byte in clocks and keeps
     /// the pin's threshold alone.
+    /// `Tuning::sdiv_by_magnitude`.
+    fn sdiv_by_magnitude(&self) -> bool {
+        false
+    }
+
     fn speed_inline_rate_at_o1(&self) -> bool {
         false
     }
@@ -1541,12 +1546,6 @@ pub trait Tti {
     /// for the narrower search to hide a counter that serves two uses.
     fn lsr_visited_registers_lose(&self) -> bool {
         true
-    }
-
-    /// DEVIATE LU3e: whether a register past the loop's real budget costs the
-    /// references per register, not one instruction (the pin: one).
-    fn lsr_prices_spills(&self) -> bool {
-        false
     }
 
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop

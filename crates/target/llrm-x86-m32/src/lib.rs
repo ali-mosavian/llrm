@@ -116,6 +116,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         inline_o1_milliclocks_per_byte: per_byte,
         inline_o1_unit_bytes_milli: 3500,
         speed_inline_milliclocks_per_byte: per_byte,
+        sdiv_by_magnitude: true,
         call_sequence_fixed_clocks: costs.call + costs.return_,
         call_sequence_argument_clocks: costs.argument,
         call_sequence_pop_clocks: costs.adjust,

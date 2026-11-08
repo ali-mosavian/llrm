@@ -2165,7 +2165,11 @@ pub fn from_lir<T: Target>(
             let (Some(what), Some(origin)) = (&insn.what, converted.origin.get((insn.at / 2) as usize)) else {
                 continue;
             };
-            if insn.defines.len() == 1 && insn.uses.is_empty() {
+            // A definition the target marks rematerializable may read a value
+            // (arm64's `add x, y, #n`): the spiller makes it again where it is
+            // read, and it is no less a definition for the register it uses.
+            let remakable = original.blocks[origin.0].insts[origin.1].rematerializable;
+            if insn.defines.len() == 1 && (insn.uses.is_empty() || remakable) {
                 definitions.entry(format!("{:?}{:?}", what.name, what.sources)).or_insert(*origin);
             }
         }
