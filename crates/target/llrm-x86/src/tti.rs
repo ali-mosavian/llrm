@@ -721,6 +721,12 @@ impl Tti for X86 {
         self.tuning.speed_inline_rate_at_o1
     }
 
+    fn callee_saved_clocks(&self, peak: usize) -> i64 {
+        self.tuning.callee_saved.map_or(0, |(scratch, preserved, clocks)| {
+            (i64::try_from(peak).unwrap_or(i64::MAX) - scratch).clamp(0, preserved) * clocks
+        })
+    }
+
     fn inline_hot_trial_frequency(&self) -> Option<i64> {
         self.tuning.inline_hot_trial_frequency
     }

@@ -679,7 +679,11 @@ impl ProgramPass for Walk {
                                         .map(|one| site_frequencies.get(one).copied().unwrap_or(1.0).max(1.0))
                                         .sum::<f64>()
                                         / calls.len() as f64;
-                                    let once = kept_clocks + run - function_clocks(module, &program.layout, tti, now);
+                                    let saves: i64 = callees
+                                        .iter()
+                                        .map(|body| tti.callee_saved_clocks(llrm_analysis::liveness::pressure(body, None, None)))
+                                        .sum();
+                                    let once = kept_clocks + run + saves - function_clocks(module, &program.layout, tti, now);
                                     (
                                         (once as f64 * trips) as i64,
                                         function_bytes(module, &program.layout, &costs, now)

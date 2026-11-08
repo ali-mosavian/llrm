@@ -98,6 +98,9 @@ pub struct Tuning {
     /// `Tti::speed_inline_rate_at_o1`: whether that rate binds at -O1 too
     /// (false by default; m32's -O1 has its own rule, INL-O1).
     pub speed_inline_rate_at_o1: bool,
+    /// `Tti::callee_saved_clocks`: (scratch registers, preserved registers,
+    /// clocks to save and restore one). None: not priced.
+    pub callee_saved: Option<(i64, i64, i64)>,
     /// `Tti::inline_hot_trial_frequency`.
     pub inline_hot_trial_frequency: Option<i64>,
     /// DEVIATE SD-DIVMAG (owner x86-m32, exit 2026-11-22): a signed divide by a
@@ -353,6 +356,7 @@ impl Tuning {
         sdiv_by_magnitude: false,
         speed_inline_rate_at_o1: false,
         inline_hot_trial_frequency: None,
+        callee_saved: None,
         call_sequence_fixed_clocks: 0,
         call_sequence_argument_clocks: 0,
         call_sequence_pop_clocks: 0,

@@ -185,6 +185,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // is tried inlined at -O2/-O3 and kept where the rate pays (x_sf_*:
         // `__addsf3 -> add_bits` cost 445 over 250, growth 45 B, 31x).
         inline_hot_trial_frequency: Some(16),
+        // A callee that keeps more than eax/ecx/edx live pushes and pops ebx, esi,
+        // edi, ebp once per call: the trial's clocks saved count it.
+        callee_saved: Some((3, 4, costs.argument + costs.pop)),
         // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion
         // (passes.def:97, then pass_ipa_inline :164). At -O3 the copies of the
         // loop beat the tree's (rectwo 1230664 -> 466986 clk, recchop,
