@@ -2209,3 +2209,28 @@ fn a_constant_factor_of_a_long_stays_inline_beside_the_calls() {
     let out = text(ir, "g", 1, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert_eq!(out.matches("call __mulsi3").count(), 2, "{out}");
 }
+
+/// A signed order of two words that are not constants biased both (`ld a, h` / `xor a, #128` / `ld b, a`, twice)
+/// to compare them unsigned: 9 B and 34 T before the subtract. The sign of the difference, corrected where it
+/// overflowed (`jp po` / `xor a, #128` / `rlca`), needs one bias: huffman_decode's `code > maxcode[..]`.
+#[test]
+fn a_signed_word_order_is_the_difference_corrected_for_overflow() {
+    let ir = include_str!("kernels/ir/signed_word_compare.ll");
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(out.contains("jp po") && out.contains("rlca"), "{level:?}: {out}");
+        assert_eq!(out.matches("xor a, #128").count(), 1, "{level:?}: {out}");
+    }
+}
+
+/// `x * 36` shifted a copy of `x` in bc (`sla c`/`rl b`, 4 B a bit): 17 B.
+/// The shifts belong in hl: 8 B.
+#[test]
+fn a_word_times_a_shifted_factor_shifts_in_hl() {
+    let ir = include_str!("kernels/ir/mul_word_by_shifted_factor.ll");
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("sla c") && !out.contains("rl b"), "{level:?}: {out}");
+        assert_eq!(out.matches("add hl, hl").count(), 5, "{level:?}: {out}");
+    }
+}

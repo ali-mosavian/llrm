@@ -15,9 +15,9 @@
 //! [fold]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L4664
 
-use crate::dag::SDValue;
-use crate::generated::ids::{isd, mvt};
-use crate::x86_addr::AddrDag;
+use llrm_dagisel::addr::AddrDag;
+use llrm_dagisel::dag::SDValue;
+use llrm_dagisel::generated::ids::{isd, mvt};
 
 /// Rewrites the count of the shift `node`; the node now (it may have merged
 /// with an equal one) when it did, `None` when the count is not one of the

@@ -108,7 +108,7 @@ impl Builder<'_> {
             // `case Intrinsic::ubsantrap`: `UBSAN_UD1` (a `ud1` with the kind
             // as its displacement) is not translated: a named refusal, not a
             // panic.
-            Intrinsic::UbsanTrap => Err(Refused("llvm.ubsantrap: M16-UBSANTRAP, not translated")),
+            Intrinsic::UbsanTrap => Err(Refused("llvm.ubsantrap: not translated")),
             // `case Intrinsic::experimental_noalias_scope_decl: return;`
             Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse | Intrinsic::NoAliasScopeDecl => Ok(()),
             // `SelectionDAGBuilder.cpp#L7680`: the region information is
@@ -222,7 +222,7 @@ impl Builder<'_> {
             && self.dag.var_args_save.is_none()
             && !self.win64_va
         {
-            return Err(Refused("va_start at m64 outside the entry block"));
+            return Err(Refused("va_start outside the entry block"));
         }
         if let Some(buffer) = self.info.variadic_buffer {
             return self.visit_va_in_buffer(instruction, intrinsic, buffer);
@@ -1372,7 +1372,10 @@ impl Builder<'_> {
                 match (inline, constant) {
                     (Some(chain), _) => chain,
                     (None, Some(bytes))
-                        if strings_exist && (self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4)) =>
+                        if strings_exist
+                            && (self.has_min_size()
+                                || (opt_size && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_stos_at_size()))
+                                || (bytes <= MAX_INLINE_SIZE && alignment >= 4)) =>
                     {
                         self.rep_stos(root, dst, other, bytes, alignment)?
                     }
@@ -1604,12 +1607,6 @@ impl Builder<'_> {
         near_16 || !self.runtime_has("memmove")
     }
 
-    /// The operands of a string move on a flat target, which names no string
-    /// registers: count, source, destination.
-    fn flat_string_names() -> [&'static str; 3] {
-        ["cx", "si", "di"]
-    }
-
     /// `std; rep movsd; cld` from the last dword down, then the `size % 4` low
     /// bytes (`add si, 3; add di, 3; mov cx, dx; rep movsb`): a move a pass
     /// proved backward, as the old selector writes it (`LLRM_ASM`, SD305, with
@@ -1658,7 +1655,7 @@ impl Builder<'_> {
         let name_of = |register| self.arch.registers().name(register).expect("a described register");
         let mut names = match strings {
             Some(strings) => vec![name_of(strings.count), name_of(strings.source), name_of(strings.destination)],
-            None => Self::flat_string_names().to_vec(),
+            None => self.flat_string_names().to_vec(),
         };
         let mut values = vec![dwords, from, to];
         if tail {
@@ -1726,7 +1723,7 @@ impl Builder<'_> {
                 [(name_of(strings.count), count), (name_of(strings.source), from), (name_of(strings.destination), to)]
             }
             None => {
-                let [counter, source, destination] = Self::flat_string_names();
+                let [counter, source, destination] = self.flat_string_names();
                 [(counter, count), (source, from), (destination, to)]
             }
         };
@@ -1927,36 +1924,45 @@ impl Builder<'_> {
         Ok(self.dag.get_root())
     }
 
+    /// The registers of a string instruction, by root.
+    fn string_roots(&self) -> llrm_target::StringRoots {
+        self.arch.string_roots().expect("a target with string instructions names their registers")
+    }
+
+    /// The view of `root` at `bits`, in the target's register file.
+    fn view_at(
+        &self,
+        root: llrm_lir::registers::RegId,
+        bits: u32,
+    ) -> llrm_lir::registers::RegId {
+        let registers = self.arch.registers();
+        registers.view(registers.root(root), bits).expect("the register file has the view a string instruction needs")
+    }
+
     /// The accumulator a string operation of `block`-byte cells stores from:
-    /// `al`, `ax`, `eax`, and `rax` for a quadword cell.
+    /// byte, word and quadword cells by their own width, any other as a dword.
     fn accumulator(
         &self,
         block: u64,
     ) -> llrm_lir::registers::RegId {
-        let name = match block {
-            1 => "al",
-            2 => "ax",
-            _ => "eax",
-        };
-        // `RAX` for a quadword block: the dword's name widened (`rax`).
-        self.arch.register_named(&if block == 8 { format!("r{}", &name[1..]) } else { name.to_owned() })
+        let bits = if matches!(block, 1 | 2 | 8) { block as u32 * 8 } else { 32 };
+        self.view_at(self.string_roots().accumulator, bits)
     }
 
-    /// The count, destination and source registers of a string operation.
+    /// The count, destination and source registers of a string operation, at
+    /// the pointer's width.
     fn string_registers(&self) -> (llrm_lir::registers::RegId, llrm_lir::registers::RegId, llrm_lir::registers::RegId) {
-        (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"))
+        let roots = self.string_roots();
+        let bits = self.target.dag.pointer.size_in_bits();
+        (self.view_at(roots.count, bits), self.view_at(roots.destination, bits), self.view_at(roots.source, bits))
     }
 
-    fn reg(
-        &self,
-        wide: &str,
-        narrow: &str,
-    ) -> llrm_lir::registers::RegId {
-        if self.target.dag.pointer == EVT::I64 {
-            // `Subtarget.is64Bit() ? X86::RCX : X86::ECX`
-            return self.arch.register_named(&format!("r{}", &wide[1..]));
-        }
-        self.arch.register_named(if self.target.dag.pointer == EVT::I16 { narrow } else { wide })
+    /// The operand names of a string move on a flat target: count, source,
+    /// destination, as the inline block spells them (the word views).
+    fn flat_string_names(&self) -> [&'static str; 3] {
+        let roots = self.string_roots();
+        [roots.count, roots.source, roots.destination]
+            .map(|root| self.arch.registers().name(self.view_at(root, 16)).expect("a described register"))
     }
 
     fn is_far(

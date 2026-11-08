@@ -186,8 +186,9 @@ impl llrm_target::Target for M16 {
         &self,
         signed: bool,
         wide_divisor: bool,
+        used: llrm_target::routines::Used,
     ) -> Result<llrm_target::routines::Divide, String> {
-        llrm_x86::helpers::divide_small(signed, wide_divisor, 16).map_err(|refused| refused.message)
+        llrm_x86::helpers::divide_small(signed, wide_divisor, 16, used).map_err(|refused| refused.message)
     }
 
     fn float_width(
@@ -389,6 +390,14 @@ impl llrm_target::Target for M16 {
 
     fn stack_pointer(&self) -> RegId {
         llrm_x86::calling::stack(CALLING.native())
+    }
+
+    fn string_roots(&self) -> Option<llrm_target::StringRoots> {
+        Some(llrm_x86::registers::STRING_ROOTS)
+    }
+
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Some(llrm_x86::registers::X87_TOP)
     }
 
     fn string_registers(&self) -> Option<llrm_target::StringRegisters> {

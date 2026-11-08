@@ -781,7 +781,8 @@ fn unrolled_o1(
     unrolled_o1_analysing(module, never_grows, None)
 }
 
-/// `unrolled_o1`, the target stating how many trips the no-growth rule analyses.
+/// `unrolled_o1`, the target stating how many trips the no-growth rule
+/// analyses.
 fn unrolled_o1_analysing(
     module: &mut Module,
     never_grows: bool,
@@ -792,11 +793,13 @@ fn unrolled_o1_analysing(
     crate::testing::closed(module).expect("closes");
     let tti = X86::of_cpu("i486")
         .expect("a cpu")
-        .with_tuning(llrm_mir::target::Tuning {
-            unroll_never_grows_at_o1: never_grows,
-            unroll_o1_analyzed_trips: analyzed_trips,
-            ..llrm_mir::target::Tuning::PIN
-        });
+        .with_tuning(
+            llrm_mir::target::Tuning {
+                unroll_never_grows_at_o1: never_grows,
+                unroll_o1_analyzed_trips: analyzed_trips,
+                ..llrm_mir::target::Tuning::PIN
+            },
+        );
     let options = Options {
         opt_level: 1,
         opt_size: false,
@@ -892,7 +895,8 @@ fn nested(n: usize) -> String {
     );
     for k in 0..n {
         let next = if k + 1 == n { "latch".to_owned() } else { format!("l{}", k + 1) };
-        let (pre, init) = if k == 0 { ("o".to_owned(), "c0".to_owned()) } else { (format!("x{}", k - 1), format!("r{}", k - 1)) };
+        let (pre, init) =
+            if k == 0 { ("o".to_owned(), "c0".to_owned()) } else { (format!("x{}", k - 1), format!("r{}", k - 1)) };
         text += &format!(
             "l{k}:\n  %i{k} = phi i16 [ 0, %{pre} ], [ %n{k}, %l{k} ]\n  %a{k} = phi i16 [ %{init}, %{pre} ], [ %s{k}, %l{k} ]\n  %s{k} = add i16 %a{k}, %i{k}\n  %n{k} = add i16 %i{k}, 1\n  %g{k} = icmp slt i16 %n{k}, 4\n  br i1 %g{k}, label %l{k}, label %x{k}\n\nx{k}:\n  %r{k} = phi i16 [ %s{k}, %l{k} ]\n  br label %{next}\n\n",
         );
@@ -1142,6 +1146,16 @@ out:
 ";
     let mut module = parsed(text);
     let created = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let out = crate::testing::managed(&mut module, super::LoopFullUnroll { opt_level: 3, opt_size: false, only_when_forced: false, target_unrolling: false, created, decided: Default::default() });
+    let out = crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 3,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            created,
+            decided: Default::default(),
+        },
+    );
     assert!(!out.contains("%i = phi"), "the outer loop is gone: {out}");
 }

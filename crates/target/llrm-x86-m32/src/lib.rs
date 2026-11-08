@@ -114,6 +114,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
         imul_at_size: true,
+        rep_stos_at_size: true,
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
         unroll_promotion_fits_x87_stack: true,
@@ -394,6 +395,14 @@ impl llrm_target::Target for M32 {
         llrm_x86::calling::stack(CALLING.native())
     }
 
+    fn string_roots(&self) -> Option<llrm_target::StringRoots> {
+        Some(llrm_x86::registers::STRING_ROOTS)
+    }
+
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Some(llrm_x86::registers::X87_TOP)
+    }
+
     /// What cdecl32 keeps, but the frame register.
     fn callee_saved(&self) -> Vec<(RegId, RegId)> {
         llrm_x86::calling::callee_saved(CALLING.native())
@@ -483,8 +492,9 @@ impl llrm_target::Target for M32 {
         &self,
         signed: bool,
         wide_divisor: bool,
+        used: llrm_target::routines::Used,
     ) -> Result<llrm_target::routines::Divide, String> {
-        llrm_x86::helpers::divide_small(signed, wide_divisor, 32).map_err(|refused| refused.message)
+        llrm_x86::helpers::divide_small(signed, wide_divisor, 32, used).map_err(|refused| refused.message)
     }
 
     fn float_width(

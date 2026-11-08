@@ -12,9 +12,10 @@
 //! # Used by
 //! [`crate::x86_select::select_node`].
 
-use crate::dag::SDValue;
-use crate::generated::ids::{mvt, x86, x86isd};
-use crate::x86_addr::{AddrDag, AddressOperands, Matcher};
+use llrm_dagisel::addr::{AddrDag, AddressOperands, Matcher};
+use llrm_dagisel::dag::SDValue;
+use llrm_dagisel::generated::ids::{mvt, x86, x86isd};
+
 use crate::x86_hooks::X86Hooks;
 
 /// Selects `node` (`chain, destination[, source], alignment`); false for an
@@ -63,7 +64,8 @@ pub fn select_mem128<D: AddrDag>(
                 &[mvt::v4i32, mvt::Other],
                 &[from.base, from.scale, from.index, from.disp, from.segment, chain],
             );
-            // A volatile piece is volatile on both accesses (`MachineMemOperand`).
+            // A volatile piece is volatile on both accesses
+            // (`MachineMemOperand`).
             dag.set_node_mem_refs(read, &[node]);
             (SDValue::new(read, 0), SDValue::new(read, 1))
         }

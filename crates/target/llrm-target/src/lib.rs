@@ -54,6 +54,17 @@ pub struct StringRegisters {
     pub tail: RegId,
 }
 
+/// The registers a string instruction (`rep movs`, `rep stos`) uses, each by its
+/// root: the view of the pointer's width is the operand (`cx`, `ecx`, `rcx`).
+#[derive(Clone, Copy, Debug)]
+pub struct StringRoots {
+    pub count: RegId,
+    pub source: RegId,
+    pub destination: RegId,
+    /// The data register a store or compare is made through (`al`, `ax`, `eax`, `rax`).
+    pub accumulator: RegId,
+}
+
 /// A flat platform's foreign linear ranges, read when a constant address is
 /// first asked of: parsing a platform's description is not paid by a compile
 /// that never asks. Profiles are equal by their prices, so these compare equal.
@@ -366,6 +377,14 @@ pub trait BuilderArch {
     fn stack_pointer(&self) -> RegId {
         self.registers().stack
     }
+    /// The registers of the target's string instructions, if it has them.
+    fn string_roots(&self) -> Option<StringRoots> {
+        None
+    }
+    /// The DAG's name for the top of the x87 stack, if the target has one.
+    fn x87_stack_top(&self) -> Option<RegId> {
+        None
+    }
 }
 
 impl<T: Target> BuilderArch for T {
@@ -393,6 +412,12 @@ impl<T: Target> BuilderArch for T {
     fn stack_pointer(&self) -> RegId {
         Target::stack_pointer(self)
     }
+    fn string_roots(&self) -> Option<StringRoots> {
+        Target::string_roots(self)
+    }
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Target::x87_stack_top(self)
+    }
 }
 
 impl BuilderArch for &dyn Target {
@@ -416,6 +441,12 @@ impl BuilderArch for &dyn Target {
     }
     fn stack_pointer(&self) -> RegId {
         Target::stack_pointer(*self)
+    }
+    fn string_roots(&self) -> Option<StringRoots> {
+        Target::string_roots(*self)
+    }
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Target::x87_stack_top(*self)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(*self)
@@ -593,6 +624,17 @@ pub trait Target {
         None
     }
 
+    /// The registers of this target's string instructions, where it has them.
+    fn string_roots(&self) -> Option<StringRoots> {
+        None
+    }
+
+    /// The register the DAG names the top of the x87 stack by (the pin's
+    /// `FP0`), where the target has an x87 unit.
+    fn x87_stack_top(&self) -> Option<RegId> {
+        None
+    }
+
     /// The registers a callee keeps for its caller that an allocator may hold
     /// a value in: each by its full register and by the one a prologue pushes.
     fn callee_saved(&self) -> Vec<(RegId, RegId)>;
@@ -683,6 +725,7 @@ pub trait Target {
         &self,
         _signed: bool,
         _wide_divisor: bool,
+        _used: routines::Used,
     ) -> Result<routines::Divide, String> {
         Err("no size divide routine".into())
     }

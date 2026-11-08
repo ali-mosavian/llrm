@@ -31,7 +31,7 @@
 //!   matcher (C2). Owner sdag-c. Exit: none. Review 2026-12-10.
 //!
 //! # Used by
-//! [`crate::x86_hooks`].
+//! [`llrm_x86_dagisel::x86_hooks`].
 //!
 //! [addr]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2053
@@ -807,7 +807,8 @@ impl<D: AddrDag> Matcher<'_, D> {
                             let shl_src = self.operand(src, 0);
                             let svt = self.dag.value_type(shl_src);
                             let high = low_mask(src_bits) & !low_mask(src_bits - amount as u32) & mask;
-                            if self.dag.has_no_unsigned_wrap(src.node) || self.dag.known_zero_bits(shl_src) & high == high
+                            if self.dag.has_no_unsigned_wrap(src.node)
+                                || self.dag.known_zero_bits(shl_src) & high == high
                             {
                                 let vt = self.dag.value_type(n);
                                 let mut res = shl_src;
@@ -1167,4 +1168,34 @@ impl<D: AddrDag> Matcher<'_, D> {
         }
         Some(self.get_address_operands(am, vt))
     }
+}
+
+/// `findNonImmUse`: `def` is reachable from `root` by a path that avoids
+/// `immediate_use`'s edge.
+pub fn find_non_imm_use<D: AddrDag>(
+    dag: &D,
+    root: u32,
+    def: u32,
+    immediate_use: u32,
+    ignore_chains: bool,
+) -> bool {
+    if dag.is_only_user_of(immediate_use, def) {
+        return false;
+    }
+    let mut visited = crate::dag::Visited::of(immediate_use);
+    let mut worklist = Vec::new();
+    let seed = |node: u32, visited: &mut crate::dag::Visited, worklist: &mut Vec<u32>| {
+        for i in 0..dag.num_operands(node) {
+            let op = dag.operand(node, i);
+            if (dag.value_type(op) == mvt::Other && ignore_chains) || op.node == def || !visited.insert(op.node) {
+                continue;
+            }
+            worklist.push(op.node);
+        }
+    };
+    seed(immediate_use, &mut visited, &mut worklist);
+    if root != immediate_use {
+        seed(root, &mut visited, &mut worklist);
+    }
+    dag.has_predecessor_helper(def, &mut visited, &mut worklist, 0)
 }

@@ -15,6 +15,7 @@ llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-dagisel = { path = "../../backend/llrm-dagisel" }
+llrm-x86-dagisel = { path = "../llrm-x86-dagisel" }
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }
 

@@ -3,11 +3,12 @@
 //!
 //! # How it works
 //! [`selected`] builds the entry block's DAG, runs
-//! [`llrm_codegen::backend::selectiondag::dag_select::select_block`] and turns the emitted blocks into a
-//! `LirBody`: the blocks the select diamond made, their successors, the machine
-//! facts the phases read. A function the path cannot yet take (more than one
-//! MIR block, a call, a frame object, an unsupported opcode) is a refusal with
-//! its reason: the shadow harness counts them.
+//! [`llrm_codegen::backend::selectiondag::dag_select::select_block`] and turns
+//! the emitted blocks into a `LirBody`: the blocks the select diamond made,
+//! their successors, the machine facts the phases read. A function the path
+//! cannot yet take (more than one MIR block, a call, a frame object, an
+//! unsupported opcode) is a refusal with its reason: the shadow harness counts
+//! them.
 //!
 //! ```text
 //! @f(a, b) = a + b      LIR:  v1 := mov [arg0]      (builder, legalizer,
@@ -35,16 +36,8 @@
 use std::sync::{LazyLock, Mutex};
 
 use indexmap::IndexMap;
-use llrm_dagisel::generated::{x86_i486, x86_m16, x86_x64};
-use llrm_dagisel::interp::Selector;
-use llrm_dagisel::x86_addr::AddrMode;
-use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
-use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{BlockId, Module, ValueDef, ValueId};
-use llrm_support::hash::{HashMap, HashSet};
-use llrm_target::Target;
-use llrm_target::routines::Used;
-
+use llrm_codegen::backend::constpool::Pool;
+use llrm_codegen::backend::isel::{Parameter, Selected, Unselected};
 use llrm_codegen::backend::selectiondag::actions::{Features, TargetLowering};
 use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, RuntimeAnswer, SizeTrade, build_block};
 use llrm_codegen::backend::selectiondag::dag_select::select_block;
@@ -55,10 +48,17 @@ use llrm_codegen::backend::selectiondag::opcodes::OpcodeMap;
 use llrm_codegen::backend::selectiondag::schedule::SchedInfo;
 use llrm_codegen::backend::selectiondag::x86_lowering::X86Lowering;
 use llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects;
-use llrm_codegen::backend::constpool::Pool;
-use llrm_codegen::backend::isel::{Parameter, Selected, Unselected};
 use llrm_codegen::model::ir::{Addr, Held, Mem, Space};
 use llrm_codegen::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
+use llrm_dagisel::addr::AddrMode;
+use llrm_dagisel::interp::Selector;
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::module::{BlockId, Module, ValueDef, ValueId};
+use llrm_support::hash::{HashMap, HashSet};
+use llrm_target::Target;
+use llrm_target::routines::Used;
+use llrm_x86_dagisel::generated::{x86_i486, x86_m16, x86_x64};
+use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 
 struct Info {
     source_order: bool,
@@ -103,7 +103,10 @@ impl SchedInfo for Info {
         &self,
         reg: u16,
     ) -> bool {
-        Some(reg) == llrm_codegen::backend::selectiondag::dagisel_adapter::pin_register(llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID)
+        Some(reg)
+            == llrm_codegen::backend::selectiondag::dagisel_adapter::pin_register(
+                llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID,
+            )
     }
 
     // `ADJCALLSTACKDOWN32`/`64` and `ADJCALLSTACKUP32`/`64`, numbered alike in
@@ -531,8 +534,9 @@ impl llrm_codegen::backend::selectiondag::emit_api::Conventions for CallConventi
 struct Tables {
     map: OpcodeMap,
     names: HashMap<u16, &'static str>,
-    /// `names` the other way, by the part before the first `|`; the first of a repeated name wins.
-    /// Built at the first lookup: a scan per name cost 4.9 M instructions in a compile of 3 K.
+    /// `names` the other way, by the part before the first `|`; the first of a
+    /// repeated name wins. Built at the first lookup: a scan per name cost
+    /// 4.9 M instructions in a compile of 3 K.
     by_name: std::sync::OnceLock<HashMap<&'static str, u16>>,
 }
 
@@ -578,22 +582,22 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                     .copied()
                     .chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied())
                     .chain([
-                        (llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
-                        (llrm_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
-                        (llrm_dagisel::x86_llrm::PORT_OPCODE, "PORT_IO"),
-                        (llrm_dagisel::x86_llrm::TC_RETURN_OPCODE, "TCRETURN_16"),
-                        (llrm_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
-                        (llrm_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
-                        (llrm_dagisel::x86_llrm::FLOG2_OPCODE, "LOG2_Fp80"),
-                        (llrm_dagisel::x86_llrm::FEXP2_OPCODE, "EXP2_Fp80"),
-                        (llrm_dagisel::x86_llrm::FSIN_OPCODE, "SIN_Fp80"),
-                        (llrm_dagisel::x86_llrm::FCOS_OPCODE, "COS_Fp80"),
-                        (llrm_dagisel::x86_llrm::FATAN_OPCODE, "ATAN_Fp80"),
-                        (llrm_dagisel::x86_llrm::FRINT_OPCODE, "RNDINT_Fp80"),
-                        (llrm_dagisel::x86_llrm::IST16_OPCODES[0], "IST_Fp16m32"),
-                        (llrm_dagisel::x86_llrm::IST16_OPCODES[1], "IST_Fp16m64"),
-                        (llrm_dagisel::x86_llrm::IST16_OPCODES[2], "IST_Fp16m80"),
-                        (llrm_dagisel::x86_llrm::LLRM_ASM_OPCODE, "CALL_ASM"),
+                        (llrm_x86_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
+                        (llrm_x86_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
+                        (llrm_x86_dagisel::x86_llrm::PORT_OPCODE, "PORT_IO"),
+                        (llrm_x86_dagisel::x86_llrm::TC_RETURN_OPCODE, "TCRETURN_16"),
+                        (llrm_x86_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FLOG2_OPCODE, "LOG2_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FEXP2_OPCODE, "EXP2_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FSIN_OPCODE, "SIN_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FCOS_OPCODE, "COS_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FATAN_OPCODE, "ATAN_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::FRINT_OPCODE, "RNDINT_Fp80"),
+                        (llrm_x86_dagisel::x86_llrm::IST16_OPCODES[0], "IST_Fp16m32"),
+                        (llrm_x86_dagisel::x86_llrm::IST16_OPCODES[1], "IST_Fp16m64"),
+                        (llrm_x86_dagisel::x86_llrm::IST16_OPCODES[2], "IST_Fp16m80"),
+                        (llrm_x86_dagisel::x86_llrm::LLRM_ASM_OPCODE, "CALL_ASM"),
                     ])
                     .collect(),
                 by_name: Default::default(),
@@ -819,8 +823,14 @@ fn narrow_divide_live(
     use llrm_mir::opcode::{BinaryOp, Opcode};
     let narrow = |inst: llrm_mir::module::InstId| {
         let op = function.instruction(inst);
-        matches!(op.opcode, Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem))
-            && matches!(op.operands.get(1), Some(llrm_mir::module::Operand::Constant(_)))
+        matches!(
+            op.opcode,
+            Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem)
+        )
+            && matches!(
+                op.operands.get(1),
+                Some(llrm_mir::module::Operand::Constant(_))
+            )
             && op.result.and_then(|r| module.context.types.int_bits(function.value(r).ty)).is_some_and(|bits| bits < 32)
     };
     let blocks: Vec<BlockId> =
@@ -890,18 +900,20 @@ fn div_prices(
         bytes: {
             let rate = cpu.speed_milliclocks_per_byte_on(machine);
             let size = machine.size_costs();
-            (rate > 0 && machine.tti().is_some_and(|tti| tti.divide_by_bytes())).then(|| llrm_codegen::backend::selectiondag::dag::DivBytes {
-                prefix: size.prefix,
-                add: size.add,
-                shift: size.shift,
-                extend: size.extend,
-                multiply: size.multiply,
-                multiply_long: size.multiply_long,
-                multiply_high: size.multiply_high,
-                divide: size.divide,
-                divide_long: size.divide_long,
-                milliclocks_per_byte: rate,
-                frequency: 1.0,
+            (rate > 0 && machine.tti().is_some_and(|tti| tti.divide_by_bytes())).then(|| {
+                llrm_codegen::backend::selectiondag::dag::DivBytes {
+                    prefix: size.prefix,
+                    add: size.add,
+                    shift: size.shift,
+                    extend: size.extend,
+                    multiply: size.multiply,
+                    multiply_long: size.multiply_long,
+                    multiply_high: size.multiply_high,
+                    divide: size.divide,
+                    divide_long: size.divide_long,
+                    milliclocks_per_byte: rate,
+                    frequency: 1.0,
+                }
             })
         },
     })
@@ -976,6 +988,7 @@ fn selected_in(
         lowering_for(32, features, || TargetLowering::x86_32(features, MVT::I32))
     };
     tli.set_small_divide(cpu.bytes_strict() && (cpu.size || arch.small_divide_at_o1()));
+    tli.set_size_only(cpu.size);
     // The soft-float routines are spelled as the C compiler spelled their
     // definitions.
     for (name, number, symbol) in libcalls {
@@ -1029,7 +1042,9 @@ fn selected_in(
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_div_live_limit(if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 })
         .with_div_prices(div_prices(cpu, &*machine, bitness))
-        .with_sdiv_by_magnitude(cpu.speed_rate && !(cpu.size || cpu.min_size) && machine.tti().is_some_and(|tti| tti.sdiv_by_magnitude()))
+        .with_sdiv_by_magnitude(
+            cpu.speed_rate && !(cpu.size || cpu.min_size) && machine.tti().is_some_and(|tti| tti.sdiv_by_magnitude()),
+        )
         .with_jump_tables(
             machine.costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
@@ -1106,8 +1121,9 @@ fn selected_in(
         else {
             return refuse("an alloca too large for the frame");
         };
-        let align =
-            llrm_codegen::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
+        let align = llrm_codegen::backend::isel::natural_align(types, &layout, allocated)
+            .max(size & size.wrapping_neg())
+            .clamp(1, 4);
         // The declared alignment wins over the natural one; above what the
         // frame keeps the stack aligned to, the frame realigns the stack
         // pointer.
@@ -1302,7 +1318,8 @@ fn selected_in(
     // SD446: a target that trades bytes for clocks at speed prices a constant
     // multiply by its block's frequency (the IR one: no machine block exists
     // before selection).
-    let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks { 0 } else { cpu.speed_milliclocks_per_byte_on(&*machine) };
+    let mul_rate =
+        if cpu.size || cpu.min_size || bytes_beat_clocks { 0 } else { cpu.speed_milliclocks_per_byte_on(&*machine) };
     let speed_goal = cpu.has_speed_goal() && !bytes_beat_clocks;
     let mul_by_clocks = speed_goal && machine.tti().is_some_and(|tti| tti.multiply_by_clocks());
     let price_pin = speed_goal && machine.tti().is_some_and(|tti| tti.price_pin_multiplies());
@@ -1349,7 +1366,9 @@ fn selected_in(
                         33..=64 if m64 => Some(64),
                         _ => None,
                     };
-                    llrm_codegen::backend::selectiondag::live_out::compute_phi_live_out_reg_info(module, function, phi, &bits, &mut info);
+                    llrm_codegen::backend::selectiondag::live_out::compute_phi_live_out_reg_info(
+                        module, function, phi, &bits, &mut info,
+                    );
                 } else if let Some(reg) = function.instruction(phi).result.and_then(|r| info.value_regs.get(&r)) {
                     info.live_out.remove(reg);
                 }
@@ -1639,7 +1658,11 @@ fn selected_in(
                                 register: llrm_codegen::model::ir::STACK,
                                 width: 2,
                             }),
-                            llrm_codegen::model::ir::Loc::Imm(llrm_codegen::model::ir::Imm { value: 0, width: 2, address: None }),
+                            llrm_codegen::model::ir::Loc::Imm(llrm_codegen::model::ir::Imm {
+                                value: 0,
+                                width: 2,
+                                address: None,
+                            }),
                         ],
                     ),
                 ),
@@ -1647,7 +1670,12 @@ fn selected_in(
                     at,
                     llrm_codegen::model::ir::Semantics {
                         target: Some(pad),
-                        ..llrm_codegen::backend::isel::semantics(llrm_codegen::model::ir::Operation::Branch, "je", vec![], vec![])
+                        ..llrm_codegen::backend::isel::semantics(
+                            llrm_codegen::model::ir::Operation::Branch,
+                            "je",
+                            vec![],
+                            vec![],
+                        )
                     },
                 ),
             ];
@@ -1764,8 +1792,9 @@ fn selected_in(
         // into the body), so the trips are proven from the body alone.
         let registers = IndexMap::default();
         let unit = unit.with_registers(&registers);
-        body.loop_trip_counts =
-            llrm_codegen::backend::isel::proven_trips(&unit, &shape, &registers, |block| block_at.get(&block.0).copied());
+        body.loop_trip_counts = llrm_codegen::backend::isel::proven_trips(&unit, &shape, &registers, |block| {
+            block_at.get(&block.0).copied()
+        });
     }
     body.frequencies = Some(llrm_codegen::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
@@ -1783,9 +1812,11 @@ fn selected_in(
                         }
                     }
                 }
-                if let Ok(routine) = arch.divide_routine_small(signed, wide) {
-                    if routine.name == name.as_str() {
-                        inline.insert(*at, routine.code);
+                for used in [Used::Both, Used::Quotient, Used::Remainder] {
+                    if let Ok(routine) = arch.divide_routine_small(signed, wide, used) {
+                        if routine.name == name.as_str() {
+                            inline.insert(*at, routine.code);
+                        }
                     }
                 }
             }
@@ -1894,15 +1925,23 @@ fn landing_pad_insn(
     general: &[llrm_lir::registers::RegId],
 ) -> Insn {
     use llrm_codegen::backend::callregs::{call_clobbered_high, call_clobbers};
-    let contract =
-        llrm_codegen::backend::lower_int64::_helper(LANDING, Default::default(), llrm_codegen::abi::runtime::EVERY.clone());
+    let contract = llrm_codegen::backend::lower_int64::_helper(
+        LANDING,
+        Default::default(),
+        llrm_codegen::abi::runtime::EVERY.clone(),
+    );
     Insn {
         clobbers: call_clobbers(&contract, segments, general),
         clobbers_high: call_clobbered_high(&contract, segments, general),
         ..Insn::new(
             at,
             Some((at, at)),
-            Some(llrm_codegen::backend::isel::semantics(llrm_codegen::model::ir::Operation::Call, "call", vec![], vec![])),
+            Some(llrm_codegen::backend::isel::semantics(
+                llrm_codegen::model::ir::Operation::Call,
+                "call",
+                vec![],
+                vec![],
+            )),
             vec![],
             vec![],
         )
@@ -2151,9 +2190,10 @@ mod lowering_cache_tests {
         assert_eq!(built.get(), 2, "another feature set is another table");
     }
 
-    /// FastISel's table of opcode names found each of its 51 names by scanning every opcode: 4.9 M
-    /// instructions in a 207 M compile of 3 K instructions. One index, built at the first lookup,
-    /// and the lowest opcode of a repeated name, not whichever the hash order met first.
+    /// FastISel's table of opcode names found each of its 51 names by scanning
+    /// every opcode: 4.9 M instructions in a 207 M compile of 3 K
+    /// instructions. One index, built at the first lookup, and the lowest
+    /// opcode of a repeated name, not whichever the hash order met first.
     #[test]
     fn test_opcodes_are_found_by_name_through_one_index() {
         let tables = Tables {

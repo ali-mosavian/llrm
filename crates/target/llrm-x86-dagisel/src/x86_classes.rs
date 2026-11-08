@@ -15,8 +15,8 @@
 //! The emitter (sdag-d), when it turns a machine node's operands into LIR
 //! values.
 
-use crate::instr::{InstrDesc, operand_type};
-use crate::x86_addr::AddrMode;
+use llrm_dagisel::addr::AddrMode;
+use llrm_dagisel::instr::{InstrDesc, operand_type};
 
 /// A part of a memory reference, in operand order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

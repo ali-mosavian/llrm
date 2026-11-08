@@ -19,9 +19,10 @@
 //! [case]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L6508
 
-use crate::dag::SDValue;
-use crate::generated::ids::{isd, mvt, target_opcode, x86};
-use crate::x86_addr::{AddrDag, vt_bits};
+use llrm_dagisel::addr::{AddrDag, vt_bits};
+use llrm_dagisel::dag::SDValue;
+use llrm_dagisel::generated::ids::{isd, mvt, target_opcode, x86};
+
 use crate::x86_hooks::X86Hooks;
 
 /// Selects `node`; false when the pin's case leaves it to the table.
@@ -136,11 +137,10 @@ fn select_shifted_mask<D: AddrDag>(
     node: u32,
     and: u32,
     mask: u64,
-    cmp_vt: crate::matcher::Vt,
+    cmp_vt: llrm_dagisel::matcher::Vt,
 ) -> bool {
     let wide = cmp_vt == mvt::i64;
-    let (leading, trailing) =
-        (mask.leading_zeros() - if wide { 0 } else { 32 }, mask.trailing_zeros());
+    let (leading, trailing) = (mask.leading_zeros() - if wide { 0 } else { 32 }, mask.trailing_zeros());
     let x = dag.operand(and, 0);
     let fits_i32 = !wide || i32::try_from(mask as i64).is_ok();
     // Profitable if it drops a movabs or shrinks a 32-bit immediate to 8 bits

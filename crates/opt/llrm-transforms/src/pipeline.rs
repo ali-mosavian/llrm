@@ -1390,6 +1390,9 @@ pub fn recorded(
             manager.compute::<GlobalsAA>();
             manager.compute::<GlobalsModRefAnalysis>();
             let mut simplify = Fixed::linear(&walked("walk"), Phase::Simplify);
+            // `Tti::inline_trial_light_simplify`: the SZ2 trial's copy goes through the
+            // cleanup list, not the whole one.
+            let mut light = Fixed::linear(&walked("walk"), Phase::Cleanup);
             manager.add_program(crate::walk::Walk {
                 inline: applied.options.inline,
                 speed_rate: applied.options.prices_bytes(),
@@ -1401,8 +1404,8 @@ pub fn recorded(
                 }),
                 simplify: Box::new(move |module, analyses, id, stage| {
                     TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
-                    rerun(module, analyses, id, &mut simplify, true)
-                        .unwrap_or_else(|error| panic!("pipeline: {error}"));
+                    let list = if stage == crate::walk::TRIAL_LIGHT { &mut light } else { &mut simplify };
+                    rerun(module, analyses, id, list, true).unwrap_or_else(|error| panic!("pipeline: {error}"));
                     TRIGGER.with(|trigger| trigger.borrow_mut().clear());
                 }),
             });

@@ -1,10 +1,11 @@
 //! `InstrEmitter`: scheduled units to LIR.
 //!
 //! # How it works
-//! [`emit`] walks the units [`llrm_codegen::backend::selectiondag::schedule::schedule`] returns, a unit's
-//! glued nodes top first, and writes one LIR instruction per machine node and
-//! per register copy. A node's results are virtual values, numbered in the
-//! order they are emitted (`VRBaseMap`); an operand is that value, an
+//! [`emit`] walks the units
+//! [`llrm_codegen::backend::selectiondag::schedule::schedule`] returns, a
+//! unit's glued nodes top first, and writes one LIR instruction per machine
+//! node and per register copy. A node's results are virtual values, numbered in
+//! the order they are emitted (`VRBaseMap`); an operand is that value, an
 //! immediate, or a memory cell built from the pin's five address operands
 //! (base, scale, index, displacement, segment).
 //!
@@ -48,21 +49,19 @@
 
 use std::sync::Arc;
 
-use llrm_dagisel::instr::{self, InstrDesc, operand_type};
-use llrm_dagisel::x86_addr::AddrMode;
-use llrm_dagisel::x86_classes::{Role, class_tag};
-use llrm_lir::registers::RegId;
-use llrm_support::hash::HashMap;
-
+use llrm_codegen::backend::isel::{_read, _written};
 use llrm_codegen::backend::selectiondag::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
+pub use llrm_codegen::backend::selectiondag::emit_api::*;
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::schedule::Unit;
-use llrm_codegen::backend::isel::{_read, _written};
 use llrm_codegen::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 use llrm_codegen::model::lir::{Insn, PairKind, Phi};
-
-pub use llrm_codegen::backend::selectiondag::emit_api::*;
+use llrm_dagisel::addr::AddrMode;
+use llrm_dagisel::instr::{self, InstrDesc, operand_type};
+use llrm_lir::registers::RegId;
+use llrm_support::hash::HashMap;
+use llrm_x86_dagisel::x86_classes::{Role, class_tag};
 
 struct Emitter<'a, 'd> {
     dag: &'d SelectionDAG,
@@ -1350,15 +1349,19 @@ impl Emitter<'_, '_> {
         let Some(index) = what.sources.iter().position(|source| matches!(source, Loc::Mem(_))) else { return compare };
         let Loc::Mem(cell) = &what.sources[index] else { return compare };
         let width = cell.width;
-        let found = self.blocks.iter().enumerate().find_map(|(block, one)| {
-            one.insns
-                .iter()
-                .position(|insn| {
-                    insn.at == compare.at
-                        && insn.what.as_ref().is_some_and(|w| w.sources.iter().any(|s| matches!(s, Loc::Mem(_))))
-                })
-                .map(|place| (block, place))
-        });
+        let found = self
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(
+                |(block, one)| one.insns
+                    .iter()
+                    .position(|insn| {
+                        insn.at == compare.at
+                            && insn.what.as_ref().is_some_and(|w| w.sources.iter().any(|s| matches!(s, Loc::Mem(_))))
+                    })
+                    .map(|place| (block, place)),
+            );
         let Some((block, place)) = found else { return compare };
         let original = Arc::clone(&self.blocks[block].insns[place]);
         let held = self.fresh(width);
@@ -1424,7 +1427,7 @@ impl Emitter<'_, '_> {
         opcode: u32,
     ) -> Result<(), EmitError> {
         // `SEGMENT_OF` (sdag-c's pseudo, SD305): the segment word of a global.
-        if opcode == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
+        if opcode == u32::from(llrm_x86_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
             let held = self.fresh(2);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);
             let word = self.segment_word(SDValue { node: n, res: 0 });
@@ -1805,7 +1808,8 @@ impl Emitter<'_, '_> {
         &self,
         register: SDValue,
     ) -> bool {
-        self.dag.node(register).data == NodeData::PhysReg(llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID)
+        self.dag.node(register).data
+            == NodeData::PhysReg(llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID)
     }
 
     /// Whether `value` is an implicit result of a machine node (EFLAGS from
@@ -2442,7 +2446,7 @@ impl Emitter<'_, '_> {
                 };
                 // Flat 32-bit: the pin's pseudos, which `callframe.rs` turns
                 // into pushes or `sub`/`add` (DEVIATE CF4).
-                if self.ctx.address_mode == AddrMode::Flat32 || self.ctx.reserved_calls {
+                if self.ctx.address_mode != AddrMode::Real16 || self.ctx.reserved_calls {
                     if bytes != 0 {
                         let width = if self.ctx.address_mode == AddrMode::Flat64 { 8 } else { 4 };
                         let imm = |value: i64| Loc::Imm(Imm { value, width, address: None });
@@ -3125,7 +3129,12 @@ impl Emitter<'_, '_> {
             "IMPLICIT_DEF" => {
                 let held = self.fresh(width);
                 self.values.insert(result, held.value);
-                self.push(Operation::Nothing, llrm_codegen::processimpdefs::IMPLICIT_DEF, vec![Loc::Held(held)], vec![]);
+                self.push(
+                    Operation::Nothing,
+                    llrm_codegen::processimpdefs::IMPLICIT_DEF,
+                    vec![Loc::Held(held)],
+                    vec![],
+                );
                 return Ok(Some(()));
             }
             // `INSERT_SUBREG undef, x, idx`: x in the low part of a wider
@@ -3617,7 +3626,7 @@ impl Emitter<'_, '_> {
                 && ins.iter().any(|one| one.kind == operand_type::MEMORY)
                 && matches!(
                     self.dag.opcode(ops[i]),
-                    ISD::Machine(op) if op == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE)
+                    ISD::Machine(op) if op == u32::from(llrm_x86_dagisel::x86_llrm::SEGMENT_OF_OPCODE)
                 )
             {
                 // A store of a segment is the immediate's store, as one of
