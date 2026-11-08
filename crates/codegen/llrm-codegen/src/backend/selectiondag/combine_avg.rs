@@ -14,11 +14,11 @@
 //! `expandAVG`, which is not translated); here the node is formed only where
 //! the target has it legal or custom, so a target without it keeps its
 //! shift and add. Exit: `expandAVG` and the type-legalizer cases translated.
-//! Owner llrm-6502-b, review 2026-12-10.
+//! Owner llrm-6502-b, exit 2026-11-20.
 //!
 //! DEVIATE SD601: `willNotOverflowAdd` (the wider-type fallback after types are
 //! legal) reads the add's `nuw`/`nsw` flag, not the known-bits range proof.
-//! Exit: with `willNotOverflowAdd`. Owner llrm-6502-b, review 2026-12-10.
+//! Exit: with `willNotOverflowAdd`. Owner llrm-6502-b, exit 2026-11-20.
 //!
 //! # See also
 //! LLVM's `DAGCombiner::foldShiftToAvg`
