@@ -66,8 +66,9 @@ impl Collection<'_, '_> {
         cur_cost: &Cost,
         cur_regs: &HashSet<Scev>,
         visited: &mut HashSet<Scev>,
+        order: &[usize],
     ) {
-        let lu_idx = workspace.len();
+        let lu_idx = order[workspace.len()];
         let lu = &self.uses[lu_idx];
         // A register of the solution so far that this use could reference is
         // required of its formula, which prunes the search.
@@ -100,7 +101,7 @@ impl Collection<'_, '_> {
             if new_cost.is_less(self.tti, solution_cost) {
                 workspace.push(f_idx);
                 if workspace.len() != self.uses.len() {
-                    self.solve_recurse(se, solution, solution_cost, workspace, &new_cost, &new_regs, visited);
+                    self.solve_recurse(se, solution, solution_cost, workspace, &new_cost, &new_regs, visited, order);
                     if self.tti.lsr_visited_registers_lose() && f.num_regs() == 1 && workspace.len() == 1 {
                         visited.insert(f.scaled_reg.unwrap_or_else(|| f.base_regs[0]));
                     }
@@ -202,6 +203,36 @@ impl Collection<'_, '_> {
         self.solve_with_cost(se).0
     }
 
+    /// One `SolveRecurse` from the empty solution with the uses taken in
+    /// `order`: the formula chosen for each use (by use, empty if none) and
+    /// what it costs.
+    fn search(
+        &self,
+        se: &mut ScalarEvolution,
+        order: &[usize],
+    ) -> (Vec<usize>, Cost) {
+        let mut by_position = Vec::new();
+        let mut solution_cost = Cost::new();
+        solution_cost.lose();
+        let mut workspace = Vec::with_capacity(self.uses.len());
+        let mut visited = HashSet::default();
+        self.solve_recurse(
+            se,
+            &mut by_position,
+            &mut solution_cost,
+            &mut workspace,
+            &Cost::new(),
+            &HashSet::default(),
+            &mut visited,
+            order,
+        );
+        let mut by_use = vec![0; by_position.len()];
+        for (position, &formula) in by_position.iter().enumerate() {
+            by_use[order[position]] = formula;
+        }
+        (by_use, solution_cost)
+    }
+
     /// `solve`, and what the solution it returns costs (nothing to compare for
     /// the empty one).
     pub fn solve_with_cost(
@@ -216,23 +247,27 @@ impl Collection<'_, '_> {
                 llrm_support::debug!("lsr", "  candidate use {at} {:?}: {:?}", lu.kind, formula);
             }
         }
+        let forward: Vec<usize> = (0..self.uses.len()).collect();
+        let reversed: Vec<usize> = forward.iter().rev().copied().collect();
         let mut solution = Vec::new();
         let mut solution_cost;
         loop {
-            solution.clear();
-            solution_cost = Cost::new();
-            solution_cost.lose();
-            let mut workspace = Vec::with_capacity(self.uses.len());
-            let mut visited = HashSet::default();
-            self.solve_recurse(
-                se,
-                &mut solution,
-                &mut solution_cost,
-                &mut workspace,
-                &Cost::new(),
-                &HashSet::default(),
-                &mut visited,
-            );
+            (solution, solution_cost) = self.search(se, &forward);
+            // DEVIATE LU14: `SolveRecurse` requires of a use the registers the
+            // uses before it chose, so a cheaper combination that starts with
+            // a later use is never rated (rcflip's RAMP loop: 4 instructions
+            // against 2 with the uses the other way round). The uses are also taken
+            // in the opposite order, and its solution kept where it costs less
+            // by the target's comparator; a tie keeps the pin's order. A
+            // target opts in (`lsr_solves_both_use_orders`). Cost: one more
+            // search per instance.
+            if self.uses.len() > 1 && !solution.is_empty() && self.tti.lsr_solves_both_use_orders() {
+                let (other, other_cost) = self.search(se, &reversed);
+                if !other.is_empty() && other_cost.is_less(self.tti, &solution_cost) {
+                    solution = other;
+                    solution_cost = other_cost;
+                }
+            }
             // DEVIATE LU3b: where the loop's other values leave less than a
             // base and an index, the cut tells no solution from
             // another; search again without it.

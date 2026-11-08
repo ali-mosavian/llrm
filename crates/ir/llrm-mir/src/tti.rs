@@ -1607,6 +1607,15 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LU14: whether `Solve` also searches the uses in the opposite
+    /// order and keeps the cheaper solution (a tie keeps the pin's order).
+    /// `SolveRecurse` requires of a use the registers the uses before it
+    /// chose, so a cheaper combination that starts with a later use is never
+    /// rated. The pin searches one order.
+    fn lsr_solves_both_use_orders(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
     /// as written is dropped when it needs more registers than exist.
     fn lsr_drops_spilling_solution(&self) -> bool {
