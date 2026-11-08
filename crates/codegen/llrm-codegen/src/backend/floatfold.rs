@@ -334,7 +334,9 @@ fn fold_constants(
                             Loc::Held(held) if held.width == 10 && earlier.defines.contains(&held.value) => {
                                 let read_between = insns[index + 1..reader]
                                     .iter()
-                                    .filter(|between| between.uses.contains(&held.value))
+                                    .filter_map(|between| between.what.as_ref())
+                                    .flat_map(|what| &what.sources)
+                                    .filter(|source| matches!(source, Loc::Held(read) if read.value == held.value))
                                     .count();
                                 (uses.get(&held.value).copied().unwrap_or(0) > read_between).then_some(held.value)
                             }
@@ -1028,6 +1030,26 @@ mod tests {
             insn(3, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
             arith(4, "fadd", 3, 1, 2),
             fstp(5, 3, global(0, 0)),
+        ]);
+        let done = names(&constants_folded(&body, cpu));
+        assert!(!done.contains(&"fld1".to_owned()), "{done:?}");
+    }
+
+    /// x_ldconv -O2 m32: `fadd v, v` reads a value twice; the count of reads
+    /// between its definition and the constant's reader counted the
+    /// instruction once, so a value already consumed looked live and the
+    /// constant stayed `fld1` (+3,999 clocks against the memory form).
+    #[test]
+    fn test_a_constant_folds_past_a_newer_value_one_instruction_read_twice() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            fld(1, 4, global(8, 0)),
+            arith(2, "fadd", 5, 4, 4),
+            fstp(3, 5, global(16, 0)),
+            insn(4, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(5, "fadd", 3, 1, 2),
+            fstp(6, 3, global(0, 0)),
         ]);
         let done = names(&constants_folded(&body, cpu));
         assert!(!done.contains(&"fld1".to_owned()), "{done:?}");
