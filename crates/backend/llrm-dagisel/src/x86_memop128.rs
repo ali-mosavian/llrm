@@ -63,11 +63,14 @@ pub fn select_mem128<D: AddrDag>(
                 &[mvt::v4i32, mvt::Other],
                 &[from.base, from.scale, from.index, from.disp, from.segment, chain],
             );
+            // A volatile piece is volatile on both accesses (`MachineMemOperand`).
+            dag.set_node_mem_refs(read, &[node]);
             (SDValue::new(read, 0), SDValue::new(read, 1))
         }
         None => (SDValue::new(dag.machine_node(x86::V_SET0, &[mvt::v4i32], &[]), 0), chain),
     };
     let write = address_store(dag, store, &to, value, chain);
+    dag.set_node_mem_refs(write, &[node]);
     dag.replace_uses(SDValue::new(node, 0), SDValue::new(write, 0));
     dag.remove_dead_node(node);
     true

@@ -157,9 +157,9 @@ impl<'a> LoopSafety<'a> {
                 !calls::may_throw(self.outer, self.context, self.function, inst)
                     && calls::will_return(self.outer, self.context, self.function, inst)
             }
-            // A volatile store is not guaranteed to return
+            // A volatile operation is not guaranteed to return
             // (`Instruction::willReturn`).
-            Opcode::Store { volatile, .. } => !volatile,
+            Opcode::Load { volatile, .. } | Opcode::Store { volatile, .. } => !volatile,
             _ => true,
         }
     }

@@ -65,6 +65,7 @@ pub fn casts_branched(
     while let Some(site) = find(context, function, convert, compared) {
         match site {
             Site::Convert { .. } => branched(context, layout, function, site),
+            Site::Arm { .. } => arm_branched(function, site),
             Site::Compare { .. } => compare_branched(function, site),
         }
         changed = true;
@@ -73,6 +74,13 @@ pub fn casts_branched(
 }
 
 enum Site {
+    /// `select c, K, %v` of integers where `%v` is a conversion nothing else
+    /// reads: the conversion goes to the path that does not take `K`.
+    Arm {
+        cast: InstId,
+        select: InstId,
+        constant_is_true: bool,
+    },
     Convert {
         cast: InstId,
         select: InstId,
@@ -93,6 +101,17 @@ fn find(
     convert: bool,
     compared: bool,
 ) -> Option<Site> {
+    // The outer select of a clamp first: its conversion moves to its own path
+    // with the inner select, and the next round branches the inner one.
+    if convert {
+        for &block in function.layout() {
+            for select in function.iter_block(block) {
+                if let Some(site) = arm_site(context, function, block, select) {
+                    return Some(site);
+                }
+            }
+        }
+    }
     for &block in function.layout() {
         for cast in function.iter_block(block) {
             let instruction = function.instruction(cast);
@@ -135,6 +154,105 @@ fn find(
         }
     }
     None
+}
+
+/// `select c, K, %v` of integers (either way round) where `%v` is a
+/// float-to-integer conversion in the select's block that nothing else reads.
+fn arm_site(
+    context: &Context,
+    function: &Function,
+    block: BlockId,
+    select: InstId,
+) -> Option<Site> {
+    if function.instruction(select).opcode != Opcode::Select {
+        return None;
+    }
+    let [Operand::Value(condition), yes, no] = function.instruction(select).operands[..] else { return None };
+    if context.types.int_bits(function.value(condition).ty) != Some(1) {
+        return None;
+    }
+    let constant = |arm: Operand| {
+        matches!(arm, Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(_)))
+    };
+    let (constant_is_true, other) = match (constant(yes), constant(no)) {
+        (true, false) => (true, no),
+        (false, true) => (false, yes),
+        _ => return None,
+    };
+    let Operand::Value(value) = other else { return None };
+    let ValueDef::Instruction(cast) = function.value(value).def else { return None };
+    (matches!(function.instruction(cast).opcode, Opcode::Cast(CastOp::FPToSI | CastOp::FPToUI))
+        && function.parent(cast) == Some(block)
+        && function.users(value).has_one_use())
+    .then_some(Site::Arm { cast, select, constant_is_true })
+}
+
+/// The conversion, with the select and compare only it reads, moves to a block
+/// taken when the constant is not; the select becomes a phi of the constant
+/// and the conversion.
+fn arm_branched(
+    function: &mut Function,
+    site: Site,
+) {
+    let Site::Arm { cast, select, constant_is_true } = site else { unreachable!("an arm site") };
+    let [condition, yes, no] = function.instruction(select).operands[..] else { unreachable!("a select") };
+    let (constant, other) = if constant_is_true { (yes, no) } else { (no, yes) };
+    let ty = function.instruction(select).ty;
+    let result = function.instruction(select).result.expect("a select's value");
+    let home = function.parent(select).expect("a placed select");
+    // What only the conversion reads, deepest first: the select that is its
+    // operand, and that select's compare.
+    let mut moved = Vec::new();
+    if let Operand::Value(value) = function.instruction(cast).operands[0]
+        && let ValueDef::Instruction(inner) = function.value(value).def
+        && function.instruction(inner).opcode == Opcode::Select
+        && function.parent(inner) == Some(home)
+        && function.users(value).has_one_use()
+    {
+        if let Operand::Value(test) = function.instruction(inner).operands[0]
+            && let ValueDef::Instruction(compare) = function.value(test).def
+            && matches!(function.instruction(compare).opcode, Opcode::FCmp(_))
+            && function.parent(compare) == Some(home)
+            && function.users(test).has_one_use()
+        {
+            moved.push(compare);
+        }
+        moved.push(inner);
+    }
+    moved.push(cast);
+    let join = split_block_at(function, home, select);
+    let jump = function.terminator(home).expect("the jump the split made");
+    let void = function.instruction(jump).ty;
+    function.erase(jump).expect("nothing reads a jump");
+    let side = function.create_block(None);
+    function.insert_block(side, Some(home)).expect("a new block");
+    for &inst in &moved {
+        function.move_to(inst, Position::End(side)).expect("a placed instruction");
+    }
+    let made = function.instruction(cast).result.expect("a conversion's value");
+    let back = function.create_instruction(Opcode::Br, void, vec![Operand::Block(join)], Flags::default(), None);
+    function.insert(back, Position::End(side)).expect("an unplaced instruction");
+    let (on_true, on_false) = if constant_is_true { (join, side) } else { (side, join) };
+    let branch = function.create_instruction(
+        Opcode::Br,
+        void,
+        vec![condition, Operand::Block(on_true), Operand::Block(on_false)],
+        Flags::default(),
+        None,
+    );
+    function.insert(branch, Position::End(home)).expect("an unplaced instruction");
+    let phi = function.create_instruction(
+        Opcode::Phi,
+        ty,
+        vec![constant, Operand::Block(home), Operand::Value(made), Operand::Block(side)],
+        Flags::default(),
+        None,
+    );
+    function.insert(phi, Position::Before(select)).expect("an unplaced instruction");
+    let value = function.instruction(phi).result.expect("a phi's value");
+    function.replace_all_uses_with(result, Operand::Value(value));
+    function.erase(select).expect("nothing reads it now");
+    let _ = other;
 }
 
 /// `select c, K, V` (either way round) where `V` is a float compare, or the
