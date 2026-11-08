@@ -122,3 +122,5 @@ def test_programs_that_assume_a_32_bit_int_are_not_run_at_m16():
     for name in ("select_of_constants", "shl_of_a_zero_extended_dividend"):
         source = (RUN / f"{name}.c").read_text()
         assert not ct.applies("x86_16-dos", source) and ct.applies("x86_32-linux", source) and ct.applies("x86_64-linux", source)
+
+
