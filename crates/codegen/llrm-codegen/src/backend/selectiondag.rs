@@ -132,6 +132,7 @@ pub mod div_combine;
 pub mod div_const;
 pub mod dump;
 pub mod emit;
+pub mod emit_api;
 pub mod expand_divrem_const;
 pub mod expand_fixed;
 pub mod expand_funnel;
