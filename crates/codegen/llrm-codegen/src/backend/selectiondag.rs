@@ -121,7 +121,7 @@ pub mod combine_token_factor;
 pub mod combine_trunc_stores;
 pub mod combine_urem_eq;
 pub mod ctcount_combine;
-mod dag;
+pub mod dag;
 pub mod dag_combiner;
 pub mod dag_function;
 pub mod dag_select;
@@ -131,7 +131,7 @@ mod demanded_bits;
 pub mod div_combine;
 pub mod div_const;
 pub mod dump;
-pub mod emit;
+pub mod emit_api;
 pub mod expand_divrem_const;
 pub mod expand_fixed;
 pub mod expand_funnel;
@@ -213,7 +213,6 @@ mod dag_select_tests;
 #[cfg(test)]
 mod dagisel_tests;
 #[cfg(test)]
-mod emit_tests;
 #[cfg(test)]
 mod exact_shift_tests;
 #[cfg(test)]

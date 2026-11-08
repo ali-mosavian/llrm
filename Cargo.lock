@@ -751,9 +751,15 @@ dependencies = [
 name = "llrm-x86-backend"
 version = "0.1.0"
 dependencies = [
+ "iced-x86",
  "llrm-codegen",
+ "llrm-dagisel",
  "llrm-lir",
+ "llrm-mir",
+ "llrm-support",
+ "llrm-target",
  "llrm-x86",
+ "llrm-x86-m32",
 ]
 
 [[package]]
