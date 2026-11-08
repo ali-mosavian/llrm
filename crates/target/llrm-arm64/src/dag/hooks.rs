@@ -10,12 +10,12 @@
 //! See SD522: the complex patterns `addr` lists as not translated answer false.
 
 use llrm_dagisel::aarch64_predicates::encode_logical_immediate;
+use llrm_dagisel::addr::AddrDag;
+use llrm_dagisel::addr::find_non_imm_use;
 use llrm_dagisel::dag::{Hooks, PatternContext, SDValue};
 use llrm_dagisel::generated::aarch64::aarch64_apple_m1 as table;
 use llrm_dagisel::generated::ids::mvt;
 use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::x86_addr::AddrDag;
-use llrm_dagisel::x86_hooks::find_non_imm_use;
 
 use super::addr;
 use super::globals::Globals;

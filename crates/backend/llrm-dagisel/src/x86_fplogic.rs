@@ -18,9 +18,9 @@
 //! # Used by
 //! [`crate::x86_select::select_node`].
 
+use crate::addr::{AddrDag, Matcher};
 use crate::dag::SDValue;
 use crate::generated::ids::{mvt, x86, x86isd};
-use crate::x86_addr::{AddrDag, Matcher};
 use crate::x86_hooks::X86Hooks;
 
 /// Selects `node`; false for an operand that is no address or a type that is no

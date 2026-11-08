@@ -13,7 +13,7 @@
 2 crates/backend/llrm-dagisel/src/generated/x86_p5.rs
 2 crates/backend/llrm-dagisel/src/generated/x86_x64.rs
 1 crates/backend/llrm-dagisel/src/predicates.rs
-1 crates/backend/llrm-dagisel/src/x86_addr.rs
+1 crates/backend/llrm-dagisel/src/addr.rs
 12 crates/backend/llrm-dagisel/src/x86_hooks.rs
 1 crates/backend/llrm-dagisel/src/x86_test.rs
 1 crates/backend/llrm-iselgen/src/build.rs

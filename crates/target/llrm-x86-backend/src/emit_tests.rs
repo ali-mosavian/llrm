@@ -1,15 +1,15 @@
-use llrm_dagisel::generated::x86_i486::MACHINE_OPCODES;
-use llrm_dagisel::x86_addr::AddrMode;
-use llrm_lir::registers::RegId;
-use llrm_support::hash::HashMap;
-use llrm_target::Target;
-
-use crate::emit::emit;
 use llrm_codegen::backend::selectiondag::emit_api::{EmitContext, EmitError};
 use llrm_codegen::backend::selectiondag::opcodes::OpcodeMap;
 use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, schedule};
 use llrm_codegen::backend::selectiondag::*;
 use llrm_codegen::model::ir::{Loc, Reg};
+use llrm_dagisel::addr::AddrMode;
+use llrm_dagisel::generated::x86_i486::MACHINE_OPCODES;
+use llrm_lir::registers::RegId;
+use llrm_support::hash::HashMap;
+use llrm_target::Target;
+
+use crate::emit::emit;
 
 const EAX: u32 = u32::MAX;
 const NO_FLAGS: &[u16] = &[];

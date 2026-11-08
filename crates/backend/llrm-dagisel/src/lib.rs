@@ -21,11 +21,11 @@ pub mod fastisel;
 #[rustfmt::skip]
 pub mod generated;
 pub mod aarch64_predicates;
+pub mod addr;
 pub mod instr;
 pub mod interp;
 pub mod matcher;
 pub mod predicates;
-pub mod x86_addr;
 pub mod x86_classes;
 pub mod x86_divrem;
 pub mod x86_fcmp;
@@ -38,6 +38,7 @@ pub mod x86_rmw;
 pub mod x86_select;
 pub mod x86_shift;
 pub mod x86_test;
+pub mod x86_testing;
 
 #[cfg(test)]
 mod aarch64_tests;

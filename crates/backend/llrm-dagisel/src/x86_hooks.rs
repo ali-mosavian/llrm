@@ -5,7 +5,7 @@
 //! # How it works
 //! The generated table names its complex patterns by number; [`X86Hooks`] reads
 //! the function each number stands for from the CPU's `COMPLEX_PATTERNS` and
-//! runs the matcher of that name from [`crate::x86_addr`]. `selectTLSADDRAddr`
+//! runs the matcher of that name from [`crate::addr`]. `selectTLSADDRAddr`
 //! never matches here (SD35).
 //!
 //! Numbered deviations from the pin (reason / owner / exit / review):
@@ -25,12 +25,12 @@
 //! # Used by
 //! The shadow harness: `Selector::select(dag, &mut X86Hooks::new(..), node)`.
 
+use crate::addr::{AddrDag, AddrMode, Matcher, SymbolKind, find_non_imm_use, vt_bits};
 use crate::dag::{Hooks, PatternContext, SDValue, X86Predicates};
 use crate::generated::ids::{isd, mvt, x86, x86isd};
 use crate::generated::{x86_i486, x86_m16, x86_p5, x86_x64};
 use crate::instr;
 use crate::matcher::Vt;
-use crate::x86_addr::{AddrDag, AddrMode, Matcher, SymbolKind, vt_bits};
 
 /// The CPU whose table is walked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,7 +261,7 @@ impl X86Hooks {
         root: u32,
         parent: u32,
         n: SDValue,
-    ) -> Option<crate::x86_addr::AddressOperands> {
+    ) -> Option<crate::addr::AddressOperands> {
         let is_non_ext_load =
             dag.opcode(n.node) == isd::LOAD && dag.load_ext_type(n.node) == Some(crate::dag::LoadExt::NonExt);
         if !is_non_ext_load
@@ -371,36 +371,6 @@ fn machine_condition<D: AddrDag>(
     }
     let at = usize::from(desc.num_operands - desc.num_defs) - 1;
     dag.constant(dag.operand(node, at)).map(|cc| cc as u64)
-}
-
-/// `findNonImmUse`: `def` is reachable from `root` by a path that avoids
-/// `immediate_use`'s edge.
-pub fn find_non_imm_use<D: AddrDag>(
-    dag: &D,
-    root: u32,
-    def: u32,
-    immediate_use: u32,
-    ignore_chains: bool,
-) -> bool {
-    if dag.is_only_user_of(immediate_use, def) {
-        return false;
-    }
-    let mut visited = crate::dag::Visited::of(immediate_use);
-    let mut worklist = Vec::new();
-    let seed = |node: u32, visited: &mut crate::dag::Visited, worklist: &mut Vec<u32>| {
-        for i in 0..dag.num_operands(node) {
-            let op = dag.operand(node, i);
-            if (dag.value_type(op) == mvt::Other && ignore_chains) || op.node == def || !visited.insert(op.node) {
-                continue;
-            }
-            worklist.push(op.node);
-        }
-    };
-    seed(immediate_use, &mut visited, &mut worklist);
-    if root != immediate_use {
-        seed(root, &mut visited, &mut worklist);
-    }
-    dag.has_predecessor_helper(def, &mut visited, &mut worklist, 0)
 }
 
 impl<D: AddrDag> Hooks<D> for X86Hooks {

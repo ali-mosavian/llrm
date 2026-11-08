@@ -1,10 +1,11 @@
 //! `InstrEmitter`: scheduled units to LIR.
 //!
 //! # How it works
-//! [`emit`] walks the units [`llrm_codegen::backend::selectiondag::schedule::schedule`] returns, a unit's
-//! glued nodes top first, and writes one LIR instruction per machine node and
-//! per register copy. A node's results are virtual values, numbered in the
-//! order they are emitted (`VRBaseMap`); an operand is that value, an
+//! [`emit`] walks the units
+//! [`llrm_codegen::backend::selectiondag::schedule::schedule`] returns, a
+//! unit's glued nodes top first, and writes one LIR instruction per machine
+//! node and per register copy. A node's results are virtual values, numbered in
+//! the order they are emitted (`VRBaseMap`); an operand is that value, an
 //! immediate, or a memory cell built from the pin's five address operands
 //! (base, scale, index, displacement, segment).
 //!
@@ -48,21 +49,19 @@
 
 use std::sync::Arc;
 
-use llrm_dagisel::instr::{self, InstrDesc, operand_type};
-use llrm_dagisel::x86_addr::AddrMode;
-use llrm_dagisel::x86_classes::{Role, class_tag};
-use llrm_lir::registers::RegId;
-use llrm_support::hash::HashMap;
-
+use llrm_codegen::backend::isel::{_read, _written};
 use llrm_codegen::backend::selectiondag::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
+pub use llrm_codegen::backend::selectiondag::emit_api::*;
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::schedule::Unit;
-use llrm_codegen::backend::isel::{_read, _written};
 use llrm_codegen::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 use llrm_codegen::model::lir::{Insn, PairKind, Phi};
-
-pub use llrm_codegen::backend::selectiondag::emit_api::*;
+use llrm_dagisel::addr::AddrMode;
+use llrm_dagisel::instr::{self, InstrDesc, operand_type};
+use llrm_dagisel::x86_classes::{Role, class_tag};
+use llrm_lir::registers::RegId;
+use llrm_support::hash::HashMap;
 
 struct Emitter<'a, 'd> {
     dag: &'d SelectionDAG,
@@ -1350,15 +1349,19 @@ impl Emitter<'_, '_> {
         let Some(index) = what.sources.iter().position(|source| matches!(source, Loc::Mem(_))) else { return compare };
         let Loc::Mem(cell) = &what.sources[index] else { return compare };
         let width = cell.width;
-        let found = self.blocks.iter().enumerate().find_map(|(block, one)| {
-            one.insns
-                .iter()
-                .position(|insn| {
-                    insn.at == compare.at
-                        && insn.what.as_ref().is_some_and(|w| w.sources.iter().any(|s| matches!(s, Loc::Mem(_))))
-                })
-                .map(|place| (block, place))
-        });
+        let found = self
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(
+                |(block, one)| one.insns
+                    .iter()
+                    .position(|insn| {
+                        insn.at == compare.at
+                            && insn.what.as_ref().is_some_and(|w| w.sources.iter().any(|s| matches!(s, Loc::Mem(_))))
+                    })
+                    .map(|place| (block, place)),
+            );
         let Some((block, place)) = found else { return compare };
         let original = Arc::clone(&self.blocks[block].insns[place]);
         let held = self.fresh(width);
@@ -1805,7 +1808,8 @@ impl Emitter<'_, '_> {
         &self,
         register: SDValue,
     ) -> bool {
-        self.dag.node(register).data == NodeData::PhysReg(llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID)
+        self.dag.node(register).data
+            == NodeData::PhysReg(llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID)
     }
 
     /// Whether `value` is an implicit result of a machine node (EFLAGS from
@@ -3125,7 +3129,12 @@ impl Emitter<'_, '_> {
             "IMPLICIT_DEF" => {
                 let held = self.fresh(width);
                 self.values.insert(result, held.value);
-                self.push(Operation::Nothing, llrm_codegen::processimpdefs::IMPLICIT_DEF, vec![Loc::Held(held)], vec![]);
+                self.push(
+                    Operation::Nothing,
+                    llrm_codegen::processimpdefs::IMPLICIT_DEF,
+                    vec![Loc::Held(held)],
+                    vec![],
+                );
                 return Ok(Some(()));
             }
             // `INSERT_SUBREG undef, x, idx`: x in the low part of a wider
