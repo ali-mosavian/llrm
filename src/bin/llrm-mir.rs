@@ -266,6 +266,7 @@ fn main() -> ExitCode {
                 let options = llrm_transforms::looprotate::Options {
                     max_header_size: 16,
                     priced_at_size: false,
+                    priced_exit_carries: false,
                     rotation_only: false,
                     is_util_mode: false,
                     prepare_for_lto: false,
