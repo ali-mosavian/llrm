@@ -60,16 +60,16 @@ static void set_hint(void)
         str_free = (StrEntry *)str_end;
 }
 
-/* Takes `bytes` for `owner` from free `entry`, leaving the rest free. */
+/* Takes `bytes` for `owner` from free `entry` (the hint or what fit found, never an owned one), leaving the rest free. */
 static char *take(StrEntry *entry, uword bytes, SD *owner)
 {
-    uword have = ENTRY_BYTES(entry);
+    uword have = WORD + FREE_DATA(entry);
 
     if (have > bytes) {
         MAKE_FREE((StrEntry *)((char *)entry + bytes), have - bytes);
         str_free = (StrEntry *)((char *)entry + bytes);
     } else {
-        str_free = FOLLOWING(entry);
+        str_free = (StrEntry *)((char *)entry + have);
     }
     entry->header = (uword)owner;
     return DATA_OF(entry);
