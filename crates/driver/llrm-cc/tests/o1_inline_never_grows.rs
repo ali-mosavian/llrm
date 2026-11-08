@@ -56,3 +56,16 @@ fn test_m32_o1_straight_line_helpers_are_priced_not_all_copied() {
     let (_, size) = compile("soft", &source, "-O1");
     assert!(size < 23_800, "object is {size} B; copying every helper into each site gave 24,284, pricing them 23,372");
 }
+
+/// The inliner's growth is in size units, one per instruction, and a callee's
+/// bytes are 3.5 to 5 times that: compared with a per-byte rate it let
+/// `sf_cmp_bits` (about 70 B) into each of eight comparison wrappers
+/// (sfm16_float 23,432 B against gcc's smaller object and 22,748 B with the unit
+/// scaled).
+#[test]
+fn test_m32_o1_growth_is_priced_in_bytes_not_size_units() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let source = std::fs::read_to_string(root.join("bench/sfm16_float/sfm16_float.c")).unwrap();
+    let (_, size) = compile("units", &source, "-O1");
+    assert!(size < 23_000, "object is {size} B; the unscaled growth gave 23,432");
+}

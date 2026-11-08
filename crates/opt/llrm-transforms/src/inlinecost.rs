@@ -2131,12 +2131,12 @@ impl<'a> Analyzer<'a> {
     /// not trade bytes for clocks.
     fn grows_more_than_it_saves(&self) -> bool {
         let Some(tti) = self.site.tti else { return false };
-        self.grows_more_than_it_saves_at(tti.inline_policy().by_rate)
+        self.grows_more_than_it_saves_at(tti.inline_policy().by_rate, 1000)
     }
 
     /// [`Self::grows_more_than_it_saves`] at a byte rate of the caller's
     /// choosing, in thousandths of a clock.
-    fn grows_more_than_it_saves_at(&self, rate: i64) -> bool {
+    fn grows_more_than_it_saves_at(&self, rate: i64, unit_bytes_milli: i64) -> bool {
         let Some(tti) = self.site.tti else { return false };
         let growth = self.growth_per_site();
         // Growth under one call's size is inside the estimate's resolution: the
@@ -2161,7 +2161,7 @@ impl<'a> Analyzer<'a> {
             .saturating_add(self.callee_frame(llrm_mir::tti::CostKind::Latency))
             .max(1);
         let frequency = self.site.relative_frequency.unwrap_or(1.0).max(0.0);
-        let grows = (growth * rate) as f64 > saved as f64 * 1000.0 * frequency;
+        let grows = (growth * unit_bytes_milli / 1000 * rate) as f64 > saved as f64 * 1000.0 * frequency;
         if llrm_support::debug::enabled("inline") {
             eprintln!("inline:   bytes-vs-clocks: growth={growth} rate={rate} saved={saved} frequency={frequency:.2} -> {}", if grows { "grows" } else { "pays" });
         }
@@ -2190,7 +2190,7 @@ impl<'a> Analyzer<'a> {
             // the site's frequency, pay for the bytes at the target's -O1 rate
             // (`inline_o1_milliclocks_per_byte`).
             let rate = self.site.tti.map_or(0, |tti| tti.inline_o1_milliclocks_per_byte());
-            !self.site.sole_call_to_local && self.grows_the_code() && !(rate > 0 && !self.grows_more_than_it_saves_at(rate))
+            !self.site.sole_call_to_local && self.grows_the_code() && !(rate > 0 && !self.grows_more_than_it_saves_at(rate, self.site.tti.map_or(1000, |tti| tti.inline_o1_unit_bytes_milli())))
         } else {
             !self.site.sole_call_to_local
                 && self.site.tti.is_some_and(|tti| {
