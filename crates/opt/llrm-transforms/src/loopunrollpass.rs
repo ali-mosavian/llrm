@@ -2271,8 +2271,10 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     // the loops are visited in the reverse of
     // `getLoopsInReverseSiblingPreorder`, each loop after the loops it
     // holds.
-    let mut work: std::collections::VecDeque<BlockId> =
+    let mut work: Vec<BlockId> =
         analyzed.loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
+    crate::loopfilter::retain(&mut work);
+    let mut work: std::collections::VecDeque<BlockId> = work.into();
     // `LoopFullUnrollPass` hands `addSiblingLoops` every sibling the unroll
     // left that was not there before, the unrolled loop's own first iteration
     // among them: they are new to the loop passes after it.

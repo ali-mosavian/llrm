@@ -944,8 +944,10 @@ fn delete_loops_with(
     run: &mut Run,
     mut analyzed: Analyzed,
 ) -> bool {
-    let mut work: std::collections::VecDeque<BlockId> =
+    let mut work: Vec<BlockId> =
         analyzed.loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
+    crate::loopfilter::retain(&mut work);
+    let mut work: std::collections::VecDeque<BlockId> = work.into();
     let mut changed = false;
     while let Some(header) = work.pop_front() {
         if !analyzed.loops.is_loop_header(header) || !run.function.is_placed(header) {
