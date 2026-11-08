@@ -415,22 +415,14 @@ impl Printer<'_> {
                 self.push("or a, a");
                 self.push(format!("sbc hl, {source}"));
             }
-            // in `a` a left shift is `add a, a` (1 B / 4 T a bit against `sla
-            // a`'s 2 B / 8 T), and a logical right shift by two or more, where
-            // nothing reads the flags, rotates the bits round (the shorter way)
-            // and masks: `rlca` x3, `and #7` for `>> 5`
-            "SHL8" if name_of(self, 0)? == "a" => {
-                for _ in 0..shift_count(inst)? {
-                    self.push("add a, a");
+            "SHL8" | "SRL8" => {
+                let (to, count) = (name_of(self, 0)?, shift_count(inst)?);
+                let left = op == "SHL8";
+                if !self.shift_byte(left, &to, &to, count, rest) {
+                    for _ in 0..count {
+                        self.push(plain_byte_shift(left, &to));
+                    }
                 }
-            }
-            "SRL8" if name_of(self, 0)? == "a" && (2..8).contains(&shift_count(inst)?) && self.flags_dead(rest) => {
-                let count = shift_count(inst)?;
-                let (rotate, turns) = if count <= 4 { ("rrca", count) } else { ("rlca", 8 - count) };
-                for _ in 0..turns {
-                    self.push(rotate);
-                }
-                self.push(format!("and a, #{}", 0xFFu32 >> count));
             }
             // the sign of the accumulator: its bit 7 into the carry and
             // out again (`sra a` seven times is 14 B)
@@ -447,30 +439,26 @@ impl Printer<'_> {
                 self.push("sbc a, a");
                 self.push(format!("ld {to}, a"));
             }
-            "SHL8" | "SRL8" | "SRA8" => {
+            "SRA8" => {
                 let to = name_of(self, 0)?;
-                let mnemonic = match op {
-                    "SHL8" => "sla",
-                    "SRL8" => "srl",
-                    _ => "sra",
-                };
                 for _ in 0..shift_count(inst)? {
-                    self.push(format!("{mnemonic} {to}"));
+                    self.push(format!("sra {to}"));
                 }
             }
             "SHL16" | "SRL16" if shift_count(inst)? >= 8 => {
                 // a whole byte moves across: the other byte is cleared, the
                 // rest is a byte shift
                 let count = shift_count(inst)?;
+                let left = op == "SHL16";
                 let (lo, hi) = lanes(self.register(inst, 0)?)?;
-                let (kept, cleared, shifted) = if op == "SHL16" { (lo, hi, "sla") } else { (hi, lo, "srl") };
-                self.push(format!("ld {}, {}", name(cleared), name(kept)));
-                self.push(format!("ld {}, #0", name(kept)));
-                if count > 8 {
-                    for _ in 0..count - 8 {
-                        self.push(format!("{shifted} {}", name(cleared)));
+                let (kept, cleared) = if left { (name(lo), name(hi)) } else { (name(hi), name(lo)) };
+                if count == 8 || !self.shift_byte(left, kept, cleared, count - 8, rest) {
+                    self.push(format!("ld {cleared}, {kept}"));
+                    for _ in 8..count {
+                        self.push(plain_byte_shift(left, cleared));
                     }
                 }
+                self.push(format!("ld {kept}, #0"));
             }
             // `add hl, hl` is a doubling: 1 B / 11 T a bit against `sla l; rl
             // h`'s 4 B / 16 T
@@ -1451,6 +1439,33 @@ impl Printer<'_> {
     /// `rest` and in the blocks it goes on to: a conditional return in the
     /// block after a compare reads the compare's flags, so an `xor a, a` or a
     /// `dec` in between would change what it sees.
+    /// `dst = src << count` (or `>>`, logical) through `a` where that is shorter than `count` `sla`/`srl`/`add a, a`
+    /// steps, or as short and quicker. Needs `a` and the flags dead after. False: nothing was pushed.
+    fn shift_byte(
+        &mut self,
+        left: bool,
+        src: &str,
+        dst: &str,
+        count: i64,
+        rest: &[Inst],
+    ) -> bool {
+        let Ok(count) = u32::try_from(count) else { return false };
+        if !(2..8).contains(&count) {
+            return false;
+        }
+        let (lines, bytes, clocks) = rotated_byte_shift(left, src, dst, count);
+        let (step_bytes, step_clocks) = if left && dst == "a" { (1, 4) } else { (2, 8) };
+        let moved = u32::from(src != dst);
+        let plain = (moved + count * step_bytes, 4 * moved + count * step_clocks);
+        if (bytes, clocks) >= plain || !(src == "a" || self.dead_after(reg::A, rest)) || !self.flags_dead(rest) {
+            return false;
+        }
+        for line in lines {
+            self.push(line);
+        }
+        true
+    }
+
     fn flags_dead(
         &self,
         rest: &[Inst],
@@ -2377,6 +2392,36 @@ fn bytes_of(line: &Line) -> u32 {
     table_cost(&key)
         // a form the table lacks: longer than any estimate
         .map_or(4, |cost| cost.bytes)
+}
+
+/// One logical shift step of byte register `to`.
+fn plain_byte_shift(left: bool, to: &str) -> String {
+    match (left, to) {
+        (true, "a") => "add a, a".to_owned(),
+        (true, _) => format!("sla {to}"),
+        (false, _) => format!("srl {to}"),
+    }
+}
+
+/// `src` shifted logically by `count` into `dst` through `a`: rotate round the shorter way, then mask (`rrca` x3,
+/// `and #224` for `<< 5`); with the bytes and clocks of the sequence.
+fn rotated_byte_shift(left: bool, src: &str, dst: &str, count: u32) -> (Vec<String>, u32, u32) {
+    let (rotate, turns) = match (count <= 4, left) {
+        (true, true) | (false, false) => ("rlca", if count <= 4 { count } else { 8 - count }),
+        _ => ("rrca", if count <= 4 { count } else { 8 - count }),
+    };
+    let mask = if left { (0xFFu32 << count) & 0xFF } else { 0xFFu32 >> count };
+    let mut lines = Vec::new();
+    if src != "a" {
+        lines.push(format!("ld a, {src}"));
+    }
+    lines.extend(std::iter::repeat_n(rotate.to_owned(), turns as usize));
+    lines.push(format!("and a, #{mask}"));
+    if dst != "a" {
+        lines.push(format!("ld {dst}, a"));
+    }
+    let loads = u32::from(src != "a") + u32::from(dst != "a");
+    (lines, loads + turns + 2, 4 * loads + 4 * turns + 7)
 }
 
 /// The label a `jp` names, and its condition if it has one.
