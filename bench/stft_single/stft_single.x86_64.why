@@ -1,0 +1,1 @@
+Float model: m64 evaluates in single precision with no FMA (x86-64 baseline), so the checksum is the strict 502187692 (host gcc -msse2 -mfpmath=sse); the DOS .out is x87 excess precision (78803551).

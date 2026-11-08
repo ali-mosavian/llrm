@@ -380,7 +380,7 @@ fn items_once(
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
-        crate::cmpelim::eliminate_tests(&mut function, options.hoist_flag_setters);
+        crate::cmpelim::eliminate_tests(&mut function, options.hoist_flag_setters, options.rematerialize_arguments);
         if options.reuse_shift_flags {
             crate::cmpshift::reuse_shift_flags(&mut function);
         }
@@ -457,6 +457,9 @@ fn items_once(
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
+    if options.hoist_flag_setters {
+        crate::cmpelim::eliminate_adjacent_tests(&mut function, &assignment);
+    }
     llrm_spike_mf::spill::remove_dead_slot_stores::<crate::regalloc::M68kRegisters>(
         &mut function,
         &assignment,
