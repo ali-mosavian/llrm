@@ -1543,12 +1543,6 @@ pub trait Tti {
         true
     }
 
-    /// DEVIATE LU3e: whether a register past the loop's real budget costs the
-    /// references per register, not one instruction (the pin: one).
-    fn lsr_prices_spills(&self) -> bool {
-        false
-    }
-
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
     /// as written is dropped when it needs more registers than exist.
     fn lsr_drops_spilling_solution(&self) -> bool {
