@@ -1207,6 +1207,11 @@ impl Fast<'_> {
                 // `FastISel::selectIntrinsicCall`: "at -O0 we don't care about the lifetime intrinsics", and
                 // `donothing`, `sideeffect`, `assume` and `noalias.scope.decl` emit nothing either.
                 Opcode::Call(_) if self.is_noop_intrinsic(&instruction) => {}
+                // `X86FastISel::fastLowerCall`: "Allow SelectionDAG isel to handle tail calls", a call marked
+                // `tail` that `FastISel::lowerCall` found in tail position (`isInTailCallPosition`).
+                Opcode::Call(_) if llrm_codegen::backend::selectiondag::builder::tail_position(self.function, insts[at - 1]) => {
+                    return None;
+                }
                 Opcode::Call(call) if !self.narrow && call.calling_convention == self.function.calling_convention => {
                     // SysV: up to six integer or pointer arguments in registers; `al` = 0 for a variadic callee
                     let (down, up, call_op, mov8) = self.names.calls64?;
