@@ -1222,6 +1222,7 @@ entry:
         exit_cfi: true,
         saved_first: false,
         wrap_split_size: false,
+        object_aligned: false,
         red_zone: 0,
         slot_scratch: None,
     };

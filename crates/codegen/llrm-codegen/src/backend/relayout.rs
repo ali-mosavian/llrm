@@ -894,6 +894,7 @@ mod tests {
                 optional: false,
                 enter: false,
                 wrap_split_size: false,
+                object_aligned: false,
                 red_zone: 0,
                 slot_scratch: None,
                 free: false,
