@@ -1203,3 +1203,23 @@ fn test_a_run_reads_the_managers_tree_and_loops_not_its_own() {
     managed(&mut module, IndVars { lftr: true, size: false });
     assert_eq!(llrm_analysis::scev::analysis::sessions_made() - before, 0, "{}", printed(&module));
 }
+
+/// The session `IndVars` reads is the manager's own tree, loops and
+/// assumptions: the data are the same objects, not copies that agree today.
+#[test]
+fn test_the_indvars_session_reads_the_managers_cached_analyses() {
+    use llrm_analysis::scev::analysis::{Assumes, ScevSession};
+    use llrm_mir::passes::{Dominators, Loops};
+
+    let mut module = parsed(&two_counters(0, 1));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::new(outer));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let loops = analyses.get::<Loops>(context, &layout, function);
+    let tree = analyses.get::<Dominators>(context, &layout, function);
+    let assumptions = analyses.get::<Assumes>(context, &layout, function);
+    let session = ScevSession::cached(context, &layout, function, &mut analyses);
+    assert!(std::ptr::eq(session.loops(), &*loops), "loops copied");
+    assert!(std::ptr::eq(session.tree(), &*tree), "tree copied");
+    assert!(std::ptr::eq(session.assumptions(), &*assumptions), "assumptions copied");
+}

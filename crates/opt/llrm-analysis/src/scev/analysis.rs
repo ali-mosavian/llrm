@@ -292,6 +292,16 @@ impl ScevSession {
         &self.loops
     }
 
+    /// The session's dominator tree.
+    pub fn tree(&self) -> &DomTree {
+        &self.tree
+    }
+
+    /// The session's assumptions.
+    pub fn assumptions(&self) -> &AssumptionCache {
+        &self.assumptions
+    }
+
     /// `scev` as the session's expressions, for a session that carries on the
     /// work of an earlier pass (`Scevs`).
     pub fn adopt(
