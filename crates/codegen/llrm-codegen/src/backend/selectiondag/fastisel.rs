@@ -134,7 +134,7 @@ pub fn build_all(
             }
         }
     }
-    let names = Names::new(opcode, if m32 { llrm_dagisel::fastisel::Table::I486 } else { llrm_dagisel::fastisel::Table::X64 })?;
+    let names = Names::of(opcode, if m32 { llrm_dagisel::fastisel::Table::I486 } else { llrm_dagisel::fastisel::Table::X64 })?;
     let mut blocks = Vec::new();
     let layout = function.layout();
     for (at, &block) in layout.iter().enumerate() {
@@ -238,7 +238,17 @@ struct Divide {
 }
 
 impl Names {
+    /// The opcode set of `table`, looked up once per process: the by-name search costs about 4 M
+    /// instructions, which on every function made a FastISel compile dearer than the DAG's.
+    fn of(opcode: &dyn Fn(&str) -> Option<u16>, table: llrm_dagisel::fastisel::Table) -> Option<&'static Names> {
+        static M32: std::sync::OnceLock<Option<Names>> = std::sync::OnceLock::new();
+        static M64: std::sync::OnceLock<Option<Names>> = std::sync::OnceLock::new();
+        let cell = if matches!(table, llrm_dagisel::fastisel::Table::I486) { &M32 } else { &M64 };
+        cell.get_or_init(|| Names::new(opcode, table)).as_ref()
+    }
+
     fn new(opcode: &dyn Fn(&str) -> Option<u16>, table: llrm_dagisel::fastisel::Table) -> Option<Names> {
+        llrm_support::debug!("isel", "fast names built");
         // The pin's own rows (`fastEmit_ISD_<OP>_MVT_i32_rr` / `_ri`) name the opcodes.
         let pair = |one: &str| {
             let row = |shape| llrm_dagisel::fastisel::lookup(table, "ISD", one, "i32", "", shape).map(|(name, _)| name);
@@ -311,6 +321,13 @@ impl Names {
             subreg: (|| Some((opcode("SUBREG_TO_REG")?, opcode("EXTRACT_SUBREG")?)))(),
         })
     }
+}
+
+/// What a call calls.
+enum Callee {
+    Global(llrm_mir::context::GlobalId),
+    /// A C library function a FastISel intrinsic stands for.
+    Library(&'static str),
 }
 
 struct Fast<'a> {
@@ -442,6 +459,63 @@ impl Fast<'_> {
             && self.module.global(global).name.as_deref().is_some_and(|name| NOOPS.iter().any(|noop| name.starts_with(noop)))
     }
 
+    /// Whether conventions `a` and `b` pass integer arguments alike. At m32 `cdecl` and `sysvcc` do: on the
+    /// stack, the caller popping. The C library routines the `memcpy` expansion calls are `sysvcc`, their declarations `cdecl`.
+    fn alike(&self, a: u32, b: u32) -> bool {
+        use llrm_mir::opcode::SYSV;
+        a == b || (self.m32 && matches!(a, 0 | SYSV) && matches!(b, 0 | SYSV))
+    }
+
+    /// A `memcpy` or `memset` intrinsic call as the library call FastISel makes of it, with the
+    /// operands passed: not volatile (permalink: X86FastISel.cpp `fastLowerIntrinsicCall`, `lowerCallTo(II, "memcpy", ...)`).
+    /// `memmove` is not here: the pin hands it to the DAG.
+    fn mem_libcall(&self, instruction: &llrm_mir::module::Instruction) -> Option<(&'static str, Vec<Operand>)> {
+        let (&Operand::Constant(callee), arguments) = instruction.operands.split_last()? else { return None };
+        let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
+        let name = self.module.global(global).name.as_deref()?;
+        let libcall = if name.starts_with("llvm.memcpy.p") {
+            "memcpy"
+        } else if name.starts_with("llvm.memset.p") {
+            "memset"
+        } else {
+            return None;
+        };
+        let [first, second, length, volatile] = arguments[..] else { return None };
+        (self.int(volatile) == Some(0)).then(|| (libcall, vec![first, second, length]))
+    }
+
+    /// An `i8` constant as the 32-bit register a C library call takes it in (`memset`'s fill byte).
+    fn narrow_constant(&mut self, operand: Operand) -> Option<SDValue> {
+        let ty = self.function.operand_type(&self.module.context, operand)?;
+        let Operand::Constant(id) = operand else { return None };
+        let ConstantKind::Int(value) = self.module.context.get(id).kind else { return None };
+        (self.module.context.types.int_bits(ty) == Some(8)).then_some(())?;
+        let imm = self.dag.get_constant_with(value as u8 as u128, EVT::I32, true, false);
+        Some(self.node(self.names.mov_ri, &[EVT::I32], &[imm]))
+    }
+
+    /// What a call calls, the operands passed, its result type (none: void) and whether it is
+    /// variadic: a function in this module with the caller's convention, or a library call
+    /// standing for an intrinsic. At most `limit` operands.
+    fn callee(&self, instruction: &llrm_mir::module::Instruction, call: &llrm_mir::opcode::CallInfo, limit: usize) -> Option<(Vec<Operand>, Callee, Option<llrm_mir::types::TypeId>, bool)> {
+        if let Some((name, arguments)) = self.mem_libcall(instruction) {
+            return (arguments.len() <= limit).then_some((arguments, Callee::Library(name), None, false));
+        }
+        let (callee, arguments) = instruction.operands.split_last()?;
+        let Operand::Constant(callee) = *callee else { return None };
+        let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
+        let (returns, parameters, variadic) = self.module.signature(call.function_type);
+        if arguments.len() < parameters.len()
+            || arguments.len() > limit
+            || (!variadic && arguments.len() != parameters.len())
+            || self.is_intrinsic(global)
+            || self.module.global(global).function().is_none_or(|callee| !self.alike(callee.calling_convention, call.calling_convention))
+        {
+            return None;
+        }
+        Some((arguments.to_vec(), Callee::Global(global), Some(returns), variadic))
+    }
+
     fn is_intrinsic(&self, global: llrm_mir::context::GlobalId) -> bool {
         self.module.global(global).name.intrinsic_id().is_some()
             || self.module.global(global).name.as_deref().is_some_and(|name| name.starts_with("llvm."))
@@ -500,6 +574,14 @@ impl Fast<'_> {
             Operand::Value(value) => {
                 if let Some(&done) = self.values.get(&value) {
                     return Some(done);
+                }
+                if let Some(&object) = self.info.static_allocas.get(&value) {
+                    // the address of a frame object: `lea r, [frame + 0]`
+                    let (lea, vt) = if self.m32 { (self.names.lea?, EVT::I32) } else { (self.names.lea64?, EVT::I64) };
+                    let ops = self.frame(object);
+                    let address = self.node(lea, &[vt], &ops);
+                    self.values.insert(value, address);
+                    return Some(address);
                 }
                 let ValueDef::Argument(n) = self.function.value(value).def else { return None };
                 if !self.m32 {
@@ -680,31 +762,26 @@ impl Fast<'_> {
                 Opcode::Call(call) if !self.m32 && call.calling_convention == self.function.calling_convention => {
                     // SysV: up to six integer or pointer arguments in registers; `al` = 0 for a variadic callee
                     let (down, up, call_op, mov8) = self.names.calls64?;
-                    let (callee, arguments) = instruction.operands.split_last()?;
-                    let Operand::Constant(callee) = *callee else { return None };
-                    let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
-                    let (returns, parameters, variadic) = self.module.signature(call.function_type);
-                    if arguments.len() < parameters.len()
-                        || arguments.len() > self.sysv.len()
-                        || (!variadic && arguments.len() != parameters.len())
-                        || self.is_intrinsic(global) || self.module.global(global).function().is_none_or(|callee| callee.calling_convention != call.calling_convention)
-                    {
-                        return None;
-                    }
+                    let (arguments, callee, returns, variadic) = self.callee(&instruction, call, self.sysv.len())?;
                     let types = &self.module.context.types;
-                    let void = types.is_void(returns);
-                    let wide_result = match types.int_bits(returns) {
+                    let void = returns.is_none_or(|ty| types.is_void(ty));
+                    let wide_result = match returns.and_then(|ty| types.int_bits(ty)) {
                         _ if void => false,
                         Some(32) => false,
                         Some(64) => true,
+                        None if returns.is_some_and(|ty| matches!(types.get(ty), llrm_mir::types::Type::Pointer(0))) => true,
                         _ => return None,
                     };
                     let mut values = Vec::new();
-                    for &one in arguments {
+                    for &one in &arguments {
                         let ty = self.function.operand_type(&self.module.context, one)?;
                         let wide = match types.int_bits(ty) {
                             Some(32) => false,
                             Some(64) => true,
+                            Some(8) if matches!(callee, Callee::Library(_)) => {
+                                values.push((self.narrow_constant(one)?, false));
+                                continue;
+                            }
                             _ if matches!(types.get(ty), llrm_mir::types::Type::Pointer(0)) => true,
                             _ => return None,
                         };
@@ -728,7 +805,10 @@ impl Fast<'_> {
                         (chain, glue) = (SDValue { node: copy.node, res: 0 }, SDValue { node: copy.node, res: 1 });
                         regs.push(self.dag.get_phys_register(EVT::I8, self.al));
                     }
-                    let target = self.dag.get_target_global_address(EVT::I64, global.0, 0);
+                    let target = match callee {
+                        Callee::Global(global) => self.dag.get_target_global_address(EVT::I64, global.0, 0),
+                        Callee::Library(name) => self.dag.get_target_external_symbol(EVT::I64, name),
+                    };
                     let mask = self.dag.get_register_mask_clobbering(&super::dagisel_adapter::call_clobbered_flags());
                     let mut ops = vec![target];
                     ops.extend(regs);
@@ -744,21 +824,23 @@ impl Fast<'_> {
                     }
                     self.chain = chain;
                 }
-                Opcode::Call(call) if self.m32 && call.calling_convention == self.function.calling_convention => {
+                Opcode::Call(call) if self.m32 && self.alike(call.calling_convention, self.function.calling_convention) => {
                     let calls = self.names.calls.as_ref()?;
-                    let (callee, arguments) = instruction.operands.split_last()?;
-                    let Operand::Constant(callee) = *callee else { return None };
-                    let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
-                    let (returns, parameters, variadic) = self.module.signature(call.function_type);
-                    if variadic || arguments.len() != parameters.len() || self.is_intrinsic(global) || self.module.global(global).function().is_none_or(|callee| callee.calling_convention != call.calling_convention) {
-                        return None;
-                    }
+                    let (arguments, callee, returns, variadic) = self.callee(&instruction, call, usize::MAX)?;
                     let int32 = |ty| word(&self.module.context.types, ty, true);
-                    let void = self.module.context.types.is_void(returns);
-                    if !parameters.iter().all(|&ty| int32(ty)) || !(void || int32(returns)) {
+                    let void = returns.is_none_or(|ty| self.module.context.types.is_void(ty));
+                    if variadic || !(void || returns.is_some_and(int32)) {
                         return None;
                     }
-                    let values: Vec<SDValue> = arguments.iter().map(|&one| self.value(one)).collect::<Option<_>>()?;
+                    let mut values = Vec::new();
+                    for &one in &arguments {
+                        let ty = self.function.operand_type(&self.module.context, one)?;
+                        values.push(match int32(ty) {
+                            true => self.value(one)?,
+                            false if matches!(callee, Callee::Library(_)) => self.narrow_constant(one)?,
+                            false => return None,
+                        });
+                    }
                     let bytes = self.dag.get_constant_with(4 * values.len() as u128, EVT::I32, true, false);
                     let zero = self.dag.get_constant_with(0, EVT::I32, true, false);
                     let down = self.node(calls.call_down, &[EVT::I32, EVT::OTHER, EVT::GLUE], &[bytes, zero, zero, self.chain]);
@@ -778,7 +860,10 @@ impl Fast<'_> {
                         ));
                     }
                     let chain = if stores.is_empty() { after_down } else { self.dag.get_token_factor(&stores) };
-                    let target = self.dag.get_target_global_address(EVT::I32, global.0, 0);
+                    let target = match callee {
+                        Callee::Global(global) => self.dag.get_target_global_address(EVT::I32, global.0, 0),
+                        Callee::Library(name) => self.dag.get_target_external_symbol(EVT::I32, name),
+                    };
                     let mask = self.dag.get_register_mask_clobbering(&super::dagisel_adapter::call_clobbered_flags());
                     let called = self.node(calls.call, &[EVT::OTHER, EVT::GLUE], &[target, mask, chain]);
                     let up = self.node(
