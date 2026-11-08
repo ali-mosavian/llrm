@@ -228,8 +228,8 @@ pub trait TargetInstrInfo {
 }
 
 /// `X86InstrInfo` at the width and register classes of one compile.
-/// DEVIATE RA-CLK: see `X86InstrInfo::reference_weight`. Weights 3, 4 and 6 give the same m16
-/// code on the 14-program sample; 2.5 and below differ.
+/// DEVIATE RA-CLK: see `X86InstrInfo::reference_weight`. Weights 3, 4 and 6
+/// give the same m16 code on the 14-program sample; 2.5 and below differ.
 const ADDRESS_REFERENCE_WEIGHT: f32 = 3.0;
 
 pub struct X86InstrInfo<'a> {
@@ -268,12 +268,14 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         super::inlinespiller::remat_shape(one)
     }
 
-    /// DEVIATE RA-CLK (real mode; owner x86-m16, exit 2026-11-29): a value that is an address
-    /// component (the base, index or selector of a memory operand) weighs `ADDRESS_REFERENCE_WEIGHT`
-    /// times a reference in the spill weight. Spilled, it must be reloaded into one of the few
-    /// registers 16-bit addressing allows (bx, bp, si, di) before the access, where any other value
-    /// is folded (`add r, [slot]`) or moves through any register: eviction leaves the others in
-    /// memory first. The pin weighs every reference alike (`getSpillWeight`).
+    /// DEVIATE RA-CLK (real mode; owner x86-m16, exit 2026-11-29): a value that
+    /// is an address component (the base, index or selector of a memory
+    /// operand) weighs `ADDRESS_REFERENCE_WEIGHT` times a reference in the
+    /// spill weight. Spilled, it must be reloaded into one of the few
+    /// registers 16-bit addressing allows (bx, bp, si, di) before the access,
+    /// where any other value is folded (`add r, [slot]`) or moves through
+    /// any register: eviction leaves the others in memory first. The pin
+    /// weighs every reference alike (`getSpillWeight`).
     fn reference_weight(
         &self,
         one: &Insn,
@@ -288,7 +290,12 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
             .sources
             .iter()
             .chain(what.dests.iter())
-            .any(|loc| matches!(loc, Loc::Mem(m) if held(&m.base) || held(&m.index) || held(&m.selector)));
+            .any(
+                |loc| matches!(
+                    loc,
+                    Loc::Mem(m) if held(&m.base) || held(&m.index) || held(&m.selector)
+                ),
+            );
         if component { ADDRESS_REFERENCE_WEIGHT } else { 1.0 }
     }
 
@@ -795,9 +802,10 @@ mod tests {
         assert!(matches!(folded.what.as_ref().unwrap().sources.as_slice(), [Loc::Held(_), Loc::Mem(_)]), "{folded:?}");
     }
 
-    /// recchop c -O1 (m16) 184 B, grep c -O1 +24.7% clocks: eviction spilled a value that is the
-    /// base of a memory operand as readily as one that only an ALU op reads, so every access
-    /// through it reloaded it into bx/si/di first. An address component weighs more.
+    /// recchop c -O1 (m16) 184 B, grep c -O1 +24.7% clocks: eviction spilled a
+    /// value that is the base of a memory operand as readily as one that
+    /// only an ALU op reads, so every access through it reloaded it into
+    /// bx/si/di first. An address component weighs more.
     #[test]
     fn test_an_address_component_weighs_more_in_the_spill_weight_at_m16_only() {
         let held = |value: u32| Held { value, width: 2, offset: 0 };
