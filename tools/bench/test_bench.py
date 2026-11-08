@@ -309,6 +309,26 @@ class SizeTests(unittest.TestCase):
         problems = bench.ratio_problems("x", "bcc", SIZED | {"code_bytes": 260}, SIZED, SIZED | {"code_bytes": 300})
         self.assertTrue(any("code_bytes vs bcc" in one for one in problems), problems)
 
+    def test_the_clock_ratio_to_a_reference_may_not_worsen(self):
+        """m16 clock rows had no stored reference clocks: every clock comparison needed a rerun of the externals."""
+        timed = SIZED | {"clocks": 1000}
+        problems = bench.ratio_problems("x", "ow", timed | {"clocks": 1300}, timed, timed | {"clocks": 2000})
+        self.assertTrue(any("clocks vs ow" in one for one in problems), problems)
+
+    def test_a_clock_row_against_a_reference_without_stored_clocks_fails_loudly(self):
+        timed = SIZED | {"clocks": 1000}
+        problems = bench.ratio_problems("x", "ow", timed, timed, SIZED)
+        self.assertTrue(any("no stored clocks" in one for one in problems), problems)
+
+    def test_the_reference_stamp_names_compilers_switches_and_load(self):
+        stamp = bench.reference_stamp()
+        self.assertEqual({"date", "load_average", "compilers_md5", "switches"}, set(stamp))
+        self.assertEqual({"ow", "bcc", "tc", "tcpp"}, set(stamp["compilers_md5"]))
+
+    def test_a_reference_whose_clocks_moved_fails(self):
+        problems = bench.drift_problems("x ow -O2", SIZED | {"clocks": 1100}, SIZED | {"clocks": 1000})
+        self.assertIn("clocks 1100 != stored 1000", problems[0])
+
     def test_a_reference_whose_size_moved_fails(self):
         problems = bench.drift_problems("x bcc -O2", SIZED | {"code_bytes": 210}, SIZED)
         self.assertIn("code_bytes 210 != stored 200", problems[0])

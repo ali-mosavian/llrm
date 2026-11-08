@@ -2234,3 +2234,16 @@ fn a_word_times_a_shifted_factor_shifts_in_hl() {
         assert_eq!(out.matches("add hl, hl").count(), 5, "{level:?}: {out}");
     }
 }
+
+/// `ld c, l; ld b, h` then `sla c; rl b` twice (4 B a bit) with `hl` dead:
+/// 8 B of doublings, and a table index of `x * 36` 16 B. The doublings belong
+/// in `hl` before the copy: 2 B.
+#[test]
+fn a_copy_of_hl_shifted_with_hl_dead_shifts_in_hl_first() {
+    let ir = include_str!("kernels/ir/shift_copy_of_hl_when_dead.ll");
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("sla c") && !out.contains("rl b"), "{level:?}: {out}");
+        assert_eq!(out.matches("add hl, hl").count(), 5, "{level:?}: {out}");
+    }
+}

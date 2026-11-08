@@ -1,62 +1,114 @@
-reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
-blessed = "2026-11-05"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "df24ad30f3b192279152757a00831b84"
+
+[ow.O1]
+instructions = 184
+memory_operands = 24
+clocks = 622
+code_bytes = 172
+data_bytes = 8
+bss_bytes = 4
+kernel_ms = 0.0034
 
 [ow.O2]
 instructions = 190
 memory_operands = 24
+clocks = 600
 code_bytes = 176
 data_bytes = 8
 bss_bytes = 4
+kernel_ms = 0.0034
 
 [ow.Os]
 instructions = 184
 memory_operands = 24
+clocks = 622
 code_bytes = 172
 data_bytes = 8
 bss_bytes = 4
+kernel_ms = 0.0034
+
+[bcc.O1]
+instructions = 73
+memory_operands = 22
+clocks = 323
+code_bytes = 166
+data_bytes = 8
+bss_bytes = 4
+kernel_ms = 0.0021
 
 [bcc.O2]
 instructions = 77
 memory_operands = 24
+clocks = 286
 code_bytes = 181
 data_bytes = 8
 bss_bytes = 4
+kernel_ms = 0.0021
 
 [bcc.Os]
 instructions = 73
 memory_operands = 22
+clocks = 323
 code_bytes = 166
 data_bytes = 8
 bss_bytes = 4
+kernel_ms = 0.0021
+
+[tc.O1]
+instructions = 220
+memory_operands = 27
+clocks = 682
+code_bytes = 189
+data_bytes = 8
+bss_bytes = 4
+kernel_ms = 0.004
 
 [tc.O2]
 instructions = 223
 memory_operands = 27
+clocks = 634
 code_bytes = 196
 data_bytes = 8
 bss_bytes = 4
+kernel_ms = 0.0041
 
 [tc.Os]
 instructions = 220
 memory_operands = 27
+clocks = 682
 code_bytes = 189
 data_bytes = 8
 bss_bytes = 4
+kernel_ms = 0.004
+
+[tcpp.O1]
+instructions = 228
+memory_operands = 30
+clocks = 735
+code_bytes = 206
+data_bytes = 8
+bss_bytes = 4
+kernel_ms = 0.0041
 
 [tcpp.O2]
 instructions = 234
 memory_operands = 30
+clocks = 702
 code_bytes = 210
 data_bytes = 8
 bss_bytes = 4
+kernel_ms = 0.0042
 
 [tcpp.Os]
 instructions = 228
 memory_operands = 30
+clocks = 735
 code_bytes = 206
 data_bytes = 8
 bss_bytes = 4
+kernel_ms = 0.0041
 
 [bc.O2]
 instructions = 344

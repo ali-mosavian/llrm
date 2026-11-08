@@ -94,6 +94,12 @@ impl Cpu {
 /// 1.2 instructions a byte, above the 0.8 break-even; it cannot know the code is cold.
 const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 500;
 
+/// Bytes, in thousandths, one inliner cost unit (an instruction) stands for.
+const BYTES_PER_COST_UNIT_MILLI: i64 = 4000;
+
+/// Thousandths of a clock one unit of inline growth costs at -O2/-O3 (250 clocks).
+const INLINE_MILLICLOCKS_PER_UNIT: i64 = 250_000;
+
 /// AArch64's scalar profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AArch64 {
@@ -358,11 +364,37 @@ impl Tti for AArch64 {
         true
     }
 
-    /// 0.004 B/clock, provisional: one byte of growth is 250 frequency-weighted
-    /// clocks. The median of the -O2/-O3 cells where inlining grew the code
-    /// (w15-arm64-rate-proposal-11-03.md); widened to 30 clean cells by 11-12.
+    /// DEVIATE LICM-FRAME (owner w15, exit 2026-11-30): rectwo -Os (+25%
+    /// instructions against clang): `n - 1`, hoisted into the unguarded entry
+    /// because rotation was refused, lived in x19 across the recursive call and
+    /// kept the frame ahead of the base case.
+    fn licm_speculation_keeps_frame_late(&self) -> bool {
+        true
+    }
+
+    /// A loop is rotated at -Os only if the copied exit test folds in the
+    /// preheader (gcc's `copy_headers`): an unfolded guard also leaves a second
+    /// exit block (recsum, recfloat -Os: `mov x0, xzr; ret` beside the loop's).
+    fn rotation_guard_must_fold_at_size(&self) -> bool {
+        true
+    }
+
+    /// The inliner counts a callee's growth in cost units, one per instruction,
+    /// and prices it as `units * inline_o1_unit_bytes_milli / 1000` bytes: an
+    /// arm64 instruction is 4 bytes. (Left at 1000, a unit priced as a byte
+    /// and the rate below was fitted to that; x86-m32 sets 3500.)
+    fn inline_o1_unit_bytes_milli(&self) -> i64 {
+        BYTES_PER_COST_UNIT_MILLI
+    }
+
+    /// 0.004 B/clock, provisional: a unit of growth is 250 frequency-weighted
+    /// clocks, the median of the -O2/-O3 cells where inlining grew the code
+    /// (w15-arm64-rate-proposal-11-03.md; widened to 30 clean cells by 11-12),
+    /// fitted with one byte a unit. Stated per byte of the 4-byte unit, so the
+    /// decisions are those of the fit; the refit to the scoring rate is its own
+    /// change.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
-        250_000
+        INLINE_MILLICLOCKS_PER_UNIT * 1000 / BYTES_PER_COST_UNIT_MILLI
     }
 
     /// DEVIATE UP1-RUNS (owner w15, exit 2026-11-20): an unknown-count loop
