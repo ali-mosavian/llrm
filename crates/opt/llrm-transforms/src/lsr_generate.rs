@@ -1050,13 +1050,17 @@ impl Collection<'_, '_> {
     /// test's register, and gcc compares against the end instead.
     ///
     /// Work: one formula for each (zero-ending register, address formula
-    /// holding an addrec of this loop), the registers capped at four.
+    /// holding an addrec of this loop), the registers capped at four. Off
+    /// where `can_macro_fuse_cmp`: the zero test it shares saves nothing.
     pub fn generate_end_biased(
         &mut self,
         se: &mut ScalarEvolution,
     ) {
         // A loop instruction saved costs setup ones; at -Os that is bytes lost.
-        if self.size {
+        // Where the compare fuses with its branch there is none saved, and the
+        // bases at the end of their arrays cost displacement bytes
+        // (x86-64 memory_expansion: disp32 on 1900 accesses, +1010 B).
+        if self.size || self.tti.can_macro_fuse_cmp() {
             return;
         }
         let cx = self.cx;
