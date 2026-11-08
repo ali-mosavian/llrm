@@ -1,5 +1,7 @@
-//! Register allocation: linear scan over one live interval per register. It is
-//! the allocator the spike needs, not LLVM's greedy (`RAGreedy`): an interval
+//! Register allocation, the fallback: linear scan over one live interval per
+//! register. The default is the shared greedy (`lir_view::allocate`); this runs
+//! under `LLRM_ARM64_LINEAR` or for a function greedy refuses. It is not LLVM's
+//! greedy (`RAGreedy`): an interval
 //! has no holes, a spilled one lives in its frame object, and every use of it
 //! is reloaded into a reserved scratch register. An interval that crosses a
 //! call takes a callee-saved register or is spilled. A value that is one
@@ -17,14 +19,11 @@
 //! (`VectorMov`) and never takes `d8`-`d15`, whose upper half a call does not
 //! keep.
 //!
-//! DEVIATE 1 (2026-11-08): this is not the allocator that runs. The default is
-//! the shared greedy (`lir_view::allocate`, the translated `RAGreedy` with its
-//! coalescer, splitter and spiller); this linear scan runs only for
-//! `LLRM_ARM64_LINEAR=1` or a function greedy refuses (`GREEDY_FALLBACKS`).
-//! The deviation that remains is the input: greedy reads the spike function
-//! (`lir_view`), not the shared machine passes' body. Exit: the 22 programs
-//! pass on `flow::machine_with` (gaps 1 and 2 of
-//! docs/architecture/arm64-spike.md), then this file goes.
+//! DEVIATE 1: LLVM allocates with `RAGreedy` on the shared machine IR; the
+//! default here is the shared greedy on `MFunction` (`lir_view`), but the
+//! machine passes around it are arm64's own until arm64 runs on
+//! `flow::machine_with` (docs/architecture/arm64-spike.md). This scan is not a
+//! translation.
 
 use std::collections::BTreeSet;
 

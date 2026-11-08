@@ -2914,7 +2914,11 @@ fn below_top(
     bytes: i64,
 ) -> Option<Loc> {
     let at = place.address()?;
-    let addr = at.addr.filter(|addr| addr.space == Space::Frame && addr.disp < 0)?;
+    // A cell in a slot (`slot_tag`) is below the top even at displacement 0:
+    // a strength-reduced index runs from -N up to it (`[ebp + esi]`, esi from
+    // -32), and it is addressed from the stack pointer as any other.
+    let below = |addr: &Addr| addr.disp < 0 || (addr.index != 0 && addr.index % 2 != 0 && addr.disp == 0);
+    let addr = at.addr.filter(|addr| addr.space == Space::Frame && below(addr))?;
     Some(place.map_address(|one| ir::AddressRef {
         through: STACK,
         addr: Some(Addr { disp: addr.disp + bytes, ..addr }),

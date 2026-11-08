@@ -32,7 +32,7 @@ Measured with `tools/targets/arm64_compare.py` (modes `whole`, `backend`, `compi
 
 ## Numbered DEVIATEs
 
-1. (2026-11-08) The allocator is the shared greedy (`lir_view::allocate`); `regalloc.rs`'s linear scan runs only for `LLRM_ARM64_LINEAR=1` or a function greedy refuses. What deviates is its input: the spike function, not the shared machine passes' `LirBody`. Owner llrm-arm64-lir; exit: the 22 programs pass on `flow::machine_with`, then `regalloc.rs` and `lir_view` go.
+1. `regalloc.rs`: the fallback allocator (ranges with holes, copy coalescing, no splitting or eviction), used under `LLRM_ARM64_LINEAR` or where the shared greedy refuses a function. The default is the shared greedy through `lir_view`; the machine passes around it are arm64's own (exit: arm64 on `flow::machine_with`).
 2. `driver.rs`: Apple's `va_arg` instruction is written out as loads in the text; MIR has no `va_arg` (exit: the instruction, owner lir-text-prs-1893).
 3. `prepass.rs`: CSE and loop hoisting of constants and addresses, a small version of `MachineCSE`/`MachineLICM`.
 4. `driver.rs`: newer clang's `ptrtoaddr` is read as `ptrtoint`; MIR refuses it by design.
