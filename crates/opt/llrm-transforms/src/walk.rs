@@ -60,7 +60,7 @@
 //! `IPSCCPPass`, `GlobalOptPass`, `DeadArgumentEliminationPass` before the
 //! CGSCC walk), `DeadArgumentElimination.cpp`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::manager::GlobalsAA;
 use llrm_mir::context::GlobalId;
@@ -300,9 +300,11 @@ impl ProgramPass for Walk {
                     // made direct is inlined by another run
                     // of the inliner over the body.
                     let mut repeats = 0;
-                    // SZ2: the callees a trial rejected in this caller; a later round
-                    // of the loop does not try them again.
-                    let mut rejected: BTreeSet<GlobalId> = BTreeSet::new();
+                    // SZ2: the callees a trial rejected in this caller, with the credit
+                    // that trial had; a later trial of the callee is skipped unless it
+                    // has more (the group of all a callee's sites, which takes the
+                    // callee with them, is not another try of one site).
+                    let mut rejected: BTreeMap<GlobalId, i64> = BTreeMap::new();
                     loop {
                         let mut decided = remarks.then(Vec::new);
                         // `sites` prices every block's frequency before it
@@ -553,7 +555,7 @@ impl ProgramPass for Walk {
                             let mut accepted: Vec<llrm_mir::module::InstId> = Vec::new();
                             for (calls, credit) in units {
                                 if tti.inline_trial_skips_rejected()
-                                    && calls.iter().any(|one| trials[one].callee.is_some_and(|callee| rejected.contains(&callee)))
+                                    && calls.iter().any(|one| trials[one].callee.is_some_and(|callee| rejected.get(&callee).is_some_and(|&tried| tried >= credit)))
                                 {
                                     continue;
                                 }
@@ -757,7 +759,10 @@ impl ProgramPass for Walk {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
-                                    rejected.extend(calls.iter().filter_map(|one| trials[one].callee));
+                                    for callee in calls.iter().filter_map(|one| trials[one].callee) {
+                                        let tried = rejected.entry(callee).or_insert(credit);
+                                        *tried = (*tried).max(credit);
+                                    }
                                     if remarks {
                                         eprintln!(
                                             "{} SZ2 trial rejected '{}'",
