@@ -378,7 +378,8 @@ fn an_x87_add_copied_to_a_virtual_register_defines_it() {
 /// at -O1. Three readers of one pool constant: a memory operand at each is
 /// 12 B, one `fld` and three register forms 10 B. x_nbody_f -O1 read its `K14`
 /// three times as memory forms: +2 B over the shared load, at a level whose
-/// bytes are strict.
+/// bytes are strict. Even a lone reader shares there, as at -Os (`FloatFold`
+/// decides on exact bytes).
 #[test]
 fn test_a_constant_read_three_times_is_loaded_once_where_bytes_are_strict() {
     use llrm_codegen::backend::selectiondag::emit_api::X87Prices;
@@ -396,5 +397,6 @@ fn test_a_constant_read_three_times_is_loaded_once_where_bytes_are_strict() {
     };
     let readers = || [(1, 16, 14); 3].into_iter();
     assert!(crate::emit::shared_load_pays(&prices(true), readers()), "10 B against 12 B");
+    assert!(crate::emit::shared_load_pays(&prices(true), [(1, 16, 14)].into_iter()), "as at -Os");
     assert!(!crate::emit::shared_load_pays(&prices(false), readers()), "at speed the cheaper memory form stays");
 }
