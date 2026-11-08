@@ -99,6 +99,9 @@ pub struct BuilderTarget {
     pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
+    /// The narrowest integer an argument register carries: a narrower one is
+    /// promoted to it (`CCPromoteToType`).
+    pub min_argument_bits: u32,
     /// The target description has no floating-point registers: the same as
     /// `use-soft-float` on every function (`TypeSoftenFloat`).
     pub soft_float: bool,
@@ -383,6 +386,7 @@ impl BuilderTarget {
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: std::iter::successors(Some(8), |width| Some(width * 2)).take_while(|width| *width <= bits.max(32)).collect(),
+            min_argument_bits: 32,
             soft_float: false,
             libcalls: None,
             stack_align: None,
@@ -638,7 +642,7 @@ impl<'a> Builder<'a> {
             tail_candidate: None,
             sibcall: false,
             variadic_call: false,
-            variadic_count: true,
+            variadic_count: None,
             win64_va: false,
             variadic_shadows: Vec::new(),
             call_clobbers: Vec::new(),
@@ -689,7 +693,9 @@ struct Builder<'a> {
     variadic_call: bool,
     /// The convention of the variadic call being lowered counts its vector
     /// registers in `al` (SysV); Win64 has no count.
-    variadic_count: bool,
+    /// The register a variadic call sets to the number of vector registers it
+    /// uses, in the call's convention.
+    variadic_count: Option<RegId>,
     /// The function being lowered keeps Win64's `va_list`, the bare pointer.
     win64_va: bool,
     /// Win64: the integer register of each argument position, where a vector
@@ -1448,7 +1454,8 @@ impl Builder<'_> {
             .sum::<usize>();
         if vector_registers > named_vectors {
             let vreg = self.info.new_reg();
-            self.live_ins.push((RegId::AL, vreg));
+            let count = found.variadic_vector_register.as_deref().expect("a save area with a vector count register");
+            self.live_ins.push((self.byte_view(self.arch.register_named(count)), vreg));
             let entry = self.dag.entry_node();
             let al = self.dag.get_copy_from_reg(entry, vreg, EVT::I8);
             let frame = self.dag.get_constant_with(save as u128, EVT::I32, true, false);
@@ -1958,7 +1965,9 @@ impl Builder<'_> {
         }
         self.variadic_call = variadic;
         let found = self.full_arch().ok().and_then(|arch| arch.calling().by_number(info.calling_convention));
-        self.variadic_count = found.is_none_or(|found| found.variadic_vector_register.is_some());
+        self.variadic_count = found
+            .and_then(|found| found.variadic_vector_register.as_deref())
+            .map(|name| self.byte_view(self.arch.register_named(name)));
         self.variadic_shadows = found
             .filter(|found| variadic && found.positional)
             .map(|found| found.argument_registers.iter().map(|name| self.arch.register_named(name)).collect())
@@ -2588,7 +2597,8 @@ impl Builder<'_> {
                         // promoted to the register (`i40` to `i64`, as
                         // `getCopyToParts` does).
                         let bits = vt.size_in_bits();
-                        let promoted = if bits > 32 && bits < width { width } else { width.min(bits.max(32)) };
+                        let least = self.target.min_argument_bits;
+                        let promoted = if bits > least && bits < width { width } else { width.min(bits.max(least)) };
                         let piece = if vt.is_integer() && vt.size_in_bits() < promoted {
                             let code = extends.get(at).copied().unwrap_or(ISD::AnyExtend);
                             self.dag.get_node(code, EVT::integer(promoted), &[piece])
@@ -2614,7 +2624,8 @@ impl Builder<'_> {
         }
         // X86's `LowerCall`: a variadic call under SysV x86-64 passes the
         // number of vector registers it uses in `al`
-        if std::mem::take(&mut self.variadic_call) && self.variadic_count && self.target.dag.pointer == EVT::I64 {
+        let variadic_call = std::mem::take(&mut self.variadic_call);
+        if let Some(register) = self.variadic_count.filter(|_| variadic_call) {
             let vectors = plan
                 .parameters
                 .iter()
@@ -2624,7 +2635,7 @@ impl Builder<'_> {
                 })
                 .sum::<usize>();
             let count = self.dag.get_constant(vectors as u128, EVT::I8);
-            copies.push((RegId::AL, count));
+            copies.push((register, count));
         }
         if !stores.is_empty() {
             chain = self.dag.get_token_factor(&stores);
@@ -2748,6 +2759,15 @@ impl Builder<'_> {
 
     /// The convention names a result register by its widest view; the DAG
     /// names the one the value's width is (`AX` for an `i16`, not `EAX`).
+    /// The byte view of `reg`'s root.
+    fn byte_view(
+        &self,
+        reg: RegId,
+    ) -> RegId {
+        let registers = self.arch.registers();
+        registers.view(registers.root(reg), 8).expect("the register file has a byte view")
+    }
+
     fn sized_register(
         &self,
         reg: RegId,
@@ -2773,7 +2793,8 @@ impl Builder<'_> {
             self.dag.set_root(SDValue { node: copy.node, res: 1 });
             return SDValue { node: copy.node, res: 0 };
         }
-        let fp0 = self.dag.get_phys_register(vt, RegId::MM0);
+        let top = self.arch.x87_stack_top().expect("a float result popped from the x87 stack");
+        let fp0 = self.dag.get_phys_register(vt, top);
         let pop =
             self.dag.get_node_multi(super::x86isd::POP_FROM_X87_REG, &[vt, EVT::OTHER, EVT::GLUE], &[chain, fp0, glue]);
         self.dag.set_root(SDValue { node: pop.node, res: 1 });
@@ -2996,10 +3017,14 @@ impl Builder<'_> {
             }
         }
         if let Some(reg) = self.info.sret_reg {
-            // the pointer is returned in eax as well
+            // the pointer is returned in the result register as well
             let pointer = self.target.dag.pointer;
             let saved = self.dag.get_copy_from_reg(chain, reg, pointer);
-            let eax = self.sized_register(self.arch.register_named("eax"), pointer);
+            let found = self.full_arch()?.calling().by_number(self.function.calling_convention);
+            let name = found
+                .and_then(|found| found.pointer_result_register(i64::from(pointer.size_in_bits() / 8)))
+                .ok_or(Refused("an sret pointer with no result register"))?;
+            let eax = self.sized_register(self.arch.register_named(name), pointer);
             let copy = self.dag.get_copy_to_phys_reg(chain, eax, saved, glue);
             chain = SDValue { node: copy.node, res: 0 };
             glue = Some(SDValue { node: copy.node, res: 1 });
@@ -3046,12 +3071,15 @@ impl Builder<'_> {
             // two zero words): `get_constant` of the pair's type panicked
             // ('integer constant of Far', 35 QCport functions).
             ConstantKind::Int(bits) if vt == MVT::Far.into() => {
-                let offset = self.dag.get_constant(*bits & 0xFFFF, EVT::I16);
-                let segment = self.dag.get_constant((*bits >> 16) & 0xFFFF, EVT::I16);
+                let half = EVT::from(MVT::Far).size_in_bits() / 2;
+                let part = EVT::integer(half);
+                let mask = (1u128 << half) - 1;
+                let offset = self.dag.get_constant(*bits & mask, part);
+                let segment = self.dag.get_constant((*bits >> half) & mask, part);
                 Ok(self.dag.get_node_flags(ISD::BuildPair, vt, &[offset, segment], super::dag::SDNodeFlags::PAIR_FAR))
             }
             ConstantKind::Null | ConstantKind::Zero if vt == MVT::Far.into() => {
-                let zero = self.dag.get_constant(0, EVT::I16);
+                let zero = self.dag.get_constant(0, EVT::integer(EVT::from(MVT::Far).size_in_bits() / 2));
                 Ok(self.dag.get_node_flags(ISD::BuildPair, vt, &[zero, zero], super::dag::SDNodeFlags::PAIR_FAR))
             }
             ConstantKind::Int(bits) => Ok(self.dag.get_constant(*bits, vt)),
