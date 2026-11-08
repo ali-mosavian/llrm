@@ -298,9 +298,9 @@ pub fn infer(
             .all(
                 |&id| {
                     let Some((linkage, function)) = body(id) else {
-                        return module.global(id).function().is_some_and(|one| Facts::of(&one.attrs).contains(fact));
+                        return module.global(id).function().is_some_and(|one| Facts::states(&one.attrs, fact));
                     };
-                    if Facts::of(&function.attrs).contains(fact) {
+                    if Facts::states(&function.attrs, fact) {
                         return true;
                     }
                     exact(linkage) && function.walk().all(|(_, inst)| !breaks(function, inst))
@@ -649,7 +649,7 @@ fn stamp_flags(
             (one.no_sync, Fact::NoSync),
             (one.no_recurse, Fact::NoRecurse),
         ] {
-            if stated && !Facts::of(&function.attrs).contains(fact) {
+            if stated && !Facts::states(&function.attrs, fact) {
                 function.attrs.extend(fact.attribute());
             }
         }
