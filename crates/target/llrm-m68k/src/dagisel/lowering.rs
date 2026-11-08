@@ -137,6 +137,9 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     set(&[BSwap], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[BSwap], &[MVT::I32], Action::Legal);
     set(&[CtTz, CtLz, CtPop], &int, Action::Expand);
+    // DEVIATE BC1 (llrm-sdag `actions`): the shared compiler-rt routines (`__clzsi2`, `__ctzdi2`, `__popcountsi2`, ...)
+    // against the inline expansion; the pin keeps `Expand` here. Owner m68k. Exit: 2026-11-30.
+    set(&[CtLzZeroPoison, CtTzZeroPoison, CtPop], &[MVT::I32, MVT::I64], Action::LibCall);
     set(&[ConstantPool, JumpTable, GlobalAddress, ExternalSymbol], &[MVT::I32], Action::Custom);
     set(&[VAStart], &[MVT::Other], Action::Custom);
     set(&[VAEnd, VACopy, StackSave, StackRestore], &[MVT::Other], Action::Expand);
