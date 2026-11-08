@@ -428,7 +428,8 @@ pub trait GreedyEnv: SpillWeightEnv {
         false
     }
     /// DEVIATE CSR5: where code is sized in bytes, whether spilling `virt`
-    /// (`reads` instructions read it, `writes` write it) is shorter than the
+    /// (`reads` instructions read it, `writes` write it; `def_reads_registers`: a
+    /// definition of it reads a register) is shorter than the
     /// first use of the callee-saved `phys`, counted in static bytes, not
     /// frequency. None: the pin's rule. Exit: none, a target knob.
     fn csr_spill_costs_less(
@@ -437,6 +438,7 @@ pub trait GreedyEnv: SpillWeightEnv {
         _phys: RegId,
         _reads: u32,
         _writes: u32,
+        _def_reads_registers: bool,
     ) -> Option<bool> {
         None
     }
@@ -1527,8 +1529,8 @@ impl<'a> RAGreedy<'a> {
             hints: &mut self.hints,
         };
         if OPT_SIZE.with(std::cell::Cell::get) && virt.is_spillable() {
-            let (reads, writes) = splitter.static_accesses(virt);
-            if splitter.env.csr_spill_costs_less(virt.reg(), phys, reads, writes) == Some(true) {
+            let (reads, writes, def_reads) = splitter.static_accesses(virt);
+            if splitter.env.csr_spill_costs_less(virt.reg(), phys, reads, writes, def_reads) == Some(true) {
                 // A split would only make the register this range is not
                 // worth: spill it.
                 splitter.extra.set_stage(virt.reg(), LiveRangeStage::Spill);
