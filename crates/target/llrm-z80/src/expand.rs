@@ -69,6 +69,8 @@ struct Printer<'a> {
     frame: Frame,
     /// The blocks that are only a `ret`.
     returns_bare: Vec<u32>,
+    /// The jump tables to print after the function: the index and the block of each entry.
+    tables: Vec<(i64, Vec<u32>)>,
     /// How many times each virtual register is read.
     reads: llrm_support::hash::HashMap<u32, usize>,
     /// A reload the next instruction reads from the frame itself: the register
@@ -186,9 +188,20 @@ impl Printer<'_> {
     ) -> Result<String, String> {
         match inst.operands.get(at) {
             Some(Operand::Imm(value)) => Ok(format!("#{}", value & mask)),
-            Some(Operand::Symbol(symbol, 0)) => Ok(format!("#{symbol}")),
+            Some(Operand::Symbol(symbol, 0)) => Ok(format!("#{}", self.symbol(symbol))),
             Some(Operand::Symbol(symbol, offset)) => Ok(format!("#{symbol}+{offset}")),
             other => Err(format!("operand {at} of {:?} is {other:?}, not an immediate", inst.kind)),
+        }
+    }
+
+    /// A symbol as printed: a jump table's placeholder is the function's own label.
+    fn symbol(
+        &self,
+        symbol: &str,
+    ) -> String {
+        match symbol.strip_prefix("$JT") {
+            Some(index) => format!("L{}_JT{index}", self.number),
+            None => symbol.to_owned(),
         }
     }
 
@@ -739,6 +752,21 @@ impl Printer<'_> {
                     self.push(format!("{mnemonic} a, {}", name(y)));
                     self.push(format!("ld {}, a", name(d)));
                 }
+            }
+            // the block's operands past the table's index are its entries, the successors
+            "JPHL" => {
+                let Some(&Operand::Imm(index)) = inst.operands.get(1) else {
+                    return Err("a jump through a table with no index".to_owned());
+                };
+                if !self.tables.iter().any(|(one, _)| *one == index) {
+                    let entries =
+                        inst.operands[2..].iter().filter_map(|operand| match operand {
+                            Operand::Block(block) => Some(*block),
+                            _ => None,
+                        });
+                    self.tables.push((index, entries.collect()));
+                }
+                self.push("jp (hl)");
             }
             "JP" | "JPNZ" | "JPZ" | "JPNC" | "JPC" => {
                 let Some(Operand::Block(target)) = inst.operands.first() else {
@@ -1894,6 +1922,7 @@ pub fn finish(
         out: Vec::new(),
         frame,
         returns_bare,
+        tables: Vec::new(),
         reads,
         folded: None,
         skip: 0,
@@ -1933,6 +1962,14 @@ pub fn finish(
                 }
             }
             printer.instruction(inst, next, &block.insts[index + 1..])?;
+        }
+    }
+    // the tables follow the code: a word a block, each entry the label of its block
+    let tables = std::mem::take(&mut printer.tables);
+    for (index, entries) in tables {
+        printer.out.push(Line::Label(format!("L{number}_JT{index}")));
+        for block in entries {
+            printer.out.push(Line::Inst(format!(".dw {}", label(number, block))));
         }
     }
     Ok(tidy(printer.out))
@@ -1976,7 +2013,7 @@ fn branch_over_tail_jump(lines: Vec<Line>) -> Vec<Line> {
             step(&mut next);
             let Some(Line::Inst(jump)) = lines.get(next) else { return None };
             let symbol = jump.strip_prefix("jp ")?;
-            if symbol.contains(',') || block_of(symbol).is_some() || symbol.ends_with('$') {
+            if symbol.contains(',') || symbol.starts_with('(') || block_of(symbol).is_some() || symbol.ends_with('$') {
                 return None;
             }
             let jump_at = next;
@@ -2239,7 +2276,8 @@ fn drop_unreachable(lines: Vec<Line>) -> Vec<Line> {
     let named: llrm_support::hash::HashSet<&str> = lines
         .iter()
         .filter_map(|line| match line {
-            Line::Inst(text) => Some(text.split([' ', ',']).filter(|word| !word.is_empty())),
+            // an immediate names a label too: `ld hl, #L0_JT0`
+            Line::Inst(text) => Some(text.split([' ', ',']).filter(|word| !word.is_empty()).map(|word| word.trim_start_matches('#'))),
             _ => None,
         })
         .flatten()
