@@ -59,13 +59,16 @@ fn kind(vt: EVT) -> Result<Kind, Refused> {
 /// two bytes are named as their pair.
 ///
 /// DEVIATE A-X-ARGS (beyond the pin; owner 6502, exit 2026-11-15): a byte
-/// argument arrives in `a`, then `x`, as in llvm-mos's CC_MOS. Cells worse
-/// than before at the 2026-11-08 corpus A/B (clocks; bytes are lower in each):
-/// rep_tails O2 +235, huffman_decode O2 +36 / Os +5, int_compared_with_float
-/// O2 +54, word_compares O2 +40, memory_expansion Os +47437. A counted loop
-/// whose bound arrives in `a` keeps its index in `a` (`tax; sta buf,x; clc;
-/// adc #1; cmp rc2`): the allocator does not price `inx` against `adc #1`, as
-/// for a bound loaded from a global.
+/// argument arrives in `a`, then `x`, as in llvm-mos's CC_MOS. The 2026-11-08
+/// corpus A/B (mean clocks over 4 pads, base ca092f05a2) lowers bytes in every
+/// changed program. Clocks worse, each by one page-crossing cliff on one pad
+/// (the change is a byte shorter, so code after it moves across a page; the
+/// instruction counts are equal or lower): O2 rep_tails +235, word_compares
+/// +40, int_compared_with_float +54, huffman_decode +36; O1 word_compares +40,
+/// huffman_decode +1; Os huffman_decode +5, memory_expansion +47437 for -214 B.
+/// A counted loop whose bound arrives in `a` keeps its index in `a` (`tax; sta
+/// buf,x; clc; adc #1; cmp rc2`): the allocator does not price `inx` against
+/// `adc #1`, as for a bound loaded from a global.
 fn locations(
     convention: &Convention,
     vts: &[EVT],
