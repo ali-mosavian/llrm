@@ -54,7 +54,7 @@ A single walk therefore reaches 13.7 M of the rule groups and, by taking in the 
 | R45-4 | `fused`, `fused_calls`, `addresses` become selection's addressing-mode matching | up to 4 | 2026-12-04 |
 | R45-5 | read `constants`, `extensions`, `popped_arguments`, `overwritten`, `pushes`, `high_extracts`, `sharedstores`, `transferred`, `shuttles`, `zeroed_loads`, `compares_again` against LLVM; each gets a home or a premise | | 2026-11-06 (reading), then one PR each |
 | R45-6 | `tested` into the translated `PeepholeOptimizer` (`optimizeCompareInstr`) | 1.4 | with row 45 #4, 2026-11-13 |
-| R45-7 | `machinecp::propagated`: per-instruction facts cheaper (the pin's pass is 3.4 M); owner w-3 (row 84) | up to 6 | 2026-11-13 |
+| R45-7 | `machinecp::propagated`: per-instruction facts cheaper (the pin's pass is 3.4 M); owner anyisa (row 84) | up to 6 | 2026-11-13 |
 
 Each PR reports what it got on the dist build, as the F3 and TwoAddress rows did.
 

@@ -33,7 +33,7 @@ Measured with `tools/targets/arm64_compare.py` (modes `whole`, `backend`, `compi
 ## Numbered DEVIATEs
 
 1. `regalloc.rs`: the fallback allocator (ranges with holes, copy coalescing, no splitting or eviction), used under `LLRM_ARM64_LINEAR` or where the shared greedy refuses a function. The default is the shared greedy through `lir_view`; the machine passes around it are arm64's own (exit: arm64 on `flow::machine_with`).
-2. `driver.rs`: Apple's `va_arg` instruction is written out as loads in the text; MIR has no `va_arg` (exit: the instruction, owner lir-text-prs-1893).
+2. `driver.rs`: Apple's `va_arg` instruction is written out as loads in the text; MIR has no `va_arg` (exit: the instruction, owner w15-arm64).
 3. `prepass.rs`: CSE and loop hoisting of constants and addresses, a small version of `MachineCSE`/`MachineLICM`.
 4. `driver.rs`: newer clang's `ptrtoaddr` is read as `ptrtoint`; MIR refuses it by design.
 5. (2026-11-08) `lir_body`: a load or store's `MemOperand`, a symbol's name and a debug note's variable ride in side tables keyed by instruction number (`Lowered`), not on the `Insn`. A stage that clones, inserts or reorders instructions loses them (a cloned load has no memory operand and is refused). Owner llrm-arm64-lir; exit: gap 3, the memory operand on the `Insn` as LLVM keeps it, symbols in the body, debug notes in `LirBody::notes`.
