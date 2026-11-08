@@ -15,13 +15,16 @@ mod control;
 mod float;
 mod integer;
 mod memory;
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use llrm_codegen::backend::lanes::{Lanes, enter};
 use llrm_codegen::model::lir::{Insn, LirBlock, LirBody};
 use llrm_codegen::support::hash::IndexMap;
-use llrm_lir::registers::RegId;
+use llrm_lir::registers::{RegId, Regs};
 use llrm_lir::{Addr as LirAddr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg as LirRegLoc, Semantics, Space};
 use llrm_spike_mf::mfunc::Reg as MfReg;
 
@@ -171,9 +174,19 @@ fn semantics(
 struct To<'a> {
     function: &'a MFunc,
     symbols: &'a mut Vec<String>,
+    /// The float registers that hold 128 bits.
+    wide: &'a [Reg],
 }
 
 impl To<'_> {
+    /// The bits a copy, call or return moves of `register`.
+    fn bits(
+        &self,
+        register: Reg,
+    ) -> u32 {
+        if self.wide.contains(&register) { 128 } else { 64 }
+    }
+
     fn block(
         &self,
         target: &Target,
@@ -267,7 +280,7 @@ fn one(
     cx: &mut To,
     op: &Op,
 ) -> Result<Semantics, Unmapped> {
-    if let Some(what) = common(op) {
+    if let Some(what) = common(cx, op) {
         return Ok(what);
     }
     let found = match op {
@@ -290,15 +303,18 @@ fn one(
 }
 
 /// `COPY` and the immediate move: pseudo operations of no group.
-fn common(op: &Op) -> Option<Semantics> {
+fn common(
+    cx: &To,
+    op: &Op,
+) -> Option<Semantics> {
     Some(match op {
         Op::Copy { dst, src } => {
             let fpr = matches!(dst, Reg::Fpr(_));
             semantics(
                 Operation::Move,
                 if fpr { "COPY_FPR" } else { "COPY" },
-                vec![loc(*dst, 64)],
-                vec![loc(*src, 64)],
+                vec![loc(*dst, cx.bits(*dst))],
+                vec![loc(*src, cx.bits(*src))],
                 None,
             )
         }
@@ -365,6 +381,43 @@ fn values_of(what: &Semantics) -> (Vec<u32>, Vec<u32>) {
     (defines, uses)
 }
 
+/// What an operation reads and writes, as the shared passes' lanes (the file's
+/// lanes must be entered): the machine registers it names, the status flags
+/// (`NZCV`, one lane as LLVM's one physical register) where it reads or sets
+/// them, and memory (one more lane) where it loads or stores. DEVIATE MS6's
+/// model, the one the allocator's view states; exit with it (gap 3).
+fn effects(
+    op: &Op,
+    facts: &crate::facts::Facts,
+) -> (Lanes, Lanes) {
+    let registers = Regs(&crate::REGISTER_INFO);
+    let lanes = |list: Vec<Reg>| {
+        list.into_iter()
+            .filter_map(|register| match lir_register(register) {
+                // The zero register is no lane: nothing writes it.
+                MfReg::Phys(id) if id != crate::reg::XZR && registers.known(id) => Some(Lanes::span(id, 0, 1)),
+                _ => None,
+            })
+            .fold(Lanes::new(), |all, one| all.or(&one))
+    };
+    let (defs, uses) = op.defs_and_uses();
+    let (mut reads, mut writes) = (lanes(uses), lanes(defs));
+    let (flags, memory) = (Lanes::flags(1), Lanes::flags(Lanes::MEMORY));
+    if facts.reads_flags {
+        reads.extend(flags.iter().copied());
+    }
+    if facts.sets_flags {
+        writes.extend(flags.iter().copied());
+    }
+    if facts.may_load || facts.may_store {
+        reads.extend(memory.iter().copied());
+    }
+    if facts.may_store {
+        writes.extend(memory.iter().copied());
+    }
+    (reads, writes)
+}
+
 /// The function's operations as a body: block `n` is `at` = `n`.
 pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
     let mut memory_operands = HashMap::new();
@@ -372,17 +425,26 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
     let mut symbols = Vec::new();
     let labels: rustc_hash::FxHashMap<&str, usize> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
+    let wide: Vec<Reg> = crate::regalloc::wide_registers(function).into_iter().collect();
+    let _file = enter(Regs(&crate::REGISTER_INFO));
     let mut at = 0_i64;
     let mut blocks = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
         let mut insns = Vec::new();
-        for op in block.ops.iter() {
-            let what = one(&mut To { function, symbols: &mut symbols }, op)?;
+        for (place, op) in block.ops.iter().enumerate() {
+            let what = one(&mut To { function, symbols: &mut symbols, wide: &wide }, op)?;
             let (defines, uses) = values_of(&what);
-            let mut insn = Insn::new(at, None, Some(what), defines, uses);
+            let facts = crate::facts::of(op);
+            let mut insn = Insn::new(at, None, Some(what), defines.clone(), uses);
+            insn.line = block.ops.loc(place);
+            insn.volatile = facts.side_effects;
+            if facts.early_clobber {
+                insn.early_clobbers = defines;
+            }
+            insn.declared = Some(effects(op, &facts));
             match op {
                 Op::I(Inst::Load { mmo, .. } | Inst::Store { mmo, .. }) => {
-                    insn.volatile = mmo.volatile;
+                    insn.volatile |= mmo.volatile;
                     insn.invariant = mmo.object == crate::mc::inst::MemObject::ConstantPool;
                     memory_operands.insert(at, mmo.clone());
                 }
@@ -403,6 +465,58 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
     Ok(Lowered { body, memory_operands, symbols, debug_values })
 }
 
+fn show(
+    place: &Loc,
+    symbols: &[String],
+) -> String {
+    let registers = Regs(&crate::REGISTER_INFO);
+    let name = |id: RegId| registers.name(id).map_or_else(|| format!("{id:?}"), str::to_owned);
+    let held = |held: &Held| format!("%{}", held.value);
+    match place {
+        Loc::Reg(register) => name(register.register),
+        Loc::Held(value) => held(value),
+        Loc::Imm(value) => format!("#{}", value.value),
+        Loc::Address(AddressRef { addr: Some(at), .. }) => match at.space {
+            Space::Frame => format!("fi{}+{}", at.slot_home().unwrap_or(-1), at.disp),
+            _ => format!("@{}+{}", symbols[at.index as usize], at.disp),
+        },
+        Loc::Mem(cell) => {
+            let base = cell.base.as_ref().map_or_else(|| name(cell.through), held);
+            let index = cell.index.as_ref().map(|value| format!("+{}", held(value))).unwrap_or_default();
+            match cell.addr {
+                Some(at) if at.space == Space::Frame => format!("[fi{}+{}]", at.slot_home().unwrap_or(-1), at.disp),
+                Some(at) => format!("[{base}, @{}+{}]", symbols[at.index as usize], at.disp),
+                None => format!("[{base}{index}, #{}]", cell.offset),
+            }
+        }
+        other => format!("{other:?}"),
+    }
+}
+
+/// The body, one instruction a line: `NAME dests <- sources`, the way an
+/// instruction reads when a pass looks at it. With `ISEL_DUMP=1` the driver
+/// prints it.
+pub fn text(lowered: &Lowered) -> String {
+    let mut out = String::new();
+    for block in lowered.body.blocks.iter() {
+        out.push_str(&format!("bb{}:\n", block.at));
+        for insn in block.insns.iter() {
+            let Some(what) = insn.what.as_ref() else { continue };
+            let list = |places: &[Loc]| {
+                places.iter().map(|place| show(place, &lowered.symbols)).collect::<Vec<_>>().join(", ")
+            };
+            let target = what.target.map(|at| format!(" -> bb{at}")).unwrap_or_default();
+            out.push_str(&format!(
+                "  {} {} <- {}{target}\n",
+                what.name.as_deref().unwrap_or("?"),
+                list(&what.dests),
+                list(&what.sources)
+            ));
+        }
+    }
+    out
+}
+
 /// `template` with its blocks' operations replaced by the body's: everything
 /// that is not an operation (labels, frame objects, pool) is the template's.
 pub fn from_lir(
@@ -417,11 +531,11 @@ pub fn from_lir(
             let what = insn.what.as_ref().expect("a selected instruction");
             if what.name.as_deref() == Some("DBG_VALUE") {
                 let (variable, reg) = lowered.debug_values[&insn.at];
-                rebuilt.ops.push(Op::DbgValue { variable, reg });
+                rebuilt.ops.push_at(Op::DbgValue { variable, reg }, insn.line);
                 continue;
             }
             let cx = Back { template, symbols: &lowered.symbols, mmo: lowered.memory_operands.get(&insn.at) };
-            rebuilt.ops.push(back(&cx, what)?);
+            rebuilt.ops.push_at(back(&cx, what)?, insn.line);
         }
         function.blocks.push(rebuilt);
     }
@@ -430,35 +544,64 @@ pub fn from_lir(
 
 thread_local! {
     static CHECK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static CHECKED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static FORMS: std::cell::RefCell<std::collections::BTreeSet<String>> = const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
-/// Makes the driver check the round trip of every function before allocation.
+/// The opcode names [`round_trip`] has seen on this thread.
+pub fn forms_seen() -> Vec<String> {
+    FORMS.with(|forms| forms.borrow().iter().cloned().collect())
+}
+
+/// Makes the driver replace every function by its round trip before
+/// allocation (`LLRM_CHECK_ARM64_LIR` does it for a whole run).
 pub fn set_check(on: bool) {
     CHECK.with(|check| check.set(on));
 }
 
 pub(crate) fn checking() -> bool {
-    CHECK.with(std::cell::Cell::get)
+    CHECK.with(std::cell::Cell::get) || llrm_support::env_flag!("LLRM_CHECK_ARM64_LIR")
 }
 
-static CHECKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// The operations whose round trip [`check_round_trip`] has compared, so far in
-/// the process: a check that compares nothing passes, so a test reads this.
+/// The operations whose round trip [`round_trip`] has compared on this thread:
+/// a check that compares nothing passes, so a test reads this.
 pub fn checked_operations() -> u64 {
-    CHECKED.load(std::sync::atomic::Ordering::Relaxed)
+    CHECKED.with(std::cell::Cell::get)
 }
 
-/// Checks MFunc -> LirBody -> MFunc is the identity: every operation, with its
-/// registers, comes back as it went.
-pub fn check_round_trip(function: &MFunc) -> Result<(), String> {
+/// The virtual registers (by number) an operation defines and reads, from the
+/// operation itself: the oracle for the body's `defines` and `uses`.
+fn oracle(op: &Op) -> (Vec<u32>, Vec<u32>) {
+    let (defs, uses) = op.defs_and_uses();
+    let values = |list: Vec<Reg>| {
+        let mut out: Vec<u32> = list
+            .into_iter()
+            .filter(|register| register.is_virtual())
+            .map(|register| match lir_register(register) {
+                MfReg::Virt(value) => value,
+                MfReg::Phys(_) => unreachable!("a virtual register"),
+            })
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    };
+    (values(defs), values(uses))
+}
+
+/// `function` as the body and back, checked: every operation with its
+/// registers and place comes back as it went, and the body's `defines` and
+/// `uses` are the operation's own.
+pub fn round_trip(function: &MFunc) -> Result<MFunc, String> {
     let lowered = to_lir(function).map_err(|Unmapped(form)| format!("@{}: unmapped form {form}", function.name))?;
+    if llrm_support::env_flag!("ISEL_DUMP") {
+        eprintln!("=== Lir @{}\n{}", function.name, text(&lowered));
+    }
     let again =
         from_lir(&lowered, function).map_err(|Unmapped(form)| format!("@{}: no way back for {form}", function.name))?;
-    let total: usize = function.blocks.iter().map(|block| block.ops.len()).sum();
-    CHECKED.fetch_add(total as u64, std::sync::atomic::Ordering::Relaxed);
-    for (a, b) in function.blocks.iter().zip(&again.blocks) {
-        if let Some(at) = (0..a.ops.len().max(b.ops.len())).find(|&at| a.ops.get(at) != b.ops.get(at)) {
+    for ((a, b), block) in function.blocks.iter().zip(&again.blocks).zip(&lowered.body.blocks) {
+        let count = a.ops.len().max(b.ops.len());
+        if let Some(at) = (0..count).find(|&at| a.ops.get(at) != b.ops.get(at) || a.ops.loc(at) != b.ops.loc(at)) {
             return Err(format!(
                 "@{}: block {} differs at operation {at} after the round trip: {:?} became {:?}",
                 function.name,
@@ -467,6 +610,29 @@ pub fn check_round_trip(function: &MFunc) -> Result<(), String> {
                 b.ops.get(at)
             ));
         }
+        for (op, insn) in a.ops.iter().zip(block.insns.iter()) {
+            let (mut defines, mut uses) = (insn.defines.clone(), insn.uses.clone());
+            defines.sort_unstable();
+            defines.dedup();
+            uses.sort_unstable();
+            uses.dedup();
+            if (defines.clone(), uses.clone()) != oracle(op) {
+                return Err(format!(
+                    "@{}: block {}: {op:?} defines {defines:?} and reads {uses:?} in the body, {:?} by the operation",
+                    function.name,
+                    a.label,
+                    oracle(op)
+                ));
+            }
+        }
     }
-    Ok(())
+    FORMS.with(|forms| {
+        let mut forms = forms.borrow_mut();
+        for insn in lowered.body.blocks.iter().flat_map(|block| block.insns.iter()) {
+            forms.extend(insn.what.iter().filter_map(|what| what.name.as_deref().map(str::to_owned)));
+        }
+    });
+    let total: usize = function.blocks.iter().map(|block| block.ops.len()).sum();
+    CHECKED.with(|checked| checked.set(checked.get() + total as u64));
+    Ok(again)
 }

@@ -288,7 +288,7 @@ fn lower_function(
     crate::prepass::order_copies(&mut machine);
     dump("OrderCopies", &machine);
     if crate::lir_body::checking() {
-        crate::lir_body::check_round_trip(&machine)?;
+        machine = crate::lir_body::round_trip(&machine)?;
     }
     // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
     // linear scan; a function greedy refuses goes to the scan, reported.

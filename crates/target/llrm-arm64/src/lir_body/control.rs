@@ -78,24 +78,28 @@ pub(super) fn to_op(
     cx: &mut To,
     op: &Op,
 ) -> Result<Option<Semantics>, Unmapped> {
-    let registers = |list: &[Reg]| -> Vec<Loc> { list.iter().map(|register| loc(*register, 64)).collect() };
+    let registers = |cx: &To, list: &[Reg]| -> Vec<Loc> {
+        list.iter().map(|register| loc(*register, cx.bits(*register))).collect()
+    };
     Ok(Some(match op {
         Op::Call { callee, uses, defs, tail } => {
             let mut sources = vec![callee_loc(cx, callee)?];
-            sources.extend(registers(uses));
+            sources.extend(registers(cx, uses));
             let form = if matches!(callee, Callee::Symbol(_)) { "di" } else { "ri" };
             semantics(
                 Operation::Call,
                 format!("CALL{form}{}", if *tail { ".tail" } else { "" }),
-                registers(defs),
+                registers(cx, defs),
                 sources,
                 None,
             )
         }
-        Op::Return { uses, tail: None } => semantics(Operation::Return, "RET_ReallyLR", vec![], registers(uses), None),
+        Op::Return { uses, tail: None } => {
+            semantics(Operation::Return, "RET_ReallyLR", vec![], registers(cx, uses), None)
+        }
         Op::Return { uses, tail: Some(callee) } => {
             let mut sources = vec![callee_loc(cx, callee)?];
-            sources.extend(registers(uses));
+            sources.extend(registers(cx, uses));
             let form = if matches!(callee, Callee::Symbol(_)) { "di" } else { "ri" };
             semantics(Operation::Return, format!("TCRETURN{form}"), vec![], sources, None)
         }

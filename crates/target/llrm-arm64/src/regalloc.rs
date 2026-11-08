@@ -17,9 +17,14 @@
 //! (`VectorMov`) and never takes `d8`-`d15`, whose upper half a call does not
 //! keep.
 //!
-//! DEVIATE 1: LLVM allocates with `RAGreedy` on the shared machine IR. This
-//! allocator stands in until the core machine passes run on arm64 LIR (see
-//! docs/architecture/arm64-spike.md); it is not a translation.
+//! DEVIATE 1 (2026-11-08): this is not the allocator that runs. The default is
+//! the shared greedy (`lir_view::allocate`, the translated `RAGreedy` with its
+//! coalescer, splitter and spiller); this linear scan runs only for
+//! `LLRM_ARM64_LINEAR=1` or a function greedy refuses (`GREEDY_FALLBACKS`).
+//! The deviation that remains is the input: greedy reads the spike function
+//! (`lir_view`), not the shared machine passes' body. Exit: the 22 programs
+//! pass on `flow::machine_with` (gaps 1 and 2 of
+//! docs/architecture/arm64-spike.md), then this file goes.
 
 use std::collections::BTreeSet;
 

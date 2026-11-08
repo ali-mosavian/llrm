@@ -2,7 +2,7 @@
 //! trip MFunc -> LirBody -> MFunc must be the identity.
 
 use llrm_arm64::driver;
-use llrm_arm64::lir_body::{checked_operations, set_check};
+use llrm_arm64::lir_body::{checked_operations, forms_seen, set_check};
 use llrm_arm64::machine::Platform;
 
 const LAYOUT: &str =
@@ -65,17 +65,23 @@ fn corpus() -> Vec<(String, Outcome)> {
             }
             let text = std::fs::read_to_string(&path).unwrap();
             let platform = if text.contains("apple") { Platform::Darwin } else { Platform::Linux };
-            set_check(true);
-            let said = driver::assembly(&text, platform, true);
             set_check(false);
-            let outcome = match said {
-                Ok(_) => Outcome::RoundTrips,
-                Err(why)
-                    if why.contains("unmapped form") || why.contains("no way back") || why.contains("round trip") =>
-                {
-                    Outcome::Failed(why)
+            let plain = driver::assembly(&text, platform, true);
+            set_check(true);
+            let before = checked_operations();
+            let said = driver::assembly(&text, platform, true);
+            let compared = checked_operations() - before;
+            set_check(false);
+            let outcome = match (plain, said) {
+                (Err(why), _) => Outcome::Refused(why),
+                (Ok(_), Err(why)) => Outcome::Failed(why),
+                (Ok(plain), Ok(said)) if plain != said => Outcome::Failed("output differs after the round trip".into()),
+                // A module whose functions the mid-end removed has nothing to
+                // compare.
+                (Ok(plain), Ok(_)) if compared == 0 && !plain.trim().is_empty() => {
+                    Outcome::Failed("no operation was compared".into())
                 }
-                Err(why) => Outcome::Refused(why),
+                (Ok(_), Ok(_)) => Outcome::RoundTrips,
             };
             found.push((format!("{dir}/{}", path.file_name().unwrap().to_string_lossy()), outcome));
         }
@@ -100,6 +106,7 @@ fn every_fixture_and_program_round_trips() {
     assert!(failed.is_empty(), "{} did not round trip:\n{}", failed.len(), failed.join("\n"));
     println!("{} operations compared", checked_operations() - before);
     assert!(checked_operations() - before > 10_000, "the check compared too little to mean anything");
+    println!("{} forms: {}", forms_seen().len(), forms_seen().join(" "));
 }
 
 /// Prints how each fixture was taken: `cargo test -p llrm-arm64 --test lir_body

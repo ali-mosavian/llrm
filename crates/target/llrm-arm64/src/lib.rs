@@ -12,6 +12,7 @@ pub mod divconst;
 pub mod driver;
 pub mod emit;
 pub mod expand_imm;
+pub mod facts;
 pub mod flagcse;
 pub mod frame;
 pub mod ipra;

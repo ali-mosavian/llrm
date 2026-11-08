@@ -32,10 +32,12 @@ Measured with `tools/targets/arm64_compare.py` (modes `whole`, `backend`, `compi
 
 ## Numbered DEVIATEs
 
-1. `regalloc.rs`: ranges with holes, copy coalescing, no splitting or eviction; stands in for `RAGreedy`.
+1. (2026-11-08) The allocator is the shared greedy (`lir_view::allocate`); `regalloc.rs`'s linear scan runs only for `LLRM_ARM64_LINEAR=1` or a function greedy refuses. What deviates is its input: the spike function, not the shared machine passes' `LirBody`. Owner llrm-arm64-lir; exit: the 22 programs pass on `flow::machine_with`, then `regalloc.rs` and `lir_view` go.
 2. `driver.rs`: Apple's `va_arg` instruction is written out as loads in the text; MIR has no `va_arg` (exit: the instruction, owner lir-text-prs-1893).
 3. `prepass.rs`: CSE and loop hoisting of constants and addresses, a small version of `MachineCSE`/`MachineLICM`.
 4. `driver.rs`: newer clang's `ptrtoaddr` is read as `ptrtoint`; MIR refuses it by design.
+5. (2026-11-08) `lir_body`: a load or store's `MemOperand`, a symbol's name and a debug note's variable ride in side tables keyed by instruction number (`Lowered`), not on the `Insn`. A stage that clones, inserts or reorders instructions loses them (a cloned load has no memory operand and is refused). Owner llrm-arm64-lir; exit: gap 3, the memory operand on the `Insn` as LLVM keeps it, symbols in the body, debug notes in `LirBody::notes`.
+6. (2026-11-08) `lir_body`: a physical register is a `Loc::Reg`, a virtual one a `Loc::Held` whose class is the name of its `COPY` (`COPY_FPR`); `LirBody::class_like` does not carry it yet. Effects are `Insn::declared` in the allocator view's model (one status-flag lane, one memory lane, MS6), not rows of an `arm64.instr`. Owner llrm-arm64-lir; exit: gap 2 (`RegisterClasses`, flag model).
 
 ## Numbered gaps
 
