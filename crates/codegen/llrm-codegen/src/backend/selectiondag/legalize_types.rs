@@ -2275,8 +2275,9 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// `ExpandIntRes_ADDSUB`, the carry forms: the low halves with an overflow
-    /// result, the high halves with that carry in. The ADDC/ADDE form (glue)
-    /// is not translated.
+    /// result, the high halves with that carry in; failing that, `ADDC` and
+    /// `ADDE` (`SUBC`, `SUBE`) joined by glue, where the target has them. The
+    /// `UADDO` form (`hasOVF`) is not translated.
     fn expand_add_sub(
         &mut self,
         value: SDValue,
@@ -2291,6 +2292,13 @@ impl<'a> TypeLegalizer<'a> {
             (ISD::USubO, ISD::USubOCarry, ISD::Sub)
         };
         if !self.tli.is_operation_legal_or_custom(carry_op, self.tli.types.type_to_expand_to(half)) {
+            let (first, second) = if op == ISD::Add { (ISD::AddC, ISD::AddE) } else { (ISD::SubC, ISD::SubE) };
+            if self.tli.is_operation_legal_or_custom(first, self.tli.types.type_to_expand_to(half)) {
+                let lo = self.dag.get_node_multi(first, &[half, EVT::GLUE], &[ll, rl]);
+                let glue = SDValue { node: lo.node, res: 1 };
+                let hi = self.dag.get_node_multi(second, &[half, EVT::GLUE], &[lh, rh, glue]);
+                return Ok((SDValue { node: lo.node, res: 0 }, SDValue { node: hi.node, res: 0 }));
+            }
             // Without a carry operation: the plain halves, the carry (a borrow
             // for a subtract) a compare of the low result with its operand.
             let lo = self.dag.get_node(plain, half, &[ll, rl]);

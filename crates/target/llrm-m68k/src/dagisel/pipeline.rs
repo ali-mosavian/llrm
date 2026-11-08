@@ -26,7 +26,7 @@ use super::generated::ids::reg as pin;
 use super::generated::instrinfo::flag;
 use super::generated::{m68k_m68000, m68k_m68020};
 use super::hooks::{Cpu, M68kHooks};
-use super::lowering::{M68kLowering, target_lowering};
+use super::lowering::{M68kLowering, target_lowering_with};
 use crate::reg;
 use crate::target::M68k;
 
@@ -184,7 +184,7 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false, false, false, false, &mut Temporaries::new(0))
+    select_block_with(dag, cpu, false, false, false, false, true, &mut Temporaries::new(0))
 }
 
 /// [`select_block`], with the pin's source-order scheduler where
@@ -197,9 +197,10 @@ pub fn select_block_with(
     indexed: bool,
     short: bool,
     absolute_data: bool,
+    carry_chain: bool,
     frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
-    let tli = target_lowering(cpu);
+    let tli = target_lowering_with(cpu, carry_chain);
     let mut lowering = M68kLowering { indexed, short, absolute_data };
     let selector = Selector::new(match cpu {
         Cpu::M68000 | Cpu::M68010 => m68k_m68000::TABLE,

@@ -75,6 +75,7 @@ const SOURCE_ORDER: Options = Options {
     return_dup: false,
     class_split: false,
     compare_destinations: false,
+    carry_chain: true,
     global_copies: true,
     loop_carried_first: false,
     debug: false,
