@@ -34,7 +34,6 @@ use llrm_lir::registers::RegId;
 use super::dag::{MemBase, MemInfo, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::mvt::EVT;
-use super::x86isd;
 
 /// Where an argument goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

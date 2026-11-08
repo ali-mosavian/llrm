@@ -1,5 +1,5 @@
 //! A call of a Nib/QB `llrm.ia16.asm.*` block: the registers and symbols the
-//! name states, as the [`LLRM_ASM`](super::super::x86isd::LLRM_ASM) node of
+//! name states, as the target's inline-assembly node of
 //! [`inline_asm`](super::super::inline_asm). The pin has no such node; the
 //! shape is the emitter's contract.
 
