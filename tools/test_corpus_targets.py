@@ -125,6 +125,17 @@ def test_the_stack_sanitizer_programs_are_dos_only():
         assert not ct.applies("x86_32-linux", source) and ct.applies("x86_32-dos", source) and ct.applies("x86_16-dos", source)
 
 
+
+
+def test_stft_single_has_an_expected_output_per_float_model():
+    """The DOS .out is x87 excess precision. Strict single (m68k, m64) and arm64's fused multiply-add give other checksums; each target
+    compared with the x87 .out read as a miscompile."""
+    source = HERE.parent / "bench/stft_single/stft_single.c"
+    want = {"m68k-68020": "502187692", "x86_64-linux": "502187692", "arm64-linux": "40144774", "x86_32-dos": "78803551", "wasm32": "502187692"}
+    for target, value in want.items():
+        assert ct.expected_output(source, target).read_text().strip() == value, target
+
+
 def test_programs_that_assume_a_32_bit_int_are_not_run_at_m16():
     """select_of_constants and shl_of_a_zero_extended_dividend hash values wider than m16's 16-bit int: the m16 run read as a miscompile (6528 for 880220544; a 200000-iteration run past the 120 s limit). Host gcc -m32 matches their .out."""
     for name in ("select_of_constants", "shl_of_a_zero_extended_dividend"):

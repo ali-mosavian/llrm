@@ -27,7 +27,7 @@ static intptr_t llrm_os_close(int h){ return fclose(fs[h]); }
 MAIN = '#include <stdio.h>\nvoid report(long v){printf("%ld\\n",v);}\n'
 
 
-def run(big_endian: bool) -> str:
+def run(big_endian: bool, program: str = "stft_fixed", fp: tuple = ()) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp)
         (d / "inc").mkdir()
@@ -35,8 +35,8 @@ def run(big_endian: bool) -> str:
         (d / "h.c").write_text(MAIN)
         (d / "SIGNAL").write_bytes(signal_gen.signal())
         flags = ["-DEMULATE_BE", "-D__BYTE_ORDER__=4321", "-D__ORDER_BIG_ENDIAN__=4321"] if big_endian else []
-        subprocess.run(["gcc", "-m32", "-O1", "-w", "-D__INT_MAX__=1", *flags, f"-I{d / 'inc'}", f"-I{ROOT / 'bench'}",
-                        str(ROOT / "bench/stft_fixed/stft_fixed.c"), str(d / "h.c"), "-o", str(d / "a")], check=True)
+        subprocess.run(["gcc", "-m32", "-O1", "-w", "-D__INT_MAX__=1", *fp, *flags, f"-I{d / 'inc'}", f"-I{ROOT / 'bench'}",
+                        str(ROOT / f"bench/{program}/{program}.c"), str(d / "h.c"), "-lm", "-o", str(d / "a")], check=True)
         return subprocess.run([str(d / "a")], cwd=d, capture_output=True, text=True, check=True).stdout.strip()
 
 
@@ -44,3 +44,13 @@ def test_a_big_endian_read_gives_the_same_checksum_as_the_little_endian_one():
     expected = (ROOT / "bench/stft_fixed/stft_fixed.out").read_text().strip()
     assert run(False) == expected
     assert run(True) == expected
+
+
+def test_stft_single_gives_the_same_strict_float_checksum_on_either_byte_order():
+    """stft_single's .out is x87 excess precision (78803551); in single-precision evaluation, which m68k, arm64, m64 and wasm use,
+    the checksum is 502187692 (stft_single.m68k.out). A big-endian read swapped every sample: m68k printed 227820999."""
+    sse = ("-msse2", "-mfpmath=sse")
+    expected = (ROOT / "bench/stft_single/stft_single.m68k.out").read_text().strip()
+    assert run(False, "stft_single", sse) == expected
+    assert run(True, "stft_single", sse) == expected
+    assert run(False, "stft_single") == (ROOT / "bench/stft_single/stft_single.out").read_text().strip()
