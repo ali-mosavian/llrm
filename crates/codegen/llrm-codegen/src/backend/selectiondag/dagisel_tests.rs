@@ -401,6 +401,24 @@ fn every_own_target_id_is_in_own_ids() {
     assert!(missing.is_empty(), "not in tools/dagisel/own_ids.txt: {missing:?}");
 }
 
+/// `x86isd` lived in `llrm-sdag` and `dagisel_adapter` named its codes, so
+/// every target's shared code carried x86's node names. A name back in either
+/// (outside comments) fails here.
+#[test]
+fn shared_node_code_names_no_x86_node() {
+    let files = [
+        ("isd.rs", include_str!("../../../../../../crates/codegen/llrm-sdag/src/isd.rs")),
+        ("target_names.rs", include_str!("../../../../../../crates/codegen/llrm-sdag/src/target_names.rs")),
+        ("dagisel_adapter.rs", include_str!("dagisel_adapter.rs")),
+    ];
+    for (file, text) in files {
+        for (n, line) in text.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("").to_ascii_lowercase();
+            assert!(!code.contains("x86isd"), "{file}:{}: {line}", n + 1);
+        }
+    }
+}
+
 /// `log`, `exp`, `log2`, `exp2`, `sin`, `cos` and `atan` of a double had no
 /// pattern (the pin calls libm): `CannotSelect` in 36 qb/nib programs under
 /// `--isel=dag`. llrm's targets have no libm, so they select as the x87
