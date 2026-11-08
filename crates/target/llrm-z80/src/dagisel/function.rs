@@ -45,6 +45,7 @@ pub fn builder_target() -> BuilderTarget {
         // An entry is 2 B, a 16-bit compare-and-branch about 6: a table pays
         // from a third of its range filled, at speed as well as size.
         min_jump_table_density: Some(40),
+        preselection_blocks: Some(crate::prepare::PHI_EDGE),
         variable_shift_legal: false,
         string_instructions: false,
         // the runtime's own routines (runtime/z80_rt.s). `memcpy` and `memmove`

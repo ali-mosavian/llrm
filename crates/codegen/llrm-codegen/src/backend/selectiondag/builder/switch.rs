@@ -463,7 +463,9 @@ impl Builder<'_> {
         unreachable_default: bool,
     ) -> Result<(), Refused> {
         let item_pos = self.order.iter().position(|one| *one == item.block).expect("a placed block");
-        let next = self.order.get(item_pos + 1).copied();
+        let next = self.order[item_pos + 1..].iter().copied().find(|&block| {
+            self.target.preselection_blocks.is_none_or(|prefix| !self.dag.block_name(block.0).starts_with(prefix))
+        });
         let size = item.last - item.first + 1;
         if size == 2 && item.block == self.block {
             let (small, big) = (clusters[item.first], clusters[item.last]);
