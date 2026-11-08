@@ -15,8 +15,19 @@ fn quotient_sized(
     narrow: bool,
     small: bool,
 ) -> (SelectionDAG, SDValue) {
+    quotient_on(&llrm_x86_m32::M32, op, narrow, small, small)
+}
+
+fn quotient_on(
+    arch: &dyn llrm_target::Target,
+    op: ISD,
+    narrow: bool,
+    small: bool,
+    size_only: bool,
+) -> (SelectionDAG, SDValue) {
     let mut tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     tli.set_small_divide(small);
+    tli.set_size_only(size_only);
     let mut dag = dag();
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
@@ -39,7 +50,7 @@ fn quotient_sized(
     let result = dag.get_node(op, EVT::I64, &[x, y]);
     let low = dag.get_node(ISD::Truncate, EVT::I32, &[result]);
     dag.set_root(low);
-    TypeLegalizer::new(&mut dag, &tli).with_target(&llrm_x86_m32::M32).run().unwrap();
+    TypeLegalizer::new(&mut dag, &tli).with_target(arch).run().unwrap();
     let root = dag.get_root();
     (dag, root)
 }
@@ -93,7 +104,24 @@ fn a_function_built_for_size_calls_the_size_divide() {
     let (dag, _) = quotient_sized(ISD::UDiv, false, true);
     assert_eq!(call_of(&dag).0, "div64_u_small");
     let (dag, _) = quotient_sized(ISD::UDiv, true, true);
-    assert_eq!(call_of(&dag).0, "div64_u32", "a dword divisor keeps the speed routine, which is shorter");
+    assert_eq!(call_of(&dag).0, "div64_u32_small", "a dword divisor has a size form, shorter than the speed one");
+}
+
+/// data_int64 at m16 -Os (Dag 441 B, Old 416): `x / 1000000` on `i64` called
+/// the 85-byte dword-divisor routine, whose test spares a `div` the size code
+/// can do without. Built for size it takes the shorter size form.
+#[test]
+fn a_function_built_for_size_divides_by_a_dword_in_the_size_form() {
+    let (dag, _) = quotient_on(&llrm_x86_m16::M16, ISD::SDiv, true, true, true);
+    assert_eq!(call_of(&dag).0, "div64_s32q_small", "a quotient read alone");
+}
+
+/// -O1 (bytes and clocks strict) keeps the dword divisor's speed routine: the
+/// size form's second `div` is a clock cost where the dividend fits a dword.
+#[test]
+fn a_function_built_for_o1_divides_by_a_dword_in_the_speed_form() {
+    let (dag, _) = quotient_on(&llrm_x86_m16::M16, ISD::SDiv, true, true, false);
+    assert_eq!(call_of(&dag).0, "div64_s32q");
 }
 
 /// `a / d + a % d` on `i64` called the routine twice, once per op, and the

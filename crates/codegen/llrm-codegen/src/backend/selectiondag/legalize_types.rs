@@ -2969,7 +2969,11 @@ impl<'a> TypeLegalizer<'a> {
             (None, true) => llrm_target::routines::Used::Quotient,
             (None, false) => llrm_target::routines::Used::Remainder,
         };
-        let small = self.tli.small_divide().then(|| arch.divide_routine_small(signed, wide).ok()).flatten();
+        // A dword divisor's size form always does two `div`s: -Os only, -O1
+        // keeps the clocks.
+        let small = (self.tli.small_divide() && (wide || self.tli.size_only()))
+            .then(|| arch.divide_routine_small(signed, wide, used).ok())
+            .flatten();
         let Some(routine) = small.or_else(|| arch.divide_routine_used(signed, wide, used).ok()) else {
             return Err(LegalizeError::Unsupported { op, ty: vt, what: "the i64 divide routine is unavailable" });
         };
