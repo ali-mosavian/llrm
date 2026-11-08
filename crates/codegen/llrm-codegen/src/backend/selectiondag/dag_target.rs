@@ -31,6 +31,9 @@ pub struct Phases<'a, L> {
     pub lowering: &'a mut L,
     /// The target whose inline routines the `i128` divide calls, if it has any.
     pub arch: Option<&'a dyn llrm_target::Target>,
+    /// `OptLevel == CodeGenOptLevel::None`: the combiner skips the chain, store
+    /// and load combines.
+    pub opt_none: bool,
 }
 
 /// What picks the instruction for a node: the target's `Select`.
@@ -99,7 +102,7 @@ pub fn select_units<T: DagTarget>(
     dag.first_temporary = temporaries.objects();
     target.prepare(dag);
     let phases = target.phases();
-    let legal = crate::support::debug::timed("dag legalize", || legalized_with(dag, phases.tli, phases.lowering, phases.arch));
+    let legal = crate::support::debug::timed("dag legalize", || legalized_with(dag, phases.tli, phases.lowering, phases.arch, phases.opt_none));
     legal.map_err(|why| target.legalize_failed(why))?;
     for (at, (size, align)) in std::mem::take(&mut dag.temporaries).into_iter().enumerate() {
         let made = temporaries.create_stack_temporary(size, align);
