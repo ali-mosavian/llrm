@@ -755,15 +755,21 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
 
 /// A `select` of a loaded value stopped the matcher at m64 ("node transform
 /// `GetOppositeBranchCondition` is not translated"): the table folds the load
-/// into `cmov` with the condition inverted (`inv_cond_XFORM`).
+/// into `cmov` with the condition inverted (`inv_cond_XFORM`). The pin's
+/// X86CmovConversion then turns a `cmov` with a memory operand into a branch
+/// over the load (`x86-cmov-converter-force-mem-operand` is on), outside a loop
+/// too: `mov rax, rcx; cmp; jl; mov rax, [rdi]; ret`, as the pin's llc has it.
 #[test]
-fn a_select_of_a_loaded_value_is_a_cmov_from_memory() {
+fn a_select_of_a_loaded_value_is_a_branch_over_the_load() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 define i64 @f(ptr %p, i64 %x, i64 %y, i64 %z) {\n  %a = load i64, ptr %p\n  %c = icmp slt i64 %x, %y\n  %r = select i1 %c, i64 %z, i64 %a\n  ret i64 %r\n}\n";
     let (built, _) = compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.lines().any(|line| line.trim().starts_with("cmovge") && line.contains('[')), "{listing}");
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    assert!(!lines.iter().any(|line| line.starts_with("cmov")), "{listing}");
+    assert!(lines.iter().any(|line| line.starts_with("jl ")), "{listing}");
+    assert!(lines.contains(&"mov rax, qword ptr [rdi]"), "{listing}");
 }
 
 /// `c ? 48 : 32` (a difference of 16) was two `mov`s and a `cmov`: the pin's
@@ -2509,13 +2515,14 @@ fn m32_over_aligned_local_realigns_the_stack_pointer() {
     assert!(lines.contains(&"mov esp, ebp"), "{listing}");
 }
 
-/// There is no pin alignment at 16 bits: an over-aligned local is refused with
-/// its reason, not compiled off its alignment.
+/// Real mode cannot realign the stack: an over-aligned local is clamped to the
+/// stack alignment (#7706), not refused, and no `and sp` is emitted.
 #[test]
-fn m16_over_aligned_local_is_refused() {
+fn m16_over_aligned_local_is_clamped_not_refused() {
     let text = format!("target datalayout = \"@m16-datalayout@-ni:2:3\"\n{ALIGNED_IR}");
-    let error = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().unwrap();
-    assert!(error.contains("in 16-bit code is not realigned"), "{error}");
+    let (built, _) = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("and sp,"), "{listing}");
 }
 
 /// A callee-saved register pushed before the stack `sub` (the pin's order,

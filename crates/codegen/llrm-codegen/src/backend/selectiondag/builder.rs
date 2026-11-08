@@ -18,6 +18,7 @@ mod memops;
 mod mergedcond;
 mod switch;
 mod tailcall;
+pub use tailcall::tail_position;
 
 use llrm_lir::registers::RegId;
 

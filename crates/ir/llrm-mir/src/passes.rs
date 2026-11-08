@@ -141,6 +141,8 @@ enum Pending {
     /// A library routine: its convention and what the library states of it.
     Routine(String, crate::types::TypeId, u32, Vec<crate::opcode::Attribute>, Vec<crate::opcode::Attribute>),
     Table(String, crate::module::GlobalVariable, crate::module::UnnamedAddr),
+    /// A defined internal function: a copy of a body made by a pass.
+    Body(String, Box<crate::module::Function>),
 }
 
 /// The size of each function a global variable's initializer names.
@@ -403,6 +405,16 @@ impl Declared {
                         kind: GlobalKind::Function(Box::new(function)),
                     }
                 }
+                Pending::Body(name, body) => GlobalValue {
+                    name: name.clone().into(),
+                    linkage: crate::module::Linkage::Internal,
+                    visibility: crate::module::Visibility::Default,
+                    unnamed_addr: Default::default(),
+                    address_space: 0,
+                    kind: GlobalKind::Function(Box::new(
+                        crate::build::function_declaration(context, name, body.ty).expect("a declaration that places"),
+                    )),
+                },
                 Pending::Table(name, variable, unnamed_addr) => GlobalValue {
                     name: name.clone().into(),
                     linkage: crate::module::Linkage::Private,
@@ -422,7 +434,7 @@ impl Declared {
     ) -> Option<&str> {
         let at = (id.0 as usize).checked_sub(self.next as usize - self.pending.len())?;
         match self.pending.get(at)? {
-            Pending::Function(name, _) | Pending::Routine(name, ..) => Some(name),
+            Pending::Function(name, _) | Pending::Routine(name, ..) | Pending::Body(name, _) => Some(name),
             Pending::Table(..) => None,
         }
     }
@@ -586,6 +598,25 @@ impl Declared {
         id
     }
 
+    /// A copy of a function's body, `body`, placed as the internal function
+    /// `name` (or the first free name made of it): the passes after this one
+    /// run over it too. Nothing calls it.
+    pub fn body(
+        &mut self,
+        name: &str,
+        body: crate::module::Function,
+    ) -> GlobalId {
+        let name = std::iter::once(name.to_owned())
+            .chain((0..).map(|n| format!("{name}.{n}")))
+            .find(|name| !self.names().contains_key(name))
+            .expect("a free name");
+        let id = GlobalId(self.next);
+        self.next += 1;
+        self.names().insert(name.clone(), id);
+        self.pending.push(Pending::Body(name, Box::new(body)));
+        id
+    }
+
     /// Whether a table is among the declarations made: its initializer may
     /// hold the address of a global no code took before.
     pub fn tables_pending(&self) -> bool {
@@ -609,6 +640,11 @@ impl Declared {
                     if let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind {
                         routine_facts(function, convention, &attrs, &parameter);
                     }
+                    (name, id)
+                }
+                Pending::Body(name, body) => {
+                    let id = module.add_function(&name, body.ty, crate::module::Linkage::Internal)?;
+                    module.globals[id.0 as usize].kind = GlobalKind::Function(body);
                     (name, id)
                 }
                 Pending::Table(name, variable, unnamed_addr) => {

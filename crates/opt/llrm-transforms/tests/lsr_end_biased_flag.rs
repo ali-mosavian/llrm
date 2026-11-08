@@ -57,7 +57,7 @@ fn reduced_with(text: &str, flag: Option<&str>) -> String {
         function.attrs.push(llrm_mir::opcode::Attribute::Flag(flag.into()));
     }
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopStrengthReduce { size: false });
+    manager.add(LoopStrengthReduce { size: false, twin: llrm_transforms::lsr_pass::Twin::Off });
     manager.run_module(&mut module, Rc::new(Flat("i486"))).expect("runs");
     llrm_mir::print::module(&module)
 }
@@ -83,4 +83,35 @@ fn a_function_marked_no_end_biased_gets_the_pins_solution() {
     let out = reduced_with(&shape(), Some(llrm_transforms::lsr_pass::NO_END_BIASED));
     assert!(!out.contains("llrm-end-biased"), "{out}");
     assert!(!out.contains("ptr %p0, i32 400"), "{out}");
+}
+
+fn reduced_twice(twin: &[llrm_transforms::lsr_pass::Twin]) -> String {
+    let mut module = llrm_mir::parse::module(&shape()).unwrap_or_else(|why| panic!("{why:?}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    for &twin in twin {
+        manager.add(LoopStrengthReduce { size: false, twin });
+    }
+    manager.run_module(&mut module, Rc::new(Flat("i486"))).expect("runs");
+    llrm_mir::print::module(&module)
+}
+
+/// The driver had to run the whole mid-end twice (1.94x Ir at -O2) to get the
+/// pin's version of a marked function. Now the function leaves a twin at LSR:
+/// `@f` end-biased, `@f.llrm-twin` the pin's, each reduced once.
+#[test]
+fn a_marked_function_leaves_a_twin_with_the_pins_formulae() {
+    use llrm_transforms::lsr_pass::Twin;
+    let out = reduced_twice(&[Twin::Make, Twin::Only]);
+    let (main, twin) = out.split_once("@f.llrm-twin").unwrap_or_else(|| panic!("no twin:\n{out}"));
+    assert!(main.contains("ptr %p0, i32 400"), "{out}");
+    assert!(!twin.contains("ptr %p0, i32 400"), "{out}");
+    assert!(!twin.contains("llrm-end-biased") && !out.contains("llrm-twin-pending"), "{out}");
+}
+
+/// No twin unless asked: a target whose driver does not pick would carry a
+/// function nothing calls.
+#[test]
+fn no_twin_unless_asked() {
+    use llrm_transforms::lsr_pass::Twin;
+    assert!(!reduced_twice(&[Twin::Off]).contains("llrm-twin"));
 }

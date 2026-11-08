@@ -1539,17 +1539,25 @@ impl Builder<'_> {
         {
             return SDValue { node: rep.node, res: 0 };
         }
-        // The tail starts where the dword copy ended: `dst + (n - n % 4)`.
-        // Leaving di/si out reloaded the copy's start (the tail rewrote the
-        // first bytes and left the last ones uncopied).
+        // The tail goes on from where the dword copy left di/si (read back
+        // after the copy; the pin's constant tails add the offset instead).
         let three = self.dag.get_constant(3, pointer);
         let bytes = self.dag.get_node(ISD::And, pointer, &[count, three]);
-        let whole = self.dag.get_node(ISD::Sub, pointer, &[count, bytes]);
-        let next_dst = self.dag.get_node(ISD::Add, pointer, &[dst, whole]);
-        let next_src = self.dag.get_node(ISD::Add, pointer, &[src, whole]);
         let mut chain = SDValue { node: rep.node, res: 0 };
         let mut glue = SDValue { node: rep.node, res: 1 };
-        for (reg, value) in [(cx, bytes), (di, next_dst), (si, next_src)] {
+        let mut left = Vec::new();
+        for reg in [di, si] {
+            let reg_node = self.dag.get_phys_register(pointer, reg);
+            let read = self.dag.get_node_multi(
+                ISD::CopyFromReg,
+                &[pointer, EVT::OTHER, EVT::GLUE],
+                &[chain, reg_node, glue],
+            );
+            left.push(SDValue { node: read.node, res: 0 });
+            chain = SDValue { node: read.node, res: 1 };
+            glue = SDValue { node: read.node, res: 2 };
+        }
+        for (reg, value) in [(cx, bytes), (di, left[0]), (si, left[1])] {
             let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, Some(glue));
             chain = SDValue { node: copy.node, res: 0 };
             glue = SDValue { node: copy.node, res: 1 };
