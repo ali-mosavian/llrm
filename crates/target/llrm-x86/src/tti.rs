@@ -713,6 +713,10 @@ impl Tti for X86 {
         Some(Cost::of(tuning.call_sequence_fixed_clocks + words * tuning.call_sequence_argument_clocks + pop))
     }
 
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        self.tuning.speed_inline_rate_at_o1
+    }
+
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         self.tuning.speed_inline_milliclocks_per_byte
     }
