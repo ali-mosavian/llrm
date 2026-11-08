@@ -1187,6 +1187,24 @@ fn a_loaded_bit_is_branched_on_without_a_diamond() {
     assert!(out.contains("and a, (hl)"), "{out}");
 }
 
+/// A long compared with a constant was the xor of each half with it, the halves or-ed, each step written back to a
+/// pair: 8 instructions for `a == 0`, 17 for `a == K`. The bytes' differences accumulate in the accumulator.
+#[test]
+fn a_long_equality_with_a_constant_accumulates_its_bytes_in_a() {
+    let ir = include_str!("kernels/ir/wide_equality.ll");
+    let function = |name: &str| {
+        let out = text(ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{name}: {why}"));
+        out.lines().map(|line| line.trim().to_owned()).collect::<Vec<_>>()
+    };
+    let writes_back = |lines: &[String]| {
+        lines.iter().filter(|line| line.len() == 7 && line.starts_with("ld ") && line.ends_with(", a")).count()
+    };
+    let zero = function("zero");
+    assert!(zero.windows(4).any(|w| w[0].starts_with("ld a, ") && w[1..].iter().all(|l| l.starts_with("or a, "))), "{zero:#?}");
+    let constant = function("eqk");
+    assert!(writes_back(&constant) <= 3, "{constant:#?}");
+}
+
 /// `memory_expansion` at -Os was refused ("a conditional return in a function
 /// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
 /// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The
