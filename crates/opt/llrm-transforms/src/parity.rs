@@ -450,6 +450,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "TailMergeBlocks (#2241), block placement chains and loops (#2629); criterion: rows vs min(gcc,pin) per bench pair + oracle sweep (J1, #2307); exit: identity vs llc after placement, branch folding and tail duplication; open: trellises and tail duplication (#2745) and alignBlocks/optimizeBranches (#2760) once landed, irreducible loops after tail dup (D16), BranchFolder merge parts, MBFI/MBPI replaced by BlockOdds (D7)",
     ),
     entry("copyprop@18", Backend, "machine-cp (run 2, after tail duplication)", Translated, ""),
+    entry("breakfalsedeps@19", Backend, "break-false-deps (BreakFalseDeps.cpp)", Translated, ""),
     partial(
         "earlytaildup@1",
         Backend,

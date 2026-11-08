@@ -4798,3 +4798,21 @@ fn a_memcpy_ending_a_function_is_a_tail_call_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("jmp memcpy") && !listing.contains("call memcpy"), "{listing}");
 }
+
+/// `cvtsi2ss xmm1, eax` in a loop rewrote only the low lane of `xmm1`, so each
+/// iteration waited for the last one's result (the pin: `xorps xmm1, xmm1`
+/// first, BreakFalseDeps). sfm16_float_i2f m64 -O2: 9 converts, no `xorps`.
+#[test]
+fn a_convert_in_a_loop_is_preceded_by_a_xorps_of_its_register() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define float @f(i32 %n) {\nentry:\n  br label %l\n\
+                l:\n  %i = phi i32 [ 0, %entry ], [ %i1, %l ]\n  %s = phi float [ 1.0, %entry ], [ %s1, %l ]\n\
+                  %c = sitofp i32 %i to float\n  %s1 = fadd float %s, %c\n  %i1 = add i32 %i, 1\n\
+                  %d = icmp eq i32 %i1, %n\n  br i1 %d, label %x, label %l\n\
+                x:\n  ret float %s1\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let (xor, convert) = (listing.find("xorps"), listing.find("cvtsi2ss"));
+    assert!(xor.is_some() && xor < convert, "{listing}");
+}

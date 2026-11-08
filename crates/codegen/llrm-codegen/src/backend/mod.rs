@@ -200,6 +200,7 @@ pub mod cmpsub;
 pub mod deadmi;
 pub mod earlytaildup;
 pub mod edges;
+pub mod breakfalsedeps;
 pub mod fixupbw;
 pub mod fixupleas;
 pub mod fixupsetcc;
