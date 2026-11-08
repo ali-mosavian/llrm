@@ -2368,6 +2368,22 @@ fn scalar_sse(
         ("mov", Operation::Move, _) => "movaps",
         _ => name,
     };
+    // `cmpss xmm0, xmm1, 0`: the predicate rides as an immediate byte.
+    if let ([Loc::Reg(into)], [_, source, Loc::Imm(predicate)]) = (dests.as_slice(), sources.as_slice()) {
+        let upper = Upper(name);
+        let bits = if name.ends_with("sd") { 64 } else { 32 };
+        let code = code_of!(upper, "_XMM_XMMM", bits, "_IMM8")?;
+        return match source {
+            Loc::Reg(outof) => {
+                _assemble(&raised(create_reg_reg_i32(code, into.register, outof.register, predicate.value)), at, true)
+            }
+            Loc::Mem(cell) => {
+                let (built, relocated) = operand_of(cell, at.bits)?;
+                _assemble(&raised(create_reg_mem_i32(code, into.register, built, predicate.value)), at, relocated)
+            }
+            _ => None,
+        };
+    }
     let (first, second) = match (dests.len(), sources.len()) {
         (1, 2) => (&dests[0], &sources[1]),
         (1, 1) => (&dests[0], &sources[0]),

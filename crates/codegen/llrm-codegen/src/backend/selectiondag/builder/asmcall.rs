@@ -62,7 +62,7 @@ impl Builder<'_> {
         let root = self.root();
         let (chain, results) = lower_asm(
             &mut self.dag,
-            LoweringNodes::need(self.target.nodes.asm, "inline asm")?,
+            LoweringNodes::need(self.target.dag.nodes.asm, "inline asm")?,
             root,
             name,
             &fixups,

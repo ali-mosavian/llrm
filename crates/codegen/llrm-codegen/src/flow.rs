@@ -75,6 +75,7 @@ const UNOPTIMIZED: &[&str] = &[
     "LoadFold",
     "FixupSetCC",
     "CopyPropagation",
+    "BreakFalseDeps",
     "LiveRangeShrink",
     "X86OptimizeLEAs",
     "MachineLICM",
@@ -151,6 +152,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("TailDuplicate", "jumps@17"),
     ("ControlFlow", "jumps@17"),
     ("CopyPropagation", "copyprop@18"),
+    ("BreakFalseDeps", "breakfalsedeps@19"),
 ];
 
 /// `machine`, its peephole made of the rules `rules` holds.
@@ -376,6 +378,8 @@ pub fn machine_with<'a>(
         }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
+        // The pin's pre-emit pass: the distances are those of the final order.
+        Box::new(crate::backend::breakfalsedeps::BreakFalseDeps),
     ];
     if !target.post_ra_tail_duplicate {
         phases.retain(|phase| phase.class_name() != "TailDuplicate");
