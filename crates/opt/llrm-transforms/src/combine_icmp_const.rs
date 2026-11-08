@@ -20,9 +20,8 @@
 //! truth-table fold, and the select, truncate, intrinsic and `extractvalue`
 //! arms of `foldICmpInstWithConstant`.
 //!
-//! DEVIATE 1: the load from an indexed global fold
-//! (`foldCmpLoadFromIndexedGlobal`) and the floating-point class folds on a
-//! bitcast (`is.fpclass`) are not translated.
+//! DEVIATE 1: the floating-point class folds on a bitcast (`is.fpclass`) are
+//! not translated.
 //!
 //! # How it works
 //! The compare's left operand is an `and` of a value with a constant `C2`,
@@ -1549,7 +1548,15 @@ fn fold_icmp_and_constant(
             return Some(new_icmp(c, inst, new_pred, a, min_signed));
         }
     }
-    // OWED: foldCmpLoadFromIndexedGlobal (DEVIATE 1).
+    // Try to optimize things like "A[i] & 42 == 0" to index computations.
+    if let (Operand::Constant(mask_constant), Some(load)) =
+        (y, c.definition_of(x).filter(|&def| matches!(c.function.instruction(def).opcode, Opcode::Load { .. })))
+        && let Operand::Constant(rhs) = c.function.instruction(inst).operands[1]
+        && let Some(found) =
+            crate::combine_icmp_table::fold_cmp_load_from_indexed_global(c, inst, pred, load, rhs, Some(mask_constant))
+    {
+        return Some(found);
+    }
     if !is_equality(pred) {
         return None;
     }
