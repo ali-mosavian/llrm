@@ -1,4 +1,5 @@
 """dag_vs_old.sh at m16 compared OMF file sizes (fixups, symbols, pool) and a failing code_bytes was swallowed: -Os read 'zero Dag-larger' where 28 cells were."""
+import os
 import subprocess
 import textwrap
 from pathlib import Path
@@ -36,6 +37,18 @@ def test_release_is_measured_even_when_a_debug_build_exists(tmp_path):
     done = subprocess.run([str(script), "x86_16-dos", "-march=i386", "-Os"], cwd=tmp_path, capture_output=True, text=True)
     assert "target/release" in done.stdout and "target/debug" not in done.stdout and "Dag fails" in done.stdout
     assert "\na FAIL" not in done.stdout
+
+
+def test_an_elf_target_with_no_omf_cells_still_reports(tmp_path):
+    """The code_bytes guard exited 1 for every ELF target (no OMF rows to convert): the m32 and m64 sweeps printed a header and nothing else."""
+    script = sandbox(tmp_path, "def code_bytes(obj):\n    raise SystemExit('boom')\n")
+    size = tmp_path / "bin"
+    size.mkdir()
+    (size / "size").write_text("#!/bin/bash\necho 'section size addr'\necho '.text 40 0'\n")
+    (size / "size").chmod(0o755)
+    env = {**os.environ, "PATH": f"{size}:{os.environ['PATH']}"}
+    done = subprocess.run([str(script), "x86_32-linux", "-m32", "-Os"], cwd=tmp_path, capture_output=True, text=True, env=env)
+    assert done.returncode == 0 and "totals: both 1 sources" in done.stdout, done.stdout + done.stderr
 
 
 def run(tmp_path: Path, sizes_body: str):

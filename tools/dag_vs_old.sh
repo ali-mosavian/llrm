@@ -27,7 +27,7 @@ for level in $levels; do
         xargs -P"${JOBS:-8}" -I{} bash -c "one {} $level $isel" < "$work/list" | sort -u > "$work/$isel"
     done
     for isel in old dag; do
-        grep -q ' OBJ:' "$work/$isel" && (cd "$root" && uv run --project tools python - "$work/$isel" <<'PY'
+        if grep -q ' OBJ:' "$work/$isel"; then (cd "$root" && uv run --project tools python - "$work/$isel" <<'PY'
 import sys
 from pathlib import Path
 sys.path.insert(0, "tools")
@@ -45,7 +45,7 @@ for line in path.read_text().splitlines():
     rows.append(f"{name} {value}")
 path.write_text("\n".join(rows) + "\n")
 PY
-        ) || { echo "code_bytes failed on $isel; OMF sizes are wrong" >&2; exit 1; }
+        ) || { echo "code_bytes failed on $isel; OMF sizes are wrong" >&2; exit 1; }; fi
     done
     echo "== $level Dag larger than Old (name old dag delta)"
     join "$work/old" "$work/dag" | awk '$2!="FAIL"&&$3!="FAIL"&&$3>$2{print $1,$2,$3,$3-$2}' | sed 's/_[0-9a-f]\{6\} / /' | sort -k4 -nr
