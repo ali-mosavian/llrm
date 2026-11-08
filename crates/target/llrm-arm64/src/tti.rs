@@ -394,6 +394,10 @@ impl Tti for AArch64 {
     /// decisions are those of the fit; the refit to the scoring rate is its own
     /// change.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        // Scan knob (w15/rate-scan only, never merged): milliclocks per byte.
+        if let Some(rate) = std::env::var("LLRM_INL_RATE").ok().and_then(|value| value.parse().ok()) {
+            return rate;
+        }
         INLINE_MILLICLOCKS_PER_UNIT * 1000 / BYTES_PER_COST_UNIT_MILLI
     }
 
