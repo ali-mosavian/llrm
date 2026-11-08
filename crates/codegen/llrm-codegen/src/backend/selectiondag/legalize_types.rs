@@ -3292,7 +3292,12 @@ impl<'a> TypeLegalizer<'a> {
         let ((ll, lh), (rl, rh)) =
             (self.expanded_integer(self.dag.operand(setcc, 0)), self.expanded_integer(self.dag.operand(setcc, 1)));
         let half = self.dag.value_type(ll);
-        if matches!(code, CondCode::SetEq | CondCode::SetNe) && self.tli.byte_equality() {
+        // A constant operand leaves one operand's bytes live beside the
+        // accumulator; two registers' worth spilled in the corpus.
+        if matches!(code, CondCode::SetEq | CondCode::SetNe)
+            && self.tli.byte_equality()
+            && self.dag.constant(self.dag.operand(setcc, 1)).is_some()
+        {
             // DEVIATE WIDE-EQ-BYTES (see `TargetLowering::byte_equality`)
             let (left, right) = (self.dag.operand(setcc, 0), self.dag.operand(setcc, 1));
             let wide = self.dag.value_type(left);
