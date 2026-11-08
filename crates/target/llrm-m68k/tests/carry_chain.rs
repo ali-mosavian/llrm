@@ -127,3 +127,21 @@ fn the_compare_form_is_kept_where_addx_runs_out_of_data_registers() {
         "the compare form is cheaper than the kept build"
     );
 }
+
+/// `sbb_wide_sub`: a 64-bit `zext(a) - zext(b)` is `sub.l; negx.l`, and the
+/// trigger of the trial named only `addx` and `subx`, so the compare form was
+/// never tried for it.
+#[test]
+fn a_negx_counts_as_carrying_through_the_extend_flag() {
+    use llrm_m68k::mfunc::MFunction;
+    use llrm_spike_mf::{Block, Inst, Kind};
+    let with = |name: &'static str| {
+        let mut function = MFunction::new("f");
+        function.blocks.push(Block { id: 0, insts: vec![Inst::new(Kind::Op(name), vec![])], phis: vec![] });
+        llrm_m68k::compile::uses_extend(&function)
+    };
+    for name in ["ADDX32dd", "ADDX8dd", "SUBX16dd", "NEGX32d", "NEGX8d"] {
+        assert!(with(name), "{name}");
+    }
+    assert!(!with("MOV32dd") && !with("ADD32dd"));
+}

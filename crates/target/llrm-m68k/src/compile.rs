@@ -309,6 +309,21 @@ pub fn items_with(
     Ok(kept)
 }
 
+/// Whether `function` carries through the extend flag: an `addx`, `subx` or
+/// `negx` (a subtract from a constant zero high half is `negx`).
+pub fn uses_extend(function: &crate::mfunc::MFunction) -> bool {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .any(
+            |inst| matches!(
+                inst.kind,
+                llrm_spike_mf::Kind::Op(name) if ["ADDX", "SUBX", "NEGX"].iter().any(|row| name.starts_with(row))
+            ),
+        )
+}
+
 /// The optional rewrites a build used.
 #[derive(Clone, Copy, Default)]
 struct Touched {
@@ -318,7 +333,7 @@ struct Touched {
     /// A compare's destination was left to the allocator's choice of an
     /// address or a data register ([`crate::addrcmp`]).
     compare_destinations: bool,
-    /// The function has an `addx` or `subx`.
+    /// The function has an `addx`, `subx` or `negx` ([`uses_extend`]).
     carry_chain: bool,
     /// The build saved a callee-saved register: the join order may have cost
     /// it.
@@ -361,13 +376,7 @@ fn items_once(
     )?;
     let mut function = emit(name, &blocks)?;
     let mut touched = Touched::default();
-    touched.carry_chain = options.carry_chain
-        && function.blocks.iter().flat_map(|block| &block.insts).any(|inst| {
-            matches!(
-                inst.kind,
-                llrm_spike_mf::Kind::Op("ADDX32dd" | "ADDX16dd" | "ADDX8dd" | "SUBX32dd" | "SUBX16dd" | "SUBX8dd")
-            )
-        });
+    touched.carry_chain = options.carry_chain && uses_extend(&function);
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
