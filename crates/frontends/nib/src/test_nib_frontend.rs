@@ -805,7 +805,7 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     let source = written(
         &directory,
         "array_borrow.nib",
-        "fn bump(values: &mut [u16]) -> void:\n    values[1] += 3\nfn main() -> i16:\n    let mut values: u16[3] = [10, 20, 30]\n    bump(&mut values)\n    return 0\n",
+        "fn bump(values: &mut [u16]) -> void:\n    values[1] += 3\nfn main() -> i16:\n    let mut values: u16[3] = [10, 20, 30]\n    bump(&mut values)\n    return i16(values[1])\n",
     );
 
     let program = parsed(&source);
