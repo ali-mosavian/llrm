@@ -222,6 +222,14 @@ pub fn expand(
             };
             byte3(&mut out, "clc", "adc", &d, &a, &b);
         }
+        // the ninth bit of the sum is C: `ror` brings it back as bit 7
+        op::AVGFLOORU8 | op::AVGCEILU8 => {
+            let (d, a, b) = simple(o)?;
+            writeln!(out, "  {}", if inst.opcode == op::AVGFLOORU8 { "clc" } else { "sec" }).unwrap();
+            copy_byte(&mut out, "a", &a);
+            writeln!(out, "  adc {b}\n  ror a").unwrap();
+            copy_byte(&mut out, &d, "a");
+        }
         op::SUB8 | op::SUBO8 => {
             let (d, a, b) = if inst.opcode == op::SUB8 {
                 simple(o)?

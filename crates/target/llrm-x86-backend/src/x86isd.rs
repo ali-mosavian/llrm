@@ -1,7 +1,8 @@
 //! Target opcodes (`X86ISD::*`) as [`ISD::Target`] codes, in the pin's order
 //! of first use here; the legalizer and lowering add theirs after these.
 
-use super::isd::ISD;
+use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::target_names::TargetNodeNames;
 
 pub const CALL: ISD = ISD::Target(1);
 pub const RET_GLUE: ISD = ISD::Target(2);
@@ -116,4 +117,37 @@ pub fn private_name(code: u16) -> Option<&'static str> {
 /// `getTargetNodeName`.
 pub fn name(code: u16) -> String {
     private_name(code).map_or_else(|| format!("X86ISD#{code}"), str::to_owned)
+}
+
+/// x86's names and pin numbers for the shared dump and adapter.
+pub struct X86Names;
+
+pub static NAMES: X86Names = X86Names;
+
+impl TargetNodeNames for X86Names {
+    fn name(&self, code: u16) -> Option<&'static str> {
+        private_name(code)
+    }
+
+    fn pin_id(&self, code: u16) -> Option<u16> {
+        let name = private_name(code)?.strip_prefix("X86ISD::")?;
+        Some(llrm_dagisel::generated::ids::x86isd_id(name).unwrap_or(u16::MAX))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Moving the names out of shared code must keep the dump text and the
+    /// pin numbers: `CALL` prints `X86ISD::CALL` and maps to the pin's id.
+    #[test]
+    fn test_names_and_pin_ids_survive_the_move() {
+        assert_eq!(NAMES.name(1), Some("X86ISD::CALL"));
+        assert_eq!(
+            NAMES.pin_id(1),
+            llrm_dagisel::generated::ids::x86isd_id("CALL")
+        );
+        assert_eq!(NAMES.pin_id(9999), None);
+    }
 }
