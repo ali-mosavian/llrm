@@ -3,8 +3,8 @@
     python3 tools/bench/worse_cells.py RESULTS.json... [--bench bench]
 
 RESULTS are bench.py --json files (keys `program/language/level`, a program may be `parity/name`). A reference is a section
-`[compiler.LEVEL]` of the program's expected.toml. At -O2 a cell is worse than a reference when 1000 * delta clocks + RATE * delta bytes > 0 (bench.py `against`; RATE
-milliclocks per byte, 500 on m16: one clock is two bytes); at -O1 and -Os each axis is strict. A program with `references = false` is listed as "no ref"; a program
+`[compiler.LEVEL]` of the program's expected.toml. At -O2 a cell is worse than a reference when 1000 * delta clocks + price * delta bytes > 0 (bench.py `against`; the price is
+bench.rate_for, milliclocks per byte, 500 on m16: one clock is two bytes); at -O1 and -Os each axis is strict. A program with `references = false` is listed as "no ref"; a program
 with neither references nor that mark raises: a lookup that finds nothing must not read as "nothing worse".
 """
 
@@ -12,12 +12,18 @@ import sys
 import tomllib
 from pathlib import Path
 
-RATE = 500  # bench.rate_for("c", "O2") on m16
 REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bq16": ("bc", "pds71", "vbdos")}
 
 
 class NoReferenceLookup(Exception):
     pass
+
+
+def rate() -> int:
+    """The price of a byte at -O2 in milliclocks: bench.py's own (`rate_for`), read from the m16 timing sheet, never a copy."""
+    import bench
+
+    return bench.rate_for("c", "O2")
 
 
 def program_of(key: str) -> str:
@@ -38,8 +44,9 @@ def references(bench: Path, program: str, language: str, level: str) -> dict[str
     return {name: table[name][level] for name in REFERENCES[language] if level in table.get(name, {})}
 
 
-def worse(results: dict, bench: Path) -> tuple[list[tuple], list[str]]:
+def worse(results: dict, bench: Path, price: int | None = None) -> tuple[list[tuple], list[str]]:
     """([(key, [axis findings])], [programs without references])."""
+    price = rate() if price is None else price
     rows, none = [], []
     for key, ours in results.items():
         program, language, level = program_of(key), key.split("/")[-2], key.split("/")[-1]
@@ -54,7 +61,7 @@ def worse(results: dict, bench: Path) -> tuple[list[tuple], list[str]]:
             for name, numbers in sorted(found.items()):
                 if all(axis in numbers for axis in ("clocks", "code_bytes")):
                     clocks, size = ours["clocks"] - numbers["clocks"], ours["code_bytes"] - numbers["code_bytes"]
-                    if 1000 * clocks + RATE * size > 0:
+                    if 1000 * clocks + price * size > 0:
                         findings.append(f"{clocks:+d} clk {size:+d} B vs {name}")
         else:
             for axis, label in (("code_bytes", "B"), ("clocks", "clk")):

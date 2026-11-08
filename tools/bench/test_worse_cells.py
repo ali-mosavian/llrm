@@ -1,5 +1,6 @@
 import pytest
 
+import bench
 import worse_cells
 
 
@@ -37,3 +38,14 @@ def test_at_o2_a_byte_for_two_clocks_is_a_trade_not_a_loss(tmp_path):
     ours = {"code_bytes": 388, "clocks": 388}
     assert worse_cells.worse({"parity/qlight/c/O2": ours}, tmp_path)[0] == []
     assert worse_cells.worse({"parity/qlight/c/Os": ours}, tmp_path)[0] == [("parity/qlight/c/Os", ["B 388 vs 216(bcc) +79.6%"])]
+
+
+def test_the_byte_price_is_the_one_bench_uses(tmp_path, monkeypatch):
+    """worse_cells carried its own 500: a changed timing sheet would have moved the gate and not this table."""
+    assert worse_cells.rate() == bench.rate_for("c", "O2") > 0
+    sheet = tmp_path / "timings.times"
+    sheet.write_text("speed_milliclocks_per_byte 2000 2000\n")
+    monkeypatch.setattr(bench, "M16_TIMINGS", sheet)
+    assert worse_cells.rate() == 2000
+    folder(tmp_path, "parity/qlight", "[bcc.O2]\ncode_bytes = 216\nclocks = 617\n")
+    assert worse_cells.worse({"parity/qlight/c/O2": {"code_bytes": 388, "clocks": 388}}, tmp_path)[0] != []
