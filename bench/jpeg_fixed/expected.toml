@@ -1,30 +1,94 @@
-reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
-blessed = "2026-11-07"
+reason = "re-bless tc/tcpp jpeg_fixed with the 1 G instruction limit"
+blessed = "2026-11-08"
 corpus = "d9a6ce600eda00bd1f7c2729c3bf21b4"
 
-[bcc.O2]
-code_bytes = 3287
-data_bytes = 474
-bss_bytes = 15849
-kernel_ms = 641.9222
-
-[bcc.Os]
+[bcc.O1]
+instructions = 58633477
+memory_operands = 13514932
+clocks = 236364439
 code_bytes = 3150
 data_bytes = 474
 bss_bytes = 15849
-kernel_ms = 801.9115
+kernel_ms = 802.0345
 
-[tcpp.O2]
-code_bytes = 3528
+[bcc.O2]
+instructions = 46629993
+memory_operands = 13922733
+clocks = 216897052
+code_bytes = 3287
 data_bytes = 474
 bss_bytes = 15849
-kernel_ms = 5739.5933
+kernel_ms = 641.8
 
-[tcpp.Os]
+[bcc.Os]
+instructions = 58633477
+memory_operands = 13514932
+clocks = 236364439
+code_bytes = 3150
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 801.9122
+
+[tc.O1]
+instructions = 431735749
+memory_operands = 27712609
+clocks = 807041458
+code_bytes = 3357
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 5778.6447
+
+[tc.O2]
+instructions = 431861107
+memory_operands = 26607227
+clocks = 804794479
+code_bytes = 3423
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 5780.3169
+
+[tc.Os]
+instructions = 431735749
+memory_operands = 27712609
+clocks = 807041458
+code_bytes = 3357
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 5778.6447
+
+[tcpp.O1]
+instructions = 429109960
+memory_operands = 27692811
+clocks = 805807633
 code_bytes = 3354
 data_bytes = 474
 bss_bytes = 15849
-kernel_ms = 5743.6192
+kernel_ms = 5743.6199
+
+[tcpp.O2]
+instructions = 428808226
+memory_operands = 26718861
+clocks = 802475245
+code_bytes = 3528
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 5739.594
+
+[tcpp.Os]
+instructions = 429109960
+memory_operands = 27692811
+clocks = 805807633
+code_bytes = 3354
+data_bytes = 474
+bss_bytes = 15849
+kernel_ms = 5743.6199
+
+[bc.O2]
+instructions = 327086743
+memory_operands = 112467885
+code_bytes = 6754
+data_bytes = 765
+bss_bytes = 3718
 
 [pds71.O2]
 code_bytes = 6545
@@ -37,10 +101,3 @@ code_bytes = 6483
 data_bytes = 813
 bss_bytes = 3718
 kernel_ms = 5360.958
-
-[bc.O2]
-instructions = 327086743
-memory_operands = 112467885
-code_bytes = 6754
-data_bytes = 765
-bss_bytes = 3718

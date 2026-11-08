@@ -166,6 +166,8 @@ pub struct Profile {
     /// Commuting prefers the operand the result is copied back into
     /// (DEVIATE TA-LC, from the target's table; off: the pin's order).
     pub commute_loop_carried: bool,
+    /// DEVIATE PHI-SHARE on (`CpuTable::share_congruent_phis`).
+    pub share_congruent_phis: bool,
     /// Clocks a mispredicted branch costs, where the target states it.
     pub mispredict_penalty: Option<i64>,
     /// `mispredict_penalty` at -O1, -Os and -Oz, where the target states one.
@@ -195,6 +197,15 @@ pub struct Profile {
     /// allocation (`TailDuplicator`, `PreRegAlloc` clear); on only where its
     /// A/B has been made (`TailDuplicate` slot).
     pub post_ra_tail_duplicate: bool,
+    /// Equal literal stores share a register at the speed levels too
+    /// (`TimingTable::share_literal_stores`).
+    pub share_literal_stores: bool,
+    /// At -Os a 1 is `xor r,r; inc r` (`TimingTable::size_one_is_xor_inc`).
+    pub size_one_is_xor_inc: bool,
+    /// A select of two constants in a block at least this often run is a branch
+    /// on a CPU with no `cmov`; 0 is off
+    /// (`TimingTable::branch_constant_selects`).
+    pub branch_constant_selects: u32,
     /// A spill of an x87 value keeps the register's 80 bits (`fstp tbyte`),
     /// as real BC keeps a temporary (BASIC). DEVIATE D-RFP5, exit: none, the
     /// pin rounds; QB follows real BC text.
@@ -394,6 +405,7 @@ impl Profile {
             tail_dup_threshold: None,
             tail_dup_hot_size: None,
             commute_loop_carried: false,
+            share_congruent_phis: false,
             mispredict_penalty: None,
             mispredict_penalty_size: None,
             float_store: false,
@@ -402,6 +414,9 @@ impl Profile {
             min_size: false,
             speed_rate: true,
             post_ra_tail_duplicate: false,
+            share_literal_stores: false,
+            size_one_is_xor_inc: false,
+            branch_constant_selects: 0,
             spills_extended: false,
             exhaustive: false,
             model: arch.cost_model(),
@@ -640,7 +655,11 @@ fn _profile(
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
         tail_dup_hot_size: table.tail_dup_hot_threshold.map(|n| n.max(0) as usize),
         commute_loop_carried: table.commute_loop_carried,
+        share_congruent_phis: table.share_congruent_phis,
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
+        share_literal_stores: table.share_literal_stores,
+        size_one_is_xor_inc: table.size_one_is_xor_inc,
+        branch_constant_selects: table.branch_constant_selects,
         mispredict_penalty: table.mispredict_penalty,
         mispredict_penalty_size: table.mispredict_penalty_size,
         ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
@@ -758,9 +777,7 @@ fn general_registers(arch: &dyn Target) -> Vec<RegId> {
     let file = llrm_target::registers::file(&arch.registers_text()).expect("the target's registers parse");
     llrm_target::registers::of_class(&file, "gpr")
         .into_iter()
-        .map(|name| {
-            RegId::named(name).unwrap_or_else(|| panic!("no register {name}"))
-        })
+        .map(|name| RegId::named(name).unwrap_or_else(|| panic!("no register {name}")))
         .collect()
 }
 

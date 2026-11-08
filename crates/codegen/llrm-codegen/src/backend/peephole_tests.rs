@@ -1689,12 +1689,51 @@ fn test_minus_one_is_or_at_size_when_flags_are_dead() {
             block(0, vec![Arc::new(set), Arc::new(jump)], vec![7]),
             block(7, vec![Arc::new(insn(7, Some((7, 9)), first, vec![], vec![]))], vec![]),
         ];
-        let result = cleared(&body("ones", 0, crate::model::lir::shared(blocks)), ones).insns()[0].clone();
+        let result = cleared(&body("ones", 0, crate::model::lir::shared(blocks)), ones, false).insns()[0].clone();
         let what = result.what.as_ref().unwrap();
         assert_eq!(what.name.as_deref(), Some(if orred { "or" } else { "mov" }), "{successor} {ones}");
         if orred {
             assert_eq!(what.sources, [eax, im(-1, 4)]);
         }
+    }
+}
+
+/// `mov eax, 1` at size is `xor eax,eax; inc eax` (the pin's `MOV32r1`): m32
+/// phi_slot_unknown_arm -Os kept two `mov r,1` (5 B each) where the pin has 3.
+/// Only a 32-bit-address body at size, and only where the flags are dead.
+#[test]
+fn test_a_one_at_size_is_xor_and_inc() {
+    // (successor's first instruction, ones, fact, bits, rewritten): the target
+    // fact decides, not the word size (a 64-bit body with the fact on was left
+    // as `mov r,1` by a `bits == 32` test in shared code).
+    for (successor, ones, fact, bits, rewritten) in [
+        ("cmp", true, true, 32, true),
+        ("cmp", false, true, 32, false),
+        ("cmp", true, false, 32, false),
+        ("cmp", true, true, 64, true),
+        ("jb", true, true, 32, false),
+    ] {
+        let eax = rl(RegId::EAX, 4);
+        let set =
+            insn(0, Some((0, 5)), Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![im(1, 4)])), vec![], vec![]);
+        let jump = insn(5, Some((5, 7)), Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(7))), vec![], vec![]);
+        let first = match successor {
+            "jb" => Some(semt(Operation::Branch, "jb", vec![], vec![], Some(9))),
+            _ => Some(sem(Operation::Compare, "cmp", vec![], vec![eax.clone(), im(2, 4)])),
+        };
+        let blocks = vec![
+            block(0, vec![Arc::new(set), Arc::new(jump)], vec![7]),
+            block(7, vec![Arc::new(insn(7, Some((7, 9)), first, vec![], vec![]))], vec![]),
+        ];
+        let input = LirBody { bits, ..body("one", 0, crate::model::lir::shared(blocks)) };
+        let result = cleared(&input, ones, fact);
+        let names: Vec<_> = result.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.clone()).collect();
+        let want: &[&str] = if rewritten { &["xor", "inc", "jmp"] } else { &["mov", "jmp"] };
+        assert_eq!(
+            names.iter().map(|name| name.as_deref().unwrap()).collect::<Vec<_>>(),
+            want,
+            "{successor} {ones} {fact} {bits}"
+        );
     }
 }
 

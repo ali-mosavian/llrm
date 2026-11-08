@@ -309,6 +309,26 @@ class SizeTests(unittest.TestCase):
         problems = bench.ratio_problems("x", "bcc", SIZED | {"code_bytes": 260}, SIZED, SIZED | {"code_bytes": 300})
         self.assertTrue(any("code_bytes vs bcc" in one for one in problems), problems)
 
+    def test_the_clock_ratio_to_a_reference_may_not_worsen(self):
+        """m16 clock rows had no stored reference clocks: every clock comparison needed a rerun of the externals."""
+        timed = SIZED | {"clocks": 1000}
+        problems = bench.ratio_problems("x", "ow", timed | {"clocks": 1300}, timed, timed | {"clocks": 2000})
+        self.assertTrue(any("clocks vs ow" in one for one in problems), problems)
+
+    def test_a_clock_row_against_a_reference_without_stored_clocks_fails_loudly(self):
+        timed = SIZED | {"clocks": 1000}
+        problems = bench.ratio_problems("x", "ow", timed, timed, SIZED)
+        self.assertTrue(any("no stored clocks" in one for one in problems), problems)
+
+    def test_the_reference_stamp_names_compilers_switches_and_load(self):
+        stamp = bench.reference_stamp()
+        self.assertEqual({"date", "load_average", "compilers_md5", "switches"}, set(stamp))
+        self.assertEqual({"ow", "bcc", "tc", "tcpp"}, set(stamp["compilers_md5"]))
+
+    def test_a_reference_whose_clocks_moved_fails(self):
+        problems = bench.drift_problems("x ow -O2", SIZED | {"clocks": 1100}, SIZED | {"clocks": 1000})
+        self.assertIn("clocks 1100 != stored 1000", problems[0])
+
     def test_a_reference_whose_size_moved_fails(self):
         problems = bench.drift_problems("x bcc -O2", SIZED | {"code_bytes": 210}, SIZED)
         self.assertIn("code_bytes 210 != stored 200", problems[0])
@@ -1077,7 +1097,7 @@ def test_a_float_nib_row_is_compiled_in_fast_mode_as_main_measured_it():
 def test_the_parity_kernels_that_folded_to_a_constant_read_their_inputs_at_run_time():
     """branch, loop, qlight and qmove took literal arguments: the optimiser returned the constant (0 to 2 instructions, a 0.03x "gain" at m16 -Os and
     six "region never entered" rows). Their C inputs are volatile reads and their BASIC inputs READ from DATA, so every build runs the body."""
-    # Instrument config (owner w6, 2026-11-06): the parity kernels that once folded to constants, named because each had its own fold.
+    # Instrument config (owner w9, 2026-11-06): the parity kernels that once folded to constants, named because each had its own fold.
     for name in ("branch", "loop", "qlight", "qmove", "control"):  # control: bas/bq16 -Os ran 0 kernel instructions on the tip
         if name != "control":  # its C passes the inputs through pointers to statics, which the kernel reads
             assert "volatile" in (bench.BENCH / "parity" / name / f"{name}.c").read_text()

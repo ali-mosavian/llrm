@@ -156,7 +156,7 @@ def test_no_row_of_the_corpus_shifts_by_the_width_of_its_type_at_m16():
     import os
 
     pindiff = load("pindiff")
-    if not (llrmbin.ow_tree().is_dir() and os.environ.get("LLRM_PIN_CLANG") and os.environ.get("LLRM_CLANG_M16")):
+    if not (llrmbin.ow_present() and os.environ.get("LLRM_PIN_CLANG") and os.environ.get("LLRM_CLANG_M16")):
         # The gate sets all three; where it requires the pin's tools (LLRM_REQUIRE_PINTOOLS) a missing one is red, not a skipped check.
         (pytest.fail if os.environ.get("LLRM_REQUIRE_PINTOOLS") else pytest.skip)("needs the Open Watcom tree (tools/ow-fetch.sh), LLRM_PIN_CLANG and LLRM_CLANG_M16")
     import tempfile
@@ -300,10 +300,12 @@ def test_an_os_row_is_not_the_o2_row():
     import os
     import tempfile
 
-    llc = os.environ.get("LLRM_LLC")
-    if not llc or not llrmbin.ow_tree().is_dir() or "LLRM_PIN_CLANG" not in os.environ:
-        pytest.skip("needs LLRM_LLC, the Open Watcom tree and LLRM_PIN_CLANG")
     pindiff = load("pindiff")
+    llc = os.environ.get("LLRM_LLC") or str(Path(os.environ.get("LLRM_BIN", "target/release")) / "llrm-llc")
+    if not Path(llc).is_file():
+        pytest.skip(f"llrm-llc is not built ({llc})")  # the gate builds it: strict_bins turns this skip into a failure
+    if not llrmbin.ow_present() or not (Path(os.environ.get("LLRM_PIN_CLANG") or pindiff.pin.PINNED_BIN / "clang")).is_file():
+        pytest.skip("needs the Open Watcom tree and the pin's clang (host tools)")
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / "d7.c"
         src.write_text("int f(int x) { return x / 7; }\n")
@@ -452,3 +454,21 @@ def test_lea_padding_counts_as_padding_not_code():
         "  12:\t90                   \tnop\n"
     )
     assert pindiff.nop_bytes(listing) == 7 + 3 + 1
+
+
+def test_pin_optimised_ir_is_refused_as_raw_input():
+    """w12 2026-11-08: one.rt.ll (pin opt output) fed to llrm-llc re-ran our mid-end before LSR; the compare read +28/+39 B at m32 -O1
+    div_constants that real flow (4324 B against 5012 B) does not have."""
+    guard = load("irguard")
+    reopt = (Path(__file__).resolve().parent / "testdata" / "one.rt.ll").read_text()
+    assert guard.reoptimised(reopt)
+    with pytest.raises(SystemExit, match="re-optimised IR"):
+        guard.check_raw(reopt, "one.rt.ll")
+    guard.check_raw("; ModuleID = 'a.c'\ndefine void @f() { ret void }\n", "raw")
+
+
+def test_pindiff_labels_what_its_pin_column_is():
+    """The pin column (pin opt on raw IR) is 3471 B on m32 -O1 div_constants_ulong where the real clang -O1 is 3771: it was read as the pin's size."""
+    diff = load("pindiff")
+    assert "RAW clang IR" in diff.pin_column_label(False) and "not clang's own -O flow" in diff.pin_column_label(False)
+    assert "RE-OPTIMISED" in diff.pin_column_label(True)

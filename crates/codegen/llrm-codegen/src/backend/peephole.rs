@@ -420,7 +420,11 @@ impl Peephole {
             self.rules,
             &compares_again(&tested(
                 self.rules,
-                &cleared(&narrowed_moves(self.rules, &body), self.cpu.size || self.cpu.min_size),
+                &cleared(
+                    &narrowed_moves(self.rules, &body),
+                    self.cpu.size || self.cpu.min_size,
+                    self.cpu.size_one_is_xor_inc,
+                ),
             )),
         );
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
@@ -525,7 +529,7 @@ pub fn extensions(
 /// `movzx r,m8` as the register cleared and its low byte loaded, where the
 /// target prices the pair lower (`peephole.peep`).
 ///
-/// DEVIATE ZL1 (owner w1, w2 for the DAG path; permanent target tuning): the
+/// DEVIATE ZL1 (owner anyisa, DAG path w12, w2 for the DAG path; permanent target tuning): the
 /// pin keeps `movzx` on the i486 as on every x86 (X86InstrCompiler.td keeps
 /// `zextloadi8` as `MOVZX32rm8`); this pair is two clocks against three there.
 /// Both selectors run it since 2026-10-31 (textfill c -O2 m16, +4000 clocks
@@ -3008,7 +3012,7 @@ fn flags_from_scratch(body: &LirBody) -> IndexMap<i64, Lanes> {
 /// Use XOR for zero only when later integer work replaces every arithmetic
 /// flag.
 pub fn zeroes(body: &LirBody) -> LirBody {
-    cleared(body, false)
+    cleared(body, false, false)
 }
 
 /// `zeroes`, and with `ones`, `mov r,-1` as `or r,-1` on the same condition.
@@ -3028,6 +3032,7 @@ pub fn zeroes(body: &LirBody) -> LirBody {
 pub fn cleared(
     body: &LirBody,
     ones: bool,
+    one_is_xor_inc: bool,
 ) -> LirBody {
     let regs = body.regs();
     let live = _flags_live_out(body);
@@ -3093,6 +3098,38 @@ pub fn cleared(
                                     vec![Loc::Reg(*dest), minus_one],
                                 ),
                             ));
+                        }
+                    }
+                }
+            }
+            // `MOV32r1` (X86InstrCompiler.td#L335, `OptForSize, Not64BitMode`):
+            // 1 is `xor r,r; inc r`, three bytes where `mov r,1` has five.
+            if ones && one_is_xor_inc && flags_dead && one.clobbers.is_empty() && one.symbol != Some(true) {
+                if let Some(what) = &one.what {
+                    if let (
+                        Operation::Move,
+                        Some("mov"),
+                        [Loc::Reg(dest)],
+                        [Loc::Imm(Imm { value: 1, width: 4, address: None })],
+                    ) = (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
+                    {
+                        if dest.width == 4 && regs.integer(dest.register) {
+                            let zero = with_what(
+                                &one,
+                                semantics(
+                                    Operation::Binary,
+                                    "xor",
+                                    vec![Loc::Reg(*dest)],
+                                    vec![Loc::Reg(*dest), Loc::Reg(*dest)],
+                                ),
+                            );
+                            let up = with_what(
+                                &one,
+                                semantics(Operation::Unary, "inc", vec![Loc::Reg(*dest)], vec![Loc::Reg(*dest)]),
+                            );
+                            // Reversed below: the xor comes first.
+                            insns.push(Arc::new(up));
+                            one = Arc::new(zero);
                         }
                     }
                 }

@@ -9,16 +9,106 @@
 //! the copy: 2 bytes and 4 clocks on the 68000 each time. The compare sets the
 //! same codes either way (a long compare of the whole register).
 //!
+//! A value only a compare's destination keeps in a data register may live in
+//! an address register: [`widen_compare_destinations`] gives it the class
+//! `XR32` before allocation, [`compare_in_address_register`] makes the `cmpa.l`
+//! after it, and [`word_immediates`] makes `cmpa.l #k` of a 16-bit `k` the 4 B
+//! `cmpa.w #k`. A function it changed is also built without, the cheaper kept
+//! (`Options::compare_destinations`, PARITY row 48).
+//!
 //! DEVIATE C-CMPA: the pin's M68k has no `CMPA` row (see
-//! [`crate::dagisel::cmpa`]). Owner m68k; exit 2026-11-28, with the rows.
+//! [`crate::dagisel::cmpa`]) and gives a compare's destination `DR32`. Owner
+//! m68k; exit 2026-11-28, with the rows.
 
 use llrm_spike_mf::livephys::PhysLiveness;
 use llrm_spike_mf::{Kind, Operand, Reg};
 
 use crate::dagisel::{cmpa, local};
-use crate::mfunc::{MFunction, op_inst};
+use crate::mfunc::{Class, MFunction, op_inst, operand_class};
 use crate::regalloc::{Assignment, M68kRegisters};
 use crate::{REGISTER_INFO, reg};
+
+/// The destination of a long compare may live in an address register: a
+/// register whose other operands all allow one takes the class `XR32`, and the
+/// allocator chooses; how many were widened. [`compare_in_address_register`]
+/// makes the `cmpa.l` after allocation.
+pub fn widen_compare_destinations(function: &mut MFunction) -> usize {
+    let count = function.classes.len();
+    let mut destination = vec![false; count];
+    let mut blocked = vec![false; count];
+    let mut note = |register: &Reg, ok: bool, dest: bool| {
+        if let Reg::Virt(v) = register {
+            destination[*v as usize] |= dest;
+            blocked[*v as usize] |= !ok;
+        }
+    };
+    for block in &function.blocks {
+        for phi in &block.phis {
+            note(&phi.result, true, false);
+            for (_, input) in &phi.incoming {
+                note(input, true, false);
+            }
+        }
+        for inst in &block.insts {
+            for (position, operand) in inst.operands.iter().enumerate() {
+                let (Operand::Def(r) | Operand::Use(r)) = operand else { continue };
+                match inst.kind {
+                    Kind::Copy => note(r, true, false),
+                    Kind::Op(name) if cmpa::dest_of(name) == Some(position) => note(r, true, true),
+                    Kind::Op(name) => note(r, operand_class(name, position) == Some(Class::Xr32), false),
+                }
+            }
+        }
+    }
+    let mut widened = 0;
+    for (v, class) in function.classes.iter_mut().enumerate() {
+        if *class == Class::Dr32 && destination[v] && !blocked[v] {
+            *class = Class::Xr32;
+            widened += 1;
+        }
+    }
+    widened
+}
+
+/// Rewrites each compare whose destination the allocation put in an address
+/// register to the `cmpa.l` of it.
+pub fn compare_in_address_register(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let address = [reg::A0, reg::A1, reg::A2, reg::A3, reg::A4, reg::A5];
+    for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
+        let Kind::Op(name) = inst.kind else { continue };
+        let (Some(sibling), Some(dest_at)) = (cmpa::sibling(name), cmpa::dest_of(name)) else { continue };
+        let Some(&Operand::Use(dest)) = inst.operands.get(dest_at) else { continue };
+        let physical = match dest {
+            Reg::Virt(v) => assignment.0[v as usize],
+            Reg::Phys(p) => p,
+        };
+        if !address.contains(&REGISTER_INFO.root(physical)) {
+            continue;
+        }
+        let Some(desc) = local::code_of(sibling).and_then(local::desc) else { continue };
+        *inst = op_inst(sibling, desc, inst.operands.clone());
+    }
+}
+
+/// `cmpa.l #imm, %an` with `imm` in 16 bits is `cmpa.w #imm, %an`: the word
+/// is sign-extended and the whole register compared. 4 bytes and 10 clocks on
+/// the 68000 for 6 and 14, with no register to hold the constant.
+pub fn word_immediates(function: &mut MFunction) {
+    for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
+        if inst.kind != Kind::Op("CMPA32i") {
+            continue;
+        }
+        let [Operand::Imm(value), Operand::Use(_)] = &inst.operands[..] else { continue };
+        if !(-32768..=32767).contains(value) {
+            continue;
+        }
+        let Some(desc) = local::code_of("CMPA16i").and_then(local::desc) else { continue };
+        *inst = op_inst("CMPA16i", desc, inst.operands.clone());
+    }
+}
 
 /// Rewrites each copy to a data register and the compare of it, as described
 /// above.

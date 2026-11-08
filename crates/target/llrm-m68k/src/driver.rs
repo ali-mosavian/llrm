@@ -21,6 +21,8 @@ pub enum Level {
     O1,
     O2,
     O3,
+    /// -Omax: `Options::aggressive()`.
+    Omax,
     Os,
     Oz,
 }
@@ -28,14 +30,15 @@ pub enum Level {
 impl Level {
     /// The level `-O<text>` names.
     pub fn parse(text: &str) -> Result<Self, String> {
-        Ok(match text {
-            "0" => Self::O0,
-            "" | "1" => Self::O1,
-            "2" => Self::O2,
-            "3" => Self::O3,
-            "s" => Self::Os,
-            "z" => Self::Oz,
-            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Os or -Oz")),
+        use llrm_transforms::pipeline::LevelName as Name;
+        Ok(match Name::parse(text)? {
+            Name::O0 => Self::O0,
+            Name::O1 => Self::O1,
+            Name::O2 => Self::O2,
+            Name::O3 => Self::O3,
+            Name::Omax => Self::Omax,
+            Name::Os => Self::Os,
+            Name::Oz => Self::Oz,
         })
     }
 
@@ -45,6 +48,7 @@ impl Level {
             Self::O1 => MidEnd::basic(),
             Self::O2 => MidEnd::default(),
             Self::O3 => MidEnd::speed(),
+            Self::Omax => MidEnd::aggressive(),
             Self::Os => MidEnd::size(),
             Self::Oz => MidEnd::min_size(),
         }
@@ -223,6 +227,9 @@ fn lowered(
     let applied = Applied { options, dump: dump.map(Into::into), ..Applied::default() };
     llrm_transforms::pipeline::applied(&mut program, &applied)?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+    // `llvm.is.constant` and `llvm.objectsize` left by -O0 (the pin runs
+    // `LowerConstantIntrinsics` at every level)
+    program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
     // `llvm.scmp` and `llvm.ucmp` have no m68k instruction: the generic
     // expansion
     program.modules.iter_mut().try_for_each(|module| llrm_codegen::backend::compares::expanded(module, |_| true))?;

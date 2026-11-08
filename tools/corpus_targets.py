@@ -6,7 +6,7 @@ A program with no line is for every target.
 Flags for one target family only go on `// flags-FAMILY: ...` (`flags_for`; m68k first), never on the shared `// flags:` line, which keeps
 its meaning for every other target (the x86 rows read `-mcmodel` there; clang rejects `-mcmodel=medium` on i386 and on m68k). A flag
 only a backend takes, not clang, is listed on the target's row in `crates/driver/llrm-cc/targets.toml` (`llc_mcmodel` for the code
-model): llrm-cc then gives it to the backend alone, and a backend that does not know it fails the build (never a silent drop). Tokens: `dos` (x86_16 and x86_32 DOS/Watcom targets), a family (`x86-m16`,
+model): llrm-cc then gives it to the backend alone, and a backend that does not know it fails the build (never a silent drop). Tokens: `dos` (x86_16 and x86_32 DOS/Watcom targets), `linux` (the sysv `-linux` targets), `!TOKEN` (every target but those; alone it means all others), `lp64` (targets whose `long` is 64 bits: x86_64, arm64; for an `.out` written with a 64-bit `long`), `ptr16` (a 16-bit address space: data over 64 KiB does not fit), `int16` (a 16-bit `int`: a bit-field wider than 16 bits is an error), `freestanding` (no libc headers: `#include <stdio.h>` fails), a family (`x86-m16`,
 `x86-m32`, `x86-m64`) or a full target name. A harness asks `applies`, and prints `NA` for a program that does not, never
 FAIL: `tools/corpus_targets.py check TARGET FILE.c` exits 3 and prints "n/a, DOS-only" (or "n/a, targets: ...").
 """
@@ -17,6 +17,9 @@ from pathlib import Path
 HEADER_LINES = 6
 DOS = re.compile(r"^x86_(16|32)-(dos|wat)")
 FAMILY = re.compile(r"^x86_(16|32|64)-")
+LP64 = re.compile(r"^(x86_64|arm64)-")
+SMALL = re.compile(r"^(x86_16|z80|6502)-")  # 16-bit pointers and int
+FREESTANDING = re.compile(r"^(wasm32|z80|6502)(-|$)")
 
 
 def tags(source: str) -> list[str] | None:
@@ -42,7 +45,12 @@ def applies(target: str, source: str) -> bool:
         return True
     family = FAMILY.match(target)
     names = {target, f"x86-m{family.group(1)}" if family else target}
-    return any(token in names or (token == "dos" and DOS.match(target)) for token in listed)
+
+    def matches(token: str) -> bool:
+        return token in names or (token == "dos" and bool(DOS.match(target))) or (token == "lp64" and bool(LP64.match(target))) or (token in ("ptr16", "int16") and bool(SMALL.match(target))) or (token == "freestanding" and bool(FREESTANDING.match(target))) or (token == "linux" and target.endswith("-linux"))
+
+    positive = [t for t in listed if not t.startswith("!")]
+    return not any(matches(t[1:]) for t in listed if t.startswith("!")) and (not positive or any(matches(t) for t in positive))
 
 
 def reason(source: str) -> str:

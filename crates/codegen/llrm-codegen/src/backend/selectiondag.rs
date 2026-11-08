@@ -102,7 +102,7 @@
 //! `FoldSetCC`
 //! ([L2698](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L2698)).
 
-pub use llrm_sdag::{actions, isd, libcalls, lowering, mvt, x86isd};
+pub use llrm_sdag::{actions, isd, libcalls, lowering, mvt, target_names};
 pub mod abs_combine;
 pub mod address_analysis;
 pub mod bitcast_combine;
@@ -111,11 +111,12 @@ pub mod bswap_combine;
 pub mod builder;
 pub mod chain_combine;
 pub mod combine_andnot;
+mod combine_avg;
 pub mod combine_funnel;
 pub mod combine_lifetime_end;
-pub mod combine_mulo;
 pub mod combine_load;
 pub mod combine_load_combine;
+pub mod combine_mulo;
 pub mod combine_store_merge;
 pub mod combine_token_factor;
 pub mod combine_trunc_stores;
@@ -134,7 +135,6 @@ pub mod div_combine;
 pub mod div_const;
 pub mod dump;
 pub mod emit_api;
-pub mod select_api;
 pub mod expand_divrem_const;
 pub mod expand_fixed;
 pub mod expand_funnel;
@@ -159,18 +159,38 @@ pub mod logic_setcc;
 mod match_rotate;
 pub mod narrow_divrem;
 pub mod opcodes;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/postprocess.rs"]
+pub mod postprocess;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/preprocess.rs"]
+pub mod preprocess;
 mod reassociate;
 pub mod reduce_load_width;
 pub mod rotate_combine;
 pub mod schedule;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/select.rs"]
+pub mod select;
+pub mod select_api;
 pub mod setcc_extreme;
 pub mod switchcg;
 pub mod target_calling;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/unfold.rs"]
+pub mod unfold;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86isd.rs"]
+pub mod x86isd;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86_carry.rs"]
 pub mod x86_carry;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86_lowering.rs"]
 pub mod x86_lowering;
-pub mod x86_postprocess;
-pub mod x86_preprocess;
-pub mod x86_unfold;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/nodes.rs"]
+pub mod x86_nodes;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use dag::{
@@ -189,6 +209,8 @@ mod asmcall_tests;
 mod bundle_tests;
 #[cfg(test)]
 mod codecall_tests;
+#[cfg(test)]
+mod combine_avg_tests;
 #[cfg(test)]
 mod dag_function_aggregates_tests;
 #[cfg(test)]
@@ -221,8 +243,6 @@ mod dagisel_tests;
 #[cfg(test)]
 mod exact_shift_tests;
 #[cfg(test)]
-mod or_as_add_tests;
-#[cfg(test)]
 mod extload_tests;
 #[cfg(test)]
 mod fallthrough_tests;
@@ -250,6 +270,8 @@ mod memlib_tests;
 mod memspace_tests;
 #[cfg(test)]
 mod opcodes_tests;
+#[cfg(test)]
+mod or_as_add_tests;
 #[cfg(test)]
 mod overflow_tests;
 #[cfg(test)]

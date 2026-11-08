@@ -161,8 +161,9 @@ fn pin() -> &'static str {
 }
 const OW_COMMIT_FILE: &str = include_str!("../../../../toolchain/owshim/ow-commit");
 
-/// The Open Watcom tree `{ow}` names: `llrm/ow-src-<commit>` under `cache`, the commit toolchain/owshim/ow-commit pins. tools/ow-fetch.sh makes
-/// it; llrm-cc never does.
+/// The Open Watcom tree `{ow}` names: `llrm/ow-src-<commit>` under the cache
+/// directory `cache`, the commit toolchain/owshim/ow-commit pins.
+/// tools/ow-fetch.sh makes it; llrm-cc never does.
 pub fn ow_tree_in(cache: &Path) -> PathBuf {
     cache.join("llrm").join(format!("ow-src-{}", OW_COMMIT_FILE.trim()))
 }
@@ -170,6 +171,18 @@ pub fn ow_tree_in(cache: &Path) -> PathBuf {
 /// The Open Watcom tree on this machine (`ow_tree_in` of the cache directory).
 pub fn ow_tree() -> PathBuf {
     ow_tree_in(&cache_dir())
+}
+
+/// Whether the tree under `cache` is whole: toolchain/cache.sh writes
+/// `.complete` last, so a directory without it is an interrupted or running
+/// fetch.
+pub fn ow_present_in(cache: &Path) -> bool {
+    ow_tree_in(cache).join(".complete").is_file()
+}
+
+/// `ow_present_in` the cache directory of this machine.
+pub fn ow_present() -> bool {
+    ow_present_in(&cache_dir())
 }
 
 /// `$XDG_CACHE_HOME`, else `~/.cache`: where toolchain/owclib.sh puts the tree.
@@ -180,15 +193,14 @@ fn cache_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".cache"))
 }
 
-/// `word` with `{ow}` replaced by the tree under `cache` where it is complete
-/// (toolchain/cache.sh writes `.complete` last); where it is not the word
-/// stays, and `missing_ow` says so.
+/// `word` with `{ow}` replaced by the tree under `cache` where it is whole;
+/// where it does not the word stays, and `missing_ow` says so.
 fn with_ow(
     word: &str,
     cache: &Path,
 ) -> String {
     let tree = ow_tree_in(cache);
-    if word.contains("{ow}") && tree.join(".complete").is_file() {
+    if word.contains("{ow}") && ow_present_in(cache) {
         word.replace("{ow}", &tree.display().to_string())
     } else {
         word.to_owned()
@@ -748,6 +760,24 @@ pub fn link_command(
     Ok(command)
 }
 
+/// The error for a clang whose datalayout differs from the table's. A row with a `clang_env` takes the fork's clang from that variable, and
+/// falls back to the pin's, which has no 16-bit layout: the message names the variable when it is unset.
+fn layout_mismatch(
+    path: &str,
+    printed: &str,
+    target: &Target,
+    var: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> String {
+    let mut message = format!(
+        "{path}: clang's datalayout `{printed}` lays types out differently from the table's `{}`",
+        target.datalayout
+    );
+    if let Some(name) = target.clang_env.as_deref().filter(|name| var(name).is_none()) {
+        message.push_str(&format!(" (this row needs the fork's clang: set {name}; the pin's clang was used)"));
+    }
+    message
+}
+
 fn clang_path(target: &Target) -> PathBuf {
     let own = target.clang_env.as_deref().and_then(std::env::var_os);
     own.or_else(|| std::env::var_os("LLRM_PIN_CLANG"))
@@ -908,10 +938,7 @@ fn build(
                 let printed = datalayout_of(&text).unwrap_or_default();
                 let expected = target.clang_datalayout.as_deref().unwrap_or(&target.datalayout);
                 if printed != expected && layout_facts(printed) != layout_facts(&target.datalayout) {
-                    return Err(fail(format!(
-                        "{path}: clang's datalayout `{printed}` lays types out differently from the table's `{}`",
-                        target.datalayout
-                    )));
+                    return Err(fail(layout_mismatch(path, printed, target, |name| std::env::var_os(name))));
                 }
                 if printed != target.datalayout {
                     let line = format!("target datalayout = \"{printed}\"");

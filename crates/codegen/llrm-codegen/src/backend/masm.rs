@@ -589,9 +589,11 @@ pub fn jump_tables(
             let name = format!("$J{index}");
             names.insert((Space::Segment, index), name.clone());
             out.push(Datum::Object(Label { name }));
-            // A table read through a register is position independent: its
-            // entries are offsets from the table.
-            let relative = what.table_id.is_some() && !matches!(what.sources.first(), Some(Loc::Mem(_)));
+            // A table read through a register is position independent at 64
+            // bits: its entries are offsets from the table. At 16 and 32 bits
+            // the register holds the entry, an address (`-O0`'s `mov eax,
+            // [table+4*i]; jmp eax`).
+            let relative = bytes == 8 && what.table_id.is_some() && !matches!(what.sources.first(), Some(Loc::Mem(_)));
             out.extend(what.table.iter().map(|&target| {
                 if relative {
                     Datum::Difference(Difference { name: label(number, target), base: format!("$J{index}") })
@@ -1194,9 +1196,9 @@ fn realign_of(body: &lir::LirBody) -> i64 {
 /// Why `procedure` cannot have its stack pointer realigned, if it cannot: it
 /// is refused rather than compiled with a local off its alignment.
 ///
-/// DEVIATE RA1 (owner w4, 2026-10-28): a dynamic `alloca` beside an
+/// DEVIATE RA1 (owner object-refactor, 2026-10-28): a dynamic `alloca` beside an
 /// over-aligned local is refused; the pin addresses the locals through a base
-/// pointer (`X86RegisterInfo::hasBasePointer`). DEVIATE RA2 (owner w4,
+/// pointer (`X86RegisterInfo::hasBasePointer`). DEVIATE RA2 (owner object-refactor,
 /// 2026-10-28): `-g` variables are refused; their locations need the canonical
 /// frame address, which a realigned frame moves. Exit for both: the pin's
 /// base pointer and CFA locations in `lowered`.
@@ -1253,7 +1255,8 @@ pub fn realigned(procedure: Procedure) -> Procedure {
                 .iter()
                 .flat_map(|block| block.insns.iter())
                 .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call)));
-    if realign_of(&procedure.body) == 0 && !calls { procedure } else { saved_first(procedure) }
+    let leaf_cell = procedure.body.bits == 32 && procedure.registers.free && procedure.reserve != 0;
+    if realign_of(&procedure.body) == 0 && !calls && !leaf_cell { procedure } else { saved_first(procedure) }
 }
 
 /// `procedure` with its callee-saved registers pushed before the space for its
@@ -1319,9 +1322,9 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // Where the frame register is omitted and that is settled without a size
     // comparison (`frame_omitted`), its cell is not reserved: the return
     // address and the registers are what the locals are aligned below. The
-    // 32-bit frames keep it (Watcom's layout, not the pin's).
+    // 32-bit frames keep it unless the frame register is free (Watcom's layout, not the pin's).
     let mut checked = None;
-    let dropped = matches!(procedure.body.bits, 64) && {
+    let dropped = (matches!(procedure.body.bits, 64) || (procedure.body.bits == 32 && procedure.registers.free)) && {
         let held = frame_held(&procedure);
         (!procedure.size || held || procedure.registers.free) && {
             let addressed = stack_addressable(&procedure, 0);
@@ -1334,10 +1337,17 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     if pushed == 0
         && !rebuilt
         && procedure.body.vector_saves.is_empty()
-        && !(dropped && procedure.reserve != 0 && aligns_for_calls(&procedure))
+        && !(dropped && procedure.reserve != 0 && (aligns_for_calls(&procedure) || procedure.body.bits == 32))
     {
         return with_checked(procedure, checked);
     }
+    // A 32-bit leaf with no frame register rounds its locals to the widest
+    // object only, as the pin does (`calculateFrameObjectOffsets`).
+    let align = if dropped && procedure.body.bits == 32 && !aligns_for_calls(&procedure) && procedure.body.object_align > 0 {
+        procedure.body.object_align.max(slot).min(align)
+    } else {
+        align
+    };
     let above = if dropped { slot } else { 0 };
     // Nothing is aligned where there are no locals: a leaf with two pushed
     // registers had a `push rax` slot, and a caller with one had `sub rsp, 16`
@@ -1474,7 +1484,7 @@ fn stack_check(
 /// A `saved_first` frame's entry and return sequences, the pin's
 /// (`framelowering`): `push bp; mov bp, sp`, the registers, `sub sp, N`; and
 /// `add sp, N` (`lea sp, [bp - registers]` after an `alloca`), the pops, `pop
-/// bp`. DEVIATE PE1 (owner w-5, 2026-11-27): a one-slot adjustment stays a
+/// bp`. DEVIATE PE1 (owner object-refactor, 2026-11-27): a one-slot adjustment stays a
 /// `sub`/`add`, not the pin's `push eax`/`pop`: the register the push may
 /// clobber is not asked of the entry's live-ins here.
 fn lowered(
@@ -2904,7 +2914,11 @@ fn below_top(
     bytes: i64,
 ) -> Option<Loc> {
     let at = place.address()?;
-    let addr = at.addr.filter(|addr| addr.space == Space::Frame && addr.disp < 0)?;
+    // A cell in a slot (`slot_tag`) is below the top even at displacement 0:
+    // a strength-reduced index runs from -N up to it (`[ebp + esi]`, esi from
+    // -32), and it is addressed from the stack pointer as any other.
+    let below = |addr: &Addr| addr.disp < 0 || (addr.index != 0 && addr.index % 2 != 0 && addr.disp == 0);
+    let addr = at.addr.filter(|addr| addr.space == Space::Frame && below(addr))?;
     Some(place.map_address(|one| ir::AddressRef {
         through: STACK,
         addr: Some(Addr { disp: addr.disp + bytes, ..addr }),
@@ -3771,6 +3785,10 @@ pub fn _instruction(
         // JWasm refuses `rep bsf`; the pin prints it, so the prefix is a byte.
         Operation::Binary if name == "bsf" && what.repeat => {
             vec!["db 0F3h".to_owned(), format!("bsf {}, {}", dests[0], sources[1])]
+        }
+        // `cmpss xmm0, xmm1, 0`: the predicate is the third operand.
+        Operation::Binary if sources.len() == 3 && matches!(what.sources[2], Loc::Imm(_)) => {
+            vec![format!("{} {}, {}, {}", name.trim_end_matches("_x"), dests[0], sources[1], sources[2])]
         }
         Operation::Binary | Operation::Select => vec![format!("{name} {}, {}", dests[0], sources[1])],
         // `sqrtsd xmm0, xmm0`: an xmm unary reads a source of its own, and a

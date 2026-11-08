@@ -2788,7 +2788,7 @@ fn a_carry_branch_on_the_old_counter_is_compared_before_the_step() {
 #[test]
 fn a_zero_branch_on_the_old_counter_keeps_its_compare_after_the_step() {
     let ir = counter_loop("ne i16 %i, 63");
-    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
     let (compare, step) = (text.find("cmp #63"), text.find("inx"));
     assert!(compare.is_some() && step.is_some(), "no compare or no step:\n{text}");
     assert!(step < compare, "the compare moved above the step:\n{text}");
@@ -2880,4 +2880,20 @@ define void @copy() {
     let second_load = body.iter().rposition(|line| line.starts_with("lda")).unwrap_or(0);
     let first_store = body.iter().position(|line| line.starts_with("sta")).unwrap_or(usize::MAX);
     assert!(first_store < second_load, "both loads came before the first store:\n{text}");
+}
+
+/// `builtins_table` at -O0 failed with "intrinsic call llvm.is.constant.i16":
+/// the O0 path skipped the step the pin runs at every level, so no object was
+/// written (2026-11-08).
+#[test]
+fn is_constant_is_lowered_at_o0() {
+    let ir = module(
+        "@g = global i16 7\n\
+         declare i1 @llvm.is.constant.i16(i16)\n\
+         define i8 @t() {\nentry:\n  %v = load volatile i16, ptr @g\n  \
+         %k = call i1 @llvm.is.constant.i16(i16 5)\n  %n = call i1 @llvm.is.constant.i16(i16 %v)\n  \
+         %a = zext i1 %k to i8\n  %b = zext i1 %n to i8\n  %s = shl i8 %a, 1\n  %r = or i8 %s, %b\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O0)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "t"), 2, "{text}");
 }

@@ -306,6 +306,7 @@ pub mod loopunroll;
 pub mod loopunrollandjam;
 pub mod loopunrollloadcse;
 pub mod loopunrollpass;
+pub mod unrollbound;
 pub mod loopunrollruntime;
 pub mod loopversioning;
 pub mod lowerconstantintrinsics;

@@ -2234,3 +2234,25 @@ fn a_word_times_a_shifted_factor_shifts_in_hl() {
         assert_eq!(out.matches("add hl, hl").count(), 5, "{level:?}: {out}");
     }
 }
+
+/// `ld c, l; ld b, h` then `sla c; rl b` twice (4 B a bit) with `hl` dead:
+/// 8 B of doublings, and a table index of `x * 36` 16 B. The doublings belong
+/// in `hl` before the copy: 2 B.
+#[test]
+fn a_copy_of_hl_shifted_with_hl_dead_shifts_in_hl_first() {
+    let ir = include_str!("kernels/ir/shift_copy_of_hl_when_dead.ll");
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("sla c") && !out.contains("rl b"), "{level:?}: {out}");
+        assert_eq!(out.matches("add hl, hl").count(), 5, "{level:?}: {out}");
+    }
+}
+
+/// `llvm.is.constant` reached the backend at -O0 and the compile was refused
+/// (`intrinsic call llvm.is.constant.i16`; builtins_table -O0 failed).
+#[test]
+fn is_constant_is_lowered_at_o0() {
+    let ir = include_str!("kernels/ir/is_constant_o0.ll");
+    let out = text(ir, "f", 0, &Request::new(Level::O0)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ret"), "{out}");
+}

@@ -70,6 +70,25 @@
 //! rate on the 68000. Default off: the pin's order, output unchanged. Owner:
 //! m68k. Exit: 2026-11-22.
 //!
+//! DEVIATE C16 (owner greedy-anyisa, exit 2026-11-29): `joinAllIntervals` takes
+//! a split edge (a block of copies and a jump between one predecessor and one
+//! successor) before the others only when `JoinSplitEdges` is set
+//! (`-join-splitedges`, off at the pin: RegisterCoalescer.cpp#L4273); here
+//! `driver::run` always does. Ties go by block index, the pin's by
+//! `MBB->getNumber()` (creation order: a block split off an edge lies next to
+//! its predecessor and is numbered last). A value read at a width above its
+//! definition's names the pin's `COPY` into the wider class
+//! (`undef %18.sub_32bit:gr64 = COPY %0` before an `LEA64_32r`), which makes it
+//! a value with another copy for `isTerminalReg`; here it is no copy. Measured
+//! (fib -Os x86-64, pin MIR vs ours): the three together give the pin's copy
+//! structure (`mov ebx, edi` once, the loop-carried copy at the latch) and, on
+//! the bench corpus, m64 -O2 +189 B (9 worse cells, sfm16_float* +23), -O3
+//! +136, m32 -Os +91 (jpeg_single +48), against -10/-36 and -32/-49/-58 at the
+//! other levels; fib -Os executes 220.5 K -> 235 K (the pin's shape: a block
+//! `mov eax, ebx; jmp` on the early exit). The widening alone: m64 -20 B at
+//! -O2/-O3 (11 cells, none worse), fib -Os +4 B and +6.8 K executed.
+//! Zero-worse-cells holds, so none is applied; each is the pin's.
+//!
 //! DEVIATE C9 (no number): a parameter's value on entry is defined by no
 //! instruction, so LLVM's phi rule ("any real interference would show up in a
 //! predecessor") does not carry over: the entry block has none. Two parameters

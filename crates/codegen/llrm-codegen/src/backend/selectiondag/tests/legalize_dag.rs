@@ -311,3 +311,56 @@ fn a_float_routine_is_a_libcall_with_all_its_operands() {
     DagLegalizer::new(&mut dag, &tli, &mut calls).run().unwrap();
     assert_eq!(calls.0, vec![("lrint", 1, EVT::I32), ("sin", 1, f64), ("fmod", 2, f64)]);
 }
+
+/// `clz`, `ctz` and `popcount` marked `LibCall` were refused ("convert node to libcall"): only the arithmetic and
+/// float routines were translated, so m68k expanded `clzll` inline (544 B for `clzll_ctzll_64` at -Os). The call takes
+/// the value as is, returns `int` and is sign-extended or truncated to the node's type; the default action still
+/// expands, with no call.
+#[test]
+fn a_count_marked_libcall_is_a_call_to_its_routine_and_the_default_is_no_call() {
+    #[derive(Default)]
+    struct Calls(Vec<(&'static str, usize, EVT)>);
+    impl Hooks for Calls {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            dag: &mut SelectionDAG,
+            name: &'static str,
+            args: &[SDValue],
+            ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0.push((name, args.len(), ret));
+            Some(dag.get_register(ret, 40 + self.0.len() as u32))
+        }
+    }
+    let counts = [(ISD::CtLzZeroPoison, "__clzsi2"), (ISD::CtPop, "__popcountsi2"), (ISD::CtTzZeroPoison, "__ctzsi2")];
+    for libcall in [true, false] {
+        let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+        if libcall {
+            for (op, _) in counts {
+                tli.set_operation_action(op, MVT::I32, Action::LibCall);
+            }
+        }
+        for (op, name) in counts {
+            let mut dag = dag();
+            let x = dag.get_register(EVT::I32, 1);
+            let count = dag.get_node(op, EVT::I32, &[x]);
+            dag.set_root(count);
+            let mut calls = Calls::default();
+            let run = DagLegalizer::new(&mut dag, &tli, &mut calls).run();
+            if libcall {
+                run.unwrap();
+                assert_eq!(calls.0, vec![(name, 1, EVT::I32)], "{op:?}");
+            } else {
+                assert!(calls.0.is_empty(), "{op:?} called {:?} by default", calls.0);
+            }
+        }
+    }
+}
