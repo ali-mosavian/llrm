@@ -46,7 +46,6 @@ use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo
 use llrm_codegen::backend::selectiondag::mvt::MVT;
 use llrm_codegen::backend::selectiondag::opcodes::OpcodeMap;
 use llrm_codegen::backend::selectiondag::schedule::SchedInfo;
-use llrm_codegen::backend::selectiondag::x86_lowering::X86Lowering;
 use llrm_codegen::model::ir::{Addr, Held, Mem, Space};
 use llrm_codegen::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use llrm_dagisel::addr::AddrMode;
@@ -60,6 +59,7 @@ use llrm_x86_dagisel::generated::{x86_i486, x86_m16, x86_x64};
 use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 
 use super::select::select_block;
+use super::x86_lowering::X86Lowering;
 
 struct Info {
     source_order: bool,
@@ -1330,22 +1330,26 @@ fn selected_in(
     // or not the multiplies are priced by clocks alone (m16): without it
     // every divide was priced as run once.
     let divide_bytes = mul_rate > 0 && machine.tti().is_some_and(|tti| tti.divide_by_bytes());
-    let frequencies = (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes).then(|| {
-        let bpi = info
-            .bpi
-            .get_or_insert_with(
-                || llrm_analysis::bpi::BranchProbabilityInfo::of(
-                    llrm_analysis::bpi::Module {
-                        context: &module.context,
-                        declarations: &module.globals,
-                        metadata: &module.metadata,
-                        layout: &layout,
-                    },
-                    function,
-                ),
-            );
-        llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
-    });
+    // DEVIATE SELB: a select of two constants is a branch where the block runs
+    // often enough to pay its bytes.
+    let select_branch = if cpu.speed_rate && !cpu.size { cpu.branch_constant_selects } else { 0 };
+    let frequencies =
+        (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes || select_branch > 0).then(|| {
+            let bpi = info
+                .bpi
+                .get_or_insert_with(
+                    || llrm_analysis::bpi::BranchProbabilityInfo::of(
+                        llrm_analysis::bpi::Module {
+                            context: &module.context,
+                            declarations: &module.globals,
+                            metadata: &module.metadata,
+                            layout: &layout,
+                        },
+                        function,
+                    ),
+                );
+            llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
+        });
     let div_live = if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 };
     let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { llrm_mir::dense::IdMap::new() };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
@@ -1416,11 +1420,15 @@ fn selected_in(
                                 | llrm_codegen::twoaddress::ThreeAddress::AddSub
                                 | llrm_codegen::twoaddress::ThreeAddress::AddSubWords
                         ),
-                    i16_mul_chains: !llrm_codegen::backend::selectiondag::x86_lowering::promotes_i16(&tli),
+                    i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
                     sext_load: true,
                     zext_free: m64,
+                    branch_constant_selects: select_branch > 0
+                        && frequencies.as_ref().is_some_and(|frequencies| {
+                            frequencies.relative_to_entry(parent) >= f64::from(select_branch)
+                        }),
                     profile: if mul_by_clocks {
-                        Some(llrm_codegen::backend::selectiondag::x86_lowering::MulPricing {
+                        Some(super::x86_lowering::MulPricing {
                             cpu,
                             arch,
                             freq: 1.0,
@@ -1433,7 +1441,7 @@ fn selected_in(
                             .as_ref()
                             .filter(|_| mul_rate > 0 || price_pin)
                             .map(
-                                |frequencies| llrm_codegen::backend::selectiondag::x86_lowering::MulPricing {
+                                |frequencies| super::x86_lowering::MulPricing {
                                     cpu,
                                     arch,
                                     freq: frequencies.relative_to_entry(parent),

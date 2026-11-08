@@ -7,15 +7,15 @@
 use std::sync::OnceLock;
 
 use llrm_lir::registers::RegId;
+use llrm_mir::module::Module;
 
+use crate::backend::constpool::Pool;
+use crate::backend::isel::{Selected, Unselected};
 use crate::backend::selectiondag::SelectionDAG;
 use crate::backend::selectiondag::emit_api::{EmitContext, EmitError, EmitState, Emitted};
 use crate::backend::selectiondag::schedule::Unit;
-use crate::backend::constpool::Pool;
-use crate::backend::isel::{Selected, Unselected};
 use crate::backend::selectiondag::select_api::RuntimeContracts;
 use crate::model::lir::LirBody;
-use llrm_mir::module::Module;
 use crate::support::hash::IndexMap;
 
 /// The backend code of one target family.
@@ -55,6 +55,9 @@ pub trait BackendHooks: Sync + Send {
 
     /// Whether the function just selected went through FastISel; read once.
     fn take_fast_took(&self) -> bool;
+
+    /// The target nodes the shared builder creates for this backend's target.
+    fn lowering_nodes(&self) -> crate::backend::selectiondag::builder::LoweringNodes;
 }
 
 static INSTALLED: OnceLock<&'static dyn BackendHooks> = OnceLock::new();
@@ -124,6 +127,10 @@ mod in_tests {
 
         fn take_fast_took(&self) -> bool {
             crate::backend::selectiondag::fastisel::take_took()
+        }
+
+        fn lowering_nodes(&self) -> crate::backend::selectiondag::builder::LoweringNodes {
+            crate::backend::selectiondag::x86_nodes::nodes()
         }
     }
 }

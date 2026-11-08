@@ -1452,6 +1452,14 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    /// DEVIATE LU14: real mode searches both use orders (rcflip's RAMP loop:
+    /// 4 instructions in the pin's order, 2 in the other). owner:
+    /// llrm-target-x86-m16, exit: 2026-11-30, or when the pin's search is
+    /// order-free.
+    fn lsr_solves_both_use_orders(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
         self.real_mode.is_some()
     }

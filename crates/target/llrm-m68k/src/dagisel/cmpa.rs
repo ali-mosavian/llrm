@@ -34,6 +34,8 @@ struct Row {
     name: &'static str,
     base: &'static str,
     dest: usize,
+    /// `cmpa.w #imm, %an`: the word is sign-extended and the long compared.
+    word: bool,
 }
 
 /// The pin's compares of a long to a data register, by their source: a
@@ -41,7 +43,13 @@ struct Row {
 static ROWS: LazyLock<Vec<Row>> = LazyLock::new(|| {
     [("r", 1), ("i", 1), ("j", 0), ("p", 0), ("f", 0), ("k", 0), ("q", 0)]
         .into_iter()
-        .map(|(form, dest)| Row { name: leak(format!("CMPA32{form}")), base: leak(format!("CMP32d{form}")), dest })
+        .map(|(form, dest)| Row {
+            name: leak(format!("CMPA32{form}")),
+            base: leak(format!("CMP32d{form}")),
+            dest,
+            word: false,
+        })
+        .chain(std::iter::once(Row { name: "CMPA16i", base: "CMP32di", dest: 1, word: true }))
         .collect()
 });
 
@@ -51,12 +59,12 @@ fn leak(text: String) -> &'static str {
 
 /// The destination operand of the pin's row `base`.
 pub fn dest_of(base: &str) -> Option<usize> {
-    ROWS.iter().find(|row| row.base == base).map(|row| row.dest)
+    ROWS.iter().find(|row| row.base == base && !row.word).map(|row| row.dest)
 }
 
 /// The address-destination row of the pin's compare `base`, if it has one.
 pub fn sibling(base: &str) -> Option<&'static str> {
-    ROWS.iter().find(|row| row.base == base).map(|row| row.name)
+    ROWS.iter().find(|row| row.base == base && !row.word).map(|row| row.name)
 }
 
 /// The machine code of the row `name`.
@@ -96,7 +104,8 @@ static ASM: LazyLock<Vec<(&'static str, &'static str, &'static [AsmOperand])>> =
         .map(|row| {
             let &(_, text, operands) = asm(row.base).expect("the pin row prints");
             let (_, rest) = text.split_once('.').expect("a sized mnemonic");
-            (row.name, leak(format!("cmpa.{rest}")), operands)
+            let text = if row.word { leak("cmpa.w\t$imm, $reg".to_owned()) } else { leak(format!("cmpa.{rest}")) };
+            (row.name, text, operands)
         })
         .collect();
     rows.sort_by_key(|row| row.0);
@@ -120,10 +129,16 @@ static ENCODINGS: LazyLock<Vec<(&'static str, u16, &'static [Piece])>> = LazyLoc
                     (Some(&last @ Piece::Operand { .. }), dest) => (last, dest as u8),
                     _ => panic!("cmpi.l ends with its immediate"),
                 };
+                // the word form is opmode `011` and a 16-bit immediate
+                let (opmode, immediate) = if row.word {
+                    (3, Piece::Operand { lo: 16, width: 16, at: 0, from: 0, enc: Enc::RelocImm(16) })
+                } else {
+                    (7, immediate)
+                };
                 vec![
                     Piece::Const { lo: 0, width: 3, value: 4 },
                     Piece::Const { lo: 3, width: 3, value: 7 },
-                    Piece::Const { lo: 6, width: 3, value: 7 },
+                    Piece::Const { lo: 6, width: 3, value: opmode },
                     Piece::Operand { lo: 9, width: 3, at: register, from: 0, enc: Enc::Plain },
                     Piece::Const { lo: 12, width: 4, value: 11 },
                     immediate,
@@ -138,7 +153,7 @@ static ENCODINGS: LazyLock<Vec<(&'static str, u16, &'static [Piece])>> = LazyLoc
                     })
                     .collect()
             };
-            (row.name, width, &*Box::leak(pieces.into_boxed_slice()))
+            (row.name, if row.word { 32 } else { width }, &*Box::leak(pieces.into_boxed_slice()))
         })
         .collect();
     rows.sort_by_key(|row| row.0);
