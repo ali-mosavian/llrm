@@ -49,6 +49,13 @@ pub struct CpuTable {
     /// reversed-copy-chain test, and keeps a copy per iteration. Off: the
     /// pin's order.
     pub commute_loop_carried: bool,
+    /// PHIElimination lowers phis of different blocks through one register
+    /// where they read the same value from every predecessor they share
+    /// (DEVIATE PHI-SHARE, owner x87, exit 2026-11-29): the pin shares only
+    /// identical phis, so a loop's header and its zero-trip exit join, whose
+    /// phis differ in the preheader alone, are carried twice through the
+    /// loop. Off: the pin's rule.
+    pub share_congruent_phis: bool,
     /// The pin's stand-alone `TailDuplicator` runs after allocation, once this
     /// target's A/B has been made (`TailDuplicate` slot). DEVIATE TD-M64 (owner
     /// greedy-subreg, exit 2026-11-12): on at m64 only; m32/m16 stay off until
@@ -201,6 +208,7 @@ impl Timings {
                     ("scalars", "mispredict_penalty") => table.mispredict_penalty = Some(number()?),
                     ("scalars", "mispredict_penalty_size") => table.mispredict_penalty_size = Some(number()?),
                     ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,
+                    ("scalars", "share_congruent_phis") => table.share_congruent_phis = number()? != 0,
                     ("scalars", "post_ra_tail_duplicate") => table.post_ra_tail_duplicate = number()? != 0,
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),

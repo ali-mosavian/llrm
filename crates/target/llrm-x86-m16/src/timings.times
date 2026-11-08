@@ -58,6 +58,8 @@ clear_ratio_size        =    =    =    =    =    =    =    =
 # (4 with a `casesi` pattern, else 5); i386.md has `tablejump` (:15824) and no `casesi`, and i386.cc sets no
 # TARGET_CASE_VALUES_THRESHOLD.
 jump_table              =    =    =    =    =    =    =    =
+# DEVIATE PHI-SHARE (owner x87, exit 2026-11-29): see CpuTable::share_congruent_phis.
+share_congruent_phis   1    1    1    1    1    1    1    1
 # Bytes of a line of the first-level data cache, which loop interchange prices
 # a walk by: the 486's 8 KB cache has 16 byte lines (Intel's i486 data sheet),
 # the Pentium's, Pentium Pro's, K5's and K6's 32 (Intel and AMD's manuals), the

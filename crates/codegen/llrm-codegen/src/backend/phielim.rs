@@ -194,6 +194,8 @@ const EDGE_MARGIN: f64 = 0.9;
 pub struct PhiElimination {
     /// -O0: no critical edge is split.
     pub unoptimized: bool,
+    /// DEVIATE PHI-SHARE (`Profile::share_congruent_phis`).
+    pub share_congruent: bool,
 }
 
 impl LIRTransform for PhiElimination {
@@ -209,7 +211,7 @@ impl LIRTransform for PhiElimination {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        crate::phielimination::lowered_with(&body, !self.unoptimized)
+        crate::phielimination::lowered_with(&body, !self.unoptimized, self.share_congruent)
     }
 }
 

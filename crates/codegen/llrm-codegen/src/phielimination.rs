@@ -19,6 +19,17 @@
 //! loop from outside. A block whose predecessors all have several successors
 //! lowers identical phis through one register.
 //!
+//! DEVIATE PHI-SHARE (owner x87, exit 2026-11-29; `Profile::share_congruent_phis`,
+//! off: the pin's rule): the pin lowers identical phis through one register
+//! (`LoweredPHIs`), and only where every edge is critical. A loop's header
+//! phis and the zero-trip join after it differ in the preheader alone: the
+//! pin copies every carried value into two registers at the latch, and with
+//! an empty preheader kept (CodeGenPrepare protects it) that is 22 copies for
+//! ten live values. Here a phi in another block that reads the same value as
+//! an earlier one from each predecessor they share takes that phi's register;
+//! only its other predecessors get a copy. x87rotate m16 -Os 612 -> 568 B,
+//! m32 -Os 644 -> 612.
+//!
 //! No deviation for a phi that reads from a block outside the body: LLVM's phis
 //! list only predecessors in their function, so it is an error here too (the
 //! verifier says the same, `a phi ... is not a predecessor`); it was left alone
@@ -70,11 +81,6 @@ thread_local! {
     /// The liveness rows `edges_to_split` solved, for the test that fixes it at
     /// none where no critical edge asks.
     static ROWS_SOLVED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
-}
-
-fn share_congruent() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_PHI_SHARE").is_some())
 }
 
 /// `SplitPHIEdges`: the critical edges worth a block of their own, as
@@ -167,15 +173,16 @@ thread_local! {
 
 /// `body` with every phi lowered to copies.
 pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
-    lowered_with(body, true)
+    lowered_with(body, true, false)
 }
 
 /// [`lowered`] with `SplitPHIEdges` on or off. The pin runs it only when
 /// `LiveVariables` or `LiveIntervals` is available (PHIElimination.cpp#L245),
-/// which -O0 has neither of.
+/// which -O0 has neither of. `share`: DEVIATE PHI-SHARE.
 pub fn lowered_with(
     body: &LirBody,
     split_edges: bool,
+    share: bool,
 ) -> Result<LirBody, String> {
     if body.blocks.iter().all(|block| block.phis.is_empty()) {
         return Ok(body.clone());
@@ -283,7 +290,7 @@ pub fn lowered_with(
                 key
             };
             let reused = if all_critical { lowered_phis.get(&key).copied() } else { None };
-            let sharing = if reused.is_none() && share_congruent() {
+            let sharing = if reused.is_none() && share {
                 phi.incoming.iter().find_map(|pair| {
                     shared.get(pair)?.iter().copied().find(|reg| {
                         let (writes, readers, held) = &regs[reg];
@@ -311,7 +318,7 @@ pub fn lowered_with(
             }
             let written_before: Vec<i64> =
                 regs.get(&incoming).map(|entry| entry.0.iter().map(|pair| pair.0).collect()).unwrap_or_default();
-            if reused.is_none() && share_congruent() && !phi.incoming.iter().any(|(_, source)| undefined.contains(source)) {
+            if reused.is_none() && share && !phi.incoming.iter().any(|(_, source)| undefined.contains(source)) {
                 let entry = regs.entry(incoming).or_insert_with(|| (Vec::new(), Vec::new(), width));
                 for &pair in &phi.incoming {
                     if !entry.0.contains(&pair) {
@@ -693,6 +700,36 @@ mod tests {
         assert_eq!(copies(made).len(), 1, "the copy is in the edge block");
     }
 
+    /// A loop with a kept preheader and a zero-trip join after it: the header
+    /// phi and the join phi read the same value from the loop block and differ
+    /// in the preheader alone. The pin carries it twice (two copies at the
+    /// latch, 22 for x87rotate's ten values, so FloatAlloc spilled nine
+    /// slots); with PHI-SHARE one register serves both.
+    #[test]
+    fn test_phis_that_differ_in_the_preheader_alone_share_a_register_under_phi_share() {
+        let phis = |header: bool| {
+            if header {
+                vec![Phi { result: 10, incoming: vec![(1, 1), (2, 12)] }]
+            } else {
+                vec![Phi { result: 11, incoming: vec![(0, 1), (2, 12)] }]
+            }
+        };
+        let was = body(vec![
+            block(0, vec![def(1), branch(3)], &[3, 1], vec![]),
+            block(1, vec![jump(2)], &[2], vec![]),
+            block(2, vec![def(12), read(10), branch(2)], &[2, 3], phis(true)),
+            block(3, vec![read(11)], &[], phis(false)),
+        ]);
+        let at = |now: &LirBody, at: i64| copies(now.blocks.iter().find(|one| one.at == at).expect("a block")).to_vec();
+        let in_loop = |now: &LirBody| at(now, 2).len();
+        let pin = lowered_with(&was, true, false).expect("lowers");
+        assert_eq!(in_loop(&pin), 3, "two phis, two registers: {:?}", at(&pin, 2));
+        let shared = lowered_with(&was, true, true).expect("lowers");
+        assert_eq!(in_loop(&shared), 2, "one register serves both: {:?}", at(&shared, 2));
+        let (top, join) = (at(&shared, 2), at(&shared, 3));
+        assert_eq!(top[0].1, join[0].1, "the join reads the register the loop wrote");
+    }
+
     /// The pin splits no critical edge at -O0 (no `LiveVariables` or
     /// `LiveIntervals`, PHIElimination.cpp#L245). Ours solved liveness rows
     /// and made a block on the edge: 4.1 M Ir on div_constants_short.
@@ -707,7 +744,7 @@ mod tests {
         ]);
         was.blocks[2] = Block::from(block(2, vec![read(10)], &[], phis));
         let before = ROWS_SOLVED.with(std::cell::Cell::get);
-        let now = lowered_with(&was, false).expect("lowers");
+        let now = lowered_with(&was, false, false).expect("lowers");
         assert_eq!(now.blocks.len(), 4, "a block was made on the edge at -O0");
         assert_eq!(ROWS_SOLVED.with(std::cell::Cell::get), before, "rows solved at -O0");
         assert_eq!(copies(&now.blocks[0]).len(), 1, "the copy stays in the predecessor");

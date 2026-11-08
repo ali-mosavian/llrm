@@ -166,6 +166,8 @@ pub struct Profile {
     /// Commuting prefers the operand the result is copied back into
     /// (DEVIATE TA-LC, from the target's table; off: the pin's order).
     pub commute_loop_carried: bool,
+    /// DEVIATE PHI-SHARE on (`CpuTable::share_congruent_phis`).
+    pub share_congruent_phis: bool,
     /// Clocks a mispredicted branch costs, where the target states it.
     pub mispredict_penalty: Option<i64>,
     /// `mispredict_penalty` at -O1, -Os and -Oz, where the target states one.
@@ -394,6 +396,7 @@ impl Profile {
             tail_dup_threshold: None,
             tail_dup_hot_size: None,
             commute_loop_carried: false,
+            share_congruent_phis: false,
             mispredict_penalty: None,
             mispredict_penalty_size: None,
             float_store: false,
@@ -640,6 +643,7 @@ fn _profile(
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
         tail_dup_hot_size: table.tail_dup_hot_threshold.map(|n| n.max(0) as usize),
         commute_loop_carried: table.commute_loop_carried,
+        share_congruent_phis: table.share_congruent_phis,
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
         mispredict_penalty: table.mispredict_penalty,
         mispredict_penalty_size: table.mispredict_penalty_size,
