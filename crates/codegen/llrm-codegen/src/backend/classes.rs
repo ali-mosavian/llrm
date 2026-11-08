@@ -97,7 +97,8 @@ impl RegisterClasses {
     pub fn of(arch: &dyn Target) -> Self {
         // A form that pins nothing has no requirement to give, and the
         // description is read at every compile.
-        let forms = parse::pinned(&arch.forms_text(), arch.dialect()).expect("the target's forms parse");
+        let all = llrm_target::instr::shared(&arch.forms_text(), arch.dialect()).expect("the target's forms parse");
+        let forms: Vec<&llrm_target::instr::Form> = all.iter().filter(|form| !form.fixed.is_empty()).collect();
         let operations: HashMap<&str, &'static str> =
             Operation::ALL.iter().map(|op| (op.as_str(), op.as_str())).collect();
         let mut pins: HashMap<Key, Vec<(Side, usize, RegId)>> = HashMap::default();
@@ -309,6 +310,17 @@ mod tests {
     #[test]
     fn the_status_word_is_where_the_form_table_stores_it() {
         assert_eq!(RegisterClasses::of(&llrm_x86_m16::M16).status_word(), Some(RegId::AX));
+    }
+
+    /// The class table read the forms a second time after the DAG tables had
+    /// read them (0.6 M Ir at start-up): the classes of one target, asked twice,
+    /// read its forms at most once.
+    #[test]
+    fn test_the_class_table_reads_the_forms_once() {
+        let before = llrm_target::instr::parsed();
+        let (first, second) = (RegisterClasses::of(&llrm_x86_m64::M64), RegisterClasses::of(&llrm_x86_m64::M64));
+        assert_eq!(first.status_word(), second.status_word());
+        assert!(llrm_target::instr::parsed() - before <= 1, "the forms were read twice");
     }
 
     #[test]

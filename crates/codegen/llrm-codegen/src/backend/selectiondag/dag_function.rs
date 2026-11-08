@@ -585,14 +585,14 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
     slots
         .entry(bits)
         .or_insert_with(|| {
-            let forms = llrm_target::instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
+            let forms = llrm_target::instr::shared(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
             let opcodes = match bits {
                 16 => x86_m16::MACHINE_OPCODES,
                 64 => x86_x64::MACHINE_OPCODES,
                 _ => x86_i486::MACHINE_OPCODES,
             };
             std::sync::Arc::new(Tables {
-                map: OpcodeMap::new(forms),
+                map: OpcodeMap::shared(forms),
                 names: opcodes
                     .iter()
                     .copied()
