@@ -1,11 +1,11 @@
 //! The Z80's DAG-to-DAG hooks as the interpreter's [`Hooks`]: fold legality and
 //! the node predicates. The tables name no complex pattern yet.
 
+use llrm_dagisel::addr::AddrDag;
+use llrm_dagisel::addr::find_non_imm_use;
 use llrm_dagisel::dag::{Hooks, PatternContext, SDValue};
 use llrm_dagisel::generated::ids::mvt;
 use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::x86_addr::AddrDag;
-use llrm_dagisel::x86_hooks::find_non_imm_use;
 
 use super::generated::{instrinfo, z80_z80, z80_z180};
 

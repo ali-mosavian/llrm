@@ -15,13 +15,13 @@
 //! # See also
 //! `llvm/lib/Target/AArch64/AArch64ISelDAGToDAG.cpp`, pin d1106deb71cc.
 
+use llrm_dagisel::addr::{AddrDag, SymbolKind};
 use llrm_dagisel::dag::SDValue;
 use llrm_dagisel::generated::aarch64::ids::isd as a64_isd;
 use llrm_dagisel::generated::aarch64::ids::opcode as a64_opcode;
 use llrm_dagisel::generated::aarch64::ids::reg::sub_32;
 use llrm_dagisel::generated::ids::{isd, mvt, target_opcode};
 use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::x86_addr::{AddrDag, SymbolKind};
 
 use super::globals::Globals;
 

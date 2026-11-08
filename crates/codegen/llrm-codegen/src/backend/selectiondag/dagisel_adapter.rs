@@ -19,10 +19,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_dagisel::addr::{AddrDag, Symbol, SymbolKind, Wrapped};
 use llrm_dagisel::dag::{Dag, FpClass, LoadExt, MemRef, SDValue as PinValue};
 use llrm_dagisel::generated::ids::{isd as pin, mvt};
 use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::x86_addr::{AddrDag, Symbol, SymbolKind, Wrapped};
 
 use super::SelectionDAG;
 use super::dag::{NodeData, SDNodeFlags, SDValue};
@@ -1197,9 +1197,7 @@ impl AddrDag for DagisAdapter<'_> {
         node: u32,
     ) -> Option<u16> {
         match self.dag.nodes()[node as usize].data {
-            NodeData::Register(number) => {
-                self.registers.pin_register(*self.dag.live_in_phys.get(&number)?)
-            }
+            NodeData::Register(number) => self.registers.pin_register(*self.dag.live_in_phys.get(&number)?),
             _ => None,
         }
     }

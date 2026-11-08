@@ -68,7 +68,7 @@ fn an_add_of_two_stack_arguments_is_a_move_and_an_add_with_a_memory_operand() {
 /// yet"), so any legalization that asked for a slot aborted the compile.
 #[test]
 fn a_scratch_frame_object_is_numbered_after_the_existing_ones() {
-    use llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects;
+    use llrm_codegen::backend::selectiondag::dag_target::FrameObjects;
     use llrm_m68k::dagisel::pipeline::Temporaries;
     let mut frame = Temporaries::new(2);
     assert_eq!(frame.create_stack_temporary(8, 4), 2);

@@ -607,6 +607,27 @@ pub trait Tti {
         false
     }
 
+    /// What a call to a callee whose peak register pressure is `peak` values
+    /// costs in clocks to save and restore the registers it must preserve (a
+    /// register the callee takes beyond the scratch ones is pushed and popped
+    /// once per call). Inlining removes it; the trial prices it. 0: not priced.
+    fn callee_saved_clocks(&self, peak: usize) -> i64 {
+        let _ = peak;
+        0
+    }
+
+    /// INL-HOT: the least site frequency (over the caller's entry) at which a
+    /// call the pin's threshold alone refused is tried inlined at -O2/-O3 and
+    /// kept where the rate pays. Whole units of relative frequency. None: the threshold is final.
+    fn inline_hot_trial_frequency(&self) -> Option<i64> {
+        None
+    }
+
+    /// Whether INL-HOT's trials run at -O3 too (false: -O2 only).
+    fn inline_hot_trial_at_o3(&self) -> bool {
+        false
+    }
+
     /// Whether a full unroll's saving is counted over `ASSUMED_TRIPS` runs
     /// of each unknown-count loop around it, as the pin's branch weights
     /// say (up to two). False: such a loop counts once, the runs the

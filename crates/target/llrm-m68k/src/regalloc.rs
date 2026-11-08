@@ -46,12 +46,19 @@ const CALLER_SAVED_ADDRESS_FIRST: [RegId; 4] = [reg::A1, reg::A0, reg::D0, reg::
 /// plus a frame cell is more bytes and clocks (seeds 300: about 115 smaller,
 /// 11 larger per CPU and level). Owner m68k. Exit: 2026-11-28, or when the
 /// pin's M68k marks the rows. Off for `Options::PINNED`.
-pub struct Registers<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool>;
+pub struct Registers<
+    const ADDRESS_FIRST: bool,
+    const ARGUMENT_REMAT: bool,
+    const GLOBAL_COPIES: bool,
+    const LOOP_CARRIED: bool,
+>;
 
 /// The allocator's registers in the order this compiler uses by default.
-pub type M68kRegisters = Registers<true, true>;
+pub type M68kRegisters = Registers<true, true, true, true>;
 
-impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool> Target for Registers<ADDRESS_FIRST, ARGUMENT_REMAT> {
+impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES: bool, const LOOP_CARRIED: bool> Target
+    for Registers<ADDRESS_FIRST, ARGUMENT_REMAT, GLOBAL_COPIES, LOOP_CARRIED>
+{
     fn spills_named_by_lane() -> bool {
         true
     }
@@ -83,11 +90,21 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool> Target for Registers
         false
     }
 
-    /// DEVIATE C15 (coalescer/pair.rs): `m = max(m, p[i])` kept a copy on both
-    /// paths (arrmax -O2 68000 +160 rate against gcc; the pin has the same
-    /// order and its llc is 80 B). Owner: m68k. Exit: 2026-11-22.
+    /// `JoinGlobalCopies`: true is what the allocator was tuned with; false is
+    /// the pin's M68k. A function is built both ways and the cheaper kept
+    /// (`compile::items_with`): false fixed `fib` -Os (the local copy joined
+    /// before the global one) and made other cells worse, so neither value is
+    /// right for every function.
+    fn joins_global_copies() -> bool {
+        GLOBAL_COPIES
+    }
+
+    /// DEVIATE C15 (coalescer/pair.rs; `Options::loop_carried_first`, off for
+    /// the pin): `m = max(m, p[i])` kept a copy on both paths (arrmax -O2
+    /// 68000 +160 rate against gcc; the pin has the same order and its llc
+    /// is 80 B). Owner: m68k. Exit: 2026-11-22.
     fn joins_loop_carried_first() -> bool {
-        true
+        LOOP_CARRIED
     }
 
     fn candidates(class: Class) -> Vec<RegId> {
@@ -221,13 +238,35 @@ pub fn allocate_greedy(
     size: bool,
     address_first: bool,
     rematerialize_arguments: bool,
+    global_copies: bool,
+    loop_carried_first: bool,
 ) -> Result<(Assignment, Vec<(i32, Class)>), String> {
+    // each option is a type parameter: the allocator reads them as constants
+    fn run<const A: bool, const R: bool, const G: bool, const L: bool>(
+        function: &mut MFunction,
+        regs: llrm_lir::registers::Regs,
+        size: bool,
+    ) -> Result<(Assignment, Vec<(i32, Class)>), String> {
+        llrm_spike_mf::tolir::allocate_greedy::<Registers<A, R, G, L>>(function, regs, size)
+    }
     let regs = llrm_lir::registers::Regs(&REGISTER_INFO);
-    match (address_first, rematerialize_arguments) {
-        (true, true) => llrm_spike_mf::tolir::allocate_greedy::<Registers<true, true>>(function, regs, size),
-        (true, false) => llrm_spike_mf::tolir::allocate_greedy::<Registers<true, false>>(function, regs, size),
-        (false, true) => llrm_spike_mf::tolir::allocate_greedy::<Registers<false, true>>(function, regs, size),
-        (false, false) => llrm_spike_mf::tolir::allocate_greedy::<Registers<false, false>>(function, regs, size),
+    match (address_first, rematerialize_arguments, global_copies, loop_carried_first) {
+        (true, true, true, true) => run::<true, true, true, true>(function, regs, size),
+        (true, true, true, false) => run::<true, true, true, false>(function, regs, size),
+        (true, true, false, true) => run::<true, true, false, true>(function, regs, size),
+        (true, true, false, false) => run::<true, true, false, false>(function, regs, size),
+        (true, false, true, true) => run::<true, false, true, true>(function, regs, size),
+        (true, false, true, false) => run::<true, false, true, false>(function, regs, size),
+        (true, false, false, true) => run::<true, false, false, true>(function, regs, size),
+        (true, false, false, false) => run::<true, false, false, false>(function, regs, size),
+        (false, true, true, true) => run::<false, true, true, true>(function, regs, size),
+        (false, true, true, false) => run::<false, true, true, false>(function, regs, size),
+        (false, true, false, true) => run::<false, true, false, true>(function, regs, size),
+        (false, true, false, false) => run::<false, true, false, false>(function, regs, size),
+        (false, false, true, true) => run::<false, false, true, true>(function, regs, size),
+        (false, false, true, false) => run::<false, false, true, false>(function, regs, size),
+        (false, false, false, true) => run::<false, false, false, true>(function, regs, size),
+        (false, false, false, false) => run::<false, false, false, false>(function, regs, size),
     }
 }
 
@@ -301,7 +340,9 @@ pub fn remove_redundant_copies(
     })
 }
 
-impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool> Jump for Registers<ADDRESS_FIRST, ARGUMENT_REMAT> {
+impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES: bool, const LOOP_CARRIED: bool> Jump
+    for Registers<ADDRESS_FIRST, ARGUMENT_REMAT, GLOBAL_COPIES, LOOP_CARRIED>
+{
     fn reverse(branch: &llrm_spike_mf::Inst) -> Option<llrm_spike_mf::Inst> {
         let Kind::Op(name) = branch.kind else { return None };
         let opposite = CONDITIONAL

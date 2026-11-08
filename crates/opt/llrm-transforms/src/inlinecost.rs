@@ -307,6 +307,9 @@ pub enum InlineCost {
         /// Refused by the target's -Os bound alone (D11): the pin's threshold
         /// would have allowed it.
         blocked: bool,
+        /// Refused by the pin's threshold alone at a site hot enough to try
+        /// (INL-HOT): the walk inlines it where the rate pays.
+        hot: bool,
     },
 }
 
@@ -2325,6 +2328,11 @@ impl<'a> Analyzer<'a> {
         grows
     }
 
+    /// Whether the cost reached the pin's threshold, however it stopped.
+    fn verdict_is_over_threshold(&self) -> bool {
+        self.cost >= self.threshold.max(1)
+    }
+
     fn finalize(&mut self) -> Result<(), String> {
         if self.site.caller_size == CallerSize::MinSize {
             let loops = loop_headers(self.callee).iter().filter(|header| !self.dead_blocks.contains(&header.0)).count();
@@ -2427,6 +2435,13 @@ pub fn inline_cost(
             threshold: analyzer.threshold,
             static_bonus: analyzer.static_bonus_applied,
             blocked: analyzer.blocked_by_bound,
+            hot: !analyzer.blocked_by_bound
+                && analyzer.verdict_is_over_threshold()
+                && site.caller_size == CallerSize::Speed
+                && !params.o1_bound
+                && site.tti.and_then(|tti| tti.inline_hot_trial_frequency()).is_some_and(|least| {
+                    site.relative_frequency.is_some_and(|ratio| ratio >= least as f64)
+                }),
         };
     }
     match verdict {
@@ -2592,7 +2607,7 @@ fn only_reads_memory(info: &CallInfo) -> bool {
 }
 
 /// The headers of the callee's loops: targets of a retreating edge (D7).
-fn loop_headers(function: &Function) -> IdSet<BlockId> {
+pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
     let Some(&entry) = function.layout().first() else { return IdSet::new() };
     let mut headers = IdSet::new();
     let mut state: HashMap<u32, u8> = HashMap::default();
@@ -3073,7 +3088,13 @@ pub fn sites_with_trials(
             decided.push((inst, decision.callee, decision.cost.clone()));
         }
         let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
-        let worth = blocked && trials.is_some() && if size == CallerSize::Speed { !always_only } else { true };
+        // INL-HOT: a caller that goes with its one call is inlined where its arguments are known, and
+        // that site decides (x_spill_store_order -O2: `pack_ref` into `run_main` first: +40% clk).
+        let leaving = local_linkage(module.global(caller_id).linkage)
+            && !addressed.contains(&caller_id)
+            && counts.get(&caller_id) == Some(&1);
+        let hot = matches!(decision.cost, InlineCost::Cost { hot: true, .. }) && !leaving;
+        let worth = (blocked || hot) && trials.is_some() && if size == CallerSize::Speed { !always_only } else { true };
         if !decision.inline && !worth {
             continue;
         }
@@ -3094,6 +3115,7 @@ pub fn sites_with_trials(
                 && counts.get(&decision.callee) == Some(&1),
             callee: Some(decision.callee),
             self_sites: own.len(),
+            hot,
             self_calls: (!own.is_empty()).then(|| {
                 let frequencies = call_frequencies(module, layout, callee);
                 own.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum()

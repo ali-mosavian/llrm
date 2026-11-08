@@ -725,6 +725,7 @@ pub trait Target {
         &self,
         _signed: bool,
         _wide_divisor: bool,
+        _used: routines::Used,
     ) -> Result<routines::Divide, String> {
         Err("no size divide routine".into())
     }

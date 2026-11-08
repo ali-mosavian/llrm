@@ -16,9 +16,9 @@
 //! # See also
 //! `llvm/lib/Target/M68k/M68kISelDAGToDAG.cpp`, pin d1106deb71cc.
 
+use llrm_dagisel::addr::{AddrDag, Symbol, SymbolKind};
 use llrm_dagisel::dag::SDValue;
 use llrm_dagisel::generated::ids::{isd, mvt};
-use llrm_dagisel::x86_addr::{AddrDag, Symbol, SymbolKind};
 
 use super::generated::ids::{generic, isd as m68k_isd, reg};
 
@@ -431,7 +431,8 @@ pub fn select_ari<D: AddrDag>(
     // `WrapperPC` of a global is taken as a register (`lea (g,%pc),%a0`) and
     // `move.w (%a0),%d0` follows, 4 B more than `move.w (g,%pc),%d0`; a plain
     // load tries `PCD` first. Every extending load has its `PCD` row. Pin
-    // order: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kInstrData.td#L689
+    // order:
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kInstrData.td#L689
     // (`ARI`, `ARID`, `ARII`, then `PCD` at L692). Only for a wrapper this load
     // alone reads: from three loads on, one shared `lea` is smaller than a
     // `(g,%pc)` each (the seeds grew 0.7% to 1.7% without the test). Owner
@@ -498,13 +499,14 @@ pub fn select_arii<D: AddrDag>(
     if am.has_symbolic_displacement() {
         return None;
     }
-    // DEVIATE: the pin tries `ARII` before `ARID` for a store, and a constant that
-    // does not fit the 8-bit displacement becomes the index register
+    // DEVIATE: the pin tries `ARII` before `ARID` for a store, and a constant
+    // that does not fit the 8-bit displacement becomes the index register
     // (`move.w #650, %a1; move.l #x, (0,%a0,%a1)`: 12 B where `(650,%a0)` is 8,
     // and a register). Reason: best of gcc and clang is the goal. The pin's
-    // `llc` makes the same pair. Owner m68k. Exit 2026-12-12: upstream the order
-    // (`ARID` first) or keep.
-    if dag.opcode(index.node) == isd::Constant && dag.constant(index).is_some_and(|value| i16::try_from(value).is_ok()) {
+    // `llc` makes the same pair. Owner m68k. Exit 2026-12-12: upstream the
+    // order (`ARID` first) or keep.
+    if dag.opcode(index.node) == isd::Constant && dag.constant(index).is_some_and(|value| i16::try_from(value).is_ok())
+    {
         return None;
     }
     if am.disp == 0 && !allow_arii_with_zero_disp(dag, parent) {

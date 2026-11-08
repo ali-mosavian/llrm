@@ -13,10 +13,15 @@ use llrm_lir::registers::RegId;
 
 pub mod dag_function;
 pub mod emit;
-pub mod fastisel;
 #[cfg(test)]
 mod emit_tests;
+pub mod fastisel;
 pub mod mirprint;
+pub mod nodes;
+pub mod postprocess;
+pub mod preprocess;
+pub mod select;
+pub mod unfold;
 
 struct X86;
 
@@ -51,6 +56,10 @@ impl BackendHooks for X86 {
         pool: &mut llrm_codegen::backend::constpool::Pool,
     ) -> Result<llrm_codegen::backend::isel::Selected, llrm_codegen::backend::isel::Unselected> {
         dag_function::selected_in_pool(module, name, arch, cpu, libcalls, contracts, pool)
+    }
+
+    fn lowering_nodes(&self) -> llrm_codegen::backend::selectiondag::builder::LoweringNodes {
+        nodes::nodes()
     }
 
     fn take_fast_took(&self) -> bool {

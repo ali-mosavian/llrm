@@ -1,11 +1,11 @@
 //! `WebAssemblyDAGToDAGISel` as the interpreter's [`Hooks`]: the address
 //! patterns the table names by number, fold legality and the node predicates.
 
+use llrm_dagisel::addr::AddrDag;
+use llrm_dagisel::addr::find_non_imm_use;
 use llrm_dagisel::dag::{Hooks, PatternContext, SDValue};
 use llrm_dagisel::generated::ids::mvt;
 use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::x86_addr::AddrDag;
-use llrm_dagisel::x86_hooks::find_non_imm_use;
 
 use super::addr::{self, ADDR32, ADDR64};
 use super::generated::{instrinfo, wasm_wasm32, wasm_wasm64};

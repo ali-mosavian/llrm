@@ -3,6 +3,15 @@
 //! adds. The pin's bar counts instructions and never asks what a copy of the
 //! body costs in code (x_ld_max: the 8-trip inner loop, copied 8 times,
 //! 232 -> 755 bytes at m32 -O2 for a few clocks).
+//!
+//! The full-unroll gate against the pin's `shouldFullUnroll` (LoopUnrollPass.cpp:904),
+//! audited 2026-11-08 (w2): (1) the gate itself, above, run on both success paths of
+//! `should_full_unroll`, with bypasses (an inlinable internal function, a copy of this
+//! run, the nest, loops of few trips); (2) the cost analysis is passed `u32::MAX` and the
+//! trips, where the pin passes `Threshold * MaxPercentThresholdBoost / 100` and
+//! `MaxIterationsCountToAnalyze`; (3) UNROLL-O1 (owner x86), (4) UNROLL-TRIAL (owner 6502,
+//! exit 2026-12-05), (5) U1, the optsize few-trip bar (arm64 states none), (6) U3, the
+//! float-stack bar (owner m32, exit 2026-11-20).
 
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{Linkage, ValueDef, ValueId};
