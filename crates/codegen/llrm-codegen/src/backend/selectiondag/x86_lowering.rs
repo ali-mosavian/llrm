@@ -180,6 +180,8 @@ pub struct MulPricing<'a> {
     /// `Tuning::price_pin_multiplies`: the pin's decompositions are priced
     /// too, and a tie keeps the `imul`.
     pub price_pin: bool,
+    /// -O1 with `by_clocks`: the chain may not be longer than the `imul`.
+    pub no_growth: bool,
 }
 
 impl CombineHooks for X86Lowering<'_> {
@@ -2732,9 +2734,9 @@ fn priced_chain(
 ) -> Option<SDValue> {
     use crate::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
-    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin } = pricing;
+    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin, no_growth } = pricing;
     let chain = if by_clocks {
-        arithmetic::chain_by_clocks(c, width, cpu)
+        arithmetic::chain_by_clocks(c, width, cpu, arch, no_growth)
     } else {
         arithmetic::priced_chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte, price_pin)
     }
