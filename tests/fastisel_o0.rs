@@ -816,3 +816,33 @@ fn fast_isel_folds_a_narrow_load_into_its_extension() {
         assert!(asm.contains("movzx eax, byte ptr [") || asm.contains("movzx ecx, byte ptr ["), "{target}: {asm}");
     }
 }
+
+/// `*p += x` read `*p` into a register and added: only a load on the right folded. The pin commutes a
+/// commutative operation to fold a load on the left, the one just before it (`foldMemoryOperand`): `add r, [m]`.
+#[test]
+fn fast_isel_folds_a_load_that_is_the_first_operand_of_a_commutative_operation() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(
+            scratch.path().join("a.c"),
+            "void h(int *p, int x)\n{\n    *p += x;\n    *p &= x;\n}\n",
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "-masm=intel", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        for form in ["add e", "and e"] {
+            assert!(asm.lines().any(|line| line.trim_start().starts_with(form) && line.contains("dword ptr [")), "{target}: no `{form}` on memory: {asm}");
+        }
+    }
+}
