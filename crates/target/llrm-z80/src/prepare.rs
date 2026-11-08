@@ -6,6 +6,10 @@ use llrm_mir::module::{Module, Operand};
 use llrm_mir::opcode::{Attribute, BinaryOp, Opcode};
 use llrm_transforms::edges::split_critical_edge;
 
+/// The name of a block split onto a phi edge: the pin lays these out only after
+/// selection, so the switch lowering looks past them.
+pub const PHI_EDGE: &str = "phi.edge";
+
 /// Splits every critical edge into a block with phis, in every function with a
 /// body. The selector refuses a block of several machine blocks (a split
 /// branch, a `switch`) that exports phi copies, as one copy list cannot serve
@@ -31,8 +35,8 @@ pub fn split_phi_edges(module: &mut Module) {
                     .iter_block(to)
                     .next()
                     .is_some_and(|first| function.instruction(first).opcode == Opcode::Phi);
-                if phi {
-                    split_critical_edge(function, from, to);
+                if phi && let Some(bridge) = split_critical_edge(function, from, to) {
+                    function.set_block_name(bridge, PHI_EDGE);
                 }
             }
         }
