@@ -3226,6 +3226,7 @@ mod post_ra {
             optimize_for_size: false,
             returns_twice: false,
             places: Vec::new(),
+            odds: None,
             variables: Vec::new(),
         }
     }

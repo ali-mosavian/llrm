@@ -4,7 +4,8 @@
 //! # How it works
 //! Blocks are first written with every fall-through as an explicit jump
 //! (`_explicit`), which makes any order correct. `optimized` then runs these
-//! steps on the body.
+//! steps on the body. Before them, `tailmerge::merged_in` runs once ahead of
+//! placement, as `BranchFolder` does as a pass of its own.
 //!
 //! 1. `_hoisted` moves an edge block's no-byte anchors up before the branch
 //!    into it, so the edge block becomes a bare jump that threading can skip.
@@ -177,13 +178,18 @@ pub fn optimized(
     calls: Option<&IndexMap<i64, String>>,
 ) -> Result<LirBody, masm::Unprintable> {
     let size = cpu.size;
-    let mut placed = threaded(&_placed(&_hoisted(body), size, cpu.aggressive, cpu.tail_dup_threshold, cpu.tail_dup_hot())?);
+    // `BranchFolder` ahead of placement: in the order the blocks were made,
+    // where a block falling into the common successor takes any tail.
+    let hoisted = _hoisted(body);
+    let (early, any_early) = tails_merged(hoisted.clone(), size, calls, false)?;
+    let start = if any_early { early.with_blocks(_explicit(&early)?) } else { hoisted };
+    let mut placed = threaded(&_placed(&start, size, cpu.aggressive, cpu.tail_dup_threshold, cpu.tail_dup_hot())?);
     // Tail duplication before the merge, as LLVM places with it: after, the
     // merge would give back what the copy gained.
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
     // the branches optimised (`threaded`), until neither changes anything. A
     // merge can leave a compare nothing selects on; LLVM leaves it (T6).
-    let (merged, any) = tails_merged(placed, size, calls)?;
+    let (merged, any) = tails_merged(placed, size, calls, true)?;
     placed = merged;
     if any {
         // `MachineBlockPlacement::runOnMachineFunction`: "Redo the layout if
@@ -206,12 +212,22 @@ fn tails_merged(
     mut placed: LirBody,
     size: bool,
     calls: Option<&IndexMap<i64, String>>,
+    after_placement: bool,
 ) -> Result<(LirBody, bool), masm::Unprintable> {
     let mut any = false;
     for _round in 0..std::cmp::max(1, placed.blocks.len() + placed.insns().len()) {
         let explicit = placed.with_blocks(_explicit(&placed)?);
-        let Some(merged) = tailmerge::merged(&explicit, size, calls)? else {
-            break;
+        let Some(merged) = tailmerge::merged_in(&explicit, size, calls, after_placement)? else {
+            // `OptimizeFunction`: the branches optimised after each merge
+            // attempt, and the merge tried again if they changed anything. A
+            // body that was not threaded yet (before placement) has edge
+            // blocks that hide the common successor.
+            let optimised = threaded(&placed);
+            if optimised == placed {
+                break;
+            }
+            placed = optimised;
+            continue;
         };
         any = true;
         placed = threaded(&merged);
@@ -239,7 +255,7 @@ pub fn tails_merged_after_exits(
     if returns < 2 {
         return Ok(body);
     }
-    let (merged, any) = tails_merged(body.clone(), size, calls)?;
+    let (merged, any) = tails_merged(body.clone(), size, calls, true)?;
     Ok(if any { inverted(&merged, size) } else { body })
 }
 

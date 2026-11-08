@@ -1433,15 +1433,6 @@ impl<'d> SplitEditor<'d> {
         for (key, reads, defines, read_lanes) in seen {
             let base = cx.lis.indexes.get_instruction_index(key);
             let block = cx.lis.indexes.get_mbb_from_index(&base);
-            // Reads look up at the instruction, defs at its register slot.
-            let read_idx = reads.then(|| self.reg_assign.lookup(base) as usize);
-            let def_idx = defines.then(|| self.reg_assign.lookup(base.get_reg_slot(false)) as usize);
-            if let (Some(r), Some(d)) = (read_idx, def_idx) {
-                assert!(r == d, "a tied pair is split over registers {r} and {d} (D-SE5)");
-            }
-            let reg_idx = read_idx.or(def_idx).expect("an operand");
-            let new_reg = self.edit().get(reg_idx);
-
             // A read of a lane the parent has not defined here is undef (the
             // pin's `<read-undef>`): a partial def keeping nothing reads
             // nothing, and a read has nothing to extend to.
@@ -1450,6 +1441,17 @@ impl<'d> SplitEditor<'d> {
             let live = parent.live_at(&at)
                 && (!parent.has_sub_ranges()
                     || parent.sub_ranges().iter().any(|sr| sr.lanes.overlaps(read_lanes) && sr.range.live_at(&at)));
+
+            // Reads look up at the instruction, defs at its register slot. A
+            // read of nothing live (the first partial def of a value) goes
+            // where the def does.
+            let read_idx = (reads && live).then(|| self.reg_assign.lookup(base) as usize);
+            let def_idx = defines.then(|| self.reg_assign.lookup(base.get_reg_slot(false)) as usize);
+            if let (Some(r), Some(d)) = (read_idx, def_idx) {
+                assert!(r == d, "a tied pair is split over registers {r} and {d} (D-SE5)");
+            }
+            let reg_idx = read_idx.or(def_idx).expect("an operand");
+            let new_reg = self.edit().get(reg_idx);
 
             let old = std::sync::Arc::clone(cx.lis.instr(key));
             let mut new = old.renamed(&|v| if v == parent_reg { new_reg } else { v });
@@ -2036,6 +2038,53 @@ mod tests {
         lis.remove_interval(1);
         let compared = lis.assert_intervals_equal_afresh(&lis.body_like(&body));
         assert_eq!(compared, 3, "all three new intervals were compared");
+    }
+
+    /// A pair built from bytes: `v1.hi := v2` is the first partial def and
+    /// nothing is live before it. The open register starts at that def, so the
+    /// def's implicit read of the other lanes must not look up the register
+    /// before it: `finish` panicked "a tied pair is split over registers 0 and
+    /// 1" (D-SE5) on the 6502 `__udivmod_w` at -O2.
+    #[test]
+    fn the_first_partial_def_of_a_pair_goes_where_its_def_does() {
+        let lane = |offset: u32, from: u32| {
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(Held { value: 1, width: 1, offset })],
+                sources: vec![Loc::Held(Held { value: from, width: 1, offset: 0 })],
+                ..Semantics::new(Operation::Move)
+            };
+            let mut copy = Insn::new(0, None, Some(what), vec![1], vec![from]);
+            copy.def_lanes = vec![(1, llrm_lir::valuelanes::ValueLanes::at(offset, 1))];
+            if offset != 0 {
+                copy.partial_defs = vec![1];
+            }
+            Arc::new(copy)
+        };
+        let (hi, lo) = (lane(1, 2), lane(0, 3));
+        let insns = vec![insn(&[2], &[]), insn(&[3], &[]), Arc::clone(&hi), lo, insn(&[], &[1])];
+        let body = LirBody::new(
+            "pair",
+            0,
+            vec![Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        let mut vrm = VirtRegMap::new();
+        let mut sa = SplitAnalysis::new(1);
+        let li = lis.interval_rc(1);
+        sa.analyze(&lis, &Env, li);
+        let mut delegate = NoDelegate;
+        let mut ed = SplitEditor::new();
+        ed.reset(&lis, LiveRangeEdit::new(1, &mut delegate), ComplementSpillMode::Partition);
+        let mut cx = SplitCx { lis: &mut lis, vrm: &mut vrm, sa: &mut sa, env: &Env, mbfi: None };
+        ed.open_intv(&mut cx);
+        let start = cx.lis.indexes.get_instruction_index(hi.id()).get_reg_slot(false);
+        let end = cx.lis.indexes.get_mbb_end_idx(0);
+        ed.use_intv(start, end);
+        ed.finish_values(&mut cx, None);
+        assert!(lis.reg_nodbg_empty(1), "nothing names the parent any more");
     }
 
     /// The spill modes copy out before the last use and recompute the ranges

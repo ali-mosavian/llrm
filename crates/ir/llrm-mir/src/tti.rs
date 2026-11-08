@@ -570,10 +570,23 @@ pub trait Tti {
         false
     }
 
-    /// Whether `speed_inline_milliclocks_per_byte` also binds at -O1. False:
-    /// -O1 prices no byte in clocks and keeps the pin's threshold alone.
+    /// Whether a callee the -O1 size bound refused is tried inline as at -Os (SZ2: the copy
+    /// stays if the caller comes out smaller), where -O1 prices no byte in clocks. False: the
+    /// bound's verdict stands.
+    fn inline_trials_at_o1(&self) -> bool {
+        false
+    }
+
+    /// Whether `speed_inline_milliclocks_per_byte` also binds at -O1. False
+    /// (the default; -O1 is strict): -O1 prices no byte in clocks and keeps
+    /// the pin's threshold alone.
+    /// `Tuning::sdiv_by_magnitude`.
+    fn sdiv_by_magnitude(&self) -> bool {
+        false
+    }
+
     fn speed_inline_rate_at_o1(&self) -> bool {
-        true
+        false
     }
 
     /// Whether one wider store of constants may start off its own size
@@ -623,6 +636,12 @@ pub trait Tti {
     /// exit test folds in the preheader (RS1). False: the pass's header limit
     /// alone.
     fn rotation_guard_must_fold_at_size(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE Z80-ROT: whether -Oz rotates a loop whose copied header folds away in
+    /// the preheader, the pin's no-copy limit notwithstanding. False: the pin.
+    fn rotation_free_guard_at_minsize(&self) -> bool {
         false
     }
 

@@ -202,6 +202,11 @@ pub static DESCRIPTION: std::sync::LazyLock<llrm_target::opcosts::Description> =
 struct Z80Machine;
 
 impl llrm_mir::target::Machine for Z80Machine {
+    /// The Z80 shifts by one bit per instruction: a variable count is `__ashlhi3`.
+    fn variable_shift_legal(&self) -> bool {
+        false
+    }
+
     fn foreign_span(
         &self,
         selectors: (i64, i64),

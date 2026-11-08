@@ -835,7 +835,7 @@ impl super::emit::ConstantCells for PoolCells<'_> {
 fn narrow_divide_live(
     module: &llrm_mir::module::Module,
     function: &llrm_mir::module::Function,
-) -> HashMap<BlockId, u32> {
+) -> llrm_mir::dense::IdMap<BlockId, u32> {
     use llrm_mir::opcode::{BinaryOp, Opcode};
     let narrow = |inst: llrm_mir::module::InstId| {
         let op = function.instruction(inst);
@@ -845,7 +845,7 @@ fn narrow_divide_live(
     };
     let blocks: Vec<BlockId> =
         function.layout().iter().copied().filter(|&block| function.iter_block(block).any(narrow)).collect();
-    let mut live = HashMap::default();
+    let mut live = llrm_mir::dense::IdMap::new();
     if blocks.is_empty() {
         return live;
     }
@@ -1020,9 +1020,9 @@ fn selected_in(
         }
     }
     let (builder_target, address_mode) = match bitness {
-        16 => (BuilderTarget::m16(), AddrMode::Real16),
-        64 => (BuilderTarget::m64(), AddrMode::Flat64),
-        _ => (BuilderTarget::m32(), AddrMode::Flat32),
+        16 => (BuilderTarget::for_pointer_bits(16), AddrMode::Real16),
+        64 => (BuilderTarget::for_pointer_bits(64), AddrMode::Flat64),
+        _ => (BuilderTarget::for_pointer_bits(32), AddrMode::Flat32),
     };
     let mut builder_target = builder_target;
     // Static code: every symbol is `dso_local`. A 64-bit PIE reaches a symbol
@@ -1049,6 +1049,7 @@ fn selected_in(
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_div_live_limit(if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 })
         .with_div_prices(div_prices(cpu, &*machine, bitness))
+        .with_sdiv_by_magnitude(cpu.speed_rate && !(cpu.size || cpu.min_size) && machine.tti().is_some_and(|tti| tti.sdiv_by_magnitude()))
         .with_jump_tables(
             machine.costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
@@ -1348,7 +1349,7 @@ fn selected_in(
         llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
     });
     let div_live = if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 };
-    let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { HashMap::default() };
+    let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { llrm_mir::dense::IdMap::new() };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
         if cpu.optimized && !fast_ids.contains(&block.0) && block == parent {

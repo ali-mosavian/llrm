@@ -108,7 +108,7 @@ pub fn builder_target(
             big_endian: false,
             calling: Some(calling(width, features)),
         }),
-        ..BuilderTarget::m64()
+        ..BuilderTarget::for_pointer_bits(64)
     }
 }
 

@@ -31,7 +31,7 @@ fn ours(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
                 &module,
                 function,
                 &layout,
-                &BuilderTarget::m32(),
+                &BuilderTarget::for_pointer_bits(32),
                 &llrm_x86_m32::M32,
                 &convention,
                 &mut info,

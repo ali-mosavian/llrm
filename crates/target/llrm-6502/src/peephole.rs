@@ -139,6 +139,8 @@ pub fn run_with(
     crate::peephole_cells::arithmetic_chain_in_a(asm);
     crate::peephole_cells::chain_ends_in_a(asm);
     crate::peephole_cells::forward_cell_copy(asm);
+    crate::peephole_cells::carry_holds_the_bit(asm);
+    crate::peephole_cells::coalesce_copy(asm);
     // the chain's load can follow the store it was loaded from
     drop_reloads(asm);
     crate::peephole_cells::drop_dead_stores(asm);

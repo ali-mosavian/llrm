@@ -564,7 +564,7 @@ mod tests {
         let convention =
             crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
         let mut info = FunctionLoweringInfo::new(function);
-        let mut target = BuilderTarget::m32().with_tuning(tuning);
+        let mut target = BuilderTarget::for_pointer_bits(32).with_tuning(tuning);
         if tti {
             target = target.with_tti(Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap())));
         }
@@ -595,7 +595,7 @@ mod tests {
         let convention =
             crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
         let mut info = FunctionLoweringInfo::new(function);
-        let target = BuilderTarget::m32().with_tti(Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap())));
+        let target = BuilderTarget::for_pointer_bits(32).with_tti(Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap())));
         build_block(
             &module,
             function,
