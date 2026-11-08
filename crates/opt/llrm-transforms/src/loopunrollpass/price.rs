@@ -4,6 +4,7 @@
 //! body costs in code (x_ld_max: the 8-trip inner loop, copied 8 times,
 //! 232 -> 755 bytes at m32 -O2 for a few clocks).
 
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{Linkage, ValueDef, ValueId};
 use llrm_mir::opcode::BinaryOp;
 
@@ -112,7 +113,7 @@ pub(super) fn full_unroll_pays(
 /// The copies of each block a nest's unroll makes: the product of the trip
 /// counts of the loops inside the nest's root that hold it.
 pub(super) struct Projection {
-    weight: std::collections::BTreeMap<BlockId, i64>,
+    weight: IdMap<BlockId, i64>,
 }
 
 impl Projection {
@@ -142,7 +143,7 @@ fn project_nest(
         tree: &analyzed.tree,
         assumptions: &analyzed.assumptions,
     };
-    let mut weight = std::collections::BTreeMap::new();
+    let mut weight = IdMap::new();
     for &block in root.get_blocks() {
         let mut copies = 1i64;
         let mut around = analyzed.loops.get_loop_for(block);
@@ -579,17 +580,16 @@ fn x87_spilled(
     trips: u32,
     room: i64,
 ) -> i64 {
-    use std::collections::HashSet;
     let function = &*run.function;
     let is_float = |value: ValueId| {
         llrm_mir::tti::Ty::of(&run.context.types, function.value(value).ty).is_some_and(|ty| ty.is_float())
     };
     let rolled = llrm_analysis::liveness::pressure_by_block(function, &|value| usize::from(is_float(value)));
     let peak_rolled = rolled.iter().map(|&(_, peak)| peak as i64).max().unwrap_or(0);
-    let inside: HashSet<BlockId> = lp.get_blocks().iter().copied().collect();
+    let inside: IdSet<BlockId> = lp.get_blocks().iter().copied().collect();
     // The blocks that run after the loop: from its exits, round any loop
     // around it.
-    let mut after: HashSet<BlockId> = HashSet::new();
+    let mut after: IdSet<BlockId> = IdSet::new();
     let mut work: Vec<BlockId> = lp.get_exit_blocks(function);
     while let Some(block) = work.pop() {
         if after.insert(block) {
@@ -612,17 +612,17 @@ fn x87_spilled(
             })
             .collect()
     };
-    let mut held: Vec<HashSet<BlockId>> = Vec::new();
+    let mut held: Vec<IdSet<BlockId>> = Vec::new();
     for root in forwarded.iter() {
-        let mut before: HashSet<BlockId> = HashSet::new();
+        let mut before: IdSet<BlockId> = IdSet::new();
         let mut work = reads_of(root);
         while let Some(block) = work.pop() {
             if before.insert(block) {
                 work.extend(function.predecessors(block));
             }
         }
-        let mut span: HashSet<BlockId> = after.intersection(&before).copied().collect();
-        span.extend(inside.iter().copied());
+        let mut span: IdSet<BlockId> = after.iter().filter(|block| before.contains(block)).collect();
+        span.extend(inside.iter());
         held.push(span);
     }
     let elements = i64::from(trips);
@@ -766,7 +766,7 @@ fn stays_in_memory(
     let mut finishes: std::collections::BTreeMap<u32, bool> = Default::default();
     // Only a read that can run after the loop keeps the stores (nbody -O2: the
     // last update loop, after the step loop, is followed by reads of constants).
-    let mut after: std::collections::HashSet<BlockId> = Default::default();
+    let mut after: IdSet<BlockId> = IdSet::new();
     let mut work: Vec<BlockId> = lp.get_exit_blocks(function);
     while let Some(block) = work.pop() {
         if after.insert(block) {
@@ -798,7 +798,7 @@ fn stays_in_memory(
                 work.extend(gep.operands[1..].iter().copied());
                 at = gep.operands[0];
             }
-            let mut seen: std::collections::HashSet<ValueId> = Default::default();
+            let mut seen: IdSet<ValueId> = IdSet::new();
             while let Some(operand) = work.pop() {
                 let value = match operand {
                     Operand::Constant(_) => continue,

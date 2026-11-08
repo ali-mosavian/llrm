@@ -1,6 +1,8 @@
 //! What clang states reaches the facts the passes read (`llrm-mir`'s
 //! `facts_coverage` names these tests). Needs the pinned clang
-//! (`LLRM_PIN_CLANG`); skipped without it.
+//! (`LLRM_PIN_CLANG`); without it they skip, and fail where
+//! `LLRM_REQUIRE_PIN_CLANG` is set (tools/debug-gate.env, and CI's setup action
+//! when it requires clang), so a gate cannot pass them by skipping.
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -14,7 +16,14 @@ const SOURCE: &str = "int add(int *restrict a, int *restrict b, int *restrict c)
 /// The `define` lines of the first and the last stage dump of `SOURCE`
 /// compiled at -O2, or `None` without the clang.
 fn defines(name: &str) -> Option<(Vec<String>, Vec<String>)> {
-    std::env::var_os("LLRM_PIN_CLANG")?;
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() {
+        assert!(
+            std::env::var_os("LLRM_REQUIRE_PIN_CLANG").is_none(),
+            "LLRM_REQUIRE_PIN_CLANG is set, and LLRM_PIN_CLANG is not"
+        );
+        eprintln!("SKIPPED: LLRM_PIN_CLANG names no pinned clang");
+        return None;
+    }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     // On disk: `--dump` refuses a tmpfs.
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{}", std::process::id()));
