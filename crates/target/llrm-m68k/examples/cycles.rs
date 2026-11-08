@@ -182,7 +182,18 @@ pub(crate) fn price(
         })
         .collect();
     let cpu = std::env::var("CYCLES_QEMU_CPU").unwrap_or_else(|_| qemu_cpu_of(exe).to_owned());
-    let cap = if harness { 200_000_000 } else { CAP };
+    // `CYCLES_CAP`: the executed instructions read before a run is called
+    // runaway
+    let cap = std::env::var("CYCLES_CAP")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(
+            if harness {
+                200_000_000
+            } else {
+                CAP
+            },
+        );
     let pcs = trace(exe, cap, &cpu);
     let mut total = Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0 };
     let mut seen = std::collections::HashSet::new();

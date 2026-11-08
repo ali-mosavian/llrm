@@ -8,6 +8,7 @@ pub mod copyprop;
 pub mod dag;
 pub mod data;
 pub mod debug;
+pub mod description;
 pub mod divconst;
 pub mod driver;
 pub mod emit;
