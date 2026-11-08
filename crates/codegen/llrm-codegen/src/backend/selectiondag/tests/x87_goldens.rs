@@ -5,16 +5,17 @@
 
 use std::collections::BTreeMap;
 
-use llrm_dagisel::generated::x86_i486 as table;
+use llrm_dagisel::addr::AddrMode;
 use llrm_dagisel::interp::Selector;
-use llrm_dagisel::x86_addr::AddrMode;
-use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_mir::datalayout::DataLayout;
+use llrm_x86_dagisel::generated::x86_i486 as table;
+use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 
 use super::super::actions::{Features, TargetLowering};
 use super::super::builder::{BuilderTarget, build_block};
-use super::super::dag_select::{do_instruction_selection, legalized, users_first};
+use super::super::dag_select::{legalized, users_first};
 use super::super::function_lowering::FunctionLoweringInfo;
+use super::super::select::do_instruction_selection;
 use super::super::x86_lowering::X86Lowering;
 use super::*;
 
@@ -53,8 +54,16 @@ fn selected(text: &str) -> BTreeMap<String, Result<Counts, String>> {
         let mut counts = Counts::new();
         let mut failure = None;
         for &block in function.layout() {
-            let built =
-                build_block(&module, function, &layout, &BuilderTarget::for_pointer_bits(32), &machine, &convention, &mut info, block);
+            let built = build_block(
+                &module,
+                function,
+                &layout,
+                &BuilderTarget::for_pointer_bits(32),
+                &machine,
+                &convention,
+                &mut info,
+                block,
+            );
             let mut built = match built {
                 Ok(b) => b,
                 Err(why) => {

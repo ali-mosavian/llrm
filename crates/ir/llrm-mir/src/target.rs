@@ -98,6 +98,13 @@ pub struct Tuning {
     /// `Tti::speed_inline_rate_at_o1`: whether that rate binds at -O1 too
     /// (false by default; m32's -O1 has its own rule, INL-O1).
     pub speed_inline_rate_at_o1: bool,
+    /// `Tti::callee_saved_clocks`: (scratch registers, preserved registers,
+    /// clocks to save and restore one). None: not priced.
+    pub callee_saved: Option<(i64, i64, i64)>,
+    /// `Tti::inline_hot_trial_frequency`.
+    pub inline_hot_trial_frequency: Option<i64>,
+    /// `Tti::inline_hot_trial_at_o3`.
+    pub inline_hot_trial_at_o3: bool,
     /// DEVIATE SD-DIVMAG (owner x86-m32, exit 2026-11-22): a signed divide by a
     /// negative constant is the negation of the divide by its magnitude, so it
     /// shares the multiply-high of the remainder (`x % -c` is `x % c`); the
@@ -136,6 +143,12 @@ pub struct Tuning {
     pub price_pin_multiplies: bool,
     /// At -Os a multiply by a constant stays an `imul` (the pin's `hasMinSize`
     /// rule, which the pin applies at -Oz only): the chain is no smaller.
+    /// A constant `memset` past the store limit is `rep stos` at `-Os`
+    /// (alignment or not), not the library call: the setup is 9-11 B against
+    /// the call's 12-16. DEVIATE REP-OS (owner w9, exit 2026-11-20): the pin
+    /// calls `memset` unless the destination is dword aligned and the size
+    /// within 128 bytes.
+    pub rep_stos_at_size: bool,
     pub imul_at_size: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
@@ -350,6 +363,9 @@ impl Tuning {
         speed_inline_milliclocks_per_byte: 0,
         sdiv_by_magnitude: false,
         speed_inline_rate_at_o1: false,
+        inline_hot_trial_frequency: None,
+        inline_hot_trial_at_o3: false,
+        callee_saved: None,
         call_sequence_fixed_clocks: 0,
         call_sequence_argument_clocks: 0,
         call_sequence_pop_clocks: 0,
@@ -358,6 +374,7 @@ impl Tuning {
         second_ipsccp: false,
         price_pin_multiplies: false,
         imul_at_size: false,
+        rep_stos_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,

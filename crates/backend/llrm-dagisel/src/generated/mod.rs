@@ -2,14 +2,3 @@
 
 pub mod aarch64;
 pub mod ids;
-pub mod instrinfo;
-pub use instrinfo::memory_flags;
-pub mod x86_i486;
-pub mod x86_p5;
-pub mod x86_m16;
-pub mod x86_x64;
-pub mod fastisel_i486;
-pub mod fastisel_p5;
-pub mod fastisel_m16;
-pub mod fastisel_x64;
-pub mod foldtables;

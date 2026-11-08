@@ -130,6 +130,8 @@ pub mod registers {
         destination: RegId::EDI,
         accumulator: RegId::EAX,
     };
+    /// The DAG's name for the top of the x87 stack (the pin's `FP0`).
+    pub const X87_TOP: RegId = RegId::MM0;
     /// The segment registers.
     pub const SEGMENTS: [RegId; 6] = [RegId::ES, RegId::CS, RegId::SS, RegId::DS, RegId::FS, RegId::GS];
     /// The dword registers.

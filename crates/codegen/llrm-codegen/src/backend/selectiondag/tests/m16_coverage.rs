@@ -6,16 +6,17 @@
 //! coverage, one function per operation family. Each must build, legalize and
 //! select every node: no refusal and no `CannotSelect`.
 
-use llrm_dagisel::generated::x86_m16 as table;
+use llrm_dagisel::addr::AddrMode;
 use llrm_dagisel::interp::Selector;
-use llrm_dagisel::x86_addr::AddrMode;
-use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_mir::datalayout::DataLayout;
+use llrm_x86_dagisel::generated::x86_m16 as table;
+use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 
 use super::super::actions::{Features, TargetLowering};
 use super::super::builder::{BuilderTarget, build_block};
-use super::super::dag_select::{do_instruction_selection, legalized};
+use super::super::dag_select::legalized;
 use super::super::function_lowering::FunctionLoweringInfo;
+use super::super::select::do_instruction_selection;
 use super::super::x86_lowering::X86Lowering;
 use super::*;
 use crate::testing::m16_ir;
@@ -44,9 +45,17 @@ fn selects(body: &str) -> Result<(), String> {
     });
     let mut info = FunctionLoweringInfo::new(function);
     for &block in function.layout() {
-        let mut built =
-            build_block(&module, function, &layout, &BuilderTarget::for_pointer_bits(16), &machine, &convention, &mut info, block)
-                .map_err(|r| format!("builder: {}", r.0))?;
+        let mut built = build_block(
+            &module,
+            function,
+            &layout,
+            &BuilderTarget::for_pointer_bits(16),
+            &machine,
+            &convention,
+            &mut info,
+            block,
+        )
+        .map_err(|r| format!("builder: {}", r.0))?;
         legalized(
             &mut built.dag,
             &tli,

@@ -178,6 +178,12 @@ impl CombineHooks for Z80Combines {
         false
     }
 
+    /// A shift is one `add hl, hl` or `sla`/`rl` pair a bit: `x * 36` is
+    /// `((x << 3) + x) << 2`, 5 shifted bits, not `(x << 5) + (x << 2)`, 7.
+    fn factor_trailing_zeros_of_mul(&self) -> bool {
+        true
+    }
+
     /// A byte or word multiply by a constant is a library call (`__mulhi3`, a
     /// loop over the constant's bits, tens of T-states a bit); `2^n +- 1` as
     /// shifts and one add is a `add hl, hl` and a copy per shifted bit.

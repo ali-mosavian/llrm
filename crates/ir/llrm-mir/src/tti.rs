@@ -576,6 +576,12 @@ pub trait Tti {
         300
     }
 
+    /// Whether SZ2 trials simplify their copy with the cleanup list, not the whole one: a trial
+    /// only counts instructions. False: the whole list.
+    fn inline_trial_light_simplify(&self) -> bool {
+        false
+    }
+
     /// Whether a later round of the inliner over one caller skips a callee SZ2 rejected in an
     /// earlier round: a round costs the simplifier over the caller per callee. False: tried again.
     fn inline_trial_skips_rejected(&self) -> bool {
@@ -598,6 +604,27 @@ pub trait Tti {
     }
 
     fn speed_inline_rate_at_o1(&self) -> bool {
+        false
+    }
+
+    /// What a call to a callee whose peak register pressure is `peak` values
+    /// costs in clocks to save and restore the registers it must preserve (a
+    /// register the callee takes beyond the scratch ones is pushed and popped
+    /// once per call). Inlining removes it; the trial prices it. 0: not priced.
+    fn callee_saved_clocks(&self, peak: usize) -> i64 {
+        let _ = peak;
+        0
+    }
+
+    /// INL-HOT: the least site frequency (over the caller's entry) at which a
+    /// call the pin's threshold alone refused is tried inlined at -O2/-O3 and
+    /// kept where the rate pays. Whole units of relative frequency. None: the threshold is final.
+    fn inline_hot_trial_frequency(&self) -> Option<i64> {
+        None
+    }
+
+    /// Whether INL-HOT's trials run at -O3 too (false: -O2 only).
+    fn inline_hot_trial_at_o3(&self) -> bool {
         false
     }
 
@@ -882,6 +909,11 @@ pub trait Tti {
 
     /// `Tuning::imul_at_size`.
     fn imul_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::rep_stos_at_size`.
+    fn rep_stos_at_size(&self) -> bool {
         false
     }
 

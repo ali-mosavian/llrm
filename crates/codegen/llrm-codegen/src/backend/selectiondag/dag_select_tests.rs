@@ -1,19 +1,19 @@
-use llrm_dagisel::generated::x86_i486::{MACHINE_OPCODES, TABLE};
 use llrm_dagisel::interp::Selector;
-use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_lir::registers::RegId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_support::hash::HashMap;
 use llrm_target::Target;
+use llrm_x86_dagisel::generated::x86_i486::{MACHINE_OPCODES, TABLE};
+use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, build_block};
-use super::dag_select::select_block;
 use super::emit_api::{EmitContext, FrameMap};
 use super::function_lowering::FunctionLoweringInfo;
 use super::mvt::MVT;
 use super::opcodes::OpcodeMap;
 use super::schedule::SchedInfo;
+use super::select::select_block;
 use super::x86_lowering::X86Lowering;
 use crate::backend::isel::Parameter;
 use crate::model::ir::{Addr, Mem, Space};
@@ -39,7 +39,7 @@ impl super::emit_api::GlobalMap for NoGlobals {
 
 struct NoTemps;
 
-impl super::x86_preprocess::FrameObjects for NoTemps {
+impl super::dag_target::FrameObjects for NoTemps {
     fn objects(&self) -> i32 {
         0
     }
@@ -60,21 +60,21 @@ impl SchedInfo for Info {
         &self,
         opcode: u32,
     ) -> usize {
-        llrm_dagisel::instr::desc(opcode as u16).map_or(0, |d| usize::from(d.num_defs))
+        llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16).map_or(0, |d| usize::from(d.num_defs))
     }
 
     fn implicit_defs(
         &self,
         opcode: u32,
     ) -> &[u16] {
-        llrm_dagisel::instr::desc(opcode as u16).map_or(&[], |d| d.implicit_defs)
+        llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16).map_or(&[], |d| d.implicit_defs)
     }
 
     fn is_call(
         &self,
         opcode: u32,
     ) -> bool {
-        llrm_dagisel::instr::desc(opcode as u16).is_some_and(|d| d.is_call())
+        llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16).is_some_and(|d| d.is_call())
     }
 }
 
@@ -100,7 +100,7 @@ fn hooks() -> X86Hooks {
         min_size: false,
         has_frame_pointer: true,
         multiply_early_out: false,
-        address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
+        address_mode: llrm_dagisel::addr::AddrMode::Flat32,
     })
 }
 
@@ -132,7 +132,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         globals: &NoGlobals,
         block_at: &HashMap::default(),
         frame: &frame,
-        address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
+        address_mode: llrm_dagisel::addr::AddrMode::Flat32,
         opt_size: false,
         call_alignment: 1,
         reserved_calls: false,
@@ -226,9 +226,17 @@ fn the_combiner_runs_between_the_legalizers() {
     let convention = crate::backend::isel::convention(&module, &layout, id, &machine).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
     let block = function.layout()[0];
-    let mut built =
-        build_block(&module, function, &layout, &BuilderTarget::for_pointer_bits(32), &machine, &convention, &mut info, block)
-            .expect("builds");
+    let mut built = build_block(
+        &module,
+        function,
+        &layout,
+        &BuilderTarget::for_pointer_bits(32),
+        &machine,
+        &convention,
+        &mut info,
+        block,
+    )
+    .expect("builds");
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     super::dag_select::legalized(
         &mut built.dag,
@@ -306,8 +314,8 @@ fn nodes_a_selection_makes_are_selected_too() {
 /// units it returns are the ones x86's own wrapper gets.
 #[test]
 fn a_dag_target_is_preprocessed_once_before_it_selects() {
-    use super::dag_select::{X86Chooser, X86Target};
     use super::dag_target::{DagTarget, Phases, select_units};
+    use super::select::{X86Chooser, X86Target};
 
     struct Recording<'a> {
         inner: X86Target<'a, 'a>,
@@ -329,7 +337,7 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
         fn preprocess(
             &mut self,
             dag: &mut super::SelectionDAG,
-            temporaries: &mut dyn super::x86_preprocess::FrameObjects,
+            temporaries: &mut dyn super::dag_target::FrameObjects,
         ) {
             self.log.push("preprocess");
             self.inner.preprocess(dag, temporaries);
@@ -360,7 +368,7 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
         .expect("builds");
         let (mut lowering, mut hooks) = (
             X86Lowering {
-               imul_if_smaller: false,
+                imul_if_smaller: false,
                 share_products: false,
                 cmov: false,
                 sse2: false,

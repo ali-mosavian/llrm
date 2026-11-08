@@ -365,7 +365,7 @@ impl<'d> SplitEditor<'d> {
         // starts.
         let remade = (!parent_vni.is_phi_def() && !parent_vni.is_unused())
             .then(|| cx.lis.instr(cx.lis.defining_instr(&parent_vni.def(), from)))
-            .and_then(|def| cx.env.rematerialize(def, to, from, beside.as_deref()));
+            .and_then(|def| cx.env.rematerialize(def, to, from, beside.as_deref(), reg_idx != 0));
         let copy = match remade {
             Some(made) => {
                 self.rematted.insert(parent_vni.id());

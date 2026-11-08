@@ -87,8 +87,11 @@ impl Cpu {
 /// DEVIATE UP1 (exit 2026-11-20), cells that grow bytes for little, against 1.0
 /// (2026-11-08): nbody_fixed -O2 +32 B for -37 instructions and -O3 +20 B for
 /// -45; shellsort -O3 +704 B for -139; jpeg_fixed -O3 +152 B and jpeg_single
-/// +148 B for -722 and -168 instructions (-O2 +24 and +8 B, 0 instructions).
-/// A wash at the floor, and they run few times.
+/// +148 B for -722 and -168 instructions. A wash at the floor, and they run few times.
+/// jpeg -O2: +28 and +8 B for -33 and -42 instructions of 11.65 M and 8.49 M (measured, not
+/// 0): the 3-trip component loops of the header parse (`id[c] == want`, 16 B for 11 clocks a
+/// run) run once a program, so the saving is real and one-off. The model prices them right at
+/// 1.2 instructions a byte, above the 0.8 break-even; it cannot know the code is cold.
 const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 500;
 
 /// AArch64's scalar profile.
@@ -316,6 +319,20 @@ impl Tti for AArch64 {
     /// (`inline_trial_skips_rejected`).
     fn inline_trial_caller_limit(&self) -> usize {
         20_000
+    }
+
+    /// DEVIATE (owner greedy-anyisa, exit 2026-11-30): the trial's copy goes through the cleanup
+    /// list, not the whole one: Ir of jpeg_fixed -Os 1.39 G, not 2.95 G (pre-trial 1.38 G). The
+    /// cleanup list misses a few simplifications, so some trials decide otherwise
+    /// (jpeg_single 3592 -> 3608 B, jpeg_fixed 3516 -> 3484 B; the sum is the same). Re-running
+    /// near misses with the whole list swaps the +16 B between the cells at 2.05 G Ir (parked,
+    /// #8278): `extend` and `receive` read alike in both and pay in one only. Exit: a trial
+    /// estimate that predicts the final bytes of those two. Exception (w15): at speed a trial of a
+    /// callee with a loop uses the whole list, as the cleanup list has no loop passes (vla -O2:
+    /// the 8-site copy priced +644 B, the unrolled and folded one is -40 B); at size the cleanup
+    /// list stays (jpeg -Os +32 B with the whole one).
+    fn inline_trial_light_simplify(&self) -> bool {
+        true
     }
 
     fn inline_trial_skips_rejected(&self) -> bool {

@@ -132,6 +132,15 @@ pub struct Options {
     /// A value an address register would hold across a loop it is not used in
     /// is held in a data register (`crate::classsplit`); kept when cheaper.
     pub class_split: bool,
+    /// The coalescer joins the copies of values that live in more than one
+    /// block with the ones that do not (`JoinGlobalCopies`, the allocator's
+    /// tuning); a function that saved a register is also built without, and
+    /// the cheaper kept. False is the pin's M68k.
+    pub global_copies: bool,
+    /// The coalescer tries first the block whose copies read a value carried
+    /// around the loop (`joins_loop_carried_first`, DEVIATE C15); false is the
+    /// pin's block order.
+    pub loop_carried_first: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -160,6 +169,8 @@ impl Options {
         sext_adds: false,
         return_dup: false,
         class_split: false,
+        global_copies: true,
+        loop_carried_first: false,
         debug: false,
     };
 }
@@ -187,6 +198,8 @@ impl Default for Options {
             sext_adds: true,
             return_dup: true,
             class_split: true,
+            global_copies: true,
+            loop_carried_first: true,
             debug: false,
         }
     }
@@ -206,7 +219,9 @@ pub fn items(
 ///
 /// A function an optional rewrite touched (the `adda`/`suba` fold, the copy of
 /// a return block into its predecessors) is also built without it, and the
-/// cheaper kept (`crate::trial`): each is priced before the code is known.
+/// cheaper kept (`crate::trial`): each is priced before the code is known. A
+/// function that saved a register is last built with the pin's join order,
+/// which replaces the tuned one only when cheaper.
 pub fn items_with(
     module: &Module,
     name: &str,
@@ -220,7 +235,7 @@ pub fn items_with(
     } else {
         module
     };
-    let mut options = Options { mid_end: false, ..options };
+    let mut options = Options { mid_end: false, global_copies: options.global_copies, ..options };
     let (mut kept, touched) = items_once(module, name, cpu, options)?;
     if !touched.any() {
         return Ok(kept);
@@ -252,6 +267,15 @@ pub fn items_with(
         let (plain, _) = items_once(module, name, cpu, without)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
             kept = plain;
+            options = without;
+        }
+    }
+    if touched.global_copies {
+        // the default stands unless the other join order is cheaper
+        let other = Options { global_copies: false, ..options };
+        let (items, _) = items_once(module, name, cpu, other)?;
+        if crate::trial::keeps(&items, &kept, cpu, price) {
+            kept = items;
         }
     }
     Ok(kept)
@@ -263,11 +287,14 @@ struct Touched {
     sext_adds: bool,
     return_dup: bool,
     class_split: bool,
+    /// The build saved a callee-saved register: the join order may have cost
+    /// it.
+    global_copies: bool,
 }
 
 impl Touched {
     fn any(self) -> bool {
-        self.sext_adds || self.return_dup || self.class_split
+        self.sext_adds || self.return_dup || self.class_split || self.global_copies
     }
 }
 
@@ -344,9 +371,17 @@ fn items_once(
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
-        crate::regalloc::allocate_greedy(&mut function, wants_size, options.indexed, options.rematerialize_arguments)?
+        crate::regalloc::allocate_greedy(
+            &mut function,
+            wants_size,
+            options.indexed,
+            options.rematerialize_arguments,
+            options.global_copies,
+            options.loop_carried_first,
+        )?
     };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
+    touched.global_copies = options.global_copies && crate::calltarget::saves_a_register(&function, &assignment);
     if options.short {
         crate::addrarith::refine_lea_round_trips(&mut function, &assignment, cpu, wants_size);
         crate::addrarith::refine_address_adds(&mut function, &assignment, cpu, wants_size);

@@ -721,6 +721,20 @@ impl Tti for X86 {
         self.tuning.speed_inline_rate_at_o1
     }
 
+    fn callee_saved_clocks(&self, peak: usize) -> i64 {
+        self.tuning.callee_saved.map_or(0, |(scratch, preserved, clocks)| {
+            (i64::try_from(peak).unwrap_or(i64::MAX) - scratch).clamp(0, preserved) * clocks
+        })
+    }
+
+    fn inline_hot_trial_at_o3(&self) -> bool {
+        self.tuning.inline_hot_trial_at_o3
+    }
+
+    fn inline_hot_trial_frequency(&self) -> Option<i64> {
+        self.tuning.inline_hot_trial_frequency
+    }
+
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         self.tuning.speed_inline_milliclocks_per_byte
     }
@@ -755,6 +769,10 @@ impl Tti for X86 {
 
     fn imul_at_size(&self) -> bool {
         self.tuning.imul_at_size
+    }
+
+    fn rep_stos_at_size(&self) -> bool {
+        self.tuning.rep_stos_at_size
     }
 
     fn has_cmov(&self) -> bool {

@@ -381,6 +381,10 @@ pub trait BuilderArch {
     fn string_roots(&self) -> Option<StringRoots> {
         None
     }
+    /// The DAG's name for the top of the x87 stack, if the target has one.
+    fn x87_stack_top(&self) -> Option<RegId> {
+        None
+    }
 }
 
 impl<T: Target> BuilderArch for T {
@@ -411,6 +415,9 @@ impl<T: Target> BuilderArch for T {
     fn string_roots(&self) -> Option<StringRoots> {
         Target::string_roots(self)
     }
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Target::x87_stack_top(self)
+    }
 }
 
 impl BuilderArch for &dyn Target {
@@ -437,6 +444,9 @@ impl BuilderArch for &dyn Target {
     }
     fn string_roots(&self) -> Option<StringRoots> {
         Target::string_roots(*self)
+    }
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Target::x87_stack_top(*self)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(*self)
@@ -616,6 +626,12 @@ pub trait Target {
 
     /// The registers of this target's string instructions, where it has them.
     fn string_roots(&self) -> Option<StringRoots> {
+        None
+    }
+
+    /// The register the DAG names the top of the x87 stack by (the pin's
+    /// `FP0`), where the target has an x87 unit.
+    fn x87_stack_top(&self) -> Option<RegId> {
         None
     }
 

@@ -60,7 +60,7 @@
 //! `IPSCCPPass`, `GlobalOptPass`, `DeadArgumentEliminationPass` before the
 //! CGSCC walk), `DeadArgumentElimination.cpp`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::manager::GlobalsAA;
 use llrm_mir::context::GlobalId;
@@ -300,9 +300,11 @@ impl ProgramPass for Walk {
                     // made direct is inlined by another run
                     // of the inliner over the body.
                     let mut repeats = 0;
-                    // SZ2: the callees a trial rejected in this caller; a later round
-                    // of the loop does not try them again.
-                    let mut rejected: BTreeSet<GlobalId> = BTreeSet::new();
+                    // SZ2: the callees a trial rejected in this caller, with the credit
+                    // that trial had; a later trial of the callee is skipped unless it
+                    // has more (the group of all a callee's sites, which takes the
+                    // callee with them, is not another try of one site).
+                    let mut rejected: BTreeMap<GlobalId, i64> = BTreeMap::new();
                     loop {
                         let mut decided = remarks.then(Vec::new);
                         // `sites` prices every block's frequency before it
@@ -551,9 +553,22 @@ impl ProgramPass for Walk {
                                 }
                             }
                             let mut accepted: Vec<llrm_mir::module::InstId> = Vec::new();
+                            let mut hot_tried = 0;
                             for (calls, credit) in units {
+                                // INL-HOT: a unit of sites the pin's threshold alone refused; a trial costs the
+                                // Simplify list over the caller, so a caller tries at most HOT_TRIALS of them.
+                                let hot = calls.iter().all(|one| trials[one].hot);
+                                if hot && self.inline.limit >= 250 && !tti.inline_hot_trial_at_o3() {
+                                    continue;
+                                }
+                                if hot {
+                                    if hot_tried >= HOT_TRIALS {
+                                        continue;
+                                    }
+                                    hot_tried += 1;
+                                }
                                 if tti.inline_trial_skips_rejected()
-                                    && calls.iter().any(|one| trials[one].callee.is_some_and(|callee| rejected.contains(&callee)))
+                                    && calls.iter().any(|one| trials[one].callee.is_some_and(|callee| rejected.get(&callee).is_some_and(|&tried| tried >= credit)))
                                 {
                                     continue;
                                 }
@@ -630,7 +645,16 @@ impl ProgramPass for Walk {
                                             .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                                                                             }
                                 }
-                                (self.simplify)(module, &mut modules[at], id, "walk.trial.");
+                                // The cleanup list has no loop passes: at speed a copy of a callee
+                                // with a loop meets constants that unroll and forward away, which
+                                // only the whole list prices (vla -O2: 8 sites, 644 B against -40).
+                                // At size the unroll keeps only what shrinks the code: jpeg -Os
+                                // measured +32 B with the whole list.
+                                let light = tti.inline_trial_light_simplify()
+                                    && !(size == crate::inlinecost::CallerSize::Speed && calls.iter().filter_map(|one| trials[one].callee).any(|callee| {
+                                        module.global(callee).function().is_some_and(|body| !crate::inlinecost::loop_headers(body).is_empty())
+                                    }));
+                                (self.simplify)(module, &mut modules[at], id, if light { TRIAL_LIGHT } else { "walk.trial." });
                                 let tried = body_size(module, &program.layout, tti, id);
                                 // At speed a target that prices bytes in clocks
                                 // takes a trial that grows the code where the
@@ -669,7 +693,11 @@ impl ProgramPass for Walk {
                                         .map(|one| site_frequencies.get(one).copied().unwrap_or(1.0).max(1.0))
                                         .sum::<f64>()
                                         / calls.len() as f64;
-                                    let once = kept_clocks + run - function_clocks(module, &program.layout, tti, now);
+                                    let saves: i64 = callees
+                                        .iter()
+                                        .map(|body| tti.callee_saved_clocks(llrm_analysis::liveness::pressure(body, None, None)))
+                                        .sum();
+                                    let once = kept_clocks + run + saves - function_clocks(module, &program.layout, tti, now);
                                     (
                                         (once as f64 * trips) as i64,
                                         function_bytes(module, &program.layout, &costs, now)
@@ -719,7 +747,7 @@ impl ProgramPass for Walk {
                                 };
                                 if remarks {
                                     eprintln!(
-                                        "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee, {} clocks saved, {} bytes)",
+                                        "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee, {} clocks saved, {} bytes{})",
                                         module.global(id).name.as_deref().unwrap_or("?"),
                                         module.global(id).function().map_or(0, |one| one.walk().count()),
                                         calls.len(),
@@ -732,7 +760,8 @@ impl ProgramPass for Walk {
                                         best,
                                         credit,
                                         saved,
-                                        growth
+                                        growth,
+                                        if light { ", cleanup list" } else { "" }
                                     );
                                 }
                                 // At speed with a byte price only the sites of
@@ -752,11 +781,14 @@ impl ProgramPass for Walk {
                                 // instructions).
                                 let priced = rate > 0 && size == crate::inlinecost::CallerSize::Speed;
                                 let kept_bytes = function_bytes(module, &program.layout, &program.target.size_costs(), &kept);
-                                if trial_accepted(tti.opt_size_inline_byte_gate(), tti.inline_trial_keeps_shrinking_copy(), priced, tried, best, credit, saved, growth, rate, kept_bytes) {
+                                if trial_accepted(tti.opt_size_inline_byte_gate(), tti.inline_trial_keeps_shrinking_copy(), priced, hot, tried, best, credit, saved, growth, rate, kept_bytes) {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
-                                    rejected.extend(calls.iter().filter_map(|one| trials[one].callee));
+                                    for callee in calls.iter().filter_map(|one| trials[one].callee) {
+                                        let tried = rejected.entry(callee).or_insert(credit);
+                                        *tried = (*tried).max(credit);
+                                    }
                                     if remarks {
                                         eprintln!(
                                             "{} SZ2 trial rejected '{}'",
@@ -1180,6 +1212,7 @@ impl SelfInline {
                         callee: None,
                         self_calls: None,
                         self_sites: 0,
+                        hot: false,
                     };
                     let available = [(id, itself)].into_iter().collect();
                     let known = modules[at].cached::<llrm_analysis::manager::GlobalsModRefAnalysis>();
@@ -1244,6 +1277,9 @@ impl SelfInline {
 #[cfg(test)]
 #[path = "walk_tests.rs"]
 mod tests;
+
+/// The stage name of a SZ2 trial's simplification when the target asks for the cleanup list.
+pub const TRIAL_LIGHT: &str = "walk.trial.light.";
 
 /// SZ2: the largest caller, in instructions, whose refused sites are tried
 /// (`Tti::inline_trial_caller_limit` where a target states one).
@@ -1349,6 +1385,9 @@ pub fn function_bytes(
         / 100
 }
 
+/// INL-HOT: the most trials of hot sites a caller tries.
+const HOT_TRIALS: usize = 4;
+
 /// SZ2: whether a trial's copies are kept. Priced (speed, a byte rate): the callee must go with them and the growth
 /// must be worth the clocks saved. At size the instruction count decides (`tried <= best + credit`), but a callee that
 /// goes with its last calls, accepted only by the credit for the callee (the copies alone count more), must also leave the bytes no larger: the count priced a float compare as an add, and
@@ -1358,6 +1397,7 @@ fn trial_accepted(
     byte_gate: bool,
     keeps_shrinking: bool,
     priced: bool,
+    hot: bool,
     tried: i64,
     best: i64,
     credit: i64,
@@ -1368,7 +1408,8 @@ fn trial_accepted(
 ) -> bool {
     if priced {
         // A copy that leaves the module no larger and runs in fewer clocks needs no callee to go with it.
-        return (credit > 0 || (keeps_shrinking && growth <= 0 && saved > 0)) && growth * rate <= saved * 1000;
+        // INL-HOT: a hot site needs no callee going with the copy; the rate alone decides.
+        return (credit > 0 || hot || (keeps_shrinking && growth <= 0 && saved > 0)) && growth * rate <= saved * 1000;
     }
     (if byte_gate { tried <= best || (tried <= best + credit && growth <= 0) } else { tried <= best + credit })
         || (saved > 0 && growth * rate <= saved * 1000)

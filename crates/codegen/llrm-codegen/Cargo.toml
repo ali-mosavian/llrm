@@ -48,6 +48,7 @@ testing = ["llrm-omf/testing"]
 fixtures = []
 
 [dev-dependencies]
+llrm-x86-dagisel = { path = "../../target/llrm-x86-dagisel" }
 llrm-codegen = { path = ".", features = ["fixtures"] }
 llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
