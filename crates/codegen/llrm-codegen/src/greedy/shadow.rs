@@ -1232,6 +1232,22 @@ fn intervals_to_allocate(
         lis.assert_intervals_cover_afresh(body);
     }
     lis.indexes.pack_indexes();
+    if llrm_support::env_flag!("LLRM_SLOT_COUNT") {
+        // `tools/slotcmp.py`: the instructions the pin's `-stop-before=greedy` MIR of the same IR has.
+        let slots: usize = body
+            .blocks
+            .iter()
+            .map(|block| {
+                block
+                    .insns
+                    .iter()
+                    .enumerate()
+                    .filter(|(at, one)| !(*at > 0 && one.group.is_some() && one.group == block.insns[at - 1].group))
+                    .count()
+            })
+            .sum();
+        eprintln!("SLOTS {} {slots}", body.name);
+    }
     lis
 }
 
