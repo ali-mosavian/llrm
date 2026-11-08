@@ -232,7 +232,7 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
                 words[1..].iter().map(|word| word.replace("%s", &path.display().to_string())).collect();
             let done = if words[0] == "llrm-cc" {
                 // llrm-c's arguments, served by llrm-cc over the pinned clang
-                // (needs LLRM_OW, LLRM_CLANG_M16).
+                // (needs the Open Watcom tree, LLRM_CLANG_M16).
                 common::cc::llrm_c().args(&arguments).output()
             } else {
                 Command::new(tool(words[0])).args(&arguments).output()
@@ -337,12 +337,13 @@ fn test_check_max_holds_a_known_gap_to_its_ceiling() {
     assert!(check("a\nx\nx\nx\n", "; CHECK: a\n; CHECK-MAX-2: x").is_err(), "a trailing ceiling covers the rest");
 }
 
-/// An unset toolchain variable made `llrm-cc` fall back to the system clang: 69 false reds on 2026-11-05.
+/// An unset toolchain variable made `llrm-cc` fall back to the system clang: 69
+/// false reds on 2026-11-05.
 #[test]
 fn test_an_unset_toolchain_variable_is_named() {
     let none = |_: &str| None;
-    assert_eq!(common::cc::missing_env(none, false, false), ["LLRM_PIN_CLANG", "LLRM_OW", "LLRM_CLANG_M16"]);
-    assert_eq!(common::cc::missing_env(none, true, false), ["LLRM_PIN_CLANG", "LLRM_OW"]);
+    assert_eq!(common::cc::missing_env(none, false, false), ["LLRM_PIN_CLANG", "OW_TREE", "LLRM_CLANG_M16"]);
+    assert_eq!(common::cc::missing_env(none, true, false), ["LLRM_PIN_CLANG", "OW_TREE"]);
     assert_eq!(common::cc::missing_env(none, false, true), ["LLRM_PIN_CLANG"]);
     let set = |_: &str| Some(std::ffi::OsString::from("/"));
     assert!(common::cc::missing_env(set, false, false).is_empty(), "set to an existing path: nothing missing");

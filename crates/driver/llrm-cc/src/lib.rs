@@ -150,6 +150,49 @@ const PIN_FILE: &str = include_str!("../../../../toolchain/clang/pin");
 fn pin() -> &'static str {
     PIN_FILE.lines().next().unwrap_or_default().trim()
 }
+const OW_COMMIT_FILE: &str = include_str!("../../../../toolchain/owshim/ow-commit");
+
+/// The Open Watcom tree `{ow}` names: `llrm/ow-src-<commit>` under `cache`, the commit toolchain/owshim/ow-commit pins. tools/ow-fetch.sh makes
+/// it; llrm-cc never does.
+pub fn ow_tree_in(cache: &Path) -> PathBuf {
+    cache.join("llrm").join(format!("ow-src-{}", OW_COMMIT_FILE.trim()))
+}
+
+/// The Open Watcom tree on this machine (`ow_tree_in` of the cache directory).
+pub fn ow_tree() -> PathBuf {
+    ow_tree_in(&cache_dir())
+}
+
+/// `$XDG_CACHE_HOME`, else `~/.cache`: where toolchain/owclib.sh puts the tree.
+fn cache_dir() -> PathBuf {
+    std::env::var_os("XDG_CACHE_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".cache"))
+}
+
+/// `word` with `{ow}` replaced by the tree under `cache` where it is complete
+/// (toolchain/cache.sh writes `.complete` last); where it is not the word
+/// stays, and `missing_ow` says so.
+fn with_ow(
+    word: &str,
+    cache: &Path,
+) -> String {
+    let tree = ow_tree_in(cache);
+    if word.contains("{ow}") && tree.join(".complete").is_file() {
+        word.replace("{ow}", &tree.display().to_string())
+    } else {
+        word.to_owned()
+    }
+}
+
+fn missing_ow(cache: &Path) -> String {
+    format!(
+        "llrm-cc: the Open Watcom tree {} is missing: run tools/ow-fetch.sh to make it",
+        ow_tree_in(cache).display()
+    )
+}
+
 /// The llrm checkout this driver was built in, for the tools the recipes name.
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
 const DEFAULT_TARGET: &str = "x86_64-linux";
@@ -294,7 +337,7 @@ pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
             *word = with_root(word);
         }
         for word in target.clang.iter_mut().chain(&mut target.llc).chain(&mut target.link) {
-            *word = with_environment(word);
+            *word = with_ow(&with_environment(word), &cache_dir());
         }
     }
     Ok(table)
@@ -663,6 +706,9 @@ pub fn link_command(
     if let Some(open) = command.iter().find(|word| word.contains("{env:")) {
         return Err(unset(open));
     }
+    if command.iter().any(|word| word.contains("{ow}")) {
+        return Err(missing_ow(&cache_dir()));
+    }
     if command.is_empty() {
         return Err("empty link recipe".into());
     }
@@ -745,6 +791,19 @@ fn stem(input: &str) -> String {
     Path::new(input).file_stem().and_then(|one| one.to_str()).unwrap_or("a").to_owned()
 }
 
+/// What the target's clang and llc words still name that this machine lacks: an
+/// unset `{env:NAME}` or the Open Watcom tree `{ow}`. Said before anything
+/// runs, so a missing tree never reads as a failed compile.
+fn unresolved(target: &Target) -> Option<String> {
+    let words = || target.clang.iter().chain(&target.llc);
+    if let Some(open) = words().find(|word| word.contains("{env:")) {
+        return Some(unset(open).trim_start_matches("llrm-cc: ").to_owned());
+    }
+    words()
+        .any(|word| word.contains("{ow}"))
+        .then(|| missing_ow(&cache_dir()).trim_start_matches("llrm-cc: ").to_owned())
+}
+
 fn build(
     target: &Target,
     build: &Build,
@@ -755,8 +814,8 @@ fn build(
         eprintln!("llrm-cc: {why}");
         1
     };
-    if let Some(open) = target.clang.iter().chain(&target.llc).find(|word| word.contains("{env:")) {
-        return Err(fail(unset(open)));
+    if let Some(why) = unresolved(target) {
+        return Err(fail(why));
     }
     if build.output.is_some() && build.stop != Stop::Executable && build.inputs.len() > 1 {
         return Err(fail("cannot specify -o with -c or -S and several inputs".into()));
@@ -938,6 +997,10 @@ pub fn run_main(argv: &[String]) -> i32 {
             eprintln!("llrm-cc: {why}");
             1
         })?;
+        if let Some(why) = unresolved(target) {
+            eprintln!("llrm-cc: {why}");
+            return Err(1);
+        }
         check_pin(&clang_path(target)).map_err(|why| {
             eprintln!("llrm-cc: {why}");
             1

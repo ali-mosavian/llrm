@@ -114,13 +114,23 @@ pub fn take_handed_over(body: &LirBody) -> Option<LiveIntervals> {
 /// between only added, removed or rewrote instructions (the pin keeps one
 /// analysis from the coalescer to the allocator): taken if no other body was
 /// numbered since and the edit applies.
-pub fn take_handed_over_edited_to(body: &LirBody) -> Option<LiveIntervals> {
+///
+/// `carry` (`Tuning::carry_slot_indexes`) also takes them across the
+/// instructions the pre-RA scheduler moved and across another body's
+/// numbering, as the pin's `SlotIndexes` live on (`handleMove` leaves the
+/// entry a move empties). Off, a function the scheduler touched is numbered
+/// afresh.
+pub fn take_handed_over_edited_to(
+    body: &LirBody,
+    carry: bool,
+) -> Option<LiveIntervals> {
     HANDED_OVER.with(|slot| {
         let mut held = slot.borrow_mut().take()?;
-        if held.analysed != super::slotindex::analysed() {
+        if !carry && held.analysed != super::slotindex::analysed() {
             return None;
         }
-        held.lis.take()?.edited_to(body)
+        let lis = held.lis.take()?;
+        if carry { lis.edited_to_moving(body) } else { lis.edited_to(body) }
     })
 }
 
@@ -460,8 +470,27 @@ impl LiveIntervals {
     /// the blocks, the inputs or the order of the instructions both bodies keep
     /// differ.
     pub fn edited_to(
+        self,
+        body: &LirBody,
+    ) -> Option<Self> {
+        self.edited(body, false)
+    }
+
+    /// [`LiveIntervals::edited_to`], where the instructions both bodies keep
+    /// may also run in another order: each one out of place goes out of the
+    /// maps and in again (`handleMove`, LiveIntervals.cpp#L1513), and the
+    /// entry it leaves stays, empty.
+    pub fn edited_to_moving(
+        self,
+        body: &LirBody,
+    ) -> Option<Self> {
+        self.edited(body, true)
+    }
+
+    fn edited(
         mut self,
         body: &LirBody,
+        moving: bool,
     ) -> Option<Self> {
         if body.blocks.len() != self.blocks.len() || body.inputs != self.inputs {
             return None;
@@ -494,7 +523,36 @@ impl LiveIntervals {
                 }
                 previous = Some(one.id());
             }
-            if !self.blocks[n].iter().map(|one| one.id()).eq(block.insns.iter().map(|one| one.id())) {
+            if !moving {
+                if !self.blocks[n].iter().map(|one| one.id()).eq(block.insns.iter().map(|one| one.id())) {
+                    return None;
+                }
+                continue;
+            }
+            let target: Vec<InstrKey> = block.insns.iter().map(|one| one.id()).collect();
+            if self.blocks[n].len() != target.len() {
+                return None;
+            }
+            for (at, key) in target.iter().enumerate() {
+                if self.blocks[n][at].id() == *key {
+                    continue;
+                }
+                let Some(insn) = self.insns.get(key).map(Arc::clone) else { return None };
+                // An instruction of a parallel copy shares its index: not moved.
+                if insn.group.is_some() {
+                    return None;
+                }
+                touched.extend(insn.defines.iter().chain(&insn.uses).copied());
+                self.remove_instr(n, *key);
+                match at.checked_sub(1) {
+                    Some(before) => self.insert_instr_after(n, target[before], insn),
+                    None => {
+                        let first = self.blocks[n].first().map(|first| first.id());
+                        self.insert_instr_before(n, first, insn)
+                    }
+                };
+            }
+            if !self.blocks[n].iter().map(|one| one.id()).eq(target.iter().copied()) {
                 return None;
             }
         }

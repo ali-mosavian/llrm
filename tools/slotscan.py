@@ -85,7 +85,7 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 2
     mode, bins, isel = argv[1], Path(argv[2]), argv[3]
-    env = {"LLRM_OW": os.path.expanduser("~/scratch/ow-src"), "LLRM_PIN_CLANG": os.path.expanduser("~/scratch/llvm-build/bin/clang")}
+    env = {"LLRM_PIN_CLANG": os.path.expanduser("~/scratch/llvm-build/bin/clang")}
     os.environ.update({key: value for key, value in env.items() if key not in os.environ})
     jobs = corpus_jobs(bins, isel, Path(argv[4]) if len(argv) > 4 else ROOT) if mode == "corpus" else runtime_jobs(bins, isel)
 

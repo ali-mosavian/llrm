@@ -178,6 +178,18 @@ impl llrm_target::Target for M16 {
         llrm_x86::helpers::divide_used(signed, wide_divisor, 16, used).map_err(|refused| refused.message)
     }
 
+    fn small_divide_at_o1(&self) -> bool {
+        true
+    }
+
+    fn divide_routine_small(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+    ) -> Result<llrm_target::routines::Divide, String> {
+        llrm_x86::helpers::divide_small(signed, wide_divisor, 16).map_err(|refused| refused.message)
+    }
+
     fn float_width(
         &self,
         _: u32,
@@ -633,6 +645,7 @@ mod tuning_tests {
         assert_eq!(table.unroll_partial_threshold, Some(0));
         assert_eq!(table.x87_stack_slots, Some(8));
         assert!(table.slots_loop_width_rule, "m16 keeps a word out of a loop-held wider stack slot (SLOTS-LOOPWIDTH)");
+        assert!(!table.carry_slot_indexes, "DEVIATE CARRY-SI: x86 numbers the function afresh after the scheduler until priced");
         assert_eq!(table.unswitch_threshold, Some(0));
         assert_eq!(
             Tuning {
@@ -654,6 +667,7 @@ mod tuning_tests {
                 unroll_partial_threshold: None,
                 x87_stack_slots: None,
                 slots_loop_width_rule: false,
+                carry_slot_indexes: true,
                 rotation_header_priced_at_size: false,
                 unswitch_threshold: None,
                 inline_threshold: None,

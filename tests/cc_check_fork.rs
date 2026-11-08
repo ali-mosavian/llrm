@@ -31,10 +31,11 @@ fn a_clang_that_is_not_the_pinned_fork_is_refused() {
 
 /// The 36 programs of tests/llc through llrm-cc on the flat Watcom row, run
 /// under dosrun, against the host clang: 0/36 went unseen for a day when the
-/// fork clang was missing. Needs LLRM_CLANG_M16, LLRM_OW and the pinned clang;
-/// the DOS gate runs it with `cargo test --test cc_check_fork -- --ignored`.
+/// fork clang was missing. Needs LLRM_CLANG_M16, the Open Watcom tree and the
+/// pinned clang; the DOS gate runs it with `cargo test --test cc_check_fork --
+/// --ignored`.
 #[test]
-#[ignore = "needs LLRM_CLANG_M16, LLRM_OW, LLRM_PIN_CLANG and dosrun"]
+#[ignore = "needs LLRM_CLANG_M16, the Open Watcom tree, LLRM_PIN_CLANG and dosrun"]
 fn the_llc_programs_all_build_and_run_at_x86_32_wat() {
     let root = env!("CARGO_MANIFEST_DIR");
     let done = Command::new("sh")
