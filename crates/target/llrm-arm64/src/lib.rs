@@ -18,6 +18,7 @@ pub mod ipra;
 pub mod isel;
 pub mod jumptable;
 pub mod layout;
+pub mod tailmerge;
 pub mod ldst_update;
 pub mod licm;
 pub mod lir_view;

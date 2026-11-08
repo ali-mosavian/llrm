@@ -508,6 +508,9 @@ pub fn fold(
         }
     }
     merge_return_tails(&mut blocks);
+    if std::env::var_os("LLRM_ARM64_TAILMERGE").is_some() {
+        blocks = crate::tailmerge::tail_merge(blocks, tables, optsize).0;
+    }
     hoist_common_code(&mut blocks, tables);
     // The entry is never forwarded away.
     let entry = blocks[0].label.clone();
