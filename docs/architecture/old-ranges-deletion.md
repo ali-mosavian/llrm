@@ -57,7 +57,7 @@ None. `homes.rs`, `floatloop.rs` and `floatfacts.rs` went to basicaa-port-2163 (
 
 ## Open dependencies
 
-vt-constantfolding's dates are per file, from reading the call sites, and all depend on the LVI and SCEV API: scev `getRange` by 2026-11-03 (else `Bounded` slips), and the LVI-versus-SCEV table for `fixednarrow` (2026-10-23). Registry rows, same owner compile-time-bench, floating-point InstSimplify half 2026-11-06 (the MemorySSA half is mssa-green-2127's); `simplifyFCmpInst` 2026-10-28, after m16-narrow-66h-ops's `compare_in`. Neither is a `ranges::` caller row.
+vt-constantfolding's dates are per file, from reading the call sites, and all depend on the LVI and SCEV API: scev `getRange` by 2026-11-03 (else `Bounded` slips), and the LVI-versus-SCEV table for `fixednarrow` (2026-10-23). Registry rows, same owner w12, floating-point InstSimplify half 2026-11-06 (the MemorySSA half is mssa-green-2127's); `simplifyFCmpInst` 2026-10-28, after m16-narrow-66h-ops's `compare_in`. Neither is a `ranges::` caller row.
 
 ## Blocking estimates
 
