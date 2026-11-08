@@ -1180,16 +1180,21 @@ fn selected_in(
                 &mut info,
             )
         })
-        .flatten()
         .unwrap_or_default();
-    let fast = !fast_blocks.is_empty();
-    super::fastisel::note(fast);
-    for &block in function.layout() {
-        let mut built = if fast {
-            fast_blocks.remove(0).1
-        } else {
-            build_block(module, function, &layout, &builder_target, &arch, &convention, &mut info, block)
-                .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?
+    let taken = fast_blocks.iter().flatten().count();
+    super::fastisel::note(taken > 0 && taken == function.layout().len());
+    if taken > 0 {
+        llrm_support::debug!("isel", "fast took {taken} of {} blocks", function.layout().len());
+    }
+    let mut fast_ids = llrm_support::hash::HashSet::default();
+    for (at, &block) in function.layout().iter().enumerate() {
+        let mut built = match fast_blocks.get_mut(at).and_then(Option::take) {
+            Some(built) => {
+                fast_ids.insert(block.0);
+                built
+            }
+            None => build_block(module, function, &layout, &builder_target, &arch, &convention, &mut info, block)
+                .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?,
         };
         let extras = std::mem::take(&mut built.extra);
         work.push((block, block, built));
@@ -1324,7 +1329,7 @@ fn selected_in(
     let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { HashMap::default() };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
-        if cpu.optimized && !fast && block == parent {
+        if cpu.optimized && !fast_ids.contains(&block.0) && block == parent {
             // `SelectAllBasicBlocks`: a phi knows what its incoming values do
             // once all its predecessors are selected.
             let ready = function.predecessors(block).iter().all(|pred| selected_blocks.contains(pred));
@@ -1359,7 +1364,7 @@ fn selected_in(
         built.dag.set_divide_live(div_live.get(&parent).copied().unwrap_or(0));
         built.dag.live_in_phys = built.live_ins.iter().map(|&(register, vreg)| (vreg, register)).collect();
         let arrived = arrival_widths(&built.dag, &built.live_ins);
-        let done = if fast {
+        let done = if fast_ids.contains(&block.0) {
             super::dag_select::select_block_fast(
                 &mut built.dag,
                 &Info { source_order: true, m64 },
