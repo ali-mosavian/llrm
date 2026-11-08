@@ -216,6 +216,7 @@ pub fn assembly(
     request: &Request,
 ) -> Result<String, String> {
     let mut program = program(text, request)?;
+    program = trial_unrolled(program, text, request)?;
     // The copies as loops, for the functions that call `memcpy`: priced
     // against the calls below.
     let copies = if request.level == Level::O0 {
@@ -297,6 +298,113 @@ pub fn assembly(
     }
     let files = file.map_or_else(String::new, |name| format!(".dbg file, \"{name}\", 0, 0\n"));
     Ok(equates(&request.platform) + &files + &text + &data.0)
+}
+
+/// DEVIATE UNROLL-TRIAL (owner llrm-target-6502, exit 2026-12-05): the program
+/// compiled again with every loop under the target's trial size unrolled, kept
+/// if its assembly is priced cheaper. The pin's threshold unrolls a loop by its
+/// own units and by what the loop folds of itself (at most ten trips); an array
+/// filled by one loop and read by the next folds only when both are gone. Only
+/// a program with a loop the threshold refused is compiled twice.
+fn trial_unrolled(
+    built: Program,
+    text: &str,
+    request: &Request,
+) -> Result<Program, String> {
+    use llrm_transforms::loopunrollpass::trial;
+    let tti = built.target.tti();
+    let Some(limit) = tti.as_ref().and_then(|tti| tti.unroll_trial_threshold()) else { return Ok(built) };
+    let (eligible, units) = trial::take();
+    if !matches!(request.level, Level::O2 | Level::O3 | Level::Os) || eligible.is_empty() {
+        return Ok(built);
+    }
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!("trial candidates: {} functions, {units} units", eligible.len());
+    }
+    let rate = tti.as_ref().map_or(0, |tti| tti.unroll_milliclocks_per_byte());
+    let other = trial::with(limit, || program(text, request))?;
+    let growth = instructions(&other).saturating_sub(instructions(&built));
+    if !trial_fits(growth) {
+        if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+            eprintln!("trial unroll: {growth} instructions more: put back unpriced");
+        }
+        return Ok(built);
+    }
+    let (kept, tried) = (priced(&built, request)?, priced(&other, request)?);
+    let (saved, added) = (kept.0 - tried.0, tried.1 - kept.1);
+    let pays = trial_pays(request.level, rate, saved, added);
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!(
+            "trial unroll: {added:+} bytes, {saved:+} clocks saved: {}",
+            if pays { "kept" } else { "put back" }
+        );
+    }
+    Ok(if pays { other } else { built })
+}
+
+/// The instructions a trial may add before it is priced: the byte limit below
+/// at about eight bytes an instruction (the programs' trials cost 5 to 60). Pricing
+/// selects every function, which is where the time goes: `fcmp_all`'s trial
+/// grew 1,423 instructions to 4,231 and took 14 s to price, 85,508 bytes more.
+const TRIAL_GROWTH_INSTRUCTIONS: usize = 2048;
+
+/// Whether a trial that adds `growth` instructions is priced at all.
+pub fn trial_fits(growth: usize) -> bool {
+    growth <= TRIAL_GROWTH_INSTRUCTIONS
+}
+
+fn instructions(program: &Program) -> usize {
+    program.modules[0].functions().map(|(_, _, function)| function.walk().count()).sum()
+}
+
+/// The most code a trial may add: a quarter of the 6502's 64 KiB address space,
+/// which the stack, the data and the runtime share. `fcmp_all` unrolled to 85,508
+/// bytes more (2,008,446 clocks saved, 23 clk/B) and would not have fitted.
+const TRIAL_GROWTH_LIMIT: i64 = 16 * 1024;
+
+/// Whether a trial that saved `saved` clocks for `added` bytes is kept. Bytes
+/// only at size, as everywhere else; at speed a byte is worth `rate`
+/// thousandths of a clock.
+pub fn trial_pays(
+    level: Level,
+    rate: i64,
+    saved: i64,
+    added: i64,
+) -> bool {
+    if added > TRIAL_GROWTH_LIMIT {
+        return false;
+    }
+    if level == Level::Os { added < 0 || (added == 0 && saved >= 0) } else { saved * 1000 >= added * rate }
+}
+
+/// The clocks and bytes of every function of `program`'s first module as
+/// selected and priced from its own text (the estimate `cheaper` reads).
+fn priced(
+    program: &Program,
+    request: &Request,
+) -> Result<(i64, i64), String> {
+    let mut module = program.modules[0].clone();
+    crate::prepare::split_phi_edges(&mut module);
+    let names: Vec<String> = module
+        .globals
+        .iter()
+        .filter(|global| global.function().is_some_and(|one| !one.is_declaration()))
+        .filter_map(|global| global.name.as_deref().map(str::to_owned))
+        .collect();
+    let (mut clocks, mut bytes) = (0i64, 0i64);
+    for name in &names {
+        let mut selection = select_function(&module, name, request.cpu)?;
+        selection.zero_page = request.platform.zero_page;
+        selection.tuning = request.level.tuning();
+        let text = crate::select::function_text(&module, name, &selection)?;
+        let function = module.named(name).and_then(|id| module.global(id).function());
+        let depths = function.map(llrm_transforms::memloops::loop_depths).unwrap_or_default();
+        let depth_of = |block: u32| depths.get(block as usize).copied().unwrap_or(0);
+        let one = crate::timing::estimate_calling(request.cpu, &text, &[], Some(&depth_of))?;
+        clocks += one.cycles as i64;
+        bytes += one.bytes as i64;
+    }
+    Ok((clocks, bytes))
 }
 
 /// Whether `name` as the loops in `alt` costs less than the calls in

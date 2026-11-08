@@ -194,6 +194,18 @@ impl Tti for Mos6502 {
         3000
     }
 
+    /// DEVIATE UNROLL-TRIAL (owner llrm-target-6502, exit 2026-12-05): the
+    /// pin's threshold of 300 counts IR instructions, about 4 a trip of a
+    /// small loop; this target counts 15 units a trip (`LLRM_DEBUG=unroll`:
+    /// `trips 64, size 15`), so the pin's reach is 300 * 15 / 4 = about 1100
+    /// here. A loop under it that the threshold refused is unrolled on trial
+    /// and kept if the simplified function pays (loop_fusion's `clear`, 64
+    /// trips of 15). Evidence: raising the threshold alone to 1100 changed 37
+    /// programs, 5 for the worse on both axes (div_constants_ulong +15,986 B).
+    fn unroll_trial_threshold(&self) -> Option<u32> {
+        Some(1100)
+    }
+
     /// A 32-bit counter or product is four byte adds; the datalayout's `n8`
     /// made LSR leave all of them (shrink_wrapped_frame: `n * i` a 32-bit
     /// multiply per trip, 56k of its 64k clocks). Not 16: with it the
