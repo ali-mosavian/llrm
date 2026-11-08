@@ -966,3 +966,29 @@ fn a_function_fastisel_selects_has_no_jump_to_the_next_block_and_no_control_flow
         }
     }
 }
+
+/// m32's default (watcall) passes parameters in registers. A function with one
+/// fell back to the DAG whole (340 of 589 declines, two thirds of the fallback
+/// instructions, over the m32 corpus on 2026-11-08).
+#[test]
+fn fast_isel_takes_register_parameters_at_m32() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "int g(int a, int b) { return a * b + a; }\nint pick(char *p, int i) { return p[i]; }\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_32-wat")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .env("LLRM_VERIFY", "1")
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    for name in ["g_", "pick_"] {
+        assert!(report.lines().any(|line| line == format!("{name} fast")), "{name} not taken: {report}");
+    }
+}
