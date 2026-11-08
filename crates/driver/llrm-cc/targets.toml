@@ -238,8 +238,6 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68000", "-ffreestanding"]
 llc = ["-mcpu=68000"]
 llc_program = "llrm-m68k-llc"
-llc_passes = false
-llc_passes_reason = "its argument parser takes no gcc pass switch"
 llc_mcmodel = true
 object = "elf"
 link = []
@@ -251,8 +249,6 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68020", "-ffreestanding"]
 llc = ["-mcpu=68020"]
 llc_program = "llrm-m68k-llc"
-llc_passes = false
-llc_passes_reason = "its argument parser takes no gcc pass switch"
 llc_mcmodel = true
 object = "elf"
 link = []
@@ -264,8 +260,6 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68010", "-ffreestanding"]
 llc = ["-mcpu=68010"]
 llc_program = "llrm-m68k-llc"
-llc_passes = false
-llc_passes_reason = "its argument parser takes no gcc pass switch"
 llc_mcmodel = true
 object = "elf"
 link = []
@@ -277,8 +271,6 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68030", "-ffreestanding"]
 llc = ["-mcpu=68030"]
 llc_program = "llrm-m68k-llc"
-llc_passes = false
-llc_passes_reason = "its argument parser takes no gcc pass switch"
 llc_mcmodel = true
 object = "elf"
 link = []
@@ -290,8 +282,6 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68040", "-ffreestanding"]
 llc = ["-mcpu=68040"]
 llc_program = "llrm-m68k-llc"
-llc_passes = false
-llc_passes_reason = "its argument parser takes no gcc pass switch"
 llc_mcmodel = true
 object = "elf"
 link = []
@@ -303,8 +293,6 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68060", "-ffreestanding"]
 llc = ["-mcpu=68060"]
 llc_program = "llrm-m68k-llc"
-llc_passes = false
-llc_passes_reason = "its argument parser takes no gcc pass switch"
 llc_mcmodel = true
 object = "elf"
 link = []
