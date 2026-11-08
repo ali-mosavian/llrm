@@ -257,7 +257,10 @@ pub struct Flags {
     pub stack_usage: bool,
     /// `-fend-biased-trial`: a function LSR's end-biased formulae enlarge (or cost) is built again without
     /// them and the better kept (x86, 32 and 64 bits). Off: it doubles the mid-end.
-    pub end_biased_trial: bool,
+    /// `-fno-end-biased-trial` turns it off. Unstated: on at -Os and -Oz.
+    // DEVIATE LG3B-OS-ONLY (owner x86-m64, exit 2026-11-20): at -O1..-O3 the twins cost +38..46% Ir at -O2; on until
+    // in-LSR pricing replaces the twin.
+    pub end_biased_trial: Option<bool>,
     /// `-Wstack-usage=N`.
     pub stack_limit: Option<i64>,
     /// `-fno-inline=NAME`, each: the function NAME is `noinline`.
@@ -297,7 +300,7 @@ impl Default for Flags {
             dwarf_unversioned: false,
             object_format: None,
             stack_usage: false,
-            end_biased_trial: false,
+            end_biased_trial: None,
             stack_limit: None,
             no_inline: Vec::new(),
             isel: None,
@@ -306,6 +309,12 @@ impl Default for Flags {
 }
 
 impl Flags {
+    /// Whether a function LSR's end-biased formulae enlarge gets a twin and the better is kept: as asked, else at
+    /// -Os and -Oz.
+    pub fn end_biased_trial(&self) -> bool {
+        self.end_biased_trial.unwrap_or(matches!(self.level, Level::Os | Level::Oz))
+    }
+
     /// Takes `argv[*at]`, and its value, when it is one of these options,
     /// leaving `*at` on the last argument taken. False leaves it to the
     /// frontend.
@@ -411,7 +420,8 @@ impl Flags {
             _ if flag.starts_with("-march=") => self.march = Some(flag["-march=".len()..].to_owned()),
             _ if flag.starts_with("-mtune=") => self.mtune = Some(flag["-mtune=".len()..].to_owned()),
             "-fstack-usage" => self.stack_usage = true,
-            "-fend-biased-trial" => self.end_biased_trial = true,
+            "-fend-biased-trial" => self.end_biased_trial = Some(true),
+            "-fno-end-biased-trial" => self.end_biased_trial = Some(false),
             "-fverify-ir" => llrm_support::debug::require_verification(),
             _ if flag.starts_with("-Wstack-usage=") => {
                 let limit = &flag["-Wstack-usage=".len()..];
@@ -592,7 +602,7 @@ impl Flags {
             debug_format,
             pipeline: self.pipeline(),
             stack_usage: self.stack_usage,
-            end_biased_trial: self.end_biased_trial,
+            end_biased_trial: self.end_biased_trial(),
             stack_limit: self.stack_limit,
             no_inline: self.no_inline.clone(),
             stack_check: self.sanitize.stack,

@@ -445,3 +445,15 @@ fn the_llrm_cgpaddr_flag_leaves_the_pass_out() {
     assert!(apply_pass_flag(&mut options, "-fno-llrm-cgpaddr"));
     assert!(!options.cgpaddr);
 }
+
+/// The twin of a function LSR's end-biased formulae enlarge costs +38..46% Ir at -O2 (memory_expansion, idioms,
+/// rep_tails), and none at -Os, where the formulae are not made: on at -Os and -Oz only, and `-f[no-]end-biased-trial`
+/// sets it at any level.
+#[test]
+fn test_the_end_biased_trial_is_on_at_os_and_oz_only() {
+    for (level, on) in [("-O0", false), ("-O1", false), ("-O2", false), ("-O3", false), ("-Os", true), ("-Oz", true)] {
+        assert_eq!(parsed(&[level]).unwrap().end_biased_trial(), on, "{level}");
+        assert!(parsed(&[level, "-fend-biased-trial"]).unwrap().end_biased_trial(), "{level}");
+        assert!(!parsed(&[level, "-fno-end-biased-trial"]).unwrap().end_biased_trial(), "{level}");
+    }
+}

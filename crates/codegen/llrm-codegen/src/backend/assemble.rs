@@ -245,6 +245,9 @@ pub fn assembled_by(
                 let twin = format!("{name}{TWIN_SUFFIX}");
                 let flagged = global.function().is_some_and(|one| llrm_mir::memory::has(&one.attrs, END_BIASED_FIRED))
                     && module.named(&twin).is_some();
+                if flagged && same_body(module, name, &twin) {
+                    llrm_support::debug!("twins", "{name} same");
+                }
                 if flagged && !same_body(module, name, &twin) {
                     end_biased_pick(module, name, &twin, abi, &pool, &target)
                 } else {
@@ -905,6 +908,11 @@ fn end_biased_pick(
         *pool.borrow_mut() = after_on;
         return Ok(on);
     };
+    llrm_support::debug!(
+        "twins",
+        "{name} {} bytes {bytes_on} -> {bytes_off} score {score_on:.1} -> {score_off:.1}",
+        if score_off <= score_on { "twin" } else { "kept" }
+    );
     if score_off <= score_on {
         off.body.name = name.to_owned();
         Ok(off)
