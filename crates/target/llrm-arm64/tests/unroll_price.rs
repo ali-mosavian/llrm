@@ -70,6 +70,15 @@ fn a_nest_is_not_priced_at_o3() {
     assert!(instructions(ir, Level::O3) > instructions(ir, Level::O2));
 }
 
+/// matmul -O3: loops carried over from an earlier slot were unrolled unpriced
+/// at -O3 too: 700 -> 1,208 B. The pin prices them there: the module stays
+/// under 250 instructions (ungated: 311, gated: 184).
+#[test]
+fn loops_carried_between_slots_are_priced_at_o3() {
+    let insns = instructions(include_str!("data/bench_matmul.ll"), Level::O3);
+    assert!(insns < 250, "{insns} instructions");
+}
+
 /// nbody -O2: the last update loop is priced while the pair nest's copies are
 /// still rolled loops made by an earlier slot of the loop pass manager
 /// (#8054 runs the pass once for each loop). They were taken for readers that

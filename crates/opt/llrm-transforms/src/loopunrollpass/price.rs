@@ -60,7 +60,12 @@ pub(super) fn full_unroll_pays(
     // decided: the copies of the inner loops follow it (nbody -O2: the 4-trip
     // outer loop unrolls, its 3-, 2- and 1-trip inner copies were each priced
     // alone and kept rolled, +38,016).
-    if !run.first.contains(&lp.get_header()) || run.decided.contains(&lp.get_header()) {
+    // Only where nests are priced: at -O3 the pin prices these copies (matmul
+    // -O3 700 B; unpriced 1,208 B).
+    let carried = run.decided.contains(&lp.get_header())
+        && run.tti.unroll_prices_nest_loops_without_outer_counter()
+        && run.options.opt_level < 3;
+    if !run.first.contains(&lp.get_header()) || carried {
         why(run, lp, "unpriced unroll: a copy of this run");
         return true;
     }
