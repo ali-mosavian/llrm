@@ -123,6 +123,8 @@ pub mod combine_urem_eq;
 pub mod ctcount_combine;
 pub mod dag;
 pub mod dag_combiner;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/dag_function.rs"]
 pub mod dag_function;
 pub mod dag_select;
 pub mod dag_target;
@@ -132,11 +134,14 @@ pub mod div_combine;
 pub mod div_const;
 pub mod dump;
 pub mod emit_api;
+pub mod select_api;
 pub mod expand_divrem_const;
 pub mod expand_fixed;
 pub mod expand_funnel;
 pub mod expand_overflow;
 pub mod expand_sat;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/fastisel.rs"]
 pub mod fastisel;
 pub mod fold;
 pub mod fp_combine;

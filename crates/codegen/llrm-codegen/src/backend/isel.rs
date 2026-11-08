@@ -231,7 +231,7 @@ pub use matcher::Compiled;
 /// Each loop of `shape` with a trip count `induction` proves, as (the LIR
 /// address of its header, the trips): what the executed-work estimate scales
 /// the loop by. `header_at` names the LIR block a MIR block became.
-pub(crate) fn proven_trips(
+pub fn proven_trips(
     unit: &Unit,
     shape: &llrm_analysis::cfg::Shape,
     facts: &IndexMap<llrm_mir::module::ValueId, llrm_analysis::consts::Known>,
@@ -1016,7 +1016,7 @@ pub(super) fn width_of(
 
 /// The alignment the hardware wants of an object of `ty`: its widest scalar's
 /// size, up to 8, whatever the data layout promises (it gives a double 1).
-pub(crate) fn natural_align(
+pub fn natural_align(
     types: &llrm_mir::types::Types,
     layout: &DataLayout,
     ty: TypeId,
@@ -1413,7 +1413,7 @@ pub fn selected_with<'c>(
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes
 /// them in.
-pub(crate) fn parameters(
+pub fn parameters(
     module: &Module,
     function: &Function,
     name: &str,
@@ -1698,7 +1698,7 @@ pub(crate) fn expression_note(
 /// from the MIR instruction it stands before; and each instruction that defines
 /// a value a note names is told so. A variable a note names that no frame cell
 /// holds is a variable of the body, found over the code from the notes.
-pub(crate) fn noted(
+pub fn noted(
     module: &Module,
     function: &Function,
     name: &str,
@@ -8485,7 +8485,7 @@ fn frame(
     Mem { through: RegId::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, disp)), width) }
 }
 
-pub(crate) fn semantics(
+pub fn semantics(
     op: Operation,
     name: &str,
     dests: Vec<Loc>,
@@ -8506,7 +8506,7 @@ fn insn_of(
     Insn::new(at, Some((at, at)), Some(what), defines, uses)
 }
 
-pub(crate) fn insn(
+pub fn insn(
     at: i64,
     what: Semantics,
 ) -> Arc<Insn> {

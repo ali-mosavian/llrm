@@ -22,12 +22,12 @@ use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 
-use super::builder::{BlockDag, BuilderTarget, fresh_dag};
-use super::dag::{NodeData, SDValue, SelectionDAG};
-use super::isd::ISD;
-use super::mvt::EVT;
-use super::function_lowering::FunctionLoweringInfo;
-use crate::backend::isel::Convention;
+use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, fresh_dag};
+use llrm_codegen::backend::selectiondag::dag::{NodeData, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
+use llrm_codegen::backend::isel::Convention;
 
 thread_local! {
     static TOOK: Cell<bool> = const { Cell::new(false) };
@@ -137,9 +137,9 @@ pub fn build_all(
     let int32 = |ty| wide_kind(&module.context.types, ty, narrow).is_some() || narrow_kind(&module.context.types, ty).is_some();
     let (returns, parameters, _) = module.signature(function.ty);
     // a 4-byte stack cell (narrow only) or one register
-    let arrives = |one: &crate::backend::isel::Parameter| match one {
-        crate::backend::isel::Parameter::Cell(_) => narrow,
-        crate::backend::isel::Parameter::Registers(regs) => regs.len() == 1,
+    let arrives = |one: &llrm_codegen::backend::isel::Parameter| match one {
+        llrm_codegen::backend::isel::Parameter::Cell(_) => narrow,
+        llrm_codegen::backend::isel::Parameter::Registers(regs) => regs.len() == 1,
         _ => false,
     };
     if parameters.iter().any(|&ty| !int32(ty))
@@ -154,7 +154,7 @@ pub fn build_all(
     let mut cells = 0;
     for one in &convention.parameters {
         match one {
-            crate::backend::isel::Parameter::Registers(regs) => {
+            llrm_codegen::backend::isel::Parameter::Registers(regs) => {
                 let vreg = info.new_reg();
                 arg_regs.push((regs[0], vreg));
                 sources.push(Source::Register(vreg));
@@ -837,7 +837,7 @@ impl Fast<'_> {
                 // the address of a global: `lea r, [rip + g]`
                 let ConstantKind::Global(global) = self.module.context.get(id).kind else { return None };
                 let target = self.dag.get_target_global_address(EVT::I64, global.0, 0);
-                let rip = self.dag.get_phys_register(EVT::I64, super::dagisel_adapter::phys_reg(llrm_dagisel::generated::ids::x86::RIP)?);
+                let rip = self.dag.get_phys_register(EVT::I64, llrm_codegen::backend::selectiondag::dagisel_adapter::phys_reg(llrm_dagisel::generated::ids::x86::RIP)?);
                 let one = self.dag.get_constant_with(1, EVT::I8, true, false);
                 let noreg = self.dag.get_register(EVT::I64, 0);
                 let segment = self.dag.get_register(EVT::I16, 0);
@@ -1257,7 +1257,7 @@ impl Fast<'_> {
                         Callee::Global(global) => self.dag.get_target_global_address(EVT::I64, global.0, 0),
                         Callee::Library(name) => self.dag.get_target_external_symbol(EVT::I64, name),
                     };
-                    let mask = self.dag.get_register_mask_clobbering(&super::dagisel_adapter::call_clobbered_flags());
+                    let mask = self.dag.get_register_mask_clobbering(&llrm_codegen::backend::selectiondag::dagisel_adapter::call_clobbered_flags());
                     let mut ops = vec![target];
                     ops.extend(regs);
                     ops.extend([mask, chain, glue]);
@@ -1312,7 +1312,7 @@ impl Fast<'_> {
                         Callee::Global(global) => self.dag.get_target_global_address(EVT::I32, global.0, 0),
                         Callee::Library(name) => self.dag.get_target_external_symbol(EVT::I32, name),
                     };
-                    let mask = self.dag.get_register_mask_clobbering(&super::dagisel_adapter::call_clobbered_flags());
+                    let mask = self.dag.get_register_mask_clobbering(&llrm_codegen::backend::selectiondag::dagisel_adapter::call_clobbered_flags());
                     let called = self.node(calls.call, &[EVT::OTHER, EVT::GLUE], &[target, mask, chain]);
                     let up = self.node(
                         calls.call_up,
@@ -1510,7 +1510,7 @@ impl Fast<'_> {
                         if self.module.context.types.int_bits(instruction.ty) != Some(1) {
                             return None;
                         }
-                        let flags = self.dag.get_copy_to_phys_reg(self.chain, super::dagisel_adapter::EFLAGS_ID, compared, None);
+                        let flags = self.dag.get_copy_to_phys_reg(self.chain, llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID, compared, None);
                         let glue = SDValue { node: flags.node, res: 1 };
                         let cc = self.dag.get_constant_with(u128::from(code), EVT::I8, true, false);
                         let set = self.node(self.names.setcc, &[EVT::I8], &[cc, glue]);
@@ -1522,7 +1522,7 @@ impl Fast<'_> {
                         std::mem::swap(&mut on_true, &mut on_false);
                         code ^= 1;
                     }
-                    let flags = self.dag.get_copy_to_phys_reg(self.chain, super::dagisel_adapter::EFLAGS_ID, compared, None);
+                    let flags = self.dag.get_copy_to_phys_reg(self.chain, llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID, compared, None);
                     let glue = SDValue { node: flags.node, res: 1 };
                     let dest = self.dag.get_basic_block(on_true.0);
                     let cc = self.dag.get_constant_with(u128::from(code), EVT::I8, true, false);

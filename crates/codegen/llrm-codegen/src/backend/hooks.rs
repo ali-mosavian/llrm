@@ -11,7 +11,11 @@ use llrm_lir::registers::RegId;
 use crate::backend::selectiondag::SelectionDAG;
 use crate::backend::selectiondag::emit_api::{EmitContext, EmitError, EmitState, Emitted};
 use crate::backend::selectiondag::schedule::Unit;
+use crate::backend::constpool::Pool;
+use crate::backend::isel::{Selected, Unselected};
+use crate::backend::selectiondag::select_api::RuntimeContracts;
 use crate::model::lir::LirBody;
+use llrm_mir::module::Module;
 use crate::support::hash::IndexMap;
 
 /// The backend code of one target family.
@@ -34,6 +38,23 @@ pub trait BackendHooks: Sync + Send {
         state: &mut EmitState,
         first_at: i64,
     ) -> Result<Emitted, EmitError>;
+
+    /// `name` of `module` selected by the DAG path (the pin's SelectionDAGISel
+    /// and FastISel for one function), constants it needs in memory going to
+    /// `pool`.
+    fn select_function(
+        &self,
+        module: &Module,
+        name: &str,
+        arch: &dyn llrm_target::Target,
+        cpu: &crate::backend::cpu::Profile,
+        libcalls: &[(String, u32, String)],
+        contracts: Option<&RuntimeContracts<'_>>,
+        pool: &mut Pool,
+    ) -> Result<Selected, Unselected>;
+
+    /// Whether the function just selected went through FastISel; read once.
+    fn take_fast_took(&self) -> bool;
 }
 
 static INSTALLED: OnceLock<&'static dyn BackendHooks> = OnceLock::new();
@@ -84,6 +105,25 @@ mod in_tests {
             first_at: i64,
         ) -> Result<Emitted, EmitError> {
             super::x86_emit::emit_in(dag, units, ctx, state, first_at)
+        }
+
+        fn select_function(
+            &self,
+            module: &Module,
+            name: &str,
+            arch: &dyn llrm_target::Target,
+            cpu: &crate::backend::cpu::Profile,
+            libcalls: &[(String, u32, String)],
+            contracts: Option<&RuntimeContracts<'_>>,
+            pool: &mut Pool,
+        ) -> Result<Selected, Unselected> {
+            crate::backend::selectiondag::dag_function::selected_in_pool(
+                module, name, arch, cpu, libcalls, contracts, pool,
+            )
+        }
+
+        fn take_fast_took(&self) -> bool {
+            crate::backend::selectiondag::fastisel::take_took()
         }
     }
 }

@@ -51,7 +51,6 @@
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/switch.rs
 3 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/tailcall.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dag.rs
-26 crates/codegen/llrm-codegen/src/backend/selectiondag/dag_function.rs
 2 crates/codegen/llrm-codegen/src/backend/selectiondag/div_combine.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dump.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/opcodes.rs
