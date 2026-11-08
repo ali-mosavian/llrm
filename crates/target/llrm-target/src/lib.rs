@@ -361,6 +361,11 @@ pub trait BuilderArch {
     /// The address-space roles (`layout().spaces.roles`).
     fn roles(&self) -> llrm_mir::spaces::Spaces;
     fn full(&self) -> Option<&dyn Target>;
+    /// The stack pointer at the pointer width of the target's code: the
+    /// register file's stack root unless the target says otherwise.
+    fn stack_pointer(&self) -> RegId {
+        self.registers().stack
+    }
 }
 
 impl<T: Target> BuilderArch for T {
@@ -385,6 +390,9 @@ impl<T: Target> BuilderArch for T {
     fn full(&self) -> Option<&dyn Target> {
         Some(self)
     }
+    fn stack_pointer(&self) -> RegId {
+        Target::stack_pointer(self)
+    }
 }
 
 impl BuilderArch for &dyn Target {
@@ -405,6 +413,9 @@ impl BuilderArch for &dyn Target {
     }
     fn roles(&self) -> llrm_mir::spaces::Spaces {
         Target::address_roles(*self)
+    }
+    fn stack_pointer(&self) -> RegId {
+        Target::stack_pointer(*self)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(*self)
