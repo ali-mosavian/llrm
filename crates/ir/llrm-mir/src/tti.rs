@@ -1548,6 +1548,13 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LG3b: whether LSR tallies the displacement bytes of the address
+    /// formulae (disp8 against disp32), to weigh them against the loop
+    /// instructions an end-biased solution saves.
+    fn lsr_prices_displacement(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
     /// as written is dropped when it needs more registers than exist.
     fn lsr_drops_spilling_solution(&self) -> bool {

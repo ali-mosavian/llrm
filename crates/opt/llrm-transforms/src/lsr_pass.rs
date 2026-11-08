@@ -341,6 +341,23 @@ fn plan_loop(
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || pin_cost.is_less(tti, &cost)
+                // DEVIATE LG3b: the displacement bytes theirs adds, at the
+                // target's price of a byte, against the loop instructions it
+                // saves over the loop's trips (unknown: 100).
+                || (tti.lsr_prices_displacement() && std::env::var_os("LLRM_LG3B_OFF").is_none() && {
+                    // The setup code outside the loop is bytes too (3 a setup
+                    // instruction, as the size order counts them).
+                    let extra = i64::from(cost.disp_bytes) - i64::from(pin_cost.disp_bytes)
+                        + 3 * (i64::from(cost.c.setup_cost) - i64::from(pin_cost.c.setup_cost));
+                    let saved = i64::from(pin_cost.c.insns + pin_cost.c.add_rec_cost)
+                        - i64::from(cost.c.insns + cost.c.add_rec_cost);
+                    let trips = match se.get_small_constant_trip_count(&cx, header) {
+                        0 => 100,
+                        n => i64::from(n),
+                    };
+                    llrm_support::debug!("lsr", "  LG3b: extra {extra} bytes, saved {saved}, trips {trips}, rate {}", tti.speed_milliclocks_per_byte());
+                    extra > 0 && (saved <= 0 || extra * tti.unroll_milliclocks_per_byte().max(tti.speed_milliclocks_per_byte()) > saved * trips * 1000)
+                })
                 || (!folds_base_and_counter
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
                         || spent > saved

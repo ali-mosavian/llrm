@@ -1447,6 +1447,13 @@ impl Tti for X86 {
         self.real_mode.is_none()
     }
 
+    /// DEVIATE LG3b: where the compare fuses with its branch (x86-64), the
+    /// end-biased bases cost displacement bytes and save no compare: LSR
+    /// tallies the bytes. owner: w12, exit: 2026-11-30.
+    fn lsr_prices_displacement(&self) -> bool {
+        self.macro_fusion
+    }
+
     /// Real mode forms a scaled index with an address-size prefix.
     fn lsr_drops_spilling_solution(&self) -> bool {
         self.real_mode.is_some()

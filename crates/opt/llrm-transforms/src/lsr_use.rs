@@ -515,6 +515,9 @@ pub struct Cost {
     /// DEVIATE LSR-SIZE: x86 bytes of the displacements, adds and setup the
     /// formulae need, where the target sizes by `Tti::lsr_size_order`.
     pub size_bytes: u32,
+    /// DEVIATE LG3b: displacement bytes of the address formulae, where
+    /// `Tti::lsr_prices_displacement`.
+    pub disp_bytes: u32,
 }
 
 impl Cost {
@@ -688,6 +691,22 @@ impl Cost {
             }
         }
 
+        if r.tti.lsr_prices_displacement() && lu.kind == Kind::Address {
+            // A base register that is a global plus a constant the addressing
+            // folds into one displacement (the end-biased bases).
+            let folded = f.base_regs.iter().any(|&reg| global_plus_far_constant(r, reg));
+            if folded {
+                self.disp_bytes += 4 * lu.fixups.len() as u32;
+            }
+            for fixup in &lu.fixups {
+                let offset = fixup.offset.add_unsigned(f.base_offset).0;
+                self.disp_bytes += if f.base_gv.is_some() || i8::try_from(offset).is_err() {
+                    4
+                } else {
+                    u32::from(offset != 0)
+                };
+            }
+        }
         if self.size && r.tti.lsr_size_order() {
             if lu.kind == Kind::Address {
                 for fixup in &lu.fixups {
@@ -1073,6 +1092,20 @@ fn holds_no_offset(
 }
 
 /// Whether `s` is the address of a stack slot: an `alloca`.
+/// Whether `reg` is `@global + c` with `c` outside a one-byte displacement.
+fn global_plus_far_constant(
+    r: &mut Rating,
+    reg: Scev,
+) -> bool {
+    if r.se.scev_type(reg) != Type::Add {
+        return false;
+    }
+    let ops: Vec<Scev> = r.se.operands(reg).iter().map(|one| one.scev).collect();
+    let global = ops.iter().any(|&op| matches!(r.se.unknown_value(op), Some(Operand::Constant(_))));
+    let far = ops.iter().any(|&op| r.se.as_constant(op).is_some_and(|c| i8::try_from(c.sext_value() as i64).is_err()));
+    global && far
+}
+
 fn is_stack_slot(
     r: &mut Rating,
     s: Scev,
