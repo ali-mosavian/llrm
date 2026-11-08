@@ -21,10 +21,12 @@
 //! The producer is the call lowering of the SelectionDAG port: `LowerCall`
 //! stores the arguments to `[sp+k]` between `ADJCALLSTACKDOWN` and
 //! `ADJCALLSTACKUP`. `emit.rs` turns the pair into `call_frame_setup` /
-//! `call_frame_destroy` at m32 only (`AddrMode::Flat32`, DEVIATE CF4); the
-//! pass is in the flow at every x86 width. At m16 (`Real16`) and m64 `emit.rs`
-//! makes `sub sp, N` / `add sp, N - M` itself, so the pass finds no setup and
-//! changes nothing there. The m16 steps left: emit the pseudos for `Real16`
+//! `call_frame_destroy` at every call at m32 and m64 (DEVIATE CF4), also the
+//! zero-byte ones, as the pin's; the pass is in the flow at every x86 width. At
+//! m16 (`Real16`) `emit.rs` makes `sub sp, N` / `add sp, N - M` itself (none for
+//! a call of no bytes), so the pass finds no setup and changes nothing there. A
+//! zero-byte pair at m16 moved no cell of the cause-A list (0 B on 14 cells,
+//! jpeg_fixed -Os +4 B). The m16 steps left: emit the pseudos for `Real16`
 //! (`slot` 2, 16-bit `Held` cells), let `ReserveCallFrame` lay the reserved
 //! area out in the m16 prologue, and re-check the readers of the old
 //! `sub`/`add` (`cfi.rs`, `framefree`, `call_pops`) and the m16 byte and clock

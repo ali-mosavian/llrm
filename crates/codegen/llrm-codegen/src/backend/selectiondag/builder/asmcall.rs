@@ -1,5 +1,5 @@
 //! A call of a Nib/QB `llrm.ia16.asm.*` block: the registers and symbols the
-//! name states, as the [`LLRM_ASM`](super::super::x86isd::LLRM_ASM) node of
+//! name states, as the target's inline-assembly node of
 //! [`inline_asm`](super::super::inline_asm). The pin has no such node; the
 //! shape is the emitter's contract.
 
@@ -7,6 +7,7 @@ use llrm_mir::module::{Instruction, Operand, ValueDef};
 use llrm_mir::opcode::{CastOp, Opcode};
 
 use super::super::inline_asm::lower_asm;
+use super::LoweringNodes;
 use super::{Builder, Refused};
 
 impl Builder<'_> {
@@ -59,7 +60,15 @@ impl Builder<'_> {
             outputs.push((self.sized_register(self.arch.register_named(register), vt), vt));
         }
         let root = self.root();
-        let (chain, results) = lower_asm(&mut self.dag, root, name, &fixups, &registers, &outputs);
+        let (chain, results) = lower_asm(
+            &mut self.dag,
+            LoweringNodes::need(self.target.nodes.asm, "inline asm")?,
+            root,
+            name,
+            &fixups,
+            &registers,
+            &outputs,
+        );
         self.dag.set_root(chain);
         if let Some(result) = instruction.result {
             if results.len() > 1 {
