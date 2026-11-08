@@ -32,6 +32,7 @@ use llrm_analysis::scev::expr::Scev;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, InstId};
+use llrm_mir::opcode::Attribute;
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::tti::Tti;
 
@@ -53,7 +54,27 @@ const MAX_IV_USERS: usize = 200;
 /// exit-value rewrite after it reads (`exitvalues` DEVIATE 15).
 pub struct LoopStrengthReduce {
     pub size: bool,
+    pub twin: Twin,
 }
+
+/// How the pass treats the function twin of a body whose end-biased formulae
+/// differ from the pin's (LG3b): the driver compiles both and keeps the
+/// smaller.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Twin {
+    /// No twins: the body is reduced with the formulae on.
+    Off,
+    /// A body that gets `END_BIASED_FIRED` leaves a twin, as the body was
+    /// before this pass with `NO_END_BIASED`, for `Only` to reduce.
+    Make,
+    /// Reduces the twins `Make` left, and nothing else.
+    Only,
+}
+
+/// The twin of `@f` is `@f` followed by this.
+pub const TWIN_SUFFIX: &str = ".llrm-twin";
+/// On a twin `Make` left, until `Only` has reduced it.
+pub const TWIN_PENDING: &str = "llrm-twin-pending";
 
 impl FunctionPass for LoopStrengthReduce {
     fn name(&self) -> &'static str {
@@ -73,8 +94,15 @@ impl FunctionPass for LoopStrengthReduce {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        let pending = llrm_mir::memory::has(&unit.function.attrs, TWIN_PENDING);
+        if pending != (self.twin == Twin::Only) {
+            return PreservedAnalyses::all();
+        }
+        unit.function.attrs.retain(|attr| !matches!(attr, Attribute::Flag(name) if name == TWIN_PENDING));
         let outer = std::rc::Rc::clone(analyses.outer());
         let Some(tti) = outer.target().tti() else { return PreservedAnalyses::all() };
+        let before = (self.twin == Twin::Make && !llrm_mir::memory::has(&unit.function.attrs, NO_END_BIASED))
+            .then(|| unit.function.clone());
         // The expressions of the passes before, as the pin keeps one SE for
         // the loop passes; handed back below where the CFG is as it was.
         // Beyond the pin: a counter only some trips step gets a pointer first,
@@ -106,6 +134,12 @@ impl FunctionPass for LoopStrengthReduce {
         let kept = scev.is_some();
         if let Some(scev) = scev {
             held.put(scev);
+        }
+        if let Some(mut twin) = before.filter(|_| llrm_mir::memory::has(&unit.function.attrs, END_BIASED_FIRED)) {
+            twin.attrs.push(Attribute::Flag(NO_END_BIASED.into()));
+            twin.attrs.push(Attribute::Flag(TWIN_PENDING.into()));
+            let name = outer.globals[unit.id.expect("a function of the module").0 as usize].name.clone();
+            unit.declared.body(&format!("{}{TWIN_SUFFIX}", name.as_deref().unwrap_or_default()), twin);
         }
         match (changed, kept) {
             (false, _) => PreservedAnalyses::all(),

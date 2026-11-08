@@ -90,7 +90,7 @@ fn reduced(
 ) -> String {
     let mut module = llrm_mir::parse::module(text).unwrap_or_else(|why| panic!("{why:?}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopStrengthReduce { size: false });
+    manager.add(LoopStrengthReduce { size: false, twin: llrm_transforms::lsr_pass::Twin::Off });
     let target: Rc<dyn llrm_mir::target::Machine> = match width {
         "p16" => Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         "p32" => Rc::new(Flat("i486")),

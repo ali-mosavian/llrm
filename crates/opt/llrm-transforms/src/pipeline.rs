@@ -238,6 +238,11 @@ pub struct Options {
     /// The translated `LoopStrengthReduce` slot (LLVM's `-disable-lsr` turns it
     /// off); `strength` turns it off with the other address passes.
     pub lsr: bool,
+    /// LG3b: a body whose end-biased `lsr` formulae differ from the pin's leaves
+    /// a twin without them (`@f.llrm-twin`), which goes through the passes
+    /// after `lsr` as `@f` does; the driver keeps the smaller. For a target
+    /// whose driver picks; off, the twin would be code nothing calls.
+    pub lsr_twins: bool,
     pub unroll: bool,
     /// A second CGSCC walk after the dead globals and loops are gone: the first
     /// walk prices a callee before the folds that empty it (a static callee
@@ -337,6 +342,7 @@ impl Default for Options {
             zero_merge: true,
             typepromotion: true,
             lsr: true,
+            lsr_twins: false,
             unroll: true,
             second_inline: false,
             loop_unrolling: true,
@@ -1666,7 +1672,13 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         passes.push(Box::new(crate::instsimplify::InstSimplify));
         // The pin runs canon-freeze with loop-reduce, before it.
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
-        passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce { size: applied.options.prefers_size() }));
+        use crate::lsr_pass::{LoopStrengthReduce, Twin};
+        let size = applied.options.prefers_size();
+        let twins = applied.options.lsr_twins;
+        passes.push(Box::new(LoopStrengthReduce { size, twin: if twins { Twin::Make } else { Twin::Off } }));
+        if twins {
+            passes.push(Box::new(LoopStrengthReduce { size, twin: Twin::Only }));
+        }
         // `TargetPassConfig::addIRPasses` (pin l.875): LoopTermFold follows
         // LSR; it does nothing for a target whose TTI does not enable it.
         if applied.options.wanted("looptermfold") {

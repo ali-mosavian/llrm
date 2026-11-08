@@ -129,7 +129,9 @@ fn add(
     match (name, params) {
         // Analyses the passes here compute on demand.
         ("require" | "invalidate", Some(_)) | ("verify", None) => {}
-        ("loop-reduce", None) => manager.add(crate::lsr_pass::LoopStrengthReduce { size: false }),
+        ("loop-reduce", None) => {
+            manager.add(crate::lsr_pass::LoopStrengthReduce { size: false, twin: crate::lsr_pass::Twin::Off })
+        }
         ("indvars", None) => manager.add(crate::indvars::IndVars { lftr: true, size: false }),
         ("indvars", Some("no-lftr")) => manager.add(crate::indvars::IndVars { lftr: false, size: false }),
         ("loop-rotate", None) => {
