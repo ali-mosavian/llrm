@@ -1,54 +1,114 @@
-reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
-blessed = "2026-11-07"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "f796419cd45f0d071b74e7606d7f7cdc"
 
-[ow.O2]
-code_bytes = 544
-data_bytes = 81
-bss_bytes = 3056
-kernel_ms = 3828.4924
-
-[ow.Os]
+[ow.O1]
+instructions = 18003894
+memory_operands = 9540230
+clocks = 39136549
 code_bytes = 517
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3553.7487
+kernel_ms = 3556.5327
 
-[bcc.O2]
-code_bytes = 593
+[ow.O2]
+instructions = 20121307
+memory_operands = 9534125
+clocks = 35060887
+code_bytes = 544
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3956.1316
+kernel_ms = 3831.2837
 
-[bcc.Os]
+[ow.Os]
+instructions = 18003894
+memory_operands = 9540230
+clocks = 39136549
+code_bytes = 517
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 3556.5327
+
+[bcc.O1]
+instructions = 21126834
+memory_operands = 7417132
+clocks = 33857865
 code_bytes = 613
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3956.2157
+kernel_ms = 3959.0077
 
-[tc.O2]
-code_bytes = 682
+[bcc.O2]
+instructions = 21120541
+memory_operands = 6376133
+clocks = 33852697
+code_bytes = 593
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 5050.0691
+kernel_ms = 3958.9269
 
-[tc.Os]
+[bcc.Os]
+instructions = 21126834
+memory_operands = 7417132
+clocks = 33857865
+code_bytes = 613
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 3959.0077
+
+[tc.O1]
+instructions = 29556026
+memory_operands = 13735427
+clocks = 50692546
 code_bytes = 673
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 5050.3344
+kernel_ms = 5053.1301
 
-[tcpp.O2]
-code_bytes = 668
+[tc.O2]
+instructions = 29553978
+memory_operands = 13735427
+clocks = 50684335
+code_bytes = 682
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 4914.1665
+kernel_ms = 5052.8615
 
-[tcpp.Os]
+[tc.Os]
+instructions = 29556026
+memory_operands = 13735427
+clocks = 50692546
+code_bytes = 673
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 5053.1301
+
+[tcpp.O1]
+instructions = 28499390
+memory_operands = 13726853
+clocks = 45432378
 code_bytes = 661
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 4914.0368
+kernel_ms = 4916.8238
+
+[tcpp.O2]
+instructions = 28500417
+memory_operands = 13726853
+clocks = 45433392
+code_bytes = 668
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 4916.9582
+
+[tcpp.Os]
+instructions = 28499390
+memory_operands = 13726853
+clocks = 45432378
+code_bytes = 661
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 4916.8238
 
 [bc.O2]
 instructions = 231132606

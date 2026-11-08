@@ -1,10 +1,20 @@
-reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
-blessed = "2026-11-07"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "71e87297c521847d800fac9eff5a57bb"
+
+[ow.O1]
+instructions = 19590
+memory_operands = 7003
+clocks = 33337
+code_bytes = 111
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.2627
 
 [ow.O2]
 instructions = 19596
 memory_operands = 3670
+clocks = 30855
 code_bytes = 122
 data_bytes = 0
 bss_bytes = 0
@@ -13,14 +23,25 @@ kernel_ms = 0.2628
 [ow.Os]
 instructions = 19590
 memory_operands = 7003
+clocks = 33337
 code_bytes = 111
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.2627
 
+[bcc.O1]
+instructions = 12359
+memory_operands = 5816
+clocks = 25919
+code_bytes = 147
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.168
+
 [bcc.O2]
 instructions = 12361
 memory_operands = 5816
+clocks = 25908
 code_bytes = 152
 data_bytes = 0
 bss_bytes = 0
@@ -29,14 +50,25 @@ kernel_ms = 0.168
 [bcc.Os]
 instructions = 12359
 memory_operands = 5816
+clocks = 25919
 code_bytes = 147
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.168
 
+[tc.O1]
+instructions = 29677
+memory_operands = 21117
+clocks = 53488
+code_bytes = 168
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.3973
+
 [tc.O2]
 instructions = 29679
 memory_operands = 21117
+clocks = 53477
 code_bytes = 173
 data_bytes = 0
 bss_bytes = 0
@@ -45,14 +77,25 @@ kernel_ms = 0.3973
 [tc.Os]
 instructions = 29677
 memory_operands = 21117
+clocks = 53488
 code_bytes = 168
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.3973
 
+[tcpp.O1]
+instructions = 18848
+memory_operands = 3844
+clocks = 29776
+code_bytes = 123
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.2528
+
 [tcpp.O2]
 instructions = 18850
 memory_operands = 3844
+clocks = 29765
 code_bytes = 130
 data_bytes = 0
 bss_bytes = 0
@@ -61,6 +104,7 @@ kernel_ms = 0.2528
 [tcpp.Os]
 instructions = 18848
 memory_operands = 3844
+clocks = 29776
 code_bytes = 123
 data_bytes = 0
 bss_bytes = 0

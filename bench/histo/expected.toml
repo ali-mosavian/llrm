@@ -1,26 +1,47 @@
-reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
-blessed = "2026-11-07"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "8f6918017295f6796d8fe8f6786877f2"
+
+[ow.O1]
+instructions = 88861
+memory_operands = 19204
+clocks = 253597
+code_bytes = 204
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.2674
 
 [ow.O2]
 instructions = 88353
 memory_operands = 18947
+clocks = 252563
 code_bytes = 213
 data_bytes = 0
 bss_bytes = 4608
-kernel_ms = 1.2564
+kernel_ms = 1.2607
 
 [ow.Os]
 instructions = 88861
 memory_operands = 19204
+clocks = 253597
 code_bytes = 204
 data_bytes = 0
 bss_bytes = 4608
-kernel_ms = 1.2632
+kernel_ms = 1.2674
+
+[bcc.O1]
+instructions = 93216
+memory_operands = 17155
+clocks = 265842
+code_bytes = 172
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.3222
 
 [bcc.O2]
 instructions = 97059
 memory_operands = 17155
+clocks = 269157
 code_bytes = 180
 data_bytes = 0
 bss_bytes = 4608
@@ -29,14 +50,25 @@ kernel_ms = 1.3734
 [bcc.Os]
 instructions = 93216
 memory_operands = 17155
+clocks = 265842
 code_bytes = 172
 data_bytes = 0
 bss_bytes = 4608
 kernel_ms = 1.3222
 
+[tc.O1]
+instructions = 116255
+memory_operands = 56076
+clocks = 323008
+code_bytes = 220
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.6286
+
 [tc.O2]
 instructions = 99623
 memory_operands = 51981
+clocks = 294062
 code_bytes = 225
 data_bytes = 0
 bss_bytes = 4608
@@ -45,14 +77,25 @@ kernel_ms = 1.4068
 [tc.Os]
 instructions = 116255
 memory_operands = 56076
+clocks = 323008
 code_bytes = 220
 data_bytes = 0
 bss_bytes = 4608
 kernel_ms = 1.6286
 
+[tcpp.O1]
+instructions = 99367
+memory_operands = 17413
+clocks = 279487
+code_bytes = 191
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.4033
+
 [tcpp.O2]
 instructions = 103465
 memory_operands = 17413
+clocks = 283569
 code_bytes = 199
 data_bytes = 0
 bss_bytes = 4608
@@ -61,6 +104,7 @@ kernel_ms = 1.458
 [tcpp.Os]
 instructions = 99367
 memory_operands = 17413
+clocks = 279487
 code_bytes = 191
 data_bytes = 0
 bss_bytes = 4608

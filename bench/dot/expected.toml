@@ -1,25 +1,47 @@
-reason = "new program: a zip dot loop over two slices of different lengths"
-blessed = "2026-11-03"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
+corpus = "81b83faf5efcbe70017db907ba6eece9"
+
+[ow.O1]
+instructions = 75554
+memory_operands = 21876
+clocks = 214550
+code_bytes = 238
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.0092
 
 [ow.O2]
 instructions = 70044
 memory_operands = 21914
+clocks = 212107
 code_bytes = 252
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.9356
+kernel_ms = 0.9357
 
 [ow.Os]
 instructions = 75554
 memory_operands = 21876
+clocks = 214550
 code_bytes = 238
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 1.0091
+kernel_ms = 1.0092
+
+[bcc.O1]
+instructions = 31451
+memory_operands = 9954
+clocks = 92753
+code_bytes = 228
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.4209
 
 [bcc.O2]
 instructions = 19535
 memory_operands = 8234
+clocks = 73816
 code_bytes = 223
 data_bytes = 0
 bss_bytes = 0
@@ -28,30 +50,52 @@ kernel_ms = 0.2619
 [bcc.Os]
 instructions = 31451
 memory_operands = 9954
+clocks = 92753
 code_bytes = 228
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.4208
+kernel_ms = 0.4209
 
-[tc.O2]
-instructions = 69101
-memory_operands = 18610
-code_bytes = 266
-data_bytes = 0
-bss_bytes = 0
-kernel_ms = 0.923
-
-[tc.Os]
+[tc.O1]
 instructions = 72619
 memory_operands = 22370
+clocks = 240129
 code_bytes = 256
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.97
 
+[tc.O2]
+instructions = 69101
+memory_operands = 18610
+clocks = 232478
+code_bytes = 266
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.9231
+
+[tc.Os]
+instructions = 72619
+memory_operands = 22370
+clocks = 240129
+code_bytes = 256
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.97
+
+[tcpp.O1]
+instructions = 77703
+memory_operands = 14036
+clocks = 241560
+code_bytes = 244
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.0378
+
 [tcpp.O2]
 instructions = 72129
 memory_operands = 12156
+clocks = 234813
 code_bytes = 249
 data_bytes = 0
 bss_bytes = 0
@@ -60,10 +104,11 @@ kernel_ms = 0.9634
 [tcpp.Os]
 instructions = 77703
 memory_operands = 14036
+clocks = 241560
 code_bytes = 244
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 1.0377
+kernel_ms = 1.0378
 
 [bc.O2]
 instructions = 98786
