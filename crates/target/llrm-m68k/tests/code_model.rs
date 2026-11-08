@@ -181,3 +181,26 @@ fn far_globals_work_in_the_medium_model_at_every_cpu() {
         assert_eq!(code, Some(8), "{cpu} object from our writer: {ours}");
     }
 }
+
+/// The pin has no `(bd32,%pc)` load, and the medium model at the 68020 refused
+/// every plain load of a global (`CannotSelect(Load)`: memcpy_runtime and
+/// memfuncs_runtime, 2026-11-09). Loads go through `lea` and `(An)`.
+#[test]
+fn a_load_of_a_global_selects_in_the_medium_model_at_the_68020() {
+    let header = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n@g = global [100 x i32] zeroinitializer, align 4\n";
+    let bodies = [
+        "define i32 @f() { %v = load i32, ptr @g  ret i32 %v }",
+        "define i32 @f() { %p = getelementptr i32, ptr @g, i32 5  %v = load i32, ptr %p  ret i32 %v }",
+        "define i32 @f(i32 %i) { %p = getelementptr i32, ptr @g, i32 %i  %v = load i32, ptr %p  ret i32 %v }",
+        "define i32 @f() { %v = load i8, ptr @g  %z = zext i8 %v to i32  ret i32 %z }",
+        "define i32 @f() { %v = load i16, ptr @g  %z = sext i16 %v to i32  ret i32 %z }",
+        "define i32 @f() { %v = load volatile i32, ptr @g  ret i32 %v }",
+    ];
+    for body in bodies {
+        for level in [Level::O0, Level::O2] {
+            let text = format!("{header}{body}\n");
+            let done = assembly_in(&text, cpu_of("68020").unwrap(), level, false, None, CodeModel::Medium);
+            assert!(done.is_ok(), "{level:?} {body}: {done:?}");
+        }
+    }
+}

@@ -19,5 +19,3 @@ z80-sdcc shrink_wrapped_saves | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc
 z80-sdcc tail_calls_edges | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @vsum: CannotSelect("CannotSelect(\"VAStart\")")
 z80-sdcc variadic | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @sum: CannotSelect("CannotSelect(\"VAStart\")")
 z80-sdcc x87_arguments | z80/6502 owners | EXIT 2026-11-20 | llrm-z80-llc: REFUSED @main: 20 bytes of stack arguments
-m68k-68020 memcpy_runtime | m68k owner | EXIT 2026-11-20 | llrm-m68k-llc: .text: a value of 70016 does not fit its 2-byte field (with -mcmodel=medium; 68000 compiles)
-m68k-68020 memfuncs_runtime | m68k owner | EXIT 2026-11-20 | llrm-m68k-llc: .text: a value of 70100 does not fit its 2-byte field (with -mcmodel=medium; 68000 compiles)

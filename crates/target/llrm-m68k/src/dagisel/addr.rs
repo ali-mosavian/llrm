@@ -342,13 +342,15 @@ fn match_register_address<D: AddrDag>(
     parent: Option<u32>,
     n: SDValue,
     am: &mut AddressMode,
+    data: DataAccess,
 ) -> bool {
     let fresh = *am;
     if match_address(dag, n, am) && !am.is_pc_relative(dag) {
         return true;
     }
-    // A load keeps its PC-relative form (`SelectPCD`); only a write retries.
-    if !parent.is_some_and(|parent| writes_memory(dag, parent)) {
+    // A load keeps its PC-relative form (`SelectPCD`); only a write retries,
+    // and under `PcFull`, which has no load of its own, a load too.
+    if data != DataAccess::PcFull && !parent.is_some_and(|parent| writes_memory(dag, parent)) {
         return false;
     }
     *am = AddressMode { pc_as_register: true, ..fresh };
@@ -430,6 +432,7 @@ pub fn select_ari<D: AddrDag>(
     dag: &mut D,
     parent: Option<u32>,
     n: SDValue,
+    data: DataAccess,
 ) -> Option<SDValue> {
     // DEVIATE: the pin tries `ARI` before `PCD` for an extending load, so the
     // `WrapperPC` of a global is taken as a register (`lea (g,%pc),%a0`) and
@@ -441,14 +444,17 @@ pub fn select_ari<D: AddrDag>(
     // alone reads: from three loads on, one shared `lea` is smaller than a
     // `(g,%pc)` each (the seeds grew 0.7% to 1.7% without the test). Owner
     // m68k. Exit 2026-11-20 (upstream the order, or keep).
+    // Under `PcFull` the pin has no `(bd32,%pc)` load: `lea` and `(An)` is the
+    // only form.
     if dag.opcode(n.node) == m68k_isd::WrapperPC
+        && data != DataAccess::PcFull
         && dag.has_one_use(n)
         && parent.is_some_and(|parent| dag.opcode(parent) == isd::LOAD)
     {
         return None;
     }
     let mut am = AddressMode::new(AddrType::Ari);
-    if !match_register_address(dag, parent, n, &mut am) {
+    if !match_register_address(dag, parent, n, &mut am, data) {
         return None;
     }
     if am.has_index_reg() || am.disp != 0 || am.has_symbolic_displacement() {
@@ -462,9 +468,10 @@ pub fn select_arid<D: AddrDag>(
     dag: &mut D,
     parent: Option<u32>,
     n: SDValue,
+    data: DataAccess,
 ) -> Option<[SDValue; 2]> {
     let mut am = AddressMode::new(AddrType::Arid);
-    if !match_register_address(dag, parent, n, &mut am) {
+    if !match_register_address(dag, parent, n, &mut am, data) {
         return None;
     }
     if let Some((disp, base)) = frame_index_address(dag, &am) {
@@ -488,9 +495,10 @@ pub fn select_arii<D: AddrDag>(
     dag: &mut D,
     parent: Option<u32>,
     n: SDValue,
+    data: DataAccess,
 ) -> Option<[SDValue; 3]> {
     let mut am = AddressMode::new(AddrType::Arii);
-    if !match_register_address(dag, parent, n, &mut am) {
+    if !match_register_address(dag, parent, n, &mut am, data) {
         return None;
     }
     let (base_reg, index_reg) =
