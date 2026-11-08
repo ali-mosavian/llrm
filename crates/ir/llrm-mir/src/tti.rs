@@ -570,6 +570,12 @@ pub trait Tti {
         false
     }
 
+    /// The largest caller, in instructions, whose refused sites SZ2 tries inline: a trial
+    /// runs the simplifier over the whole caller once per callee tried.
+    fn inline_trial_caller_limit(&self) -> usize {
+        300
+    }
+
     /// Whether a callee the -O1 size bound refused is tried inline as at -Os (SZ2: the copy
     /// stays if the caller comes out smaller), where -O1 prices no byte in clocks. False: the
     /// bound's verdict stands.

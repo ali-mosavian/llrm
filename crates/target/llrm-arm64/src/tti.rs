@@ -282,6 +282,24 @@ fn intrinsic_prices() -> &'static Prices {
 }
 
 impl Tti for AArch64 {
+    /// SZ1: at -Os an inline that stays must not grow the code, as gcc's `-Os`
+    /// inlines only where the module shrinks. The pin's `OptSizeThreshold` 50
+    /// inlines jpeg_fixed's `put32` (a 4-trip store loop) into eight sites
+    /// and `message` into nine: +176 B against gcc.
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE (owner greedy-anyisa, exit 2026-11-15): the pin has no byte trial. At
+    /// -Os the trial that keeps `tmul`, `clamp`, `extend` inline (smaller in
+    /// bytes, the unit model refuses them) is bounded by the caller's size,
+    /// and jpeg_fixed's `bench_jpeg_fixed` is 600+ instructions. Cost: 16
+    /// trials of about 15 ms, jpeg_fixed -Os compiles in 0.38 s, not 0.14 s.
+    /// Exit: skip a trial the last round of the same callee rejected.
+    fn inline_trial_caller_limit(&self) -> usize {
+        20_000
+    }
+
     /// `FSQRT` is legal on `f32` and `f64`.
     fn have_fast_sqrt(
         &self,
