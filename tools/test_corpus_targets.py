@@ -108,3 +108,10 @@ def test_long_double_stride_is_not_run_on_the_sysv_rows():
     """Its .out is Watcom's 8-byte long double; x86_32-linux got 12/24/20/12 (gcc's too) and read as a miscompile."""
     source = (RUN / "long_double_stride.c").read_text()
     assert not ct.applies("x86_32-linux", source) and ct.applies("x86_32-dos", source) and ct.applies("m68k-68020", source)
+
+
+def test_the_stack_sanitizer_programs_are_dos_only():
+    """stackdeep and stackover link the DOS runtime's LL$STACK_LOW and __STKOVERFLOW; tagged x86-m32 they ran on x86_32-linux and failed to link."""
+    for name in ("stackdeep", "stackover"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not ct.applies("x86_32-linux", source) and ct.applies("x86_32-dos", source) and ct.applies("x86_16-dos", source)
