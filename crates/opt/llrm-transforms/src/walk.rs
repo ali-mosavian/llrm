@@ -268,6 +268,7 @@ impl ProgramPass for Walk {
             recursive_callee_limit: recursion.map_or(i64::MAX, |one| one.callee),
             recursive_edge_growth: edge_growth_bar(program.target.tti().as_deref(), self.inline.limit >= 250),
             last_call_to_static: self.inline.last,
+            o1_bound: !self.speed_rate,
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
         // The target's tuning table.
@@ -333,7 +334,8 @@ impl ProgramPass for Walk {
                                 decided.as_mut(),
                                 (tti.as_deref().is_some_and(|tti| {
                                     size != crate::inlinecost::CallerSize::Speed
-                                        || tti.inline_policy().by_rate > 0
+                                        || (tti.inline_policy().by_rate > 0
+                                            && (self.speed_rate || tti.speed_inline_rate_at_o1()))
                                 }))
                                 .then_some(&mut trials),
                             )
@@ -1346,7 +1348,8 @@ fn trial_accepted(
     kept_bytes: i64,
 ) -> bool {
     if priced {
-        return credit > 0 && growth * rate <= saved * 1000;
+        // A copy that leaves the module no larger and runs in fewer clocks needs no callee to go with it.
+        return (credit > 0 || (growth <= 0 && saved > 0)) && growth * rate <= saved * 1000;
     }
     (if byte_gate { tried <= best || (tried <= best + credit && growth <= 0) } else { tried <= best + credit })
         || (saved > 0 && growth * rate <= saved * 1000)

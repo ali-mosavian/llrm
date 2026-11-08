@@ -327,27 +327,26 @@ __ashrsi3:
 ; ---- long multiply -------------------------------------------------------------------------------
 
 ; The product of two longs, low 32 bits: a is hl (low) and de (high), b bc (low) and the word the caller stored on the
-; stack (high); the result is de (low) and hl (high). Shift and add over b's 32 bits in the shadow registers. The
-; return address waits in iy and the caller's word stays where it was (it pops it).
+; stack (high); the result is de (low) and hl (high). Shift and add over b's bits in the shadow registers, until b is
+; spent (a product by 100 takes 7 passes, not 32). The return address waits in iy and the caller's word stays where it was
+; (it pops it).
 	.globl __mulsi3
 __mulsi3:
 	pop	iy
 	exx
 	pop	de
-	ld	hl,#0
+	or	a,a
+	sbc	hl,hl
 	exx
 	push	de
 	ld	d,b
 	ld	e,c
 	ld	b,h
 	ld	c,l
-	ld	hl,#0
+	sbc	hl,hl
 	exx
 	pop	bc
-	exx
-	ld	a,#32
-1$:	exx
-	srl	d
+1$:	srl	d
 	rr	e
 	exx
 	rr	d
@@ -362,9 +361,14 @@ __mulsi3:
 	exx
 	rl	c
 	rl	b
+	ld	a,d
+	or	a,e
 	exx
-	dec	a
+	or	a,d
+	or	a,e
+	exx
 	jr	nz,1$
+	exx
 	push	hl
 	exx
 	pop	de

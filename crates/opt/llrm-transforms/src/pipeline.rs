@@ -1038,6 +1038,7 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
                     created: Default::default(),
+                    decided: Default::default(),
                 }),
             ),
             sroa("sroa@1494"),
@@ -1126,6 +1127,7 @@ pub(crate) fn llvm_order(
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             // What the unroll makes, for the slot after it.
             let created: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
+            let decided: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
             // LPM2 runs loop by loop (`PerLoop`): the slot of indvars runs the
             // passes of the slots after it too, each of which then finds its
             // work done.
@@ -1146,6 +1148,7 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: false,
                     created: std::rc::Rc::clone(&created),
+                    decided: std::rc::Rc::clone(&decided),
                 })
             };
             let on_created = || -> Box<dyn FunctionPass> {
@@ -1441,6 +1444,13 @@ pub fn recorded(
     manager.add_program(Interprocedural {
         late,
         pipeline: Box::new(move |module, analyses, id, stage| {
+            // The pin runs nothing over a body `DeadArgumentEliminationPass`
+            // changed: the late function pipeline, which every body goes
+            // through, finds what the lost argument leaves (PassBuilderPipelines.cpp,
+            // `buildModuleOptimizationPipeline` follows the module pass).
+            if stage == "ipa-deadargs." {
+                return;
+            }
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
             let done =
                 // The stage that only retargets loads and stores of globals
@@ -1449,7 +1459,7 @@ pub fn recorded(
                     module,
                     analyses,
                     id,
-                    if matches!(stage, "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
+                    if stage == "ipsccp." { &mut cleaned } else { &mut again },
                     stage == "globalsra.",
                 )
                 .unwrap_or_else(|error| panic!("pipeline: {error}"));

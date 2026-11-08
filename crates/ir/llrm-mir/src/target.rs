@@ -90,9 +90,19 @@ pub struct Tuning {
     /// x_sf_mul 82587 -> 88263 (88107). Recovery: weigh callee size against
     /// the site's frequency and loop depth.
     pub inline_o1_unit_bytes_milli: i64,
+    /// DEVIATE INL-O1 ENTRY (owner x86-m32, exit 2026-11-15): the -O1
+    /// bytes-vs-clocks check weighs a site's frequency by how often its
+    /// function runs (the calls to it up the call graph), not by the
+    /// function's entry alone: the bottom-up walk prices a helper in the
+    /// function that calls it, which a hot loop up the graph runs 30 times
+    /// more. false: the site's own frequency.
+    pub inline_o1_weighs_entry: bool,
     /// Trips the -O1 no-growth rule above analyses for folds: the pin's
     /// `-unroll-max-iteration-count-to-analyze` (10) when `None`.
     pub unroll_o1_analyzed_trips: Option<u32>,
+    /// IPSCCP runs a second time after ArgumentPromotion changed a body (the
+    /// pin runs it once; DEVIATE SD443, interprocedural.rs).
+    pub second_ipsccp: bool,
     /// A multiply by a constant is decomposed only where the chain's saved
     /// clocks pay for its extra bytes at `speed_milliclocks_per_byte`, the
     /// pin's own decompositions included (a tie keeps the `imul`); false:
@@ -311,7 +321,9 @@ impl Tuning {
         inline_never_grows_without_rate: false,
         inline_o1_milliclocks_per_byte: 0,
         inline_o1_unit_bytes_milli: 1000,
+        inline_o1_weighs_entry: false,
         unroll_o1_analyzed_trips: None,
+        second_ipsccp: false,
         price_pin_multiplies: false,
         imul_at_size: false,
         unroll_threshold: None,
@@ -431,13 +443,6 @@ pub trait Machine {
     /// overrides. A target with no entry here takes `Tuning::PIN`.
     fn tuning(&self) -> Tuning {
         Tuning::PIN
-    }
-
-    /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
-    /// (DEVIATE SD443, owner w2, exit 2026-11-15: interprocedural.rs). The pin
-    /// runs it once; a target that matches the pin's output turns it off.
-    fn second_ipsccp(&self) -> bool {
-        true
     }
 
     /// Clocks a byte of code is worth, in thousandths, where a decision is
