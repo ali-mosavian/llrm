@@ -38,6 +38,7 @@ Measured with `tools/targets/arm64_compare.py` (modes `whole`, `backend`, `compi
 4. `driver.rs`: newer clang's `ptrtoaddr` is read as `ptrtoint`; MIR refuses it by design.
 5. (2026-11-08) `lir_body`: a load or store's `MemOperand`, a symbol's name and a debug note's variable ride in side tables keyed by instruction number (`Lowered`), not on the `Insn`. A stage that clones, inserts or reorders instructions loses them (a cloned load has no memory operand and is refused). Owner llrm-arm64-lir; exit: gap 3, the memory operand on the `Insn` as LLVM keeps it, symbols in the body, debug notes in `LirBody::notes`.
 6. (2026-11-08) `lir_body`: a physical register is a `Loc::Reg`, a virtual one a `Loc::Held` whose class is the name of its `COPY` (`COPY_FPR`); `LirBody::class_like` does not carry it yet. Effects are `Insn::declared` in the allocator view's model (one status-flag lane, one memory lane, MS6), not rows of an `arm64.instr`. Owner llrm-arm64-lir; exit: gap 2 (`RegisterClasses`, flag model).
+7. MS6 (2026-11-08) `lir_body` `declared`: memory is one lane (a load reads it, a store writes it), so no access moves past a store; the pin asks alias analysis. NZCV as one flag lane is the pin's (one physical register), not a deviation. Owner llrm-arm64-lir; exit: gap 3, alias queries on the memory operand replace the lane.
 
 ## Numbered gaps
 
