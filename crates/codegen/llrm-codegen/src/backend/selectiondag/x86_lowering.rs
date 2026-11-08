@@ -98,6 +98,9 @@ pub mod x86isd {
     /// `X86ISD::FCMP`: the flags of an x87 compare (`fucom`, `fnstsw`,
     /// `sahf` on a 486).
     pub const FCMP: ISD = ISD::Target(576);
+    /// `X86ISD::FSETCC`: `cmpss`/`cmpsd` with an immediate predicate, all
+    /// ones or all zeros in the scalar.
+    pub const FSETCC: ISD = ISD::Target(622);
     pub const XOR: ISD = ISD::Target(955);
     /// `X86ISD::FAND`/`FOR`/`FXOR`: `andps`/`orps`/`xorps` on a scalar float
     /// and a 16-byte pool mask.
@@ -465,6 +468,7 @@ impl CombineHooks for X86Lowering<'_> {
             || op == ISD::Select
             || op == ISD::Add
             || op == ISD::Or
+            || op == ISD::And
             || op == ISD::Sub
             || op == x86isd::ADD
             || op == x86isd::SUB
@@ -508,7 +512,8 @@ impl CombineHooks for X86Lowering<'_> {
             ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
             ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
-            ISD::Or => combine_or(dag, node),
+            ISD::Or => combine_compare_equal(dag, node, self.sse2, self.zext_free).or_else(|| combine_or(dag, node)),
+            ISD::And => combine_compare_equal(dag, node, self.sse2, self.zext_free),
             ISD::Sub => combine_sub(dag, node, self.three_address_adds),
             ISD::FAdd | ISD::FSub => combine_shared_product(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
@@ -1647,6 +1652,69 @@ fn combine_brcond(
     let code = cond_code(dag, code);
     let (chain, dest) = (dag.operand(node, 0), dag.operand(node, 1));
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
+}
+
+/// `combineCompareEqual`: `oeq` (`sete` and `setnp`) or `une` (`setne` or `setp`)
+/// of one float compare, used as a value, is `cmpeqss`/`cmpneqss`, a `movd`
+/// and an `and 1`: three instructions, no flags and no branch. A user that
+/// might want the flags (a branch, a select, anything but a register copy or
+/// an extend) keeps the `setcc` pair.
+///
+/// DEVIATE CE1: the pin's AVX-512 form (`FSETCCM`, mask register) and its
+/// 32-bit `f64` form (`SCALAR_TO_VECTOR`, a `v4f32` bitcast) are not
+/// translated; the first has no target here, the second leaves the pair at
+/// m32 SSE2 doubles. Exit 2026-12-08, owner m64.
+fn combine_compare_equal(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    sse2: bool,
+    is_64bit: bool,
+) -> Option<SDValue> {
+    if !sse2 {
+        return None;
+    }
+    let (left, right) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.opcode(left) != x86isd::SETCC
+        || dag.opcode(right) != x86isd::SETCC
+        || !dag.has_one_use(left.node)
+        || !dag.has_one_use(right.node)
+    {
+        return None;
+    }
+    let (cmp0, cmp1) = (dag.operand(left, 1), dag.operand(right, 1));
+    if dag.opcode(cmp0) != x86isd::FCMP || cmp0 != cmp1 {
+        return None;
+    }
+    let (lhs, rhs) = (dag.operand(cmp0, 0), dag.operand(cmp0, 1));
+    let vt = dag.value_type(lhs);
+    if vt != EVT::Simple(MVT::F32) && !(vt == EVT::Simple(MVT::F64) && is_64bit) {
+        return None;
+    }
+    let wants_flags = dag.users(node).any(|user| {
+        !matches!(
+            dag.opcode(SDValue { node: user, res: 0 }),
+            ISD::CopyToReg | ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend
+        )
+    });
+    if wants_flags {
+        return None;
+    }
+    let (mut cc0, mut cc1) = (dag.constant(dag.operand(left, 0))?, dag.constant(dag.operand(right, 0))?);
+    if cc1 == cond::E || cc1 == cond::NE {
+        std::mem::swap(&mut cc0, &mut cc1);
+    }
+    let predicate = match (cc0, cc1) {
+        (cond::E, cond::NP) => 0,
+        (cond::NE, cond::P) => 4,
+        _ => return None,
+    };
+    let imm = dag.get_constant_with(predicate, EVT::I8, true, false);
+    let ones_or_zeros = dag.get_node(x86isd::FSETCC, vt, &[lhs, rhs, imm]);
+    let int = if vt == EVT::Simple(MVT::F64) { EVT::I64 } else { EVT::I32 };
+    let bits = dag.get_node(ISD::BitCast, int, &[ones_or_zeros]);
+    let one = dag.get_constant(1, int);
+    let anded = dag.get_node(ISD::And, int, &[bits, one]);
+    Some(dag.get_node(ISD::Truncate, EVT::I8, &[anded]))
 }
 
 /// `combineOr`'s tail: `combineAddOrSubToADCOrSBB` of a disjoint `or`, which is

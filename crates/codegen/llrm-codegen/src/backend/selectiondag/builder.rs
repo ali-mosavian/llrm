@@ -155,9 +155,6 @@ pub struct BuilderTarget {
     /// The nodes and facts of a target that is not x86: none for x86, whose
     /// `CALL`, `RET_GLUE` and stack pointer the builder names itself.
     pub target_nodes: Option<TargetNodes>,
-    /// The nodes beyond call and return the builder creates; none for a target
-    /// that has no such construct.
-    pub nodes: LoweringNodes,
     /// `f128` is a legal type with a register class (AArch64's `FPR128`): its
     /// operations are library calls on `q` registers, not routines on its
     /// bits as an `i128` (`SoftenFloat`).
@@ -216,6 +213,15 @@ pub struct LoweringNodes {
     /// absolute).
     pub wrapper: Option<ISD>,
     pub wrapper_rip: Option<ISD>,
+    /// Far-pointer nodes: a load of the offset leaving the selector in a
+    /// segment register (offset-only and data-segment forms), the register it
+    /// leaves it in, and a call through a far pointer.
+    pub far_load_es: Option<ISD>,
+    pub far_load_ds: Option<ISD>,
+    pub far_selector_register: Option<u32>,
+    pub far_call: Option<ISD>,
+    /// A boolean from a condition of the flags (`0` or `1`).
+    pub flag_boolean: Option<ISD>,
     /// An inline assembly block, and inline code naming frame places.
     pub asm: Option<ISD>,
     pub code: Option<ISD>,
@@ -476,7 +482,6 @@ impl BuilderTarget {
             tti: None,
             runtime_calls: None,
             target_nodes: None,
-            nodes: LoweringNodes::installed(),
             legal_f128: false,
         }
     }
@@ -1550,7 +1555,7 @@ impl Builder<'_> {
             let saved = self
                 .dag
                 .get_node(
-                    LoweringNodes::need(self.target.nodes.vector_save, "va_start vector save")?,
+                    LoweringNodes::need(self.target.dag.nodes.vector_save, "va_start vector save")?,
                     EVT::OTHER,
                     &[root, al, frame, first],
                 );
@@ -1810,7 +1815,7 @@ impl Builder<'_> {
         let node = self
             .dag
             .get_node_multi(
-                LoweringNodes::need(self.target.nodes.wide_divide, "wide divide")?,
+                LoweringNodes::need(self.target.dag.nodes.wide_divide, "wide divide")?,
                 &[EVT::I32, EVT::I32],
                 &[hi, lo, divisor],
             );
@@ -2548,11 +2553,15 @@ impl Builder<'_> {
     }
 
     fn call_node(&self) -> ISD {
-        self.target.target_nodes.map_or_else(|| self.target.nodes.call.expect("a target with a call node"), |t| t.call)
+        self.target
+            .target_nodes
+            .map_or_else(|| self.target.dag.nodes.call.expect("a target with a call node"), |t| t.call)
     }
 
     fn ret_node(&self) -> ISD {
-        self.target.target_nodes.map_or_else(|| self.target.nodes.ret.expect("a target with a return node"), |t| t.ret)
+        self.target
+            .target_nodes
+            .map_or_else(|| self.target.dag.nodes.ret.expect("a target with a return node"), |t| t.ret)
     }
 
     /// Where a narrow argument sits in its stack slot: the high end on a
@@ -2753,9 +2762,9 @@ impl Builder<'_> {
             ops.insert(2, fpdiff);
             // the pin has no 16-bit pattern: m16 has a node of its own
             let node = if self.target.dag.pointer == EVT::I16 {
-                LoweringNodes::need(self.target.nodes.far_tail_return, "far sibling call")?
+                LoweringNodes::need(self.target.dag.nodes.far_tail_return, "far sibling call")?
             } else {
-                LoweringNodes::need(self.target.nodes.tail_return, "sibling call")?
+                LoweringNodes::need(self.target.dag.nodes.tail_return, "sibling call")?
             };
             let tc = self.dag.get_node_multi(node, &[EVT::OTHER], &ops);
             self.dag.set_root(tc);
@@ -2818,7 +2827,7 @@ impl Builder<'_> {
             self.dag.set_root(SDValue { node: flags.node, res: 1 });
             let flags = SDValue { node: flags.node, res: 0 };
             return Ok(Some(self.dag.get_node(
-                LoweringNodes::need(self.target.nodes.call_flags, "call flags")?,
+                LoweringNodes::need(self.target.dag.nodes.call_flags, "call flags")?,
                 vt,
                 &[flags],
             )));
@@ -2895,7 +2904,7 @@ impl Builder<'_> {
         let pop = self
             .dag
             .get_node_multi(
-                self.target.nodes.pop_float_result.expect("a float result popped from the target's float stack"),
+                self.target.dag.nodes.pop_float_result.expect("a float result popped from the target's float stack"),
                 &[vt, EVT::OTHER, EVT::GLUE],
                 &[chain, fp0, glue],
             );
@@ -3739,7 +3748,7 @@ impl Builder<'_> {
         &mut self,
         global: Option<u32>,
     ) -> SDValue {
-        self.dag.get_segment_of(self.target.nodes.segment_of.expect("a target with segment selectors"), global)
+        self.dag.get_segment_of(self.target.dag.nodes.segment_of.expect("a target with segment selectors"), global)
     }
 
     /// `SS`, the stack's selector.
@@ -4068,7 +4077,7 @@ impl Builder<'_> {
             let zero = self.dag.get_constant(0, EVT::I32);
             let delta = self.gep_value(zero, source, nuw, nusw, inbounds, indices)?;
             return Ok(self.dag.get_node(
-                LoweringNodes::need(self.target.nodes.huge_add, "huge pointer add")?,
+                LoweringNodes::need(self.target.dag.nodes.huge_add, "huge pointer add")?,
                 MVT::Far.into(),
                 &[base, delta],
             ));
