@@ -63,6 +63,13 @@ use llrm_lir::registers::RegId;
 use llrm_support::hash::HashMap;
 use llrm_x86_dagisel::x86_classes::{Role, class_tag};
 
+/// The one flag a saved byte stands for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SavedFlag {
+    Carry,
+    Overflow,
+}
+
 struct Emitter<'a, 'd> {
     dag: &'d SelectionDAG,
     ctx: &'a EmitContext<'a>,
@@ -134,7 +141,7 @@ struct Emitter<'a, 'd> {
     flag_insns: HashMap<u32, Arc<Insn>>,
     /// The carry a flag producer made, saved in a byte before another unit
     /// wrote the flags, for the `adc`/`sbb` that still reads it.
-    saved_carry: HashMap<u32, Held>,
+    saved_carry: HashMap<u32, (Held, SavedFlag)>,
     /// The machine nodes emitted: the scheduler's clone of a unit emits its
     /// node again.
     machine_emitted: llrm_support::hash::HashSet<u32>,
@@ -1218,11 +1225,20 @@ impl Emitter<'_, '_> {
         }
     }
 
-    /// Whether the units glued after the flags copy `copy` are `adc`s and
-    /// `sbb`s: they read the carry flag and no other.
-    fn reads_only_carry(
+    /// Whether the units glued after the flags copy `copy` read the carry flag
+    /// alone (`adc`, `sbb`, condition B or AE), the overflow flag alone
+    /// (condition O or NO), or neither of those alone.
+    fn reads_only_flag(
         &self,
         copy: u32,
+    ) -> Option<SavedFlag> {
+        [SavedFlag::Carry, SavedFlag::Overflow].into_iter().find(|&flag| self.reads_only(copy, flag))
+    }
+
+    fn reads_only(
+        &self,
+        copy: u32,
+        flag: SavedFlag,
     ) -> bool {
         let users = self.glue_users.get(&SDValue { node: copy, res: 1 });
         users.is_some_and(|users| {
@@ -1239,7 +1255,12 @@ impl Emitter<'_, '_> {
                     } else {
                         None
                     };
-                    name.starts_with("ADC") || name.starts_with("SBB") || matches!(condition, Some(2 | 3))
+                    match flag {
+                        SavedFlag::Carry => {
+                            name.starts_with("ADC") || name.starts_with("SBB") || matches!(condition, Some(2 | 3))
+                        }
+                        SavedFlag::Overflow => matches!(condition, Some(0 | 1)),
+                    }
                 })
         })
     }
@@ -1258,31 +1279,38 @@ impl Emitter<'_, '_> {
             ""
         };
         let defines_carry = ["ADD", "ADC", "SUB", "SBB"].iter().any(|stem| name.starts_with(stem));
-        let pending = (0..self.dag.node(SDValue { node: previous, res: 0 }).values.len() as u8).any(|res| {
-            self.glue_users
-                .get(&SDValue { node: previous, res })
-                .is_some_and(
-                    |users| users
-                        .iter()
-                        .any(
-                            |&user| self.dag.opcode(SDValue { node: user, res: 0 }) == ISD::CopyToReg
-                                && self.writes_flags(self.dag.node(SDValue { node: user, res: 0 }).ops[1])
-                                && !self.flag_copies_done.contains(&user),
-                        ),
-                )
-        });
-        if !defines_carry || !pending || self.saved_carry.contains_key(&previous) {
+        // The copies still to come, and the one flag their readers use.
+        let pending: Vec<u32> = (0..self.dag.node(SDValue { node: previous, res: 0 }).values.len() as u8)
+            .flat_map(|res| self.glue_users.get(&SDValue { node: previous, res }).into_iter().flatten().copied())
+            .filter(|&user| {
+                self.dag.opcode(SDValue { node: user, res: 0 }) == ISD::CopyToReg
+                    && self.writes_flags(self.dag.node(SDValue { node: user, res: 0 }).ops[1])
+                    && !self.flag_copies_done.contains(&user)
+            })
+            .collect();
+        let kinds: Vec<Option<SavedFlag>> = pending.iter().map(|&copy| self.reads_only_flag(copy)).collect();
+        let flag = match kinds.first() {
+            Some(Some(first)) if kinds.iter().all(|kind| *kind == Some(*first)) => *first,
+            // Readers of mixed flags: the carry is what `adc` and `sbb` need.
+            _ if !pending.is_empty() => SavedFlag::Carry,
+            _ => return,
+        };
+        if !defines_carry || self.saved_carry.contains_key(&previous) {
             return;
         }
         let held = self.fresh(1);
+        let name = match flag {
+            SavedFlag::Carry => "setb",
+            SavedFlag::Overflow => "seto",
+        };
         let what =
-            Semantics { name: Some("setb".into()), dests: vec![Loc::Held(held)], ..Semantics::new(Operation::Unary) };
+            Semantics { name: Some(name.into()), dests: vec![Loc::Held(held)], ..Semantics::new(Operation::Unary) };
         let at = self.next_address();
         let insn = Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![held.value], vec![]));
         let (block, place) = before;
         if let Some(target) = self.blocks.get_mut(block) {
             target.insns.insert(place.min(target.insns.len()), insn);
-            self.saved_carry.insert(previous, held);
+            self.saved_carry.insert(previous, (held, flag));
         }
     }
 
@@ -1303,12 +1331,20 @@ impl Emitter<'_, '_> {
         // The carry of an `add` another unit's flags came between: restored
         // from its byte (`add byte, 0xFF` carries when the byte is 1)
         // for the `adc`/`sbb` that reads it, which reads nothing else.
-        if let Some(&saved) = self.saved_carry.get(&producer)
-            && self.reads_only_carry(copy)
+        if let Some(&(saved, flag)) = self.saved_carry.get(&producer)
+            && self.reads_only_flag(copy) == Some(flag)
         {
-            let restored = self.fresh(1);
-            let all_ones = Imm { value: 0xFF, width: 1, address: None };
-            self.push(Operation::Binary, "add", vec![Loc::Held(restored)], vec![Loc::Held(saved), Loc::Imm(all_ones)]);
+            // `add byte, 0xFF` carries when the byte is 1; `cmp byte, -127`
+            // overflows when it is 1 (1 - -127 leaves the signed range), and
+            // leaves the byte for the next restore.
+            if flag == SavedFlag::Carry {
+                let restored = self.fresh(1);
+                let bits = Imm { value: 0xFF, width: 1, address: None };
+                self.push(Operation::Binary, "add", vec![Loc::Held(restored)], vec![Loc::Held(saved), Loc::Imm(bits)]);
+            } else {
+                let bits = Imm { value: -127, width: 1, address: None };
+                self.push(Operation::Compare, "cmp", vec![], vec![Loc::Held(saved), Loc::Imm(bits)]);
+            }
             self.flags_now = Some(producer);
             return Ok(());
         }

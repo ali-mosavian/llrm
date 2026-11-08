@@ -1275,6 +1275,8 @@ impl<'a> TypeLegalizer<'a> {
             | ISD::USubO
             | ISD::UAddOCarry
             | ISD::USubOCarry
+            | ISD::SAddOCarry
+            | ISD::SSubOCarry
             | ISD::SAddO
             | ISD::SSubO
             | ISD::UMulO
@@ -1533,7 +1535,7 @@ impl<'a> TypeLegalizer<'a> {
                 let updated = self.dag.update_node_operands(n, &ops);
                 SDValue { node: updated, res: 0 }
             }
-            ISD::UAddOCarry | ISD::USubOCarry if at == 2 => {
+            ISD::UAddOCarry | ISD::USubOCarry | ISD::SAddOCarry | ISD::SSubOCarry if at == 2 => {
                 // `PromoteIntOp_ADDSUBO_CARRY`: the carry in as the target's
                 // boolean type (`PromoteTargetBoolean`).
                 let (lhs, rhs, carry) =
@@ -1852,6 +1854,7 @@ impl<'a> TypeLegalizer<'a> {
             op @ (ISD::UAddO | ISD::USubO) => self.expand_addsub_overflow(value, op, half)?,
             op @ (ISD::UAddOCarry | ISD::USubOCarry) => self.expand_addsub_carry(value, op, half),
             op @ (ISD::SAddO | ISD::SSubO) => self.expand_signed_addsub_overflow(value, op, half),
+            op @ (ISD::SAddOCarry | ISD::SSubOCarry) => self.expand_signed_addsub_carry(value, op, half),
             ISD::SMulFix | ISD::UMulFix | ISD::SMulFixSat | ISD::UMulFixSat => self.expand_mulfix(value, half),
             ISD::SShlSat | ISD::UShlSat => {
                 // `ExpandIntRes_SHLSAT`.
@@ -2392,9 +2395,30 @@ impl<'a> TypeLegalizer<'a> {
         (SDValue { node: lo.node, res: 0 }, SDValue { node: hi.node, res: 0 })
     }
 
-    /// `ExpandIntRes_SADDSUBO` without a signed carry operation: the plain sum
-    /// or difference, and the overflow as the sign of `(~(l ^ r) & (l ^ sum))`
-    /// for an add, `((l ^ r) & (l ^ sum))` for a subtract.
+    /// `ExpandIntRes_SADDSUBO_CARRY`: the low halves with the unsigned carry
+    /// operation, the high halves with the signed one, which gives the
+    /// overflow.
+    fn expand_signed_addsub_carry(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let (lhs, rhs, carry) = (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
+        let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
+        let overflow_vt = self.dag.node(value).values[1];
+        let unsigned = if op == ISD::SAddOCarry { ISD::UAddOCarry } else { ISD::USubOCarry };
+        let lo = self.dag.get_node_multi(unsigned, &[half, overflow_vt], &[ll, rl, carry]);
+        let hi = self.dag.get_node_multi(op, &[half, overflow_vt], &[lh, rh, SDValue { node: lo.node, res: 1 }]);
+        self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: hi.node, res: 1 });
+        (SDValue { node: lo.node, res: 0 }, SDValue { node: hi.node, res: 0 })
+    }
+
+    /// `ExpandIntRes_SADDSUBO`: where the target has the signed carry operation
+    /// on the half type, the low halves with `UADDO`/`USUBO` and the high halves
+    /// with it, whose flag is the overflow. Without one, the plain sum or
+    /// difference, and the overflow as the sign of `(~(l ^ r) & (l ^ sum))` for
+    /// an add, `((l ^ r) & (l ^ sum))` for a subtract.
     fn expand_signed_addsub_overflow(
         &mut self,
         value: SDValue,
@@ -2402,6 +2426,26 @@ impl<'a> TypeLegalizer<'a> {
         half: EVT,
     ) -> (SDValue, SDValue) {
         let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        let carry_op = if op == ISD::SAddO { ISD::SAddOCarry } else { ISD::SSubOCarry };
+        // DEVIATE SD549 (owner x86-m32, exit: a flags copy like
+        // `X86FlagsCopyLowering` that tests the saved byte and rewrites the
+        // reader's condition, and the selects of one flag joined): a flag a
+        // select or a branch reads keeps the sign test, whose `test; jns` is
+        // one branch. On the carry chain's flag a wide select is two selects,
+        // each restoring it: two branches (sat_builtins -O1 m32 +8 B against
+        // the sign test). A flag stored as a value takes the carry chain.
+        let read_by_branch = self.dag.users(SDValue { node: value.node, res: 1 }).any(|user| {
+            matches!(self.dag.opcode(SDValue { node: user, res: 0 }), ISD::Select | ISD::SelectCC | ISD::BrCond | ISD::BrCC)
+        });
+        if !read_by_branch && self.tli.is_operation_legal_or_custom(carry_op, half) {
+            let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
+            let overflow_vt = self.dag.node(value).values[1];
+            let lo_op = if op == ISD::SAddO { ISD::UAddO } else { ISD::USubO };
+            let lo = self.dag.get_node_multi(lo_op, &[half, overflow_vt], &[ll, rl]);
+            let hi = self.dag.get_node_multi(carry_op, &[half, overflow_vt], &[lh, rh, SDValue { node: lo.node, res: 1 }]);
+            self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: hi.node, res: 1 });
+            return (SDValue { node: lo.node, res: 0 }, SDValue { node: hi.node, res: 0 });
+        }
         let wide = self.dag.value_type(value);
         let is_add = op == ISD::SAddO;
         let sum = self.dag.get_node(if is_add { ISD::Add } else { ISD::Sub }, wide, &[lhs, rhs]);
