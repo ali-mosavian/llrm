@@ -34,6 +34,8 @@ pub struct TestDag {
     pub nodes: Vec<Node>,
     /// (virtual register, physical register it arrives in).
     pub live_ins: Vec<(u16, u16)>,
+    /// The memory references `set_node_mem_refs` gave each node.
+    pub mem_refs: Vec<(u32, Vec<MemRef>)>,
 }
 
 impl TestDag {
@@ -399,9 +401,10 @@ impl Dag for TestDag {
     }
     fn set_node_mem_refs(
         &mut self,
-        _: u32,
-        _: &[MemRef],
+        node: u32,
+        mems: &[MemRef],
     ) {
+        self.mem_refs.push((node, mems.to_vec()));
     }
 
     fn entry_node(&mut self) -> SDValue {
