@@ -1,4 +1,5 @@
 """dag_vs_old.sh at m16 compared OMF file sizes (fixups, symbols, pool) and a failing code_bytes was swallowed: -Os read 'zero Dag-larger' where 28 cells were."""
+import os
 import subprocess
 import textwrap
 from pathlib import Path
@@ -17,12 +18,37 @@ def sandbox(tmp: Path, sizes_body: str) -> Path:
     (tmp / "tests/run/c/a.c").write_text("")
     (tmp / "bench").mkdir()
     for name in ("llrm-cc-bin", "llrm-llc"):
-        (tmp / "target/debug").mkdir(parents=True, exist_ok=True)
-        (tmp / "target/debug" / name).write_text('#!/bin/bash\nout=; while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; case $1 in --isel=dag) n=900;; --isel=old) n=100;; esac; shift; done\nhead -c $n /dev/zero > $out\n')
-        (tmp / "target/debug" / name).chmod(0o755)
+        (tmp / "target/release").mkdir(parents=True, exist_ok=True)
+        (tmp / "target/release" / name).write_text('#!/bin/bash\nout=; while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; case $1 in --isel=dag) n=900;; --isel=old) n=100;; esac; shift; done\nhead -c $n /dev/zero > $out\n')
+        (tmp / "target/release" / name).chmod(0o755)
     subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"], cwd=tmp, check=True)
     return tmp / "tools/dag_vs_old.sh"
+
+
+def test_release_is_measured_even_when_a_debug_build_exists(tmp_path):
+    """A stale target/debug/llrm-cc-bin was picked over release: struct_odd_sizes read 139 B (Dag larger) where release gave 128 (smaller)."""
+    script = sandbox(tmp_path, "def code_bytes(obj):\n    return 50\n")
+    debug = tmp_path / "target/debug"
+    debug.mkdir(parents=True)
+    for name in ("llrm-cc-bin", "llrm-llc"):
+        (debug / name).write_text("#!/bin/bash\nexit 1\n")
+        (debug / name).chmod(0o755)
+    done = subprocess.run([str(script), "x86_16-dos", "-march=i386", "-Os"], cwd=tmp_path, capture_output=True, text=True)
+    assert "target/release" in done.stdout and "target/debug" not in done.stdout and "Dag fails" in done.stdout
+    assert "\na FAIL" not in done.stdout
+
+
+def test_an_elf_target_with_no_omf_cells_still_reports(tmp_path):
+    """The code_bytes guard exited 1 for every ELF target (no OMF rows to convert): the m32 and m64 sweeps printed a header and nothing else."""
+    script = sandbox(tmp_path, "def code_bytes(obj):\n    raise SystemExit('boom')\n")
+    size = tmp_path / "bin"
+    size.mkdir()
+    (size / "size").write_text("#!/bin/bash\necho 'section size addr'\necho '.text 40 0'\n")
+    (size / "size").chmod(0o755)
+    env = {**os.environ, "PATH": f"{size}:{os.environ['PATH']}"}
+    done = subprocess.run([str(script), "x86_32-linux", "-m32", "-Os"], cwd=tmp_path, capture_output=True, text=True, env=env)
+    assert done.returncode == 0 and "totals: both 1 sources" in done.stdout, done.stdout + done.stderr
 
 
 def run(tmp_path: Path, sizes_body: str):

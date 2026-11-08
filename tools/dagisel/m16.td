@@ -89,3 +89,13 @@ def : Pat<(i16 (anyext GR8:$src)), (MOVZX16rr8 GR8:$src)>;
 def : Pat<(and GR16:$src1, 0xff), (MOVZX16rr8 (EXTRACT_SUBREG GR16:$src1, sub_8bit))>;
 def : Pat<(sext_inreg GR16:$src, i8), (MOVSX16rr8 (EXTRACT_SUBREG GR16:$src, sub_8bit))>;
 }
+
+// DEVIATE M16-EXT16 (owner w9, exit 2026-11-22): byte to word extends. The pin widens through the 32-bit form and takes `sub_16bit` (X86InstrCompiler.td,
+// "sext, sext_load, zext, zext_load"). In real mode a 32-bit register operand costs an 0x66 prefix; the
+// 16-bit form is the same instruction without it.
+let AddedComplexity = 10, Predicates = [In16BitMode] in {
+def : Pat<(i16 (sext GR8:$src)), (MOVSX16rr8 GR8:$src)>;
+def : Pat<(sextloadi16i8 addr:$src), (MOVSX16rm8 addr:$src)>;
+def : Pat<(i16 (zext GR8:$src)), (MOVZX16rr8 GR8:$src)>;
+def : Pat<(zextloadi16i8 addr:$src), (MOVZX16rm8 addr:$src)>;
+}
