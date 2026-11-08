@@ -1,5 +1,4 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32
-// targets: dos
 /* The OS layer's exit ends the program at once, with the output before it written and none after it. */
 #include "llrm_os.h"
 extern void report(long value);

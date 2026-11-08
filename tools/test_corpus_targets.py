@@ -86,11 +86,9 @@ def test_a_program_written_for_one_abi_is_tagged_for_it():
     assert ct.applies("x86_32-dos", source) and not ct.applies("m68k-68000", source)
 
 
-def test_every_program_of_the_dos_os_layer_is_dos_only():
-    """tests/run/c programs that include llrm_os.h or bench_io.h (the DOS OS layer: files, console, exec) carried no mark, so x86_32-linux and
-    m68k counted them as build failures (os_*: `llrm_os.h` not found) or as wrong output (stft_*: no signal file to read)."""
-    root = HERE.parent
-    users = [p for d in ("tests/run/c",) for p in (root / d).rglob("*.c") if re.search(r'#include\s+"[^"]*(llrm_os|bench_io)\.h"', p.read_text())]
-    assert len(users) >= 8
-    unmarked = [str(p.relative_to(root)) for p in users if ct.applies("x86_32-linux", p.read_text()) or ct.applies("m68k-68020", p.read_text())]
-    assert unmarked == [], "add `// targets: dos` to " + ", ".join(unmarked)
+def test_the_os_layer_programs_whose_out_is_dos_semantics_are_dos_only():
+    """os_files, os_find, os_names and os_console_in print the DOS layer's answers (error codes, ordering): on the POSIX layer ours
+    and host gcc agree with each other and both differ from the .out. os_execute runs COMSPEC. Unmarked, x86_32-linux read them as miscompiles."""
+    for name in ("os_files", "os_find", "os_names", "os_console_in", "os_execute"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not ct.applies("x86_32-linux", source) and not ct.applies("m68k-68020", source) and ct.applies("x86_32-dos", source)
