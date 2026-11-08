@@ -43,9 +43,9 @@ pub fn take_took() -> bool {
 }
 
 /// Logs why FastISel left a whole function to the DAG (`LLRM_DEBUG=isel`).
-fn declined<T>(why: &str) -> Option<T> {
+fn declined_all(why: &str) -> Vec<Option<BlockDag>> {
     llrm_support::debug!("isel", "fast declined: {why}");
-    None
+    Vec::new()
 }
 
 /// A 32-bit integer, or at m32 a pointer in the default space (the same register).
@@ -64,10 +64,11 @@ fn wide_kind(types: &llrm_mir::types::Types, ty: llrm_mir::types::TypeId, m32: b
     }
 }
 
-/// FastISel's blocks for every block of `function`, or none: one block it
-/// cannot take sends the whole function to the DAG path.
+/// FastISel's block for each block of `function` in layout order: a block it cannot take is
+/// none, and the DAG path builds it. A function it cannot take at all is an empty list.
 // DEVIATE F1: hand-written subset; exit 2026-11-27 (a generator over X86GenFastISel.inc).
-// DEVIATE F2: whole-function fallback; exit with integer + call coverage.
+// DEVIATE F2: fallback by block, not by instruction (the pin sends the failing instruction and
+// the ones before it); exit 2026-11-30 if blocks that decline stay over 10% of the blocks.
 // DEVIATE F3: no FP, vector, atomics or intrinsics; exit after parity.
 #[allow(clippy::too_many_arguments)]
 pub fn build_all(
@@ -79,10 +80,10 @@ pub fn build_all(
     convention: &Convention,
     arch: &dyn llrm_target::Target,
     info: &mut FunctionLoweringInfo,
-) -> Option<Vec<(BlockId, BlockDag)>> {
+) -> Vec<Option<BlockDag>> {
     let m32 = arch.object().bitness == 32;
     if !(m32 || arch.object().bitness == 64) || module.signature(function.ty).2 {
-        return declined("a variadic function or another width");
+        return declined_all("a variadic function or another width");
     }
     // every parameter is a 4-byte stack cell: fixed object -(n + 1)
     let int32 = |ty| wide_kind(&module.context.types, ty, m32).is_some();
@@ -97,7 +98,7 @@ pub fn build_all(
         || convention.parameters.len() != parameters.len()
         || !convention.parameters.iter().all(arrives)
     {
-        return declined("a parameter that is not a 4-byte stack cell or one register");
+        return declined_all("a parameter that is not a 4-byte stack cell or one register");
     }
     let arg_regs: Vec<(llrm_lir::registers::RegId, u32)> = match m32 {
         true => Vec::new(),
@@ -112,7 +113,7 @@ pub fn build_all(
     };
     let returns_int = int32(returns);
     if !returns_int && !module.context.types.is_void(returns) {
-        return declined("a result that is not an int, a pointer or void");
+        return declined_all("a result that is not an int, a pointer or void");
     }
     let return_bytes = if wide_kind(&module.context.types, returns, m32) == Some(true) { 8 } else { 4 };
     let eax = (returns_int && convention.returns.len() == 1).then(|| arch.registers().named(convention.returns[0], return_bytes));
@@ -134,7 +135,7 @@ pub fn build_all(
             }
         }
     }
-    let names = Names::new(opcode, if m32 { llrm_dagisel::fastisel::Table::I486 } else { llrm_dagisel::fastisel::Table::X64 })?;
+    let Some(names) = Names::of(opcode, if m32 { llrm_dagisel::fastisel::Table::I486 } else { llrm_dagisel::fastisel::Table::X64 }) else { return Vec::new() };
     let mut blocks = Vec::new();
     let layout = function.layout();
     for (at, &block) in layout.iter().enumerate() {
@@ -142,18 +143,38 @@ pub fn build_all(
         let dag = fresh_dag(module, function, target, info, block, None);
         let chain = dag.entry_node();
         let mut declined = String::new();
-        let dag = Fast { layout: data_layout, module, function, info: &*info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), arg_regs: &arg_regs, entry: layout[0] == block, sysv: &sysv, al, edx: arch.registers().named(arch.register_named("edx"), 4), rax: view("rax", 8), rdx: view("rdx", 8), m32, dag, chain, values: Default::default(), next, uses: &uses, folded: None }
+        let dag = Fast { layout: data_layout, module, function, info: &mut *info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), arg_regs: &arg_regs, entry: layout[0] == block, sysv: &sysv, al, edx: arch.registers().named(arch.register_named("edx"), 4), rax: view("rax", 8), rdx: view("rdx", 8), m32, dag, chain, values: Default::default(), next, uses: &uses, folded: None, exports: Vec::new(), phi_updates: Vec::new() }
             .block(block, &mut declined);
-        let Some(dag) = dag else {
+        let Some((dag, phi_updates)) = dag else {
             llrm_support::debug!("isel", "fast declined at {declined}");
-            return None;
+            blocks.push(None);
+            continue;
         };
-        blocks.push((
-            block,
-            BlockDag { dag, phi_updates: Vec::new(), live_ins: if at == 0 { arg_regs.clone() } else { Vec::new() }, extra: Vec::new(), tail_calls: Vec::new(), values: Vec::new() },
-        ));
+        blocks.push(Some(BlockDag {
+            dag,
+            phi_updates,
+            live_ins: if at == 0 { arg_regs.clone() } else { Vec::new() },
+            extra: Vec::new(),
+            tail_calls: Vec::new(),
+            values: Vec::new(),
+        }));
     }
-    Some(blocks)
+    // A fast entry block does not lower the arguments the way the DAG's does (no `value_regs` for
+    // them): a block left to the DAG that reads one needs the DAG's entry.
+    let reads_argument = |block: &BlockId| {
+        function.iter_block(*block).any(|id| {
+            function.instruction(id).operands.iter().any(|operand| match operand {
+                Operand::Value(value) => matches!(function.value(*value).def, ValueDef::Argument(_)),
+                _ => false,
+            })
+        })
+    };
+    if blocks.first().is_some_and(Option::is_some)
+        && blocks.iter().zip(layout).skip(1).any(|(built, block)| built.is_none() && reads_argument(block))
+    {
+        blocks[0] = None;
+    }
+    blocks
 }
 
 /// The forms that read their second operand from memory (a folded load): `add`, `sub`,
@@ -238,7 +259,17 @@ struct Divide {
 }
 
 impl Names {
+    /// The opcode set of `table`, looked up once per process: the by-name search costs about 4 M
+    /// instructions, which on every function made a FastISel compile dearer than the DAG's.
+    fn of(opcode: &dyn Fn(&str) -> Option<u16>, table: llrm_dagisel::fastisel::Table) -> Option<&'static Names> {
+        static M32: std::sync::OnceLock<Option<Names>> = std::sync::OnceLock::new();
+        static M64: std::sync::OnceLock<Option<Names>> = std::sync::OnceLock::new();
+        let cell = if matches!(table, llrm_dagisel::fastisel::Table::I486) { &M32 } else { &M64 };
+        cell.get_or_init(|| Names::new(opcode, table)).as_ref()
+    }
+
     fn new(opcode: &dyn Fn(&str) -> Option<u16>, table: llrm_dagisel::fastisel::Table) -> Option<Names> {
+        llrm_support::debug!("isel", "fast names built");
         // The pin's own rows (`fastEmit_ISD_<OP>_MVT_i32_rr` / `_ri`) name the opcodes.
         let pair = |one: &str| {
             let row = |shape| llrm_dagisel::fastisel::lookup(table, "ISD", one, "i32", "", shape).map(|(name, _)| name);
@@ -313,11 +344,18 @@ impl Names {
     }
 }
 
+/// What a call calls.
+enum Callee {
+    Global(llrm_mir::context::GlobalId),
+    /// A C library function a FastISel intrinsic stands for.
+    Library(&'static str),
+}
+
 struct Fast<'a> {
     layout: &'a llrm_mir::datalayout::DataLayout,
     module: &'a Module,
     function: &'a Function,
-    info: &'a FunctionLoweringInfo,
+    info: &'a mut FunctionLoweringInfo,
     names: &'a Names,
     eax: Option<llrm_lir::registers::RegId>,
     any_eax: llrm_lir::registers::RegId,
@@ -342,6 +380,10 @@ struct Fast<'a> {
     uses: &'a llrm_mir::dense::IdMap<ValueId, u32>,
     /// A load not emitted because the instruction right after it reads it from memory.
     folded: Option<(ValueId, Vec<SDValue>)>,
+    /// The values of this block another block reads, whose virtual register is not yet written.
+    exports: Vec<ValueId>,
+    /// The phis of the blocks this one branches to and the register each is given its value in.
+    phi_updates: Vec<(ValueId, u32)>,
 }
 
 impl Fast<'_> {
@@ -442,6 +484,72 @@ impl Fast<'_> {
             && self.module.global(global).name.as_deref().is_some_and(|name| NOOPS.iter().any(|noop| name.starts_with(noop)))
     }
 
+    /// Whether conventions `a` and `b` pass integer arguments alike. At m32 `cdecl` and `sysvcc` do: on the
+    /// stack, the caller popping. The C library routines the `memcpy` expansion calls are `sysvcc`, their declarations `cdecl`.
+    fn alike(&self, a: u32, b: u32) -> bool {
+        use llrm_mir::opcode::SYSV;
+        a == b || (self.m32 && matches!(a, 0 | SYSV) && matches!(b, 0 | SYSV))
+    }
+
+    /// A `memcpy` or `memset` intrinsic call as the library call FastISel makes of it, with the
+    /// operands passed: not volatile (permalink: X86FastISel.cpp `fastLowerIntrinsicCall`, `lowerCallTo(II, "memcpy", ...)`).
+    /// `memmove` is not here: the pin hands it to the DAG.
+    fn mem_libcall(&self, instruction: &llrm_mir::module::Instruction) -> Option<(&'static str, Vec<Operand>)> {
+        let (&Operand::Constant(callee), arguments) = instruction.operands.split_last()? else { return None };
+        let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
+        let name = self.module.global(global).name.as_deref()?;
+        let libcall = if name.starts_with("llvm.memcpy.p") {
+            "memcpy"
+        } else if name.starts_with("llvm.memset.p") {
+            "memset"
+        } else {
+            return None;
+        };
+        let [first, second, length, volatile] = arguments[..] else { return None };
+        (self.int(volatile) == Some(0)).then(|| (libcall, vec![first, second, length]))
+    }
+
+    /// An `i8` constant as the 32-bit register a C library call takes it in (`memset`'s fill byte).
+    fn narrow_constant(&mut self, operand: Operand) -> Option<SDValue> {
+        let ty = self.function.operand_type(&self.module.context, operand)?;
+        let Operand::Constant(id) = operand else { return None };
+        let ConstantKind::Int(value) = self.module.context.get(id).kind else { return None };
+        (self.module.context.types.int_bits(ty) == Some(8)).then_some(())?;
+        let imm = self.dag.get_constant_with(value as u8 as u128, EVT::I32, true, false);
+        Some(self.node(self.names.mov_ri, &[EVT::I32], &[imm]))
+    }
+
+    /// What a call calls, the operands passed, its result type (none: void) and whether it is
+    /// variadic: a function in this module with the caller's convention, or a library call
+    /// standing for an intrinsic. At most `limit` operands.
+    fn callee(&self, instruction: &llrm_mir::module::Instruction, call: &llrm_mir::opcode::CallInfo, limit: usize) -> Option<(Vec<Operand>, Callee, Option<llrm_mir::types::TypeId>, bool)> {
+        if let Some((name, arguments)) = self.mem_libcall(instruction) {
+            return (arguments.len() <= limit).then_some((arguments, Callee::Library(name), None, false));
+        }
+        let (callee, arguments) = instruction.operands.split_last()?;
+        let Operand::Constant(callee) = *callee else { return None };
+        let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
+        let (returns, parameters, variadic) = self.module.signature(call.function_type);
+        // an argument that changes how it is passed (a struct by value is a copy on the stack, not the pointer)
+        let by_abi = |attribute: &llrm_mir::opcode::Attribute| match attribute {
+            llrm_mir::opcode::Attribute::Type(name, _) => ["sret", "byval", "byref", "inalloca", "preallocated"].iter().any(|one| name == *one),
+            llrm_mir::opcode::Attribute::Flag(name) => ["inreg", "nest", "returned", "swiftself"].iter().any(|one| name == *one),
+            _ => false,
+        };
+        if call.argument_attrs.iter().flatten().any(by_abi) || call.return_attrs.iter().any(by_abi) {
+            return None;
+        }
+        if arguments.len() < parameters.len()
+            || arguments.len() > limit
+            || (!variadic && arguments.len() != parameters.len())
+            || self.is_intrinsic(global)
+            || self.module.global(global).function().is_none_or(|callee| !self.alike(callee.calling_convention, call.calling_convention))
+        {
+            return None;
+        }
+        Some((arguments.to_vec(), Callee::Global(global), Some(returns), variadic))
+    }
+
     fn is_intrinsic(&self, global: llrm_mir::context::GlobalId) -> bool {
         self.module.global(global).name.intrinsic_id().is_some()
             || self.module.global(global).name.as_deref().is_some_and(|name| name.starts_with("llvm."))
@@ -501,6 +609,25 @@ impl Fast<'_> {
                 if let Some(&done) = self.values.get(&value) {
                     return Some(done);
                 }
+                if let Some(&reg) = self.info.value_regs.get(&value)
+                    && matches!(self.function.value(value).def, ValueDef::Instruction(_))
+                {
+                    // defined in another block: read back from its virtual register
+                    let vt = if self.is_wide(Operand::Value(value))? { EVT::I64 } else { EVT::I32 };
+                    let copy = self.dag.get_copy_from_reg(self.chain, reg, vt);
+                    self.chain = SDValue { node: copy.node, res: 1 };
+                    let copy = SDValue { node: copy.node, res: 0 };
+                    self.values.insert(value, copy);
+                    return Some(copy);
+                }
+                if let Some(&object) = self.info.static_allocas.get(&value) {
+                    // the address of a frame object: `lea r, [frame + 0]`
+                    let (lea, vt) = if self.m32 { (self.names.lea?, EVT::I32) } else { (self.names.lea64?, EVT::I64) };
+                    let ops = self.frame(object);
+                    let address = self.node(lea, &[vt], &ops);
+                    self.values.insert(value, address);
+                    return Some(address);
+                }
                 let ValueDef::Argument(n) = self.function.value(value).def else { return None };
                 if !self.m32 {
                     if !self.entry {
@@ -525,15 +652,76 @@ impl Fast<'_> {
         }
     }
 
-    fn block(mut self, block: BlockId, declined: &mut String) -> Option<SelectionDAG> {
+    /// Writes the virtual register of each value of this block another block reads, once it is computed.
+    fn export_ready(&mut self) -> Option<()> {
+        let mut at = 0;
+        while at < self.exports.len() {
+            let value = self.exports[at];
+            let Some(&computed) = self.values.get(&value) else {
+                at += 1;
+                continue;
+            };
+            let reg = *self.info.value_regs.get(&value)?;
+            if !matches!(self.dag.value_type(computed), EVT::I32 | EVT::I64) {
+                return None;
+            }
+            self.chain = self.dag.get_copy_to_reg(self.chain, reg, computed);
+            self.exports.swap_remove(at);
+        }
+        Some(())
+    }
+
+    /// `HandlePHINodesInSuccessorBlocks`: the value each phi of a successor takes from this block,
+    /// copied to a register before the branch.
+    fn phi_copies(&mut self, block: BlockId) -> Option<()> {
+        for successor in self.function.successors(block).to_vec() {
+            let phis: Vec<_> = self
+                .function
+                .iter_block(successor)
+                .take_while(|&id| self.function.instruction(id).opcode == Opcode::Phi)
+                .collect();
+            for phi in phis {
+                let phi = self.function.instruction(phi).clone();
+                let result = phi.result?;
+                if self.function.users(result).is_empty() {
+                    continue;
+                }
+                wide_kind(&self.module.context.types, phi.ty, self.m32)?;
+                let incoming = phi.operands.chunks(2).find(|pair| pair[1] == Operand::Block(block)).map(|pair| pair[0])?;
+                let reg = match incoming {
+                    Operand::Value(value) if self.info.value_regs.contains_key(&value) => self.info.value_regs[&value],
+                    _ => {
+                        let value = self.value(incoming)?;
+                        let reg = self.info.new_reg();
+                        self.chain = self.dag.get_copy_to_reg(self.chain, reg, value);
+                        reg
+                    }
+                };
+                self.phi_updates.push((result, reg));
+            }
+        }
+        Some(())
+    }
+
+    fn block(mut self, block: BlockId, declined: &mut String) -> Option<(SelectionDAG, Vec<(ValueId, u32)>)> {
         self.chain = self.dag.entry_node();
         let insts: Vec<_> = self.function.iter_block(block).collect();
+        self.exports = insts
+            .iter()
+            .filter_map(|&id| self.function.instruction(id).result)
+            .filter(|result| self.info.value_regs.contains_key(result))
+            .collect();
         let mut at = 0;
         while at < insts.len() {
             let instruction = self.function.instruction(insts[at]).clone();
             at += 1;
             *declined = format!("{:?}", instruction.opcode);
+            self.export_ready()?;
             match &instruction.opcode {
+                Opcode::Phi => {
+                    // read back from its register where used; the predecessors write it
+                    wide_kind(&self.module.context.types, instruction.ty, self.m32)?;
+                }
                 Opcode::Alloca { .. } => {
                     // a static alloca is its frame object
                     self.info.static_allocas.get(&instruction.result?)?;
@@ -680,31 +868,26 @@ impl Fast<'_> {
                 Opcode::Call(call) if !self.m32 && call.calling_convention == self.function.calling_convention => {
                     // SysV: up to six integer or pointer arguments in registers; `al` = 0 for a variadic callee
                     let (down, up, call_op, mov8) = self.names.calls64?;
-                    let (callee, arguments) = instruction.operands.split_last()?;
-                    let Operand::Constant(callee) = *callee else { return None };
-                    let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
-                    let (returns, parameters, variadic) = self.module.signature(call.function_type);
-                    if arguments.len() < parameters.len()
-                        || arguments.len() > self.sysv.len()
-                        || (!variadic && arguments.len() != parameters.len())
-                        || self.is_intrinsic(global) || self.module.global(global).function().is_none_or(|callee| callee.calling_convention != call.calling_convention)
-                    {
-                        return None;
-                    }
+                    let (arguments, callee, returns, variadic) = self.callee(&instruction, call, self.sysv.len())?;
                     let types = &self.module.context.types;
-                    let void = types.is_void(returns);
-                    let wide_result = match types.int_bits(returns) {
+                    let void = returns.is_none_or(|ty| types.is_void(ty));
+                    let wide_result = match returns.and_then(|ty| types.int_bits(ty)) {
                         _ if void => false,
                         Some(32) => false,
                         Some(64) => true,
+                        None if returns.is_some_and(|ty| matches!(types.get(ty), llrm_mir::types::Type::Pointer(0))) => true,
                         _ => return None,
                     };
                     let mut values = Vec::new();
-                    for &one in arguments {
+                    for &one in &arguments {
                         let ty = self.function.operand_type(&self.module.context, one)?;
                         let wide = match types.int_bits(ty) {
                             Some(32) => false,
                             Some(64) => true,
+                            Some(8) if matches!(callee, Callee::Library(_)) => {
+                                values.push((self.narrow_constant(one)?, false));
+                                continue;
+                            }
                             _ if matches!(types.get(ty), llrm_mir::types::Type::Pointer(0)) => true,
                             _ => return None,
                         };
@@ -728,7 +911,10 @@ impl Fast<'_> {
                         (chain, glue) = (SDValue { node: copy.node, res: 0 }, SDValue { node: copy.node, res: 1 });
                         regs.push(self.dag.get_phys_register(EVT::I8, self.al));
                     }
-                    let target = self.dag.get_target_global_address(EVT::I64, global.0, 0);
+                    let target = match callee {
+                        Callee::Global(global) => self.dag.get_target_global_address(EVT::I64, global.0, 0),
+                        Callee::Library(name) => self.dag.get_target_external_symbol(EVT::I64, name),
+                    };
                     let mask = self.dag.get_register_mask_clobbering(&super::dagisel_adapter::call_clobbered_flags());
                     let mut ops = vec![target];
                     ops.extend(regs);
@@ -744,21 +930,23 @@ impl Fast<'_> {
                     }
                     self.chain = chain;
                 }
-                Opcode::Call(call) if self.m32 && call.calling_convention == self.function.calling_convention => {
+                Opcode::Call(call) if self.m32 && self.alike(call.calling_convention, self.function.calling_convention) => {
                     let calls = self.names.calls.as_ref()?;
-                    let (callee, arguments) = instruction.operands.split_last()?;
-                    let Operand::Constant(callee) = *callee else { return None };
-                    let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
-                    let (returns, parameters, variadic) = self.module.signature(call.function_type);
-                    if variadic || arguments.len() != parameters.len() || self.is_intrinsic(global) || self.module.global(global).function().is_none_or(|callee| callee.calling_convention != call.calling_convention) {
-                        return None;
-                    }
+                    let (arguments, callee, returns, variadic) = self.callee(&instruction, call, usize::MAX)?;
                     let int32 = |ty| word(&self.module.context.types, ty, true);
-                    let void = self.module.context.types.is_void(returns);
-                    if !parameters.iter().all(|&ty| int32(ty)) || !(void || int32(returns)) {
+                    let void = returns.is_none_or(|ty| self.module.context.types.is_void(ty));
+                    if variadic || !(void || returns.is_some_and(int32)) {
                         return None;
                     }
-                    let values: Vec<SDValue> = arguments.iter().map(|&one| self.value(one)).collect::<Option<_>>()?;
+                    let mut values = Vec::new();
+                    for &one in &arguments {
+                        let ty = self.function.operand_type(&self.module.context, one)?;
+                        values.push(match int32(ty) {
+                            true => self.value(one)?,
+                            false if matches!(callee, Callee::Library(_)) => self.narrow_constant(one)?,
+                            false => return None,
+                        });
+                    }
                     let bytes = self.dag.get_constant_with(4 * values.len() as u128, EVT::I32, true, false);
                     let zero = self.dag.get_constant_with(0, EVT::I32, true, false);
                     let down = self.node(calls.call_down, &[EVT::I32, EVT::OTHER, EVT::GLUE], &[bytes, zero, zero, self.chain]);
@@ -778,7 +966,10 @@ impl Fast<'_> {
                         ));
                     }
                     let chain = if stores.is_empty() { after_down } else { self.dag.get_token_factor(&stores) };
-                    let target = self.dag.get_target_global_address(EVT::I32, global.0, 0);
+                    let target = match callee {
+                        Callee::Global(global) => self.dag.get_target_global_address(EVT::I32, global.0, 0),
+                        Callee::Library(name) => self.dag.get_target_external_symbol(EVT::I32, name),
+                    };
                     let mask = self.dag.get_register_mask_clobbering(&super::dagisel_adapter::call_clobbered_flags());
                     let called = self.node(calls.call, &[EVT::OTHER, EVT::GLUE], &[target, mask, chain]);
                     let up = self.node(
@@ -953,6 +1144,7 @@ impl Fast<'_> {
                         std::mem::swap(&mut on_true, &mut on_false);
                         code ^= 1;
                     }
+                    self.phi_copies(block)?;
                     let flags = self.dag.get_copy_to_phys_reg(self.chain, super::dagisel_adapter::EFLAGS_ID, compared, None);
                     let glue = SDValue { node: flags.node, res: 1 };
                     let dest = self.dag.get_basic_block(on_true.0);
@@ -996,6 +1188,7 @@ impl Fast<'_> {
                 }
                 Opcode::Br if instruction.operands.len() == 1 => {
                     let Operand::Block(target) = instruction.operands[0] else { return None };
+                    self.phi_copies(block)?;
                     if Some(target) != self.next {
                         let dest = self.dag.get_basic_block(target.0);
                         self.chain = self.node(self.names.jmp, &[EVT::OTHER], &[dest, self.chain]);
@@ -1020,7 +1213,11 @@ impl Fast<'_> {
                 _ => return None,
             }
         }
+        if !self.exports.is_empty() {
+            *declined = "a value another block reads that is not a register value".to_owned();
+            return None;
+        }
         self.dag.set_root(self.chain);
-        Some(self.dag)
+        Some((self.dag, self.phi_updates))
     }
 }

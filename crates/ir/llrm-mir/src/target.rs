@@ -79,6 +79,17 @@ pub struct Tuning {
     /// -O1 inline, in thousandths of a clock, against the call's latency at
     /// the site's frequency. m32: half the -O2 rate (-O1 weighs code size).
     pub inline_o1_milliclocks_per_byte: i64,
+    /// Thousandths of a byte one unit of the inliner's code size is: the
+    /// units count instructions (one each, a call 3 to 5), the bytes a callee
+    /// takes are 3.5 to 5 times that on x86 (22 callees of the m32 O1 corpus:
+    /// median 3.99 bytes per unit). Scales the growth the -O1 bytes-vs-clocks
+    /// check compares with its per-byte rate; 1000: one byte a unit.
+    /// DEVIATE INL-O1 unit scale (owner x86-m32, exit 2026-12-05). Stated cost,
+    /// exit 2026-11-15 (strict -O1 clocks, not waived): x_sf_cmp64 81196 ->
+    /// 93965 clk (best gcc/clang 90307), x_sf_div 146540 -> 152986 (149453),
+    /// x_sf_mul 82587 -> 88263 (88107). Recovery: weigh callee size against
+    /// the site's frequency and loop depth.
+    pub inline_o1_unit_bytes_milli: i64,
     /// Trips the -O1 no-growth rule above analyses for folds: the pin's
     /// `-unroll-max-iteration-count-to-analyze` (10) when `None`.
     pub unroll_o1_analyzed_trips: Option<u32>,
@@ -299,6 +310,7 @@ impl Tuning {
         unroll_never_grows_at_o1: false,
         inline_never_grows_without_rate: false,
         inline_o1_milliclocks_per_byte: 0,
+        inline_o1_unit_bytes_milli: 1000,
         unroll_o1_analyzed_trips: None,
         price_pin_multiplies: false,
         imul_at_size: false,
