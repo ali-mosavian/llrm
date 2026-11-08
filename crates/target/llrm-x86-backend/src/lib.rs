@@ -4,10 +4,16 @@
 //! calls it once where it builds its targets.
 
 use llrm_codegen::backend::hooks::{self, BackendHooks};
+use llrm_codegen::backend::selectiondag::SelectionDAG;
+use llrm_codegen::backend::selectiondag::emit_api::{EmitContext, EmitError, EmitState, Emitted};
+use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_codegen::model::lir::LirBody;
 use llrm_codegen::support::hash::IndexMap;
 use llrm_lir::registers::RegId;
 
+pub mod emit;
+#[cfg(test)]
+mod emit_tests;
 pub mod mirprint;
 
 struct X86;
@@ -19,6 +25,17 @@ impl BackendHooks for X86 {
         pins: &IndexMap<u32, RegId>,
     ) -> Result<String, String> {
         mirprint::mir(body, pins)
+    }
+
+    fn emit_units(
+        &self,
+        dag: &SelectionDAG,
+        units: &[Unit],
+        ctx: &EmitContext<'_>,
+        state: &mut EmitState,
+        first_at: i64,
+    ) -> Result<Emitted, EmitError> {
+        emit::emit_in(dag, units, ctx, state, first_at)
     }
 }
 

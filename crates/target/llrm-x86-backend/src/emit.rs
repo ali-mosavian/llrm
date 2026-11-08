@@ -1,7 +1,7 @@
 //! `InstrEmitter`: scheduled units to LIR.
 //!
 //! # How it works
-//! [`emit`] walks the units [`super::schedule::schedule`] returns, a unit's
+//! [`emit`] walks the units [`llrm_codegen::backend::selectiondag::schedule::schedule`] returns, a unit's
 //! glued nodes top first, and writes one LIR instruction per machine node and
 //! per register copy. A node's results are virtual values, numbered in the
 //! order they are emitted (`VRBaseMap`); an operand is that value, an
@@ -54,15 +54,15 @@ use llrm_dagisel::x86_classes::{Role, class_tag};
 use llrm_lir::registers::RegId;
 use llrm_support::hash::HashMap;
 
-use super::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
-use super::isd::ISD;
-use super::mvt::{EVT, MVT};
-use super::schedule::Unit;
-use crate::backend::isel::{_read, _written};
-use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
-use crate::model::lir::{Insn, PairKind, Phi};
+use llrm_codegen::backend::selectiondag::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
+use llrm_codegen::backend::selectiondag::schedule::Unit;
+use llrm_codegen::backend::isel::{_read, _written};
+use llrm_codegen::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
+use llrm_codegen::model::lir::{Insn, PairKind, Phi};
 
-pub use super::emit_api::*;
+pub use llrm_codegen::backend::selectiondag::emit_api::*;
 
 struct Emitter<'a, 'd> {
     dag: &'d SelectionDAG,
@@ -925,7 +925,7 @@ impl Emitter<'_, '_> {
             if what.op != Operation::Move
                 || mem.base.is_some()
                 || mem.index.is_some()
-                || address.space != crate::model::ir::Space::External
+                || address.space != llrm_codegen::model::ir::Space::External
             {
                 continue;
             }
@@ -1805,7 +1805,7 @@ impl Emitter<'_, '_> {
         &self,
         register: SDValue,
     ) -> bool {
-        self.dag.node(register).data == NodeData::PhysReg(super::dagisel_adapter::EFLAGS_ID)
+        self.dag.node(register).data == NodeData::PhysReg(llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID)
     }
 
     /// Whether `value` is an implicit result of a machine node (EFLAGS from
@@ -1870,7 +1870,7 @@ impl Emitter<'_, '_> {
                 clobbers
             }
         };
-        let memory = Arc::new(crate::model::lir::CallMemory {
+        let memory = Arc::new(llrm_codegen::model::lir::CallMemory {
             effects: self.ctx.conventions.effects(callee),
             private: Vec::new(),
             // A callee that pops its own arguments lists SP among what it
@@ -3125,7 +3125,7 @@ impl Emitter<'_, '_> {
             "IMPLICIT_DEF" => {
                 let held = self.fresh(width);
                 self.values.insert(result, held.value);
-                self.push(Operation::Nothing, crate::processimpdefs::IMPLICIT_DEF, vec![Loc::Held(held)], vec![]);
+                self.push(Operation::Nothing, llrm_codegen::processimpdefs::IMPLICIT_DEF, vec![Loc::Held(held)], vec![]);
                 return Ok(Some(()));
             }
             // `INSERT_SUBREG undef, x, idx`: x in the low part of a wider
@@ -3191,7 +3191,7 @@ impl Emitter<'_, '_> {
                 // address came: the masm names the table from this address.
                 let index = self.address_register(group[2], Role::Index)?;
                 let scale = self.constant(group[1])?;
-                let mut address = Addr::new(crate::model::ir::Space::Segment, 0);
+                let mut address = Addr::new(llrm_codegen::model::ir::Space::Segment, 0);
                 address.index = jump.id;
                 let entry = match name {
                     "JMP16m" => 2,
@@ -3336,7 +3336,7 @@ impl Emitter<'_, '_> {
                     && cell.base.is_some()
                     && cell.index.is_some()
                     && cell.scale != 1
-                    && cell.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Literal)
+                    && cell.addr.is_some_and(|addr| addr.space == llrm_codegen::model::ir::Space::Literal)
                 {
                     cell.offset = cell.addr.map_or(cell.offset, |addr| addr.disp);
                     cell.addr = None;
@@ -3354,9 +3354,9 @@ impl Emitter<'_, '_> {
                     && let Some(address) = cell.addr
                     && matches!(
                         address.space,
-                        crate::model::ir::Space::Segment
-                            | crate::model::ir::Space::External
-                            | crate::model::ir::Space::Group
+                        llrm_codegen::model::ir::Space::Segment
+                            | llrm_codegen::model::ir::Space::External
+                            | llrm_codegen::model::ir::Space::Group
                     )
                 {
                     let offset = Imm { value: 0, width, address: Some(address) };
@@ -3746,7 +3746,7 @@ impl Emitter<'_, '_> {
                         disp,
                         Addr {
                             segment: llrm_lir::registers::RegId::ES.iced(),
-                            ..Addr::new(crate::model::ir::Space::Far, disp)
+                            ..Addr::new(llrm_codegen::model::ir::Space::Far, disp)
                         },
                     )
                 }
@@ -3772,7 +3772,7 @@ impl Emitter<'_, '_> {
         }
         if let NodeData::JumpTable(table) = self.dag.node(group[3]).data {
             let table = self.jump_table(table)?;
-            let mut address = Addr::new(crate::model::ir::Space::Segment, 0);
+            let mut address = Addr::new(llrm_codegen::model::ir::Space::Segment, 0);
             address.index = table.id;
             return Ok(Mem { base, index, scale, disp_width: 2, ..Mem::new(Some(overridden(address)), cell_width) });
         }
@@ -3805,7 +3805,7 @@ impl Emitter<'_, '_> {
         }
         let disp = self.displacement(group[3])?;
         if through_ss && (base.is_some() || index.is_some()) {
-            let address = overridden(Addr::new(crate::model::ir::Space::Literal, disp));
+            let address = overridden(Addr::new(llrm_codegen::model::ir::Space::Literal, disp));
             return Ok(Mem { base, index, scale, offset: disp, disp_width: 2, ..Mem::new(Some(address), cell_width) });
         }
         if !through_ss && self.address_register(group[4], Role::Segment)?.is_some() {
@@ -3813,14 +3813,14 @@ impl Emitter<'_, '_> {
         }
         // An absolute address (`[0xB8000]`) is a literal address of four bytes.
         if base.is_none() && index.is_none() {
-            let address = overridden(Addr::new(crate::model::ir::Space::Literal, disp));
+            let address = overridden(Addr::new(llrm_codegen::model::ir::Space::Literal, disp));
             return Ok(Mem { disp_width: 4, ..Mem::new(Some(address), cell_width) });
         }
         // An indexed cell's displacement is a literal address, as the old
         // selector makes it: without one later passes read `[base]` alone and
         // the index is dropped (strlen_idiom looped forever).
         if index.is_some() {
-            let address = Addr::new(crate::model::ir::Space::Literal, disp);
+            let address = Addr::new(llrm_codegen::model::ir::Space::Literal, disp);
             // Dword address registers at real mode (the 67h form) take a
             // dword displacement.
             let wide = [base, index].into_iter().flatten().any(|held| held.width == 4);
@@ -4089,7 +4089,7 @@ impl Emitter<'_, '_> {
         // The address of a jump table.
         if let NodeData::JumpTable(table) = self.dag.node(value).data {
             let table = self.jump_table(table)?;
-            let mut address = Addr::new(crate::model::ir::Space::Segment, 0);
+            let mut address = Addr::new(llrm_codegen::model::ir::Space::Segment, 0);
             address.index = table.id;
             return Ok(Loc::Imm(Imm {
                 value: 0,
