@@ -265,7 +265,7 @@ needs = [{ env = "WDUMP", default = "~/dos/devtools/dev/c/watcom/binl/wdump", ma
 # (toolchain/clangbuild.sh --print). Open source, so not private: CI builds and caches them, and a missing one is red there (only `perf` may
 # be missing); a local run with GATE_ALLOW_MISSING=1 skips the steps that need them with this reason.
 [capability.clang]
-require = []
+require = ["LLRM_REQUIRE_PIN_CLANG"]
 needs = [
   { run = 'cd "$(git rev-parse --show-toplevel)" && test -x "$(sh toolchain/clangbuild.sh --print pin)/bin/clang"' },
   { run = 'cd "$(git rev-parse --show-toplevel)" && test -x "$(sh toolchain/clangbuild.sh --print m16)/bin/clang"' },
