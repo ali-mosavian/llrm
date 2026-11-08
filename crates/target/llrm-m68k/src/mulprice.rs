@@ -2,17 +2,17 @@
 //!
 //! The 68000 and 68010 have no 32-bit multiply: it is a call of `__mulsi3`
 //! (`pea c; move.l x, -(%sp); jsr; addq.l #8, %sp`, 14 B and over 100 clocks).
-//! From the 68020 it is `muls.l` (4 B and 2 for the constant). The pieces cost
+//! The pieces cost
 //! a copy and a shift for each term and an add or subtract; both are priced
-//! from the encodings and the tables under the level's [`Price`]. Against
-//! `muls.l` the pieces must be strictly smaller: they never are (6 B each), so
-//! the 68020 and up keep the multiply, as before.
+//! from the encodings and the tables under the level's [`Price`]. From the
+//! 68020 the multiply is one instruction and is kept, as before.
 //!
 //! DEVIATE: the pin's `M68kTargetLowering::decomposeMulByConstant` answers yes
 //! for a multiply of 32 bits or fewer on every cpu, and for 64 bits from the
-//! 68020. Reason: on the 68020 and up the pieces are larger than `muls.l`
-//! (+3760 B over 516 cells, 112 of them worse). Owner: m68k. Exit: 2026-11-14,
-//! the shared flow prices a multiply expansion against its pieces.
+//! 68020. Reason: from the 68020 the multiply is one instruction that
+//! takes memory operands; the pieces lost in context (+3760 B over 516 cells,
+//! 112 of them worse; priced in isolation they tie). Owner: m68k. Exit:
+//! 2026-11-14, the shared flow prices a multiply expansion against its pieces.
 
 use llrm_codegen::backend::selectiondag::dag_combiner::MulPieces;
 
@@ -67,14 +67,6 @@ fn multiply(
     cpu: Cpu,
 ) -> Option<(usize, u32)> {
     use mc::Operand::{Imm, Reg as R};
-    let constant = if (-128..=127).contains(&c) {
-        price_of("MOVQ", vec![R(reg::D1), Imm(c)], cpu)
-    } else {
-        price_of("MOV32ri", vec![R(reg::D1), Imm(c)], cpu)
-    };
-    if cpu.at_least(Cpu::M68020) {
-        return sum([constant, price_of("SMULd32d32", vec![R(reg::D0), R(reg::D0), R(reg::D1)], cpu)]);
-    }
     let push = if crate::dagisel::pea::fits(c) {
         price_of(crate::dagisel::pea::NAME, vec![Imm(c)], cpu)
     } else {
@@ -105,6 +97,12 @@ pub fn pieces_beat_multiply(
     c: i64,
 ) -> bool {
     use mc::Operand::Reg as R;
+    // `muls.l` is one instruction, and it takes its source from memory, which
+    // the pieces cannot: priced in isolation they tie or win by 2 B and
+    // lose in context (+1040 B over 516 cells)
+    if cpu.at_least(Cpu::M68020) {
+        return false;
+    }
     let parts = sum([
         shifted(pieces.high, cpu),
         if pieces.low > 0 { shifted(pieces.low, cpu) } else { Some((0, 0)) },
@@ -112,10 +110,6 @@ pub fn pieces_beat_multiply(
         if pieces.negative { price_of("NEG32d", vec![R(reg::D1), R(reg::D1)], cpu) } else { Some((0, 0)) },
     ]);
     match (parts, multiply(c, cpu)) {
-        // `muls.l` takes its source from memory and the pieces cannot, which
-        // the model does not see: where the multiply is an instruction the
-        // pieces must be smaller outright, and no slower
-        (Some(parts), Some(multiply)) if cpu.at_least(Cpu::M68020) => parts.0 < multiply.0 && parts.1 <= multiply.1,
         (Some(parts), Some(multiply)) => price.beats(cpu, parts, multiply),
         _ => false,
     }
