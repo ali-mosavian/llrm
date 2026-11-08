@@ -98,6 +98,12 @@ pub struct Tuning {
     /// `Tti::speed_inline_rate_at_o1`: whether that rate binds at -O1 too
     /// (false by default; m32's -O1 has its own rule, INL-O1).
     pub speed_inline_rate_at_o1: bool,
+    /// DEVIATE SD-DIVMAG (owner x86-m32, exit 2026-11-22): a signed divide by a
+    /// negative constant is the negation of the divide by its magnitude, so it
+    /// shares the multiply-high of the remainder (`x % -c` is `x % c`); the
+    /// pin multiplies twice (div_constants_long -O2 +4.1% clk over gcc).
+    /// false: the pin's `BuildSDIV`.
+    pub sdiv_by_magnitude: bool,
     /// What one call costs in clocks when the inliner prices its latency
     /// (`Tti::call_sequence_cost`): the call and return, each argument word
     /// pushed, and the caller's pop of them. The pin prices the call as one
@@ -342,6 +348,7 @@ impl Tuning {
         inline_o1_milliclocks_per_byte: 0,
         inline_o1_unit_bytes_milli: 1000,
         speed_inline_milliclocks_per_byte: 0,
+        sdiv_by_magnitude: false,
         speed_inline_rate_at_o1: false,
         call_sequence_fixed_clocks: 0,
         call_sequence_argument_clocks: 0,
