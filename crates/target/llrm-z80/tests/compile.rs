@@ -1163,6 +1163,16 @@ fn a_byte_or_word_rotate_compiles_to_shifts() {
     }
 }
 
+/// A bit loaded and branched on at once (`while (!bad)`, `bad` a flag the program only sets to 1) was a byte made into a
+/// 0 or 1 by a diamond of jumps, then tested again: 14 instructions where `and a, (hl)` already sets the flag.
+#[test]
+fn a_loaded_bit_is_branched_on_without_a_diamond() {
+    let ir = include_str!("kernels/ir/bit_load_branch.ll");
+    let out = text(ir, "g", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("xor a, a"), "{out}");
+    assert!(out.contains("and a, (hl)"), "{out}");
+}
+
 /// `memory_expansion` at -Os was refused ("a conditional return in a function
 /// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
 /// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The
