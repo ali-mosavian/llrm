@@ -835,7 +835,7 @@ impl super::emit::ConstantCells for PoolCells<'_> {
 fn narrow_divide_live(
     module: &llrm_mir::module::Module,
     function: &llrm_mir::module::Function,
-) -> HashMap<BlockId, u32> {
+) -> llrm_mir::dense::IdMap<BlockId, u32> {
     use llrm_mir::opcode::{BinaryOp, Opcode};
     let narrow = |inst: llrm_mir::module::InstId| {
         let op = function.instruction(inst);
@@ -845,7 +845,7 @@ fn narrow_divide_live(
     };
     let blocks: Vec<BlockId> =
         function.layout().iter().copied().filter(|&block| function.iter_block(block).any(narrow)).collect();
-    let mut live = HashMap::default();
+    let mut live = llrm_mir::dense::IdMap::new();
     if blocks.is_empty() {
         return live;
     }
@@ -1349,7 +1349,7 @@ fn selected_in(
         llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
     });
     let div_live = if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 };
-    let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { HashMap::default() };
+    let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { llrm_mir::dense::IdMap::new() };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
         if cpu.optimized && !fast_ids.contains(&block.0) && block == parent {
