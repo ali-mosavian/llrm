@@ -70,21 +70,21 @@ impl SchedInfo for Info {
         &self,
         opcode: u32,
     ) -> usize {
-        llrm_dagisel::instr::desc(opcode as u16).map_or(0, |d| usize::from(d.num_defs))
+        llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16).map_or(0, |d| usize::from(d.num_defs))
     }
 
     fn implicit_defs(
         &self,
         opcode: u32,
     ) -> &[u16] {
-        llrm_dagisel::instr::desc(opcode as u16).map_or(&[], |d| d.implicit_defs)
+        llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16).map_or(&[], |d| d.implicit_defs)
     }
 
     fn is_call(
         &self,
         opcode: u32,
     ) -> bool {
-        llrm_dagisel::instr::desc(opcode as u16).is_some_and(|d| d.is_call())
+        llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16).is_some_and(|d| d.is_call())
     }
 
     fn source_order(&self) -> bool {

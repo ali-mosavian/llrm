@@ -4,9 +4,10 @@
 
 #![allow(clippy::all, unused_imports)]
 
-use llrm_dagisel::dag::{Dag, Hooks, PatternContext, SDValue, X86Predicates};
+use llrm_dagisel::dag::{Dag, Hooks, PatternContext, SDValue};
+use crate::x86_predicates::X86Predicates;
 use llrm_dagisel::matcher::{Emit, Matcher::*, Slice, Table, Vt};
-use llrm_dagisel::predicates;
+use crate::x86_predicates as predicates;
 
 pub static ITEMS: [llrm_dagisel::matcher::Matcher; 15272] = [
     SwitchOpcode,
