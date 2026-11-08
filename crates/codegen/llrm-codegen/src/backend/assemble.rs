@@ -183,6 +183,25 @@ pub fn assembled_by(
     arch: &dyn llrm_target::Target,
     libcalls: &[(String, u32, String)],
 ) -> Result<masm::Module, String> {
+    assembled_with(module, None, abi, code, cpu, segments, selection, selector, arch, libcalls)
+}
+
+/// [`assembled_by`], where `alternative` is the same module put through the
+/// pipeline again with `llrm-no-end-biased` on the functions that carry
+/// `llrm-end-biased` (`lsr_pass`): each such function is selected from both and
+/// the better kept (`end_biased_pick`).
+pub fn assembled_with(
+    module: &Module,
+    alternative: Option<&Module>,
+    abi: &dyn Abi,
+    code: &str,
+    cpu: ProfileOrName<'_>,
+    segments: &Segments,
+    selection: &'static isel::Compiled,
+    selector: Selector,
+    arch: &dyn llrm_target::Target,
+    libcalls: &[(String, u32, String)],
+) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
     // A far object of more bytes than a segment holds is laid down in
     // segments, which a huge pointer steps through.
@@ -235,7 +254,14 @@ pub fn assembled_by(
         let global = module.global(id);
         if global.function().is_some_and(|one| !one.is_declaration()) {
             let name = global.name.as_deref().unwrap_or_default();
-            let made = llrm_support::debug::in_function(name, || machined(module, name, abi, &pool, &target))?;
+            let made = llrm_support::debug::in_function(name, || {
+                let flagged = alternative
+                    .filter(|_| global.function().is_some_and(|one| llrm_mir::memory::has(&one.attrs, END_BIASED_FIRED)));
+                match flagged {
+                    Some(other) => end_biased_pick(module, other, name, abi, &pool, &target),
+                    None => machined(module, name, abi, &pool, &target),
+                }
+            })?;
             facts.record(name, &made.body, &made.registers, &made.calls);
             done.insert(id, made);
         }
@@ -851,6 +877,64 @@ fn calls_known(
                 .and_then(|id| module.global(id).name.as_deref())
                 .is_some_and(|callee| facts.written(callee).is_some()),
         )
+}
+
+/// A function whose LSR chose end-biased formulae the pin does not
+/// (`llrm-end-biased`), selected as it is and again from `other`, the module
+/// built with them off: the smaller where bytes are strict (-O1, -Os), else
+/// the lower work plus the bytes at the speed rate. The pin's form, the
+/// formulae off, wins a tie. The constant pool is the winner's alone.
+fn end_biased_pick(
+    module: &Module,
+    other: &Module,
+    name: &str,
+    abi: &dyn Abi,
+    pool: &Rc<RefCell<Pool>>,
+    target: &Target<'_>,
+) -> Result<Machined, String> {
+    let before = pool.borrow().clone();
+    let on = machined(module, name, abi, pool, target)?;
+    let after_on = pool.borrow().clone();
+    *pool.borrow_mut() = before;
+    let Ok(off) = machined(other, name, abi, pool, target) else {
+        *pool.borrow_mut() = after_on;
+        return Ok(on);
+    };
+    let (Some(bytes_on), Some(bytes_off)) = (encoded_bytes(&on), encoded_bytes(&off)) else {
+        *pool.borrow_mut() = after_on;
+        return Ok(on);
+    };
+    let score = |made: &Machined, bytes: f64| {
+        if target.cpu.bytes_strict() {
+            bytes
+        } else {
+            executed::work(&made.body) + bytes * target.cpu.speed_milliclocks_per_byte() as f64 / 1000.0
+        }
+    };
+    if score(&off, bytes_off) <= score(&on, bytes_on) {
+        Ok(off)
+    } else {
+        *pool.borrow_mut() = after_on;
+        Ok(on)
+    }
+}
+
+/// The attribute `lsr_pass` puts on a function whose end-biased formulae differ
+/// from the pin's.
+const END_BIASED_FIRED: &str = llrm_transforms::lsr_pass::END_BIASED_FIRED;
+
+/// The bytes of a finished function's instructions, or none where one has no
+/// price.
+fn encoded_bytes(made: &Machined) -> Option<f64> {
+    made.body
+        .insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .map(|what| {
+            let what = &stack_as_addressed(made.body.regs(), made.body.bits, what);
+            select::priced_in(made.body.bits, what, 0, None, false, false, None).map(|code| code.code.len() as f64)
+        })
+        .sum()
 }
 
 fn machined_once(

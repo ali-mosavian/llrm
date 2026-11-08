@@ -96,6 +96,11 @@ pub struct Options {
     /// hand-over of a QB module keeps the `invoke`s and landing pads for the
     /// backend instead of a `setjmp` frame. The mid-end is the same.
     pub wasm_exceptions: bool,
+    /// A function whose LSR chose end-biased formulae the pin does not
+    /// (`llrm-end-biased`) is built again without them and the better kept
+    /// (`assemble::assembled_with`). The module is cloned before the pipeline
+    /// to be able to.
+    pub end_biased_trial: bool,
 }
 
 impl Options {
@@ -127,6 +132,7 @@ impl Options {
             isel,
             libcalls: Vec::new(),
             wasm_exceptions: false,
+            end_biased_trial: false,
         }
     }
 
@@ -366,19 +372,25 @@ pub fn compiled_module(
         None => return Err(format!("the module states no datalayout; {}'s is `{layout}`", options.arch.name())),
     }
     let cpu = options.cpu()?;
+    let unbuilt = options.end_biased_trial.then(|| module.clone());
     let mut program = Program::new(vec![module], cpu.target_under(&*options.arch, options.abi.as_deref()))?;
     if llrm_support::debug::verifying() {
         timed("mir verify frontend", || verified(&program, "the frontend"))?;
     }
     optimized(&mut program, options)?;
+    let other = match unbuilt {
+        Some(module) => end_biased_off(module, &program.modules[0], &cpu, options)?,
+        None => None,
+    };
     let segments = Segments::of(
         &options.machine,
         Regs(options.arch.registers()),
         crate::backend::target::offset_bytes(&*options.arch),
     );
     let assembled = timed("assemble", || {
-        assemble::assembled_by(
+        assemble::assembled_with(
             &program.modules[0],
+            other.as_ref().map(|one| &one.modules[0]),
             &crate::abi::llvm::LlvmAbi {
                 stack_check: if options.stack_check { Some(runtime_stack_check(&*options.arch)?) } else { None },
             },
@@ -399,6 +411,42 @@ pub fn compiled_module(
     }
     stage_files(options, "", &assembled)?;
     Ok(assembled)
+}
+
+/// The module `unbuilt` (as it was before the pipeline) through the pipeline
+/// again with `llrm-no-end-biased` on the functions `built` marks
+/// `llrm-end-biased`; none where it marks none, or where the two come out with
+/// other globals (the choice between a function's two forms shares the
+/// globals' numbers).
+fn end_biased_off(
+    mut unbuilt: Module,
+    built: &Module,
+    cpu: &Profile,
+    options: &Options,
+) -> Result<Option<Program>, String> {
+    let fired = |function: &llrm_mir::function::Function| {
+        llrm_mir::memory::has(&function.attrs, llrm_transforms::lsr_pass::END_BIASED_FIRED)
+    };
+    let flagged: std::collections::HashSet<&str> = built
+        .globals
+        .iter()
+        .filter(|global| global.function().is_some_and(fired))
+        .filter_map(|global| global.name.as_deref())
+        .collect();
+    if flagged.is_empty() {
+        return Ok(None);
+    }
+    for global in &mut unbuilt.globals {
+        if let (Some(name), Some(function)) = (global.name.as_deref(), global.function_mut()) {
+            if flagged.contains(name) {
+                function.attrs.push(llrm_mir::opcode::Attribute::Flag(llrm_transforms::lsr_pass::NO_END_BIASED.to_owned()));
+            }
+        }
+    }
+    let mut program = Program::new(vec![unbuilt], cpu.target_under(&*options.arch, options.abi.as_deref()))?;
+    optimized(&mut program, options)?;
+    let names = |module: &Module| module.globals.iter().map(|global| global.name.clone()).collect::<Vec<_>>();
+    Ok((names(&program.modules[0]) == names(built)).then_some(program))
 }
 
 /// What the spill model (`llrm_transforms::spill`) forecasts for each function
