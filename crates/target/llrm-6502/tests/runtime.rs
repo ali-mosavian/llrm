@@ -584,6 +584,28 @@ fn a_long_modulo_by_a_17_bit_divisor_does_not_walk_32_trips() {
     assert!(with - without < 1800, "{} clocks", with - without);
 }
 
+/// `x % 100003` on dividends like loop_interchange's checksum (below 31 *
+/// 100003 + 65535) cost 931 clocks a call against llvm-mos's 769: the
+/// remainder was built beside a quotient nothing reads (four `rol` a trip) and
+/// copied back. The speed remainder keeps the dividend in place and builds no
+/// quotient. Seven calls took 6065 clocks before, 4639 now.
+#[test]
+fn a_long_modulo_builds_no_quotient_and_copies_no_remainder() {
+    let load = |at: &str, v: u32| {
+        (0..4).map(|k| format!("  lda #{}\n  sta {at}+{k}\n", (v >> (8 * k)) & 255)).collect::<String>()
+    };
+    let dividends = [3_100_000u32, 1_550_001, 700_000, 250_000, 100_003, 100_002, 4_000_000_000];
+    let mut total = 0;
+    for a in dividends {
+        let setup = format!("{}{}", load("__sa", a), load("__sb", 100_003));
+        let name = format!("mod-q-{a}");
+        let with = common::cycles_with(&format!("{name}-with"), &format!("{setup}  jsr __umodsi3_fast\n"), "");
+        total += with - common::cycles_with(&format!("{name}-none"), &setup, "");
+        assert_eq!(long(&name, "__umodsi3_fast", a, 100_003), a % 100_003, "{a} % 100003");
+    }
+    assert!(total < 5200, "{total} clocks for {} calls", dividends.len());
+}
+
 /// `(x * 3 + p) % 1000003` ran 8 trips of the bit loop for a 22-bit dividend
 /// and a 20-bit divisor whatever the quotient (1189 clocks a call, 2.2x
 /// llvm-mos's loop around it): it started from whole bytes. The pin's
@@ -649,7 +671,8 @@ fn the_small_speed_division_links_no_wide_path_and_divides_like_the_hot_one() {
         let text = common::pipeline::reachable_runtime(&format!("  jsr {routine}\n"));
         assert!(text.contains("udivmod32_fast_small:") && !text.contains("udivmod32_wide:"), "{routine}: {text}");
         let hot_text = common::pipeline::reachable_runtime(&format!("  jsr {hot}\n"));
-        assert!(hot_text.contains("udivmod32_wide:") && !hot_text.contains("_small"), "{hot}: {hot_text}");
+        let wide = if routine.contains("mod") { "umod32_wide:" } else { "udivmod32_wide:" };
+        assert!(hot_text.contains(wide) && !hot_text.contains("_small"), "{hot}: {hot_text}");
         for (a, b) in cases {
             let name = format!("{routine}-{a}-{b}");
             assert_eq!(long(&name, routine, a, b), long(&format!("h{name}"), hot, a, b), "{routine} {a} {b}");

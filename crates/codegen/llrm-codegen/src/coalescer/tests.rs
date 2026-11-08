@@ -1160,17 +1160,14 @@ fn test_a_target_can_leave_every_copy_between_widths_unjoined() {
     assert_eq!(result, JoinResult::Rejected);
 }
 
-/// With the joins between widths off, the driver sees no copy between widths:
-/// before, such a copy sat in the work lists and the terminal rule counted
-/// it, which moved a register choice in m68k's phi_slot_unknown_arm (-O1)
-/// though no join differed.
+/// The driver sees a copy between widths whatever the target says (#7968): `join_copy` decides, so a
+/// narrow copy that lies inside its wide value joins even with the joins between widths off.
 #[test]
-fn test_with_the_joins_between_widths_off_the_driver_sees_no_such_copy() {
+fn test_with_the_joins_between_widths_off_the_driver_still_sees_the_copy() {
     let (narrow, same) = (copy_at((2, 2), (1, 4)), copy_at((3, 4), (1, 4)));
-    let pick = super::driver::pick_of(&NoSubRegisterJoins);
-    assert!(pick(&narrow).is_none() && pick(&same).is_some());
-    let pick = super::driver::pick_of(&SubRegisters);
-    assert!(pick(&narrow).is_some() && pick(&same).is_some());
+    for pick in [super::driver::pick_of(&NoSubRegisterJoins), super::driver::pick_of(&SubRegisters)] {
+        assert!(pick(&narrow).is_some() && pick(&same).is_some());
+    }
 }
 
 /// `v1:4 := def; v2:2 := mov v1:4; read v2:2`, the truncating copy of a

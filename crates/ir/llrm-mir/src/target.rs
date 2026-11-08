@@ -471,6 +471,13 @@ pub trait Machine {
         false
     }
 
+    /// `isOperationLegal(ISD::SHL, pointer)`: whether a shift of a pointer-wide value by a variable
+    /// count is an instruction, not a call or a loop. False: a switch builds no bit tests
+    /// (`1 << x` and a mask).
+    fn variable_shift_legal(&self) -> bool {
+        true
+    }
+
     /// The target's tuning limits: the pin's values, with this target's
     /// overrides. A target with no entry here takes `Tuning::PIN`.
     fn tuning(&self) -> Tuning {
