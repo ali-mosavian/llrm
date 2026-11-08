@@ -9,7 +9,7 @@ Answer source: **P** the pin (AArch64 .td / InstrInfo / FrameLowering), **E** ex
 |---|---|---|
 | `name`, `machine`, `layout`, `cpus`, `default_cpu` | "arm64"; Darwin/Linux `Platform`; its datalayout; the `tti.rs` cpus | E |
 | `registers`, `registers_text`, `register_named`, `stack_pointer`, `frame_register`, `register_capacity` | `REGISTER_INFO`, `registers.regs`; sp, x29; allocatable gprs | E |
-| `debug_target`, `objects`, `object` | dwarf column of `registers.regs`; Mach-O/ELF writers behind `DebugObjectTarget`; `ObjectFormat` | E (adapter) |
+| `debug_target`, `objects` | dwarf column of `registers.regs`; Mach-O/ELF writers behind `DebugObjectTarget` | E (adapter) |
 | `stack_slot_bytes`, `results`, `callee_saved`, `convention_results`, `convention_callee_saved`, `conventions`, `calling` | 8; x0/x1, v0..; x19-x28 and d8-d15 (low 64); AAPCS64 and Darwin from a new `calling.toml` | E `cc.rs`, N |
 | `register_op_bytes`, `shift_op_bytes`, `multiply_immediate_bytes` | 4 each: fixed-width A64 | P |
 | `forms_text`, `dialect` | new `arm64.instr` (names as in `lir_body`, kinds, fixed regs, flags) and `dialect.toml` (N Z C V; `{cc}` eq..nv). The dialect is data (`instr.rs:10`), so no `llrm-target` edit | N |
