@@ -261,6 +261,16 @@ fn temp_operand_once(asm: &mut Asm) -> bool {
     false
 }
 
+/// A spill slot's name (`s_<function>_<n>`): a cell nothing else names, writes
+/// through a pointer or reaches by another spelling (`buf+2+1` and `buf+3` are
+/// the same byte).
+fn spill_slot(name: &str) -> bool {
+    name.strip_prefix("s_")
+        .and_then(|rest| rest.rsplit_once('_'))
+        .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        && !name.contains(['+', '-', '(', ' '])
+}
+
 pub fn fold_spill_copy(asm: &mut Asm) {
     let mut at = 0;
     while at + 1 < asm.lines.len() {
@@ -288,7 +298,7 @@ fn spill_copy_once(
     };
     let (Operand::Direct(s), Operand::Direct(t)) = (&load.operand, &store.operand) else { return false };
     let Some(n) = cell_number(t) else { return false };
-    if s == t || !caller_saved(n) {
+    if s == t || !caller_saved(n) || !(cell_number(s).is_some() || spill_slot(s)) {
         return false;
     }
     let lines = &asm.lines;
