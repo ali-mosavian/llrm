@@ -9,7 +9,7 @@ use llrm_mir::program::Program;
 use llrm_mir::target::Machine;
 use llrm_transforms::pipeline::{Applied, Options as MidEnd};
 
-use crate::compile::{CodeModel, Options, text_with};
+use crate::compile::{CodeModel, Item, Options, items_with};
 use crate::dagisel::hooks::Cpu;
 use crate::machine::M68kMachine;
 
@@ -254,6 +254,44 @@ pub fn assembly_in(
     assembly_flagged(text, cpu, level, debug, dump, model, &Policy::default())
 }
 
+/// The items of each function `module` defines, in order. Calls of the
+/// module's own functions are pc-relative when all its code fits in
+/// [`crate::pccall::REACH`], else absolute.
+fn function_items(
+    module: &Module,
+    cpu: Cpu,
+    backend: Options,
+) -> Result<Vec<(String, Vec<Item>)>, String> {
+    let mut names = Vec::new();
+    for (_, global, function) in module.functions() {
+        if !function.is_declaration() {
+            names.push(global.name.owned().ok_or("an unnamed function")?);
+        }
+    }
+    let compile = |pc_calls: bool| -> Result<Vec<(String, Vec<Item>)>, String> {
+        names
+            .iter()
+            .map(|name| {
+                items_with(module, name, cpu, Options { pc_calls, ..backend })
+                    .map(|items| (name.clone(), items))
+                    .map_err(|why| format!("@{name}: {why}"))
+            })
+            .collect()
+    };
+    let near = compile(true)?;
+    let calls = near.iter().flat_map(|(_, items)| items).any(|item| matches!(item, Item::Inst(inst) if inst.opcode == "CALLq"));
+    let bytes: usize = near
+        .iter()
+        .flat_map(|(_, items)| items)
+        .map(|item| match item {
+            Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
+            Item::Bytes(bytes) => bytes.len(),
+            _ => 0,
+        })
+        .sum();
+    if calls && bytes > crate::pccall::REACH { compile(false) } else { Ok(near) }
+}
+
 /// [`assembly_in`] with the mid-end flags in `policy`.
 pub fn assembly_flagged(
     text: &str,
@@ -275,17 +313,14 @@ pub fn assembly_flagged(
         ..Options::default()
     };
     let mut out = String::new();
-    for (_, global, function) in module.functions() {
-        if function.is_declaration() {
-            continue;
-        }
-        let name = global.name.owned().ok_or("an unnamed function")?;
+    for (name, items) in function_items(module, cpu, backend)? {
+        let global = module.global(module.named(&name).ok_or("a function with no global")?);
         match llrm_mir::image::Export::of(global.linkage) {
             llrm_mir::image::Export::Public => out.push_str(&format!("\t.globl\t{name}\n")),
             llrm_mir::image::Export::Weak => out.push_str(&format!("\t.weak\t{name}\n")),
             llrm_mir::image::Export::Local => {}
         }
-        out.push_str(&text_with(module, &name, cpu, backend).map_err(|why| format!("@{name}: {why}"))?);
+        out.push_str(&crate::compile::printed(items, backend.debug).map_err(|why| format!("@{name}: {why}"))?);
     }
     let layout =
         llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
@@ -342,16 +377,10 @@ pub fn object_flagged(
     };
     let mut items = Vec::new();
     let mut exports = llrm_support::hash::HashMap::default();
-    for (_, global, function) in module.functions() {
-        if function.is_declaration() {
-            continue;
-        }
-        let function_name = global.name.owned().ok_or("an unnamed function")?;
-        exports.insert(function_name.clone(), llrm_mir::image::Export::of(global.linkage));
-        items.extend(
-            crate::compile::items_with(&module, &function_name, cpu, backend)
-                .map_err(|why| format!("@{function_name}: {why}"))?,
-        );
+    for (function_name, one) in function_items(&module, cpu, backend)? {
+        let global = module.global(module.named(&function_name).ok_or("a function with no global")?);
+        exports.insert(function_name, llrm_mir::image::Export::of(global.linkage));
+        items.extend(one);
     }
     let layout =
         llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
