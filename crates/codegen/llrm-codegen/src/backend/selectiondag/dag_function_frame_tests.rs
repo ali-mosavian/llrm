@@ -1787,3 +1787,27 @@ define i1 @f(i32 %x) {
     let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
     assert!(named("not") == 1 && named("test") == 1 && named("cmp") == 0, "not {} test {} cmp {}", named("not"), named("test"), named("cmp"));
 }
+
+/// `(x & y) == 0` on registers selected `and; test` (the `and` a register of
+/// its own): the sfm16_float `__mulsf3` entry guard read `and dh, dl; je`
+/// where the pin's `PostprocessISelDAG` makes it `test dl, dh; je`.
+#[test]
+fn at_m32_a_test_of_an_and_of_registers_is_one_test() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i1 @f(i8 %x, i8 %y) {
+  %p = add i8 %x, 1
+  %q = add i8 %y, 2
+  %a = and i8 %p, %q
+  %c = icmp eq i8 %a, 0
+  ret i1 %c
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(named("test") == 1 && named("and") == 0, "test {} and {}", named("test"), named("and"));
+}

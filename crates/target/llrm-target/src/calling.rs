@@ -159,6 +159,10 @@ pub struct Convention {
     /// return with the late path (the exit then jumps over the epilogue). Left
     /// false where that jump outgrows its short form (QCport m16 -Os +9 B).
     pub frame_wrap_split_size: bool,
+    /// The locals' base takes the widest object's alignment and the call
+    /// alignment is met by a pad, as the pin's 64-bit `X86FrameLowering` lays
+    /// a frame out (`calculateFrameObjectOffsets`).
+    pub frame_object_aligned: bool,
     /// Bytes below the stack pointer the ABI keeps safe from signal handlers
     /// (the System V red zone): a leaf function's locals live there, with
     /// no `sub`.
@@ -195,6 +199,13 @@ pub struct Convention {
     /// For an interrupt handler: what its frame pointer addresses, lowest
     /// address first, each slot's register and bytes. Empty for the rest.
     pub interrupt_frame: Vec<(String, i64)>,
+    /// For an interrupt handler: the registers its entry pushes after the
+    /// general ones, in push order (the frame holds them in reverse).
+    pub interrupt_saves: Vec<String>,
+    /// For an interrupt handler: the registers its entry loads with the data
+    /// group's selector, the first from the group, each next from the one
+    /// before.
+    pub interrupt_data: Vec<String>,
 }
 
 /// A target's description of its conventions, by its address: one per target,
@@ -282,6 +293,7 @@ const KEYS: &[&str] = &[
     "frame_saved_first",
     "frame_enter",
     "frame_wrap_split_size",
+    "frame_object_aligned",
     "frame_red_zone",
     "frame_slot_push",
     "frame_slot_pop",
@@ -302,6 +314,8 @@ const KEYS: &[&str] = &[
     "va_list",
     "like",
     "interrupt_frame",
+    "interrupt_saves",
+    "interrupt_data",
 ];
 
 impl Calling {
@@ -763,6 +777,7 @@ impl Convention {
             frame_saved_first: flag("frame_saved_first")?,
             frame_enter: flag("frame_enter")?,
             frame_wrap_split_size: flag("frame_wrap_split_size")?,
+            frame_object_aligned: flag("frame_object_aligned")?,
             frame_red_zone: table
                 .contains_key("frame_red_zone")
                 .then(|| integer("frame_red_zone"))
@@ -786,6 +801,14 @@ impl Convention {
                 .then(|| text("variadic_vector_register"))
                 .transpose()?,
             va_list: table.contains_key("va_list").then(|| text("va_list")).transpose()?,
+            interrupt_saves: match table.get("interrupt_saves") {
+                Some(_) => names(table.get("interrupt_saves"), "interrupt_saves")?,
+                None => Vec::new(),
+            },
+            interrupt_data: match table.get("interrupt_data") {
+                Some(_) => names(table.get("interrupt_data"), "interrupt_data")?,
+                None => Vec::new(),
+            },
             interrupt_frame: match table.get("interrupt_frame") {
                 None => Vec::new(),
                 Some(rows) => rows

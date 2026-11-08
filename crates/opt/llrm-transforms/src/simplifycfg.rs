@@ -1235,7 +1235,7 @@ fn insts_folded_to_unreachable(
     let stops = |inst: InstId| {
         let Opcode::Call(info) = &function.instruction(inst).opcode else { return false };
         info.tail != Tail::MustTail
-            && (Facts::of(&info.attrs).contains(Fact::NoReturn)
+            && (Facts::states(&info.attrs, Fact::NoReturn)
                 || llrm_mir::memory::callee(context, function, inst)
                     .and_then(|target| callees.get(&target))
                     .is_some_and(|summary| summary.no_return))

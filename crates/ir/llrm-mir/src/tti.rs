@@ -555,6 +555,27 @@ pub trait Tti {
         0
     }
 
+    /// Whether a speed caller's inline that gives a loop of the callee a constant
+    /// trip count is exempt from the byte rate (gcc's `INLINE_HINT_loop_iterations`:
+    /// the copy unrolls and folds, which the call's latency does not show).
+    fn inline_hints_known_loop_bound(&self) -> bool {
+        false
+    }
+
+    /// Whether a priced inline trial keeps a copy that leaves the module no
+    /// larger and saves clocks though no callee goes with it. False: the
+    /// callee's credit decides (arm64 -O3 jpeg `decode`: 5,828 -> 7,324 B and
+    /// +1.2M instructions when the copies were kept).
+    fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        false
+    }
+
+    /// Whether `speed_inline_milliclocks_per_byte` also binds at -O1. False:
+    /// -O1 prices no byte in clocks and keeps the pin's threshold alone.
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        true
+    }
+
     /// Whether one wider store of constants may start off its own size
     /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
     /// at a multiple of its size.
@@ -715,6 +736,17 @@ pub trait Tti {
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
         0
+    }
+
+    /// Whether a full unroll is credited a `move` for each read, in the loops
+    /// inside it, of a value its copies make constant: true where an immediate
+    /// operand saves a register copy (two-address or stack machines). False
+    /// where it saves nothing (3-address arm64: `cmp x, #n` = `cmp x, y`).
+    /// Credited, a nested read counts a run of the inner loop's assumed trips
+    /// (shellsort -O3 at 20 clocks a byte: 12,491 clocks "saved", 6,177 ->
+    /// 7,090 instructions run, 164 -> 560 B).
+    fn unroll_credits_immediate_operands(&self) -> bool {
+        true
     }
 
     /// DEVIATE UP1: what a code byte a full unroll adds is worth in
@@ -1558,6 +1590,15 @@ pub trait Tti {
     /// the pin promotes without a cap.
     fn licm_register_limit(&self) -> Option<u32> {
         Some(self.number_of_gpr_registers())
+    }
+
+    /// DEVIATE IND-MASK (beyond the pin; exit 2026-11-30): whether `indvars`
+    /// also widens a counter of an illegal narrow width whose chain is
+    /// masked by a constant and then extended (`(i*5+3)&1023` indexing a
+    /// table, `short i`). The pin sees only an extension of the counter's own
+    /// recurrence, so the chain stays narrow and `LSR` skips it.
+    fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
+        false
     }
 
     /// DEVIATE LSR-N: integer widths LSR takes as native induction variables

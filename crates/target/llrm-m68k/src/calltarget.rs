@@ -47,7 +47,7 @@ pub fn repeated(function: &MFunction) -> Vec<String> {
     let mut count: HashMap<&str, usize> = HashMap::new();
     let mut order: Vec<&str> = Vec::new();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
-        if let (Kind::Op("CALLb"), Some(Operand::Symbol(name, 0))) = (inst.kind, inst.operands.first()) {
+        if let (Kind::Op("CALLb" | "CALLq"), Some(Operand::Symbol(name, 0))) = (inst.kind, inst.operands.first()) {
             let seen = count.entry(name).or_insert(0);
             if *seen == 0 {
                 order.push(name);
@@ -99,7 +99,9 @@ pub fn through_registers(
         loads.push(op_inst("LEA32b", desc, vec![Operand::Def(Reg::Phys(*register)), Operand::Symbol(name.clone(), 0)]));
     }
     for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
-        let (Kind::Op("CALLb"), Some(Operand::Symbol(name, 0))) = (inst.kind, inst.operands.first()) else { continue };
+        let (Kind::Op("CALLb" | "CALLq"), Some(Operand::Symbol(name, 0))) = (inst.kind, inst.operands.first()) else {
+            continue;
+        };
         let Some((_, register)) = targets.iter().find(|(target, _)| target == name) else { continue };
         inst.kind = Kind::Op("CALLj");
         inst.operands[0] = Operand::Use(Reg::Phys(*register));
@@ -145,27 +147,46 @@ pub fn choose(
     }
     // a price the tables cannot give keeps the calls as they are
     let Some(mut best) = lines(function).and_then(|lines| price_of(&lines, cpu)).ok() else { return Ok(chosen) };
+    // A callee that does not pay alone may pay with the ones tried before it:
+    // the register's save and restore is paid once for them all.
+    let mut pending: Vec<String> = Vec::new();
     for name in candidates {
-        let Some(&register) = free.first() else { break };
-        let mut trial = function.clone();
-        let mut targets = chosen.clone();
-        targets.push((name, register));
-        through_registers(&mut trial, &targets)?;
-        let Ok(expanded) = lines(&trial) else { continue };
-        // a frame that made `%a6` its pointer leaves it no call target
-        if expanded.iter().any(|line| {
-            matches!(
-                line,
-                Line::Inst(inst) if inst.opcode == "LINK16" || inst.opcode == "UNLK"
-            )
-        }) {
-            continue;
+        let mut taken = None;
+        let with_pending: Vec<String> = pending.iter().cloned().chain(std::iter::once(name.clone())).collect();
+        for set in [vec![name.clone()], with_pending] {
+            if set.len() > free.len() || (set.len() > 1 && pending.is_empty()) {
+                continue;
+            }
+            let mut targets = chosen.clone();
+            targets.extend(set.iter().cloned().zip(free.iter().copied()));
+            let mut trial = function.clone();
+            through_registers(&mut trial, &targets)?;
+            let Ok(expanded) = lines(&trial) else { continue };
+            // a frame that made `%a6` its pointer leaves it no call target
+            if expanded.iter().any(|line| {
+                matches!(
+                    line,
+                    Line::Inst(inst) if inst.opcode == "LINK16" || inst.opcode == "UNLK"
+                )
+            }) {
+                continue;
+            }
+            let Some(cost) = price_of(&expanded, cpu).ok() else { continue };
+            if price.beats(cpu, cost, best) {
+                best = cost;
+                taken = Some((targets, set.len()));
+                break;
+            }
         }
-        let Some(cost) = price_of(&expanded, cpu).ok() else { continue };
-        if price.beats(cpu, cost, best) {
-            best = cost;
-            chosen = targets;
-            free.remove(0);
+        match taken {
+            Some((targets, used)) => {
+                free.drain(..used);
+                chosen = targets;
+                if used > 1 {
+                    pending.clear();
+                }
+            }
+            None => pending.push(name),
         }
     }
     Ok(chosen)

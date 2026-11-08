@@ -24,7 +24,7 @@
 2 crates/codegen/llrm-codegen/src/backend/bodyfacts.rs
 1 crates/codegen/llrm-codegen/src/backend/callregs.rs
 2 crates/codegen/llrm-codegen/src/backend/cfi.rs
-25 crates/codegen/llrm-codegen/src/backend/classes.rs
+1 crates/codegen/llrm-codegen/src/backend/classes.rs
 1 crates/codegen/llrm-codegen/src/backend/cmovconversion.rs
 1 crates/codegen/llrm-codegen/src/backend/cpu.rs
 2 crates/codegen/llrm-codegen/src/backend/debuginfo.rs
@@ -42,7 +42,6 @@
 6 crates/codegen/llrm-codegen/src/backend/machinecp.rs
 1 crates/codegen/llrm-codegen/src/backend/machinelicm.rs
 1 crates/codegen/llrm-codegen/src/backend/maskbyand.rs
-17 crates/codegen/llrm-codegen/src/backend/masm.rs
 1 crates/codegen/llrm-codegen/src/backend/memcpycall.rs
 21 crates/codegen/llrm-codegen/src/backend/mirprint.rs
 7 crates/codegen/llrm-codegen/src/backend/peep/guards.rs
@@ -60,7 +59,6 @@
 2 crates/codegen/llrm-codegen/src/backend/selectiondag/div_combine.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dump.rs
 58 crates/codegen/llrm-codegen/src/backend/selectiondag/emit.rs
-50 crates/codegen/llrm-codegen/src/backend/selectiondag/fastisel.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/opcodes.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/schedule.rs
 3 crates/codegen/llrm-codegen/src/backend/selectiondag/x86_lowering.rs
@@ -77,8 +75,6 @@
 3 crates/driver/llrm-bcdriver/src/lib.rs
 2 crates/driver/llrm-cc/src/inline_asm.rs
 6 crates/driver/llrm-cc/src/lib.rs
-3 crates/frontends/llrm-c/src/compile.rs
-6 crates/frontends/llrm-c/src/translate.rs
 1 crates/frontends/nib/src/declarations.rs
 1 crates/frontends/nib/src/library.rs
 4 crates/frontends/nib/src/semantic/assembly.rs

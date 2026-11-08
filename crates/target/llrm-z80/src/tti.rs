@@ -336,6 +336,31 @@ impl Tti for Z80Tti {
         if llrm_mir::tti::is_free_intrinsic(name) { Cost::FREE } else { llrm_mir::tti::base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
     }
 
+    /// A byte of growth is worth 3 T at -O2 and -O3, the rate the program table is judged at: an inline that costs
+    /// more bytes than its call saves clocks is refused (a callee that stays and is copied into its one caller).
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        3000
+    }
+
+    /// A loop whose bound the call's constants fix unrolls and folds in the copy, which the call's latency does not
+    /// show (loop_fusion -O3 39,020 T became 299,430 T without it).
+    /// DEVIATE Z80-RATE (owner z80, exit 2026-11-21): the rate sees the call's latency and no other gain of a copy.
+    /// Two cells stay net worse at 1 B = 3 T: loop_fusion -O2 (`clear` kept as 11 calls, +40,010 T for -869 B; the
+    /// copies would meet the overwriting loops) and memmove_overlap -O3 (`fill` kept, +718 T for -100 B; the estimate
+    /// saves 57 clocks, the copies fold more).
+    fn inline_hints_known_loop_bound(&self) -> bool {
+        true
+    }
+
+    fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        true
+    }
+
+    /// -O1 is strict on bytes and clocks: the pin's threshold alone, no rate.
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        false
+    }
+
     /// SZ1, rule 1: a size build keeps a callee bigger than its call. The pin's
     /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
     /// call is 3.

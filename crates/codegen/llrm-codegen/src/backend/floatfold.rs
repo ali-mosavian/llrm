@@ -311,6 +311,41 @@ fn fold_constants(
                 continue;
             };
             let cell_is_left = left.value == value;
+            // The memory form reads and writes `st(0)`: the other operand must
+            // be the float the block defined last, or an exchange (or the
+            // constant loaded again) follows, which ties in clocks and costs
+            // bytes (x_nbody_f -O3 m32: +378 clocks, a nest laid out again;
+            // x_ld_axpy -O2: `fld [K]` for `fld1`).
+            let other = if cell_is_left { right.value } else { left.value };
+            // Only a value still read at or after the reader is on the stack:
+            // one a `fistp` or a popping operation consumed is gone (x_ldconv
+            // -O2: the folds counted as exchanges lost 3,999 clocks).
+            let newest = insns[..reader]
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(
+                    |(index, earlier)| {
+                        if index == at {
+                            return None;
+                        }
+                        let what = earlier.what.as_ref()?;
+                        what.dests.iter().find_map(|dest| match dest {
+                            Loc::Held(held) if held.width == 10 && earlier.defines.contains(&held.value) => {
+                                let read_between = insns[index + 1..reader]
+                                    .iter()
+                                    .filter(|between| between.uses.contains(&held.value))
+                                    .count();
+                                (uses.get(&held.value).copied().unwrap_or(0) > read_between).then_some(held.value)
+                            }
+                            _ => None,
+                        })
+                    },
+                );
+            if newest != Some(other) {
+                at += 1;
+                continue;
+            }
             let bytes = constpool::narrowest(if one_value { 1.0 } else { 0.0 });
             let Some((_, saved)) = memory_form_of(&name, cell_is_left, false, bytes.len() as u32, cpu) else {
                 at += 1;
@@ -952,45 +987,50 @@ mod tests {
     fn test_a_constant_one_instruction_reads_is_its_memory_operand_at_speed() {
         let cpu = crate::backend::cpu::profile("486").expect("a profile");
         let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
             insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
             arith(2, "fadd", 3, 1, 2),
             fstp(3, 3, global(0, 0)),
         ]);
-        assert_eq!(names(&constants_folded(&body, cpu)), ["fadd+m", "fstp"]);
-        assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fadd", "fstp"], "no pool: unchanged");
+        assert_eq!(names(&constants_folded(&body, cpu)), ["fld", "fadd+m", "fstp"]);
+        assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fadd+m", "fstp"], "no pool: only the load folds");
     }
 
-    /// The fold is the table's call, not a constant: on every CPU the target
-    /// knows it is made exactly where the clocks `x87_load + x87_add -
-    /// x87_add_m` save, at the CPU's exchange rate, outweigh the extra bytes of
-    /// the memory form.
+    /// x_nbody_f -O3 m32 and x_ld_axpy -O2: the other operand is not the last
+    /// float defined, so `fadd [K]` needs an exchange (or the constant loaded
+    /// again): a tie in clocks and 4 bytes more, and in x_nbody_f a nest laid
+    /// out again (+378 clocks). The constant stays `fld1`.
     #[test]
-    fn test_a_constant_is_folded_exactly_where_the_cpu_table_prices_it_so() {
+    fn test_a_constant_stays_loaded_where_its_memory_form_would_need_an_exchange() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
         let body = one_block(vec![
-            insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
-            arith(2, "fadd", 3, 1, 2),
-            fstp(3, 3, global(0, 0)),
+            fld(0, 1, global(0, 0)),
+            fld(1, 4, global(8, 0)),
+            insn(2, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(3, "fadd", 3, 1, 2),
+            fstp(4, 3, global(0, 0)),
+            fstp(5, 4, global(8, 0)),
         ]);
-        let mut folded_on = Vec::new();
-        for name in ["386", "486", "P5", "K5", "K6", "K7"] {
-            let cpu = crate::backend::cpu::profile(name).expect("a profile");
-            let price = |key: &str| cpu.cost(key).expect("a priced operation");
-            let saved = price("x87_load") + price("x87_add") - price("x87_add_m");
-            let probe = Mem { disp_width: 2, ..Mem::new(Some(Addr { index: 0, ..Addr::new(Space::Segment, 0) }), 4) };
-            let gained = 2 + REGISTER_FORM - _memory_operation_bytes(&probe, body.bits);
-            let rate = cpu.speed_milliclocks_per_byte();
-            let expected = if rate == 0 { saved > 0 && gained >= 0 } else { saved * 1000 + gained * rate > 0 };
-            let done = names(&constants_folded(&body, cpu));
-            assert_eq!(
-                done == ["fadd+m", "fstp"],
-                expected,
-                "{name}: saved {saved} clocks, {gained} bytes, rate {rate}"
-            );
-            if expected {
-                folded_on.push(name);
-            }
-        }
-        assert!(folded_on.contains(&"486"), "{folded_on:?}");
+        let done = names(&constants_folded(&body, cpu));
+        assert!(done.contains(&"fld1".to_owned()), "{done:?}");
+    }
+
+    /// x_ldconv -O2 m32: a float defined after the other operand but already
+    /// consumed (stored) is not on the stack, so the operand is the top and the
+    /// memory form needs no exchange.
+    #[test]
+    fn test_a_constant_folds_past_a_newer_value_already_consumed() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            fld(1, 4, global(8, 0)),
+            fstp(2, 4, global(16, 0)),
+            insn(3, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(4, "fadd", 3, 1, 2),
+            fstp(5, 3, global(0, 0)),
+        ]);
+        let done = names(&constants_folded(&body, cpu));
+        assert!(!done.contains(&"fld1".to_owned()), "{done:?}");
     }
 
     /// A constant that two instructions read stays loaded: one `fld1` serves
@@ -999,12 +1039,13 @@ mod tests {
     fn test_a_constant_read_twice_stays_loaded() {
         let cpu = crate::backend::cpu::profile("486").expect("a profile");
         let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
             insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
             arith(2, "fadd", 3, 1, 2),
             arith(3, "fmul", 4, 3, 2),
             fstp(4, 4, global(0, 0)),
         ]);
-        assert_eq!(names(&constants_folded(&body, cpu)), ["fld1", "fadd", "fmul", "fstp"]);
+        assert_eq!(names(&constants_folded(&body, cpu)), ["fld1", "fadd+m", "fmul", "fstp"]);
     }
 
     /// int_compared_with_float -Os: a volatile float read once by a compare was
