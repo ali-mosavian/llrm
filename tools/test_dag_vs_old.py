@@ -10,7 +10,10 @@ SCRIPT = Path(__file__).with_name("dag_vs_old.sh")
 def sandbox(tmp: Path, sizes_body: str) -> Path:
     (tmp / "tools").mkdir()
     (tmp / "tools/pyproject.toml").write_text('[project]\nname = "t"\nversion = "0"\n')
-    (tmp / "tools/llrmbin.py").write_text("def stale_binaries(*_):\n    return ['x']\n")
+    real = SCRIPT.with_name("llrmbin.py").read_text()
+    # The real resolver (the script asks it for the binaries); the sandbox's few files are never "older than the source".
+    stubs = "def stale_binaries(*_):\n    return []\n\n\ndef stamped(*_):\n    return None\n\n\n"
+    (tmp / "tools/llrmbin.py").write_text(real.replace('if __name__ == "__main__":', stubs + 'if __name__ == "__main__":'))
     (tmp / "tools/sizes.py").write_text(sizes_body)
     (tmp / "tools/dag_vs_old.sh").write_text(SCRIPT.read_text())
     (tmp / "tools/dag_vs_old.sh").chmod(0o755)

@@ -367,7 +367,10 @@ fn fold_constants(
                 disp_width: 2,
                 ..Mem::new(Some(Addr { index: 0, ..Addr::new(Space::Segment, 0) }), bytes.len() as u32)
             };
-            let gained = 2 + REGISTER_FORM - _memory_operation_bytes(&probe, body.bits);
+            // A constant the pool does not hold yet is a cell of its own, which
+            // the fold pays for once (the fold of a repeated constant reuses it).
+            let cell_bytes = if pool.holds(&bytes) { 0 } else { bytes.len() as i64 };
+            let gained = 2 + REGISTER_FORM - _memory_operation_bytes(&probe, body.bits) - cell_bytes;
             let rate = cpu.speed_milliclocks_per_byte();
             let pays = if rate == 0 { saved > 0 && gained >= 0 } else { saved * 1000 + gained * rate > 0 };
             if !pays {
@@ -1159,6 +1162,31 @@ mod tests {
         let adds = |done: &LirBody| names(done).iter().filter(|name| *name == "fadd+m").count();
         assert_eq!(adds(&folded(&body(true), &cpu, REGISTERS)), 3, "calls split the reads: three loads held");
         assert_eq!(adds(&folded(&body(false), &cpu, REGISTERS)), 0, "no call: one load and three register forms win");
+    }
+
+    /// A fold of `fld1` makes a pool cell the code does not show: 4 B for a
+    /// float. The 486 saves 3 clocks (`fld1; faddp` 11, `fadd [K]` 8) and
+    /// pays it; the Pentium saves 1 (1 + 3 against 3) and does not, unless
+    /// another reader already put the constant in the pool.
+    #[test]
+    fn test_a_constant_fold_pays_for_the_pool_cell_it_makes() {
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(2, "fadd", 3, 1, 2),
+            fstp(3, 3, global(0, 0)),
+        ]);
+        let run = |name: &str, held_before: bool| {
+            let cpu = crate::backend::cpu::profile(name).expect("a profile");
+            let mut pool = crate::backend::constpool::Pool::new(0);
+            if held_before {
+                pool.cell(crate::backend::constpool::narrowest(1.0));
+            }
+            names(&folded_with(&body, cpu, REGISTERS, Some(&mut pool)))
+        };
+        assert_eq!(run("486", false), ["fld", "fadd+m", "fstp"], "486: 3 clocks for 4 B");
+        assert_eq!(run("P5", false), ["fld1", "fadd+m", "fstp"], "P5: 1 clock does not pay for 4 B");
+        assert_eq!(run("P5", true), ["fld", "fadd+m", "fstp"], "P5 with the cell already there");
     }
 
     /// x_nbody_f -O3 m32 and x_ld_axpy -O2: the other operand is not the last

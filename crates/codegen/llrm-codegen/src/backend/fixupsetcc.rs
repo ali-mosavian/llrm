@@ -24,8 +24,8 @@
 //! sub-register values in LIR.
 //!
 //! DEVIATE F2 (owner x87, exit 2026-11-29): at -O1, -Os and -Oz the pair after
-//! an x87 compare stays when its result is required in the accumulator (a
-//! return value). `fnstsw ax` holds EAX, so the zero lands in another register
+//! an x87 compare stays when its result is required in the register the status
+//! word takes (`fnstsw ax`: a return value at m32). `fnstsw ax` holds EAX, so the zero lands in another register
 //! and a copy follows: `xor ecx,ecx; fcomp; fnstsw ax; sahf; seta cl; mov
 //! eax,ecx` (7 B) for `seta al; movzx eax,al` (6 B), and the register it took
 //! is clobbered for the callers of a private-convention function:
@@ -67,6 +67,8 @@ use crate::model::passes::LIRTransform;
 pub struct FixupSetCc {
     /// -O1, -Os and -Oz, which gate every metric alone (`!Profile::speed_rate`).
     pub strict: bool,
+    /// Where an x87 compare leaves the status word (`RegisterClasses::status_word`).
+    pub status_word: Option<llrm_lir::registers::RegId>,
 }
 
 impl LIRTransform for FixupSetCc {
@@ -82,7 +84,7 @@ impl LIRTransform for FixupSetCc {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(fixed_for(&body, self.strict))
+        Ok(fixed_for(&body, self.strict, self.status_word))
     }
 }
 
@@ -112,14 +114,16 @@ thread_local! {
 
 /// `body` with its `setcc`-and-`movzx` pairs made zero-then-`setcc`.
 pub fn fixed(body: &LirBody) -> LirBody {
-    fixed_for(body, false)
+    fixed_for(body, false, None)
 }
 
 /// [`fixed`], except that a `strict` build leaves the pair after an x87
-/// compare whose result is a return value: DEVIATE F2.
+/// compare whose result is required in the register the compare's status word
+/// takes (`status_word`; a return value at m32): DEVIATE F2.
 pub fn fixed_for(
     body: &LirBody,
     strict: bool,
+    status_word: Option<llrm_lir::registers::RegId>,
 ) -> LirBody {
     // Without a `setcc` into a byte there is no pair to find: the read counts
     // and the effect of each instruction are not worth computing.
@@ -164,14 +168,14 @@ pub fn fixed_for(
 
     let every_flag = crate::backend::lanes::Lanes::read_flags();
 
-    // At a strict level: the values an instruction requires in the
-    // accumulator (a return value).
-    let accumulator_bound: llrm_mir::hash::HashSet<u32> = if strict {
+    // At a strict level: the values an instruction requires in the status
+    // word's register (a return value at m32).
+    let accumulator_bound: llrm_mir::hash::HashSet<u32> = if let (true, Some(status)) = (strict, status_word) {
         body.blocks
             .iter()
             .flat_map(|block| block.insns.iter())
             .flat_map(|one| one.requires.iter())
-            .filter(|(_, register)| register.full_register32() == llrm_lir::registers::RegId::EAX)
+            .filter(|(_, register)| register.full_register32() == status.full_register32())
             .map(|(held, _)| held.value)
             .collect()
     } else {
@@ -339,11 +343,13 @@ mod tests {
                 .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
                 .collect()
         };
+        const AX: Option<llrm_lir::registers::RegId> = Some(llrm_lir::registers::RegId::AX);
         let rewritten = ["mov", "fcomp", "seta"];
-        assert_eq!(names(fixed_for(&body("fcomp", true), false)), rewritten, "-O2: the pin's form");
-        assert_eq!(names(fixed_for(&body("fcomp", true), true)), ["fcomp", "seta", "movzx"], "strict, a return: kept");
-        assert_eq!(names(fixed_for(&body("fcomp", false), true)), rewritten, "strict, not a return: the pin's form");
-        assert_eq!(names(fixed_for(&body("cmp", true), true)), ["mov", "cmp", "seta"], "an integer compare");
+        assert_eq!(names(fixed_for(&body("fcomp", true), false, AX)), rewritten, "-O2: the pin's form");
+        assert_eq!(names(fixed_for(&body("fcomp", true), true, AX)), ["fcomp", "seta", "movzx"], "strict, a return: kept");
+        assert_eq!(names(fixed_for(&body("fcomp", false), true, AX)), rewritten, "strict, not a return: the pin's form");
+        assert_eq!(names(fixed_for(&body("cmp", true), true, AX)), ["mov", "cmp", "seta"], "an integer compare");
+        assert_eq!(names(fixed_for(&body("fcomp", true), true, None)), rewritten, "a target without a status word");
     }
 
     /// Compile time: `fixed` read-counted every value and asked the effect of
