@@ -768,13 +768,38 @@ fn hoist_sub_add_association(
 fn is_safe_to_execute_unconditionally(
     unit: &passes::Unit,
     outer: &Outer,
-    _ctx: &LoopCtx,
+    ctx: &LoopCtx,
     safety: &LoopSafety,
-    _preheader: BlockId,
+    preheader: BlockId,
     inst: InstId,
 ) -> bool {
-    (safety.allow_speculation() && is_safe_to_speculatively_execute(unit, outer, inst))
-        || safety.is_guaranteed_to_execute(inst)
+    if safety.is_guaranteed_to_execute(inst) {
+        return true;
+    }
+    safety.allow_speculation()
+        && is_safe_to_speculatively_execute(unit, outer, inst)
+        && !speculation_would_hold_the_frame(unit, outer, ctx, preheader)
+}
+
+/// DEVIATE LICM-FRAME (see `Tti::licm_speculation_keeps_frame_late`): a
+/// speculated hoist into the entry block of an `optsize` function whose loop
+/// calls.
+fn speculation_would_hold_the_frame(
+    unit: &passes::Unit,
+    outer: &Outer,
+    ctx: &LoopCtx,
+    preheader: BlockId,
+) -> bool {
+    let function = &*unit.function;
+    if function.entry() != Some(preheader)
+        || !function.attrs.iter().any(|attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"))
+        || !crate::looprotate::target_tti(outer.target()).licm_speculation_keeps_frame_late()
+    {
+        return false;
+    }
+    ctx.loop_.body.iter().any(|&block| {
+        function.iter_block(cfg::block(block)).any(|inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)))
+    })
 }
 
 /// [`isSafeToSpeculativelyExecuteWithOpcode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7575).

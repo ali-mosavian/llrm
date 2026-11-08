@@ -358,6 +358,14 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE LICM-FRAME (owner w15, exit 2026-11-30): rectwo -Os (+25%
+    /// instructions against clang): `n - 1`, hoisted into the unguarded entry
+    /// because rotation was refused, lived in x19 across the recursive call and
+    /// kept the frame ahead of the base case.
+    fn licm_speculation_keeps_frame_late(&self) -> bool {
+        true
+    }
+
     /// A loop is rotated at -Os only if the copied exit test folds in the
     /// preheader (gcc's `copy_headers`): an unfolded guard also leaves a second
     /// exit block (recsum, recfloat -Os: `mov x0, xzr; ret` beside the loop's).
