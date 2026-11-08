@@ -1367,7 +1367,7 @@ fn dying_callees_bytes(
 }
 
 /// SZ2: the clocks of `function` run once, by the target's latency model.
-fn function_clocks(
+pub(crate) fn function_clocks(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
     tti: &dyn llrm_mir::tti::Tti,

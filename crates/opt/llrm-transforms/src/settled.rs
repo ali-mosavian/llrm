@@ -132,6 +132,11 @@ impl Settled {
         slice: Slice,
         reads: Footprint,
     ) -> bool {
+        // DEVIATE UNROLL-TRIAL: the unroll under a trial threshold finds what
+        // it found nothing on before, with the body and its facts as they were.
+        if pass.starts_with("unroll@") && crate::loopunrollpass::trial::active().is_some() {
+            return false;
+        }
         let now = function.mark();
         let found = self.found.borrow();
         let Some(record) = found.get(&now.lineage()).and_then(|records| records.get(pass)) else {

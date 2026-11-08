@@ -1331,6 +1331,19 @@ pub fn recorded(
         inline: applied.options.inline,
         rate: Some(if applied.options.prefers_size() { 0 } else { applied.options.limits.milliclocks_per_byte }),
     });
+    // DEVIATE UNROLL-TRIAL (owner 6502, exit 2026-12-05): the loops the unroll
+    // threshold refused, unrolled on trial where the target names a size.
+    if unroll_level(&applied.options) >= 2 {
+        let mut simplify = Fixed::linear(&walked("trial"), Phase::Simplify);
+        manager.add_program(crate::trialunroll::TrialUnroll {
+            for_size: applied.options.prefers_size(),
+            simplify: Box::new(move |module, analyses, id, stage| {
+                TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
+                rerun(module, analyses, id, &mut simplify, true).unwrap_or_else(|error| panic!("pipeline: {error}"));
+                TRIGGER.with(|trigger| trigger.borrow_mut().clear());
+            }),
+        });
+    }
     // A global no body loads from any more (the loads were forwarded) needs
     // none of its stores, as LLVM's GlobalOpt and gcc's ipa find a variable
     // only written; the dead-code pass then finds nothing names it.

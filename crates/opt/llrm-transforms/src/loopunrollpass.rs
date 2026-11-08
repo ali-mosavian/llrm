@@ -83,6 +83,7 @@ use crate::looppeel::PeelingPreferences;
 use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_blocks};
 
 mod price;
+pub mod trial;
 
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
 const UNROLL_THRESHOLD_AGGRESSIVE: u32 = 300;
@@ -1073,6 +1074,17 @@ fn should_full_unroll(
             && price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up))
         .then_some(full_unroll_trip_count);
     }
+    // DEVIATE UNROLL-TRIAL: while a trial runs, every loop under the trial
+    // size is unrolled; the function is priced whole afterwards.
+    if let Some(limit) = trial::active() {
+        if let Some(latch) = lp.get_loop_latch(run.function) {
+            trial::proved(llrm_analysis::cfg::id(latch), full_unroll_trip_count);
+        }
+        if unrolled_size < u64::from(limit) {
+            why(run, lp, "trial unroll");
+            return Some(full_unroll_trip_count);
+        }
+    }
     // DEVIATE U1: a loop of few trips is held to the target's `optsize` bar
     // (the pin's is `OptSizeThreshold`, 0 on x86).
     let few = if run.options.opt_size {
@@ -1111,6 +1123,14 @@ fn should_full_unroll(
             return price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up)
                 .then_some(full_unroll_trip_count);
         }
+    }
+    // DEVIATE UNROLL-TRIAL: noted for the trial that follows the walk.
+    if trial::active().is_none()
+        && let (Some(limit), Some(this)) = (run.tti.unroll_trial_threshold(), run.this)
+        && unrolled_size < u64::from(limit)
+        && let Some(name) = run.globals[this.0 as usize].name.as_deref()
+    {
+        trial::note(name);
     }
     None
 }

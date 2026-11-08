@@ -415,24 +415,34 @@ impl ModulePass for WriteOnly {
         let mut named = BTreeMap::new();
         for (at, global) in globals.iter_mut().enumerate() {
             let GlobalKind::Function(function) = &mut global.kind else { continue };
-            // Every use of a found global is a store's address or address
-            // arithmetic that only stores use, so the stores and the arithmetic
-            // between them and the globals all go; arithmetic left unused
-            // before goes with them.
-            let mut dead = std::collections::BTreeSet::new();
-            let reached = reach_all(context, function, &mut named);
-            for global in &found {
-                if let Some(Some(reach)) = reached.get(global) {
-                    dead.extend(reach.uses.iter().map(|&(inst, _)| inst).chain(reach.moved.iter().copied()));
-                }
-            }
-            let dead: Vec<InstId> = dead.into_iter().collect();
-            if !dead.is_empty() && function.erase_all(&dead).is_ok() {
+            if without_stores_to(context, function, &found, &mut named) {
                 changed.push(GlobalId(at as u32));
             }
         }
         changed
     }
+}
+
+/// Erases from `function` the stores to the globals `found` and the arithmetic
+/// that only reached them; whether it erased any. Every use of a found global
+/// is a store's address or address arithmetic that only stores use, so the
+/// stores and the arithmetic between them and the globals all go; arithmetic
+/// left unused before goes with them.
+pub fn without_stores_to(
+    context: &Context,
+    function: &mut Function,
+    found: &[GlobalId],
+    named: &mut BTreeMap<ConstantId, BTreeSet<GlobalId>>,
+) -> bool {
+    let mut dead = std::collections::BTreeSet::new();
+    let reached = reach_all(context, function, named);
+    for global in found {
+        if let Some(Some(reach)) = reached.get(global) {
+            dead.extend(reach.uses.iter().map(|&(inst, _)| inst).chain(reach.moved.iter().copied()));
+        }
+    }
+    let dead: Vec<InstId> = dead.into_iter().collect();
+    !dead.is_empty() && function.erase_all(&dead).is_ok()
 }
 
 /// The internal variables no body loads from, and whose every use is a

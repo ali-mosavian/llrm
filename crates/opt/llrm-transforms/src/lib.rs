@@ -426,6 +426,7 @@ pub mod uremloop;
 pub mod vncoercion;
 #[cfg(test)]
 mod vncoercion_tests;
+pub mod trialunroll;
 pub mod walk;
 pub mod widen;
 pub mod window;
