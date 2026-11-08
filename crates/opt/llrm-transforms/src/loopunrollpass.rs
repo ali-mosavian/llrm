@@ -1077,9 +1077,6 @@ fn should_full_unroll(
     // DEVIATE UNROLL-TRIAL: while a trial runs, every loop under the trial
     // size is unrolled; the function is priced whole afterwards.
     if let Some(limit) = trial::active() {
-        if let Some(latch) = lp.get_loop_latch(run.function) {
-            trial::proved(llrm_analysis::cfg::id(latch), full_unroll_trip_count);
-        }
         if unrolled_size < u64::from(limit) {
             why(run, lp, "trial unroll");
             return Some(full_unroll_trip_count);
