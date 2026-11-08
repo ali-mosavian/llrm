@@ -555,6 +555,19 @@ pub trait Tti {
         0
     }
 
+    /// Whether a speed caller's inline that gives a loop of the callee a constant
+    /// trip count is exempt from the byte rate (gcc's `INLINE_HINT_loop_iterations`:
+    /// the copy unrolls and folds, which the call's latency does not show).
+    fn inline_hints_known_loop_bound(&self) -> bool {
+        false
+    }
+
+    /// Whether `speed_inline_milliclocks_per_byte` also binds at -O1. False:
+    /// -O1 prices no byte in clocks and keeps the pin's threshold alone.
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        true
+    }
+
     /// Whether one wider store of constants may start off its own size
     /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
     /// at a multiple of its size.
