@@ -590,9 +590,13 @@ impl super::splitkit::SplitEnv for BodySplitEnv<'_> {
         to: u32,
         parent: u32,
         beside: Option<&Insn>,
+        entering: bool,
     ) -> Option<Arc<Insn>> {
         use crate::model::ir::{Held, Loc, Operation, Semantics};
         if !self.tii.remat_shape(def) || !def.uses.is_empty() {
+            return None;
+        }
+        if !self.tii.remake_at_split(def, entering) {
             return None;
         }
         let what = def.what.clone()?;
@@ -2516,7 +2520,7 @@ mod tests {
             None,
             Default::default(),
         );
-        let made = env.rematerialize(&zero, 7, 1, None).expect("the literal is made again");
+        let made = env.rematerialize(&zero, 7, 1, None, true).expect("the literal is made again");
         assert_eq!(made.defines, [7]);
         assert!(matches!(made.what.as_ref().unwrap().sources[..], [Loc::Imm(Imm { value: 0, .. })]));
         // A load still needs the register's facts (D-I): nothing says the cell
@@ -2541,7 +2545,7 @@ mod tests {
             ..Semantics::new(Operation::Move)
         };
         let load = Insn::new(0, None, Some(load), vec![1], vec![]);
-        assert!(env.rematerialize(&load, 8, 1, None).is_none());
+        assert!(env.rematerialize(&load, 8, 1, None, true).is_none());
     }
 
     /// A reload made for a stored word got its parent's order, {BX}

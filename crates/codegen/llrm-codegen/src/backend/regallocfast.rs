@@ -16,9 +16,11 @@
 //! def `definePhysReg`/`freePhysReg`. An instruction's `clobbers` are its
 //! register mask.
 //!
-//! DEVIATE R1 (no number, exit 2026-11-13): the copy hints are one level deep:
-//! `traceCopies` follows no chain of copies (the pin follows three), and a
-//! hint comes from an argument's arrival or a copy out of a pinned value.
+//! DEVIATE R1 (no number, exit 2026-11-13): the static copy hints are one level
+//! deep (an argument's arrival, a copy out of a pinned value); `traceCopies`
+//! follows no chain of copies (the pin follows three). A use copied into a
+//! value already placed takes that value's register, so a chain ending in an
+//! argument register is followed to its end.
 //!
 //! DEVIATE R2 (no number, exit 2026-11-13): a body this does not cover is left
 //! to the greedy allocator (`Fallback`): x87 or SSE values, segment registers,
@@ -666,11 +668,12 @@ impl Fast<'_> {
             self.live[slot].live_out = true;
         }
         if self.live[slot].phys.is_none() {
-            // a copy into a pinned value hints that register (`useVirtReg`)
+            // a copy into a pinned value hints that register (`useVirtReg`);
+            // a copy into a value already placed, the register it was given
             let mut hint0 = None;
             if one.what.as_ref().is_some_and(|what| what.op == ir::Operation::Move)
                 && let ([def], [_]) = (&one.defines[..], &one.uses[..])
-                && let Some(register) = self.pins.get(def)
+                && let Some(register) = self.pins.get(def).or_else(|| self.here.get(def))
             {
                 hint0 = self.index.get(&ir::root(*register)).copied();
             }
@@ -704,9 +707,7 @@ impl Fast<'_> {
             let mut made = self.instruction(one)?;
             out.append(&mut self.after);
             if made.group.is_some() {
-                let mut copy = (*made).clone();
-                copy.group = None;
-                made = Arc::new(copy);
+                Arc::make_mut(&mut made).group = None;
             }
             out.push(made);
         }
@@ -873,9 +874,8 @@ impl Fast<'_> {
         if self.here.is_empty() && physical.is_empty() && one.undefs.is_empty() {
             return Ok(Arc::clone(one));
         }
-        let mut held: IndexMap<u32, RegId> = self.here.clone();
-        held.extend(physical.iter().map(|(value, register)| (*value, *register)));
-        let placed = crate::backend::rewriter::_placed(one, &held, self.classes).map_err(|why| Fallback(why.0))?;
+        self.here.extend(physical.iter().map(|(value, register)| (*value, *register)));
+        let placed = crate::backend::rewriter::_placed(one, &self.here, self.classes).map_err(|why| Fallback(why.0))?;
         // An identity move stays as an inert anchor: its value is defined.
         if placed.group.is_none() && crate::backend::rewriter::_pointless(&placed) {
             return Ok(crate::model::lir::anchor(placed));
