@@ -583,3 +583,30 @@ fn fast_isel_materializes_a_wide_constant_with_movabs() {
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(asm.contains("20015998343868") || asm.to_uppercase().contains("123456789ABC"), "{asm}");
 }
+
+/// `while (x) x &= x - 1` loaded `x` into a register to compare it with 0 and again for the `and`'s
+/// first operand: `test rax, rax` and a separate `mov` (popcount, +5 B over the pin's llc).
+#[test]
+fn fast_isel_folds_a_load_compared_with_an_immediate_and_a_commutative_first_operand() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(long x, int y)\n{\n    int n = 0;\n    while (x) { x &= x - 1; n = y + n; }\n    return n;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        if target == "x86_64-linux" {
+            assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: {report}");
+        }
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(asm.lines().any(|line| line.trim_start().starts_with("cmp") && line.contains("ptr [") && line.trim_end().ends_with(", 0")), "{target}: {asm}");
+        assert!(!asm.lines().any(|line| line.trim_start().starts_with("test")), "{target}: {asm}");
+    }
+}

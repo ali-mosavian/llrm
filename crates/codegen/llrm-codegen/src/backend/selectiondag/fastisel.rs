@@ -161,6 +161,7 @@ pub fn build_all(
 struct Mem {
     alu: [u16; 5],
     cmp: u16,
+    cmp_mi: u16,
     imul: u16,
 }
 
@@ -246,7 +247,8 @@ impl Names {
         };
         let mem = |width: &str| {
             let one = |name: &str| opcode(&format!("{name}{width}rm"));
-            Some(Mem { alu: [one("ADD")?, one("SUB")?, one("AND")?, one("OR")?, one("XOR")?], cmp: one("CMP")?, imul: one("IMUL")? })
+            let imm = if width == "64" { "CMP64mi32" } else { "CMP32mi" };
+            Some(Mem { alu: [one("ADD")?, one("SUB")?, one("AND")?, one("OR")?, one("XOR")?], cmp: one("CMP")?, cmp_mi: opcode(imm)?, imul: one("IMUL")? })
         };
         let wide = (|| {
             let both = |one: &str| Some((opcode(&format!("{one}64rr"))?, opcode(&format!("{one}64ri32"))?));
@@ -421,9 +423,16 @@ impl Fast<'_> {
             return false;
         }
         let second = |this: &Self| user.operands.get(1) == Some(&Operand::Value(result)) && matches!(user.operands[0], Operand::Value(_)) && this.is_wide(user.operands[0]) == Some(wide);
+        // a commutative user swaps a first-operand load to the second, as the pin's `foldMemoryOperand` commutes
+        let first = |this: &Self| user.operands.first() == Some(&Operand::Value(result)) && matches!(user.operands[1], Operand::Value(_)) && this.is_wide(user.operands[1]) == Some(wide);
+        let same_width = wide_kind(&self.module.context.types, user.ty, self.m32) == Some(wide);
         match &user.opcode {
-            Opcode::Binary(Add | Sub | And | Or | Xor | Mul) => second(self) && wide_kind(&self.module.context.types, user.ty, self.m32) == Some(wide),
-            Opcode::ICmp(_) => second(self),
+            Opcode::Binary(Sub) => second(self) && same_width,
+            Opcode::Binary(Add | And | Or | Xor | Mul) => (second(self) || first(self)) && same_width,
+            Opcode::ICmp(_) => {
+                let immediate = |this: &Self| if wide { this.int_signed(user.operands[1]) } else { this.int(user.operands[1]) };
+                second(self) || (user.operands.first() == Some(&Operand::Value(result)) && immediate(self).is_some())
+            }
             Opcode::Cast(llrm_mir::opcode::CastOp::SExt) => {
                 !self.m32 && !wide && user.operands[0] == Operand::Value(result) && self.module.context.types.int_bits(user.ty) == Some(64)
             }
@@ -807,11 +816,15 @@ impl Fast<'_> {
                         self.values.insert(instruction.result?, done);
                         continue;
                     }
+                    let mut operands = [instruction.operands[0], instruction.operands[1]];
+                    if matches!(op, Add | And | Or | Xor | Mul) && self.folded.as_ref().is_some_and(|(held, _)| Operand::Value(*held) == operands[0]) {
+                        operands.swap(0, 1);
+                    }
                     if matches!(op, Mul) {
                         // the pin's `fastEmit_ri_`: a power of two is `shl r, k`, any other constant
                         // `imul r, r, imm`; a constant on the left is swapped to the right
                         let constant = |this: &Self, one| if wide { this.int_signed(one) } else { this.int(one) };
-                        let (a, b) = (instruction.operands[0], instruction.operands[1]);
+                        let (a, b) = (operands[0], operands[1]);
                         let (register, imm) = match (constant(&self, a), constant(&self, b)) {
                             (_, Some(imm)) => (a, Some(imm)),
                             (Some(imm), None) => (b, Some(imm)),
@@ -857,8 +870,8 @@ impl Fast<'_> {
                         _ => return None,
                     };
                     let (rr, ri) = alu[which];
-                    let left = self.value(instruction.operands[0])?;
-                    if let Some(mut address) = self.take_fold(instruction.operands[1]) {
+                    let left = self.value(operands[0])?;
+                    if let Some(mut address) = self.take_fold(operands[1]) {
                         let rm = if wide { self.names.wide.as_ref()?.mem.alu[which] } else { self.names.mem.alu[which] };
                         let mut ops = vec![left];
                         ops.append(&mut address);
@@ -868,12 +881,12 @@ impl Fast<'_> {
                         self.values.insert(instruction.result?, SDValue { node: done.node, res: 0 });
                         continue;
                     }
-                    let immediate = if wide { self.int_signed(instruction.operands[1]) } else { self.int(instruction.operands[1]) };
+                    let immediate = if wide { self.int_signed(operands[1]) } else { self.int(operands[1]) };
                     let done = if let Some(imm) = immediate {
                         let imm = self.dag.get_constant_with(imm as u128, vt, true, false);
                         self.node(ri, &[vt, EVT::I32], &[left, imm])
                     } else {
-                        let right = self.value(instruction.operands[1])?;
+                        let right = self.value(operands[1])?;
                         self.node(rr, &[vt, EVT::I32], &[left, right])
                     };
                     self.values.insert(instruction.result?, done);
@@ -893,12 +906,23 @@ impl Fast<'_> {
                     });
                     let wide = self.is_wide(instruction.operands[0])?;
                     let (_, _, _, _, _, cmp_rr, cmp_ri, _, vt) = self.set(wide)?;
-                    let left = self.value(instruction.operands[0])?;
                     let immediate = if wide { self.int_signed(instruction.operands[1]) } else { self.int(instruction.operands[1]) };
+                    let folded_left = if immediate.is_some() { self.take_fold(instruction.operands[0]) } else { None };
                     let compared = if let Some(imm) = immediate {
                         let imm = self.dag.get_constant_with(imm as u128, vt, true, false);
-                        self.node(cmp_ri, &[EVT::I32], &[left, imm])
+                        if let Some(mut ops) = folded_left {
+                            let rm = if wide { self.names.wide.as_ref()?.mem.cmp_mi } else { self.names.mem.cmp_mi };
+                            ops.push(imm);
+                            ops.push(self.chain);
+                            let done = self.node(rm, &[EVT::I32, EVT::OTHER], &ops);
+                            self.chain = SDValue { node: done.node, res: 1 };
+                            SDValue { node: done.node, res: 0 }
+                        } else {
+                            let left = self.value(instruction.operands[0])?;
+                            self.node(cmp_ri, &[EVT::I32], &[left, imm])
+                        }
                     } else if let Some(mut address) = self.take_fold(instruction.operands[1]) {
+                        let left = self.value(instruction.operands[0])?;
                         let rm = if wide { self.names.wide.as_ref()?.mem.cmp } else { self.names.mem.cmp };
                         let mut ops = vec![left];
                         ops.append(&mut address);
@@ -907,6 +931,7 @@ impl Fast<'_> {
                         self.chain = SDValue { node: done.node, res: 1 };
                         SDValue { node: done.node, res: 0 }
                     } else {
+                        let left = self.value(instruction.operands[0])?;
                         let right = self.value(instruction.operands[1])?;
                         self.node(cmp_rr, &[EVT::I32], &[left, right])
                     };
