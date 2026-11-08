@@ -1427,7 +1427,6 @@ fn selected_in(
                             milliclocks_per_byte: mul_rate,
                             by_clocks: true,
                             price_pin: false,
-                            no_growth: cpu.bytes_strict(),
                         })
                     } else {
                         frequencies
@@ -1441,7 +1440,6 @@ fn selected_in(
                                     milliclocks_per_byte: mul_rate,
                                     by_clocks: false,
                                     price_pin,
-                                    no_growth: false,
                                 },
                             )
                     },
