@@ -846,3 +846,28 @@ fn fast_isel_folds_a_load_that_is_the_first_operand_of_a_commutative_operation()
         }
     }
 }
+
+/// A zero was `mov eax, 0` at -O0 (5 B): the pin's `ExpandPostRAPseudos` makes `xor eax, eax` (2 B) where the
+/// flags are dead, and ours ran no such pass at -O0 (`Peephole` was left out whole): 7 `xor` in the pin's
+/// `div_constants_short` against none.
+#[test]
+fn o0_makes_a_zero_with_xor_on_both_selectors() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        for fast in ["0", "1"] {
+            let scratch = tempfile::tempdir().unwrap();
+            std::fs::write(scratch.path().join("a.c"), "int h(void)\n{\n    return 0;\n}\n").unwrap();
+            let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+                .env("LLRM_CC_TARGET", target)
+                .env("LLRM_FAST_ISEL", fast)
+                .env("LLRM_VERIFY", "1")
+                .current_dir(scratch.path())
+                .args(["-O0", "-S", "-masm=intel", "a.c", "-o", "a.s"])
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+            assert!(asm.contains("xor eax, eax"), "{target} fast={fast}: {asm}");
+            assert!(!asm.contains("mov eax, 0"), "{target} fast={fast}: {asm}");
+        }
+    }
+}
