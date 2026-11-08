@@ -358,6 +358,13 @@ impl Tti for AArch64 {
         true
     }
 
+    /// A loop is rotated at -Os only if the copied exit test folds in the
+    /// preheader (gcc's `copy_headers`): an unfolded guard also leaves a second
+    /// exit block (recsum, recfloat -Os: `mov x0, xzr; ret` beside the loop's).
+    fn rotation_guard_must_fold_at_size(&self) -> bool {
+        true
+    }
+
     /// 0.004 B/clock, provisional: one byte of growth is 250 frequency-weighted
     /// clocks. The median of the -O2/-O3 cells where inlining grew the code
     /// (w15-arm64-rate-proposal-11-03.md); widened to 30 clean cells by 11-12.
