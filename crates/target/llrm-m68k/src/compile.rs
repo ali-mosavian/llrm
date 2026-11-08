@@ -129,6 +129,9 @@ pub struct Options {
     /// A block that only returns is copied into the predecessors that go only
     /// there (`TailDuplicator`); kept when the function is cheaper for it.
     pub return_dup: bool,
+    /// A value an address register would hold across a loop it is not used in
+    /// is held in a data register (`crate::classsplit`); kept when cheaper.
+    pub class_split: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -156,6 +159,7 @@ impl Options {
         pc_calls: false,
         sext_adds: false,
         return_dup: false,
+        class_split: false,
         debug: false,
     };
 }
@@ -182,6 +186,7 @@ impl Default for Options {
             pc_calls: false,
             sext_adds: true,
             return_dup: true,
+            class_split: true,
             debug: false,
         }
     }
@@ -234,6 +239,14 @@ pub fn items_with(
             options = without;
         }
     }
+    if touched.class_split {
+        let without = Options { class_split: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
     if touched.return_dup {
         let without = Options { return_dup: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
@@ -249,11 +262,12 @@ pub fn items_with(
 struct Touched {
     sext_adds: bool,
     return_dup: bool,
+    class_split: bool,
 }
 
 impl Touched {
     fn any(self) -> bool {
-        self.sext_adds || self.return_dup
+        self.sext_adds || self.return_dup || self.class_split
     }
 }
 
@@ -303,6 +317,9 @@ fn items_once(
                 cpu,
                 crate::timing::Price::of(wants_size, options.strict),
             ) > 0;
+        }
+        if options.class_split {
+            touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;
         }
         if cpu.at_least(Cpu::M68020) {
             crate::scaledindex::scale_indexes(&mut function);
