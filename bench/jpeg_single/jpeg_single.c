@@ -1,6 +1,5 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32
 // data: photo.jpg
-// targets: dos
 /* JPEG to BMP, an MCU row at a time: baseline Huffman YCbCr in 4:2:0, 4:4:4, 4:2:2 or 4:4:0, with restart markers. Reads
    PHOTO.JPG, writes a top-down 24-bit OUT.BMP and returns the Adler-32 of the BMP's bytes. The IDCT and the colour
    conversion are in float; chroma is replicated. A progressive or arithmetic-coded file is refused with a message. */

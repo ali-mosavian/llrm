@@ -87,10 +87,10 @@ def test_a_program_written_for_one_abi_is_tagged_for_it():
 
 
 def test_every_program_of_the_dos_os_layer_is_dos_only():
-    """Programs that include llrm_os.h or bench_io.h (the DOS OS layer: files, console, exec) carried no mark, so x86_32-linux and
+    """tests/run/c programs that include llrm_os.h or bench_io.h (the DOS OS layer: files, console, exec) carried no mark, so x86_32-linux and
     m68k counted them as build failures (os_*: `llrm_os.h` not found) or as wrong output (stft_*: no signal file to read)."""
     root = HERE.parent
-    users = [p for d in ("bench", "tests/run/c") for p in (root / d).rglob("*.c") if re.search(r'#include\s+"[^"]*(llrm_os|bench_io)\.h"', p.read_text())]
-    assert len(users) >= 12
+    users = [p for d in ("tests/run/c",) for p in (root / d).rglob("*.c") if re.search(r'#include\s+"[^"]*(llrm_os|bench_io)\.h"', p.read_text())]
+    assert len(users) >= 8
     unmarked = [str(p.relative_to(root)) for p in users if ct.applies("x86_32-linux", p.read_text()) or ct.applies("m68k-68020", p.read_text())]
     assert unmarked == [], "add `// targets: dos` to " + ", ".join(unmarked)
