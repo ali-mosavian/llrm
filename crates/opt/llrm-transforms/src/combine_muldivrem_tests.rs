@@ -1139,7 +1139,7 @@ fn combined_fixed_count(text: &str) -> String {
         visit,
         false,
         &mut declared,
-        true,
+        crate::combine::TargetHooks { fixed_shift_count: true, ..Default::default() },
     );
     printed(&module)
 }

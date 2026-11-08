@@ -50,6 +50,17 @@ fn a_nest_whose_counters_only_index_memory_is_priced_not_bypassed() {
     assert!(insns < 190, "{insns} instructions");
 }
 
+/// matmul -O2: the init nest fills `a` and `b` with a computed value, and the
+/// `k` loop reads them at run-time indices. The array stays in memory, so the
+/// stores were credited as promoted for nothing, and the inner loop was
+/// unrolled alone by the nest bypass while the outer was kept rolled:
+/// 174 instructions (660 B), 292 B rolled. Fewer than 120.
+#[test]
+fn an_init_nest_whose_arrays_stay_in_memory_is_not_unrolled() {
+    let insns = instructions(include_str!("data/bench_matmul.ll"), Level::O2);
+    assert!(insns < 120, "{insns} instructions");
+}
+
 /// matmul -O3: pricing the nest kept the multiply loop rolled, 4,148
 /// instructions run against 672 unrolled (clang 608), for 40 B. -O3 keeps the
 /// nest's decision: more instructions than the priced -O2 module.
