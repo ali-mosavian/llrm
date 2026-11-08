@@ -191,6 +191,16 @@ fn a_pass_switch_stays_away_from_a_backend_that_takes_none() {
     for name in ["wasm32", "m68k-68020", "z80-sdcc"] {
         assert!(args(name).iter().all(|flag| !flag.starts_with("-fno-")), "{name}: {:?}", args(name));
     }
+    let precise = built("-fexcess-precision=standard -c x.c");
+    let wasm = &table["wasm32"];
+    let wasm_args = llc_args(wasm, &precise, Path::new("x.ll"), Path::new("x.o"));
+    assert!(wasm_args.iter().all(|flag| !flag.starts_with("-fexcess-precision")), "{wasm_args:?}");
+    assert!(clang_flags(wasm, &precise).contains(&"-fexcess-precision=standard".to_owned()));
+    let x86 = &table["x86_32-linux"];
+    assert!(
+        llc_args(x86, &precise, Path::new("x.ll"), Path::new("x.o"))
+            .contains(&"-fexcess-precision=standard".to_owned())
+    );
     let kept = args("x86_32-linux");
     assert!(kept.contains(&"-fno-inline-functions-called-once".to_owned()), "{kept:?}");
     assert!(kept.contains(&"-fno-unroll-loops".to_owned()), "{kept:?}");
