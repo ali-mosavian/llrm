@@ -335,19 +335,18 @@ __mulsi3:
 	pop	iy
 	exx
 	pop	de
-	ld	hl,#0
+	or	a,a
+	sbc	hl,hl
 	exx
 	push	de
 	ld	d,b
 	ld	e,c
 	ld	b,h
 	ld	c,l
-	ld	hl,#0
+	sbc	hl,hl
 	exx
 	pop	bc
-	exx
-1$:	exx
-	srl	d
+1$:	srl	d
 	rr	e
 	exx
 	rr	d
@@ -362,7 +361,6 @@ __mulsi3:
 	exx
 	rl	c
 	rl	b
-	exx
 	ld	a,d
 	or	a,e
 	exx
@@ -370,6 +368,7 @@ __mulsi3:
 	or	a,e
 	exx
 	jr	nz,1$
+	exx
 	push	hl
 	exx
 	pop	de

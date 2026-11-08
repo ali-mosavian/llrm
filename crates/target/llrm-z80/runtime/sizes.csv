@@ -28,7 +28,7 @@ __modqi3,13,__umodqi3
 __modsi3,2,__udivmodsi4
 __mulhi3,24,
 __mulqi3,14,
-__mulsi3,60,
+__mulsi3,57,
 __rt_end,0,
 __s_divdi3,4,__s_moddi3
 __s_divremsi4,159,__s_dvcore
