@@ -54,6 +54,17 @@ pub struct StringRegisters {
     pub tail: RegId,
 }
 
+/// The registers a string instruction (`rep movs`, `rep stos`) uses, each by its
+/// root: the view of the pointer's width is the operand (`cx`, `ecx`, `rcx`).
+#[derive(Clone, Copy, Debug)]
+pub struct StringRoots {
+    pub count: RegId,
+    pub source: RegId,
+    pub destination: RegId,
+    /// The data register a store or compare is made through (`al`, `ax`, `eax`, `rax`).
+    pub accumulator: RegId,
+}
+
 /// A flat platform's foreign linear ranges, read when a constant address is
 /// first asked of: parsing a platform's description is not paid by a compile
 /// that never asks. Profiles are equal by their prices, so these compare equal.
@@ -361,6 +372,19 @@ pub trait BuilderArch {
     /// The address-space roles (`layout().spaces.roles`).
     fn roles(&self) -> llrm_mir::spaces::Spaces;
     fn full(&self) -> Option<&dyn Target>;
+    /// The stack pointer at the pointer width of the target's code: the
+    /// register file's stack root unless the target says otherwise.
+    fn stack_pointer(&self) -> RegId {
+        self.registers().stack
+    }
+    /// The registers of the target's string instructions, if it has them.
+    fn string_roots(&self) -> Option<StringRoots> {
+        None
+    }
+    /// The DAG's name for the top of the x87 stack, if the target has one.
+    fn x87_stack_top(&self) -> Option<RegId> {
+        None
+    }
 }
 
 impl<T: Target> BuilderArch for T {
@@ -385,6 +409,15 @@ impl<T: Target> BuilderArch for T {
     fn full(&self) -> Option<&dyn Target> {
         Some(self)
     }
+    fn stack_pointer(&self) -> RegId {
+        Target::stack_pointer(self)
+    }
+    fn string_roots(&self) -> Option<StringRoots> {
+        Target::string_roots(self)
+    }
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Target::x87_stack_top(self)
+    }
 }
 
 impl BuilderArch for &dyn Target {
@@ -405,6 +438,15 @@ impl BuilderArch for &dyn Target {
     }
     fn roles(&self) -> llrm_mir::spaces::Spaces {
         Target::address_roles(*self)
+    }
+    fn stack_pointer(&self) -> RegId {
+        Target::stack_pointer(*self)
+    }
+    fn string_roots(&self) -> Option<StringRoots> {
+        Target::string_roots(*self)
+    }
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Target::x87_stack_top(*self)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(*self)
@@ -579,6 +621,17 @@ pub trait Target {
     /// mode's, whose source segment defaults to DS); none where the target
     /// has no segments to name.
     fn string_registers(&self) -> Option<StringRegisters> {
+        None
+    }
+
+    /// The registers of this target's string instructions, where it has them.
+    fn string_roots(&self) -> Option<StringRoots> {
+        None
+    }
+
+    /// The register the DAG names the top of the x87 stack by (the pin's
+    /// `FP0`), where the target has an x87 unit.
+    fn x87_stack_top(&self) -> Option<RegId> {
         None
     }
 

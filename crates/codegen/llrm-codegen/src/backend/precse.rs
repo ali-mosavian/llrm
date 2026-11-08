@@ -363,7 +363,7 @@ impl Walk<'_> {
         // the pin, which then makes it twice; sharing it costs nothing the
         // callee-saved pricing below does not count (sieve m64 -O2 made a
         // zero twice, 4 bytes and 6 instructions over release/next). Exit
-        // 2026-11-20 with CSE4.
+        // 2026-11-27 with CSE4.
         let reads_value = !one.uses.is_empty();
         if !reads_value
             && old_readers.iter().all(|reader| match reader {
@@ -380,8 +380,11 @@ impl Walk<'_> {
         // enough. The pin shares it (heuristic 2 asks only for a register use
         // or a non-copy reader). Not a qword symbol address (`LEA64r`): the
         // pin's allocator holds it in a register it pushes for the other
-        // addresses too, and a later loop reads it from there. Exit
-        // 2026-11-20.
+        // addresses too, and a later loop reads it from there. Measured off
+        // 2026-11-08 (m32 + m64, 176 rows, padfree bytes): O1 -91, O2 -21, O3 -21,
+        // Os -7 except memory_expansion m64 (O1 +123, Os +331: a shared movabs
+        // the allocator does not rematerialize). Exit 2026-11-27: RA remat of
+        // a movabs (owner llrm-greedy-subreg), then delete.
         if std::env::var_os("LLRM_NO_CSE4").is_none()
             && !qword_address(one)
             && !reads_value

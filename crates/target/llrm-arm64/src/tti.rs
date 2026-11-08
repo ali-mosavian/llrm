@@ -79,12 +79,17 @@ impl Cpu {
 /// clocks: 0.25 a byte, the floor (a Cortex-A72/M1-class core fetches 16 B a
 /// clock and runs 3-4 instructions a clock, so an instruction is about 0.3).
 /// The saving the model counts is the loop control and the folded operands
-/// only, and every byte also takes a place in the instruction cache and the
-/// branch predictor; 1 clock a byte is where no cell of the corpus (34
-/// programs, 2026-11-08) grew bytes for no instruction gain, and it keeps the
-/// unrolls that save 0.8-23 clocks a byte. It was 250, the median of the cells
-/// where gcc and clang differed, against a saving counted over assumed runs.
-const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 1000;
+/// only, so the price is set at twice the floor: 0.5 keeps every unroll that
+/// saves 0.5-23 clocks a byte, which the pin makes by size (150) alone
+/// (fpbench -O2 -33% instructions). It was 250, the median of the cells where
+/// gcc and clang differed, against a saving counted over assumed runs.
+///
+/// DEVIATE UP1 (exit 2026-11-20), cells that grow bytes for little, against 1.0
+/// (2026-11-08): nbody_fixed -O2 +32 B for -37 instructions and -O3 +20 B for
+/// -45; shellsort -O3 +704 B for -139; jpeg_fixed -O3 +152 B and jpeg_single
+/// +148 B for -722 and -168 instructions (-O2 +24 and +8 B, 0 instructions).
+/// A wash at the floor, and they run few times.
+const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 500;
 
 /// AArch64's scalar profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -311,6 +316,15 @@ impl Tti for AArch64 {
     /// (`inline_trial_skips_rejected`).
     fn inline_trial_caller_limit(&self) -> usize {
         20_000
+    }
+
+    /// DEVIATE (owner greedy-anyisa, exit 2026-11-12): the trial's copy goes through the cleanup
+    /// list, not the whole one: Ir of jpeg_fixed -Os 1.39 G, not 2.95 G (pre-trial 1.38 G). The
+    /// cleanup list misses a few simplifications, so some trials decide otherwise
+    /// (jpeg_single 3592 -> 3608 B, jpeg_fixed 3516 -> 3484 B). Exit: a near miss is re-run with
+    /// the whole list.
+    fn inline_trial_light_simplify(&self) -> bool {
+        true
     }
 
     fn inline_trial_skips_rejected(&self) -> bool {

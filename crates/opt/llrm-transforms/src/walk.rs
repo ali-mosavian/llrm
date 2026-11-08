@@ -630,7 +630,7 @@ impl ProgramPass for Walk {
                                             .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                                                                             }
                                 }
-                                (self.simplify)(module, &mut modules[at], id, "walk.trial.");
+                                (self.simplify)(module, &mut modules[at], id, if tti.inline_trial_light_simplify() { TRIAL_LIGHT } else { "walk.trial." });
                                 let tried = body_size(module, &program.layout, tti, id);
                                 // At speed a target that prices bytes in clocks
                                 // takes a trial that grows the code where the
@@ -719,7 +719,7 @@ impl ProgramPass for Walk {
                                 };
                                 if remarks {
                                     eprintln!(
-                                        "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee, {} clocks saved, {} bytes)",
+                                        "{} ({} instructions) SZ2 trial of {} call(s) to '{}': {} against {} (+{} for the callee, {} clocks saved, {} bytes{})",
                                         module.global(id).name.as_deref().unwrap_or("?"),
                                         module.global(id).function().map_or(0, |one| one.walk().count()),
                                         calls.len(),
@@ -732,7 +732,8 @@ impl ProgramPass for Walk {
                                         best,
                                         credit,
                                         saved,
-                                        growth
+                                        growth,
+                                        if tti.inline_trial_light_simplify() { ", cleanup list" } else { "" }
                                     );
                                 }
                                 // At speed with a byte price only the sites of
@@ -1244,6 +1245,9 @@ impl SelfInline {
 #[cfg(test)]
 #[path = "walk_tests.rs"]
 mod tests;
+
+/// The stage name of a SZ2 trial's simplification when the target asks for the cleanup list.
+pub const TRIAL_LIGHT: &str = "walk.trial.light.";
 
 /// SZ2: the largest caller, in instructions, whose refused sites are tried
 /// (`Tti::inline_trial_caller_limit` where a target states one).

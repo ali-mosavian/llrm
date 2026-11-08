@@ -391,6 +391,14 @@ impl llrm_target::Target for M16 {
         llrm_x86::calling::stack(CALLING.native())
     }
 
+    fn string_roots(&self) -> Option<llrm_target::StringRoots> {
+        Some(llrm_x86::registers::STRING_ROOTS)
+    }
+
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Some(llrm_x86::registers::X87_TOP)
+    }
+
     fn string_registers(&self) -> Option<llrm_target::StringRegisters> {
         Some(llrm_target::StringRegisters {
             count: RegId::CX,
