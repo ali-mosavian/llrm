@@ -1532,7 +1532,8 @@ fn a_jump_outside_every_loop_is_jr_even_when_speed_comes_first() {
 
 /// The driver turned the unroller off: sum4's four-trip loop ran 160 clocks at
 /// -O2, 104 unrolled. A loop of four trips is copied out where speed comes
-/// first, and stays a loop at -Oz.
+/// first, and stays a loop at -Oz. At -Oz the late LoopRotate (#8138, Z80-ROT)
+/// rotates it where the guard folds away: a `djnz` loop.
 #[test]
 fn a_four_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
     let ir = include_str!("kernels/ir/sum4.ll");
@@ -2084,4 +2085,69 @@ fn a_refused_inline_that_shrinks_the_caller_is_tried_at_o1() {
     let ir = include_str!("kernels/ir/struct_odd_sizes.ll");
     let out = text(ir, "main", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("call _fives") && !out.contains("call _three"), "{out}");
+}
+
+/// A byte shifted by five or more took `sla`/`srl` a step each (`word << 13` of a volatile bit field: `ld b, c;
+/// ld c, #0; sla b` x5, 12 B and 48 T); `a` rotated round the shorter way and masked is 8 B and 27 T
+/// (volatile_bitfield, 6 sites).
+#[test]
+fn a_byte_shifted_far_rotates_through_a_and_masks() {
+    let ir = |op: &str, ty: &str, n: u32| {
+        format!(
+            "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+             define {ty} @f({ty} %x) {{\n  %y = {op} {ty} %x, {n}\n  ret {ty} %y\n}}\n"
+        )
+    };
+    for (op, ty, n, rotates) in [("shl", "i16", 13, "rrca\n\trrca\n\trrca\n\tand a, #224"), ("shl", "i8", 6, "rrca\n\trrca\n\tand a, #192")] {
+        let out = text(&ir(op, ty, n), "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(out.contains(rotates) && !out.contains("sla") && !out.contains("add a, a"), "{op} {ty} {n}\n{out}");
+    }
+}
+
+/// A test that tail-calls one function or falls on to a second test was `jr nz, L; L1: jp _h; L:` (sibling_call_callees:
+/// 5 B where `jp z, _h` is 3).
+#[test]
+fn a_branch_over_a_tail_call_is_the_tail_call_on_the_opposite_condition() {
+    let ir = include_str!("kernels/ir/sibling_call_callees.ll");
+    let out = text(ir, "g", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("jp z, _h") && !out.contains("jr nz") && !out.contains("jp nz"), "{out}");
+}
+
+/// A byte widened and combined with a word (`or`, `and`, `xor`, with a register or a constant) ran the zero high
+/// lane through `a` (`ld b, #0; ld a, b; or a, #129; ld b, a`): volatile_bitfield's bit-field inserts, 4 instructions
+/// where `ld b, #129` does.
+#[test]
+fn a_widened_byte_combined_with_a_word_skips_its_zero_lane() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i16 @or_const(i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %z, 33280\n  ret i16 %r\n}\n\
+              define i16 @or_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %x, %z\n  ret i16 %r\n}\n\
+              define i16 @and_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = and i16 %x, %z\n  ret i16 %r\n}\n";
+    let ors = |name| text(ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let constant = ors("or_const");
+    assert!(constant.contains("#130") && !constant.contains("or a,"), "{constant}");
+    let word = ors("or_word");
+    assert_eq!(word.matches("or a,").count(), 1, "only the low lane: {word}");
+    let both = ors("and_word");
+    assert_eq!(both.matches("and a,").count(), 1, "only the low lane: {both}");
+}
+
+/// The sign of a sign mask is the mask: widening `a` right after `sbc a, a` (0 or 255) ran `rla; sbc a, a` again
+/// (high_byte's signed_high, 2 B and 8 T).
+#[test]
+fn a_sign_mask_widens_without_taking_its_sign_again() {
+    let ir = include_str!("kernels/ir/high_byte.ll");
+    let out = text(ir, "signed_high", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("rla").count(), 1, "{out}");
+}
+
+/// A dense switch of three targets became bit tests, `1 << x` and a mask per target, and the Z80's shift by a variable
+/// count is a call: two `__ashlhi3` calls (each tens of clocks) to pick among eight cases. `isOperationLegal(SHL)`
+/// is false here, so the pin builds no bit tests.
+#[test]
+fn a_dense_switch_builds_no_bit_tests_where_a_variable_shift_is_a_call() {
+    let ir = include_str!("kernels/ir/switch_dense_bit_tests.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("__ashlhi3"), "{out}");
+    }
 }
