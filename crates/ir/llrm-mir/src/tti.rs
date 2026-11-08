@@ -601,6 +601,14 @@ pub trait Tti {
         false
     }
 
+    /// Whether a full unroll's saving is counted over `ASSUMED_TRIPS` runs
+    /// of each unknown-count loop around it, as the pin's branch weights
+    /// say (up to two). False: such a loop counts once, the runs the
+    /// compiler can show.
+    fn unroll_assumes_unknown_loops_run(&self) -> bool {
+        true
+    }
+
     /// Whether a call to a function of the module destroys what that function
     /// writes, not every caller-saved register (`-enable-ipra`; off in the
     /// pin, on in GCC from -O1).
