@@ -178,7 +178,6 @@ pub mod framelowering;
 pub mod frameobjects;
 pub mod funnel;
 pub mod globals;
-pub mod inline_asm;
 pub mod isel;
 pub mod liverows;
 pub mod masks;
