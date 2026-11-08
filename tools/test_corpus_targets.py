@@ -115,3 +115,10 @@ def test_the_stack_sanitizer_programs_are_dos_only():
     for name in ("stackdeep", "stackover"):
         source = (RUN / f"{name}.c").read_text()
         assert not ct.applies("x86_32-linux", source) and ct.applies("x86_32-dos", source) and ct.applies("x86_16-dos", source)
+
+
+def test_programs_that_assume_a_32_bit_int_are_not_run_at_m16():
+    """select_of_constants and shl_of_a_zero_extended_dividend hash values wider than m16's 16-bit int: the m16 run read as a miscompile (6528 for 880220544; a 200000-iteration run past the 120 s limit). Host gcc -m32 matches their .out."""
+    for name in ("select_of_constants", "shl_of_a_zero_extended_dividend"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not ct.applies("x86_16-dos", source) and ct.applies("x86_32-linux", source) and ct.applies("x86_64-linux", source)
