@@ -221,7 +221,16 @@ fn worked_out(
         let reads = if what.op == Operation::Branch { _branch_reads(what) } else { Lanes::new() };
         return Some(Effect { reads, writes: Lanes::new(), moved: Vec::new() });
     }
-    let (reads, writes) = _register_effects(regs, bits, one, false, true).or_else(|| _declared(regs, one))?;
+    let (reads, mut writes) = _register_effects(regs, bits, one, false, true).or_else(|| _declared(regs, one))?;
+    // The x87 compare is a pseudo here, expanded after the stackifier into
+    // `fcom; fnstsw ax; sahf`; the pin's MIR has the flags write (`SAHF`) from
+    // instruction selection on.
+    if one.what.as_ref().is_some_and(|what| {
+        what.op == Operation::Compare
+            && what.name.as_deref().is_some_and(|n| n.starts_with("fcom") || n.starts_with("ficom"))
+    }) {
+        writes.include(_flag_lanes(0xFFFF_FFFF));
+    }
     Some(match _moved_lanes(regs, bits, one) {
         Some((moved, operands)) => Effect { reads: reads.minus(&operands), writes, moved },
         None => Effect { reads, writes, moved: Vec::new() },

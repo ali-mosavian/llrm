@@ -1163,7 +1163,11 @@ fn a_spilled_word_shifted_right_by_more_than_a_byte_reloads_one_byte() {
         .windows(4)
         .any(|w| w[0].starts_with("ld e, -") && w[1].starts_with("ld d, -") && w[2] == "ld e, d" && w[3] == "ld d, #0");
     assert!(!dead, "{out}");
-    assert!(lines.windows(3).any(|w| w[0].starts_with("ld e, -") && w[1] == "ld d, #0" && w[2] == "srl e"), "{out}");
+    // The byte is reloaded alone, or copied where the word's high half is still in `d`.
+    assert!(
+        lines.windows(3).any(|w| (w[0].starts_with("ld e, -") || w[0] == "ld e, d") && w[1] == "ld d, #0" && w[2] == "srl e"),
+        "{out}"
+    );
 }
 
 /// A byte or word rotated (`llvm.fshl` of one value twice) was refused at -O2, `CannotSelect(Rotl)`: neither type had an
@@ -2150,4 +2154,30 @@ fn a_dense_switch_builds_no_bit_tests_where_a_variable_shift_is_a_call() {
         let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
         assert!(!out.contains("__ashlhi3"), "{out}");
     }
+}
+
+/// Eight dense cases to three targets were a compare tree. The DAG builder
+/// now plans a jump table: one range check, `jp (hl)`, and the `.dw` table
+/// (kept by the branch folder, which took `jp (hl)` for a jump to its first
+/// block and dropped the table's label).
+#[test]
+fn a_dense_switch_jumps_through_a_table() {
+    let ir = include_str!("kernels/ir/switch_jump_table_dispatch.ll");
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("jp (hl)").count(), 1, "{out}");
+    assert_eq!(out.matches(".dw ").count(), 8, "{out}");
+    assert!(out.contains("_JT0:"), "{out}");
+    assert_eq!(out.matches("sbc a, #0").count(), 1, "one range check: {out}");
+}
+
+/// The block that follows a switch gets its case tested last, so it falls
+/// through. The block made for a phi edge sat between them, so no case was
+/// moved and div_constants_{long,short,ulong} reloaded a value per site
+/// (+24..+98 B): case 1 (the next block) is tested last, not first.
+#[test]
+fn a_switch_looks_past_phi_edge_blocks_for_the_next_block() {
+    let ir = include_str!("kernels/ir/switch_next_past_phi_edge.ll");
+    let out = text(ir, "h", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let tests: Vec<&str> = out.lines().map(str::trim).filter(|line| line.starts_with("cp a, #")).collect();
+    assert_eq!(tests, ["cp a, #3", "cp a, #2", "cp a, #1"], "{out}");
 }

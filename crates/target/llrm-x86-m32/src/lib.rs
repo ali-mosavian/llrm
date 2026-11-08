@@ -45,8 +45,8 @@ pub fn layout() -> llrm_target::layout::Layout {
 pub struct M32;
 
 /// The registers and the address forms the descriptions state.
-static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> =
-    LazyLock::new(|| llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"));
+static REGISTERS: LazyLock<std::sync::Arc<Vec<llrm_target::registers::Register>>> =
+    LazyLock::new(|| llrm_target::registers::file(include_str!("registers.regs")).expect("registers.regs parses"));
 
 /// How flat operations are priced from the instruction forms: `opcosts.txt`.
 static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
@@ -71,8 +71,8 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// The target's tuning. DEVIATE: a multiply by a constant the pin leaves an
 /// `imul` (13-42 clocks on a 486, Intel 240440-002 Table 10.1) is, at -O1..-O3,
 /// the shift/`lea` chain of fewest clocks on the CPU's table with no byte term,
-/// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
-/// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
+/// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -O1 only if
+/// the chain is no longer than the `imul`; -Os keeps bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 ///
 /// A code byte costs the CPU's instruction-cache fill, once per run: a line's
 /// fill clocks over its bytes (`line_fill_clocks` / `cache_line` of the CPU's

@@ -69,11 +69,12 @@ fn pays(
     }
 }
 
+/// The number of sums moved to an address register.
 pub fn sign_extended_words(
     function: &mut MFunction,
     cpu: SelectCpu,
     price: Price,
-) {
+) -> usize {
     let count = function.classes.len();
     let mut defs = vec![0u32; count];
     let mut uses = vec![0u32; count];
@@ -232,6 +233,7 @@ pub fn sign_extended_words(
         Some(moves)
     };
     let mut made: Vec<(usize, usize)> = Vec::new();
+    let mut folded = 0;
     for b in 0..function.blocks.len() {
         for at in 0..function.blocks[b].insts.len() {
             let inst = &function.blocks[b].insts[at];
@@ -292,10 +294,12 @@ pub fn sign_extended_words(
             );
             function.classes[acc as usize] = Class::Ar32;
             function.classes[sum as usize] = Class::Ar32;
+            folded += 1;
         }
     }
     made.sort_unstable_by(|a, b| b.cmp(a));
     for (b, at) in made {
         function.blocks[b].insts.remove(at);
     }
+    folded
 }
