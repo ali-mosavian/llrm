@@ -59,7 +59,8 @@ fn a_callee_the_trial_rejected_is_not_tried_again_in_the_same_caller() {
 
 /// jpeg_fixed -Os: every SZ2 trial ran the whole simplifier list over a 600-instruction caller,
 /// 2.95 G instructions to compile it against 1.38 G before the trial existed. The trial's copy
-/// goes through the cleanup list (1.39 G); `tmul` is still inlined.
+/// goes through the cleanup list (1.39 G); `tmul` is still inlined. A callee with a loop is
+/// the exception: the list has no loop passes, so its copy is priced with the whole one.
 #[test]
 fn the_byte_trial_simplifies_its_copy_with_the_cleanup_list() {
     let dir = tempfile::tempdir().unwrap();
@@ -76,8 +77,11 @@ fn the_byte_trial_simplifies_its_copy_with_the_cleanup_list() {
     let log = String::from_utf8_lossy(&output.stderr);
     let trials: Vec<&str> = log.lines().filter(|line| line.contains("SZ2 trial of")).collect();
     assert!(!trials.is_empty(), "premise: trials run\n{log}");
-    let whole: Vec<&&str> = trials.iter().filter(|line| !line.contains("cleanup list")).collect();
-    assert!(whole.is_empty(), "trials on the whole list: {whole:?}");
+    let loopless: Vec<&&str> =
+        trials.iter().filter(|line| line.contains("call(s) to 'tmul'") || line.contains("call(s) to 'clamp'")).collect();
+    assert!(!loopless.is_empty(), "premise: loopless callees are tried\n{log}");
+    let whole: Vec<&&&str> = loopless.iter().filter(|line| !line.contains("cleanup list")).collect();
+    assert!(whole.is_empty(), "trials of loopless callees on the whole list: {whole:?}");
 }
 
 /// vla -O2: one site of `vla` was rejected, and the trial of all its sites (the

@@ -2592,7 +2592,7 @@ fn only_reads_memory(info: &CallInfo) -> bool {
 }
 
 /// The headers of the callee's loops: targets of a retreating edge (D7).
-fn loop_headers(function: &Function) -> IdSet<BlockId> {
+pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
     let Some(&entry) = function.layout().first() else { return IdSet::new() };
     let mut headers = IdSet::new();
     let mut state: HashMap<u32, u8> = HashMap::default();

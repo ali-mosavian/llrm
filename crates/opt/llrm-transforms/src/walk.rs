@@ -632,7 +632,14 @@ impl ProgramPass for Walk {
                                             .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                                                                             }
                                 }
-                                (self.simplify)(module, &mut modules[at], id, if tti.inline_trial_light_simplify() { TRIAL_LIGHT } else { "walk.trial." });
+                                // The cleanup list has no loop passes: a copy of a callee with a
+                                // loop meets constants that unroll and forward away, which only the
+                                // whole list prices (vla -O2: 8 sites, 644 B against -40).
+                                let light = tti.inline_trial_light_simplify()
+                                    && !calls.iter().filter_map(|one| trials[one].callee).any(|callee| {
+                                        module.global(callee).function().is_some_and(|body| !crate::inlinecost::loop_headers(body).is_empty())
+                                    });
+                                (self.simplify)(module, &mut modules[at], id, if light { TRIAL_LIGHT } else { "walk.trial." });
                                 let tried = body_size(module, &program.layout, tti, id);
                                 // At speed a target that prices bytes in clocks
                                 // takes a trial that grows the code where the
@@ -735,7 +742,7 @@ impl ProgramPass for Walk {
                                         credit,
                                         saved,
                                         growth,
-                                        if tti.inline_trial_light_simplify() { ", cleanup list" } else { "" }
+                                        if light { ", cleanup list" } else { "" }
                                     );
                                 }
                                 // At speed with a byte price only the sites of
