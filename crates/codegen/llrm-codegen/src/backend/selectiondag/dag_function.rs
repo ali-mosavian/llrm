@@ -551,6 +551,29 @@ impl super::emit::Conventions for CallConventions<'_> {
 struct Tables {
     map: OpcodeMap,
     names: HashMap<u16, &'static str>,
+    /// `names` the other way, by the part before the first `|`; the first of a repeated name wins.
+    /// Built at the first lookup: a scan per name cost 4.9 M instructions in a compile of 3 K.
+    by_name: std::sync::OnceLock<HashMap<&'static str, u16>>,
+}
+
+impl Tables {
+    fn opcode_named(
+        &self,
+        wanted: &str,
+    ) -> Option<u16> {
+        self.by_name
+            .get_or_init(|| {
+                let mut ordered: Vec<_> = self.names.iter().map(|(op, name)| (*op, *name)).collect();
+                ordered.sort_unstable_by_key(|(op, _)| *op);
+                let mut by_name = HashMap::default();
+                for (op, name) in ordered {
+                    by_name.entry(name.split('|').next().unwrap_or(name)).or_insert(op);
+                }
+                by_name
+            })
+            .get(wanted)
+            .copied()
+    }
 }
 
 /// One per target width.
@@ -593,6 +616,7 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
                         (llrm_dagisel::x86_llrm::LLRM_ASM_OPCODE, "CALL_ASM"),
                     ])
                     .collect(),
+                by_name: Default::default(),
             })
         })
         .clone()
@@ -1171,9 +1195,7 @@ fn selected_in(
                 module,
                 function,
                 &builder_target,
-                &|wanted: &str| {
-                    tables.names.iter().find(|(_, name)| name.split('|').next() == Some(wanted)).map(|(op, _)| *op)
-                },
+                &|wanted: &str| tables.opcode_named(wanted),
                 &layout,
                 &convention,
                 arch,
