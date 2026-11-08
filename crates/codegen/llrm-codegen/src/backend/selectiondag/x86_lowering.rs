@@ -2677,9 +2677,7 @@ fn combine_mul(
 /// DEVIATE SD446: the pin's `combineMul` leaves an `imul` for a constant none
 /// of its cases covers (75, 251, 10000); on the 486 that is 13-42 clocks
 /// (Intel 240440-002 Table 10.1) against 2-4 for a chain. The search is
-/// GCC's `synth_mult`
-/// ([expmed.cc](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/expmed.cc)),
-/// the same as DEVIATE M1 in `arithmetic.rs`. Only where the target trades
+/// `arithmetic`'s, the same as DEVIATE M1 in `arithmetic.rs`. Only where the target trades
 /// bytes for clocks at speed (m16: `speed_milliclocks_per_byte`); the block's
 /// frequency is the IR `BlockFrequencies` (the machine one does not exist at
 /// DAG time). Exit: none while the clocks decide. Owner sdag-d.

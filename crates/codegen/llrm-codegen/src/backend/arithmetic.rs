@@ -9,7 +9,7 @@
 //!
 //! `cheapest_chain` is the cheapest sequence of `shl`, `add`, `sub`, `lea`
 //! and copies. Horner chains over binary and signed digits give a first
-//! bound. Then `synth` searches as GCC's `synth_mult` does: an even `t` is
+//! bound. Then `synth` searches (Bernstein 1986, branch and bound): an even `t` is
 //! a shift of `t >> m`; an odd `t` is `t-1` or `t+1` plus or minus the
 //! source; a factor `2^m +- 1` is `cur + cur<<m` or `cur<<m - cur`, one
 //! `lea` for a scale of 2, 4 or 8. The search stops at the best cost so far
@@ -64,12 +64,8 @@
 //! `isel/matcher.rs` (which multiply to select), `division.rs` (a divisor's
 //! multiply chain), and the QB ABI (`abi/qb.rs`) for its multiply costs.
 //! Design notes: `docs/machine/arithmetic-targets.md`.
-//!
-//! # See also
-//! GCC's `synth_mult`:
-//! <https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/expmed.cc>
 
-use std::collections::BTreeMap;
+mod chain_search;
 
 use crate::backend::cpu::{self as targets, ProfileOrName};
 use crate::backend::timing;
@@ -149,7 +145,7 @@ pub fn chain_bytes(
 }
 
 /// The chain for a multiply by `number` where it takes fewer clocks than
-/// `imul r,r,imm` on the CPU's table, whatever its bytes (gcc's `synth_mult`
+/// `imul r,r,imm` on the CPU's table, whatever its bytes (the search
 /// at speed).
 pub fn chain_by_clocks<'a>(
     number: i64,
@@ -229,8 +225,7 @@ pub fn cheapest_narrow_chain<'a>(
     chains(number, cpu, false)
 }
 
-/// The chain of `number`: of its magnitude negated, or, as GCC's `synth_mult`
-/// has it for a negative `t` (`a * -7` is `a
+/// The chain of `number`: of its magnitude negated, or, for a negative `t` (`a * -7` is `a
 /// - a*8`), of `1 - number` shifted and taken from the source.
 fn chains<'a>(
     number: i64,
@@ -367,7 +362,7 @@ fn positive_chains<'a>(
             && parts[2].0 == "shl"
         {
             // peephole.addresses selects LEA + SHL for this exact shape.
-            // 386: two core clocks. P6: GCC pentiumpro_cost ranks indexed
+            // 386: two core clocks. P6: the P6 cost table ranks indexed
             // LEA at one unit, like a shift, versus four for multiply.
             return Ok((if target.name == "386" { 2 } else { 1 }) + cost(target, "shift_ri")?);
         }
@@ -405,7 +400,7 @@ fn positive_chains<'a>(
     let leas = |scale: i64| lea(scale).filter(|_| scale <= 8);
     let ops = Ops { shift: &shifts, alu: cost(target, "alu_rr")?, mov: cost(target, "mov_rr")?, lea: &leas };
     let limit = best.as_ref().map_or(i64::MAX / 4, |(_, price)| *price);
-    let synthesized = synth(number, limit, &mut BTreeMap::new(), &ops).map(|(parts, _)| parts);
+    let synthesized = chain_search::synth(number, limit, &mut chain_search::Memo::default(), &ops).map(|(parts, _)| parts);
     if let Some(parts) = synthesized {
         let price = clocks(&parts)?;
         if best.as_ref().is_none_or(|(_, kept)| price < *kept) {
@@ -432,114 +427,30 @@ struct Ops<'a> {
     lea: &'a dyn Fn(i64) -> Option<i64>,
 }
 
-/// GCC's `alg_hash` entry (expmed.cc): the chain found for `t` within a limit,
-/// or that none was.
-enum Known {
-    Found(Chain, i64),
-    Impossible(i64),
-}
-
-/// GCC's `synth_mult` (expmed.cc): the chain of `t` costing less than `limit`,
-/// and its cost, or none. The search is bounded as GCC's is: `limit` is what
-/// the best chain so far costs (`cost_limit`, passed down less each operation:
-/// `new_limit`), a `t` is looked up in `memo` first (`alg_hash`: what was
-/// found, or that nothing is under that limit), and the caller starts from the
-/// cost of the `imul` and the Horner chain (`expand_mult`'s `max_cost`).
-/// Even `t` is a shift of `t >> m`; odd `t` is `t - 1` or `t + 1` (the one a
-/// run of ones points to) plus or minus the source, a shift and a source added
-/// to `(t - 1) >> m` or `(t + 1) >> m`, or `q * (2^m +- 1)` for a factor of
-/// that form: `q`'s chain, then `cur + cur<<m` or `cur<<m - cur`. The chain's
-/// copy of the source is not counted.
-fn synth(
-    t: i64,
-    limit: i64,
-    memo: &mut BTreeMap<i64, Known>,
-    ops: &Ops,
-) -> Option<(Chain, i64)> {
-    #[cfg(test)]
-    SEARCHED.with(|count| count.set(count.get() + 1));
-    if limit <= 0 || t < 1 {
-        return None;
-    }
-    if t == 1 {
-        return Some((Vec::new(), 0));
-    }
-    match memo.get(&t) {
-        Some(Known::Found(chain, cost)) => return (*cost < limit).then(|| (chain.clone(), *cost)),
-        Some(Known::Impossible(under)) if limit <= *under => return None,
-        _ => {}
-    }
-    let alu = ops.alu;
-    // The options: what `t` is reached from, and the operations after it.
-    let mut options: Vec<(i64, Chain, i64)> = Vec::new();
-    // `q << m` and then an add or subtract of the source: one `lea` for an add
-    // of a scale.
-    let shift_add = |m: i64, sub: bool| -> (Chain, i64) {
-        match (sub, (ops.lea)(1 << m)) {
-            (false, Some(lea)) if (1..=3).contains(&m) => (vec![("lea", 1 << m)], lea),
-            _ => (vec![("shl", m), (if sub { "sub" } else { "add" }, 0)], (ops.shift)(m) + alu),
-        }
-    };
-    if t & 1 == 0 {
-        let m = i64::from(t.trailing_zeros());
-        options.push((t >> m, vec![("shl", m)], (ops.shift)(m)));
-    } else {
-        // A run of ones at the bottom (but not 3) is `(t + 1) - 1`; otherwise
-        // `(t - 1) + 1`.
-        if (t + 1) & !t > 2 && t != 3 {
-            options.push((t + 1, vec![("sub", 0)], alu));
-        } else {
-            options.push((t - 1, vec![("add", 0)], alu));
-        }
-        for m in (2..=(63 - i64::from((t - 1).leading_zeros()))).rev() {
-            let up = (1i64 << m) + 1;
-            let down = (1i64 << m) - 1;
-            if t % up == 0 && t > up {
-                let (op, cost) = match (m <= 3).then(|| (ops.lea)(1 << m)).flatten() {
-                    Some(lea) => (("flea", 1 << m), lea),
-                    None => (("fadd", m), ops.mov + (ops.shift)(m) + alu),
-                };
-                options.push((t / up, vec![op], cost));
-                break;
-            }
-            if t % down == 0 && t > down {
-                options.push((t / down, vec![("fsub", m)], ops.mov + (ops.shift)(m) + alu));
-                break;
-            }
-        }
-        for (q, sub) in [(t - 1, false), (t + 1, true)] {
-            let m = i64::from(q.trailing_zeros());
-            if m > 0 {
-                let (tail, cost) = shift_add(m, sub);
-                options.push((q >> m, tail, cost));
-            }
-        }
-    }
-    let mut bound = limit;
-    let mut best: Option<(Chain, i64)> = None;
-    for (q, tail, cost) in options {
-        // No progress: a larger target whose odd part is no smaller.
-        if q >= t && q >> q.trailing_zeros() >= t {
-            continue;
-        }
-        let Some((mut parts, below)) = synth(q, bound - cost, memo, ops) else { continue };
-        parts.extend(tail);
-        bound = below + cost;
-        best = Some((parts, bound));
-    }
-    memo.insert(
-        t,
-        match &best {
-            Some((chain, cost)) => Known::Found(chain.clone(), *cost),
-            None => Known::Impossible(limit),
-        },
-    );
-    best
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The search was a translation of gcc's (GPL-3.0-or-later) in the default
+    /// build, with its permalink and names. It is written from Bernstein's
+    /// 1986 paper now; the chains it finds are the same.
+    #[test]
+    fn test_the_search_names_no_gcc_source() {
+        for (file, text) in [("arithmetic.rs", include_str!("arithmetic.rs")), ("chain_search.rs", include_str!("arithmetic/chain_search.rs"))] {
+            let production = text.split("#[cfg(test)]\nmod tests {").next().unwrap();
+            for name in ["gcc-mirror", "expmed", "synth_mult", "alg_hash", "gcc.gnu"] {
+                assert!(!production.contains(name), "{file} names {name}");
+            }
+        }
+    }
+
+    /// x_switch's `r * 1103515245`: the chain of 15 clocks on a 486 at m32,
+    /// the same one the search always found.
+    #[test]
+    fn test_the_wide_lcg_multiplier_is_a_15_clock_chain_on_a_486() {
+        let m32 = targets::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
+        assert_eq!(cheapest_chain(1103515245, m32).unwrap().unwrap().1, 15);
+    }
 
     /// x3, x5 and x9 were `shl`, `add` and a copy (or an `imul` at -Os) where
     /// the address unit makes them in one instruction: the chain of a
@@ -604,7 +515,7 @@ mod tests {
         assert!(saved > 0 && extra > 2 * saved && extra <= 2 * saved * 8, "premise: saved {saved}, extra {extra}");
     }
 
-    /// GCC's `synth_mult` factors `q * (2^m +- 1)` and tries `t - 1` and `t +
+    /// The search factors `q * (2^m +- 1)` and tries `t - 1` and `t +
     /// 1`; the chains here were Horner chains only, 17 operations and 29
     /// clocks for x_switch's `r * 1103515245` against gcc's 13. Every chain is
     /// the product, in 32 and in 16 bits.
@@ -656,7 +567,7 @@ mod tests {
                 }
             }
         }
-        // `a * -15` is `a - a*16` (synth_mult's negative `t`), not the product
+        // `a * -15` is `a - a*16` (a negative `t`), not the product
         // by 15 and a negation.
         assert_eq!(cheapest_narrow_chain(-15, m32).unwrap().unwrap().0, [("shl", 4), ("rsub", 0)]);
         let (chain, clocks) = cheapest_chain(1103515245, m32).unwrap().unwrap();
@@ -666,9 +577,8 @@ mod tests {
     /// `a * 2654448107u` took 75 million instructions in the selector, four of
     /// them 337 million, at -O0 as well: the selector asks for a multiply's
     /// chain three times (is it scalable, what does it cost, what is it) and
-    /// each time searched every way down from every target. GCC's
-    /// `synth_mult` prunes by the cost so far and keeps what
-    /// it found (`alg_hash`).
+    /// each time searched every way down from every target. The search now
+    /// prunes by the cost so far and keeps what it found.
     #[test]
     fn test_the_search_for_a_wide_odd_constant_is_made_once_and_bounded() {
         let m32 = targets::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();

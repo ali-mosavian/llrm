@@ -50,7 +50,7 @@
 //! or `shl r,1`), [`Profile::clears_before_byte_load`] (`xor r,r; mov rl,m`
 //! or `movzx`) and [`Profile::pops_arguments`] (pops against `add sp`).
 //! `MultiplyChains` caches the constant-multiply chains found under this
-//! profile's prices (GCC's `alg_hash`); a clone starts with an empty cache.
+//! profile's prices; a clone starts with an empty cache.
 //!
 //! # Example
 //! Facts the profiles state (from the target's timing tables):
@@ -206,7 +206,7 @@ pub struct Profile {
     /// prices.
     pub model: llrm_target::CostModel,
     /// The chains of shifts and adds found for constant multiplies under this
-    /// profile's prices (GCC's `alg_hash`).
+    /// profile's prices.
     pub multiplies: MultiplyChains,
 }
 

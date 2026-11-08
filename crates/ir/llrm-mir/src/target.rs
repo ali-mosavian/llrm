@@ -36,7 +36,7 @@ pub struct Tuning {
     /// pin's, which forms the memset whenever the stores allow.
     pub price_fills: bool,
     /// A multiply by a constant at speed is the chain of fewest clocks the
-    /// CPU's table gives, with no byte term (gcc's `synth_mult` at
+    /// CPU's table gives, with no byte term (the search at
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,

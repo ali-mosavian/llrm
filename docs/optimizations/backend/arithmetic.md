@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/arithmetic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/arithmetic.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/arithmetic.rs sha256:81aa4576d6c371b95545715d03e38fd6e67ee44d6d137d042d13044570dbc3dc -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/arithmetic.rs sha256:7aa9a755ba28cdaed020f54c4518796e31931f2e9137ff402020d2677b7ef92d -->
 
 # arithmetic
 
@@ -14,7 +14,7 @@ table's range by the multiplier's bits, else the flat `imul_r32` price.
 
 `cheapest_chain` is the cheapest sequence of `shl`, `add`, `sub`, `lea`
 and copies. Horner chains over binary and signed digits give a first
-bound. Then `synth` searches as GCC's `synth_mult` does: an even `t` is
+bound. Then `synth` searches (Bernstein 1986, branch and bound): an even `t` is
 a shift of `t >> m`; an odd `t` is `t-1` or `t+1` plus or minus the
 source; a factor `2^m +- 1` is `cur + cur<<m` or `cur<<m - cur`, one
 `lea` for a scale of 2, 4 or 8. The search stops at the best cost so far
@@ -34,7 +34,7 @@ a dword.
 Results are kept in the profile, as a multiply is asked about again and
 again.
 
-DEVIATE M1 (AM-M1, priced): the pin's X86 does a scalar constant multiply
+DEVIATE M1 (owner w6/w10, exit 2026-12-01; AM-M1, priced): the pin's X86 does a scalar constant multiply
 by `combineMul`
 ([X86ISelLowering.cpp#L51191](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191))
 and `decomposeMulByConstant` (#L3636): a `lea` for 3, 5 and 9 (times a power
@@ -49,8 +49,7 @@ chosen; the DAG path since 2026-10-27 takes them at m32 -Os as the pin does:
 pin's, and keeps `imul` at m16 -Os, where they grow 27 of 175 by 3550 B);
 QCport m16 -38 B at -O1..-O3, 0 at -Os. Instructions against the pin on the
 same IR: lea +471 at -O2 (`docs/working/instruction-gap-vs-pin.md`). Exit:
-none while the clocks decide; reviewed with the tuning phase. Owner w-4,
-review 2026-12-01.
+none while the clocks decide; reviewed with the tuning phase.
 
 ## Example
 What the ranking answers on a 486 (`targets::tuned_for(M32, "486")`):
@@ -70,7 +69,3 @@ From unit tests `test_a_factor_of_one_more_than_a_scale_is_one_lea`,
 `isel/matcher.rs` (which multiply to select), `division.rs` (a divisor's
 multiply chain), and the QB ABI (`abi/qb.rs`) for its multiply costs.
 Design notes: `docs/machine/arithmetic-targets.md`.
-
-## See also
-GCC's `synth_mult`:
-<https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/expmed.cc>

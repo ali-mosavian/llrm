@@ -1182,8 +1182,7 @@ pub fn visit_mul(
     // the pin's `shl X, select(c, 3, 1)` (visitMul,
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp#L604)
     // costs the move and the register (pack_ref -Os: m32 -18 B, m64 -7 B).
-    // gcc's `expand_mult` shifts only a constant multiplier
-    // (expmed.cc:3540-3560). A constant count stays.
+    // gcc shifts only a constant multiplier. A constant count stays.
     let keeps_mul = c.env.hooks.fixed_shift_count && is_optsize(c.function);
     for (log_of, other) in [(op0, op1), (op1, op0)] {
         if keeps_mul && !matches!(log_of, Operand::Constant(_)) {

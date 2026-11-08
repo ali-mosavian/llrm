@@ -14,7 +14,7 @@ tuning is a threshold or a call penalty from the description, not a per-instruct
 
 ## Constant multiplies are priced by the profile (DEVIATE D35)
 
-Owner: w-1. llrm multiplies by a constant with GCC's `synth_mult` chain (`arithmetic::scale`) when its clocks are below the immediate multiply's under
+Owner: w-1. llrm multiplies by a constant with a shift-and-add chain search (`arithmetic::scale`) when its clocks are below the immediate multiply's under
 the CPU profile; the pin's `combineMul` only decomposes 3, 5, 9 and a few two-op shapes, and never at minsize. `x_switch` m32 -O2 (`x * 1103515245`,
 vsgcc priced streams, i486): llrm 37207 instructions, 42090 clocks, 619 B; pin's clang 19212 instructions, 83500 clocks, 372 B (gcc 54805 clocks).
 Kept: 11 one-clock steps against an `imul` of 13 to 42 clocks. At -Os llrm does not chain (0 `lea`, 2 `imul`; 218 B, 125401 clocks against
