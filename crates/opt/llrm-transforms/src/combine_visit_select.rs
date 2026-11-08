@@ -21,8 +21,8 @@
 //! `foldOverflowingAddSubSelect`, `foldSetClearBits`,
 //! `foldSelectZeroOrFixedOp`, `foldSelectIntrinsic`,
 //! `foldSelectWithSRem`, the
-//! `foldSPFofSPF`, and everything after the not-condition
-//! (`foldSelectCmpBitcasts` ... `FoldSelectWithAndOrCond`).
+//! `foldSPFofSPF`, and everything after the not-condition but
+//! `foldSelectToCmp` (`foldSelectCmpBitcasts` ... `FoldSelectWithAndOrCond`).
 //!
 //! DEVIATE 3: `replaceInInstruction` (the arms' instructions that read the
 //! condition get its value) is not made:
@@ -53,6 +53,7 @@ use crate::combine_select_into_op::select_into_op;
 use crate::combine_select_op_op::select_op_op;
 use crate::combine_select_spf::select_with_icmp;
 use crate::combine_select_tail::{nested_selects, select_of_symmetric_select};
+use crate::combine_select_to_cmp::select_to_cmp;
 use crate::combine_shared::{has_one_use, query, replace_operand};
 
 /// The parts of a `select`.
@@ -86,6 +87,7 @@ const FOLDS: &[Fold] = &[
     absorb_not_condition,
     select_of_symmetric_select,
     nested_selects,
+    select_to_cmp,
 ];
 
 impl Combiner<'_> {
