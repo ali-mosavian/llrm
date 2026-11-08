@@ -2515,13 +2515,14 @@ fn m32_over_aligned_local_realigns_the_stack_pointer() {
     assert!(lines.contains(&"mov esp, ebp"), "{listing}");
 }
 
-/// There is no pin alignment at 16 bits: an over-aligned local is refused with
-/// its reason, not compiled off its alignment.
+/// Real mode cannot realign the stack: an over-aligned local is clamped to the
+/// stack alignment (#7706), not refused, and no `and sp` is emitted.
 #[test]
-fn m16_over_aligned_local_is_refused() {
+fn m16_over_aligned_local_is_clamped_not_refused() {
     let text = format!("target datalayout = \"@m16-datalayout@-ni:2:3\"\n{ALIGNED_IR}");
-    let error = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().unwrap();
-    assert!(error.contains("in 16-bit code is not realigned"), "{error}");
+    let (built, _) = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("and sp,"), "{listing}");
 }
 
 /// A callee-saved register pushed before the stack `sub` (the pin's order,
