@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OW = llrmbin.ow_tree()
 
 
-@pytest.mark.skipif(not OW.is_dir(), reason="the Open Watcom tree is missing (tools/ow-fetch.sh)")
+@pytest.mark.skipif(not llrmbin.ow_present(), reason="the Open Watcom tree is missing (tools/ow-fetch.sh)")
 def test_an_indirect_call_through_every_volatile_register_compiles_under_dag_at_m32_wat():
     binary = llrmbin.bin_dir() / "llrm-cc"
     env = {**os.environ, "LLRM_CC_TARGET": "x86_32-wat"}
