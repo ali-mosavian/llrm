@@ -228,6 +228,10 @@ pub trait TargetInstrInfo {
 }
 
 /// `X86InstrInfo` at the width and register classes of one compile.
+/// DEVIATE RA-CLK: see `X86InstrInfo::reference_weight`. Weights 3, 4 and 6 give the same m16
+/// code on the 14-program sample; 2.5 and below differ.
+const ADDRESS_REFERENCE_WEIGHT: f32 = 3.0;
+
 pub struct X86InstrInfo<'a> {
     pub bits: u32,
     pub classes: &'a RegisterClasses,
@@ -264,26 +268,28 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         super::inlinespiller::remat_shape(one)
     }
 
-    /// DEVIATE RA-CLK (real mode, POC): a reference the instruction can take
-    /// from memory (a source operand of an ALU op or compare) costs a few
-    /// clocks if the value is spilled; any other reference costs a reload
-    /// and its use. Half the weight to the first, so eviction leaves in
-    /// memory the values whose references fold.
+    /// DEVIATE RA-CLK (real mode; owner x86-m16, exit 2026-11-29): a value that is an address
+    /// component (the base, index or selector of a memory operand) weighs `ADDRESS_REFERENCE_WEIGHT`
+    /// times a reference in the spill weight. Spilled, it must be reloaded into one of the few
+    /// registers 16-bit addressing allows (bx, bp, si, di) before the access, where any other value
+    /// is folded (`add r, [slot]`) or moves through any register: eviction leaves the others in
+    /// memory first. The pin weighs every reference alike (`getSpillWeight`).
     fn reference_weight(
         &self,
         one: &Insn,
         value: u32,
     ) -> f32 {
-        if self.bits != 16 || std::env::var_os("LLRM_RACLK_OFF").is_some() {
+        if self.bits != 16 {
             return 1.0;
         }
         let Some(what) = one.what.as_ref() else { return 1.0 };
-        let folds = matches!(
-            what.name.as_deref(),
-            Some("add" | "sub" | "and" | "or" | "xor" | "cmp" | "test" | "adc" | "sbb")
-        );
-        let read_whole = what.sources.iter().any(|loc| matches!(loc, Loc::Held(held) if held.value == value));
-        if folds && read_whole { std::env::var("LLRM_RACLK").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5) } else { 1.0 }
+        let held = |h: &Option<Held>| h.as_ref().is_some_and(|h| h.value == value);
+        let component = what
+            .sources
+            .iter()
+            .chain(what.dests.iter())
+            .any(|loc| matches!(loc, Loc::Mem(m) if held(&m.base) || held(&m.index) || held(&m.selector)));
+        if component { ADDRESS_REFERENCE_WEIGHT } else { 1.0 }
     }
 
     fn encoding_bytes(
@@ -787,6 +793,27 @@ mod tests {
         let classes = RegisterClasses::of(&llrm_x86_m64::M64);
         let folded = fold_memory_operand(&mulsd, 2, &cell, 64, &classes).expect("folds");
         assert!(matches!(folded.what.as_ref().unwrap().sources.as_slice(), [Loc::Held(_), Loc::Mem(_)]), "{folded:?}");
+    }
+
+    /// recchop c -O1 (m16) 184 B, grep c -O1 +24.7% clocks: eviction spilled a value that is the
+    /// base of a memory operand as readily as one that only an ALU op reads, so every access
+    /// through it reloaded it into bx/si/di first. An address component weighs more.
+    #[test]
+    fn test_an_address_component_weighs_more_in_the_spill_weight_at_m16_only() {
+        let held = |value: u32| Held { value, width: 2, offset: 0 };
+        let cell = Mem { base: Some(held(7)), ..Mem::new(Some(Addr::new(Space::Frame, 0)), 2) };
+        let load = Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Held(held(8))],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::Move)
+        };
+        let insn = Insn::new(0, None, Some(load), vec![8], vec![7]);
+        let m16 = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false };
+        let flat = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false };
+        assert!(m16.reference_weight(&insn, 7) > 1.0, "the base of the cell");
+        assert_eq!(m16.reference_weight(&insn, 8), 1.0, "the loaded value");
+        assert_eq!(flat.reference_weight(&insn, 7), 1.0, "flat code weighs the pin's way");
     }
 
     fn x87_body(insns: Vec<Arc<Insn>>) -> crate::model::lir::LirBody {
