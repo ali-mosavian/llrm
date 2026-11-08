@@ -138,7 +138,12 @@ def decode(sig, v):
 
 def cost(name, sig, args):
     """T-states of one call incl. its call+ret: run with the call minus without."""
-    regs = {"A,L>A": "\tld a,#%d\n\tld l,#%d\n", "HL,DE>DE": "\tld hl,#%d\n\tld de,#%d\n", "HL,A>DE": "\tld hl,#%d\n\tld a,#%d\n", "LL>L": "\tld hl,#0\n\tpush hl\n\tld hl,#%d\n\tld de,#0\n\tld bc,#%d\n", "L,A>L": "\tld hl,#%d\n\tld de,#0\n\tld a,#%d\n"}[sig] % args
+    if sig == "LL>L":
+        # both longs whole: a in de:hl, b in the stacked word:bc (a 16-bit immediate cut a 32-bit operand to its low word)
+        a, b = args
+        regs = f"\tld hl,#{b >> 16}\n\tpush hl\n\tld hl,#{a & 0xFFFF}\n\tld de,#{a >> 16}\n\tld bc,#{b & 0xFFFF}\n"
+    else:
+        regs = {"A,L>A": "\tld a,#%d\n\tld l,#%d\n", "HL,DE>DE": "\tld hl,#%d\n\tld de,#%d\n", "HL,A>DE": "\tld hl,#%d\n\tld a,#%d\n", "L,A>L": "\tld hl,#%d\n\tld de,#0\n\tld a,#%d\n"}[sig] % args
     base = f"\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n{regs}"
     t = {}
     for tag, call in (("with", f"\tcall {name}\n"), ("without", "")):
@@ -262,8 +267,9 @@ def main():
         if t > bar:
             print(f"FAIL __udivdi3 ({a:#x}, {b}) took {t} T, bar {bar}")
             allok = False
-    # A long multiply stops when the multiplier is spent; at 32 passes whatever the multiplier these cost 3.8k T.
-    for a, b, bar in ((0x12345, 100, 1500), (31, 1000, 2000)):
+    # A long multiply stops when the multiplier is spent; at 32 passes whatever the multiplier these cost 3.7k T. A full
+    # 32-bit multiplier is the worst case.
+    for a, b, bar in ((0x12345, 100, 1500), (31, 1000, 2000), (31, 0xFFFFFFFF, 5500)):
         t = cost("__mulsi3", "LL>L", (a, b))
         if t > bar:
             print(f"FAIL __mulsi3 ({a:#x}, {b}) took {t} T, bar {bar}")
