@@ -87,8 +87,11 @@ impl Cpu {
 /// DEVIATE UP1 (exit 2026-11-20), cells that grow bytes for little, against 1.0
 /// (2026-11-08): nbody_fixed -O2 +32 B for -37 instructions and -O3 +20 B for
 /// -45; shellsort -O3 +704 B for -139; jpeg_fixed -O3 +152 B and jpeg_single
-/// +148 B for -722 and -168 instructions (-O2 +24 and +8 B, 0 instructions).
-/// A wash at the floor, and they run few times.
+/// +148 B for -722 and -168 instructions. A wash at the floor, and they run few times.
+/// jpeg -O2: +28 and +8 B for -33 and -42 instructions of 11.65 M and 8.49 M (measured, not
+/// 0): the 3-trip component loops of the header parse (`id[c] == want`, 16 B for 11 clocks a
+/// run) run once a program, so the saving is real and one-off. The model prices them right at
+/// 1.2 instructions a byte, above the 0.8 break-even; it cannot know the code is cold.
 const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 500;
 
 /// AArch64's scalar profile.
