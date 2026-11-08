@@ -2785,13 +2785,16 @@ mod tests {
         assert_eq!(forward_high_bytes(lines).len(), 3);
     }
 
-    /// A loop with two jumps back to its head was counted as two nested
-    /// loops, 8 times too heavy: lz4 -O2 priced a candidate with 40% fewer
-    /// real clocks as 40% dearer.
+    /// A loop with two jumps back to its head was counted as two nested loops, 8 times too heavy: lz4 -O2 priced
+    /// a candidate with 40% fewer real clocks as 40% dearer. Blocks are weighted by the IR frequencies since
+    /// then (Z80-BLOCK-WEIGHT): the head's frequency applies once, however many jumps return to it.
     #[test]
-    fn a_loop_with_two_jumps_back_is_one_loop() {
+    fn a_loop_with_two_jumps_back_is_weighted_once() {
         let inst = |text: &str| Line::Inst(text.to_owned());
-        let lines = vec![Line::Label("L1".into()), inst("ld a, b"), inst("jr nz, L1"), inst("jr z, L1")];
-        assert_eq!(price_in_loops(&lines).1, price(&lines).1 as u64 * 8);
+        let lines = vec![Line::Label("L1_1".into()), inst("ld a, b"), inst("jr nz, L1_1"), inst("jr z, L1_1")];
+        set_frequencies(&[(1, 8.0)]);
+        let priced = price_in_loops(&lines).1;
+        set_frequencies(&[]);
+        assert_eq!(priced, price(&lines).1 as u64 * 8);
     }
 }

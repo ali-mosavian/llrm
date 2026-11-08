@@ -42,7 +42,6 @@
 1 crates/codegen/llrm-codegen/src/backend/machinelicm.rs
 1 crates/codegen/llrm-codegen/src/backend/maskbyand.rs
 1 crates/codegen/llrm-codegen/src/backend/memcpycall.rs
-21 crates/codegen/llrm-codegen/src/backend/mirprint.rs
 7 crates/codegen/llrm-codegen/src/backend/peep/guards.rs
 4 crates/codegen/llrm-codegen/src/backend/peep/make.rs
 12 crates/codegen/llrm-codegen/src/backend/peephole.rs
