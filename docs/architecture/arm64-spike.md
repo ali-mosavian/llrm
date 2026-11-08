@@ -32,7 +32,7 @@ Measured with `tools/targets/arm64_compare.py` (modes `whole`, `backend`, `compi
 
 ## Numbered DEVIATEs
 
-1. `regalloc.rs`: ranges with holes, copy coalescing, no splitting or eviction; stands in for `RAGreedy`.
+1. `regalloc.rs`: the fallback allocator (ranges with holes, copy coalescing, no splitting or eviction), used under `LLRM_ARM64_LINEAR` or where the shared greedy refuses a function. The default is the shared greedy through `lir_view`; the machine passes around it are arm64's own (exit: arm64 on `flow::machine_with`).
 2. `driver.rs`: Apple's `va_arg` instruction is written out as loads in the text; MIR has no `va_arg` (exit: the instruction, owner lir-text-prs-1893).
 3. `prepass.rs`: CSE and loop hoisting of constants and addresses, a small version of `MachineCSE`/`MachineLICM`.
 4. `driver.rs`: newer clang's `ptrtoaddr` is read as `ptrtoint`; MIR refuses it by design.

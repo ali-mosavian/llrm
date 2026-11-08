@@ -515,6 +515,18 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
         let refused = LegalizeError::Unsupported { op, ty: vt, what: "convert node to libcall" };
+        // `ExpandBitCountingLibCall` (CTLZ_ZERO_POISON, CTPOP; DEVIATE BC1 adds CTTZ_ZERO_POISON): the value as is, the
+        // routine's `int` result sign-extended or truncated to the node's type.
+        if matches!(op, ISD::CtLzZeroPoison | ISD::CtPop | ISD::CtTzZeroPoison) {
+            let Some(name) = self.tli.libcall_name(op, vt) else { return Err(refused) };
+            let int = EVT::integer(self.tli.types.int_size());
+            let arg = self.dag.operand(node, 0);
+            let Some(call) = self.hooks.make_lib_call(self.dag, name, &[arg], int, false) else { return Err(refused) };
+            let ret = self.dag.value_type(node);
+            let result = self.dag.get_sext_or_trunc(call, ret);
+            self.replace_node(node, result);
+            return Ok(());
+        }
         let (signed, arity) = match op {
             ISD::SDiv | ISD::SRem => (true, 2),
             ISD::UDiv | ISD::URem | ISD::Mul => (false, 2),
