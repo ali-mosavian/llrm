@@ -226,6 +226,22 @@ mod libcall_shape {
         }
     }
 
+    /// `pin_register` answers from a table made once (a scan of 200 numbers a
+    /// query cost 81 K Ir a call in memory_expansion); it is `phys_reg`'s inverse
+    /// and, where two numbers name one register, the lower one, as the scan did.
+    #[test]
+    fn pin_register_is_the_lowest_number_of_phys_reg() {
+        use super::super::dagisel_adapter::{phys_reg, pin_register};
+        let mut named = 0;
+        for number in 0..=200u16 {
+            let Some(reg) = phys_reg(number) else { continue };
+            let lowest = (0..=200u16).find(|&other| phys_reg(other) == Some(reg));
+            assert_eq!(pin_register(reg), lowest, "register of pin number {number}");
+            named += 1;
+        }
+        assert!(named > 10, "premise: phys_reg names registers ({named})");
+    }
+
     /// A helper call with a stack argument and a register argument reads
     /// `callseq_start, store, CopyToReg, CALL, callseq_end, CopyFromReg`
     /// in that order, the result on the call's chain and glue. Without

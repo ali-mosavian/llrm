@@ -2827,3 +2827,26 @@ fn an_i63_compare_of_a_truncated_i64_compiles() {
     );
     assembly(&ir, &Request::new(Level::O2)).unwrap();
 }
+
+/// `store i16 (load i16 @s), @d`: the legalizer splits the load into two byte
+/// loads joined by a token factor, and the split store took that token as its
+/// chain, so both loads came before both stores (copy_runs +374 B / +92k clk
+/// against llvm-mos: 8 instructions through X and Y, not 4). The pin's
+/// `FindBetterChain` lets each store wait only for the loads it may alias.
+#[test]
+fn a_word_copy_between_globals_interleaves_its_byte_loads_and_stores() {
+    let ir = module(
+        r#"@s = global i16 0
+@d = global i16 0
+define void @copy() {
+  %v = load i16, ptr @s
+  store i16 %v, ptr @d
+  ret void
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    let body: Vec<&str> = text.lines().map(str::trim).filter(|line| line.starts_with("lda") || line.starts_with("sta")).collect();
+    let second_load = body.iter().rposition(|line| line.starts_with("lda")).unwrap_or(0);
+    let first_store = body.iter().position(|line| line.starts_with("sta")).unwrap_or(usize::MAX);
+    assert!(first_store < second_load, "both loads came before the first store:\n{text}");
+}

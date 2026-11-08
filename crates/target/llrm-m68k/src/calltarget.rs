@@ -39,7 +39,8 @@ use crate::{REGISTER_INFO, frame, mc, reg};
 
 /// The address registers a call target may live in, in the order they are
 /// taken.
-const ADDRESS: [RegId; 4] = [reg::A2, reg::A3, reg::A4, reg::A5];
+/// `%a6` is the frame pointer when the frame has one, and is free otherwise.
+const ADDRESS: [RegId; 5] = [reg::A2, reg::A3, reg::A4, reg::A5, reg::A6];
 
 /// The callees `function` calls directly more than once, most called first.
 pub fn repeated(function: &MFunction) -> Vec<String> {
@@ -150,7 +151,17 @@ pub fn choose(
         let mut targets = chosen.clone();
         targets.push((name, register));
         through_registers(&mut trial, &targets)?;
-        let Some(cost) = lines(&trial).and_then(|lines| price_of(&lines, cpu)).ok() else { continue };
+        let Ok(expanded) = lines(&trial) else { continue };
+        // a frame that made `%a6` its pointer leaves it no call target
+        if expanded.iter().any(|line| {
+            matches!(
+                line,
+                Line::Inst(inst) if inst.opcode == "LINK16" || inst.opcode == "UNLK"
+            )
+        }) {
+            continue;
+        }
+        let Some(cost) = price_of(&expanded, cpu).ok() else { continue };
         if price.beats(cpu, cost, best) {
             best = cost;
             chosen = targets;

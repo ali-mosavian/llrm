@@ -409,6 +409,10 @@ pub fn finish_with(
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
     // pointer is that much further
     let mut pushed = 0i64;
+    // the bytes of finished calls' arguments still on the stack: their cleanups
+    // wait for the next instruction that needs the stack pointer as it is
+    let mut owed = 0i64;
+    let mut last_block = 0usize;
     // the values of the stores whose pushes wait for the call, by offset
     let mut waiting: Vec<(i64, usize)> = Vec::new();
     let mut block_of = kept.iter().map(|(at, _)| *at).peekable();
@@ -466,6 +470,13 @@ pub fn finish_with(
     };
     for (index, inst) in insts.iter().copied().enumerate() {
         let at = block_of.next().expect("a block per instruction");
+        if owed > 0 && at != last_block {
+            // a block is entered with the stack as its predecessors left it
+            frame_op(&FrameOp::AddSp(owed), &mut out, short);
+            pushed -= owed;
+            owed = 0;
+        }
+        last_block = at;
         while shown <= at {
             if targeted.contains(&shown) {
                 flush(&mut out, &mut marks, &mut lines);
@@ -514,9 +525,28 @@ pub fn finish_with(
             continue;
         }
         if let Some(bytes) = pushes.cleanup(index) {
-            frame_op(&FrameOp::AddSp(bytes), &mut out, short);
-            pushed -= bytes;
+            if function.returns_twice {
+                frame_op(&FrameOp::AddSp(bytes), &mut out, short);
+                pushed -= bytes;
+            } else {
+                owed += bytes;
+            }
             continue;
+        }
+        // an instruction that reads the stack pointer as the frame has it, or
+        // leaves the block, finds the cleanups done
+        if owed > 0
+            && (inst.terminator
+                || inst.barrier
+                || matches!(
+                    inst.kind,
+                    Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN")
+                )
+                || crate::callpush::names_sp(inst, assignment))
+        {
+            frame_op(&FrameOp::AddSp(owed), &mut out, short);
+            pushed -= owed;
+            owed = 0;
         }
         match inst.kind {
             Kind::Copy => {
