@@ -1153,6 +1153,18 @@ fn test_bt_of_a_cell_and_an_immediate_encodes() {
     assert_eq!(hex(&made(emitted(&bt)).code), "660fba66fc01");
 }
 
+/// `test [bp-4], reg` (from `(p[i] & m) == 0`, TEST*mr) had no encoder: the
+/// text printed, `-c` stopped on `Unencodable` and the m16 BASIC runtime
+/// (`_big_shr`) did not build.
+#[test]
+fn test_test_of_a_cell_and_a_register_encodes() {
+    for (width, reg, bytes) in [(2_u32, RegId::CX, "854efc"), (1, RegId::CL, "844efc"), (4, RegId::ECX, "66854efc")] {
+        let cell = Loc::Mem(ir::Mem { through: RegId::BP, disp_width: 1, ..frame(-4, width) });
+        let what = sem(Operation::Compare, Some("test"), vec![], vec![cell, rg(reg, width)], None, false);
+        assert_eq!(hex(&made(emitted(&what)).code), bytes, "width {width}");
+    }
+}
+
 /// `dec byte [bp-4]` was unprintable: the memory form took words only, so
 /// `llrm-nib -m16 -O0 runtime.nib` stopped on G$74 under the DAG selector.
 #[test]

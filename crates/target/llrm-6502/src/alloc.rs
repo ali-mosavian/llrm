@@ -394,6 +394,10 @@ impl<const STACK: bool> Target for Mos<STACK> {
         [reg::A, reg::X, reg::Y].into_iter().chain(cells()).chain(pairs()).filter(|r| !preserved(*r)).collect()
     }
 
+    fn lanes_of(register: RegId) -> Option<[RegId; 2]> {
+        is_pair(register).then(|| [lane(register, 0), lane(register, 1)])
+    }
+
     fn overlaps(
         one: RegId,
         other: RegId,

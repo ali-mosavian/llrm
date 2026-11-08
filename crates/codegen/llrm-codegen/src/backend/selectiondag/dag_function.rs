@@ -1163,7 +1163,7 @@ fn selected_in(
         } else {
             Cpu::I486
         },
-        opt_none: false,
+        opt_none: !cpu.optimized,
         opt_for_size: cpu.size,
         min_size: llrm_mir::memory::has(&function.attrs, "minsize"),
         has_frame_pointer: true,
