@@ -362,11 +362,15 @@ impl licm::Inst for Wrapped {
         other: &Self,
     ) -> bool {
         let (Some(one), Some(two)) = (&self.0.what, &other.0.what) else { return false };
-        // DEVIATE X2 (owner m64, exit 2026-11-20): an x87 value is a stack
+        // DEVIATE X2 (owner m64, exit 2026-12-20): an x87 value is a stack
         // entry and the allocator gives each loop-carried entry its own
         // definition; the pin's RFP registers are virtual until the stackifier
         // (X86FloatingPoint), which copes with one register feeding two. Two
-        // `fldz` stay two values.
+        // `fldz` stay two values. Removed (2026-11-08): no object of 80 x87
+        // size cells (m32, m64, O2/Os) changes and 52 run outputs are equal, so
+        // the corpus never holds two equal hoistable x87 constants; the unit
+        // test below differs (the merge is real), and no program shows the
+        // stackifier coping. Delete once one does.
         if one.dests.iter().any(|place| matches!(place, Loc::Held(held) if held.width == 10)) {
             return false;
         }
