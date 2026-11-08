@@ -1126,8 +1126,7 @@ __udivsi3_fast_byte:            ; __sa / __sb -> __sa, a divisor of 1 to 255
 
 .export __umodsi3_fast
 __umodsi3_fast:                 ; __sa % __sb -> __sa
-  jsr udivmod32_fast
-  jmp copy_sr_to_sa
+  jmp umod32_fast
 
 .export __umodsi3_fast_byte
 __umodsi3_fast_byte:            ; __sa % __sb -> __sa, a divisor of 1 to 255
@@ -1164,14 +1163,7 @@ __divsi3_fast:                  ; __sa / __sb -> __sa (signed, truncated toward 
 
 .export __modsi3_fast
 __modsi3_fast:                  ; __sa % __sb -> __sa (signed, the sign of the dividend)
-  jsr divmod32s_fast
-  jsr copy_sr_to_sa
-  lda __sg
-  and #2
-  beq @done
-  jsr neg_sa
-@done:
-  rts
+  jmp umod32s_fast
 
 divmod32s_fast_byte:            ; the dividend's sign split off (the divisor is 1 to 255), then the byte loop
   lda #0
@@ -1372,5 +1364,157 @@ __modsi3_fast_small:                  ; __sa % __sb -> __sa (signed, the sign of
   and #2
   beq @done
   jsr neg_sa
+@done:
+  rts
+
+; ---- the speed remainder: the quotient is never built, as in llvm-mos's `__umodsi3`. The dividend is
+; the remainder, in place in __sa; the divisor is shifted up as far as the quotient's first bit, and each
+; trip subtracts it when it fits and halves it ----
+umod32_fast:                         ; __sa % __sb -> __sa (unsigned)
+  lda __sb
+  ora __sb+1
+  ora __sb+2
+  ora __sb+3
+  beq @zero                     ; a zero divisor: the dividend is the remainder
+  lda __sb+1                    ; a divisor below 256 takes the byte loop
+  ora __sb+2
+  ora __sb+3
+  bne umod32_wide
+  jsr udivmod32_fast_byte
+  jmp copy_sr_to_sa
+@zero:
+  rts
+
+umod32_wide:
+  ldx #3                        ; a divisor above the dividend: the dividend is the remainder
+@cmpd:
+  lda __sa,x
+  cmp __sb,x
+  bne @cmpe
+  dex
+  bpl @cmpd
+  inx                           ; equal: C is set
+@cmpe:
+  bcs @big
+  rts
+@big:
+  lda __sa+3                    ; half the dividend, in __st
+  lsr a
+  sta __st+3
+  lda __sa+2
+  ror a
+  sta __st+2
+  lda __sa+1
+  ror a
+  sta __st+1
+  lda __sa
+  ror a
+  sta __st
+  ldx #0
+@abyte:                         ; a whole byte at once while the divisor shifted by 8 stays at or below half
+  lda __sb+3
+  bne @align
+  lda __sb+2
+  cmp __st+3
+  bne @cb
+  lda __sb+1
+  cmp __st+2
+  bne @cb
+  lda __sb
+  cmp __st+1
+  beq @bshift                   ; equal above, and the divisor's low byte is 0 after the shift
+@cb:
+  bcs @align
+@bshift:
+  lda __sb+2
+  sta __sb+3
+  lda __sb+1
+  sta __sb+2
+  lda __sb
+  sta __sb+1
+  lda #0
+  sta __sb
+  txa
+  clc
+  adc #8
+  tax
+  bne @abyte
+@align:
+  lda __sb+3                    ; the divisor above half the dividend: aligned
+  cmp __st+3
+  bne @cmph
+  lda __sb+2
+  cmp __st+2
+  bne @cmph
+  lda __sb+1
+  cmp __st+1
+  bne @cmph
+  lda __sb
+  cmp __st
+  beq @shift
+@cmph:
+  bcs @aligned
+@shift:
+  asl __sb
+  rol __sb+1
+  rol __sb+2
+  rol __sb+3
+  inx
+  bne @align                    ; X is never 0 here: the loop is past a short branch's reach otherwise
+@aligned:
+  inx
+@trip:
+  lda __sa+3                    ; compare from the high byte: most trips end at the first
+  cmp __sb+3
+  bne @c2
+  lda __sa+2
+  cmp __sb+2
+  bne @c2
+  lda __sa+1
+  cmp __sb+1
+  bne @c2
+  lda __sa
+  cmp __sb
+@c2:
+  bcc @no                       ; the remainder is below the divisor: the quotient bit is 0 (C clear)
+  lda __sa                      ; C is set: no borrow, and the quotient bit is 1
+  sbc __sb
+  sta __sa
+  lda __sa+1
+  sbc __sb+1
+  sta __sa+1
+  lda __sa+2
+  sbc __sb+2
+  sta __sa+2
+  lda __sa+3
+  sbc __sb+3
+  sta __sa+3
+@no:
+  lsr __sb+3
+  ror __sb+2
+  ror __sb+1
+  ror __sb
+  dex
+  bne @trip
+  rts
+
+
+umod32s_fast:                        ; __sa % __sb -> __sa (signed, the sign of the dividend)
+  lda #0
+  sta __sg
+  lda __sa+3
+  bpl @a
+  lda #2
+  sta __sg
+  jsr neg_sa
+@a:
+  lda __sb+3
+  bpl @b
+  jsr neg_sb
+@b:
+  jsr umod32_fast
+  lda __sg
+  beq @done
+  jmp neg_sa
 @done:
   rts
