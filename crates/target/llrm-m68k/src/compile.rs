@@ -32,10 +32,23 @@ pub enum Item {
 
 /// The pin's code model (`-mcmodel`), which decides how a global is reached
 /// (`M68kSubtarget::classifyGlobalReference`, without PIC): small, PC-relative
-/// with a 16-bit displacement; medium, absolute on the 68000 and 68010 and
-/// PC-relative from the 68020; large, absolute. The assembler relaxes only
-/// branches, so data farther than 32 KiB from the code needs medium on the
-/// 68000 or large.
+/// with a 16-bit displacement; medium and large, absolute. The assembler
+/// relaxes only branches, so data farther than 32 KiB from the code needs
+/// medium or large.
+///
+/// DEVIATE: medium is absolute on the 68020 and later as well. The pin picks
+/// PC-relative there (`M68kSubtarget::classifyLocalReference`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kSubtarget.cpp#L199-L208>),
+/// but its only PC-relative data form is `(d16,%pc)` (`MxPCD`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kInstrInfo.td#L417-L422>
+/// is the indexed `(bd32,%pc,Xn)` form), so a global past 32 KiB fails to link:
+/// `relocation truncated to fit: R_68K_PC16` for `memcpy_runtime`'s two
+/// 70016-byte arrays (command and output in
+/// `docs/working/m68k-medium-pin-pc16.md`). Reason: medium has to reach any
+/// offset; `abs.l` does at every cpu, and a `(bd32,%pc)` form would be beyond
+/// the pin and 2 B longer. Position independence is not modelled (`-fPIC` is
+/// ignored). Owner: m68k. Review: 2026-12-15, or when the pin selects a 32-bit
+/// PC-relative form for data, whichever is first.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum CodeModel {
     #[default]
@@ -55,15 +68,11 @@ impl CodeModel {
         }
     }
 
-    /// Whether a global's address is an absolute one on `cpu`.
-    pub fn absolute_data(
-        self,
-        cpu: Cpu,
-    ) -> bool {
+    /// Whether a global's address is an absolute one.
+    pub fn absolute_data(self) -> bool {
         match self {
             CodeModel::Small => false,
-            CodeModel::Medium => !cpu.at_least(Cpu::M68020),
-            CodeModel::Large => true,
+            CodeModel::Medium | CodeModel::Large => true,
         }
     }
 }
@@ -370,7 +379,7 @@ fn items_once(
         options.source_order,
         options.indexed,
         options.short,
-        options.code_model.absolute_data(cpu),
+        options.code_model.absolute_data(),
         wants_size,
         options.carry_chain,
     )?;
