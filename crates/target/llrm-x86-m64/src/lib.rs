@@ -238,6 +238,10 @@ impl llrm_target::Target for M64 {
         CALLING.native().frame_wrap_split_size
     }
 
+    fn frame_object_aligned(&self) -> bool {
+        CALLING.native().frame_object_aligned
+    }
+
     fn frame_red_zone(&self) -> i64 {
         CALLING.native().frame_red_zone
     }
@@ -417,6 +421,13 @@ impl llrm_target::Target for M64 {
                             // clk, frames -20%, rectwo -12%; -O3 stays at 150). Owner m64,
                             // exit 2026-11-20.
                             recursive_inlining_growth: Some((450, 150)),
+                            // DEVIATE REC-2-LOSERS (owner m64, exit 2026-11-21): the copies cost
+                            // net (clk + 0.312 B) against none on recchop -O3 +1020 (2194 B),
+                            // bintree -O3 +134 (1160 B, 0 clk), recpow -O2 +4002 (peeled). Their
+                            // bodies are load chains the call overhead hides under (call share
+                            // 52%, 45%); fib/frames/rectwo are 83-93% and win 42k-250k.
+                            // A call-share bar costs queens -O3 -2492 (share 24%); the fix is a
+                            // trial copy priced by the sheet's latencies.
                             // DEVIATE REC5-1 (owner w2, exit 2026-11-20), as m32.
                             ipsccp_widen_keeps_sign: true,
                             // DEVIATE UJ2 (owner m64, exit 2026-11-14): BasicTTIImpl's

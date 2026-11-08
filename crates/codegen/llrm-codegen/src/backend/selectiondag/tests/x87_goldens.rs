@@ -54,7 +54,7 @@ fn selected(text: &str) -> BTreeMap<String, Result<Counts, String>> {
         let mut failure = None;
         for &block in function.layout() {
             let built =
-                build_block(&module, function, &layout, &BuilderTarget::m32(), &machine, &convention, &mut info, block);
+                build_block(&module, function, &layout, &BuilderTarget::for_pointer_bits(32), &machine, &convention, &mut info, block);
             let mut built = match built {
                 Ok(b) => b,
                 Err(why) => {

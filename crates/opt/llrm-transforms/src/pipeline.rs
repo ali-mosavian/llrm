@@ -985,6 +985,7 @@ pub(crate) fn llvm_order(
                     duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
                     size: applied.options.prefers_size(),
                     check_exit_count: true,
+                    free_guard: false,
                 }),
             ),
             // LoopInterchangePass (l.1631), in the loop pass manager after
@@ -1038,6 +1039,7 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
                     created: Default::default(),
+                    decided: Default::default(),
                 }),
             ),
             sroa("sroa@1494"),
@@ -1107,6 +1109,7 @@ pub(crate) fn llvm_order(
                         duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
                         size: applied.options.prefers_size(),
                         check_exit_count: false,
+                        free_guard: false,
                     }),
                 ));
             }
@@ -1126,6 +1129,7 @@ pub(crate) fn llvm_order(
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             // What the unroll makes, for the slot after it.
             let created: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
+            let decided: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
             // LPM2 runs loop by loop (`PerLoop`): the slot of indvars runs the
             // passes of the slots after it too, each of which then finds its
             // work done.
@@ -1146,6 +1150,7 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: false,
                     created: std::rc::Rc::clone(&created),
+                    decided: std::rc::Rc::clone(&decided),
                 })
             };
             let on_created = || -> Box<dyn FunctionPass> {
@@ -1545,6 +1550,16 @@ pub fn recorded(
     // there.
     if applied.options.wanted("window") {
         manager.add(window::Window { size: applied.options.prefers_size() });
+    }
+    // DEVIATE Z80-ROT: after every loop pass, as the gcc tail rotate was, a counted loop
+    // proven to run is entered at its body at -Oz (target opt-in).
+    if applied.options.has_min_size {
+        manager.add(looprotate::LoopRotate {
+            duplicate_headers: false,
+            size: true,
+            check_exit_count: false,
+            free_guard: true,
+        });
     }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.

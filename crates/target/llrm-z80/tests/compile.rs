@@ -1532,7 +1532,8 @@ fn a_jump_outside_every_loop_is_jr_even_when_speed_comes_first() {
 
 /// The driver turned the unroller off: sum4's four-trip loop ran 160 clocks at
 /// -O2, 104 unrolled. A loop of four trips is copied out where speed comes
-/// first, and stays a loop at -Oz.
+/// first, and stays a loop at -Oz. At -Oz the late LoopRotate (#8138, Z80-ROT)
+/// rotates it where the guard folds away: a `djnz` loop.
 #[test]
 fn a_four_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
     let ir = include_str!("kernels/ir/sum4.ll");
@@ -2064,4 +2065,59 @@ fn an_internal_function_is_a_local_label_and_an_external_one_is_global() {
     assert!(internal.starts_with("_sum:\n"), "{internal}");
     let external = text(include_str!("kernels/ir/digits.ll"), "digits", 0, &Request::new(Level::Os)).expect("compiles");
     assert!(external.starts_with("_digits::\n"), "{external}");
+}
+
+/// A byte of growth is worth 3 T from -O2 (z80 `speed_inline_milliclocks_per_byte`): `scale`, a 100-trip loop that
+/// stays for other callers, is not copied into `caller` for the one jump the copy saves. (-O1 prices no byte in
+/// clocks: `a_rate_that_binds_from_o2_leaves_o1_to_the_pin`; since the O1 trials, `from` is copied at -O1 because
+/// the caller shrinks, `a_refused_inline_that_shrinks_the_caller_is_tried_at_o1`.)
+#[test]
+fn the_speed_rate_refuses_a_big_copy_at_o2() {
+    let text = text(include_str!("kernels/ir/scale_call.ll"), "caller", 0, &Request::new(Level::O2))
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(text.contains("jp _scale"), "{text}");
+}
+
+/// -O1 kept the size bound's refusals: `fives` (cost -40, folds into `main`) stayed a call, 498 B and 3,534 T against
+/// SDCC's 367 B and 2,548 T. Refused sites are tried inline as at -Os: the copy folds, 259 B and 355 T.
+#[test]
+fn a_refused_inline_that_shrinks_the_caller_is_tried_at_o1() {
+    let ir = include_str!("kernels/ir/struct_odd_sizes.ll");
+    let out = text(ir, "main", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("call _fives") && !out.contains("call _three"), "{out}");
+}
+
+/// A byte shifted by five or more took `sla`/`srl` a step each (`word << 13` of a volatile bit field: `ld b, c;
+/// ld c, #0; sla b` x5, 12 B and 48 T); `a` rotated round the shorter way and masked is 8 B and 27 T
+/// (volatile_bitfield, 6 sites).
+#[test]
+fn a_byte_shifted_far_rotates_through_a_and_masks() {
+    let ir = |op: &str, ty: &str, n: u32| {
+        format!(
+            "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+             define {ty} @f({ty} %x) {{\n  %y = {op} {ty} %x, {n}\n  ret {ty} %y\n}}\n"
+        )
+    };
+    for (op, ty, n, rotates) in [("shl", "i16", 13, "rrca\n\trrca\n\trrca\n\tand a, #224"), ("shl", "i8", 6, "rrca\n\trrca\n\tand a, #192")] {
+        let out = text(&ir(op, ty, n), "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(out.contains(rotates) && !out.contains("sla") && !out.contains("add a, a"), "{op} {ty} {n}\n{out}");
+    }
+}
+
+/// A byte widened and combined with a word (`or`, `and`, `xor`, with a register or a constant) ran the zero high
+/// lane through `a` (`ld b, #0; ld a, b; or a, #129; ld b, a`): volatile_bitfield's bit-field inserts, 4 instructions
+/// where `ld b, #129` does.
+#[test]
+fn a_widened_byte_combined_with_a_word_skips_its_zero_lane() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i16 @or_const(i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %z, 33280\n  ret i16 %r\n}\n\
+              define i16 @or_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %x, %z\n  ret i16 %r\n}\n\
+              define i16 @and_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = and i16 %x, %z\n  ret i16 %r\n}\n";
+    let ors = |name| text(ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let constant = ors("or_const");
+    assert!(constant.contains("#130") && !constant.contains("or a,"), "{constant}");
+    let word = ors("or_word");
+    assert_eq!(word.matches("or a,").count(), 1, "only the low lane: {word}");
+    let both = ors("and_word");
+    assert_eq!(both.matches("and a,").count(), 1, "only the low lane: {both}");
 }

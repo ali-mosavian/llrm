@@ -2871,13 +2871,22 @@ fn live_after(
 ) -> Vec<Vec<HashSet<RegId>>> {
     let blocks = function.blocks.len();
     let next = successors(function);
+    // A pair is its two bytes: a lane moved into a cell the live pair is made
+    // of is read through the pair (`UNPACK` into the lane of a pointer).
+    let named = |r: Reg, into: &mut Vec<RegId>| {
+        let register = at(r);
+        into.push(register);
+        if is_pair(register) {
+            into.extend([lane(register, 0), lane(register, 1)]);
+        }
+    };
     let effects = |inst: &Inst| {
         let mut defs = Vec::new();
         let mut reads = Vec::new();
         for operand in &inst.operands {
             match operand {
-                Operand::Def(r) => defs.push(at(*r)),
-                Operand::Use(r) => reads.push(at(*r)),
+                Operand::Def(r) => named(*r, &mut defs),
+                Operand::Use(r) => named(*r, &mut reads),
                 _ => {}
             }
         }

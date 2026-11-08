@@ -886,13 +886,17 @@ pub mod x86 {
     pub const SUB8mi: u16 = 4867;
     pub const SUB8mr: u16 = 4873;
     pub const TEST16mi: u16 = 5007;
+    pub const TEST16mr: u16 = 5008;
     pub const TEST16ri: u16 = 5009;
     pub const TEST16rr: u16 = 5010;
     pub const TEST32mi: u16 = 5012;
+    pub const TEST32mr: u16 = 5013;
     pub const TEST32ri: u16 = 5014;
     pub const TEST32rr: u16 = 5015;
+    pub const TEST64mr: u16 = 5018;
     pub const TEST64rr: u16 = 5020;
     pub const TEST8mi: u16 = 5022;
+    pub const TEST8mr: u16 = 5023;
     pub const TEST8ri: u16 = 5024;
     pub const TEST8rr: u16 = 5025;
     pub const UCOM_Fpr32: u16 = 5096;
@@ -1025,13 +1029,17 @@ pub mod x86 {
         (4867, "SUB8mi"),
         (4873, "SUB8mr"),
         (5007, "TEST16mi"),
+        (5008, "TEST16mr"),
         (5009, "TEST16ri"),
         (5010, "TEST16rr"),
         (5012, "TEST32mi"),
+        (5013, "TEST32mr"),
         (5014, "TEST32ri"),
         (5015, "TEST32rr"),
+        (5018, "TEST64mr"),
         (5020, "TEST64rr"),
         (5022, "TEST8mi"),
+        (5023, "TEST8mr"),
         (5024, "TEST8ri"),
         (5025, "TEST8rr"),
         (5096, "UCOM_Fpr32"),

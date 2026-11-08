@@ -334,7 +334,9 @@ impl ProgramPass for Walk {
                                 decided.as_mut(),
                                 (tti.as_deref().is_some_and(|tti| {
                                     size != crate::inlinecost::CallerSize::Speed
-                                        || tti.inline_policy().by_rate > 0
+                                        || (tti.inline_policy().by_rate > 0
+                                            && (self.speed_rate || tti.speed_inline_rate_at_o1()))
+                                        || (!self.speed_rate && tti.inline_trials_at_o1())
                                 }))
                                 .then_some(&mut trials),
                             )
@@ -742,7 +744,7 @@ impl ProgramPass for Walk {
                                 // instructions).
                                 let priced = rate > 0 && size == crate::inlinecost::CallerSize::Speed;
                                 let kept_bytes = function_bytes(module, &program.layout, &program.target.size_costs(), &kept);
-                                if trial_accepted(tti.opt_size_inline_byte_gate(), priced, tried, best, credit, saved, growth, rate, kept_bytes) {
+                                if trial_accepted(tti.opt_size_inline_byte_gate(), tti.inline_trial_keeps_shrinking_copy(), priced, tried, best, credit, saved, growth, rate, kept_bytes) {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
@@ -1337,6 +1339,7 @@ pub fn function_bytes(
 #[allow(clippy::too_many_arguments)]
 fn trial_accepted(
     byte_gate: bool,
+    keeps_shrinking: bool,
     priced: bool,
     tried: i64,
     best: i64,
@@ -1347,7 +1350,8 @@ fn trial_accepted(
     kept_bytes: i64,
 ) -> bool {
     if priced {
-        return credit > 0 && growth * rate <= saved * 1000;
+        // A copy that leaves the module no larger and runs in fewer clocks needs no callee to go with it.
+        return (credit > 0 || (keeps_shrinking && growth <= 0 && saved > 0)) && growth * rate <= saved * 1000;
     }
     (if byte_gate { tried <= best || (tried <= best + credit && growth <= 0) } else { tried <= best + credit })
         || (saved > 0 && growth * rate <= saved * 1000)
