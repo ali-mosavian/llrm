@@ -415,7 +415,7 @@ fn an_i64_select_of_adjacent_constants_adds_the_flag_not_a_negated_one() {
         .filter_map(|i| i.what.as_ref())
         .filter_map(|w| w.name.as_deref().map(str::to_owned))
         .collect();
-    assert!(!names.iter().any(|n| n == "neg" || n == "adc" || n.starts_with('j')), "{names:?}");
+    assert!(!names.iter().any(|n| n == "neg" || n == "adc" || n == "sbb" || n.starts_with('j')), "{names:?}");
 }
 
 const AFTER_UNREACHABLE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
