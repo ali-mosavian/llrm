@@ -1661,9 +1661,29 @@ fn try_to_unroll_loop(
 
     // Try to find the trip count upper bound if the exact one is not known.
     let (mut max_trip_count, mut max_or_zero) = (0, false);
+    let mut object_bounded: Option<u32> = None;
     if trip_count == 0 {
         max_trip_count = se.get_small_constant_max_trip_count(&cx, header);
         max_or_zero = se.is_backedge_taken_count_max_or_zero(&cx, header);
+        // DEVIATE OB1: where the pin's bound is none or too large to unroll by, the object the loop's
+        // accesses run through gives one (its range-derived 2^31-1 for `i < n`).
+        if let Some(cap) = run.tti.unroll_object_bound()
+            && !opt_for_size
+            && run.options.opt_level >= 2
+            && let Some(bound) = crate::unrollbound::object_max_trip_count(&mut se, &cx, header)
+            && bound <= cap
+            // The pin's bound is none, or too large to unroll by.
+            && (max_trip_count == 0 || max_trip_count > cap)
+            // Not under a loop that unrolls whole: its constant counter makes the trips of this loop exact in
+            // the copies, where a bounded unroll leaves exit tests (nbody -O2/-O3: 20,604 more instructions).
+            && !lp.get_parent_loop().is_some_and(|parent| {
+                let trips = se.get_small_constant_trip_count(&cx, parent.get_header());
+                trips != 0 && trips <= up.full_unroll_max_count
+            })
+        {
+            max_trip_count = bound;
+            object_bounded = Some(cap);
+        }
     }
 
     // DEVIATE U3: on a float stack, copies of a body whose floats do not fit
@@ -1683,6 +1703,12 @@ fn try_to_unroll_loop(
             why(run, lp, &format!("{peak} floats live in a body, {kept} kept across its trips: the default bar"));
             up.threshold = UNROLL_THRESHOLD_DEFAULT;
         }
+    }
+
+    // OB1: a bound the object gives is unrolled by in full, to the target's cap.
+    if let Some(cap) = object_bounded {
+        up.upper_bound = true;
+        up.max_upper_bound = up.max_upper_bound.max(cap);
     }
 
     let pinfo = UnrollPragmaInfo::of(run, &options);

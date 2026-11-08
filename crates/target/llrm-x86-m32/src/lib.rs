@@ -124,6 +124,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         promote_va_list: true,
         branch_compare_trees_at_size: true,
         inline_never_grows_without_rate: true,
+        // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`): gcc completely peels a loop whose
+        // trips the object it indexes bounds (max-completely-peel-times 16); the pin does not.
+        // x_matmul_f / x_ld_matmul -O3: 392 B and 3 fmul against gcc's 1183 B and 14.
+        unroll_object_bound: Some(16),
         inline_o1_milliclocks_per_byte: per_byte,
         inline_o1_unit_bytes_milli: 3500,
         speed_inline_milliclocks_per_byte: per_byte,

@@ -562,6 +562,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE OB1 (`unrollbound.rs`): the most trips the unroller takes from the
+    /// size of the object a loop's accesses run through, as a bound it unrolls
+    /// completely by; none: the pin's bound alone.
+    fn unroll_object_bound(&self) -> Option<u32> {
+        None
+    }
+
     /// Whether a priced inline trial keeps a copy that leaves the module no
     /// larger and saves clocks though no callee goes with it. False: the
     /// callee's credit decides (arm64 -O3 jpeg `decode`: 5,828 -> 7,324 B and
@@ -1615,6 +1622,15 @@ pub trait Tti {
     /// for the narrower search to hide a counter that serves two uses.
     fn lsr_visited_registers_lose(&self) -> bool {
         true
+    }
+
+    /// DEVIATE LU14: whether `Solve` also searches the uses in the opposite
+    /// order and keeps the cheaper solution (a tie keeps the pin's order).
+    /// `SolveRecurse` requires of a use the registers the uses before it
+    /// chose, so a cheaper combination that starts with a later use is never
+    /// rated. The pin searches one order.
+    fn lsr_solves_both_use_orders(&self) -> bool {
+        false
     }
 
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
