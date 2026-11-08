@@ -1698,6 +1698,43 @@ fn test_minus_one_is_or_at_size_when_flags_are_dead() {
     }
 }
 
+/// `mov eax, 1` at size is `xor eax,eax; inc eax` (the pin's `MOV32r1`): m32
+/// phi_slot_unknown_arm -Os kept two `mov r,1` (5 B each) where the pin has 3.
+/// Only a 32-bit-address body at size, and only where the flags are dead.
+#[test]
+fn test_a_one_at_size_is_xor_and_inc() {
+    // (successor's first instruction, ones, bits, rewritten)
+    for (successor, ones, bits, rewritten) in [
+        ("cmp", true, 32, true),
+        ("cmp", false, 32, false),
+        ("cmp", true, 16, false),
+        ("cmp", true, 64, false),
+        ("jb", true, 32, false),
+    ] {
+        let eax = rl(RegId::EAX, 4);
+        let set =
+            insn(0, Some((0, 5)), Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![im(1, 4)])), vec![], vec![]);
+        let jump = insn(5, Some((5, 7)), Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(7))), vec![], vec![]);
+        let first = match successor {
+            "jb" => Some(semt(Operation::Branch, "jb", vec![], vec![], Some(9))),
+            _ => Some(sem(Operation::Compare, "cmp", vec![], vec![eax.clone(), im(2, 4)])),
+        };
+        let blocks = vec![
+            block(0, vec![Arc::new(set), Arc::new(jump)], vec![7]),
+            block(7, vec![Arc::new(insn(7, Some((7, 9)), first, vec![], vec![]))], vec![]),
+        ];
+        let input = LirBody { bits, ..body("one", 0, crate::model::lir::shared(blocks)) };
+        let result = cleared(&input, ones);
+        let names: Vec<_> = result.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.clone()).collect();
+        let want: &[&str] = if rewritten { &["xor", "inc", "jmp"] } else { &["mov", "jmp"] };
+        assert_eq!(
+            names.iter().map(|name| name.as_deref().unwrap()).collect::<Vec<_>>(),
+            want,
+            "{successor} {ones} {bits}"
+        );
+    }
+}
+
 /// `mov ecx, 0; mov edx, 64; jmp _chop` (a sibling call) stayed five bytes: the
 /// jump that returns was taken to read the flags, which the pin's `TAILJMPd`
 /// does not (m32 -O2 recchop, +3 B over the pin's `xor`).

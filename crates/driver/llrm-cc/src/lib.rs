@@ -748,6 +748,24 @@ pub fn link_command(
     Ok(command)
 }
 
+/// The error for a clang whose datalayout differs from the table's. A row with a `clang_env` takes the fork's clang from that variable, and
+/// falls back to the pin's, which has no 16-bit layout: the message names the variable when it is unset.
+fn layout_mismatch(
+    path: &str,
+    printed: &str,
+    target: &Target,
+    var: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> String {
+    let mut message = format!(
+        "{path}: clang's datalayout `{printed}` lays types out differently from the table's `{}`",
+        target.datalayout
+    );
+    if let Some(name) = target.clang_env.as_deref().filter(|name| var(name).is_none()) {
+        message.push_str(&format!(" (this row needs the fork's clang: set {name}; the pin's clang was used)"));
+    }
+    message
+}
+
 fn clang_path(target: &Target) -> PathBuf {
     let own = target.clang_env.as_deref().and_then(std::env::var_os);
     own.or_else(|| std::env::var_os("LLRM_PIN_CLANG"))
@@ -908,10 +926,7 @@ fn build(
                 let printed = datalayout_of(&text).unwrap_or_default();
                 let expected = target.clang_datalayout.as_deref().unwrap_or(&target.datalayout);
                 if printed != expected && layout_facts(printed) != layout_facts(&target.datalayout) {
-                    return Err(fail(format!(
-                        "{path}: clang's datalayout `{printed}` lays types out differently from the table's `{}`",
-                        target.datalayout
-                    )));
+                    return Err(fail(layout_mismatch(path, printed, target, |name| std::env::var_os(name))));
                 }
                 if printed != target.datalayout {
                     let line = format!("target datalayout = \"{printed}\"");
