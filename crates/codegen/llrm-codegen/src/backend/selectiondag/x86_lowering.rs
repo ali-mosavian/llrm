@@ -282,6 +282,10 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    fn sub_without_borrow_is_xor(&self) -> bool {
+        true
+    }
+
     /// `BuildSDIV`/`BuildUDIV` widen to a legal `i64` multiply for an `i32`
     /// divisor too (`imul rax, rcx, 0xCCCCCCCD; shr rax, 35`), where ours kept
     /// the `div` (an `i32` has no `MULHS` here). Where `i64` is not legal
@@ -1842,6 +1846,13 @@ fn combine_masked_xor_difference(
 /// `(a >= b) + 1`: a `setge` and an `inc`, not a load of the constant and a
 /// `sub`).
 ///
+/// DEVIATE SW1 (owner w9, recheck 2026-11-20 against gcc and clang): at `i8`
+/// the setcc is the operand itself, with no `zext` for the pin's match to see
+/// (`c ? 5 : 6` is `setl cl; mov al, 6; sub al, cl`). The inverted form is
+/// `setge al; add al, 5`: m64 -Os select_of_constants 12987 B with the old
+/// selector against 14506. Exit: the pin matches it, or the sweep shows a
+/// cell larger.
+///
 /// [pin]:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L60838
 fn combine_sub_setcc(
@@ -1851,17 +1862,18 @@ fn combine_sub_setcc(
     let (op0, op1) = (dag.operand(node, 0), dag.operand(node, 1));
     let vt = dag.value_type(node);
     let constant = dag.constant(op0).filter(|c| *c != 0)?;
-    if dag.opcode(op1) != ISD::ZeroExtend || !dag.has_one_use(op1.node) {
+    let bare = vt == EVT::I8 && dag.opcode(op1) == x86isd::SETCC;
+    if !bare && (dag.opcode(op1) != ISD::ZeroExtend || !dag.has_one_use(op1.node)) {
         return None;
     }
-    let setcc = dag.operand(op1, 0);
+    let setcc = if bare { op1 } else { dag.operand(op1, 0) };
     if dag.opcode(setcc) != x86isd::SETCC || !dag.has_one_use(setcc.node) {
         return None;
     }
     let code = dag.constant(dag.operand(setcc, 0))?;
     let opposite = cond_code(dag, code ^ 1);
     let inverted = dag.get_node(x86isd::SETCC, EVT::I8, &[opposite, dag.operand(setcc, 1)]);
-    let widened = dag.get_node(ISD::ZeroExtend, vt, &[inverted]);
+    let widened = if bare { inverted } else { dag.get_node(ISD::ZeroExtend, vt, &[inverted]) };
     let adjusted = dag.get_constant(constant.wrapping_sub(1), vt);
     Some(dag.get_node(ISD::Add, vt, &[widened, adjusted]))
 }
