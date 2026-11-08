@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: LLRM_CC_DIR=dir LLRM_OW=dir tools/softfloat_cells/rows_bytes_test.sh
+# usage: LLRM_CC_DIR=dir tools/softfloat_cells/rows_bytes_test.sh
 # rows_bytes.sh m32 ranked neg as a gap (ours 14 B vs compiler-rt 7): compiler-rt returns floats in st0 (`flds; fchs`), ours in integer registers.
 # Starred cells also get an ours+x87 column (ours plus the 17 / 15 B st0 return shim, measured with clang) to rank against.
 # A float-returning op's compiler-rt cell must carry the `*` mark (not a rank); libgcc is built -msoft-float: neg 21 B, not the 34 of the x87 return.

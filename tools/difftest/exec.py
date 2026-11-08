@@ -79,7 +79,6 @@ class Setup:
             "LLRM_CC_TARGET": target,
             "LLRM_PIN_CLANG": CLANG,
             "LLRM_LLC": str(Path(bin_dir) / "llrm-llc"),
-            **({} if "LLRM_OW" in os.environ else {"LLRM_OW": str(Path.home() / "scratch/ow-src")}),
         }
 
 

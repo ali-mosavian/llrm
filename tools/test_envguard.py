@@ -43,5 +43,5 @@ def test_a_pipeline_switch_outside_the_three_families_is_refused_and_a_tool_loca
     """LLRM_WASM_BACKEND_ONLY is none of CHECK_/EXP_/NO_ and skipped the mid-end on one side; the guard let it through."""
     with pytest.raises(SystemExit, match="LLRM_WASM_BACKEND_ONLY=1"):
         envguard.require_clean("abmeasure", {"LLRM_WASM_BACKEND_ONLY": "1"})
-    envguard.require_clean("abmeasure", {"LLRM_OW": "/ow", "LLRM_PIN_CLANG": "/c"})
+    envguard.require_clean("abmeasure", {"LLRM_CLANG_M16": "/m", "LLRM_PIN_CLANG": "/c"})
 

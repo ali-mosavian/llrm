@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: LLRM_CC_DIR=<dir with llrm-cc> LLRM_OW=... LLRM_CLANG_M16=... tests/tmp_free_check_inline_test.sh
+# usage: LLRM_CC_DIR=<dir with llrm-cc> LLRM_CLANG_M16=... tests/tmp_free_check_inline_test.sh
 # 130,816 of 327,556 str_tmp_free calls on stft_fixed were for a variable, not a temporary: a far call and a frame (11-13 instructions) to find that out.
 # The test of "is this descriptor a temporary" is in line (str_free_if_tmp): B$FASC compares against the temporaries before it calls.
 cd "$(dirname "$0")/.." || exit 2

@@ -94,12 +94,8 @@ fn run(
     std::fs::write(directory.join(tool.input.0), tool.input.1).unwrap();
     if tool.name == "llrm-cc" {
         // llrm-cc names its target by `LLRM_CC_TARGET`; the helper maps `-m32`.
-        // The Watcom m32 row names its headers by LLRM_OW; only the flag parse
-        // is under test, so any path will do.
-        let headers = std::env::var_os("LLRM_OW").unwrap_or_else(|| directory.as_os_str().to_owned());
         return common::cc::llrm_c()
             .current_dir(directory)
-            .env("LLRM_OW", headers)
             .args(flags)
             .arg(tool.input.0)
             .args(tool.more)

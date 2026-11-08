@@ -2,7 +2,8 @@
 //! `<stdarg.h>` the list was a stack slot `llvm.va_start` wrote through, so
 //! `va_arg` loaded and stored it on every trip: `sum` below was `sub esp,8;
 //! lea; mov [esp],eax; ... mov edx,[esp]; mov [esp],edx` (46 B, gcc 32 B).
-//! Needs `LLRM_OW` and the m16 clang (`LLRM_CLANG_M16`).
+//! Needs the Open Watcom tree (tools/ow-fetch.sh) and the m16 clang
+//! (`LLRM_CLANG_M16`).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -28,9 +29,14 @@ fn compile(
     source: &str,
     flag: &str,
 ) -> (String, u64) {
-    for var in ["LLRM_OW", "LLRM_CLANG_M16"] {
-        assert!(std::env::var_os(var).is_some(), "{var} is not set: this test needs it and does not skip");
-    }
+    assert!(
+        llrm_cc::ow_tree().is_dir(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
+    assert!(
+        std::env::var_os("LLRM_CLANG_M16").is_some(),
+        "LLRM_CLANG_M16 is not set: this test needs it and does not skip"
+    );
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("vastart-{name}-{}", std::process::id()));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let _ = std::fs::remove_dir_all(&dir);

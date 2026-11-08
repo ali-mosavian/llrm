@@ -1,7 +1,7 @@
 //! m32 -O1 (INL-O1): a growing inline stays only where the call's clocks pay for
 //! its bytes at the O1 rate. The pin's threshold copied every soft-float helper
-//! into each site: sfm16_dbg 24,284 B against 23,372 B priced. Needs `LLRM_OW` and
-//! the m16 clang (`LLRM_CLANG_M16`).
+//! into each site: sfm16_dbg 24,284 B against 23,372 B priced. Needs the Open
+//! Watcom tree (tools/ow-fetch.sh) and the m16 clang (`LLRM_CLANG_M16`).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -14,9 +14,14 @@ fn compile(
     source: &str,
     flag: &str,
 ) -> (String, u64) {
-    for var in ["LLRM_OW", "LLRM_CLANG_M16"] {
-        assert!(std::env::var_os(var).is_some(), "{var} is not set: this test needs it and does not skip");
-    }
+    assert!(
+        llrm_cc::ow_tree().is_dir(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
+    assert!(
+        std::env::var_os("LLRM_CLANG_M16").is_some(),
+        "LLRM_CLANG_M16 is not set: this test needs it and does not skip"
+    );
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("inlo1-{name}-{}", std::process::id()));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let _ = std::fs::remove_dir_all(&dir);

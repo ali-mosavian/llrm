@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: LLRM_CC_DIR=<dir with llrm-cc> LLRM_OW=... LLRM_CLANG_M16=... tests/small_copy_inline_test.sh
+# usage: LLRM_CC_DIR=<dir with llrm-cc> LLRM_CLANG_M16=... tests/small_copy_inline_test.sh
 # CVI/CVL/CVS/CVD/MKI/MKL/MKS/MKD copied 2..8 bytes through the far B$COPY call (CVI 49 instructions, BC's 2): a copy of a constant few bytes is loads and stores.
 cd "$(dirname "$0")/.." || exit 2
 T=$(mktemp -d); trap 'rm -rf "${T:?}"' EXIT
