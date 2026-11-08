@@ -1,4 +1,4 @@
-use super::super::dag_select::legalized;
+use super::super::select::legalized;
 use super::super::x86_lowering::{X86Lowering, x86isd};
 use super::*;
 

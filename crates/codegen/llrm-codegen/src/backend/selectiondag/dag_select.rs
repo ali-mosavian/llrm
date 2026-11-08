@@ -39,7 +39,6 @@ use super::legalize_dag;
 use super::legalize_dag::DagLegalizer;
 use super::legalize_types::TypeLegalizer;
 use super::schedule::{SchedInfo, Unit, schedule};
-use super::x86_lowering::X86Lowering;
 use super::{SDValue, SelectionDAG};
 
 /// Why a block did not get through the DAG path.
@@ -79,19 +78,10 @@ pub fn remove_assertions(dag: &mut SelectionDAG) {
     }
 }
 
-/// `CodeGenAndEmitDAG` up to selection: `Combine` at each of three levels
-/// around the two legalizers. The select shadow calls this same function.
-pub fn legalized(
-    dag: &mut SelectionDAG,
-    tli: &TargetLowering,
-    lowering: &mut X86Lowering<'_>,
-    arch: &dyn llrm_target::Target,
-) -> Result<(), Refusal> {
-    legalized_with(dag, tli, lowering, Some(arch), false)
-}
-
-/// [`legalized`] for any target's lowering hooks. `arch` is the target whose
-/// inline routines the `i128` divide calls; a target without any passes `None`.
+/// `CodeGenAndEmitDAG` up to selection for any target's lowering hooks:
+/// `Combine` at each of three levels around the two legalizers. `arch` is the
+/// target whose inline routines the `i128` divide calls; a target without any
+/// passes `None`.
 pub fn legalized_with<L: CombineHooks + legalize_dag::Hooks>(
     dag: &mut SelectionDAG,
     tli: &TargetLowering,

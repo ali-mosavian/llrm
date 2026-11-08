@@ -20,4 +20,5 @@ iced-x86 = { workspace = true }
 indexmap = { workspace = true }
 
 [dev-dependencies]
+llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }

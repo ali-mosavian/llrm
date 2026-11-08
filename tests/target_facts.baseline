@@ -9,7 +9,6 @@
 1 crates/backend/llrm-dagisel/src/addr.rs
 1 crates/backend/llrm-iselgen/src/build.rs
 10 crates/codegen/llrm-codegen/examples/builder_refusals.rs
-10 crates/codegen/llrm-codegen/examples/select_shadow.rs
 4 crates/codegen/llrm-codegen/src/abi/qb.rs
 4 crates/codegen/llrm-codegen/src/backend/arithmetic.rs
 1 crates/codegen/llrm-codegen/src/backend/arrival.rs
@@ -45,7 +44,6 @@
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dump.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/opcodes.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/schedule.rs
-3 crates/codegen/llrm-codegen/src/backend/selectiondag/x86_lowering.rs
 1 crates/codegen/llrm-codegen/src/backend/slots.rs
 2 crates/codegen/llrm-codegen/src/backend/storecombine.rs
 1 crates/codegen/llrm-codegen/src/backend/upperzero.rs

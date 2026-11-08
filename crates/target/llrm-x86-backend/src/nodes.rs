@@ -1,7 +1,9 @@
 //! The target nodes x86 gives the shared builder (`LoweringNodes`).
 
 use llrm_codegen::backend::selectiondag::builder::LoweringNodes;
-use llrm_codegen::backend::selectiondag::{x86_lowering::x86isd as pin, x86isd as own};
+use llrm_codegen::backend::selectiondag::x86isd as own;
+
+use super::x86_lowering::x86isd as pin;
 
 pub fn nodes() -> LoweringNodes {
     LoweringNodes {
@@ -27,7 +29,7 @@ pub fn nodes() -> LoweringNodes {
         wrapper_rip: Some(pin::WRAPPER_RIP),
         far_load_es: Some(pin::LES),
         far_load_ds: Some(pin::LDS),
-        far_selector_register: Some(llrm_codegen::backend::selectiondag::x86_lowering::ES),
+        far_selector_register: Some(super::x86_lowering::ES),
         far_call: Some(own::LLRM_FARCALL),
         flag_boolean: Some(pin::SETCC),
         asm: Some(own::LLRM_ASM),

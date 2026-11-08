@@ -22,6 +22,8 @@ pub mod postprocess;
 pub mod preprocess;
 pub mod select;
 pub mod unfold;
+pub mod x86_carry;
+pub mod x86_lowering;
 
 struct X86;
 
