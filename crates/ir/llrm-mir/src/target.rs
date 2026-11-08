@@ -100,6 +100,9 @@ pub struct Tuning {
     /// Trips the -O1 no-growth rule above analyses for folds: the pin's
     /// `-unroll-max-iteration-count-to-analyze` (10) when `None`.
     pub unroll_o1_analyzed_trips: Option<u32>,
+    /// IPSCCP runs a second time after ArgumentPromotion changed a body (the
+    /// pin runs it once; DEVIATE SD443, interprocedural.rs).
+    pub second_ipsccp: bool,
     /// A multiply by a constant is decomposed only where the chain's saved
     /// clocks pay for its extra bytes at `speed_milliclocks_per_byte`, the
     /// pin's own decompositions included (a tie keeps the `imul`); false:
@@ -320,6 +323,7 @@ impl Tuning {
         inline_o1_unit_bytes_milli: 1000,
         inline_o1_weighs_entry: false,
         unroll_o1_analyzed_trips: None,
+        second_ipsccp: false,
         price_pin_multiplies: false,
         imul_at_size: false,
         unroll_threshold: None,
@@ -439,13 +443,6 @@ pub trait Machine {
     /// overrides. A target with no entry here takes `Tuning::PIN`.
     fn tuning(&self) -> Tuning {
         Tuning::PIN
-    }
-
-    /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
-    /// (DEVIATE SD443, owner w2, exit 2026-11-15: interprocedural.rs). The pin
-    /// runs it once; a target that matches the pin's output turns it off.
-    fn second_ipsccp(&self) -> bool {
-        true
     }
 
     /// Clocks a byte of code is worth, in thousandths, where a decision is
