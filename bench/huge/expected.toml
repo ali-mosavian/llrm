@@ -1,45 +1,87 @@
-reason = "huge: bc/pds71/vbdos code bytes measured again by the bench harness (356/360/362 -> 354/359/361); tcpp row recorded"
-blessed = "2026-11-07"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "986ef1d39222ea0ac0b0b7b248476f9a"
+
+[ow.O1]
+instructions = 6714616
+memory_operands = 885005
+clocks = 17098115
+code_bytes = 276
+data_bytes = 80400
+bss_bytes = 0
+kernel_ms = 89.5657
 
 [ow.O2]
 instructions = 6756017
 memory_operands = 925604
+clocks = 16857490
 code_bytes = 295
 data_bytes = 80400
 bss_bytes = 0
-kernel_ms = 90.1173
+kernel_ms = 90.1179
 
 [ow.Os]
 instructions = 6714616
 memory_operands = 885005
+clocks = 17098115
 code_bytes = 276
 data_bytes = 80400
 bss_bytes = 0
-kernel_ms = 89.5651
+kernel_ms = 89.5657
+
+[bcc.O1]
+instructions = 4986412
+memory_operands = 120602
+clocks = 15298551
+code_bytes = 219
+data_bytes = 0
+bss_bytes = 80400
+kernel_ms = 66.5142
 
 [bcc.O2]
 instructions = 4986414
 memory_operands = 120602
+clocks = 15298540
 code_bytes = 221
 data_bytes = 0
 bss_bytes = 80400
-kernel_ms = 66.5136
+kernel_ms = 66.5142
 
 [bcc.Os]
 instructions = 4986412
 memory_operands = 120602
+clocks = 15298551
 code_bytes = 219
 data_bytes = 0
 bss_bytes = 80400
-kernel_ms = 66.5136
+kernel_ms = 66.5142
+
+[tcpp.O1]
+instructions = 7118219
+memory_operands = 321604
+clocks = 18990114
+code_bytes = 240
+data_bytes = 0
+bss_bytes = 80400
+kernel_ms = 94.9493
 
 [tcpp.O2]
 instructions = 7118221
 memory_operands = 321604
+clocks = 18990103
 code_bytes = 242
 data_bytes = 0
 bss_bytes = 80400
+kernel_ms = 94.9494
+
+[tcpp.Os]
+instructions = 7118219
+memory_operands = 321604
+clocks = 18990114
+code_bytes = 240
+data_bytes = 0
+bss_bytes = 80400
+kernel_ms = 94.9493
 
 [bc.O2]
 instructions = 10014180

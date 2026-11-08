@@ -557,6 +557,26 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
     return net_times(out)
 
 
+REFERENCE_STAMP = BENCH / "references.stamp.json"
+
+
+def reference_stamp() -> dict:
+    """What the stored reference numbers were measured with: the compilers' md5, their switches per level, the host's load. Written by
+    --bless --references beside expected.toml, so a clock or count that moved can be told from a compiler or host that changed."""
+    import hashlib
+
+    def md5(path: Path) -> str | None:
+        return hashlib.md5(path.read_bytes()).hexdigest() if path.is_file() else None
+
+    compilers = {"ow": md5(OW / "bwcc")} | {name: md5(home / f"{tool}.exe") for name, (home, tool, _) in BORLAND.items()}
+    return {
+        "date": str(date.today()),
+        "load_average": list(os.getloadavg()),
+        "compilers_md5": compilers,
+        "switches": {name: levels for name, (_, _, levels) in BORLAND.items()} | {"ow": {"O2": "-ox -oe=0", "O1": "-os -ol", "Os": "-os -ol"}, "basic": "/O /FPi"},
+    }
+
+
 def net_times(measured: dict) -> dict:
     """Each program's time less its toolchain's start-up (the same toolchain and level, built from startup/): kernel_ms.
     The whole program's time prices C0M's or the BASIC runtime's initialisation against llrm's small crt, which the
@@ -858,7 +878,7 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
     for (benchmark, language, opt), counts in measured.items():
         if benchmark != name or "error" in counts or "skip" in counts:
             continue
-        new = {one: counts[one] for one in (*COUNTERS, *SIZES, "kernel_ms") if one in counts}
+        new = {one: counts[one] for one in (*COUNTERS, "clocks", *SIZES, "kernel_ms") if one in counts}
         old = tables.get(language, {}).get(opt, {})
         if "kernel_ms" not in new and "kernel_ms" in old and old.get("instructions") == new.get("instructions"):
             new["kernel_ms"] = old["kernel_ms"]
@@ -953,7 +973,9 @@ def ratio_problems(label: str, reference: str, got: dict, want: dict, ref: dict,
     always moved it and no waiver on a row with references could pass."""
     problems = []
     got, want, ref = with_footprint(got), with_footprint(want), with_footprint(ref)
-    for counter in (*COUNTERS, *JUDGED_SIZES, "kernel_ms"):
+    if "clocks" in got and "clocks" in want and "clocks" not in ref:
+        problems.append(f"{label}: no stored clocks for {reference}: --bless --references --reason")
+    for counter in (*COUNTERS, "clocks", *JUDGED_SIZES, "kernel_ms"):
         if any(w["label"] == label and w["counter"] == counter and w["to"] == got.get(counter) for w in waived):
             continue
         if all(counter in one for one in (got, want, ref)) and ref[counter] > 0:
@@ -971,7 +993,7 @@ def drift_problems(label: str, got: dict, stored: dict | None) -> list[str]:
     if stored is None:
         return [f"{label}: not recorded; run --bless --references --reason"]
     problems = []
-    for counter in (*COUNTERS, *SIZES, "kernel_ms"):
+    for counter in (*COUNTERS, "clocks", *SIZES, "kernel_ms"):
         if counter in got and counter in stored:
             slack = max(TIME_TOLERANCE * abs(stored[counter]), TIME_SLACK_MS) if counter == "kernel_ms" else 0
             if abs(got[counter] - stored[counter]) > slack:
@@ -1358,6 +1380,7 @@ def main() -> int:
                 print(f"not blessing {name}: {broken}")
                 return 1
             changed += write_expected(directory, references, name, args.reason)
+        REFERENCE_STAMP.write_text(json.dumps(reference_stamp(), indent=1) + "\n")
         print(f"blessed {len({key[0] for key in references})} benchmarks, {changed} files changed")
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0

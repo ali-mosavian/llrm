@@ -1,9 +1,20 @@
-reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
-blessed = "2026-10-15"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
+corpus = "75b4c384fd4bf24cbb92c073dbec2063"
+
+[ow.O1]
+instructions = 99429
+memory_operands = 30234
+clocks = 304321
+code_bytes = 321
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.3276
 
 [ow.O2]
 instructions = 109307
 memory_operands = 23057
+clocks = 287709
 code_bytes = 335
 data_bytes = 0
 bss_bytes = 0
@@ -12,14 +23,25 @@ kernel_ms = 1.4594
 [ow.Os]
 instructions = 99429
 memory_operands = 30234
+clocks = 304321
 code_bytes = 321
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 1.3276
 
+[bcc.O1]
+instructions = 138275
+memory_operands = 22251
+clocks = 403415
+code_bytes = 359
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.8488
+
 [bcc.O2]
 instructions = 137679
 memory_operands = 22851
+clocks = 351443
 code_bytes = 383
 data_bytes = 0
 bss_bytes = 0
@@ -28,14 +50,25 @@ kernel_ms = 1.8409
 [bcc.Os]
 instructions = 138275
 memory_operands = 22251
+clocks = 403415
 code_bytes = 359
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 1.8488
 
+[tc.O1]
+instructions = 141131
+memory_operands = 29727
+clocks = 430587
+code_bytes = 365
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.8839
+
 [tc.O2]
 instructions = 141133
 memory_operands = 29727
+clocks = 430576
 code_bytes = 370
 data_bytes = 0
 bss_bytes = 0
@@ -44,14 +77,25 @@ kernel_ms = 1.8839
 [tc.Os]
 instructions = 141131
 memory_operands = 29727
+clocks = 430587
 code_bytes = 365
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 1.8839
 
+[tcpp.O1]
+instructions = 125974
+memory_operands = 31618
+clocks = 445432
+code_bytes = 352
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.6817
+
 [tcpp.O2]
 instructions = 152696
 memory_operands = 31618
+clocks = 397081
 code_bytes = 385
 data_bytes = 0
 bss_bytes = 0
@@ -60,6 +104,7 @@ kernel_ms = 2.0381
 [tcpp.Os]
 instructions = 125974
 memory_operands = 31618
+clocks = 445432
 code_bytes = 352
 data_bytes = 0
 bss_bytes = 0
