@@ -2011,6 +2011,21 @@ pub(super) fn set_odds(
         };
         *stated.entry((at, to_at)).or_insert(0) += u64::from(probability);
     }
+    // The machine CFG lists successors in `addSuccessor` order, true edge
+    // first, whichever side the jump ends up on; placement breaks ties by it.
+    let mut order: IndexMap<i64, Vec<i64>> = IndexMap::default();
+    for &(at, to_at) in stated.keys() {
+        order.entry(at).or_default().push(to_at);
+    }
+    for block in &mut body.blocks {
+        let Some(stated_order) = order.get(&block.at).filter(|_| block.succ.len() > 1) else { continue };
+        let mut reordered: Vec<i64> = stated_order.iter().copied().filter(|to| block.succ.contains(to)).collect();
+        let rest: Vec<i64> = block.succ.iter().copied().filter(|to| !reordered.contains(to)).collect();
+        reordered.extend(rest);
+        if reordered[..] != block.succ[..] {
+            block.succ = reordered.into();
+        }
+    }
     // `normalizeSuccProbs`: the edges of a block share one.
     let mut total: IndexMap<i64, u64> = IndexMap::default();
     for (&(at, _), &probability) in &stated {
