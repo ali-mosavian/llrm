@@ -4758,3 +4758,18 @@ fn a_volatile_copy_is_made_of_16_byte_pieces_and_each_is_read_and_written_at_m64
     let pieces = listing.matches("movups").count() + listing.matches("movaps").count();
     assert_eq!(pieces, 4, "{listing}");
 }
+
+/// The pin tail-calls the library routine of a `memmove`/`memcpy`/`memset` that ends a function (`jmp memmove`); ours
+/// pushed a slot, called, popped and returned: three bytes in each of the two hundred wrappers of memory_expansion
+/// (+4201 B at -O2).
+#[test]
+fn a_memmove_ending_a_function_is_a_tail_call_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %d, ptr %s) {\n  \
+                tail call void @llvm.memmove.p0.p0.i64(ptr %d, ptr %s, i64 300, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("jmp memmove") && !listing.contains("call memmove"), "{listing}");
+}
