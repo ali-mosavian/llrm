@@ -99,3 +99,28 @@ fn a_lea_of_a_symbol_has_a_price_on_every_cpu() {
     }
     assert_eq!(cost_on(Cpu::M68000, "lea\tg, %a2", 6, false).unwrap().clocks, 12);
 }
+
+/// Five callees called four times each: `%a2` to `%a5` took four, the fifth
+/// stayed 6 B a call (memory_expansion: ~190 calls). `%a6` is free when the
+/// frame has no pointer.
+#[test]
+fn a_fifth_callee_goes_in_a6() {
+    let mut ir =
+        String::from("target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n");
+    for name in ["g1", "g2", "g3", "g4", "g5"] {
+        ir += &format!("declare void @{name}(i32)\n");
+    }
+    ir += "define void @f() optsize {\nentry:\n";
+    for n in 1..=4 {
+        for name in ["g1", "g2", "g3", "g4", "g5"] {
+            ir += &format!("  call void @{name}(i32 {n})\n");
+        }
+    }
+    ir += "  ret void\n}\n";
+    let out = lines(&ir, "68000", Level::Os);
+    assert!(
+        out.iter().any(|line| line.starts_with("jsr") && line.contains("(%a6)")),
+        "no call through %a6:\n{}",
+        out.join("\n")
+    );
+}
