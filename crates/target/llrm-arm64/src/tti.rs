@@ -79,12 +79,15 @@ impl Cpu {
 /// clocks: 0.25 a byte, the floor (a Cortex-A72/M1-class core fetches 16 B a
 /// clock and runs 3-4 instructions a clock, so an instruction is about 0.3).
 /// The saving the model counts is the loop control and the folded operands
-/// only, and every byte also takes a place in the instruction cache and the
-/// branch predictor; 1 clock a byte is where no cell of the corpus (34
-/// programs, 2026-11-08) grew bytes for no instruction gain, and it keeps the
-/// unrolls that save 0.8-23 clocks a byte. It was 250, the median of the cells
-/// where gcc and clang differed, against a saving counted over assumed runs.
-const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 1000;
+/// only, so the price is set at twice the floor: 0.5 keeps every unroll that
+/// saves 0.5-23 clocks a byte, which the pin makes by size (150) alone
+/// (fpbench -O2 -33% instructions). It was 250, the median of the cells where
+/// gcc and clang differed, against a saving counted over assumed runs.
+///
+/// DEVIATE UP1 (exit 2026-11-20), cells that grow bytes for little: nbody_fixed
+/// -O2 +32 B for -37 instructions, shellsort -O3 +704 B for -139; both are
+/// priced a wash at the floor, and run few times.
+const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 500;
 
 /// AArch64's scalar profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
