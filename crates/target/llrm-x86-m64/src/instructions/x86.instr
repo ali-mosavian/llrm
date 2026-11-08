@@ -104,6 +104,8 @@ sqrtsd	unary	x/xm	64	sse_sqrt	-	-	-	-/-	Sqrtsd_xmm_xmmm64
 movsd_x	move	x/xm	64	sse_move	-	self,same	-	-/-	Movsd_xmm_xmmm64
 movsd_x	move	m/x	64	sse_move	-	-	-	-/-	Movsd_xmmm64_xmm
 ucomisd	cmp	-/x,xm	64	sse_compare	-	-	-	-/OF,SF,ZF,AF,CF,PF	Ucomisd_xmm_xmmm64
+cmpss	binary	x/^0,xm,i	32	sse_arith	-	-	-	-/-	Cmpss_xmm_xmmm32_imm8
+cmpsd_x	binary	x/^0,xm,i	64	sse_arith	-	-	-	-/-	Cmpsd_xmm_xmmm64_imm8
 xorps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Xorps_xmm_xmmm128
 andps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Andps_xmm_xmmm128
 andnps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Andnps_xmm_xmmm128
