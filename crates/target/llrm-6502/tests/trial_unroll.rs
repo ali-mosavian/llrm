@@ -100,3 +100,17 @@ fn a_trial_that_grows_the_ir_past_the_limit_is_not_priced() {
     assert!(trial_fits(461)); // loop_fusion, kept
     assert!(!trial_fits(2808)); // fcmp_all
 }
+
+/// The trial priced the first build, then the trial, then selected the winner
+/// a third time: +16.9% of corpus compile at -O2 (2026-11-08). Each build is
+/// selected once and the winner's text is the one priced.
+#[test]
+fn a_trial_selects_each_build_once() {
+    let before = llrm_6502::driver::selected();
+    assembly(&module(FOLDING), &Request::new(Level::O2)).unwrap();
+    let functions = llrm_6502::driver::selected() - before;
+    let before = llrm_6502::driver::selected();
+    assembly(&module(FOLDING), &Request::new(Level::O1)).unwrap();
+    let once = llrm_6502::driver::selected() - before;
+    assert_eq!(functions, 2 * once, "two builds, one selection each");
+}
