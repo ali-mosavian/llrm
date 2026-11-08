@@ -206,6 +206,8 @@ fn program(
             }
         }
     }
+    // The pin lowers `llvm.is.constant` and `llvm.objectsize` at every level.
+    program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
     Ok(program)
 }
 
