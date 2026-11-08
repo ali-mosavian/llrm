@@ -56,3 +56,45 @@ fn test_m32_o1_straight_line_helpers_are_priced_not_all_copied() {
     let (_, size) = compile("soft", &source, "-O1");
     assert!(size < 23_800, "object is {size} B; copying every helper into each site gave 24,284, pricing them 23,372");
 }
+
+/// The inliner's growth is in size units, one per instruction, and a callee's
+/// bytes are 3.5 to 5 times that: compared with a per-byte rate it let
+/// `sf_cmp_bits` (about 70 B) into each of eight comparison wrappers
+/// (sfm16_float 23,432 B against gcc's smaller object and 22,748 B with the unit
+/// scaled).
+#[test]
+fn test_m32_o1_growth_is_priced_in_bytes_not_size_units() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let source = std::fs::read_to_string(root.join("bench/sfm16_float/sfm16_float.c")).unwrap();
+    let (_, size) = compile("units", &source, "-O1");
+    assert!(size < 23_000, "object is {size} B; the unscaled growth gave 23,432");
+}
+
+/// The bottom-up walk priced `sf32_pack` in `mul_core` at the site's own
+/// frequency (1.0), though the soft-float multiply runs in a loop of the
+/// kernel 30 times per call: it stayed a call and x_sf_mul ran 88263 clk
+/// against 82587 with it inlined (gcc/clang 88107). The check weighs a site by
+/// how often its function runs, up the call graph.
+#[test]
+fn test_m32_o1_inline_weighs_how_often_the_caller_runs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let source =
+        std::fs::read_to_string(root.join("crates/target/llrm-x86-m32/vsgcc/kernels/x_sf_mul/x_sf_mul.c")).unwrap();
+    let (listing, _) = compile("entry", &source, "-O1");
+    let calls = listing.lines().filter(|line| line.contains("call") && line.contains("sf32_pack")).count();
+    assert!(calls <= 2, "{calls} calls of sf32_pack: the hot caller's copies were not made (3 without the weight)");
+}
+
+/// m32 -O2 (INL-O2 RATE): a growing inline stays where the call sequence's
+/// clocks, at the site's run count, pay for the bytes at the 486's rate. The
+/// call was priced as one instruction (4 clocks of the 15 it costs, with its
+/// pushes, `ret` and `add esp`) and a helper called from a hot loop up the
+/// graph kept its call: x_sf_add -O2 object: 22,860 B before, 22,572 B priced.
+#[test]
+fn test_m32_o2_inline_prices_the_call_sequence_and_the_caller_s_run_count() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let source =
+        std::fs::read_to_string(root.join("crates/target/llrm-x86-m32/vsgcc/kernels/x_sf_add/x_sf_add.c")).unwrap();
+    let (_, size) = compile("o2rate", &source, "-O2");
+    assert!(size < 22_700, "object is {size} B; the call priced as one instruction gave 22,860");
+}

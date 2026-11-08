@@ -29,6 +29,7 @@ LAYERS = [
         [
             "llrm-x86", "llrm-x86-m16", "llrm-x86-m32", "llrm-x86-m64", "llrm-x86-m16-select", "llrm-x86-m32-select",
             "llrm-x86-m64-select", "llrm-arm64", "llrm-6502", "llrm-m68k", "llrm-wasm",
+            "llrm-x86-backend", "llrm-x86-dagisel",
         ],
     ),
     ("driver", ["llrm-driver", "llrm-cc", "llrm-bcdriver", "llrm-opt"]),

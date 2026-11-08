@@ -23,6 +23,7 @@ pub mod staticlocals;
 pub mod target;
 pub mod timing;
 pub mod tti;
+pub mod weights;
 
 use llrm_lir::registers::{RegId, Row};
 

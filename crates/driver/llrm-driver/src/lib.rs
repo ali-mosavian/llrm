@@ -18,6 +18,7 @@ pub const DEFAULT: &str = "x86-m16";
 
 /// Every target built in.
 pub fn all() -> Vec<Rc<dyn Target>> {
+    llrm_x86_backend::install();
     vec![Rc::new(llrm_x86_m16::M16), Rc::new(llrm_x86_m32::M32), Rc::new(llrm_x86_m64::M64)]
 }
 

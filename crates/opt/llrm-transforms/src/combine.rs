@@ -330,6 +330,15 @@ pub enum Visit {
 }
 
 /// What `visit` reads besides the function.
+/// What the target's `Tti` lets the combiner do.
+#[derive(Clone, Copy, Default)]
+pub struct TargetHooks {
+    /// `Tti::variable_shift_count_in_fixed_register`.
+    pub fixed_shift_count: bool,
+    /// `Tti::folds_select_to_cmp`.
+    pub select_to_cmp: bool,
+}
+
 pub struct Env<'a> {
     pub globals: &'a [GlobalValue],
     /// The module's metadata nodes, which ValueTracking reads (`!range`).
@@ -341,8 +350,7 @@ pub struct Env<'a> {
     /// `instcombine-code-sinking` (default true): the driver sinks an
     /// instruction to its only user's block after popping it.
     pub sinking: bool,
-    /// `Tti::variable_shift_count_in_fixed_register`.
-    pub fixed_shift_count: bool,
+    pub hooks: TargetHooks,
     /// `BackEdges`, computed on the first ask (`computeBackEdges`).
     pub back_edges: std::cell::OnceCell<std::collections::BTreeSet<(BlockId, BlockId)>>,
 }
@@ -643,11 +651,12 @@ pub fn combine(
     function: &mut Function,
     declared: &mut Declared,
 ) -> bool {
-    combine_on_target(context, globals, callees, metadata, layout, function, declared, false)
+    combine_on_target(context, globals, callees, metadata, layout, function, declared, TargetHooks::default())
 }
 
 /// `combine` on a target that says whether a variable shift count must sit in
-/// one register (`Tti::variable_shift_count_in_fixed_register`).
+/// one register (`Tti::variable_shift_count_in_fixed_register`) and whether
+/// it makes `scmp`/`ucmp` (`Tti::folds_select_to_cmp`).
 pub fn combine_on_target(
     context: &mut Context,
     globals: &[GlobalValue],
@@ -656,9 +665,9 @@ pub fn combine_on_target(
     layout: &DataLayout,
     function: &mut Function,
     declared: &mut Declared,
-    fixed_shift_count: bool,
+    hooks: TargetHooks,
 ) -> bool {
-    combine_for(context, globals, callees, metadata, layout, function, visit, true, declared, fixed_shift_count)
+    combine_for(context, globals, callees, metadata, layout, function, visit, true, declared, hooks)
 }
 
 /// `combine` with the `visit*` of a test, and no sinking: a test of one
@@ -702,7 +711,7 @@ pub(crate) fn combine_with_sinking(
     sinking: bool,
     declared: &mut Declared,
 ) -> bool {
-    combine_for(context, globals, callees, metadata, layout, function, visit, sinking, declared, false)
+    combine_for(context, globals, callees, metadata, layout, function, visit, sinking, declared, TargetHooks::default())
 }
 
 pub(crate) fn combine_for(
@@ -715,23 +724,14 @@ pub(crate) fn combine_for(
     visit: fn(&mut Combiner, InstId) -> Visit,
     sinking: bool,
     declared: &mut Declared,
-    fixed_shift_count: bool,
+    hooks: TargetHooks,
 ) -> bool {
     // InstCombine's `SQ.DC`: what the branches dominating an instruction say,
     // those visited so far.
     let analyses =
         FunctionAnalyses::of_declared(context, globals, metadata, layout, function, declared.assume_declared(globals))
             .with_lazy_dom_conditions();
-    let env = Env {
-        globals,
-        metadata,
-        callees,
-        layout,
-        analyses,
-        sinking,
-        fixed_shift_count,
-        back_edges: Default::default(),
-    };
+    let env = Env { globals, metadata, callees, layout, analyses, sinking, hooks, back_edges: Default::default() };
     let mut c = Combiner {
         context,
         function,

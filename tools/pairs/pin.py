@@ -104,6 +104,8 @@ def retarget(text: str, of: Target) -> str:
     text = re.sub(r"^(declare [^\n]*@llvm\.[^\n]*?\)) addrspace\(1\)(?= [a-z]|$)", r"\1", text, flags=re.M)
     text = re.sub(r"^(\s+(?:%\S+ = )?(?:(?:tail|musttail|notail) )?call(?: cc \d+)?) addrspace\(1\)( [^\n]*@llvm\.)", r"\1\2", text, flags=re.M)
     text = _with_stack_alignment(text, of)
+    # A dump's own groups carry clang's `target-cpu` (pentium4 for -m32): one CPU per module, or which of two groups wins is LLVM's merge.
+    text = re.sub(r' ?"(?:target-cpu|target-features|tune-cpu)"="[^"]*"', "", text)
     group = f'"target-cpu"="{of.cpu}" "target-features"="{of.features}"' + (" optsize" if of.optsize else "")
     return text + f"\nattributes #9999 = {{ {group} }}\n"
 
@@ -122,7 +124,7 @@ def opt(passes: str, text: str, of: Target | None = None, extra: list[str] | Non
     """`opt -passes=PASSES -S` over `text` retargeted to `of`; `stdout` starts with the `target:` line as a comment."""
     of = _need(of)
     done = subprocess.run([_tool("opt", bin_dir), f"-passes={passes}", "-S", *(extra or []), "-"], input=retarget(text, of), capture_output=True, text=True)
-    done.stdout = f"; {header(of)}\n" + done.stdout
+    done.stdout = f"; {header(of)}\n; optimised: {passes}\n" + done.stdout
     return done
 
 

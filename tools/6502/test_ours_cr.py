@@ -14,6 +14,42 @@ def run(env_rt, script="ours_cr.py"):
     return subprocess.run([sys.executable, os.path.join(HERE, script), "/nonexistent/llrm-cc", "O2", "/dev/null", "__empty__"],
                           capture_output=True, text=True, env=env, timeout=120)
 
+def header_flags_fn():
+    src = open(os.path.join(HERE, "ours_cr.py")).read()
+    ns = {}
+    exec("import re\n" + src[src.index("X86_ONLY"):src.index("def one(job):")], ns)
+    return ns["header_flags"]
+
+class HeaderFlags(unittest.TestCase):
+    """ours_cr compiled every program without its `// flags:` -f options: 24 of 212 programs (12 with
+    -fno-inline-functions, tail_calls among them) were measured inlined when the test says they are not (2026-11-08).
+    Their rows in the tip table, the shift-RMW and trial-unroll A/Bs were withdrawn."""
+    def write(self, header):
+        f = tempfile.NamedTemporaryFile("w", suffix=".c", delete=False); f.write(header + "\nint main(){return 0;}\n"); f.close()
+        self.addCleanup(os.unlink, f.name); return f.name
+    def test_f_options_pass_x86_only_options_drop(self):
+        p = self.write("// flags: -O2 -march=i486 -fno-inline-functions | -O2 -m32 -mabi=sysv -fno-inline-functions -fwrapv")
+        self.assertEqual(header_flags_fn()(p), ["-fno-inline-functions", "-fwrapv"])
+    def test_unknown_option_is_an_error(self):
+        with self.assertRaises(SystemExit): header_flags_fn()(self.write("// flags: -O2 -mfoo=bar"))
+    def test_no_header_no_flags(self):
+        self.assertEqual(header_flags_fn()(self.write("int x;")), [])
+
+class PadSpan(unittest.TestCase):
+    """The A/B scan ran with OURS_PADS=0,1,2,3: four copies of one layout. wide_shift_by_one read +3,377 clocks for -44 B,
+    a page-crossing cliff (607,141 at pads 0..16, 619,097 at 200) that four neighbouring pads cannot see (2026-11-08)."""
+    def pads(self, value):
+        env = {k: v for k, v in os.environ.items()}
+        env.update(OURS_RT="/nonexistent", OURS_PADS=value)
+        return subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), "/nonexistent/llrm-cc", "O2", "/dev/null", "__empty__"],
+                              capture_output=True, text=True, env=env, timeout=120)
+    def test_neighbouring_pads_are_refused(self):
+        r = self.pads("0,1,2,3")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("span", r.stderr)
+    def test_spread_pads_are_accepted(self):
+        self.assertNotIn("span", self.pads("0,37,101,200").stderr)
+
 class OursCr(unittest.TestCase):
     def test_refuses_without_ours_rt(self):
         r = run(None)

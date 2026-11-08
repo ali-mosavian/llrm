@@ -35,7 +35,7 @@ pub fn builder_target() -> BuilderTarget {
         dag: DagConfig {
             boolean_contents: BooleanContents::ZeroOrNegativeOne,
             big_endian: true,
-            ..BuilderTarget::m32().dag
+            ..BuilderTarget::for_pointer_bits(32).dag
         },
         shift_amount: EVT::I32,
         jump_tables: false,
@@ -56,7 +56,7 @@ pub fn builder_target() -> BuilderTarget {
             big_endian: true,
             calling: Some(&*CALLING),
         }),
-        ..BuilderTarget::m32()
+        ..BuilderTarget::for_pointer_bits(32)
     }
 }
 

@@ -388,6 +388,12 @@ pub fn cost_on(
         None => (name, None),
     };
     let mut operands: Vec<Operand> = split_operands(rest).into_iter().map(operand).collect::<Result<_, _>>()?;
+    if matches!(base, "lea" | "pea") {
+        // the address of a symbol is absolute short in four bytes, long in six
+        if let Some(one @ Operand::Target) = operands.first_mut() {
+            *one = Operand::Mode(if bytes == 4 { Mode::AbsW } else { Mode::AbsL }, 0);
+        }
+    }
     if base == "movem" {
         // a list of one register reads as a register operand
         for one in &mut operands {

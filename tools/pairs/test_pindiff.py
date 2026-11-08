@@ -438,3 +438,35 @@ def test_a_pin_llc_that_exits_zero_without_output_is_refused_not_read_from_the_l
     src.write_text("void f(void){}\n")
     result = pindiff.one(src, "m32", "O2", "llc", tmp_path, False)
     assert isinstance(result, str) and result.startswith("pin llc:"), result
+
+
+def test_lea_padding_counts_as_padding_not_code():
+    """Ours aligns with `lea esi,[esi+eiz*1+0x0]`; the nop-only filter left ~1.7 KB of it in memory_expansion's "padding-free" bytes (m32 -O1:
+    ours 31083 B read 31006 against the pin's 30095), and the code-B gap of every m32 row came out too large (2026-11-08)."""
+    pindiff = load("pindiff")
+    listing = (
+        "   0:\tb8 01 00 00 00       \tmov    eax,0x1\n"
+        "   5:\t8d b4 26 00 00 00 00 \tlea    esi,[esi+eiz*1+0x0]\n"
+        "   c:\t8d 76 00             \tlea    esi,[esi+0x0]\n"
+        "   f:\t8d 04 06             \tlea    eax,[esi+eax*1]\n"
+        "  12:\t90                   \tnop\n"
+    )
+    assert pindiff.nop_bytes(listing) == 7 + 3 + 1
+
+
+def test_pin_optimised_ir_is_refused_as_raw_input():
+    """w12 2026-11-08: one.rt.ll (pin opt output) fed to llrm-llc re-ran our mid-end before LSR; the compare read +28/+39 B at m32 -O1
+    div_constants that real flow (4324 B against 5012 B) does not have."""
+    guard = load("irguard")
+    reopt = (Path(__file__).resolve().parent / "testdata" / "one.rt.ll").read_text()
+    assert guard.reoptimised(reopt)
+    with pytest.raises(SystemExit, match="re-optimised IR"):
+        guard.check_raw(reopt, "one.rt.ll")
+    guard.check_raw("; ModuleID = 'a.c'\ndefine void @f() { ret void }\n", "raw")
+
+
+def test_pindiff_labels_what_its_pin_column_is():
+    """The pin column (pin opt on raw IR) is 3471 B on m32 -O1 div_constants_ulong where the real clang -O1 is 3771: it was read as the pin's size."""
+    diff = load("pindiff")
+    assert "RAW clang IR" in diff.pin_column_label(False) and "not clang's own -O flow" in diff.pin_column_label(False)
+    assert "RE-OPTIMISED" in diff.pin_column_label(True)

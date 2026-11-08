@@ -1037,7 +1037,7 @@ impl MemorySsaUpdater {
         let new_phi = mssa.create_memory_phi(new);
         let mut remaining: Vec<BlockId> = preds.to_vec();
         if !identical_edges_were_merged {
-            let distinct: BTreeSet<BlockId> = preds.iter().copied().collect();
+            let distinct: IdSet<BlockId> = preds.iter().copied().collect();
             assert_eq!(distinct.len(), preds.len(), "without merged edges there are no duplicate predecessors");
         }
         let mut moved: Vec<(AccessId, BlockId)> = Vec::new();

@@ -179,6 +179,45 @@ fn a_row_without_a_level_and_without_a_reason_is_found() {
     assert!(rows_dropping_the_level(&said).is_empty());
 }
 
+/// `-fno-inline-functions-called-once` (tests/run/c headers, 38 programs carry
+/// `-fno-inline-functions`) reached llrm-wasm-llc, which answered
+/// "unrecognized argument" and refused the compile; the pin's clang takes the
+/// switches itself and writes `noinline` into the IR.
+#[test]
+fn a_pass_switch_stays_away_from_a_backend_that_takes_none() {
+    let table = targets(TARGETS).unwrap();
+    let one = built("-fno-inline-functions-called-once -fno-unroll-loops -c x.c");
+    let args = |name: &str| llc_args(&table[name], &one, Path::new("x.ll"), Path::new("x.o"));
+    for name in ["wasm32", "z80-sdcc"] {
+        assert!(args(name).iter().all(|flag| !flag.starts_with("-fno-")), "{name}: {:?}", args(name));
+    }
+    // m68k's llc takes them (its program headers' `-fno-inline-functions` made 19 programs fail)
+    for name in ["x86_32-linux", "m68k-68000", "m68k-68020"] {
+        let kept = args(name);
+        assert!(kept.contains(&"-fno-inline-functions-called-once".to_owned()), "{name}: {kept:?}");
+        assert!(kept.contains(&"-fno-unroll-loops".to_owned()), "{name}: {kept:?}");
+    }
+    let precise = built("-fexcess-precision=standard -c x.c");
+    let wasm = &table["wasm32"];
+    let wasm_args = llc_args(wasm, &precise, Path::new("x.ll"), Path::new("x.o"));
+    assert!(wasm_args.iter().all(|flag| !flag.starts_with("-fexcess-precision")), "{wasm_args:?}");
+    assert!(clang_flags(wasm, &precise).contains(&"-fexcess-precision=standard".to_owned()));
+    let x86 = &table["x86_32-linux"];
+    assert!(
+        llc_args(x86, &precise, Path::new("x.ll"), Path::new("x.o"))
+            .contains(&"-fexcess-precision=standard".to_owned())
+    );
+}
+
+#[test]
+fn a_row_that_takes_no_pass_switch_says_why() {
+    let table = targets(TARGETS).unwrap();
+    for (name, row) in &table {
+        let reasoned = row.llc_passes_reason.as_deref().is_some_and(|why| !why.is_empty());
+        assert!(row.llc_passes || reasoned, "{name}");
+    }
+}
+
 /// The Watcom front end's tests pass the backend's switches (`-march`,
 /// `-fno-inline-functions-called-once`, `-mcode-segment=`) with the source;
 /// clang took them all and the backend saw none, so a program built with them
@@ -441,4 +480,17 @@ fn every_toolchain_header_a_recipe_includes_is_embedded() {
         assert!(names.contains(&header), "{header} missing from the embedded toolchain: {names:?}");
     }
     assert!(TOOLCHAIN_FILES.iter().all(|(_, bytes)| !bytes.is_empty()));
+}
+
+/// An m16 compile on a box with only `LLRM_PIN_CLANG` died with "clang's datalayout `e-m:e-p:32:32...` lays types out differently" and
+/// no word of the variable that picks the fork's clang. The message names it when it is unset, and only then.
+#[test]
+fn a_layout_mismatch_names_the_variable_of_the_forks_clang_when_it_is_unset() {
+    let table = targets(TARGETS).unwrap();
+    let row = &table["x86_16-dos"];
+    let name = row.clang_env.as_deref().unwrap();
+    let unset = layout_mismatch("f.c", "e-m:e-p:32:32", row, |_| None);
+    assert!(unset.contains(name), "{unset}");
+    let set = layout_mismatch("f.c", "e-m:e-p:32:32", row, |_| Some("clang".into()));
+    assert!(!set.contains(name), "{set}");
 }

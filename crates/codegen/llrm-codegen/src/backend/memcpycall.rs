@@ -112,9 +112,11 @@ pub fn expanded(
     if !any {
         return Ok(());
     }
+    // The routine's result is dropped, as `getMemcpy`'s void `RetTy` has it: a copy ending the function is then a
+    // sibling call (the caller's void return matches).
     let (pointer, word, returns) = {
         let types = &module.context.types;
-        (types.ptr(0), types.int(32), types.ptr(0))
+        (types.ptr(0), types.int(32), types.void())
     };
     let ty = module
         .context
@@ -150,17 +152,22 @@ pub fn expanded(
                 Operand::Value(function.instruction(made).result.expect("a value"))
             }
         };
+        // `EmitTargetCodeForMemcpy`'s `isTailCall`: the call is a tail call as the intrinsic was.
+        let tail = match &instruction.opcode {
+            Opcode::Call(original) => original.tail,
+            _ => Default::default(),
+        };
         let info = CallInfo {
             function_type: ty,
             calling_convention: convention,
             return_attrs: Vec::new(),
             argument_attrs: vec![Vec::new(); 3],
             attrs: Vec::new(),
-            tail: Default::default(),
+            tail,
         };
         let made = function.create_instruction(
             Opcode::Call(Box::new(info)),
-            pointer,
+            returns,
             vec![dst, src, len, Operand::Constant(reference)],
             Flags::default(),
             None,

@@ -814,6 +814,9 @@ def test_what_a_runner_lacks_is_a_named_skip_and_what_it_needs_is_installed(tmp_
     (tmp_path / "wdump").write_text("")
     assert "wdump" not in gate.missing_capabilities({**host, "WDUMP": str(tmp_path / "wdump")})
     assert "LLRM_REQUIRE_WDUMP" in (gate.ROOT / "tools/debug-gate.env").read_text()
+    # The facts tests skip without the pinned clang unless this is set: the gate must set it, or they pass vacuously.
+    assert "LLRM_REQUIRE_PIN_CLANG" in (gate.ROOT / "tools/debug-gate.env").read_text()
+    assert gate.load()["capability"]["clang"]["require"] == ["LLRM_REQUIRE_PIN_CLANG"]
     declared = gate.declared_requirements()
     # BCOM45 is the oracle of these; the llrm side (jwlink) of every QB test needs no QB45
     for test in ("test_qbbc.py", "test_qbgfx.py", "test_qbgfxstep.py", "test_qbdemos.py", "test_qbrt.py"):

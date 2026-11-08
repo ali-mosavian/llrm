@@ -28,6 +28,7 @@ pub mod z80isd {
 
     pub const CMP: ISD = ISD::Target(ids::CMP);
     pub const CMPC: ISD = ISD::Target(ids::CMPC);
+    pub const CMPS: ISD = ISD::Target(ids::CMPS);
     pub const WRAPPER: ISD = ISD::Target(ids::WRAPPER);
     pub const SUBZX: ISD = ISD::Target(ids::SUBZX);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
@@ -99,6 +100,8 @@ pub fn target_lowering() -> TargetLowering {
     set(&[MulHS, MulHU, UMulLoHi, SMulLoHi], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[SDivRem, UDivRem], &[MVT::I8], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], &[MVT::I8, MVT::I16], Action::Expand);
+    // no rotate or funnel shift instruction: shifts and an or (`expandROT`, `expandFunnelShift`)
+    set(&[Rotl, Rotr, FShl, FShr], &[MVT::I8, MVT::I16], Action::Expand);
     // the action is by the type extended from (`LegalizeDAG`): a word from a
     // byte is the byte sign-extended (`lower_sign_extend_inreg`)
     set(&[SignExtendInReg], &[MVT::I1, MVT::I16], Action::Expand);
@@ -168,7 +171,13 @@ pub fn target_lowering() -> TargetLowering {
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
+    // equality of a long is the bytes' xors or-ed in the accumulator
+    tl.set_byte_equality(true);
+    tl.set_assert_sext_keeps_high(true);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
+    // a jump table: the word at table + 2 * index, jumped to (`ExpandNode` of BR_JT)
+    tl.set_operation_action(BrJT, MVT::Other, Action::Expand);
+    tl.set_operation_action(JumpTable, MVT::I16, Action::Custom);
     tl
 }
 
@@ -353,6 +362,7 @@ impl Hooks for Z80Lowering {
             ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
             ISD::SignExtendInReg => lower_sign_extend_inreg(dag, node),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::JumpTable => lower_jump_table(dag, node),
             ISD::Load if dag.value_type(node) == EVT::I1 => lower_bit_load(dag, node),
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
             _ => None,
@@ -576,6 +586,16 @@ fn lower_global_address(
     Some(dag.get_node(z80isd::WRAPPER, EVT::I16, &[address]))
 }
 
+/// `LowerJumpTable`: `WRAPPER` of the table's address.
+fn lower_jump_table(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::JumpTable(index) = dag.node(node).data else { return None };
+    let table = dag.get_target_jump_table(EVT::I16, index);
+    Some(dag.get_node(z80isd::WRAPPER, EVT::I16, &[table]))
+}
+
 fn cc_operand(
     dag: &mut SelectionDAG,
     code: u128,
@@ -698,6 +718,24 @@ fn compare(
         let op1 = op1;
         let (code, a, b) = translate_cc(dag, cc, op0, op1);
         return (code, dag.get_node(z80isd::CMP, EVT::I8, &[a, b]));
+    }
+    // A signed order of two words that are not constants: the subtract's sign
+    // corrected for overflow (6 B) where biasing both operands costs 8.
+    // DEVIATE Z80-CMP16S-ROW (owner z80, exit 2026-11-15): compare_to_int64
+    // +19 B / +416 T at -O1..-O3 (allocation after the one site; 917 B against
+    // SDCC's 1589 B).
+    if vt == EVT::I16 && dag.constant(op0).is_none() && dag.constant(op1).is_none() {
+        let (code, a, b) = match cc {
+            SetLt => (cond::C, op0, op1),
+            SetGe => (cond::NC, op0, op1),
+            SetGt => (cond::C, op1, op0),
+            SetLe => (cond::NC, op1, op0),
+            _ => {
+                let (code, a, b) = translate_cc(dag, cc, op0, op1);
+                return (code, dag.get_node(z80isd::CMP, EVT::I8, &[a, b]));
+            }
+        };
+        return (code, dag.get_node(z80isd::CMPS, EVT::I8, &[a, b]));
     }
     let (code, a, b) = translate_cc(dag, cc, op0, op1);
     (code, dag.get_node(z80isd::CMP, EVT::I8, &[a, b]))
@@ -833,6 +871,11 @@ fn condition_byte(
                 let one = dag.get_constant(1, EVT::I8);
                 dag.get_node(ISD::And, EVT::I8, &[byte, one])
             }
+            // a bit loaded and tested at once: the byte read, masked
+            ISD::Load => match lower_bit_load(dag, value) {
+                Some(lowered) => condition_byte(dag, lowered),
+                None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
+            },
             ISD::Freeze => {
                 let bit = dag.operand(value, 0);
                 condition_byte(dag, bit)

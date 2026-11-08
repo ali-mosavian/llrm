@@ -120,3 +120,16 @@ def test_the_symbols_missing_dso_local_are_named():
     spec.loader.exec_module(guard)
     assert guard.missing_dso_local(GOT_MODULE) == ["g", "ext", "f"]
     assert guard.missing_dso_local(LOCAL_MODULE) == []
+
+
+def test_a_dump_that_names_pentium4_reaches_the_pin_as_one_cpu():
+    """A clang -m32 dump's own group says pentium4 and +sse2; the retarget added a second group, leaving two CPUs on every function and the pin's
+    column riding on which one LLVM's merge kept. Now the dump's words are dropped: one `target-cpu`, the target's."""
+    pin = load()
+    text = (
+        "define float @f(float %a, float %b) #0 {\n  %c = fadd float %a, %b\n  ret float %c\n}\n"
+        'attributes #0 = { nounwind "target-cpu"="pentium4" "target-features"="+cmov,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }\n'
+    )
+    out = pin.retarget(text, pin.target("m32"))
+    assert out.count('"target-cpu"') == 1 and "pentium4" not in out and "+sse2" not in out and "tune-cpu" not in out
+    assert '"target-cpu"="i486"' in out and "nounwind" in out

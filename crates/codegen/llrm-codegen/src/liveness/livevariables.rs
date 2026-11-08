@@ -133,6 +133,12 @@ thread_local! {
     pub(crate) static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+// The dataflow solves made, for a test that -O0 makes none.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The kills of one value in a block, in order: the instructions that end a
 /// segment of it (see [`LiveVariables::from_dataflow`]).
 pub fn segment_kills<'a>(
@@ -220,6 +226,8 @@ impl LiveVariables {
     /// killed in a block that does not leave it, by the last instruction that
     /// names it there (a definition no one reads is its own kill).
     pub fn from_dataflow(body: &LirBody) -> Self {
+        #[cfg(test)]
+        BUILT.with(|built| built.set(built.get() + 1));
         let cfg = Cfg::of(body);
         let blocks = cfg.len();
         let number: HashMap<i64, usize> = body.blocks.iter().enumerate().map(|(n, block)| (block.at, n)).collect();

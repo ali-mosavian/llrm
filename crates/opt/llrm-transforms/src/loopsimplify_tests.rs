@@ -837,3 +837,32 @@ fn test_a_simplified_function_derives_one_shape() {
     let derived = get(Event::Shapes) - before;
     assert_eq!(derived, 1, "{derived} shapes derived for a function that needed nothing");
 }
+
+/// Compile time: every run copied the function's whole `Shape` (loops, bodies,
+/// dominance) before asking whether any loop needed work, 1,126 runs on memexp
+/// -O2 against the pin's 337, 37 M Ir against 6 M. A function in canonical
+/// form is looked at, not copied.
+#[test]
+fn test_a_function_in_canonical_form_makes_no_copy_of_its_shape() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %next
+}
+",
+    );
+    super::SHAPE_COPIES.with(|count| count.set(0));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::LoopSimplify);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    assert_eq!(super::SHAPE_COPIES.with(std::cell::Cell::get), 0, "the shape was copied");
+}

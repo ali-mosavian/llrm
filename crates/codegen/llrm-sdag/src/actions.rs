@@ -21,7 +21,7 @@
 //! the arm applies to i486/P5 (no SSE, no CMOV before P6, no BMI, POPCNT or
 //! LZCNT, x87 on, 32-bit). Not yet translated because [`ISD`] has no such
 //! node: `ABDS`/`ABDU`, the `STRICT_*` family, `FSIN`/`FCOS`/`FPOW`-style
-//! math, `SHL_PARTS`/`SRA_PARTS`/`SRL_PARTS`, `SETCCCARRY`/`SADDO_CARRY`,
+//! math, `SHL_PARTS`/`SRA_PARTS`/`SRL_PARTS`, `SETCCCARRY`,
 //! atomics, `VASTART`/`VAARG`, `JumpTable`/`BlockAddress`/`GlobalTLSAddress`,
 //! `LRINT`, `ADDRSPACECAST`, `INTRINSIC_*`. Each is added with the piece
 //! that needs it (B1), in the position the constructor sets it. Arms for
@@ -135,8 +135,14 @@ pub struct TargetLowering {
     /// times the bits beyond them reach `least` (each is a shift instruction
     /// per granule).
     size_shift_call: Option<(u128, u128)>,
+    /// A constant factor the combiner turns into shifts and adds, so the
+    /// multiply is not the library call outside functions tuned for size.
+    inline_constant_mul: Option<fn(u128) -> bool>,
     /// The function is built for size: an `i64` divide calls the target's size routine.
     small_divide: bool,
+    /// The function is built for size alone (-Os), not -O1 where clocks are strict too: an `i64` divide by a
+    /// dword takes the size form that always does two `div`s.
+    size_only: bool,
     /// The object spelling of a routine's name where the convention decorates
     /// it (`___addsf3@3`).
     libcall_symbols: HashMap<String, (String, u32)>,
@@ -146,6 +152,22 @@ pub struct TargetLowering {
     /// `X86TargetLowering::BuildSDIVPow2` builds the `cmov` form of a signed
     /// divide by a power of two: `Some(is64)`, `i64` too where `is64`.
     sdiv_pow2_cmov: Option<bool>,
+    /// DEVIATE WIDE-EQ-BYTES (owner z80, exit 2026-11-30): equality of a wide
+    /// integer with a constant is the or of its bytes' xors, not of its
+    /// halves' xors. The pin (`IntegerExpandSetCCOperands`) xors the halves;
+    /// on an 8-bit machine that is a byte write-back per xor, and the bytes
+    /// accumulate in the accumulator without them. Two registers keep both
+    /// operands' bytes live beside the accumulator and spilled (div_constants
+    /// +155 B), so they keep the pin's form. Exit: when the allocator holds
+    /// that pressure.
+    byte_equality: bool,
+    /// DEVIATE ASSERT-SEXT-HI (owner z80, exit 2026-11-30): an `AssertSext`
+    /// inside the low half keeps the operand's high half when it is a copy
+    /// from a register, where the pin (`ExpandIntRes_AssertSext`) makes it
+    /// `sra(lo, bits-1)`. The value is the same; the register already holds it
+    /// (a call's result, an argument), and the shift is seven instructions on
+    /// an 8-bit machine.
+    assert_sext_keeps_high: bool,
 }
 
 impl TargetLowering {
@@ -160,10 +182,14 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             size_shift_call: None,
+            inline_constant_mul: None,
             small_divide: false,
+            size_only: false,
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
             sdiv_pow2_cmov: None,
+            byte_equality: false,
+            assert_sext_keeps_high: false,
         };
         table.set_default_integer_libcalls();
         // `TargetLoweringBase`: `VAARG` is expanded unless the target says
@@ -189,6 +215,21 @@ impl TargetLowering {
         ];
         for (vt, names) in rows {
             for (op, name) in [Shl, Srl, Sra, Mul, SDiv, UDiv, SRem, URem].into_iter().zip(names) {
+                self.set_libcall_name(op, vt, name);
+            }
+        }
+        // `RTLIB::CTLZ_I32` and the rest (RuntimeLibcalls.td): the pin names clz and popcount at i32, i64 and
+        // i128, no cttz and no i16. DEVIATE BC1 (owner softfloat, exit 2026-11-30): `__ctz*2` for a zero-poison
+        // cttz, and libgcc's `__clzhi2`, `__ctzhi2`, `__popcounthi2` for the 8-bit targets' i16. A name is
+        // only called where the target's action for the op and type is `LibCall`.
+        let counts: [(MVT, [&'static str; 3]); 4] = [
+            (MVT::I16, ["__clzhi2", "__popcounthi2", "__ctzhi2"]),
+            (MVT::I32, ["__clzsi2", "__popcountsi2", "__ctzsi2"]),
+            (MVT::I64, ["__clzdi2", "__popcountdi2", "__ctzdi2"]),
+            (MVT::I128, ["__clzti2", "__popcountti2", "__ctzti2"]),
+        ];
+        for (vt, names) in counts {
+            for (op, name) in [CtLzZeroPoison, CtPop, CtTzZeroPoison].into_iter().zip(names) {
                 self.set_libcall_name(op, vt, name);
             }
         }
@@ -431,6 +472,59 @@ impl TargetLowering {
         self.small_divide
     }
 
+    pub fn set_size_only(
+        &mut self,
+        size_only: bool,
+    ) {
+        self.size_only = size_only;
+    }
+
+    pub fn size_only(&self) -> bool {
+        self.size_only
+    }
+
+    pub fn set_byte_equality(
+        &mut self,
+        on: bool,
+    ) {
+        self.byte_equality = on;
+    }
+
+    pub fn byte_equality(&self) -> bool {
+        self.byte_equality
+    }
+
+    pub fn set_assert_sext_keeps_high(
+        &mut self,
+        on: bool,
+    ) {
+        self.assert_sext_keeps_high = on;
+    }
+
+    pub fn assert_sext_keeps_high(&self) -> bool {
+        self.assert_sext_keeps_high
+    }
+
+    /// `shouldOptimizeForSize` of the function being selected.
+    pub fn is_opt_for_size(&self) -> bool {
+        self.opt_for_size
+    }
+
+    pub fn set_inline_constant_mul(
+        &mut self,
+        decomposes: fn(u128) -> bool,
+    ) {
+        self.inline_constant_mul = Some(decomposes);
+    }
+
+    /// Whether a multiply by `c` stays inline here (see `inline_constant_mul`).
+    pub fn multiply_by_constant_stays_inline(
+        &self,
+        c: u128,
+    ) -> bool {
+        !self.opt_for_size && self.inline_constant_mul.is_some_and(|decomposes| decomposes(c))
+    }
+
     /// `DAG.shouldOptForSize()` for the function selected next.
     pub fn set_opt_for_size(
         &mut self,
@@ -589,6 +683,10 @@ impl TargetLowering {
                     FShl,
                     FShr,
                     SAddSat,
+                    AvgFloorS,
+                    AvgFloorU,
+                    AvgCeilS,
+                    AvgCeilU,
                     UAddSat,
                     SSubSat,
                     USubSat,
@@ -605,7 +703,7 @@ impl TargetLowering {
                 Action::Expand,
             );
             self.set_ops(&[SAddO, SSubO, UAddO, USubO, SMulO, UMulO], &[vt], Action::Expand);
-            self.set_ops(&[UAddOCarry, USubOCarry, SetCCCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
+            self.set_ops(&[UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
             self.set_ops(&[CtLzZeroPoison, CtTzZeroPoison, CtLs, BitReverse, Parity], &[vt], Action::Expand);
             // A pair that is a legal register type (an i32 at m16) is built by
             // shifts and an or.
@@ -726,7 +824,7 @@ impl TargetLowering {
         }
         t.set_ops(&[SDivRem, SRem, UDivRem, URem], &words, Expand);
         t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO], &words, Custom);
-        t.set_ops(&[UAddOCarry, USubOCarry], &words, Custom);
+        t.set_ops(&[UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry], &words, Custom);
         for vt in INTS {
             t.set_load_ext_action(LoadExt::SExtLoad, vt, MVT::I1, Expand);
         }
@@ -953,7 +1051,7 @@ impl TargetLowering {
             }
         }
         // L2757..L2776
-        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry, SetCCCarry], native, Custom);
+        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry], native, Custom);
         t
     }
 }

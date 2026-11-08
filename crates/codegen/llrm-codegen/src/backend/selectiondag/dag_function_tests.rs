@@ -326,7 +326,7 @@ fn a_chain_of_word_operations_has_no_casts_between_them() {
 fn the_check_for_a_value_read_before_it_is_defined_is_linear_in_the_body() {
     use std::sync::Arc;
 
-    use super::emit::EmitBlock;
+    use super::emit_api::EmitBlock;
     use crate::model::ir::{Held, Loc, Operation, Semantics};
     use crate::model::lir::Insn;
     let defining = |at: i64, defines: Vec<u32>, uses: Vec<u32>| {

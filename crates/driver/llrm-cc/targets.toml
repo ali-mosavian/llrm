@@ -5,6 +5,7 @@
 # `description` names the crate whose `[c]` states sizeof(int, long, void *, ...); `wchar_bytes` and `long_double_bytes` are the row's libc's departures from it (tests/c_abi.rs
 # holds the front end to them; the triple's default decides nothing).
 # `llc_program` (default llrm-llc) and `llc_level` (default true: it takes -O<n>) say how the backend is run; a row without a level must give `llc_level_reason`.
+# `llc_passes` (default true) says the backend takes the `-f[no-]PASS` switches; a row that does not gives `llc_passes_reason`, and the driver leaves them out with a warning (clang has written `noinline` and the loop hints into the IR).
 # `llc_mcmodel` (default false) says the backend takes `-mcmodel=` and clang does not (the pin's clang refuses it for m68k): the flag goes to the backend alone.
 # `unroll_at_o1` (default false) makes `-funroll-loops` the default at -O1 (DEVIATE UNROLL-O1: clang marks every loop unroll-disable there, so the pin's -O1 never unrolls).
 # `clang_env` names an environment variable holding a clang for the target (m16's carries the i8086 patch).
@@ -306,6 +307,8 @@ clang_datalayout = "e-m:e-p:16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16"
 clang = ["-target", "msp430", "-funsigned-char", "-fpack-struct=1"]
 llc = []
 llc_program = "llrm-z80-llc"
+llc_passes = false
+llc_passes_reason = "its argument parser takes no gcc pass switch; clang writes noinline into the IR"
 object = "sdasz80"
 link = ["sh", "-c", "echo 'llrm-cc: the z80 row stops at -S' >&2; exit 1"]
 
@@ -321,6 +324,8 @@ datalayout = "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:
 clang = ["-target", "wasm32-unknown-unknown", "-ffreestanding"]
 llc = ["-filetype=obj"]
 llc_program = "llrm-wasm-llc"
+llc_passes = false
+llc_passes_reason = "clang writes noinline and the loop hints into the IR; the pipeline has no gcc pass names"
 llc_level = true
 object = "wasm"
 link = ["wasm-ld", "--no-entry", "--allow-undefined", "{objects}", "-o", "{output}"]

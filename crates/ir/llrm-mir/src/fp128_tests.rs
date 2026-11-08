@@ -161,3 +161,83 @@ fn an_integer_cast_to_fp128_folds_to_a_binary128_constant() {
     assert_eq!(fold(crate::opcode::CastOp::SIToFP, -2), ConstantKind::Float128((1u128 << 127) | (0x4000u128 << 112)));
     assert_eq!(fold(crate::opcode::CastOp::UIToFP, 0), ConstantKind::Float128(0));
 }
+
+/// The constant `expr` (an instruction producing `ty`) simplifies to, with
+/// nothing but constants in it.
+fn folded(
+    ty: &str,
+    expr: &str,
+) -> Option<ConstantKind> {
+    let text = format!(
+        "declare fp128 @llvm.fmuladd.f128(fp128, fp128, fp128)\ndefine {ty} @f() {{\nb0:\n  %r = {expr}\n  ret {ty} %r\n}}\n"
+    );
+    let mut module: Module = parse::module(&text).unwrap_or_else(|why| panic!("{why:?}\n{text}"));
+    let id = module.named("f").unwrap();
+    let GlobalKind::Function(function) = &module.globals[id.0 as usize].kind else { panic!("a function") };
+    let function = function.clone();
+    let inst = function.walk().map(|(_, inst)| inst).next().unwrap();
+    let found = crate::simplify::simplify_instruction_in(
+        &mut module.context,
+        &module.globals,
+        &crate::datalayout::DataLayout::default(),
+        None,
+        &function,
+        inst,
+    );
+    match found {
+        Some(Operand::Constant(id)) => Some(module.context.get(id).kind.clone()),
+        _ => None,
+    }
+}
+
+const ONE: &str = "0xL00000000000000003FFF000000000000";
+
+/// `long_double_constant_store.c` (`1.0l * 100.0l + 3.5l * 10.0l + ...`) kept
+/// every fp128 `fmul`, `fadd` and `fptosi` of constants to run time, as
+/// `__multf3`, `__addtf3` and `__fixtfsi` calls: 308 B on wasm32, the pin's
+/// 116, and no result where the helpers are not linked. Expected values are the
+/// pin's `opt -passes=instcombine`.
+#[test]
+fn fp128_arithmetic_on_constants_folds_to_the_pins_values() {
+    let mul = folded("fp128", "fmul fp128 0xL00000000000000004000C00000000000, 0xL00000000000000004002400000000000");
+    assert_eq!(mul, Some(ConstantKind::Float128(bits("3.5e1"))));
+    // 1/3 rounded to nearest even at 113 bits.
+    let third = folded("fp128", &format!("fdiv fp128 {ONE}, 0xL00000000000000004000800000000000"));
+    assert_eq!(third, Some(ConstantKind::Float128(quad(0x3ffd_5555_5555_5555, 0x5555_5555_5555_5555))));
+    let sum = folded("fp128", &format!("fsub fp128 0xL00000000000000004005900000000000, {ONE}"));
+    assert_eq!(sum, Some(ConstantKind::Float128(bits("9.9e1"))));
+}
+
+#[test]
+fn fp128_conversions_of_constants_fold_to_the_pins_values() {
+    assert_eq!(folded("i32", "fptosi fp128 0xL00000000000000004005F00000000000 to i32"), Some(ConstantKind::Int(124)));
+    assert_eq!(
+        folded("i64", "fptoui fp128 0xLF000000000000000403EFFFFFFFFFFFF to i64"),
+        Some(ConstantKind::Int(u128::from(-2048_i64 as u64)))
+    );
+    // Out of range is poison, as the pin has it.
+    assert_eq!(folded("i32", "fptosi fp128 0xLF000000000000000C03EFFFFFFFFFFFF to i32"), Some(ConstantKind::Poison));
+    assert_eq!(
+        folded("fp128", "fpext double 0.1 to fp128"),
+        Some(ConstantKind::Float128(quad(0x3ffb_9999_9999_9999, 0xa000_0000_0000_0000)))
+    );
+    assert_eq!(
+        folded("double", "fptrunc fp128 0xL00000000000000003FFB999999999999 to double"),
+        Some(ConstantKind::Float(0x3FB9_9999_9999_9990))
+    );
+    assert_eq!(
+        folded("i1", &format!("fcmp olt fp128 {ONE}, 0xL00000000000000004000000000000000")),
+        Some(ConstantKind::Int(1))
+    );
+}
+
+#[test]
+fn an_fp128_fmuladd_with_an_exact_product_folds() {
+    let fused = folded(
+        "fp128",
+        &format!(
+            "call fp128 @llvm.fmuladd.f128(fp128 {ONE}, fp128 0xL00000000000000004005900000000000, fp128 0xL00000000000000004004180000000000)"
+        ),
+    );
+    assert_eq!(fused, Some(ConstantKind::Float128(bits("1.35e2"))));
+}

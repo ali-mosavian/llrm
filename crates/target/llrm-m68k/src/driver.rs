@@ -9,7 +9,7 @@ use llrm_mir::program::Program;
 use llrm_mir::target::Machine;
 use llrm_transforms::pipeline::{Applied, Options as MidEnd};
 
-use crate::compile::{CodeModel, Options, text_with};
+use crate::compile::{CodeModel, Item, Options, items_with};
 use crate::dagisel::hooks::Cpu;
 use crate::machine::M68kMachine;
 
@@ -21,6 +21,8 @@ pub enum Level {
     O1,
     O2,
     O3,
+    /// -Omax: `Options::aggressive()`.
+    Omax,
     Os,
     Oz,
 }
@@ -28,14 +30,15 @@ pub enum Level {
 impl Level {
     /// The level `-O<text>` names.
     pub fn parse(text: &str) -> Result<Self, String> {
-        Ok(match text {
-            "0" => Self::O0,
-            "" | "1" => Self::O1,
-            "2" => Self::O2,
-            "3" => Self::O3,
-            "s" => Self::Os,
-            "z" => Self::Oz,
-            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Os or -Oz")),
+        use llrm_transforms::pipeline::LevelName as Name;
+        Ok(match Name::parse(text)? {
+            Name::O0 => Self::O0,
+            Name::O1 => Self::O1,
+            Name::O2 => Self::O2,
+            Name::O3 => Self::O3,
+            Name::Omax => Self::Omax,
+            Name::Os => Self::Os,
+            Name::Oz => Self::Oz,
         })
     }
 
@@ -45,9 +48,76 @@ impl Level {
             Self::O1 => MidEnd::basic(),
             Self::O2 => MidEnd::default(),
             Self::O3 => MidEnd::speed(),
+            Self::Omax => MidEnd::aggressive(),
             Self::Os => MidEnd::size(),
             Self::Oz => MidEnd::min_size(),
         }
+    }
+}
+
+/// What a driver flag asks of the mid-end past the level: gcc's `-f` pass
+/// flags (`-fno-inline-functions`, `-fno-unroll-loops`...) and
+/// `-fno-inline=NAME`, as `llrm-cc` passes them on.
+#[derive(Clone, Debug, Default)]
+pub struct Policy {
+    passes: Vec<String>,
+    no_inline: Vec<String>,
+}
+
+impl Policy {
+    /// Takes `flag` when it is one of these; false leaves it to the caller.
+    /// `-fexcess-precision` and `-ffloat-store` are taken and change nothing:
+    /// the software float of m68k rounds every operation to its type, so there
+    /// is no wider register to keep a value in.
+    pub fn take(
+        &mut self,
+        flag: &str,
+    ) -> bool {
+        if let Some(name) = flag.strip_prefix("-fno-inline=") {
+            self.no_inline.push(name.to_owned());
+        } else if matches!(flag, "-fexcess-precision=standard" | "-fexcess-precision=fast" | "-ffloat-store" | "-fno-float-store") {
+        } else if llrm_codegen::driver::flags::apply_pass_flag(&mut MidEnd::default(), flag) {
+            self.passes.push(flag.to_owned());
+        } else {
+            return false;
+        }
+        true
+    }
+
+    fn apply(
+        &self,
+        options: &mut MidEnd,
+    ) {
+        for flag in &self.passes {
+            llrm_codegen::driver::flags::apply_pass_flag(options, flag);
+        }
+    }
+
+    /// Each function of `program` that `-fno-inline=` names marked `noinline`;
+    /// a name that no function defines is an error, not a flag that did
+    /// nothing.
+    fn mark(
+        &self,
+        program: &mut Program,
+    ) -> Result<(), String> {
+        for name in &self.no_inline {
+            let mut found = false;
+            for global in program.modules.iter_mut().flat_map(|module| &mut module.globals) {
+                if global.name.as_deref() != Some(name.as_str()) {
+                    continue;
+                }
+                if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
+                    && !function.is_declaration()
+                {
+                    function.attrs.push(llrm_mir::facts::Fact::Inline(llrm_mir::facts::Inlining::Never).carrier());
+                    found = true;
+                }
+            }
+            if !found {
+                return Err(format!("-fno-inline={name}: the program defines no function of that name"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -145,15 +215,21 @@ fn lowered(
     cpu: Cpu,
     level: Level,
     dump: Option<&std::path::Path>,
+    policy: &Policy,
 ) -> Result<Module, String> {
     let mut program = program_for(text, cpu)?;
-    let options = MidEnd { library: c_library(), ..level.mid_end() };
+    policy.mark(&mut program)?;
+    let mut options = MidEnd { library: c_library(), ..level.mid_end() };
+    policy.apply(&mut options);
     if let Some(dump) = dump {
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
     }
     let applied = Applied { options, dump: dump.map(Into::into), ..Applied::default() };
     llrm_transforms::pipeline::applied(&mut program, &applied)?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+    // `llvm.is.constant` and `llvm.objectsize` left by -O0 (the pin runs
+    // `LowerConstantIntrinsics` at every level)
+    program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
     // `llvm.scmp` and `llvm.ucmp` have no m68k instruction: the generic
     // expansion
     program.modules.iter_mut().try_for_each(|module| llrm_codegen::backend::compares::expanded(module, |_| true))?;
@@ -182,7 +258,58 @@ pub fn assembly_in(
     dump: Option<&std::path::Path>,
     model: CodeModel,
 ) -> Result<String, String> {
-    let optimized = lowered(text, cpu, level, dump)?;
+    assembly_flagged(text, cpu, level, debug, dump, model, &Policy::default())
+}
+
+/// The items of each function `module` defines, in order. Calls of the
+/// module's own functions are pc-relative when all its code fits in
+/// [`crate::pccall::REACH`], else absolute.
+fn function_items(
+    module: &Module,
+    cpu: Cpu,
+    backend: Options,
+) -> Result<Vec<(String, Vec<Item>)>, String> {
+    let mut names = Vec::new();
+    for (_, global, function) in module.functions() {
+        if !function.is_declaration() {
+            names.push(global.name.owned().ok_or("an unnamed function")?);
+        }
+    }
+    let compile = |pc_calls: bool| -> Result<Vec<(String, Vec<Item>)>, String> {
+        names
+            .iter()
+            .map(|name| {
+                items_with(module, name, cpu, Options { pc_calls, ..backend })
+                    .map(|items| (name.clone(), items))
+                    .map_err(|why| format!("@{name}: {why}"))
+            })
+            .collect()
+    };
+    let near = compile(true)?;
+    let calls = near.iter().flat_map(|(_, items)| items).any(|item| matches!(item, Item::Inst(inst) if inst.opcode == "CALLq"));
+    let bytes: usize = near
+        .iter()
+        .flat_map(|(_, items)| items)
+        .map(|item| match item {
+            Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
+            Item::Bytes(bytes) => bytes.len(),
+            _ => 0,
+        })
+        .sum();
+    if calls && bytes > crate::pccall::REACH { compile(false) } else { Ok(near) }
+}
+
+/// [`assembly_in`] with the mid-end flags in `policy`.
+pub fn assembly_flagged(
+    text: &str,
+    cpu: Cpu,
+    level: Level,
+    debug: bool,
+    dump: Option<&std::path::Path>,
+    model: CodeModel,
+    policy: &Policy,
+) -> Result<String, String> {
+    let optimized = lowered(text, cpu, level, dump, policy)?;
     let module = &optimized;
     let backend = Options {
         size: matches!(level, Level::Os | Level::Oz),
@@ -193,17 +320,14 @@ pub fn assembly_in(
         ..Options::default()
     };
     let mut out = String::new();
-    for (_, global, function) in module.functions() {
-        if function.is_declaration() {
-            continue;
-        }
-        let name = global.name.owned().ok_or("an unnamed function")?;
+    for (name, items) in function_items(module, cpu, backend)? {
+        let global = module.global(module.named(&name).ok_or("a function with no global")?);
         match llrm_mir::image::Export::of(global.linkage) {
             llrm_mir::image::Export::Public => out.push_str(&format!("\t.globl\t{name}\n")),
             llrm_mir::image::Export::Weak => out.push_str(&format!("\t.weak\t{name}\n")),
             llrm_mir::image::Export::Local => {}
         }
-        out.push_str(&text_with(module, &name, cpu, backend).map_err(|why| format!("@{name}: {why}"))?);
+        out.push_str(&crate::compile::printed(items, backend.debug).map_err(|why| format!("@{name}: {why}"))?);
     }
     let layout =
         llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
@@ -231,6 +355,18 @@ pub fn object_in(
     name: &str,
     model: CodeModel,
 ) -> Result<Vec<u8>, String> {
+    object_flagged(text, cpu, level, name, model, &Policy::default())
+}
+
+/// [`object_in`] with the mid-end flags in `policy`.
+pub fn object_flagged(
+    text: &str,
+    cpu: Cpu,
+    level: Level,
+    name: &str,
+    model: CodeModel,
+    policy: &Policy,
+) -> Result<Vec<u8>, String> {
     // The file symbol is the module's own `source_filename`, as the pin's: the
     // path of a scratch IR file would differ between two compiles of one
     // source.
@@ -238,7 +374,7 @@ pub fn object_in(
         .lines()
         .find_map(|line| line.strip_prefix("source_filename = \"")?.strip_suffix('"'))
         .map_or_else(|| name.rsplit('/').next().unwrap_or(name), |one| one);
-    let module = lowered(text, cpu, level, None)?;
+    let module = lowered(text, cpu, level, None, policy)?;
     let backend = Options {
         size: matches!(level, Level::Os | Level::Oz),
         strict: level == Level::O1,
@@ -248,16 +384,10 @@ pub fn object_in(
     };
     let mut items = Vec::new();
     let mut exports = llrm_support::hash::HashMap::default();
-    for (_, global, function) in module.functions() {
-        if function.is_declaration() {
-            continue;
-        }
-        let function_name = global.name.owned().ok_or("an unnamed function")?;
-        exports.insert(function_name.clone(), llrm_mir::image::Export::of(global.linkage));
-        items.extend(
-            crate::compile::items_with(&module, &function_name, cpu, backend)
-                .map_err(|why| format!("@{function_name}: {why}"))?,
-        );
+    for (function_name, one) in function_items(&module, cpu, backend)? {
+        let global = module.global(module.named(&function_name).ok_or("a function with no global")?);
+        exports.insert(function_name, llrm_mir::image::Export::of(global.linkage));
+        items.extend(one);
     }
     let layout =
         llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;

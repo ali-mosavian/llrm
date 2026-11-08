@@ -4,7 +4,8 @@
 //! # How it works
 //! Blocks are first written with every fall-through as an explicit jump
 //! (`_explicit`), which makes any order correct. `optimized` then runs these
-//! steps on the body.
+//! steps on the body. Before them, `tailmerge::merged_in` runs once ahead of
+//! placement, as `BranchFolder` does as a pass of its own.
 //!
 //! 1. `_hoisted` moves an edge block's no-byte anchors up before the branch
 //!    into it, so the edge block becomes a bare jump that threading can skip.
@@ -85,7 +86,7 @@
 //! `bb-reorder` and `copy_bb_p`.
 
 mod branchfold;
-mod placement;
+pub(crate) mod placement;
 mod tailmerge;
 
 use std::collections::BTreeSet;
@@ -113,6 +114,12 @@ pub struct ControlFlow<'a> {
     /// The routine each call goes to, by the call's position: two calls are
     /// the same instruction only where it is the same.
     pub calls: Option<IndexMap<i64, String>>,
+    /// The callee-saved registers (whole), whether the frame register is free,
+    /// and the frame pointer: what the teardown a return will carry is
+    /// counted from (`latetaildup::saved_count`).
+    pub saved: Vec<llrm_lir::registers::RegId>,
+    pub free: bool,
+    pub pointer: llrm_lir::registers::RegId,
 }
 
 impl LIRTransform for ControlFlow<'_> {
@@ -148,7 +155,12 @@ impl ControlFlow<'_> {
         // -O0 keeps the blocks in source order and drops the jumps that order
         // makes redundant: no tails merged, no block copied, no trace chosen.
         let placed = if self.cpu.optimized {
-            optimized(body, self.cpu, self.calls.as_ref())?
+            optimized_with(
+                body,
+                self.cpu,
+                self.calls.as_ref(),
+                crate::backend::latetaildup::saved_count(body, &self.saved, self.free, self.pointer),
+            )?
         } else {
             threaded(&body.with_blocks(_explicit(body)?))
         };
@@ -176,20 +188,37 @@ pub fn optimized(
     cpu: &cpu::Profile,
     calls: Option<&IndexMap<i64, String>>,
 ) -> Result<LirBody, masm::Unprintable> {
+    optimized_with(body, cpu, calls, 0)
+}
+
+/// `optimized`, for a body whose returns will carry `epilogue` instructions of
+/// frame teardown: the pin places after the teardown is in, so a return block
+/// is that much longer to `TailDuplicator`.
+pub fn optimized_with(
+    body: &LirBody,
+    cpu: &cpu::Profile,
+    calls: Option<&IndexMap<i64, String>>,
+    epilogue: usize,
+) -> Result<LirBody, masm::Unprintable> {
     let size = cpu.size;
-    let mut placed = threaded(&_placed(&_hoisted(body), size, cpu.aggressive, cpu.tail_dup_threshold)?);
+    // `BranchFolder` ahead of placement: in the order the blocks were made,
+    // where a block falling into the common successor takes any tail.
+    let hoisted = _hoisted(body);
+    let (early, any_early) = tails_merged(hoisted.clone(), size, calls, false)?;
+    let start = if any_early { early.with_blocks(_explicit(&early)?) } else { hoisted };
+    let mut placed = threaded(&_placed(&start, size, cpu.aggressive, cpu.tail_dup_threshold, cpu.tail_dup_hot(), epilogue)?);
     // Tail duplication before the merge, as LLVM places with it: after, the
     // merge would give back what the copy gained.
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
     // the branches optimised (`threaded`), until neither changes anything. A
     // merge can leave a compare nothing selects on; LLVM leaves it (T6).
-    let (merged, any) = tails_merged(placed, size, calls)?;
+    let (merged, any) = tails_merged(placed, size, calls, true)?;
     placed = merged;
     if any {
         // `MachineBlockPlacement::runOnMachineFunction`: "Redo the layout if
         // tail merging creates/removes/moves blocks."
         let explicit = placed.with_blocks(_explicit(&placed)?);
-        placed = threaded(&_placed(&explicit, size, cpu.aggressive, cpu.tail_dup_threshold)?);
+        placed = threaded(&_placed(&explicit, size, cpu.aggressive, cpu.tail_dup_threshold, cpu.tail_dup_hot(), epilogue)?);
     }
     let done = aligned(&inverted(&placed, size), cpu);
     // Every block leaves by a way the printer can read.
@@ -206,12 +235,22 @@ fn tails_merged(
     mut placed: LirBody,
     size: bool,
     calls: Option<&IndexMap<i64, String>>,
+    after_placement: bool,
 ) -> Result<(LirBody, bool), masm::Unprintable> {
     let mut any = false;
     for _round in 0..std::cmp::max(1, placed.blocks.len() + placed.insns().len()) {
         let explicit = placed.with_blocks(_explicit(&placed)?);
-        let Some(merged) = tailmerge::merged(&explicit, size, calls)? else {
-            break;
+        let Some(merged) = tailmerge::merged_in(&explicit, size, calls, after_placement)? else {
+            // `OptimizeFunction`: the branches optimised after each merge
+            // attempt, and the merge tried again if they changed anything. A
+            // body that was not threaded yet (before placement) has edge
+            // blocks that hide the common successor.
+            let optimised = threaded(&placed);
+            if optimised == placed {
+                break;
+            }
+            placed = optimised;
+            continue;
         };
         any = true;
         placed = threaded(&merged);
@@ -239,7 +278,7 @@ pub fn tails_merged_after_exits(
     if returns < 2 {
         return Ok(body);
     }
-    let (merged, any) = tails_merged(body.clone(), size, calls)?;
+    let (merged, any) = tails_merged(body.clone(), size, calls, true)?;
     Ok(if any { inverted(&merged, size) } else { body })
 }
 
@@ -448,7 +487,7 @@ fn _without_jumps_to_next(order: Vec<Block>) -> Vec<Block> {
 /// drops the jumps the order made redundant and turns the test into one
 /// branch back to the body.
 pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
-    _placed(body, false, false, None)
+    _placed(body, false, false, None, None, 0)
 }
 
 /// The blocks in the order `MachineBlockPlacement` lays them out (see
@@ -458,6 +497,8 @@ fn _placed(
     size: bool,
     aggressive: bool,
     tail_dup: Option<usize>,
+    hot: Option<placement::HotTailDup>,
+    epilogue: usize,
 ) -> Result<LirBody, masm::Unprintable> {
     let explicit = _explicit(body)?;
     if body.source_order {
@@ -465,7 +506,7 @@ fn _placed(
     }
     let natural = loopy::loops(&explicit, Some(body.entry));
     let busy = Frequency::of(body);
-    let (blocks, odds) = placement::order(&explicit, body.entry, &body.odds, &busy, &natural, size, aggressive, tail_dup);
+    let (blocks, odds) = placement::order(&explicit, body.entry, &body.odds, &busy, &natural, size, aggressive, tail_dup, hot, epilogue);
     Ok(_reachable(&LirBody { odds, ..body.clone() }, blocks))
 }
 

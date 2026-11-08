@@ -57,7 +57,7 @@ pub fn builder_target() -> BuilderTarget {
         // default `getJumpConditionMergingParams`), not two 0/1 bytes and a
         // logic op
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
-        ..BuilderTarget::m16()
+        ..BuilderTarget::for_pointer_bits(16)
     }
     .with_narrow_divrem(EVT::I16, true)
 }

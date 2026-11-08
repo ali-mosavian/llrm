@@ -1,4 +1,4 @@
-use super::super::dag_select::legalized;
+use super::super::select::legalized;
 use super::super::x86_lowering::{X86Lowering, x86isd};
 use super::*;
 
@@ -26,6 +26,7 @@ fn selected(
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
         &llrm_x86_m32::M32,

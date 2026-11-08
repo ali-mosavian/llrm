@@ -537,6 +537,91 @@ pub fn merged_line(
 }
 
 impl Insn {
+    /// A copy that says `what` instead: the instruction's own semantics are
+    /// not cloned to be replaced. Listing every field makes a new one fail to
+    /// compile here until it is carried over.
+    #[must_use]
+    pub fn with_what(
+        &self,
+        what: Option<Semantics>,
+    ) -> Insn {
+        let Insn {
+            at,
+            covers,
+            defines,
+            uses,
+            undefs,
+            partial_defs,
+            early_clobbers,
+            lane_copies,
+            def_lanes,
+            use_lanes,
+            undef_super,
+            clobbers,
+            clobbers_high,
+            spread,
+            call,
+            group,
+            requires,
+            delivers,
+            widths,
+            symbol,
+            spill_reload,
+            spill_store,
+            frame_adjust,
+            rematerialized,
+            volatile,
+            invariant,
+            reads_complete,
+            pair,
+            disjoint,
+            line,
+            debug,
+            declared,
+            what: _,
+            effect: _,
+            register_effects: _,
+            ident: _,
+        } = self;
+        Insn {
+            at: at.clone(),
+            covers: covers.clone(),
+            defines: defines.clone(),
+            uses: uses.clone(),
+            undefs: undefs.clone(),
+            partial_defs: partial_defs.clone(),
+            early_clobbers: early_clobbers.clone(),
+            lane_copies: lane_copies.clone(),
+            def_lanes: def_lanes.clone(),
+            use_lanes: use_lanes.clone(),
+            undef_super: undef_super.clone(),
+            clobbers: clobbers.clone(),
+            clobbers_high: clobbers_high.clone(),
+            spread: spread.clone(),
+            call: call.clone(),
+            group: group.clone(),
+            requires: requires.clone(),
+            delivers: delivers.clone(),
+            widths: widths.clone(),
+            symbol: symbol.clone(),
+            spill_reload: spill_reload.clone(),
+            spill_store: spill_store.clone(),
+            frame_adjust: frame_adjust.clone(),
+            rematerialized: rematerialized.clone(),
+            volatile: volatile.clone(),
+            invariant: invariant.clone(),
+            reads_complete: reads_complete.clone(),
+            pair: pair.clone(),
+            disjoint: disjoint.clone(),
+            line: line.clone(),
+            debug: debug.clone(),
+            declared: declared.clone(),
+            what,
+            effect: Derived::default(),
+            register_effects: Default::default(),
+            ident: Derived::default(),
+        }
+    }
     /// The (written, read) pair this instruction is a plain move of
     /// (`TargetInstrInfo::isCopyInstr`).
     pub fn copy_of(&self) -> Option<(u32, u32)> {
@@ -1420,6 +1505,10 @@ pub struct LirBody {
     /// frame register was omitted (`true`) or kept (`false`)
     /// (`masm::exits_inserted`); the printer adds nothing at a return.
     pub frame_exit: Option<bool>,
+    /// Whether the body can be addressed through the stack pointer, as
+    /// `masm::saved_first` found it: `masm::exits_inserted` takes it up
+    /// instead of asking again of the same body. Cleared once read.
+    pub stack_checked: Option<bool>,
     /// The registers the frame saved, found before its exit was made: the
     /// exit's own pops name them and the frame register.
     pub frame_saved: Option<Vec<RegId>>,
@@ -1631,6 +1720,7 @@ impl LirBody {
             object_align: 0,
             over_aligned: Vec::new(),
             frame_exit: None,
+            stack_checked: None,
             frame_saved: None,
             vector_saves: Vec::new(),
             notes: Arc::default(),
@@ -1706,6 +1796,7 @@ impl LirBody {
             object_align: self.object_align,
             over_aligned: self.over_aligned.clone(),
             frame_exit: self.frame_exit,
+            stack_checked: self.stack_checked,
             frame_saved: self.frame_saved.clone(),
             vector_saves: self.vector_saves.clone(),
             notes: Arc::clone(&self.notes),
@@ -1755,7 +1846,9 @@ pub fn inert() -> Semantics {
 /// Keep virtual dataflow and source-byte ownership for an elided machine op.
 #[must_use]
 pub fn anchor(one: Arc<Insn>) -> Arc<Insn> {
-    let mut anchored = (*one).clone();
+    // A freshly placed copy is unique: `make_mut` rewrites it without a clone.
+    let mut one = one;
+    let anchored = Arc::make_mut(&mut one);
     anchored.what = Some(inert());
     anchored.clobbers.clear();
     anchored.clobbers_high.clear();
@@ -1767,7 +1860,7 @@ pub fn anchor(one: Arc<Insn>) -> Arc<Insn> {
     anchored.spill_store = false;
     anchored.frame_adjust = false;
     anchored.rematerialized = false;
-    Arc::new(anchored)
+    one
 }
 
 /// Only the source bytes `one` owns: no machine work and no dataflow.
@@ -1998,6 +2091,20 @@ mod tests {
         Arc::new(Insn::new(at, covers, Some(Semantics::new(Operation::Move)), Vec::new(), Vec::new()))
     }
 
+    /// `_placed` cloned an instruction's operand lists to drop them (1.1 M of
+    /// 24.3 M Ir at -O0). The copy made without them is the same instruction.
+    #[test]
+    fn test_with_what_is_a_clone_whose_semantics_are_replaced() {
+        let mut one = (*instruction(7, Some((1, 2)))).clone();
+        one.uses = vec![3];
+        one.spill_store = true;
+        let mut other = Semantics::new(Operation::Move);
+        other.name = Some("mov".into());
+        let mut expected = one.clone();
+        expected.what = Some(other.clone());
+        assert_eq!(one.with_what(Some(other)), expected);
+    }
+
     /// A rename of a few values copied every instruction: phielim renamed 3,500
     /// and 27 changed (d_faces -O2), and each copy held the body twice. One
     /// that names nothing the rename moves is the same allocation; one that
@@ -2215,11 +2322,12 @@ mod tests {
         assert_eq!(pyrepr::tuple::<i64>(&[2, 3]), "(2, 3)");
     }
 
-    /// A failed check's edge stated at `NEVER_TAKEN_WEIGHT` to 1 (isel: that many
-    /// 2^31sts) vanished when a split gave it a share of 1/16: `rerouted` rounds
-    /// to the unit as the pin does (`BranchProbability.h:140`, no clamp), a block
-    /// on that path then had a table entry and no odds into it, and
-    /// `LLRM_VERIFY=1` rejected x87 floatalloc blocks (fpbench Os at `i32::MAX`).
+    /// A failed check's edge stated at `NEVER_TAKEN_WEIGHT` to 1 (isel: that
+    /// many 2^31sts) vanished when a split gave it a share of 1/16:
+    /// `rerouted` rounds to the unit as the pin does
+    /// (`BranchProbability.h:140`, no clamp), a block on that path then had
+    /// a table entry and no odds into it, and `LLRM_VERIFY=1` rejected x87
+    /// floatalloc blocks (fpbench Os at `i32::MAX`).
     #[test]
     fn test_a_never_taken_edge_survives_a_sixteenth_share() {
         use crate::hir::mir::NEVER_TAKEN_WEIGHT;

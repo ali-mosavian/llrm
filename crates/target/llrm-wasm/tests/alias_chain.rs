@@ -24,3 +24,34 @@ fn a_store_does_not_wait_for_a_load_of_another_global() {
     let kinds: Vec<&str> = accesses.iter().map(|line| line.split_whitespace().next().unwrap()).collect();
     assert_eq!(kinds, ["i32.load", "i32.store", "i32.load", "i32.store"], "{asm}");
 }
+
+/// Thirty adjacent halfword copies: the pin merges the first run to 64-bit
+/// moves, then the rest (`h q q q q q q w h w`). Ours left the tail as
+/// halfwords (`... w h h h`): `getStoreSource` takes any `LOAD`, and after
+/// type legalization the loads are extending ones, which ours refused.
+#[test]
+fn a_run_of_halfword_copies_is_merged_to_the_end() {
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/store_merge_run.ll");
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc")).args(["-S", "-o", "-"]).arg(ir).output().expect("llrm-wasm-llc");
+    assert!(out.status.success());
+    let asm = String::from_utf8_lossy(&out.stdout).into_owned();
+    let kinds: Vec<&str> = asm
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("i32.load") || line.starts_with("i64.load"))
+        .map(|line| line.split_whitespace().next().unwrap())
+        .collect();
+    let want = [
+        "i32.load16_u",
+        "i64.load",
+        "i64.load",
+        "i64.load",
+        "i64.load",
+        "i64.load",
+        "i64.load",
+        "i32.load",
+        "i32.load16_u",
+        "i32.load",
+    ];
+    assert_eq!(kinds, want, "{asm}");
+}

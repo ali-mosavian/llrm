@@ -266,6 +266,8 @@ pub struct Candidate {
     pub self_calls: Option<f64>,
     /// How many calls of itself the body has.
     pub self_sites: usize,
+    /// Tried because the pin's threshold alone refused a hot site (INL-HOT).
+    pub hot: bool,
 }
 
 /// What a caller says of itself that bounds what may be copied into it.

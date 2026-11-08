@@ -63,7 +63,8 @@
 //! reading that operand (`fsubr st, st(i)`) where the target prices the copy
 //! (`fld st(i)`) and the memory form above the load and the register form
 //! (`unfold_copy_form`). The pin copies the operand and keeps the memory form
-//! (`handleOneArgFPRW`'s `duplicateToTop` branch, <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FloatingPoint.cpp#L1300-L1304>):
+//! (`handleOneArgFPRW`'s `duplicateToTop` branch,
+//! <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FloatingPoint.cpp#L1300-L1304>):
 //! on a 486 `fld st(i)` is 4 clocks and `fld m` 3 (nbody -O2 m16, 1,200 trips).
 //!
 //! DEVIATE 4: an unreachable block with live floating values has no predecessor
@@ -94,6 +95,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
+use llrm_lir::registers::Regs;
 
 use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::Profile;
@@ -103,10 +105,9 @@ use crate::backend::floatalloc::{
 };
 use crate::backend::floatassign;
 use crate::backend::floatregions::{Raised, clears_stack};
-use llrm_lir::registers::Regs;
 use crate::backend::liverows::live_among;
 use crate::backend::spillplacement;
-use crate::model::ir::{Held, Loc, Operation, Reg, Semantics};
+use crate::model::ir::{Held, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Block, Insn, LirBody};
 use crate::support::hash::{HashMap, HashSet, IndexMap};
 
@@ -186,6 +187,9 @@ struct LiveBundle {
 
 struct Fps<'a> {
     floating: &'a HashSet<u32>,
+    /// The pool cells `fldz` and `fld1` stand for: a memory operand read from
+    /// one that has to be loaded is loaded by the constant's own instruction.
+    constants: &'a HashMap<i64, &'static str>,
     /// `Stack[]`, top first: `values[i]` is in `st(i)`.
     values: Vec<u32>,
     depth: usize,
@@ -690,6 +694,32 @@ impl Fps<'_> {
         Ok(())
     }
 
+    /// `fld [m]` for the cell of a memory operand made a load again; `fldz` or
+    /// `fld1` where the cell is a pool constant (FF2 put it there: 4 clocks
+    /// and 2 bytes against a load's 5 and 6).
+    fn load_cell(
+        &mut self,
+        cell: &Loc,
+        memory: &Mem,
+        what: &Semantics,
+    ) {
+        let constant = memory
+            .addr
+            .filter(|addr| addr.space == Space::Segment && memory.base.is_none() && memory.index.is_none())
+            .and_then(|addr| self.constants.get(&addr.index));
+        let (name, sources) = match constant {
+            Some(name) => (*name, Vec::new()),
+            None => ("fld", vec![cell.clone()]),
+        };
+        self.emit(Semantics {
+            op: Operation::FloatLoad,
+            name: Some(name.into()),
+            dests: vec![st(0)],
+            sources,
+            ..what.clone()
+        });
+    }
+
     /// DEVIATE 9 (exit 2026-11-20): `fadd [m]` reads and writes `st(0)`, so a
     /// dying operand below the top costs an `fxch` to bring it up, and often a
     /// second to put the next value back (`t += (float)v` in a loop with two
@@ -722,13 +752,7 @@ impl Fps<'_> {
             return Ok(false);
         }
         let scratch = self.take_fresh();
-        self.emit(Semantics {
-            op: Operation::FloatLoad,
-            name: Some("fld".into()),
-            dests: vec![st(0)],
-            sources: vec![cell.clone()],
-            ..what.clone()
-        });
+        self.load_cell(cell, memory, what);
         self.push(scratch)?;
         // The operand is one slot lower now; the result replaces it.
         let other = slot + 1;
@@ -768,15 +792,10 @@ impl Fps<'_> {
             return Ok(false);
         }
         let slot = self.slot(kept)?;
-        self.emit(Semantics {
-            op: Operation::FloatLoad,
-            name: Some("fld".into()),
-            dests: vec![st(0)],
-            sources: vec![cell.clone()],
-            ..what.clone()
-        });
+        self.load_cell(cell, memory, what);
         self.push(result)?;
-        // The operand is one slot lower now; the cell is on top, the result's place.
+        // The operand is one slot lower now; the cell is on top, the result's
+        // place.
         self.insert(semantics(Operation::FloatArith, name, vec![st(0)], vec![st(0), st(slot + 1)]));
         Ok(true)
     }
@@ -1297,9 +1316,19 @@ pub(super) fn converted(
     classes: &RegisterClasses,
     cpu: Option<&Profile>,
 ) -> Result<LirBody, Raised> {
+    converted_with(body, classes, cpu, &HashMap::default())
+}
+
+/// [`converted`], knowing which pool cells hold +0.0 and +1.0.
+pub(super) fn converted_with(
+    body: &LirBody,
+    classes: &RegisterClasses,
+    cpu: Option<&Profile>,
+    constants: &HashMap<i64, &'static str>,
+) -> Result<LirBody, Raised> {
     let valued = crate::backend::fpregs::valued(body);
     let body = valued.as_ref().unwrap_or(body);
-    let mut best = converted_valued(body, classes, cpu)?;
+    let mut best = converted_valued(body, classes, cpu, constants)?;
     let floating = floatassign::_floating_values(body);
     if floating.is_empty() {
         return Ok(best);
@@ -1320,7 +1349,7 @@ pub(super) fn converted(
             let mut blocks: Vec<Block> = current.blocks.iter().cloned().collect();
             blocks[index] = block.with_insns(insns);
             let candidate = current.with_blocks(blocks);
-            let Ok(done) = converted_valued(&candidate, classes, cpu) else { continue };
+            let Ok(done) = converted_valued(&candidate, classes, cpu, constants) else { continue };
             let length = weighted_len(&done, &weight);
             if length < score {
                 score = length;
@@ -1380,15 +1409,15 @@ fn chain_orders(
         {
             return Vec::new();
         }
-        let float = what.sources.iter().chain(&what.dests).any(|arg| matches!(arg, Loc::Held(held) if held.width == 10));
+        let float =
+            what.sources.iter().chain(&what.dests).any(|arg| matches!(arg, Loc::Held(held) if held.width == 10));
         if !float {
             continue;
         }
-        let operands_ok = what
-            .sources
-            .iter()
-            .chain(&what.dests)
-            .all(|arg| matches!(arg, Loc::Held(held) if held.width == 10) || matches!(arg, Loc::Mem(_) | Loc::Imm(_)));
+        let operands_ok =
+            what.sources.iter().chain(&what.dests).all(|arg| {
+                matches!(arg, Loc::Held(held) if held.width == 10) || matches!(arg, Loc::Mem(_) | Loc::Imm(_))
+            });
         if !operands_ok || one.uses.iter().chain(&one.defines).any(|value| !floating.contains(value)) {
             return Vec::new();
         }
@@ -1426,10 +1455,14 @@ fn chain_orders(
     let mut of_root: HashMap<usize, usize> = HashMap::default();
     for index in 0..positions.len() {
         let at = root(&mut parent, index);
-        let chain = *of_root.entry(at).or_insert_with(|| {
-            chains.push(Vec::new());
-            chains.len() - 1
-        });
+        let chain = *of_root
+            .entry(at)
+            .or_insert_with(
+                || {
+                    chains.push(Vec::new());
+                    chains.len() - 1
+                },
+            );
         chains[chain].push(positions[index]);
     }
     if !(2..=3).contains(&chains.len()) {
@@ -1467,6 +1500,7 @@ fn converted_valued(
     body: &LirBody,
     classes: &RegisterClasses,
     cpu: Option<&Profile>,
+    constants: &HashMap<i64, &'static str>,
 ) -> Result<LirBody, Raised> {
     let regs = body.regs();
     let floating = floatassign::_floating_values(body);
@@ -1534,6 +1568,7 @@ fn converted_valued(
             .map_or(0, |most| most + 1);
     let mut fps = Fps {
         floating: &floating,
+        constants,
         values: Vec::new(),
         depth: body.float_stack,
         out: Vec::new(),

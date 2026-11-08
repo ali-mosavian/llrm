@@ -24,6 +24,7 @@ fn converted(
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
     )
@@ -85,6 +86,7 @@ fn an_unsigned_i64_conversion_subtracts_two_to_the_63_and_flips_the_sign() {
         i16_mul_chains: false,
         sext_load: false,
         zext_free: false,
+        branch_constant_selects: false,
         profile: None,
     }
     .lower_operation(&mut dag, converted)
@@ -121,6 +123,7 @@ fn an_i64_result_is_lowered_by_the_target_then_split() {
         i16_mul_chains: false,
         sext_load: false,
         zext_free: false,
+        branch_constant_selects: false,
         profile: None,
     };
     let mut legalizer = TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut hooks);
@@ -157,6 +160,7 @@ fn an_unsigned_conversion_from_sse_is_a_small_and_a_big_under_the_sign_mask() {
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         }
         .lower_operation(&mut dag, converted)

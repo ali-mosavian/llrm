@@ -313,6 +313,42 @@ mod tests {
         assert!(!cheaper(Level::O2, (4505, 85_000), (4444, 85_107)));
         assert!(cheaper(Level::O2, (4440, 85_000), (4444, 85_107)));
     }
+
+    /// A select side made by an instruction that sets the flags, named in its
+    /// operands or not (`XOR16i`), was sunk into the arm ahead of a second
+    /// select that still read the compare: i64 `ssub.sat` in a loop gave 0 for
+    /// the saturated -1. Neither form may sink.
+    #[test]
+    fn a_flag_setting_select_side_is_not_sunk_ahead_of_another_select() {
+        let flags = Reg::Phys(crate::reg::FLAGS);
+        let cmov = |result: u32, on_true: u32| {
+            let mut inst = Inst::new(
+                Kind::Op("CMOV16"),
+                vec![
+                    Operand::Def(Reg::Virt(result)),
+                    Operand::Use(Reg::Virt(9)),
+                    Operand::Use(Reg::Virt(on_true)),
+                    Operand::Imm(0),
+                    Operand::Use(flags),
+                ],
+            );
+            inst.reads_flags = true;
+            inst
+        };
+        for named in [false, true] {
+            let mut compare = Inst::new(Kind::Op("BIT7_16"), vec![Operand::Def(flags), Operand::Use(Reg::Virt(8))]);
+            compare.sets_flags = true;
+            let mut operands = vec![Operand::Def(Reg::Virt(1)), Operand::Use(Reg::Virt(8))];
+            if named {
+                operands.push(Operand::Def(flags));
+            }
+            let mut side = Inst::new(Kind::Op("XOR16i"), operands);
+            side.sets_flags = true;
+            let mut function = MFunction::new("f");
+            function.blocks.push(Block { id: 0, insts: vec![compare, side, cmov(2, 1), cmov(3, 8)], phis: Vec::new() });
+            assert!(sunk_operand(&function, 0, 2, Reg::Virt(1)).is_none(), "flag operand named: {named}");
+        }
+    }
 }
 
 /// Allocates `function`; where the first allocation fails, once more with the
@@ -1697,7 +1733,7 @@ pub fn read_copies_at_their_source(
 /// (`ld e, -8(ix)` / `ld d, -7(ix)` / `ld e, d` / `ld d, #0` is `ld e,
 /// -7(ix)` / `ld d, #0`). The pin folds a reload into its use where the
 /// target has the form (`InlineSpiller::foldMemoryOperand`); this is that
-/// form for the shift by 8.
+/// form for the shift by 8 or more (the shift left over runs on the byte).
 pub fn narrow_reload_for_byte_shift(
     function: &mut MFunction,
     assignment: &Assignment,
@@ -1714,12 +1750,13 @@ pub fn narrow_reload_for_byte_shift(
                 Kind::Op("RELOAD16"),
                 [Operand::Def(loaded), Operand::Frame(slot)],
                 Kind::Op(shift @ ("SHL16" | "SRL16")),
-                [Operand::Def(written), Operand::Use(read), Operand::Imm(8)],
+                [Operand::Def(written), Operand::Use(read), Operand::Imm(count @ 8..=15)],
             ) = (first.kind, &first.operands[..], second.kind, &second.operands[..])
             else {
                 at += 1;
                 continue;
             };
+            let rest = count - 8;
             let pair = register(*loaded);
             let Ok((lo, hi)) = expand::lanes(pair) else {
                 at += 1;
@@ -1741,9 +1778,19 @@ pub fn narrow_reload_for_byte_shift(
             };
             let clear = Inst::new(Kind::Op("LD8ri"), vec![Operand::Def(Reg::Phys(cleared)), Operand::Imm(0)]);
             let (a, b) = if shift == "SRL16" { (load, clear) } else { (clear, load) };
+            let left_over = (rest > 0).then(|| {
+                let mut one = second.clone();
+                one.kind = Kind::Op(if shift == "SRL16" { "SRL8" } else { "SHL8" });
+                one.operands = vec![Operand::Def(Reg::Phys(kept)), Operand::Use(Reg::Phys(kept)), Operand::Imm(rest)];
+                one
+            });
             block.insts[at] = a;
             block.insts[at + 1] = b;
             at += 2;
+            if let Some(one) = left_over {
+                block.insts.insert(at, one);
+                at += 1;
+            }
         }
     }
 }
@@ -1952,8 +1999,8 @@ thread_local! {
 /// the call makes smaller keep it only where together they save what the
 /// routines cost (switch_table_holes -Os: 40 B saved, 57 B routine).
 /// DEVIATE z80-mul-function-price: the pin's `decomposeMulByConstant` has no
-/// such choice. Owner z80, exit 2026-11-20 (a pricing of the other
-/// libcalls a variant moves).
+/// such choice. Owner z80. Every runtime routine a variant reaches is already
+/// priced (`runtime_size`), so no libcall is left out of the total.
 fn decomposes(
     selected: &Selections,
     alternatives: &Selections,
@@ -1972,15 +2019,17 @@ fn decomposes(
     set.contains(name)
 }
 
-/// The functions of the module that call `__mulsi3`, built with the shifts
-/// and adds where the module is smaller for it (bytes first at the size
-/// levels).
-fn decomposed_functions(
+/// The priced forms of the module's functions: those with one form, and
+/// those that call `__mulsi3` with the form built with shifts and adds too
+/// (bytes, runtime routines reached).
+type Priced = (u32, std::collections::HashSet<String>);
+type Variants = (Vec<Priced>, Vec<(String, Priced, Option<Priced>)>);
+
+fn variants(
     selected: &Selections,
     alternatives: &Selections,
     request: &Request,
-) -> std::collections::HashSet<String> {
-    use std::collections::HashSet;
+) -> Variants {
     let speed = !matches!(request.level, Level::Os | Level::Oz);
     // the printed form of every function, and for those with an alternative
     // the form with the shifts
@@ -1988,8 +2037,8 @@ fn decomposed_functions(
         let bytes = expand::price_emitted(&lines, speed).0;
         (bytes, crate::runtime_size::referenced(&lines))
     };
-    let mut fixed: Vec<(u32, HashSet<String>)> = Vec::new();
-    let mut either: Vec<(String, (u32, HashSet<String>), Option<(u32, HashSet<String>)>)> = Vec::new();
+    let mut fixed: Vec<Priced> = Vec::new();
+    let mut either: Vec<(String, Priced, Option<Priced>)> = Vec::new();
     for (one, ..) in selected.iter() {
         let call = lines_of(selected, one, 0, request).ok().map(priced);
         let Some(call) = call else { continue };
@@ -2004,23 +2053,57 @@ fn decomposed_functions(
         let decomposed = if differs { lines_of(alternatives, one, 0, request).ok().map(priced) } else { None };
         either.push((one.clone(), call, decomposed));
     }
-    let total = |decomposes: &HashSet<usize>| {
-        let mut reached: HashSet<String> = HashSet::new();
-        let mut bytes = 0;
-        for (one_bytes, refs) in &fixed {
-            bytes += one_bytes;
-            reached.extend(refs.iter().cloned());
-        }
-        for (at, (_, call, decomposed)) in either.iter().enumerate() {
-            let (one_bytes, refs) = match decomposed {
-                Some(decomposed) if decomposes.contains(&at) => decomposed,
-                _ => call,
-            };
-            bytes += one_bytes;
-            reached.extend(refs.iter().cloned());
-        }
-        bytes + crate::runtime_size::reached(&reached)
-    };
+    (fixed, either)
+}
+
+/// The module's bytes with the functions of `decomposes` built with shifts
+/// and adds: theirs and the runtime routines reached, each linked once.
+fn module_price(
+    (fixed, either): &Variants,
+    decomposes: &std::collections::HashSet<usize>,
+) -> u32 {
+    use std::collections::HashSet;
+    let mut reached: HashSet<String> = HashSet::new();
+    let mut bytes = 0;
+    for (one_bytes, refs) in fixed {
+        bytes += one_bytes;
+        reached.extend(refs.iter().cloned());
+    }
+    for (at, (_, call, decomposed)) in either.iter().enumerate() {
+        let (one_bytes, refs) = match decomposed {
+            Some(decomposed) if decomposes.contains(&at) => decomposed,
+            _ => call,
+        };
+        bytes += one_bytes;
+        reached.extend(refs.iter().cloned());
+    }
+    bytes + crate::runtime_size::reached(&reached)
+}
+
+/// The module's bytes with every function calling `__mulsi3` and with every
+/// one that has the other form built with shifts and adds.
+pub fn module_prices(
+    ir: &str,
+    request: &Request,
+) -> Result<(u32, u32), String> {
+    let (selected, alternatives) = cached_both(ir, request)?;
+    let variants = variants(&selected, &alternatives, request);
+    let every = (0..variants.1.len()).filter(|at| variants.1[*at].2.is_some()).collect();
+    Ok((module_price(&variants, &std::collections::HashSet::new()), module_price(&variants, &every)))
+}
+
+/// The functions of the module that call `__mulsi3`, built with the shifts
+/// and adds where the module is smaller for it (bytes first at the size
+/// levels).
+fn decomposed_functions(
+    selected: &Selections,
+    alternatives: &Selections,
+    request: &Request,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    let variants = variants(selected, alternatives, request);
+    let either = &variants.1;
+    let total = |decomposes: &HashSet<usize>| module_price(&variants, decomposes);
     // descend from all shifts and from all calls (two functions may together
     // pay for a routine neither pays for alone); the smaller module wins, a tie
     // goes to the shifts
@@ -2329,13 +2412,15 @@ fn sunk_operand(
     // after the diamond sees what the slice leaves only if the slice leaves
     // none
     let flags = Reg::Phys(crate::reg::FLAGS);
-    let makes_flags = slice.iter().any(|&at| touches(&insts[at], flags));
+    // an instruction that sets the flags may not name them (`XOR16i`)
+    let sets = |inst: &Inst| inst.sets_flags || touches(inst, flags);
+    let makes_flags = slice.iter().any(|&at| sets(&insts[at]));
     if makes_flags {
-        if insts.iter().rposition(|inst| touches(inst, flags)).is_some_and(|last| slice.contains(&last)) {
+        if insts.iter().rposition(sets).is_some_and(|last| slice.contains(&last)) {
             return None;
         }
         let tail = &function.blocks[block].insts[p + 1..];
-        let wanted = tail.iter().find(|inst| inst.reads_flags || touches(inst, flags));
+        let wanted = tail.iter().find(|inst| inst.reads_flags || sets(inst));
         if wanted.is_some_and(|inst| inst.reads_flags) {
             return None;
         }

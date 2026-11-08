@@ -32,11 +32,11 @@ pub fn returns_flags(
     inst: InstId,
 ) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
-    Facts::of(&info.attrs).contains(Fact::FlagsResult)
+    Facts::states(&info.attrs, Fact::FlagsResult)
         || crate::memory::callee(context, function, inst)
             .and_then(|callee| globals.get(callee.0 as usize))
             .and_then(GlobalValue::function)
-            .is_some_and(|callee| Facts::of(&callee.attrs).contains(Fact::FlagsResult))
+            .is_some_and(|callee| Facts::states(&callee.attrs, Fact::FlagsResult))
 }
 
 /// Whether `value` is a flags result, which only a comparison may read: a
@@ -713,6 +713,16 @@ impl Facts {
         fact: Fact,
     ) -> bool {
         self.0.contains(&fact)
+    }
+
+    /// Whether `attributes` state `fact`: `Facts::of(attributes).contains(fact)`
+    /// without the set made (the pin's `hasFnAttr`). Not for `Fact::Inline`,
+    /// where `of` keeps only the strongest.
+    pub fn states(
+        attributes: &[Attribute],
+        fact: Fact,
+    ) -> bool {
+        attributes.iter().filter_map(Fact::of_attribute).any(|one| one == fact)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = Fact> + '_ {

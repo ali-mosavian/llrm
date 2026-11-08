@@ -19,10 +19,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_dagisel::addr::{AddrDag, Symbol, SymbolKind, Wrapped};
 use llrm_dagisel::dag::{Dag, FpClass, LoadExt, MemRef, SDValue as PinValue};
 use llrm_dagisel::generated::ids::{isd as pin, mvt};
 use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::x86_addr::{AddrDag, Symbol, SymbolKind, Wrapped};
 
 use super::SelectionDAG;
 use super::dag::{NodeData, SDNodeFlags, SDValue};
@@ -81,7 +81,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         SMulO => pin::SMULO,
         UAddOCarry => pin::UADDO_CARRY,
         USubOCarry => pin::USUBO_CARRY,
-        SetCCCarry => u16::MAX,
+        SAddOCarry | SSubOCarry | SetCCCarry => u16::MAX,
         SAddSat => pin::SADDSAT,
         UAddSat => pin::UADDSAT,
         SSubSat => pin::SSUBSAT,
@@ -90,6 +90,10 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         SMax => pin::SMAX,
         UMin => pin::UMIN,
         UMax => pin::UMAX,
+        AvgFloorS => pin::AVGFLOORS,
+        AvgFloorU => pin::AVGFLOORU,
+        AvgCeilS => pin::AVGCEILS,
+        AvgCeilU => pin::AVGCEILU,
         Abs => pin::ABS,
         PtrAdd => pin::PTRADD,
         And => pin::AND,
@@ -205,13 +209,11 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         // `ISD::VAARG` is 335, one below `VACOPY`; no pattern names it.
         VAArg => 335,
         SrcValue => pin::SRCVALUE,
-        // sdag-a's codes are private and named (`x86isd::name`), the pin's
-        // number comes from the name; sdag-b's lowering writes the pin's
-        // numbers, which `name` does not know.
-        Target(code) => match super::x86isd::private_name(code).and_then(|name| name.strip_prefix("X86ISD::")) {
-            Some(name) => llrm_dagisel::generated::ids::x86isd_id(name).unwrap_or(u16::MAX),
-            None => code,
-        },
+        // A target's private codes are named; the pin's number comes from
+        // the name, and a code the target does not know is already the pin's.
+        Target(code) => llrm_sdag::target_names::installed()
+            .and_then(|names| names.pin_id(code))
+            .unwrap_or(code),
         // A machine node reads as the pin's `~opcode`.
         Machine(code) => !(code as u16),
     }
@@ -260,9 +262,7 @@ fn our_vt(vt: Vt) -> EVT {
     .unwrap_or_else(|| panic!("pin value type {vt:?} has no counterpart"))
 }
 
-/// The id the flags register has: iced numbers no EFLAGS, so it takes the last
-/// raw id.
-pub const EFLAGS_ID: llrm_lir::registers::RegId = llrm_lir::registers::RegId::from_raw(255);
+pub use llrm_x86::pinregs::{EFLAGS_ID, phys_reg, pin_register};
 
 /// The flags every x86 call clobbers, the one register a `RegisterMask` always
 /// names. A call lowered with a convention adds that convention's clobbered
@@ -291,83 +291,6 @@ pub fn clobbered_by(
     out.sort_unstable();
     out.dedup();
     out
-}
-
-/// The register of the pin's register number `register` that the builder names
-/// as a physical register (`NodeData::PhysReg`); `None` for `$noreg` (0) and
-/// the ones with no id.
-pub fn phys_reg(register: u16) -> Option<llrm_lir::registers::RegId> {
-    use llrm_dagisel::generated::ids::x86;
-    use llrm_lir::registers::RegId;
-    // The pin's register numbers, in its X86 enum order (alphabetical: AH 1,
-    // AL 2, AX 3, ... EDX 27, ES 31); the ids module names the ones
-    // tools/dagisel/extra_symbols.txt asks for.
-    const AL: u16 = 2;
-    Some(match register {
-        AL => RegId::AL,
-        x86::AH => RegId::AH,
-        x86::AX => RegId::AX,
-        x86::CL => RegId::CL,
-        x86::CX => RegId::CX,
-        x86::DX => RegId::DX,
-        x86::EAX => RegId::EAX,
-        x86::EDX => RegId::EDX,
-        x86::RAX => RegId::RAX,
-        x86::RIP => RegId::RIP,
-        x86::RDX => RegId::RDX,
-        x86::CS => RegId::CS,
-        x86::DS => RegId::DS,
-        x86::ES => RegId::ES,
-        x86::FS => RegId::FS,
-        x86::GS => RegId::GS,
-        x86::SS => RegId::SS,
-        x86::BH => RegId::BH,
-        x86::BL => RegId::BL,
-        x86::BP => RegId::BP,
-        x86::BX => RegId::BX,
-        x86::CH => RegId::CH,
-        x86::DH => RegId::DH,
-        x86::DI => RegId::DI,
-        x86::DL => RegId::DL,
-        x86::EBP => RegId::EBP,
-        x86::EBX => RegId::EBX,
-        x86::ECX => RegId::ECX,
-        x86::EDI => RegId::EDI,
-        x86::ESI => RegId::ESI,
-        x86::ESP => RegId::ESP,
-        x86::RBP => RegId::RBP,
-        x86::RBX => RegId::RBX,
-        x86::RCX => RegId::RCX,
-        x86::RDI => RegId::RDI,
-        x86::RSI => RegId::RSI,
-        x86::RSP => RegId::RSP,
-        x86::SI => RegId::SI,
-        x86::SP => RegId::SP,
-        x86::R8 => RegId::R8,
-        x86::R9 => RegId::R9,
-        x86::R10 => RegId::R10,
-        x86::R11 => RegId::R11,
-        x86::R12 => RegId::R12,
-        x86::R13 => RegId::R13,
-        x86::R14 => RegId::R14,
-        x86::R15 => RegId::R15,
-        x86::R8D => RegId::R8D,
-        x86::R9D => RegId::R9D,
-        x86::R10D => RegId::R10D,
-        x86::R11D => RegId::R11D,
-        x86::R12D => RegId::R12D,
-        x86::R13D => RegId::R13D,
-        x86::R14D => RegId::R14D,
-        x86::R15D => RegId::R15D,
-        x86::EFLAGS => EFLAGS_ID,
-        _ => return None,
-    })
-}
-
-/// The pin's register number of the register the builder names `id`
-/// (`phys_reg` inverted); `None` where it has none.
-pub fn pin_register(id: llrm_lir::registers::RegId) -> Option<u16> {
-    (0..=u16::MAX.min(200)).find(|&number| phys_reg(number) == Some(id))
 }
 
 /// A target's physical registers in the pin's numbering: the ids the builder
@@ -1276,9 +1199,7 @@ impl AddrDag for DagisAdapter<'_> {
         node: u32,
     ) -> Option<u16> {
         match self.dag.nodes()[node as usize].data {
-            NodeData::Register(number) => {
-                self.registers.pin_register(*self.dag.live_in_phys.get(&number)?)
-            }
+            NodeData::Register(number) => self.registers.pin_register(*self.dag.live_in_phys.get(&number)?),
             _ => None,
         }
     }

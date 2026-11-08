@@ -30,11 +30,7 @@ pub mod calling {
 
     /// `name` (`ebx`, `si`, `st0`), as the family spells it.
     pub fn register(name: &str) -> RegId {
-        static NAMES: std::sync::LazyLock<llrm_support::hash::HashMap<String, RegId>> =
-            std::sync::LazyLock::new(|| {
-                RegId::values().map(|one| (format!("{one:?}").to_ascii_lowercase(), one)).collect()
-            });
-        *NAMES.get(name).unwrap_or_else(|| panic!("calling.toml names no x86 register {name}"))
+        RegId::named(name).unwrap_or_else(|| panic!("calling.toml names no x86 register {name}"))
     }
 
     /// The most bytes `ret imm16` (and `retf imm16`) removes: the immediate is
@@ -127,6 +123,15 @@ pub mod registers {
     pub fn word_of(dword: RegId) -> Option<RegId> {
         DWORDS.iter().position(|one| *one == dword).map(|at| WORDS[at])
     }
+    /// The registers of the string instructions, by root.
+    pub const STRING_ROOTS: llrm_target::StringRoots = llrm_target::StringRoots {
+        count: RegId::ECX,
+        source: RegId::ESI,
+        destination: RegId::EDI,
+        accumulator: RegId::EAX,
+    };
+    /// The DAG's name for the top of the x87 stack (the pin's `FP0`).
+    pub const X87_TOP: RegId = RegId::MM0;
     /// The segment registers.
     pub const SEGMENTS: [RegId; 6] = [RegId::ES, RegId::CS, RegId::SS, RegId::DS, RegId::FS, RegId::GS];
     /// The dword registers.
@@ -210,6 +215,8 @@ pub mod registers {
 /// is made of: `[base+index+disp]` with a base from BX or BP and an index from
 /// SI or DI. The architecture's, the same in every 16-bit target.
 pub mod asm;
+pub mod inline_asm;
+pub mod pinregs;
 pub mod helpers;
 
 pub mod addressing16 {

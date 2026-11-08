@@ -39,6 +39,11 @@ pub struct Inst {
     pub kind: Kind,
     pub operands: Vec<Operand>,
     pub call: bool,
+    /// The registers a call destroys where that is fewer than the target's
+    /// caller-saved set: what its callee is known to write (interprocedural
+    /// register use, the pin's `RegUsageInfo`). `None` is the calling
+    /// convention's own answer.
+    pub call_clobbers: Option<std::sync::Arc<std::collections::BTreeSet<RegId>>>,
     /// `(def operand, use operand)` pairs that must be one register
     /// (`TIED_TO`).
     pub ties: Vec<(usize, usize)>,
@@ -82,6 +87,7 @@ impl Inst {
             kind,
             operands,
             call: false,
+            call_clobbers: None,
             ties: Vec::new(),
             terminator: false,
             barrier: false,

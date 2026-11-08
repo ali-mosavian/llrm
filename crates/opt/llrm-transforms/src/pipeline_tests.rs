@@ -3046,3 +3046,70 @@ fn getenv_calls_do_not_grow_with_the_functions_compiled() {
     assert_eq!(one, eight, "getenv calls grow with the work: {one} for 1 function, {eight} for 8");
     assert_eq!(eight, 0, "a pass run reads the environment: {eight} calls");
 }
+
+/// `loops` counted loops one after the other, each added to a running sum, the
+/// trip count too large to unroll.
+fn chained_loops(loops: usize) -> String {
+    let mut text = String::from("define i16 @main(ptr %a) {\nentry:\n  br label %h0\n");
+    for at in 0..loops {
+        let from = if at == 0 { "entry".to_owned() } else { format!("x{}", at - 1) };
+        text += &format!(
+            "h{at}:\n  %i{at} = phi i16 [ 0, %{from} ], [ %n{at}, %h{at} ]\n  %s{at} = phi i16 [ {at}, %{from} ], [ %t{at}, %h{at} ]\n  %p{at} = getelementptr i16, ptr %a, i16 %i{at}\n  %v{at} = load i16, ptr %p{at}\n  %t{at} = add i16 %s{at}, %v{at}\n  %n{at} = add nuw nsw i16 %i{at}, 1\n  %c{at} = icmp ult i16 %n{at}, 1000\n  br i1 %c{at}, label %h{at}, label %x{at}\nx{at}:\n"
+        );
+        text += &if at + 1 == loops { format!("  ret i16 %t{at}\n") } else { format!("  br label %h{}\n", at + 1) };
+    }
+    text + "}\n"
+}
+
+/// How many times the costly end of the guard queries ran while the pipeline
+/// took `loops` chained loops.
+fn operand_queries_over(loops: usize) -> usize {
+    let before = llrm_analysis::scev::implied::operand_queries();
+    pipelined(&chained_loops(loops), pipeline::Options::default());
+    llrm_analysis::scev::implied::operand_queries() - before
+}
+
+/// LPM2 runs the loop passes on one loop at a time. All of `indvars` ran
+/// before any loop's exit test was rewritten, so each loop's guard query
+/// walked the exit tests of the loops before it in their original form, and
+/// proved them with `isImpliedCondOperands` where the rewritten tests of the
+/// pin never get that far, and the queries grew with the square of the loops
+/// (huge at 100 loops: 692 M Ir in `indvars`, 419 M with the order).
+#[test]
+fn the_exit_tests_of_earlier_loops_are_rewritten_before_the_next_loop_is_asked() {
+    let (small, large) = (operand_queries_over(10), operand_queries_over(20));
+    assert!(
+        2 * large < 5 * small,
+        "queries: {small} at 10 loops, {large} at 20 (220 and 440 in order, 625 and 2150 not)"
+    );
+}
+
+/// A body that dead-argument elimination changed after the inliner went
+/// through the whole cleanup list again (promote, combine@1242, dead,
+/// simplify-cfg): 63 of the 129 extra InstCombine runs on memory_expansion -O2.
+/// The pin runs GlobalCleanup once, before the inliner, and nothing follows
+/// `DeadArgumentEliminationPass`. Here `@g`'s argument is read only by a call
+/// to `@h(%u, 0)`, whose select the inliner folds: the argument is dead only after it.
+#[test]
+fn test_a_body_dead_argument_elimination_changed_does_not_run_the_cleanup_list_again() {
+    let text = "define internal i16 @h(i16 %p, i16 %q) {\nb0:\n  %c = icmp eq i16 %q, 0\n  %r = select i1 %c, i16 1, i16 %p\n  ret i16 %r\n}\n\ndefine internal i16 @g(i16 %x, i16 %u) noinline {\nb0:\n  %k = call i16 @h(i16 %u, i16 0)\n  %m = call i16 @h(i16 %x, i16 1)\n  %r = add i16 %m, %k\n  ret i16 %r\n}\n\ndefine i16 @f(i16 %a, i16 %b) {\nb0:\n  %c = call i16 @g(i16 %a, i16 %b)\n  ret i16 %c\n}\n";
+    llrm_mir::counts::per_pass();
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied::default();
+    let before = llrm_mir::counts::lines();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let after = llrm_mir::counts::lines();
+    let runs = |lines: &[String]| {
+        lines
+            .iter()
+            .filter_map(|line| line.strip_prefix("[counts] pass combine@1242 ")?.split(' ').next()?.parse::<u64>().ok())
+            .sum::<u64>()
+    };
+    let printed = llrm_mir::print::module(&module);
+    assert!(printed.contains("@g(i16 %") && !printed.contains("@g(i16 %x, i16"), "the argument was removed: {printed}");
+    assert_eq!(runs(&after) - runs(&before), 3, "the cleanup list runs once over each of the three bodies");
+}
