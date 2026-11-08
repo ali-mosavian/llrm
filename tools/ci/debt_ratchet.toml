@@ -1,3 +1,19 @@
-# The last accepted numbers of a debt row's limit, in the order they appear in the row. A limit only goes down: raising one is red
-# (test_debt.py). Lower the number here in the PR that lowers it in docs/working/ci.md.
+# The accepted numbers of every debt row's limit, in the order they appear in the row (any unit: B, insns, clocks, tests, programs).
+# A limit only goes down: a raised number, a missing row or a stale one is red (test_debt.py). Lower the number here in the PR that lowers it in docs/working/ci.md.
+skip-readme-c = [1]
+skip-qcport-console = [1]
+llrm-c-scoreboard = [1]
+llrm-c-compile-map = [1]
+llrm-c-pipeline-runs = [1]
+llrm-c-qcport-sweep = [1]
+oracles-llrm-cc-unbuilt = [24]
+skip-alloc-scaling = [37]
+qb-poc-chk-entries = [3]
+sum-three-nib-lsr-m16 = [129]
+os-unroll-3 = [353, 249, 252, 23, 171]
+bench-tile-os-m16-insns = [4182, 10300, 94]
 lru-os-m16-bytes = [382, 129, 57, 515, 147]
+turbo-near-function = [1]
+sfm16-placement = [351, 342, 346, 342, 431, 411, 2]
+greedy-inline-slot = [6, 4]
+x87-zero-memset = [2, 18, 10]
