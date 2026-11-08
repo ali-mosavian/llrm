@@ -245,7 +245,7 @@ pub fn assembled_by(
                 let twin = format!("{name}{TWIN_SUFFIX}");
                 let flagged = global.function().is_some_and(|one| llrm_mir::memory::has(&one.attrs, END_BIASED_FIRED))
                     && module.named(&twin).is_some();
-                if flagged {
+                if flagged && !same_body(module, name, &twin) {
                     end_biased_pick(module, name, &twin, abi, &pool, &target)
                 } else {
                     machined(module, name, abi, &pool, &target)
@@ -918,6 +918,32 @@ fn end_biased_pick(
 /// from the pin's.
 const END_BIASED_FIRED: &str = llrm_transforms::lsr_pass::END_BIASED_FIRED;
 use llrm_transforms::lsr_pass::TWIN_SUFFIX;
+
+/// Whether the twin came out of the passes as the function did: its instructions, operand for operand. LSR's
+/// end-biased formulae change nothing in a loop they do not reach, and selecting both would cost the same twice.
+fn same_body(
+    module: &Module,
+    name: &str,
+    twin: &str,
+) -> bool {
+    let body = |name: &str| module.named(name).and_then(|id| module.global(id).function());
+    let (Some(one), Some(other)) = (body(name), body(twin)) else { return false };
+    let mut ours = one.walk();
+    let mut theirs = other.walk();
+    loop {
+        match (ours.next(), theirs.next()) {
+            (None, None) => return true,
+            (Some((block, at)), Some((other_block, other_at))) => {
+                if block != other_block
+                    || format!("{:?}", one.instruction(at)) != format!("{:?}", other.instruction(other_at))
+                {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+}
 
 fn is_twin(name: &str) -> bool {
     name.ends_with(TWIN_SUFFIX)
