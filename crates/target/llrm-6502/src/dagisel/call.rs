@@ -148,9 +148,20 @@ pub fn lower_call(
         chain = dag.get_token_factor(&stores);
     }
     let mut glue = None;
-    for (out, &target) in outs.iter().zip(&targets) {
-        let Location::Register(register) = target else { continue };
-        let copy = dag.get_copy_to_phys_reg(chain, register, out.value, glue);
+    // `a` and `x` last: moving a constant or a byte into a cell goes through `a`
+    let (a, x) = (abi::register("a"), abi::register("x"));
+    let late = |register: llrm_lir::registers::RegId| u8::from(register == x) + 2 * u8::from(register == a);
+    let mut copies: Vec<_> = outs
+        .iter()
+        .zip(&targets)
+        .filter_map(|(out, &target)| match target {
+            Location::Register(register) => Some((register, out.value)),
+            Location::Stack(_) => None,
+        })
+        .collect();
+    copies.sort_by_key(|&(register, _)| late(register));
+    for (register, value) in copies {
+        let copy = dag.get_copy_to_phys_reg(chain, register, value, glue);
         chain = SDValue { node: copy.node, res: 0 };
         glue = Some(SDValue { node: copy.node, res: 1 });
     }

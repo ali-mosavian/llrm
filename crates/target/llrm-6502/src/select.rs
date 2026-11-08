@@ -72,6 +72,9 @@ struct Cells<'a> {
     /// Copies into `a`, `x` and `y`, held back to the `RET`: every other copy
     /// goes through `a`.
     deferred: Vec<MInst>,
+    /// The unit being lowered ends in a call: its copies into `a`, `x` and `y`
+    /// are arguments (`lower_call` puts them last) and stay in place.
+    in_call: bool,
     /// The successors the current block branches to by label, for the edge
     /// blocks.
     branched_to: llrm_support::hash::HashSet<u32>,
@@ -226,6 +229,7 @@ pub fn function_items_with_places(
         fixed,
         saved: HashMap::default(),
         deferred: Vec::new(),
+        in_call: false,
         branched_to: Default::default(),
     };
     let mut body: Vec<Item> = vec![Item::Label(name.to_owned())];
@@ -249,6 +253,12 @@ pub fn function_items_with_places(
         let split = one.edges.iter().any(|edge| edge.to.is_some());
         cells.branched_to.clear();
         for unit in &one.units {
+            cells.in_call = unit.nodes.iter().any(|&node| {
+                matches!(
+                    one.dag.nodes()[node as usize].opcode,
+                    ISD::Machine(code) if [op::JSR, op::JSRI].contains(&(code as u16))
+                )
+            });
             for &node in unit.nodes.iter().rev() {
                 if matches!(
                     one.dag.nodes()[node as usize].opcode,
@@ -560,10 +570,12 @@ fn lower(
             let from = location(module, name, one, at(2), values, cells)?;
             let bits = one.dag.value_type(at(2)).size_in_bits();
             let copy = copy(bits, to.clone(), from);
-            if matches!(
-                &to,
-                Operand::Reg(text) if ["a", "x", "y"].contains(&text.as_str())
-            ) {
+            if !cells.in_call
+                && matches!(
+                    &to,
+                    Operand::Reg(text) if ["a", "x", "y"].contains(&text.as_str())
+                )
+            {
                 cells.deferred.push(copy);
                 return Ok(Vec::new());
             }
