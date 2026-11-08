@@ -362,6 +362,12 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// -O1 keeps the size bound's refusals but tries them as -Os does: a copy that folds (struct_odd_sizes: `fives`
+    /// -40, refused, 131 B over SDCC) leaves the caller smaller and faster.
+    fn inline_trials_at_o1(&self) -> bool {
+        true
+    }
+
     /// -O1 is strict on bytes and clocks: the pin's threshold alone, no rate.
     fn speed_inline_rate_at_o1(&self) -> bool {
         false

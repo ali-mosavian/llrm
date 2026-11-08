@@ -2078,3 +2078,12 @@ fn the_speed_rate_refuses_a_big_copy_at_o2_and_leaves_o1_to_the_pin() {
     let split = at(include_str!("kernels/ir/split_loops.ll"), "main", Level::O1);
     assert!(split.contains("call _from"), "-O1\n{split}");
 }
+
+/// -O1 kept the size bound's refusals: `fives` (cost -40, folds into `main`) stayed a call, 498 B and 3,534 T against
+/// SDCC's 367 B and 2,548 T. Refused sites are tried inline as at -Os: the copy folds, 259 B and 355 T.
+#[test]
+fn a_refused_inline_that_shrinks_the_caller_is_tried_at_o1() {
+    let ir = include_str!("kernels/ir/struct_odd_sizes.ll");
+    let out = text(ir, "main", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("call _fives") && !out.contains("call _three"), "{out}");
+}
