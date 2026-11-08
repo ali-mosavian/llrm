@@ -40,7 +40,7 @@ def test_no_debt_line_in_the_ci_doc_is_malformed_or_overdue():
 
 def test_the_doc_lists_debt_lines():
     """A rename of the section or of the marker would make the check above pass on nothing."""
-    assert "- DEBT skip-llrm-pass |" in DOC.read_text()
+    assert any(line.startswith("- DEBT ") for line in DOC.read_text().splitlines())  # any row: a paid row must not fail this
 
 
 def test_a_past_dated_row_is_red():
