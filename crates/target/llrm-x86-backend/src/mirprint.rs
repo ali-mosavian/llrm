@@ -26,8 +26,8 @@ use std::fmt::Write as _;
 use llrm_lir::registers::RegId;
 use llrm_lir::{Held, Imm, Loc, Mem, Space};
 
-use crate::model::lir::{Insn, LirBody};
-use crate::support::hash::IndexMap;
+use llrm_codegen::model::lir::{Insn, LirBody};
+use llrm_codegen::support::hash::IndexMap;
 
 thread_local! {
     /// The widest each value is named at, for the body being printed.
@@ -634,7 +634,7 @@ pub fn mir(
     pins: &IndexMap<u32, RegId>,
 ) -> Result<String, String> {
     let at: Vec<i64> = body.blocks.iter().map(|b| b.at).collect();
-    let odds = crate::liveness::blockfrequency::MachineBranchProbabilityInfo::of(body);
+    let odds = llrm_codegen::liveness::blockfrequency::MachineBranchProbabilityInfo::of(body);
     let mut symbols = BTreeSet::new();
     let mut callees = BTreeSet::new();
     let mut text = String::new();
@@ -877,8 +877,8 @@ mod tests {
     use llrm_lir::{Held, Imm, Loc, Operation, Semantics};
 
     use super::mir;
-    use crate::model::lir::{Block, Insn, LirBlock, LirBody};
-    use crate::support::hash::IndexMap;
+    use llrm_codegen::model::lir::{Block, Insn, LirBlock, LirBody};
+    use llrm_codegen::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
         Loc::Held(Held { value, width: 4, offset: 0 })
