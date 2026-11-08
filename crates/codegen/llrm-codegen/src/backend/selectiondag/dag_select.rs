@@ -93,16 +93,26 @@ pub fn legalized_with<L: CombineHooks + legalize_dag::Hooks>(
         let combiner = DagCombiner::new(dag, lowering, level).with_tli(tli);
         if opt_none { combiner.with_opt_none() } else { combiner }.run();
     };
+    let stage = |dag: &SelectionDAG, name: &str| {
+        if llrm_support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "stages") {
+            eprintln!("{name}:\n{}", dag.dump());
+        }
+    };
+    stage(dag, "built");
     combiner(dag, lowering, CombineLevel::BeforeLegalizeTypes);
+    stage(dag, "combined before type legalization");
     let mut types = TypeLegalizer::new(dag, tli);
     if let Some(arch) = arch {
         types = types.with_target(arch);
     }
     let types = types.with_hooks(lowering).run();
     types.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
+    stage(dag, "types legalized");
     combiner(dag, lowering, CombineLevel::AfterLegalizeTypes);
+    stage(dag, "combined after type legalization");
     let legal = DagLegalizer::new(dag, tli, lowering).run();
     legal.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
+    stage(dag, "legalized");
     combiner(dag, lowering, CombineLevel::AfterLegalizeDag);
     // `LLRM_DAGDUMP=all` prints every block's DAG as selection will see it.
     if llrm_support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
