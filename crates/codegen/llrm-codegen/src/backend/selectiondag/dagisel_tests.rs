@@ -1,9 +1,9 @@
 //! The matcher interpreter over our own DAG: the C1 address and fold cases.
 
-use llrm_dagisel::generated::x86_i486 as table;
 use llrm_dagisel::interp::{Outcome, Selector};
-use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
-use llrm_dagisel::x86_select::select_node;
+use llrm_x86_dagisel::generated::x86_i486 as table;
+use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
+use llrm_x86_dagisel::x86_select::select_node;
 
 use super::dag::{MemBase, MemInfo};
 use super::dagisel_adapter::DagisAdapter;
@@ -99,7 +99,7 @@ fn a_node_the_table_has_no_pattern_for_cannot_be_selected() {
 
 #[test]
 fn the_select_loop_drops_a_shift_counts_plus_thirty_two_in_our_dag() {
-    use llrm_dagisel::x86_select::select_node;
+    use llrm_x86_dagisel::x86_select::select_node;
     let mut dag = SelectionDAG::new(DagConfig::default());
     let x = input(&mut dag, 40);
     let entry = dag.entry_node();
@@ -433,14 +433,14 @@ fn a_natural_log_exp_and_log2_are_the_x87_sequences() {
 
         let ISD::Machine(code) = dag.nodes()[node.node as usize].opcode else { panic!("{op:?} is no machine node") };
         let own = [
-            (llrm_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
-            (llrm_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
-            (llrm_dagisel::x86_llrm::FLOG2_OPCODE, "LOG2_Fp80"),
-            (llrm_dagisel::x86_llrm::FEXP2_OPCODE, "EXP2_Fp80"),
-            (llrm_dagisel::x86_llrm::FSIN_OPCODE, "SIN_Fp80"),
-            (llrm_dagisel::x86_llrm::FCOS_OPCODE, "COS_Fp80"),
-            (llrm_dagisel::x86_llrm::FATAN_OPCODE, "ATAN_Fp80"),
-            (llrm_dagisel::x86_llrm::FRINT_OPCODE, "RNDINT_Fp80"),
+            (llrm_x86_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
+            (llrm_x86_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
+            (llrm_x86_dagisel::x86_llrm::FLOG2_OPCODE, "LOG2_Fp80"),
+            (llrm_x86_dagisel::x86_llrm::FEXP2_OPCODE, "EXP2_Fp80"),
+            (llrm_x86_dagisel::x86_llrm::FSIN_OPCODE, "SIN_Fp80"),
+            (llrm_x86_dagisel::x86_llrm::FCOS_OPCODE, "COS_Fp80"),
+            (llrm_x86_dagisel::x86_llrm::FATAN_OPCODE, "ATAN_Fp80"),
+            (llrm_x86_dagisel::x86_llrm::FRINT_OPCODE, "RNDINT_Fp80"),
         ];
         assert_eq!(own.iter().find(|(v, _)| u32::from(*v) == code).map(|(_, n)| *n), Some(name), "{op:?}");
     }
@@ -506,7 +506,7 @@ fn an_x87_fist_to_a_stack_slot_is_an_ist_pseudo() {
         match name.strip_prefix("IST16_") {
             Some(_) => {
                 let ISD::Machine(code) = dag.nodes()[fist.node as usize].opcode else { panic!("no machine node") };
-                assert_eq!(code, u32::from(llrm_dagisel::x86_llrm::IST16_OPCODES[1]), "a word fist of a double");
+                assert_eq!(code, u32::from(llrm_x86_dagisel::x86_llrm::IST16_OPCODES[1]), "a word fist of a double");
             }
             None => assert_eq!(machine_name(&dag, fist.node), name),
         }

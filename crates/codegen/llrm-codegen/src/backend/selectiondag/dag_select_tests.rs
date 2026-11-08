@@ -1,10 +1,10 @@
-use llrm_dagisel::generated::x86_i486::{MACHINE_OPCODES, TABLE};
 use llrm_dagisel::interp::Selector;
-use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_lir::registers::RegId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_support::hash::HashMap;
 use llrm_target::Target;
+use llrm_x86_dagisel::generated::x86_i486::{MACHINE_OPCODES, TABLE};
+use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, build_block};

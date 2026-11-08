@@ -22,9 +22,10 @@
 //! [select]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L5513
 
-use crate::addr::AddrDag;
-use crate::generated::ids::{isd, x86isd};
-use crate::interp::{Outcome, Selector};
+use llrm_dagisel::addr::AddrDag;
+use llrm_dagisel::generated::ids::{isd, x86isd};
+use llrm_dagisel::interp::{Outcome, Selector};
+
 use crate::x86_divrem::select_divrem;
 use crate::x86_fcmp::{select_fcmp, select_fist16, select_pop_from_x87, select_setcc_carry};
 use crate::x86_fplogic::select_fp_logic;

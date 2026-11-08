@@ -17,6 +17,7 @@ llrm-debug = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-hir = { workspace = true }
 llrm-dagisel = { path = "../../backend/llrm-dagisel" }
+llrm-x86-dagisel = { path = "../../target/llrm-x86-dagisel" }
 llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }

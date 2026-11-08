@@ -1,9 +1,10 @@
-//! Hooks for the x86-32 tables over [`TestDag`](crate::testing::TestDag).
+//! Hooks for the x86-32 tables over
+//! [`TestDag`](llrm_dagisel::testing::TestDag).
 
-use crate::dag::{Dag, Hooks, SDValue, X86Predicates};
-use crate::generated::ids::mvt;
-use crate::matcher::Vt;
-use crate::testing::TestDag;
+use llrm_dagisel::dag::{Dag, Hooks, SDValue, X86Predicates};
+use llrm_dagisel::generated::ids::mvt;
+use llrm_dagisel::matcher::Vt;
+use llrm_dagisel::testing::TestDag;
 
 /// Hooks for a 32-bit target whose address pattern the test supplies.
 pub struct TestHooks {
@@ -152,7 +153,7 @@ impl X86Predicates<TestDag> for TestHooks {
 
 pub struct OptSize;
 
-impl crate::dag::PatternContext for OptSize {
+impl llrm_dagisel::dag::PatternContext for OptSize {
     fn should_opt_for_size(&self) -> bool {
         false
     }

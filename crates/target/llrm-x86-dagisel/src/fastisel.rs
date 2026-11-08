@@ -32,9 +32,10 @@ impl Table {
     }
 }
 
-/// The `(opcode, register class)` the pin's `fastEmit_<namespace>_<op>_MVT_<vt>…`
-/// takes: `ret` is empty unless the function is named with a result type;
-/// `shape` is [`Shape`](#) code 0 `r`, 1 `rr`, 2 `ri`, 3 `ri` with a predicate, 4 `i`.
+/// The `(opcode, register class)` the pin's
+/// `fastEmit_<namespace>_<op>_MVT_<vt>…` takes: `ret` is empty unless the
+/// function is named with a result type; `shape` is [`Shape`](#) code 0 `r`, 1
+/// `rr`, 2 `ri`, 3 `ri` with a predicate, 4 `i`.
 pub fn lookup(
     table: Table,
     namespace: &str,
@@ -44,7 +45,8 @@ pub fn lookup(
     shape: u8,
 ) -> Option<(&'static str, &'static str)> {
     let rows = table.rows();
-    let at = rows.binary_search_by(|row| (row.0, row.1, row.2, row.3, row.4).cmp(&(namespace, op, vt, ret, shape))).ok()?;
+    let at =
+        rows.binary_search_by(|row| (row.0, row.1, row.2, row.3, row.4).cmp(&(namespace, op, vt, ret, shape))).ok()?;
     Some((rows[at].5, rows[at].6))
 }
 
@@ -58,8 +60,16 @@ mod tests {
     fn the_pins_alu_rows_are_the_hand_spelled_opcodes() {
         for table in [Table::I486, Table::P5, Table::X64] {
             for (op, name) in [("ADD", "ADD"), ("SUB", "SUB"), ("AND", "AND"), ("OR", "OR"), ("XOR", "XOR")] {
-                assert_eq!(lookup(table, "ISD", op, "i32", "", 1), Some((&*format!("{name}32rr").leak(), "GR32")), "{table:?} {op} rr");
-                assert_eq!(lookup(table, "ISD", op, "i32", "", 2), Some((&*format!("{name}32ri").leak(), "GR32")), "{table:?} {op} ri");
+                assert_eq!(
+                    lookup(table, "ISD", op, "i32", "", 1),
+                    Some((&*format!("{name}32rr").leak(), "GR32")),
+                    "{table:?} {op} rr"
+                );
+                assert_eq!(
+                    lookup(table, "ISD", op, "i32", "", 2),
+                    Some((&*format!("{name}32ri").leak(), "GR32")),
+                    "{table:?} {op} ri"
+                );
             }
         }
     }

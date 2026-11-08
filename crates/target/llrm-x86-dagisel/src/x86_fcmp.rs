@@ -17,9 +17,9 @@
 //! [case]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L6391
 
-use crate::addr::AddrDag;
-use crate::dag::SDValue;
-use crate::generated::ids::{mvt, target_opcode, x86};
+use llrm_dagisel::addr::AddrDag;
+use llrm_dagisel::dag::SDValue;
+use llrm_dagisel::generated::ids::{mvt, target_opcode, x86};
 
 /// Selects `node`; false for a compare type with no x87 form.
 pub fn select_fcmp<D: AddrDag>(
@@ -112,7 +112,7 @@ pub fn select_fist16<D: AddrDag>(
     hooks: &crate::x86_hooks::X86Hooks,
     node: u32,
 ) -> bool {
-    use crate::addr::Matcher;
+    use llrm_dagisel::addr::Matcher;
     if dag.memory_vt(node) != mvt::i16 {
         return false;
     }

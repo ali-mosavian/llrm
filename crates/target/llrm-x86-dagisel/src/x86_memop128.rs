@@ -12,9 +12,10 @@
 //! # Used by
 //! [`crate::x86_select::select_node`].
 
-use crate::addr::{AddrDag, AddressOperands, Matcher};
-use crate::dag::SDValue;
-use crate::generated::ids::{mvt, x86, x86isd};
+use llrm_dagisel::addr::{AddrDag, AddressOperands, Matcher};
+use llrm_dagisel::dag::SDValue;
+use llrm_dagisel::generated::ids::{mvt, x86, x86isd};
+
 use crate::x86_hooks::X86Hooks;
 
 /// Selects `node` (`chain, destination[, source], alignment`); false for an

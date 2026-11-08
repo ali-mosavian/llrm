@@ -4,11 +4,11 @@
 
 #![allow(clippy::all, unused_imports)]
 
-use crate::dag::{Dag, Hooks, PatternContext, SDValue, X86Predicates};
-use crate::matcher::{Emit, Matcher::*, Slice, Table, Vt};
-use crate::predicates;
+use llrm_dagisel::dag::{Dag, Hooks, PatternContext, SDValue, X86Predicates};
+use llrm_dagisel::matcher::{Emit, Matcher::*, Slice, Table, Vt};
+use llrm_dagisel::predicates;
 
-pub static ITEMS: [crate::matcher::Matcher; 20208] = [
+pub static ITEMS: [llrm_dagisel::matcher::Matcher; 20208] = [
     SwitchOpcode,
     OpcodeCase { size: 4100, opcode: 317 },
     RecordMemRef,

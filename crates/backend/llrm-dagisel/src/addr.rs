@@ -31,7 +31,7 @@
 //!   matcher (C2). Owner sdag-c. Exit: none. Review 2026-12-10.
 //!
 //! # Used by
-//! [`crate::x86_hooks`].
+//! [`llrm_x86_dagisel::x86_hooks`].
 //!
 //! [addr]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2053

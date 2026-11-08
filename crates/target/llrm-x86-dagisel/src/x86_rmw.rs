@@ -19,10 +19,11 @@
 //! [fusable]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3787
 
-use crate::addr::{AddrDag, Matcher};
-use crate::dag::{LoadExt, SDValue};
-use crate::generated::ids::{isd, mvt, x86, x86isd};
-use crate::matcher::Vt;
+use llrm_dagisel::addr::{AddrDag, Matcher};
+use llrm_dagisel::dag::{LoadExt, SDValue};
+use llrm_dagisel::generated::ids::{isd, mvt, x86, x86isd};
+use llrm_dagisel::matcher::Vt;
+
 use crate::x86_hooks::X86Hooks;
 
 /// The memory opcode of an operation by operand width: `[8, 16, 32]`.
@@ -127,7 +128,7 @@ fn fusable<D: AddrDag>(
             worklist.push(op.node);
         }
     }
-    if dag.has_predecessor_helper(load.node, &mut crate::dag::Visited::new(), &mut worklist, 1024) {
+    if dag.has_predecessor_helper(load.node, &mut llrm_dagisel::dag::Visited::new(), &mut worklist, 1024) {
         return None;
     }
     let input_chain = if chain_ops.len() == 1 { chain_ops[0] } else { dag.token_factor(&chain_ops) };

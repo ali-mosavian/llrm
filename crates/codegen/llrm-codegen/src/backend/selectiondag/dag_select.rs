@@ -4,7 +4,7 @@
 //! [`select_block`] runs the pin's `CodeGenAndEmitDAG` order over a built
 //! block: combine, legalize types, combine, legalize the DAG, combine, then
 //! `DoInstructionSelection`: every node the root reaches,
-//! last created first, goes to `llrm_dagisel::x86_select::select_node`
+//! last created first, goes to `llrm_x86_dagisel::x86_select::select_node`
 //! (the pin's `Select` hand matchers, then the generated table). The
 //! machine DAG is scheduled ([`super::schedule`]) and emitted
 //! ([`super::emit`]) as LIR blocks.
@@ -28,9 +28,9 @@
 //! ([L1281](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L1281)).
 
 use llrm_dagisel::interp::{Outcome, Selector};
-use llrm_dagisel::x86_hooks::X86Hooks;
-use llrm_dagisel::x86_select::select_node;
 use llrm_support::hash::HashSet;
+use llrm_x86_dagisel::x86_hooks::X86Hooks;
+use llrm_x86_dagisel::x86_select::select_node;
 
 use super::actions::TargetLowering;
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
@@ -135,7 +135,7 @@ impl<'p> DagTarget for X86Target<'_, 'p> {
         if options.address_mode != llrm_dagisel::addr::AddrMode::Real16 {
             let facts = super::x86_preprocess::CalleeLoadFacts {
                 optimizing: !options.opt_none,
-                is_64: options.cpu == llrm_dagisel::x86_hooks::Cpu::X64,
+                is_64: options.cpu == llrm_x86_dagisel::x86_hooks::Cpu::X64,
                 position_independent: false,
                 slow_two_mem_ops: false,
                 slow_indirect_call: false,
