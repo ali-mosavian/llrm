@@ -7,6 +7,7 @@ Host oracle (run from `runtime/compiler-rt`, each prints `fails=0` or its totals
 - `cc -O2 -Iinclude tests/host_fast32.c lib/fast/fast32.c -lm`; `tests/host_mathf.c` and `tests/host_fp8.c`: the build line is in their header
 - `tests/host_div_newton.sh` (SF_DIV_NEWTON, two multiplies); `tests/host_add_far.c` (far-exponent add/sub; build line in its header)
 - `cc -O2 -Iinclude '-DSFB_NAME(n)=sfb_##n' tests/host_clz.c lib/int/clzsi2.c lib/int/clzdi2.c && ./a.out`
+- `cc -O2 -Iinclude '-DSFB_NAME(n)=sfb_##n' tests/host_bitcount.c lib/int/clz{hi,si,di}2.c lib/int/ctz{hi,si,di}2.c lib/int/popcount{hi,si,di}2.c && ./a.out`: clz/ctz/popcount at 16, 32 and 64 bits against `__builtin_*`
 - `python3 tests/cells_worse.py A.json B.json` (bench.py --json files): lists cells worse on bytes, clocks or instructions; `sh tests/cells_worse_test.sh` is its test
 - `sh tests/int16_lint.sh` (16-bit int compile of every source)
 - `LLRM_CC=llrm-cc sh tests/udivmod_w_size_test.sh`: the 64-bit divide worker links no 32-bit shift libcall at -Os
