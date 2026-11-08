@@ -1085,7 +1085,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // `ExpandSetCCOperands`: a pair equals a constant when both halves do
         // (`(lo ^ c.lo) | (hi ^ c.hi)` is zero), so a long a call returned in
         // dx:ax is compared by halves, not joined into one dword first.
-        if matches!(cond, CondCode::SetEq | CondCode::SetNe) && self.dag.opcode(n0) == ISD::BuildPair {
+        if matches!(cond, CondCode::SetEq | CondCode::SetNe)
+            && self.dag.opcode(n0) == ISD::BuildPair
+            && !self.tli.is_some_and(|tli| tli.byte_equality())
+        {
             let (low, high) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
             let half = self.dag.value_type(low);
             let bits = half.size_in_bits();

@@ -3419,6 +3419,36 @@ impl<'a> TypeLegalizer<'a> {
         let ((ll, lh), (rl, rh)) =
             (self.expanded_integer(self.dag.operand(setcc, 0)), self.expanded_integer(self.dag.operand(setcc, 1)));
         let half = self.dag.value_type(ll);
+        // A constant operand leaves one operand's bytes live beside the
+        // accumulator; two registers' worth spilled in the corpus.
+        if matches!(code, CondCode::SetEq | CondCode::SetNe)
+            && self.tli.byte_equality()
+            && self.dag.constant(self.dag.operand(setcc, 1)).is_some()
+        {
+            // DEVIATE WIDE-EQ-BYTES (see `TargetLowering::byte_equality`)
+            let (left, right) = (self.dag.operand(setcc, 0), self.dag.operand(setcc, 1));
+            let wide = self.dag.value_type(left);
+            let byte = |this: &mut Self, value: SDValue, at: u32| {
+                let shifted = if at == 0 {
+                    value
+                } else {
+                    let by = this.dag.get_constant(u128::from(8 * at), EVT::I8);
+                    this.dag.get_node(ISD::Srl, wide, &[value, by])
+                };
+                this.dag.get_node(ISD::Truncate, EVT::I8, &[shifted])
+            };
+            let mut seen: Option<SDValue> = None;
+            for at in 0..wide.size_in_bits() / 8 {
+                let (a, b) = (byte(self, left, at), byte(self, right, at));
+                let diff = self.dag.get_node(ISD::Xor, EVT::I8, &[a, b]);
+                seen = Some(match seen {
+                    Some(so_far) => self.dag.get_node(ISD::Or, EVT::I8, &[diff, so_far]),
+                    None => diff,
+                });
+            }
+            let zero = self.dag.get_constant(0, EVT::I8);
+            return self.dag.get_setcc(vt, seen.expect("a byte"), zero, code);
+        }
         if matches!(code, CondCode::SetEq | CondCode::SetNe) {
             let (low, high) =
                 (self.dag.get_node(ISD::Xor, half, &[ll, rl]), self.dag.get_node(ISD::Xor, half, &[lh, rh]));

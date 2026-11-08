@@ -188,12 +188,15 @@ fn a_pass_switch_stays_away_from_a_backend_that_takes_none() {
     let table = targets(TARGETS).unwrap();
     let one = built("-fno-inline-functions-called-once -fno-unroll-loops -c x.c");
     let args = |name: &str| llc_args(&table[name], &one, Path::new("x.ll"), Path::new("x.o"));
-    for name in ["wasm32", "m68k-68020", "z80-sdcc"] {
+    for name in ["wasm32", "z80-sdcc"] {
         assert!(args(name).iter().all(|flag| !flag.starts_with("-fno-")), "{name}: {:?}", args(name));
     }
-    let kept = args("x86_32-linux");
-    assert!(kept.contains(&"-fno-inline-functions-called-once".to_owned()), "{kept:?}");
-    assert!(kept.contains(&"-fno-unroll-loops".to_owned()), "{kept:?}");
+    // m68k's llc takes them (its program headers' `-fno-inline-functions` made 19 programs fail)
+    for name in ["x86_32-linux", "m68k-68000", "m68k-68020"] {
+        let kept = args(name);
+        assert!(kept.contains(&"-fno-inline-functions-called-once".to_owned()), "{name}: {kept:?}");
+        assert!(kept.contains(&"-fno-unroll-loops".to_owned()), "{name}: {kept:?}");
+    }
 }
 
 #[test]
