@@ -38,6 +38,7 @@ fn an_undef_float_is_zero() {
                 i16_mul_chains: false,
                 sext_load: false,
                 zext_free: false,
+                branch_constant_selects: false,
                 profile: None,
             },
         )
