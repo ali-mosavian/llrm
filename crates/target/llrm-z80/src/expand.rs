@@ -1863,7 +1863,7 @@ pub fn finish(
 /// The post-printer passes. `forward_high_bytes` runs before `drop_overwritten_byte_stores`: the latter drops the
 /// `ld R1, S1` the former needs to see.
 fn tidy(lines: Vec<Line>) -> Vec<Line> {
-    drop_unreachable(drop_overwritten_byte_stores(forward_high_bytes(cancel_steps(lines))))
+    drop_unreachable(drop_overwritten_byte_stores(forward_byte_copies(forward_high_bytes(cancel_steps(lines)))))
 }
 
 /// Whether `text` ends the flow: `ret`, `jp L` or `jr L` with no condition.
@@ -1964,6 +1964,20 @@ fn mentions(
         .filter(|word| !word.is_empty())
         .skip(1)
         .any(|word| word == pair || (word.len() == 1 && pair.contains(word)))
+}
+
+/// `ld R, S; ld a, R` reads `S` itself: the copy may then be dead, which `drop_overwritten_byte_stores` finds
+/// (a byte shifted through `a` right after a copy of its source).
+fn forward_byte_copies(mut lines: Vec<Line>) -> Vec<Line> {
+    let is_byte = |register: &str| register.len() == 1 && "bcdehl".contains(register);
+    for at in 1..lines.len() {
+        let (Line::Inst(copy), Line::Inst(read)) = (&lines[at - 1], &lines[at]) else { continue };
+        let Some((to, from)) = copy.strip_prefix("ld ").and_then(|text| text.split_once(", ")) else { continue };
+        if is_byte(to) && is_byte(from) && read == &format!("ld a, {to}") {
+            lines[at] = Line::Inst(format!("ld a, {from}"));
+        }
+    }
+    lines
 }
 
 /// `ld R1, S1; ld R2, S2; ld R1, R2; ld R2, #0`: a pair copied in order to read
@@ -2732,6 +2746,15 @@ mod tests {
         let inst = |text: &str| Line::Inst(text.to_owned());
         let lines = vec![inst("ld l, c"), inst("ld h, b"), inst("ld l, h"), inst("ld h, #0")];
         assert_eq!(tidy(lines), vec![inst("ld l, b"), inst("ld h, #0")]);
+    }
+
+    /// `ld l, e; ld h, d; ld a, h; ...; ld l, a; ld h, #0` (a word's high byte shifted through `a`) read the copy
+    /// `h` of `d`: the copies were dead (loop_interchange -O2: +1 B and 9,216 T over `ld l, d; ld h, #0; srl l` x3).
+    #[test]
+    fn a_byte_read_through_a_copy_reads_the_source() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = ["ld l, e", "ld h, d", "ld a, h", "rrca", "and a, #31", "ld l, a", "ld h, #0"].map(inst).to_vec();
+        assert_eq!(tidy(lines), ["ld a, d", "rrca", "and a, #31", "ld l, a", "ld h, #0"].map(inst).to_vec());
     }
 
     /// A pair stored to its slot and reloaded after lines that leave it alone
