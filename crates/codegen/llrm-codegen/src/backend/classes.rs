@@ -131,14 +131,19 @@ impl RegisterClasses {
         }
         let pins = by_name;
         let file = llrm_target::registers::file(&arch.registers_text()).expect("the target's registers parse");
-        let named = |name: &str| iced(name);
+        let named = |name: &str| {
+            arch.registers().by_name(name).unwrap_or_else(|| panic!("the target names no register `{name}`"))
+        };
         // The word view of each root, the first the file names: a scan of the file for every root of
         // every class was most of this function.
         let mut word_views: HashMap<&str, &str> = HashMap::default();
         for one in file.iter().filter(|one| one.bits == 16) {
             word_views.entry(one.root.as_str()).or_insert(one.name.as_str());
         }
-        let word = |root: &str| word_views.get(root).map(|name| iced(name)).expect("a register has a word view");
+        // The address key of a root: its 16-bit view where the file has one,
+        // else the register itself (a target whose registers have no narrower
+        // view addresses through the whole register).
+        let word = |root: &str| word_views.get(root).map_or_else(|| named(root), |name| named(name));
         let held =
             |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(named).collect::<Vec<_>>();
         let words = |class: &str| {
@@ -198,10 +203,9 @@ impl RegisterClasses {
                 .map_or(free.available.len(), |kept| kept + 1);
             free.available.insert(at, whole);
         }
-        if let Some(word) = llrm_x86::registers::word_of(whole) {
-            free.word_bases.insert(word);
-            free.word_indexes.insert(word);
-        }
+        let key = self.registers.view(whole, 16).unwrap_or(whole);
+        free.word_bases.insert(key);
+        free.word_indexes.insert(key);
         free
     }
 
@@ -286,11 +290,6 @@ fn root_register(
     registers.by_name(root).unwrap_or_else(|| panic!("the target names no register `{root}`")).full_register32()
 }
 
-/// The iced register a description names.
-fn iced(name: &str) -> RegId {
-    RegId::named(name).unwrap_or_else(|| panic!("no register {name}"))
-}
-
 #[cfg(test)]
 mod tests {
     /// A fixed root names its full register, found from the register, not a
@@ -332,6 +331,42 @@ mod tests {
         assert_eq!(classes.frame, llrm_x86_m16::FRAME);
         assert_eq!(classes.encodable_bases, llrm_x86::addressing16::BASES.into_iter().collect());
         assert_eq!(classes.addressing, [RegId::BX, RegId::BP, RegId::SI, RegId::DI].into_iter().collect());
+    }
+
+    /// The address keys (and registers) are now read from the target's own
+    /// file, with the root itself where it has no 16-bit view. On every x86
+    /// target they must be what x86's name table and word views gave: the
+    /// word of each `base`/`index` root, and the frame's word once it is free.
+    #[test]
+    fn test_x86_address_keys_are_the_word_views_the_name_table_gave() {
+        fn old(arch: &dyn Target) -> (Vec<RegId>, BTreeSet<RegId>, BTreeSet<RegId>) {
+            let file = llrm_target::registers::file(&arch.registers_text()).unwrap();
+            let named = |name: &str| RegId::named(name).unwrap();
+            let word = |root: &str| {
+                let one = file.iter().find(|one| one.bits == 16 && one.root == root).expect("a word view");
+                named(&one.name)
+            };
+            let every = |class| llrm_target::registers::of_class(&file, class).into_iter().map(word).collect();
+            let gpr = llrm_target::registers::of_class(&file, "gpr").into_iter().map(named).collect();
+            (gpr, every("base"), every("index"))
+        }
+        let targets: [&dyn Target; 3] = [&llrm_x86_m16::M16, &llrm_x86_m32::M32, &llrm_x86_m64::M64];
+        for arch in targets {
+            let classes = RegisterClasses::of(arch);
+            let (gpr, bases, indexes) = old(arch);
+            assert_eq!((classes.available.clone(), classes.encodable_bases.clone()), (gpr, bases), "{}", arch.name());
+            assert_eq!(
+                classes.addressing,
+                classes.encodable_bases.union(&indexes).copied().collect(),
+                "{}",
+                arch.name()
+            );
+            let free = classes.with_frame_free();
+            let whole = classes.registers.root(classes.frame);
+            let word = llrm_x86::registers::word_of(whole);
+            assert!(word.is_some(), "{}: the frame has a word", arch.name());
+            assert!(free.word_bases.contains(&word.unwrap()) && free.word_indexes.contains(&word.unwrap()));
+        }
     }
 
     /// `is_encodable` puts a spill cell through the target's own frame register
