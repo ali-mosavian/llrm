@@ -375,6 +375,14 @@ impl llrm_target::Target for M32 {
         CALLING.native().frame_enter
     }
 
+    fn frame_slot_scratch_of(
+        &self,
+        convention: &llrm_target::calling::Convention,
+    ) -> Option<(RegId, RegId)> {
+        let (push, pop) = convention.frame_slot_scratch.as_ref()?;
+        Some((llrm_x86::calling::register(push), llrm_x86::calling::register(pop)))
+    }
+
     fn frame_wrap_split_size(&self) -> bool {
         CALLING.native().frame_wrap_split_size
     }

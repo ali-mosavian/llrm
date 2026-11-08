@@ -1,9 +1,20 @@
-reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
-blessed = "2026-10-15"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
+corpus = "92c77f940be609e41967a0898858fe46"
+
+[ow.O1]
+instructions = 279
+memory_operands = 60
+clocks = 712
+code_bytes = 115
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.0045
 
 [ow.O2]
 instructions = 288
 memory_operands = 66
+clocks = 676
 code_bytes = 124
 data_bytes = 0
 bss_bytes = 0
@@ -12,14 +23,25 @@ kernel_ms = 0.0047
 [ow.Os]
 instructions = 279
 memory_operands = 60
+clocks = 712
 code_bytes = 115
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.0045
 
+[bcc.O1]
+instructions = 127
+memory_operands = 18
+clocks = 485
+code_bytes = 92
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.0025
+
 [bcc.O2]
 instructions = 87
 memory_operands = 11
+clocks = 315
 code_bytes = 98
 data_bytes = 0
 bss_bytes = 0
@@ -28,14 +50,25 @@ kernel_ms = 0.002
 [bcc.Os]
 instructions = 127
 memory_operands = 18
+clocks = 485
 code_bytes = 92
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.0025
 
+[tc.O1]
+instructions = 283
+memory_operands = 62
+clocks = 923
+code_bytes = 101
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.0046
+
 [tc.O2]
 instructions = 285
 memory_operands = 62
+clocks = 912
 code_bytes = 106
 data_bytes = 0
 bss_bytes = 0
@@ -44,14 +77,25 @@ kernel_ms = 0.0046
 [tc.Os]
 instructions = 283
 memory_operands = 62
+clocks = 923
 code_bytes = 101
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.0046
 
+[tcpp.O1]
+instructions = 269
+memory_operands = 28
+clocks = 871
+code_bytes = 100
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.0044
+
 [tcpp.O2]
 instructions = 282
 memory_operands = 21
+clocks = 786
 code_bytes = 111
 data_bytes = 0
 bss_bytes = 0
@@ -60,6 +104,7 @@ kernel_ms = 0.0045
 [tcpp.Os]
 instructions = 269
 memory_operands = 28
+clocks = 871
 code_bytes = 100
 data_bytes = 0
 bss_bytes = 0

@@ -115,3 +115,5 @@ def test_the_stack_sanitizer_programs_are_dos_only():
     for name in ("stackdeep", "stackover"):
         source = (RUN / f"{name}.c").read_text()
         assert not ct.applies("x86_32-linux", source) and ct.applies("x86_32-dos", source) and ct.applies("x86_16-dos", source)
+
+

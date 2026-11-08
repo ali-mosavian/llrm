@@ -1,59 +1,111 @@
-reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
-blessed = "2026-11-05"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "57bb48927f7b2c00fa50b010239814e9"
+
+[ow.O1]
+instructions = 8228
+memory_operands = 2165
+clocks = 16066
+code_bytes = 179
+data_bytes = 0
+bss_bytes = 128
+kernel_ms = 0.1126
 
 [ow.O2]
 instructions = 8413
 memory_operands = 1975
+clocks = 13521
 code_bytes = 187
 data_bytes = 0
 bss_bytes = 128
+kernel_ms = 0.115
 
 [ow.Os]
 instructions = 8228
 memory_operands = 2165
+clocks = 16066
 code_bytes = 179
 data_bytes = 0
 bss_bytes = 128
+kernel_ms = 0.1126
+
+[bcc.O1]
+instructions = 8217
+memory_operands = 1340
+clocks = 20261
+code_bytes = 195
+data_bytes = 0
+bss_bytes = 128
+kernel_ms = 0.1124
 
 [bcc.O2]
 instructions = 7897
 memory_operands = 1850
+clocks = 17133
 code_bytes = 227
 data_bytes = 0
 bss_bytes = 128
+kernel_ms = 0.1082
 
 [bcc.Os]
 instructions = 8217
 memory_operands = 1340
+clocks = 20261
 code_bytes = 195
 data_bytes = 0
 bss_bytes = 128
+kernel_ms = 0.1124
+
+[tc.O1]
+instructions = 8355
+memory_operands = 2676
+clocks = 22619
+code_bytes = 182
+data_bytes = 0
+bss_bytes = 128
+kernel_ms = 0.1143
 
 [tc.O2]
 instructions = 8485
 memory_operands = 2613
+clocks = 20275
 code_bytes = 193
 data_bytes = 0
 bss_bytes = 128
+kernel_ms = 0.116
 
 [tc.Os]
 instructions = 8355
 memory_operands = 2676
+clocks = 22619
 code_bytes = 182
 data_bytes = 0
 bss_bytes = 128
+kernel_ms = 0.1143
+
+[tcpp.O1]
+instructions = 8860
+memory_operands = 3765
+clocks = 23576
+code_bytes = 205
+data_bytes = 0
+bss_bytes = 128
+kernel_ms = 0.121
 
 [tcpp.O2]
 instructions = 9054
 memory_operands = 2613
+clocks = 21159
 code_bytes = 212
 data_bytes = 0
 bss_bytes = 128
+kernel_ms = 0.1236
 
 [tcpp.Os]
 instructions = 8860
 memory_operands = 3765
+clocks = 23576
 code_bytes = 205
 data_bytes = 0
 bss_bytes = 128
+kernel_ms = 0.121
