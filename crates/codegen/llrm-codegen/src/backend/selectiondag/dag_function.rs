@@ -2154,4 +2154,21 @@ mod lowering_cache_tests {
         });
         assert_eq!(built.get(), 2, "another feature set is another table");
     }
+
+    /// FastISel's table of opcode names found each of its 51 names by scanning every opcode: 4.9 M
+    /// instructions in a 207 M compile of 3 K instructions. One index, built at the first lookup,
+    /// and the lowest opcode of a repeated name, not whichever the hash order met first.
+    #[test]
+    fn test_opcodes_are_found_by_name_through_one_index() {
+        let tables = Tables {
+            map: OpcodeMap::new(Default::default()),
+            names: HashMap::from_iter([(7, "ADD|x"), (3, "ADD"), (9, "SUB")]),
+            by_name: Default::default(),
+        };
+        assert!(tables.by_name.get().is_none(), "built at the first lookup, not before");
+        assert_eq!(tables.opcode_named("ADD"), Some(3));
+        assert_eq!(tables.opcode_named("SUB"), Some(9));
+        assert_eq!(tables.opcode_named("MUL"), None);
+        assert!(tables.by_name.get().is_some(), "a lookup is a search of the index, not of the names");
+    }
 }
