@@ -123,6 +123,13 @@ pub mod registers {
     pub fn word_of(dword: RegId) -> Option<RegId> {
         DWORDS.iter().position(|one| *one == dword).map(|at| WORDS[at])
     }
+    /// The registers of the string instructions, by root.
+    pub const STRING_ROOTS: llrm_target::StringRoots = llrm_target::StringRoots {
+        count: RegId::ECX,
+        source: RegId::ESI,
+        destination: RegId::EDI,
+        accumulator: RegId::EAX,
+    };
     /// The segment registers.
     pub const SEGMENTS: [RegId; 6] = [RegId::ES, RegId::CS, RegId::SS, RegId::DS, RegId::FS, RegId::GS];
     /// The dword registers.
