@@ -132,3 +132,10 @@ def test_programs_that_assume_a_32_bit_int_are_not_run_at_m16():
         assert not ct.applies("x86_16-dos", source) and ct.applies("x86_32-linux", source) and ct.applies("x86_64-linux", source)
 
 
+
+
+def test_tail_calls_edges_is_not_run_where_the_backend_takes_no_fno_inline_names():
+    """tail_calls_edges is callee-pop x86 code (every variant -march=i486 or -mabi=...) and its `-fno-inline=NAME` flags are backend-only: llrm-wasm-llc refused them (build failure, 3 cells). It is for the x86 rows."""
+    source = (RUN / "tail_calls_edges.c").read_text()
+    assert ct.applies("x86_16-dos", source) and ct.applies("x86_32-linux", source)
+    assert not ct.applies("wasm32", source) and not ct.applies("arm64-linux", source) and not ct.applies("x86_64-linux", source)
