@@ -262,6 +262,12 @@ def main():
         if t > bar:
             print(f"FAIL __udivdi3 ({a:#x}, {b}) took {t} T, bar {bar}")
             allok = False
+    # A long multiply stops when the multiplier is spent; at 32 passes whatever the multiplier these cost 3.8k T.
+    for a, b, bar in ((0x12345, 100, 1500), (31, 1000, 2000)):
+        t = cost("__mulsi3", "LL>L", (a, b))
+        if t > bar:
+            print(f"FAIL __mulsi3 ({a:#x}, {b}) took {t} T, bar {bar}")
+            allok = False
     print("ALL OK" if allok else "FAILURES")
     for nm, sig, args in (("__mulqi3", "A,L>A", (7, 6)), ("__mulqi3", "A,L>A", (200, 255)), ("__udivqi3", "A,L>A", (200, 7)), ("__mulhi3", "HL,DE>DE", (1234, 56)), ("__mulhi3", "HL,DE>DE", (56, 1234)), ("__udivhi3", "HL,DE>DE", (40000, 10)), ("__umodhi3", "HL,DE>DE", (40000, 10)), ("__ashlhi3", "HL,A>DE", (1, 5)), ("__divqi3", "A,L>A", (200, 7)), ("__divhi3", "HL,DE>DE", (40000, 10)), ("__ashlsi3", "L,A>L", (1, 20)), ("__mulsi3", "LL>L", (31, 1000)), ("__udivsi3", "LL>L", (1000000, 10)), ("__divsi3", "LL>L", (1000000, 10))):
         print(f"{nm}{args}: {cost(nm, sig, args)} T")
