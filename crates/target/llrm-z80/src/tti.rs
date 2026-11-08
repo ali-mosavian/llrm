@@ -352,6 +352,10 @@ impl Tti for Z80Tti {
         true
     }
 
+    fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        true
+    }
+
     /// -O1 is strict on bytes and clocks: the pin's threshold alone, no rate.
     fn speed_inline_rate_at_o1(&self) -> bool {
         false
