@@ -681,6 +681,10 @@ impl Tti for X86 {
         self.tuning.inline_never_grows_without_rate
     }
 
+    fn inline_o1_weighs_entry(&self) -> bool {
+        self.tuning.inline_o1_weighs_entry
+    }
+
     fn inline_o1_unit_bytes_milli(&self) -> i64 {
         self.tuning.inline_o1_unit_bytes_milli
     }
