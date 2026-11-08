@@ -694,7 +694,7 @@ pub trait Target {
         &self,
         _cell: u32,
     ) -> Result<routines::HugeString, String> {
-        Err("the target has no huge pointers".to_owned())
+        Err(format!("{}: huge_fill_routine: the target has no huge pointers", self.name()))
     }
 
     /// The inline routine that copies through huge pointers, upward or, `down`,
@@ -703,7 +703,7 @@ pub trait Target {
         &self,
         _down: bool,
     ) -> Result<routines::HugeString, String> {
-        Err("the target has no huge pointers".to_owned())
+        Err(format!("{}: huge_copy_routine: the target has no huge pointers", self.name()))
     }
 
     /// Whether the target links a C math library (`log`, `exp`, `log2` ...). It
@@ -720,7 +720,7 @@ pub trait Target {
         _signed: bool,
         _wide_divisor: bool,
     ) -> Result<routines::Divide, String> {
-        Err("the target divides natively".to_owned())
+        Err(format!("{}: divide_routine: the target states no inline divide", self.name()))
     }
 
     /// `divide_routine` for a caller that reads only `used` of the results: a
@@ -834,11 +834,9 @@ pub trait Target {
     /// operand-size prefix cost.
     fn operation_costs(
         &self,
-        _price: &dyn Fn(&str) -> i64,
-        _prefix: i64,
-    ) -> OperationCosts {
-        OperationCosts::default()
-    }
+        price: &dyn Fn(&str) -> i64,
+        prefix: i64,
+    ) -> OperationCosts;
 
     /// The registers an allocator may hold values in.
     fn register_capacity(&self) -> i64;
@@ -859,11 +857,9 @@ pub trait Target {
     /// operand-size prefix in `prefix`) and `address_stall`: native form first.
     fn address_forms(
         &self,
-        _costs: &OperationCosts,
-        _address_stall: i64,
-    ) -> Vec<AddressForm> {
-        Vec::new()
-    }
+        costs: &OperationCosts,
+        address_stall: i64,
+    ) -> Vec<AddressForm>;
 
     /// How this target's passes are given the prices of a CPU.
     fn cost_model(&self) -> CostModel;

@@ -341,8 +341,14 @@ mod tests {
     #[test]
     fn the_trait_defaults_answer_what_arm64_does_not_state() {
         assert_eq!((Arm64.march("armv8"), Arm64.marches().len(), Arm64.cpu_table("generic")), (None, 0, None));
-        assert!(Arm64.divide_routine(true, true).is_err());
-        assert!(Arm64.huge_fill_routine(4).is_err() && Arm64.huge_copy_routine(false).is_err());
+        // An unsupported default is loud: the error names the target and the method.
+        let refusal = |text: Result<_, String>| -> String { text.map(|_: ()| ()).unwrap_err() };
+        assert_eq!(
+            refusal(Arm64.divide_routine(true, true).map(drop)),
+            "arm64: divide_routine: the target states no inline divide"
+        );
+        assert!(refusal(Arm64.huge_fill_routine(4).map(drop)).starts_with("arm64: huge_fill_routine"));
+        assert!(refusal(Arm64.huge_copy_routine(false).map(drop)).starts_with("arm64: huge_copy_routine"));
         assert_eq!((Arm64.float_width(4), Arm64.float_width(8)), (4, 8));
     }
 
