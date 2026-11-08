@@ -191,7 +191,10 @@ const EDGE_MARGIN: f64 = 0.9;
 
 /// The PHI elimination pass (`phielimination::lowered`).
 #[derive(Default)]
-pub struct PhiElimination;
+pub struct PhiElimination {
+    /// -O0: no critical edge is split.
+    pub unoptimized: bool,
+}
 
 impl LIRTransform for PhiElimination {
     fn class_name(&self) -> &'static str {
@@ -206,7 +209,7 @@ impl LIRTransform for PhiElimination {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        crate::phielimination::lowered(&body)
+        crate::phielimination::lowered_with(&body, !self.unoptimized)
     }
 }
 
