@@ -691,7 +691,11 @@ impl<'a> TypeLegalizer<'a> {
             }
         }
         let arch = self.target?;
-        let env = super::libcall::CallEnv { arch, pointer: self.dag.config().pointer };
+        let env = super::libcall::CallEnv {
+            arch,
+            pointer: self.dag.config().pointer,
+            call: super::builder::LoweringNodes::installed().call.expect("a target with a call node"),
+        };
         super::libcall::c_lib_call(
             self.dag,
             &env,
@@ -1992,7 +1996,8 @@ impl<'a> TypeLegalizer<'a> {
         let narrow = self.dag.get_value_type_node(asserted);
         let lo = self.dag.get_node(code, half, &[lo, narrow]);
         let hi = if code == ISD::AssertSext {
-            // DEVIATE ASSERT-SEXT-HI (see `TargetLowering::assert_sext_keeps_high`)
+            // DEVIATE ASSERT-SEXT-HI (see
+            // `TargetLowering::assert_sext_keeps_high`)
             if self.tli.assert_sext_keeps_high() && self.dag.opcode(hi) == ISD::CopyFromReg {
                 return (lo, hi);
             }
@@ -2741,7 +2746,10 @@ impl<'a> TypeLegalizer<'a> {
             (self.dag.get_node(ISD::Mul, half, &[ll, rl]), self.dag.get_node(ISD::MulHU, half, &[ll, rl]))
         } else if self.tli.has_size_libcall_name(ISD::Mul, self.dag.value_type(value))
             && !self.product_fits(lhs, rhs, bits)
-            && ![lhs, rhs].into_iter().filter_map(|one| self.dag.constant(one)).any(|c| self.tli.multiply_by_constant_stays_inline(c))
+            && ![lhs, rhs]
+                .into_iter()
+                .filter_map(|one| self.dag.constant(one))
+                .any(|c| self.tli.multiply_by_constant_stays_inline(c))
             && let Some(pair) = self.expand_by_libcall(value, ISD::Mul, half, false, [lhs, rhs])
         {
             return Ok(pair);
@@ -2938,7 +2946,11 @@ impl<'a> TypeLegalizer<'a> {
         // the driver names it for hosted objects), the pin's call, not the
         // inline routine; its bytes are the library's.
         if let Some(name) = self.tli.libcall_name(op, vt).filter(|name| self.tli.libcall_convention(name).is_some()) {
-            let env = super::libcall::CallEnv { arch, pointer: self.dag.config().pointer };
+            let env = super::libcall::CallEnv {
+                arch,
+                pointer: self.dag.config().pointer,
+                call: super::builder::LoweringNodes::installed().call.expect("a target with a call node"),
+            };
             let parts = super::libcall::c_lib_call_parts(
                 self.dag,
                 &env,
@@ -2993,8 +3005,22 @@ impl<'a> TypeLegalizer<'a> {
         let pointer = self.dag.config().pointer;
         let callee = self.dag.get_target_external_symbol(pointer, routine.name);
         let root = self.dag.entry_node();
-        let env = CallEnv { arch, pointer };
-        let (_chain, results) = lib_call(self.dag, &env, root, callee, &args, 0, 0, &returns, &super::dagisel_adapter::call_clobbered_flags());
+        let env = CallEnv {
+            arch,
+            pointer,
+            call: super::builder::LoweringNodes::installed().call.expect("a target with a call node"),
+        };
+        let (_chain, results) = lib_call(
+            self.dag,
+            &env,
+            root,
+            callee,
+            &args,
+            0,
+            0,
+            &returns,
+            &super::dagisel_adapter::call_clobbered_flags(),
+        );
         let (quotient, remainder) = ((results[0], results[1]), (results[2], results[3]));
         if let Some(other) = sibling {
             let (lo, hi) = if wants_quotient { remainder } else { quotient };
@@ -3682,8 +3708,12 @@ impl<'a> TypeLegalizer<'a> {
             ISD::SetCCCarry if at < 2 => {
                 // `ExpandIntOp_SETCCCARRY`: the low halves' subtract takes the
                 // carry in, and the high halves compare with its borrow.
-                let (lhs, rhs, carry, cc) =
-                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2), self.dag.operand(node, 3));
+                let (lhs, rhs, carry, cc) = (
+                    self.dag.operand(node, 0),
+                    self.dag.operand(node, 1),
+                    self.dag.operand(node, 2),
+                    self.dag.operand(node, 3),
+                );
                 let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
                 let half = self.dag.value_type(ll);
                 let carry_vt = self.dag.value_type(carry);

@@ -18,9 +18,8 @@ mod memops;
 mod mergedcond;
 mod switch;
 mod tailcall;
-pub use tailcall::tail_position;
-
 use llrm_lir::registers::RegId;
+pub use tailcall::tail_position;
 
 use super::dag::{DagConfig, MemBase, MemInfo, SDNodeFlags, SDValue, SelectionDAG};
 use super::fold::mask;
@@ -156,6 +155,9 @@ pub struct BuilderTarget {
     /// The nodes and facts of a target that is not x86: none for x86, whose
     /// `CALL`, `RET_GLUE` and stack pointer the builder names itself.
     pub target_nodes: Option<TargetNodes>,
+    /// The nodes beyond call and return the builder creates; none for a target
+    /// that has no such construct.
+    pub nodes: LoweringNodes,
     /// `f128` is a legal type with a register class (AArch64's `FPR128`): its
     /// operations are library calls on `q` registers, not routines on its
     /// bits as an `i128` (`SoftenFloat`).
@@ -175,6 +177,74 @@ pub struct TargetNodes {
     /// The target's `LowerCall`, `LowerReturn` and `LowerFormalArguments`;
     /// none: the builder places values by the `Convention`, as x86's do.
     pub calling: Option<&'static dyn TargetCalling>,
+}
+
+/// The target nodes the shared builder creates beyond the generic ones: each
+/// is a role the target may or may not have, named by what it does. A target
+/// supplies its own (x86's `REP_MOVS`, wasm's none); the builder refuses a
+/// construct whose node the target lacks.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LoweringNodes {
+    pub call: Option<ISD>,
+    pub ret: Option<ISD>,
+    /// A repeated string move and store (`rep movs`, `rep stos`).
+    pub string_move: Option<ISD>,
+    pub string_store: Option<ISD>,
+    /// A float call's result, popped from the target's float stack.
+    pub pop_float_result: Option<ISD>,
+    /// A sibling call, and the far form where the target has one.
+    pub tail_return: Option<ISD>,
+    pub far_tail_return: Option<ISD>,
+    /// `va_start`'s save of the vector argument registers.
+    pub vector_save: Option<ISD>,
+    /// A 64-by-32 divide in one instruction.
+    pub wide_divide: Option<ISD>,
+    /// The flags a call leaves, read back.
+    pub call_flags: Option<ISD>,
+    pub port_io: Option<ISD>,
+    pub copy128: Option<ISD>,
+    pub move128: Option<ISD>,
+    pub zero128: Option<ISD>,
+    /// Huge-pointer arithmetic: the window move, the difference, the byte add.
+    pub window: Option<ISD>,
+    pub ptrdiff: Option<ISD>,
+    pub huge_add: Option<ISD>,
+    /// The selector of the segment a global lives in.
+    pub segment_of: Option<ISD>,
+    /// A symbol's address wrapped for the target, and the form addressed from
+    /// the program counter (used for a 64-bit pointer unless the symbols are
+    /// absolute).
+    pub wrapper: Option<ISD>,
+    pub wrapper_rip: Option<ISD>,
+    /// An inline assembly block, and inline code naming frame places.
+    pub asm: Option<ISD>,
+    pub code: Option<ISD>,
+}
+
+impl LoweringNodes {
+    /// The nodes of the installed backend (`backend::hooks`), none where no
+    /// backend is installed.
+    pub fn installed() -> LoweringNodes {
+        crate::backend::hooks::installed().map_or_else(LoweringNodes::default, |hooks| hooks.lowering_nodes())
+    }
+
+    /// The wrapper node for a symbol address of type `vt`.
+    pub fn wrapper_of(
+        &self,
+        dag: &SelectionDAG,
+        vt: EVT,
+    ) -> Result<ISD, Refused> {
+        let rip = vt == EVT::I64 && !dag.config().absolute_symbols;
+        Self::need(if rip { self.wrapper_rip } else { self.wrapper }, "symbol wrapper")
+    }
+
+    /// `node`, or the refusal for a target without it.
+    pub fn need(
+        node: Option<ISD>,
+        what: &'static str,
+    ) -> Result<ISD, Refused> {
+        node.ok_or(Refused(what))
+    }
 }
 
 /// The clock side of a fill at speed (`fill_is_smaller`): the longer form is
@@ -385,7 +455,9 @@ impl BuilderTarget {
             variable_shift_legal: true,
             switch_optimize: true,
             trap_unreachable: false,
-            legal_ints: std::iter::successors(Some(8), |width| Some(width * 2)).take_while(|width| *width <= bits.max(32)).collect(),
+            legal_ints: std::iter::successors(Some(8), |width| Some(width * 2))
+                .take_while(|width| *width <= bits.max(32))
+                .collect(),
             min_argument_bits: 32,
             soft_float: false,
             libcalls: None,
@@ -404,6 +476,7 @@ impl BuilderTarget {
             tti: None,
             runtime_calls: None,
             target_nodes: None,
+            nodes: LoweringNodes::installed(),
             legal_f128: false,
         }
     }
@@ -537,8 +610,13 @@ pub fn fresh_dag(
     let tables = info
         .tables
         .get_or_insert_with(|| {
-            let (global_names, local_symbols) = module_tables
-                .unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols, target.dag.defined_dso_local));
+            let (global_names, local_symbols) = module_tables.unwrap_or_else(|| {
+                super::function_lowering::module_tables(
+                    module,
+                    target.dag.dso_local_symbols,
+                    target.dag.defined_dso_local,
+                )
+            });
             super::function_lowering::Tables {
                 global_names,
                 local_symbols,
@@ -843,7 +921,8 @@ impl Builder<'_> {
                 // `getNumRegisters`: an integer wider than a register is
                 // that many registers when the width is a power of two of them;
                 // an odd width is first promoted to the next power of two
-                // (`getTypeConversion`: `i63` is `i64`, as many registers as that).
+                // (`getTypeConversion`: `i63` is `i64`, as many registers as
+                // that).
                 let bits = vt.size_in_bits().next_power_of_two();
                 let count = bits / widest.size_in_bits();
                 if vt.is_integer() && bits % widest.size_in_bits() == 0 && count.is_power_of_two() {
@@ -1468,7 +1547,13 @@ impl Builder<'_> {
                     false,
                 );
             let root = self.control_root();
-            let saved = self.dag.get_node(super::x86isd::VASTART_SAVE_XMM_REGS, EVT::OTHER, &[root, al, frame, first]);
+            let saved = self
+                .dag
+                .get_node(
+                    LoweringNodes::need(self.target.nodes.vector_save, "va_start vector save")?,
+                    EVT::OTHER,
+                    &[root, al, frame, first],
+                );
             self.dag.set_root(saved);
         }
         let fp_offset = (found.argument_registers.len() * 8 + named_vectors * 16) as u32;
@@ -1722,7 +1807,13 @@ impl Builder<'_> {
         let arguments = &instruction.operands[..instruction.operands.len() - 1];
         let [hi, lo, divisor] = arguments else { return Err(Refused("a wide divide of other than three operands")) };
         let (hi, lo, divisor) = (self.get_value(*hi)?, self.get_value(*lo)?, self.get_value(*divisor)?);
-        let node = self.dag.get_node_multi(super::x86isd::LLRM_UDIV64BY32, &[EVT::I32, EVT::I32], &[hi, lo, divisor]);
+        let node = self
+            .dag
+            .get_node_multi(
+                LoweringNodes::need(self.target.nodes.wide_divide, "wide divide")?,
+                &[EVT::I32, EVT::I32],
+                &[hi, lo, divisor],
+            );
         let pair = [SDValue { node: node.node, res: 0 }, SDValue { node: node.node, res: 1 }];
         let value = self.dag.get_node(ISD::BuildPair, EVT::I64, &pair);
         self.set_value(instruction.result.ok_or(Refused("a wide divide without a result"))?, value);
@@ -2081,7 +2172,9 @@ impl Builder<'_> {
 
     /// The stack pointer register: the target's, or the one its node set names.
     fn stack_pointer_register(&self) -> RegId {
-        self.target.target_nodes.map_or_else(|| self.arch.stack_pointer(), |t| self.arch.register_named(t.stack_pointer))
+        self.target
+            .target_nodes
+            .map_or_else(|| self.arch.stack_pointer(), |t| self.arch.register_named(t.stack_pointer))
     }
 
     /// Whether an attribute of `attrs` moves its argument out of the ordinary
@@ -2455,11 +2548,11 @@ impl Builder<'_> {
     }
 
     fn call_node(&self) -> ISD {
-        self.target.target_nodes.map_or(super::x86isd::CALL, |t| t.call)
+        self.target.target_nodes.map_or_else(|| self.target.nodes.call.expect("a target with a call node"), |t| t.call)
     }
 
     fn ret_node(&self) -> ISD {
-        self.target.target_nodes.map_or(super::x86isd::RET_GLUE, |t| t.ret)
+        self.target.target_nodes.map_or_else(|| self.target.nodes.ret.expect("a target with a return node"), |t| t.ret)
     }
 
     /// Where a narrow argument sits in its stack slot: the high end on a
@@ -2660,9 +2753,9 @@ impl Builder<'_> {
             ops.insert(2, fpdiff);
             // the pin has no 16-bit pattern: m16 has a node of its own
             let node = if self.target.dag.pointer == EVT::I16 {
-                super::x86isd::LLRM_TC_RETURN
+                LoweringNodes::need(self.target.nodes.far_tail_return, "far sibling call")?
             } else {
-                super::x86isd::TC_RETURN
+                LoweringNodes::need(self.target.nodes.tail_return, "sibling call")?
             };
             let tc = self.dag.get_node_multi(node, &[EVT::OTHER], &ops);
             self.dag.set_root(tc);
@@ -2724,7 +2817,11 @@ impl Builder<'_> {
             let flags = self.dag.get_copy_from_phys_reg(chain, super::dagisel_adapter::EFLAGS_ID, EVT::I32, glue);
             self.dag.set_root(SDValue { node: flags.node, res: 1 });
             let flags = SDValue { node: flags.node, res: 0 };
-            return Ok(Some(self.dag.get_node(super::x86isd::LLRM_CALL_FLAGS, vt, &[flags])));
+            return Ok(Some(self.dag.get_node(
+                LoweringNodes::need(self.target.nodes.call_flags, "call flags")?,
+                vt,
+                &[flags],
+            )));
         }
         // No FPU: a float comes back as the integer of its width.
         let soft = self.softens(vt);
@@ -2795,8 +2892,13 @@ impl Builder<'_> {
         }
         let top = self.arch.x87_stack_top().expect("a float result popped from the x87 stack");
         let fp0 = self.dag.get_phys_register(vt, top);
-        let pop =
-            self.dag.get_node_multi(super::x86isd::POP_FROM_X87_REG, &[vt, EVT::OTHER, EVT::GLUE], &[chain, fp0, glue]);
+        let pop = self
+            .dag
+            .get_node_multi(
+                self.target.nodes.pop_float_result.expect("a float result popped from the target's float stack"),
+                &[vt, EVT::OTHER, EVT::GLUE],
+                &[chain, fp0, glue],
+            );
         self.dag.set_root(SDValue { node: pop.node, res: 1 });
         pop
     }
@@ -3637,7 +3739,7 @@ impl Builder<'_> {
         &mut self,
         global: Option<u32>,
     ) -> SDValue {
-        self.dag.get_segment_of(global)
+        self.dag.get_segment_of(self.target.nodes.segment_of.expect("a target with segment selectors"), global)
     }
 
     /// `SS`, the stack's selector.
@@ -3965,7 +4067,11 @@ impl Builder<'_> {
         if self.layout.carries(*space) {
             let zero = self.dag.get_constant(0, EVT::I32);
             let delta = self.gep_value(zero, source, nuw, nusw, inbounds, indices)?;
-            return Ok(self.dag.get_node(super::x86_lowering::x86isd::HUGE_ADD, MVT::Far.into(), &[base, delta]));
+            return Ok(self.dag.get_node(
+                LoweringNodes::need(self.target.nodes.huge_add, "huge pointer add")?,
+                MVT::Far.into(),
+                &[base, delta],
+            ));
         }
         let [offset, selector] = self.split_value(base, pointer_vt);
         let moved = self.gep_value(offset, source, nuw, nusw, inbounds, indices)?;
@@ -4255,6 +4361,7 @@ mod f80_tests {
     use super::super::mvt::EVT;
     use super::super::mvt::MVT;
     use super::super::target_calling::{FixedObject, In, LiveIn, Out, TargetCalling};
+    use super::LoweringNodes;
     use super::{BuilderTarget, TargetNodes, build_block, f80_from_double_bits};
 
     /// A long double constant in a block is the x87 encoding in the DAG, for
@@ -4341,7 +4448,11 @@ mod f80_tests {
                 .unwrap()
                 .push((outs.len(), outs.iter().filter(|o| dag.value_type(o.value) == EVT::I8).count()));
             *self.ins.lock().unwrap() = ins.iter().map(|one| one.vt).collect();
-            let call = dag.get_node_multi(super::super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &[chain, callee]);
+            let call = dag.get_node_multi(
+                LoweringNodes::installed().call.unwrap(),
+                &[EVT::OTHER, EVT::GLUE],
+                &[chain, callee],
+            );
             let values = ins.iter().map(|one| dag.get_constant(0, one.vt)).collect();
             (SDValue { node: call.node, res: 0 }, values)
         }
@@ -4367,7 +4478,7 @@ mod f80_tests {
                 .lock()
                 .unwrap()
                 .push((outs.len(), outs.iter().filter(|o| dag.value_type(o.value) == EVT::I8).count()));
-            dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain])
+            dag.get_node(LoweringNodes::installed().ret.unwrap(), EVT::OTHER, &[chain])
         }
     }
 
@@ -4386,8 +4497,8 @@ mod f80_tests {
             legal_ints: vec![8],
             soft_float: false,
             target_nodes: Some(TargetNodes {
-                call: super::super::x86isd::CALL,
-                ret: super::super::x86isd::RET_GLUE,
+                call: LoweringNodes::installed().call.unwrap(),
+                ret: LoweringNodes::installed().ret.unwrap(),
                 stack_pointer: "esp",
                 big_endian: false,
                 calling: Some(stub),
@@ -4471,7 +4582,11 @@ mod f80_tests {
         ) -> (SDValue, Vec<SDValue>) {
             *self.calls.lock().unwrap() += 1;
             *self.results.lock().unwrap() = ins.iter().map(|one| one.vt).collect();
-            let call = dag.get_node_multi(super::super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &[chain, callee]);
+            let call = dag.get_node_multi(
+                LoweringNodes::installed().call.unwrap(),
+                &[EVT::OTHER, EVT::GLUE],
+                &[chain, callee],
+            );
             let values = ins.iter().map(|one| dag.get_constant(0, one.vt)).collect();
             (SDValue { node: call.node, res: 0 }, values)
         }
@@ -4493,7 +4608,7 @@ mod f80_tests {
             chain: SDValue,
             _outs: &[Out],
         ) -> SDValue {
-            dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain])
+            dag.get_node(LoweringNodes::installed().ret.unwrap(), EVT::OTHER, &[chain])
         }
     }
 
@@ -4512,8 +4627,8 @@ mod f80_tests {
             legal_ints: vec![8],
             soft_float: false,
             target_nodes: Some(TargetNodes {
-                call: super::super::x86isd::CALL,
-                ret: super::super::x86isd::RET_GLUE,
+                call: LoweringNodes::installed().call.unwrap(),
+                ret: LoweringNodes::installed().ret.unwrap(),
                 stack_pointer: "esp",
                 big_endian: false,
                 calling: Some(stub),
@@ -4565,7 +4680,11 @@ mod f80_tests {
         ) -> (SDValue, Vec<SDValue>) {
             *self.calls.lock().unwrap() += 1;
             *self.results.lock().unwrap() = ins.iter().map(|one| one.vt).collect();
-            let call = dag.get_node_multi(super::super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &[chain, callee]);
+            let call = dag.get_node_multi(
+                LoweringNodes::installed().call.unwrap(),
+                &[EVT::OTHER, EVT::GLUE],
+                &[chain, callee],
+            );
             let values = ins.iter().map(|one| dag.get_constant(0, one.vt)).collect();
             (SDValue { node: call.node, res: 0 }, values)
         }
@@ -4579,7 +4698,7 @@ mod f80_tests {
         ) -> Option<SDValue> {
             self.takes.then(|| {
                 *self.tails.lock().unwrap() += 1;
-                dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain, callee])
+                dag.get_node(LoweringNodes::installed().ret.unwrap(), EVT::OTHER, &[chain, callee])
             })
         }
 
@@ -4600,7 +4719,7 @@ mod f80_tests {
             chain: SDValue,
             _outs: &[Out],
         ) -> SDValue {
-            dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain])
+            dag.get_node(LoweringNodes::installed().ret.unwrap(), EVT::OTHER, &[chain])
         }
     }
 
@@ -4619,8 +4738,8 @@ mod f80_tests {
             legal_ints: vec![8],
             soft_float: false,
             target_nodes: Some(TargetNodes {
-                call: super::super::x86isd::CALL,
-                ret: super::super::x86isd::RET_GLUE,
+                call: LoweringNodes::installed().call.unwrap(),
+                ret: LoweringNodes::installed().ret.unwrap(),
                 stack_pointer: "esp",
                 big_endian: false,
                 calling: Some(stub),
