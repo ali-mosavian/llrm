@@ -123,3 +123,126 @@ fn liveness_of_many_blocks_and_registers_is_cheap() {
     let took = start.elapsed();
     assert!(took.as_millis() < 100, "{blocks} blocks took {took:?}");
 }
+
+mod accumulator {
+    //! `commute_accumulator`: `a = first; op a, a, second` where `second`
+    //! arrives in `a`.
+    use llrm_lir::registers::RegId;
+    use llrm_spike_mf::regalloc::Target;
+    use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Reg, commute_accumulator};
+
+    /// A one-accumulator target: register 0 is the accumulator, 1 an index
+    /// register, and the second source of `add` is a memory class.
+    struct Acc;
+
+    const MEM: u8 = 1;
+    const ANY: u8 = 3;
+
+    impl Target for Acc {
+        type Class = u8;
+        fn meet(
+            one: u8,
+            other: u8,
+        ) -> Option<u8> {
+            (one & other != 0).then_some(one & other)
+        }
+        fn any() -> u8 {
+            ANY
+        }
+        fn candidates(_: u8) -> Vec<RegId> {
+            vec![RegId::from_raw(0), RegId::from_raw(1)]
+        }
+        fn view(
+            root: RegId,
+            _: u8,
+        ) -> RegId {
+            root
+        }
+        fn root(register: RegId) -> RegId {
+            register
+        }
+        fn reserved(_: RegId) -> bool {
+            false
+        }
+        fn caller_saved() -> Vec<RegId> {
+            vec![]
+        }
+        fn operand_class(
+            name: &str,
+            index: usize,
+        ) -> Option<u8> {
+            (name == "add" && index == 2).then_some(MEM)
+        }
+    }
+
+    const A: u32 = 0;
+    const X: u32 = 1;
+
+    fn phys(n: u32) -> Reg {
+        Reg::Phys(RegId::from_raw(n as u8))
+    }
+
+    /// Entry block copies the arguments out of `a` and `x`; the next block
+    /// moves one into `a` and adds the other.
+    fn function(
+        first: Reg,
+        second: Reg,
+    ) -> MFunction<u8> {
+        let mut f = MFunction::new("f");
+        f.classes = vec![ANY, ANY, ANY, ANY];
+        let entry = vec![Inst::copy(Reg::Virt(0), phys(A)), Inst::copy(Reg::Virt(1), phys(X))];
+        let mut add =
+            Inst::new(Kind::Op("add"), vec![Operand::Def(phys(A)), Operand::Use(phys(A)), Operand::Use(second)]);
+        add.commutable = true;
+        let body = vec![Inst::copy(phys(A), first), add];
+        f.blocks.push(Block { id: 0, insts: entry, phis: vec![] });
+        f.blocks.push(Block { id: 1, insts: body, phis: vec![] });
+        f.blocks[0]
+            .insts
+            .push(
+                {
+                    let mut jump = Inst::new(Kind::Op("jump"), vec![Operand::Block(1)]);
+                    jump.terminator = true;
+                    jump
+                },
+            );
+        f
+    }
+
+    fn loaded(f: &MFunction<u8>) -> Reg {
+        let Operand::Use(r) = f.blocks[1].insts[0].operands[1] else { panic!() };
+        r
+    }
+
+    /// `a + x` read as `x + a`: `a = copy x-value; add a, a, a-value` stored
+    /// the argument that is already in `a` and moved the other (`sta; txa;
+    /// adc`). The one that arrives in `a` goes first, and the other becomes
+    /// the cell.
+    #[test]
+    fn the_source_that_arrives_in_the_accumulator_is_loaded_into_it() {
+        let mut f = function(Reg::Virt(1), Reg::Virt(0));
+        commute_accumulator::<Acc>(&mut f);
+        assert_eq!(loaded(&f), Reg::Virt(0));
+        assert_eq!(f.classes[1], MEM, "the other source is the memory operand");
+        assert_eq!(f.classes[0], ANY);
+    }
+
+    #[test]
+    fn the_right_order_is_left_alone() {
+        let mut f = function(Reg::Virt(0), Reg::Virt(1));
+        let before = f.blocks[1].insts.clone();
+        commute_accumulator::<Acc>(&mut f);
+        assert_eq!(f.blocks[1].insts, before);
+    }
+
+    /// A write of the accumulator between the argument copy and the load: the
+    /// copy no longer holds the value, so nothing is gained.
+    #[test]
+    fn a_clobbered_accumulator_is_not_a_source() {
+        let mut f = function(Reg::Virt(1), Reg::Virt(0));
+        f.blocks[0].insts.insert(2, Inst::new(Kind::Op("clobber"), vec![Operand::Def(phys(A))]));
+        let before = f.blocks[1].insts.clone();
+        commute_accumulator::<Acc>(&mut f);
+        assert_eq!(f.blocks[1].insts, before);
+    }
+}

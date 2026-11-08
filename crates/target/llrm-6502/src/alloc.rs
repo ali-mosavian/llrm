@@ -16,6 +16,7 @@ use std::fmt::Write;
 use llrm_codegen::model::ir::Loc;
 use llrm_codegen::model::lir::Insn;
 use llrm_lir::registers::RegId;
+use llrm_spike_mf::commute_accumulator;
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{
@@ -192,6 +193,14 @@ fn is_cell(register: RegId) -> bool {
 pub struct Mos<const STACK: bool>;
 
 impl<const STACK: bool> Target for Mos<STACK> {
+    /// The second source of a byte op on the accumulator is a zero-page cell.
+    fn operand_class(
+        name: &str,
+        index: usize,
+    ) -> Option<Class> {
+        (index == 2 && matches!(name, "ADC" | "AND" | "ORA" | "EOR")).then_some(Class::MEM)
+    }
+
     /// A copy is priced as the load of a cell into a register, `ldx rc2`: the
     /// join of a value with its argument cell removes that copy.
     fn copy_cost() -> u32 {
@@ -1117,7 +1126,7 @@ impl Builder {
             self.push(Inst::new(Kind::Op(carry), vec![]));
         }
         self.copy(acc, a);
-        self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second]));
+        self.push(accumulate(mnemonic, second));
         self.copy(d, acc);
         Ok(())
     }
@@ -1220,7 +1229,7 @@ impl Builder {
         }
         for ((d, a), b) in [(dl, al), (dh, ah)].into_iter().zip(second) {
             self.copy(acc, a);
-            self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), b]));
+            self.push(accumulate(mnemonic, b));
             self.copy(d, acc);
         }
         Ok(())
@@ -1353,7 +1362,7 @@ impl Builder {
                 self.push(Inst::new(Kind::Op(carry), vec![]));
             }
             self.copy(acc, a);
-            self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), b]));
+            self.push(accumulate(mnemonic, b));
             self.copy(d, acc);
         }
         Ok(())
@@ -1397,6 +1406,18 @@ fn memory_holds_until_flags_are_read(
                 _ => true,
             },
         )
+}
+
+/// `mnemonic a, a, second`: the byte op on the accumulator. `ADC`, `AND`, `ORA`
+/// and `EOR` may swap their sources (`isCommutable`).
+fn accumulate(
+    mnemonic: &'static str,
+    second: Operand,
+) -> Inst {
+    let acc = Reg::Phys(reg::A);
+    let mut inst = Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second]);
+    inst.commutable = matches!(mnemonic, "ADC" | "AND" | "ORA" | "EOR");
+    inst
 }
 
 /// A logical op whose immediate leaves the byte as it was: `x ^ 0`, `x | 0`, `x
@@ -3341,6 +3362,7 @@ fn emit_with<const STACK: bool>(
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
+    commute_accumulator::<Mos<STACK>>(&mut function);
     two_address(&mut function);
     let (assignment, mut slots) = allocate::<STACK>(&mut function)?;
     save_preserved::<STACK>(&mut function, &assignment, &mut slots);
