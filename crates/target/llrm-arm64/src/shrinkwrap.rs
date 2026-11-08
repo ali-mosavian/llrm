@@ -14,6 +14,7 @@ use llrm_mir::module::BlockId;
 use rustc_hash::FxHashMap as HashMap;
 
 use crate::mc::inst::{Addr, Inst};
+use crate::mc::visit::Reg;
 use crate::mfunc::{MFunc, Op, successors_of};
 
 /// Where the frame is made and unmade.
@@ -242,4 +243,102 @@ pub fn place(function: &MFunc) -> Option<Wrapped> {
         work.extend(graph.successors[block].iter().copied());
     }
     Some(Wrapped { save, restores, at_end })
+}
+
+/// Whether `op` reads or writes one of `regs`.
+fn mentions(
+    op: &Op,
+    regs: &[Reg],
+) -> bool {
+    let (defs, uses) = op.defs_and_uses();
+    defs.iter().chain(&uses).any(|register| regs.contains(register))
+}
+
+/// The registers of one saved pair as the frame: a block needs the pair
+/// saved where it mentions either (POC, gcc's `-fshrink-wrap-separate`).
+struct ComponentUses<'a> {
+    function: &'a MFunc,
+    regs: &'a [Reg],
+}
+
+impl Frame for ComponentUses<'_> {
+    fn touches(
+        &self,
+        block: BlockId,
+        _stack_address_used: bool,
+    ) -> bool {
+        self.function.blocks[block.0 as usize].ops.iter().any(|op| mentions(op, self.regs))
+    }
+
+    fn terminators_touch(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        let ops = &self.function.blocks[block.0 as usize].ops;
+        ops[terminators_start(ops)..].iter().any(|op| mentions(op, self.regs))
+    }
+
+    fn is_return(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        matches!(self.function.blocks[block.0 as usize].ops.last(), Some(Op::Return { .. }))
+    }
+}
+
+/// Where each saved pair (`pairs`: its registers) is saved and restored, if it
+/// is not at the frame's own prologue and epilogue: the block that saves it and
+/// the one return or block end that restores it. A pair with a split or an
+/// irreducible placement stays with the frame.
+pub fn components(
+    function: &MFunc,
+    pairs: &[Vec<Reg>],
+) -> Vec<Option<(usize, usize)>> {
+    let count = function.blocks.len();
+    if function.dynamic || count < 2 {
+        return vec![None; pairs.len()];
+    }
+    let labels: HashMap<&str, usize> =
+        function.blocks.iter().enumerate().map(|(at, one)| (one.label.as_str(), at)).collect();
+    let successors: Vec<Vec<usize>> =
+        function.blocks.iter().enumerate().map(|(at, block)| successors_of(block, at, count, &labels)).collect();
+    let mut predecessors = vec![Vec::new(); count];
+    for (from, targets) in successors.iter().enumerate() {
+        for &to in targets {
+            predecessors[to].push(from);
+        }
+    }
+    let graph = Graph { nodes: (0..count).map(id).collect(), successors, predecessors };
+    let depth = loop_depths(&graph);
+    let frequencies = Depth(depth.iter().map(|&one| 10u64.pow(one.min(6))).collect());
+    pairs
+        .iter()
+        .map(|regs| {
+            let uses = ComponentUses { function, regs };
+            let placement = saverestore::run(&graph, &uses, &frequencies)?;
+            placement.split.is_none().then_some((placement.save.0 as usize, placement.restore.0 as usize))
+        })
+        .map(|placed| {
+            // Every block the saved registers reach is entered through the
+            // save, and the walk ends at the restore.
+            let (save, restore) = placed?;
+            let mut dominators = DomTreeBase::<false>::new();
+            dominators.recalculate(&graph);
+            let mut seen = vec![false; count];
+            let mut work = vec![save];
+            while let Some(block) = work.pop() {
+                if std::mem::replace(&mut seen[block], true) {
+                    continue;
+                }
+                if !dominators.dominates(id(save), id(block)) {
+                    return None;
+                }
+                if block == restore {
+                    continue;
+                }
+                work.extend(graph.successors[block].iter().copied());
+            }
+            Some((save, restore))
+        })
+        .collect()
 }

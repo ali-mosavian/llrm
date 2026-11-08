@@ -34,7 +34,7 @@ pub struct Lowered {
     pub locs: Vec<Option<(u32, u32)>>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Layout {
     size: u64,
     /// The stack pointer moves in the body: objects are addressed from `x29`.
@@ -562,14 +562,20 @@ pub fn lower(
     allocation: &Allocation,
     darwin: bool,
 ) -> Result<Vec<Lowered>, String> {
-    let frame = layout(function, allocation, darwin);
-    let wrapped = crate::shrinkwrap::place(function).filter(|_| frame.size > 0);
+    let whole = layout(function, allocation, darwin);
+    let wrapped = crate::shrinkwrap::place(function).filter(|_| whole.size > 0);
     let save = wrapped.as_ref().map_or(0, |one| one.save);
+    // POC (`LLRM_ARM64_SEP`): a saved pair whose registers a part of the
+    // function mentions is saved and restored there, not by the frame.
+    let (frame, deferred) = separate(function, &whole, wrapped.is_some() || true);
     let mut out = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
         let mut emitter = Emitter::new();
         if index == save {
             prologue(&frame, &mut emitter);
+        }
+        for part in deferred.iter().filter(|part| part.save == index) {
+            part.emit(&mut emitter, true);
         }
         // The entry block is where the source begins, whichever block the
         // frame is built in.
@@ -616,6 +622,9 @@ pub fn lower(
                     Callee::Register(register) => Inst::BranchReg { link: true, rn: *register },
                 }),
                 Op::Return { tail, .. } => {
+                    for part in deferred.iter().filter(|part| part.restore == index) {
+                        part.emit(&mut emitter, false);
+                    }
                     if framed {
                         epilogue(&frame, &mut emitter);
                     }
@@ -636,6 +645,29 @@ pub fn lower(
                 }
             }
             emitter.from_place(place);
+        }
+        // A part restored in a block that does not return: before its branches.
+        let returns = matches!(block.ops.last(), Some(Op::Return { .. }));
+        if !returns && deferred.iter().any(|part| part.restore == index) {
+            let at = emitter
+                .insts
+                .iter()
+                .rposition(|inst| {
+                    !matches!(
+                        inst,
+                        Inst::Branch { link: false, .. }
+                            | Inst::BranchCond { .. }
+                            | Inst::CompareBranch { .. }
+                            | Inst::TestBranch { .. }
+                    )
+                })
+                .map_or(0, |i| i + 1);
+            let mut tail = Emitter::new();
+            for part in deferred.iter().filter(|part| part.restore == index) {
+                part.emit(&mut tail, false);
+            }
+            emitter.locs.splice(at..at, vec![None; tail.insts.len()]);
+            emitter.insts.splice(at..at, tail.insts);
         }
         if wrapped.as_ref().is_some_and(|one| one.at_end && one.restores.contains(&index)) {
             // Before the branches that leave.
@@ -661,6 +693,62 @@ pub fn lower(
         out.push(Lowered { label: block.label.clone(), insts: emitter.insts, locs: emitter.locs });
     }
     Ok(out)
+}
+
+/// A saved pair the frame leaves to the blocks that need it (POC).
+struct Part {
+    layout: Layout,
+    save: usize,
+    restore: usize,
+}
+
+impl Part {
+    fn emit(
+        &self,
+        emitter: &mut Emitter,
+        store: bool,
+    ) {
+        let (kept_saved, kept_restored) = (std::mem::take(&mut emitter.saved), std::mem::take(&mut emitter.restored));
+        save_registers(&self.layout, emitter, store, None, 0);
+        // POC: no unwind rules for the part yet.
+        emitter.saved = kept_saved;
+        emitter.restored = kept_restored;
+    }
+}
+
+/// `whole` less the pairs that are saved at their own blocks, and those.
+fn separate(
+    function: &MFunc,
+    whole: &Layout,
+    _wrapped: bool,
+) -> (Layout, Vec<Part>) {
+    if !llrm_support::env_flag!("LLRM_ARM64_SEP") || whole.frame_record.is_none() || whole.dynamic {
+        return (whole.clone(), Vec::new());
+    }
+    let pairs: Vec<Vec<Reg>> = whole
+        .saves
+        .iter()
+        .map(|(save, _)| match *save {
+            Save::GprPair(a, b) => [Some(a), b].into_iter().flatten().map(|n| Reg::Gpr(Gpr(n))).collect(),
+            Save::FprPair(a, b) => [Some(a), b].into_iter().flatten().map(|n| Reg::Fpr(Vreg(n))).collect(),
+            Save::Record => Vec::new(),
+        })
+        .collect();
+    let placed = crate::shrinkwrap::components(function, &pairs);
+    let mut kept = whole.clone();
+    kept.saves.clear();
+    let mut parts = Vec::new();
+    for (index, (save, offset)) in whole.saves.iter().enumerate() {
+        match (placed[index], save) {
+            (Some((from, to)), Save::GprPair(..) | Save::FprPair(..)) if from != 0 => {
+                let mut one = whole.clone();
+                one.saves = vec![(*save, *offset)];
+                parts.push(Part { layout: one, save: from, restore: to });
+            }
+            _ => kept.saves.push((*save, *offset)),
+        }
+    }
+    (kept, parts)
 }
 
 fn prologue(
