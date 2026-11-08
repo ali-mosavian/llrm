@@ -595,6 +595,9 @@ impl super::splitkit::SplitEnv for BodySplitEnv<'_> {
         if !self.tii.remat_shape(def) || !def.uses.is_empty() {
             return None;
         }
+        if !self.tii.as_cheap_as_a_move(def) {
+            return None;
+        }
         let what = def.what.clone()?;
         // `SplitEditor::defFromParent` asks `canRematerializeAt(..,
         // cheapAsAMove = true)`: a literal or an address is made again,

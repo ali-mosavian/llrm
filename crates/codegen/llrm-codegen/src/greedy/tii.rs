@@ -74,6 +74,17 @@ pub trait TargetInstrInfo {
         one: &Insn,
     ) -> bool;
 
+    /// `isAsCheapAsAMove`: whether making `def` again costs no more than a
+    /// copy, which `SplitEditor::defFromParent` asks before it remakes a value
+    /// at a split (SplitKit.cpp#L658). The spiller's `isTriviallyReMaterializable`
+    /// does not ask: `LEA64r` of a symbol is remade there and copied here.
+    fn as_cheap_as_a_move(
+        &self,
+        _def: &Insn,
+    ) -> bool {
+        true
+    }
+
     /// `isTriviallyReMaterializable`.
     fn is_trivially_re_materializable(
         &self,
@@ -266,6 +277,18 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         one: &Insn,
     ) -> bool {
         super::inlinespiller::remat_shape(one)
+    }
+
+    /// A quadword symbol address is `LEA64r $rip` (`isReMaterializable` only,
+    /// no `isAsCheapAsAMove`); a dword one is `MOV32ri`. A large code model's
+    /// `MOV64ri` is not modelled.
+    fn as_cheap_as_a_move(
+        &self,
+        def: &Insn,
+    ) -> bool {
+        !def.what.as_ref().is_some_and(|what| {
+            what.sources.iter().any(|source| matches!(source, Loc::Imm(imm) if imm.address.is_some() && imm.width == 8))
+        })
     }
 
     /// DEVIATE RA-CLK (real mode; owner x86-m16, exit 2026-11-29): a value that
