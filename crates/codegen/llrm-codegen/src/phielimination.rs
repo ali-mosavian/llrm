@@ -28,7 +28,10 @@
 //! ten live values. Here a phi in another block that reads the same value as
 //! an earlier one from each predecessor they share takes that phi's register;
 //! only its other predecessors get a copy. x87rotate m16 -Os 612 -> 568 B,
-//! m32 -Os 644 -> 612.
+//! m32 -Os 644 -> 612. Only x87 values share: a copy of one is a stack
+//! rotation or a spill round trip the coalescer cannot remove, while an
+//! integer copy is one clock and coalesces, so sharing there only lengthens
+//! the live range (m16 fib O2 +1.3% clocks, mergesort +15 B).
 //!
 //! No deviation for a phi that reads from a block outside the body: LLVM's phis
 //! list only predecessors in their function, so it is an error here too (the
@@ -75,6 +78,9 @@ use crate::backend::phielim::{self, Split};
 use crate::model::ir::Held;
 use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::{HashMap, IndexMap};
+
+/// The width of an x87 value (`Held::width`), the only class PHI-SHARE serves.
+const X87_WIDTH: u32 = 10;
 
 #[cfg(test)]
 thread_local! {
@@ -295,6 +301,7 @@ pub fn lowered_with(
                     shared.get(pair)?.iter().copied().find(|reg| {
                         let (writes, readers, held) = &regs[reg];
                         *held == width
+                            && width == X87_WIDTH
                             && !readers.contains(&block.at)
                             && phi.incoming.iter().all(|&(pre, source)| {
                                 !undefined.contains(&source)
@@ -707,6 +714,22 @@ mod tests {
     /// slots); with PHI-SHARE one register serves both.
     #[test]
     fn test_phis_that_differ_in_the_preheader_alone_share_a_register_under_phi_share() {
+        let (pin, shared) = preheader_alone(X87_WIDTH);
+        assert_eq!(pin.len(), 3, "two phis, two registers: {:?}", pin);
+        assert_eq!(shared.len(), 2, "one register serves both: {:?}", shared);
+    }
+
+    /// An integer copy is one clock and coalesces; sharing only lengthened the
+    /// live range (m16 fib O2 gained `mov si, ax` in the entry, +1.3% clocks;
+    /// mergesort +15 B).
+    #[test]
+    fn test_integer_phis_keep_their_own_registers_under_phi_share() {
+        let (pin, shared) = preheader_alone(4);
+        assert_eq!(shared, pin, "no sharing for an integer");
+    }
+
+    /// The copies at the top of the loop block, for the pin and for PHI-SHARE.
+    fn preheader_alone(width: u32) -> (Vec<(u32, u32)>, Vec<(u32, u32)>) {
         let phis = |header: bool| {
             if header {
                 vec![Phi { result: 10, incoming: vec![(1, 1), (2, 12)] }]
@@ -714,20 +737,26 @@ mod tests {
                 vec![Phi { result: 11, incoming: vec![(0, 1), (2, 12)] }]
             }
         };
+        let make = |value: u32| {
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(Held { value, width, offset: 0 })],
+                sources: vec![Loc::Imm(Imm { value: 7, width: 4, address: None })],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![value], vec![]))
+        };
         let was = body(vec![
-            block(0, vec![def(1), branch(3)], &[3, 1], vec![]),
+            block(0, vec![make(1), branch(3)], &[3, 1], vec![]),
             block(1, vec![jump(2)], &[2], vec![]),
-            block(2, vec![def(12), read(10), branch(2)], &[2, 3], phis(true)),
+            block(2, vec![make(12), read(10), branch(2)], &[2, 3], phis(true)),
             block(3, vec![read(11)], &[], phis(false)),
         ]);
-        let at = |now: &LirBody, at: i64| copies(now.blocks.iter().find(|one| one.at == at).expect("a block")).to_vec();
-        let in_loop = |now: &LirBody| at(now, 2).len();
-        let pin = lowered_with(&was, true, false).expect("lowers");
-        assert_eq!(in_loop(&pin), 3, "two phis, two registers: {:?}", at(&pin, 2));
-        let shared = lowered_with(&was, true, true).expect("lowers");
-        assert_eq!(in_loop(&shared), 2, "one register serves both: {:?}", at(&shared, 2));
-        let (top, join) = (at(&shared, 2), at(&shared, 3));
-        assert_eq!(top[0].1, join[0].1, "the join reads the register the loop wrote");
+        let in_loop = |share: bool| {
+            let now = lowered_with(&was, true, share).expect("lowers");
+            copies(now.blocks.iter().find(|one| one.at == 2).expect("a block")).to_vec()
+        };
+        (in_loop(false), in_loop(true))
     }
 
     /// The pin splits no critical edge at -O0 (no `LiveVariables` or
