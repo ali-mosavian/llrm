@@ -33,6 +33,11 @@ def ow_tree() -> Path:
     return cache / "llrm" / f"ow-src-{commit}"
 
 
+def ow_present() -> bool:
+    """Whether `ow_tree()` is whole: toolchain/cache.sh writes `.complete` last, so a directory without it is an interrupted or running fetch."""
+    return (ow_tree() / ".complete").is_file()
+
+
 def cc_environment() -> dict[str, str]:
     """The variables llrm-cc needs, from the caller's (the Open Watcom tree is `ow_tree()`, no variable)."""
     env = {name: os.environ[name] for name in CC_ENV if name in os.environ}
