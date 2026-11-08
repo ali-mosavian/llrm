@@ -172,6 +172,7 @@ pub fn target_lowering() -> TargetLowering {
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
     // equality of a long is the bytes' xors or-ed in the accumulator
     tl.set_byte_equality(true);
+    tl.set_assert_sext_keeps_high(true);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
     tl
 }
