@@ -546,7 +546,7 @@ pub fn select_block(
     tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
     llrm_codegen::backend::selectiondag::live_out::assert_live_out_copies(dag, info);
     let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone(), linux };
-    let legal = legalized_with(dag, &tli, &mut lowering, None);
+    let legal = legalized_with(dag, &tli, &mut lowering, None, false);
     // The reason the legalizer stopped is the Custom operation it could not
     // lower.
     if let Some(why) = lowering.custom {
