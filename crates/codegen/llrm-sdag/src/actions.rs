@@ -147,10 +147,13 @@ pub struct TargetLowering {
     /// divide by a power of two: `Some(is64)`, `i64` too where `is64`.
     sdiv_pow2_cmov: Option<bool>,
     /// DEVIATE WIDE-EQ-BYTES (owner z80, exit 2026-11-30): equality of a wide
-    /// integer is the or of its bytes' xors, not of its halves' xors. The pin
-    /// (`IntegerExpandSetCCOperands`) xors the halves; on an 8-bit machine
-    /// that is a byte write-back per xor, and the bytes accumulate in the
-    /// accumulator without them.
+    /// integer with a constant is the or of its bytes' xors, not of its
+    /// halves' xors. The pin (`IntegerExpandSetCCOperands`) xors the halves;
+    /// on an 8-bit machine that is a byte write-back per xor, and the bytes
+    /// accumulate in the accumulator without them. Two registers keep both
+    /// operands' bytes live beside the accumulator and spilled (div_constants
+    /// +155 B), so they keep the pin's form. Exit: when the allocator holds
+    /// that pressure.
     byte_equality: bool,
 }
 
