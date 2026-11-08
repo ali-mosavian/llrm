@@ -1236,6 +1236,20 @@ impl<'a> TypeLegalizer<'a> {
                 let load = self.dag.get_load(vt, store, slot, info);
                 self.dag.get_node(ISD::AnyExtend, to, &[load])
             }
+            op @ (ISD::AssertSext | ISD::AssertZext) => {
+                // `PromoteIntRes_AssertSext` and `PromoteIntRes_AssertZext`:
+                // the new bits are the sign (or zero), and the assertion
+                // continues on the wider value.
+                let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                let wide = if op == ISD::AssertSext {
+                    let ty = self.dag.get_value_type_node(vt);
+                    self.dag.get_node(ISD::SignExtendInReg, to, &[promoted, ty])
+                } else {
+                    let mask = self.dag.get_constant(super::fold::mask(vt.size_in_bits()), to);
+                    self.dag.get_node(ISD::And, to, &[promoted, mask])
+                };
+                self.dag.get_node(op, to, &[wide, self.dag.operand(value, 1)])
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);
