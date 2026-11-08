@@ -53,7 +53,7 @@
 //! x_ll_div +1), -Os and m16 unchanged; the skip-edge zero of x_life waits on
 //! phi operands without a copy (DAG isel).
 //!
-//! DEVIATE CSE3 (owner w-1, exit 2026-11-08): both selectors mark a load
+//! DEVIATE CSE3 (owner w2, exit 2026-11-22): both selectors mark a load
 //! invariant when it reads a constant global or says so (`!invariant.load`, a
 //! `noalias readonly` argument), and the DAG selector the load of an incoming
 //! stack argument (an immutable fixed object) and of a constant-pool entry. The
