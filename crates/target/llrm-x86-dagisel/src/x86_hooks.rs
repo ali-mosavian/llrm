@@ -26,12 +26,14 @@
 //! The shadow harness: `Selector::select(dag, &mut X86Hooks::new(..), node)`.
 
 use llrm_dagisel::addr::{AddrDag, AddrMode, Matcher, SymbolKind, find_non_imm_use, vt_bits};
-use llrm_dagisel::dag::{Hooks, PatternContext, SDValue, X86Predicates};
+use llrm_dagisel::dag::{Hooks, PatternContext, SDValue};
 use llrm_dagisel::generated::ids::{isd, mvt, x86, x86isd};
 use llrm_dagisel::instr;
 use llrm_dagisel::matcher::Vt;
 
+use crate::generated::instrinfo::desc as instr_desc;
 use crate::generated::{x86_i486, x86_m16, x86_p5, x86_x64};
+use crate::x86_predicates::X86Predicates;
 
 /// The CPU whose table is walked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -365,7 +367,7 @@ fn machine_condition<D: AddrDag>(
     dag: &D,
     node: u32,
 ) -> Option<u64> {
-    let desc = instr::desc(!dag.opcode(node))?;
+    let desc = instr_desc(!dag.opcode(node))?;
     let last = desc.operands.last()?;
     if desc.is_pseudo() || last.kind != instr::operand_type::X86_COND_CODE {
         return None;
@@ -551,7 +553,7 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         &self,
         opcode: u16,
     ) -> (bool, bool) {
-        llrm_dagisel::generated::memory_flags(opcode)
+        crate::generated::memory_flags(opcode)
     }
 }
 

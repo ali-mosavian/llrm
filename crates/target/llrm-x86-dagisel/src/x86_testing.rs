@@ -1,10 +1,12 @@
 //! Hooks for the x86-32 tables over
 //! [`TestDag`](llrm_dagisel::testing::TestDag).
 
-use llrm_dagisel::dag::{Dag, Hooks, SDValue, X86Predicates};
+use llrm_dagisel::dag::{Dag, Hooks, SDValue};
 use llrm_dagisel::generated::ids::mvt;
 use llrm_dagisel::matcher::Vt;
 use llrm_dagisel::testing::TestDag;
+
+use crate::x86_predicates::X86Predicates;
 
 /// Hooks for a 32-bit target whose address pattern the test supplies.
 pub struct TestHooks {

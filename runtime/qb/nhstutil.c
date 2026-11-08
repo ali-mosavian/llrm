@@ -218,17 +218,25 @@ none:
     return NULL;
 }
 
+/* The owner check failed: report it, then free the entry anyway (the error handler may resume).
+   Out of line, so the hot path keeps no value live across a call and needs no frame. */
+static __attribute__((noinline)) void release_corrupt(SD *owner, StrEntry *entry)
+{
+    corrupt();
+    MAKE_FREE(entry, WORD + EVEN(owner->len));
+}
+
 static inline __attribute__((always_inline)) void release(SD *owner)
 {
     StrEntry *entry;
-    uword bytes;
 
     if (!IN_SPACE(owner))
         return;
     entry = ENTRY_OF(owner->ptr);
-    CHECK_OWNER(entry, owner);
-    bytes = WORD + EVEN(owner->len);
-    MAKE_FREE(entry, bytes);
+    if (OWNER_OF(entry) != owner || owner->ptr != (char *)(entry + 1))
+        release_corrupt(owner, entry);
+    else
+        MAKE_FREE(entry, WORD + EVEN(owner->len));
 }
 
 void str_release(SD *owner)
@@ -284,8 +292,8 @@ void str_adopt(SD *to, SD *from)
 void str_tmp_free(SD *sd)
 {
     if (str_is_tmp(sd)) {
-        release(sd);
         tmp_release(as_tmp(sd));
+        release(sd);
     }
 }
 
