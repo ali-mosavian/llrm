@@ -74,15 +74,20 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
 /// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 ///
-/// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32, exit 2026-11-15): at
-/// -O1 that chain is the stated trade against the pin's `imul`, not a
-/// Pareto win. `x * 1664525`: 29 B and ~9 clocks against 6 B and 13-42. Rows
-/// (padded .text at the matrix flags, 2026-11-08): mul_constants -O1 ours 2279,
-/// pin llc 2061, clang 2063, gcc 3032 (gcc chains it too); x_iir -O1 49.5k clk
-/// against 130.5k with the `imul` (#8211 kept it and was reverted, #8222);
-/// urem_eq -O1 +86 B for the 0xAAAAAAAB constant. Exit: a general mechanism
-/// with the chain's clocks and `imul`-like bytes (a shorter chain search, or
-/// the block's frequency pricing the choice).
+/// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32; oversight ruling
+/// 2026-11-08, a standing priced trade, review at the next pin bump): at -O1
+/// the chain is the trade against the pin's `imul` (`x * 1664525`: 29 B and ~9
+/// clocks against 6 B and 13-42), not a Pareto win. harness code bytes /
+/// simulated clocks at -O1, chain | `imul` | best gcc/clang (2026-11-08):
+/// x_iir 141/49.5k | 111/130.5k | 122/60.0k; mul_constants 2285/132.6k |
+/// 1782/287.0k | 1777/142.2k; urem_eq 467/792k | 340/1444k | 374/1468k;
+/// bintree 308/74.0k | 282/79.4k | 276/84.1k; recpow 267/442k | 220/532k |
+/// 238/575k; x_spill_store_order 687/82.2k | 611/99.5k | 633/103.3k;
+/// copy_runs 818/6.3k | 778/8.3k | 964/8.1k. The chain wins clocks 5-31% for
+/// 16-80 B; it is above the best byte bar on the first six rows, the `imul`
+/// above the clock bar on x_iir and mul_constants. Exit (if ever): a general
+/// mechanism with the chain's clocks and `imul`-like bytes (a shorter chain
+/// search, or the block's frequency pricing the choice).
 ///
 /// A code byte costs the CPU's instruction-cache fill, once per run: a line's
 /// fill clocks over its bytes (`line_fill_clocks` / `cache_line` of the CPU's
