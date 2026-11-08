@@ -1,5 +1,6 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32
 // data: @signal
+// targets: dos
 /* Short-time Fourier transform in float: a 256-point Hann-windowed radix-2 FFT of every 128-sample hop of SIGNAL
    (16-bit little-endian samples, read one hop at a time); the 129 bin powers of each frame go to SPECTRA as 16-bit
    values. Samples are scaled by 1/4 and each stage by 1/2; a bin is (re^2 + im^2) / 16 truncated, at most 65535.

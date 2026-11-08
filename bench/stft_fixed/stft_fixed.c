@@ -1,5 +1,6 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32
 // data: @signal
+// targets: dos
 /* Short-time Fourier transform in Q9 fixed point, as stft_single.c: long is 32-bit, >> floors, as Nib's fixed '*' does. A product is
    (a * b) >> 9; samples are scaled by 1/4 and each stage by 1/2; a bin is ((re / 128)^2 + (im / 128)^2) / 256, at most
    65535. The twiddles are rotated in Q15 and cut to Q9. Prints the checksum of the values written:

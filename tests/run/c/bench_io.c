@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32
+// targets: dos
 /* bench/bench_io.h under llrm: write a file by name, read it back in two chunks, a missing file is below zero. */
 #include "../../../bench/bench_io.h"
 extern void report(long value);
