@@ -38,7 +38,6 @@
 2 crates/codegen/llrm-codegen/src/backend/isel/matcher.rs
 2 crates/codegen/llrm-codegen/src/backend/isel/wide.rs
 1 crates/codegen/llrm-codegen/src/backend/leaopt.rs
-6 crates/codegen/llrm-codegen/src/backend/machinecp.rs
 1 crates/codegen/llrm-codegen/src/backend/machinelicm.rs
 1 crates/codegen/llrm-codegen/src/backend/maskbyand.rs
 1 crates/codegen/llrm-codegen/src/backend/memcpycall.rs
@@ -55,7 +54,6 @@
 26 crates/codegen/llrm-codegen/src/backend/selectiondag/dag_function.rs
 2 crates/codegen/llrm-codegen/src/backend/selectiondag/div_combine.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dump.rs
-58 crates/codegen/llrm-codegen/src/backend/selectiondag/emit.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/opcodes.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/schedule.rs
 3 crates/codegen/llrm-codegen/src/backend/selectiondag/x86_lowering.rs

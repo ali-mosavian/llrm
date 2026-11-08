@@ -1508,7 +1508,7 @@ fn test_for_size_a_join_of_two_instructions_is_not_copied() {
     let join = || vec![_move(30, imm(3)), _return(31)];
     let speed = placed(&diamond_joined(0.9, join())).unwrap();
     assert!(speed.blocks.iter().all(|one| one.at != 30), "copied for speed");
-    let size = _placed(&diamond_joined(0.9, join()), true, false, None, None).unwrap();
+    let size = _placed(&diamond_joined(0.9, join()), true, false, None, None, 0).unwrap();
     assert!(size.blocks.iter().any(|one| one.at == 30), "kept for size");
 }
 
@@ -1517,9 +1517,9 @@ fn test_for_size_a_join_of_two_instructions_is_not_copied() {
 #[test]
 fn test_at_o3_a_join_of_four_instructions_is_copied() {
     let join = || vec![_move(30, imm(3)), _move(31, imm(4)), _move(32, imm(5)), _return(33)];
-    let o2 = _placed(&diamond_joined(0.9, join()), false, false, None, None).unwrap();
+    let o2 = _placed(&diamond_joined(0.9, join()), false, false, None, None, 0).unwrap();
     assert!(o2.blocks.iter().any(|one| one.at == 30), "kept at -O2");
-    let o3 = _placed(&diamond_joined(0.9, join()), false, true, None, None).unwrap();
+    let o3 = _placed(&diamond_joined(0.9, join()), false, true, None, None, 0).unwrap();
     assert!(o3.blocks.iter().all(|one| one.at != 30), "copied at -O3");
 }
 
@@ -1529,9 +1529,9 @@ fn test_at_o3_a_join_of_four_instructions_is_copied() {
 #[test]
 fn test_a_target_threshold_keeps_a_join_the_pin_copies() {
     let join = || vec![_move(30, imm(3)), _return(31)];
-    let pin = _placed(&diamond_joined(0.9, join()), false, false, None, None).unwrap();
+    let pin = _placed(&diamond_joined(0.9, join()), false, false, None, None, 0).unwrap();
     assert!(pin.blocks.iter().all(|one| one.at != 30), "copied by the pin's bound");
-    let target = _placed(&diamond_joined(0.9, join()), false, false, Some(1), None).unwrap();
+    let target = _placed(&diamond_joined(0.9, join()), false, false, Some(1), None, 0).unwrap();
     assert!(target.blocks.iter().any(|one| one.at == 30), "kept at the target's bound");
 }
 
@@ -1545,7 +1545,7 @@ fn test_a_hot_join_above_the_pin_bound_is_copied_where_the_jump_pays() {
     let join = || (30..36).map(|id| _move(id, imm(3))).chain([_return(36)]).collect::<Vec<_>>();
     let placed_with = |hot: Option<HotTailDup>, per_byte: f64| {
         let hot = hot.map(|one| HotTailDup { clocks_per_byte: per_byte, ..one });
-        _placed(&diamond_joined(0.9, join()), false, true, None, hot).unwrap()
+        _placed(&diamond_joined(0.9, join()), false, true, None, hot, 0).unwrap()
     };
     let bound = Some(HotTailDup { size: 8, jump_clocks: 3.0, clocks_per_byte: 0.0 });
     assert!(placed_with(None, 0.0).blocks.iter().any(|one| one.at == 30), "premise: the pin keeps seven instructions");
@@ -1582,7 +1582,7 @@ fn test_a_loop_latch_is_not_copied_above_the_pin_bound() {
         let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
         made.odds.taken.insert((2, 10), fixed(0.5));
         made.odds.taken.insert((2, 20), fixed(0.5));
-        _placed(&made, false, false, None, hot).unwrap()
+        _placed(&made, false, false, None, hot, 0).unwrap()
     };
     assert!(looped(true).blocks.iter().any(|one| one.at == 30), "the latch is kept");
     assert!(looped(false).blocks.iter().all(|one| one.at != 30), "premise: the same block, no back edge, is copied");
@@ -1641,7 +1641,7 @@ fn test_a_copied_test_keeps_its_loops_odds() {
 #[test]
 fn test_for_size_a_diamond_is_placed_as_for_speed() {
     let order =
-        |body: LirBody| _placed(&body, true, false, None, None).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+        |body: LirBody| _placed(&body, true, false, None, None, 0).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
     assert_eq!(order(weighted_diamond(0.7)), vec![1, 10, 20, 30]);
     assert_eq!(order(weighted_diamond(0.9)), vec![1, 10, 30, 20]);
 }

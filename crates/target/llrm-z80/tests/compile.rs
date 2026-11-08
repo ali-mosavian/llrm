@@ -2169,3 +2169,15 @@ fn a_dense_switch_jumps_through_a_table() {
     assert!(out.contains("_JT0:"), "{out}");
     assert_eq!(out.matches("sbc a, #0").count(), 1, "one range check: {out}");
 }
+
+/// The block that follows a switch gets its case tested last, so it falls
+/// through. The block made for a phi edge sat between them, so no case was
+/// moved and div_constants_{long,short,ulong} reloaded a value per site
+/// (+24..+98 B): case 1 (the next block) is tested last, not first.
+#[test]
+fn a_switch_looks_past_phi_edge_blocks_for_the_next_block() {
+    let ir = include_str!("kernels/ir/switch_next_past_phi_edge.ll");
+    let out = text(ir, "h", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let tests: Vec<&str> = out.lines().map(str::trim).filter(|line| line.starts_with("cp a, #")).collect();
+    assert_eq!(tests, ["cp a, #3", "cp a, #2", "cp a, #1"], "{out}");
+}

@@ -71,8 +71,8 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// The target's tuning. DEVIATE: a multiply by a constant the pin leaves an
 /// `imul` (13-42 clocks on a 486, Intel 240440-002 Table 10.1) is, at -O1..-O3,
 /// the shift/`lea` chain of fewest clocks on the CPU's table with no byte term,
-/// as a shift-and-add search does (`arithmetic::chain_by_clocks`, SD446); -O1 only if
-/// the chain is no longer than the `imul`; -Os keeps bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
+/// as a shift-and-add search does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
+/// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 ///
 /// A code byte costs the CPU's instruction-cache fill, once per run: a line's
 /// fill clocks over its bytes (`line_fill_clocks` / `cache_line` of the CPU's
