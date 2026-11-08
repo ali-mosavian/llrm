@@ -731,6 +731,7 @@ impl<'a> Builder<'a> {
             call_clobbers: Vec::new(),
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
+            call_pointers: Vec::new(),
             call_result_assert: None,
             call_result_range_bits: None,
             fixed_args: 0,
@@ -793,6 +794,9 @@ struct Builder<'a> {
     call_attrs_move_arguments: bool,
     /// The arguments of the call being lowered that carry `sret`.
     call_sret: Vec<bool>,
+    /// Whether each value of the call being lowered is a pointer in the IR; a
+    /// target's hook places pointers apart from integers (6502: `rs` pairs).
+    call_pointers: Vec<bool>,
     /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
     /// for.
     call_result_assert: Option<ISD>,
@@ -2083,6 +2087,14 @@ impl Builder<'_> {
             .iter()
             .map(|argument| info.argument_attrs.get(*argument).is_some_and(|attrs| has_sret(attrs)))
             .collect();
+        self.call_pointers = owner
+            .iter()
+            .map(|argument| {
+                self.function
+                    .operand_type(&self.module.context, arguments[*argument])
+                    .is_some_and(|ty| self.is_pointer_type(ty))
+            })
+            .collect();
         self.call_attrs_move_arguments = match self.calling() {
             Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
             None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),
@@ -2377,6 +2389,7 @@ impl Builder<'_> {
         let mut outs = Vec::new();
         let variadic = std::mem::take(&mut self.variadic_call);
         let sret_args = std::mem::take(&mut self.call_sret);
+        let pointer_args = std::mem::take(&mut self.call_pointers);
         let variadic_from = if variadic { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {
@@ -2391,7 +2404,7 @@ impl Builder<'_> {
                 outs.push(Out {
                     value: piece,
                     ext,
-                    pointer: false,
+                    pointer: pointer_args.get(at).copied().unwrap_or(false) && !split,
                     arg_vt,
                     split,
                     variadic: at >= variadic_from,

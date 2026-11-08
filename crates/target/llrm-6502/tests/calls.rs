@@ -20,10 +20,11 @@ fn phys(
     }
 }
 
-/// `f(i8 a, i16 b)` returning `i16`: `a` goes to `a`, `b` to the first free
-/// pair, rc2:rc3 (rs1); the word comes back as `a` (low) and `x` (high) joined.
+/// `f(i8 a, i16 b)` returning `i16`: `a` goes to `a`, the word `b` (not a
+/// pointer) is two bytes in the next free registers, `x` then rc2; the word
+/// comes back as `a` (low) and `x` (high) joined.
 #[test]
-fn a_call_passes_a_byte_in_a_and_a_word_in_rs1() {
+fn a_call_passes_a_byte_in_a_and_a_word_in_the_next_bytes() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let a = dag.get_register(EVT::I8, 1);
@@ -70,17 +71,34 @@ fn a_call_passes_a_byte_in_a_and_a_word_in_rs1() {
     let call = dag.operand(end, 0);
     assert_eq!(dag.opcode(call), CALL);
     assert_eq!(dag.opcode(dag.operand(call, 1)), ISD::TargetGlobalAddress);
-    // chain, callee, then the two argument registers in order
-    assert_eq!((phys(&dag, dag.operand(call, 2)), phys(&dag, dag.operand(call, 3))), (reg::A, reg::RS1));
+    // chain, callee, then the argument registers: `a` and `x` last, a copy into
+    // either goes through `a`
+    let operands: Vec<RegId> = (2..5).map(|at| phys(&dag, dag.operand(call, at))).collect();
+    assert_eq!(operands, [reg::RC2, reg::X, reg::A]);
 }
 
-/// Three words fit rc2..rc7; the fourth fits no register and is stored on the
-/// soft stack at `rs0 + 0` inside a call sequence of two bytes.
+/// A pointer is not bytes: it takes the first free pair of rc cells, rs1, as
+/// the indexed modes need it.
 #[test]
-fn a_fourth_word_is_stored_on_the_soft_stack() {
+fn a_call_passes_a_pointer_in_rs1() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
-    let words: Vec<Out> = (1..=4)
+    let p = dag.get_register(EVT::I16, 2);
+    let callee = dag.get_global_address(EVT::I16, 7, 0);
+    let out = Out { value: p, ext: Ext::Any, pointer: true, arg_vt: EVT::I16, split: false, variadic: false, sret: false, byval: None };
+    let (chain, _) = lower_call(&mut dag, entry, callee, &[out], &[]).unwrap();
+    assert_eq!(dag.opcode(chain), ISD::CallSeqEnd);
+    let call = dag.operand(chain, 0);
+    assert_eq!(phys(&dag, dag.operand(call, 2)), reg::RS1);
+}
+
+/// Four words fill `a`, `x` and rc2..rc7; the fifth fits no register and is
+/// stored on the soft stack at `rs0 + 0` inside a call sequence of two bytes.
+#[test]
+fn a_fifth_word_is_stored_on_the_soft_stack() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let words: Vec<Out> = (1..=5)
         .map(|n| Out {
             value: dag.get_register(EVT::I16, n),
             ext: Ext::Any,
@@ -102,7 +120,7 @@ fn a_fourth_word_is_stored_on_the_soft_stack() {
         .filter(|&v| dag.opcode(v) == ISD::Store)
         .collect();
     assert_eq!(stores.len(), 1);
-    assert_eq!(dag.operand(stores[0], 1), words[3].value);
+    assert_eq!(dag.operand(stores[0], 1), words[4].value);
     // the address is `rs0` (plus the offset 0, which may fold away)
     let address = dag.operand(stores[0], 2);
     let base = if dag.opcode(address) == ISD::Add { dag.operand(address, 0) } else { address };
@@ -112,7 +130,7 @@ fn a_fourth_word_is_stored_on_the_soft_stack() {
 /// A word that reaches the callee on the stack is loaded from a fixed object of
 /// two bytes at the offset the convention gave it.
 #[test]
-fn a_fourth_formal_word_is_loaded_from_a_fixed_object() {
+fn a_fifth_formal_word_is_loaded_from_a_fixed_object() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let mut created = Vec::new();
@@ -124,21 +142,21 @@ fn a_fourth_formal_word_is_loaded_from_a_fixed_object() {
     let args = lower_formal_arguments(
         &mut dag,
         entry,
-        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any, byval: None }; 4],
+        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any, byval: None }; 5],
         &mut fixed,
         &mut |_| 4096,
     )
     .unwrap();
 
     assert_eq!(created, [(2, 0, true)]);
-    assert_eq!((dag.opcode(args[3]), dag.value_type(args[3])), (ISD::Load, EVT::I16));
-    assert_eq!(dag.opcode(args[0]), ISD::CopyFromReg);
+    assert_eq!((dag.opcode(args[4]), dag.value_type(args[4])), (ISD::Load, EVT::I16));
+    assert_eq!(dag.opcode(args[0]), ISD::BuildPair);
 }
 
-/// `g(i8, i16)` is live-in at `a` and rs1, each read from the virtual register
-/// it arrives in.
+/// `g(i8, i16)` is live-in at `a`, `x` and rc2, each read from the virtual
+/// register it arrives in; the word is its two bytes joined.
 #[test]
-fn formal_arguments_are_live_in_at_a_and_rs1() {
+fn formal_arguments_are_live_in_at_a_x_and_rc2() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let mut live_ins = Vec::new();
@@ -153,9 +171,12 @@ fn formal_arguments_are_live_in_at_a_and_rs1() {
     ];
     let args = lower_formal_arguments(&mut dag, entry, &ins, &mut |_, _, _| 0, &mut live_in).unwrap();
 
-    assert_eq!(live_ins, [reg::A, reg::RS1]);
+    assert_eq!(live_ins, [reg::A, reg::X, reg::RC2]);
     assert_eq!((dag.value_type(args[0]), dag.value_type(args[1])), (EVT::I8, EVT::I16));
-    assert!(matches!(dag.node(dag.operand(args[1], 1)).data, NodeData::Register(4097)));
+    assert_eq!(dag.opcode(args[1]), ISD::BuildPair);
+    let (lo, hi) = (dag.operand(args[1], 0), dag.operand(args[1], 1));
+    assert!(matches!(dag.node(dag.operand(lo, 1)).data, NodeData::Register(4097)));
+    assert!(matches!(dag.node(dag.operand(hi, 1)).data, NodeData::Register(4098)));
 }
 
 /// A returned byte is copied to `a` and the return follows the copy, glued to

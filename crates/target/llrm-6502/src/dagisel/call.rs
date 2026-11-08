@@ -43,6 +43,9 @@ pub enum Refused {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Location {
     Register(llrm_lir::registers::RegId),
+    /// A word that is not a pointer, as two bytes in the byte registers
+    /// (low, high), as `CC_MOS` splits an integer.
+    Bytes(llrm_lir::registers::RegId, llrm_lir::registers::RegId),
     /// By its offset in the stack arguments.
     Stack(i64),
 }
@@ -55,8 +58,11 @@ fn kind(vt: EVT) -> Result<Kind, Refused> {
     }
 }
 
-/// The location of each argument and the bytes the stack ones take; a word's
-/// two bytes are named as their pair.
+/// The location of each argument and the bytes the stack ones take. As
+/// `CC_MOS` does: a pointer takes the first free pair of rc cells; any other
+/// value is bytes, each in the first free of `a`, `x`, rc2.., so a first
+/// integer word is `a:x`. An argument that fits no registers goes on the
+/// stack, and every one after it.
 ///
 /// DEVIATE A-X-ARGS (beyond the pin; owner 6502, exit 2026-11-15): a byte
 /// argument arrives in `a`, then `x`, as in llvm-mos's CC_MOS. The 2026-11-08
@@ -72,20 +78,45 @@ fn kind(vt: EVT) -> Result<Kind, Refused> {
 fn locations(
     convention: &Convention,
     vts: &[EVT],
+    pointers: &[bool],
 ) -> Result<(Vec<Location>, i64), Refused> {
     let kinds = vts.iter().map(|&vt| kind(vt)).collect::<Result<Vec<_>, _>>()?;
-    let placement = convention.place(&kinds);
-    let places = placement
-        .places
-        .iter()
-        .enumerate()
-        .map(|(at, place)| match place {
-            Place::Registers(names) if vts[at] == EVT::I16 => Location::Register(abi::pair_of(&names[0])),
-            Place::Registers(names) => Location::Register(abi::register(&names[0])),
-            Place::Stack(offset) => Location::Stack(*offset),
-        })
-        .collect();
-    Ok((places, placement.stack_bytes))
+    let names = &convention.argument_registers;
+    let mut free = vec![true; names.len()];
+    let (mut places, mut stack, mut spilled) = (Vec::new(), 0, false);
+    for (at, kind) in kinds.iter().enumerate() {
+        let wide = *kind == Kind::Wide;
+        let found = if spilled {
+            None
+        } else if wide && pointers[at] {
+            convention.wide_pairs.iter().find_map(|pair| {
+                let both = pair.iter().map(|name| names.iter().position(|one| one == name)).collect::<Option<Vec<_>>>()?;
+                both.iter().all(|&index| free[index]).then(|| (both, true))
+            })
+        } else {
+            let wanted = if wide { 2 } else { 1 };
+            let taken: Vec<usize> = (0..names.len()).filter(|&index| free[index]).take(wanted).collect();
+            (taken.len() == wanted).then_some((taken, false))
+        };
+        match found {
+            Some((indices, pair)) => {
+                for &index in &indices {
+                    free[index] = false;
+                }
+                places.push(match (indices.len(), pair) {
+                    (2, true) => Location::Register(abi::pair_of(&names[indices[0]])),
+                    (2, false) => Location::Bytes(abi::register(&names[indices[0]]), abi::register(&names[indices[1]])),
+                    _ => Location::Register(abi::register(&names[indices[0]])),
+                });
+            }
+            None => {
+                spilled = true;
+                places.push(Location::Stack(stack));
+                stack += if wide { convention.slot_bytes * convention.wide_slots } else { convention.slot_bytes };
+            }
+        }
+    }
+    Ok((places, stack))
 }
 
 /// The registers the parts `vts` of one result leave in, in order: the
@@ -134,7 +165,8 @@ pub fn lower_call(
 ) -> Result<(SDValue, Vec<SDValue>), Refused> {
     let convention = abi::mos();
     let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
-    let (targets, bytes) = locations(&convention, &vts)?;
+    let pointers: Vec<bool> = outs.iter().map(|out| out.pointer).collect();
+    let (targets, bytes) = locations(&convention, &vts, &pointers)?;
     let mut chain = dag.get_callseq_start(chain, bytes as u64);
     // `LowerMemOpCallTo`: the stack arguments are stored at `rs0 + offset`.
     let mut stores = Vec::new();
@@ -160,19 +192,26 @@ pub fn lower_call(
         chain = dag.get_token_factor(&stores);
     }
     let mut glue = None;
+    // each register an argument travels in, with the value it holds; a word
+    // that is not a pointer is split into its bytes
+    let mut copies = Vec::new();
+    for (out, &target) in outs.iter().zip(&targets) {
+        match target {
+            Location::Register(register) => copies.push((register, out.value)),
+            Location::Bytes(lo, hi) => {
+                let shift = dag.get_constant(8, EVT::I8);
+                let high = dag.get_node(ISD::Srl, EVT::I16, &[out.value, shift]);
+                copies.push((lo, dag.get_node(ISD::Truncate, EVT::I8, &[out.value])));
+                copies.push((hi, dag.get_node(ISD::Truncate, EVT::I8, &[high])));
+            }
+            Location::Stack(_) => {}
+        }
+    }
     // `a` and `x` last: moving a constant or a byte into a cell goes through `a`
     let (a, x) = (abi::register("a"), abi::register("x"));
     let late = |register: llrm_lir::registers::RegId| u8::from(register == x) + 2 * u8::from(register == a);
-    let mut copies: Vec<_> = outs
-        .iter()
-        .zip(&targets)
-        .filter_map(|(out, &target)| match target {
-            Location::Register(register) => Some((register, out.value)),
-            Location::Stack(_) => None,
-        })
-        .collect();
     copies.sort_by_key(|&(register, _)| late(register));
-    for (register, value) in copies {
+    for &(register, value) in &copies {
         let copy = dag.get_copy_to_phys_reg(chain, register, value, glue);
         chain = SDValue { node: copy.node, res: 0 };
         glue = Some(SDValue { node: copy.node, res: 1 });
@@ -189,9 +228,8 @@ pub fn lower_call(
         _ => callee,
     };
     let mut operands = vec![chain, callee];
-    for (out, &target) in outs.iter().zip(&targets) {
-        let Location::Register(register) = target else { continue };
-        let vt = dag.value_type(out.value);
+    for &(register, value) in &copies {
+        let vt = dag.value_type(value);
         operands.push(dag.get_phys_register(vt, register));
     }
     // the scheduler's live-register check reads the mask: a call clobbers the flags
@@ -220,7 +258,8 @@ pub fn lower_formal_arguments(
 ) -> Result<Vec<SDValue>, Refused> {
     let convention = abi::mos();
     let vts: Vec<EVT> = ins.iter().map(|arg| arg.vt).collect();
-    let (sources, _) = locations(&convention, &vts)?;
+    let pointers: Vec<bool> = ins.iter().map(|arg| arg.pointer).collect();
+    let (sources, _) = locations(&convention, &vts, &pointers)?;
     Ok(ins
         .iter()
         .zip(sources)
@@ -228,6 +267,11 @@ pub fn lower_formal_arguments(
             Location::Register(register) => {
                 let copy = dag.get_copy_from_reg(chain, live_in(register), arg.vt);
                 SDValue { node: copy.node, res: 0 }
+            }
+            Location::Bytes(lo, hi) => {
+                let low = dag.get_copy_from_reg(chain, live_in(lo), EVT::I8);
+                let high = dag.get_copy_from_reg(chain, live_in(hi), EVT::I8);
+                dag.get_node(ISD::BuildPair, arg.vt, &[SDValue { node: low.node, res: 0 }, SDValue { node: high.node, res: 0 }])
             }
             Location::Stack(offset) => {
                 // `LowerMemArgument`

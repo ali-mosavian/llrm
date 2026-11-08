@@ -397,20 +397,21 @@ fn expected(edit: impl FnOnce(&mut [u8])) -> i32 {
     i32::from(memory.iter().fold(0u8, |sum, byte| sum.rotate_left(1) ^ byte))
 }
 
-/// `routine(buf + dst, buf + src, n)` for memcpy and memmove, `routine(buf +
-/// dst, c, n)` for memset (`c` in A, `n` in rs2).
+/// `routine(buf + dst, buf + src, n)` for memcpy and memmove (`n` in `a:x`),
+/// `routine(buf + dst, c, n)` for memset (`c` in `a`, `n` in `x` and rc4).
 fn mem_call(
     routine: &str,
     dst: usize,
     second: &str,
     n: usize,
 ) -> String {
-    let (low, high) = if routine == "memset" { (4, 5) } else { (6, 7) };
-    format!(
-        "  lda #<(buf+{dst})\n  sta rc2\n  lda #>(buf+{dst})\n  sta rc3\n  lda #{}\n  sta rc{low}\n  lda #{}\n  sta rc{high}\n{second}  jsr {routine}\n",
-        n & 0xFF,
-        n >> 8
-    )
+    let dst = format!("  lda #<(buf+{dst})\n  sta rc2\n  lda #>(buf+{dst})\n  sta rc3\n");
+    let (low, high) = (n & 0xFF, n >> 8);
+    if routine == "memset" {
+        format!("{dst}  lda #{high}\n  sta rc4\n  ldx #{low}\n{second}  jsr {routine}\n")
+    } else {
+        format!("{dst}{second}  ldx #{high}\n  lda #{low}\n  jsr {routine}\n")
+    }
 }
 
 fn source(src: usize) -> String {
