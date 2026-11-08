@@ -114,6 +114,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
         imul_at_size: true,
+        rep_stos_at_size: true,
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
         unroll_promotion_fits_x87_stack: true,

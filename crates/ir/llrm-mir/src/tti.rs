@@ -885,6 +885,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::rep_stos_at_size`.
+    fn rep_stos_at_size(&self) -> bool {
+        false
+    }
+
     /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
     fn has_cmov(&self) -> bool {
         true

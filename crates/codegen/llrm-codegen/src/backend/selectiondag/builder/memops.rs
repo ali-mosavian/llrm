@@ -1372,7 +1372,10 @@ impl Builder<'_> {
                 match (inline, constant) {
                     (Some(chain), _) => chain,
                     (None, Some(bytes))
-                        if strings_exist && (self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4)) =>
+                        if strings_exist
+                            && (self.has_min_size()
+                                || (opt_size && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_stos_at_size()))
+                                || (bytes <= MAX_INLINE_SIZE && alignment >= 4)) =>
                     {
                         self.rep_stos(root, dst, other, bytes, alignment)?
                     }
