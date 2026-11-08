@@ -95,7 +95,11 @@ pub struct Tuning {
     /// function runs (the calls to it up the call graph), not by the
     /// function's entry alone: the bottom-up walk prices a helper in the
     /// function that calls it, which a hot loop up the graph runs 30 times
-    /// more. false: the site's own frequency.
+    /// more. false: the site's own frequency. Costs at m32 -O1 (A/B
+    /// e09ff5f2a4^..e09ff5f2a4): x_jpeg_fixed +2.2% clk for -33% B (8415 ->
+    /// 5647), x_sf_mul +22 clk (0.03%) over the best external. Closes: jpeg
+    /// re-run against the best external (not yet measured); mul by the
+    /// frequency of the call's own loop depth, or the row stays to the exit.
     pub inline_o1_weighs_entry: bool,
     /// Trips the -O1 no-growth rule above analyses for folds: the pin's
     /// `-unroll-max-iteration-count-to-analyze` (10) when `None`.
