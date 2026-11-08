@@ -557,6 +557,7 @@ fn sequences(
     // the call areas of the sequences that cannot be pushed
     let mut others = Vec::new();
     let mut at = 0;
+    let mut claimed = Vec::new();
     while at < insts.len() {
         let Kind::Op("ADJCALLSTACKDOWN") = insts[at].kind else {
             at += 1;
@@ -589,6 +590,7 @@ fn sequences(
             continue;
         };
         at = up + 1;
+        claimed.push(up);
         // each argument store: where, its offset, its source, its price kept
         // and pushed
         let mut parts: Vec<(usize, i64, Source, (usize, u32), (usize, u32))> = Vec::new();
@@ -723,6 +725,25 @@ fn sequences(
             addresses,
             kept: priced.0,
             pushed: add(priced.1, cost(&cleanup, cpu)?),
+        });
+    }
+    // A call area made before a diamond can serve a call on each path: the
+    // second call's cleanup has no call area of its own to claim it, and its
+    // arguments are stored into the area the first call's sequence would have
+    // pushed away. That area stays.
+    for (up, _) in insts
+        .iter()
+        .enumerate()
+        .filter(|(i, inst)| matches!(inst.kind, Kind::Op("ADJCALLSTACKUP")) && !claimed.contains(i))
+    {
+        let Some(Operand::Imm(bytes)) = insts[up].operands.first() else { continue };
+        let Some(call) = (0..up).rev().find(|&i| insts[i].call) else { continue };
+        found.retain(|one: &Sequence| {
+            let shared = one.bytes == *bytes && one.down < call && blocks[one.down] != blocks[one.up];
+            if shared {
+                others.push(one.bytes);
+            }
+            !shared
         });
     }
     Ok((found, others))
