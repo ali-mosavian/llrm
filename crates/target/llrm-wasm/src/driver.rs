@@ -58,7 +58,7 @@ impl Level {
         let options = match self {
             Self::O0 => MidEnd::none(),
             Self::O1 => MidEnd::basic(),
-            Self::O2 => MidEnd::default(),
+            Self::O2 => MidEnd::standard(),
             Self::O3 => MidEnd::speed(),
             Self::Omax => MidEnd::aggressive(),
             Self::Os => MidEnd::size(),
