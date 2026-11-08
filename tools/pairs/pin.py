@@ -104,6 +104,8 @@ def retarget(text: str, of: Target) -> str:
     text = re.sub(r"^(declare [^\n]*@llvm\.[^\n]*?\)) addrspace\(1\)(?= [a-z]|$)", r"\1", text, flags=re.M)
     text = re.sub(r"^(\s+(?:%\S+ = )?(?:(?:tail|musttail|notail) )?call(?: cc \d+)?) addrspace\(1\)( [^\n]*@llvm\.)", r"\1\2", text, flags=re.M)
     text = _with_stack_alignment(text, of)
+    # A dump's own groups carry clang's `target-cpu` (pentium4 for -m32): one CPU per module, or which of two groups wins is LLVM's merge.
+    text = re.sub(r' ?"(?:target-cpu|target-features|tune-cpu)"="[^"]*"', "", text)
     group = f'"target-cpu"="{of.cpu}" "target-features"="{of.features}"' + (" optsize" if of.optsize else "")
     return text + f"\nattributes #9999 = {{ {group} }}\n"
 
