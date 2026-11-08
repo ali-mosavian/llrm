@@ -139,6 +139,7 @@ pub fn run_with(
     drop_cancelling_transfers(asm);
     crate::peephole_cells::carry_stays_in_the_flag(asm);
     crate::peephole_cells::fold_temp_operand(asm);
+    crate::peephole_cells::fold_spill_copy(asm);
     crate::peephole_cells::arithmetic_chain_in_a(asm);
     crate::peephole_cells::chain_ends_in_a(asm);
     crate::peephole_cells::forward_cell_copy(asm);
