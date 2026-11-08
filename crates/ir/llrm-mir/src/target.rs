@@ -101,8 +101,13 @@ pub struct Tuning {
     /// `Tti::callee_saved_clocks`: (scratch registers, preserved registers,
     /// clocks to save and restore one). None: not priced.
     pub callee_saved: Option<(i64, i64, i64)>,
+    /// `Tti::register_spill_clocks`: (allocatable registers, clocks to store and
+    /// reload one value). None: not priced.
+    pub register_spill: Option<(i64, i64)>,
     /// `Tti::inline_hot_trial_frequency`.
     pub inline_hot_trial_frequency: Option<i64>,
+    /// `Tti::inline_hot_trial_at_o3`.
+    pub inline_hot_trial_at_o3: bool,
     /// DEVIATE SD-DIVMAG (owner x86-m32, exit 2026-11-22): a signed divide by a
     /// negative constant is the negation of the divide by its magnitude, so it
     /// shares the multiply-high of the remainder (`x % -c` is `x % c`); the
@@ -356,7 +361,9 @@ impl Tuning {
         sdiv_by_magnitude: false,
         speed_inline_rate_at_o1: false,
         inline_hot_trial_frequency: None,
+        inline_hot_trial_at_o3: false,
         callee_saved: None,
+        register_spill: None,
         call_sequence_fixed_clocks: 0,
         call_sequence_argument_clocks: 0,
         call_sequence_pop_clocks: 0,

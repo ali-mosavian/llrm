@@ -181,12 +181,16 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // depth 8 stays where it wins (-O3 rectwo 466986, x_hanoi2 155672).
         recursive_inlining_depth: Some((2, 8)),
         // DEVIATE INL-HOT (owner m32, exit 2026-11-30): a call the pin's
-        // threshold alone refuses, at a site 16x the caller's entry or hotter,
-        // is tried inlined at -O2/-O3 and kept where the rate pays (x_sf_*:
-        // `__addsf3 -> add_bits` cost 445 over 250, growth 45 B, 31x).
+        // threshold alone refuses, at a site 16x the caller's entry or hotter, is tried
+        // inlined at -O2 and kept where the rate pays, the trial counting the callee's
+        // preserved registers (x_sf_* -O2 clk -10..-23%, +516..676 B; jpeg -0.4% clk,
+        // +442..586 B). Trips are the pin's estimate (31), not a profile.
         inline_hot_trial_frequency: Some(16),
+        // -O3 off: x_jpeg_fixed/single get +129/+112 B and +0.2%/+0.1% clk there
+        // (`getbit` into `receive`; a trip count of 31 estimated, ~1 real).
         // A callee that keeps more than eax/ecx/edx live pushes and pops ebx, esi,
         // edi, ebp once per call: the trial's clocks saved count it.
+        register_spill: Some((6, costs.store + costs.load)),
         callee_saved: Some((3, 4, costs.argument + costs.pop)),
         // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion
         // (passes.def:97, then pass_ipa_inline :164). At -O3 the copies of the

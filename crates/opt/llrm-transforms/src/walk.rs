@@ -556,6 +556,9 @@ impl ProgramPass for Walk {
                                 // INL-HOT: a unit of sites the pin's threshold alone refused; a trial costs the
                                 // Simplify list over the caller, so a caller tries at most HOT_TRIALS of them.
                                 let hot = calls.iter().all(|one| trials[one].hot);
+                                if hot && self.inline.limit >= 250 && !tti.inline_hot_trial_at_o3() {
+                                    continue;
+                                }
                                 if hot {
                                     if hot_tried >= HOT_TRIALS {
                                         continue;
@@ -683,7 +686,11 @@ impl ProgramPass for Walk {
                                         .iter()
                                         .map(|body| tti.callee_saved_clocks(llrm_analysis::liveness::pressure(body, None, None)))
                                         .sum();
-                                    let once = kept_clocks + run + saves - function_clocks(module, &program.layout, tti, now);
+                                    let spills = tti.register_spill_clocks(
+                                        llrm_analysis::liveness::pressure(&kept, None, None),
+                                        llrm_analysis::liveness::pressure(now, None, None),
+                                    );
+                                    let once = kept_clocks + run + saves - spills - function_clocks(module, &program.layout, tti, now);
                                     (
                                         (once as f64 * trips) as i64,
                                         function_bytes(module, &program.layout, &costs, now)
