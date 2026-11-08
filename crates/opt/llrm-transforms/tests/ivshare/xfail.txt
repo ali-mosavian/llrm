@@ -6,8 +6,8 @@ F12.p16 end-biased formulae not built (S3)
 F21.p16 end-biased formulae not built (S3)
 F23.p16 end-biased formulae not built (S3)
 F34.p16 end-biased formulae not built (S3)
-B01.p16 LU8 prices address registers past bx/si/di (#6688): a shared index needs a base register per array; pointer walks win
-B02.p16 LU8 prices address registers past bx/si/di (#6688): a shared index needs a base register per array; pointer walks win
-B07.p16 LU8 prices address registers past bx/si/di (#6688): a shared index needs a base register per array; pointer walks win
-B10.p16 LU8 prices address registers past bx/si/di (#6688): a shared index needs a base register per array; pointer walks win
-B11.p16 LU8 prices address registers past bx/si/di (#6688): a shared index needs a base register per array; pointer walks win
+B01.p16 DEVIATE LU8 (#6688), owner w12, exit 2026-11-30: arrays past bx/si/di cost a base each, so pointer walks win; cells: QB m16 sum_three O2 82->73 instrs, Nib jpeg_fixed O2 -29 B, jpeg_single O2 -32 B (clocks: LU8 prices reloads of 2 insns a trip). Passes => fails the test.
+B02.p16 DEVIATE LU8 (#6688), owner w12, exit 2026-11-30: arrays past bx/si/di cost a base each, so pointer walks win; cells: QB m16 sum_three O2 82->73 instrs, Nib jpeg_fixed O2 -29 B, jpeg_single O2 -32 B (clocks: LU8 prices reloads of 2 insns a trip). Passes => fails the test.
+B07.p16 DEVIATE LU8 (#6688), owner w12, exit 2026-11-30: arrays past bx/si/di cost a base each, so pointer walks win; cells: QB m16 sum_three O2 82->73 instrs, Nib jpeg_fixed O2 -29 B, jpeg_single O2 -32 B (clocks: LU8 prices reloads of 2 insns a trip). Passes => fails the test.
+B10.p16 DEVIATE LU8 (#6688), owner w12, exit 2026-11-30: arrays past bx/si/di cost a base each, so pointer walks win; cells: QB m16 sum_three O2 82->73 instrs, Nib jpeg_fixed O2 -29 B, jpeg_single O2 -32 B (clocks: LU8 prices reloads of 2 insns a trip). Passes => fails the test.
+B11.p16 DEVIATE LU8 (#6688), owner w12, exit 2026-11-30: arrays past bx/si/di cost a base each, so pointer walks win; cells: QB m16 sum_three O2 82->73 instrs, Nib jpeg_fixed O2 -29 B, jpeg_single O2 -32 B (clocks: LU8 prices reloads of 2 insns a trip). Passes => fails the test.
