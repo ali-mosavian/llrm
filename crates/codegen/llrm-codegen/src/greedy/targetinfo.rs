@@ -35,12 +35,71 @@ pub trait TargetRegisterInfo {
         false
     }
 
+    /// DEVIATE CSR5: where code is sized in bytes, what a callee-saved
+    /// register and a spill cost in them; none: the pin's frequency rule.
+    fn size_bytes(&self) -> Option<&SizeBytes> {
+        None
+    }
+
     /// `RegCosts[phys]`, the register's `CostPerUse`.
     fn reg_cost(
         &self,
         _phys: RegId,
     ) -> u8 {
         0
+    }
+}
+
+/// The bytes of the instructions a callee-saved register and a spill are made
+/// of, from the target's sheet (`opcosts.txt`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SizeBytes {
+    pub push: u32,
+    pub pop: u32,
+    /// A reload and a store of a spilled value.
+    pub load: u32,
+    pub store: u32,
+    /// Making a value again from a constant, the most a rematerialized one
+    /// costs at each use.
+    pub constant: u32,
+    /// What a register past the legacy eight adds to an instruction naming it.
+    pub extended_prefix: u32,
+}
+
+impl SizeBytes {
+    /// A push and a pop of `phys`.
+    pub fn save_restore(
+        &self,
+        phys: RegId,
+    ) -> u32 {
+        let extended = u32::from(is_extended(phys));
+        self.push + self.pop + 2 * extended * self.extended_prefix
+    }
+}
+
+/// `r8`..`r15`: the registers a REX prefix names.
+fn is_extended(phys: RegId) -> bool {
+    let name = format!("{phys:?}").to_lowercase();
+    name.strip_prefix('r').and_then(|n| n.parse::<u32>().ok()).is_some_and(|n| n >= 8)
+}
+
+/// `X86RegisterInfo` of a function sized in bytes (`optsize`).
+pub struct X86SizeRegisterInfo(pub SizeBytes);
+
+impl TargetRegisterInfo for X86SizeRegisterInfo {
+    fn copy_cost(&self) -> u32 {
+        X86RegisterInfo.copy_cost()
+    }
+
+    fn csr_first_use_cost(
+        &self,
+        any_saved: bool,
+    ) -> u32 {
+        X86RegisterInfo.csr_first_use_cost(any_saved)
+    }
+
+    fn size_bytes(&self) -> Option<&SizeBytes> {
+        Some(&self.0)
     }
 }
 

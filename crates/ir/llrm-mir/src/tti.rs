@@ -570,6 +570,18 @@ pub trait Tti {
         false
     }
 
+    /// The largest caller, in instructions, whose refused sites SZ2 tries inline: a trial
+    /// runs the simplifier over the whole caller once per callee tried.
+    fn inline_trial_caller_limit(&self) -> usize {
+        300
+    }
+
+    /// Whether a later round of the inliner over one caller skips a callee SZ2 rejected in an
+    /// earlier round: a round costs the simplifier over the caller per callee. False: tried again.
+    fn inline_trial_skips_rejected(&self) -> bool {
+        false
+    }
+
     /// Whether a callee the -O1 size bound refused is tried inline as at -Os (SZ2: the copy
     /// stays if the caller comes out smaller), where -O1 prices no byte in clocks. False: the
     /// bound's verdict stands.
@@ -586,6 +598,13 @@ pub trait Tti {
     }
 
     fn speed_inline_rate_at_o1(&self) -> bool {
+        false
+    }
+
+    /// Whether a call to a function of the module destroys what that function
+    /// writes, not every caller-saved register (`-enable-ipra`; off in the
+    /// pin, on in GCC from -O1).
+    fn interprocedural_register_use(&self) -> bool {
         false
     }
 

@@ -103,6 +103,9 @@ struct Placer {
     /// Edges rerouted by copies, for the odds: (from, its successors before,
     /// the tail, the tail's successors with their chances).
     rerouted: Vec<(i64, Vec<i64>, i64, Vec<(i64, f64)>)>,
+    /// Instructions of frame teardown a return block will carry: the pin
+    /// places after the epilogue is in (DEVIATE: counted, not emitted yet).
+    epilogue: usize,
 }
 
 fn succ_seen(
@@ -156,10 +159,12 @@ pub(super) fn order(
     aggressive: bool,
     tail_dup: Option<usize>,
     hot: Option<HotTailDup>,
+    epilogue: usize,
 ) -> (Vec<Block>, BlockOdds) {
     let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(place, block)| (block.at, place)).collect();
     let entry = index.get(&entry).copied().unwrap_or(0);
     let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, tail_dup, hot, entry);
+    placer.epilogue = epilogue;
     for found in natural {
         let Some(&header) = index.get(&found.header) else { continue };
         for at in found.body.to_set().iter() {
@@ -209,6 +214,13 @@ impl Placer {
                 pred[to].push(from);
             }
         }
+        // `predecessors()` lists a block's predecessors in the order isel made
+        // their edges: it visits the blocks in reverse post-order, so a
+        // branch's last successor first. Ties between trellis edges follow it.
+        let rank = reverse_post_order(&succ, entry);
+        for list in &mut pred {
+            list.sort_by_key(|from| rank[*from]);
+        }
         let postdom = postdom::PostDom::of(&succ, &pred);
         Self {
             postdom,
@@ -243,6 +255,7 @@ impl Placer {
             hot: hot.filter(|_| !size),
             latch: vec![false; n],
             rerouted: Vec::new(),
+            epilogue: 0,
         }
     }
 
@@ -1012,4 +1025,34 @@ impl Placer {
         }
         self.chains[chain].blocks.rotate_left(at + 1);
     }
+}
+
+/// Each block's place in the reverse post-order of a walk from `entry` that
+/// takes successors in order; blocks it does not reach come last.
+fn reverse_post_order(
+    succ: &[Vec<usize>],
+    entry: usize,
+) -> Vec<usize> {
+    let n = succ.len();
+    let mut done = vec![false; n];
+    let mut post = Vec::with_capacity(n);
+    let mut stack = vec![(entry, 0usize)];
+    done[entry] = true;
+    while let Some(&mut (block, ref mut next)) = stack.last_mut() {
+        if let Some(&to) = succ[block].get(*next) {
+            *next += 1;
+            if !done[to] {
+                done[to] = true;
+                stack.push((to, 0));
+            }
+        } else {
+            post.push(block);
+            stack.pop();
+        }
+    }
+    let mut rank = vec![n; n];
+    for (place, block) in post.iter().rev().enumerate() {
+        rank[*block] = place;
+    }
+    rank
 }

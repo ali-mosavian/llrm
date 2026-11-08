@@ -84,7 +84,7 @@ use crate::backend::calleefacts;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::constpool::Pool;
 use crate::backend::cpu::{Profile, ProfileOrName};
-use crate::backend::isel::{self, Selected};
+use crate::backend::isel::{self, Selected, Unselected};
 use crate::backend::shadow::{self, Selector};
 use crate::backend::target::Segments;
 use crate::backend::{addressvalues, constrain, executed, frame, globals, jumps, masm, returnsplit, select};
@@ -1156,7 +1156,7 @@ fn staged(
     SELECTED.with(|count| count.set(count.get() + 1));
     llrm_mir::counts::bump(llrm_mir::counts::Event::Selections);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
-    let contracts = Some(crate::backend::selectiondag::dag_function::RuntimeContracts {
+    let contracts = Some(crate::backend::selectiondag::select_api::RuntimeContracts {
         abi,
         segments: target.segments,
         runtime: abi.runtime_contracts(),
@@ -1173,7 +1173,7 @@ fn staged(
         // old selector.
         Selector::Dag | Selector::Shadow if !shadow::only(name) || calls_atomic(module, name) => None,
         Selector::Dag => Some(timed("dag isel", || {
-            crate::backend::selectiondag::dag_function::selected_in_pool(
+            select_in_pool(
                 module,
                 name,
                 target.arch,
@@ -1185,7 +1185,7 @@ fn staged(
         })),
         Selector::Shadow => {
             match timed("dag isel", || {
-                crate::backend::selectiondag::dag_function::selected_in_pool(
+                select_in_pool(
                     module,
                     name,
                     target.arch,
@@ -1206,7 +1206,7 @@ fn staged(
     let mut fast = false;
     let selected = if let Some(done) = dag {
         if done.is_ok() {
-            if crate::backend::selectiondag::fastisel::take_took() {
+            if crate::backend::hooks::installed().is_some_and(|hooks| hooks.take_fast_took()) {
                 fast = true;
                 shadow::record_fast(name);
             } else {
@@ -1577,4 +1577,22 @@ fn comdat_of(
         _ => return None,
     };
     Some(masm::Comdat { name: comdat.clone(), selection, extent: None, constant: false })
+}
+
+/// The installed backend's function selector. Without one no function is
+/// selected by the DAG path: a refusal, which `Selector::Shadow` takes to the
+/// old selector.
+fn select_in_pool(
+    module: &Module,
+    name: &str,
+    arch: &dyn llrm_target::Target,
+    cpu: &crate::backend::cpu::Profile,
+    libcalls: &[(String, u32, String)],
+    contracts: Option<&crate::backend::selectiondag::select_api::RuntimeContracts<'_>>,
+    pool: &mut Pool,
+) -> Result<Selected, Unselected> {
+    match crate::backend::hooks::installed() {
+        Some(hooks) => hooks.select_function(module, name, arch, cpu, libcalls, contracts, pool),
+        None => Err(Unselected("no backend installed (llrm_x86_backend::install)".to_owned())),
+    }
 }

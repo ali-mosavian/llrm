@@ -36,12 +36,12 @@ use super::actions::TargetLowering;
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::dag_target::{DagTarget, Phases, Select, select_units};
 use super::dagisel_adapter::{DagisAdapter, PinRegisters};
-use super::emit::{EmitContext, EmitState, Emitted, emit_in};
+use super::emit_api::{EmitContext, EmitState, Emitted};
 use super::isd::ISD;
 use super::legalize_dag;
 use super::legalize_dag::DagLegalizer;
 use super::legalize_types::TypeLegalizer;
-use super::schedule::{SchedInfo, schedule};
+use super::schedule::{SchedInfo, Unit, schedule};
 use super::x86_lowering::X86Lowering;
 use super::{SDValue, SelectionDAG};
 
@@ -53,7 +53,7 @@ pub enum Refusal {
     CannotSelect(String),
     /// The selector named a register the target has no id for.
     UnknownRegister(String),
-    Emit(super::emit::EmitError),
+    Emit(super::emit_api::EmitError),
 }
 
 /// x86 as a [`DagTarget`]: its lowering tables, hooks and selector tables.
@@ -170,7 +170,7 @@ pub fn select_block(
         info,
         temporaries,
     )?;
-    crate::support::debug::timed("dag emit", || emit_in(dag, &units, ctx, state, first_at)).map_err(Refusal::Emit)
+    crate::support::debug::timed("dag emit", || emit_units(dag, &units, ctx, state, first_at)).map_err(Refusal::Emit)
 }
 
 /// [`select_block`] for a DAG FastISel already selected: scheduled and emitted.
@@ -183,7 +183,7 @@ pub fn select_block_fast(
 ) -> Result<Emitted, Refusal> {
     let root = dag.get_root();
     let units = crate::support::debug::timed("dag schedule", || schedule(dag, root, info));
-    crate::support::debug::timed("dag emit", || emit_in(dag, &units, ctx, state, first_at)).map_err(Refusal::Emit)
+    crate::support::debug::timed("dag emit", || emit_units(dag, &units, ctx, state, first_at)).map_err(Refusal::Emit)
 }
 
 /// `SelectCodeCommon` for `AssertSext` and `AssertZext`: each is its operand.
@@ -352,4 +352,19 @@ pub(crate) fn users_first(dag: &SelectionDAG) -> Vec<u32> {
     }
     order.reverse();
     order
+}
+
+/// The installed backend's emitter. Without one nothing emits LIR: a
+/// refusal, never a skipped block.
+fn emit_units(
+    dag: &SelectionDAG,
+    units: &[Unit],
+    ctx: &EmitContext<'_>,
+    state: &mut EmitState,
+    first_at: i64,
+) -> Result<Emitted, super::emit_api::EmitError> {
+    match crate::backend::hooks::installed() {
+        Some(hooks) => hooks.emit_units(dag, units, ctx, state, first_at),
+        None => Err(super::emit_api::EmitError::Unsupported("no backend installed (llrm_x86_backend::install)".to_owned())),
+    }
 }
