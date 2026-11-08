@@ -73,7 +73,7 @@ fn test_complete_far_pointer_loads_share_one_priced_form() {
 
 #[test]
 fn test_x87_exchange_is_explicitly_priced_for_every_cpu() {
-    let expected = [("386", 18), ("486", 4), ("P5", 1), ("P6", 0), ("K5", 1), ("K6", 2), ("K7", 0), ("Core", 0)];
+    let expected = [("386", 4), ("486", 4), ("P5", 1), ("P6", 0), ("K5", 1), ("K6", 2), ("K7", 0), ("Core", 0)];
     assert_eq!(classify("fxch", "st1", "d9c9"), "x87_exchange");
     let got: Vec<(&str, i64)> = cpu::names()
         .into_iter()
@@ -85,15 +85,15 @@ fn test_x87_exchange_is_explicitly_priced_for_every_cpu() {
 /// `fld st(i)` was priced as `fld m` (`x87_load`): on a 486 the copy takes 4
 /// clocks and the load 3, so a hoisted constant copied each trip looked free
 /// (nbody -O2 m16: two copies a pair-loop trip, 1,200 trips). Every CPU states
-/// the copy; the 486 data sheet's figure differs, the others tie with the load
-/// until measured.
+/// the copy; the 486 data sheet's figure differs (the 386 column carries the
+/// 486 numbers since #8311), the others tie with the load until measured.
 #[test]
 fn test_x87_register_copy_is_its_own_priced_form() {
     assert_eq!(classify("fld", "st1", "d9c1"), "x87_copy");
     assert_eq!(classify("fld", "qword [bp-8]", "dd46f8"), "x87_load");
     for name in cpu::names() {
         let cpu = cpu::profile(name).unwrap();
-        let extra = i64::from(name == "486");
+        let extra = i64::from(matches!(name, "386" | "486"));
         assert_eq!(cpu.cost("x87_copy").unwrap(), cpu.cost("x87_load").unwrap() + extra, "{name}");
     }
 }
