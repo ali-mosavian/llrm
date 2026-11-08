@@ -73,6 +73,18 @@ fn a_nest_is_priced_at_o3_as_at_o2() {
     assert!(instructions(tile, Level::O3) < 80, "tile -O3: {} instructions", instructions(tile, Level::O3));
 }
 
+/// A synthetic 8 x 8 nest fills a local array that a loop of run-time trips
+/// reads at run-time indices (`data/nest_fill_then_read.c`). The array stays in
+/// memory, so unrolling the fill saves nothing it keeps: the module is the same
+/// size at -O3 as at -O2 (46 instructions). -O3 unrolled the inner fill loop
+/// first, its nest bypass assuming the nest would follow: 69.
+#[test]
+fn a_nest_filling_an_array_read_at_run_time_indices_is_rolled_at_every_level() {
+    let ir = include_str!("data/nest_fill_then_read.ll");
+    let (o2, o3) = (instructions(ir, Level::O2), instructions(ir, Level::O3));
+    assert!(o3 <= o2 + 5, "{o3} instructions at -O3, {o2} at -O2");
+}
+
 /// nbody_single -O2: the 6-trip loops sit in a 1000-trip loop and were priced
 /// as if it ran 32 times: 17,408 clocks saved against 72,250 for the bytes,
 /// kept rolled: 737,170 instructions where unrolled they are 501,176. Rolled
