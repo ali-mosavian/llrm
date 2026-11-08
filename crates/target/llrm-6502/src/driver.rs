@@ -323,6 +323,13 @@ fn trial_unrolled(
     }
     let rate = tti.as_ref().map_or(0, |tti| tti.unroll_milliclocks_per_byte());
     let other = trial::with(limit, || program(text, request))?;
+    let growth = instructions(&other).saturating_sub(instructions(&built));
+    if !trial_fits(growth) {
+        if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+            eprintln!("trial unroll: {growth} instructions more: put back unpriced");
+        }
+        return Ok(built);
+    }
     let (kept, tried) = (priced(&built, request)?, priced(&other, request)?);
     let (saved, added) = (kept.0 - tried.0, tried.1 - kept.1);
     let pays = trial_pays(request.level, rate, saved, added);
@@ -333,6 +340,21 @@ fn trial_unrolled(
         );
     }
     Ok(if pays { other } else { built })
+}
+
+/// The instructions a trial may add before it is priced: the byte limit below
+/// at about eight bytes an instruction (the programs' trials cost 5 to 60). Pricing
+/// selects every function, which is where the time goes: `fcmp_all`'s trial
+/// grew 1,423 instructions to 4,231 and took 14 s to price, 85,508 bytes more.
+const TRIAL_GROWTH_INSTRUCTIONS: usize = 2048;
+
+/// Whether a trial that adds `growth` instructions is priced at all.
+pub fn trial_fits(growth: usize) -> bool {
+    growth <= TRIAL_GROWTH_INSTRUCTIONS
+}
+
+fn instructions(program: &Program) -> usize {
+    program.modules[0].functions().map(|(_, _, function)| function.walk().count()).sum()
 }
 
 /// The most code a trial may add: a quarter of the 6502's 64 KiB address space,
