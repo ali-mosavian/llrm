@@ -237,8 +237,9 @@ pub fn function_items_with_places(
     let mut prologue = Some(cells.frame.prologue());
     for one in blocks {
         let mut values: HashMap<(u32, u8), Operand> = HashMap::default();
-        // the frame's stack adjust goes through `a`: an argument that arrives in `a` or
-        // `x` is copied out before it, and the prologue is then outside the first block
+        // the frame's stack adjust goes through `a`: an argument that arrives
+        // in `a` or `x` is copied out before it, and the prologue is
+        // then outside the first block
         for &(register, vreg) in &one.live_ins {
             let from = REGISTER_INFO.name(register).ok_or("a live-in with no name")?;
             if prologue.is_some() && ["a", "x"].contains(&from) {
@@ -267,12 +268,15 @@ pub fn function_items_with_places(
         let split = one.edges.iter().any(|edge| edge.to.is_some());
         cells.branched_to.clear();
         for unit in &one.units {
-            cells.in_call = unit.nodes.iter().any(|&node| {
-                matches!(
-                    one.dag.nodes()[node as usize].opcode,
-                    ISD::Machine(code) if [op::JSR, op::JSRI].contains(&(code as u16))
-                )
-            });
+            cells.in_call = unit
+                .nodes
+                .iter()
+                .any(
+                    |&node| matches!(
+                        one.dag.nodes()[node as usize].opcode,
+                        ISD::Machine(code) if [op::JSR, op::JSRI].contains(&(code as u16))
+                    ),
+                );
             for &node in unit.nodes.iter().rev() {
                 if matches!(
                     one.dag.nodes()[node as usize].opcode,
