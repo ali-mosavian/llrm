@@ -545,6 +545,20 @@ impl Printer<'_> {
             }
             "SHL16" | "SRL16" | "SRA16" => {
                 if op == "SHL16"
+                    && let Some(copy) = self.shifted_in_hl_instead(self.register(inst, 0)?, shift_count(inst)?, rest)
+                {
+                    // the copy is what `hl` held before the doublings only
+                    // where `hl` is read again; otherwise it follows them
+                    let kept = if copy { vec![] } else { self.take_copy_of_hl(self.register(inst, 0)?) };
+                    for _ in 0..shift_count(inst)? {
+                        self.push("add hl, hl");
+                    }
+                    for line in kept {
+                        self.push(line);
+                    }
+                    return Ok(());
+                }
+                if op == "SHL16"
                     && let Some(lines) =
                         word_double_through_hl(&name_of(self, 0)?, shift_count(inst)?, self.dead_after(reg::HL, rest))
                 {
@@ -676,7 +690,7 @@ impl Printer<'_> {
                 // half-carry flags, which no branch here reads.
                 self.push(if value == "#0" { "or a, a".to_owned() } else { format!("cp a, {value}") });
             }
-            "CP16" | "CP16i" | "CP16C" | "CP16Ci" => self.compare16(inst, rest)?,
+            "CP16" | "CP16i" | "CP16C" | "CP16Ci" | "CP16S" => self.compare16(inst, rest)?,
             // `ld` leaves the flags alone: the byte is 1, and 0 when the
             // condition fails
             "SETCC8" => {
@@ -1119,6 +1133,61 @@ impl Printer<'_> {
         held_since_stored(&self.out, stores)
     }
 
+    /// The two lines just emitted copy `hl` into `pair`.
+    fn copies_hl_into(
+        &self,
+        pair: RegId,
+    ) -> bool {
+        let Ok((lo, hi)) = lanes(pair) else { return false };
+        let mut tail = self.out.iter().rev().filter(|line| !matches!(line, Line::Loc(_)));
+        matches!(
+            (tail.next(), tail.next()),
+            (Some(Line::Inst(high)), Some(Line::Inst(low)))
+                if *high == format!("ld {}, h", name(hi)) && *low == format!("ld {}, l", name(lo))
+        )
+    }
+
+    /// Takes back the two lines of [`Self::copies_hl_into`].
+    fn take_copy_of_hl(
+        &mut self,
+        pair: RegId,
+    ) -> Vec<String> {
+        let (lo, hi) = lanes(pair).expect("a pair");
+        for _ in 0..2 {
+            while matches!(self.out.last(), Some(Line::Loc(_))) {
+                self.out.pop();
+            }
+            self.out.pop();
+        }
+        vec![format!("ld {}, l", name(lo)), format!("ld {}, h", name(hi))]
+    }
+
+    /// `pair` was just copied from `hl` and is shifted left by `bits`: the
+    /// doublings are `add hl, hl` (1 B a bit against `sla`/`rl`'s 4) in `hl`
+    /// when `hl` is dead after (the copy follows them), or when the shifted
+    /// copy is added to `hl` next and dead then (`(hl << n) + hl` is the same
+    /// sum either way, the copy stays above). Some(true): the copy stays.
+    fn shifted_in_hl_instead(
+        &self,
+        pair: RegId,
+        bits: i64,
+        rest: &[Inst],
+    ) -> Option<bool> {
+        if pair == reg::HL || bits < 1 || !self.copies_hl_into(pair) {
+            return None;
+        }
+        let added_next = rest.first().is_some_and(|next| {
+            next.kind == Kind::Op("ADD16")
+                && matches!(next.operands.get(2), Some(Operand::Use(r)) if self.physical(*r) == pair)
+        }) && bits >= 2
+            && self.pair_dead_after(pair, &rest[1..]);
+        if added_next {
+            Some(true)
+        } else {
+            self.dead_after(reg::HL, rest).then_some(false)
+        }
+    }
+
     /// [`Self::dead_after`] for both bytes of `pair`, and the pair itself.
     fn pair_dead_after(
         &self,
@@ -1266,6 +1335,23 @@ impl Printer<'_> {
                 self.out.push(Line::Label(fixed));
                 self.push("rlca");
             }
+            return Ok(());
+        }
+        // a signed order of two words: the sign of the difference, corrected
+        // where the subtract overflowed, into the carry
+        if matches!(inst.kind, Kind::Op("CP16S")) {
+            if zero {
+                return Err("CP16S read for zero".into());
+            }
+            self.push(format!("ld a, {}", name(al)));
+            self.push(format!("sub a, {bl}"));
+            self.push(format!("ld a, {}", name(ah)));
+            self.push(format!("sbc a, {bh}"));
+            let fixed = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count() + 1);
+            self.push(format!("jp po, {fixed}"));
+            self.push("xor a, #128");
+            self.out.push(Line::Label(fixed));
+            self.push("rlca");
             return Ok(());
         }
         let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());

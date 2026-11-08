@@ -72,12 +72,12 @@ entry:
     assert_eq!(registers, expected);
     // The argument area is a multiple of 16: a call finds the stack aligned
     // (printf crashed in `movaps` with the 8-byte area).
-    let sub = insns
+    let setup = insns
         .iter()
         .filter_map(|i| i.what.as_ref())
-        .find(|w| w.name.as_deref() == Some("sub"))
+        .find(|w| w.name.as_deref() == Some("call_frame_setup"))
         .expect("the area reserved");
-    assert!(matches!(sub.sources[1], crate::model::ir::Loc::Imm(ref i) if i.value == 16), "{sub:?}");
+    assert!(matches!(setup.sources[0], crate::model::ir::Loc::Imm(ref i) if i.value == 16), "{setup:?}");
     let store = insns
         .iter()
         .filter_map(|i| i.what.as_ref())

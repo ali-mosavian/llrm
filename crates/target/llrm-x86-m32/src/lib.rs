@@ -74,6 +74,25 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// as a shift-and-add search does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
 /// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 ///
+/// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32, exit 2026-11-10
+/// evening; oversight 2026-11-08: a Pareto chain search, equal clocks and
+/// fewer bytes, replaces the fewest-clocks chain; per-site pricing stays
+/// unshipped, it moves no row). Open vs the byte bar: bintree +32, recpow +29,
+/// x_spill_store_order +54 B (also tail_calls_edges +32, stft_fixed +32,
+/// copy_runs +40 against the `imul` build). At -O1
+/// the chain is the trade against the pin's `imul` (`x * 1664525`: 29 B and ~9
+/// clocks against 6 B and 13-42), not a Pareto win. harness code bytes /
+/// simulated clocks at -O1, chain | `imul` | best gcc/clang (2026-11-08):
+/// x_iir 141/49.5k | 111/130.5k | 122/60.0k; mul_constants 2285/132.6k |
+/// 1782/287.0k | 1777/142.2k; urem_eq 467/792k | 340/1444k | 374/1468k;
+/// bintree 308/74.0k | 282/79.4k | 276/84.1k; recpow 267/442k | 220/532k |
+/// 238/575k; x_spill_store_order 687/82.2k | 611/99.5k | 633/103.3k;
+/// copy_runs 818/6.3k | 778/8.3k | 964/8.1k. The chain wins clocks 7-62% for
+/// 26-503 B; it is above the best byte bar on the first six rows, the `imul`
+/// above the clock bar on x_iir and mul_constants. Exit (if ever): a general
+/// mechanism with the chain's clocks and `imul`-like bytes (a shorter chain
+/// search, or the block's frequency pricing the choice).
+///
 /// A code byte costs the CPU's instruction-cache fill, once per run: a line's
 /// fill clocks over its bytes (`line_fill_clocks` / `cache_line` of the CPU's
 /// sheet; 486: 5 / 16 = 312 milliclocks), so `speed_milliclocks_per_byte` is
@@ -104,6 +123,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
         imul_at_size: true,
+        rep_stos_at_size: true,
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
         unroll_promotion_fits_x87_stack: true,
@@ -113,6 +133,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         promote_va_list: true,
         branch_compare_trees_at_size: true,
         inline_never_grows_without_rate: true,
+        // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`): gcc completely peels a loop whose
+        // trips the object it indexes bounds (max-completely-peel-times 16); the pin does not.
+        // x_matmul_f / x_ld_matmul -O3: 392 B and 3 fmul against gcc's 1183 B and 14.
+        unroll_object_bound: Some(16),
         inline_o1_milliclocks_per_byte: per_byte,
         inline_o1_unit_bytes_milli: 3500,
         speed_inline_milliclocks_per_byte: per_byte,
@@ -170,6 +194,18 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // 99618 -> 19993 (962 -> 215 B), frames 5035113 -> 4585856;
         // depth 8 stays where it wins (-O3 rectwo 466986, x_hanoi2 155672).
         recursive_inlining_depth: Some((2, 8)),
+        // DEVIATE INL-HOT (owner m32, exit 2026-11-30): a call the pin's
+        // threshold alone refuses, at a site 16x the caller's entry or hotter, is tried
+        // inlined at -O2 and kept where the rate pays, the trial counting the callee's
+        // preserved registers (x_sf_* -O2 clk -10..-23%, +516..676 B; jpeg -0.4% clk,
+        // +442..586 B). Trips are the pin's block frequency (31 in x_sf_add's loop, 400 run), not a
+        // profile; -O3 stays off (jpeg `getbit` into `receive`: est. 31 trips, ~1 real).
+        inline_hot_trial_frequency: Some(16),
+        // -O3 off: x_jpeg_fixed/single get +129/+112 B and +0.2%/+0.1% clk there
+        // (`getbit` into `receive`; a trip count of 31 estimated, ~1 real).
+        // A callee that keeps more than eax/ecx/edx live pushes and pops ebx, esi,
+        // edi, ebp once per call: the trial's clocks saved count it.
+        callee_saved: Some((3, 4, costs.argument + costs.pop)),
         // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion
         // (passes.def:97, then pass_ipa_inline :164). At -O3 the copies of the
         // loop beat the tree's (rectwo 1230664 -> 466986 clk, recchop,
@@ -352,6 +388,14 @@ impl llrm_target::Target for M32 {
         CALLING.native().frame_enter
     }
 
+    fn frame_slot_scratch_of(
+        &self,
+        convention: &llrm_target::calling::Convention,
+    ) -> Option<(RegId, RegId)> {
+        let (push, pop) = convention.frame_slot_scratch.as_ref()?;
+        Some((llrm_x86::calling::register(push), llrm_x86::calling::register(pop)))
+    }
+
     fn frame_wrap_split_size(&self) -> bool {
         CALLING.native().frame_wrap_split_size
     }
@@ -382,6 +426,14 @@ impl llrm_target::Target for M32 {
 
     fn stack_pointer(&self) -> RegId {
         llrm_x86::calling::stack(CALLING.native())
+    }
+
+    fn string_roots(&self) -> Option<llrm_target::StringRoots> {
+        Some(llrm_x86::registers::STRING_ROOTS)
+    }
+
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Some(llrm_x86::registers::X87_TOP)
     }
 
     /// What cdecl32 keeps, but the frame register.
@@ -473,8 +525,9 @@ impl llrm_target::Target for M32 {
         &self,
         signed: bool,
         wide_divisor: bool,
+        used: llrm_target::routines::Used,
     ) -> Result<llrm_target::routines::Divide, String> {
-        llrm_x86::helpers::divide_small(signed, wide_divisor, 32).map_err(|refused| refused.message)
+        llrm_x86::helpers::divide_small(signed, wide_divisor, 32, used).map_err(|refused| refused.message)
     }
 
     fn float_width(

@@ -481,3 +481,16 @@ fn every_toolchain_header_a_recipe_includes_is_embedded() {
     }
     assert!(TOOLCHAIN_FILES.iter().all(|(_, bytes)| !bytes.is_empty()));
 }
+
+/// An m16 compile on a box with only `LLRM_PIN_CLANG` died with "clang's datalayout `e-m:e-p:32:32...` lays types out differently" and
+/// no word of the variable that picks the fork's clang. The message names it when it is unset, and only then.
+#[test]
+fn a_layout_mismatch_names_the_variable_of_the_forks_clang_when_it_is_unset() {
+    let table = targets(TARGETS).unwrap();
+    let row = &table["x86_16-dos"];
+    let name = row.clang_env.as_deref().unwrap();
+    let unset = layout_mismatch("f.c", "e-m:e-p:32:32", row, |_| None);
+    assert!(unset.contains(name), "{unset}");
+    let set = layout_mismatch("f.c", "e-m:e-p:32:32", row, |_| Some("clang".into()));
+    assert!(!set.contains(name), "{set}");
+}

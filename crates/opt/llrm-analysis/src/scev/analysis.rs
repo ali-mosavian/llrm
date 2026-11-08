@@ -50,6 +50,11 @@ impl std::fmt::Debug for ScevCache {
 }
 
 impl ScevCache {
+    /// `scev` as an entry's expressions.
+    pub fn of(scev: ScalarEvolution) -> Self {
+        Self(RefCell::new(scev))
+    }
+
     /// The expressions out of the entry, which is left empty: a pass that
     /// keeps them current while it edits holds them for its run and `put`s
     /// them back before it says it kept `Scevs`.

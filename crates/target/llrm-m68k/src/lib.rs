@@ -11,6 +11,8 @@ pub mod callpush;
 pub mod calltarget;
 pub mod ccr;
 pub mod chain;
+pub mod classcheck;
+pub mod classsplit;
 pub mod cmpdup;
 pub mod cmpelim;
 pub mod cmpshift;

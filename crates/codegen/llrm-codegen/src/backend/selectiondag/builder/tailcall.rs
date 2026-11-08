@@ -192,7 +192,7 @@ impl Builder<'_> {
 }
 
 /// `isInTailCallPosition` over `function`.
-pub(super) fn tail_position(
+pub fn tail_position(
     function: &Function,
     inst: InstId,
 ) -> bool {

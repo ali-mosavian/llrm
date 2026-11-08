@@ -113,9 +113,9 @@ pub mod chain_combine;
 pub mod combine_andnot;
 pub mod combine_funnel;
 pub mod combine_lifetime_end;
-pub mod combine_mulo;
 pub mod combine_load;
 pub mod combine_load_combine;
+pub mod combine_mulo;
 pub mod combine_store_merge;
 pub mod combine_token_factor;
 pub mod combine_trunc_stores;
@@ -123,6 +123,8 @@ pub mod combine_urem_eq;
 pub mod ctcount_combine;
 pub mod dag;
 pub mod dag_combiner;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/dag_function.rs"]
 pub mod dag_function;
 pub mod dag_select;
 pub mod dag_target;
@@ -137,6 +139,8 @@ pub mod expand_fixed;
 pub mod expand_funnel;
 pub mod expand_overflow;
 pub mod expand_sat;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/fastisel.rs"]
 pub mod fastisel;
 pub mod fold;
 pub mod fp_combine;
@@ -154,18 +158,35 @@ pub mod logic_setcc;
 mod match_rotate;
 pub mod narrow_divrem;
 pub mod opcodes;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/postprocess.rs"]
+pub mod postprocess;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/preprocess.rs"]
+pub mod preprocess;
 mod reassociate;
 pub mod reduce_load_width;
 pub mod rotate_combine;
 pub mod schedule;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/select.rs"]
+pub mod select;
+pub mod select_api;
 pub mod setcc_extreme;
 pub mod switchcg;
 pub mod target_calling;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/unfold.rs"]
+pub mod unfold;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86_carry.rs"]
 pub mod x86_carry;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86_lowering.rs"]
 pub mod x86_lowering;
-pub mod x86_postprocess;
-pub mod x86_preprocess;
-pub mod x86_unfold;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/nodes.rs"]
+pub mod x86_nodes;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use dag::{
@@ -243,6 +264,8 @@ mod memlib_tests;
 mod memspace_tests;
 #[cfg(test)]
 mod opcodes_tests;
+#[cfg(test)]
+mod or_as_add_tests;
 #[cfg(test)]
 mod overflow_tests;
 #[cfg(test)]

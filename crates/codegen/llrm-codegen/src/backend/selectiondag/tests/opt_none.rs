@@ -70,6 +70,7 @@ fn the_x86_pipeline_passes_o0_to_the_combiner() {
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         };
         legalized_with(&mut dag, &tli, &mut lowering, Some(&llrm_x86_m32::M32), opt_none).expect("legalizes");

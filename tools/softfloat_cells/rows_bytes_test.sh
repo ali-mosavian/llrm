@@ -23,4 +23,7 @@ echo "$out" | awk '$1=="cmp"' | head -1 | awk '{ if ($6 < 200) { print "FAIL: wa
 # gcc -O2 pads loops, jumps and labels with .p2align inside .text: libgcc fix_usi -O2 read 107 (f32) / 139 (f64) B, 88 / 113 unpadded; the column must count code, not nops
 out=$(ROWS_ONLY=fix_usi bash ./rows_bytes.sh m32) || exit 2
 echo "$out" | awk '$1=="fix_usi"' | tail -1 | awk '{ if ($4 > 113 || $8 > 88) { print "FAIL: m32 -O2 libgcc fix_usi " $4 " | " $8 " B include alignment padding (want 113 | 88)"; exit 1 } }' || bad=1
+# libgcc has no comparedf2/comparesf2: the cmp libgcc cells read ERR, so a worse-than-gcc compare could not show (eq+le+ge+unord: 790 | 530 B at -Os)
+out=$(ROWS_ONLY=cmp bash ./rows_bytes.sh m32) || exit 2
+echo "$out" | awk '$1=="cmp"' | head -1 | awk '{ if ($4 == "ERR" || $8 == "ERR") { print "FAIL: m32 cmp libgcc cells " $4 " | " $8; exit 1 } }' || bad=1
 [ $bad = 0 ] && echo "rows_bytes ok"; exit $bad

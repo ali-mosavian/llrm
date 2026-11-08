@@ -2355,7 +2355,7 @@ pub fn build_with_places(
                 b.copy(rl, Reg::Phys(rc(6)));
                 b.copy(rh, Reg::Phys(rc(7)));
             }
-            op::UMUL8X8 => {
+            code @ (op::UMUL8X8 | op::SMUL8X8) => {
                 let (dl, dh) = b.write_word(name(&o[0])?)?;
                 let (mut x, mut y) = (b.byte(name(&o[1])?)?, b.byte(name(&o[2])?)?);
                 // a product goes either way round: the operand that arrives in
@@ -2365,7 +2365,7 @@ pub fn build_with_places(
                 }
                 b.copy(Reg::Phys(rc(2)), x);
                 b.copy(Reg::Phys(rc(3)), y);
-                b.call("__umulqihi3");
+                b.call(if code == op::SMUL8X8 { "__mulqihi3" } else { "__umulqihi3" });
                 b.copy(dl, Reg::Phys(reg::A));
                 b.copy(dh, Reg::Phys(reg::X));
             }

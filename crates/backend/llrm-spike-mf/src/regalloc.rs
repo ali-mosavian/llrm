@@ -169,12 +169,18 @@ pub trait Target {
     /// true, as before, until a target's owner states otherwise.
     ///
     /// m68k (owner greedy-subreg, exit 2026-11-29): keeps true. False is the
-    /// pin's value and fixes `fib` -Os (the local copy `v7 = COPY a` joins before
-    /// the global `a := b`), but makes 7-9 cells per CPU/level worse (68000 O2
-    /// div_constants_long +284 B), as in idiv_loop_os, where the pin's own
-    /// order gives the same `bra` + `moveq #0`. Not flipped while a strict cell is worse.
+    /// pin's value and fixes `fib` -Os (the local copy `v7 = COPY a` joins
+    /// before the global `a := b`), but makes 7-9 cells per CPU/level worse
+    /// (68000 O2 div_constants_long +284 B), as in idiv_loop_os, where the
+    /// pin's own order gives the same `bra` + `moveq #0`. Not flipped while
+    /// a strict cell is worse.
     fn joins_global_copies() -> bool {
         true
+    }
+
+    /// DEVIATE C15 (`CoalescerEnv::joins_loop_carried_first`): the pin's order.
+    fn joins_loop_carried_first() -> bool {
+        false
     }
 
     /// DEVIATE C13: whether a copy between widths is joined (the pin always
@@ -261,9 +267,10 @@ pub trait Target {
         join.extra_cost() <= join.copy_frequency * Self::copy_cost() as f32
     }
 
-    /// Whether a move of a symbol's address is made again where it is read, as any literal is. The pin does for
-    /// `MOV32ri` of a global; the price is the target's: z80's `ld hl, #sym` is 3 B against a spill and a reload, 6502's
-    /// pair of immediates is not (the objects grew).
+    /// Whether a move of a symbol's address is made again where it is read, as
+    /// any literal is. The pin does for `MOV32ri` of a global; the price is
+    /// the target's: z80's `ld hl, #sym` is 3 B against a spill and a reload,
+    /// 6502's pair of immediates is not (the objects grew).
     fn remats_symbol_addresses() -> bool {
         false
     }
@@ -746,8 +753,12 @@ fn effects<T: Target>(
     let mut uses = Vec::new();
     for operand in &inst.operands {
         match operand {
-            Operand::Def(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => defs.extend(nodes.all::<T>(*r)),
-            Operand::Use(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => uses.extend(nodes.all::<T>(*r)),
+            Operand::Def(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => {
+                defs.extend(nodes.all::<T>(*r))
+            }
+            Operand::Use(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => {
+                uses.extend(nodes.all::<T>(*r))
+            }
             _ => {}
         }
     }

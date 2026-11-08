@@ -1,4 +1,4 @@
-//! Full unrolls are priced by the estimate at 250 clocks per byte.
+//! Full unrolls are priced by the estimate at 1 clock per byte (UP1).
 
 use llrm_arm64::driver::{self, Level};
 use llrm_arm64::machine::Platform;
@@ -25,14 +25,13 @@ fn init_loops_whose_stores_merge_when_unrolled_are_unrolled() {
     assert_eq!(labels(include_str!("data/bench_lru.ll")), 11);
 }
 
-/// crc -O2: the 8-trip bit loop inside the 9-trip byte loop was unrolled
-/// through the nest bypass (152 B, 262 instructions) where the rolled loop is
-/// 88 B and 494 instructions; 250 clocks a byte prices the 64 B at 16,000.
-/// Nothing in the bit loop depends on the byte counter, so there is nothing
-/// for unrolling the nest to fold. Unrolled it has 4 labels, rolled 6.
+/// crc -O2: the 8-trip bit loop inside the 9-trip byte loop saves 207 clocks
+/// for 112 B (1.8 clocks a byte): unrolled, 152 B and 262 instructions where the
+/// rolled loop is 88 B and 494 (clang 271, gcc 238). Unrolled it has 4 labels,
+/// rolled 6.
 #[test]
-fn a_nest_loop_that_uses_no_outer_counter_is_priced_not_bypassed() {
-    assert_eq!(labels(include_str!("data/bench_crc.ll")), 6);
+fn a_nest_loop_that_saves_more_than_its_bytes_cost_is_unrolled() {
+    assert_eq!(labels(include_str!("data/bench_crc.ll")), 4);
 }
 
 fn instructions(source: &str, level: Level) -> usize {
@@ -40,34 +39,13 @@ fn instructions(source: &str, level: Level) -> usize {
     asm.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count()
 }
 
-/// matmul -O2: the 8 x 8 x 8 nest reads its counters only to index memory,
-/// and the nest bypass unrolled it anyway: 202 instructions where gcc's rolled
-/// nest is 89. Its multiply loops are priced; loops that store a computed
-/// constant still unroll. Fewer than 190.
+/// matmul -O2: the multiply loops save 2,112 clocks for 92 B and unroll; the
+/// init loops that fill `a` and `b` save 18 clocks for 17,546 B and stay
+/// rolled. 338 instructions (all unrolled: more than a thousand).
 #[test]
-fn a_nest_whose_counters_only_index_memory_is_priced_not_bypassed() {
+fn a_nest_is_unrolled_where_it_pays_and_not_where_it_does_not() {
     let insns = instructions(include_str!("data/bench_matmul.ll"), Level::O2);
-    assert!(insns < 190, "{insns} instructions");
-}
-
-/// matmul -O2: the init nest fills `a` and `b` with a computed value, and the
-/// `k` loop reads them at run-time indices. The array stays in memory, so the
-/// stores were credited as promoted for nothing, and the inner loop was
-/// unrolled alone by the nest bypass while the outer was kept rolled:
-/// 174 instructions (660 B), 292 B rolled. Fewer than 120.
-#[test]
-fn an_init_nest_whose_arrays_stay_in_memory_is_not_unrolled() {
-    let insns = instructions(include_str!("data/bench_matmul.ll"), Level::O2);
-    assert!(insns < 120, "{insns} instructions");
-}
-
-/// matmul -O3: pricing the nest kept the multiply loop rolled, 4,148
-/// instructions run against 672 unrolled (clang 608), for 40 B. -O3 keeps the
-/// pin's decision: more instructions than the priced -O2 module.
-#[test]
-fn a_nest_is_not_priced_at_o3() {
-    let ir = include_str!("data/bench_matmul.ll");
-    assert!(instructions(ir, Level::O3) > instructions(ir, Level::O2));
+    assert!(insns < 400, "{insns} instructions");
 }
 
 /// matmul -O3: loops carried over from an earlier slot were unrolled unpriced
@@ -108,13 +86,21 @@ fn a_loop_whose_copies_make_data_constant_is_unrolled_with_its_nest() {
     assert!(labels(include_str!("data/bench_stft_fixed.ll")) <= 27);
 }
 
-/// tile -O2: the 40-trip loop inside a 25-trip loop was unrolled by the nest
-/// bypass: the outer counter's only reader is the address of a load, which is
-/// not data the nest folds. 364 B and 2,155 instructions where the rolled loop
-/// is 68 B and 4,181 (gcc 80 B, 4,184). The module was 115 instructions;
-/// fewer than 80 with the loop priced.
+/// tile -O2: the 40-trip loop inside a 25-trip loop saves 3,000 clocks for 300
+/// B (10 a byte): unrolled, 364 B and 2,155 instructions run where the rolled
+/// loop is 68 B and 4,181 (gcc 80 B, 4,184). The module is 115 instructions;
+/// rolled, fewer than 80.
 #[test]
-fn a_nest_loop_whose_outer_counter_only_addresses_a_load_is_priced_not_bypassed() {
+fn a_loop_that_saves_ten_clocks_a_byte_is_unrolled() {
     let insns = instructions(include_str!("data/bench_tile.ll"), Level::O2);
-    assert!(insns < 80, "{insns} instructions");
+    assert!(insns >= 100, "{insns} instructions");
+}
+
+/// jpeg_fixed -O2: a 16-trip dot product inside two loops of unknown count was
+/// unrolled (+104 B) for a saving counted over 32 x 32 assumed runs of the
+/// loops around it (49,152 clocks); the program's instructions did not move.
+/// An unknown loop around counts once. Rolled: the loop's label stays.
+#[test]
+fn a_loop_inside_unknown_loops_is_not_unrolled_for_runs_nobody_counted() {
+    assert!(labels(include_str!("data/unroll_cold_nest.ll")) >= 6);
 }

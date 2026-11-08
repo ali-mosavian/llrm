@@ -31,13 +31,23 @@
 //! (`os_locals_between_pushes`, +18 B on `probe` -Os). Exit: none, program
 //! order beats bytes.
 //!
-//! DEVIATE CF1 (no number): the pin's i386 linux triple has a 16-byte stack
-//! alignment, so `isProfitable` keeps one 4-byte argument a store into the
-//! reserved frame (`movl %edi,(%esp)`). `x86_32-wat` keeps a slot's alignment
-//! (`CalleeFacts::stack_alignment`: the target's only where it needs aligned
-//! calls), so the same translated pass pushes it, as the pin's would at that
-//! alignment (`one_push_is_not_worth_the_adjustments_but_two_are`). Exit:
-//! none, a target fact.
+//! DEVIATE CF1 (owner x86-m32, exit 2026-11-20): the pin's i386 linux triple
+//! has a 16-byte stack alignment, so `isProfitable` keeps one 4-byte argument
+//! a store into the reserved frame (`movl %edi,(%esp)`). `x86_32-wat` keeps a
+//! slot's alignment (`CalleeFacts::stack_alignment`: the target's only where
+//! it needs aligned calls), so the same translated pass pushes it, as the
+//! pin's would at that alignment (`one_push_is_not_worth_the_adjustments_but_two_are`).
+//! The m32 frame facts (`stack_alignment`, `aligned_calls`) are the default
+//! convention's (watcall32), also for `-mabi=sysv` code: sat_builtins -O1/-O2
+//! +7/+28 B against pin_clang (one byte a `report` call). Steps: (a) read
+//! the facts per function convention: tried 2026-11-08 and disproved (one
+//! accessor holds two facts, the call alignment, 16 at sysv32, and the
+//! double-tuning alignment, 8; reading the first for the second pads sysv
+//! `f()` of `~/scratch/handoff/cf1/al.c` to `sub esp,60`, pin 44); (b) FO-1
+//! wiring card, with the split of the two facts, 11-12; (c) wiring PR 11-17;
+//! (d) rerun of the aligned-calls experiment 11-19 (turned on without FO-1:
+//! cells above the best compiler 40/68/69/25 -> 98/128/124/113 at
+//! O1/O2/O3/Os, evidence `~/scratch/handoff/cf1/`).
 //!
 //! # Example
 //! `f(p->a, p->b, p->c)`, before (after `FloatFold`):

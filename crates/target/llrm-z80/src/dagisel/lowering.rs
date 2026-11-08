@@ -28,6 +28,7 @@ pub mod z80isd {
 
     pub const CMP: ISD = ISD::Target(ids::CMP);
     pub const CMPC: ISD = ISD::Target(ids::CMPC);
+    pub const CMPS: ISD = ISD::Target(ids::CMPS);
     pub const WRAPPER: ISD = ISD::Target(ids::WRAPPER);
     pub const SUBZX: ISD = ISD::Target(ids::SUBZX);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
@@ -717,6 +718,24 @@ fn compare(
         let op1 = op1;
         let (code, a, b) = translate_cc(dag, cc, op0, op1);
         return (code, dag.get_node(z80isd::CMP, EVT::I8, &[a, b]));
+    }
+    // A signed order of two words that are not constants: the subtract's sign
+    // corrected for overflow (6 B) where biasing both operands costs 8.
+    // DEVIATE Z80-CMP16S-ROW (owner z80, exit 2026-11-15): compare_to_int64
+    // +19 B / +416 T at -O1..-O3 (allocation after the one site; 917 B against
+    // SDCC's 1589 B).
+    if vt == EVT::I16 && dag.constant(op0).is_none() && dag.constant(op1).is_none() {
+        let (code, a, b) = match cc {
+            SetLt => (cond::C, op0, op1),
+            SetGe => (cond::NC, op0, op1),
+            SetGt => (cond::C, op1, op0),
+            SetLe => (cond::NC, op1, op0),
+            _ => {
+                let (code, a, b) = translate_cc(dag, cc, op0, op1);
+                return (code, dag.get_node(z80isd::CMP, EVT::I8, &[a, b]));
+            }
+        };
+        return (code, dag.get_node(z80isd::CMPS, EVT::I8, &[a, b]));
     }
     let (code, a, b) = translate_cc(dag, cc, op0, op1);
     (code, dag.get_node(z80isd::CMP, EVT::I8, &[a, b]))

@@ -3,6 +3,15 @@
 //! adds. The pin's bar counts instructions and never asks what a copy of the
 //! body costs in code (x_ld_max: the 8-trip inner loop, copied 8 times,
 //! 232 -> 755 bytes at m32 -O2 for a few clocks).
+//!
+//! The full-unroll gate against the pin's `shouldFullUnroll` (LoopUnrollPass.cpp:904),
+//! audited 2026-11-08 (w2): (1) the gate itself, above, run on both success paths of
+//! `should_full_unroll`, with bypasses (an inlinable internal function, a copy of this
+//! run, the nest, loops of few trips); (2) the cost analysis is passed `u32::MAX` and the
+//! trips, where the pin passes `Threshold * MaxPercentThresholdBoost / 100` and
+//! `MaxIterationsCountToAnalyze`; (3) UNROLL-O1 (owner x86), (4) UNROLL-TRIAL (owner 6502,
+//! exit 2026-12-05), (5) U1, the optsize few-trip bar (arm64 states none), (6) U3, the
+//! float-stack bar (owner m32, exit 2026-11-20).
 
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{Linkage, ValueDef, ValueId};
@@ -349,7 +358,7 @@ fn priced_verdict(
     let runs = if prices_nest {
         enclosing_runs(run, se, analyzed, lp)
     } else {
-        ASSUMED_TRIPS.pow((lp.get_loop_depth() - 1).min(2))
+        if run.tti.unroll_assumes_unknown_loops_run() { ASSUMED_TRIPS.pow((lp.get_loop_depth() - 1).min(2)) } else { 1 }
     };
     // DEVIATE UP2-X87 (owner x87, exit 2026-11-20): an element past the stack
     // is stored and loaded again each run (nbody -O2 m32: the unroll priced
@@ -407,7 +416,7 @@ fn enclosing_runs(
         let trips = se.get_small_constant_trip_count(&cx, parent.get_header());
         if trips != 0 {
             runs = runs.saturating_mul(i64::from(trips)).min(1 << 24);
-        } else if assumed < 2 {
+        } else if run.tti.unroll_assumes_unknown_loops_run() && assumed < 2 {
             // As before: at most two unknown loops around count.
             assumed += 1;
             runs *= ASSUMED_TRIPS;

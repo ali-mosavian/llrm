@@ -75,6 +75,7 @@ const UNOPTIMIZED: &[&str] = &[
     "LoadFold",
     "FixupSetCC",
     "CopyPropagation",
+    "BreakFalseDeps",
     "LiveRangeShrink",
     "X86OptimizeLEAs",
     "MachineLICM",
@@ -151,6 +152,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("TailDuplicate", "jumps@17"),
     ("ControlFlow", "jumps@17"),
     ("CopyPropagation", "copyprop@18"),
+    ("BreakFalseDeps", "breakfalsedeps@19"),
 ];
 
 /// `machine`, its peephole made of the rules `rules` holds.
@@ -267,10 +269,10 @@ pub fn machine_with<'a>(
         // instruction that clobbers them become a byte per condition
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
-        Box::new(phielim::PhiElimination { unoptimized: !target.optimized }),
+        Box::new(phielim::PhiElimination { unoptimized: !target.optimized, share_congruent: target.share_congruent_phis }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
-        Box::new(crate::backend::fixupsetcc::FixupSetCc),
+        Box::new(crate::backend::fixupsetcc::FixupSetCc { strict: !target.speed_rate }),
         // A float load a loop only reads is made again where it is read (so
         // the next step can fold it).
         Box::new(crate::backend::floatunhoist::FloatUnhoist { cpu: target, basic_semantics }),
@@ -376,6 +378,8 @@ pub fn machine_with<'a>(
         }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
+        // The pin's pre-emit pass: the distances are those of the final order.
+        Box::new(crate::backend::breakfalsedeps::BreakFalseDeps),
     ];
     if !target.post_ra_tail_duplicate {
         phases.retain(|phase| phase.class_name() != "TailDuplicate");

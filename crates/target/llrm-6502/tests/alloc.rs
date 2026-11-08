@@ -1483,19 +1483,23 @@ fn a_product_of_two_zero_extended_bytes_is_a_widening_multiply() {
     }
 }
 
-/// Siblings: a byte times a full word and a product of sign-extended bytes are
-/// not the zero-extended case, and keep their meaning. (-1) * 2 = 0xFFFE.
+/// Siblings: a byte times a full word keeps `__mulhi3`, and a product of two
+/// sign-extended bytes is the signed widening multiply `__mulqihi3` (eight
+/// iterations; `k_imul8x8r16` ran `__mulhi3`, 412 to 802 clocks by the order of
+/// its operands). Every sign combination, both bytes of the product.
 #[test]
-fn only_zero_extended_bytes_take_the_widening_multiply() {
+fn only_zero_extended_bytes_take_the_unsigned_widening_multiply() {
     let word = "define i16 @bw(i8 %a, i16 %w) {\n  %x = zext i8 %a to i16\n  %p = mul i16 %x, %w\n  ret i16 %p\n}";
     assert!(compile(word, "bw").contains("__mulhi3"));
     let signed = "define i16 @sw(i8 %a, i8 %b) {\n  %x = sext i8 %a to i16\n  %y = sext i8 %b to i16\n  %p = mul i16 %x, %y\n  ret i16 %p\n}";
     let text = compile(signed, "sw");
-    assert!(!text.contains("__umulqihi3"), "{text}");
-    let setup = bytes(&[255, 2]);
-    let lo = common::run_with("alloc-sw-lo", &format!("{setup}  jsr sw\n"), &text);
-    let hi = common::run_with("alloc-sw-hi", &format!("{setup}  jsr sw\n  txa\n"), &text);
-    assert_eq!(hi << 8 | lo, 0xFFFE);
+    assert!(text.contains("__mulqihi3") && !text.contains("__umulqihi3") && !text.contains("__mulhi3"), "{text}");
+    for (a, b) in [(-1i16, 2i16), (-128, -128), (127, 127), (-128, 127), (127, -128), (0, -5), (-7, 0), (-1, -1), (100, -3), (-3, 100), (1, -128)] {
+        let setup = bytes(&[a as u16 & 0xFF, b as u16 & 0xFF]);
+        let lo = common::run_with(&format!("alloc-sw-lo-{a}-{b}"), &format!("{setup}  jsr sw\n"), &text);
+        let hi = common::run_with(&format!("alloc-sw-hi-{a}-{b}"), &format!("{setup}  jsr sw\n  txa\n"), &text);
+        assert_eq!(((hi << 8 | lo) as u16) as i16, a * b, "{a} * {b}");
+    }
 }
 
 /// A quotient and a remainder of the same operands called the divide twice (or

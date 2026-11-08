@@ -96,3 +96,31 @@ fn a_move_outside_the_loop_does_not_outweigh_a_saving_inside_it() {
     let kept = llrm_m68k::trial::cheaper(dearer.clone(), without, Cpu::M68000, Price::Rate);
     assert_eq!(text(&kept), text(&dearer));
 }
+
+/// `Bne8` over 130 bytes does not reach: the assembler gives it 4 bytes. The
+/// trial counted 2, so a build with the far branch looked 2 bytes smaller than
+/// one without it (stft_fixed -O1 grew 2 B when the other join order was kept).
+#[test]
+fn a_branch_that_does_not_reach_counts_four_bytes() {
+    use llrm_m68k::mc::{Inst, Operand};
+    use llrm_m68k::reg;
+    let label = |name: &str| Item::Label(name.to_owned());
+    let inst = |opcode: &'static str, operands: Vec<Operand>| Item::Inst(Inst { opcode, operands });
+    let moves = |n: usize| (0..n).map(|_| inst("MOV32rr", vec![Operand::Reg(reg::D0), Operand::Reg(reg::D1)]));
+    // skip: 2 + 130 + 2 = 134 B counted short, 136 laid out; plain: 134 B, the
+    // same size as the short count
+    let mut skip = vec![label("f"), inst("Bne8", vec![Operand::Symbol("end".into(), 0)])];
+    skip.extend(moves(65));
+    skip.extend([label("end"), inst("RTS", vec![])]);
+    let mut plain = vec![label("f")];
+    plain.extend(moves(66));
+    plain.push(inst("RTS", vec![]));
+    let mut small = vec![label("f")];
+    small.extend(moves(60));
+    small.push(inst("RTS", vec![]));
+    assert!(llrm_m68k::trial::keeps(&small, &plain, Cpu::M68000, Price::Size), "premise: these build up are priced");
+    assert!(
+        !llrm_m68k::trial::keeps(&skip, &plain, Cpu::M68000, Price::Size),
+        "the far branch is 4 bytes: the skip build is 136 B, larger than the plain 134"
+    );
+}

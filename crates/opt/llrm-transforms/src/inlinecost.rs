@@ -286,6 +286,10 @@ pub struct Site<'a> {
     /// up the call graph (read only where the target weighs it,
     /// `Tti::inline_o1_weighs_entry`); none: once.
     pub entry_weight: Option<&'a dyn Fn() -> f64>,
+    /// The caller's calls already decided to be inlined in this sweep: the
+    /// pin's inliner splices each before it prices the next, so a later site
+    /// sees their bodies (`folded_caller_stores`).
+    pub planned: Option<&'a IdSet<InstId>>,
     /// The target's LLVM cost model (`Machine::tti`); none: the generic rules.
     pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
@@ -303,6 +307,9 @@ pub enum InlineCost {
         /// Refused by the target's -Os bound alone (D11): the pin's threshold
         /// would have allowed it.
         blocked: bool,
+        /// Refused by the pin's threshold alone at a site hot enough to try
+        /// (INL-HOT): the walk inlines it where the rate pays.
+        hot: bool,
     },
 }
 
@@ -2166,10 +2173,12 @@ impl<'a> Analyzer<'a> {
             let mut derived = IdSet::<ValueId>::new();
             derived.insert(root);
             let mut stores = Vec::new();
+            let mut folded_by_calls = 0;
             let mut sound = true;
             loop {
                 let before = derived.len();
                 stores.clear();
+                folded_by_calls = 0;
                 for &block in caller.layout() {
                     for inst in caller.iter_block(block) {
                         let operation = caller.instruction(inst);
@@ -2192,6 +2201,9 @@ impl<'a> Analyzer<'a> {
                                 stores.push(inst);
                             }
                             Opcode::Call(_) if inst == self.site.call => {}
+                            Opcode::Call(_) if self.planned_stores(inst, &derived).is_some() => {
+                                folded_by_calls += self.planned_stores(inst, &derived).unwrap_or(0);
+                            }
                             Opcode::Call(_)
                                 if llrm_mir::memory::callee(self.context, caller, inst).is_some_and(|callee| {
                                     self.site.module.global(callee).name.as_deref().is_some_and(|name| name.starts_with("llvm.lifetime."))
@@ -2207,6 +2219,7 @@ impl<'a> Analyzer<'a> {
             if !sound {
                 continue;
             }
+            total += folded_by_calls;
             for &inst in &stores {
                 total += llrm_mir::instructioncost::instruction_cost(
                     view.as_deref().unwrap_or(tti),
@@ -2221,6 +2234,41 @@ impl<'a> Analyzer<'a> {
             }
         }
         total
+    }
+
+    /// The bytes of the stores a call of the caller, decided to be inlined,
+    /// makes through the pointers it is given from `derived`, where its
+    /// callee only stores through them: once spliced they are in the caller
+    /// with no reader. None for any other call.
+    fn planned_stores(&self, call: InstId, derived: &IdSet<ValueId>) -> Option<i64> {
+        if !self.site.planned.is_some_and(|planned| planned.contains(&call)) {
+            return None;
+        }
+        let tti = self.site.tti?;
+        let view = tti.inline_size_view();
+        let caller = self.site.caller;
+        let callee_id = llrm_mir::memory::callee(self.context, caller, call)?;
+        let llrm_mir::module::GlobalKind::Function(callee) = &self.site.module.global(callee_id).kind else { return None };
+        let mut bytes = 0;
+        for (index, one) in caller.instruction(call).operands.iter().enumerate() {
+            if !matches!(one, Operand::Value(v) if derived.contains(v)) {
+                continue;
+            }
+            let parameter = *callee.parameters().get(index)?;
+            for inst in stores_through(callee, parameter)? {
+                bytes += llrm_mir::instructioncost::instruction_cost(
+                    view.as_deref().unwrap_or(tti),
+                    self.context,
+                    self.site.layout,
+                    &self.site.module.globals,
+                    callee,
+                    inst,
+                    llrm_mir::tti::CostKind::CodeSize,
+                )
+                .value;
+            }
+        }
+        Some(bytes)
     }
 
     /// Bytes one inlined site adds to the module: the callee's unfolded size
@@ -2275,9 +2323,14 @@ impl<'a> Analyzer<'a> {
         }
         let grows = (growth * unit_bytes_milli / 1000 * rate) as f64 > saved as f64 * 1000.0 * frequency;
         if llrm_support::debug::enabled("inline") {
-            eprintln!("inline:   bytes-vs-clocks: growth={growth} rate={rate} saved={saved} frequency={frequency:.2} -> {}", if grows { "grows" } else { "pays" });
+            eprintln!("inline:   bytes-vs-clocks: growth={growth} (stores folded {}) rate={rate} saved={saved} frequency={frequency:.2} -> {}", self.folded_caller_stores(), if grows { "grows" } else { "pays" });
         }
         grows
+    }
+
+    /// Whether the cost reached the pin's threshold, however it stopped.
+    fn verdict_is_over_threshold(&self) -> bool {
+        self.cost >= self.threshold.max(1)
     }
 
     fn finalize(&mut self) -> Result<(), String> {
@@ -2326,6 +2379,42 @@ impl<'a> Analyzer<'a> {
     }
 }
 
+/// The stores of `function` through `value` (a pointer), directly or through
+/// offsets of it; none where it also reads or passes the pointer on.
+fn stores_through(function: &Function, value: ValueId) -> Option<Vec<InstId>> {
+    let mut derived = IdSet::<ValueId>::new();
+    derived.insert(value);
+    loop {
+        let before = derived.len();
+        let mut stores = Vec::new();
+        for &block in function.layout() {
+            for inst in function.iter_block(block) {
+                let operation = function.instruction(inst);
+                if !operation.operands.iter().any(|one| matches!(one, Operand::Value(v) if derived.contains(v))) {
+                    continue;
+                }
+                match &operation.opcode {
+                    Opcode::GetElementPtr { .. } => {
+                        if let Some(result) = operation.result {
+                            derived.insert(result);
+                        }
+                    }
+                    Opcode::Store { volatile: false, .. }
+                        if matches!(operation.operands[1], Operand::Value(v) if derived.contains(&v))
+                            && !matches!(operation.operands[0], Operand::Value(v) if derived.contains(&v)) =>
+                    {
+                        stores.push(inst);
+                    }
+                    _ => return None,
+                }
+            }
+        }
+        if derived.len() == before {
+            return Some(stores);
+        }
+    }
+}
+
 /// `getInlineCost` (InlineCost.cpp:3265): what the call costs, or why it is
 /// always or never to be inlined.
 pub fn inline_cost(
@@ -2346,6 +2435,13 @@ pub fn inline_cost(
             threshold: analyzer.threshold,
             static_bonus: analyzer.static_bonus_applied,
             blocked: analyzer.blocked_by_bound,
+            hot: !analyzer.blocked_by_bound
+                && analyzer.verdict_is_over_threshold()
+                && site.caller_size == CallerSize::Speed
+                && !params.o1_bound
+                && site.tti.and_then(|tti| tti.inline_hot_trial_frequency()).is_some_and(|least| {
+                    site.relative_frequency.is_some_and(|ratio| ratio >= least as f64)
+                }),
         };
     }
     match verdict {
@@ -2511,7 +2607,7 @@ fn only_reads_memory(info: &CallInfo) -> bool {
 }
 
 /// The headers of the callee's loops: targets of a retreating edge (D7).
-fn loop_headers(function: &Function) -> IdSet<BlockId> {
+pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
     let Some(&entry) = function.layout().first() else { return IdSet::new() };
     let mut headers = IdSet::new();
     let mut state: HashMap<u32, u8> = HashMap::default();
@@ -2601,6 +2697,7 @@ pub fn shadow(
                     caller_size: CallerSize::Speed,
                     relative_frequency: caller.parent(inst).and_then(|block| relative_to_entry(&frequencies, block)),
                     entry_weight: None,
+                    planned: None,
                     // The shadow is the oracle's: opt without a triple prices
                     // generically.
                     tti: None,
@@ -2981,13 +3078,23 @@ pub fn sites_with_trials(
             }
         }
     }
+    let mut planned = IdSet::<InstId>::new();
     for (_, inst) in caller.walk() {
-        let Some(decision) = decide(module, layout, caller_id, inst, &context, &frequencies) else { continue };
+        let Some(decision) = decide(module, layout, caller_id, inst, &context, &frequencies, Some(&planned)) else { continue };
+        if decision.inline {
+            planned.insert(inst);
+        }
         if let Some(decided) = decided.as_deref_mut() {
             decided.push((inst, decision.callee, decision.cost.clone()));
         }
         let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
-        let worth = blocked && trials.is_some() && if size == CallerSize::Speed { !always_only } else { true };
+        // INL-HOT: a caller that goes with its one call is inlined where its arguments are known, and
+        // that site decides (x_spill_store_order -O2: `pack_ref` into `run_main` first: +40% clk).
+        let leaving = local_linkage(module.global(caller_id).linkage)
+            && !addressed.contains(&caller_id)
+            && counts.get(&caller_id) == Some(&1);
+        let hot = matches!(decision.cost, InlineCost::Cost { hot: true, .. }) && !leaving;
+        let worth = (blocked || hot) && trials.is_some() && if size == CallerSize::Speed { !always_only } else { true };
         if !decision.inline && !worth {
             continue;
         }
@@ -3008,6 +3115,7 @@ pub fn sites_with_trials(
                 && counts.get(&decision.callee) == Some(&1),
             callee: Some(decision.callee),
             self_sites: own.len(),
+            hot,
             self_calls: (!own.is_empty()).then(|| {
                 let frequencies = call_frequencies(module, layout, callee);
                 own.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum()
@@ -3055,6 +3163,7 @@ pub fn decide(
     call: InstId,
     context: &DecideContext,
     frequencies: &llrm_analysis::blockfreq::BlockFrequencies,
+    planned: Option<&IdSet<InstId>>,
 ) -> Option<Decision> {
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return None };
     let callee_id = llrm_mir::memory::callee(&module.context, caller, call)?;
@@ -3083,6 +3192,7 @@ pub fn decide(
         caller_size: context.size,
         relative_frequency: caller.parent(call).and_then(|block| relative_to_entry(frequencies, block)),
         entry_weight: Some(&entry_weight),
+        planned,
         tti: context.tti,
     };
     let cost = inline_cost(&site, context.params);
