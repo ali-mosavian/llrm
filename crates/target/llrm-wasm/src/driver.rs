@@ -145,6 +145,8 @@ fn prepared(
     if options.level != Level::O0 {
         module = optimized(module, options.level)?;
     }
+    // `PreISelIntrinsicLowering` runs `LowerConstantIntrinsics` at every level; at -O0 the mid-end has not.
+    llrm_transforms::lowerconstantintrinsics::module_lowered(&mut module)?;
     llrm_mir::atomic::lowered_single_thread(&mut module)?;
     crate::fix_function_bitcasts::fix(&mut module)?;
     if options.exception_model == crate::dag::ExceptionModel::Wasm {
