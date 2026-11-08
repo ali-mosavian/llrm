@@ -1828,8 +1828,8 @@ fn a_word_divide_and_remainder_of_the_same_operands_are_one_call() {
 /// A long multiplied by a constant was split into its halves, each half
 /// shifted and subtracted, in a function tuned for size: `x * 31` was 99 B and
 /// `x * 1000` 185 B, where a call is 14 (div_constants_short, mul_constants,
-/// -Os). A function tuned for size calls `__mulsi3`; the others keep the
-/// halves.
+/// -Os). A function calls `__mulsi3`, tuned for size or not (the halves
+/// cost more bytes and more T-states: phi_slot_unknown_arm -O1).
 #[test]
 fn a_function_tuned_for_size_calls_the_long_multiply() {
     let body = |attr: &str| {
@@ -1840,7 +1840,7 @@ fn a_function_tuned_for_size_calls_the_long_multiply() {
     let out = compiled(&body("optsize"), "f");
     assert!(out.contains("call __mulsi3"), "{out}");
     let out = compiled(&body(""), "f");
-    assert!(!out.contains("__mulsi3"), "{out}");
+    assert!(out.contains("call __mulsi3"), "{out}");
 }
 
 /// The routine is 57 B: one small multiply in a module called it at -Os and
@@ -2180,4 +2180,18 @@ fn a_switch_looks_past_phi_edge_blocks_for_the_next_block() {
     let out = text(ir, "h", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
     let tests: Vec<&str> = out.lines().map(str::trim).filter(|line| line.starts_with("cp a, #")).collect();
     assert_eq!(tests, ["cp a, #3", "cp a, #2", "cp a, #1"], "{out}");
+}
+
+/// A long multiply in a function not tuned for size was four word multiplies
+/// and their sums inline, bigger and slower than the routine: phi_slot_unknown_arm
+/// -O1 980 B and 3.95M T, 664 B and 3.04M T called; idioms -O2 7763 B. A module
+/// with two or more of them calls `__mulsi3` at every level.
+#[test]
+fn a_long_multiply_calls_the_routine_at_every_level() {
+    let ir = include_str!("kernels/ir/long_multiply_call.ll");
+    for level in [Level::O1, Level::O2, Level::O3, Level::Os] {
+        let out = text(ir, "g", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert_eq!(out.matches("call __mulsi3").count(), 2, "{level:?}: {out}");
+        assert!(!out.contains("__mulhi3"), "{level:?}: {out}");
+    }
 }

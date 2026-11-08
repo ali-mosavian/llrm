@@ -280,10 +280,14 @@ pub fn select_block(
 ) -> Result<Vec<Unit>, Refusal> {
     let mut tli = target_lowering();
     tli.set_opt_for_size(sized);
-    // a long multiply is a call in a function tuned for size, in a module with
-    // enough of them to pay for the routine (`prepare::mark_long_multiplies`)
+    // a long multiply is a call (`RTLIB::MUL_I32`) in a module with enough of
+    // them to pay for the routine (`prepare::mark_long_multiplies`), at every
+    // level: four word multiplies inline cost more bytes and more T-states
     if long_multiply {
         tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
+        if !sized {
+            tli.set_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
+        }
     }
     let mut lowering = Z80Lowering { sized };
     let mut combines = Z80Combines { long_multiply: sized && long_multiply };
