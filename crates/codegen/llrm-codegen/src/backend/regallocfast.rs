@@ -347,7 +347,9 @@ impl Fast<'_> {
         value: u32,
     ) -> Result<Vec<usize>, Fallback> {
         let wanted = self.confined.get(&value);
-        if let Some((_, found)) = self.orders.iter().find(|(set, _)| set.as_ref() == wanted) {
+        let remembered = self.orders.iter().find(|(set, _)| set.as_ref() == wanted);
+        llrm_support::debug::counted("fast register order", remembered.is_some());
+        if let Some((_, found)) = remembered {
             return Ok(found.clone());
         }
         let order = target::order(wanted, self.segments, self.classes);
