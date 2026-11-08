@@ -15,7 +15,7 @@ Rows (m32, tools/rows/run.sh, same binary, env switch on/off, 284 programs x4 le
 Verdict: as a flat term it is not a win. It helps loops whose offset really folds into an `lea` and hurts ones where the offset costs an add.
 
 ## Plan
-1. Price the add absorbed by the addressing form from the target table (`lea` vs `add`), per use kind, not a flat discount (owner: laa-runtime-checks-loadelim; by 11-04).
+1. Price the add absorbed by the addressing form from the target table (`lea` vs `add`), per use kind, not a flat discount (no owner (was laa-runtime-checks-loadelim, unplaced 2026-11-09); by 11-04).
 2. x_bubble: the formula family (start `-bound`, shared with the address) in the generator, as a numbered DEVIATE; the pin has no counterpart (by 11-06).
 3. Each step: fail-first minimal .ll, rows pair against main and parity, QCport, compile Ir.
 

@@ -26,11 +26,11 @@
 //! ```
 //!
 //! DEVIATE LO-1 (exit: displacements of a symbol or a frame cell shifted by
-//! `Addr::plus`, owner w-6, 2026-11-09): only an address of registers and a
+//! `Addr::plus`, owner anyisa, 2026-11-09): only an address of registers and a
 //! number is a candidate; the pin also takes a global, a constant-pool entry
 //! or a symbol as the displacement.
 //!
-//! DEVIATE LO-2 (exit: the wrap of a 16-bit offset proved, owner w-6,
+//! DEVIATE LO-2 (exit: the wrap of a 16-bit offset proved, owner anyisa,
 //! 2026-11-09): only a body of 32-bit addresses is rewritten; a displacement
 //! moved between two 16-bit sums can change what wraps.
 //!

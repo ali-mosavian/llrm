@@ -28,7 +28,7 @@ Interface with funcattrs-port: S1 and S2 do not touch `Annotated`'s result type 
 
 ## Status 10-23 and the deviations still open
 
-S1a (#3991) and the AliasQuery switch of `mod_set_loc` (#4155) are in. Open, owner w-3:
+S1a (#3991) and the AliasQuery switch of `mod_set_loc` (#4155) are in. Open, owner compile-time-bench:
 
 | # | Deviation | Why it is there | Exit | Date |
 |---|---|---|---|---|

@@ -29,7 +29,7 @@ After selection, before allocation, on the LIR: the call's `Push` run and the lo
 ## Tests
 Fail first: `g` above has no register load for the three pushed members; a load with a store between it and the call keeps its register; a vreg with two uses keeps its load; volatile and `lock` loads are not folded; the 16-bit target folds `push word ptr`.
 
-## Update 2026-10-25: the DAG path is the producer (owner sdag-d, plan 11-06, first PR 11-13)
+## Update 2026-10-25: the DAG path is the producer (owner x86-m32, plan 11-06, first PR 11-13)
 The DAG emitter lowers `ADJCALLSTACKDOWN/UP` to a per-call `sub esp, N` / `add esp, N` with `mov [esp+k], x` stores between (the pin's input form, minus the pseudos and the reserved frame). `emit.rs::pushed_dwords` (DEVIATE CF3) turns every tiling area into pushes at m32, which took QCport m32 from +10.7..+18.9% to -0.7..+1.9% over the old selector (#4566). The pin instead keeps the frame reserved (one `sub esp, MaxCallFrameSize` in the prologue, no per-call adjust) and lets this pass push only where `isProfitable`.
 
 Pieces, one PR each, rows priced after each (AM-BT 30, `qcport.py` m32 -O2/-Os, `run_tests.py c`):

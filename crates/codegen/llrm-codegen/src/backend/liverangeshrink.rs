@@ -38,7 +38,7 @@
 //! with a live flags def does not move), and one that reads them does not
 //! move. Exit: none; the register and flag model of the LIR.
 //!
-//! DEVIATE LRS2 (owner w-8, review 2026-11-14): the pin's `COPY` from a
+//! DEVIATE LRS2 (no owner (was w-8, unplaced 2026-11-09), review 2026-11-14): the pin's `COPY` from a
 //! physical register is a value the entry delivers; a call's result is a `COPY`
 //! there too, and counted here as a definition that shortens a range. Not
 //! counting it grew recchop -O3 by 16 bytes. Exit: the allocation that makes

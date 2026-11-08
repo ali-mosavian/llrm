@@ -9,7 +9,7 @@ index 5747a0822..3e22448ec 100644
 +        self.generate_zero_end_counters(se);
 +    }
 +
-+    /// DEVIATE LZ1 (no pin counterpart; owner w-5, review 2026-11-19): a
++    /// DEVIATE LZ1 (no pin counterpart; owner compile-time-bench, review 2026-11-19): a
 +    /// counter that ends at zero. Where an ICmpZero formula is
 +    /// `reg(B) + -1*reg(IV)` (`B - IV == 0`) with `B` invariant in the loop,
 +    /// the counter `R = IV - B` ends at zero: `reg(R)` is a formula for the
