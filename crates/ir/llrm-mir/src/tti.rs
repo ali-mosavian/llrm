@@ -730,6 +730,17 @@ pub trait Tti {
         0
     }
 
+    /// Whether a full unroll is credited a `move` for each read, in the loops
+    /// inside it, of a value its copies make constant: true where an immediate
+    /// operand saves a register copy (two-address or stack machines). False
+    /// where it saves nothing (3-address arm64: `cmp x, #n` = `cmp x, y`).
+    /// Credited, a nested read counts a run of the inner loop's assumed trips
+    /// (shellsort -O3 at 20 clocks a byte: 12,491 clocks "saved", 6,177 ->
+    /// 7,090 instructions run, 164 -> 560 B).
+    fn unroll_credits_immediate_operands(&self) -> bool {
+        true
+    }
+
     /// DEVIATE UP1: what a code byte a full unroll adds is worth in
     /// thousandths of a clock at -O2/-O3, where the unroll must save that many
     /// clocks to be made (`loopunrollprice`); 0: the pin's threshold alone.

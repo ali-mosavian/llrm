@@ -78,14 +78,16 @@ impl Cpu {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AArch64 {
     pub cpu: Cpu,
+    /// `unroll_milliclocks_per_byte`; the tests' knob.
+    pub unroll_rate: i64,
 }
 
 impl AArch64 {
     /// The profile of a `-mcpu` llrm supports.
     pub fn of_cpu(cpu: &str) -> Option<AArch64> {
         match cpu {
-            "generic" => Some(AArch64 { cpu: Cpu::Generic }),
-            "apple-m1" => Some(AArch64 { cpu: Cpu::AppleM1 }),
+            "generic" => Some(AArch64 { cpu: Cpu::Generic, unroll_rate: 250_000 }),
+            "apple-m1" => Some(AArch64 { cpu: Cpu::AppleM1, unroll_rate: 250_000 }),
             _ => None,
         }
     }
@@ -335,7 +337,12 @@ impl Tti for AArch64 {
     /// byte). Without it matmul -O2 is 1560 B against gcc's 304 for 3x fewer
     /// instructions. Exit: the per-target clock model (2026-11-20).
     fn unroll_milliclocks_per_byte(&self) -> i64 {
-        250_000
+        self.unroll_rate
+    }
+
+    /// DEVIATE ARM64-UNROLL-PRICE (owner w15, exit 2026-11-30): see the trait.
+    fn unroll_credits_immediate_operands(&self) -> bool {
+        false
     }
 
     /// DEVIATE ARM64-UNROLL-PRICE (owner w15, exit 2026-11-30): see the

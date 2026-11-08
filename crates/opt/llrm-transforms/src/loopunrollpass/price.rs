@@ -329,7 +329,10 @@ fn priced_verdict(
     let added = (added - merged_store_credit(run, se, analyzed, lp, trips)).max(0);
     let (saved_units, constant_clocks) = match analysis {
         Some(cost) => (i64::from(cost.rolled_dynamic_cost.saturating_sub(cost.unrolled_cost)), 0),
-        None => (i64::from(trips) * i64::from(up.be_insns), i64::from(trips) * nested_uses * clocks.r#move),
+        None => {
+            let credited = if run.tti.unroll_credits_immediate_operands() { nested_uses } else { 0 };
+            (i64::from(trips) * i64::from(up.be_insns), i64::from(trips) * credited * clocks.r#move)
+        }
     };
     // The loop's control costs what it runs, never less than the body's average
     // unit: a taken back edge is several clocks (the i486's `jne` 3), the
