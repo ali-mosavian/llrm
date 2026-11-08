@@ -728,14 +728,16 @@ impl SelectionDAG {
             }
             // Chain and glue nodes stay: the builder keeps handles on some
             // (the pin protects them with `HandleSDNode`). DEVIATE: an unused
-            // token factor goes like any node (`RemoveDeadNodes`): kept, it
-            // stays a user of its operands, `visitTokenFactor` cannot merge
-            // them and the chains nest past `GatherAllAliases` depth 18.
+            // token factor or load goes like any node (`RemoveDeadNodes`):
+            // kept, it stays a user of its operands, `visitTokenFactor` cannot
+            // merge them and the chains nest past `GatherAllAliases` depth 18;
+            // a load the legalizer replaced kept its chain shared, and the
+            // tail of a copy run never merged.
             if n == self.root.node
                 || n == self.entry.node
                 || self.is_deleted(n)
                 || self.nodes[n as usize].ops.is_empty()
-                || (self.nodes[n as usize].opcode != ISD::TokenFactor
+                || (!matches!(self.nodes[n as usize].opcode, ISD::TokenFactor | ISD::Load)
                     && self.nodes[n as usize].values.iter().any(|&vt| vt == EVT::OTHER || vt == EVT::GLUE))
             {
                 continue;
