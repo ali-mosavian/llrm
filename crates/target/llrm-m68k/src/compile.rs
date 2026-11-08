@@ -144,6 +144,10 @@ pub struct Options {
     /// The destination of a long compare may be an address register
     /// (`cmpa.l`, [`crate::addrcmp`]); kept when the function is cheaper.
     pub compare_destinations: bool,
+    /// A 64-bit add or subtract is `add`/`addx` (`ADDC`/`ADDE`, the pin's
+    /// lowering); a function it changed is also built with the compare form
+    /// and the cheaper kept: `addx` needs data registers on both halves.
+    pub carry_chain: bool,
     /// The coalescer joins the copies of values that live in more than one
     /// block with the ones that do not (`JoinGlobalCopies`, the allocator's
     /// tuning); a function that saved a register is also built without, and
@@ -182,6 +186,7 @@ impl Options {
         return_dup: false,
         class_split: false,
         compare_destinations: false,
+        carry_chain: true,
         global_copies: true,
         loop_carried_first: false,
         debug: false,
@@ -212,6 +217,7 @@ impl Default for Options {
             return_dup: true,
             class_split: true,
             compare_destinations: true,
+            carry_chain: true,
             global_copies: true,
             loop_carried_first: true,
             debug: false,
@@ -294,6 +300,14 @@ pub fn items_with(
         }
     }
     // last: the two builds compared are final, the other choices made
+    if touched.carry_chain {
+        let without = Options { carry_chain: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
     if touched.compare_destinations {
         let without = Options { compare_destinations: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
@@ -302,6 +316,21 @@ pub fn items_with(
         }
     }
     Ok(kept)
+}
+
+/// Whether `function` carries through the extend flag: an `addx`, `subx` or
+/// `negx` (a subtract from a constant zero high half is `negx`).
+pub fn uses_extend(function: &crate::mfunc::MFunction) -> bool {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .any(
+            |inst| matches!(
+                inst.kind,
+                llrm_spike_mf::Kind::Op(name) if ["ADDX", "SUBX", "NEGX"].iter().any(|row| name.starts_with(row))
+            ),
+        )
 }
 
 /// The optional rewrites a build used.
@@ -313,6 +342,8 @@ struct Touched {
     /// A compare's destination was left to the allocator's choice of an
     /// address or a data register ([`crate::addrcmp`]).
     compare_destinations: bool,
+    /// The function has an `addx`, `subx` or `negx` ([`uses_extend`]).
+    carry_chain: bool,
     /// The build saved a callee-saved register: the join order may have cost
     /// it.
     global_copies: bool,
@@ -320,7 +351,12 @@ struct Touched {
 
 impl Touched {
     fn any(self) -> bool {
-        self.sext_adds || self.return_dup || self.class_split || self.compare_destinations || self.global_copies
+        self.sext_adds
+            || self.return_dup
+            || self.class_split
+            || self.compare_destinations
+            || self.carry_chain
+            || self.global_copies
     }
 }
 
@@ -345,9 +381,11 @@ fn items_once(
         options.short,
         options.code_model.absolute_data(),
         wants_size,
+        options.carry_chain,
     )?;
     let mut function = emit(name, &blocks)?;
     let mut touched = Touched::default();
+    touched.carry_chain = options.carry_chain && uses_extend(&function);
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {

@@ -300,10 +300,12 @@ def test_an_os_row_is_not_the_o2_row():
     import os
     import tempfile
 
-    llc = os.environ.get("LLRM_LLC")
-    if not llc or not llrmbin.ow_present() or "LLRM_PIN_CLANG" not in os.environ:
-        pytest.skip("needs LLRM_LLC, the Open Watcom tree and LLRM_PIN_CLANG")
     pindiff = load("pindiff")
+    llc = os.environ.get("LLRM_LLC") or str(Path(os.environ.get("LLRM_BIN", "target/release")) / "llrm-llc")
+    if not Path(llc).is_file():
+        pytest.skip(f"llrm-llc is not built ({llc})")  # the gate builds it: strict_bins turns this skip into a failure
+    if not llrmbin.ow_present() or not (Path(os.environ.get("LLRM_PIN_CLANG") or pindiff.pin.PINNED_BIN / "clang")).is_file():
+        pytest.skip("needs the Open Watcom tree and the pin's clang (host tools)")
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / "d7.c"
         src.write_text("int f(int x) { return x / 7; }\n")
