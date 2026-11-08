@@ -2256,3 +2256,14 @@ fn is_constant_is_lowered_at_o0() {
     let out = text(ir, "f", 0, &Request::new(Level::O0)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ret"), "{out}");
 }
+
+/// The `i32` scale of `llvm.smul.fix.sat.i16` is illegal on a 16-bit target
+/// and had no expand case: refused with `Unsupported { op: SMulFixSat, ty: I32,
+/// what: "expand operand" }` (fixed_point, every level).
+#[test]
+fn a_fixed_point_multiply_with_an_i32_scale_compiles() {
+    let ir = include_str!("kernels/ir/mul_fix_sat_i16.ll");
+    for level in [Level::O0, Level::O2, Level::Os] {
+        text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+    }
+}
