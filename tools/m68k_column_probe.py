@@ -6,9 +6,11 @@ through flags it does not name: x87 measured -fno-omit-frame-pointer, PIE and st
 relocation kinds of one object per column, from `objdump -r`; the static model has no GOT or PLT kind.
 Usage: m68k_column_probe.py [matrix.rs] [obj ...]
 """
+import os
 import re
 import subprocess
 import sys
+import tempfile
 
 PIC = re.compile(r"-f(pic|PIC|pie|PIE)\b")
 HARDENING = re.compile(r"-f(stack-protector|stack-clash-protection|cf-protection|hardened)|_FORTIFY_SOURCE")
@@ -48,6 +50,23 @@ def reloc_kinds(listing: str) -> set[str]:
 
 def object_violations(kinds: set[str]) -> list[str]:
     return sorted(kind for kind in kinds if FORBIDDEN_KINDS.search(kind))
+
+
+# A union initialised through its smaller member: -fzero-init-padding-bits=all zeroes the rest, standard does not.
+PADDING_SOURCE = "union u { char c; long l[4]; };\nextern void use(void *);\nvoid f(void) { union u a = { 1 }; use(&a); }\n"
+
+
+def padding_flag_reaches_gcc(gcc: str) -> bool:
+    """Whether `-fzero-init-padding-bits=all` and `=standard` give different assembly: the flag is live in this gcc."""
+    with tempfile.TemporaryDirectory() as tmp:
+        source = os.path.join(tmp, "p.c")
+        open(source, "w").write(PADDING_SOURCE)
+        asm = {}
+        for mode in ("all", "standard"):
+            out = os.path.join(tmp, mode + ".s")
+            subprocess.run([gcc, "-m68000", "-O2", "-ffreestanding", f"-fzero-init-padding-bits={mode}", "-S", "-o", out, source], check=True)
+            asm[mode] = open(out).read()
+    return asm["all"] != asm["standard"]
 
 
 if __name__ == "__main__":
