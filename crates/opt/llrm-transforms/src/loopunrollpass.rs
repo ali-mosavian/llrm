@@ -2286,7 +2286,14 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         loops: llrm_analysis::cfg::natural(run.function, loops),
     });
     let simplified = crate::loopsimplify::simplified_given(run.function, held);
-    let closed = crate::lcssa::closed(run.context, run.layout, run.function).unwrap_or(false);
+    // Nothing was reshaped: the manager's tree and loops are the function's.
+    let closed = match &run.cached {
+        Some((tree, loops)) if !simplified => {
+            crate::lcssa::form_on_all_loops(run.context, run.layout, run.function, tree, loops)
+        }
+        _ => crate::lcssa::closed(run.context, run.layout, run.function),
+    }
+    .unwrap_or(false);
     let mut analyzed = Analyzed::entry(run, !simplified && !closed);
     let at_first: IdSet<BlockId> = analyzed.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
     run.first = at_first.clone();
