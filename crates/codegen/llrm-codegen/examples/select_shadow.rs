@@ -136,6 +136,7 @@ fn main() {
                     cmov: false,
                     sse2: false,
                     min_size: false,
+                    imul_if_smaller: false,
                     three_address_adds: false,
                     i16_mul_chains: false,
                     sext_load: false,
