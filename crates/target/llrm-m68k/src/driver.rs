@@ -227,6 +227,9 @@ fn lowered(
     let applied = Applied { options, dump: dump.map(Into::into), ..Applied::default() };
     llrm_transforms::pipeline::applied(&mut program, &applied)?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+    // `llvm.is.constant` and `llvm.objectsize` left by -O0 (the pin runs
+    // `LowerConstantIntrinsics` at every level)
+    program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
     // `llvm.scmp` and `llvm.ucmp` have no m68k instruction: the generic
     // expansion
     program.modules.iter_mut().try_for_each(|module| llrm_codegen::backend::compares::expanded(module, |_| true))?;

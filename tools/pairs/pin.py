@@ -124,7 +124,7 @@ def opt(passes: str, text: str, of: Target | None = None, extra: list[str] | Non
     """`opt -passes=PASSES -S` over `text` retargeted to `of`; `stdout` starts with the `target:` line as a comment."""
     of = _need(of)
     done = subprocess.run([_tool("opt", bin_dir), f"-passes={passes}", "-S", *(extra or []), "-"], input=retarget(text, of), capture_output=True, text=True)
-    done.stdout = f"; {header(of)}\n" + done.stdout
+    done.stdout = f"; {header(of)}\n; optimised: {passes}\n" + done.stdout
     return done
 
 

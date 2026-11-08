@@ -386,7 +386,7 @@ fn every_own_node_has_a_pin_id() {
 /// to the file, so the generated ids did not know it.
 #[test]
 fn every_own_target_id_is_in_own_ids() {
-    let nodes = include_str!("../../../../../../crates/codegen/llrm-sdag/src/x86isd.rs");
+    let nodes = include_str!("../../../../../../crates/target/llrm-x86-backend/src/x86isd.rs");
     let ids = include_str!("../../../../../../tools/dagisel/own_ids.txt");
     let listed: Vec<(&str, &str)> = ids.lines().filter_map(|line| line.split_once(' ')).collect();
     let mut missing = Vec::new();
@@ -399,6 +399,24 @@ fn every_own_target_id_is_in_own_ids() {
         }
     }
     assert!(missing.is_empty(), "not in tools/dagisel/own_ids.txt: {missing:?}");
+}
+
+/// `x86isd` lived in `llrm-sdag` and `dagisel_adapter` named its codes, so
+/// every target's shared code carried x86's node names. A name back in either
+/// (outside comments) fails here.
+#[test]
+fn shared_node_code_names_no_x86_node() {
+    let files = [
+        ("isd.rs", include_str!("../../../../../../crates/codegen/llrm-sdag/src/isd.rs")),
+        ("target_names.rs", include_str!("../../../../../../crates/codegen/llrm-sdag/src/target_names.rs")),
+        ("dagisel_adapter.rs", include_str!("dagisel_adapter.rs")),
+    ];
+    for (file, text) in files {
+        for (n, line) in text.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("").to_ascii_lowercase();
+            assert!(!code.contains("x86isd"), "{file}:{}: {line}", n + 1);
+        }
+    }
 }
 
 /// `log`, `exp`, `log2`, `exp2`, `sin`, `cos` and `atan` of a double had no
