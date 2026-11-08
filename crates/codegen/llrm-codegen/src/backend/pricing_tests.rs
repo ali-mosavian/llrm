@@ -86,7 +86,7 @@ fn test_x87_exchange_is_explicitly_priced_for_every_cpu() {
 /// clocks and the load 3, so a hoisted constant copied each trip looked free
 /// (nbody -O2 m16: two copies a pair-loop trip, 1,200 trips). Every CPU states
 /// the copy; the 486 data sheet's figure differs (the 386 column carries the
-/// 486 numbers since #8311), the others tie with the load until measured.
+/// 486 numbers since #8311, by the user's 486/P5 rule: nobody uses the 386), the others tie with the load until measured.
 #[test]
 fn test_x87_register_copy_is_its_own_priced_form() {
     assert_eq!(classify("fld", "st1", "d9c1"), "x87_copy");
