@@ -246,6 +246,16 @@ def assert_distinct(base, new, same_source: bool = False) -> str:
     return f"binaries: base {a[:12]} {base} | new {b[:12]} {new}" + (" (same binary, same source)" if a == b else "")
 
 
+def backends_of(target: str) -> tuple[str, ...]:
+    """The programs beside llrm-cc that compile for `target` (a row of crates/driver/llrm-cc/targets.toml): llrm-llc, and the row's own `llc_program` where it names another. A pair
+    that shares the target's own backend reads SAME on every row of that target, whatever llrm-llc is."""
+    import tomllib
+
+    rows = tomllib.loads((Path(__file__).resolve().parents[1] / "crates/driver/llrm-cc/targets.toml").read_text())
+    own = rows.get(target, {}).get("llc_program", "llrm-llc")
+    return ("llrm-llc",) if own == "llrm-llc" else ("llrm-llc", own)
+
+
 def assert_distinct_llc(base, new, same_llc: bool = False, names=("llrm-llc",), required: bool = False) -> None:
     """SystemExit when a backend named in `names` beside `base` and the one beside `new` are the same bytes: llrm-cc only drives, so two dists sharing one backend read SAME on every
     row. A name missing from either is skipped, or refused when `required` (wasm32 runs llrm-wasm-llc: a pair sharing one gave a 0-DIFF identity run where nbody -O2 moves 939 -> 910 B).
