@@ -1227,6 +1227,17 @@ fn a_fill_loop_stays_a_call_at_size() {
     assert!(out.contains("_fill") && !out.contains("ld (hl)"), "{out}");
 }
 
+/// A long returned with a signed range (`range(i32 -128, 128)`) had its high word made again from the low word's sign
+/// (`add a, a; sbc a, a; ...`, seven instructions a caller) though the call had returned it.
+#[test]
+fn a_call_result_with_a_signed_range_keeps_the_returned_high_word() {
+    let ir = include_str!("kernels/ir/call_result_in_range.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "caller", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("sbc a, a"), "{level:?}: {out}");
+    }
+}
+
 /// `memory_expansion` at -Os was refused ("a conditional return in a function
 /// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
 /// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The
@@ -2053,4 +2064,17 @@ fn an_internal_function_is_a_local_label_and_an_external_one_is_global() {
     assert!(internal.starts_with("_sum:\n"), "{internal}");
     let external = text(include_str!("kernels/ir/digits.ll"), "digits", 0, &Request::new(Level::Os)).expect("compiles");
     assert!(external.starts_with("_digits::\n"), "{external}");
+}
+
+/// A byte of growth is worth 3 T from -O2 (z80 `speed_inline_milliclocks_per_byte`): `scale`, a 100-trip loop that
+/// stays for other callers, is not copied into `caller` for the one jump the copy saves. -O1 prices
+/// no byte in clocks: its trial inlines went on at -O1 and `from` (a call at -O1) was copied in, 24 B smaller
+/// and 38,901 T slower.
+#[test]
+fn the_speed_rate_refuses_a_big_copy_at_o2_and_leaves_o1_to_the_pin() {
+    let at = |ir: &str, name, level| text(ir, name, 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+    let scale = at(include_str!("kernels/ir/scale_call.ll"), "caller", Level::O2);
+    assert!(scale.contains("jp _scale"), "-O2\n{scale}");
+    let split = at(include_str!("kernels/ir/split_loops.ll"), "main", Level::O1);
+    assert!(split.contains("call _from"), "-O1\n{split}");
 }

@@ -555,6 +555,19 @@ pub trait Tti {
         0
     }
 
+    /// Whether a speed caller's inline that gives a loop of the callee a constant
+    /// trip count is exempt from the byte rate (gcc's `INLINE_HINT_loop_iterations`:
+    /// the copy unrolls and folds, which the call's latency does not show).
+    fn inline_hints_known_loop_bound(&self) -> bool {
+        false
+    }
+
+    /// Whether `speed_inline_milliclocks_per_byte` also binds at -O1. False:
+    /// -O1 prices no byte in clocks and keeps the pin's threshold alone.
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        true
+    }
+
     /// Whether one wider store of constants may start off its own size
     /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
     /// at a multiple of its size.
@@ -717,6 +730,17 @@ pub trait Tti {
         0
     }
 
+    /// Whether a full unroll is credited a `move` for each read, in the loops
+    /// inside it, of a value its copies make constant: true where an immediate
+    /// operand saves a register copy (two-address or stack machines). False
+    /// where it saves nothing (3-address arm64: `cmp x, #n` = `cmp x, y`).
+    /// Credited, a nested read counts a run of the inner loop's assumed trips
+    /// (shellsort -O3 at 20 clocks a byte: 12,491 clocks "saved", 6,177 ->
+    /// 7,090 instructions run, 164 -> 560 B).
+    fn unroll_credits_immediate_operands(&self) -> bool {
+        true
+    }
+
     /// DEVIATE UP1: what a code byte a full unroll adds is worth in
     /// thousandths of a clock at -O2/-O3, where the unroll must save that many
     /// clocks to be made (`loopunrollprice`); 0: the pin's threshold alone.
@@ -734,6 +758,11 @@ pub trait Tti {
 
     /// `Tuning::unroll_never_grows_at_o1`.
     fn unroll_never_grows_at_o1(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::second_ipsccp`.
+    fn second_ipsccp(&self) -> bool {
         false
     }
 

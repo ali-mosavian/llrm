@@ -136,6 +136,10 @@ pub struct Run<'a> {
     /// The headers of the loops this run made: those that were no loop's header
     /// when it began (`LPMUpdater::addSiblingLoops`, for the passes after it).
     pub created: Vec<BlockId>,
+    /// The headers of loops earlier runs made by unrolling a loop around them:
+    /// part of a nest already decided, though no longer in `created` (the loop
+    /// pass manager runs the pass again for each loop).
+    pub decided: IdSet<BlockId>,
     /// The headers of the loops the run began with: a loop not among them is a
     /// copy an unroll made.
     pub first: IdSet<BlockId>,
@@ -2262,6 +2266,33 @@ fn forget_since(
     run.scev.forget_touched(&cx, &touched);
 }
 
+/// `forgetTopmostLoop(L)` of `UnrollLoop`, for a loop fully unrolled that held
+/// loops: what the expressions of its blocks and its loops' counts said of the
+/// nest is stale once the nest is straight-line code and copies.
+fn forget_nest(
+    run: &mut Run,
+    before: &Analyzed,
+    lp: Loop,
+) {
+    let mut top = lp;
+    while let Some(parent) = top.get_parent_loop() {
+        top = parent;
+    }
+    let headers: Vec<BlockId> =
+        before.loops.get_loops_in_preorder().iter().filter(|one| top.contains_loop(Some(**one))).map(|one| one.get_header()).collect();
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &before.loops,
+        tree: &before.tree,
+        assumptions: &before.assumptions,
+    };
+    run.scev.forget_loop_nest(&cx, top.get_blocks(), &headers);
+}
+
 /// The blocks `UnrollLoop` hands `simplifyLoopAfterUnroll`: the loop's own that
 /// remain (`body`) and those made since the function had `capacity` blocks.
 pub(crate) fn unrolled_blocks(
@@ -2305,6 +2336,13 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     let mut analyzed = Analyzed::entry(run, !simplified && !closed);
     let at_first: IdSet<BlockId> = analyzed.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
     run.first = at_first.clone();
+    let mut kept = IdSet::new();
+    for header in run.decided.iter() {
+        if analyzed.loops.is_loop_header(header) {
+            kept.insert(header);
+        }
+    }
+    run.decided = kept;
     // The worklist is popped from the back (`appendReversedLoopsToWorklist`):
     // the loops are visited in the reverse of
     // `getLoopsInReverseSiblingPreorder`, each loop after the loops it
@@ -2372,6 +2410,9 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let peeled = result == Unrolled::Peeled;
         changed = true;
         forget_since(run, &analyzed, mark);
+        if result == Unrolled::Fully && holds_loops {
+            forget_nest(run, &analyzed, lp);
+        }
         // The pin's loop pass manager runs LPM2's whole list on a loop,
         // children before parents ([`L270`][pop]): a parent's IndVars
         // sees its child already unrolled. Here each pass runs over
@@ -2529,6 +2570,9 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             created.push(header);
         }
     }
+    for header in &created {
+        run.decided.insert(*header);
+    }
     run.created = created;
     changed
 }
@@ -2546,6 +2590,8 @@ pub struct LoopFullUnroll {
     /// The headers of the loops the last run made, for the slot after it: the
     /// loop pass manager's worklist.
     pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
+    /// Every loop an earlier run made, kept (unlike `created`) for the runs after it.
+    pub decided: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
 }
 
 impl FunctionPass for LoopFullUnroll {
@@ -2584,6 +2630,7 @@ impl FunctionPass for LoopFullUnroll {
             peeled: Default::default(),
             finished: IdSet::new(),
             created: Vec::new(),
+            decided: self.decided.borrow().iter().copied().collect(),
             first: Default::default(),
             scev: held.take(),
             cached: Some(cached),
@@ -2598,6 +2645,7 @@ impl FunctionPass for LoopFullUnroll {
         };
         let changed = unroll_loops(&mut run);
         *self.created.borrow_mut() = std::mem::take(&mut run.created);
+        *self.decided.borrow_mut() = run.decided.iter().collect();
         if changed {
             PreservedAnalyses::none()
         } else {
@@ -2647,6 +2695,7 @@ pub fn unroll_function(
         peeled: Default::default(),
         finished: IdSet::new(),
         created: Vec::new(),
+        decided: IdSet::new(),
         first: Default::default(),
         scev: ScalarEvolution::new(),
         cached: None,

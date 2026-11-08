@@ -638,6 +638,10 @@ pub fn clang_flags(
     if unrolls_at_o1(target, build) {
         flags.push("-funroll-loops".into());
     }
+    // Clang takes `-fexcess-precision=` where the backend does not.
+    if !target.llc_passes {
+        flags.extend(build.llc.iter().filter(|flag| flag.starts_with("-fexcess-precision=")).cloned());
+    }
     flags
 }
 
@@ -654,7 +658,10 @@ fn unrolls_at_o1(
 
 /// Whether `flag` is one of the backend pipeline's `-f[no-]PASS` switches.
 fn is_pass_switch(flag: &str) -> bool {
-    backend_pass(flag).is_some() || flag == "-funroll-loops" || flag == "-fno-unroll-loops"
+    backend_pass(flag).is_some()
+        || flag == "-funroll-loops"
+        || flag == "-fno-unroll-loops"
+        || flag.starts_with("-fexcess-precision=")
 }
 
 /// The build's switches that the target's backend does not take.
@@ -941,9 +948,9 @@ fn build(
                 }
                 let object = want(if build.stop == Stop::Assembly { "s" } else { "o" });
                 // A switch clang got as well is taken there.
-                for flag in dropped_pass_switches(target, build)
-                    .into_iter()
-                    .filter(|flag| !build.clang.iter().any(|one| one == flag))
+                let taken = clang_flags(target, build);
+                for flag in
+                    dropped_pass_switches(target, build).into_iter().filter(|flag| !taken.iter().any(|one| one == flag))
                 {
                     eprintln!("llrm-cc: warning: {flag} is not a switch of this target's backend: ignored");
                 }

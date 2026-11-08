@@ -32,7 +32,7 @@ fn llc(flags: &[&str]) -> Output {
 fn calls_h(flags: &[&str]) -> bool {
     let done = llc(flags);
     assert!(done.status.success(), "{flags:?}: {}", String::from_utf8_lossy(&done.stderr));
-    String::from_utf8_lossy(&done.stdout).contains("jsr\th")
+    String::from_utf8_lossy(&done.stdout).contains("jsr\t(h,%pc)")
 }
 
 #[test]

@@ -1166,3 +1166,33 @@ fn sunk_nested(sinks: bool) -> (String, String) {
     let (preheader, rest) = after.split_once("inner:").expect("inner");
     (preheader.to_string(), rest.to_string())
 }
+
+/// Compile time: every run built the body's whole loop list again
+/// (`cfg::natural`, 308 M Ir over 534 runs on memexp -O2, one run for each of
+/// a function's 403 loops) though it keeps the tree and loops. Two runs over
+/// a function derive its shape once.
+#[test]
+fn test_two_runs_over_a_function_derive_its_shape_once() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %next
+}
+",
+    );
+    let before = llrm_analysis::cfg::shapes_derived();
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(IndVars { lftr: true, size: false });
+    manager.add(IndVars { lftr: true, size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    assert_eq!(llrm_analysis::cfg::shapes_derived() - before, 1, "the shape was derived again");
+}
