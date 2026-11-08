@@ -174,6 +174,9 @@ pub fn target_lowering() -> TargetLowering {
     tl.set_byte_equality(true);
     tl.set_assert_sext_keeps_high(true);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
+    // a jump table: the word at table + 2 * index, jumped to (`ExpandNode` of BR_JT)
+    tl.set_operation_action(BrJT, MVT::Other, Action::Expand);
+    tl.set_operation_action(JumpTable, MVT::I16, Action::Custom);
     tl
 }
 
@@ -358,6 +361,7 @@ impl Hooks for Z80Lowering {
             ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
             ISD::SignExtendInReg => lower_sign_extend_inreg(dag, node),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::JumpTable => lower_jump_table(dag, node),
             ISD::Load if dag.value_type(node) == EVT::I1 => lower_bit_load(dag, node),
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
             _ => None,
@@ -579,6 +583,16 @@ fn lower_global_address(
     let NodeData::Global { symbol, offset } = dag.node(node).data else { return None };
     let address = dag.get_target_global_address(EVT::I16, symbol, offset);
     Some(dag.get_node(z80isd::WRAPPER, EVT::I16, &[address]))
+}
+
+/// `LowerJumpTable`: `WRAPPER` of the table's address.
+fn lower_jump_table(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::JumpTable(index) = dag.node(node).data else { return None };
+    let table = dag.get_target_jump_table(EVT::I16, index);
+    Some(dag.get_node(z80isd::WRAPPER, EVT::I16, &[table]))
 }
 
 fn cc_operand(
