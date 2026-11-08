@@ -446,6 +446,17 @@ pub fn assembled_by(
                         return Err(why);
                     }
                     masm::realigned(procedure)
+                } else if matches!(procedure.body.bits, 32 | 64) {
+                    let procedure = timed("lir split returns", || returnsplit::split(procedure));
+                    if let Some(why) = masm::realign_refusal(&procedure) {
+                        return Err(why);
+                    }
+                    let procedure = masm::exits_inserted(masm::saved_first(procedure));
+                    let body = timed("lir placed after exits", || {
+                        jumps::placed_after_exits(&procedure.body, cpu, Some(&calls))
+                    })
+                    .map_err(|error| error.to_string())?;
+                    masm::tail_calls_folded(masm::Procedure { body, ..procedure })
                 } else {
                     let procedure = timed("lir split returns", || returnsplit::split(procedure));
                     // Asked only by a tail a copy could save a jump for.
@@ -1442,6 +1453,15 @@ fn phased(
         }
         // The pin's -O0 has no BranchFolder, and what FastISel selects has no jump to the next block.
         if staged.fast && !target.cpu.optimized && phase.class_name() == "ControlFlow" {
+            continue;
+        }
+        // The pin lays blocks out after the epilogue is in (`PrologEpilogInserter`
+        // runs first): 32- and 64-bit placement and the copies after it wait for
+        // the procedure (`placed_after_exits`).
+        if target.cpu.optimized
+            && matches!(body.bits, 32 | 64)
+            && matches!(phase.class_name(), "ControlFlow" | "CopyPropagation")
+        {
             continue;
         }
         if phase.class_name() == "PhiElimination" {

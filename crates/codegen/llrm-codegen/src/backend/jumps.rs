@@ -191,6 +191,19 @@ pub fn optimized(
     optimized_with(body, cpu, calls, 0)
 }
 
+/// What the flow does after the frame's exits are instructions: tails merged,
+/// blocks placed and the copies propagated (`ControlFlow` and `CopyPropagation`
+/// of the phase list, which wait for it at 32 and 64 bits).
+pub fn placed_after_exits(
+    body: &LirBody,
+    cpu: &cpu::Profile,
+    calls: Option<&IndexMap<i64, String>>,
+) -> Result<LirBody, masm::Unprintable> {
+    use crate::model::passes::LIRTransform;
+    let placed = optimized_with(body, cpu, calls, 0)?;
+    crate::backend::machinecp::CopyPropagation.transform(placed).map_err(masm::Unprintable)
+}
+
 /// `optimized`, for a body whose returns will carry `epilogue` instructions of
 /// frame teardown: the pin places after the teardown is in, so a return block
 /// is that much longer to `TailDuplicator`.
