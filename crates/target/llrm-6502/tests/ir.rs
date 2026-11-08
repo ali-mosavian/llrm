@@ -32,6 +32,22 @@ fn set(
     format!("  lda #{}\n  sta {register}\n", value & 0xFF)
 }
 
+/// Byte arguments as the caller sets them: the first in `a`, the second in `x`,
+/// the rest in rc2.. (`a` and `x` last: a cell is loaded through `a`).
+fn bytes(values: &[u16]) -> String {
+    let mut text = String::new();
+    for (at, value) in values.iter().enumerate().skip(2) {
+        text += &set(&format!("rc{}", at), *value);
+    }
+    if let Some(value) = values.get(1) {
+        text += &format!("  ldx #{}\n", value & 0xFF);
+    }
+    if let Some(value) = values.first() {
+        text += &format!("  lda #{}\n", value & 0xFF);
+    }
+    text
+}
+
 fn run(
     name: &str,
     ir: &str,
@@ -48,7 +64,7 @@ const ADD8: &str = "define i8 @add8(i8 %a, i8 %b) {\n  %r = add i8 %a, %b\n  ret
 #[test]
 fn a_byte_add_runs() {
     for (a, b, want) in [(7, 5, 12), (200, 100, 44)] {
-        let setup = set("rc2", a) + &set("rc3", b);
+        let setup = bytes(&[a, b]);
         assert_eq!(run(&format!("add8-{a}"), ADD8, "add8", &setup, ""), want);
     }
 }
@@ -59,7 +75,7 @@ fn a_byte_add_runs() {
 fn a_product_of_two_zero_extended_bytes_runs_as_a_widening_multiply() {
     let ir = "define i16 @wide(i8 %a, i8 %b) {\n  %x = zext i8 %a to i16\n  %y = zext i8 %b to i16\n  %p = mul i16 %x, %y\n  ret i16 %p\n}";
     assert!(compile(ir, &["wide"]).contains("__umulqihi3"));
-    let setup = set("rc2", 200) + &set("rc3", 100);
+    let setup = bytes(&[200, 100]);
     assert_eq!(run("wide-lo", ir, "wide", &setup, ""), 0x20);
     assert_eq!(run("wide-hi", ir, "wide", &setup, "  txa\n"), 0x4E);
 }
@@ -78,7 +94,7 @@ fn a_word_add_runs() {
 fn an_unsigned_branch_runs() {
     let ir = "define i8 @lt(i8 %a, i8 %b) {\nentry:\n  %c = icmp ult i8 %a, %b\n  br i1 %c, label %t, label %f\nt:\n  ret i8 1\nf:\n  ret i8 2\n}";
     for (a, b, want) in [(3, 9, 1), (9, 3, 2), (5, 5, 2)] {
-        let setup = set("rc2", a) + &set("rc3", b);
+        let setup = bytes(&[a, b]);
         assert_eq!(run(&format!("lt-{a}-{b}"), ir, "lt", &setup, ""), want);
     }
 }
@@ -295,7 +311,7 @@ const STACK: &str = "  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n";
 #[test]
 fn a_local_byte_runs() {
     let ir = "define i8 @loc(i8 %x) {\n  %p = alloca i8\n  store i8 %x, ptr %p\n  %v = load i8, ptr %p\n  ret i8 %v\n}";
-    let setup = STACK.to_owned() + &set("rc2", 77);
+    let setup = STACK.to_owned() + &bytes(&[77]);
     assert_eq!(run("loc", ir, "loc", &setup, ""), 77);
 }
 
@@ -322,7 +338,7 @@ fn nested_frames_do_not_overlap() {
     let ir = "define i8 @inner(i8 %x) {\n  %p = alloca i8\n  store i8 %x, ptr %p\n  %v = load i8, ptr %p\n  %r = add i8 %v, 1\n  ret i8 %r\n}\n\
 define i8 @outer(i8 %x) {\n  %p = alloca i8\n  store i8 %x, ptr %p\n  %y = add i8 %x, 1\n  %c = call i8 @inner(i8 %y)\n  %v = load i8, ptr %p\n  %r = add i8 %v, %c\n  ret i8 %r\n}";
     let text = compile(ir, &["inner", "outer"]);
-    let main = format!("{STACK}{}  jsr outer\n", set("rc2", 5));
+    let main = format!("{STACK}{}  jsr outer\n", bytes(&[5]));
     assert_eq!(common::run_with("nested", &main, &text), 12);
 }
 
@@ -339,7 +355,7 @@ fn binary(
     let setup = if word {
         set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8)
     } else {
-        set("rc2", a) + &set("rc3", b)
+        bytes(&[a, b])
     };
     let key = format!("{ty}-{op}-{a}-{b}");
     let low = run(&format!("{key}-lo"), &ir, "func", &setup, "") as u32;
@@ -412,7 +428,7 @@ fn comparisons_as_values_run() {
         let setup = if ty == "i16" {
             set("rc2", a) + &set("rc3", a >> 8) + &set("rc4", b) + &set("rc5", b >> 8)
         } else {
-            set("rc2", a) + &set("rc3", b)
+            bytes(&[a, b])
         };
         assert_eq!(run(&format!("cmp-{ty}-{cc}-{a}-{b}"), &ir, "func", &setup, ""), want, "{ty} {cc} {a} {b}");
     }
@@ -599,7 +615,7 @@ define void @put(i8 %i, i8 %v) {{\n  %z = zext i8 %i to i16\n  %p = getelementpt
     );
     let text = compile(&ir, &["pick", "put"]);
     assert!(text.contains("lda t,x") && text.contains("sta t,x"), "{text}");
-    assert_eq!(common::run_with("tx-pick", &format!("{}  jsr pick\n", set("rc2", 2)), &format!("{text}{T_DATA}")), 30);
-    let after = format!("{}{}  jsr put\n{}  jsr pick\n", set("rc2", 3), set("rc3", 99), set("rc2", 3));
+    assert_eq!(common::run_with("tx-pick", &format!("{}  jsr pick\n", bytes(&[2])), &format!("{text}{T_DATA}")), 30);
+    let after = format!("{}  jsr put\n{}  jsr pick\n", bytes(&[3, 99]), bytes(&[3]));
     assert_eq!(common::run_with("tx-put", &after, &format!("{text}{T_DATA}")), 99);
 }

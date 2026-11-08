@@ -10,3 +10,4 @@ Source: ~/scratch/handoff/matrix/x86-m16-O1-tip-2026-11-08.md (O1, 262 cells, 7 
 | M16-HUGE-BQ16-O1 | huge bq16 O1 358 B vs bc 354..356 (+2..+4) | about 40 B of spill code around the inner loops (five slots stored at entry, reloaded at exit) | greedy-subreg | 2026-11-24 |
 | M16-GREP-LSR | grep c O1 clocks +24.7%, bytes +2.5%; O2 clocks +18.6% | count-to-zero induction variable keeps the end pointer live; state and position spill every trip | w12 (LSR) | open |
 | M16-RECCHOP-O1 | recchop c O1 184 B vs ow 179 (+5) | LSR-made invariants live across the recursive calls | w12 (LSR) | open |
+| M16-QSORT-O1-CLK | quicksort c O1 clocks 305k -> 322k (+5.4%) after RA-CLK (265 -> 256 B); still -27% vs ow 443k | the 3x address-component weight evicts another value in the partition loop; fix forward by pricing the evicted value's references | m16 | 2026-11-15 |

@@ -53,7 +53,7 @@ pub enum Unmapped {
 
 /// `x86.instr`'s forms, by mnemonic.
 pub struct OpcodeMap {
-    forms: Vec<Form>,
+    forms: std::sync::Arc<Vec<Form>>,
     /// [`Self::scalar_sse`], asked per operand width: found once.
     scalar_sse: bool,
     /// The answer for each name asked: every machine node of a function asks,
@@ -65,6 +65,11 @@ pub struct OpcodeMap {
 
 impl OpcodeMap {
     pub fn new(forms: Vec<Form>) -> OpcodeMap {
+        OpcodeMap::shared(std::sync::Arc::new(forms))
+    }
+
+    /// The map of forms read once (`llrm_target::instr::shared`).
+    pub fn shared(forms: std::sync::Arc<Vec<Form>>) -> OpcodeMap {
         let scalar_sse = forms.iter().any(|form| form.name == "addsd");
         OpcodeMap { forms, scalar_sse, asked: Default::default(), sized: Default::default() }
     }

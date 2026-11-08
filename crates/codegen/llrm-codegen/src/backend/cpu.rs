@@ -755,13 +755,11 @@ pub fn tuned_optimizing(
 
 /// The registers a value may be placed in: the description's `gpr` class.
 fn general_registers(arch: &dyn Target) -> Vec<RegId> {
-    let file = llrm_target::registers::parse(&arch.registers_text()).expect("the target's registers parse");
+    let file = llrm_target::registers::file(&arch.registers_text()).expect("the target's registers parse");
     llrm_target::registers::of_class(&file, "gpr")
         .into_iter()
         .map(|name| {
-            RegId::values()
-                .find(|one| format!("{one:?}").eq_ignore_ascii_case(name))
-                .unwrap_or_else(|| panic!("no register {name}"))
+            RegId::named(name).unwrap_or_else(|| panic!("no register {name}"))
         })
         .collect()
 }
