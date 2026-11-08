@@ -1,5 +1,4 @@
-//! -O0 can select with FastISel (`backend::selectiondag::fastisel`), off unless
-//! `LLRM_FAST_ISEL=1`.
+//! -O0 selects with FastISel (`backend::selectiondag::fastisel`) unless `LLRM_FAST_ISEL=0`.
 
 use std::process::Command;
 
@@ -21,9 +20,7 @@ fn built(
         .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
         .current_dir(scratch.path())
         .args([level, "-c", "a.c", "-o", "a.o"]);
-    if fast {
-        command.env("LLRM_FAST_ISEL", "1");
-    }
+    command.env("LLRM_FAST_ISEL", if fast { "1" } else { "0" });
     let output = command.output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let object = std::fs::read(scratch.path().join("a.o")).unwrap();
@@ -48,7 +45,7 @@ fn fast_isel_on_main_alone_leaves_the_dag_object() {
 
 /// `five` is `ret i32 5`: at -O0 with the flag it is selected by FastISel
 /// (the report says `fast`); at -O1 the flag does nothing and the DAG path
-/// selects it. Off by default.
+/// selects it. `LLRM_FAST_ISEL=0` turns it off at -O0.
 #[test]
 fn fast_isel_takes_a_constant_return_at_o0_and_not_at_o1() {
     for target in ["x86_64-linux", "x86_32-linux"] {
@@ -60,7 +57,7 @@ fn fast_isel_takes_a_constant_return_at_o0_and_not_at_o1() {
         let (_, report, _) = built(target, "-O1", true);
         assert!(named(&report, "dag") && !report.contains(" fast"), "{target}: -O1 took FastISel: {report}");
         let (_, report, _) = built(target, "-O0", false);
-        assert!(!report.contains(" fast"), "{target}: FastISel on by default: {report}");
+        assert!(!report.contains(" fast"), "{target}: FastISel on with LLRM_FAST_ISEL=0: {report}");
     }
 }
 
@@ -814,6 +811,51 @@ fn fast_isel_folds_a_narrow_load_into_its_extension() {
         let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
         assert!(asm.contains("movsx eax, word ptr [") || asm.contains("movsx ecx, word ptr ["), "{target}: {asm}");
         assert!(asm.contains("movzx eax, byte ptr [") || asm.contains("movzx ecx, byte ptr ["), "{target}: {asm}");
+    }
+}
+
+/// `0 - *p` read the operand into a register before the `sub` (the fold wanted a register on the left):
+/// the pin folds the load whatever the left operand is (`abs` of `builtins_table`, +11% `.text`).
+#[test]
+fn fast_isel_folds_a_load_whose_left_operand_is_a_constant() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(int *p)\n{\n    return 100 - *p;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "-masm=intel", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(asm.contains("sub eax, dword ptr ["), "{target}: {asm}");
+    }
+}
+
+/// The pin's -O0 selects with FastISel; ours kept the DAG unless asked (`-O0` compiles cost 3261 M instructions
+/// on the 61-program corpus against 3021 M). With no environment variable `five` is selected by FastISel.
+#[test]
+fn fast_isel_is_the_default_at_o0() {
+    for target in ["x86_64-linux", "x86_32-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env_remove("LLRM_FAST_ISEL")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-c", "a.c", "-o", "a.o"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "five fast" || line == "_five fast"), "{target}: {report}");
     }
 }
 
