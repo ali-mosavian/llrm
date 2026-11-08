@@ -19,7 +19,7 @@
 use std::cell::Cell;
 
 use llrm_mir::context::ConstantKind;
-use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 
 use super::builder::{BlockDag, BuilderTarget, fresh_dag};
@@ -50,6 +50,29 @@ pub fn take_took() -> bool {
 }
 
 /// Logs why FastISel left a whole function to the DAG (`LLRM_DEBUG=isel`).
+/// Where a block was declined, kept as ids: the text is made only when the `isel` channel is on.
+enum Declined {
+    At(InstId),
+    Export(ValueId),
+}
+
+fn declined_text(module: &Module, function: &Function, declined: Option<Declined>) -> String {
+    match declined {
+        None => String::new(),
+        Some(Declined::At(id)) => {
+            let instruction = function.instruction(id);
+            format!("{:?} {}", instruction.opcode, module.context.types.display(instruction.ty))
+        }
+        Some(Declined::Export(value)) => {
+            let def = match function.value(value).def {
+                ValueDef::Instruction(id) => format!("{:?}", function.instruction(id).opcode),
+                _ => "an argument".to_owned(),
+            };
+            format!("a value another block reads that is not a register value: {def}")
+        }
+    }
+}
+
 fn declined_all(why: &str) -> Vec<Option<BlockDag>> {
     llrm_support::debug!("isel", "fast declined: {why}");
     Vec::new()
@@ -158,11 +181,11 @@ pub fn build_all(
         let next = layout.get(at + 1).copied();
         let dag = fresh_dag(module, function, target, info, block, None);
         let chain = dag.entry_node();
-        let mut declined = String::new();
+        let mut declined = None;
         let dag = Fast { layout: data_layout, module, function, info: &mut *info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), arg_regs: &arg_regs, entry: layout[0] == block, sysv: &sysv, al, edx: arch.registers().named(arch.register_named("edx"), 4), rax: view("rax", 8), rdx: view("rdx", 8), m32, dag, chain, values: Default::default(), next, uses: &uses, folded: None, exports: Vec::new(), phi_updates: Vec::new(), geps: Default::default() }
             .block(block, &mut declined);
         let Some((dag, phi_updates)) = dag else {
-            llrm_support::debug!("isel", "fast declined at {declined}");
+            llrm_support::debug!("isel", "fast declined at {}", declined_text(module, function, declined));
             blocks.push(None);
             continue;
         };
@@ -851,7 +874,7 @@ impl Fast<'_> {
         Some(())
     }
 
-    fn block(mut self, block: BlockId, declined: &mut String) -> Option<(SelectionDAG, Vec<(ValueId, u32)>)> {
+    fn block(mut self, block: BlockId, declined: &mut Option<Declined>) -> Option<(SelectionDAG, Vec<(ValueId, u32)>)> {
         self.chain = self.dag.entry_node();
         let insts: Vec<_> = self.function.iter_block(block).collect();
         self.exports = insts
@@ -864,7 +887,7 @@ impl Fast<'_> {
         while at < insts.len() {
             let instruction = self.function.instruction(insts[at]).clone();
             at += 1;
-            *declined = format!("{:?} {}", instruction.opcode, self.module.context.types.display(instruction.ty));
+            *declined = Some(Declined::At(insts[at - 1]));
             self.export_ready()?;
             match &instruction.opcode {
                 Opcode::Phi => {
@@ -1465,11 +1488,7 @@ impl Fast<'_> {
             }
         }
         if !self.exports.is_empty() {
-            let def = match self.function.value(self.exports[0]).def {
-                ValueDef::Instruction(id) => format!("{:?}", self.function.instruction(id).opcode),
-                _ => "an argument".to_owned(),
-            };
-            *declined = format!("a value another block reads that is not a register value: {def}");
+            *declined = Some(Declined::Export(self.exports[0]));
             return None;
         }
         self.dag.set_root(self.chain);
