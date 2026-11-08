@@ -1866,7 +1866,57 @@ pub fn finish(
 /// The post-printer passes. `forward_high_bytes` runs before `drop_overwritten_byte_stores`: the latter drops the
 /// `ld R1, S1` the former needs to see.
 fn tidy(lines: Vec<Line>) -> Vec<Line> {
-    drop_unreachable(drop_overwritten_byte_stores(forward_byte_copies(forward_high_bytes(cancel_steps(lines)))))
+    branch_over_tail_jump(drop_unreachable(drop_overwritten_byte_stores(forward_byte_copies(forward_high_bytes(cancel_steps(lines))))))
+}
+
+/// `jp cc, L; M: jp SYMBOL; L:` with nothing else naming `M` is `jp !cc, SYMBOL; L:`: the conditional jump over a
+/// tail call is the tail call's own condition (the pin's branch folder reverses a branch over an unconditional one).
+fn branch_over_tail_jump(lines: Vec<Line>) -> Vec<Line> {
+    let named = |lines: &[Line], label: &str| {
+        lines.iter().any(|line| matches!(line, Line::Inst(text) if text.rsplit([' ', ',']).next() == Some(label)))
+    };
+    let opposite = |cc: &str| match cc {
+        "nz" => Some("z"),
+        "z" => Some("nz"),
+        "nc" => Some("c"),
+        "c" => Some("nc"),
+        _ => None,
+    };
+    let mut at = 0;
+    let mut lines = lines;
+    while at < lines.len() {
+        let folded = (|| {
+            let Line::Inst(branch) = &lines[at] else { return None };
+            let (cc, target) = branch.strip_prefix("jp ")?.split_once(", ")?;
+            let cc = opposite(cc)?;
+            let mut next = at + 1;
+            let mut step = |next: &mut usize| {
+                while matches!(lines.get(*next), Some(Line::Loc(_))) {
+                    *next += 1;
+                }
+            };
+            step(&mut next);
+            let Some(Line::Label(middle)) = lines.get(next) else { return None };
+            next += 1;
+            step(&mut next);
+            let Some(Line::Inst(jump)) = lines.get(next) else { return None };
+            let symbol = jump.strip_prefix("jp ")?;
+            if symbol.contains(',') || block_of(symbol).is_some() || symbol.ends_with('$') {
+                return None;
+            }
+            let jump_at = next;
+            next += 1;
+            step(&mut next);
+            let Some(Line::Label(after)) = lines.get(next) else { return None };
+            (after == target && !named(&lines, middle)).then(|| (format!("jp {cc}, {symbol}"), jump_at))
+        })();
+        if let Some((text, jump_at)) = folded {
+            lines[at] = Line::Inst(text);
+            lines.drain(at + 1..=jump_at);
+        }
+        at += 1;
+    }
+    lines
 }
 
 /// Whether `text` ends the flow: `ret`, `jp L` or `jr L` with no condition.
