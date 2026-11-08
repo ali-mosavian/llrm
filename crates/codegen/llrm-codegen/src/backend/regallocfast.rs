@@ -16,9 +16,11 @@
 //! def `definePhysReg`/`freePhysReg`. An instruction's `clobbers` are its
 //! register mask.
 //!
-//! DEVIATE R1 (no number, exit 2026-11-13): the copy hints are one level deep:
-//! `traceCopies` follows no chain of copies (the pin follows three), and a
-//! hint comes from an argument's arrival or a copy out of a pinned value.
+//! DEVIATE R1 (no number, exit 2026-11-13): the static copy hints are one level
+//! deep (an argument's arrival, a copy out of a pinned value); `traceCopies`
+//! follows no chain of copies (the pin follows three). A use copied into a
+//! value already placed takes that value's register, so a chain ending in an
+//! argument register is followed to its end.
 //!
 //! DEVIATE R2 (no number, exit 2026-11-13): a body this does not cover is left
 //! to the greedy allocator (`Fallback`): x87 or SSE values, segment registers,
@@ -666,11 +668,12 @@ impl Fast<'_> {
             self.live[slot].live_out = true;
         }
         if self.live[slot].phys.is_none() {
-            // a copy into a pinned value hints that register (`useVirtReg`)
+            // a copy into a pinned value hints that register (`useVirtReg`);
+            // a copy into a value already placed, the register it was given
             let mut hint0 = None;
             if one.what.as_ref().is_some_and(|what| what.op == ir::Operation::Move)
                 && let ([def], [_]) = (&one.defines[..], &one.uses[..])
-                && let Some(register) = self.pins.get(def)
+                && let Some(register) = self.pins.get(def).or_else(|| self.here.get(def))
             {
                 hint0 = self.index.get(&ir::root(*register)).copied();
             }
