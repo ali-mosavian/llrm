@@ -2064,3 +2064,16 @@ fn test_odds_follow_a_split_edge_and_a_taken_over_branch() {
     assert_eq!(odds[&(12, 9)].0, share(10, 100));
     assert!(odds.keys().all(|(from, _)| *from != 7));
 }
+
+/// A call whose callee is known to write one register destroys that one: it
+/// came out as every caller-saved register, so a value kept across a call to a
+/// leaf that never touches it still went to the stack (recpow -Os: six
+/// callee-saved saves around a call to a function writing three registers).
+#[test]
+fn test_a_call_with_known_callee_writes_clobbers_only_those() {
+    let mut f = across_a_call(2);
+    f.blocks[2].insts[0].call_clobbers = Some(std::sync::Arc::new([RegId::EBX].into_iter().collect()));
+    let converted = to_lir::<Flat>(&lowered(f), regs()).expect("converts");
+    let call = &converted.body.blocks[2].insns[0];
+    assert_eq!(call.clobbers.iter().copied().collect::<Vec<_>>(), vec![RegId::EBX], "{call:?}");
+}
