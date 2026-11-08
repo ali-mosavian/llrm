@@ -81,6 +81,7 @@ fn priced_params(
         caller_size: size,
         relative_frequency: None,
         entry_weight: None,
+        planned: None,
         tti,
     };
     match inline_cost(&site, params) {
@@ -555,6 +556,7 @@ fn a_noipa_callee_is_never_inlined_by_cost() {
             caller_size: CallerSize::Speed,
             relative_frequency: None,
             entry_weight: None,
+            planned: None,
             tti: None,
         };
         let verdict = inline_cost(&site, InlineParams::from_level(2));
@@ -599,6 +601,7 @@ fn an_interposable_callee_is_not_inlined() {
             caller_size: CallerSize::Speed,
             relative_frequency: None,
             entry_weight: None,
+            planned: None,
             tti: None,
         };
         let verdict = inline_cost(&site, InlineParams::from_level(2));
@@ -742,7 +745,7 @@ fn test_one_site_is_decided_as_the_site_list_decides_it() {
         ))
         .collect();
     let one =
-        crate::inlinecost::decide(&module, &layout, main, calls[0], &context, &frequencies).expect("leaf has a body");
+        crate::inlinecost::decide(&module, &layout, main, calls[0], &context, &frequencies, None).expect("leaf has a body");
     let mut listed = Vec::new();
     crate::inlinecost::sites(
         &module,
@@ -758,7 +761,7 @@ fn test_one_site_is_decided_as_the_site_list_decides_it() {
         Some(&mut listed),
     );
     assert_eq!((one.inline, &one.cost), (true, &listed[0].2));
-    assert_eq!(crate::inlinecost::decide(&module, &layout, main, calls[1], &context, &frequencies), None);
+    assert_eq!(crate::inlinecost::decide(&module, &layout, main, calls[1], &context, &frequencies, None), None);
 }
 
 /// `inlinehint` raises a callee's threshold to the hint threshold, not for a
@@ -837,6 +840,7 @@ b0:
         caller_size: CallerSize::Speed,
         relative_frequency: None,
         entry_weight: None,
+        planned: None,
         tti: None,
     };
     let verdict = inline_cost(&site, InlineParams::from_level(2));
@@ -899,6 +903,7 @@ b0:
             caller_size: CallerSize::Speed,
             relative_frequency: None,
             entry_weight: None,
+            planned: None,
             tti: None,
         };
         let params =

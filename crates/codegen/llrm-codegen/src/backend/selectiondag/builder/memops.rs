@@ -1341,6 +1341,7 @@ impl Builder<'_> {
                         return Err(Refused("memmove of far pointers: the runtime's routine takes near ones"));
                     }
                     _ => self.mem_libcall(
+                        info,
                         if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" },
                         root,
                         &[dst, other],
@@ -1402,7 +1403,7 @@ impl Builder<'_> {
                         self.rep_stos(root, dst, other, bytes, self.pointer_bytes())?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
-                    _ => self.mem_libcall("memset", root, &[dst, other], size)?,
+                    _ => self.mem_libcall(info, "memset", root, &[dst, other], size)?,
                 }
             }
         };
@@ -1538,17 +1539,25 @@ impl Builder<'_> {
         {
             return SDValue { node: rep.node, res: 0 };
         }
-        // The tail starts where the dword copy ended: `dst + (n - n % 4)`.
-        // Leaving di/si out reloaded the copy's start (the tail rewrote the
-        // first bytes and left the last ones uncopied).
+        // The tail goes on from where the dword copy left di/si (read back
+        // after the copy; the pin's constant tails add the offset instead).
         let three = self.dag.get_constant(3, pointer);
         let bytes = self.dag.get_node(ISD::And, pointer, &[count, three]);
-        let whole = self.dag.get_node(ISD::Sub, pointer, &[count, bytes]);
-        let next_dst = self.dag.get_node(ISD::Add, pointer, &[dst, whole]);
-        let next_src = self.dag.get_node(ISD::Add, pointer, &[src, whole]);
         let mut chain = SDValue { node: rep.node, res: 0 };
         let mut glue = SDValue { node: rep.node, res: 1 };
-        for (reg, value) in [(cx, bytes), (di, next_dst), (si, next_src)] {
+        let mut left = Vec::new();
+        for reg in [di, si] {
+            let reg_node = self.dag.get_phys_register(pointer, reg);
+            let read = self.dag.get_node_multi(
+                ISD::CopyFromReg,
+                &[pointer, EVT::OTHER, EVT::GLUE],
+                &[chain, reg_node, glue],
+            );
+            left.push(SDValue { node: read.node, res: 0 });
+            chain = SDValue { node: read.node, res: 1 };
+            glue = SDValue { node: read.node, res: 2 };
+        }
+        for (reg, value) in [(cx, bytes), (di, left[0]), (si, left[1])] {
             let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, Some(glue));
             chain = SDValue { node: copy.node, res: 0 };
             glue = SDValue { node: copy.node, res: 1 };
@@ -1866,6 +1875,7 @@ impl Builder<'_> {
     /// value, size)` for a set; the result is read and dropped.
     fn mem_libcall(
         &mut self,
+        info: &CallInfo,
         name: &str,
         chain_in: SDValue,
         first_two: &[SDValue],
@@ -1886,13 +1896,16 @@ impl Builder<'_> {
             if name == "memset" { types.int(self.dag.value_type(first_two[1]).size_in_bits()) } else { pointer_type };
         let arg_types = [pointer_type, value_type, word];
         let first = self.full_arch()?.first_argument_offset(false);
+        // `getMemcpy`'s `RetTy` is void: the routine's result is dropped, so a call ending the function is a tail
+        // call (`jmp memmove`).
+        let void = types.void();
         let plan: Convention = convention_for(
             self.module,
             self.layout,
             self.full_arch()?,
             first,
             convention,
-            pointer_type,
+            void,
             false,
             &arg_types,
             &[],
@@ -1903,7 +1916,14 @@ impl Builder<'_> {
         let values = vec![first_two[0], first_two[1], size];
         self.dag.set_root(chain_in);
         let extends = [ISD::AnyExtend; 3];
-        let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
+        // `isTailCall`: the intrinsic is marked `tail` and ends the function, and the target takes the sibling call.
+        if let Some(tail) = self.tail_candidate.take()
+            && self.eligible_for_sibling_call(info, &plan, false, None, first, &[])
+        {
+            self.tail_calls.push(tail);
+            self.sibcall = self.target.tail_calls;
+        }
+        let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, void, false)?;
         Ok(self.dag.get_root())
     }
 
