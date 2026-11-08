@@ -4,7 +4,9 @@
 //! (`pea c; move.l x, -(%sp); jsr; addq.l #8, %sp`, 14 B and over 100 clocks).
 //! From the 68020 it is `muls.l` (4 B and 2 for the constant). The pieces cost
 //! a copy and a shift for each term and an add or subtract; both are priced
-//! from the encodings and the tables under the level's [`Price`].
+//! from the encodings and the tables under the level's [`Price`]. Against
+//! `muls.l` the pieces must be strictly smaller: they never are (6 B each), so
+//! the 68020 and up keep the multiply, as before.
 //!
 //! DEVIATE: the pin's `M68kTargetLowering::decomposeMulByConstant` answers yes
 //! for a multiply of 32 bits or fewer on every cpu, and for 64 bits from the
@@ -110,6 +112,10 @@ pub fn pieces_beat_multiply(
         if pieces.negative { price_of("NEG32d", vec![R(reg::D1), R(reg::D1)], cpu) } else { Some((0, 0)) },
     ]);
     match (parts, multiply(c, cpu)) {
+        // `muls.l` takes its source from memory and the pieces cannot, which
+        // the model does not see: where the multiply is an instruction the
+        // pieces must be smaller outright, and no slower
+        (Some(parts), Some(multiply)) if cpu.at_least(Cpu::M68020) => parts.0 < multiply.0 && parts.1 <= multiply.1,
         (Some(parts), Some(multiply)) => price.beats(cpu, parts, multiply),
         _ => false,
     }
