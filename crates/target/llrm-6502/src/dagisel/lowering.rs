@@ -20,7 +20,7 @@
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
-use llrm_codegen::backend::selectiondag::{Action, LoadExt, MemInfo, NodeData, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::{Action, LoadExt, MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_codegen::backend::selectiondag::{TargetLowering, TargetLoweringInfo};
 
 use super::generated::ids::isd as ids;
@@ -140,6 +140,8 @@ pub fn target_lowering() -> TargetLowering {
     for op in [Load, Store] {
         tl.set_operation_action(op, MVT::I1, Action::Custom);
     }
+    // a word copied between two objects is bytes in turn (`lower_word_copy`)
+    tl.set_operation_action(Store, MVT::I16, Action::Custom);
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
     for op in [SetCC, Select] {
@@ -178,6 +180,7 @@ impl Hooks for MosLowering {
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::Load if dag.value_type(node) == EVT::I1 => lower_bit_load(dag, node),
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
+            ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I16 => Some(lower_word_copy(dag, node)),
             ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
             ISD::Mul | ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem | ISD::Shl | ISD::Srl | ISD::Sra
                 if dag.value_type(node) == EVT::I32 =>
@@ -356,6 +359,57 @@ fn lower_bit_load(
     let masked = dag.get_node(ISD::And, EVT::I8, &[byte, one]);
     let bit = dag.get_node(ISD::Truncate, EVT::I1, &[masked]);
     Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I1, EVT::OTHER], &[bit, SDValue { node: byte.node, res: 1 }]))
+}
+
+/// Whether two accesses are to different known objects.
+fn distinct_objects(
+    a: MemBase,
+    b: MemBase,
+) -> bool {
+    matches!((a, b), (MemBase::Global(_) | MemBase::Stack(_), MemBase::Global(_) | MemBase::Stack(_))) && a != b
+}
+
+/// A word loaded only to be stored to another object is copied a byte at a
+/// time: low byte loaded and stored, then the high. Both loads first would
+/// hold the low byte in a register across the high load (`tax`/`txa`); the
+/// stores cannot touch what the second load reads when the objects differ.
+/// Any other word store is left as it is, a word.
+///
+/// DEVIATE 6502-COPY-PAIRS (owner w9, exit 2026-12-05): the pin legalizes
+/// i16 to bytes, which gives this and costs the word forms the selector folds
+/// into an add or a compare. Exit: those folds match byte pairs.
+fn lower_word_copy(
+    dag: &mut SelectionDAG,
+    store: SDValue,
+) -> SDValue {
+    let (chain, value, to) = (dag.operand(store, 0), dag.operand(store, 1), dag.operand(store, 2));
+    let (NodeData::Mem(out), NodeData::Mem(inn)) = (dag.node(store).data, dag.node(value).data) else { return store };
+    if dag.opcode(value) != ISD::Load
+        || value.res != 0
+        || inn.mem_vt != EVT::I16
+        || out.mem_vt != EVT::I16
+        || inn.ext.is_some()
+        || inn.volatile
+        || out.volatile
+        || inn.ordering.is_some()
+        || out.ordering.is_some()
+        || dag.users(value).any(|user| user != store.node)
+        || !distinct_objects(inn.base, out.base)
+    {
+        return store;
+    }
+    let (load_chain, from) = (dag.operand(value, 0), dag.operand(value, 1));
+    let (load_info, store_info) = (MemInfo { mem_vt: EVT::I8, ..inn }, MemInfo { mem_vt: EVT::I8, ..out });
+    let (high_from, high_to) = (dag.get_object_ptr_offset(from, 1), dag.get_object_ptr_offset(to, 1));
+    let low = dag.get_load(EVT::I8, load_chain, from, load_info);
+    let low_chain = SDValue { node: low.node, res: 1 };
+    let before_store = if chain == (SDValue { node: value.node, res: 1 }) { low_chain } else { dag.get_token_factor(&[low_chain, chain]) };
+    let low_store = dag.get_store(before_store, low, to, store_info);
+    let high = dag.get_load(EVT::I8, low_store, high_from, load_info);
+    let high_store = dag.get_store(SDValue { node: high.node, res: 1 }, high, high_to, store_info);
+    // whatever waited for the word load waits for the whole copy
+    dag.replace_all_uses_with(SDValue { node: value.node, res: 1 }, high_store);
+    high_store
 }
 
 /// The store of a bit: the byte of 0 or 1 (`lower_bit_load`).
