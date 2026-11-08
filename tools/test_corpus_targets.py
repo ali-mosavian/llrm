@@ -131,6 +131,6 @@ def test_stft_single_has_an_expected_output_per_float_model():
     """The DOS .out is x87 excess precision. Strict single (m68k, m64) and arm64's fused multiply-add give other checksums; each target
     compared with the x87 .out read as a miscompile."""
     source = HERE.parent / "bench/stft_single/stft_single.c"
-    want = {"m68k-68020": "502187692", "x86_64-linux": "502187692", "arm64-linux": "40144774", "x86_32-dos": "78803551"}
+    want = {"m68k-68020": "502187692", "x86_64-linux": "502187692", "arm64-linux": "40144774", "x86_32-dos": "78803551", "wasm32": "502187692"}
     for target, value in want.items():
         assert ct.expected_output(source, target).read_text().strip() == value, target
