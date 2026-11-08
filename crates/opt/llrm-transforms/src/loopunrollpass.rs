@@ -1127,7 +1127,7 @@ fn should_full_unroll(
         && unrolled_size < u64::from(limit)
         && let Some(name) = run.globals[this.0 as usize].name.as_deref()
     {
-        trial::note(name);
+        trial::note(name, unrolled_size);
     }
     None
 }

@@ -314,16 +314,18 @@ fn trial_unrolled(
     use llrm_transforms::loopunrollpass::trial;
     let tti = built.target.tti();
     let Some(limit) = tti.as_ref().and_then(|tti| tti.unroll_trial_threshold()) else { return Ok(built) };
-    if !matches!(request.level, Level::O2 | Level::O3 | Level::Os) || trial::take().is_empty() {
+    let (eligible, units) = trial::take();
+    if !matches!(request.level, Level::O2 | Level::O3 | Level::Os) || eligible.is_empty() {
         return Ok(built);
+    }
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!("trial candidates: {} functions, {units} units", eligible.len());
     }
     let rate = tti.as_ref().map_or(0, |tti| tti.unroll_milliclocks_per_byte());
     let other = trial::with(limit, || program(text, request))?;
     let (kept, tried) = (priced(&built, request)?, priced(&other, request)?);
     let (saved, added) = (kept.0 - tried.0, tried.1 - kept.1);
-    // Bytes only at size, as everywhere else; at speed a byte is worth `rate`
-    // thousandths of a clock.
-    let pays = if request.level == Level::Os { added < 0 || (added == 0 && saved >= 0) } else { saved * 1000 >= added * rate };
+    let pays = trial_pays(request.level, rate, saved, added);
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
         eprintln!(
             "trial unroll: {added:+} bytes, {saved:+} clocks saved: {}",
@@ -331,6 +333,26 @@ fn trial_unrolled(
         );
     }
     Ok(if pays { other } else { built })
+}
+
+/// The most code a trial may add: a quarter of the 6502's 64 KiB address space,
+/// which the stack, the data and the runtime share. `fcmp_all` unrolled to 85,508
+/// bytes more (2,008,446 clocks saved, 23 clk/B) and would not have fitted.
+const TRIAL_GROWTH_LIMIT: i64 = 16 * 1024;
+
+/// Whether a trial that saved `saved` clocks for `added` bytes is kept. Bytes
+/// only at size, as everywhere else; at speed a byte is worth `rate`
+/// thousandths of a clock.
+pub fn trial_pays(
+    level: Level,
+    rate: i64,
+    saved: i64,
+    added: i64,
+) -> bool {
+    if added > TRIAL_GROWTH_LIMIT {
+        return false;
+    }
+    if level == Level::Os { added < 0 || (added == 0 && saved >= 0) } else { saved * 1000 >= added * rate }
 }
 
 /// The clocks and bytes of every function of `program`'s first module as

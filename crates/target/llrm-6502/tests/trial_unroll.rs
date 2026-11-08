@@ -78,3 +78,15 @@ fn an_unroll_that_folds_nothing_is_put_back() {
     let xors = text.lines().filter(|line| line.trim_start().starts_with("eor")).count();
     assert!(xors < 8, "{xors} xors: the 16 trips were copied out:\n{text}");
 }
+
+/// `fcmp_all` was unrolled to 85,508 bytes more at 23 clk/B: it pays by the
+/// rate and would not fit the 64 KiB address space. A trial is put back past
+/// the growth limit whatever it saves, at either level.
+#[test]
+fn a_trial_that_grows_the_code_past_the_limit_is_put_back() {
+    use llrm_6502::driver::trial_pays;
+    assert!(trial_pays(Level::O2, 3000, 100_000, 8_000));
+    assert!(!trial_pays(Level::O2, 3000, 2_008_446, 85_508));
+    assert!(trial_pays(Level::Os, 0, 0, -1));
+    assert!(!trial_pays(Level::Os, 0, 1_000_000, 17_000));
+}
