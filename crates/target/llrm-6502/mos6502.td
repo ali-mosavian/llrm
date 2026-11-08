@@ -146,6 +146,11 @@ let Defs = [P] in
 def UMUL8X8 : MOSInst<(outs Imag16:$d), (ins Imag8:$a, Imag8:$b), "umul8x8 $d, $a, $b",
     [(set i16:$d, (mul (zext i8:$a), (zext i8:$b)))]>;
 
+// The same for two sign-extended bytes: the unsigned product with the high byte corrected.
+let Defs = [P] in
+def SMUL8X8 : MOSInst<(outs Imag16:$d), (ins Imag8:$a, Imag8:$b), "smul8x8 $d, $a, $b",
+    [(set i16:$d, (mul (sext i8:$a), (sext i8:$b)))]>;
+
 def LDI8 : MOSInst<(outs Imag8:$d), (ins i8imm:$v), "ldi $d, $v", [(set i8:$d, imm:$v)]>;
 def LDI16 : MOSInst<(outs Imag16:$d), (ins i16imm:$v), "ldi $d, $v", [(set i16:$d, imm:$v)]>;
 
