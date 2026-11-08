@@ -2,7 +2,7 @@
 //! trip MFunc -> LirBody -> MFunc must be the identity.
 
 use llrm_arm64::driver;
-use llrm_arm64::lir_body::set_check;
+use llrm_arm64::lir_body::{checked_operations, set_check};
 use llrm_arm64::machine::Platform;
 
 const LAYOUT: &str =
@@ -44,38 +44,77 @@ out:
     lowers_checked(ir).expect("round trip is the identity");
 }
 
-/// A form the producer does not map yet is named by its variant, so the first
-/// missing form of a program is the next one to write (here the address of a
-/// global).
-#[test]
-fn the_first_unmapped_form_is_named() {
-    let ir = "@x = global i32 0\ndefine i32 @f() {\n  %v = load i32, ptr @x\n  ret i32 %v\n}\n";
-    let why = lowers_checked(ir).expect_err("a global's address has no mapping yet");
-    assert!(why.contains("unmapped form Adr"), "{why}");
+/// How the driver took a fixture or program.
+enum Outcome {
+    RoundTrips,
+    /// Refused for a reason that is not the round trip's (a missing
+    /// datalayout).
+    Refused(String),
+    /// The round trip failed, or a form has no mapping.
+    Failed(String),
 }
 
-/// Prints the first unmapped form of each fixture: `cargo test -p llrm-arm64
-/// --test lir_body -- --ignored --nocapture`.
+fn corpus() -> Vec<(String, Outcome)> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let mut found = Vec::new();
+    for dir in ["data", "darwin"] {
+        for entry in std::fs::read_dir(root.join(dir)).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|ext| ext != "ll") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let platform = if text.contains("apple") { Platform::Darwin } else { Platform::Linux };
+            set_check(true);
+            let said = driver::assembly(&text, platform, true);
+            set_check(false);
+            let outcome = match said {
+                Ok(_) => Outcome::RoundTrips,
+                Err(why)
+                    if why.contains("unmapped form") || why.contains("no way back") || why.contains("round trip") =>
+                {
+                    Outcome::Failed(why)
+                }
+                Err(why) => Outcome::Refused(why),
+            };
+            found.push((format!("{dir}/{}", path.file_name().unwrap().to_string_lossy()), outcome));
+        }
+    }
+    found
+}
+
+/// The round trip MFunc -> LirBody -> MFunc was the identity on 7 of 126
+/// fixtures and none of the 24 programs: every other one named a form the
+/// producer did not map (`Adr` first). Compared operations are counted, so a
+/// check that stops running cannot pass.
+#[test]
+fn every_fixture_and_program_round_trips() {
+    let before = checked_operations();
+    let failed: Vec<_> = corpus()
+        .into_iter()
+        .filter_map(|(name, outcome)| match outcome {
+            Outcome::Failed(why) => Some(format!("{name}: {why}")),
+            _ => None,
+        })
+        .collect();
+    assert!(failed.is_empty(), "{} did not round trip:\n{}", failed.len(), failed.join("\n"));
+    println!("{} operations compared", checked_operations() - before);
+    assert!(checked_operations() - before > 10_000, "the check compared too little to mean anything");
+}
+
+/// Prints how each fixture was taken: `cargo test -p llrm-arm64 --test lir_body
+/// -- --ignored --nocapture`.
 #[test]
 #[ignore = "inventory"]
 fn unmapped_inventory() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
     let mut tally = std::collections::BTreeMap::<String, usize>::new();
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_none_or(|ext| ext != "ll") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).unwrap();
-        let platform = if text.contains("apple") { Platform::Darwin } else { Platform::Linux };
-        set_check(true);
-        let said = driver::assembly(&text, platform, true);
-        set_check(false);
-        let form = match said {
-            Ok(_) => "mapped".to_owned(),
-            Err(why) => why.split("unmapped form ").nth(1).map_or(format!("other: {why:.60}"), str::to_owned),
+    for (_, outcome) in corpus() {
+        let key = match outcome {
+            Outcome::RoundTrips => "round trips".to_owned(),
+            Outcome::Refused(why) => format!("refused: {why:.60}"),
+            Outcome::Failed(why) => why,
         };
-        *tally.entry(form).or_default() += 1;
+        *tally.entry(key).or_default() += 1;
     }
     for (form, count) in &tally {
         println!("{count:4} {form}");
