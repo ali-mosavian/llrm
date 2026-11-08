@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Regenerates the checked-in DAG selector tables from the pin's own tblgen.
 #
-#   tools/dagisel/regen.sh [OUT_DIR]   # default: crates/backend/llrm-dagisel/src/generated
+#   tools/dagisel/regen.sh [OUT_DIR [X86_OUT_DIR]]
+#     defaults: crates/backend/llrm-dagisel/src/generated and crates/target/llrm-x86-dagisel/src/generated
 #
 # DAGISEL_GEN names a built llrm-dagisel-gen to use instead of cargo run.
 # LLVM_SRC is a checkout of the pin and LLVM_BUILD a build of it that has bin/llvm-tblgen.
@@ -12,6 +13,7 @@ LLVM_SRC=${LLVM_SRC:-$HOME/work/personal/llvm-project}
 LLVM_BUILD=${LLVM_BUILD:-$HOME/scratch/llvm-build-assert}
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=${1:-$ROOT/crates/backend/llrm-dagisel/src/generated}
+X86_OUT=${2:-$ROOT/crates/target/llrm-x86-dagisel/src/generated}
 if [ -z "${WORK:-}" ]; then WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT; fi
 mkdir -p "$WORK"
 
@@ -66,6 +68,6 @@ g++ -std=c++17 -w -I"$S/include" -I"$LLVM_BUILD/include" -I"$X" -I"$LLVM_BUILD/l
 # Numbers for the X86ISD nodes m16.td defines; the pin's headers do not have them.
 cat "$ROOT/tools/dagisel/own_ids.txt" >> "$WORK/ids.txt"
 
-mkdir -p "$OUT"
+mkdir -p "$OUT" "$X86_OUT"
 if [ -n "${DAGISEL_GEN:-}" ]; then GEN=("$DAGISEL_GEN"); else GEN=(cargo run -q --release -p llrm-dagisel-gen --); fi
-"${GEN[@]}" --inc "$WORK/X86GenDAGISel.inc" --ids "$WORK/ids.txt" --pin "$PIN" --inc-m16 "$WORK/X86GenDAGISel_m16.inc" --fastisel-inc "$WORK/X86GenFastISel.inc" --out "$OUT" --extras "$ROOT/tools/dagisel/extra_symbols.txt" --instrinfo "$WORK/instrinfo.txt" --fold-tables "$WORK/X86GenFoldTables.inc"
+"${GEN[@]}" --inc "$WORK/X86GenDAGISel.inc" --ids "$WORK/ids.txt" --pin "$PIN" --inc-m16 "$WORK/X86GenDAGISel_m16.inc" --fastisel-inc "$WORK/X86GenFastISel.inc" --out "$OUT" --x86-out "$X86_OUT" --extras "$ROOT/tools/dagisel/extra_symbols.txt" --instrinfo "$WORK/instrinfo.txt" --fold-tables "$WORK/X86GenFoldTables.inc"

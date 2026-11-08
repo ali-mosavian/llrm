@@ -2,7 +2,7 @@
 # cells.sh DIR LIST: per-cell .text bytes and instruction count, DIR/base vs DIR/new.
 # LIST lines: "<anything> <target> <-Olevel> <file.c>". Refuses to run when base and new are
 # the same binary (a sweep of a build against itself reads "no change" everywhere).
-# Env: CELLS_FLAGS (extra cc flags), CELLS_INC (include flags).
+# Env: CELLS_FLAGS (extra cc flags), CELLS_INC (include flags). Each row ends `flags: WORDS`: the file's own flags, `-` for none.
 set -u
 . "$(dirname "$0")/../ab_env.sh"; ab_env_check || exit 2
 D=$1; L=$2
@@ -17,9 +17,12 @@ declare -A text ins
 empty=0
 while read -r _ tg lvl f; do
   fl=""; case $tg in x86_16-wat) fl=-march=i386;; x86_32-linux) fl=-m32;; esac
+  # The program's own flags (`// flags:`, first variant): a cell built without them is another program (div_constants_*
+  # without -fno-inline-functions inlined to 145 kB on z80 where the row is 17.5 kB).
+  pf=$(python3 "$(dirname "$0")/cell_flags.py" "$f")
   for v in base new; do
-    LLRM_CC_TARGET=$tg fresh_compile "$w/$v.o" "$D/$v/llrm-cc" $fl $lvl ${CELLS_INC:-} -c "$f" -o "$w/$v.o" >/dev/null 2>&1 || continue
-    LLRM_CC_TARGET=$tg fresh_compile "$w/$v.s" "$D/$v/llrm-cc" $fl $lvl ${CELLS_INC:-} -S "$f" -o "$w/$v.s" >/dev/null 2>&1 || continue
+    LLRM_CC_TARGET=$tg fresh_compile "$w/$v.o" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_INC:-} -c "$f" -o "$w/$v.o" >/dev/null 2>&1 || continue
+    LLRM_CC_TARGET=$tg fresh_compile "$w/$v.s" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_INC:-} -S "$f" -o "$w/$v.s" >/dev/null 2>&1 || continue
     [ -s "$w/$v.o" ] && [ -s "$w/$v.s" ] || continue
     # OMF (m16) objects defeat size(1): the file size then, symbols being equal on both sides.
     text[$v]=$(size "$w/$v.o" 2>/dev/null | awk 'NR==2{print $1}')
@@ -29,7 +32,7 @@ while read -r _ tg lvl f; do
   if [ -z "${text[base]:-}" ] || [ -z "${text[new]:-}" ] || [ "${ins[base]:-0}" -eq 0 ] || [ "${ins[new]:-0}" -eq 0 ]; then
     echo "EMPTY $tg $lvl $f" ; empty=$((empty + 1)); unset 'text[base]' 'text[new]' 'ins[base]' 'ins[new]'; continue
   fi
-  echo "$tg $lvl $(basename "$f") bytes ${text[base]} ${text[new]} instrs ${ins[base]} ${ins[new]}"
+  echo "$tg $lvl $(basename "$f") bytes ${text[base]} ${text[new]} instrs ${ins[base]} ${ins[new]} flags: ${pf:--}"
   unset 'text[base]' 'text[new]' 'ins[base]' 'ins[new]'
 done < "$L"
 # A cell that built nothing is a failed measurement, not a quiet one.

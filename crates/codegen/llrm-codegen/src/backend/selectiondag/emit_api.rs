@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use llrm_dagisel::x86_addr::AddrMode;
+use llrm_dagisel::addr::AddrMode;
 use llrm_support::hash::HashMap;
 
 use super::dag::SDValue;
@@ -175,6 +175,8 @@ pub struct X87Prices {
     /// The bytes of `fld m` / `fadd m` on a pool cell (6 flat, 4 real mode);
     /// the register forms take 2.
     pub memory_bytes: i64,
+    /// Bytes decide over clocks (`Profile::bytes_strict`: -O1, -Os).
+    pub bytes_strict: bool,
 }
 
 /// The pin's machine opcode names, by number.
@@ -305,4 +307,3 @@ pub struct Emitted {
     /// The address of the first instruction emitted for each `IROrder`.
     pub first_at: HashMap<u32, i64>,
 }
-

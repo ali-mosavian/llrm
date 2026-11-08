@@ -1709,6 +1709,14 @@ impl Spiller for InlineSpiller<'_> {
         }
         self.keys.insert(reg, self.key);
         if let Some(width) = self.tables.widths.borrow().get(&reg).copied().filter(|width| *width > 0) {
+            // An x87 value's cell is its float type's, not the register's ten
+            // bytes (D-RFP1): every access of it is that wide, and the first
+            // cell made fixes the slot.
+            let width = if self.is_float(reg, &[]) {
+                self.tables.float_bytes.borrow().get(&reg).copied().unwrap_or(width)
+            } else {
+                width
+            };
             if self.frame.cell(self.key, width).is_err() {
                 self.failed = true;
                 return;
@@ -2207,6 +2215,48 @@ mod tests {
         let after = lis.block_insns(0);
         assert!(after.iter().all(|one| one.copy_of().is_none()), "the snippet copy is gone: {after:?}");
         assert!(after.iter().all(|one| !one.uses.contains(&3) && !one.defines.contains(&3)), "no %3 left: {after:?}");
+    }
+
+    /// A spilled `float` took a ten-byte slot (the register's width) while
+    /// every access of it was four bytes: x87rotate at -Os m16 spaced nine
+    /// spills ten bytes apart (enter 98 against 58), and x87_loop_carried at
+    /// m32 pushed five spill accesses past disp8.
+    #[test]
+    fn test_a_spilled_float_takes_a_slot_of_its_type_not_ten_bytes() {
+        let global = Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 0)), 4));
+        let insns = vec![
+            x87(0, Operation::FloatLoad, "fld", vec![held(2)], vec![global.clone()], vec![2], vec![]),
+            x87(1, Operation::FloatArith, "fmul", vec![held(3)], vec![held(2), held(2)], vec![3], vec![2]),
+            x87(2, Operation::FloatArith, "fadd", vec![held(4)], vec![held(2), held(3)], vec![4], vec![2, 3]),
+            x87(3, Operation::FloatStore, "fstp", vec![global], vec![held(4)], vec![], vec![4]),
+        ];
+        let body =
+            LirBody::new("slot", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let mut lis = LiveIntervals::new(&body);
+        for value in 2..=4 {
+            let li = lis.compute_virt_reg_interval(value);
+            lis.insert_interval(li);
+        }
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO)), Box::new(NoFixed));
+        let mut frame = Frame::new(0);
+        let classes = RegisterClasses::m16();
+        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
+        let tables = Rc::new(Tables::default());
+        for value in 2..=4 {
+            tables.orders.borrow_mut().insert(value, vec![RegId::MM0]);
+            tables.float_bytes.borrow_mut().insert(value, 4);
+            tables.widths.borrow_mut().insert(value, 10);
+        }
+        let order_of = |_: u32| Vec::new();
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
+        let (env, original) = (Env, Default::default());
+        let mut vrai = VirtRegAuxInfo::new(&env, &original);
+        let (mut shrunk, mut made) = (Vec::new(), Vec::new());
+        let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
+        spiller.spill(ctx, 2, &mut made);
+        drop(spiller);
+        let widths: Vec<i64> = frame.capacities.values().copied().collect();
+        assert_eq!(widths, vec![4], "one slot, as wide as a float: {:?}", frame.capacities);
     }
 
     /// The stores left in the blocks of a diamond after `hoistAllSpills`: a

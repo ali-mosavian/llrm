@@ -1,59 +1,111 @@
-reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
-blessed = "2026-11-05"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "fecad9a0ddefddf57b1035d10a416efc"
+
+[ow.O1]
+instructions = 46929
+memory_operands = 15708
+clocks = 180312
+code_bytes = 155
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.6267
 
 [ow.O2]
 instructions = 50636
 memory_operands = 9510
+clocks = 170097
 code_bytes = 156
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.6761
 
 [ow.Os]
 instructions = 46929
 memory_operands = 15708
+clocks = 180312
 code_bytes = 155
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.6267
+
+[bcc.O1]
+instructions = 58628
+memory_operands = 7405
+clocks = 212514
+code_bytes = 143
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.7827
 
 [bcc.O2]
 instructions = 56834
 memory_operands = 8006
+clocks = 203810
 code_bytes = 150
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.7588
 
 [bcc.Os]
 instructions = 58628
 memory_operands = 7405
+clocks = 212514
 code_bytes = 143
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.7827
+
+[tc.O1]
+instructions = 66331
+memory_operands = 7707
+clocks = 250822
+code_bytes = 139
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.8855
 
 [tc.O2]
 instructions = 62935
 memory_operands = 7407
+clocks = 226709
 code_bytes = 150
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.8402
 
 [tc.Os]
 instructions = 66331
 memory_operands = 7707
+clocks = 250822
 code_bytes = 139
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.8855
+
+[tcpp.O1]
+instructions = 72833
+memory_operands = 7707
+clocks = 247121
+code_bytes = 151
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.9722
 
 [tcpp.O2]
 instructions = 73438
 memory_operands = 7407
+clocks = 247415
 code_bytes = 163
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.9803
 
 [tcpp.Os]
 instructions = 72833
 memory_operands = 7707
+clocks = 247121
 code_bytes = 151
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.9722

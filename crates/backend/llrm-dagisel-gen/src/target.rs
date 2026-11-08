@@ -121,6 +121,7 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
         local_desc: true,
         hooks: "Hooks",
         listed_predicates: target.listed_predicates,
+        shared_flags: false,
     };
     let write = |name: &str, text: String| {
         let path = inputs.out.join(name);

@@ -161,3 +161,21 @@ fn a_long_at_or_above_zero_is_the_sign_of_its_high_word() {
     let body: String = text[from..].split(".segment").next().unwrap().to_owned();
     assert!(!body.contains("sbc"), "a chain for a sign:\n{body}");
 }
+
+/// The sign of a long, run: the branch tests the sign of the high word, so a
+/// value whose low words are all ones or all zeros must not change it.
+#[test]
+fn the_sign_of_a_long_decides_the_branch_when_run() {
+    for (value, want) in [(-1i32, 2), (0, 1), (1, 1), (0x0001_0000, 1), (-0x0001_0000, 2), (i32::MIN, 2), (i32::MAX, 1)] {
+        let ir = format!(
+            "target datalayout = \"{}\"\n@g = global i32 {value}\n\
+             define i8 @t() {{\nentry:\n  %x = load volatile i32, ptr @g\n  %c = icmp sge i32 %x, 0\n  \
+             br i1 %c, label %p, label %n\np:\n  ret i8 1\nn:\n  ret i8 2\n}}\n",
+            datalayout()
+        );
+        let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+        let functions: String = text.lines().filter(|l| !l.contains(" = $")).map(|l| format!("{l}\n")).collect();
+        let got = common::run_with(&format!("sign-{value}"), "  jsr t\n", &functions);
+        assert_eq!(got, want, "x = {value}:\n{text}");
+    }
+}

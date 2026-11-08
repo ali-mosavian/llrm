@@ -84,6 +84,28 @@ __umulqihi3:                    ; rc2 * rc3 -> A:X, both unsigned bytes
   lda rc3
   rts
 
+; two signed bytes: the unsigned product, then the high byte less the other byte for each negative one
+.export __mulqihi3
+__mulqihi3:                     ; rc2 * rc3 -> A:X, both signed bytes
+  lda rc3
+  sta rc5
+  jsr __umulqihi3
+  sta rc4
+  txa
+  ldx rc2
+  bpl @a
+  sec
+  sbc rc5
+@a:
+  ldx rc5
+  bpl @b
+  sec
+  sbc rc2
+@b:
+  tax
+  lda rc4
+  rts
+
 .export __mulhi3
 __mulhi3:                       ; rs1 * rs2 -> A:X
   lda #0

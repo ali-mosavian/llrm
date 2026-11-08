@@ -1,11 +1,11 @@
 //! `M68kDAGToDAGISel` as the interpreter's [`Hooks`]: the complex patterns the
 //! table names by number, fold legality and the node predicates.
 
+use llrm_dagisel::addr::AddrDag;
+use llrm_dagisel::addr::find_non_imm_use;
 use llrm_dagisel::dag::{Hooks, PatternContext, SDValue};
 use llrm_dagisel::generated::ids::{isd, mvt};
 use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::x86_addr::AddrDag;
-use llrm_dagisel::x86_hooks::find_non_imm_use;
 
 use super::addr;
 use super::generated::ids::isd as m68k_isd;

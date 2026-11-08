@@ -1,23 +1,14 @@
 # Copies of target facts left in shared code, per file: count path. Only shrinks.
+# Exit 2026-11-22 (re-dated only by oversight): Selector::Old and isel.rs are deleted at DAG switch-over, condition: Selector::default() = Dag at m16/m32/m64 and every x86 corpus cell identical-or-better. The old-selector files (backend/isel*.rs, peephole.rs, peep/*, selects.rs, pushfold.rs, storecombine.rs, arithmetic.rs, floatassign.rs, intbits.rs, verify.rs, fixupleas.rs) leave this list then, not by moving.
 1 crates/backend/llrm-dagisel-gen/src/inc.rs
 8 crates/backend/llrm-dagisel-gen/src/main.rs
 2 crates/backend/llrm-dagisel/src/aarch64_predicates.rs
-2 crates/backend/llrm-dagisel/src/fastisel.rs
 10 crates/backend/llrm-dagisel/src/generated/aarch64/aarch64_apple_m1.rs
 1 crates/backend/llrm-dagisel/src/generated/aarch64/ids.rs
-158 crates/backend/llrm-dagisel/src/generated/instrinfo.rs
-1 crates/backend/llrm-dagisel/src/generated/mod.rs
-2 crates/backend/llrm-dagisel/src/generated/x86_i486.rs
-2 crates/backend/llrm-dagisel/src/generated/x86_m16.rs
-2 crates/backend/llrm-dagisel/src/generated/x86_p5.rs
-2 crates/backend/llrm-dagisel/src/generated/x86_x64.rs
 1 crates/backend/llrm-dagisel/src/predicates.rs
-1 crates/backend/llrm-dagisel/src/x86_addr.rs
-12 crates/backend/llrm-dagisel/src/x86_hooks.rs
-1 crates/backend/llrm-dagisel/src/x86_test.rs
+1 crates/backend/llrm-dagisel/src/addr.rs
 1 crates/backend/llrm-iselgen/src/build.rs
 10 crates/codegen/llrm-codegen/examples/builder_refusals.rs
-10 crates/codegen/llrm-codegen/examples/select_shadow.rs
 4 crates/codegen/llrm-codegen/src/abi/qb.rs
 4 crates/codegen/llrm-codegen/src/backend/arithmetic.rs
 1 crates/codegen/llrm-codegen/src/backend/arrival.rs
@@ -43,20 +34,16 @@
 1 crates/codegen/llrm-codegen/src/backend/memcpycall.rs
 7 crates/codegen/llrm-codegen/src/backend/peep/guards.rs
 4 crates/codegen/llrm-codegen/src/backend/peep/make.rs
-12 crates/codegen/llrm-codegen/src/backend/peephole.rs
+7 crates/codegen/llrm-codegen/src/backend/peephole.rs
 2 crates/codegen/llrm-codegen/src/backend/pushfold.rs
 1 crates/codegen/llrm-codegen/src/backend/rewriter.rs
-13 crates/codegen/llrm-codegen/src/backend/selectiondag/builder.rs
-14 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/memops.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/switch.rs
 3 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/tailcall.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dag.rs
-26 crates/codegen/llrm-codegen/src/backend/selectiondag/dag_function.rs
 2 crates/codegen/llrm-codegen/src/backend/selectiondag/div_combine.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dump.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/opcodes.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/schedule.rs
-3 crates/codegen/llrm-codegen/src/backend/selectiondag/x86_lowering.rs
 1 crates/codegen/llrm-codegen/src/backend/slots.rs
 2 crates/codegen/llrm-codegen/src/backend/storecombine.rs
 1 crates/codegen/llrm-codegen/src/backend/upperzero.rs

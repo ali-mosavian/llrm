@@ -222,6 +222,7 @@ fn a_narrowed_shift_takes_the_targets_amount_type() {
         i16_mul_chains: false,
         sext_load: true,
         zext_free: true,
+        branch_constant_selects: false,
         profile: None,
     };
     let tli = TargetLowering::x86_64(Features::default(), MVT::I64);
@@ -377,6 +378,7 @@ fn and_mask_under_a_shift(m16: bool) -> Option<u128> {
         i16_mul_chains: m16,
         sext_load: true,
         zext_free: false,
+        branch_constant_selects: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).run();

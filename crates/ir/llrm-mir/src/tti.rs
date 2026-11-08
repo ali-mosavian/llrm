@@ -562,11 +562,36 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE OB1 (`unrollbound.rs`): the most trips the unroller takes from the
+    /// size of the object a loop's accesses run through, as a bound it unrolls
+    /// completely by; none: the pin's bound alone.
+    fn unroll_object_bound(&self) -> Option<u32> {
+        None
+    }
+
     /// Whether a priced inline trial keeps a copy that leaves the module no
     /// larger and saves clocks though no callee goes with it. False: the
     /// callee's credit decides (arm64 -O3 jpeg `decode`: 5,828 -> 7,324 B and
     /// +1.2M instructions when the copies were kept).
     fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        false
+    }
+
+    /// The largest caller, in instructions, whose refused sites SZ2 tries inline: a trial
+    /// runs the simplifier over the whole caller once per callee tried.
+    fn inline_trial_caller_limit(&self) -> usize {
+        300
+    }
+
+    /// Whether SZ2 trials simplify their copy with the cleanup list, not the whole one: a trial
+    /// only counts instructions. False: the whole list.
+    fn inline_trial_light_simplify(&self) -> bool {
+        false
+    }
+
+    /// Whether a later round of the inliner over one caller skips a callee SZ2 rejected in an
+    /// earlier round: a round costs the simplifier over the caller per callee. False: tried again.
+    fn inline_trial_skips_rejected(&self) -> bool {
         false
     }
 
@@ -586,6 +611,42 @@ pub trait Tti {
     }
 
     fn speed_inline_rate_at_o1(&self) -> bool {
+        false
+    }
+
+    /// What a call to a callee whose peak register pressure is `peak` values
+    /// costs in clocks to save and restore the registers it must preserve (a
+    /// register the callee takes beyond the scratch ones is pushed and popped
+    /// once per call). Inlining removes it; the trial prices it. 0: not priced.
+    fn callee_saved_clocks(&self, peak: usize) -> i64 {
+        let _ = peak;
+        0
+    }
+
+    /// INL-HOT: the least site frequency (over the caller's entry) at which a
+    /// call the pin's threshold alone refused is tried inlined at -O2/-O3 and
+    /// kept where the rate pays. Whole units of relative frequency. None: the threshold is final.
+    fn inline_hot_trial_frequency(&self) -> Option<i64> {
+        None
+    }
+
+    /// Whether INL-HOT's trials run at -O3 too (false: -O2 only).
+    fn inline_hot_trial_at_o3(&self) -> bool {
+        false
+    }
+
+    /// Whether a full unroll's saving is counted over `ASSUMED_TRIPS` runs
+    /// of each unknown-count loop around it, as the pin's branch weights
+    /// say (up to two). False: such a loop counts once, the runs the
+    /// compiler can show.
+    fn unroll_assumes_unknown_loops_run(&self) -> bool {
+        true
+    }
+
+    /// Whether a call to a function of the module destroys what that function
+    /// writes, not every caller-saved register (`-enable-ipra`; off in the
+    /// pin, on in GCC from -O1).
+    fn interprocedural_register_use(&self) -> bool {
         false
     }
 
@@ -636,6 +697,16 @@ pub trait Tti {
     /// exit test folds in the preheader (RS1). False: the pass's header limit
     /// alone.
     fn rotation_guard_must_fold_at_size(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LICM-FRAME (size builds, target opt-in, owner w15, exit
+    /// 2026-11-30): the speculative LICM does not hoist an instruction the loop
+    /// might never execute into the entry block of a function when the loop
+    /// calls: the value would live across the call in a callee-saved register
+    /// and the frame could no longer start after the guard (shrink wrapping).
+    /// False: the pin's rule.
+    fn licm_speculation_keeps_frame_late(&self) -> bool {
         false
     }
 
@@ -855,6 +926,11 @@ pub trait Tti {
 
     /// `Tuning::imul_at_size`.
     fn imul_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::rep_stos_at_size`.
+    fn rep_stos_at_size(&self) -> bool {
         false
     }
 
@@ -1546,6 +1622,15 @@ pub trait Tti {
     /// for the narrower search to hide a counter that serves two uses.
     fn lsr_visited_registers_lose(&self) -> bool {
         true
+    }
+
+    /// DEVIATE LU14: whether `Solve` also searches the uses in the opposite
+    /// order and keeps the cheaper solution (a tie keeps the pin's order).
+    /// `SolveRecurse` requires of a use the registers the uses before it
+    /// chose, so a cheaper combination that starts with a later use is never
+    /// rated. The pin searches one order.
+    fn lsr_solves_both_use_orders(&self) -> bool {
+        false
     }
 
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop

@@ -84,6 +84,7 @@ fn a_float_read_as_an_i32_goes_through_a_stack_slot() {
             i16_mul_chains: false,
             sext_load: false,
             zext_free: false,
+            branch_constant_selects: false,
             profile: None,
         },
     )

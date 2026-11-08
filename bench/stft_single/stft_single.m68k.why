@@ -1,0 +1,1 @@
+Float model: the .out is x87 excess precision (FLT_EVAL_METHOD=2, the DOS and x86_32 rows); m68k, arm64, m64 and wasm evaluate in single. 502187692 is host gcc -m32 -msse2 -mfpmath=sse on the same signal, and m68k ours = gcc once the samples are read little-endian.

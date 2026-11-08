@@ -39,8 +39,8 @@ fn a_load_of_a_global_names_its_symbol() {
 #[test]
 fn stack_temporaries_are_cells_below_the_frame_pointer() {
     use super::dag_function::{Frame, Temporaries};
+    use super::dag_target::FrameObjects;
     use super::emit_api::FrameMap;
-    use super::x86_preprocess::FrameObjects;
     let frame = Frame::new(vec![8, 12], 0);
     let mut temps = Temporaries(&frame);
     let (first, second) = (temps.create_stack_temporary(4, 4), temps.create_stack_temporary(8, 8));
@@ -1143,9 +1143,13 @@ entry:
     (fills, stores)
 }
 
-/// The Fill and mov-to-memory counts of a flat m32 constant fill of `length` bytes
-/// of `value`, `size` for -Os.
-fn memset_shape_m32(length: u32, value: i32, size: bool) -> (usize, usize) {
+/// The Fill and mov-to-memory counts of a flat m32 constant fill of `length`
+/// bytes of `value`, `size` for -Os.
+fn memset_shape_m32(
+    length: u32,
+    value: i32,
+    size: bool,
+) -> (usize, usize) {
     let text = format!(
         "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 @g = global [64 x i8] zeroinitializer, align 4
@@ -1177,7 +1181,8 @@ fn at_m32_os_a_28_byte_fill_is_rep_stos_and_at_speed_stores() {
     assert_eq!(memset_shape_m32(28, -1, true).0, 1, "-Os: a fill");
     assert_eq!(memset_shape_m32(28, -1, false).0, 0, "-O2: stores");
     assert_eq!(memset_shape_m32(4, -1, true).0, 0, "one dword store is smaller than the fill");
-    // rep_tails -Os grew a byte when a 5-byte fill (no whole dwords) was a fill.
+    // rep_tails -Os grew a byte when a 5-byte fill (no whole dwords) was a
+    // fill.
     assert_eq!(memset_shape_m32(5, 7, true).0, 0, "a tail is stores");
 }
 
@@ -1747,7 +1752,8 @@ define i64 @f(i64 %d) {
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
-    let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    let named =
+        |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
     assert!(named("setb") <= 2 && named("adc") >= 4, "setb {} adc {}", named("setb"), named("adc"));
 }
 
@@ -1760,7 +1766,9 @@ fn at_m32_the_copies_of_a_recursive_function_are_two_deep_at_o2_and_eight_at_o3(
     let target = cpu.target();
     let tti = target.tti();
     let depth = |o3: bool| {
-        llrm_transforms::walk::Recursion::of(false, false, true, o3, tti.as_deref()).expect("m32 copies recursion").depth
+        llrm_transforms::walk::Recursion::of(false, false, true, o3, tti.as_deref())
+            .expect("m32 copies recursion")
+            .depth
     };
     assert_eq!((depth(false), depth(true)), (2, 8));
 }
@@ -1784,8 +1792,15 @@ define i1 @f(i32 %x) {
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
-    let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
-    assert!(named("not") == 1 && named("test") == 1 && named("cmp") == 0, "not {} test {} cmp {}", named("not"), named("test"), named("cmp"));
+    let named =
+        |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(
+        named("not") == 1 && named("test") == 1 && named("cmp") == 0,
+        "not {} test {} cmp {}",
+        named("not"),
+        named("test"),
+        named("cmp")
+    );
 }
 
 /// `(x & y) == 0` on registers selected `and; test` (the `and` a register of
@@ -1808,7 +1823,8 @@ define i1 @f(i8 %x, i8 %y) {
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
-    let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    let named =
+        |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
     assert!(named("test") == 1 && named("and") == 0, "test {} and {}", named("test"), named("and"));
 }
 
@@ -1832,7 +1848,8 @@ define i1 @f(i8 %x, ptr %p) {
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
-    let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    let named =
+        |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
     assert!(named("test") == 1 && named("and") == 0, "test {} and {}", named("test"), named("and"));
 }
 
@@ -1856,7 +1873,8 @@ define i32 @f(i32 %x, i32 %y, i32 %z) {
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
-    let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    let named =
+        |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
     assert!(named("adc") == 1 && named("add") == 0, "adc {} add {}", named("adc"), named("add"));
 }
 
@@ -1879,6 +1897,7 @@ define i32 @f(i32 %x, i32 %z) {
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
-    let named = |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    let named =
+        |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
     assert!(named("adc") == 1 && named("add") == 0, "adc {} add {}", named("adc"), named("add"));
 }

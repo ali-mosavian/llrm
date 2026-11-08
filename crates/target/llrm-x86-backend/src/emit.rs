@@ -1,10 +1,11 @@
 //! `InstrEmitter`: scheduled units to LIR.
 //!
 //! # How it works
-//! [`emit`] walks the units [`llrm_codegen::backend::selectiondag::schedule::schedule`] returns, a unit's
-//! glued nodes top first, and writes one LIR instruction per machine node and
-//! per register copy. A node's results are virtual values, numbered in the
-//! order they are emitted (`VRBaseMap`); an operand is that value, an
+//! [`emit`] walks the units
+//! [`llrm_codegen::backend::selectiondag::schedule::schedule`] returns, a
+//! unit's glued nodes top first, and writes one LIR instruction per machine
+//! node and per register copy. A node's results are virtual values, numbered in
+//! the order they are emitted (`VRBaseMap`); an operand is that value, an
 //! immediate, or a memory cell built from the pin's five address operands
 //! (base, scale, index, displacement, segment).
 //!
@@ -48,21 +49,19 @@
 
 use std::sync::Arc;
 
-use llrm_dagisel::instr::{self, InstrDesc, operand_type};
-use llrm_dagisel::x86_addr::AddrMode;
-use llrm_dagisel::x86_classes::{Role, class_tag};
-use llrm_lir::registers::RegId;
-use llrm_support::hash::HashMap;
-
+use llrm_codegen::backend::isel::{_read, _written};
 use llrm_codegen::backend::selectiondag::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
+pub use llrm_codegen::backend::selectiondag::emit_api::*;
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::schedule::Unit;
-use llrm_codegen::backend::isel::{_read, _written};
 use llrm_codegen::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 use llrm_codegen::model::lir::{Insn, PairKind, Phi};
-
-pub use llrm_codegen::backend::selectiondag::emit_api::*;
+use llrm_dagisel::addr::AddrMode;
+use llrm_dagisel::instr::{InstrDesc, operand_type};
+use llrm_lir::registers::RegId;
+use llrm_support::hash::HashMap;
+use llrm_x86_dagisel::x86_classes::{Role, class_tag};
 
 struct Emitter<'a, 'd> {
     dag: &'d SelectionDAG,
@@ -1145,7 +1144,7 @@ impl Emitter<'_, '_> {
         // `mov` here, which a later pass makes an `xor` only where they are
         // dead.
         let writes_flags = self.ctx.names.get(&(opcode as u16)).is_none_or(|name| *name != "MOV32r0")
-            && instr::desc(opcode as u16)
+            && llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16)
                 .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS));
         let previous = self.flags_now.filter(|&p| p != n);
         // The scheduler may put two `CopyToReg ES` ahead of the cells that read
@@ -1350,15 +1349,19 @@ impl Emitter<'_, '_> {
         let Some(index) = what.sources.iter().position(|source| matches!(source, Loc::Mem(_))) else { return compare };
         let Loc::Mem(cell) = &what.sources[index] else { return compare };
         let width = cell.width;
-        let found = self.blocks.iter().enumerate().find_map(|(block, one)| {
-            one.insns
-                .iter()
-                .position(|insn| {
-                    insn.at == compare.at
-                        && insn.what.as_ref().is_some_and(|w| w.sources.iter().any(|s| matches!(s, Loc::Mem(_))))
-                })
-                .map(|place| (block, place))
-        });
+        let found = self
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(
+                |(block, one)| one.insns
+                    .iter()
+                    .position(|insn| {
+                        insn.at == compare.at
+                            && insn.what.as_ref().is_some_and(|w| w.sources.iter().any(|s| matches!(s, Loc::Mem(_))))
+                    })
+                    .map(|place| (block, place)),
+            );
         let Some((block, place)) = found else { return compare };
         let original = Arc::clone(&self.blocks[block].insns[place]);
         let held = self.fresh(width);
@@ -1424,7 +1427,7 @@ impl Emitter<'_, '_> {
         opcode: u32,
     ) -> Result<(), EmitError> {
         // `SEGMENT_OF` (sdag-c's pseudo, SD305): the segment word of a global.
-        if opcode == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
+        if opcode == u32::from(llrm_x86_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
             let held = self.fresh(2);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);
             let word = self.segment_word(SDValue { node: n, res: 0 });
@@ -1439,8 +1442,8 @@ impl Emitter<'_, '_> {
         if let Some(done) = self.special(n, name)? {
             return Ok(done);
         }
-        let desc =
-            instr::desc(opcode as u16).ok_or_else(|| EmitError::Unsupported(format!("{name}: no descriptor")))?;
+        let desc = llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16)
+            .ok_or_else(|| EmitError::Unsupported(format!("{name}: no descriptor")))?;
         if name == "JMP_1" || name == "JCC_1" {
             return self.jump(n, name == "JCC_1");
         }
@@ -1805,7 +1808,8 @@ impl Emitter<'_, '_> {
         &self,
         register: SDValue,
     ) -> bool {
-        self.dag.node(register).data == NodeData::PhysReg(llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID)
+        self.dag.node(register).data
+            == NodeData::PhysReg(llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID)
     }
 
     /// Whether `value` is an implicit result of a machine node (EFLAGS from
@@ -1819,7 +1823,7 @@ impl Emitter<'_, '_> {
         // The implicit results follow the explicit ones, in the order the
         // description lists them: `MUL8r` has AX before EFLAGS, and AX is not
         // flags.
-        instr::desc(op as u16).is_some_and(|d| {
+        llrm_x86_dagisel::generated::instrinfo::desc(op as u16).is_some_and(|d| {
             usize::from(value.res)
                 .checked_sub(usize::from(d.num_defs))
                 .and_then(|implicit| d.implicit_defs.get(implicit))
@@ -2387,7 +2391,7 @@ impl Emitter<'_, '_> {
             !matches!(
                 name,
                 "COPY" | "COPY_TO_REGCLASS" | "EXTRACT_SUBREG" | "INSERT_SUBREG" | "SUBREG_TO_REG" | "IMPLICIT_DEF"
-            ) && !(name.starts_with("MOV") && name.ends_with("rr"))
+            ) && !is_gpr_copy(name)
         })
     }
 
@@ -2442,17 +2446,17 @@ impl Emitter<'_, '_> {
                 };
                 // Flat 32-bit: the pin's pseudos, which `callframe.rs` turns
                 // into pushes or `sub`/`add` (DEVIATE CF4).
-                if self.ctx.address_mode == AddrMode::Flat32 || self.ctx.reserved_calls {
-                    if bytes != 0 {
-                        let width = if self.ctx.address_mode == AddrMode::Flat64 { 8 } else { 4 };
-                        let imm = |value: i64| Loc::Imm(Imm { value, width, address: None });
-                        let (pseudo, sources) = if name.starts_with("ADJCALLSTACKDOWN") {
-                            ("call_frame_setup", vec![imm(bytes), imm(0), imm(0)])
-                        } else {
-                            ("call_frame_destroy", vec![imm(bytes), imm(popped)])
-                        };
-                        self.push(Operation::Barrier, pseudo, Vec::new(), sources);
-                    }
+                if self.ctx.address_mode != AddrMode::Real16 || self.ctx.reserved_calls {
+                    // Every call has its pair, as the pin's: a zero-byte one holds its
+                    // slot-index entry through allocation and is removed after it.
+                    let width = if self.ctx.address_mode == AddrMode::Flat64 { 8 } else { 4 };
+                    let imm = |value: i64| Loc::Imm(Imm { value, width, address: None });
+                    let (pseudo, sources) = if name.starts_with("ADJCALLSTACKDOWN") {
+                        ("call_frame_setup", vec![imm(bytes), imm(0), imm(0)])
+                    } else {
+                        ("call_frame_destroy", vec![imm(bytes), imm(popped)])
+                    };
+                    self.push(Operation::Barrier, pseudo, Vec::new(), sources);
                     return Ok(Some(()));
                 }
                 let (verb, count) =
@@ -3125,7 +3129,12 @@ impl Emitter<'_, '_> {
             "IMPLICIT_DEF" => {
                 let held = self.fresh(width);
                 self.values.insert(result, held.value);
-                self.push(Operation::Nothing, llrm_codegen::processimpdefs::IMPLICIT_DEF, vec![Loc::Held(held)], vec![]);
+                self.push(
+                    Operation::Nothing,
+                    llrm_codegen::processimpdefs::IMPLICIT_DEF,
+                    vec![Loc::Held(held)],
+                    vec![],
+                );
                 return Ok(Some(()));
             }
             // `INSERT_SUBREG undef, x, idx`: x in the low part of a wider
@@ -3211,7 +3220,7 @@ impl Emitter<'_, '_> {
             // A jump through a register that holds a table entry's address
             // (the position-independent table of 64-bit code): the table is
             // the one the register's sum was made from.
-            "JMP64r" => {
+            "JMP16r" | "JMP32r" | "JMP64r" => {
                 let table = self
                     .jump_table_behind(node.ops[0], 8)
                     .ok_or_else(|| EmitError::Unsupported("an indirect jump through a register".to_owned()))?;
@@ -3219,6 +3228,13 @@ impl Emitter<'_, '_> {
                     return Err(EmitError::Unsupported("a jump through a non-register".to_owned()));
                 };
                 let jump = self.jump_table(table)?;
+                // The table is relative only where the DAG made it so (64-bit
+                // position independent code); `masm::jump_tables` says the same
+                // by the pointer width. A pointer-wide 64-bit table read into a
+                // register would be written as offsets: refuse it.
+                if !self.dag.relative_jump_tables() && self.dag.config().pointer == EVT::I64 {
+                    return Err(EmitError::Unsupported("a jump through a register at 64 bits without position independence".to_owned()));
+                }
                 let what = Semantics {
                     indirect: true,
                     table: jump.targets,
@@ -3617,7 +3633,7 @@ impl Emitter<'_, '_> {
                 && ins.iter().any(|one| one.kind == operand_type::MEMORY)
                 && matches!(
                     self.dag.opcode(ops[i]),
-                    ISD::Machine(op) if op == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE)
+                    ISD::Machine(op) if op == u32::from(llrm_x86_dagisel::x86_llrm::SEGMENT_OF_OPCODE)
                 )
             {
                 // A store of a segment is the immediate's store, as one of
@@ -4008,9 +4024,7 @@ impl Emitter<'_, '_> {
         if self.ctx.opt_size {
             return true;
         }
-        let rate = p.milliclocks_per_byte;
-        let (mut fold, mut shared) = (0i64, p.load * 1000 + p.memory_bytes * rate);
-        for user in self.dag.users(value) {
+        let readers = self.dag.users(value).map(|user| {
             let reads =
                 self.dag.node(SDValue { node: user, res: 0 }).ops.iter().filter(|op| **op == value).count() as i64;
             let name = match self.dag.opcode(SDValue { node: user, res: 0 }) {
@@ -4024,12 +4038,9 @@ impl Emitter<'_, '_> {
             } else {
                 (p.add, p.add_m)
             };
-            fold += reads * (memory * 1000 + p.memory_bytes * rate);
-            shared += reads * (register * 1000 + 2 * rate);
-        }
-        // The tables hold whole clocks: a difference under one is rounding,
-        // and the old shape (a memory operand at each reader) stays.
-        shared + 1000 <= fold
+            (reads, register, memory)
+        });
+        shared_load_pays(&p, readers)
     }
 
     fn operand(
@@ -4314,3 +4325,35 @@ fn sign_extend(
     let shift = 128 - width.clamp(1, 128);
     (((bits << shift) as i128) >> shift) as i64
 }
+
+/// A register-to-register `mov` of one general class (`MOV32rr`, `MOV64rr_REV`): emitted as a `Move` the coalescer
+/// joins away. `MOVPDI2DIrr` (`movd r32, xmm`) and its kin write a register of another class, a real write.
+fn is_gpr_copy(name: &str) -> bool {
+    let name = name.strip_suffix("_REV").unwrap_or(name);
+    matches!(name, "MOV8rr" | "MOV16rr" | "MOV32rr" | "MOV64rr")
+}
+/// Whether a pool constant read by `readers` (reads, register-form clocks,
+/// memory-form clocks) is loaded once rather than read as a memory operand at
+/// each. Where bytes are strict (`-O1`, `-Os`) it is always loaded once, as at
+/// -Os: one load serves a segment's readers, and `FloatFold` takes the memory
+/// forms back where the exact bytes pay (the count here cannot see a call that
+/// splits the readers into segments, each with its own load). Elsewhere clocks
+/// and bytes at the rate decide.
+pub(crate) fn shared_load_pays(
+    p: &llrm_codegen::backend::selectiondag::emit_api::X87Prices,
+    readers: impl Iterator<Item = (i64, i64, i64)>,
+) -> bool {
+    if p.bytes_strict {
+        return true;
+    }
+    let rate = p.milliclocks_per_byte;
+    let (mut fold, mut shared) = (0i64, p.load * 1000 + p.memory_bytes * rate);
+    for (reads, register, memory) in readers {
+        fold += reads * (memory * 1000 + p.memory_bytes * rate);
+        shared += reads * (register * 1000 + 2 * rate);
+    }
+    // The tables hold whole clocks: a difference under one is rounding,
+    // and the old shape (a memory operand at each reader) stays.
+    shared + 1000 <= fold
+}
+

@@ -69,6 +69,7 @@ fn promoted(
         i16_mul_chains: false,
         sext_load: false,
         zext_free: false,
+        branch_constant_selects: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
@@ -129,6 +130,7 @@ fn only_words_and_byte_multiplies_are_promoted_and_not_at_m16() {
         i16_mul_chains: false,
         sext_load: false,
         zext_free: false,
+        branch_constant_selects: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();

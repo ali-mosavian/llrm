@@ -60,6 +60,30 @@ pub fn repeated(function: &MFunction) -> Vec<String> {
     order.into_iter().map(str::to_owned).collect()
 }
 
+/// Whether any instruction of `function` names a callee-saved register, which
+/// the frame then saves and restores.
+pub fn saves_a_register(
+    function: &MFunction,
+    assignment: &Assignment,
+) -> bool {
+    let saved = frame::callee_saved();
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .flat_map(|inst| &inst.operands)
+        .any(
+            |operand| {
+                let (Operand::Def(r) | Operand::Use(r)) = operand else { return false };
+                let physical = match r {
+                    Reg::Virt(v) => assignment.0[*v as usize],
+                    Reg::Phys(p) => *p,
+                };
+                saved.contains(&REGISTER_INFO.root(physical))
+            },
+        )
+}
+
 /// The callee-saved address registers no instruction of `function` names.
 pub fn unused(
     function: &MFunction,

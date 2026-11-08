@@ -392,6 +392,71 @@ fn idiom_trip_counts(
     llrm_analysis::scev::trip::backedge_taken_computations() - before
 }
 
+/// A loop with no effect (deleted), a fill loop (turned into a `memset`) and
+/// a loop with a call (left alone).
+const DEAD_FILL_AND_CALL: &str = "declare void @g(i32)
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+declare i32 @llvm.smax.i32(i32, i32)
+define void @f(ptr %p, i32 %n, i32 %m) {
+entry:
+  br label %d
+d:
+  %x = phi i32 [ 0, %entry ], [ %x2, %d ]
+  %x2 = add i32 %x, 1
+  %e = icmp slt i32 %x2, %n
+  br i1 %e, label %d, label %h0
+h0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %h0 ], [ %i2, %h ]
+  %a = getelementptr i8, ptr %p, i32 %i
+  store i8 0, ptr %a
+  %i2 = add i32 %i, 1
+  %c = icmp slt i32 %i2, %n
+  br i1 %c, label %h, label %mid
+mid:
+  br label %k
+k:
+  %j = phi i32 [ 0, %mid ], [ %j2, %k ]
+  call void @g(i32 %j)
+  %j2 = add i32 %j, 1
+  %d2 = icmp slt i32 %j2, %m
+  br i1 %d2, label %k, label %exit
+exit:
+  ret void
+}
+";
+
+fn after_deletion_trip_counts(
+    text: &str,
+    then_idiom: bool,
+) -> usize {
+    let mut module = crate::testing::parsed(text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::pass::AfterDeletion {
+        deletion: crate::loopdeletion::LoopDeletion,
+        idiom: super::pass::LoopIdiom::new(),
+    });
+    if then_idiom {
+        manager.add(super::pass::LoopIdiom::new());
+    }
+    let before = llrm_analysis::scev::trip::backedge_taken_computations();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// `AfterDeletion` said it kept nothing, so the loop pass after it counted
+/// every loop again, and so did each round of the pipeline (jpeg_fixed -O2:
+/// 13 rounds of 38 counts, 82 M of 1,255 M Ir). The pin's loop passes keep
+/// ScalarEvolution and forget only the loop they edited (the fill loop here).
+#[test]
+fn test_the_pass_after_loop_deletion_counts_only_the_loop_the_idiom_run_edited() {
+    let (alone, followed) =
+        (after_deletion_trip_counts(DEAD_FILL_AND_CALL, false), after_deletion_trip_counts(DEAD_FILL_AND_CALL, true));
+    assert!(alone > 0, "the idiom run asks for counts: {alone}");
+    assert_eq!(followed, alone + 1, "alone {alone} counts, followed by another run {followed}");
+}
+
 /// Every run started a `ScalarEvolution` of its own, so a loop it left alone
 /// had its trip count worked out again by the next pass (53 of d_faces -O2's
 /// 226 counts were such repeats). A run that changes nothing hands its

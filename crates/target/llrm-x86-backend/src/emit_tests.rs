@@ -1,15 +1,15 @@
-use llrm_dagisel::generated::x86_i486::MACHINE_OPCODES;
-use llrm_dagisel::x86_addr::AddrMode;
-use llrm_lir::registers::RegId;
-use llrm_support::hash::HashMap;
-use llrm_target::Target;
-
-use crate::emit::emit;
 use llrm_codegen::backend::selectiondag::emit_api::{EmitContext, EmitError};
 use llrm_codegen::backend::selectiondag::opcodes::OpcodeMap;
 use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, schedule};
 use llrm_codegen::backend::selectiondag::*;
 use llrm_codegen::model::ir::{Loc, Reg};
+use llrm_dagisel::addr::AddrMode;
+use llrm_lir::registers::RegId;
+use llrm_support::hash::HashMap;
+use llrm_target::Target;
+use llrm_x86_dagisel::generated::x86_i486::MACHINE_OPCODES;
+
+use crate::emit::emit;
 
 const EAX: u32 = u32::MAX;
 const NO_FLAGS: &[u16] = &[];
@@ -21,7 +21,7 @@ impl SchedInfo for Info {
         &self,
         opcode: u32,
     ) -> usize {
-        llrm_dagisel::instr::desc(opcode as u16).map_or(0, |d| usize::from(d.num_defs))
+        llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16).map_or(0, |d| usize::from(d.num_defs))
     }
 
     fn implicit_defs(
@@ -372,4 +372,31 @@ fn an_x87_add_copied_to_a_virtual_register_defines_it() {
         assert_eq!(blocks[0].insns.len(), 1, "{lines:?}");
         assert!(lines[0].contains("fadd"), "{lines:?}");
     });
+}
+
+/// i486 prices (`fmul m` 14 clocks, `fmul st` 16), real mode, speed rate 0 as
+/// at -O1. Three readers of one pool constant: a memory operand at each is
+/// 12 B, one `fld` and three register forms 10 B. x_nbody_f -O1 read its `K14`
+/// three times as memory forms: +2 B over the shared load, at a level whose
+/// bytes are strict. Even a lone reader shares there, as at -Os (`FloatFold`
+/// decides on exact bytes).
+#[test]
+fn test_a_constant_read_three_times_is_loaded_once_where_bytes_are_strict() {
+    use llrm_codegen::backend::selectiondag::emit_api::X87Prices;
+    let prices = |bytes_strict| X87Prices {
+        load: 3,
+        add: 8,
+        add_m: 8,
+        mul: 16,
+        mul_m: 14,
+        div: 73,
+        div_m: 73,
+        milliclocks_per_byte: 0,
+        memory_bytes: 4,
+        bytes_strict,
+    };
+    let readers = || [(1, 16, 14); 3].into_iter();
+    assert!(crate::emit::shared_load_pays(&prices(true), readers()), "10 B against 12 B");
+    assert!(crate::emit::shared_load_pays(&prices(true), [(1, 16, 14)].into_iter()), "as at -Os");
+    assert!(!crate::emit::shared_load_pays(&prices(false), readers()), "at speed the cheaper memory form stays");
 }

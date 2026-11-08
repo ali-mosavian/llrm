@@ -685,6 +685,10 @@ impl Tti for X86 {
         self.tuning.inline_never_grows_without_rate
     }
 
+    fn unroll_object_bound(&self) -> Option<u32> {
+        self.tuning.unroll_object_bound
+    }
+
     fn inline_o1_weighs_entry(&self) -> bool {
         self.tuning.inline_o1_weighs_entry
     }
@@ -721,6 +725,20 @@ impl Tti for X86 {
         self.tuning.speed_inline_rate_at_o1
     }
 
+    fn callee_saved_clocks(&self, peak: usize) -> i64 {
+        self.tuning.callee_saved.map_or(0, |(scratch, preserved, clocks)| {
+            (i64::try_from(peak).unwrap_or(i64::MAX) - scratch).clamp(0, preserved) * clocks
+        })
+    }
+
+    fn inline_hot_trial_at_o3(&self) -> bool {
+        self.tuning.inline_hot_trial_at_o3
+    }
+
+    fn inline_hot_trial_frequency(&self) -> Option<i64> {
+        self.tuning.inline_hot_trial_frequency
+    }
+
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         self.tuning.speed_inline_milliclocks_per_byte
     }
@@ -755,6 +773,10 @@ impl Tti for X86 {
 
     fn imul_at_size(&self) -> bool {
         self.tuning.imul_at_size
+    }
+
+    fn rep_stos_at_size(&self) -> bool {
+        self.tuning.rep_stos_at_size
     }
 
     fn has_cmov(&self) -> bool {
@@ -1311,8 +1333,11 @@ impl Tti for X86 {
         // (`isPositionIndependent() && is64Bit()`), so `@sym + reg` is one
         // address to it; the backend forms the symbol with a `lea` at every
         // use, which the metric never saw (histo -O2 -80 B, jpeg_fixed -O1
-        // -832 B, objects of m32 and non-PIE unchanged). Owner w12, exit
-        // 2026-11-30.
+        // -832 B, objects of m32 and non-PIE unchanged). 2026-11-08, same-tree
+        // A/B over 171 m64 cells with it off: 6 better (-162 B), 42 worse (+2712 B:
+        // particle O2 +396, scroll +121, stft_single +112, jpeg_single O2 +256).
+        // Exit: the backend shares one `lea sym` per loop (MachineLICM/CSE of
+        // the symbol), then the pin's legality; owner w12, exit 2026-12-15.
         if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale != 0 || has_base_reg) {
             return false;
         }
@@ -1428,6 +1453,14 @@ impl Tti for X86 {
     /// the pin's X86 leaves off). Six registers and a prefix on every scaled
     /// index make the model's best answer a loss in bytes and clocks too.
     fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    /// DEVIATE LU14: real mode searches both use orders (rcflip's RAMP loop:
+    /// 4 instructions in the pin's order, 2 in the other). owner:
+    /// llrm-target-x86-m16, exit: 2026-11-30, or when the pin's search is
+    /// order-free.
+    fn lsr_solves_both_use_orders(&self) -> bool {
         self.real_mode.is_some()
     }
 

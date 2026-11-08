@@ -34,7 +34,6 @@ use llrm_lir::registers::RegId;
 use super::dag::{MemBase, MemInfo, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::mvt::EVT;
-use super::x86isd;
 
 /// Where an argument goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +54,8 @@ pub struct Returned {
 pub struct CallEnv<'a> {
     pub arch: &'a dyn llrm_target::Target,
     pub pointer: EVT,
+    /// The target's call node.
+    pub call: ISD,
 }
 
 /// The nodes of the call: the chain after it, and the value read from each
@@ -79,7 +80,7 @@ pub fn lib_call(
         match *place {
             Place::Stack(offset) => {
                 let sp = *stack_pointer.get_or_insert_with(|| {
-                    let sp = env.arch.register_named(super::builder::stack_pointer_name(env.pointer));
+                    let sp = env.arch.stack_pointer();
                     dag.get_copy_from_phys_reg_plain(chain, sp, env.pointer)
                 });
                 let offset = dag.get_constant(offset as u128, env.pointer);
@@ -115,7 +116,7 @@ pub fn lib_call(
     }
     ops.push(dag.get_register_mask_clobbering(clobbers));
     ops.extend(glue);
-    let call = dag.get_node_multi(x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &ops);
+    let call = dag.get_node_multi(env.call, &[EVT::OTHER, EVT::GLUE], &ops);
     let end = dag.get_callseq_end(
         SDValue { node: call.node, res: 0 },
         stack_bytes,
