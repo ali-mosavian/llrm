@@ -11,7 +11,9 @@ use llrm_codegen::model::lir::LirBody;
 use llrm_codegen::support::hash::IndexMap;
 use llrm_lir::registers::RegId;
 
+pub mod dag_function;
 pub mod emit;
+pub mod fastisel;
 #[cfg(test)]
 mod emit_tests;
 pub mod mirprint;
@@ -36,6 +38,23 @@ impl BackendHooks for X86 {
         first_at: i64,
     ) -> Result<Emitted, EmitError> {
         emit::emit_in(dag, units, ctx, state, first_at)
+    }
+
+    fn select_function(
+        &self,
+        module: &llrm_mir::module::Module,
+        name: &str,
+        arch: &dyn llrm_target::Target,
+        cpu: &llrm_codegen::backend::cpu::Profile,
+        libcalls: &[(String, u32, String)],
+        contracts: Option<&llrm_codegen::backend::selectiondag::select_api::RuntimeContracts<'_>>,
+        pool: &mut llrm_codegen::backend::constpool::Pool,
+    ) -> Result<llrm_codegen::backend::isel::Selected, llrm_codegen::backend::isel::Unselected> {
+        dag_function::selected_in_pool(module, name, arch, cpu, libcalls, contracts, pool)
+    }
+
+    fn take_fast_took(&self) -> bool {
+        fastisel::take_took()
     }
 }
 

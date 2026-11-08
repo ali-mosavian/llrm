@@ -3,7 +3,7 @@
 //!
 //! # How it works
 //! [`selected`] builds the entry block's DAG, runs
-//! [`super::dag_select::select_block`] and turns the emitted blocks into a
+//! [`llrm_codegen::backend::selectiondag::dag_select::select_block`] and turns the emitted blocks into a
 //! `LirBody`: the blocks the select diamond made, their successors, the machine
 //! facts the phases read. A function the path cannot yet take (more than one
 //! MIR block, a call, a frame object, an unsupported opcode) is a refusal with
@@ -45,20 +45,20 @@ use llrm_support::hash::{HashMap, HashSet};
 use llrm_target::Target;
 use llrm_target::routines::Used;
 
-use super::actions::{Features, TargetLowering};
-use super::builder::{BuilderTarget, RuntimeAnswer, SizeTrade, build_block};
-use super::dag_select::select_block;
-use super::emit_api::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
-use super::function_lowering::FunctionLoweringInfo;
-use super::mvt::MVT;
-use super::opcodes::OpcodeMap;
-use super::schedule::SchedInfo;
-use super::x86_lowering::X86Lowering;
-use super::x86_preprocess::FrameObjects;
-use crate::backend::constpool::Pool;
-use crate::backend::isel::{Parameter, Selected, Unselected};
-use crate::model::ir::{Addr, Held, Mem, Space};
-use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
+use llrm_codegen::backend::selectiondag::actions::{Features, TargetLowering};
+use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, RuntimeAnswer, SizeTrade, build_block};
+use llrm_codegen::backend::selectiondag::dag_select::select_block;
+use llrm_codegen::backend::selectiondag::emit_api::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
+use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
+use llrm_codegen::backend::selectiondag::mvt::MVT;
+use llrm_codegen::backend::selectiondag::opcodes::OpcodeMap;
+use llrm_codegen::backend::selectiondag::schedule::SchedInfo;
+use llrm_codegen::backend::selectiondag::x86_lowering::X86Lowering;
+use llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects;
+use llrm_codegen::backend::constpool::Pool;
+use llrm_codegen::backend::isel::{Parameter, Selected, Unselected};
+use llrm_codegen::model::ir::{Addr, Held, Mem, Space};
+use llrm_codegen::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 
 struct Info {
     source_order: bool,
@@ -93,17 +93,17 @@ impl SchedInfo for Info {
 
     fn unfold_memory_operand(
         &self,
-        dag: &mut super::SelectionDAG,
+        dag: &mut llrm_codegen::backend::selectiondag::SelectionDAG,
         node: u32,
     ) -> Option<[u32; 2]> {
-        super::x86_unfold::unfold_memory_operand(dag, node)
+        llrm_codegen::backend::selectiondag::x86_unfold::unfold_memory_operand(dag, node)
     }
 
     fn has_cross_copy_class(
         &self,
         reg: u16,
     ) -> bool {
-        Some(reg) == super::dagisel_adapter::pin_register(super::dagisel_adapter::EFLAGS_ID)
+        Some(reg) == llrm_codegen::backend::selectiondag::dagisel_adapter::pin_register(llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID)
     }
 
     // `ADJCALLSTACKDOWN32`/`64` and `ADJCALLSTACKUP32`/`64`, numbered alike in
@@ -190,16 +190,16 @@ impl FrameObjects for Temporaries<'_> {
 /// The module's globals by `GlobalId`: where each symbol is.
 struct Globals<'a>(&'a Module, llrm_mir::spaces::Spaces);
 
-impl super::emit_api::GlobalMap for Globals<'_> {
+impl llrm_codegen::backend::selectiondag::emit_api::GlobalMap for Globals<'_> {
     fn segment(
         &self,
         symbol: Option<u32>,
     ) -> Addr {
         let (space, index) = match symbol {
             Some(symbol) if self.0.global(llrm_mir::context::GlobalId(symbol)).address_space != self.1.near => {
-                (Space::Group, crate::backend::globals::segment_of(llrm_mir::context::GlobalId(symbol)))
+                (Space::Group, llrm_codegen::backend::globals::segment_of(llrm_mir::context::GlobalId(symbol)))
             }
-            _ => crate::hir::symbols::DGROUP,
+            _ => llrm_codegen::hir::symbols::DGROUP,
         };
         Addr { index, ..Addr::new(space, 0) }
     }
@@ -209,7 +209,7 @@ impl super::emit_api::GlobalMap for Globals<'_> {
         symbol: u32,
         offset: i64,
     ) -> Addr {
-        let space = crate::backend::globals::space(self.0, llrm_mir::context::GlobalId(symbol));
+        let space = llrm_codegen::backend::globals::space(self.0, llrm_mir::context::GlobalId(symbol));
         Addr { index: i64::from(symbol), ..Addr::new(space, offset) }
     }
 }
@@ -247,27 +247,7 @@ pub(super) fn huge_routine_with(
     fills.chain(copies).find(|routine| routine.name == name)
 }
 
-/// What the program's ABI says about its runtime routines: a QB routine's
-/// contract names the registers it destroys and how it returns, which its
-/// declared convention does not.
-pub struct RuntimeContracts<'a> {
-    pub abi: &'a dyn crate::backend::assemble::Abi,
-    pub segments: &'a crate::backend::target::Segments,
-    /// Whether the program's runtime routines have contracts of their own
-    /// (QB's); a call of any other routine reads the ABI's for what it
-    /// destroys.
-    pub runtime: bool,
-    /// Whether the function's frame is zero-filled by the runtime that builds
-    /// it (QB's `B$ENRA`): the entry block's zero writes to a fresh local are
-    /// then dropped.
-    pub frame_zeroed: bool,
-    /// What the module's finished callees wrote, which a call of one destroys
-    /// and no more (`isel`'s `written`).
-    pub facts: Option<&'a crate::backend::calleefacts::CalleeFacts>,
-    /// Bytes below BP left free above the allocas, for spill slots
-    /// (`relayout`'s second layout): the frame's objects start under them.
-    pub hole: i64,
-}
+pub use llrm_codegen::backend::selectiondag::select_api::RuntimeContracts;
 
 /// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
 /// convention models what its contract says (the callee pops what was pushed,
@@ -278,7 +258,7 @@ pub(crate) fn runtime_call_verdicts(
     function: &llrm_mir::module::Function,
     layout: &DataLayout,
     arch: &dyn Target,
-    abi: &dyn crate::backend::assemble::Abi,
+    abi: &dyn llrm_codegen::backend::assemble::Abi,
 ) -> llrm_mir::dense::IdMap<llrm_mir::module::InstId, Result<RuntimeAnswer, &'static str>> {
     use llrm_mir::module::Operand;
     use llrm_mir::opcode::Opcode;
@@ -290,7 +270,7 @@ pub(crate) fn runtime_call_verdicts(
             let Some(&Operand::Constant(callee)) = instruction.operands.last() else { continue };
             let llrm_mir::context::ConstantKind::Global(global) = module.context.get(callee).kind else { continue };
             let name = module.global(global).name.owned().unwrap_or_default();
-            if !name.starts_with(crate::hir::mir::RUNTIME) {
+            if !name.starts_with(llrm_codegen::hir::mir::RUNTIME) {
                 continue;
             }
             let keep = instruction.operands.len() - if matches!(instruction.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
@@ -301,7 +281,7 @@ pub(crate) fn runtime_call_verdicts(
             let first = arch.first_argument_offset(false);
             let (result, _, variadic) = module.signature(info.function_type);
             let plan = types.and_then(|types| {
-                crate::backend::isel::convention_for(
+                llrm_codegen::backend::isel::convention_for(
                     module,
                     layout,
                     arch,
@@ -321,9 +301,9 @@ pub(crate) fn runtime_call_verdicts(
 }
 
 fn modelled(
-    abi: &dyn crate::backend::assemble::Abi,
+    abi: &dyn llrm_codegen::backend::assemble::Abi,
     name: &str,
-    plan: Option<&crate::backend::isel::Convention>,
+    plan: Option<&llrm_codegen::backend::isel::Convention>,
     first: i64,
 ) -> Result<RuntimeAnswer, &'static str> {
     let plan = plan.ok_or("QB runtime call the convention does not describe")?;
@@ -354,7 +334,7 @@ impl CallConventions<'_> {
     fn contract(
         &self,
         callee: Option<&Callee>,
-    ) -> Option<crate::abi::runtime::Contract> {
+    ) -> Option<llrm_codegen::abi::runtime::Contract> {
         let (contracts, Some(Callee::Global(id))) = (self.contracts?, callee) else { return None };
         let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
         contracts.abi.contract(&name, false, 0).ok()
@@ -369,7 +349,7 @@ impl CallConventions<'_> {
         let Some(Callee::Global(id)) = callee else { return false };
         let global = self.module.global(llrm_mir::context::GlobalId(*id));
         global.function().is_some_and(|function| !function.is_declaration())
-            && !global.name.owned().is_some_and(|name| name.starts_with(crate::hir::mir::RUNTIME))
+            && !global.name.owned().is_some_and(|name| name.starts_with(llrm_codegen::hir::mir::RUNTIME))
             && self.convention_of(callee).is_none()
     }
 
@@ -400,7 +380,7 @@ impl CallConventions<'_> {
         callee: Option<&Callee>,
     ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>> {
         let contract = self.contract(callee)?;
-        Some(crate::backend::callregs::call_clobbers(&contract, self.contracts?.segments, self.general))
+        Some(llrm_codegen::backend::callregs::call_clobbers(&contract, self.contracts?.segments, self.general))
     }
 
     /// `call_clobbered_high_keeping`: what the callee keeps only the 16-bit
@@ -418,7 +398,7 @@ impl CallConventions<'_> {
             .filter(|(full, pushed)| full == pushed)
             .map(|(full, _)| regs.root(full))
             .collect();
-        crate::backend::callregs::call_clobbered_high_keeping(
+        llrm_codegen::backend::callregs::call_clobbered_high_keeping(
             &contract,
             self.contracts.expect("a contract implies contracts").segments,
             self.general,
@@ -427,7 +407,7 @@ impl CallConventions<'_> {
     }
 }
 
-impl super::emit_api::Conventions for CallConventions<'_> {
+impl llrm_codegen::backend::selectiondag::emit_api::Conventions for CallConventions<'_> {
     fn effects(
         &self,
         callee: Option<&Callee>,
@@ -522,7 +502,7 @@ impl super::emit_api::Conventions for CallConventions<'_> {
             .collect();
         // the contract names no FS or GS, yet the callee may use them
         if let (Some(contract), Some(contracts)) = (self.contract(callee), self.contracts) {
-            out.extend(crate::backend::callregs::unnamed_selectors_clobbered(
+            out.extend(llrm_codegen::backend::callregs::unnamed_selectors_clobbered(
                 &contract,
                 contracts.segments,
                 self.general,
@@ -536,10 +516,10 @@ impl super::emit_api::Conventions for CallConventions<'_> {
         let real_mode = llrm_lir::registers::Regs(self.arch.registers()).width_of(self.arch.stack_pointer()) == Some(2);
         if let (true, Some(contracts), Some(Callee::Global(id))) = (real_mode, self.contracts, callee) {
             let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
-            if name.starts_with(crate::hir::mir::RUNTIME)
+            if name.starts_with(llrm_codegen::hir::mir::RUNTIME)
                 && let Ok(contract) = contracts.abi.contract(&name, false, 0)
             {
-                out.extend(crate::backend::callregs::call_clobbers(&contract, contracts.segments, self.general));
+                out.extend(llrm_codegen::backend::callregs::call_clobbers(&contract, contracts.segments, self.general));
             }
         }
         Some(out)
@@ -628,7 +608,7 @@ fn successors(
     emitted: &[EmitBlock],
     sinks: &HashSet<i64>,
 ) -> Vec<Vec<i64>> {
-    use crate::model::ir::Operation;
+    use llrm_codegen::model::ir::Operation;
     emitted
         .iter()
         .enumerate()
@@ -666,13 +646,13 @@ fn successors(
 /// The byte width of each live-in's value: the type of the `CopyFromReg` that
 /// reads it.
 fn arrival_widths(
-    dag: &super::SelectionDAG,
+    dag: &llrm_codegen::backend::selectiondag::SelectionDAG,
     live_ins: &[(llrm_lir::registers::RegId, u32)],
 ) -> Vec<(u32, u32)> {
-    use super::dag::NodeData;
+    use llrm_codegen::backend::selectiondag::dag::NodeData;
     let mut out = Vec::new();
     for node in dag.nodes() {
-        if node.opcode != super::isd::ISD::CopyFromReg {
+        if node.opcode != llrm_codegen::backend::selectiondag::isd::ISD::CopyFromReg {
             continue;
         }
         if let NodeData::Register(vreg) = dag.node(node.ops[1]).data {
@@ -700,7 +680,7 @@ fn arrived_width(
 pub(super) fn stack_cells(
     module: &Module,
     function: &llrm_mir::module::Function,
-    convention: &crate::backend::isel::Convention,
+    convention: &llrm_codegen::backend::isel::Convention,
     widest: u32,
 ) -> Vec<i64> {
     let mut cells = Vec::new();
@@ -750,7 +730,7 @@ pub fn selected(
     module: &Module,
     name: &str,
     arch: &dyn Target,
-    cpu: &crate::backend::cpu::Profile,
+    cpu: &llrm_codegen::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
 ) -> Result<Selected, Unselected> {
     selected_in_pool(module, name, arch, cpu, libcalls, None, &mut Pool::new(module.globals.len() as i64))
@@ -796,7 +776,7 @@ pub fn selected_in_pool(
     module: &Module,
     name: &str,
     arch: &dyn Target,
-    cpu: &crate::backend::cpu::Profile,
+    cpu: &llrm_codegen::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
     contracts: Option<&RuntimeContracts<'_>>,
     pool: &mut Pool,
@@ -819,7 +799,7 @@ pub fn selected_in_pool(
 /// The module's constant pool as the emitter asks it.
 struct PoolCells<'a>(std::cell::RefCell<&'a mut Pool>);
 
-impl super::emit_api::ConstantCells for PoolCells<'_> {
+impl llrm_codegen::backend::selectiondag::emit_api::ConstantCells for PoolCells<'_> {
     fn cell(
         &self,
         bytes: Vec<u8>,
@@ -875,10 +855,10 @@ fn narrow_divide_live(
 /// target that does not price a divide above a multiply, which then keeps the
 /// pin's rule.
 fn div_prices(
-    cpu: &crate::backend::cpu::Profile,
+    cpu: &llrm_codegen::backend::cpu::Profile,
     machine: &dyn llrm_mir::target::Machine,
     bitness: u32,
-) -> Option<super::dag::DivPrices> {
+) -> Option<llrm_codegen::backend::selectiondag::dag::DivPrices> {
     let costs = machine.costs();
     if costs.divide <= costs.multiply {
         return None;
@@ -888,13 +868,13 @@ fn div_prices(
     // What `combine_mul` emits for the constant: the `imul` by its immediate
     // or a chain, whichever costs fewer clocks (`Machine::multiply_by`).
     let product = move |factor: i64| {
-        let imul = crate::backend::arithmetic::immediate_multiply(&owned, factor).unwrap_or(multiply);
-        match crate::backend::arithmetic::cheapest_chain(factor, &owned) {
+        let imul = llrm_codegen::backend::arithmetic::immediate_multiply(&owned, factor).unwrap_or(multiply);
+        match llrm_codegen::backend::arithmetic::cheapest_chain(factor, &owned) {
             Ok(Some((_, clocks))) => clocks.min(imul),
             _ => imul,
         }
     };
-    Some(super::dag::DivPrices {
+    Some(llrm_codegen::backend::selectiondag::dag::DivPrices {
         operand: i64::from(bitness.min(32) / 8),
         prefix: costs.prefix,
         add: costs.add,
@@ -906,11 +886,11 @@ fn div_prices(
         divide: costs.divide,
         divide_long: costs.divide_long,
         margin: costs.divide_margin,
-        product: Some(super::dag::ProductPrice(std::rc::Rc::new(product))),
+        product: Some(llrm_codegen::backend::selectiondag::dag::ProductPrice(std::rc::Rc::new(product))),
         bytes: {
             let rate = cpu.speed_milliclocks_per_byte_on(machine);
             let size = machine.size_costs();
-            (rate > 0 && machine.tti().is_some_and(|tti| tti.divide_by_bytes())).then(|| super::dag::DivBytes {
+            (rate > 0 && machine.tti().is_some_and(|tti| tti.divide_by_bytes())).then(|| llrm_codegen::backend::selectiondag::dag::DivBytes {
                 prefix: size.prefix,
                 add: size.add,
                 shift: size.shift,
@@ -948,7 +928,7 @@ fn selected_in(
     module: &Module,
     name: &str,
     arch: &dyn Target,
-    cpu: &crate::backend::cpu::Profile,
+    cpu: &llrm_codegen::backend::cpu::Profile,
     libcalls: &[(String, u32, String)],
     contracts: Option<&RuntimeContracts<'_>>,
     pool: &mut Pool,
@@ -974,15 +954,15 @@ fn selected_in(
     // narrower than the widest native integer (m16), -Os keeps `imul` as well:
     // the chains grow its objects (27 of 175 by 3550 B, tests/run/c -Os).
     let bytes_beat_clocks = cpu.size && layout.pointer(0).bits < layout.largest_legal_integer();
-    let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
+    let convention = llrm_codegen::backend::isel::convention(module, &layout, id, arch)?;
     let mut info = FunctionLoweringInfo::new(function);
     info.module_tables = pool.symbols.clone();
     if contracts.is_some_and(|contracts| contracts.frame_zeroed) {
-        info.prezeroed = crate::backend::prezeroed::prezeroed(module, function);
+        info.prezeroed = llrm_codegen::backend::prezeroed::prezeroed(module, function);
     }
     let mut tli = if m16 {
         // `useSoftFloat()`, or no x87 among the function's target features.
-        let soft_float = crate::backend::isel::soft_float(&function.attrs);
+        let soft_float = llrm_codegen::backend::isel::soft_float(&function.attrs);
         let features = Features { soft_float, ..Features::default() };
         lowering_for(16, features, || TargetLowering::x86_16(features, MVT::I16))
     } else if m64 {
@@ -1005,17 +985,17 @@ fn selected_in(
     // translated yet, so the node is refused rather than selected inline.
     if arch.has_libm() {
         for op in [
-            super::isd::ISD::FLog,
-            super::isd::ISD::FLog2,
-            super::isd::ISD::FExp,
-            super::isd::ISD::FExp2,
-            super::isd::ISD::FSin,
-            super::isd::ISD::FCos,
-            super::isd::ISD::FAtan,
-            super::isd::ISD::FRint,
+            llrm_codegen::backend::selectiondag::isd::ISD::FLog,
+            llrm_codegen::backend::selectiondag::isd::ISD::FLog2,
+            llrm_codegen::backend::selectiondag::isd::ISD::FExp,
+            llrm_codegen::backend::selectiondag::isd::ISD::FExp2,
+            llrm_codegen::backend::selectiondag::isd::ISD::FSin,
+            llrm_codegen::backend::selectiondag::isd::ISD::FCos,
+            llrm_codegen::backend::selectiondag::isd::ISD::FAtan,
+            llrm_codegen::backend::selectiondag::isd::ISD::FRint,
         ] {
             for vt in [MVT::F32, MVT::F64, MVT::F80] {
-                tli.set_operation_action(op, vt, super::actions::Action::LibCall);
+                tli.set_operation_action(op, vt, llrm_codegen::backend::selectiondag::actions::Action::LibCall);
             }
         }
     }
@@ -1127,7 +1107,7 @@ fn selected_in(
             return refuse("an alloca too large for the frame");
         };
         let align =
-            crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
+            llrm_codegen::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
         // The declared alignment wins over the natural one; above what the
         // frame keeps the stack aligned to, the frame realigns the stack
         // pointer.
@@ -1135,7 +1115,7 @@ fn selected_in(
         sizes.push((value, size, align));
     }
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
-    let objects = crate::backend::stackcoloring::share_frame(module, function, &mut info, &sizes);
+    let objects = llrm_codegen::backend::stackcoloring::share_frame(module, function, &mut info, &sizes);
     let alloca_count = objects.len() as i32;
     // A local above the alignment the stack keeps realigns it: the pin's
     // `MaxAlignment > StackAlignment`
@@ -1167,7 +1147,7 @@ fn selected_in(
         opt_for_size: cpu.size,
         min_size: llrm_mir::memory::has(&function.attrs, "minsize"),
         has_frame_pointer: true,
-        multiply_early_out: crate::backend::timing::signed_multiply(cpu, 4, false)
+        multiply_early_out: llrm_codegen::backend::timing::signed_multiply(cpu, 4, false)
             .ok()
             .flatten()
             .is_some_and(|clocks| clocks.minimum < clocks.maximum),
@@ -1189,7 +1169,7 @@ fn selected_in(
     // before them, so their addresses are fixed here too. Each is emitted
     // after the block that made it and its LIR blocks belong to that block's
     // range, where the phis of its successors look for their edges.
-    let mut work: Vec<(BlockId, BlockId, crate::backend::selectiondag::builder::BlockDag)> = Vec::new();
+    let mut work: Vec<(BlockId, BlockId, llrm_codegen::backend::selectiondag::builder::BlockDag)> = Vec::new();
     let mut fast_blocks = (!cpu.optimized && super::fastisel::enabled())
         .then(|| {
             super::fastisel::build_all(
@@ -1264,7 +1244,7 @@ fn selected_in(
     let x87_prices = (!arch.scalar_sse())
         .then(|| {
             let cost = |name: &str| cpu.cost(name).ok();
-            Some(super::emit_api::X87Prices {
+            Some(llrm_codegen::backend::selectiondag::emit_api::X87Prices {
                 load: cost("x87_load")?,
                 add: cost("x87_add")?,
                 add_m: cost("x87_add_m")?,
@@ -1369,7 +1349,7 @@ fn selected_in(
                         33..=64 if m64 => Some(64),
                         _ => None,
                     };
-                    super::live_out::compute_phi_live_out_reg_info(module, function, phi, &bits, &mut info);
+                    llrm_codegen::backend::selectiondag::live_out::compute_phi_live_out_reg_info(module, function, phi, &bits, &mut info);
                 } else if let Some(reg) = function.instruction(phi).result.and_then(|r| info.value_regs.get(&r)) {
                     info.live_out.remove(reg);
                 }
@@ -1388,7 +1368,7 @@ fn selected_in(
         built.dag.live_in_phys = built.live_ins.iter().map(|&(register, vreg)| (vreg, register)).collect();
         let arrived = arrival_widths(&built.dag, &built.live_ins);
         let done = if fast_ids.contains(&block.0) {
-            super::dag_select::select_block_fast(
+            llrm_codegen::backend::selectiondag::dag_select::select_block_fast(
                 &mut built.dag,
                 &Info { source_order: true, m64 },
                 &ctx,
@@ -1412,15 +1392,15 @@ fn selected_in(
                     three_address_adds: !(cpu.size || cpu.min_size)
                         && !matches!(
                             cpu.three_address(),
-                            crate::twoaddress::ThreeAddress::Off
-                                | crate::twoaddress::ThreeAddress::AddSub
-                                | crate::twoaddress::ThreeAddress::AddSubWords
+                            llrm_codegen::twoaddress::ThreeAddress::Off
+                                | llrm_codegen::twoaddress::ThreeAddress::AddSub
+                                | llrm_codegen::twoaddress::ThreeAddress::AddSubWords
                         ),
-                    i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
+                    i16_mul_chains: !llrm_codegen::backend::selectiondag::x86_lowering::promotes_i16(&tli),
                     sext_load: true,
                     zext_free: m64,
                     profile: if mul_by_clocks {
-                        Some(super::x86_lowering::MulPricing {
+                        Some(llrm_codegen::backend::selectiondag::x86_lowering::MulPricing {
                             cpu,
                             arch,
                             freq: 1.0,
@@ -1433,7 +1413,7 @@ fn selected_in(
                             .as_ref()
                             .filter(|_| mul_rate > 0 || price_pin)
                             .map(
-                                |frequencies| super::x86_lowering::MulPricing {
+                                |frequencies| llrm_codegen::backend::selectiondag::x86_lowering::MulPricing {
                                     cpu,
                                     arch,
                                     freq: frequencies.relative_to_entry(parent),
@@ -1462,7 +1442,7 @@ fn selected_in(
             // it.
             let regs = llrm_lir::registers::Regs(arch.registers());
             let mut arrival =
-                Insn::new(block_at[&block.0], None, Some(crate::model::lir::inert()), Vec::new(), Vec::new());
+                Insn::new(block_at[&block.0], None, Some(llrm_codegen::model::lir::inert()), Vec::new(), Vec::new());
             for (register, vreg) in &built.live_ins {
                 let value = state.vreg(*vreg);
                 // The argument arrives in the view of the register as wide as
@@ -1500,7 +1480,7 @@ fn selected_in(
             let name = match callee {
                 Callee::Global(symbol) => {
                     let global = module.global(llrm_mir::context::GlobalId(*symbol));
-                    if crate::backend::isel::far(global).unwrap_or(false) {
+                    if llrm_codegen::backend::isel::far(global).unwrap_or(false) {
                         far.insert(*at);
                     }
                     global.name.as_deref().unwrap_or_default().to_owned()
@@ -1621,7 +1601,7 @@ fn selected_in(
             .filter_map(|insn| insn.what.as_ref())
             .flat_map(|what| what.dests.iter())
             .filter_map(|dest| match dest {
-                crate::model::ir::Loc::Held(held) if held.width == 10 => Some(held.value),
+                llrm_codegen::model::ir::Loc::Held(held) if held.width == 10 => Some(held.value),
                 _ => None,
             })
             .collect();
@@ -1631,7 +1611,7 @@ fn selected_in(
             if mentions.into_iter().any(|loc| {
                 matches!(
                     loc,
-                    crate::model::ir::Loc::Held(held) if held.width != 10 && floating.contains(&held.value)
+                    llrm_codegen::model::ir::Loc::Held(held) if held.width != 10 && floating.contains(&held.value)
                 )
             }) {
                 return refuse(format!("--isel=dag: a floating value used as an integer ({:?})", what.name));
@@ -1648,26 +1628,26 @@ fn selected_in(
         .zip(landing)
         .map(|(at, pad)| {
             let never = [
-                crate::backend::isel::insn(
+                llrm_codegen::backend::isel::insn(
                     at,
-                    crate::backend::isel::semantics(
-                        crate::model::ir::Operation::Compare,
+                    llrm_codegen::backend::isel::semantics(
+                        llrm_codegen::model::ir::Operation::Compare,
                         "cmp",
                         vec![],
                         vec![
-                            crate::model::ir::Loc::Reg(crate::model::ir::Reg {
-                                register: crate::model::ir::STACK,
+                            llrm_codegen::model::ir::Loc::Reg(llrm_codegen::model::ir::Reg {
+                                register: llrm_codegen::model::ir::STACK,
                                 width: 2,
                             }),
-                            crate::model::ir::Loc::Imm(crate::model::ir::Imm { value: 0, width: 2, address: None }),
+                            llrm_codegen::model::ir::Loc::Imm(llrm_codegen::model::ir::Imm { value: 0, width: 2, address: None }),
                         ],
                     ),
                 ),
-                crate::backend::isel::insn(
+                llrm_codegen::backend::isel::insn(
                     at,
-                    crate::model::ir::Semantics {
+                    llrm_codegen::model::ir::Semantics {
                         target: Some(pad),
-                        ..crate::backend::isel::semantics(crate::model::ir::Operation::Branch, "je", vec![], vec![])
+                        ..llrm_codegen::backend::isel::semantics(llrm_codegen::model::ir::Operation::Branch, "je", vec![], vec![])
                     },
                 ),
             ];
@@ -1711,7 +1691,7 @@ fn selected_in(
     body.ordered = true;
     // `-g`: the parameters where the convention passes them, and each declared
     // variable in the frame cell its alloca has.
-    body.variables = crate::backend::isel::parameters(module, function, name, &convention, &IndexMap::default());
+    body.variables = llrm_codegen::backend::isel::parameters(module, function, name, &convention, &IndexMap::default());
     body.cfa_variables = true;
     for record in function.debug_records() {
         let (llrm_mir::DebugWhat::Declare(llrm_mir::Operand::Value(address)), Some(variable)) =
@@ -1727,10 +1707,10 @@ fn selected_in(
         if variable.scope != name {
             continue;
         }
-        let said = crate::model::lir::DebugVariable {
+        let said = llrm_codegen::model::lir::DebugVariable {
             name: variable.name,
             r#type: variable.r#type,
-            place: crate::model::lir::DebugPlace::At(Addr::new(Space::Frame, disp + variable.offset)),
+            place: llrm_codegen::model::lir::DebugPlace::At(Addr::new(Space::Frame, disp + variable.offset)),
             parameter: variable.parameter,
             argument: variable.argument,
             arrives: None,
@@ -1741,8 +1721,8 @@ fn selected_in(
         // allocator then reuses; the register it arrived in is `arrives`, until
         // the store.
         match body.variables.iter_mut().find(|one| said.parameter && one.parameter && one.name == said.name) {
-            Some(one) if matches!(one.place, crate::model::lir::DebugPlace::Register(_)) => {
-                *one = crate::model::lir::DebugVariable { argument: said.argument.or(one.argument), ..said }
+            Some(one) if matches!(one.place, llrm_codegen::model::lir::DebugPlace::Register(_)) => {
+                *one = llrm_codegen::model::lir::DebugVariable { argument: said.argument.or(one.argument), ..said }
             }
             // passed in a cell, which holds it from the entry
             Some(_) => {}
@@ -1750,7 +1730,7 @@ fn selected_in(
         }
     }
     for one in &mut body.variables {
-        if let (Some(argument), crate::model::lir::DebugPlace::At(_)) = (one.argument, &one.place) {
+        if let (Some(argument), llrm_codegen::model::lir::DebugPlace::At(_)) = (one.argument, &one.place) {
             one.arrives = match usize::try_from(argument).ok().and_then(|argument| convention.parameters.get(argument))
             {
                 Some(Parameter::Registers(registers)) if registers.len() == 1 => Some(registers[0]),
@@ -1766,7 +1746,7 @@ fn selected_in(
         }
     }
     let mut body =
-        crate::backend::isel::noted(module, function, name, &noted_ats, &noted_values, &noted_wides, &[], body);
+        llrm_codegen::backend::isel::noted(module, function, name, &noted_ats, &noted_values, &noted_wides, &[], body);
     set_odds(&mut body, &info.edge_probs, &block_at);
     // The loops whose trips `induction` proves, as the old route states them:
     // the executed-work estimate (the route choice's, `LLRM_DEBUG=cost`) reads
@@ -1785,9 +1765,9 @@ fn selected_in(
         let registers = IndexMap::default();
         let unit = unit.with_registers(&registers);
         body.loop_trip_counts =
-            crate::backend::isel::proven_trips(&unit, &shape, &registers, |block| block_at.get(&block.0).copied());
+            llrm_codegen::backend::isel::proven_trips(&unit, &shape, &registers, |block| block_at.get(&block.0).copied());
     }
-    body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
+    body.frequencies = Some(llrm_codegen::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
     // their bytes are laid down at the call, as the old route did.
     let mut inline = IndexMap::default();
@@ -1910,19 +1890,19 @@ fn is_pad(
 
 fn landing_pad_insn(
     at: i64,
-    segments: &crate::backend::target::Segments,
+    segments: &llrm_codegen::backend::target::Segments,
     general: &[llrm_lir::registers::RegId],
 ) -> Insn {
-    use crate::backend::callregs::{call_clobbered_high, call_clobbers};
+    use llrm_codegen::backend::callregs::{call_clobbered_high, call_clobbers};
     let contract =
-        crate::backend::lower_int64::_helper(LANDING, Default::default(), crate::abi::runtime::EVERY.clone());
+        llrm_codegen::backend::lower_int64::_helper(LANDING, Default::default(), llrm_codegen::abi::runtime::EVERY.clone());
     Insn {
         clobbers: call_clobbers(&contract, segments, general),
         clobbers_high: call_clobbered_high(&contract, segments, general),
         ..Insn::new(
             at,
             Some((at, at)),
-            Some(crate::backend::isel::semantics(crate::model::ir::Operation::Call, "call", vec![], vec![])),
+            Some(llrm_codegen::backend::isel::semantics(llrm_codegen::model::ir::Operation::Call, "call", vec![], vec![])),
             vec![],
             vec![],
         )
@@ -2056,7 +2036,7 @@ pub(super) fn read_before_defined(
             .is_some_and(
                 |what| matches!(
                     (&what.dests[..], &what.sources[..]),
-                    ([crate::model::ir::Loc::Held(to)], [crate::model::ir::Loc::Held(from)]) if to.value == from.value
+                    ([llrm_codegen::model::ir::Loc::Held(to)], [llrm_codegen::model::ir::Loc::Held(from)]) if to.value == from.value
                 ),
             );
         if itself { Vec::new() } else { insn.defines.clone() }
