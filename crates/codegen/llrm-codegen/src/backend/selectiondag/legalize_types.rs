@@ -1831,14 +1831,23 @@ impl<'a> TypeLegalizer<'a> {
             }
             ISD::AssertSext | ISD::AssertZext => self.expand_assert_ext(value, half),
             ISD::Abs | ISD::AbsMinPoison => self.expand_abs(value, half),
-            ISD::CtPop => self.expand_ctpop(value, half),
+            ISD::CtPop => match self.expand_count_by_libcall(value, ISD::CtPop, half) {
+                Some(parts) => parts,
+                None => self.expand_ctpop(value, half),
+            },
             // `ExpandIntRes_BITREVERSE`: each half reversed, and swapped.
             ISD::BitReverse => {
                 let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
                 (self.dag.get_node(ISD::BitReverse, half, &[hi]), self.dag.get_node(ISD::BitReverse, half, &[lo]))
             }
-            op @ (ISD::CtLz | ISD::CtLzZeroPoison) => self.expand_ctlz(value, op, half),
-            op @ (ISD::CtTz | ISD::CtTzZeroPoison) => self.expand_cttz(value, op, half),
+            op @ (ISD::CtLz | ISD::CtLzZeroPoison) => match self.expand_count_by_libcall(value, op, half) {
+                Some(parts) => parts,
+                None => self.expand_ctlz(value, op, half),
+            },
+            op @ (ISD::CtTz | ISD::CtTzZeroPoison) => match self.expand_count_by_libcall(value, op, half) {
+                Some(parts) => parts,
+                None => self.expand_cttz(value, op, half),
+            },
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
             op @ (ISD::UAddO | ISD::USubO) => self.expand_addsub_overflow(value, op, half)?,
             op @ (ISD::UAddOCarry | ISD::USubOCarry) => self.expand_addsub_carry(value, op, half),
@@ -2848,6 +2857,32 @@ impl<'a> TypeLegalizer<'a> {
         let below = self.dag.get_node(ISD::Sub, vt, &[quotient, one]);
         let adjust = self.dag.get_node(ISD::And, bool_vt, &[rem_nonzero, quotient_negative]);
         Some(self.dag.get_select(vt, adjust, below, quotient))
+    }
+
+    /// `ExpandIntRes_CTPOP`'s `LibCall` arm for a count too wide for a register: the routine the target names for
+    /// `op` of this type (`__popcountdi2`), called through `makeLibCall`, its `int` result widened and split. DEVIATE
+    /// BC1 (owner softfloat, exit 2026-11-30) takes the same arm for the zero-poison clz and ctz (the pin splits those
+    /// into halves). `None` where the action is not `LibCall`, no routine is named or the target makes no such call
+    /// (the pin falls back to the split too).
+    fn expand_count_by_libcall(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> Option<(SDValue, SDValue)> {
+        if !matches!(op, ISD::CtPop | ISD::CtLzZeroPoison | ISD::CtTzZeroPoison) {
+            return None;
+        }
+        let vt = self.dag.value_type(value);
+        if self.tli.operation_action(op, vt) != Action::LibCall {
+            return None;
+        }
+        let name = self.tli.libcall_name(op, vt)?;
+        let int = EVT::integer(self.tli.types.int_size());
+        let arg = self.dag.operand(value, 0);
+        let call = self.hooks.as_mut()?.make_lib_call(self.dag, name, &[arg], int, false)?;
+        let widened = self.dag.get_sext_or_trunc(call, vt);
+        Some(self.split_integer(widened, half))
     }
 
     /// `ExpandIntRes_CTPOP`: the population count of both halves, added.
