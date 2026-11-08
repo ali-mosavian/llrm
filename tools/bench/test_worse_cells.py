@@ -16,13 +16,13 @@ def folder(root, name, expected=None, mark=None):
 def test_a_program_under_parity_finds_its_references(tmp_path):
     """The first table skipped the 11 parity programs: it looked for bench/parity/expected.toml, not bench/parity/<name>/."""
     folder(tmp_path, "parity/loop", "[ow.O2]\ncode_bytes = 171\nclocks = 900\n")
-    rows, none = worse_cells.worse({"parity/loop/c/O2": {"code_bytes": 202, "clocks": 900}}, tmp_path)
+    rows, none, _ = worse_cells.worse({"parity/loop/c/O2": {"code_bytes": 202, "clocks": 900}}, tmp_path)
     assert rows == [("parity/loop/c/O2", ["+0 clk +31 B vs ow"])] and none == []
 
 
 def test_a_program_without_references_is_listed_as_no_ref(tmp_path):
     folder(tmp_path, "sfm16_dbg", mark="false")
-    rows, none = worse_cells.worse({"sfm16_dbg/c/O2": {"code_bytes": 10, "clocks": 10}}, tmp_path)
+    rows, none, _ = worse_cells.worse({"sfm16_dbg/c/O2": {"code_bytes": 10, "clocks": 10}}, tmp_path)
     assert rows == [] and none == ["sfm16_dbg"]
 
 
@@ -36,8 +36,8 @@ def test_at_o2_a_byte_for_two_clocks_is_a_trade_not_a_loss(tmp_path):
     """parity/qlight O2 read +80.5% bytes (388 vs 215) beside the best clocks: -229 clk for +172 B passes at 500 milliclocks per byte."""
     folder(tmp_path, "parity/qlight", "[bcc.O2]\ncode_bytes = 216\nclocks = 617\n[bcc.Os]\ncode_bytes = 216\nclocks = 617\n")
     ours = {"code_bytes": 388, "clocks": 388}
-    assert worse_cells.worse({"parity/qlight/c/O2": ours}, tmp_path)[0] == []
-    assert worse_cells.worse({"parity/qlight/c/Os": ours}, tmp_path)[0] == [("parity/qlight/c/Os", ["B 388 vs 216(bcc) +79.6%"])]
+    assert worse_cells.worse({"parity/qlight/c/O2": ours}, tmp_path, 500)[0] == []
+    assert worse_cells.worse({"parity/qlight/c/Os": ours}, tmp_path, 500)[0] == [("parity/qlight/c/Os", ["B 388 vs 216(bcc) +79.6%"])]
 
 
 def test_the_byte_price_is_the_one_bench_uses(tmp_path, monkeypatch):
@@ -48,4 +48,13 @@ def test_the_byte_price_is_the_one_bench_uses(tmp_path, monkeypatch):
     monkeypatch.setattr(bench, "M16_TIMINGS", sheet)
     assert worse_cells.rate() == 2000
     folder(tmp_path, "parity/qlight", "[bcc.O2]\ncode_bytes = 216\nclocks = 617\n")
-    assert worse_cells.worse({"parity/qlight/c/O2": {"code_bytes": 388, "clocks": 388}}, tmp_path)[0] != []
+    assert worse_cells.worse({"parity/qlight/c/O2": {"code_bytes": 388, "clocks": 388}}, tmp_path, worse_cells.rate())[0] != []
+
+
+def test_a_missing_reference_column_is_reported_not_skipped(tmp_path):
+    """z80's table took the next-best SDCC column when -ma was missing and understated the gap by up to 1.7 kB. Here tc has no stored cell: the
+    best of ow, bcc and tcpp stands in, and the row says so."""
+    folder(tmp_path, "huge", "[ow.Os]\ncode_bytes = 200\nclocks = 10\n[bcc.Os]\ncode_bytes = 190\nclocks = 10\n[tcpp.Os]\ncode_bytes = 250\nclocks = 10\n")
+    rows, _, missing = worse_cells.worse({"huge/c/Os": {"code_bytes": 195, "clocks": 10}}, tmp_path, 500)
+    assert rows == [("huge/c/Os", ["B 195 vs 190(bcc) +2.6%"])]
+    assert missing == ["huge/c/Os: no stored tc"]
