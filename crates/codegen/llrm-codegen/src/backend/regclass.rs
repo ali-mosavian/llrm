@@ -867,7 +867,8 @@ fn _through_xmm_copies(
     registers: &RegisterClasses,
     out: &mut Classes,
 ) {
-    if registers.xmm_set.is_empty() {
+    // A web with no xmm-confined member changes nothing: most bodies have none.
+    if registers.xmm_set.is_empty() || !out.values().any(|class| *class == registers.xmm_set) {
         return;
     }
     let mut web: IndexMap<u32, u32> = IndexMap::default();
@@ -1483,6 +1484,33 @@ mod tests {
         let of = |value| recompute_class(&body, value, &target::BUILT_IN, &registers);
         assert_eq!(of(word), None);
         assert!(of(base).is_some_and(|class| class.contains(&RegId::BX) && !class.contains(&RegId::AX)));
+    }
+
+    /// Every body built a union-find over its moves to carry an xmm class
+    /// through copies, however few xmm values it had: 2.6 M of a 182 M -O0
+    /// compile, whose bodies had none. With no xmm-confined value there is
+    /// nothing to carry, and nothing is built.
+    #[test]
+    fn test_moves_are_not_walked_for_xmm_where_no_value_is_xmm() {
+        let registers = crate::backend::classes::RegisterClasses::of(&llrm_x86_m64::M64);
+        assert!(!registers.xmm_set.is_empty(), "the premise: this target has xmm");
+        let held = |value| Loc::Held(Held { value, width: 4, offset: 0 });
+        let insns: Vec<Arc<Insn>> = (0..200)
+            .map(|at| {
+                let what = Semantics {
+                    name: Some("mov".into()),
+                    dests: vec![held(at + 1)],
+                    sources: vec![held(at)],
+                    ..Semantics::new(Operation::Move)
+                };
+                Arc::new(Insn::new(at as i64, None, Some(what), vec![at + 1], vec![at]))
+            })
+            .collect();
+        let body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let mut out = Classes::default();
+        let ((), made) = llrm_support::alloc_count::counted(|| _through_xmm_copies(&body, &registers, &mut out));
+        assert!(out.is_empty());
+        assert!(made <= 2, "{made} allocations for a body with no xmm value");
     }
 
     /// What the form says fills an operand, not the register's width: an
