@@ -38,6 +38,9 @@
 //!   each a step of 1) of a byte in memory, with `a` and the carry dead after:
 //!   `inc m` (`dec m`), which sets the sign and zero flags as the store left
 //!   them.
+//! - [`shift_in_place`]: `lda m; asl|lsr|rol|ror a; sta m` of a byte in memory
+//!   with `a` dead after: `asl|lsr|rol|ror m`, the same carry and sign and zero
+//!   flags (2 bytes and 3 clocks fewer on a zero-page cell).
 //! - [`jump_to_return`]: `jmp l` where `l:` is a lone `rts` becomes `rts`.
 //!
 //! DEVIATE: LLVM's `PeepholeOptimizer` and `MachineCSE` work on allocated
@@ -127,6 +130,7 @@ pub fn run_with(
     sink_step_to_compare(asm);
     drop_zero_compares(asm);
     step_in_place(asm);
+    shift_in_place(asm);
     load_straight_into_a(asm);
     store_before_transfer(asm);
     drop_cancelling_transfers(asm);
@@ -1820,6 +1824,38 @@ pub fn step_in_place(asm: &mut Asm) {
             let place = asm.lines[at].inst().map_or(0, |i| i.place);
             let op = if up { Op::Inc } else { Op::Dec };
             asm.lines.splice(at..after, [Line::Inst(Inst { op, operand: cell, place })]);
+        }
+        at += 1;
+    }
+}
+
+/// `lda m; asl|lsr|rol|ror a; sta m` where `a` is dead after the store: the
+/// shift done on the byte in memory (`lsr m`). The carry and the sign and zero
+/// flags are what the shift of `a` left, and what the store kept.
+pub fn shift_in_place(asm: &mut Asm) {
+    let mut at = 0;
+    while at + 2 < asm.lines.len() {
+        let inst = |n: usize| asm.lines.get(at + n).and_then(Line::inst);
+        let found = match (inst(0), inst(1), inst(2)) {
+            (Some(load), Some(shift), Some(store))
+                if load.op == Op::Lda
+                    && matches!(
+                        load.operand,
+                        Operand::Direct(_) | Operand::Indexed(_, Index::X)
+                    )
+                    && matches!(shift.op, Op::Asl | Op::Lsr | Op::Rol | Op::Ror)
+                    && matches!(shift.operand, Operand::Acc | Operand::None)
+                    && store.op == Op::Sta
+                    && store.operand == load.operand =>
+            {
+                Some((shift.op, load.operand.clone(), load.place))
+            }
+            _ => None,
+        };
+        if let Some((op, operand, place)) = found
+            && dead_from(&asm.lines, at + 3, Registers::A, &mut HashSet::default(), Exits::of(asm))
+        {
+            asm.lines.splice(at..at + 3, [Line::Inst(Inst { op, operand, place })]);
         }
         at += 1;
     }

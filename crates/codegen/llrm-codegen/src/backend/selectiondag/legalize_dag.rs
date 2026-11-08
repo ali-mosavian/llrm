@@ -815,6 +815,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     .map(|result| vec![result])
             }
             ISD::FShl | ISD::FShr => Some(vec![super::expand_funnel::expand_funnel_shift(self.dag, self.tli, node)]),
+            ISD::Rotl | ISD::Rotr => Some(vec![super::expand_funnel::expand_rotate(self.dag, self.tli, node)]),
             ISD::SShlSat | ISD::UShlSat => Some(vec![super::expand_fixed::expand_shl_sat(self.dag, self.tli, node)]),
             ISD::SCmp | ISD::UCmp => Some(vec![super::expand_fixed::expand_cmp(self.dag, self.tli, node)]),
             ISD::Abs | ISD::AbsMinPoison => Some(vec![self.expand_abs(node)]),

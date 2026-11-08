@@ -384,6 +384,8 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // DEVIATE CARRY-SI (owner x86-m64, exit 2026-11-21): see Tuning.
+                            carry_slot_indexes: false,
                             // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
                             // callee with one site too; the pin copies it (crc, floats,
                             // tile -Os: gcc keeps the call, +40 B each).
@@ -452,6 +454,31 @@ impl llrm_target::Target for M64 {
 
 #[cfg(test)]
 mod tests {
+    /// CARRY-SI: carrying the coalescer's slot indexes through the scheduler
+    /// moved x86 cells worse at -O1 (2026-11-07), so m64 numbers the function
+    /// afresh until it has priced them.
+    #[test]
+    fn test_m64_does_not_carry_the_slot_indexes_yet() {
+        let layout = M64.layout();
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout.spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M64.flat_ports(),
+        };
+        let tti = (M64.cost_model())(&prices).tti().expect("m64 states its cost model");
+        assert!(!tti.carries_slot_indexes());
+    }
+
     /// The m64 sheet had a cache line and no line fill, so no byte rate was
     /// derivable at m64 and the borrowed 312 had no number to be compared with.
     /// Zen 5 fills a 64 B line from L2 in 10 clk: 156 mclk/B.

@@ -388,6 +388,7 @@ impl<T: Target> Converted<T> {
             tri: &self.tri,
             lane_pins: true,
             size: false,
+            carry_slot_indexes: true,
         }
     }
 }

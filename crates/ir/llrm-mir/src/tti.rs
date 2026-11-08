@@ -749,6 +749,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::inline_o1_unit_bytes_milli`.
+    fn inline_o1_unit_bytes_milli(&self) -> i64 {
+        1000
+    }
+
     /// DEVIATE INL-O1: `Tuning::inline_o1_milliclocks_per_byte`.
     fn inline_o1_milliclocks_per_byte(&self) -> i64 {
         0
@@ -756,6 +761,11 @@ pub trait Tti {
 
     /// DEVIATE VASTART-PROMOTE: `Tuning::promote_va_list`.
     fn promote_va_list(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE SETCC-TREE-BRANCH: `Tuning::branch_compare_trees_at_size`.
+    fn branch_compare_trees_at_size(&self) -> bool {
         false
     }
 
@@ -794,6 +804,11 @@ pub trait Tti {
     ) -> i64 {
         let _ = optsize;
         0
+    }
+
+    /// `Tuning::carry_slot_indexes`.
+    fn carries_slot_indexes(&self) -> bool {
+        true
     }
 
     /// `Tuning::sink_select_arms`.
@@ -1405,6 +1420,17 @@ pub trait Tti {
     /// Flip the default when those are fixed.
     /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp)
     fn sinks_unused_invariants(&self) -> bool {
+        false
+    }
+
+    /// Whether InstCombine makes `scmp`/`ucmp` of a select chain
+    /// (`foldSelectToCmp`). The pin does so on every target.
+    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-21): off by default; on,
+    /// 62 other-target cells grew (arm64 sfm16 -Os +500 B, m68k -O2 +320 B,
+    /// x86_32 -O2 +28 B, 27 z80 cells): the compare's expansion and the
+    /// inline cost of the callee that holds it. Flip the default when fixed.
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineSelect.cpp#L4172)
+    fn folds_select_to_cmp(&self) -> bool {
         false
     }
 

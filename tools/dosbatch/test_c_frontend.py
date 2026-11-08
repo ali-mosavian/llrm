@@ -165,8 +165,8 @@ def test_the_real_mode_start_up_finds_qb_start_by_the_name_start_asm_calls(tmp_p
     to link (jwlink E2028: _qb_start is an undefined reference)."""
     import qbruntime
 
-    if not (os.environ.get("LLRM_CLANG_M16") and os.environ.get("LLRM_OW")):
-        pytest.skip("needs LLRM_CLANG_M16 and LLRM_OW")
+    if not (os.environ.get("LLRM_CLANG_M16") and dosbatch.llrmbin.ow_tree().is_dir()):
+        pytest.skip("needs LLRM_CLANG_M16 and the Open Watcom tree (tools/ow-fetch.sh)")
     obj = tmp_path / "rtinit.obj"
     qbruntime._compile_c(dosbatch.ROOT / "runtime/qb/rtinit.c", obj, dosbatch.c_include(dosbatch.REAL_MODE, tmp_path))
     names = obj.read_bytes()
@@ -180,8 +180,8 @@ def test_an_initializer_lands_in_the_xi_segments_start_up_walks(tmp_path, model)
     import qb32
     import qbruntime
 
-    if not (os.environ.get("LLRM_CLANG_M16") and os.environ.get("LLRM_OW")):
-        pytest.skip("needs LLRM_CLANG_M16 and LLRM_OW")
+    if not (os.environ.get("LLRM_CLANG_M16") and dosbatch.llrmbin.ow_tree().is_dir()):
+        pytest.skip("needs LLRM_CLANG_M16 and the Open Watcom tree (tools/ow-fetch.sh)")
     target, platform = (dosbatch.REAL_MODE, qbruntime.platform_directory()) if model == "m16" else (qb32.TARGET, qb32.PLATFORM)
     include = dosbatch.c_include(target, tmp_path)
     obj = tmp_path / "nheap.obj"

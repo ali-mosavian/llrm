@@ -46,6 +46,9 @@ cache_line             =    =
 # Clocks to fill one such line (a burst): the instruction cache's cost of a code byte once per run; 486 and Pentium state it
 # (their CPU files), later CPUs do not.
 line_fill_clocks             =    = 
+# DEVIATE TAILDUP-HOT (owner x86-m32): gcc copies up to 8 instructions where it optimises for speed. Stated cost:
+# x_jpeg_fixed/x_jpeg_single -O2 +32 B at 0 clk (a cold error tail in a loop; static frequency cannot tell). Exit: profile-fed frequencies (program PGO).
+tail_dup_hot_threshold  8    8
 pairing                 =    =
 # DEVIATE TA-LC (owner anyisa, exit 2026-11-27): measured on the 486 (m32 A/B, 1984 cells); P5 off until measured.
 commute_loop_carried    1    0

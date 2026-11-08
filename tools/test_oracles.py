@@ -22,7 +22,7 @@ FIXTURES = sorted((HERE.parent / "tests/run/c").glob("*.c"))
 LLRM_CC_UNBUILT = frozenset(('bench_io.c', 'div_constants_long.c', 'div_constants_short.c', 'div_constants_ulong.c', 'far_return.c', 'fixed_point.c', 'frame_address_stack_args.c', 'huge_runs.c', 'inline_emit.c', 'inlined_calls_keep_stores_through_far_alias.c', 'logical_value.c', 'memcpy_libcall.c', 'os_console.c', 'os_console_in.c', 'os_execute.c', 'os_exit.c', 'os_files.c', 'os_find.c', 'os_more.c', 'os_names.c', 'os_screen.c', 'wc16_mixed.c', 'wc_mixed.c', 'wrapv_overflow_check.c'))
 
 
-LOCATORS = ("LLRM_PIN_CLANG", "LLRM_CLANG_M16", "LLRM_OW")  # where llrm-cc finds its clang and libc: CI sets them, not ~/scratch
+LOCATORS = ("LLRM_PIN_CLANG", "LLRM_CLANG_M16")  # where llrm-cc finds its clang: CI sets them, not ~/scratch
 
 
 def oracle_env(base: dict[str, str]) -> dict[str, str]:

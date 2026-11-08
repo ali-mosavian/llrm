@@ -5,8 +5,7 @@ set -e
 FAILED=0; fail() { echo "$@"; FAILED=1; }
 P=$1; R=$(cd "$(dirname "$0")/../../../.." && pwd); O=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}; K=$(cd "$(dirname "$0")" && pwd)/kernels; if [ "${P#run_}" != "$P" ]; then S=$R/tests/run/c/${P#run_}.c; elif [ -d $K/$P ]; then S=$K/$P/$P.c; else S=$R/bench/$P/$P.c; fi
 LLRM=${LLRM:-$(python3 "$R/tools/llrmbin.py" bin)/llrm-cc}
-# llrm-cc takes its target as a row; the Open Watcom tree and the pin come from the environment
-export LLRM_OW=${LLRM_OW:-$HOME/scratch/ow-src}
+# llrm-cc takes its target as a row; the pin comes from the environment, the Open Watcom tree is {ow}
 mkdir -p $O/b $O/o
 ORIG=$S
 # the kernel is called through a volatile pointer in every compiler's copy: it stays a call, and the rest inlines as it would

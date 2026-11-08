@@ -165,6 +165,12 @@ use crate::edges;
 
 pub struct LoopSimplify;
 
+#[cfg(test)]
+thread_local! {
+    /// Shapes `LoopSimplify::run` has copied on this thread.
+    pub(crate) static SHAPE_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl FunctionPass for LoopSimplify {
     fn adds_memory_operations(&self) -> bool {
         false
@@ -185,7 +191,15 @@ impl FunctionPass for LoopSimplify {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let shape = (*analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function)).clone();
+        let held = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
+        // A function in canonical form is the usual case: it is looked at, not
+        // copied.
+        if !held.loops.iter().any(|loop_| _needs_grouping(unit.function, loop_)) {
+            return PreservedAnalyses::all();
+        }
+        #[cfg(test)]
+        SHAPE_COPIES.with(|count| count.set(count.get() + 1));
+        let shape = (*held).clone();
         if _simplified(unit.function, shape) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
@@ -329,15 +343,28 @@ fn _needs_grouping(
     function: &Function,
     loop_: &loops::Loop,
 ) -> bool {
-    let outside = _outside(function, loop_);
-    let Some(&parent) = outside.first() else { return false };
-    if outside.len() != 1
-        || function.successors(cfg::block(parent)) != [cfg::block(loop_.header)]
-        || loop_.latches.len() != 1
-    {
+    // Asked of every loop on every run: no set is built.
+    if loop_.latches.len() != 1 {
+        return _has_outside(function, loop_);
+    }
+    let mut outside = function.predecessors(cfg::block(loop_.header)).into_iter().filter(|at| !loop_.body.contains(&cfg::id(*at)));
+    let Some(parent) = outside.next() else { return false };
+    if outside.next().is_some() || function.successors(parent) != [cfg::block(loop_.header)] {
         return true;
     }
-    _exits(function, loop_).iter().any(|&target| !_reached_only_from(function, target, &loop_.body))
+    loop_.body.iter().any(|&at| {
+        function.successors(cfg::block(at)).into_iter().any(|target| {
+            !loop_.body.contains(&cfg::id(target)) && !_reached_only_from(function, cfg::id(target), &loop_.body)
+        })
+    })
+}
+
+/// Whether the header has a predecessor outside the loop.
+fn _has_outside(
+    function: &Function,
+    loop_: &loops::Loop,
+) -> bool {
+    function.predecessors(cfg::block(loop_.header)).into_iter().any(|at| !loop_.body.contains(&cfg::id(at)))
 }
 
 /// The predecessors of `loop_`'s header that are not in it.
@@ -466,7 +493,17 @@ fn visit_order(
 
 /// Whether any loop changed.
 pub fn simplified(function: &mut Function) -> bool {
-    let (nested, shape) = separated_nested_loops(function);
+    simplified_given(function, None)
+}
+
+/// [`simplified`], `first` being `function`'s shape where the caller holds one
+/// (the manager's dominator tree and loops): the first round asks it rather
+/// than building a new one.
+pub fn simplified_given(
+    function: &mut Function,
+    first: Option<cfg::Shape>,
+) -> bool {
+    let (nested, shape) = separated_nested_loops(function, first);
     _simplified(function, shape) | nested
 }
 
@@ -480,14 +517,17 @@ pub fn simplified(function: &mut Function) -> bool {
 /// preheader and exit blocks of the pin's `simplifyOneLoop`, so the new block
 /// takes the edges the preheader would have (the later grouping gives the
 /// outer loop its own preheader); exit 2026-11-14.
-fn separated_nested_loops(function: &mut Function) -> (bool, cfg::Shape) {
+fn separated_nested_loops(
+    function: &mut Function,
+    mut first: Option<cfg::Shape>,
+) -> (bool, cfg::Shape) {
     let mut changed = false;
     // Each separation removes a latch from a loop: the blocks bound it.
     // The shape of the last round, where nothing was separated, is that of the
     // function the caller goes on with.
     let mut last = None;
     for _ in 0..function.layout().len() {
-        let shape = cfg::Shape::of(function);
+        let shape = first.take().unwrap_or_else(|| cfg::Shape::of(function));
         let separated = shape.loops.iter().any(|loop_| {
             if loop_.latches.len() < 2 {
                 return false;

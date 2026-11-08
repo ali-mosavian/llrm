@@ -106,8 +106,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         narrow_divide_live_limit: 4,
         sink_spares_ranges: true,
         promote_va_list: true,
+        branch_compare_trees_at_size: true,
         inline_never_grows_without_rate: true,
-        inline_o1_milliclocks_per_byte: per_byte / 2,
+        inline_o1_milliclocks_per_byte: per_byte,
+        inline_o1_unit_bytes_milli: 3500,
         x87_zero_fill_at_size: true,
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant
@@ -727,6 +729,30 @@ mod tests {
         assert!(!model.port_touches_memory((0x3DA, 0x3DA)), "the VGA status register");
         assert!(model.port_touches_memory((0x0B, 0x0B)), "the 8237's mode register may start a transfer");
         assert!(model.port_touches_memory((0x300, 0x300)), "a port the platform does not list");
+    }
+
+    /// CARRY-SI closed: carrying the coalescer's slot indexes through the
+    /// scheduler (the pin's numbering) moved x86_32 -O1 14 cells +704 B, each
+    /// still below the pin's own bytes (pindiff m32), so m32 takes it.
+    #[test]
+    fn test_m32_carries_the_slot_indexes() {
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout().spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M32.flat_ports(),
+        };
+        let tti = (M32.cost_model())(&prices).tti().expect("m32 states its cost model");
+        assert!(tti.carries_slot_indexes());
     }
 
     /// The pin's full-unroll thresholds made matmul 2188 B against gcc's 382 at

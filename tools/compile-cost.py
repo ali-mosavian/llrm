@@ -44,7 +44,6 @@ class NoCounter(Exception):
 def instructions(command: list[str]) -> int:
     """User-space instructions `command` retires, children included. The compiler must succeed."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("LLRM_") or k in ("LLRM_BIN", "LLRM_COUNTER", *llrmbin.CC_ENV)}  # LLRM_VERIFY adds checking work
-    env.setdefault("LLRM_OW", llrmbin.cc_environment()["LLRM_OW"])
     try:
         with llrmbin.with_object(command) as real:
             count, _, done = levels_time.counted(real, env=env)

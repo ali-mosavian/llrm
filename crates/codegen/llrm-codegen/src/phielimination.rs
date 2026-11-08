@@ -162,6 +162,16 @@ thread_local! {
 
 /// `body` with every phi lowered to copies.
 pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
+    lowered_with(body, true)
+}
+
+/// [`lowered`] with `SplitPHIEdges` on or off. The pin runs it only when
+/// `LiveVariables` or `LiveIntervals` is available (PHIElimination.cpp#L245),
+/// which -O0 has neither of.
+pub fn lowered_with(
+    body: &LirBody,
+    split_edges: bool,
+) -> Result<LirBody, String> {
     if body.blocks.iter().all(|block| block.phis.is_empty()) {
         return Ok(body.clone());
     }
@@ -180,7 +190,7 @@ pub fn lowered(body: &LirBody) -> Result<LirBody, String> {
     let kept_phis = |body: &LirBody| -> IndexMap<i64, Vec<Phi>> {
         body.blocks.iter().map(|block| (block.at, block.phis.to_vec())).collect()
     };
-    let split = edges_to_split(body, &at_of);
+    let split = if split_edges { edges_to_split(body, &at_of) } else { Vec::new() };
     let split_body;
     let body = if split.is_empty() {
         body
@@ -632,6 +642,26 @@ mod tests {
         assert_eq!(made.succ.to_vec(), vec![2]);
         assert!(!now.blocks[0].succ.contains(&2), "the branch no longer goes to the phi's block");
         assert_eq!(copies(made).len(), 1, "the copy is in the edge block");
+    }
+
+    /// The pin splits no critical edge at -O0 (no `LiveVariables` or
+    /// `LiveIntervals`, PHIElimination.cpp#L245). Ours solved liveness rows
+    /// and made a block on the edge: 4.1 M Ir on div_constants_short.
+    #[test]
+    fn test_o0_splits_no_critical_edge_and_solves_no_rows() {
+        let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (3, 2)] }];
+        let mut was = body(vec![
+            block(0, vec![def(1), branch(2)], &[2, 1], vec![]),
+            block(1, vec![read(1), jump(3)], &[3], vec![]),
+            block(2, vec![read(10)], &[], vec![]),
+            block(3, vec![def(2), jump(2)], &[2], vec![]),
+        ]);
+        was.blocks[2] = Block::from(block(2, vec![read(10)], &[], phis));
+        let before = ROWS_SOLVED.with(std::cell::Cell::get);
+        let now = lowered_with(&was, false).expect("lowers");
+        assert_eq!(now.blocks.len(), 4, "a block was made on the edge at -O0");
+        assert_eq!(ROWS_SOLVED.with(std::cell::Cell::get), before, "rows solved at -O0");
+        assert_eq!(copies(&now.blocks[0]).len(), 1, "the copy stays in the predecessor");
     }
 
     /// The rows of liveness were solved for every value of every body with a

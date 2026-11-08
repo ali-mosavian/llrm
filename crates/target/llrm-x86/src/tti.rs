@@ -681,12 +681,20 @@ impl Tti for X86 {
         self.tuning.inline_never_grows_without_rate
     }
 
+    fn inline_o1_unit_bytes_milli(&self) -> i64 {
+        self.tuning.inline_o1_unit_bytes_milli
+    }
+
     fn inline_o1_milliclocks_per_byte(&self) -> i64 {
         self.tuning.inline_o1_milliclocks_per_byte
     }
 
     fn promote_va_list(&self) -> bool {
         self.tuning.promote_va_list
+    }
+
+    fn branch_compare_trees_at_size(&self) -> bool {
+        self.tuning.branch_compare_trees_at_size
     }
 
     fn sink_spares_ranges(&self) -> bool {
@@ -789,6 +797,10 @@ impl Tti for X86 {
 
     fn peels_folded_entry(&self) -> bool {
         self.tuning.peel_folded_entry
+    }
+
+    fn carries_slot_indexes(&self) -> bool {
+        self.tuning.carry_slot_indexes
     }
 
     fn sinks_select_arms(&self) -> bool {

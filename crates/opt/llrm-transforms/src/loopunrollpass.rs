@@ -2262,7 +2262,13 @@ pub(crate) fn unrolled_blocks(
 pub fn unroll_loops(run: &mut Run) -> bool {
     // `LoopUnrollPass::run` (L1762): every loop is put in simplified form and
     // LCSSA first, whether or not anything is unrolled.
-    let simplified = crate::loopsimplify::simplified(run.function);
+    // The manager's tree and loops stand for the function as it is: the first
+    // look at its loops asks them, not a tree made again.
+    let held = run.cached.as_ref().map(|(tree, loops)| llrm_analysis::cfg::Shape {
+        dominance: llrm_analysis::cfg::Dominance::new(std::rc::Rc::clone(tree)),
+        loops: llrm_analysis::cfg::natural(run.function, loops),
+    });
+    let simplified = crate::loopsimplify::simplified_given(run.function, held);
     let closed = crate::lcssa::closed(run.context, run.layout, run.function).unwrap_or(false);
     let mut analyzed = Analyzed::entry(run, !simplified && !closed);
     let at_first: IdSet<BlockId> = analyzed.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
@@ -2271,8 +2277,10 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     // the loops are visited in the reverse of
     // `getLoopsInReverseSiblingPreorder`, each loop after the loops it
     // holds.
-    let mut work: std::collections::VecDeque<BlockId> =
+    let mut work: Vec<BlockId> =
         analyzed.loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
+    crate::loopfilter::retain(&mut work);
+    let mut work: std::collections::VecDeque<BlockId> = work.into();
     // `LoopFullUnrollPass` hands `addSiblingLoops` every sibling the unroll
     // left that was not there before, the unrolled loop's own first iteration
     // among them: they are new to the loop passes after it.
