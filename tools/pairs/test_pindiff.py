@@ -452,3 +452,21 @@ def test_lea_padding_counts_as_padding_not_code():
         "  12:\t90                   \tnop\n"
     )
     assert pindiff.nop_bytes(listing) == 7 + 3 + 1
+
+
+def test_pin_optimised_ir_is_refused_as_raw_input():
+    """w12 2026-11-08: one.rt.ll (pin opt output) fed to llrm-llc re-ran our mid-end before LSR; the compare read +28/+39 B at m32 -O1
+    div_constants that real flow (4324 B against 5012 B) does not have."""
+    guard = load("irguard")
+    reopt = (Path(__file__).resolve().parent / "testdata" / "one.rt.ll").read_text()
+    assert guard.reoptimised(reopt)
+    with pytest.raises(SystemExit, match="re-optimised IR"):
+        guard.check_raw(reopt, "one.rt.ll")
+    guard.check_raw("; ModuleID = 'a.c'\ndefine void @f() { ret void }\n", "raw")
+
+
+def test_pindiff_labels_what_its_pin_column_is():
+    """The pin column (pin opt on raw IR) is 3471 B on m32 -O1 div_constants_ulong where the real clang -O1 is 3771: it was read as the pin's size."""
+    diff = load("pindiff")
+    assert "RAW clang IR" in diff.pin_column_label(False) and "not clang's own -O flow" in diff.pin_column_label(False)
+    assert "RE-OPTIMISED" in diff.pin_column_label(True)
