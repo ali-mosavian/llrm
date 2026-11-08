@@ -125,6 +125,8 @@ pub fn program(
         program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
         program.modules.iter_mut().for_each(crate::prepare::mark_long_multiplies);
     }
+    // The pin lowers `llvm.is.constant` at every level; -O0 reaches here with the call.
+    program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)?;
     Ok(program)
 }
 
