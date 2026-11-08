@@ -138,11 +138,10 @@ fn function_text<'a>(out: &'a str, name: &str) -> &'a str {
     &rest[..rest.find("\n}").unwrap_or(rest.len())]
 }
 
-/// The twin takes up at the loop that differs; the loops before it are the
-/// function's. It must be what reducing the function from the start without the
-/// formulae makes, or the driver compares a function with another.
+/// Two loops, the second differing: the twin must be what reducing the function
+/// without the formulae makes, or the driver compares a function with another.
 #[test]
-fn a_twin_taking_up_at_the_loop_is_the_function_reduced_without_the_formulae() {
+fn a_twin_is_the_function_reduced_without_the_formulae() {
     use llrm_transforms::lsr_pass::{NO_END_BIASED, Twin};
     let text = two_loops();
     let mut module = llrm_mir::parse::module(&text).unwrap_or_else(|why| panic!("{why:?}"));

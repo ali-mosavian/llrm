@@ -73,10 +73,8 @@ pub enum Twin {
 
 /// The twin of `@f` is `@f` followed by this.
 pub const TWIN_SUFFIX: &str = ".llrm-twin";
-/// On a twin `Make` left, until `Only` has reduced it: the header of the first
-/// loop whose end-biased result differs, where the twin takes up. The loops
-/// before it are as the function has them.
-pub const TWIN_RESUME: &str = "llrm-twin-resume";
+/// On a twin `Make` left, until `Only` has reduced it.
+pub const TWIN_PENDING: &str = "llrm-twin-pending";
 
 impl FunctionPass for LoopStrengthReduce {
     fn name(&self) -> &'static str {
@@ -96,24 +94,15 @@ impl FunctionPass for LoopStrengthReduce {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let resume = unit.function.attrs.iter().find_map(|attr| match attr {
-            Attribute::Int(name, header) if name == TWIN_RESUME => Some(BlockId(*header as u32)),
-            _ => None,
-        });
-        if resume.is_some() != (self.twin == Twin::Only) {
+        let pending = llrm_mir::memory::has(&unit.function.attrs, TWIN_PENDING);
+        if pending != (self.twin == Twin::Only) {
             return PreservedAnalyses::all();
         }
-        unit.function.attrs.retain(|attr| !matches!(attr, Attribute::Int(name, _) if name == TWIN_RESUME));
+        unit.function.attrs.retain(|attr| !matches!(attr, Attribute::Flag(name) if name == TWIN_PENDING));
         let outer = std::rc::Rc::clone(analyses.outer());
         let Some(tti) = outer.target().tti() else { return PreservedAnalyses::all() };
-        let mut before = None;
-        let twinning = match resume {
-            Some(header) => Twinning::Resume(header),
-            None if self.twin == Twin::Make && !llrm_mir::memory::has(&unit.function.attrs, NO_END_BIASED) => {
-                Twinning::Make(&mut before)
-            }
-            None => Twinning::Off,
-        };
+        let before = (self.twin == Twin::Make && !llrm_mir::memory::has(&unit.function.attrs, NO_END_BIASED))
+            .then(|| unit.function.clone());
         // The expressions of the passes before, as the pin keeps one SE for
         // the loop passes; handed back below where the CFG is as it was.
         // Beyond the pin: a counter only some trips step gets a pointer first,
@@ -131,7 +120,7 @@ impl FunctionPass for LoopStrengthReduce {
             analyses.invalidate(unit.function, &PreservedAnalyses::none());
         }
         let held = analyses.get::<Scevs>(unit.context, unit.layout, unit.function);
-        let (changed, scev) = reduced_core(
+        let (changed, scev) = reduced_held(
             unit.context,
             unit.layout,
             unit.function,
@@ -141,15 +130,14 @@ impl FunctionPass for LoopStrengthReduce {
             false,
             self.size,
             Some(held.take()),
-            twinning,
         );
         let kept = scev.is_some();
         if let Some(scev) = scev {
             held.put(scev);
         }
-        if let Some((header, mut twin)) = before {
+        if let Some(mut twin) = before.filter(|_| llrm_mir::memory::has(&unit.function.attrs, END_BIASED_FIRED)) {
             twin.attrs.push(Attribute::Flag(NO_END_BIASED.into()));
-            twin.attrs.push(Attribute::Int(TWIN_RESUME.into(), u64::from(header.0)));
+            twin.attrs.push(Attribute::Flag(TWIN_PENDING.into()));
             let name = outer.globals[unit.id.expect("a function of the module").0 as usize].name.clone();
             unit.declared.body(&format!("{}{TWIN_SUFFIX}", name.as_deref().unwrap_or_default()), twin);
         }
@@ -466,33 +454,6 @@ pub fn reduced_held(
     size: bool,
     held: Option<ScalarEvolution>,
 ) -> (bool, Option<ScalarEvolution>) {
-    reduced_core(context, layout, function, declared, outer, tti, stress_chains, size, held, Twinning::Off)
-}
-
-/// What [`reduced_core`] does about a function twin (LG3b).
-pub enum Twinning<'a> {
-    Off,
-    /// Keeps the function as it stood before the first loop whose end-biased
-    /// result differs, with that loop's header.
-    Make(&'a mut Option<(BlockId, Function)>),
-    /// Reduces the loops from this header on.
-    Resume(BlockId),
-}
-
-/// [`reduced_held`], with `twinning`.
-#[allow(clippy::too_many_arguments)]
-pub fn reduced_core(
-    context: &mut Context,
-    layout: &DataLayout,
-    function: &mut Function,
-    declared: &mut Declared,
-    outer: &Outer,
-    tti: &dyn Tti,
-    stress_chains: bool,
-    size: bool,
-    held: Option<ScalarEvolution>,
-    mut twinning: Twinning,
-) -> (bool, Option<ScalarEvolution>) {
     // The pass requires `LoopSimplify` (`getAnalysisUsage`): an outer loop
     // entered by a conditional branch gets the preheader its invariants'
     // induction variables are made in.
@@ -519,20 +480,8 @@ pub fn reduced_core(
         headers.reverse();
         headers
     };
-    let headers = match twinning {
-        Twinning::Resume(from) => {
-            let at = headers.iter().position(|&one| one == from).unwrap_or(0);
-            headers[at..].to_vec()
-        }
-        _ => headers,
-    };
     for header in headers {
         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrLoops);
-        // As the loop starts: the twin takes up here if its result differs.
-        let mut loop_start = match &twinning {
-            Twinning::Make(made) if made.is_none() => Some(function.clone()),
-            _ => None,
-        };
         // The first look may find exit tests to edit, and the plan may split
         // edges: each is followed by an analysis of the loop as it is then.
         let mut marked: Option<Vec<InstId>> = None;
@@ -591,13 +540,8 @@ pub fn reduced_core(
                     }
                     Outcome::Planned(Some(plan)) => {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrSolutions);
-                        if plan.end_biased_differs {
-                            if !llrm_mir::memory::has(&function.attrs, END_BIASED_FIRED) {
-                                function.attrs.push(llrm_mir::opcode::Attribute::Flag(END_BIASED_FIRED.into()));
-                            }
-                            if let (Twinning::Make(made), Some(start)) = (&mut twinning, loop_start.take()) {
-                                made.get_or_insert((header, start));
-                            }
+                        if plan.end_biased_differs && !llrm_mir::memory::has(&function.attrs, END_BIASED_FIRED) {
+                            function.attrs.push(llrm_mir::opcode::Attribute::Flag(END_BIASED_FIRED.into()));
                         }
                         plan
                     }
