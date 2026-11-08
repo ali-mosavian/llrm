@@ -4741,3 +4741,20 @@ fn a_function_calling_through_a_pointer_uses_rbp_as_a_value_register_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("rbp"), "{listing}");
 }
+
+/// A volatile `memcpy` kept eight-byte pieces at m64 (the 16-byte pieces carried no volatile mark, so the second
+/// read of the same source could be forwarded from the first); the pin copies it as `v4i32` pieces, each a volatile
+/// access (double_to_uint64 -O2: 80 bytes, ten pairs for five).
+#[test]
+fn a_volatile_copy_is_made_of_16_byte_pieces_and_each_is_read_and_written_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %src, ptr %d1, ptr %d2) {\n  \
+                call void @llvm.memcpy.p0.p0.i64(ptr align 16 %d1, ptr align 16 %src, i64 16, i1 true)\n  \
+                call void @llvm.memcpy.p0.p0.i64(ptr align 16 %d2, ptr align 16 %src, i64 16, i1 true)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let pieces = listing.matches("movups").count() + listing.matches("movaps").count();
+    assert_eq!(pieces, 4, "{listing}");
+}
