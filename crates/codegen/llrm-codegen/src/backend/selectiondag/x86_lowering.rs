@@ -225,7 +225,10 @@ impl CombineHooks for X86Lowering<'_> {
     /// `X86TargetLowering::isLegalAddImmediate`: `isInt<32>`. Without it
     /// `add(mul(add(A, CA), CM), CB)` folded the LCG chain of mul_constants
     /// into 64-bit constants (+875 B at -O2/-O3).
-    fn legal_add_immediate(&self, imm: i64) -> bool {
+    fn legal_add_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
         i32::try_from(imm).is_ok()
     }
 
@@ -949,8 +952,9 @@ fn get_bt(
 
 /// `LowerAndToBT`: `(x & (1 << n)) == 0` and `((x >> n) & 1) != 0` test bit `n`
 /// of `x`; the carry flag is the bit, so `!= 0` is `B` and `== 0` is `AE`.
-/// `(x & 2^k)` is the bit `k` when the immediate does not fit a `test` (32 bits;
-/// a byte at minsize). (The reassociated three-way `and` is not taken, SD200.)
+/// `(x & 2^k)` is the bit `k` when the immediate does not fit a `test` (32
+/// bits; a byte at minsize). (The reassociated three-way `and` is not taken,
+/// SD200.)
 pub(super) fn lower_and_to_bt(
     dag: &mut SelectionDAG,
     and: SDValue,
@@ -1645,7 +1649,7 @@ fn combine_add(
     node: SDValue,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
-    if vt != EVT::I32 {
+    if vt != EVT::I32 && vt != EVT::I64 {
         return super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node);
     }
     // `m_Add` matches either operand as the difference.
@@ -1882,7 +1886,9 @@ fn combine_select_of_two_constants(
     let (mut true_c, mut false_c) = (dag.constant(then)?, dag.constant(other)?);
     let vt = dag.value_type(node);
     // Not "crazy integer types", and the condition is `i1`.
-    if !(vt == EVT::I8 || vt == EVT::I16 || vt == EVT::I32 || (vt == EVT::I64 && is64)) || dag.value_type(cond) != EVT::I1 {
+    if !(vt == EVT::I8 || vt == EVT::I16 || vt == EVT::I32 || (vt == EVT::I64 && is64))
+        || dag.value_type(cond) != EVT::I1
+    {
         return None;
     }
     let bits = vt.size_in_bits();
@@ -1949,8 +1955,8 @@ fn combine_cmov(
         return Some(dag.get_node(x86isd::CMOV, vt, &[false_op, true_op, simpler, flags]));
     }
     // `(cmov 1, T, uge, (sub T, 2))` is `T + (T < 1)`: `adc T, 0` on the carry
-    // of `sub T, 1` (X86ISelLowering.cpp#L50411, the `umax(x, 1)` the soft-float
-    // runtime builds its exponents with).
+    // of `sub T, 1` (X86ISelLowering.cpp#L50411, the `umax(x, 1)` the
+    // soft-float runtime builds its exponents with).
     if code == cond::AE
         && dag.constant(false_op) == Some(1)
         && dag.opcode(flags) == x86isd::SUB
@@ -1965,7 +1971,11 @@ fn combine_cmov(
             let one = dag.get_constant(1, cond_vt);
             let sub = dag.get_node_multi(x86isd::SUB, &[cond_vt, EVT::I32], &[dag.operand(flags, 0), one]);
             let zero = dag.get_constant(0, vt);
-            return Some(dag.get_node_multi(x86isd::ADC, &[vt, EVT::I32], &[true_op, zero, SDValue { node: sub.node, res: 1 }]));
+            return Some(dag.get_node_multi(
+                x86isd::ADC,
+                &[vt, EVT::I32],
+                &[true_op, zero, SDValue { node: sub.node, res: 1 }],
+            ));
         }
     }
     let (Some(mut true_c), Some(mut false_c)) = (dag.constant(true_op), dag.constant(false_op)) else { return None };
@@ -2030,7 +2040,10 @@ fn lower_global_address(
     // `classifyGlobalReference`: a symbol that is not `dso_local` in position
     // independent 64-bit code is `MO_GOTPCREL`; `LowerGlobalOrExternal` then
     // loads its address from the GOT and adds the offset after (no folding).
-    if vt == EVT::I64 && !dag.config().absolute_symbols && !dag.local_symbols.get(symbol as usize).copied().unwrap_or(true) {
+    if vt == EVT::I64
+        && !dag.config().absolute_symbols
+        && !dag.local_symbols.get(symbol as usize).copied().unwrap_or(true)
+    {
         let target = dag.intern(
             ISD::TargetGlobalAddress,
             &[vt],
@@ -2039,15 +2052,8 @@ fn lower_global_address(
             NodeData::Global { symbol, offset: 0 },
         );
         let entry = dag.get_node(x86isd::WRAPPER_RIP, vt, &[target]);
-        let info = MemInfo {
-            mem_vt: vt,
-            align: 8,
-            volatile: false,
-            base: MemBase::Got,
-            ext: None,
-            space: 0,
-            ordering: None,
-        };
+        let info =
+            MemInfo { mem_vt: vt, align: 8, volatile: false, base: MemBase::Got, ext: None, space: 0, ordering: None };
         let root = dag.entry_node();
         let load = dag.get_load(vt, root, entry, info);
         dag.invariant_loads.insert(load.node);
