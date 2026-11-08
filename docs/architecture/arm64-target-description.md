@@ -43,21 +43,26 @@ So no `llrm-target` edit blocks arm64. The defaults only save m68k, wasm, z80 an
 - **Large, 2:** `forms_text` (the instruction file; arm64 about 250 names), `cost_model` (a `Machine` impl; arm64 has `tti.rs`, 1183 lines, a target without a TTI pays this).
 - Shared cost of a second target beyond these: its `RegisterClasses` pins live in the same forms file, its `Frame` facts in `FrameRegisters`.
 
-## Size of the arm64 description (from the m64 template)
-`llrm-x86-m64` is 598 lines of Rust plus `calling.toml` (149), `datalayout.toml` (66), `object.toml` (13), `registers.regs`, `opcosts.txt`, `timings.times` and an instruction file, and it leans on `llrm_x86::calling::{results, callee_saved, register, frame, stack, first_argument_offset, return_address_bytes}` (x86-crate helpers over a `Convention`). Estimate for arm64, source in brackets:
-- `description.rs` about 450 lines (the 39 methods, the `frame_*` facts, `pref_*_alignment`, `move_bytes`) [own, mostly P].
-- an arm64 `calling` helper module about 150 lines, same shape as x86's [own].
-- `calling.toml` about 200 lines (AAPCS64 and Darwin: x0-x7/v0-v7, x19-x28 and d8-d15 preserved, no red zone on Darwin, 128 on Linux per the pin's `AArch64FrameLowering`) [P].
-- `datalayout.toml` about 50, `object.toml` about 30 [P].
-- `arm64.instr` about 250 forms and `dialect.toml` about 30 [P: `AArch64InstrInfo.td` names; own: operand kinds].
-- Non-required methods with x86-flavoured answers it will also need (`frame_optional`, `frame_saved_first`, `frame_enter`, `frame_slot_scratch`, `frame_wrap_split_size`, `frame_object_aligned`, `frame_red_zone`, `aligned_calls`, `stack_alignment`, `selects_by_dag`, `string_roots`, `x87_stack_top`): these feed `FrameRegisters`; each reads `calling.toml`, none needs a shared edit.
-Total about 1,000 lines of Rust and 560 of data, before the first stage runs.
+## Size of the arm64 description (2026-11-08, measured)
+Most data exists already. Estimate -> actual, source in brackets:
+- `description.rs`: ~450 -> 250 lines of Rust, plus 140 of tests (39 methods, `frame_*` from `calling.toml`, cost model reused from `machine.rs`) [own].
+- arm64 `calling` helper module: ~150 -> 0. `Convention::{callee_saved, result_registers}` plus `REGISTER_INFO.by_name` answer; no helper crate.
+- `calling.toml` ~200 -> 54 existing + 2 lines (`float_argument_registers`, `result.float`; floats went to the stack before). Darwin convention, vector-saved d8-d15 and red zone are not stated yet (Darwin and `frame_red_zone` follow with the frame stage).
+- `datalayout.toml`, `object.toml` (+ Darwin twins): existing, parse under `llrm_target` unchanged.
+- `arm64.instr` ~250 forms -> 137 lines exist; `dialect.toml` exists (44 lines). The selector's ~250 form names remain (due 2026-11-12).
+- Stubs (7): `march`, `marches`, `cpu_table`, `multiply_immediate_bytes`, `divide_routine`, `huge_*` (Err by design), prices from `machine.rs`.
+Total: 250 lines of Rust and 2 of data, against 1,000 and 560 estimated. The estimate missed `src/machines/*.toml` and `arm64.instr`.
 
 ## Round 1 from the other targets (6502, wasm, z80; m68k due 23:20Z)
 - **(a) `object.bitness` 64.** The field is a `u32` and `CodeModel::of` (`object.rs:141`) has a flat 64-bit model, so wasm64 and arm64 need no additive variant. Only the doc comment ("16 or 32") is wrong. The readers that compare it (`isel.rs:6916`, `:7811` `== 32`; `basic.rs:647` `!= 16`; `isel.rs:7006` `< 32`) treat 64 as "not 32": x86-m64 already goes through them, so 64 is exercised. Unverified for a target without x86's 32-bit paths.
 - **(b) cost methods.** `cpu_table` is `Option<CpuTable>` and `CpuTable` has x86 columns (issue, prefix, pairing, lcp); `operation_costs(price, prefix)` takes an x86 prefix cost. A form-table answer (z80 `timing/z80.csv`, 6502 `timing.rs`) fits neither. Proposal: the neutral defaults stay `None` / `OperationCosts::default()`; a target with a form table answers through `cost_model` (it already builds a `Machine` from `CpuPrices`), and `prefix` is documented as "ignored where the target has none". No signature change, nothing x86 assumed by a target that ignores them.
 - **(c) `operand_bytes`.** Readers: `cpu.rs:382` (`Profile.operand_bytes`), `arithmetic.rs:138`, nib `cli.rs:372`. Neutral meaning proposed: the native operand width in bytes, the width a plain register operation works at: x86-m64 8, arm64 8, 6502 and z80 1, wasm the value type's size (4 for i32). Encoded size is a different question, answered per form by `register_op_bytes`/`shift_op_bytes`/`multiply_immediate_bytes`; z80's 1..4 by form and wasm's LEB128 belong there, not here.
-- **(d) no register file (wasm).** An empty answer must be legal for: `registers` (an empty `Info`), `registers_text` (empty parses), `register_capacity` (0), `callee_saved` and `convention_callee_saved` (empty), `results` and `convention_results` (empty), `register_named` (returns `RegId`, so `RegId::None` must be legal), `frame_register` and `stack_pointer` (the same). Unverified: that the consumers of those (`RegisterClasses::of`, `FrameRegisters`, the prologue) accept them; wasm skips the register stages (`Allocator::None`), so only the target description is asked, not the stages. To check before the defaults PR.
+- **(d) no register file (wasm).** An empty answer must be legal for: `registers` (an empty `Info`), `registers_text` (empty parses), `register_capacity` (0), `callee_saved` and `convention_callee_saved` (empty), `results` and `convention_results` (empty), `register_named` (returns `RegId`, so `RegId::None` must be legal), `frame_register` and `stack_pointer` (the same). Unverified: that the consumers of those (`RegisterClasses::of`, `FrameRegisters`, the prologue) accept them; wasm skips the register stages (`Allocator::None`), so only the target description is asked, not the stages. Checked on arm64's non-empty case only (2026-11-08): `RegisterClasses::of` stops at an x86 fact (below). wasm's empty case is still unchecked.
+
+## First x86 fact per shared input (2026-11-08)
+- `FrameRegisters` (`Target::frame_registers`): builds; x29/sp/8/16, red zone 0 (test).
+- `RegisterClasses::of` (classes.rs:141): every `base`/`index` root needs a 16-bit view (`word`); arm64's general registers have none. Next facts in the same function: `iced()` (classes.rs:291) names registers through `RegId::named`, `root_register` (classes.rs:286) uses `full_register32`. Pinned by `the_class_table_stops_at_the_x86_word_view`.
+- x86-coupled lines by stage file (grep for `llrm_x86`, `RegId::<NAME>`, `full_register32`; a proxy, not a run): allocate 53, constrain 42, liveness 26, classes 21, loopslots 12, cpu 10, lanes 9, regclass 7, flow 4, peephole 3, assemble 2, floatalloc 1, sharedstores 0.
 
 ## Deviations expected
 - `cpu_table`/`operation_costs` empty: arm64 prices from `tti.rs` (the pin's cost model), not `timings.times`. DEVIATE, exit when the cost model is data.
