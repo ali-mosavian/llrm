@@ -91,12 +91,26 @@ fn a_trial_that_grows_the_code_past_the_limit_is_put_back() {
     assert!(!trial_pays(Level::Os, 0, 1_000_000, 17_000));
 }
 
-/// `fcmp_all`'s trial took 14 s of selection to price 85,508 bytes more: a 4 min
-/// corpus compile became 6 (+76%, 2026-11-08). A trial past the instruction
+/// `fcmp_all`'s trial took 14 s of selection to price 85,508 bytes more: a 4
+/// min corpus compile became 6 (+76%, 2026-11-08). A trial past the instruction
 /// growth limit is put back before it is priced.
 #[test]
 fn a_trial_that_grows_the_ir_past_the_limit_is_not_priced() {
     use llrm_6502::driver::trial_fits;
     assert!(trial_fits(461)); // loop_fusion, kept
     assert!(!trial_fits(2808)); // fcmp_all
+}
+
+/// The trial priced the first build, then the trial, then selected the winner
+/// a third time: +16.9% of corpus compile at -O2 (2026-11-08). Each build is
+/// selected once and the winner's text is the one priced.
+#[test]
+fn a_trial_selects_each_build_once() {
+    let before = llrm_6502::driver::selected();
+    assembly(&module(FOLDING), &Request::new(Level::O2)).unwrap();
+    let functions = llrm_6502::driver::selected() - before;
+    let before = llrm_6502::driver::selected();
+    assembly(&module(FOLDING), &Request::new(Level::O1)).unwrap();
+    let once = llrm_6502::driver::selected() - before;
+    assert_eq!(functions, 2 * once, "two builds, one selection each");
 }
