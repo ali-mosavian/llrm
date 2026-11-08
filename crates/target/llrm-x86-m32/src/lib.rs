@@ -138,6 +138,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // x_matmul_f / x_ld_matmul -O3: 392 B and 3 fmul against gcc's 1183 B and 14.
         // Tried at m64 on 2026-11-08, hook on: only x_matmul_f / x_ld_matmul O2/O3 change (-848 B on x_matmul_f), but
         // executed instructions rise 53% (7416 -> 11364: guarded peeled copies against a 4x runtime unroll); left None.
+        // The m64 x_matmul_f size gap (ours 1751 B, pin 2296 B, 50 packed ops) is vector-shaped: vector-deferred list.
         unroll_object_bound: Some(16),
         inline_o1_milliclocks_per_byte: per_byte,
         inline_o1_unit_bytes_milli: 3500,
