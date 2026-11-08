@@ -3088,7 +3088,12 @@ pub fn sites_with_trials(
             decided.push((inst, decision.callee, decision.cost.clone()));
         }
         let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
-        let hot = matches!(decision.cost, InlineCost::Cost { hot: true, .. });
+        // INL-HOT: a caller that goes with its one call is inlined where its arguments are known, and
+        // that site decides (x_spill_store_order -O2: `pack_ref` into `run_main` first: +40% clk).
+        let leaving = local_linkage(module.global(caller_id).linkage)
+            && !addressed.contains(&caller_id)
+            && counts.get(&caller_id) == Some(&1);
+        let hot = matches!(decision.cost, InlineCost::Cost { hot: true, .. }) && !leaving;
         let worth = (blocked || hot) && trials.is_some() && if size == CallerSize::Speed { !always_only } else { true };
         if !decision.inline && !worth {
             continue;
