@@ -295,9 +295,14 @@ impl Tti for AArch64 {
     /// bytes, the unit model refuses them) is bounded by the caller's size,
     /// and jpeg_fixed's `bench_jpeg_fixed` is 600+ instructions. Cost: 16
     /// trials of about 15 ms, jpeg_fixed -Os compiles in 0.38 s, not 0.14 s.
-    /// Exit: skip a trial the last round of the same callee rejected.
+    /// A callee rejected in one round is not tried in the next
+    /// (`inline_trial_skips_rejected`).
     fn inline_trial_caller_limit(&self) -> usize {
         20_000
+    }
+
+    fn inline_trial_skips_rejected(&self) -> bool {
+        true
     }
 
     /// `FSQRT` is legal on `f32` and `f64`.
