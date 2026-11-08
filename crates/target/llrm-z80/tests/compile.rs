@@ -1227,6 +1227,17 @@ fn a_fill_loop_stays_a_call_at_size() {
     assert!(out.contains("_fill") && !out.contains("ld (hl)"), "{out}");
 }
 
+/// A long returned with a signed range (`range(i32 -128, 128)`) had its high word made again from the low word's sign
+/// (`add a, a; sbc a, a; ...`, seven instructions a caller) though the call had returned it.
+#[test]
+fn a_call_result_with_a_signed_range_keeps_the_returned_high_word() {
+    let ir = include_str!("kernels/ir/call_result_in_range.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "caller", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("sbc a, a"), "{level:?}: {out}");
+    }
+}
+
 /// `memory_expansion` at -Os was refused ("a conditional return in a function
 /// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
 /// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The
