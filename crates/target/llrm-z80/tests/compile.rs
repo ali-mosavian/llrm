@@ -1152,6 +1152,41 @@ fn a_spilled_word_shifted_right_by_a_byte_reloads_one_byte() {
     assert!(byte, "{out}");
 }
 
+/// `w >> 29` of a spilled long reloaded the whole high word (`ld e, -8(ix)` / `ld d, -7(ix)`), then `ld e, d` threw the
+/// low byte away: 3 B and 19 T a site, in every `shape == k ? w >> n` of div_constants. A shift of 8 or more reads one byte.
+#[test]
+fn a_spilled_word_shifted_right_by_more_than_a_byte_reloads_one_byte() {
+    let ir = include_str!("kernels/ir/reload_high_lane_far.ll");
+    let out = text(ir, "g", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    let dead = lines
+        .windows(4)
+        .any(|w| w[0].starts_with("ld e, -") && w[1].starts_with("ld d, -") && w[2] == "ld e, d" && w[3] == "ld d, #0");
+    assert!(!dead, "{out}");
+    assert!(lines.windows(3).any(|w| w[0].starts_with("ld e, -") && w[1] == "ld d, #0" && w[2] == "srl e"), "{out}");
+}
+
+/// A byte or word rotated (`llvm.fshl` of one value twice) was refused at -O2, `CannotSelect(Rotl)`: neither type had an
+/// action for the rotates, and the legalizer did not expand them. Both widths and both directions compile, to shifts and an `or`.
+#[test]
+fn a_byte_or_word_rotate_compiles_to_shifts() {
+    let ir = include_str!("kernels/ir/rotate_small.ll");
+    for name in ["rotl8", "rotr16", "rotr16_by_nine"] {
+        let out = text(ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{name}: {why}"));
+        assert!(out.contains("or a, "), "{name}: {out}");
+    }
+}
+
+/// A bit loaded and branched on at once (`while (!bad)`, `bad` a flag the program only sets to 1) was a byte made into a
+/// 0 or 1 by a diamond of jumps, then tested again: 14 instructions where `and a, (hl)` already sets the flag.
+#[test]
+fn a_loaded_bit_is_branched_on_without_a_diamond() {
+    let ir = include_str!("kernels/ir/bit_load_branch.ll");
+    let out = text(ir, "g", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("xor a, a"), "{out}");
+    assert!(out.contains("and a, (hl)"), "{out}");
+}
+
 /// `memory_expansion` at -Os was refused ("a conditional return in a function
 /// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
 /// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The

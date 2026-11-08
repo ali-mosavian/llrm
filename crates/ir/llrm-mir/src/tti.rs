@@ -1426,6 +1426,17 @@ pub trait Tti {
         false
     }
 
+    /// Whether InstCombine makes `scmp`/`ucmp` of a select chain
+    /// (`foldSelectToCmp`). The pin does so on every target.
+    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-21): off by default; on,
+    /// 62 other-target cells grew (arm64 sfm16 -Os +500 B, m68k -O2 +320 B,
+    /// x86_32 -O2 +28 B, 27 z80 cells): the compare's expansion and the
+    /// inline cost of the callee that holds it. Flip the default when fixed.
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineSelect.cpp#L4172)
+    fn folds_select_to_cmp(&self) -> bool {
+        false
+    }
+
     /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
     /// (default 4), for a function built for size or not: the operations
     /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.

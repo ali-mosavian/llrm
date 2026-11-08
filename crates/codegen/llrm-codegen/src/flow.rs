@@ -291,6 +291,7 @@ pub fn machine_with<'a>(
         Box::new(twoaddr::TwoAddress {
             lea: target.three_address_for(target.size || target.min_size),
             loop_carried: target.commutes_loop_carried(),
+            unoptimized: !target.optimized,
         }),
         Box::new(Coalescer { size: target.size, moves: target.move_bytes, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
@@ -775,7 +776,8 @@ mod tests {
     /// Ours ran them at -O0: 12 M Ir of 78 M on div_constants_short.
     #[test]
     fn test_the_o0_pipeline_has_none_of_the_phases_the_pin_runs_only_when_optimizing() {
-        let o0 = crate::backend::cpu::Profile { optimized: false, ..crate::backend::cpu::named("486").unwrap().clone() };
+        let o0 =
+            crate::backend::cpu::Profile { optimized: false, ..crate::backend::cpu::named("486").unwrap().clone() };
         let phases = machine(&IndexMap::default(), None, None, None, false, &o0, &crate::backend::target::BUILT_IN)
             .expect("the phases");
         let names: Vec<&str> = phases.iter().map(|phase| phase.class_name()).collect();
