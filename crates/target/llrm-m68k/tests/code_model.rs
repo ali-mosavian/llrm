@@ -51,6 +51,7 @@ fn small_is_pc_relative_at_every_cpu() {
 /// displacement refused a global past 32 KiB (memcpy_runtime and
 /// memfuncs_runtime, -O0 sweep: ".text: a value of 70016 does not fit its
 /// 2-byte field").
+/// Interim pin (DEVIATE in `CodeModel`): flips to PC-relative from the 68020 when the `(bd32,%pc)` form lands.
 #[test]
 fn medium_is_absolute_at_every_cpu() {
     for cpu in ["68000", "68020"] {

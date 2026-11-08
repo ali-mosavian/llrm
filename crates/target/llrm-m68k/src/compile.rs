@@ -46,7 +46,7 @@ pub enum Item {
 /// 2 B longer than `abs.l` and needs a new encoding. Position independence is
 /// not modelled (`-fPIC` is ignored, as the small model's PC-relative data
 /// already is position independent): the pin's PIC medium is PC-relative from
-/// the 68020 and `@GOTOFF` below it. Owner: m68k. Exit: 2026-12-15, add the
+/// the 68020 and `@GOTOFF` below it. Owner: m68k. Exit: 2026-11-20, add the
 /// `(bd32,%pc)` form and the PIC model; medium is PC-relative again from the
 /// 68020 where PIC is asked for.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
