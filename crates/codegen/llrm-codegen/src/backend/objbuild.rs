@@ -998,6 +998,7 @@ pub fn _code_by(
         }
         items.push(Encoded::End(end));
     }
+    near_within_group(&mut items, module.object.code_model());
     // Tuned for size, a long conditional jump may go through a `jmp` within
     // reach.
     let size = !group.is_empty() && group.iter().all(|&number| module.procedures[number].size);
@@ -1062,6 +1063,46 @@ pub fn _code_by(
         at = segment.image.len();
     }
     Ok(())
+}
+
+/// A far call or jump to a procedure of the group the linker puts in the call's
+/// own segment is `push cs; call near` (a near `jmp`): four bytes (three), where
+/// jwlink's own rewrite of `call far` keeps five and pads one with a `ds`
+/// prefix at one parity and a `nop` that runs at the other (0.60-0.85% of
+/// stft_fixed's executed instructions). The callee returns with `retf` either way.
+fn near_within_group(
+    items: &mut Vec<Encoded>,
+    model: CodeModel,
+) {
+    if !model.segmented() {
+        return;
+    }
+    let defined: std::collections::HashSet<String> = items
+        .iter()
+        .filter_map(|item| match item {
+            Encoded::Label(masm::Label { name }) => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut made = Vec::with_capacity(items.len());
+    for item in items.drain(..) {
+        match &item {
+            Encoded::Piece(Piece { code, fixups })
+                if matches!(code.as_slice(), [0x9A | 0xEA, 0, 0, 0, 0])
+                    && fixups.len() == 1
+                    && fixups[0].at == 1
+                    && defined.contains(&fixups[0].name) =>
+            {
+                let tail = code[0] == 0xEA;
+                if !tail {
+                    made.push(Encoded::Piece(Piece::new(vec![0x0E])));
+                }
+                made.push(Encoded::Near(Near { name: fixups[0].name.clone(), tail, cond: None }));
+            }
+            _ => made.push(item),
+        }
+    }
+    *items = made;
 }
 
 pub fn _items(
