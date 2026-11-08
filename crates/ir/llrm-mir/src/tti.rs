@@ -576,6 +576,12 @@ pub trait Tti {
         300
     }
 
+    /// Whether a later round of the inliner over one caller skips a callee SZ2 rejected in an
+    /// earlier round: a round costs the simplifier over the caller per callee. False: tried again.
+    fn inline_trial_skips_rejected(&self) -> bool {
+        false
+    }
+
     /// Whether a callee the -O1 size bound refused is tried inline as at -Os (SZ2: the copy
     /// stays if the caller comes out smaller), where -O1 prices no byte in clocks. False: the
     /// bound's verdict stands.

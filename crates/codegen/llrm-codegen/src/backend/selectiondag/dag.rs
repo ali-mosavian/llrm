@@ -1229,7 +1229,7 @@ impl SelectionDAG {
 
     /// `lookupNode` then `newSDNode`: one node per (opcode, types, operands,
     /// data); glue is never shared.
-    pub(super) fn intern(
+    pub fn intern(
         &mut self,
         opcode: ISD,
         values: &[EVT],
