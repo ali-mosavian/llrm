@@ -274,6 +274,10 @@ impl llrm_target::Target for M64 {
         llrm_x86::calling::stack(CALLING.native())
     }
 
+    fn string_roots(&self) -> Option<llrm_target::StringRoots> {
+        Some(llrm_x86::registers::STRING_ROOTS)
+    }
+
     /// What cdecl32 keeps, but the frame register.
     fn callee_saved(&self) -> Vec<(RegId, RegId)> {
         llrm_x86::calling::callee_saved(CALLING.native())
@@ -392,6 +396,11 @@ impl llrm_target::Target for M64 {
                             // inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
                             second_ipsccp: true,
+                            // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
+                            // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes
+                            // `mov; shl; sub` (x * 31). select_of_constants -Os was +1519 B
+                            // against the old selector.
+                            imul_at_size: true,
                             // DEVIATE CARRY-SI (owner x86-m64, exit 2026-11-21): see Tuning.
                             carry_slot_indexes: false,
                             // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a

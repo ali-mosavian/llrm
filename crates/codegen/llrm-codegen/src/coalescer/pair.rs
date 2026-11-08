@@ -105,6 +105,19 @@ pub trait CoalescerEnv {
         true
     }
 
+    /// DEVIATE C15: among blocks the pin orders alike (same loop depth, split
+    /// edge and connectivity) it takes the lower number first. True: a block
+    /// whose copies read a value that is live at the loop header, a
+    /// loop-carried one, goes first, so the join that makes the carried value
+    /// and its update one register is tried before a join with a value born in
+    /// the loop body. `m = max(m, p[i])`: joining `m' = p[i]` first leaves a
+    /// copy on both paths; joining `m' = m` first leaves one on the path
+    /// that takes the new value. Owner: m68k. Exit: 2026-11-22, the pin's
+    /// order or a frequency-priced choice replaces it.
+    fn joins_loop_carried_first(&self) -> bool {
+        false
+    }
+
     /// DEVIATE C13: whether a copy between widths (`CP.isPartial()`) is joined.
     /// The pin always joins it (`TRI->shouldCoalesce` is the only veto,
     /// RegisterCoalescer.cpp#L2080); a target whose profitability for these
