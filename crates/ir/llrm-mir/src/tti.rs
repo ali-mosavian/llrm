@@ -580,6 +580,11 @@ pub trait Tti {
     /// Whether `speed_inline_milliclocks_per_byte` also binds at -O1. False
     /// (the default; -O1 is strict): -O1 prices no byte in clocks and keeps
     /// the pin's threshold alone.
+    /// `Tuning::sdiv_by_magnitude`.
+    fn sdiv_by_magnitude(&self) -> bool {
+        false
+    }
+
     fn speed_inline_rate_at_o1(&self) -> bool {
         false
     }

@@ -268,6 +268,16 @@ impl BuilderTarget {
 
     /// This target with a divide by a constant kept where its priced clocks
     /// beat the multiply-high sequence's.
+    /// This target with a signed divide by a negative constant made from the
+    /// divide by its magnitude ([`DagConfig::sdiv_by_magnitude`]).
+    pub fn with_sdiv_by_magnitude(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.sdiv_by_magnitude = on;
+        self
+    }
+
     pub fn with_div_prices(
         mut self,
         prices: Option<super::dag::DivPrices>,
