@@ -6,3 +6,8 @@ F12.p16 end-biased formulae not built (S3)
 F21.p16 end-biased formulae not built (S3)
 F23.p16 end-biased formulae not built (S3)
 F34.p16 end-biased formulae not built (S3)
+B01.p16 LU8 prices address registers past bx/si/di (#6688): a shared index needs a base register per array; pointer walks win
+B02.p16 LU8 prices address registers past bx/si/di (#6688): a shared index needs a base register per array; pointer walks win
+B07.p16 LU8 prices address registers past bx/si/di (#6688): a shared index needs a base register per array; pointer walks win
+B10.p16 LU8 prices address registers past bx/si/di (#6688): a shared index needs a base register per array; pointer walks win
+B11.p16 LU8 prices address registers past bx/si/di (#6688): a shared index needs a base register per array; pointer walks win
