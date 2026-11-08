@@ -76,3 +76,31 @@ impl Policy {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::Policy;
+
+    /// What `llrm-cc` hands to an `llc` that clang does not take, and what stays the caller's. A backend's `llc` that calls `Policy::take`
+    /// accepts the first column: arm64 and wasm refused `-fexcess-precision=` and `-fno-inline=` as unrecognized arguments.
+    #[test]
+    fn the_flags_the_driver_passes_on_are_taken_and_others_are_left_to_the_caller() {
+        let passed_on = [
+            "-fexcess-precision=standard",
+            "-fexcess-precision=fast",
+            "-ffloat-store",
+            "-fno-float-store",
+            "-fno-inline=sum5",
+            "-fno-unroll-loops",
+            "-funroll-loops",
+        ];
+        let not_ours = ["-fsanitize=bounds", "-fnot-a-flag", "-O2", "-S", "--isel=dag"];
+        let mut policy = Policy::default();
+        for flag in passed_on {
+            assert!(policy.take(flag), "{flag}");
+        }
+        for flag in not_ours {
+            assert!(!policy.take(flag), "{flag}");
+        }
+    }
+}
