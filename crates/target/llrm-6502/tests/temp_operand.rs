@@ -62,11 +62,46 @@ fn an_operand_loaded_through_x_into_a_cell_is_the_operand() {
     assert_eq!(after_a_byte(before), want);
 }
 
-/// `y` read after the user, or the cell read again: both stay.
+/// `y` still read after the user keeps its load, and the one read reads the
+/// byte: the copy to the cell goes.
 #[test]
-fn a_live_index_register_or_cell_keeps_the_temporary() {
-    let y_live = "  lda rc2\n  ldy s_6\n  sty rc16\n  sbc rc16\n  sty out\n  rts\n";
-    assert_eq!(after_a_byte(y_live), y_live);
-    let cell_live = "  lda rc2\n  ldy s_6\n  sty rc16\n  sbc rc16\n  sta out\n  lda rc16\n  sta out2\n  rts\n";
-    assert_eq!(after_a_byte(cell_live), cell_live);
+fn a_live_index_register_keeps_its_load_and_loses_the_copy() {
+    let before = "  lda rc2\n  ldy s_6\n  sty rc16\n  sbc rc16\n  sty out\n  rts\n";
+    let want = "  lda rc2\n  ldy s_6\n  sbc s_6\n  sty out\n  rts\n";
+    assert_eq!(after_a_byte(before), want);
+}
+
+/// Every read of the cell on every path reads the byte, in the next block too
+/// (a compare chain and the subtract chain after it).
+#[test]
+fn the_reads_of_the_cell_in_a_later_block_read_the_byte() {
+    let before = "  lda rc2\n  sec\n  ldy s_6\n  sty rc16\n  sbc rc16\n  bcc skip\n  lda rc3\n  sbc rc16\n  sta out\nskip:\n  rts\n";
+    let want = "  lda rc2\n  sec\n  sbc s_6\n  bcc skip\n  lda rc3\n  sbc s_6\n  sta out\nskip:\n  rts\n";
+    assert_eq!(after_a_byte(before), want);
+}
+
+/// Another path into a label where the cell is live brings another value: the
+/// copy stays.
+#[test]
+fn a_label_another_path_reaches_with_the_cell_live_keeps_the_copy() {
+    let code = "  lda rc2\n  bne other\n  ldy s_6\n  sty rc16\n  jmp join\nother:\n  ldy #3\n  sty rc16\njoin:\n  lda rc3\n  sbc rc16\n  sta out\n  rts\n";
+    assert_eq!(after_a_byte(code), code);
+}
+
+/// The byte rewritten on the way: the cell is the old value, the copy stays.
+#[test]
+fn a_byte_stored_between_the_copy_and_the_read_keeps_the_copy() {
+    let code = "  lda rc2\n  ldy s_6\n  sty rc16\n  sta s_6\n  lda rc3\n  sbc rc16\n  sta out\n  rts\n";
+    assert_eq!(after_a_byte(code), code);
+}
+
+/// A call ends the cell's life above the argument cells (the `__divdf3` loop
+/// exit), and reads it nowhere; at `rc4` it may be an argument and the copy
+/// stays.
+#[test]
+fn a_call_ends_a_scratch_cell_and_reads_an_argument_cell() {
+    let scratch = "  lda rc2\n  ldy s_6\n  sty rc16\n  sbc rc16\n  bcc out\n  jsr f\nout:\n  rts\n";
+    assert_eq!(after_a_byte(scratch), "  lda rc2\n  sbc s_6\n  bcc out\n  jsr f\nout:\n  rts\n");
+    let argument = "  lda rc2\n  ldy s_6\n  sty rc4\n  sbc rc4\n  bcc out\n  jsr f\nout:\n  rts\n";
+    assert_eq!(after_a_byte(argument), argument);
 }

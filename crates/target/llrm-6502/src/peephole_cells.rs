@@ -26,9 +26,10 @@
 //!   writes `s` or `t` and the copy `t` is dead after: a value copied to a cell
 //!   to be loaded again, one instruction early, costs the store and the cell.
 //!
-//! - [`fold_index_temp_operand`]: `ldy m; sty t; sbc t` (likewise `x`, and the
-//!   other ALU instructions) is `sbc m` when `t` and the index register are
-//!   dead after it: an operand loaded through an index register into a cell.
+//! - [`fold_spill_copy`]: `ldy m; sty t; ...; sbc t` (likewise `lda`, `ldx`
+//!   and the other readers) reads `m` when `m` is unchanged on every path to the
+//!   reads and `t` is written again before another read: a spilled byte
+//!   reloaded into a cell for its readers.
 //!
 //! Runs from [`crate::peephole::run`].
 
@@ -260,53 +261,128 @@ fn temp_operand_once(asm: &mut Asm) -> bool {
     false
 }
 
-pub fn fold_index_temp_operand(asm: &mut Asm) {
-    while index_temp_operand_once(asm) {}
+pub fn fold_spill_copy(asm: &mut Asm) {
+    let mut at = 0;
+    while at + 1 < asm.lines.len() {
+        if spill_copy_once(asm, at) {
+            continue;
+        }
+        at += 1;
+    }
 }
 
-/// `ldy m; sty t; <alu> t` with `t` and `y` dead after: `<alu> m`. The ALU
-/// instruction sets the zero and sign flags the load did.
-fn index_temp_operand_once(asm: &mut Asm) -> bool {
-    let lines = &asm.lines;
-    for at in 0..lines.len().saturating_sub(2) {
-        let (Line::Inst(load), Line::Inst(store)) = (&lines[at], &lines[at + 1]) else { continue };
-        let (register, Op::Sty | Op::Stx) = (
-            match load.op {
-                Op::Ldy => Registers::Y,
-                Op::Ldx => Registers::X,
-                _ => continue,
-            },
-            store.op,
-        ) else {
-            continue;
-        };
-        if (load.op == Op::Ldy) != (store.op == Op::Sty) {
-            continue;
-        }
-        let Operand::Direct(t) = &store.operand else { continue };
-        if !matches!(load.operand, Operand::Direct(_) | Operand::Imm(_)) || load.operand.name() == Some(t.as_str()) {
-            continue;
-        }
-        let mut op_at = at + 2;
-        while matches!(lines.get(op_at), Some(Line::Inst(Inst { op: Op::Clc | Op::Sec, .. }))) {
-            op_at += 1;
-        }
-        let Some(Line::Inst(user)) = lines.get(op_at) else { continue };
-        if !alu(user.op) || user.operand != Operand::Direct(t.clone()) {
-            continue;
-        }
-        let exits = Exits::of(asm);
-        if !cell_dead_from(lines, op_at + 1, t, &asm.result_cells, &mut BTreeSet::new())
-            || !dead_from(lines, op_at + 1, register, &mut Default::default(), exits)
-        {
-            continue;
-        }
-        let operand = load.operand.clone();
-        asm.lines[op_at] = Line::Inst(Inst { op: user.op, operand, place: user.place });
-        asm.lines.drain(at..at + 2);
-        return true;
+/// `ld* m; st* t` at `at`, `t` a caller-saved cell: every read of `t` that
+/// reaches from the copy reads `m` instead when `m` is unchanged on the way and
+/// `t` is written again before anything else reads it. The store goes; the load
+/// goes with it where its register is dead after.
+fn spill_copy_once(
+    asm: &mut Asm,
+    at: usize,
+) -> bool {
+    let (Line::Inst(load), Line::Inst(store)) = (&asm.lines[at], &asm.lines[at + 1]) else { return false };
+    let register = match (load.op, store.op) {
+        (Op::Lda, Op::Sta) => Registers::A,
+        (Op::Ldx, Op::Stx) => Registers::X,
+        (Op::Ldy, Op::Sty) => Registers::Y,
+        _ => return false,
+    };
+    let (Operand::Direct(s), Operand::Direct(t)) = (&load.operand, &store.operand) else { return false };
+    let Some(n) = cell_number(t) else { return false };
+    if s == t || !caller_saved(n) {
+        return false;
     }
-    false
+    let lines = &asm.lines;
+    let covers = |c: &String| cell_number(c).is_some_and(|m| m == n || m + 1 == n);
+    let covers_s = |c: &String| cell_number(c).zip(cell_number(s)).is_some_and(|(m, k)| m == k || m + 1 == k);
+    let position = |name: &str| lines.iter().position(|l| *l == Line::Label(name.to_owned()));
+    let mut reads = Vec::new();
+    let mut arrivals: std::collections::BTreeMap<usize, usize> = Default::default();
+    let mut seen = BTreeSet::new();
+    let mut work = vec![at + 2];
+    while let Some(mut p) = work.pop() {
+        loop {
+            if matches!(lines.get(p), Some(Line::Label(_))) {
+                *arrivals.entry(p).or_default() += 1;
+            }
+            if !seen.insert(p) {
+                break;
+            }
+            let inst = match lines.get(p) {
+                Some(Line::Label(_)) => {
+                    p += 1;
+                    continue;
+                }
+                Some(Line::Inst(inst)) => inst,
+                _ => return false,
+            };
+            p += 1;
+            if inst.op == Op::Rts {
+                if asm.result_cells.contains(t) {
+                    return false;
+                }
+                break;
+            }
+            if matches!(inst.op, Op::Jmp | Op::Bra) {
+                let Some(to) = inst.target().and_then(position) else { return false };
+                work.push(to);
+                break;
+            }
+            if inst.op.opposite().is_some() {
+                let Some(to) = inst.target().and_then(position) else { return false };
+                work.push(to);
+                continue;
+            }
+            // a call clobbers a caller-saved cell and reads none above the argument cells
+            if inst.op == Op::Jsr {
+                if n <= 7 {
+                    return false;
+                }
+                break;
+            }
+            if !straight(inst.op) {
+                return false;
+            }
+            match &inst.operand {
+                Operand::Indexed(c, _) if cell_number(c).is_some() || c == s => return false,
+                Operand::IndirectY(c) | Operand::IndirectX(c) | Operand::Indirect(c) if covers(c) || covers_s(c) => {
+                    return false;
+                }
+                Operand::Direct(c) if c == t => match inst.op {
+                    Op::Sta | Op::Stx | Op::Sty | Op::Stz => break,
+                    o if reads_only(o) => reads.push(p - 1),
+                    _ => return false,
+                },
+                Operand::Direct(c) if c == s && !reads_only(inst.op) => return false,
+                _ => {}
+            }
+        }
+    }
+    // a label that other paths also reach, with `t` live there, joins another value of `t`
+    for (&label, &came) in &arrivals {
+        let Line::Label(name) = &lines[label] else { continue };
+        let refs = lines.iter().filter(|l| matches!(l, Line::Inst(i) if i.target() == Some(name.as_str()))).count();
+        let falls = label > 0
+            && matches!(&lines[label - 1], Line::Inst(i) if !matches!(i.op, Op::Jmp | Op::Bra | Op::Rts))
+            || label > 0 && matches!(&lines[label - 1], Line::Label(_));
+        if came < refs + usize::from(falls) && !cell_dead_from(lines, label, t, &asm.result_cells, &mut BTreeSet::new())
+        {
+            return false;
+        }
+    }
+    // a read of `t` the walk could not reach from here is no fold's business; the store goes only if none remain
+    let exits = Exits::of(asm);
+    let dead_load = dead_from(lines, at + 2, register, &mut Default::default(), exits);
+    if reads.is_empty() || reads.len() > if dead_load { 4 } else { 1 } {
+        return false;
+    }
+    let source = s.clone();
+    for p in reads {
+        if let Line::Inst(inst) = &mut asm.lines[p] {
+            inst.operand = Operand::Direct(source.clone());
+        }
+    }
+    asm.lines.remove(at + 1);
+    true
 }
 
 /// An operand a later instruction reads as the load did: the same bytes as
