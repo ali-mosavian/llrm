@@ -18,7 +18,7 @@ unsigned h(unsigned r, unsigned mb) { return (r << 1) | (r < mb); }
 #[test]
 fn test_m32_shifted_value_plus_a_compare_is_adc_or_sbb() {
     assert!(
-        llrm_cc::ow_tree().is_dir(),
+        llrm_cc::ow_present(),
         "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
     );
     assert!(

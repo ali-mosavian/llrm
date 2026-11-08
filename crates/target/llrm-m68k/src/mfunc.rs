@@ -20,14 +20,13 @@
 //! # See also
 //! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`, pin d1106deb71cc.
 
-use llrm_support::hash::HashMap;
-
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
 use llrm_dagisel::instr::{InstrDesc, OperandDesc};
 pub use llrm_spike_mf as mf;
 pub use llrm_spike_mf::{Block, Inst, Kind, Operand, Phi, Reg};
+use llrm_support::hash::HashMap;
 
 use crate::dagisel::function::Selected;
 use crate::dagisel::generated::ids::reg as pin;
@@ -497,7 +496,11 @@ impl Emitter<'_> {
                 if sets_flags || desc.has(flag::CALL) {
                     self.flags_from = (sets_flags && !desc.has(flag::CALL)).then_some(node);
                 }
-                into.push(op_inst(name, desc, operands));
+                let mut inst = op_inst(name, desc, operands);
+                // a volatile access keeps its place among the others
+                // (`hasOrderedMemoryRef`): no pass folds, moves or merges it
+                inst.side_effects |= self.dag.volatile_accesses.contains(&node);
+                into.push(inst);
                 if self.save.contains(&node) {
                     let kept = self.new_reg(Class::Dr16);
                     // not a `Copy`: the allocator takes a copy for the same
