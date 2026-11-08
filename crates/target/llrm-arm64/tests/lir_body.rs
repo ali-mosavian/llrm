@@ -2,7 +2,7 @@
 //! trip MFunc -> LirBody -> MFunc must be the identity.
 
 use llrm_arm64::driver;
-use llrm_arm64::lir_body::{checked_operations, forms_seen, set_check};
+use llrm_arm64::lir_body::{checked_operations, forms_seen, refuse_form, set_check};
 use llrm_arm64::machine::Platform;
 
 const LAYOUT: &str =
@@ -42,6 +42,18 @@ out:
 }
 ";
     lowers_checked(ir).expect("round trip is the identity");
+}
+
+/// The check goes red when the producer drops a form: with `ADRP` refused, a
+/// function that takes a global's address is named as unmapped, not passed.
+#[test]
+fn a_dropped_form_turns_the_round_trip_red() {
+    let ir = "@x = global i32 0\ndefine i32 @f() {\n  %v = load i32, ptr @x\n  ret i32 %v\n}\n";
+    lowers_checked(ir).expect("premise: it round-trips with every form mapped");
+    refuse_form(Some("ADRP"));
+    let why = lowers_checked(ir);
+    refuse_form(None);
+    assert!(why.expect_err("refused").contains("unmapped form Adr"));
 }
 
 /// How the driver took a fixture or program.

@@ -296,10 +296,20 @@ fn one(
         },
         other => control::to_op(cx, other)?,
     };
-    found.ok_or_else(|| match op {
-        Op::I(inst) => Unmapped(crate::lir_view::name_of(inst).to_owned()),
-        other => Unmapped(format!("{other:?}").split([' ', '{']).next().unwrap_or_default().to_owned()),
-    })
+    let refused = found
+        .as_ref()
+        .and_then(|what| what.name.as_deref())
+        .is_some_and(
+            |name| REFUSED.with(|refused| refused.borrow().as_deref().is_some_and(|prefix| name.starts_with(prefix))),
+        );
+    found
+        .filter(|_| !refused)
+        .ok_or_else(
+            || match op {
+                Op::I(inst) => Unmapped(crate::lir_view::name_of(inst).to_owned()),
+                other => Unmapped(format!("{other:?}").split([' ', '{']).next().unwrap_or_default().to_owned()),
+            },
+        )
 }
 
 /// `COPY` and the immediate move: pseudo operations of no group.
@@ -545,7 +555,15 @@ pub fn from_lir(
 thread_local! {
     static CHECK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static CHECKED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static REFUSED: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     static FORMS: std::cell::RefCell<std::collections::BTreeSet<String>> = const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+}
+
+/// Makes the producer refuse every form whose name starts with `prefix` on this
+/// thread, as if it had no mapping: the way a test shows the check goes red
+/// when a form is dropped.
+pub fn refuse_form(prefix: Option<&str>) {
+    REFUSED.with(|refused| *refused.borrow_mut() = prefix.map(str::to_owned));
 }
 
 /// The opcode names [`round_trip`] has seen on this thread.
