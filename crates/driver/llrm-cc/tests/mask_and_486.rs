@@ -30,7 +30,7 @@ fn asm(
     level: &str,
     tag: &str,
 ) -> Option<String> {
-    require_env(|name| std::env::var_os(name).is_some(), llrm_cc::ow_tree().is_dir());
+    require_env(|name| std::env::var_os(name).is_some(), llrm_cc::ow_present());
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("maskand-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

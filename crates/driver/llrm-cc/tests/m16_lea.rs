@@ -20,7 +20,7 @@ fn has(
 /// five, with disp8 and disp32 only where the value needs them.
 #[test]
 fn a_base_and_scaled_dword_index_takes_the_shortest_displacement() {
-    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_tree().is_dir() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llrm_cc::ow_present() {
         eprintln!("skipped: LLRM_PIN_CLANG is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }

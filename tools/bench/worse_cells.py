@@ -1,40 +1,88 @@
-#!/usr/bin/env python3
-"""worse_cells.py MATRIX.tsv: the cells where ours is bigger than the best of gcc and clang (code bytes), from a matrix64 table.
+"""Cells where ours is worse than the best stored reference compiler, per axis.
 
-A cell with no number for ours, gcc or clang is refused (exit 2, listed), never compared against the next-best column: a missing
-reference understated the z80 gaps by up to 1.7 kB."""
+    python3 tools/bench/worse_cells.py RESULTS.json... [--bench bench]
+
+RESULTS are bench.py --json files (keys `program/language/level`, a program may be `parity/name`). A reference is a section
+`[compiler.LEVEL]` of the program's expected.toml. At -O2 a cell is worse than a reference when 1000 * delta clocks + price * delta bytes > 0 (bench.py `against`; the price is
+bench.rate_for, milliclocks per byte, 500 on m16: one clock is two bytes); at -O1 and -Os each axis is strict. A program with `references = false` is listed as "no ref"; a program
+with neither references nor that mark raises: a lookup that finds nothing must not read as "nothing worse".
+"""
+
 import sys
-from collections import defaultdict
+import tomllib
+from pathlib import Path
 
-COLUMNS = ("ours", "gcc", "clang")
-
-
-def cells(lines: list[str]) -> dict[tuple[str, str], dict[str, str]]:
-    found: dict[tuple[str, str], dict[str, str]] = defaultdict(dict)
-    for line in lines:
-        f = line.rstrip("\n").split("\t")
-        if len(f) >= 5 and not line.startswith(("#", "target")) and f[3] in COLUMNS:
-            found[(f[1], f[2])][f[3]] = f[4]
-    return found
+REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bq16": ("bc", "pds71", "vbdos")}
 
 
-def worse(table: dict[tuple[str, str], dict[str, str]]) -> tuple[list[tuple[str, str, int, int]], list[str]]:
-    missing, rows = [], []
-    for (program, level), row in sorted(table.items()):
-        gone = [c for c in COLUMNS if not row.get(c, "").isdigit()]
-        if gone:
-            missing.append(f"{program} {level}: no {', '.join(gone)}")
+class NoReferenceLookup(Exception):
+    pass
+
+
+def rate() -> int:
+    """The price of a byte at -O2 in milliclocks: bench.py's own (`rate_for`), read from the m16 timing sheet, never a copy."""
+    import bench
+
+    return bench.rate_for("c", "O2")
+
+
+def program_of(key: str) -> str:
+    """`parity/algebra/c/O2` -> `parity/algebra`."""
+    return key.rsplit("/", 2)[0]
+
+
+def references(bench: Path, program: str, language: str, level: str) -> dict[str, dict] | None:
+    """{compiler: its numbers} for the program at the level; None if the program says `references = false`."""
+    folder = bench / program
+    marked = tomllib.loads((folder / "bench.toml").read_text()) if (folder / "bench.toml").exists() else {}
+    if marked.get("references") is False:
+        return None
+    path = folder / "expected.toml"
+    if not path.exists():
+        raise NoReferenceLookup(f"{program}: no expected.toml and not marked `references = false`")
+    table = tomllib.loads(path.read_text())
+    return {name: table[name][level] for name in REFERENCES[language] if level in table.get(name, {})}
+
+
+def worse(results: dict, bench: Path, price: int | None = None) -> tuple[list[tuple], list[str]]:
+    """([(key, [axis findings])], [programs without references])."""
+    price = rate() if price is None else price
+    rows, none = [], []
+    for key, ours in results.items():
+        program, language, level = program_of(key), key.split("/")[-2], key.split("/")[-1]
+        if language not in REFERENCES or "code_bytes" not in ours:
             continue
-        best = min(int(row["gcc"]), int(row["clang"]))
-        if int(row["ours"]) > best:
-            rows.append((program, level, int(row["ours"]), best))
-    return rows, missing
+        found = references(bench, program, language, level)
+        if found is None:
+            none.append(program)
+            continue
+        findings = []
+        if level == "O2":
+            for name, numbers in sorted(found.items()):
+                if all(axis in numbers for axis in ("clocks", "code_bytes")):
+                    clocks, size = ours["clocks"] - numbers["clocks"], ours["code_bytes"] - numbers["code_bytes"]
+                    if 1000 * clocks + price * size > 0:
+                        findings.append(f"{clocks:+d} clk {size:+d} B vs {name}")
+        else:
+            for axis, label in (("code_bytes", "B"), ("clocks", "clk")):
+                best = min(((numbers[axis], name) for name, numbers in found.items() if axis in numbers), default=None)
+                if best and ours.get(axis, 0) > best[0]:
+                    findings.append(f"{label} {ours[axis]} vs {best[0]}({best[1]}) {100 * (ours[axis] - best[0]) / best[0]:+.1f}%")
+        if findings:
+            rows.append((key, findings))
+    return rows, sorted(set(none))
 
 
 if __name__ == "__main__":
-    rows, missing = worse(cells(open(sys.argv[1]).read().splitlines()))
-    for program, level, ours, best in sorted(rows, key=lambda r: -(r[2] - r[3]) / r[3]):
-        print(f"{program}\t{level}\t{ours}\t{best}\t{100 * (ours - best) / best:+.1f}%")
-    for line in missing:
-        print("MISSING", line, file=sys.stderr)
-    sys.exit(2 if missing else 0)
+    import json
+
+    bench = Path("bench")
+    files = [argument for argument in sys.argv[1:] if not argument.startswith("--")]
+    if "--bench" in sys.argv:
+        bench = Path(sys.argv[sys.argv.index("--bench") + 1])
+        files = [file for file in files if file != str(bench)]
+    for file in files:
+        rows, none = worse(json.loads(Path(file).read_text()), bench)
+        for key, findings in rows:
+            print(key, "; ".join(findings))
+        print("no ref:", ", ".join(none) or "-")

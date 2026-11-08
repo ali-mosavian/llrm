@@ -936,7 +936,7 @@ pub(crate) fn llvm_order(
                         },
                     }),
                 ),
-                // DEVIATE VASTART-PROMOTE: a one-pointer `va_list` is a slot SROA can promote.
+                // DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27): a one-pointer `va_list` is a slot SROA can promote.
                 slot("vastart@1178", Box::new(crate::vastart::VaStart)),
                 sroa("sroa@1179"),
                 earlycse("earlycse@1180", false),
@@ -1292,6 +1292,35 @@ fn unroll_level(options: &Options) -> u32 {
     }
 }
 
+/// The `-O<text>` words every driver takes. A driver maps each to its own mid-end `Options`;
+/// `Omax` is `Options::aggressive()` there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LevelName {
+    O0,
+    O1,
+    O2,
+    O3,
+    Omax,
+    Os,
+    Oz,
+}
+
+impl LevelName {
+    /// The level `-O<text>` names; a bare `-O` is -O1, as in gcc.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        Ok(match text {
+            "0" => Self::O0,
+            "" | "1" => Self::O1,
+            "2" => Self::O2,
+            "3" => Self::O3,
+            "max" => Self::Omax,
+            "s" => Self::Os,
+            "z" => Self::Oz,
+            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Omax, -Os or -Oz")),
+        })
+    }
+}
+
 /// `program` through the pipeline.
 pub fn applied(
     program: &mut Program,
@@ -1555,7 +1584,7 @@ pub fn recorded(
         manager.add(window::Window { size: applied.options.prefers_size() });
     }
     // DEVIATE Z80-ROT: after every loop pass, as the gcc tail rotate was, a counted loop
-    // proven to run is entered at its body at -Oz (target opt-in).
+    // proven to run is entered at its body at -Oz (target opt-in). Owner z80, exit 2026-11-30.
     if applied.options.has_min_size {
         manager.add(looprotate::LoopRotate {
             duplicate_headers: false,
