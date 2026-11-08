@@ -79,6 +79,12 @@
 //! reads them (`SinkInstruction`'s zombie check).
 //! Exit: honor a dead implicit def when LIR marks one.
 //!
+//! DEVIATE F1 (owner w2, exit 2026-11-12): the x87 compare is one pseudo here
+//! and writes the flags itself (the pin's `SAHF` does), so flags defs above it
+//! sink. tests_run_c_fcmp_all -Os m32 grew 4600 -> 4728 B (pin llc 6296); the
+//! cause is not yet read. Exit: cause found and fixed, or the growth shown to
+//! be the pin's own.
+//!
 //! DEVIATE M7 (no number): an instruction whose pinned operands are all
 //! sources (the count of `shld`/`shl r, cl`) stays, as the pin's `$cl = COPY`
 //! makes it read a physical register; ours names the pin only in the register
@@ -613,18 +619,29 @@ impl Sinker {
         // spelled through is not a read of one.
         // A local object's cell is a frame index in the pin too: `%stack.N`
         // carries no register until frame lowering, so its load sinks.
-        let frame_cell = one.what.as_ref().is_some_and(|what| {
-            let mut cells = what.sources.iter().chain(&what.dests).filter_map(|place| match place {
-                Loc::Mem(mem) => Some(mem),
-                _ => None,
-            });
-            cells.clone().next().is_some()
-                && cells.all(|mem| {
-                    mem.base.is_none()
-                        && mem.index.is_none()
-                        && mem.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame)
-                })
-        });
+        let frame_cell = one
+            .what
+            .as_ref()
+            .is_some_and(
+                |what| {
+                    let mut cells = what
+                        .sources
+                        .iter()
+                        .chain(&what.dests)
+                        .filter_map(
+                            |place| match place {
+                                Loc::Mem(mem) => Some(mem),
+                                _ => None,
+                            },
+                        );
+                    cells.clone().next().is_some()
+                        && cells.all(|mem| {
+                            mem.base.is_none()
+                                && mem.index.is_none()
+                                && mem.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame)
+                        })
+                },
+            );
         let fixed_stack = frame_cell || one.defines.first().is_some_and(|value| self.arguments.contains(value));
         let reads = effect.all_reads();
         // DEVIATE (segment-reads): an access through the default data segment
@@ -1152,7 +1169,9 @@ impl Sinker {
             })
             .count();
         dying > one.defines.len()
-            && self.insns[block][index + 1..].iter().any(|next| !next.clobbers.is_empty() || !next.clobbers_high.is_empty())
+            && self.insns[block][index + 1..]
+                .iter()
+                .any(|next| !next.clobbers.is_empty() || !next.clobbers_high.is_empty())
     }
 
     /// `ProcessBlock`: the block bottom-up.
@@ -1340,6 +1359,65 @@ mod tests {
             .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
             .collect();
         assert_eq!(names, ["mov", "or", "je"], "the flag-setting or stays in its block");
+    }
+
+    /// `x = a * 7; if (y != y) x = NaN` compares with `fcom` and branches on
+    /// `jp`: the compare's `sahf` sets the flags before the branch, so the
+    /// `sub` above it is dead in flags and sinks into the arm that uses it.
+    /// The pseudo declared no flags write, the `sub` stayed above the select
+    /// and the loop paid three movs and a jmp per trip (sfm16_float_div m32
+    /// -O2 with the select left to the DAG: 5607 -> 6801 instructions).
+    #[test]
+    fn test_flags_set_by_a_float_compare_make_the_flags_above_it_dead() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let fcom = insn(1, Operation::Compare, "fcom", vec![], vec![held(3), held(4)], vec![], vec![3, 4]);
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Binary, "sub", vec![held(9)], vec![held(1), held(2)], vec![9], vec![1, 2]),
+                    fcom,
+                    insn(2, Operation::Branch, "jp", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let arm = LirBlock::new(
+            1,
+            vec![
+                insn(3, Operation::Move, "mov", vec![held(20)], vec![held(9)], vec![20], vec![9]),
+                insn(6, Operation::Compare, "cmp", vec![], vec![held(20), imm(0)], vec![], vec![20]),
+                insn(4, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+            ],
+        );
+        // Neither successor reads the flags it is entered with: each sets its
+        // own.
+        let leaf = LirBlock::new(
+            2,
+            vec![
+                insn(7, Operation::Compare, "cmp", vec![], vec![held(1), imm(0)], vec![], vec![1]),
+                insn(5, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+            ],
+        );
+        let mut body = LirBody::new(
+            "fcom_flags",
+            0,
+            vec![entry.into(), arm.into(), leaf.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2, 3, 4].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let after = sunk(&body, false);
+        let names = |at: usize| -> Vec<String> {
+            after.blocks[at]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
+        };
+        assert_eq!(names(0), ["fcom", "jp"], "the sub left the block that compares");
+        assert_eq!(names(1), ["sub", "mov", "cmp", "ret"], "and runs in the arm that uses it");
     }
 
     /// An instruction sunk into a block that itself sinks it on is one
@@ -1755,7 +1833,15 @@ mod tests {
             ..LirBlock::new(
                 0,
                 vec![
-                    insn(0, Operation::FloatArith, "fadd", vec![held(10)], vec![held(1), held(2)], vec![10], vec![1, 2]),
+                    insn(
+                        0,
+                        Operation::FloatArith,
+                        "fadd",
+                        vec![held(10)],
+                        vec![held(1), held(2)],
+                        vec![10],
+                        vec![1, 2],
+                    ),
                     call,
                     insn(5, Operation::Compare, "cmp", vec![], vec![held(3), held(4)], vec![], vec![3, 4]),
                     insn(2, Operation::Branch, "jbe", vec![], vec![], vec![], vec![]),
@@ -2056,13 +2142,7 @@ mod tests {
         let block =
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let body = |blocks: Vec<LirBlock>| {
-            let mut body = LirBody::new(
-                "f",
-                0,
-                blocks.into_iter().collect(),
-                IndexMap::default(),
-                IndexMap::default(),
-            );
+            let mut body = LirBody::new("f", 0, blocks.into_iter().collect(), IndexMap::default(), IndexMap::default());
             body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
             body
         };
@@ -2072,11 +2152,8 @@ mod tests {
             crate::liveness::blockfrequency::GRAPH_BUILDS.with(std::cell::Cell::get) - before
         };
         let straight = body(vec![block(0, vec![1], vec![]), block(1, vec![], vec![ret(1)])]);
-        let branching = body(vec![
-            block(0, vec![1, 2], vec![jump(0)]),
-            block(1, vec![2], vec![]),
-            block(2, vec![], vec![ret(2)]),
-        ]);
+        let branching =
+            body(vec![block(0, vec![1, 2], vec![jump(0)]), block(1, vec![2], vec![]), block(2, vec![], vec![ret(2)])]);
         assert_eq!(graphs(&straight), 0, "graphs built for a body that cannot sink");
         assert!(graphs(&branching) > 0, "a body with a branch is still analysed");
     }
@@ -2189,7 +2266,10 @@ mod tests {
                 block(
                     2,
                     vec![1, 3],
-                    vec![insn(12, Operation::Move, "mov", vec![held(3)], vec![Loc::Mem(cell)], vec![3], vec![]), jump(13)],
+                    vec![
+                        insn(12, Operation::Move, "mov", vec![held(3)], vec![Loc::Mem(cell)], vec![3], vec![]),
+                        jump(13),
+                    ],
                 )
                 .into(),
                 block(

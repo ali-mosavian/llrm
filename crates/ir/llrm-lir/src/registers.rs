@@ -52,6 +52,18 @@ impl RegId {
         Register::values().map(RegId::new)
     }
 
+    /// The register a description names `name`, in any case: the table of
+    /// names is made once.
+    pub fn named(name: &str) -> Option<RegId> {
+        static NAMES: std::sync::LazyLock<llrm_support::hash::HashMap<String, RegId>> =
+            std::sync::LazyLock::new(|| {
+                #[cfg(test)]
+                BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                RegId::values().map(|one| (format!("{one:?}").to_ascii_lowercase(), one)).collect()
+            });
+        NAMES.get(name.to_ascii_lowercase().as_str()).copied()
+    }
+
     /// The register of iced's number `index`.
     #[inline]
     pub fn from_index(index: usize) -> RegId {
@@ -822,5 +834,25 @@ impl llrm_support::pyrepr::Repr for RegId {
 impl llrm_support::pyset::PyHash for RegId {
     fn py_hash(&self) -> i64 {
         self.iced().py_hash()
+    }
+}
+
+#[cfg(test)]
+static BUILDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+mod named_tests {
+    use super::*;
+
+    /// `classes::iced` scanned every register, formatting each, for every
+    /// name a description gave (106 names, 2.2 M Ir on a 19 M compile). The
+    /// names are tabled once, however many are asked.
+    #[test]
+    fn test_register_names_are_tabled_once() {
+        assert_eq!(RegId::named("AX"), Some(RegId::AX));
+        assert_eq!(RegId::named("ax"), Some(RegId::AX));
+        assert_eq!(RegId::named("no-such-register"), None);
+        let _ = (0..50).map(|_| RegId::named("ebx")).count();
+        assert_eq!(BUILDS.load(std::sync::atomic::Ordering::Relaxed), 1, "the table was rebuilt");
     }
 }

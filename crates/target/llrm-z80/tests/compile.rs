@@ -1163,7 +1163,11 @@ fn a_spilled_word_shifted_right_by_more_than_a_byte_reloads_one_byte() {
         .windows(4)
         .any(|w| w[0].starts_with("ld e, -") && w[1].starts_with("ld d, -") && w[2] == "ld e, d" && w[3] == "ld d, #0");
     assert!(!dead, "{out}");
-    assert!(lines.windows(3).any(|w| w[0].starts_with("ld e, -") && w[1] == "ld d, #0" && w[2] == "srl e"), "{out}");
+    // The byte is reloaded alone, or copied where the word's high half is still in `d`.
+    assert!(
+        lines.windows(3).any(|w| (w[0].starts_with("ld e, -") || w[0] == "ld e, d") && w[1] == "ld d, #0" && w[2] == "srl e"),
+        "{out}"
+    );
 }
 
 /// A byte or word rotated (`llvm.fshl` of one value twice) was refused at -O2, `CannotSelect(Rotl)`: neither type had an
@@ -2104,6 +2108,15 @@ fn a_byte_shifted_far_rotates_through_a_and_masks() {
     }
 }
 
+/// A test that tail-calls one function or falls on to a second test was `jr nz, L; L1: jp _h; L:` (sibling_call_callees:
+/// 5 B where `jp z, _h` is 3).
+#[test]
+fn a_branch_over_a_tail_call_is_the_tail_call_on_the_opposite_condition() {
+    let ir = include_str!("kernels/ir/sibling_call_callees.ll");
+    let out = text(ir, "g", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("jp z, _h") && !out.contains("jr nz") && !out.contains("jp nz"), "{out}");
+}
+
 /// A byte widened and combined with a word (`or`, `and`, `xor`, with a register or a constant) ran the zero high
 /// lane through `a` (`ld b, #0; ld a, b; or a, #129; ld b, a`): volatile_bitfield's bit-field inserts, 4 instructions
 /// where `ld b, #129` does.
@@ -2120,4 +2133,39 @@ fn a_widened_byte_combined_with_a_word_skips_its_zero_lane() {
     assert_eq!(word.matches("or a,").count(), 1, "only the low lane: {word}");
     let both = ors("and_word");
     assert_eq!(both.matches("and a,").count(), 1, "only the low lane: {both}");
+}
+
+/// The sign of a sign mask is the mask: widening `a` right after `sbc a, a` (0 or 255) ran `rla; sbc a, a` again
+/// (high_byte's signed_high, 2 B and 8 T).
+#[test]
+fn a_sign_mask_widens_without_taking_its_sign_again() {
+    let ir = include_str!("kernels/ir/high_byte.ll");
+    let out = text(ir, "signed_high", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("rla").count(), 1, "{out}");
+}
+
+/// A dense switch of three targets became bit tests, `1 << x` and a mask per target, and the Z80's shift by a variable
+/// count is a call: two `__ashlhi3` calls (each tens of clocks) to pick among eight cases. `isOperationLegal(SHL)`
+/// is false here, so the pin builds no bit tests.
+#[test]
+fn a_dense_switch_builds_no_bit_tests_where_a_variable_shift_is_a_call() {
+    let ir = include_str!("kernels/ir/switch_dense_bit_tests.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("__ashlhi3"), "{out}");
+    }
+}
+
+/// Eight dense cases to three targets were a compare tree. The DAG builder
+/// now plans a jump table: one range check, `jp (hl)`, and the `.dw` table
+/// (kept by the branch folder, which took `jp (hl)` for a jump to its first
+/// block and dropped the table's label).
+#[test]
+fn a_dense_switch_jumps_through_a_table() {
+    let ir = include_str!("kernels/ir/switch_jump_table_dispatch.ll");
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("jp (hl)").count(), 1, "{out}");
+    assert_eq!(out.matches(".dw ").count(), 8, "{out}");
+    assert!(out.contains("_JT0:"), "{out}");
+    assert_eq!(out.matches("sbc a, #0").count(), 1, "one range check: {out}");
 }

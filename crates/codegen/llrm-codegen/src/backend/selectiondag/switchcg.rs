@@ -149,12 +149,18 @@ pub struct SwitchTarget {
     pub min_jump_table_entries: usize,
     /// `areJTsAllowed`.
     pub jump_tables: bool,
+    /// `getMinimumJumpTableDensity`: percent of the range that cases fill,
+    /// where the target states one; none: the pin's 10, or 40 for size.
+    pub min_density: Option<u64>,
     /// `shouldOptimizeForSize`.
     pub opt_size: bool,
     /// `hasMinSize`: no peeling, no balanced tree.
     pub min_size: bool,
     /// Not -O0.
     pub optimize: bool,
+    /// `isOperationLegal(SHL, ptr)`: the target can build bit tests. None
+    /// where a variable shift is a call.
+    pub shift_legal: bool,
 }
 
 impl SwitchTarget {
@@ -164,9 +170,11 @@ impl SwitchTarget {
             pointer_bits,
             min_jump_table_entries: 4,
             jump_tables: true,
+            min_density: None,
             opt_size: false,
             min_size: false,
             optimize: true,
+            shift_legal: true,
         }
     }
 }
@@ -311,7 +319,7 @@ fn suitable_for_jump_table(
     range: u64,
     target: &SwitchTarget,
 ) -> bool {
-    let min_density = if target.opt_size { 40 } else { 10 };
+    let min_density = target.min_density.unwrap_or(if target.opt_size { 40 } else { 10 });
     num_cases * 100 >= range * min_density
 }
 
@@ -322,7 +330,7 @@ fn suitable_for_bit_tests(
     high: i128,
     target: &SwitchTarget,
 ) -> bool {
-    if !range_fits_in_word(low, high, target) {
+    if !target.shift_legal || !range_fits_in_word(low, high, target) {
         return false;
     }
     let num_dests = dests.len();

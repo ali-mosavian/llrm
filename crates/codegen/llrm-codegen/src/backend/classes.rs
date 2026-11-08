@@ -287,9 +287,7 @@ fn root_register(
 
 /// The iced register a description names.
 fn iced(name: &str) -> RegId {
-    RegId::values()
-        .find(|one| format!("{one:?}").eq_ignore_ascii_case(name))
-        .unwrap_or_else(|| panic!("no register {name}"))
+    RegId::named(name).unwrap_or_else(|| panic!("no register {name}"))
 }
 
 #[cfg(test)]
