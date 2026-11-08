@@ -74,8 +74,12 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
 /// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 ///
-/// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32; interim, oversight
-/// 2026-11-08: replaced by a per-site priced choice, `chain_by_clocks`): at -O1
+/// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32, exit 2026-11-10
+/// evening; oversight 2026-11-08: a Pareto chain search, equal clocks and
+/// fewer bytes, replaces the fewest-clocks chain; per-site pricing stays
+/// unshipped, it moves no row). Open vs the byte bar: bintree +32, recpow +29,
+/// x_spill_store_order +54 B (also tail_calls_edges +32, stft_fixed +32,
+/// copy_runs +40 against the `imul` build). At -O1
 /// the chain is the trade against the pin's `imul` (`x * 1664525`: 29 B and ~9
 /// clocks against 6 B and 13-42), not a Pareto win. harness code bytes /
 /// simulated clocks at -O1, chain | `imul` | best gcc/clang (2026-11-08):
