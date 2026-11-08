@@ -73,6 +73,7 @@ const SOURCE_ORDER: Options = Options {
     pc_calls: false,
     sext_adds: false,
     return_dup: false,
+    class_split: false,
     debug: false,
 };
 
@@ -813,9 +814,10 @@ define i16 @f() {
   ret i16 %38
 }
 "#;
-    // Since #7968 (the coalescer joins a low part inside its wide value) no copy sits between the
-    // compare and the branch here, so the codes are not pushed (`move.w %sr, -(%sp)`): this input
-    // no longer reaches the fallback. It must still compile and run; the fallback needs a new input.
+    // Since #7968 (the coalescer joins a low part inside its wide value) no
+    // copy sits between the compare and the branch here, so the codes are
+    // not pushed (`move.w %sr, -(%sp)`): this input no longer reaches the
+    // fallback. It must still compile and run; the fallback needs a new input.
     compiled(ir, SOURCE_ORDER);
     // the same function built for x86 by the pin's clang returns 55
     if let Some(got) = run_reading_zero(ir) {
