@@ -2019,15 +2019,17 @@ fn decomposes(
     set.contains(name)
 }
 
-/// The functions of the module that call `__mulsi3`, built with the shifts
-/// and adds where the module is smaller for it (bytes first at the size
-/// levels).
-fn decomposed_functions(
+/// The priced forms of the module's functions: those with one form, and
+/// those that call `__mulsi3` with the form built with shifts and adds too
+/// (bytes, runtime routines reached).
+type Priced = (u32, std::collections::HashSet<String>);
+type Variants = (Vec<Priced>, Vec<(String, Priced, Option<Priced>)>);
+
+fn variants(
     selected: &Selections,
     alternatives: &Selections,
     request: &Request,
-) -> std::collections::HashSet<String> {
-    use std::collections::HashSet;
+) -> Variants {
     let speed = !matches!(request.level, Level::Os | Level::Oz);
     // the printed form of every function, and for those with an alternative
     // the form with the shifts
@@ -2035,8 +2037,8 @@ fn decomposed_functions(
         let bytes = expand::price_emitted(&lines, speed).0;
         (bytes, crate::runtime_size::referenced(&lines))
     };
-    let mut fixed: Vec<(u32, HashSet<String>)> = Vec::new();
-    let mut either: Vec<(String, (u32, HashSet<String>), Option<(u32, HashSet<String>)>)> = Vec::new();
+    let mut fixed: Vec<Priced> = Vec::new();
+    let mut either: Vec<(String, Priced, Option<Priced>)> = Vec::new();
     for (one, ..) in selected.iter() {
         let call = lines_of(selected, one, 0, request).ok().map(priced);
         let Some(call) = call else { continue };
@@ -2051,23 +2053,57 @@ fn decomposed_functions(
         let decomposed = if differs { lines_of(alternatives, one, 0, request).ok().map(priced) } else { None };
         either.push((one.clone(), call, decomposed));
     }
-    let total = |decomposes: &HashSet<usize>| {
-        let mut reached: HashSet<String> = HashSet::new();
-        let mut bytes = 0;
-        for (one_bytes, refs) in &fixed {
-            bytes += one_bytes;
-            reached.extend(refs.iter().cloned());
-        }
-        for (at, (_, call, decomposed)) in either.iter().enumerate() {
-            let (one_bytes, refs) = match decomposed {
-                Some(decomposed) if decomposes.contains(&at) => decomposed,
-                _ => call,
-            };
-            bytes += one_bytes;
-            reached.extend(refs.iter().cloned());
-        }
-        bytes + crate::runtime_size::reached(&reached)
-    };
+    (fixed, either)
+}
+
+/// The module's bytes with the functions of `decomposes` built with shifts
+/// and adds: theirs and the runtime routines reached, each linked once.
+fn module_price(
+    (fixed, either): &Variants,
+    decomposes: &std::collections::HashSet<usize>,
+) -> u32 {
+    use std::collections::HashSet;
+    let mut reached: HashSet<String> = HashSet::new();
+    let mut bytes = 0;
+    for (one_bytes, refs) in fixed {
+        bytes += one_bytes;
+        reached.extend(refs.iter().cloned());
+    }
+    for (at, (_, call, decomposed)) in either.iter().enumerate() {
+        let (one_bytes, refs) = match decomposed {
+            Some(decomposed) if decomposes.contains(&at) => decomposed,
+            _ => call,
+        };
+        bytes += one_bytes;
+        reached.extend(refs.iter().cloned());
+    }
+    bytes + crate::runtime_size::reached(&reached)
+}
+
+/// The module's bytes with every function calling `__mulsi3` and with every
+/// one that has the other form built with shifts and adds.
+pub fn module_prices(
+    ir: &str,
+    request: &Request,
+) -> Result<(u32, u32), String> {
+    let (selected, alternatives) = cached_both(ir, request)?;
+    let variants = variants(&selected, &alternatives, request);
+    let every = (0..variants.1.len()).filter(|at| variants.1[*at].2.is_some()).collect();
+    Ok((module_price(&variants, &std::collections::HashSet::new()), module_price(&variants, &every)))
+}
+
+/// The functions of the module that call `__mulsi3`, built with the shifts
+/// and adds where the module is smaller for it (bytes first at the size
+/// levels).
+fn decomposed_functions(
+    selected: &Selections,
+    alternatives: &Selections,
+    request: &Request,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    let variants = variants(selected, alternatives, request);
+    let either = &variants.1;
+    let total = |decomposes: &HashSet<usize>| module_price(&variants, decomposes);
     // descend from all shifts and from all calls (two functions may together
     // pay for a routine neither pays for alone); the smaller module wins, a tie
     // goes to the shifts

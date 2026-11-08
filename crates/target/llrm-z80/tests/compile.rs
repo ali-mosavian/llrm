@@ -2195,3 +2195,17 @@ fn a_long_multiply_calls_the_routine_at_every_level() {
         assert!(!out.contains("__mulhi3"), "{level:?}: {out}");
     }
 }
+
+/// A long multiplied by a constant of the form `2^k +- 1` stays shifts and an
+/// add where the module calls `__mulsi3` for its other multiplies: called, the
+/// `x * 3` of an `i64` was a call per half (compare_to_int64: +8k T of 37k).
+#[test]
+fn a_constant_factor_of_a_long_stays_inline_beside_the_calls() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i64 @f(i64 %a) {\n  %m = mul i64 %a, 3\n  ret i64 %m\n}\n\
+              define i32 @g(i32 %a, i32 %b, i32 %c) {\n  %m = mul i32 %a, %b\n  %n = mul i32 %m, %c\n  ret i32 %n\n}";
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("__mulsi3"), "{out}");
+    let out = text(ir, "g", 1, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("call __mulsi3").count(), 2, "{out}");
+}

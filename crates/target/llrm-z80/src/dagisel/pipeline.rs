@@ -158,6 +158,12 @@ struct Z80Combines {
     long_multiply: bool,
 }
 
+/// `2^k +- 1` (k up to 8): shifts and one add (`decompose_mul_by_constant`).
+fn near_power_factor(c: u128) -> bool {
+    let near_power = |n: u128| n.is_power_of_two() && n <= 256;
+    c >= 3 && (near_power(c - 1) || near_power(c + 1))
+}
+
 impl CombineHooks for Z80Combines {
     /// DEVIATE Z80-SHL-COMMUTE: `(x + c) << n` stays. Commuted, the folded
     /// constant `c << n` is a `ld bc, #k` and an `add hl, bc` where the add of
@@ -187,10 +193,9 @@ impl CombineHooks for Z80Combines {
         vt: EVT,
         c: u128,
     ) -> bool {
-        let near_power = |n: u128| n.is_power_of_two() && n <= 256;
         match vt {
             EVT::I8 | EVT::I16 => true,
-            EVT::I32 => !self.long_multiply && c >= 3 && (near_power(c - 1) || near_power(c + 1)),
+            EVT::I32 => !self.long_multiply && near_power_factor(c),
             _ => false,
         }
     }
@@ -287,6 +292,7 @@ pub fn select_block(
         tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
         if !sized {
             tli.set_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
+        tli.set_inline_constant_mul(near_power_factor);
         }
     }
     let mut lowering = Z80Lowering { sized };

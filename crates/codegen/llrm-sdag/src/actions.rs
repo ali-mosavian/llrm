@@ -135,6 +135,9 @@ pub struct TargetLowering {
     /// times the bits beyond them reach `least` (each is a shift instruction
     /// per granule).
     size_shift_call: Option<(u128, u128)>,
+    /// A constant factor the combiner turns into shifts and adds, so the
+    /// multiply is not the library call outside functions tuned for size.
+    inline_constant_mul: Option<fn(u128) -> bool>,
     /// The function is built for size: an `i64` divide calls the target's size routine.
     small_divide: bool,
     /// The object spelling of a routine's name where the convention decorates
@@ -176,6 +179,7 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             size_shift_call: None,
+            inline_constant_mul: None,
             small_divide: false,
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
@@ -469,6 +473,26 @@ impl TargetLowering {
 
     pub fn assert_sext_keeps_high(&self) -> bool {
         self.assert_sext_keeps_high
+    }
+
+    /// `shouldOptimizeForSize` of the function being selected.
+    pub fn is_opt_for_size(&self) -> bool {
+        self.opt_for_size
+    }
+
+    pub fn set_inline_constant_mul(
+        &mut self,
+        decomposes: fn(u128) -> bool,
+    ) {
+        self.inline_constant_mul = Some(decomposes);
+    }
+
+    /// Whether a multiply by `c` stays inline here (see `inline_constant_mul`).
+    pub fn multiply_by_constant_stays_inline(
+        &self,
+        c: u128,
+    ) -> bool {
+        !self.opt_for_size && self.inline_constant_mul.is_some_and(|decomposes| decomposes(c))
     }
 
     /// `DAG.shouldOptForSize()` for the function selected next.
