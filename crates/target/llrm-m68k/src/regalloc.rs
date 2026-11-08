@@ -83,6 +83,13 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool> Target for Registers
         false
     }
 
+    /// DEVIATE C15 (coalescer/pair.rs): `m = max(m, p[i])` kept a copy on both
+    /// paths (arrmax -O2 68000 +160 rate against gcc; the pin has the same
+    /// order and its llc is 80 B). Owner: m68k. Exit: 2026-11-22.
+    fn joins_loop_carried_first() -> bool {
+        true
+    }
+
     fn candidates(class: Class) -> Vec<RegId> {
         match class {
             Class::Dr8 | Class::Dr16 | Class::Dr32 => DATA.to_vec(),

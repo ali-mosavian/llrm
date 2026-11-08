@@ -61,6 +61,15 @@
 //! names both values counts once per value, not once for the pair (checked
 //! by `LLRM_CHECK_USE_SUMMARY`). Exit: none; the target's price is its own.
 //!
+//! DEVIATE C15: `CoalescerEnv::joins_loop_carried_first`. Among blocks of one
+//! depth, split-edge state and connectivity the pin takes the lower number
+//! first; a target may put first the block whose copies read a value carried
+//! around the loop (live at the header, or a copy of one), so the join of a
+//! loop-carried value with its update comes before a join with a value born in
+//! the body. m68k: `m = max(m, p[i])` (arrmax -O2) lost a copy per trip, +160
+//! rate on the 68000. Default off: the pin's order, output unchanged. Owner:
+//! m68k. Exit: 2026-11-22.
+//!
 //! DEVIATE C9 (no number): a parameter's value on entry is defined by no
 //! instruction, so LLVM's phi rule ("any real interference would show up in a
 //! predecessor") does not carry over: the entry block has none. Two parameters

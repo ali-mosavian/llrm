@@ -137,8 +137,8 @@ impl LIRTransform for Coalescer {
 /// The target's price of making a constant again at size: its encoding
 /// strictly under the copy's (a tie keeps the copy: before allocation a
 /// register's REX byte is unknown, and a remade zero stored to a spill slot is
-/// dearer than a register stored), or any, where the source's own definition goes. At speed the
-/// pin's choice stands: always.
+/// dearer than a register stored), or any, where the source's own definition
+/// goes. At speed the pin's choice stands: always.
 pub(super) fn remat_priced(bytes: llrm_target::MoveBytes) -> crate::coalescer::env::RematWins {
     Box::new(move |def, _, _, size, alone| {
         if !size || alone {
@@ -222,6 +222,7 @@ impl Coalescer {
                 joins_pinned_copies: true,
                 joins_sub_registers: true,
                 joins_lanes: false,
+                joins_loop_carried_first: false,
                 aliases: Default::default(),
                 should_join: None,
                 freq: Vec::new(),
