@@ -5,7 +5,6 @@
 2 crates/backend/llrm-dagisel/src/aarch64_predicates.rs
 10 crates/backend/llrm-dagisel/src/generated/aarch64/aarch64_apple_m1.rs
 1 crates/backend/llrm-dagisel/src/generated/aarch64/ids.rs
-158 crates/backend/llrm-dagisel/src/generated/instrinfo.rs
 1 crates/backend/llrm-dagisel/src/predicates.rs
 1 crates/backend/llrm-dagisel/src/addr.rs
 1 crates/backend/llrm-iselgen/src/build.rs

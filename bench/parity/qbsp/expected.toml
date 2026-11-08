@@ -1,10 +1,20 @@
-reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
-blessed = "2026-11-05"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "12c6e09e8425ab49369492c3c33eaab9"
+
+[ow.O1]
+instructions = 355
+memory_operands = 131
+clocks = 1231
+code_bytes = 382
+data_bytes = 0
+bss_bytes = 4
+kernel_ms = 0.0186
 
 [ow.O2]
 instructions = 387
 memory_operands = 133
+clocks = 1161
 code_bytes = 394
 data_bytes = 0
 bss_bytes = 4
@@ -13,14 +23,25 @@ kernel_ms = 0.019
 [ow.Os]
 instructions = 355
 memory_operands = 131
+clocks = 1231
 code_bytes = 382
 data_bytes = 0
 bss_bytes = 4
 kernel_ms = 0.0186
 
+[bcc.O1]
+instructions = 371
+memory_operands = 105
+clocks = 1155
+code_bytes = 383
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.0125
+
 [bcc.O2]
 instructions = 393
 memory_operands = 103
+clocks = 1119
 code_bytes = 391
 data_bytes = 0
 bss_bytes = 0
@@ -29,14 +50,25 @@ kernel_ms = 0.0127
 [bcc.Os]
 instructions = 371
 memory_operands = 105
+clocks = 1155
 code_bytes = 383
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.0125
 
+[tc.O1]
+instructions = 537
+memory_operands = 157
+clocks = 1526
+code_bytes = 448
+data_bytes = 4
+bss_bytes = 0
+kernel_ms = 0.0137
+
 [tc.O2]
 instructions = 549
 memory_operands = 155
+clocks = 1450
 code_bytes = 457
 data_bytes = 4
 bss_bytes = 0
@@ -45,14 +77,25 @@ kernel_ms = 0.0138
 [tc.Os]
 instructions = 537
 memory_operands = 157
+clocks = 1526
 code_bytes = 448
 data_bytes = 4
 bss_bytes = 0
 kernel_ms = 0.0137
 
+[tcpp.O1]
+instructions = 483
+memory_operands = 109
+clocks = 1440
+code_bytes = 423
+data_bytes = 16
+bss_bytes = 0
+kernel_ms = 0.014
+
 [tcpp.O2]
 instructions = 496
 memory_operands = 109
+clocks = 1401
 code_bytes = 429
 data_bytes = 16
 bss_bytes = 0
@@ -61,6 +104,7 @@ kernel_ms = 0.0142
 [tcpp.Os]
 instructions = 483
 memory_operands = 109
+clocks = 1440
 code_bytes = 423
 data_bytes = 16
 bss_bytes = 0

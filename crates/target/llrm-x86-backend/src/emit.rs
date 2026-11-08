@@ -58,7 +58,7 @@ use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_codegen::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 use llrm_codegen::model::lir::{Insn, PairKind, Phi};
 use llrm_dagisel::addr::AddrMode;
-use llrm_dagisel::instr::{self, InstrDesc, operand_type};
+use llrm_dagisel::instr::{InstrDesc, operand_type};
 use llrm_lir::registers::RegId;
 use llrm_support::hash::HashMap;
 use llrm_x86_dagisel::x86_classes::{Role, class_tag};
@@ -1144,7 +1144,7 @@ impl Emitter<'_, '_> {
         // `mov` here, which a later pass makes an `xor` only where they are
         // dead.
         let writes_flags = self.ctx.names.get(&(opcode as u16)).is_none_or(|name| *name != "MOV32r0")
-            && instr::desc(opcode as u16)
+            && llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16)
                 .is_some_and(|desc| desc.implicit_defs.contains(&llrm_dagisel::generated::ids::x86::EFLAGS));
         let previous = self.flags_now.filter(|&p| p != n);
         // The scheduler may put two `CopyToReg ES` ahead of the cells that read
@@ -1442,8 +1442,8 @@ impl Emitter<'_, '_> {
         if let Some(done) = self.special(n, name)? {
             return Ok(done);
         }
-        let desc =
-            instr::desc(opcode as u16).ok_or_else(|| EmitError::Unsupported(format!("{name}: no descriptor")))?;
+        let desc = llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16)
+            .ok_or_else(|| EmitError::Unsupported(format!("{name}: no descriptor")))?;
         if name == "JMP_1" || name == "JCC_1" {
             return self.jump(n, name == "JCC_1");
         }
@@ -1823,7 +1823,7 @@ impl Emitter<'_, '_> {
         // The implicit results follow the explicit ones, in the order the
         // description lists them: `MUL8r` has AX before EFLAGS, and AX is not
         // flags.
-        instr::desc(op as u16).is_some_and(|d| {
+        llrm_x86_dagisel::generated::instrinfo::desc(op as u16).is_some_and(|d| {
             usize::from(value.res)
                 .checked_sub(usize::from(d.num_defs))
                 .and_then(|implicit| d.implicit_defs.get(implicit))
@@ -2391,7 +2391,7 @@ impl Emitter<'_, '_> {
             !matches!(
                 name,
                 "COPY" | "COPY_TO_REGCLASS" | "EXTRACT_SUBREG" | "INSERT_SUBREG" | "SUBREG_TO_REG" | "IMPLICIT_DEF"
-            ) && !(name.starts_with("MOV") && name.ends_with("rr"))
+            ) && !is_gpr_copy(name)
         })
     }
 
@@ -2447,16 +2447,16 @@ impl Emitter<'_, '_> {
                 // Flat 32-bit: the pin's pseudos, which `callframe.rs` turns
                 // into pushes or `sub`/`add` (DEVIATE CF4).
                 if self.ctx.address_mode != AddrMode::Real16 || self.ctx.reserved_calls {
-                    if bytes != 0 {
-                        let width = if self.ctx.address_mode == AddrMode::Flat64 { 8 } else { 4 };
-                        let imm = |value: i64| Loc::Imm(Imm { value, width, address: None });
-                        let (pseudo, sources) = if name.starts_with("ADJCALLSTACKDOWN") {
-                            ("call_frame_setup", vec![imm(bytes), imm(0), imm(0)])
-                        } else {
-                            ("call_frame_destroy", vec![imm(bytes), imm(popped)])
-                        };
-                        self.push(Operation::Barrier, pseudo, Vec::new(), sources);
-                    }
+                    // Every call has its pair, as the pin's: a zero-byte one holds its
+                    // slot-index entry through allocation and is removed after it.
+                    let width = if self.ctx.address_mode == AddrMode::Flat64 { 8 } else { 4 };
+                    let imm = |value: i64| Loc::Imm(Imm { value, width, address: None });
+                    let (pseudo, sources) = if name.starts_with("ADJCALLSTACKDOWN") {
+                        ("call_frame_setup", vec![imm(bytes), imm(0), imm(0)])
+                    } else {
+                        ("call_frame_destroy", vec![imm(bytes), imm(popped)])
+                    };
+                    self.push(Operation::Barrier, pseudo, Vec::new(), sources);
                     return Ok(Some(()));
                 }
                 let (verb, count) =
@@ -4322,4 +4322,11 @@ fn sign_extend(
 ) -> i64 {
     let shift = 128 - width.clamp(1, 128);
     (((bits << shift) as i128) >> shift) as i64
+}
+
+/// A register-to-register `mov` of one general class (`MOV32rr`, `MOV64rr_REV`): emitted as a `Move` the coalescer
+/// joins away. `MOVPDI2DIrr` (`movd r32, xmm`) and its kin write a register of another class, a real write.
+fn is_gpr_copy(name: &str) -> bool {
+    let name = name.strip_suffix("_REV").unwrap_or(name);
+    matches!(name, "MOV8rr" | "MOV16rr" | "MOV32rr" | "MOV64rr")
 }

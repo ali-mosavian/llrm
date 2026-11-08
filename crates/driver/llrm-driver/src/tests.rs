@@ -2527,6 +2527,31 @@ fn m16_over_aligned_local_is_clamped_not_refused() {
     assert!(!listing.contains("and sp,"), "{listing}");
 }
 
+/// jwlink turns a far call to the same segment into `push cs; call near` plus
+/// a pad byte, a `ds` prefix at one parity and an executed `nop` at the other
+/// (0.60-0.85% of stft_fixed's executed instructions, 47 sites). The object
+/// writer states the near form itself where the callee is in the call's own
+/// segment: four bytes, no pad, nothing to execute.
+#[test]
+fn a_far_call_inside_its_own_segment_is_push_cs_and_a_near_call() {
+    let text = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+                define cc 1005 i32 @g(i32 %a) addrspace(1) noinline {\n  %r = mul i32 %a, 3\n  ret i32 %r\n}\n\
+                define cc 1005 i32 @f(i32 %a) addrspace(1) {\n  %r = call cc 1005 addrspace(1) i32 @g(i32 %a)\n  %s = add i32 %r, 1\n  ret i32 %s\n}\n";
+    let (built, format) = compiled(&flags(&["-m16", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let bytes = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m16::M16),
+    )
+    .unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|window| window == needle);
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!has(&[0x9A, 0, 0, 0, 0]), "a far call to g is left to the linker: {listing}");
+    assert!(has(&[0x0E, 0xE8]), "push cs; call near: {listing} {bytes:02x?}");
+}
+
 /// A callee-saved register pushed before the stack `sub` (the pin's order,
 /// `saved_first`) had no `.eh_frame`: the frame was left out of the declared
 /// ones. Its offset is declared after the `sub` (`def_cfa_offset n; offset
@@ -4809,4 +4834,36 @@ fn a_loop_bounded_by_the_object_it_indexes_is_peeled_at_m32_o3() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let bench = listing.split("bench_x_matmul_f_ proc").nth(1).and_then(|rest| rest.split("endp").next()).expect(&listing);
     assert!(bench.matches("fmul").count() >= 12, "{listing}");
+}
+
+/// `cvtsi2ss xmm1, eax` in a loop rewrote only the low lane of `xmm1`, so each
+/// iteration waited for the last one's result (the pin: `xorps xmm1, xmm1`
+/// first, BreakFalseDeps). sfm16_float_i2f m64 -O2: 9 converts, no `xorps`.
+#[test]
+fn a_convert_in_a_loop_is_preceded_by_a_xorps_of_its_register() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define float @f(i32 %n) {\nentry:\n  br label %l\n\
+                l:\n  %i = phi i32 [ 0, %entry ], [ %i1, %l ]\n  %s = phi float [ 1.0, %entry ], [ %s1, %l ]\n\
+                  %c = sitofp i32 %i to float\n  %s1 = fadd float %s, %c\n  %i1 = add i32 %i, 1\n\
+                  %d = icmp eq i32 %i1, %n\n  br i1 %d, label %x, label %l\n\
+                x:\n  ret float %s1\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let (xor, convert) = (listing.find("xorps"), listing.find("cvtsi2ss"));
+    assert!(xor.is_some() && xor < convert, "{listing}");
+}
+
+/// `movd eax, xmm0` writes the whole of `rax`, but the zero extension that followed was `mov eax, eax` (the pin: none).
+/// The check took every `MOV*rr` for a register copy, `MOVPDI2DIrr` among them: 2 in sfm16_float_i2f's loop, 4 per
+/// iteration there.
+#[test]
+fn a_float_bits_zero_extended_at_m64_is_one_movd() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(float %x) {\n  %u = bitcast float %x to i32\n  %z = zext i32 %u to i64\n  ret i64 %z\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("movd"), "{listing}");
+    assert!(!listing.contains("movzx"), "{listing}");
 }

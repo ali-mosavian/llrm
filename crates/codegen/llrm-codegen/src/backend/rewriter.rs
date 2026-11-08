@@ -394,18 +394,14 @@ pub(crate) fn _placed(
             }
         }
     }
-    let mut made = (**one).clone();
     // A value now in an x87 register is named by the register: the stackifier
     // numbers it again (`fpregs`).
     let in_rfp = |value: &u32| held.get(value).is_some_and(|at| regs.in_class(*at, llrm_lir::registers::class::RFP));
+    // The copy's own operands are replaced: cloning `what` to drop them copied
+    // both lists twice.
+    let mut made = one.with_what(Some(what.with_operands(name, dests, sources)));
     made.uses.retain(|value| !in_rfp(value));
     made.defines.retain(|value| !in_rfp(value));
-    // The copy's own operands are replaced in place: building a `Semantics`
-    // from `what.clone()` copied both lists again to drop them.
-    let own = made.what.as_mut().expect("an instruction with semantics");
-    own.name = name;
-    own.dests = dests;
-    own.sources = sources;
     Ok(Arc::new(made))
 }
 

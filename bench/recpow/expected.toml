@@ -1,59 +1,111 @@
-reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
-blessed = "2026-11-05"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "986327e51dca12c9f476546261db9f7c"
+
+[ow.O1]
+instructions = 301842
+memory_operands = 16742
+clocks = 850107
+code_bytes = 215
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 4.0273
 
 [ow.O2]
 instructions = 306092
 memory_operands = 16343
+clocks = 847657
 code_bytes = 217
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 4.084
 
 [ow.Os]
 instructions = 301842
 memory_operands = 16742
+clocks = 850107
 code_bytes = 215
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 4.0273
+
+[bcc.O1]
+instructions = 126717
+memory_operands = 15141
+clocks = 634017
+code_bytes = 223
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.6913
 
 [bcc.O2]
 instructions = 120609
 memory_operands = 14741
+clocks = 619614
 code_bytes = 241
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 1.6099
 
 [bcc.Os]
 instructions = 126717
 memory_operands = 15141
+clocks = 634017
 code_bytes = 223
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 1.6913
+
+[tc.O1]
+instructions = 1666983
+memory_operands = 39269
+clocks = 2918405
+code_bytes = 211
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 22.2365
 
 [tc.O2]
 instructions = 1666988
 memory_operands = 38869
+clocks = 2917999
 code_bytes = 219
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 22.2366
 
 [tc.Os]
 instructions = 1666983
 memory_operands = 39269
+clocks = 2918405
 code_bytes = 211
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 22.2365
+
+[tcpp.O1]
+instructions = 1664375
+memory_operands = 45019
+clocks = 2917826
+code_bytes = 223
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 22.2017
 
 [tcpp.O2]
 instructions = 1664380
 memory_operands = 44619
+clocks = 2917420
 code_bytes = 231
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 22.2017
 
 [tcpp.Os]
 instructions = 1664375
 memory_operands = 45019
+clocks = 2917826
 code_bytes = 223
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 22.2017

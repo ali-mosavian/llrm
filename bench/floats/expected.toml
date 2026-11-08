@@ -1,26 +1,47 @@
-reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
-blessed = "2026-11-07"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "efb6e40e347ee0991a5f379435d95da5"
+
+[ow.O1]
+instructions = 9040
+memory_operands = 6016
+clocks = 113163
+code_bytes = 98
+data_bytes = 32
+bss_bytes = 0
+kernel_ms = 0.1339
 
 [ow.O2]
 instructions = 9045
 memory_operands = 5016
+clocks = 112153
 code_bytes = 106
 data_bytes = 32
 bss_bytes = 0
-kernel_ms = 0.1342
+kernel_ms = 0.1339
 
 [ow.Os]
 instructions = 9040
 memory_operands = 6016
+clocks = 113163
 code_bytes = 98
 data_bytes = 32
 bss_bytes = 0
-kernel_ms = 0.1341
+kernel_ms = 0.1339
+
+[bcc.O1]
+instructions = 15040
+memory_operands = 5013
+clocks = 118147
+code_bytes = 89
+data_bytes = 16
+bss_bytes = 0
+kernel_ms = 0.2088
 
 [bcc.O2]
 instructions = 15042
 memory_operands = 5013
+clocks = 118136
 code_bytes = 92
 data_bytes = 16
 bss_bytes = 0
@@ -29,14 +50,25 @@ kernel_ms = 0.2088
 [bcc.Os]
 instructions = 15040
 memory_operands = 5013
+clocks = 118147
 code_bytes = 89
 data_bytes = 16
 bss_bytes = 0
 kernel_ms = 0.2088
 
+[tc.O1]
+instructions = 16039
+memory_operands = 8017
+clocks = 122139
+code_bytes = 103
+data_bytes = 32
+bss_bytes = 0
+kernel_ms = 0.2211
+
 [tc.O2]
 instructions = 16041
 memory_operands = 8017
+clocks = 122128
 code_bytes = 107
 data_bytes = 32
 bss_bytes = 0
@@ -45,14 +77,25 @@ kernel_ms = 0.2211
 [tc.Os]
 instructions = 16039
 memory_operands = 8017
+clocks = 122139
 code_bytes = 103
 data_bytes = 32
 bss_bytes = 0
 kernel_ms = 0.2211
 
+[tcpp.O1]
+instructions = 15042
+memory_operands = 6013
+clocks = 119157
+code_bytes = 91
+data_bytes = 16
+bss_bytes = 0
+kernel_ms = 0.2089
+
 [tcpp.O2]
 instructions = 15048
 memory_operands = 5013
+clocks = 118152
 code_bytes = 98
 data_bytes = 16
 bss_bytes = 0
@@ -61,6 +104,7 @@ kernel_ms = 0.209
 [tcpp.Os]
 instructions = 15042
 memory_operands = 6013
+clocks = 119157
 code_bytes = 91
 data_bytes = 16
 bss_bytes = 0

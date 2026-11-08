@@ -1,26 +1,47 @@
-reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
-blessed = "2026-11-07"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "4c4f0a666d87b15d3bc03da24bd8f588"
+
+[ow.O1]
+instructions = 1938265
+memory_operands = 606003
+clocks = 2646002
+code_bytes = 209
+data_bytes = 0
+bss_bytes = 8000
+kernel_ms = 26.2333
 
 [ow.O2]
 instructions = 1552318
 memory_operands = 606002
+clocks = 2250035
 code_bytes = 221
 data_bytes = 0
 bss_bytes = 8000
-kernel_ms = 21.0542
+kernel_ms = 21.0584
 
 [ow.Os]
 instructions = 1938265
 memory_operands = 606003
+clocks = 2646002
 code_bytes = 209
 data_bytes = 0
 bss_bytes = 8000
-kernel_ms = 26.2285
+kernel_ms = 26.2333
+
+[bcc.O1]
+instructions = 2656760
+memory_operands = 592002
+clocks = 4474492
+code_bytes = 208
+data_bytes = 0
+bss_bytes = 8000
+kernel_ms = 35.8526
 
 [bcc.O2]
 instructions = 1486615
 memory_operands = 592002
+clocks = 2132137
 code_bytes = 194
 data_bytes = 0
 bss_bytes = 8000
@@ -29,30 +50,52 @@ kernel_ms = 20.1912
 [bcc.Os]
 instructions = 2656760
 memory_operands = 592002
+clocks = 4474492
 code_bytes = 208
 data_bytes = 0
 bss_bytes = 8000
 kernel_ms = 35.8526
 
+[tc.O1]
+instructions = 2909015
+memory_operands = 1782508
+clocks = 5705902
+code_bytes = 289
+data_bytes = 0
+bss_bytes = 8000
+kernel_ms = 39.2041
+
 [tc.O2]
 instructions = 2909017
 memory_operands = 1782508
+clocks = 5705891
 code_bytes = 294
 data_bytes = 0
 bss_bytes = 8000
-kernel_ms = 39.2036
+kernel_ms = 39.2042
 
 [tc.Os]
 instructions = 2909015
 memory_operands = 1782508
+clocks = 5705902
 code_bytes = 289
 data_bytes = 0
 bss_bytes = 8000
-kernel_ms = 39.2035
+kernel_ms = 39.2041
+
+[tcpp.O1]
+instructions = 2714969
+memory_operands = 594004
+clocks = 4613508
+code_bytes = 233
+data_bytes = 0
+bss_bytes = 8000
+kernel_ms = 36.6157
 
 [tcpp.O2]
 instructions = 2714971
 memory_operands = 594004
+clocks = 4613497
 code_bytes = 237
 data_bytes = 0
 bss_bytes = 8000
@@ -61,6 +104,7 @@ kernel_ms = 36.6424
 [tcpp.Os]
 instructions = 2714969
 memory_operands = 594004
+clocks = 4613508
 code_bytes = 233
 data_bytes = 0
 bss_bytes = 8000

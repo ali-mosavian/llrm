@@ -1,10 +1,20 @@
-reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
-blessed = "2026-11-07"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "cd1c5a4a7f63fea4e29ac67fa015f99b"
+
+[ow.O1]
+instructions = 74636
+memory_operands = 14048
+clocks = 154859
+code_bytes = 107
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.9969
 
 [ow.O2]
 instructions = 75663
 memory_operands = 14048
+clocks = 155872
 code_bytes = 112
 data_bytes = 0
 bss_bytes = 0
@@ -13,14 +23,25 @@ kernel_ms = 1.0106
 [ow.Os]
 instructions = 74636
 memory_operands = 14048
+clocks = 154859
 code_bytes = 107
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.9969
 
+[bcc.O1]
+instructions = 85320
+memory_operands = 13026
+clocks = 220853
+code_bytes = 115
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.1394
+
 [bcc.O2]
 instructions = 70253
 memory_operands = 13026
+clocks = 132752
 code_bytes = 113
 data_bytes = 0
 bss_bytes = 0
@@ -29,14 +50,25 @@ kernel_ms = 0.9384
 [bcc.Os]
 instructions = 85320
 memory_operands = 13026
+clocks = 220853
 code_bytes = 115
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 1.1394
 
+[tc.O1]
+instructions = 121759
+memory_operands = 48152
+clocks = 303970
+code_bytes = 145
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.6254
+
 [tc.O2]
 instructions = 122785
 memory_operands = 48152
+clocks = 304983
 code_bytes = 149
 data_bytes = 0
 bss_bytes = 0
@@ -45,14 +77,25 @@ kernel_ms = 1.6391
 [tc.Os]
 instructions = 121759
 memory_operands = 48152
+clocks = 303970
 code_bytes = 145
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 1.6254
 
+[tcpp.O1]
+instructions = 118833
+memory_operands = 26052
+clocks = 290229
+code_bytes = 139
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.5864
+
 [tcpp.O2]
 instructions = 129811
 memory_operands = 26052
+clocks = 301194
 code_bytes = 145
 data_bytes = 0
 bss_bytes = 0
@@ -61,6 +104,7 @@ kernel_ms = 1.7328
 [tcpp.Os]
 instructions = 118833
 memory_operands = 26052
+clocks = 290229
 code_bytes = 139
 data_bytes = 0
 bss_bytes = 0

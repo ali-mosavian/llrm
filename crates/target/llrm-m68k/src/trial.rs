@@ -47,6 +47,54 @@ fn ending(
     }
 }
 
+/// The bytes of each item once the assembler has laid the code out: an 8-bit
+/// branch whose displacement does not fit, or is 0, takes its 16-bit form
+/// (`object::assemble`). Without this a build with one more far branch looks
+/// 2 bytes smaller than it is.
+fn relaxed_sizes(
+    items: &[Item],
+    labels: &HashMap<&str, usize>,
+) -> Option<Vec<usize>> {
+    let mut sizes: Vec<usize> = items
+        .iter()
+        .map(|item| match item {
+            Item::Inst(inst) => crate::encode::encode(inst).ok().map(|encoded| encoded.bytes.len()),
+            Item::Bytes(bytes) => Some(bytes.len()),
+            _ => Some(0),
+        })
+        .collect::<Option<_>>()?;
+    loop {
+        let mut offsets = Vec::with_capacity(items.len() + 1);
+        let mut at = 0usize;
+        for size in &sizes {
+            offsets.push(at);
+            at += size;
+        }
+        offsets.push(at);
+        let mut changed = false;
+        for (index, item) in items.iter().enumerate() {
+            let Item::Inst(inst) = item else { continue };
+            if !(inst.opcode.starts_with('B') && inst.opcode.ends_with('8')) || sizes[index] != 2 {
+                continue;
+            }
+            let Some(target) = inst.operands.iter().find_map(|operand| match operand {
+                mc::Operand::Symbol(name, 0) => labels.get(name.as_str()).copied(),
+                _ => None,
+            }) else {
+                continue;
+            };
+            let displacement = offsets[target] as i64 - (offsets[index] as i64 + 2);
+            if !(-128..128).contains(&displacement) || displacement == 0 {
+                sizes[index] = 4;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Some(sizes);
+        }
+    }
+}
+
 /// Bytes, and clocks of `items` on `cpu` weighted by how often each runs: an
 /// instruction counts the share of runs that reach it (a two-way branch splits
 /// evenly) times ten per loop it sits in (a backward branch to a label makes
@@ -100,10 +148,11 @@ fn price_of(
             _ => share[at + 1] += share[at],
         }
     }
+    let sizes = relaxed_sizes(items, &labels)?;
     let (mut bytes, mut clocks) = (0usize, 0u64);
     for (at, item) in items.iter().enumerate() {
         let Item::Inst(inst) = item else { continue };
-        let size = crate::encode::encode(inst).ok()?.bytes.len();
+        let size = sizes[at];
         let cost = crate::timing::cost(cpu, &mc::print(inst).ok()?, size as u32, false).ok()?.clocks;
         let depth = loops.iter().filter(|(from, to)| *from <= at && at <= *to).count().min(3);
         bytes += size;

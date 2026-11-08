@@ -14,8 +14,9 @@ use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 
 use super::super::actions::{Features, TargetLowering};
 use super::super::builder::{BuilderTarget, build_block};
-use super::super::dag_select::{do_instruction_selection, legalized};
+use super::super::dag_select::legalized;
 use super::super::function_lowering::FunctionLoweringInfo;
+use super::super::select::do_instruction_selection;
 use super::super::x86_lowering::X86Lowering;
 use super::*;
 use crate::testing::m16_ir;
@@ -68,6 +69,7 @@ fn selects(body: &str) -> Result<(), String> {
                 i16_mul_chains: false,
                 sext_load: false,
                 zext_free: false,
+                branch_constant_selects: false,
                 profile: None,
             },
             &machine,

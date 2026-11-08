@@ -22,17 +22,17 @@
 //! selected. Exit: vector MIR.
 //!
 //! # Used by
-//! The scheduler's `TryUnfoldSU`, through [`super::schedule::SchedInfo`].
+//! The scheduler's `TryUnfoldSU`, through
+//! [`llrm_codegen::backend::selectiondag::schedule::SchedInfo`].
 //!
 //! [pin]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L9026
 
+use llrm_codegen::backend::selectiondag::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::{EVT, ISD};
 use llrm_dagisel::generated::ids::x86;
-use llrm_dagisel::instr::desc;
 use llrm_x86_dagisel::generated::foldtables::{FOLDED_LOAD, FOLDED_STORE, INDEX_MASK, UNFOLD};
-
-use super::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
-use super::{EVT, ISD};
+use llrm_x86_dagisel::generated::instrinfo::desc;
 
 /// The widths a general register class loads: `getLoadRegOpcode`'s `MOV*rm`
 /// for `GR8` to `GR64`, with the value type the class holds.
@@ -104,10 +104,10 @@ pub fn unfold_memory_operand(
 
 #[cfg(test)]
 mod tests {
+    use llrm_codegen::backend::selectiondag::dag::DagConfig;
     use llrm_x86_dagisel::generated::x86_x64::MACHINE_OPCODES;
 
     use super::*;
-    use crate::backend::selectiondag::dag::DagConfig;
 
     fn id(name: &str) -> u32 {
         u32::from(MACHINE_OPCODES.iter().find(|(_, n)| *n == name).unwrap_or_else(|| panic!("no {name}")).0)
