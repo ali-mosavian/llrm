@@ -336,6 +336,7 @@ impl ProgramPass for Walk {
                                     size != crate::inlinecost::CallerSize::Speed
                                         || (tti.inline_policy().by_rate > 0
                                             && (self.speed_rate || tti.speed_inline_rate_at_o1()))
+                                        || (!self.speed_rate && tti.inline_trials_at_o1())
                                 }))
                                 .then_some(&mut trials),
                             )

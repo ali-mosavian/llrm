@@ -144,6 +144,15 @@ impl CombineHooks for WasmCombines {
         true
     }
 
+    /// `getScalarShiftAmountTy`: wasm shifts by the type of the value shifted
+    /// (the combiner's default is a byte).
+    fn shift_amount_type(
+        &self,
+        shifted: EVT,
+    ) -> EVT {
+        shifted
+    }
+
     fn fold_and_of_extload(&self) -> bool {
         true
     }

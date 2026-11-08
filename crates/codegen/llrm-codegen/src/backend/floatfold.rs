@@ -177,6 +177,13 @@ pub fn folded_with(
         let mut at = 0;
         while at < insns.len() {
             let one = Arc::clone(&insns[at]);
+            if let Some((home, loaded, read)) = _repaired(&insns, at, &uses, &floating, cpu) {
+                insns[home] = loaded;
+                insns[at] = read;
+                changed = true;
+                at += 1;
+                continue;
+            }
             let compared = _compare_with_integer(&insns, at, &uses, cpu);
             let arithmetic = one
                 .what
@@ -334,7 +341,9 @@ fn fold_constants(
                             Loc::Held(held) if held.width == 10 && earlier.defines.contains(&held.value) => {
                                 let read_between = insns[index + 1..reader]
                                     .iter()
-                                    .filter(|between| between.uses.contains(&held.value))
+                                    .filter_map(|between| between.what.as_ref())
+                                    .flat_map(|what| &what.sources)
+                                    .filter(|source| matches!(source, Loc::Held(read) if read.value == held.value))
                                     .count();
                                 (uses.get(&held.value).copied().unwrap_or(0) > read_between).then_some(held.value)
                             }
@@ -720,6 +729,90 @@ pub fn read_from_cell(
     Some(made)
 }
 
+/// An arithmetic instruction that reads a float cell and an integer `fild`
+/// nothing else reads: `fild [i]; fmul dword [K]` becomes `fld dword [K];
+/// fimul [i]` where the target prices the integer memory form further below
+/// its pair than the float one (486: 13 + 16 - 23 = 6 against 3 + 16 - 14 = 5).
+/// The cells are the same two, so the bytes tie; the pin keeps the float form
+/// (the DAG folds the cell before the integer load is seen), gcc takes the
+/// integer one. DEVIATE (owner x87, exit 2026-11-28); not made for size.
+///
+/// Returns the load's place, the `fld` that replaces it and the instruction
+/// that reads the integer cell.
+fn _repaired(
+    insns: &[Arc<Insn>],
+    at: usize,
+    uses: &HashMap<u32, usize>,
+    floating: &HashSet<u32>,
+    cpu: &crate::backend::cpu::Profile,
+) -> Option<(usize, Arc<Insn>, Arc<Insn>)> {
+    if cpu.size || cpu.min_size {
+        return None;
+    }
+    let arith = &insns[at];
+    let what = arith.what.as_ref().filter(|what| what.op == Operation::FloatArith && what.dests.len() == 1)?;
+    let [Loc::Held(held), Loc::Mem(float_cell)] = what.sources.as_slice() else { return None };
+    if held.width != 10 || arith.volatile || !matches!(float_cell.width, 4 | 8) || uses.get(&held.value) != Some(&1) {
+        return None;
+    }
+    let home = _home_of(insns, at, held.value)?;
+    let load = &insns[home];
+    if load.volatile || !name_is(load.what.as_ref()?, "fild") {
+        return None;
+    }
+    // The float cell is read at the load's place now: no write to it, and no
+    // register of its address changed, in between.
+    if insns[home + 1..at].iter().any(|between| {
+        between.defines.iter().any(|defined| arith.uses.contains(defined)) || may_write(between, float_cell, false)
+    }) {
+        return None;
+    }
+    let full = what.name.as_deref()?;
+    let integer_is_left = !matches!(full, "fsubr" | "fdivr");
+    let base = full.strip_suffix('r').filter(|_| !integer_is_left).unwrap_or(full);
+    let (operation, saved_integer) = memory_form_of(base, integer_is_left, true, cell_of(load).width, cpu)?;
+    let (_, saved_float) = memory_form_of(base, !integer_is_left, false, float_cell.width, cpu)?;
+    if saved_integer <= saved_float {
+        return None;
+    }
+    let foreign = |values: &[u32]| values.iter().copied().filter(|one| !floating.contains(one)).collect::<Vec<u32>>();
+    let mut loaded = (**load).clone();
+    loaded.what = Some(semantics(
+        Operation::FloatLoad,
+        "fld",
+        load.what.as_ref()?.dests.clone(),
+        vec![Loc::Mem(float_cell.clone())],
+    ));
+    loaded.uses = foreign(&arith.uses);
+    loaded.widths = arith.widths.iter().copied().filter(|(one, _)| !floating.contains(one)).collect();
+    let mut read = (**arith).clone();
+    read.what = Some(semantics(
+        Operation::FloatArith,
+        &operation,
+        what.dests.clone(),
+        vec![Loc::Held(*held), Loc::Mem(cell_of(load).clone())],
+    ));
+    read.uses = arith
+        .uses
+        .iter()
+        .copied()
+        .filter(|one| floating.contains(one))
+        .chain(foreign(&load.uses))
+        .collect::<IndexSet<u32>>()
+        .into_iter()
+        .collect();
+    read.widths = arith
+        .widths
+        .iter()
+        .chain(&load.widths)
+        .copied()
+        .filter(|(one, _)| floating.contains(one) || load.uses.contains(one))
+        .collect::<IndexSet<(u32, u32)>>()
+        .into_iter()
+        .collect();
+    Some((home, Arc::new(loaded), Arc::new(read)))
+}
+
 /// The load that defines `value`, if it may be read again at `at` as a memory
 /// operand: the nearest definition in the block, a plain load of a cell, with
 /// no clobbers and not part of a group, and nothing between it
@@ -1031,6 +1124,41 @@ mod tests {
         ]);
         let done = names(&constants_folded(&body, cpu));
         assert!(!done.contains(&"fld1".to_owned()), "{done:?}");
+    }
+
+    /// x_ldconv -O2 m32: `fadd v, v` reads a value twice; the count of reads
+    /// between its definition and the constant's reader counted the
+    /// instruction once, so a value already consumed looked live and the
+    /// constant stayed `fld1` (+3,999 clocks against the memory form).
+    #[test]
+    fn test_a_constant_folds_past_a_newer_value_one_instruction_read_twice() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            fld(1, 4, global(8, 0)),
+            arith(2, "fadd", 5, 4, 4),
+            fstp(3, 5, global(16, 0)),
+            insn(4, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(5, "fadd", 3, 1, 2),
+            fstp(6, 3, global(0, 0)),
+        ]);
+        let done = names(&constants_folded(&body, cpu));
+        assert!(!done.contains(&"fld1".to_owned()), "{done:?}");
+    }
+
+    /// x_ld_matmul -O2 m32: the DAG folds `0.5L` into `fmul dword [K]` and
+    /// leaves `fild [i]`; the integer memory form saves more (13 + 16 - 23
+    /// against 3 + 16 - 14), as gcc has it: `fld [K]; fimul [i]`, +576 clocks.
+    #[test]
+    fn test_an_integer_load_and_a_float_cell_read_the_integer_one_from_memory_at_speed() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            insn(0, Operation::FloatLoad, "fild", vec![held(1)], vec![Loc::Mem(frame(-4))]),
+            insn(1, Operation::FloatArith, "fmul", vec![held(3)], vec![held(1), Loc::Mem(global(8, 0))]),
+            fstp(2, 3, global(0, 0)),
+        ]);
+        let done = names(&folded(&body, cpu, REGISTERS));
+        assert_eq!(done, ["fld", "fimul+m", "fstp"], "{done:?}");
     }
 
     /// A constant that two instructions read stays loaded: one `fld1` serves

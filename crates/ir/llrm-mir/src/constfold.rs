@@ -361,6 +361,29 @@ pub fn cast(
             }
             Some(context.constant(Constant { ty: to, kind: ConstantKind::Float(x as u64) }))
         }
+        // `bitcastToAPInt` / `APFloat(Semantics, APInt)` of the wider formats.
+        (CastOp::BitCast, Type::Int(80)) => {
+            let ConstantKind::Float80(bits) = context.get(c).kind else { return None };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Int(bits) }))
+        }
+        (CastOp::BitCast, Type::Int(128)) => {
+            let ConstantKind::Float128(bits) = context.get(c).kind else { return None };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Int(bits) }))
+        }
+        (CastOp::BitCast, Type::Float(FloatKind::X86Fp80)) => {
+            let (ConstantKind::Int(bits), Type::Int(80)) = (&context.get(c).kind, context.types.get(context.get(c).ty))
+            else {
+                return None;
+            };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Float80(*bits) }))
+        }
+        (CastOp::BitCast, Type::Float(FloatKind::F128)) => {
+            let (ConstantKind::Int(bits), Type::Int(128)) = (&context.get(c).kind, context.types.get(context.get(c).ty))
+            else {
+                return None;
+            };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Float128(*bits) }))
+        }
         (CastOp::BitCast, Type::Int(width @ (32 | 64))) => {
             let ConstantKind::Float(bits) = context.get(c).kind else { return None };
             let float = match context.types.get(context.get(c).ty) {
@@ -992,6 +1015,21 @@ mod tests {
         assert_eq!(context.get(float).kind, ConstantKind::Float(0x3f80_0000));
         let back = cast(&mut context, CastOp::BitCast, float, i32t).expect("bitcast to int");
         assert_eq!(back, one);
+    }
+
+    /// `bitcast (x86_fp80 0xK403791A2B3C4D5E6F780 to i80)` stayed a constant
+    /// expression: only float and double folded. The pin folds every format
+    /// (`bitcastToAPInt`), and the long double pun in long_double_union_pun
+    /// then selects as five immediates, not a store, a load and shifts.
+    #[test]
+    fn the_bits_of_an_extended_float_are_an_i80_and_back() {
+        let mut context = Context::new();
+        let (i80, f80) = (context.types.int(80), context.types.intern(Type::Float(FloatKind::X86Fp80)));
+        let bits = 0x4037_91A2_B3C4_D5E6_F780_u128;
+        let float = context.constant(Constant { ty: f80, kind: ConstantKind::Float80(bits) });
+        let int = cast(&mut context, CastOp::BitCast, float, i80).expect("bitcast to i80");
+        assert_eq!(context.get(int).kind, ConstantKind::Int(bits));
+        assert_eq!(cast(&mut context, CastOp::BitCast, int, f80), Some(float));
     }
 }
 
