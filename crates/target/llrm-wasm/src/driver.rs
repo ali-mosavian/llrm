@@ -67,6 +67,16 @@ impl Level {
     }
 }
 
+/// The `-f` switches of the command line (`-fno-inline=NAME`, `-fexcess-precision=`), applied to every mid-end run of the process: the
+/// same parser as every other backend's `llc`.
+static POLICY: std::sync::Mutex<llrm_codegen::driver::policy::Policy> =
+    std::sync::Mutex::new(llrm_codegen::driver::policy::Policy::new());
+
+/// Records `flag` if the driver passes it on to a backend; false when it is not one.
+pub fn pass_flag(flag: &str) -> bool {
+    POLICY.lock().unwrap().take(flag)
+}
+
 /// `module` through the shared mid-end at `level`.
 fn optimized(
     module: llrm_mir::module::Module,
@@ -79,11 +89,16 @@ fn optimized(
     // through it (`LLRM_WASM_IR`) is compared with the pin's `llc` as it
     // stands. A second run is no fixed point (it inlined `gcd` in recgcd
     // -O1).
-    let options = if std::env::var_os("LLRM_WASM_BACKEND_ONLY").is_some() {
+    let mut options = if std::env::var_os("LLRM_WASM_BACKEND_ONLY").is_some() {
         MidEnd::none()
     } else {
         MidEnd { library: c_library(), ..level.mid_end() }
     };
+    {
+        let policy = POLICY.lock().unwrap();
+        policy.mark(&mut program)?;
+        policy.apply(&mut options);
+    }
     // `LLRM_WASM_DUMP=DIR`: every mid-end step that changed a body, written to
     // DIR.
     let dump = std::env::var_os("LLRM_WASM_DUMP").map(std::path::PathBuf::from);
