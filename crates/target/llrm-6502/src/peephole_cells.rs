@@ -271,6 +271,12 @@ fn spill_slot(name: &str) -> bool {
         && !name.contains(['+', '-', '(', ' '])
 }
 
+/// DEVIATE SPILL-COPY-FOLD (beyond the pin; owner 6502, exit 2026-11-15): the
+/// 2026-11-08 corpus A/B (mean over 4 pads, matched base 698373eaa2) lowers
+/// bytes in every changed program and instructions in each cell below, whose
+/// clocks are worse by page-crossing cliffs on one or two pads (the layouts of
+/// the base itself differ by 20k): O2 div_constants_short +12247 (-88 B), Os
+/// call_keeps +173 (-4 B), Os div_constants_short +45393 (-96 B).
 pub fn fold_spill_copy(asm: &mut Asm) {
     let mut at = 0;
     while at + 1 < asm.lines.len() {
