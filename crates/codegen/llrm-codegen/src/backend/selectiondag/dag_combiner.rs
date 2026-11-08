@@ -464,6 +464,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// `visitSUB`'s `sub C, X` is `xor X, C` where X cannot borrow from C's bits
+    /// ([L4651](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4651)).
+    /// DEVIATE SW2 (owner w9, 2026-11-08): on only where a target states it;
+    /// the x86 targets do (the Dag switch-over: `c ? 4 : 5` at i16 is `setl;
+    /// xor 5`). Exit: every target on, after their integration sweeps.
+    fn sub_without_borrow_is_xor(&self) -> bool {
+        false
+    }
+
     /// `visitSUB`'s algebraic folds (`a - (b - c)` is `a + (c - b)`, the
     /// cancelling pairs, the constants that meet). DEVIATE: off by default.
     /// On x86 the regrouped remainder `x - (8q - q)` keeps `q` live longer and
@@ -3136,6 +3145,21 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             && let Some(folded) = self.fold_sub_algebra(vt, n0, n1)
         {
             return Some(folded);
+        }
+        // `visitSUB` ([L4651][pin]): with no chance of borrowing from the
+        // adjacent bits, `sub C0, X` is `xor X, C0` (`5 - zext(c)` is `5 ^ c`).
+        //
+        // [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4651
+        if self.hooks.sub_without_borrow_is_xor()
+            && let Some(c0) = self.dag.constant(n0).filter(|_| !self.dag.is_opaque(n0))
+        {
+            let mask = super::fold::mask(vt.size_in_bits());
+            let maybe_ones = !super::known_bits::known_bits(self.dag, n1).zero & mask;
+            // `sub -1, x` is `~x`, a fold `sub_algebra_folds` keeps off (it moved
+            // x86_16 spills).
+            if c0 & mask != mask && c0.wrapping_sub(maybe_ones) & mask == (c0 ^ maybe_ones) & mask {
+                return Some(self.dag.get_node(ISD::Xor, vt, &[n1, n0]));
+            }
         }
         let c = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1))?;
         let negated = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(vt.size_in_bits()), vt);
