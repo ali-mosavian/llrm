@@ -83,6 +83,11 @@ impl LIRTransform for MaskByAnd {
             return Ok(body);
         }
         let frequencies = MachineBlockFrequencyInfo::of(&body);
+        // A `movzx` of a `setcc` that `FixupSetCC` rewrites becomes a zero made
+        // before the compare (`xor`, two bytes): cheaper than the `and` here in
+        // both bytes and clocks, so it is left alone.
+        let fixed = crate::backend::fixupsetcc::fixed(&body);
+        let kept: llrm_mir::hash::HashSet<i64> = fixed.blocks.iter().flat_map(|b| b.insns.iter()).map(|one| one.at).collect();
         let regs = body.regs();
         let reads = read_counts(&body);
         let mut out = body.clone();
@@ -93,6 +98,9 @@ impl LIRTransform for MaskByAnd {
             let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
             let mut changed = false;
             for at in 0..insns.len() {
+                if !kept.contains(&insns[at].at) {
+                    continue;
+                }
                 if let Some(new) =
                     masked(&insns[at], &reads).filter(|_| flags_dead_after(regs, body.bits, &insns[at + 1..]))
                 {

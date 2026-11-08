@@ -268,6 +268,16 @@ impl BuilderTarget {
 
     /// This target with a divide by a constant kept where its priced clocks
     /// beat the multiply-high sequence's.
+    /// This target with a signed divide by a negative constant made from the
+    /// divide by its magnitude ([`DagConfig::sdiv_by_magnitude`]).
+    pub fn with_sdiv_by_magnitude(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.sdiv_by_magnitude = on;
+        self
+    }
+
     pub fn with_div_prices(
         mut self,
         prices: Option<super::dag::DivPrices>,
@@ -349,58 +359,18 @@ impl BuilderTarget {
         self
     }
 
-    /// i486 and P5: 32-bit pointers, `i8`/`i16`/`i32` in registers.
-    pub fn m32() -> BuilderTarget {
+    /// A target with `bits`-bit pointers: integers up to the larger of 32 and
+    /// the pointer are legal in registers (the pin's `In16BitMode` has `GR32`
+    /// legal).
+    pub fn for_pointer_bits(bits: u32) -> BuilderTarget {
         BuilderTarget {
-            dag: DagConfig { offset_folding: true, ..DagConfig::default() },
+            dag: DagConfig { pointer: EVT::integer(bits), offset_folding: true, ..DagConfig::default() },
             shift_amount: EVT::I8,
             shift_amount_of: None,
             min_jump_table_entries: 4,
             switch_optimize: true,
             trap_unreachable: false,
-            legal_ints: vec![8, 16, 32],
-            soft_float: false,
-            libcalls: None,
-            stack_align: None,
-            float_store: false,
-            jump_tables: true,
-            opt_size: false,
-            min_size: false,
-            tuning: llrm_mir::target::Tuning::PIN,
-            size_trade: None,
-            ordered_copies: false,
-            string_instructions: true,
-            native_atomics: false,
-            tail_calls: false,
-            is_zext_free: |_, _, _| false,
-            tti: None,
-            runtime_calls: None,
-            target_nodes: None,
-            legal_f128: false,
-        }
-    }
-
-    /// x86-64: 64-bit pointers, `i8`..`i64` in registers.
-    pub fn m64() -> BuilderTarget {
-        BuilderTarget {
-            dag: DagConfig { pointer: EVT::I64, offset_folding: true, ..DagConfig::default() },
-            legal_ints: vec![8, 16, 32, 64],
-            soft_float: false,
-            ..BuilderTarget::m32()
-        }
-    }
-
-    /// Real mode: 16-bit near pointers, `i8`/`i16`/`i32` in registers (the
-    /// pin's `In16BitMode` has `GR32` legal).
-    pub fn m16() -> BuilderTarget {
-        BuilderTarget {
-            dag: DagConfig { pointer: EVT::I16, offset_folding: true, ..DagConfig::default() },
-            shift_amount: EVT::I8,
-            shift_amount_of: None,
-            min_jump_table_entries: 4,
-            switch_optimize: true,
-            trap_unreachable: false,
-            legal_ints: vec![8, 16, 32],
+            legal_ints: std::iter::successors(Some(8), |width| Some(width * 2)).take_while(|width| *width <= bits.max(32)).collect(),
             soft_float: false,
             libcalls: None,
             stack_align: None,
@@ -4231,6 +4201,21 @@ pub(super) fn f80_from_double_bits(bits: u64) -> u128 {
 }
 
 #[cfg(test)]
+mod pointer_width_tests {
+    use super::*;
+
+    /// The legal integer widths follow the pointer: a 16-bit pointer still has
+    /// `i32` in registers, a 64-bit one adds `i64`.
+    #[test]
+    fn test_legal_ints_follow_the_pointer_width() {
+        let widths = |bits| BuilderTarget::for_pointer_bits(bits).legal_ints;
+        assert_eq!(widths(16), [8, 16, 32]);
+        assert_eq!(widths(32), [8, 16, 32]);
+        assert_eq!(widths(64), [8, 16, 32, 64]);
+    }
+}
+
+#[cfg(test)]
 mod f80_tests {
     use llrm_lir::registers::RegId;
     use llrm_mir::datalayout::DataLayout;
@@ -4259,7 +4244,7 @@ mod f80_tests {
             &module,
             function,
             &layout,
-            &BuilderTarget::m32(),
+            &BuilderTarget::for_pointer_bits(32),
             &llrm_x86_m32::M32,
             &convention,
             &mut info,
@@ -4379,7 +4364,7 @@ mod f80_tests {
                 big_endian: false,
                 calling: Some(stub),
             }),
-            ..BuilderTarget::m32()
+            ..BuilderTarget::for_pointer_bits(32)
         };
         build_block(
             &module,
@@ -4505,7 +4490,7 @@ mod f80_tests {
                 big_endian: false,
                 calling: Some(stub),
             }),
-            ..BuilderTarget::m32()
+            ..BuilderTarget::for_pointer_bits(32)
         };
         build_block(
             &module,
@@ -4612,7 +4597,7 @@ mod f80_tests {
                 big_endian: false,
                 calling: Some(stub),
             }),
-            ..BuilderTarget::m32()
+            ..BuilderTarget::for_pointer_bits(32)
         };
         build_block(
             &module,

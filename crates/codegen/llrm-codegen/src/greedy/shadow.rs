@@ -1222,7 +1222,10 @@ pub fn decide_with_split(
     }
     crate::greedy::greedy::OPT_SIZE.with(|size| size.set(inputs.size));
     if llrm_support::env_var("LLRM_MIR_PRINT").is_some_and(|n| n == &*body.name) {
-        match crate::backend::mirprint::mir(body, inputs.pins) {
+        match crate::backend::hooks::installed()
+            .ok_or_else(|| "no backend installed".to_owned())
+            .and_then(|hooks| hooks.mir_print(body, inputs.pins))
+        {
             Ok(text) => eprintln!("{text}"),
             Err(why) => eprintln!("MIR-PRINT-REFUSED {}: {why}", body.name),
         }

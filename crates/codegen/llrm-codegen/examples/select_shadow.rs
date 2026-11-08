@@ -74,7 +74,7 @@ fn main() {
     };
     let (target, tli, arch, cpu, address_mode): (_, _, &dyn llrm_target::Target, _, _) = if m16 {
         (
-            BuilderTarget::m16().with_libcalls(RUNTIME),
+            BuilderTarget::for_pointer_bits(16).with_libcalls(RUNTIME),
             TargetLowering::x86_16(features, MVT::I16),
             &llrm_x86_m16::M16,
             Cpu::M16,
@@ -82,7 +82,7 @@ fn main() {
         )
     } else {
         (
-            BuilderTarget::m32().with_libcalls(RUNTIME),
+            BuilderTarget::for_pointer_bits(32).with_libcalls(RUNTIME),
             TargetLowering::x86_32(features, MVT::I32),
             &llrm_x86_m32::M32,
             Cpu::I486,

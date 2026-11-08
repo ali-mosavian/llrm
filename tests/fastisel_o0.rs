@@ -992,3 +992,29 @@ fn fast_isel_takes_register_parameters_at_m32() {
         assert!(report.lines().any(|line| line == format!("{name} fast")), "{name} not taken: {report}");
     }
 }
+
+/// A load or store of a global at m32 fell back to the DAG: only m64 had an
+/// address for one (`rip`). Over the m32 corpus on 2026-11-08 the loads and
+/// stores were 2284 of 6040 fallback instructions.
+#[test]
+fn fast_isel_takes_global_accesses_at_m32() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "int g;\nint table[4];\nint f(int i) { int v = g; g = i; return v; }\nint at(int i) { return table[i] + table[2]; }\nint *where(void) { return &g; }\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_32-linux")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .env("LLRM_VERIFY", "1")
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    for name in ["f", "at", "where"] {
+        assert!(report.lines().any(|line| line == format!("{name} fast") || line == format!("_{name} fast")), "{name} not taken: {report}");
+    }
+}
