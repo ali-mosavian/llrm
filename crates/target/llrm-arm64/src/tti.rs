@@ -74,6 +74,18 @@ impl Cpu {
     }
 }
 
+/// What a code byte costs a full unroll at -O2/-O3, in thousandths of a clock.
+/// A byte executed cold costs the refill of its 64 B line from L2, about 16
+/// clocks: 0.25 a byte, the floor (a Cortex-A72/M1-class core fetches 16 B a
+/// clock and runs 3-4 instructions a clock, so an instruction is about 0.3).
+/// The saving the model counts is the loop control and the folded operands
+/// only, and every byte also takes a place in the instruction cache and the
+/// branch predictor; 1 clock a byte is where no cell of the corpus (34
+/// programs, 2026-11-08) grew bytes for no instruction gain, and it keeps the
+/// unrolls that save 0.8-23 clocks a byte. It was 250, the median of the cells
+/// where gcc and clang differed, against a saving counted over assumed runs.
+const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 1000;
+
 /// AArch64's scalar profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AArch64 {
@@ -86,8 +98,8 @@ impl AArch64 {
     /// The profile of a `-mcpu` llrm supports.
     pub fn of_cpu(cpu: &str) -> Option<AArch64> {
         match cpu {
-            "generic" => Some(AArch64 { cpu: Cpu::Generic, unroll_rate: 250_000 }),
-            "apple-m1" => Some(AArch64 { cpu: Cpu::AppleM1, unroll_rate: 250_000 }),
+            "generic" => Some(AArch64 { cpu: Cpu::Generic, unroll_rate: UNROLL_MILLICLOCKS_PER_BYTE }),
+            "apple-m1" => Some(AArch64 { cpu: Cpu::AppleM1, unroll_rate: UNROLL_MILLICLOCKS_PER_BYTE }),
             _ => None,
         }
     }
@@ -331,9 +343,23 @@ impl Tti for AArch64 {
         250_000
     }
 
+    /// DEVIATE UP1-RUNS (owner w15, exit 2026-11-20): an unknown-count loop
+    /// around an unroll counts once, not 32 times (jpeg_fixed -O2 unrolled a
+    /// 16-trip loop for 49,152 assumed clocks; its instructions did not move).
+    fn unroll_assumes_unknown_loops_run(&self) -> bool {
+        false
+    }
+
     /// DEVIATE ARM64-IPRA (owner w15, exit 2026-11-30): the pin has
     /// `-enable-ipra` off; GCC's `-fipa-ra` is on from -O1 and its recpow -Os
     /// is 32 B smaller for it.
+    ///
+    /// DEVIATE ARM64-IPRA-OS (owner w15, exit 2026-11-15): jpeg_single -Os is
+    /// 20 B larger (3,544 -> 3,564 kernel, +4 B object) with 2% fewer
+    /// executed instructions: the greedy re-allocates the whole function and
+    /// places 3 more moves and 2 more constant rematerializations. No single
+    /// cause; the Os corpus is 40 B smaller in all. Linked to the Os jpeg
+    /// register-allocation card (anyisa); re-measure when it lands.
     fn interprocedural_register_use(&self) -> bool {
         true
     }
@@ -362,10 +388,9 @@ impl Tti for AArch64 {
         Some((3, 5))
     }
 
-    /// DEVIATE UP1 (arm64): a full unroll at -O2/-O3 must save 250 clocks for
-    /// each byte it adds, the bar's price (score = instructions + 250 per
-    /// byte). Without it matmul -O2 is 1560 B against gcc's 304 for 3x fewer
-    /// instructions. Exit: the per-target clock model (2026-11-20).
+    /// DEVIATE UP1 (arm64): a full unroll at -O2/-O3 must save
+    /// [`UNROLL_MILLICLOCKS_PER_BYTE`] for each byte it adds. Exit: the
+    /// per-target clock model (2026-11-20).
     fn unroll_milliclocks_per_byte(&self) -> i64 {
         self.unroll_rate
     }
