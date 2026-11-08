@@ -70,6 +70,8 @@ const SOURCE_ORDER: Options = Options {
     rematerialize_arguments: false,
     loop_top_by_jumps: false,
     call_targets: false,
+    pc_calls: false,
+    sext_adds: false,
     debug: false,
 };
 

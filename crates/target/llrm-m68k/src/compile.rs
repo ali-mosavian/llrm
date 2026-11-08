@@ -123,6 +123,9 @@ pub struct Options {
     /// 6 of `jsr name`. Only for a driver that has checked the module's code
     /// is within 16-bit reach of itself ([`crate::driver`]).
     pub pc_calls: bool,
+    /// A sum in an address register adds a sign-extended word with `adda.w`
+    /// ([`crate::sextacc`]).
+    pub sext_adds: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -148,6 +151,7 @@ impl Options {
         loop_top_by_jumps: false,
         call_targets: false,
         pc_calls: false,
+        sext_adds: false,
         debug: false,
     };
 }
@@ -172,6 +176,7 @@ impl Default for Options {
             loop_top_by_jumps: true,
             call_targets: true,
             pc_calls: false,
+            sext_adds: true,
             debug: false,
         }
     }
@@ -233,6 +238,9 @@ pub fn items_with(
             crate::foldarg::fold_argument_loads(&mut function);
         }
         crate::addrroles::address_roles(&mut function);
+        if options.sext_adds {
+            crate::sextacc::sign_extended_words(&mut function, cpu, crate::timing::Price::of(wants_size, options.strict));
+        }
         if cpu.at_least(Cpu::M68020) {
             crate::scaledindex::scale_indexes(&mut function);
         }
