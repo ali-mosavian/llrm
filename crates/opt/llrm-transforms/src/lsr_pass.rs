@@ -407,7 +407,13 @@ fn plan_loop(
             lsr = pin;
             solution = pin_solution;
         } else {
-            differs = !pin_solution.is_empty();
+            // Not every end-biased space picks other formulae than the pin's:
+            // where it picks the same, the function is the pin's.
+            let same = solution.len() == pin_solution.len()
+                && solution.iter().zip(&pin_solution).enumerate().all(|(at, (&mine, &theirs))| {
+                    lsr.uses[at].formulae[mine] == pin.uses[at].formulae[theirs]
+                });
+            differs = !pin_solution.is_empty() && !same;
         }
     }
     if solution.is_empty() {
