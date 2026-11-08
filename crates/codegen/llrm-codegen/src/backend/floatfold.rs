@@ -412,6 +412,32 @@ fn _memory_operation_bytes(
     2 + displacement + i64::from(model.flat() && cell.index.is_some()) + i64::from(cell.selector.is_some())
 }
 
+/// The loads a held cell takes: its own, and one more at each read a call
+/// separates from the one before it (or from the load), as a call empties the
+/// x87 stack and the cell is loaded again where it is read next.
+fn _loads_needed(
+    body: &LirBody,
+    home: (usize, usize),
+    places: &[(usize, usize)],
+) -> i64 {
+    let mut loads = 1;
+    for (index, place) in places.iter().enumerate() {
+        let previous = places[..index].iter().rev().find(|earlier| earlier.0 == place.0).map(|earlier| earlier.1);
+        let from = match previous {
+            Some(at) => at + 1,
+            None if place.0 == home.0 => home.1 + 1,
+            None => 0,
+        };
+        let calls = |one: &Arc<Insn>| {
+            one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call)
+        };
+        if body.blocks[place.0].insns[from..place.1].iter().any(calls) {
+            loads += 1;
+        }
+    }
+    loads
+}
+
 /// A load that arithmetic instructions read, each taking the cell as its
 /// memory operand and the load deleted: gcc's `REG_EQUIV` through x87's memory
 /// forms, where LLVM folds only a load with one use in its block.
@@ -520,7 +546,7 @@ fn _refolded(
         if !foldable {
             continue;
         }
-        let bytes = loaded + held - folded_bytes;
+        let bytes = loaded * _loads_needed(body, *home, places) + held - folded_bytes;
         // Built for size the bytes decide, on every target and with no
         // exchange rate; clocks only break a tie. At speed a target with a
         // rate takes clocks for bytes at it, and one without takes neither
@@ -1105,6 +1131,34 @@ mod tests {
         assert_eq!(names(&constants_folded(&body, &cpu)), ["fld", "fadd+m", "fstp"], "-O2: the control");
         cpu.speed_rate = false;
         assert_eq!(names(&constants_folded(&body, &cpu)), ["fld1", "fadd+m", "fstp"], "-O1: the constant stays");
+    }
+
+    /// x_jpeg_single -O1 m16: one pool constant read three times, a call
+    /// between the reads. A call empties the x87 stack, so the held constant
+    /// is loaded again at each read (`fld K; faddp`, 6 B) where the memory form
+    /// is 4 B: 3 x 4 + 6 - 3 x 4 = 6 B in favour of folding. The cell is a pool
+    /// constant, which the call cannot write.
+    #[test]
+    fn test_a_pool_constant_read_across_calls_is_read_from_its_cell_where_bytes_are_strict() {
+        let mut cpu = crate::backend::cpu::profile("486").expect("a profile").clone();
+        cpu.speed_rate = false;
+        let call = |at: i64| insn(at, Operation::Call, "call", vec![], vec![]);
+        let invariant = |one: Arc<Insn>| Arc::new(Insn { invariant: true, ..Insn::clone(&one) });
+        let body = |calls: bool| {
+            let mut insns = vec![invariant(fld(0, 1, global(0, 0)))];
+            for (index, value) in [(1, 10), (3, 11), (5, 12)] {
+                insns.push(insn(index, Operation::FloatLoad, "fld1", vec![held(value)], vec![]));
+                insns.push(arith(index + 1, "fadd", value + 10, value, 1));
+                insns.push(fstp(index + 1, value + 10, frame(-4)));
+                if calls {
+                    insns.push(call(index + 1));
+                }
+            }
+            one_block(insns)
+        };
+        let adds = |done: &LirBody| names(done).iter().filter(|name| *name == "fadd+m").count();
+        assert_eq!(adds(&folded(&body(true), &cpu, REGISTERS)), 3, "calls split the reads: three loads held");
+        assert_eq!(adds(&folded(&body(false), &cpu, REGISTERS)), 0, "no call: one load and three register forms win");
     }
 
     /// x_nbody_f -O3 m32 and x_ld_axpy -O2: the other operand is not the last
