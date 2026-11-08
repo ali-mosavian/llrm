@@ -47,6 +47,22 @@ fn uses<'a>(
     inst.operands.iter().filter_map(move |o| if let Operand::Use(r) = o { Some(root(*r, assignment)) } else { None })
 }
 
+/// The data register `inst` writes where it becomes a `move` that sets the
+/// codes: a copy from another register, or a load of a frame slot (the
+/// allocator makes an argument's load again where it is read,
+/// `ARGUMENT_REMAT`).
+fn written(
+    inst: &Inst,
+    assignment: &Assignment,
+) -> Option<RegId> {
+    let to = match (inst.kind, &inst.operands[..]) {
+        (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) if root(*to, assignment) != root(*from, assignment) => *to,
+        (Kind::Op("MOV32rp"), [Operand::Def(to), .., Operand::Frame(_)]) => *to,
+        _ => return None,
+    };
+    Some(root(to, assignment)).filter(|&to| is_data(to))
+}
+
 /// Makes every flag reader in `function` see the codes of the instruction it
 /// meant.
 pub fn preserve_flags(
@@ -64,32 +80,28 @@ pub fn preserve_flags(
                 r += 1;
                 continue;
             };
-            // a copy that becomes a `move` into a data register, from `s + 1`
-            // on
+            // a copy or a frame load that becomes a `move` into a data
+            // register, from `s + 1` on
             let clobbering = |block: &llrm_spike_mf::Block, s: usize, r: usize| -> Vec<usize> {
-                (s + 1..r)
-                    .filter(|&i| {
-                        matches!(
-                            block.insts[i].operands[..],
-                            [Operand::Def(to), Operand::Use(from)] if block.insts[i].kind == Kind::Copy && is_data(root(to, assignment)) && root(to, assignment) != root(from, assignment)
-                        )
-                    })
-                    .collect()
+                (s + 1..r).filter(|&i| written(&block.insts[i], assignment).is_some()).collect()
             };
             // those that do not depend on what runs from the setter up to them
             // move above the setter
             loop {
-                let movable = clobbering(block, s, r).into_iter().find(|&i| {
-                    let [Operand::Def(to), Operand::Use(from)] = block.insts[i].operands[..] else { return false };
-                    let (dst, src) = (root(to, assignment), root(from, assignment));
-                    !block
-                        .insts[s..i]
-                        .iter()
-                        .any(
-                            |before| defs(before, assignment).any(|d| d == src || d == dst)
-                                || uses(before, assignment).any(|u| u == dst),
-                        )
-                });
+                let movable = clobbering(block, s, r)
+                    .into_iter()
+                    .find(
+                        |&i| {
+                            let inst = &block.insts[i];
+                            let Some(dst) = written(inst, assignment) else { return false };
+                            let load = inst.kind != Kind::Copy;
+                            !block.insts[s..i].iter().any(|before| {
+                                defs(before, assignment).any(|d| d == dst || uses(inst, assignment).any(|u| u == d))
+                                    || uses(before, assignment).any(|u| u == dst)
+                                    || (load && (before.may_store || before.side_effects || before.call))
+                            })
+                        },
+                    );
                 let Some(i) = movable else { break };
                 let moved = block.insts.remove(i);
                 block.insts.insert(s, moved);

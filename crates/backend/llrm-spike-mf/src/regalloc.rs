@@ -234,6 +234,15 @@ pub trait Target {
         false
     }
 
+    /// Whether an instruction made again by the spiller stops setting the
+    /// flags its original sets: the reader after the original reads that
+    /// original's flags, not those of a copy that stands beside another
+    /// instruction. A target whose loads set the flags in hardware (m68k's
+    /// `move`) says true, and keeps the flags across the copy itself.
+    fn remade_sets_no_flags() -> bool {
+        false
+    }
+
     /// Whether the row `name` loads a frame object a call filled (see
     /// `frame_address`): made again where it is read.
     fn is_buffer_load(_name: &str) -> bool {
