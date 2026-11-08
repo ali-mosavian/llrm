@@ -95,6 +95,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // folds of up to 16 trips, gcc's `max-completely-peel-times`, not the pin's 10 (a 16-trip loop
         // over a constant table folds to nothing and stayed rolled: 64 -> 158 B).
         unroll_o1_analyzed_trips: Some(16),
+        // DEVIATE SD443 (owner w9, exit: a constant-argument pass after inlining, as gcc's
+        // IPA-CP): a function called directly only after inlining keeps its address-taken
+        // parameters through the pin's one IPSCCP; a second one after promotion folds them.
+        // m32 memory_expansion -1332 B (-O2/-O3), second_ipsccp.c -368 B.
+        second_ipsccp: true,
         // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
