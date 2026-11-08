@@ -60,7 +60,7 @@ pub(super) fn full_unroll_pays(
     // decided: the copies of the inner loops follow it (nbody -O2: the 4-trip
     // outer loop unrolls, its 3-, 2- and 1-trip inner copies were each priced
     // alone and kept rolled, +38,016).
-    if !run.first.contains(&lp.get_header()) {
+    if !run.first.contains(&lp.get_header()) || run.decided.contains(&lp.get_header()) {
         why(run, lp, "unpriced unroll: a copy of this run");
         return true;
     }
@@ -68,9 +68,9 @@ pub(super) fn full_unroll_pays(
     // then the nest's unroll folds nothing here and the loop is priced as any
     // other (crc -O2: the bit loop reads the running value and constants only,
     // 64 B added for 232 instructions saved).
-    // -O3 is speed: the nest's decision holds there (matmul -O3: 672
-    // instructions kept against 4,148 priced, clang's 608).
-    let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3;
+    // The target's byte rate holds at -O3 too (tile -O3: the pin's 364 B and
+    // 2,155 instructions against the priced loop's 68 B and 4,181).
+    let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter();
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count)
         && (!prices_nest || reads_outer_counter(run, se, analyzed, lp, up))
     {
@@ -811,7 +811,8 @@ fn stays_in_memory(
                             // already; else the nest it belongs to is priced as a whole.
                             let fits = *finishes.entry(id).or_insert_with(|| {
                                 !run.first.contains(&counter.get_header())
-                                    || { let r = root_pays(run, se, analyzed, counter, up, false); if llrm_support::debug::enabled("unroll") { eprintln!("DBG finish {:?} first {} -> {:?}", counter.get_header(), run.first.contains(&counter.get_header()), r); } r.unwrap_or(false) }
+                                    || run.decided.contains(&counter.get_header())
+                                    || root_pays(run, se, analyzed, counter, up, false).unwrap_or(false)
                             });
                             if !fits {
                                 return true;

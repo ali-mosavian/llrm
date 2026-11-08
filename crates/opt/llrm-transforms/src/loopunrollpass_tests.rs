@@ -337,6 +337,7 @@ fn a_full_unroll_hands_over_the_loops_it_made() {
             only_when_forced: false,
             target_unrolling: false,
             created: std::rc::Rc::clone(&created),
+            decided: Default::default(),
         },
     );
     assert!(!text.contains("%i = phi"), "the outer loop is gone: {text}");
@@ -360,6 +361,7 @@ fn a_full_unroll_hands_over_the_inner_loop_of_its_first_trip() {
             only_when_forced: false,
             target_unrolling: false,
             created: std::rc::Rc::clone(&created),
+            decided: Default::default(),
         },
     );
     // The text has five blocks, b0 to out: a loop headed by one of them is the
@@ -935,6 +937,7 @@ fn test_a_function_the_unroll_leaves_alone_makes_no_loop_analyses() {
             only_when_forced: false,
             target_unrolling: false,
             created: Default::default(),
+            decided: Default::default(),
         },
     );
     let made = get(Event::LoopAnalyses) - before;

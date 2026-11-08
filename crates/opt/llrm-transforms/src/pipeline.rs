@@ -1038,6 +1038,7 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
                     created: Default::default(),
+                    decided: Default::default(),
                 }),
             ),
             sroa("sroa@1494"),
@@ -1126,6 +1127,7 @@ pub(crate) fn llvm_order(
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             // What the unroll makes, for the slot after it.
             let created: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
+            let decided: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
             // LPM2 runs loop by loop (`PerLoop`): the slot of indvars runs the
             // passes of the slots after it too, each of which then finds its
             // work done.
@@ -1146,6 +1148,7 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: false,
                     created: std::rc::Rc::clone(&created),
+                    decided: std::rc::Rc::clone(&decided),
                 })
             };
             let on_created = || -> Box<dyn FunctionPass> {

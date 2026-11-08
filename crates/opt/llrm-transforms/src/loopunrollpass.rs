@@ -135,6 +135,10 @@ pub struct Run<'a> {
     /// The headers of the loops this run made: those that were no loop's header
     /// when it began (`LPMUpdater::addSiblingLoops`, for the passes after it).
     pub created: Vec<BlockId>,
+    /// The headers of loops earlier runs made by unrolling a loop around them:
+    /// part of a nest already decided, though no longer in `created` (the loop
+    /// pass manager runs the pass again for each loop).
+    pub decided: IdSet<BlockId>,
     /// The headers of the loops the run began with: a loop not among them is a
     /// copy an unroll made.
     pub first: IdSet<BlockId>,
@@ -2267,6 +2271,13 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     let mut analyzed = Analyzed::entry(run, !simplified && !closed);
     let at_first: IdSet<BlockId> = analyzed.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
     run.first = at_first.clone();
+    let mut kept = IdSet::new();
+    for header in run.decided.iter() {
+        if analyzed.loops.is_loop_header(header) {
+            kept.insert(header);
+        }
+    }
+    run.decided = kept;
     // The worklist is popped from the back (`appendReversedLoopsToWorklist`):
     // the loops are visited in the reverse of
     // `getLoopsInReverseSiblingPreorder`, each loop after the loops it
@@ -2491,6 +2502,9 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             created.push(header);
         }
     }
+    for header in &created {
+        run.decided.insert(*header);
+    }
     run.created = created;
     changed
 }
@@ -2508,6 +2522,8 @@ pub struct LoopFullUnroll {
     /// The headers of the loops the last run made, for the slot after it: the
     /// loop pass manager's worklist.
     pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
+    /// Every loop an earlier run made, kept (unlike `created`) for the runs after it.
+    pub decided: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
 }
 
 impl FunctionPass for LoopFullUnroll {
@@ -2546,6 +2562,7 @@ impl FunctionPass for LoopFullUnroll {
             peeled: Default::default(),
             finished: IdSet::new(),
             created: Vec::new(),
+            decided: self.decided.borrow().iter().copied().collect(),
             first: Default::default(),
             scev: held.take(),
             cached: Some(cached),
@@ -2560,6 +2577,7 @@ impl FunctionPass for LoopFullUnroll {
         };
         let changed = unroll_loops(&mut run);
         *self.created.borrow_mut() = std::mem::take(&mut run.created);
+        *self.decided.borrow_mut() = run.decided.iter().collect();
         if changed {
             PreservedAnalyses::none()
         } else {
@@ -2609,6 +2627,7 @@ pub fn unroll_function(
         peeled: Default::default(),
         finished: IdSet::new(),
         created: Vec::new(),
+        decided: IdSet::new(),
         first: Default::default(),
         scev: ScalarEvolution::new(),
         cached: None,
