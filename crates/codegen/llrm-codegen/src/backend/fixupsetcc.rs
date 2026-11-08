@@ -23,15 +23,16 @@
 //! same register. Only a byte read once by the `movzx` is rewritten. Exit:
 //! sub-register values in LIR.
 //!
-//! DEVIATE F2 (owner x87, exit 2026-11-29): at a build for size the pair after
+//! DEVIATE F2 (owner x87, exit 2026-11-29): at -O1, -Os and -Oz the pair after
 //! an x87 compare stays when its result is required in the accumulator (a
 //! return value). `fnstsw ax` holds EAX, so the zero lands in another register
 //! and a copy follows: `xor ecx,ecx; fcomp; fnstsw ax; sahf; seta cl; mov
 //! eax,ecx` (7 B) for `seta al; movzx eax,al` (6 B), and the register it took
 //! is clobbered for the callers of a private-convention function:
 //! tests/run/c/fcmp_all -Os m32 5436 -> 5564 B (+128) since the compare writes
-//! the flags (#8200). Any other result keeps the pin's form (`xor; seta`, 1 B
-//! less). Speed builds keep the pin's form.
+//! the flags (#8200); -O1 grew 5883 -> 6011 B alike. Any other result keeps the
+//! pin's form (`xor; seta`, 1 B less). -O2 and -O3, which price bytes against
+//! clocks, keep the pin's form.
 //!
 //! # Example
 //! `int f(int a, int b) { return a < b; }` at `-m32`, `ISEL_DUMP=1`.
@@ -64,8 +65,8 @@ use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 
 pub struct FixupSetCc {
-    /// A build for size (`Profile::size` or `min_size`): bytes, not clocks.
-    pub size: bool,
+    /// -O1, -Os and -Oz, which gate every metric alone (`!Profile::speed_rate`).
+    pub strict: bool,
 }
 
 impl LIRTransform for FixupSetCc {
@@ -81,7 +82,7 @@ impl LIRTransform for FixupSetCc {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(fixed_for(&body, self.size))
+        Ok(fixed_for(&body, self.strict))
     }
 }
 
@@ -114,11 +115,11 @@ pub fn fixed(body: &LirBody) -> LirBody {
     fixed_for(body, false)
 }
 
-/// [`fixed`], except that a build for `size` leaves the pair after an x87
+/// [`fixed`], except that a `strict` build leaves the pair after an x87
 /// compare whose result is a return value: DEVIATE F2.
 pub fn fixed_for(
     body: &LirBody,
-    size: bool,
+    strict: bool,
 ) -> LirBody {
     // Without a `setcc` into a byte there is no pair to find: the read counts
     // and the effect of each instruction are not worth computing.
@@ -163,9 +164,9 @@ pub fn fixed_for(
 
     let every_flag = crate::backend::lanes::Lanes::read_flags();
 
-    // At a build for size: the values an instruction requires in the
+    // At a strict level: the values an instruction requires in the
     // accumulator (a return value).
-    let accumulator_bound: llrm_mir::hash::HashSet<u32> = if size {
+    let accumulator_bound: llrm_mir::hash::HashSet<u32> = if strict {
         body.blocks
             .iter()
             .flat_map(|block| block.insns.iter())
@@ -311,13 +312,13 @@ mod tests {
         assert_eq!(names(Some(inc)), ["cmp", "inc", "setb", "movzx"]);
     }
 
-    /// `fcomp; seta; movzx` of a return value at a build for size. The pin's
+    /// `fcomp; seta; movzx` of a return value at a strict level. The pin's
     /// zero before an x87 compare cannot be EAX (`fnstsw ax` holds it), so
     /// `fcmp_all` -Os m32 grew 5436 -> 5564 B: `xor ecx,ecx; seta cl; mov
     /// eax,ecx` for `seta al; movzx eax,al`. A result not bound to EAX keeps
     /// the pin's form (`x_ldcmp` -Os m32: +1 B when it did not).
     #[test]
-    fn test_an_x87_compare_keeps_its_movzx_when_the_result_is_a_return_at_size() {
+    fn test_an_x87_compare_keeps_its_movzx_when_the_result_is_a_return_at_strict_levels() {
         let body = |name: &str, bound: bool| {
             let mut ret = Insn::new(3, Some((3, 3)), None, vec![], vec![6]);
             if bound {
@@ -339,9 +340,9 @@ mod tests {
                 .collect()
         };
         let rewritten = ["mov", "fcomp", "seta"];
-        assert_eq!(names(fixed_for(&body("fcomp", true), false)), rewritten, "speed: the pin's form");
-        assert_eq!(names(fixed_for(&body("fcomp", true), true)), ["fcomp", "seta", "movzx"], "size, a return: kept");
-        assert_eq!(names(fixed_for(&body("fcomp", false), true)), rewritten, "size, not a return: the pin's form");
+        assert_eq!(names(fixed_for(&body("fcomp", true), false)), rewritten, "-O2: the pin's form");
+        assert_eq!(names(fixed_for(&body("fcomp", true), true)), ["fcomp", "seta", "movzx"], "strict, a return: kept");
+        assert_eq!(names(fixed_for(&body("fcomp", false), true)), rewritten, "strict, not a return: the pin's form");
         assert_eq!(names(fixed_for(&body("cmp", true), true)), ["mov", "cmp", "seta"], "an integer compare");
     }
 
