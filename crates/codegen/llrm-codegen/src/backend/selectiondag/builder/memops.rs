@@ -61,7 +61,7 @@ impl Builder<'_> {
                 let vt = self.type_of(instruction.ty)?;
                 let node = self
                     .dag
-                    .get_node(LoweringNodes::need(self.target.nodes.ptrdiff, "pointer difference")?, vt, &[a, b]);
+                    .get_node(LoweringNodes::need(self.target.dag.nodes.ptrdiff, "pointer difference")?, vt, &[a, b]);
                 self.set_value(instruction.result.ok_or(Refused("a pointer difference without a result"))?, node);
                 Ok(())
             }
@@ -70,7 +70,7 @@ impl Builder<'_> {
                 let node = self
                     .dag
                     .get_node(
-                        LoweringNodes::need(self.target.nodes.window, "pointer window")?,
+                        LoweringNodes::need(self.target.dag.nodes.window, "pointer window")?,
                         EVT::Simple(super::super::mvt::MVT::Far),
                         &[pointer],
                     );
@@ -87,7 +87,7 @@ impl Builder<'_> {
                     let node = self
                         .dag
                         .get_node_multi(
-                            LoweringNodes::need(self.target.nodes.port_io, "port io")?,
+                            LoweringNodes::need(self.target.dag.nodes.port_io, "port io")?,
                             &[vt, EVT::OTHER],
                             &[root, port],
                         );
@@ -98,7 +98,7 @@ impl Builder<'_> {
                     let node = self
                         .dag
                         .get_node_multi(
-                            LoweringNodes::need(self.target.nodes.port_io, "port io")?,
+                            LoweringNodes::need(self.target.dag.nodes.port_io, "port io")?,
                             &[EVT::OTHER],
                             &[root, port, value],
                         );
@@ -608,7 +608,7 @@ impl Builder<'_> {
                 let copy = self
                     .dag
                     .get_node(
-                        LoweringNodes::need(self.target.nodes.copy128, "128-bit copy")?,
+                        LoweringNodes::need(self.target.dag.nodes.copy128, "128-bit copy")?,
                         EVT::OTHER,
                         &[order, to, from, align],
                     );
@@ -716,7 +716,7 @@ impl Builder<'_> {
                 left = left.saturating_sub(*width);
             }
             return Ok(Some(self.dag.get_node(
-                LoweringNodes::need(self.target.nodes.move128, "128-bit move")?,
+                LoweringNodes::need(self.target.dag.nodes.move128, "128-bit move")?,
                 EVT::OTHER,
                 &operands,
             )));
@@ -969,7 +969,7 @@ impl Builder<'_> {
                 let to = self.dag.get_object_ptr_offset(dst, off as i64);
                 let node = if zero {
                     self.dag.get_node(
-                        LoweringNodes::need(self.target.nodes.zero128, "128-bit zero")?,
+                        LoweringNodes::need(self.target.dag.nodes.zero128, "128-bit zero")?,
                         EVT::OTHER,
                         &[chain, to, align],
                     )
@@ -978,9 +978,10 @@ impl Builder<'_> {
                     let splat = (0..16).fold(0u128, |all, at| all | byte << (at * 8));
                     let pointer = self.dag.config().pointer;
                     let pool = self.dag.get_constant_pool(pointer, splat, EVT::Simple(MVT::I128), true);
-                    let from = self.dag.get_node(self.target.nodes.wrapper_of(&self.dag, pointer)?, pointer, &[pool]);
+                    let from =
+                        self.dag.get_node(self.target.dag.nodes.wrapper_of(&self.dag, pointer)?, pointer, &[pool]);
                     self.dag.get_node(
-                        LoweringNodes::need(self.target.nodes.copy128, "128-bit copy")?,
+                        LoweringNodes::need(self.target.dag.nodes.copy128, "128-bit copy")?,
                         EVT::OTHER,
                         &[chain, to, from, align],
                     )
@@ -1571,7 +1572,7 @@ impl Builder<'_> {
         let rep = self
             .dag
             .get_node_multi(
-                self.target.nodes.string_move.expect("a target with string move"),
+                self.target.dag.nodes.string_move.expect("a target with string move"),
                 &[EVT::OTHER, EVT::GLUE],
                 &[chain, dword, glue],
             );
@@ -1607,7 +1608,7 @@ impl Builder<'_> {
         let rep = self
             .dag
             .get_node_multi(
-                self.target.nodes.string_move.expect("a target with string move"),
+                self.target.dag.nodes.string_move.expect("a target with string move"),
                 &[EVT::OTHER, EVT::GLUE],
                 &[chain, byte, glue],
             );
@@ -1638,7 +1639,7 @@ impl Builder<'_> {
         let rep = self
             .dag
             .get_node_multi(
-                self.target.nodes.string_move.expect("a target with string move"),
+                self.target.dag.nodes.string_move.expect("a target with string move"),
                 &[EVT::OTHER, EVT::GLUE],
                 &[chain, byte, glue],
             );
@@ -1741,7 +1742,7 @@ impl Builder<'_> {
             .collect();
         let (chain, _) = lower_asm(
             &mut self.dag,
-            self.target.nodes.asm.expect("a target with inline asm"),
+            self.target.dag.nodes.asm.expect("a target with inline asm"),
             chain,
             &name,
             &[],
@@ -1801,7 +1802,7 @@ impl Builder<'_> {
             .collect();
         let (chain, _) = lower_asm(
             &mut self.dag,
-            self.target.nodes.asm.expect("a target with inline asm"),
+            self.target.dag.nodes.asm.expect("a target with inline asm"),
             chain,
             &name,
             &[],
@@ -1855,7 +1856,7 @@ impl Builder<'_> {
         let rep = self
             .dag
             .get_node_multi(
-                self.target.nodes.string_store.expect("a target with string store"),
+                self.target.dag.nodes.string_store.expect("a target with string store"),
                 &[EVT::OTHER, EVT::GLUE],
                 &[chain, cell, glue],
             );
@@ -1939,7 +1940,7 @@ impl Builder<'_> {
         let rep = self
             .dag
             .get_node_multi(
-                self.target.nodes.string_store.expect("a target with string store"),
+                self.target.dag.nodes.string_store.expect("a target with string store"),
                 &[EVT::OTHER, EVT::GLUE],
                 &[chain, unit, glue],
             );
@@ -2129,7 +2130,7 @@ impl Builder<'_> {
         let rep = self
             .dag
             .get_node_multi(
-                self.target.nodes.string_move.expect("a target with string move"),
+                self.target.dag.nodes.string_move.expect("a target with string move"),
                 &[EVT::OTHER, EVT::GLUE],
                 &[SDValue { node: copy.node, res: 0 }, block_type, SDValue { node: copy.node, res: 1 }],
             );
@@ -2153,7 +2154,7 @@ impl Builder<'_> {
                     last = self
                         .dag
                         .get_node_multi(
-                            self.target.nodes.string_move.expect("a target with string move"),
+                            self.target.dag.nodes.string_move.expect("a target with string move"),
                             &[EVT::OTHER, EVT::GLUE],
                             &[SDValue { node: last.node, res: 0 }, kind, SDValue { node: last.node, res: 1 }],
                         );
@@ -2247,7 +2248,7 @@ impl Builder<'_> {
         let rep = self
             .dag
             .get_node_multi(
-                self.target.nodes.string_store.expect("a target with string store"),
+                self.target.dag.nodes.string_store.expect("a target with string store"),
                 &[EVT::OTHER, EVT::GLUE],
                 &[SDValue { node: copy.node, res: 0 }, block_type, SDValue { node: copy.node, res: 1 }],
             );
