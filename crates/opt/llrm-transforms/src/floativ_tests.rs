@@ -1,16 +1,16 @@
 //! A counter stepped as a float.
 
-use llrm_analysis::testing::{DOS, layout};
-use llrm_mir::passes::Outer;
+use llrm_analysis::testing::DOS;
 
 use crate::testing::{parsed, printed};
 
 /// `text`'s @f with its float counters made integer, printed.
 fn converted(text: &str) -> (bool, String) {
     let mut module = parsed(&format!("{DOS}{text}"));
-    let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = super::converted(context, &layout, function, &outer);
+    let tree = llrm_mir::domtree::DomTree::of(function);
+    let loops = llrm_mir::loopinfo::LoopInfo::analyze(function, || &tree);
+    let changed = super::converted(context, function, &loops);
     (changed, printed(&module))
 }
 

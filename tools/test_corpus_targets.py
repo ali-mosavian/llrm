@@ -150,3 +150,26 @@ def test_tail_calls_edges_is_not_run_where_the_backend_takes_no_fno_inline_names
     source = (RUN / "tail_calls_edges.c").read_text()
     assert ct.applies("x86_16-dos", source) and ct.applies("x86_32-linux", source)
     assert not ct.applies("wasm32", source) and not ct.applies("arm64-linux", source) and not ct.applies("x86_64-linux", source)
+
+
+def test_programs_with_over_64k_data_are_not_run_in_a_16_bit_address_space():
+    """memcpy_runtime and memfuncs_runtime keep 70 KB arrays: x86_16 failed to link (segment 140032 > 65536), z80 and 6502 died in clang
+    ("array is too large"); the sweep listed them as compile refusals of the target."""
+    for name in ("memcpy_runtime", "memfuncs_runtime"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not any(ct.applies(t, source) for t in ("x86_16-wat", "z80-sdcc", "6502-sim65"))
+        assert all(ct.applies(t, source) for t in ("x86_32-linux", "x86_64-linux", "wasm32", "arm64-linux"))
+
+
+def test_a_24_bit_bit_field_program_is_not_run_with_a_16_bit_int():
+    """bitfield_overhang_init declares `int b : 24`: clang rejects it on x86_16, z80 and 6502 (width exceeds the type's 16 bits)."""
+    source = (RUN / "bitfield_overhang_init.c").read_text()
+    assert not any(ct.applies(t, source) for t in ("x86_16-wat", "z80-sdcc", "6502-sim65"))
+    assert ct.applies("x86_32-linux", source) and ct.applies("wasm32", source)
+
+
+def test_a_program_including_stdio_is_not_run_on_a_freestanding_target():
+    """widening_multiply includes <stdio.h>: wasm32, z80 and 6502 have none ('stdio.h' file not found), x86_16 and the sysv rows do."""
+    source = (RUN / "widening_multiply.c").read_text()
+    assert not any(ct.applies(t, source) for t in ("wasm32", "z80-sdcc", "6502-sim65"))
+    assert ct.applies("x86_16-wat", source) and ct.applies("x86_64-linux", source)

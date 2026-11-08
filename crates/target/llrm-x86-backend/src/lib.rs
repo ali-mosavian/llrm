@@ -24,6 +24,7 @@ pub mod select;
 pub mod unfold;
 pub mod x86_carry;
 pub mod x86_lowering;
+pub mod x86isd;
 
 struct X86;
 
@@ -73,6 +74,7 @@ static X86_HOOKS: X86 = X86;
 
 /// Installs x86's backend code into the shared backend.
 pub fn install() {
+    llrm_codegen::backend::selectiondag::target_names::install(&x86isd::NAMES);
     hooks::install(&X86_HOOKS);
 }
 
