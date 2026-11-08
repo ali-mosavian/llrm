@@ -11,7 +11,6 @@ use llrm_spike_mf::regalloc::{Assignment, Target as AllocTarget};
 use llrm_spike_mf::tolir::allocate_greedy;
 use llrm_support::hash::HashMap;
 
-use crate::flagcse::writes_flags;
 use crate::mc::inst::{Gpr, Inst, Shift, Target, Vreg, Wide};
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{MFunc, Op};
@@ -53,7 +52,7 @@ pub(crate) fn caller_saved() -> Vec<RegId> {
     <Arm64 as AllocTarget>::caller_saved()
 }
 
-fn to_lir(register: Reg) -> LirReg {
+pub(crate) fn to_lir(register: Reg) -> LirReg {
     match register {
         Reg::Gpr(Gpr(n)) if n < Gpr::FIRST_VIRTUAL => LirReg::Phys(id(Class::Gpr, n)),
         Reg::Fpr(Vreg(n)) if n < Gpr::FIRST_VIRTUAL => LirReg::Phys(id(Class::Fpr, n)),
@@ -61,7 +60,7 @@ fn to_lir(register: Reg) -> LirReg {
     }
 }
 
-fn from_lir(
+pub(crate) fn from_lir(
     register: LirReg,
     class: Class,
 ) -> Reg {
@@ -76,19 +75,12 @@ fn from_lir(
 }
 
 /// The instruction's name for the allocator: its variant (`AddSubImm`).
-fn name_of(inst: &Inst) -> &'static str {
+pub(crate) fn name_of(inst: &Inst) -> &'static str {
     static NAMES: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
     let debug = format!("{inst:?}");
     let variant = debug.split([' ', '(', '{']).next().unwrap_or_default().to_owned();
     let mut names = NAMES.get_or_init(Default::default).lock().unwrap();
     names.entry(variant.clone()).or_insert_with(|| Box::leak(variant.into_boxed_str()))
-}
-
-fn reads_flags(op: &Op) -> bool {
-    matches!(
-        op,
-        Op::I(Inst::BranchCond { .. } | Inst::CondSelect { .. } | Inst::CondCompare { .. } | Inst::FpSelect { .. })
-    )
 }
 
 fn label_of(inst: &Inst) -> Option<&str> {
@@ -313,21 +305,13 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             if let Op::Call { callee: crate::mfunc::Callee::Symbol(name), .. } = &op {
                 inst.call_clobbers = crate::ipra::known(name);
             }
-            inst.sets_flags = writes_flags(&op);
-            inst.reads_flags = reads_flags(&op);
-            inst.may_load = matches!(
-                op,
-                Op::I(Inst::Load { .. } | Inst::LoadPair { .. } | Inst::Atomic { .. } | Inst::Prefetch { .. })
-            );
-            inst.may_store = matches!(
-                op,
-                Op::I(Inst::Store { .. } | Inst::StorePair { .. } | Inst::Atomic { .. })
-            );
-            inst.side_effects = matches!(
-                op,
-                Op::I(Inst::Svc { .. } | Inst::Dmb { .. } | Inst::Atomic { .. })
-            );
-            inst.early_clobber = matches!(op, Op::I(Inst::Atomic { .. }) | Op::JumpTable { .. });
+            let facts = crate::facts::of(&op);
+            inst.sets_flags = facts.sets_flags;
+            inst.reads_flags = facts.reads_flags;
+            inst.may_load = facts.may_load;
+            inst.may_store = facts.may_store;
+            inst.side_effects = facts.side_effects;
+            inst.early_clobber = facts.early_clobber;
             inst.rematerializable = fused
                 || zero
                 || cheap_alu(&op)

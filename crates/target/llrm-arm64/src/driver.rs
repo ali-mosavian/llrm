@@ -287,6 +287,9 @@ fn lower_function(
     dump("SibCall", &machine);
     crate::prepass::order_copies(&mut machine);
     dump("OrderCopies", &machine);
+    if crate::lir_body::checking() {
+        machine = crate::lir_body::round_trip(&machine)?;
+    }
     // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
     // linear scan; a function greedy refuses goes to the scan, reported.
     // `x16`/`x17` are the lowerer's scratch pair where an offset does not
