@@ -45,13 +45,13 @@ So no `llrm-target` edit blocks arm64. The defaults only save m68k, wasm, z80 an
 
 ## Size of the arm64 description (2026-11-08, measured)
 Most data exists already. Estimate -> actual, source in brackets:
-- `description.rs`: ~450 -> 250 lines of Rust, plus 140 of tests (39 methods, `frame_*` from `calling.toml`, cost model reused from `machine.rs`) [own].
+- `description.rs`: ~450 -> 318 lines of Rust, plus 70 of tests (39 methods, `frame_*` from `calling.toml`, cost model reused from `machine.rs`) [own].
 - arm64 `calling` helper module: ~150 -> 0. `Convention::{callee_saved, result_registers}` plus `REGISTER_INFO.by_name` answer; no helper crate.
 - `calling.toml` ~200 -> 54 existing + 2 lines (`float_argument_registers`, `result.float`; floats went to the stack before). Darwin convention, vector-saved d8-d15 and red zone are not stated yet (Darwin and `frame_red_zone` follow with the frame stage).
 - `datalayout.toml`, `object.toml` (+ Darwin twins): existing, parse under `llrm_target` unchanged.
 - `arm64.instr` ~250 forms -> 137 lines exist; `dialect.toml` exists (44 lines). The selector's ~250 form names remain (due 2026-11-12).
 - Stubs (7): `march`, `marches`, `cpu_table`, `multiply_immediate_bytes`, `divide_routine`, `huge_*` (Err by design), prices from `machine.rs`.
-Total: 250 lines of Rust and 2 of data, against 1,000 and 560 estimated. The estimate missed `src/machines/*.toml` and `arm64.instr`.
+Total: 318 lines of Rust and 2 of data, against 1,000 and 560 estimated. The estimate missed `src/machines/*.toml` and `arm64.instr`.
 
 ## Round 1 from the other targets (6502, wasm, z80; m68k due 23:20Z)
 - **(a) `object.bitness` 64.** The field is a `u32` and `CodeModel::of` (`object.rs:141`) has a flat 64-bit model, so wasm64 and arm64 need no additive variant. Only the doc comment ("16 or 32") is wrong. The readers that compare it (`isel.rs:6916`, `:7811` `== 32`; `basic.rs:647` `!= 16`; `isel.rs:7006` `< 32`) treat 64 as "not 32": x86-m64 already goes through them, so 64 is exercised. Unverified for a target without x86's 32-bit paths.
