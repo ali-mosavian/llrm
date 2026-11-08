@@ -27,13 +27,13 @@ fn fifteen_registers_hold_values_and_every_class_is_known() {
         .expect("every class is in llrm-lir's list");
 }
 
-/// An i8 takes the first free byte, an i16 the first free pair: f(i8, i16, i8)
-/// is rc2, rc4:rc5, rc3.
+/// An i8 takes the first free of a, x, rc2..; an i16 the first free pair of
+/// rc cells: f(i8, i16, i8) is a, rc2:rc3, x.
 #[test]
-fn arguments_fill_bytes_and_pairs_from_rc2() {
+fn arguments_fill_a_x_and_then_pairs_from_rc2() {
     let calling = Calling::parse(CALLING).expect("calling.toml parses");
     let placed = calling.native().place(&[Kind::Word, Kind::Wide, Kind::Word]);
-    assert_eq!(placed.places, [registers(&["rc2"]), registers(&["rc4", "rc5"]), registers(&["rc3"])]);
+    assert_eq!(placed.places, [registers(&["a"]), registers(&["rc2", "rc3"]), registers(&["x"])]);
     assert_eq!(placed.stack_bytes, 0);
 }
 

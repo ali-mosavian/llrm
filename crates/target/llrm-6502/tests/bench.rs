@@ -212,9 +212,10 @@ fn driver(
     }
     s.push_str(&format!("  lda #{calls}\n  sta cnt\nloop:\n"));
     let last = kernel.args.len().wrapping_sub(1);
-    // ours: bytes take the first free `rc` from `rc2`, words and pointers the
-    // first free pair (`backfill`)
-    let mut used = [false; 6];
+    // ours: a byte takes the first free of a, x, rc2.., a word or pointer the
+    // first free pair of rc2.. (`backfill`); a and x are loaded last
+    let mut used = [false; 8];
+    let (mut in_a, mut in_x) = (String::new(), String::new());
     for (i, &arg) in kernel.args.iter().enumerate() {
         let wide = !matches!(arg, B(_));
         let (lo, hi) = match arg {
@@ -231,20 +232,26 @@ fn driver(
             }
             Abi::Ours => {
                 let at = if wide {
-                    (0..3).map(|p| 2 * p).find(|&p| !used[p] && !used[p + 1]).expect("a free pair")
+                    (1..4).map(|p| 2 * p).find(|&p| !used[p] && !used[p + 1]).expect("a free pair")
                 } else {
-                    (0..6).find(|&p| !used[p]).expect("a free byte")
+                    (0..8).find(|&p| !used[p]).expect("a free byte")
                 };
                 used[at] = true;
                 if wide {
                     used[at + 1] = true;
-                    s.push_str(&format!("  lda {lo}\n  sta rc{}\n  lda {hi}\n  sta rc{}\n", 2 + at, 3 + at));
+                    s.push_str(&format!("  lda {lo}\n  sta rc{}\n  lda {hi}\n  sta rc{}\n", at, at + 1));
+                } else if at == 0 {
+                    in_a = format!("  lda {lo}\n");
+                } else if at == 1 {
+                    in_x = format!("  ldx {lo}\n");
                 } else {
-                    s.push_str(&format!("  lda {lo}\n  sta rc{}\n", 2 + at));
+                    s.push_str(&format!("  lda {lo}\n  sta rc{at}\n"));
                 }
             }
         }
     }
+    s.push_str(&in_x);
+    s.push_str(&in_a);
     s.push_str(&format!("  jsr {symbol}\n  dec cnt\n  bne loop\n"));
     if let Some(from) = kernel.hand.as_ref().and_then(|hand| hand.rel) {
         s.push_str(&format!("  sec\n  sbc #<{from}\n  pha\n  txa\n  sbc #>{from}\n  tax\n  pla\n"));

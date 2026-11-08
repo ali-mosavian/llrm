@@ -816,17 +816,16 @@ __ashrsi3_fast:                 ; __sa >> __sb (arithmetic) -> __sa
   rts
 
 ; ---- memory fills and copies ----------------------------------------------------------------------
-; memset(rs1 = dst, rc4 = byte, rs3 = n), memcpy and memmove(rs1 = dst, rs2 = src, rs3 = n); each
+; memset(rs1 = dst, A = byte, rs2 = n), memcpy and memmove(rs1 = dst, rs2 = src, rs3 = n); each
 ; returns dst in A:X. They walk whole pages with Y, so the low byte of dst stays put and only its high
-; byte is saved, on the hardware stack.
+; byte is saved (memset in rc6, the others on the hardware stack).
 
 .export memset
 memset:
-  lda rc3
-  pha
+  ldx rc3
+  stx rc6
   ldy #0
-  lda rc4
-  ldx rc7
+  ldx rc5
   beq @tail
 @page:
   sta (rc2),y
@@ -836,7 +835,7 @@ memset:
   dex
   bne @page
 @tail:
-  ldx rc6
+  ldx rc4
   beq @done
 @byte:
   sta (rc2),y
@@ -844,8 +843,7 @@ memset:
   dex
   bne @byte
 @done:
-  pla
-  tax
+  ldx rc6
   lda rc2
   rts
 

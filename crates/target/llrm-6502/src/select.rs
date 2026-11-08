@@ -72,6 +72,9 @@ struct Cells<'a> {
     /// Copies into `a`, `x` and `y`, held back to the `RET`: every other copy
     /// goes through `a`.
     deferred: Vec<MInst>,
+    /// The unit being lowered ends in a call: its copies into `a`, `x` and `y`
+    /// are arguments (`lower_call` puts them last) and stay in place.
+    in_call: bool,
     /// The successors the current block branches to by label, for the edge
     /// blocks.
     branched_to: llrm_support::hash::HashSet<u32>,
@@ -226,18 +229,34 @@ pub fn function_items_with_places(
         fixed,
         saved: HashMap::default(),
         deferred: Vec::new(),
+        in_call: false,
         branched_to: Default::default(),
     };
     let mut body: Vec<Item> = vec![Item::Label(name.to_owned())];
     let mut edges: Vec<Item> = Vec::new();
-    for inst in cells.frame.prologue() {
-        body.push(Item::Inst(inst));
-    }
+    let mut prologue = Some(cells.frame.prologue());
     for one in blocks {
-        body.push(Item::Label(block_label(name, one.block.0)));
         let mut values: HashMap<(u32, u8), Operand> = HashMap::default();
+        // the frame's stack adjust goes through `a`: an argument that arrives
+        // in `a` or `x` is copied out before it, and the prologue is
+        // then outside the first block
         for &(register, vreg) in &one.live_ins {
             let from = REGISTER_INFO.name(register).ok_or("a live-in with no name")?;
+            if prologue.is_some() && ["a", "x"].contains(&from) {
+                let cell = cell_for(&mut cells, 8);
+                cells.virtual_regs.insert(vreg, cell.clone());
+                body.push(Item::Inst(copy(8, cell, Operand::reg(from))));
+            }
+        }
+        for inst in prologue.take().into_iter().flatten() {
+            body.push(Item::Inst(inst));
+        }
+        body.push(Item::Label(block_label(name, one.block.0)));
+        for &(register, vreg) in &one.live_ins {
+            let from = REGISTER_INFO.name(register).ok_or("a live-in with no name")?;
+            if cells.virtual_regs.contains_key(&vreg) {
+                continue;
+            }
             let bits = if from.starts_with("rs") { 16 } else { 8 };
             let cell = cell_for(&mut cells, bits);
             cells.virtual_regs.insert(vreg, cell.clone());
@@ -249,6 +268,15 @@ pub fn function_items_with_places(
         let split = one.edges.iter().any(|edge| edge.to.is_some());
         cells.branched_to.clear();
         for unit in &one.units {
+            cells.in_call = unit
+                .nodes
+                .iter()
+                .any(
+                    |&node| matches!(
+                        one.dag.nodes()[node as usize].opcode,
+                        ISD::Machine(code) if [op::JSR, op::JSRI].contains(&(code as u16))
+                    ),
+                );
             for &node in unit.nodes.iter().rev() {
                 if matches!(
                     one.dag.nodes()[node as usize].opcode,
@@ -560,10 +588,12 @@ fn lower(
             let from = location(module, name, one, at(2), values, cells)?;
             let bits = one.dag.value_type(at(2)).size_in_bits();
             let copy = copy(bits, to.clone(), from);
-            if matches!(
-                &to,
-                Operand::Reg(text) if ["a", "x", "y"].contains(&text.as_str())
-            ) {
+            if !cells.in_call
+                && matches!(
+                    &to,
+                    Operand::Reg(text) if ["a", "x", "y"].contains(&text.as_str())
+                )
+            {
                 cells.deferred.push(copy);
                 return Ok(Vec::new());
             }
