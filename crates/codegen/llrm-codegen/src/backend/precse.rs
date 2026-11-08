@@ -365,10 +365,9 @@ impl Walk<'_> {
         local || !phi
     }
 
-    /// The pin reads a value a call needs in a particular register through a
-    /// `COPY` into it (a call's argument). A return or another fixed-register
-    /// reader is not one: a constant it reads is still shared (sieve m64 -O2
-    /// made a returned zero twice).
+    /// The pin reads a value a call or a return needs in a particular register
+    /// through a `COPY` into it (a call's argument, the returned value). Another
+    /// fixed-register reader is not one.
     fn pinned_read(
         &self,
         id: u64,
@@ -378,7 +377,8 @@ impl Walk<'_> {
             .get(&id)
             .and_then(|&block| self.body.blocks[block].insns.iter().find(|one| one.id() == id))
             .is_some_and(|one| {
-                (one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call))
+                (one.call.is_some()
+                    || one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Return)))
                     && one.requires.iter().any(|(held, _)| held.value == value)
             })
     }
@@ -1164,7 +1164,7 @@ mod tests {
                 address: Some(crate::model::ir::Addr::new(crate::model::ir::Space::External, 0)),
             })
         };
-        let build = |call_reads: bool, fixed_reader: bool, zero: bool| {
+        let build = |call_reads: bool, fixed_reader: bool, zero: bool, ret_reads: bool| {
             let make = |at: i64, value: u32| {
                 let source =
                     if zero { Loc::Imm(llrm_lir::Imm { value: 0, width: 8, address: None }) } else { symbol() };
@@ -1172,10 +1172,12 @@ mod tests {
             };
             let mut reader = if call_reads {
                 insn(3, Operation::Call, "call", vec![], vec![], vec![], vec![11])
+            } else if ret_reads {
+                insn(3, Operation::Return, "ret", vec![], vec![], vec![], vec![11])
             } else {
                 insn(3, Operation::Binary, "add", vec![wide(12)], vec![wide(11), wide(1)], vec![12], vec![11, 1])
             };
-            if call_reads || fixed_reader {
+            if call_reads || fixed_reader || ret_reads {
                 Arc::get_mut(&mut reader).unwrap().requires =
                     vec![(Held { value: 11, width: 8, offset: 0 }, llrm_lir::registers::RegId::EAX)];
             }
@@ -1211,16 +1213,21 @@ mod tests {
                 .filter(|one| one.what.as_ref().is_some_and(|what| matches!(what.sources.as_slice(), [Loc::Imm(_)])))
                 .count()
         };
-        let read = shared(&build(false, false, false), &RegisterClasses::m16());
+        let read = shared(&build(false, false, false, false), &RegisterClasses::m16());
         assert_eq!(made(&read), 1, "the premise: an address an add reads is shared");
-        let argument = shared(&build(true, false, false), &RegisterClasses::m16());
+        let argument = shared(&build(true, false, false, false), &RegisterClasses::m16());
         assert_eq!(made(&argument), 2, "{argument:?}");
         // A reader that is not a call but needs the value in a fixed register
         // (the return value) is not a copy: the shared constant stays shared.
-        let returned = shared(&build(false, true, false), &RegisterClasses::m16());
+        let returned = shared(&build(false, true, false, false), &RegisterClasses::m16());
         assert_eq!(made(&returned), 1, "{returned:?}");
+        // The returned value is a `COPY` into the return register too: a zero
+        // a return reads is made again, not shared (strlen_idiom m64 -O2: the
+        // pin makes `xor edi, edi` and `xor eax, eax`, not a held zero).
+        let ret = shared(&build(false, false, true, true), &RegisterClasses::m16());
+        assert_eq!(made(&ret), 2, "{ret:?}");
         // A cheap constant a call argument reads is a copy's too: not shared.
-        let zero = shared(&build(true, false, true), &RegisterClasses::m16());
+        let zero = shared(&build(true, false, true, false), &RegisterClasses::m16());
         assert_eq!(made(&zero), 2, "{zero:?}");
     }
 
