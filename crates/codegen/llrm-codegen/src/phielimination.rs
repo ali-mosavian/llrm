@@ -72,6 +72,11 @@ thread_local! {
     static ROWS_SOLVED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
+fn share_congruent() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_PHI_SHARE").is_some())
+}
+
 /// `SplitPHIEdges`: the critical edges worth a block of their own, as
 /// `(predecessor, block)`.
 fn edges_to_split(
@@ -246,6 +251,11 @@ pub fn lowered_with(
     // `LoweredPHIs`: kept for the whole function, so identical phis of
     // different blocks share the temporary.
     let mut lowered_phis: HashMap<Vec<(i64, u32)>, u32> = HashMap::default();
+    // Registers other blocks' phis may share: where each is written, from
+    // what, which blocks read it, and its width.
+    type Written = (Vec<(i64, u32)>, Vec<i64>, u32);
+    let mut regs: HashMap<u32, Written> = HashMap::default();
+    let mut shared: HashMap<(i64, u32), Vec<u32>> = HashMap::default();
     for block in &body.blocks {
         // If all incoming edges are critical, identical phis are lowered
         // through one register, so fewer copies are made.
@@ -273,16 +283,43 @@ pub fn lowered_with(
                 key
             };
             let reused = if all_critical { lowered_phis.get(&key).copied() } else { None };
-            let incoming = reused.unwrap_or_else(|| {
+            let sharing = if reused.is_none() && share_congruent() {
+                phi.incoming.iter().find_map(|pair| {
+                    shared.get(pair)?.iter().copied().find(|reg| {
+                        let (writes, readers, held) = &regs[reg];
+                        *held == width
+                            && !readers.contains(&block.at)
+                            && phi.incoming.iter().all(|&(pre, source)| {
+                                !undefined.contains(&source)
+                                    && writes.iter().all(|&(at, other)| at != pre || other == source)
+                            })
+                    })
+                })
+            } else {
+                None
+            };
+            let incoming = reused.or(sharing).unwrap_or_else(|| {
                 let made = next;
                 next += 1;
                 made
             });
-            if all_critical && reused.is_none() {
+            if all_critical && reused.is_none() && sharing.is_none() {
                 lowered_phis.insert(key, incoming);
             }
-            if reused.is_none() {
+            if reused.is_none() && sharing.is_none() {
                 born.insert(incoming, phi.result);
+            }
+            let written_before: Vec<i64> =
+                regs.get(&incoming).map(|entry| entry.0.iter().map(|pair| pair.0).collect()).unwrap_or_default();
+            if reused.is_none() && share_congruent() && !phi.incoming.iter().any(|(_, source)| undefined.contains(source)) {
+                let entry = regs.entry(incoming).or_insert_with(|| (Vec::new(), Vec::new(), width));
+                for &pair in &phi.incoming {
+                    if !entry.0.contains(&pair) {
+                        entry.0.push(pair);
+                        shared.entry(pair).or_default().push(incoming);
+                    }
+                }
+                entry.1.push(block.at);
             }
             // The copy at the top of the block, after any remaining phis
             // (`head` is in lowering order; the block gets it
@@ -295,6 +332,10 @@ pub fn lowered_with(
             let mut done: Vec<i64> = Vec::new();
             for &(pre, source) in phi.incoming.iter().rev() {
                 if done.contains(&pre) {
+                    continue;
+                }
+                // A predecessor the shared register is already written at.
+                if sharing.is_some() && written_before.contains(&pre) {
                     continue;
                 }
                 done.push(pre);
