@@ -98,7 +98,10 @@ struct Fast<'a> {
     sites: HashMap<u32, Sites>,
     across: HashSet<u32>,
     stored: HashSet<u32>,
-    orders: HashMap<u32, Vec<usize>>,
+    /// The order registers are tried in, by the set a value is confined to
+    /// (`None`: unconfined): it depends on nothing else of the value. A handful
+    /// of sets occur, so a scan finds one.
+    orders: Vec<(Option<std::collections::BTreeSet<RegId>>, Vec<usize>)>,
     /// `traceCopies`: the register a value is copied from, where that is a
     /// physical one (an argument's arrival, a copy out of a pinned value).
     hints: HashMap<u32, usize>,
@@ -173,7 +176,7 @@ fn run(
         sites: HashMap::default(),
         across: HashSet::default(),
         stored: HashSet::default(),
-        orders: HashMap::default(),
+        orders: Vec::new(),
         hints: HashMap::default(),
         confined,
         block: 0,
@@ -343,10 +346,10 @@ impl Fast<'_> {
         &mut self,
         value: u32,
     ) -> Result<Vec<usize>, Fallback> {
-        if let Some(found) = self.orders.get(&value) {
+        let wanted = self.confined.get(&value);
+        if let Some((_, found)) = self.orders.iter().find(|(set, _)| set.as_ref() == wanted) {
             return Ok(found.clone());
         }
-        let wanted = self.confined.get(&value);
         let order = target::order(wanted, self.segments, self.classes);
         let regs = self.classes.registers;
         let mut out = Vec::with_capacity(order.len());
@@ -362,7 +365,7 @@ impl Fast<'_> {
                 None => return fail("a register outside the allocatable set"),
             }
         }
-        self.orders.insert(value, out.clone());
+        self.orders.push((wanted.cloned(), out.clone()));
         Ok(out)
     }
 
