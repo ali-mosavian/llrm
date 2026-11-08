@@ -21,7 +21,7 @@
 //! the arm applies to i486/P5 (no SSE, no CMOV before P6, no BMI, POPCNT or
 //! LZCNT, x87 on, 32-bit). Not yet translated because [`ISD`] has no such
 //! node: `ABDS`/`ABDU`, the `STRICT_*` family, `FSIN`/`FCOS`/`FPOW`-style
-//! math, `SHL_PARTS`/`SRA_PARTS`/`SRL_PARTS`, `SETCCCARRY`/`SADDO_CARRY`,
+//! math, `SHL_PARTS`/`SRA_PARTS`/`SRL_PARTS`, `SETCCCARRY`,
 //! atomics, `VASTART`/`VAARG`, `JumpTable`/`BlockAddress`/`GlobalTLSAddress`,
 //! `LRINT`, `ADDRSPACECAST`, `INTRINSIC_*`. Each is added with the piece
 //! that needs it (B1), in the position the constructor sets it. Arms for
@@ -699,7 +699,7 @@ impl TargetLowering {
                 Action::Expand,
             );
             self.set_ops(&[SAddO, SSubO, UAddO, USubO, SMulO, UMulO], &[vt], Action::Expand);
-            self.set_ops(&[UAddOCarry, USubOCarry, SetCCCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
+            self.set_ops(&[UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
             self.set_ops(&[CtLzZeroPoison, CtTzZeroPoison, CtLs, BitReverse, Parity], &[vt], Action::Expand);
             // A pair that is a legal register type (an i32 at m16) is built by
             // shifts and an or.
@@ -820,7 +820,7 @@ impl TargetLowering {
         }
         t.set_ops(&[SDivRem, SRem, UDivRem, URem], &words, Expand);
         t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO], &words, Custom);
-        t.set_ops(&[UAddOCarry, USubOCarry], &words, Custom);
+        t.set_ops(&[UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry], &words, Custom);
         for vt in INTS {
             t.set_load_ext_action(LoadExt::SExtLoad, vt, MVT::I1, Expand);
         }
@@ -1047,7 +1047,7 @@ impl TargetLowering {
             }
         }
         // L2757..L2776
-        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry, SetCCCarry], native, Custom);
+        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry, SAddOCarry, SSubOCarry, SetCCCarry], native, Custom);
         t
     }
 }
