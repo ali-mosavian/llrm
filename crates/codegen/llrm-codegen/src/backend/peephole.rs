@@ -289,8 +289,7 @@ impl Peephole {
                 if through.is_some_and(|through| {
                     let root = regs.root(through);
                     root == regs.root(regs.frame) || root == regs.root(regs.stack)
-                })
-                    && address.is_none_or(|address| address.space != Space::Frame)
+                }) && address.is_none_or(|address| address.space != Space::Frame)
                 {
                     return body;
                 }
@@ -327,10 +326,12 @@ impl LIRTransform for Peephole {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        // The pin's -O0 has no peephole, but `ExpandPostRAPseudos` still turns a zero (`MOV32r0`) into `xor`
-        // where the flags are dead ([X86InstrInfo.cpp:6236]).
+        // The pin's -O0 has no peephole, but `ExpandPostRAPseudos` still turns
+        // a zero (`MOV32r0`) into `xor` where the flags are dead
+        // ([X86InstrInfo.cpp:6236]).
         if !self.cpu.optimized {
-            // the flag liveness costs a dataflow: only a body with a zero to make pays it
+            // the flag liveness costs a dataflow: only a body with a zero to
+            // make pays it
             let has_zero = body.blocks.iter().flat_map(|block| &block.insns).any(|one| {
                 one.what.as_ref().is_some_and(|what| {
                     matches!(
@@ -2405,7 +2406,8 @@ pub fn widened_moves(
 }
 
 /// A sign-extending word load as the dword load and the in-place extension
-/// where the pair encodes in fewer bytes (`mov eax,[abs]; cwde`, `peephole.peep`).
+/// where the pair encodes in fewer bytes (`mov eax,[abs]; cwde`,
+/// `peephole.peep`).
 pub fn split_loads(
     rules: &peep::Rules,
     body: &LirBody,
@@ -3093,6 +3095,38 @@ pub fn cleared(
                                     vec![Loc::Reg(*dest), minus_one],
                                 ),
                             ));
+                        }
+                    }
+                }
+            }
+            // `MOV32r1` (X86InstrCompiler.td#L335, `OptForSize, Not64BitMode`):
+            // 1 is `xor r,r; inc r`, three bytes where `mov r,1` has five.
+            if ones && body.bits == 32 && flags_dead && one.clobbers.is_empty() && one.symbol != Some(true) {
+                if let Some(what) = &one.what {
+                    if let (
+                        Operation::Move,
+                        Some("mov"),
+                        [Loc::Reg(dest)],
+                        [Loc::Imm(Imm { value: 1, width: 4, address: None })],
+                    ) = (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
+                    {
+                        if dest.width == 4 && regs.integer(dest.register) {
+                            let zero = with_what(
+                                &one,
+                                semantics(
+                                    Operation::Binary,
+                                    "xor",
+                                    vec![Loc::Reg(*dest)],
+                                    vec![Loc::Reg(*dest), Loc::Reg(*dest)],
+                                ),
+                            );
+                            let up = with_what(
+                                &one,
+                                semantics(Operation::Unary, "inc", vec![Loc::Reg(*dest)], vec![Loc::Reg(*dest)]),
+                            );
+                            // Reversed below: the xor comes first.
+                            insns.push(Arc::new(up));
+                            one = Arc::new(zero);
                         }
                     }
                 }
