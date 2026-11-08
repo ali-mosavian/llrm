@@ -1383,7 +1383,9 @@ impl<'a> TypeLegalizer<'a> {
                 self.dag.get_node(op, to, &[wide, self.dag.operand(value, 1)])
             }
             op @ (ISD::Rotl | ISD::Rotr) => {
-                // `PromoteIntRes_Rotate`: with room for the value twice, a
+                // `PromoteIntRes_Rotate`
+                // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L1533>):
+                // with room for the value twice, a
                 // variable rotate is one shift of the value concatenated
                 // with itself; otherwise the rotate becomes shifts and ORs
                 // (`expandROT`) that promote on their own.
