@@ -562,6 +562,14 @@ pub trait Tti {
         false
     }
 
+    /// Whether a priced inline trial keeps a copy that leaves the module no
+    /// larger and saves clocks though no callee goes with it. False: the
+    /// callee's credit decides (arm64 -O3 jpeg `decode`: 5,828 -> 7,324 B and
+    /// +1.2M instructions when the copies were kept).
+    fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        false
+    }
+
     /// Whether `speed_inline_milliclocks_per_byte` also binds at -O1. False:
     /// -O1 prices no byte in clocks and keeps the pin's threshold alone.
     fn speed_inline_rate_at_o1(&self) -> bool {
