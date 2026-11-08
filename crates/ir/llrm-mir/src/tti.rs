@@ -749,6 +749,21 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE INL-O1: `Tuning::inline_o1_milliclocks_per_byte`.
+    fn inline_o1_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
+    /// DEVIATE VASTART-PROMOTE: `Tuning::promote_va_list`.
+    fn promote_va_list(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE SETCC-TREE-BRANCH: `Tuning::branch_compare_trees_at_size`.
+    fn branch_compare_trees_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE SINK-EXT (owner x86-m32, exit 2026-11-24): `Tuning::sink_spares_ranges`.
     fn sink_spares_ranges(&self) -> bool {
         false
@@ -784,6 +799,11 @@ pub trait Tti {
     ) -> i64 {
         let _ = optsize;
         0
+    }
+
+    /// `Tuning::carry_slot_indexes`.
+    fn carries_slot_indexes(&self) -> bool {
+        true
     }
 
     /// `Tuning::sink_select_arms`.
@@ -1433,6 +1453,14 @@ pub trait Tti {
     /// register serves.
     fn address_registers(&self) -> u32 {
         self.number_of_gpr_registers()
+    }
+
+    /// Whether a one-register formula of the first use makes its register a
+    /// loser for the later uses (`VisitedRegs`, `SolveRecurse` L5600): the pin's
+    /// rule. DEVIATE LS1 turns it off where the target has too few registers
+    /// for the narrower search to hide a counter that serves two uses.
+    fn lsr_visited_registers_lose(&self) -> bool {
+        true
     }
 
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop

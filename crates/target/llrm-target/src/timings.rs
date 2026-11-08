@@ -34,6 +34,13 @@ pub struct CpuTable {
     /// tail duplication (`TailDupPlacementThreshold`), where the target states
     /// a smaller bound than the pin's (2, 4 at -O3); `None`: the pin's.
     pub tail_dup_placement_threshold: Option<i64>,
+    /// DEVIATE TAILDUP-HOT (owner x86-m32, exit 2026-12-05): the most
+    /// instructions a block may hold above the pin's bound and still be copied
+    /// when the clocks of the jump the copy saves, over the block's executions,
+    /// outweigh the bytes of the copy at the speed rate (gcc's `copy_bb_p`,
+    /// `max-grow-copy-bb-insns` 8, takes any block it optimises for speed);
+    /// `None`: the pin's bound alone.
+    pub tail_dup_hot_threshold: Option<i64>,
     /// Two-address commuting ties the operand the result goes back into (a
     /// loop's back-edge copy) even where the operand was read earlier in the
     /// block (DEVIATE TA-LC, owner anyisa, exit 2026-11-27): the pin's
@@ -189,6 +196,7 @@ impl Timings {
                     ("scalars", "speed_milliclocks_per_byte") => table.speed_milliclocks_per_byte = Some(number()?),
                     ("scalars", "line_fill_clocks") => table.line_fill_clocks = Some(number()?),
                     ("scalars", "tail_dup_placement_threshold") => table.tail_dup_placement_threshold = Some(number()?),
+                    ("scalars", "tail_dup_hot_threshold") => table.tail_dup_hot_threshold = Some(number()?),
                     ("scalars", "mispredict_penalty") => table.mispredict_penalty = Some(number()?),
                     ("scalars", "mispredict_penalty_size") => table.mispredict_penalty_size = Some(number()?),
                     ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,

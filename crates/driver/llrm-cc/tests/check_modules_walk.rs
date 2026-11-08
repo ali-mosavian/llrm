@@ -1,8 +1,9 @@
-//! `LLRM_CHECK_MODULES` panicked ("declarations: brought up to date, it is not what working it out
-//! afresh gives ... @fib kept ... afresh ... Flag(\"tre-deferred\")") where the walk marked a tree
-//! recursion's tail-call elimination as deferred without telling the analyses the body changed
-//! (`bench/frames/frames.c`, 1 of 166 programs; x86_32 and x86_64, -O2 and -O3). Needs `LLRM_OW` and
-//! `LLRM_PIN_CLANG`.
+//! `LLRM_CHECK_MODULES` panicked ("declarations: brought up to date, it is not
+//! what working it out afresh gives ... @fib kept ... afresh ...
+//! Flag(\"tre-deferred\")") where the walk marked a tree recursion's tail-call
+//! elimination as deferred without telling the analyses the body changed
+//! (`bench/frames/frames.c`, 1 of 166 programs; x86_32 and x86_64, -O2 and
+//! -O3). Needs the Open Watcom tree (tools/ow-fetch.sh) and `LLRM_PIN_CLANG`.
 
 use std::path::Path;
 use std::process::Command;
@@ -11,9 +12,14 @@ const SOURCE: &str = "static int fib(int n) { if (n < 2) return n; return fib(n 
 
 #[test]
 fn a_function_the_walk_flags_for_deferred_tail_recursion_elimination_is_told_changed() {
-    for name in ["LLRM_OW", "LLRM_PIN_CLANG"] {
-        assert!(std::env::var_os(name).is_some(), "{name} is not set: this test needs it and does not skip");
-    }
+    assert!(
+        llrm_cc::ow_tree().is_dir(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
+    assert!(
+        std::env::var_os("LLRM_PIN_CLANG").is_some(),
+        "LLRM_PIN_CLANG is not set: this test needs it and does not skip"
+    );
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("checkmodules-walk-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

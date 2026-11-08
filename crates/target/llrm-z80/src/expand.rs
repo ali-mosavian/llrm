@@ -145,6 +145,14 @@ impl Printer<'_> {
         {
             return;
         }
+        // `ex de, hl` twice is nothing; the flags are untouched
+        if text == "ex de, hl"
+            && matches!(self.out.last(), Some(Line::Inst(last)) if last == "ex de, hl")
+            && !PRICING.with(|one| one.get())
+        {
+            self.out.pop();
+            return;
+        }
         self.out.push(Line::Inst(text));
     }
 
@@ -472,6 +480,15 @@ impl Printer<'_> {
                 }
             }
             "SHL16" | "SRL16" | "SRA16" => {
+                if op == "SHL16"
+                    && let Some(lines) =
+                        word_double_through_hl(&name_of(self, 0)?, shift_count(inst)?, self.dead_after(reg::HL, rest))
+                {
+                    for line in lines {
+                        self.push(line);
+                    }
+                    return Ok(());
+                }
                 let (lo, hi) = lanes(self.register(inst, 0)?)?;
                 let (lo, hi) = (name(lo), name(hi));
                 for _ in 0..shift_count(inst)? {
@@ -1456,6 +1473,50 @@ fn flags_first(insts: &[Inst]) -> Option<bool> {
     None
 }
 
+/// A word in `de` or `bc` shifted left by `bits`: `sla r; rl r'` is 4 B / 16 T a
+/// bit, `add hl, hl` 1 B / 11 T. `de` swaps with `hl` round the doublings
+/// (`ex de, hl` x2 keeps `hl`); `bc` goes through `hl` when nothing reads it.
+/// None where the bit by bit form is no longer or no slower, priced by the
+/// timing table.
+fn word_double_through_hl(
+    pair: &str,
+    bits: i64,
+    hl_dead: bool,
+) -> Option<Vec<String>> {
+    let bits = usize::try_from(bits).ok().filter(|bits| *bits >= 2)?;
+    let (head, tail, setup, teardown): (Vec<&str>, Vec<&str>, Vec<&str>, Vec<&str>) = match pair {
+        "de" => (vec!["ex de, hl"], vec!["ex de, hl"], vec!["ex de;hl"], vec!["ex de;hl"]),
+        "bc" if hl_dead => (
+            vec!["ld h, b", "ld l, c"],
+            vec!["ld b, h", "ld c, l"],
+            vec!["ld b;c", "ld b;c"],
+            vec!["ld b;c", "ld b;c"],
+        ),
+        _ => return None,
+    };
+    let price = |forms: &[&str]| {
+        forms.iter().fold(
+            (0u32, 0u32),
+            |(bytes, clocks), form| {
+                let one = crate::timing::cost(form).unwrap_or_else(|| panic!("timing/z80.csv has no form `{form}`"));
+                (bytes + one.bytes, clocks + one.taken)
+            },
+        )
+    };
+    let mut new = [setup, teardown].concat();
+    new.extend(std::iter::repeat_n("add hl;bc", bits));
+    let old: Vec<&str> = std::iter::repeat_n(["sla b", "rl b"], bits).flatten().collect();
+    let (new_price, old_price) = (price(&new), price(&old));
+    if !(new_price.0 < old_price.0 && new_price.1 <= old_price.1) {
+        return None;
+    }
+    let mut lines: Vec<String> = head.iter().map(|line| (*line).to_owned()).collect();
+    lines.extend(std::iter::repeat_n("add hl, hl".to_owned(), bits));
+    lines.extend(tail.iter().map(|line| (*line).to_owned()));
+    Some(lines)
+}
+
+
 fn shift_count(inst: &Inst) -> Result<i64, String> {
     match inst.operands.last() {
         Some(Operand::Imm(count)) => Ok(*count),
@@ -2421,16 +2482,26 @@ fn tail_calls(function: &MFunction) -> MFunction {
     if escapes {
         return function;
     }
-    for block in &mut function.blocks {
+    // a block that ends in a call and falls into a block of only `ret` returns
+    // as the call does: the shared return stands where its own `ret` did
+    let falls_into_return: Vec<bool> = (0..function.blocks.len())
+        .map(|at| {
+            function.blocks.get(at + 1).is_some_and(|next| matches!(&next.insts[..], [one] if one.kind == Kind::Op("RET")))
+        })
+        .collect();
+    for (index, block) in function.blocks.iter_mut().enumerate() {
         let insts = &block.insts;
         let n = insts.len();
         let bare_adjust = |inst: &Inst| {
             matches!(inst.kind, Kind::Op("ADJCALLSTACKUP")) && matches!(inst.operands.first(), Some(Operand::Imm(0)))
         };
-        if n >= 2 && insts[n - 1].kind == Kind::Op("RET") {
-            let at = if bare_adjust(&insts[n - 2]) { n - 3 } else { n - 2 };
-            if n >= 2 && at < n && insts[at].call && insts[at].kind == Kind::Op("CALL") && (at == n - 2 || at == n - 3)
-            {
+        let returns = n >= 1 && insts[n - 1].kind == Kind::Op("RET");
+        // the end as it would stand with the `ret` the next block holds
+        let falls = !returns && n >= 1 && falls_into_return[index] && (bare_adjust(&insts[n - 1]) || insts[n - 1].call);
+        let end = n + usize::from(falls);
+        if end >= 2 && (returns || falls) {
+            let at = if bare_adjust(&insts[end - 2]) { end - 3 } else { end - 2 };
+            if at < n && insts[at].call && insts[at].kind == Kind::Op("CALL") && (at == end - 2 || at == end - 3) {
                 let symbol = insts[at].operands.first().cloned();
                 if let Some(symbol @ Operand::Symbol(..)) = symbol {
                     // the call's argument registers stay read: the copies that

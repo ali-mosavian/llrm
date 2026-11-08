@@ -2,7 +2,7 @@
 //! as its triple's default does: sizeof of each type through the row's own
 //! clang command, against the description plus the row's libc. Needs the clangs
 //! (`LLRM_PIN_CLANG`, `LLRM_CLANG_M16`) and the Open Watcom headers
-//! (`LLRM_OW`).
+//! (`{ow}`, tools/ow-fetch.sh).
 
 use std::process::Command;
 
@@ -41,8 +41,8 @@ fn test_every_row_lays_types_out_as_its_description_says() {
             eprintln!("{name}: skipped, {variable} is not set");
             continue;
         };
-        if row.clang.iter().any(|word| word.contains("{env:")) && std::env::var_os("LLRM_OW").is_none() {
-            eprintln!("{name}: skipped, LLRM_OW is not set");
+        if row.clang.iter().any(|word| word.contains("{env:")) && !llrm_cc::ow_tree().is_dir() {
+            eprintln!("{name}: skipped, the Open Watcom tree is missing (tools/ow-fetch.sh)");
             continue;
         }
         if row.clang.iter().any(|word| word.contains("ARM64_SYSROOT")) {

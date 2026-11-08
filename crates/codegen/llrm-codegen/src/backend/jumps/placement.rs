@@ -94,6 +94,11 @@ struct Placer {
     dead: Vec<bool>,
     /// The tail-duplication threshold in instructions (`TailDupSize`).
     dup_size: usize,
+    /// DEVIATE TAILDUP-HOT: blocks above `dup_size` copied where it pays.
+    hot: Option<HotTailDup>,
+    /// The blocks that jump back to a loop header: copying one into its
+    /// predecessors would give the loop several back edges.
+    latch: Vec<bool>,
     postdom: postdom::PostDom,
     /// Edges rerouted by copies, for the odds: (from, its successors before,
     /// the tail, the tail's successors with their chances).
@@ -108,6 +113,36 @@ fn succ_seen(
     index.get(&to).is_some_and(|to| seen.contains(to))
 }
 
+/// DEVIATE TAILDUP-HOT (owner x86-m32, exit 2026-12-05): a block of up to
+/// `size` instructions above the pin's bound is copied into a predecessor when
+/// the jump the copy saves, on half the block's executions, is worth more
+/// than the copy's bytes at the speed rate.
+#[derive(Clone, Copy, Debug)]
+pub struct HotTailDup {
+    pub size: usize,
+    /// Clocks of the unconditional jump the copy removes.
+    pub jump_clocks: f64,
+    /// Clocks a byte of code is worth at speed.
+    pub clocks_per_byte: f64,
+}
+
+/// Bytes of an x86 instruction on average, to price a copy by its length in
+/// instructions.
+const AVERAGE_INSN_BYTES: f64 = 3.0;
+
+impl HotTailDup {
+    /// Whether a block of `count` instructions run `frequency` times per call
+    /// is worth copying.
+    pub(super) fn pays(
+        &self,
+        count: usize,
+        frequency: f64,
+    ) -> bool {
+        count <= self.size
+            && frequency * self.jump_clocks / 2.0 >= count as f64 * AVERAGE_INSN_BYTES * self.clocks_per_byte
+    }
+}
+
 /// The blocks of `blocks` in the order `MachineBlockPlacement` lays them out,
 /// as they are after the copies it made, with the odds those leave. The first
 /// is the entry; blocks nothing reaches any more come last.
@@ -120,10 +155,19 @@ pub(super) fn order(
     size: bool,
     aggressive: bool,
     tail_dup: Option<usize>,
+    hot: Option<HotTailDup>,
 ) -> (Vec<Block>, BlockOdds) {
     let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(place, block)| (block.at, place)).collect();
     let entry = index.get(&entry).copied().unwrap_or(0);
-    let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, tail_dup, entry);
+    let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, tail_dup, hot, entry);
+    for found in natural {
+        let Some(&header) = index.get(&found.header) else { continue };
+        for at in found.body.to_set().iter() {
+            if let Some(&member) = index.get(at).filter(|&&member| placer.succ[member].contains(&header)) {
+                placer.latch[member] = true;
+            }
+        }
+    }
     let order = placer.build(natural, &index);
     let mut out = odds.clone();
     for (from, succ, tail, into) in &placer.rerouted {
@@ -143,6 +187,7 @@ impl Placer {
         size: bool,
         aggressive: bool,
         tail_dup: Option<usize>,
+        hot: Option<HotTailDup>,
         entry: usize,
     ) -> Self {
         let n = blocks.len();
@@ -195,6 +240,8 @@ impl Placer {
             } else {
                 TAIL_DUPLICATION
             }),
+            hot: hot.filter(|_| !size),
+            latch: vec![false; n],
             rerouted: Vec::new(),
         }
     }

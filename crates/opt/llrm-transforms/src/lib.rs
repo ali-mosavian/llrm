@@ -375,6 +375,7 @@ pub mod reassociate_pairs;
 pub mod reassociate_rank;
 pub mod reassociate_tree;
 pub mod remidiom;
+pub mod vastart;
 pub mod rpoattrs;
 pub mod runtimechecks;
 pub mod sccp;

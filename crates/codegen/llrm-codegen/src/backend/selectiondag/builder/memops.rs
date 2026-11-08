@@ -49,6 +49,12 @@ impl Builder<'_> {
                 self.visit_lifetime(instruction, matches!(intrinsic, Intrinsic::LifetimeStart))
             }
             Intrinsic::VaStart | Intrinsic::VaEnd | Intrinsic::VaCopy => self.visit_va(instruction, intrinsic),
+            Intrinsic::VarargAddress => {
+                let index = self.info.vararg_frame_index.ok_or(Refused("a vararg address in a function with no varargs"))?;
+                let node = self.dag.get_frame_index(self.target.dag.pointer, index);
+                self.set_value(instruction.result.ok_or(Refused("a vararg address without a result"))?, node);
+                Ok(())
+            }
             Intrinsic::PtrDiff => {
                 let (a, b) = (self.get_value(instruction.operands[0])?, self.get_value(instruction.operands[1])?);
                 let vt = self.type_of(instruction.ty)?;

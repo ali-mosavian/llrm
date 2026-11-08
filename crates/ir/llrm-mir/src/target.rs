@@ -55,6 +55,18 @@ pub struct Tuning {
     /// result by more operands that die at it, across a later instruction that
     /// clobbers registers (more values spilled). false: the pin's sink.
     pub sink_spares_ranges: bool,
+    /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27): the target's
+    /// `va_list` is one pointer, so `llvm.va_start` of it is a store of the
+    /// first variadic argument's address (`llrm.vararg.address`) the mid-end
+    /// can keep in a register. false: the pin's `va_start`, which leaves the
+    /// list in memory.
+    pub promote_va_list: bool,
+    /// DEVIATE SETCC-TREE-BRANCH (owner x86-m32, exit 2026-12-05): at -Os a
+    /// sum `x + zext(c)` whose `c` is an `and`/`or` of two or more word
+    /// compares is a branch around `x + 1` (the byte price of the `setcc`
+    /// chain decides), where the pin keeps the `setcc`/`or`/`movzx` chain.
+    /// false: the pin's lowering.
+    pub branch_compare_trees_at_size: bool,
     /// At -O1 (`OptLevel` 1) a full unroll is made only where its cost after
     /// the folding the analysis simulates does not exceed the rolled loop's
     /// size (gcc's size-neutral complete unroll); false: the pin's thresholds.
@@ -63,6 +75,10 @@ pub struct Tuning {
     /// stated (-O1), an inline that stays is held to the -Os bound (the callee
     /// copied only if it does not grow the code); false: the pin's threshold.
     pub inline_never_grows_without_rate: bool,
+    /// With `inline_never_grows_without_rate`: what a byte of growth costs an
+    /// -O1 inline, in thousandths of a clock, against the call's latency at
+    /// the site's frequency. m32: half the -O2 rate (-O1 weighs code size).
+    pub inline_o1_milliclocks_per_byte: i64,
     /// Trips the -O1 no-growth rule above analyses for folds: the pin's
     /// `-unroll-max-iteration-count-to-analyze` (10) when `None`.
     pub unroll_o1_analyzed_trips: Option<u32>,
@@ -117,6 +133,14 @@ pub struct Tuning {
     /// wide (`slots::width_rule_allows`); false: the pin's `ColorSlot`,
     /// which shares any two slots whose ranges do not overlap.
     pub slots_loop_width_rule: bool,
+    /// DEVIATE CARRY-SI (x86 m16, m32, m64: owners the three x86 sessions, exit
+    /// 2026-11-21): the coalescer's slot indexes reach the allocator through the
+    /// pre-RA scheduler with the entries its erased and moved instructions left
+    /// empty (the pin's one `SlotIndexes`), so range sizes, and the dequeue and
+    /// spill weights that divide by them, are the pin's. false: the function
+    /// is numbered afresh after the scheduler, as the x86 numbers were tuned
+    /// (A/B 2026-11-07: x86_32 O1 14 cells +704 B worse).
+    pub carry_slot_indexes: bool,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
@@ -270,8 +294,11 @@ impl Tuning {
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
         sink_spares_ranges: false,
+        promote_va_list: false,
+        branch_compare_trees_at_size: false,
         unroll_never_grows_at_o1: false,
         inline_never_grows_without_rate: false,
+        inline_o1_milliclocks_per_byte: 0,
         unroll_o1_analyzed_trips: None,
         price_pin_multiplies: false,
         imul_at_size: false,
@@ -286,6 +313,7 @@ impl Tuning {
         x87_share_negated_products: false,
         x87_zero_fill_at_size: false,
         slots_loop_width_rule: false,
+        carry_slot_indexes: true,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
@@ -1121,6 +1149,7 @@ mod tests {
         assert!(!pin.unroll_promotion_fits_x87_stack);
         assert!(!pin.x87_zero_fill_at_size);
         assert!(!pin.slots_loop_width_rule);
+        assert!(pin.carry_slot_indexes);
         assert_eq!(pin.inline_threshold, None);
     }
 }

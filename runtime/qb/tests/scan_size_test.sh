@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: LLRM_CC_DIR=<dir with llrm-cc> LLRM_OW=... LLRM_CLANG_M16=... tests/scan_size_test.sh
+# usage: LLRM_CC_DIR=<dir with llrm-cc> LLRM_CLANG_M16=... tests/scan_size_test.sh
 # The first-fit scan of string space walked 184,639 entries on stft_fixed at 27 instructions each (BC's hand loop about 8): it re-read each header through ENTRY_BYTES and wrote it per merge.
 # fit+scan were 121 instructions at -O2 m16; one header read per entry and one write per merge make 69.
 cd "$(dirname "$0")/.." || exit 2

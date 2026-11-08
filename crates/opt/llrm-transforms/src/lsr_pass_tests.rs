@@ -1573,6 +1573,34 @@ e:
     assert!(after.contains("phi ptr") && after.contains(", 7013"), "{after}");
 }
 
+/// bench/ring -O1 (m32): `a[i] = 3 * i - 4` took an end-biased counter and a
+/// base made by two geps (`ptr + i - 4096`, then `+ 4096`), 4 B over the pin's
+/// pointer walk. Formulae of the first use hid the pointer's counter from the
+/// store (the pin's `VisitedRegs` rule was off for every target).
+#[test]
+fn a_store_through_the_counter_keeps_the_pointer_walk() {
+    let text = "@a = internal global [1024 x i32] zeroinitializer
+define void @f() {
+entry:
+  br label %l
+l:
+  %i = phi i32 [ 0, %entry ], [ %n, %l ]
+  %m = mul nuw nsw i32 %i, 3
+  %v = add nsw i32 %m, -4
+  %p = getelementptr inbounds nuw [4 x i8], ptr @a, i32 %i
+  store i32 %v, ptr %p, align 4
+  %n = add nuw nsw i32 %i, 1
+  %c = icmp eq i32 %n, 1024
+  br i1 %c, label %e, label %l
+e:
+  ret void
+}
+";
+    let (changed, after) = reduced_on(FLAT, text, "i486", &[&[0]]);
+    assert!(changed, "{after}");
+    assert!(after.contains("phi ptr") && !after.contains("4096"), "{after}");
+}
+
 /// switch_table_holes (m32 -O2): `buf[t[i - 7]] += (i8)(i + 1)` made the byte
 /// add one `lea` with the offset in the wide formula, so the i32 counter
 /// plus 25 won and the store paid a zext, an add and a trunc. The pin keeps
