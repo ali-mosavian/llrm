@@ -23,6 +23,16 @@
 //! same register. Only a byte read once by the `movzx` is rewritten. Exit:
 //! sub-register values in LIR.
 //!
+//! DEVIATE F2 (owner x87, exit 2026-11-29): at a build for size the pair after
+//! an x87 compare stays when its result is required in the accumulator (a
+//! return value). `fnstsw ax` holds EAX, so the zero lands in another register
+//! and a copy follows: `xor ecx,ecx; fcomp; fnstsw ax; sahf; seta cl; mov
+//! eax,ecx` (7 B) for `seta al; movzx eax,al` (6 B), and the register it took
+//! is clobbered for the callers of a private-convention function:
+//! tests/run/c/fcmp_all -Os m32 5436 -> 5564 B (+128) since the compare writes
+//! the flags (#8200). Any other result keeps the pin's form (`xor; seta`, 1 B
+//! less). Speed builds keep the pin's form.
+//!
 //! # Example
 //! `int f(int a, int b) { return a < b; }` at `-m32`, `ISEL_DUMP=1`.
 //! Before:
@@ -53,7 +63,10 @@ use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 
-pub struct FixupSetCc;
+pub struct FixupSetCc {
+    /// A build for size (`Profile::size` or `min_size`): bytes, not clocks.
+    pub size: bool,
+}
 
 impl LIRTransform for FixupSetCc {
     fn class_name(&self) -> &'static str {
@@ -68,7 +81,7 @@ impl LIRTransform for FixupSetCc {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(fixed(&body))
+        Ok(fixed_for(&body, self.size))
     }
 }
 
@@ -98,6 +111,15 @@ thread_local! {
 
 /// `body` with its `setcc`-and-`movzx` pairs made zero-then-`setcc`.
 pub fn fixed(body: &LirBody) -> LirBody {
+    fixed_for(body, false)
+}
+
+/// [`fixed`], except that a build for `size` leaves the pair after an x87
+/// compare whose result is a return value: DEVIATE F2.
+pub fn fixed_for(
+    body: &LirBody,
+    size: bool,
+) -> LirBody {
     // Without a `setcc` into a byte there is no pair to find: the read counts
     // and the effect of each instruction are not worth computing.
     if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| set_byte(one).is_some()) {
@@ -141,6 +163,20 @@ pub fn fixed(body: &LirBody) -> LirBody {
 
     let every_flag = crate::backend::lanes::Lanes::read_flags();
 
+    // At a build for size: the values an instruction requires in the
+    // accumulator (a return value).
+    let accumulator_bound: llrm_mir::hash::HashSet<u32> = if size {
+        body.blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .flat_map(|one| one.requires.iter())
+            .filter(|(_, register)| register.full_register32() == llrm_lir::registers::RegId::EAX)
+            .map(|(held, _)| held.value)
+            .collect()
+    } else {
+        Default::default()
+    };
+
     let mut out = body.clone();
     for block in &mut out.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
@@ -174,6 +210,10 @@ pub fn fixed(body: &LirBody) -> LirBody {
                     .iter()
                     .any(|between| between.defines.contains(&into.value) || between.uses.contains(&into.value))
                 {
+                    return None;
+                }
+                // DEVIATE F2: see the header.
+                if accumulator_bound.contains(&into.value) && liveness::is_x87_compare(&insns[flags_at]) {
                     return None;
                 }
                 Some((flags_at, at, into))
@@ -269,6 +309,40 @@ mod tests {
         assert_eq!(names(None), ["mov", "cmp", "setb"], "the control: nothing between");
         let inc = insn(1, Operation::Unary, "inc", vec![held(4, 4)], vec![held(5, 4)], vec![4], vec![5]);
         assert_eq!(names(Some(inc)), ["cmp", "inc", "setb", "movzx"]);
+    }
+
+    /// `fcomp; seta; movzx` of a return value at a build for size. The pin's
+    /// zero before an x87 compare cannot be EAX (`fnstsw ax` holds it), so
+    /// `fcmp_all` -Os m32 grew 5436 -> 5564 B: `xor ecx,ecx; seta cl; mov
+    /// eax,ecx` for `seta al; movzx eax,al`. A result not bound to EAX keeps
+    /// the pin's form (`x_ldcmp` -Os m32: +1 B when it did not).
+    #[test]
+    fn test_an_x87_compare_keeps_its_movzx_when_the_result_is_a_return_at_size() {
+        let body = |name: &str, bound: bool| {
+            let mut ret = Insn::new(3, Some((3, 3)), None, vec![], vec![6]);
+            if bound {
+                ret.requires = vec![(Held { value: 6, width: 4, offset: 0 }, llrm_lir::registers::RegId::EAX)];
+            }
+            let insns = vec![
+                insn(0, Operation::Compare, name, vec![], vec![held(1, 4), held(2, 4)], vec![], vec![1, 2]),
+                insn(1, Operation::Unary, "seta", vec![held(3, 1)], vec![], vec![3], vec![]),
+                insn(2, Operation::Extend, "movzx", vec![held(6, 4)], vec![held(3, 1)], vec![6], vec![3]),
+                Arc::new(ret),
+            ];
+            LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default())
+        };
+        let names = |done: LirBody| -> Vec<String> {
+            done.blocks[0]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
+        };
+        let rewritten = ["mov", "fcomp", "seta"];
+        assert_eq!(names(fixed_for(&body("fcomp", true), false)), rewritten, "speed: the pin's form");
+        assert_eq!(names(fixed_for(&body("fcomp", true), true)), ["fcomp", "seta", "movzx"], "size, a return: kept");
+        assert_eq!(names(fixed_for(&body("fcomp", false), true)), rewritten, "size, not a return: the pin's form");
+        assert_eq!(names(fixed_for(&body("cmp", true), true)), ["mov", "cmp", "seta"], "an integer compare");
     }
 
     /// Compile time: `fixed` read-counted every value and asked the effect of

@@ -270,7 +270,7 @@ pub fn machine_with<'a>(
         Box::new(phielim::PhiElimination { unoptimized: !target.optimized }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
-        Box::new(crate::backend::fixupsetcc::FixupSetCc),
+        Box::new(crate::backend::fixupsetcc::FixupSetCc { size: target.size || target.min_size }),
         // A float load a loop only reads is made again where it is read (so
         // the next step can fold it).
         Box::new(crate::backend::floatunhoist::FloatUnhoist { cpu: target, basic_semantics }),

@@ -190,6 +190,16 @@ pub fn with_effect<R>(
     if *was == bits { with(answer.as_ref()) } else { with(worked_out(regs, bits, one).as_ref()) }
 }
 
+/// An x87 compare pseudo (`fcom`, `ficom`, their pops).
+pub fn is_x87_compare(one: &Insn) -> bool {
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.op == Operation::Compare
+                && what.name.as_deref().is_some_and(|name| name.starts_with("fcom") || name.starts_with("ficom")),
+        )
+}
+
 /// `one`'s effect as it decodes, else as its contract declares; None when
 /// unknown. Worked out once for the instruction, whoever asks.
 pub fn effect(
@@ -225,10 +235,7 @@ fn worked_out(
     // The x87 compare is a pseudo here, expanded after the stackifier into
     // `fcom; fnstsw ax; sahf`; the pin's MIR has the flags write (`SAHF`) from
     // instruction selection on.
-    if one.what.as_ref().is_some_and(|what| {
-        what.op == Operation::Compare
-            && what.name.as_deref().is_some_and(|n| n.starts_with("fcom") || n.starts_with("ficom"))
-    }) {
+    if is_x87_compare(one) {
         writes.include(_flag_lanes(0xFFFF_FFFF));
     }
     Some(match _moved_lanes(regs, bits, one) {
