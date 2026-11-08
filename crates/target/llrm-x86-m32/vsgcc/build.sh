@@ -45,7 +45,7 @@ for o in O1 O3; do $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD
 [ -z "${VSGCC_ONLY:-}" ] || exit $FAILED
 cd $O/b
 # Our m32 target states a stack alignment of 4 (S32); the pin's and gcc's Linux default is 16, which keeps a reserved call frame where 4 pushes.
-F="$REF_LD -Dfar= -m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables"
+F="$REF_LD -Dfar= -m32 -march=i486 $(python3 "$R/tools/external_flags.py" --reloc=-fno-pic)"
 # VSGCC_NOVEC=1: the scalar column, both competitors with their vectorizers off (gcc 13 runs its vectorizer at O2/O3 even with no SIMD)
 NV_GCC=; NV_CLANG=; [ -z "${VSGCC_NOVEC:-}" ] || { NV_GCC="-fno-tree-vectorize -fno-tree-slp-vectorize"; NV_CLANG="-fno-vectorize -fno-slp-vectorize"; }
 for o in O1 O2 O3 Os; do
