@@ -1592,6 +1592,15 @@ pub trait Tti {
         Some(self.number_of_gpr_registers())
     }
 
+    /// DEVIATE IND-MASK (beyond the pin; exit 2026-11-30): whether `indvars`
+    /// also widens a counter of an illegal narrow width whose chain is
+    /// masked by a constant and then extended (`(i*5+3)&1023` indexing a
+    /// table, `short i`). The pin sees only an extension of the counter's own
+    /// recurrence, so the chain stays narrow and `LSR` skips it.
+    fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LSR-N: integer widths LSR takes as native induction variables
     /// besides the datalayout's `n`. The pin's `IVUsers` skips every type
     /// `isLegalInteger` refuses, so on a datalayout of `n8` no 16- or 32-bit
