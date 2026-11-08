@@ -103,7 +103,7 @@ pub fn select_setcc_carry<D: AddrDag>(
     true
 }
 
-/// `X86ISD::FIST chain, value, ptr` of an `i16` (DEVIATE SD215; owner sdag-b,
+/// `X86ISD::FIST chain, value, ptr` of an `i16` (DEVIATE SD215; owner w12,
 /// exit: promote it as the pin does, review 2026-12-10): `IST_Fp16m<float>`
 /// with the address group, the value and the chain, as the table's `i32` and
 /// `i64` patterns build theirs. False for another memory type.

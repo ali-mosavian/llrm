@@ -40,7 +40,7 @@
 //!
 //! DEVIATE LP-3 (no pin pass: SelectionDAG expands `smul.fix`
 //! (`TargetLowering::expandFixedPointMul`); exit: isel does it and this is
-//! deleted; owner w-6; review 2026-11-20).
+//! deleted; owner w10-instcombine; review 2026-11-20).
 //!
 //! # Example
 //! Before:

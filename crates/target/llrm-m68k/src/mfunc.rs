@@ -499,7 +499,11 @@ impl Emitter<'_> {
                 if sets_flags || desc.has(flag::CALL) {
                     self.flags_from = (sets_flags && !desc.has(flag::CALL)).then_some(node);
                 }
-                into.push(op_inst(name, desc, operands));
+                let mut inst = op_inst(name, desc, operands);
+                // a volatile access keeps its place among the others
+                // (`hasOrderedMemoryRef`): no pass folds, moves or merges it
+                inst.side_effects |= self.dag.volatile_accesses.contains(&node);
+                into.push(inst);
                 if self.save.contains(&node) {
                     let kept = self.new_reg(Class::Dr16);
                     // not a `Copy`: the allocator takes a copy for the same
