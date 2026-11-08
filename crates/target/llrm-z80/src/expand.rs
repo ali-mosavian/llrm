@@ -452,13 +452,16 @@ impl Printer<'_> {
                 let left = op == "SHL16";
                 let (lo, hi) = lanes(self.register(inst, 0)?)?;
                 let (kept, cleared) = if left { (name(lo), name(hi)) } else { (name(hi), name(lo)) };
-                if count == 8 || !self.shift_byte(left, kept, cleared, count - 8, rest) {
+                if count > 8 && self.shift_byte(left, kept, cleared, count - 8, rest) {
+                    self.push(format!("ld {kept}, #0"));
+                } else {
+                    // `ld cleared, kept; ld kept, #0` stay adjacent: `forward_high_bytes` reads them
                     self.push(format!("ld {cleared}, {kept}"));
+                    self.push(format!("ld {kept}, #0"));
                     for _ in 8..count {
                         self.push(plain_byte_shift(left, cleared));
                     }
                 }
-                self.push(format!("ld {kept}, #0"));
             }
             // `add hl, hl` is a doubling: 1 B / 11 T a bit against `sla l; rl
             // h`'s 4 B / 16 T
@@ -2746,6 +2749,17 @@ mod tests {
         let inst = |text: &str| Line::Inst(text.to_owned());
         let lines = vec![inst("ld l, c"), inst("ld h, b"), inst("ld l, h"), inst("ld h, #0")];
         assert_eq!(tidy(lines), vec![inst("ld l, b"), inst("ld h, #0")]);
+    }
+
+    /// `word >> 15` with `a` live kept the copy ahead of the shifts (`ld b, h; ld c, b; srl c` x7; `ld b, #0`, which
+    /// `forward_high_bytes` cannot fuse): idioms -Oz +1 B and 24 T over `ld c, h; ld b, #0; srl c` x7.
+    #[test]
+    fn a_word_shifted_by_a_byte_and_more_clears_the_pair_next_to_the_copy() {
+        let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n@g = global i16 0\n\
+                  define i8 @f(i8 %a, i16 %x) {\n  %s = lshr i16 %x, 15\n  %t = add i16 %s, %x\n\
+                  store volatile i16 %t, ptr @g\n  %r = add i8 %a, 1\n  ret i8 %r\n}\n";
+        let out = crate::compile::text(ir, "f", 0, &crate::driver::Request::new(crate::driver::Level::Oz)).unwrap();
+        assert!(out.contains("srl c") && !out.contains("ld c, b\n\tsrl"), "{out}");
     }
 
     /// `ld l, e; ld h, d; ld a, h; ...; ld l, a; ld h, #0` (a word's high byte shifted through `a`) read the copy
