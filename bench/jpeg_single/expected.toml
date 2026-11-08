@@ -1,30 +1,94 @@
-reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
-blessed = "2026-11-07"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "691e1774e53fd1d9ebfc503e9a381e6a"
 
-[bcc.O2]
-code_bytes = 3192
+[bcc.O1]
+instructions = 54498978
+memory_operands = 14491113
+clocks = 147473785
+code_bytes = 3089
 data_bytes = 634
 bss_bytes = 15849
-kernel_ms = 608.1099
+kernel_ms = 746.7694
+
+[bcc.O2]
+instructions = 44103690
+memory_operands = 15359714
+clocks = 127787522
+code_bytes = 3189
+data_bytes = 634
+bss_bytes = 15849
+kernel_ms = 608.1105
 
 [bcc.Os]
-code_bytes = 3090
+instructions = 54498978
+memory_operands = 14491113
+clocks = 147473785
+code_bytes = 3089
 data_bytes = 634
 bss_bytes = 15849
-kernel_ms = 746.7687
+kernel_ms = 746.7694
+
+[tc.O1]
+instructions = 68020058
+memory_operands = 19076094
+clocks = 169770491
+code_bytes = 3361
+data_bytes = 662
+bss_bytes = 15849
+kernel_ms = 927.1243
+
+[tc.O2]
+instructions = 68173061
+memory_operands = 17970712
+clocks = 167551157
+code_bytes = 3430
+data_bytes = 662
+bss_bytes = 15849
+kernel_ms = 929.1652
+
+[tc.Os]
+instructions = 68020058
+memory_operands = 19076094
+clocks = 169770491
+code_bytes = 3361
+data_bytes = 662
+bss_bytes = 15849
+kernel_ms = 927.1243
+
+[tcpp.O1]
+instructions = 58984038
+memory_operands = 20013497
+clocks = 156686657
+code_bytes = 3267
+data_bytes = 634
+bss_bytes = 15849
+kernel_ms = 806.5953
 
 [tcpp.O2]
-code_bytes = 3446
+instructions = 59517888
+memory_operands = 19039547
+clocks = 152272925
+code_bytes = 3440
 data_bytes = 634
 bss_bytes = 15849
-kernel_ms = 813.7156
+kernel_ms = 813.7158
 
 [tcpp.Os]
-code_bytes = 3270
+instructions = 58984038
+memory_operands = 20013497
+clocks = 156686657
+code_bytes = 3267
 data_bytes = 634
 bss_bytes = 15849
-kernel_ms = 806.5947
+kernel_ms = 806.5953
+
+[bc.O2]
+instructions = 168408816
+memory_operands = 45192831
+code_bytes = 6399
+data_bytes = 1257
+bss_bytes = 3718
 
 [pds71.O2]
 code_bytes = 6157
@@ -37,10 +101,3 @@ code_bytes = 6101
 data_bytes = 1305
 bss_bytes = 3718
 kernel_ms = 2708.6217
-
-[bc.O2]
-instructions = 168408816
-memory_operands = 45192831
-code_bytes = 6399
-data_bytes = 1257
-bss_bytes = 3718

@@ -1,69 +1,114 @@
-reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
-blessed = "2026-10-15"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
+corpus = "e2800d9983242508b32eb2ef4fce02f0"
+
+[ow.O1]
+instructions = 319471
+memory_operands = 65530
+clocks = 729058
+code_bytes = 105
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 4.2621
 
 [ow.O2]
 instructions = 376809
 memory_operands = 65530
+clocks = 655335
 code_bytes = 114
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 5.0264
+kernel_ms = 5.027
 
 [ow.Os]
 instructions = 319471
 memory_operands = 65530
+clocks = 729058
 code_bytes = 105
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 4.2615
+kernel_ms = 4.2621
+
+[bcc.O1]
+instructions = 401385
+memory_operands = 65531
+clocks = 933849
+code_bytes = 114
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 5.3548
 
 [bcc.O2]
 instructions = 393193
 memory_operands = 65531
+clocks = 909273
 code_bytes = 118
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 5.2449
+kernel_ms = 5.2455
 
 [bcc.Os]
 instructions = 401385
 memory_operands = 65531
+clocks = 933849
 code_bytes = 114
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 5.3542
+kernel_ms = 5.3548
+
+[tc.O1]
+instructions = 352236
+memory_operands = 65530
+clocks = 884693
+code_bytes = 105
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 4.6992
 
 [tc.O2]
 instructions = 352236
 memory_operands = 65530
+clocks = 884693
 code_bytes = 107
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 4.6986
+kernel_ms = 4.6992
 
 [tc.Os]
 instructions = 352236
 memory_operands = 65530
+clocks = 884693
 code_bytes = 105
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 4.6986
+kernel_ms = 4.6992
+
+[tcpp.O1]
+instructions = 401385
+memory_operands = 65531
+clocks = 933845
+code_bytes = 112
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 5.3548
 
 [tcpp.O2]
 instructions = 401385
 memory_operands = 65531
+clocks = 933845
 code_bytes = 114
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 5.3542
+kernel_ms = 5.3548
 
 [tcpp.Os]
 instructions = 401385
 memory_operands = 65531
+clocks = 933845
 code_bytes = 112
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 5.3542
+kernel_ms = 5.3548
 
 [bc.O2]
 instructions = 942068

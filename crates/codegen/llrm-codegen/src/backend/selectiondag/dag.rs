@@ -248,6 +248,9 @@ impl std::fmt::Debug for ProductPrice {
 /// than read from a global.
 #[derive(Clone, Debug)]
 pub struct DagConfig {
+    /// The target nodes the shared passes recognize or create; the backend's
+    /// own where one is installed.
+    pub nodes: super::builder::LoweringNodes,
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
@@ -260,8 +263,9 @@ pub struct DagConfig {
     /// `extern` symbol's offset then folds too. The pin takes the flag from
     /// the IR; its absence there is this field's default.
     pub dso_local_symbols: bool,
-    /// A symbol defined in this module is `dso_local` (clang -fPIE marks definitions, not
-    /// declarations) although `dso_local_symbols` is off. Set for the 64-bit PIE only.
+    /// A symbol defined in this module is `dso_local` (clang -fPIE marks
+    /// definitions, not declarations) although `dso_local_symbols` is off.
+    /// Set for the 64-bit PIE only.
     pub defined_dso_local: bool,
     /// Static code (the pin's `PICStyle::None`): a symbol keeps a base and an
     /// index in its address at 64 bits, as an absolute `disp32`, where
@@ -282,9 +286,10 @@ pub struct DagConfig {
     /// `sdiv` by a power of two stays an `sdiv`.
     pub sdiv_pow2_stays: bool,
     /// A signed divide by a negative constant is the negation of the divide by
-    /// its magnitude (gcc's `expand_divmod`; the pin's `BuildSDIV` multiplies by
-    /// the negative divisor's own magic), so the quotient and the remainder
-    /// (`x % -c` is `x % c`) share one multiply-high. DEVIATE SD-DIVMAG.
+    /// its magnitude (gcc's `expand_divmod`; the pin's `BuildSDIV` multiplies
+    /// by the negative divisor's own magic), so the quotient and the
+    /// remainder (`x % -c` is `x % c`) share one multiply-high. DEVIATE
+    /// SD-DIVMAG.
     pub sdiv_by_magnitude: bool,
     /// The function evaluates floats at the x87's extended precision
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
@@ -335,6 +340,7 @@ impl Default for DagConfig {
     /// for the default PIC model).
     fn default() -> DagConfig {
         DagConfig {
+            nodes: super::builder::LoweringNodes::installed(),
             boolean_contents: BooleanContents::ZeroOrOne,
             offset_folding: false,
             global_addresses_constant: false,
@@ -1870,6 +1876,7 @@ impl SelectionDAG {
     /// DGROUP, where the near data is, when it names none.
     pub fn get_segment_of(
         &mut self,
+        segment_of: ISD,
         symbol: Option<u32>,
     ) -> SDValue {
         // The global is an operand, not the node's data: selection morphs the
@@ -1877,7 +1884,7 @@ impl SelectionDAG {
         // no operands would be one.
         let ops: Vec<SDValue> =
             symbol.map(|symbol| self.get_target_global_address(EVT::I16, symbol, 0)).into_iter().collect();
-        self.intern(super::x86isd::SEGMENT_OF, &[EVT::I16], &ops, SDNodeFlags::default(), NodeData::None)
+        self.intern(segment_of, &[EVT::I16], &ops, SDNodeFlags::default(), NodeData::None)
     }
 
     pub fn get_jump_table(

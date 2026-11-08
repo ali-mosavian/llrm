@@ -1,69 +1,114 @@
-reason = "m16 C is built with the inlining gcc, clang and the m32 table have: the kernel is called through a volatile pointer, not built with -fno-inline-functions, which also kept a recursive function from inlining itself (rectwo -O2 2333728 -> 1463465 clocks, fib 404985 -> 266306, frames 11.94M -> 9.98M); sizes are of the kernel noinline with main as written"
-blessed = "2026-10-15"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
+corpus = "917ce3aa0ad5d4b74e0fa28d833fe80d"
+
+[ow.O1]
+instructions = 328367
+memory_operands = 32837
+clocks = 612971
+code_bytes = 82
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 4.3808
 
 [ow.O2]
 instructions = 372151
 memory_operands = 21892
+clocks = 744313
 code_bytes = 89
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 4.9642
+kernel_ms = 4.9649
 
 [ow.Os]
 instructions = 328367
 memory_operands = 32837
+clocks = 612971
 code_bytes = 82
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 4.3802
+kernel_ms = 4.3808
+
+[bcc.O1]
+instructions = 394041
+memory_operands = 21892
+clocks = 974174
+code_bytes = 83
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 5.2569
 
 [bcc.O2]
 instructions = 383095
 memory_operands = 21892
+clocks = 875663
 code_bytes = 92
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 5.1102
+kernel_ms = 5.1108
 
 [bcc.Os]
 instructions = 394041
 memory_operands = 21892
+clocks = 974174
 code_bytes = 83
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 5.2563
+kernel_ms = 5.2569
+
+[tc.O1]
+instructions = 394040
+memory_operands = 21892
+clocks = 974170
+code_bytes = 78
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 5.2568
 
 [tc.O2]
 instructions = 415930
 memory_operands = 21892
+clocks = 930387
 code_bytes = 83
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 5.5482
+kernel_ms = 5.5488
 
 [tc.Os]
 instructions = 394040
 memory_operands = 21892
+clocks = 974170
 code_bytes = 78
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 5.2562
+kernel_ms = 5.2568
+
+[tcpp.O1]
+instructions = 394040
+memory_operands = 21892
+clocks = 974170
+code_bytes = 83
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 5.2568
 
 [tcpp.O2]
 instructions = 394040
 memory_operands = 21892
+clocks = 908497
 code_bytes = 91
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 5.2562
+kernel_ms = 5.2568
 
 [tcpp.Os]
 instructions = 394040
 memory_operands = 21892
+clocks = 974170
 code_bytes = 83
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 5.2562
+kernel_ms = 5.2568
 
 [bc.O2]
 instructions = 1193097

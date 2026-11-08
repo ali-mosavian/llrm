@@ -174,7 +174,7 @@ impl Builder<'_> {
             .any(
                 |case| matches!(
                     case.lhs,
-                    Operand::Value(value) if self.node_map.get(&value).is_some_and(|one| self.dag.opcode(*one) == super::super::x86isd::LLRM_CALL_FLAGS)
+                    Operand::Value(value) if self.node_map.get(&value).is_some_and(|one| Some(self.dag.opcode(*one)) == self.target.dag.nodes.call_flags)
                 ),
             );
         if flags_read || !self.should_emit_as_branches(&cases) {
@@ -595,7 +595,8 @@ mod tests {
         let convention =
             crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
         let mut info = FunctionLoweringInfo::new(function);
-        let target = BuilderTarget::for_pointer_bits(32).with_tti(Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap())));
+        let target = BuilderTarget::for_pointer_bits(32)
+            .with_tti(Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap())));
         build_block(
             &module,
             function,

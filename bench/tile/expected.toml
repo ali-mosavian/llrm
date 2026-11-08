@@ -1,26 +1,47 @@
-reason = "m16: bc/pds71/vbdos externals for the nib/bq16 rows that had none"
-blessed = "2026-11-07"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
 corpus = "22830461b74c44e5f8f0128a9a7a0a82"
+
+[ow.O1]
+instructions = 12188
+memory_operands = 2101
+clocks = 17327
+code_bytes = 162
+data_bytes = 0
+bss_bytes = 8192
+kernel_ms = 0.8031
 
 [ow.O2]
 instructions = 11265
 memory_operands = 2101
+clocks = 16309
 code_bytes = 166
 data_bytes = 0
 bss_bytes = 8192
-kernel_ms = 0.6782
+kernel_ms = 0.6824
 
 [ow.Os]
 instructions = 12188
 memory_operands = 2101
+clocks = 17327
 code_bytes = 162
 data_bytes = 0
 bss_bytes = 8192
-kernel_ms = 0.7989
+kernel_ms = 0.8031
+
+[bcc.O1]
+instructions = 14167
+memory_operands = 4004
+clocks = 27204
+code_bytes = 163
+data_bytes = 0
+bss_bytes = 8192
+kernel_ms = 1.1496
 
 [bcc.O2]
 instructions = 9417
 memory_operands = 2156
+clocks = 19691
 code_bytes = 193
 data_bytes = 0
 bss_bytes = 8192
@@ -29,14 +50,25 @@ kernel_ms = 0.7073
 [bcc.Os]
 instructions = 14167
 memory_operands = 4004
+clocks = 27204
 code_bytes = 163
 data_bytes = 0
 bss_bytes = 8192
 kernel_ms = 1.1496
 
+[tc.O1]
+instructions = 17241
+memory_operands = 10161
+clocks = 33473
+code_bytes = 205
+data_bytes = 0
+bss_bytes = 8192
+kernel_ms = 1.3025
+
 [tc.O2]
 instructions = 17243
 memory_operands = 10161
+clocks = 33462
 code_bytes = 210
 data_bytes = 0
 bss_bytes = 8192
@@ -45,22 +77,34 @@ kernel_ms = 1.3026
 [tc.Os]
 instructions = 17241
 memory_operands = 10161
+clocks = 33473
 code_bytes = 205
 data_bytes = 0
 bss_bytes = 8192
 kernel_ms = 1.3025
 
+[tcpp.O1]
+instructions = 16194
+memory_operands = 6059
+clocks = 30382
+code_bytes = 175
+data_bytes = 0
+bss_bytes = 8192
+kernel_ms = 1.1793
+
 [tcpp.O2]
 instructions = 16196
 memory_operands = 5033
+clocks = 29346
 code_bytes = 180
 data_bytes = 0
 bss_bytes = 8192
-kernel_ms = 1.3979
+kernel_ms = 1.3978
 
 [tcpp.Os]
 instructions = 16194
 memory_operands = 6059
+clocks = 30382
 code_bytes = 175
 data_bytes = 0
 bss_bytes = 8192

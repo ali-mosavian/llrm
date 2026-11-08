@@ -1,0 +1,37 @@
+{
+ "date": "2026-11-08",
+ "load_average": [
+  10.1455078125,
+  17.37939453125,
+  24.87939453125
+ ],
+ "compilers_md5": {
+  "ow": "ba2470ab8b7194078b9035efabb25b2f",
+  "bcc": null,
+  "tc": null,
+  "tcpp": null
+ },
+ "switches": {
+  "bcc": {
+   "O1": "-O1",
+   "O2": "",
+   "Os": "-O1"
+  },
+  "tc": {
+   "O1": "-O -Z -r -1 -D__huge=huge",
+   "O2": "-G -O -Z -r -1 -D__huge=huge",
+   "Os": "-O -Z -r -1 -D__huge=huge"
+  },
+  "tcpp": {
+   "O1": "-2 -O -Z -r",
+   "O2": "-2 -G -O -Z -r",
+   "Os": "-2 -O -Z -r"
+  },
+  "ow": {
+   "O2": "-ox -oe=0",
+   "O1": "-os -ol",
+   "Os": "-os -ol"
+  },
+  "basic": "/O /FPi"
+ }
+}

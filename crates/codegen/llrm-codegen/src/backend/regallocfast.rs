@@ -16,9 +16,11 @@
 //! def `definePhysReg`/`freePhysReg`. An instruction's `clobbers` are its
 //! register mask.
 //!
-//! DEVIATE R1 (no number, exit 2026-11-13): the copy hints are one level deep:
-//! `traceCopies` follows no chain of copies (the pin follows three), and a
-//! hint comes from an argument's arrival or a copy out of a pinned value.
+//! DEVIATE R1 (no number, exit 2026-11-13): the static copy hints are one level
+//! deep (an argument's arrival, a copy out of a pinned value); `traceCopies`
+//! follows no chain of copies (the pin follows three). A use copied into a
+//! value already placed takes that value's register, so a chain ending in an
+//! argument register is followed to its end.
 //!
 //! DEVIATE R2 (no number, exit 2026-11-13): a body this does not cover is left
 //! to the greedy allocator (`Fallback`): x87 or SSE values, segment registers,
@@ -96,7 +98,10 @@ struct Fast<'a> {
     sites: HashMap<u32, Sites>,
     across: HashSet<u32>,
     stored: HashSet<u32>,
-    orders: HashMap<u32, Vec<usize>>,
+    /// The order registers are tried in, by the set a value is confined to
+    /// (`None`: unconfined): it depends on nothing else of the value. A handful
+    /// of sets occur, so a scan finds one.
+    orders: Vec<(Option<std::collections::BTreeSet<RegId>>, Vec<usize>)>,
     /// `traceCopies`: the register a value is copied from, where that is a
     /// physical one (an argument's arrival, a copy out of a pinned value).
     hints: HashMap<u32, usize>,
@@ -171,7 +176,7 @@ fn run(
         sites: HashMap::default(),
         across: HashSet::default(),
         stored: HashSet::default(),
-        orders: HashMap::default(),
+        orders: Vec::new(),
         hints: HashMap::default(),
         confined,
         block: 0,
@@ -341,10 +346,12 @@ impl Fast<'_> {
         &mut self,
         value: u32,
     ) -> Result<Vec<usize>, Fallback> {
-        if let Some(found) = self.orders.get(&value) {
+        let wanted = self.confined.get(&value);
+        let remembered = self.orders.iter().find(|(set, _)| set.as_ref() == wanted);
+        llrm_support::debug::counted("fast register order", remembered.is_some());
+        if let Some((_, found)) = remembered {
             return Ok(found.clone());
         }
-        let wanted = self.confined.get(&value);
         let order = target::order(wanted, self.segments, self.classes);
         let regs = self.classes.registers;
         let mut out = Vec::with_capacity(order.len());
@@ -360,7 +367,7 @@ impl Fast<'_> {
                 None => return fail("a register outside the allocatable set"),
             }
         }
-        self.orders.insert(value, out.clone());
+        self.orders.push((wanted.cloned(), out.clone()));
         Ok(out)
     }
 
@@ -666,11 +673,12 @@ impl Fast<'_> {
             self.live[slot].live_out = true;
         }
         if self.live[slot].phys.is_none() {
-            // a copy into a pinned value hints that register (`useVirtReg`)
+            // a copy into a pinned value hints that register (`useVirtReg`);
+            // a copy into a value already placed, the register it was given
             let mut hint0 = None;
             if one.what.as_ref().is_some_and(|what| what.op == ir::Operation::Move)
                 && let ([def], [_]) = (&one.defines[..], &one.uses[..])
-                && let Some(register) = self.pins.get(def)
+                && let Some(register) = self.pins.get(def).or_else(|| self.here.get(def))
             {
                 hint0 = self.index.get(&ir::root(*register)).copied();
             }
@@ -704,9 +712,7 @@ impl Fast<'_> {
             let mut made = self.instruction(one)?;
             out.append(&mut self.after);
             if made.group.is_some() {
-                let mut copy = (*made).clone();
-                copy.group = None;
-                made = Arc::new(copy);
+                Arc::make_mut(&mut made).group = None;
             }
             out.push(made);
         }
@@ -873,9 +879,8 @@ impl Fast<'_> {
         if self.here.is_empty() && physical.is_empty() && one.undefs.is_empty() {
             return Ok(Arc::clone(one));
         }
-        let mut held: IndexMap<u32, RegId> = self.here.clone();
-        held.extend(physical.iter().map(|(value, register)| (*value, *register)));
-        let placed = crate::backend::rewriter::_placed(one, &held, self.classes).map_err(|why| Fallback(why.0))?;
+        self.here.extend(physical.iter().map(|(value, register)| (*value, *register)));
+        let placed = crate::backend::rewriter::_placed(one, &self.here, self.classes).map_err(|why| Fallback(why.0))?;
         // An identity move stays as an inert anchor: its value is defined.
         if placed.group.is_none() && crate::backend::rewriter::_pointless(&placed) {
             return Ok(crate::model::lir::anchor(placed));
