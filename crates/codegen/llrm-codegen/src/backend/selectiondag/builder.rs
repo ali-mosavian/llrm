@@ -84,6 +84,10 @@ pub struct BuilderTarget {
     pub min_jump_table_entries: usize,
     /// `getMinimumJumpTableDensity`, where the target states one.
     pub min_jump_table_density: Option<u64>,
+    /// Name prefix of the blocks the target added to the IR before selection
+    /// (phi edges): the pin has none at this point, so a switch's layout
+    /// successor is the next block without it.
+    pub preselection_blocks: Option<&'static str>,
     /// `isOperationLegal(SHL, pointer)`: a switch may be bit tests (`1 << x`).
     pub variable_shift_legal: bool,
     /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit
@@ -373,6 +377,7 @@ impl BuilderTarget {
             shift_amount_of: None,
             min_jump_table_entries: 4,
             min_jump_table_density: None,
+            preselection_blocks: None,
             variable_shift_legal: true,
             switch_optimize: true,
             trap_unreachable: false,
