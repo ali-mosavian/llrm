@@ -97,9 +97,10 @@ pub struct Options {
     /// backend instead of a `setjmp` frame. The mid-end is the same.
     pub wasm_exceptions: bool,
     /// A function whose LSR chose end-biased formulae the pin does not
-    /// (`llrm-end-biased`) is built again without them and the better kept
-    /// (`assemble::assembled_with`). The module is cloned before the pipeline
-    /// to be able to.
+    /// (`llrm-end-biased`) has a twin without them (`pipeline::Options::lsr_twins`)
+    /// and the better of the two is kept (`assemble::assembled_by`).
+    // DEVIATE LG3B-DEFAULT-OFF (owner x86-m64, exit 2026-11-22): off by default until the Ir of the twins on the
+    // three compile-time programs is within the bar (<= +5% at -O2).
     pub end_biased_trial: bool,
 }
 
@@ -372,25 +373,19 @@ pub fn compiled_module(
         None => return Err(format!("the module states no datalayout; {}'s is `{layout}`", options.arch.name())),
     }
     let cpu = options.cpu()?;
-    let unbuilt = options.end_biased_trial.then(|| module.clone());
     let mut program = Program::new(vec![module], cpu.target_under(&*options.arch, options.abi.as_deref()))?;
     if llrm_support::debug::verifying() {
         timed("mir verify frontend", || verified(&program, "the frontend"))?;
     }
     optimized(&mut program, options)?;
-    let other = match unbuilt {
-        Some(module) => end_biased_off(module, &program.modules[0], &cpu, options)?,
-        None => None,
-    };
     let segments = Segments::of(
         &options.machine,
         Regs(options.arch.registers()),
         crate::backend::target::offset_bytes(&*options.arch),
     );
     let assembled = timed("assemble", || {
-        assemble::assembled_with(
+        assemble::assembled_by(
             &program.modules[0],
-            other.as_ref().map(|one| &one.modules[0]),
             &crate::abi::llvm::LlvmAbi {
                 stack_check: if options.stack_check { Some(runtime_stack_check(&*options.arch)?) } else { None },
             },
@@ -411,87 +406,6 @@ pub fn compiled_module(
     }
     stage_files(options, "", &assembled)?;
     Ok(assembled)
-}
-
-// DEVIATE LG3B-DEFAULT-OFF (owner x86-m64, exit 2026-11-22): `-fend-biased-trial` is off by default. The second
-// whole-module mid-end run costs 1.94x llrm-cc Ir at -O2; default-on waits for a function twin made at LSR time.
-/// The module `unbuilt` (as it was before the pipeline) through the pipeline
-/// again with `llrm-no-end-biased` on the functions `built` marks
-/// `llrm-end-biased`; none where it marks none, or where the two come out with
-/// other globals (the choice between a function's two forms shares the
-/// globals' numbers).
-fn end_biased_off(
-    mut unbuilt: Module,
-    built: &Module,
-    cpu: &Profile,
-    options: &Options,
-) -> Result<Option<Program>, String> {
-    let fired = |function: &llrm_mir::module::Function| {
-        llrm_mir::memory::has(&function.attrs, llrm_transforms::lsr_pass::END_BIASED_FIRED)
-    };
-    let flagged: Vec<String> = built
-        .globals
-        .iter()
-        .filter(|global| global.function().is_some_and(fired))
-        .filter_map(|global| global.name.as_deref().map(str::to_owned))
-        .collect();
-    if flagged.is_empty() {
-        return Ok(None);
-    }
-    for name in &flagged {
-        if let Some((_, function)) = unbuilt.function_mut(name) {
-            function.attrs.push(llrm_mir::opcode::Attribute::Flag(llrm_transforms::lsr_pass::NO_END_BIASED.into()));
-        }
-    }
-    let mut program = Program::new(vec![unbuilt], cpu.target_under(&*options.arch, options.abi.as_deref()))?;
-    optimized(&mut program, options)?;
-    Ok(aligned(program.modules.swap_remove(0), built).map(|module| Program { modules: vec![module], ..program }))
-}
-
-/// `other` with its globals numbered as `built`'s are, by name, so a function
-/// of it can be selected beside `built`'s: a declaration one has and the other
-/// has not (an idiom's `memcpy`, a pruned intrinsic) is placed past the end
-/// or stands in its own place. None where `other` defines a global `built`
-/// does not have, or one of them is a variable where the other is a function.
-fn aligned(
-    mut other: Module,
-    built: &Module,
-) -> Option<Module> {
-    let mut number: HashMap<GlobalId, GlobalId> = HashMap::default();
-    let mut extra = Vec::new();
-    for (at, global) in other.globals.iter().enumerate() {
-        let name = global.name.as_deref()?;
-        match built.named(name) {
-            Some(id) => {
-                if built.global(id).function().is_some() != global.function().is_some() {
-                    return None;
-                }
-                number.insert(GlobalId(at as u32), id);
-            }
-            None => {
-                let declared = global.function().is_some_and(|one| one.is_declaration());
-                if !declared {
-                    return None;
-                }
-                number.insert(GlobalId(at as u32), GlobalId((built.globals.len() + extra.len()) as u32));
-                extra.push(at);
-            }
-        }
-    }
-    let mut globals = built.globals.clone();
-    for (at, global) in other.globals.iter().enumerate() {
-        if let Some(id) = built.named(global.name.as_deref()?) {
-            globals[id.0 as usize] = global.clone();
-        } else {
-            let _ = at;
-        }
-    }
-    globals.extend(extra.iter().map(|&at| other.globals[at].clone()));
-    other.globals = globals;
-    other.global_metadata.clear();
-    other.context.renumber_globals(&|id| number.get(&id).copied());
-    other.symbols = Default::default();
-    Some(other)
 }
 
 /// What the spill model (`llrm_transforms::spill`) forecasts for each function

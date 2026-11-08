@@ -648,6 +648,7 @@ fn options_for(
     };
     // `-fend-biased-trial` is for 32- and 64-bit x86.
     options.end_biased_trial &= bound.target.name().starts_with("x86") && bound.target.layout().mode >= 32;
+    options.pipeline.lsr_twins = options.end_biased_trial;
     let number = llrm_target::calling::Calling::number_of(default.cc.as_deref());
     let pattern = default.symbol.get(format).map_or("*", String::as_str);
     if let (Some(number), Some(description)) = (number, bound.target.runtime("c")) {

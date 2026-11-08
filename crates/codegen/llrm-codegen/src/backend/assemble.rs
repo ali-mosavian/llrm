@@ -171,28 +171,11 @@ pub fn assembled(
     assembled_by(module, abi, code, cpu, segments, isel::m16(), Selector::Old, &llrm_x86_m16::M16, &[])
 }
 
-/// `module` as masm, its code in the segment `code`, selected by `selection`.
+/// `module` as masm, its code in the segment `code`, selected by `selection`. A function marked
+/// `llrm-end-biased` that has a twin (`lsr_pass::TWIN_SUFFIX`) is selected as both and the better kept
+/// (`end_biased_pick`); the twins are not emitted.
 pub fn assembled_by(
     module: &Module,
-    abi: &dyn Abi,
-    code: &str,
-    cpu: ProfileOrName<'_>,
-    segments: &Segments,
-    selection: &'static isel::Compiled,
-    selector: Selector,
-    arch: &dyn llrm_target::Target,
-    libcalls: &[(String, u32, String)],
-) -> Result<masm::Module, String> {
-    assembled_with(module, None, abi, code, cpu, segments, selection, selector, arch, libcalls)
-}
-
-/// [`assembled_by`], where `alternative` is the same module put through the
-/// pipeline again with `llrm-no-end-biased` on the functions that carry
-/// `llrm-end-biased` (`lsr_pass`): each such function is selected from both and
-/// the better kept (`end_biased_pick`).
-pub fn assembled_with(
-    module: &Module,
-    alternative: Option<&Module>,
     abi: &dyn Abi,
     code: &str,
     cpu: ProfileOrName<'_>,
@@ -254,12 +237,18 @@ pub fn assembled_with(
         let global = module.global(id);
         if global.function().is_some_and(|one| !one.is_declaration()) {
             let name = global.name.as_deref().unwrap_or_default();
+            // A twin is selected beside its function, not on its own.
+            if is_twin(name) {
+                continue;
+            }
             let made = llrm_support::debug::in_function(name, || {
-                let flagged = alternative
-                    .filter(|_| global.function().is_some_and(|one| llrm_mir::memory::has(&one.attrs, END_BIASED_FIRED)));
-                match flagged {
-                    Some(other) => end_biased_pick(module, other, name, abi, &pool, &target),
-                    None => machined(module, name, abi, &pool, &target),
+                let twin = format!("{name}{TWIN_SUFFIX}");
+                let flagged = global.function().is_some_and(|one| llrm_mir::memory::has(&one.attrs, END_BIASED_FIRED))
+                    && module.named(&twin).is_some();
+                if flagged {
+                    end_biased_pick(module, name, &twin, abi, &pool, &target)
+                } else {
+                    machined(module, name, abi, &pool, &target)
                 }
             })?;
             facts.record(name, &made.body, &made.registers, &made.calls);
@@ -343,6 +332,7 @@ pub fn assembled_with(
                     weak.insert(names[&(globals::space(module, id), at as i64)].clone());
                 }
             }
+            GlobalKind::Function(_) if is_twin(name) => {}
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
                 let Machined { body, reserve, calls, inline, inline_symbols, far, pops, popped, registers, .. } =
@@ -880,14 +870,14 @@ fn calls_known(
 }
 
 /// A function whose LSR chose end-biased formulae the pin does not
-/// (`llrm-end-biased`), selected as it is and again from `other`, the module
-/// built with them off: the smaller where bytes are strict (-O1, -Os), else
+/// (`llrm-end-biased`), selected as it is and again as `twin`, the same body
+/// built without them: the smaller where bytes are strict (-O1, -Os), else
 /// the lower work plus the bytes at the speed rate. The pin's form, the
 /// formulae off, wins a tie. The constant pool is the winner's alone.
 fn end_biased_pick(
     module: &Module,
-    other: &Module,
     name: &str,
+    twin: &str,
     abi: &dyn Abi,
     pool: &Rc<RefCell<Pool>>,
     target: &Target<'_>,
@@ -896,7 +886,7 @@ fn end_biased_pick(
     let on = machined(module, name, abi, pool, target)?;
     let after_on = pool.borrow().clone();
     *pool.borrow_mut() = before;
-    let Ok(off) = machined(other, name, abi, pool, target) else {
+    let Ok(mut off) = machined(module, twin, abi, pool, target) else {
         *pool.borrow_mut() = after_on;
         return Ok(on);
     };
@@ -916,6 +906,7 @@ fn end_biased_pick(
         return Ok(on);
     };
     if score_off <= score_on {
+        off.body.name = name.to_owned();
         Ok(off)
     } else {
         *pool.borrow_mut() = after_on;
@@ -926,6 +917,11 @@ fn end_biased_pick(
 /// The attribute `lsr_pass` puts on a function whose end-biased formulae differ
 /// from the pin's.
 const END_BIASED_FIRED: &str = llrm_transforms::lsr_pass::END_BIASED_FIRED;
+use llrm_transforms::lsr_pass::TWIN_SUFFIX;
+
+fn is_twin(name: &str) -> bool {
+    name.ends_with(TWIN_SUFFIX)
+}
 
 /// The bytes of a finished function's instructions, or none where one has no
 /// price.
