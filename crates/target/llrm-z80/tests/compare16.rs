@@ -33,3 +33,19 @@ fn two_words_are_compared_for_equality_with_sbc_hl() {
     );
     assert!(text.contains("sbc hl, de") && !text.contains("sub a, e"), "{text}");
 }
+
+/// The biased copy a signed compare builds (`ld c, e; ld a, d; xor a, #128; ld b, a`) had its low byte and its
+/// high byte read by nothing once the compare tested the high byte alone, and both were rebuilt below
+/// (`ld c, e; ld b, d`): 2 dead loads in switch_peeled_table's loop.
+#[test]
+fn a_biased_copy_the_compare_no_longer_reads_is_not_loaded() {
+    let text = assembly(
+        "dead_bias",
+        "declare void @f(i16)\n\
+         define void @g(i16 %a) {\n  %c = icmp slt i16 %a, 256\n  br i1 %c, label %t, label %e\n\
+         t:\n  call void @f(i16 %a)\n  ret void\n\
+         e:\n  ret void\n}\n",
+    );
+    let loads = text.lines().filter(|line| line.trim_start().starts_with("ld c, e")).count();
+    assert!(loads <= 1, "{text}");
+}

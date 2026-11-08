@@ -2018,19 +2018,25 @@ fn cancel_steps(lines: Vec<Line>) -> Vec<Line> {
     out
 }
 
-/// `ld r, a` and a later `ld r, ...` with nothing between that names the pair of
-/// `r`, a label or a jump: the first store is never read. The printer leaves it
-/// when the `ld a, r` that read it was spared (`and a, #248; ld c, a; or a, #5;
-/// ld c, a`). The load leaves the flags alone.
+/// `ld r, s` (a register or a constant) and a later `ld r, ...` with nothing between that names `r`, its
+/// pair, a label or a jump: the first load is never read. The printer leaves one when the instruction that read it
+/// was spared (`and a, #248; ld c, a; or a, #5; ld c, a`, or a signed compare of a word against a constant
+/// whose low byte is 0, which keeps only the high byte of the biased copy). The load leaves the flags alone.
 fn drop_overwritten_byte_stores(lines: Vec<Line>) -> Vec<Line> {
+    let is_byte = |register: &str| register.len() == 1 && "bcdehl".contains(register);
     let byte = |text: &str| {
-        let register = text.strip_prefix("ld ")?.strip_suffix(", a")?;
-        (register.len() == 1 && "bcdehl".contains(register)).then_some(register.to_owned())
+        let (register, source) = text.strip_prefix("ld ")?.split_once(", ")?;
+        (is_byte(register) && (is_byte(source) || source == "a" || source.starts_with('#')))
+            .then_some(register.to_owned())
     };
     let pair_of = |register: &str| match register {
         "b" | "c" => "bc",
         "d" | "e" => "de",
         _ => "hl",
+    };
+    // the register or its pair named: the other byte of the pair is no reader
+    let names = |text: &str, register: &str| {
+        text.split([' ', ',', '(', ')', '+']).filter(|word| !word.is_empty()).skip(1).any(|word| word == register || word == pair_of(register))
     };
     let mut keep = vec![true; lines.len()];
     for (at, line) in lines.iter().enumerate() {
@@ -2042,12 +2048,12 @@ fn drop_overwritten_byte_stores(lines: Vec<Line>) -> Vec<Line> {
                 Line::Label(_) => break,
                 Line::Inst(next) => {
                     if let Some(source) = next.strip_prefix(&format!("ld {register}, "))
-                        && !mentions(&format!("ld x, {source}"), pair_of(&register))
+                        && !names(&format!("ld x, {source}"), &register)
                     {
                         keep[at] = false;
                         break;
                     }
-                    if mentions(next, pair_of(&register)) || HIDDEN.contains(&next.split(' ').next().unwrap_or("")) {
+                    if names(next, &register) || HIDDEN.contains(&next.split(' ').next().unwrap_or("")) {
                         break;
                     }
                 }
