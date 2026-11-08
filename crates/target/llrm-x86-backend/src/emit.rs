@@ -3220,7 +3220,7 @@ impl Emitter<'_, '_> {
             // A jump through a register that holds a table entry's address
             // (the position-independent table of 64-bit code): the table is
             // the one the register's sum was made from.
-            "JMP64r" => {
+            "JMP16r" | "JMP32r" | "JMP64r" => {
                 let table = self
                     .jump_table_behind(node.ops[0], 8)
                     .ok_or_else(|| EmitError::Unsupported("an indirect jump through a register".to_owned()))?;
@@ -3228,6 +3228,13 @@ impl Emitter<'_, '_> {
                     return Err(EmitError::Unsupported("a jump through a non-register".to_owned()));
                 };
                 let jump = self.jump_table(table)?;
+                // The table is relative only where the DAG made it so (64-bit
+                // position independent code); `masm::jump_tables` says the same
+                // by the pointer width. A pointer-wide 64-bit table read into a
+                // register would be written as offsets: refuse it.
+                if !self.dag.relative_jump_tables() && self.dag.config().pointer == EVT::I64 {
+                    return Err(EmitError::Unsupported("a jump through a register at 64 bits without position independence".to_owned()));
+                }
                 let what = Semantics {
                     indirect: true,
                     table: jump.targets,
