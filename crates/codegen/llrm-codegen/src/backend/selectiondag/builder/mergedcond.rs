@@ -174,7 +174,7 @@ impl Builder<'_> {
             .any(
                 |case| matches!(
                     case.lhs,
-                    Operand::Value(value) if self.node_map.get(&value).is_some_and(|one| Some(self.dag.opcode(*one)) == self.target.nodes.call_flags)
+                    Operand::Value(value) if self.node_map.get(&value).is_some_and(|one| Some(self.dag.opcode(*one)) == self.target.dag.nodes.call_flags)
                 ),
             );
         if flags_read || !self.should_emit_as_branches(&cases) {
