@@ -3083,3 +3083,33 @@ fn the_exit_tests_of_earlier_loops_are_rewritten_before_the_next_loop_is_asked()
         "queries: {small} at 10 loops, {large} at 20 (220 and 440 in order, 625 and 2150 not)"
     );
 }
+
+/// A body that dead-argument elimination changed after the inliner went
+/// through the whole cleanup list again (promote, combine@1242, dead,
+/// simplify-cfg): 63 of the 129 extra InstCombine runs on memory_expansion -O2.
+/// The pin runs GlobalCleanup once, before the inliner, and nothing follows
+/// `DeadArgumentEliminationPass`. Here `@g`'s argument is read only by a call
+/// to `@h(%u, 0)`, whose select the inliner folds: the argument is dead only after it.
+#[test]
+fn test_a_body_dead_argument_elimination_changed_does_not_run_the_cleanup_list_again() {
+    let text = "define internal i16 @h(i16 %p, i16 %q) {\nb0:\n  %c = icmp eq i16 %q, 0\n  %r = select i1 %c, i16 1, i16 %p\n  ret i16 %r\n}\n\ndefine internal i16 @g(i16 %x, i16 %u) noinline {\nb0:\n  %k = call i16 @h(i16 %u, i16 0)\n  %m = call i16 @h(i16 %x, i16 1)\n  %r = add i16 %m, %k\n  ret i16 %r\n}\n\ndefine i16 @f(i16 %a, i16 %b) {\nb0:\n  %c = call i16 @g(i16 %a, i16 %b)\n  ret i16 %c\n}\n";
+    llrm_mir::counts::per_pass();
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied::default();
+    let before = llrm_mir::counts::lines();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let after = llrm_mir::counts::lines();
+    let runs = |lines: &[String]| {
+        lines
+            .iter()
+            .filter_map(|line| line.strip_prefix("[counts] pass combine@1242 ")?.split(' ').next()?.parse::<u64>().ok())
+            .sum::<u64>()
+    };
+    let printed = llrm_mir::print::module(&module);
+    assert!(printed.contains("@g(i16 %") && !printed.contains("@g(i16 %x, i16"), "the argument was removed: {printed}");
+    assert_eq!(runs(&after) - runs(&before), 3, "the cleanup list runs once over each of the three bodies");
+}
