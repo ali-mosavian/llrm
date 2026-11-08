@@ -689,6 +689,38 @@ impl Tti for X86 {
         self.tuning.inline_o1_weighs_entry
     }
 
+    fn call_sequence_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let tuning = &self.tuning;
+        if kind != CostKind::Latency || tuning.call_sequence_fixed_clocks == 0 {
+            return None;
+        }
+        let words: i64 = shape
+            .arguments
+            .iter()
+            .map(|argument| match (argument.byval_bytes, argument.ty) {
+                (Some(bytes), _) => (bytes as i64 + 3) / 4,
+                (None, Some(Ty::Int(bits))) => i64::from(bits.div_ceil(32).max(1)),
+                (None, Some(Ty::Double)) => 2,
+                (None, Some(Ty::X87)) => 3,
+                _ => 1,
+            })
+            .sum();
+        let pop = if words > 0 { tuning.call_sequence_pop_clocks } else { 0 };
+        Some(Cost::of(tuning.call_sequence_fixed_clocks + words * tuning.call_sequence_argument_clocks + pop))
+    }
+
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        self.tuning.speed_inline_rate_at_o1
+    }
+
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.speed_inline_milliclocks_per_byte
+    }
+
     fn inline_o1_unit_bytes_milli(&self) -> i64 {
         self.tuning.inline_o1_unit_bytes_milli
     }
