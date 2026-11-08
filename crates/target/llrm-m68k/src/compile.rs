@@ -37,18 +37,18 @@ pub enum Item {
 /// medium or large.
 ///
 /// DEVIATE: medium is absolute on the 68020 and later as well. The pin picks
-/// PC-relative there, "any data offset fits"
-/// (`M68kSubtarget::classifyLocalReference`,
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kSubtarget.cpp>),
-/// but our table has only the 16-bit displacement form, so a global past 32 KiB
-/// (`memcpy_runtime`'s 70016-byte arrays) failed with "does not fit its 2-byte
-/// field". Reason: medium has to reach any offset at every cpu; `(bd32,%pc)` is
-/// 2 B longer than `abs.l` and needs a new encoding. Position independence is
-/// not modelled (`-fPIC` is ignored, as the small model's PC-relative data
-/// already is position independent): the pin's PIC medium is PC-relative from
-/// the 68020 and `@GOTOFF` below it. Owner: m68k. Exit: 2026-11-20, add the
-/// `(bd32,%pc)` form and the PIC model; medium is PC-relative again from the
-/// 68020 where PIC is asked for.
+/// PC-relative there (`M68kSubtarget::classifyLocalReference`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kSubtarget.cpp#L199-L208>),
+/// but its only PC-relative data form is `(d16,%pc)` (`MxPCD`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kInstrInfo.td#L417-L422>
+/// is the indexed `(bd32,%pc,Xn)` form), so a global past 32 KiB fails to link:
+/// `relocation truncated to fit: R_68K_PC16` for `memcpy_runtime`'s two
+/// 70016-byte arrays (command and output in
+/// `docs/working/m68k-medium-pin-pc16.md`). Reason: medium has to reach any
+/// offset; `abs.l` does at every cpu, and a `(bd32,%pc)` form would be beyond
+/// the pin and 2 B longer. Position independence is not modelled (`-fPIC` is
+/// ignored). Owner: m68k. Review: 2026-12-15, or when the pin selects a 32-bit
+/// PC-relative form for data, whichever is first.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum CodeModel {
     #[default]
