@@ -2698,6 +2698,8 @@ impl<'a> TypeLegalizer<'a> {
     /// as it was until their owners measure the call. Exit: those targets
     /// measured. Nor is it made where the product fits a half: a byte times
     /// a constant is a few instructions, less than the call and the routine.
+    /// Outside functions tuned for size a constant factor the combiner makes
+    /// shifts and adds stays inline (compare_to_int64 `x * 3`: +8k T called).
     fn expand_mul(
         &mut self,
         value: SDValue,
@@ -2739,6 +2741,7 @@ impl<'a> TypeLegalizer<'a> {
             (self.dag.get_node(ISD::Mul, half, &[ll, rl]), self.dag.get_node(ISD::MulHU, half, &[ll, rl]))
         } else if self.tli.has_size_libcall_name(ISD::Mul, self.dag.value_type(value))
             && !self.product_fits(lhs, rhs, bits)
+            && ![lhs, rhs].into_iter().filter_map(|one| self.dag.constant(one)).any(|c| self.tli.multiply_by_constant_stays_inline(c))
             && let Some(pair) = self.expand_by_libcall(value, ISD::Mul, half, false, [lhs, rhs])
         {
             return Ok(pair);

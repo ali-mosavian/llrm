@@ -82,11 +82,16 @@ fn a_size_function_whose_calls_save_less_than_the_routine_costs_keeps_the_shifts
 
 /// compound_assignment_types -Os: `main` is 1 B smaller with the shifts and adds, but they call the
 /// runtime's shift routines (+46 B) where the multiplies called `__mulsi3`: priced by the function alone
-/// the shifts won and the program grew 2 B. The module is priced with the runtime routines it reaches.
+/// the shifts won and the program grew 2 B. The module is priced with the runtime routines it reaches, and
+/// the form chosen is the cheaper of the two (a tie goes to the shifts, which are faster).
 #[test]
 fn a_function_keeps_the_call_when_the_shifts_pull_in_more_runtime_than_the_routine() {
-    use llrm_z80::compile::text;
+    use llrm_z80::compile::{module_prices, text};
     use llrm_z80::driver::{Level, Request};
-    let asm = text(include_str!("data/compound_assignment_types.ll"), "main", 0, &Request::new(Level::Os)).expect("compiles");
-    assert!(asm.contains("call __mulsi3"), "{asm}");
+    let ir = include_str!("data/compound_assignment_types.ll");
+    let request = Request::new(Level::Os);
+    let (calls, shifts) = module_prices(ir, &request).expect("prices");
+    let asm = text(ir, "main", 0, &request).expect("compiles");
+    let called = asm.contains("call __mulsi3");
+    assert!(if called { calls < shifts } else { shifts <= calls }, "calls {calls} B, shifts {shifts} B, called {called}:\n{asm}");
 }

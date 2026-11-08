@@ -1828,8 +1828,8 @@ fn a_word_divide_and_remainder_of_the_same_operands_are_one_call() {
 /// A long multiplied by a constant was split into its halves, each half
 /// shifted and subtracted, in a function tuned for size: `x * 31` was 99 B and
 /// `x * 1000` 185 B, where a call is 14 (div_constants_short, mul_constants,
-/// -Os). A function tuned for size calls `__mulsi3`; the others keep the
-/// halves.
+/// -Os). A function calls `__mulsi3`, tuned for size or not (the halves
+/// cost more bytes and more T-states: phi_slot_unknown_arm -O1).
 #[test]
 fn a_function_tuned_for_size_calls_the_long_multiply() {
     let body = |attr: &str| {
@@ -1840,7 +1840,7 @@ fn a_function_tuned_for_size_calls_the_long_multiply() {
     let out = compiled(&body("optsize"), "f");
     assert!(out.contains("call __mulsi3"), "{out}");
     let out = compiled(&body(""), "f");
-    assert!(!out.contains("__mulsi3"), "{out}");
+    assert!(out.contains("call __mulsi3"), "{out}");
 }
 
 /// The routine is 57 B: one small multiply in a module called it at -Os and
@@ -2180,4 +2180,32 @@ fn a_switch_looks_past_phi_edge_blocks_for_the_next_block() {
     let out = text(ir, "h", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
     let tests: Vec<&str> = out.lines().map(str::trim).filter(|line| line.starts_with("cp a, #")).collect();
     assert_eq!(tests, ["cp a, #3", "cp a, #2", "cp a, #1"], "{out}");
+}
+
+/// A long multiply in a function not tuned for size was four word multiplies
+/// and their sums inline, bigger and slower than the routine: phi_slot_unknown_arm
+/// -O1 980 B and 3.95M T, 664 B and 3.04M T called; idioms -O2 7763 B. A module
+/// with two or more of them calls `__mulsi3` at every level.
+#[test]
+fn a_long_multiply_calls_the_routine_at_every_level() {
+    let ir = include_str!("kernels/ir/long_multiply_call.ll");
+    for level in [Level::O1, Level::O2, Level::O3, Level::Os] {
+        let out = text(ir, "g", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert_eq!(out.matches("call __mulsi3").count(), 2, "{level:?}: {out}");
+        assert!(!out.contains("__mulhi3"), "{level:?}: {out}");
+    }
+}
+
+/// A long multiplied by a constant of the form `2^k +- 1` stays shifts and an
+/// add where the module calls `__mulsi3` for its other multiplies: called, the
+/// `x * 3` of an `i64` was a call per half (compare_to_int64: +8k T of 37k).
+#[test]
+fn a_constant_factor_of_a_long_stays_inline_beside_the_calls() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i64 @f(i64 %a) {\n  %m = mul i64 %a, 3\n  ret i64 %m\n}\n\
+              define i32 @g(i32 %a, i32 %b, i32 %c) {\n  %m = mul i32 %a, %b\n  %n = mul i32 %m, %c\n  ret i32 %n\n}";
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("__mulsi3"), "{out}");
+    let out = text(ir, "g", 1, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("call __mulsi3").count(), 2, "{out}");
 }
