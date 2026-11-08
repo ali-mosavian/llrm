@@ -344,7 +344,7 @@ fn layout(
     allocation: &Allocation,
     darwin: bool,
 ) -> Layout {
-    let (slots, locals_end) = place_objects(function);
+    let (mut slots, locals_end) = place_objects(function);
     // `AArch64FrameLowering::hasFP`: `disableFramePointerElim` (the attribute)
     // or a variable-sized object keeps the frame record; so does a call, which
     // saves the link register beside it.
@@ -358,6 +358,20 @@ fn layout(
     // register that would leave a half pair below takes the gap under it.
     let mut gap = area != 8 * registers;
     let mut top = area;
+    // DEVIATE FR-LOW (beyond the pin; owner w15, exit 2026-11-30): on ELF a
+    // frame that has locals and saved registers and fits one `stp [sp, #-N]!`
+    // puts the saved registers lowest and the locals above them, as gcc does:
+    // the stack pointer moves in the first store and the last load, not in a
+    // separate `sub sp` and `add sp` (queens -Os: `bench_queens` 44 B, gcc 36).
+    // The pin's frame has the saved registers on top. Mach-O keeps it: its
+    // compact unwind names the saves below the frame record.
+    let record_low = !darwin
+        && !function.dynamic
+        && function.outgoing == 0
+        && locals_end > 0
+        && area > 0
+        && locals_end + area <= 512;
+    let shift = if record_low { 0 } else { locals_end };
     let mut saves = Vec::new();
     let mut frame_record = None;
     for (first, second) in pairs {
@@ -366,7 +380,7 @@ fn layout(
             top -= 8;
             gap = false;
         }
-        let at = locals_end + top;
+        let at = shift + top;
         // The register at the higher number goes at the lower address.
         let save = match (first, second) {
             (Csr::Lr, Some(Csr::Fp)) => {
@@ -382,6 +396,11 @@ fn layout(
         saves.push((save, at));
     }
     saves.reverse();
+    if record_low {
+        for slot in &mut slots {
+            *slot += area;
+        }
+    }
     Layout { size: locals_end + area, dynamic: function.dynamic, slots, saves, frame_record, locals: locals_end }
 }
 
