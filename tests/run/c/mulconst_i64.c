@@ -1,3 +1,4 @@
+// targets: lp64
 #include <stdint.h>
 
 /* i64 multiply by constants (lea/shl chains at m64): each product is reported for several operands. */

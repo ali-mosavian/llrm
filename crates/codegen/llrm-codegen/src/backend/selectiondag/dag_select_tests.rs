@@ -239,7 +239,7 @@ fn the_combiner_runs_between_the_legalizers() {
     )
     .expect("builds");
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-    super::dag_select::legalized(
+    super::select::legalized(
         &mut built.dag,
         &tli,
         &mut X86Lowering {

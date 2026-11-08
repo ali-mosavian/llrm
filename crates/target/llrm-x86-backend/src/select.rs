@@ -13,10 +13,11 @@ use llrm_codegen::backend::selectiondag::dag_target::{DagTarget, FrameObjects, P
 use llrm_codegen::backend::selectiondag::dagisel_adapter::{DagisAdapter, PinRegisters};
 use llrm_codegen::backend::selectiondag::emit_api::{EmitContext, EmitState, Emitted};
 use llrm_codegen::backend::selectiondag::schedule::SchedInfo;
-use llrm_codegen::backend::selectiondag::x86_lowering::X86Lowering;
 use llrm_dagisel::interp::{Outcome, Selector};
 use llrm_x86_dagisel::x86_hooks::X86Hooks;
 use llrm_x86_dagisel::x86_select::select_node;
+
+use super::x86_lowering::X86Lowering;
 
 /// x86 as a [`DagTarget`]: its lowering tables, hooks and selector tables.
 pub struct X86Target<'a, 'p> {
@@ -147,4 +148,15 @@ pub fn do_instruction_selection(
         &llrm_codegen::backend::selectiondag::dagisel_adapter::X86Registers,
         |adapter, node| select_node(selector, adapter, hooks, node),
     )
+}
+
+/// `CodeGenAndEmitDAG` up to selection: `Combine` at each of three levels
+/// around the two legalizers. The select shadow calls this same function.
+pub fn legalized(
+    dag: &mut SelectionDAG,
+    tli: &TargetLowering,
+    lowering: &mut X86Lowering<'_>,
+    arch: &dyn llrm_target::Target,
+) -> Result<(), Refusal> {
+    llrm_codegen::backend::selectiondag::dag_select::legalized_with(dag, tli, lowering, Some(arch), false)
 }

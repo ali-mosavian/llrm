@@ -246,8 +246,9 @@ pub fn folded_with(
 /// every use (LLVM's legal x87 immediates) and gcc folds them when the memory
 /// form is cheaper. The same rule as a load: the clocks the fold saves
 /// (`memory_form`, per CPU) and the bytes at the target's exchange rate; the
-/// memory form is the longer (6 bytes against 4 at m32), so code built for size
-/// keeps the constant. x_ld_sum -O2 m32: `x[r] += 1` ran `fld1; faddp` (12
+/// memory form is the longer (6 bytes against 4 at m32) and the pool keeps the
+/// constant besides, so code whose bytes are strict (-O1, -Os, -Oz) keeps the
+/// constant: -O1 m16 x_ld_sum grew 9 B with the 486 rows, two new pool cells. x_ld_sum -O2 m32: `x[r] += 1` ran `fld1; faddp` (12
 /// clocks) against `fadd dword [K]` (8); in the loops of x_ld_poly 129 of them.
 fn fold_constants(
     body: &LirBody,
@@ -256,7 +257,7 @@ fn fold_constants(
     cpu: &crate::backend::cpu::Profile,
     pool: &mut crate::backend::constpool::Pool,
 ) -> Option<LirBody> {
-    if cpu.size || cpu.min_size {
+    if cpu.bytes_strict() {
         return None;
     }
     let mut blocks = Vec::new();
@@ -1089,6 +1090,23 @@ mod tests {
         assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fadd+m", "fstp"], "no pool: only the load folds");
     }
 
+    /// x_ld_sum -O1 m16 grew 9 B (x_nbody_f 21) once the table priced `fld1;
+    /// faddp` above `fadd [K]`: the code ties and the pool cell is the growth.
+    /// Where bytes are strict the constant stays loaded.
+    #[test]
+    fn test_a_constant_stays_loaded_where_bytes_are_strict() {
+        let mut cpu = crate::backend::cpu::profile("486").expect("a profile").clone();
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(2, "fadd", 3, 1, 2),
+            fstp(3, 3, global(0, 0)),
+        ]);
+        assert_eq!(names(&constants_folded(&body, &cpu)), ["fld", "fadd+m", "fstp"], "-O2: the control");
+        cpu.speed_rate = false;
+        assert_eq!(names(&constants_folded(&body, &cpu)), ["fld1", "fadd+m", "fstp"], "-O1: the constant stays");
+    }
+
     /// x_nbody_f -O3 m32 and x_ld_axpy -O2: the other operand is not the last
     /// float defined, so `fadd [K]` needs an exchange (or the constant loaded
     /// again): a tie in clocks and 4 bytes more, and in x_nbody_f a nest laid
@@ -1152,6 +1170,23 @@ mod tests {
     #[test]
     fn test_an_integer_load_and_a_float_cell_read_the_integer_one_from_memory_at_speed() {
         let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            insn(0, Operation::FloatLoad, "fild", vec![held(1)], vec![Loc::Mem(frame(-4))]),
+            insn(1, Operation::FloatArith, "fmul", vec![held(3)], vec![held(1), Loc::Mem(global(8, 0))]),
+            fstp(2, 3, global(0, 0)),
+        ]);
+        let done = names(&folded(&body, cpu, REGISTERS));
+        assert_eq!(done, ["fld", "fimul+m", "fstp"], "{done:?}");
+    }
+
+    /// The 386 column priced the integer memory form at the 387's numbers
+    /// (`fimul` 35 against `fild` 8 + `fmul` 27), where the pair saves
+    /// nothing and the pair stays: x87rotate-class m16 code was priced at
+    /// fxch 18 and fstp 8 while the bar is the 486 table (fxch 4, `fimul` 23
+    /// against 13 + 16).
+    #[test]
+    fn test_the_386_column_prices_the_integer_memory_form_at_the_486_numbers() {
+        let cpu = crate::backend::cpu::profile("386").expect("a profile");
         let body = one_block(vec![
             insn(0, Operation::FloatLoad, "fild", vec![held(1)], vec![Loc::Mem(frame(-4))]),
             insn(1, Operation::FloatArith, "fmul", vec![held(3)], vec![held(1), Loc::Mem(global(8, 0))]),
