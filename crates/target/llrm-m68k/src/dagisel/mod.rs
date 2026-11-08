@@ -20,6 +20,7 @@ pub mod hooks;
 pub mod indexed;
 pub mod local;
 pub mod lowering;
+pub mod pcfull;
 pub mod pea;
 pub mod pipeline;
 pub mod predicates;

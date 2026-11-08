@@ -189,6 +189,8 @@ fn mode_label(mode: Mode) -> &'static str {
         Mode::Imm => "#<xxx>",
         Mode::Index => "(d8,An,Xn)",
         Mode::PcIndex => "(d8,PC,Xn)",
+        // the full format with a 32-bit displacement: the manual's `(bd,BR,Xn)`
+        Mode::PcFull => "(bd,BR,Xn)",
     }
 }
 

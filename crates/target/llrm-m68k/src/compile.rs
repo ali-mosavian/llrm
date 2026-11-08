@@ -8,6 +8,7 @@ use llrm_mir::module::Module;
 
 use crate::dagisel::function::select_function_with;
 use crate::dagisel::hooks::Cpu;
+use crate::dagisel::lowering::DataAccess;
 use crate::expand::{Line, finish_with};
 use crate::flags::preserve_flags;
 use crate::machine::{M68k, M68kMachine};
@@ -32,23 +33,21 @@ pub enum Item {
 
 /// The pin's code model (`-mcmodel`), which decides how a global is reached
 /// (`M68kSubtarget::classifyGlobalReference`, without PIC): small, PC-relative
-/// with a 16-bit displacement; medium and large, absolute. The assembler
-/// relaxes only branches, so data farther than 32 KiB from the code needs
-/// medium or large.
+/// with a 16-bit displacement; medium, absolute on the 68000 and 68010 and
+/// PC-relative from the 68020; large, absolute. The assembler relaxes only
+/// branches, so data farther than 32 KiB from the code needs medium or large.
 ///
-/// DEVIATE: medium is absolute on the 68020 and later as well. The pin picks
-/// PC-relative there, "any data offset fits"
-/// (`M68kSubtarget::classifyLocalReference`,
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kSubtarget.cpp>),
-/// but our table has only the 16-bit displacement form, so a global past 32 KiB
-/// (`memcpy_runtime`'s 70016-byte arrays) failed with "does not fit its 2-byte
-/// field". Reason: medium has to reach any offset at every cpu; `(bd32,%pc)` is
-/// 2 B longer than `abs.l` and needs a new encoding. Position independence is
-/// not modelled (`-fPIC` is ignored, as the small model's PC-relative data
-/// already is position independent): the pin's PIC medium is PC-relative from
-/// the 68020 and `@GOTOFF` below it. Owner: m68k. Exit: 2026-11-20, add the
-/// `(bd32,%pc)` form and the PIC model; medium is PC-relative again from the
-/// 68020 where PIC is asked for.
+/// DEVIATE: medium from the 68020 is `(bd32,%pc)`, the full-format extension
+/// word with the index suppressed (`MxPCIBD32`, the pin's call form), not the
+/// pin's `(d16,%pc)`. The pin classifies PC-relative there ("on M68020 and
+/// better we can fit big any data offset into dips field",
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kSubtarget.cpp#L197-L212>)
+/// but selects only `PCD`, so a global past 32 KiB ends in `R_68K_PC16`
+/// "relocation truncated to fit" (the pin's `llc` object, 2026-11-09). Reason:
+/// medium has to reach any offset. Position independence is not modelled
+/// (`-fPIC` is ignored; the pin's PIC medium is PC-relative from the 68020 and
+/// `@GOTOFF` below it). Owner: m68k-68020. Exit: 2026-11-20, upstream the
+/// selection or keep.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum CodeModel {
     #[default]
@@ -68,11 +67,15 @@ impl CodeModel {
         }
     }
 
-    /// Whether a global's address is an absolute one.
-    pub fn absolute_data(self) -> bool {
+    /// How a global's address is formed on `cpu`.
+    pub fn data_access(
+        self,
+        cpu: Cpu,
+    ) -> DataAccess {
         match self {
-            CodeModel::Small => false,
-            CodeModel::Medium | CodeModel::Large => true,
+            CodeModel::Small => DataAccess::PcDisp,
+            CodeModel::Medium if cpu.at_least(Cpu::M68020) => DataAccess::PcFull,
+            CodeModel::Medium | CodeModel::Large => DataAccess::Absolute,
         }
     }
 }
@@ -81,7 +84,7 @@ impl CodeModel {
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
     /// The pin's code model: how a global's address is formed
-    /// ([`CodeModel::absolute_data`]).
+    /// ([`CodeModel::data_access`]).
     pub code_model: CodeModel,
     /// Run the shared IR mid-end (`-O2`) first, as `llc -O2` is given
     /// optimized IR by `opt`.
@@ -343,7 +346,7 @@ fn items_once(
         options.source_order,
         options.indexed,
         options.short,
-        options.code_model.absolute_data(),
+        options.code_model.data_access(cpu),
         wants_size,
     )?;
     let mut function = emit(name, &blocks)?;

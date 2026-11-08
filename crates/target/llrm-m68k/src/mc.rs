@@ -126,7 +126,8 @@ fn print_method(
     let kind = method.trim_end_matches("Mem").trim_start_matches("print").trim_end_matches(char::is_numeric);
     Ok(match kind {
         "Operand" => print_operand(inst, at)?,
-        // `printImmediate`: a symbol in an immediate slot is `#sym` (the address), bare `sym` is the memory at it.
+        // `printImmediate`: a symbol in an immediate slot is `#sym` (the
+        // address), bare `sym` is the memory at it.
         "Immediate" => match operand(inst, at)? {
             Operand::Symbol(name, addend) => format!("#{}", symbol(name, *addend)),
             _ => print_operand(inst, at)?,
@@ -154,6 +155,21 @@ fn print_method(
         },
         "PCD" => format!("({},%pc)", print_disp(inst, at)?),
         "PCI" => format!("({},%pc,{})", print_disp(inst, at)?, print_operand(inst, at + 1)?),
+        "PCIBD" => {
+            let index = match operand(inst, at + 1)? {
+                // DEVIATE: the pin prints `(sym,%pc)` for a suppressed index
+                // (`printPCIBDMem`), which GNU as reads as the 16-bit
+                // `(d16,%pc)`; `%zd0` asks for the full format.
+                // Exit: never, the syntax is binutils'.
+                Operand::Imm(0) => ",%zd0".to_owned(),
+                _ => format!(",{}.{}", print_operand(inst, at + 1)?, if method.contains("16") { 'w' } else { 'l' }),
+            };
+            let scale = match operand(inst, at + 2)? {
+                Operand::Imm(scale) if *scale != 1 => format!("*{scale}"),
+                _ => String::new(),
+            };
+            format!("({},%pc{index}{scale})", print_disp(inst, at)?)
+        }
         _ => return Err(format!("{}: printer {method} is not translated", inst.opcode)),
     })
 }

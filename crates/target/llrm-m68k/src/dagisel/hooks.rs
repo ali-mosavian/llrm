@@ -10,6 +10,7 @@ use llrm_dagisel::matcher::Vt;
 use super::addr;
 use super::generated::ids::isd as m68k_isd;
 use super::generated::{instrinfo, m68k_m68000, m68k_m68020};
+use super::lowering::DataAccess;
 
 /// The CPUs of the family. The pin selects on three gates only (`IsM68000`,
 /// `AtLeastM68010`, `AtLeastM68020`), so the tables are generated for two:
@@ -89,6 +90,9 @@ pub struct M68kHooks {
     opt_none: bool,
     /// The complex pattern of each number the table uses.
     complex: Vec<Option<Complex>>,
+    /// How a global's address is formed: [`DataAccess::PcFull`] sends a
+    /// symbol to `PCIBD` and away from `PCD`.
+    data: DataAccess,
 }
 
 impl M68kHooks {
@@ -114,7 +118,15 @@ impl M68kHooks {
                 other => panic!("complex pattern `{other}` is not translated"),
             });
         }
-        M68kHooks { cpu, opt_none, complex }
+        M68kHooks { cpu, opt_none, complex, data: DataAccess::PcDisp }
+    }
+
+    pub fn data(
+        mut self,
+        data: DataAccess,
+    ) -> M68kHooks {
+        self.data = data;
+        self
     }
 }
 
@@ -174,9 +186,9 @@ impl<D: AddrDag> Hooks<D> for M68kHooks {
             Complex::Ari => addr::select_ari(dag, parent, value).map(|v| push(&[v])).is_some(),
             Complex::Arid => addr::select_arid(dag, parent, value).map(|v| push(&v)).is_some(),
             Complex::Arii => addr::select_arii(dag, parent, value).map(|v| push(&v)).is_some(),
-            Complex::Pcd => addr::select_pcd(dag, value).map(|v| push(&[v])).is_some(),
-            Complex::Pci => addr::select_pci(dag, value).map(|v| push(&v)).is_some(),
-            Complex::Pcibd => addr::select_pcibd(dag, value).map(|v| push(&v)).is_some(),
+            Complex::Pcd => addr::select_pcd(dag, value, self.data).map(|v| push(&[v])).is_some(),
+            Complex::Pci => addr::select_pci(dag, value, self.data).map(|v| push(&v)).is_some(),
+            Complex::Pcibd => addr::select_pcibd(dag, value, self.data).map(|v| push(&v)).is_some(),
             Complex::Al => addr::select_al(dag, value).map(|v| push(&[v])).is_some(),
             Complex::Never => false,
         }

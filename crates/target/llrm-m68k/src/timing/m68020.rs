@@ -105,6 +105,7 @@ fn label(
         Mode::AbsW => "(xxx).W",
         Mode::AbsL => "(xxx).L",
         Mode::Index | Mode::PcIndex => "(d8,An,Xn) or (d8,PC,Xn)",
+        Mode::PcFull => "(d32,B)",
         Mode::Imm => match size {
             Size::B => "#<data>.B",
             Size::W => "#<data>.W",

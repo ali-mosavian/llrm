@@ -26,7 +26,7 @@ use super::generated::ids::reg as pin;
 use super::generated::instrinfo::flag;
 use super::generated::{m68k_m68000, m68k_m68020};
 use super::hooks::{Cpu, M68kHooks};
-use super::lowering::{M68kLowering, target_lowering};
+use super::lowering::{DataAccess, M68kLowering, target_lowering};
 use crate::reg;
 use crate::target::M68k;
 
@@ -184,7 +184,7 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false, false, false, false, &mut Temporaries::new(0))
+    select_block_with(dag, cpu, false, false, false, DataAccess::PcDisp, &mut Temporaries::new(0))
 }
 
 /// [`select_block`], with the pin's source-order scheduler where
@@ -196,11 +196,11 @@ pub fn select_block_with(
     source_order: bool,
     indexed: bool,
     short: bool,
-    absolute_data: bool,
+    data: DataAccess,
     frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
-    let mut lowering = M68kLowering { indexed, short, absolute_data };
+    let mut lowering = M68kLowering { indexed, short, data };
     let selector = Selector::new(match cpu {
         Cpu::M68000 | Cpu::M68010 => m68k_m68000::TABLE,
         Cpu::M68020 | Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => m68k_m68020::TABLE,
@@ -208,7 +208,7 @@ pub fn select_block_with(
     let mut target = M68kTarget {
         tli: &tli,
         lowering: &mut lowering,
-        chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false) },
+        chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false).data(data), data },
         short,
     };
     select_units(dag, &mut target, &M68kSched { source_order }, frame).map_err(|why| match why {
@@ -227,6 +227,7 @@ struct M68kTarget<'a> {
 struct M68kChooser<'a> {
     selector: &'a Selector,
     hooks: M68kHooks,
+    data: DataAccess,
 }
 
 impl Select for M68kChooser<'_> {
@@ -235,7 +236,9 @@ impl Select for M68kChooser<'_> {
         adapter: &mut llrm_codegen::backend::selectiondag::dagisel_adapter::DagisAdapter<'_>,
         node: u32,
     ) -> llrm_dagisel::interp::Outcome {
-        super::indexed::select(adapter, node).unwrap_or_else(|| self.selector.select(adapter, &mut self.hooks, node))
+        let hand = super::indexed::select(adapter, node)
+            .or_else(|| (self.data == DataAccess::PcFull).then(|| super::pcfull::select(adapter, node)).flatten());
+        hand.unwrap_or_else(|| self.selector.select(adapter, &mut self.hooks, node))
     }
 }
 

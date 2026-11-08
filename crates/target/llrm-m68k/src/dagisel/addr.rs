@@ -21,6 +21,7 @@ use llrm_dagisel::dag::SDValue;
 use llrm_dagisel::generated::ids::{isd, mvt};
 
 use super::generated::ids::{generic, isd as m68k_isd, reg};
+use super::lowering::DataAccess;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AddrType {
@@ -34,6 +35,9 @@ pub enum AddrType {
     Pcd,
     /// PC with index.
     Pci,
+    /// PC with index and base displacement, the full format: DEVIATE, the pin
+    /// matches [`AddrType::Pci`] for it ([`select_pcibd`]).
+    Pcibd,
     /// Absolute.
     Al,
 }
@@ -96,7 +100,7 @@ impl AddressMode {
     fn is_disp_addr_type(&self) -> bool {
         matches!(
             self.am,
-            AddrType::Arii | AddrType::Pci | AddrType::Arid | AddrType::Pcd | AddrType::Al
+            AddrType::Arii | AddrType::Pci | AddrType::Pcibd | AddrType::Arid | AddrType::Pcd | AddrType::Al
         )
     }
 
@@ -104,7 +108,7 @@ impl AddressMode {
         match self.am {
             AddrType::Arii | AddrType::Pci => 8,
             AddrType::Arid | AddrType::Pcd => 16,
-            AddrType::Al => 32,
+            AddrType::Al | AddrType::Pcibd => 32,
             AddrType::Ari => 0,
         }
     }
@@ -530,13 +534,18 @@ pub fn select_al<D: AddrDag>(
     (am.disp != 0).then(|| i32_imm(dag, am.disp))
 }
 
-/// `SelectPCD`: `[disp]`.
 pub fn select_pcd<D: AddrDag>(
     dag: &mut D,
     n: SDValue,
+    data: DataAccess,
 ) -> Option<SDValue> {
     let mut am = AddressMode::new(AddrType::Pcd);
     if !match_address(dag, n, &mut am) || !am.is_pc_relative(dag) || am.has_index_reg() {
+        return None;
+    }
+    // DEVIATE: a symbol is `PCIBD`'s when its displacement needs 32 bits
+    // ([`CodeModel`](crate::compile::CodeModel)).
+    if data == DataAccess::PcFull && am.has_symbolic_displacement() {
         return None;
     }
     Some(symbolic_displacement(dag, &am).unwrap_or_else(|| i16_imm(dag, am.disp)))
@@ -546,9 +555,15 @@ pub fn select_pcd<D: AddrDag>(
 pub fn select_pci<D: AddrDag>(
     dag: &mut D,
     n: SDValue,
+    data: DataAccess,
 ) -> Option<[SDValue; 2]> {
     let mut am = AddressMode::new(AddrType::Pci);
     if !match_address(dag, n, &mut am) || !am.is_pc_relative(dag) || !am.has_index_reg() {
+        return None;
+    }
+    // DEVIATE: as in [`select_pcd`], an 8-bit symbolic displacement reaches
+    // 128 B.
+    if data == DataAccess::PcFull && am.has_symbolic_displacement() {
         return None;
     }
     let index = am.index_reg?;
@@ -556,10 +571,32 @@ pub fn select_pci<D: AddrDag>(
 }
 
 /// `SelectPCIBD`: `[disp, index, scale]`, scale 1.
+///
+/// DEVIATE: under [`DataAccess::PcFull`] a symbol takes the full format with a
+/// 32-bit displacement, and `NoReg` as the index when there is none
+/// (`encodeIndexSuppress`); the pin's placeholder
+/// ("TODO: Implement the actual selection logic on SCALE") is `SelectPCI`'s.
+/// Exit: [`CodeModel`](crate::compile::CodeModel)'s.
 pub fn select_pcibd<D: AddrDag>(
     dag: &mut D,
     n: SDValue,
+    data: DataAccess,
 ) -> Option<[SDValue; 3]> {
-    let [disp, index] = select_pci(dag, n)?;
-    Some([disp, index, dag.target_constant(1, mvt::i8)])
+    let scale = dag.target_constant(1, mvt::i8);
+    if let Some([disp, index]) = select_pci(dag, n, data) {
+        return Some([disp, index, scale]);
+    }
+    if data != DataAccess::PcFull {
+        return None;
+    }
+    let mut am = AddressMode::new(AddrType::Pcibd);
+    if !match_address(dag, n, &mut am) || !am.is_pc_relative(dag) || !am.has_symbolic_displacement() {
+        return None;
+    }
+    let disp = symbolic_displacement(dag, &am)?;
+    let index = match am.index_reg {
+        Some(index) => index,
+        None => dag.register(0, mvt::i32),
+    };
+    Some([disp, index, scale])
 }

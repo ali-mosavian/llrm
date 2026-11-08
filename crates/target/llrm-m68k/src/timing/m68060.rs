@@ -167,6 +167,8 @@ fn label(
         Mode::AbsL => "(xxx).L",
         Mode::PcDisp => "(d16,PC)",
         Mode::PcIndex => "(d8,PC,Xi*SF)",
+        // the manual prints the full format for `An` only
+        Mode::PcFull => "(bd,An,Xi*SF)",
         Mode::Imm => "#<data>",
     }
 }

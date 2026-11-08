@@ -47,15 +47,17 @@ fn small_is_pc_relative_at_every_cpu() {
     }
 }
 
-/// The 68020 stayed PC-relative in the medium model, and its 16-bit
-/// displacement refused a global past 32 KiB (memcpy_runtime and
-/// memfuncs_runtime, -O0 sweep: ".text: a value of 70016 does not fit its
-/// 2-byte field").
-/// Interim pin (DEVIATE in `CodeModel`): flips to PC-relative from the 68020 when the `(bd32,%pc)` form lands.
+/// Medium is absolute on the 68000 and 68010 and, from the 68020, the full
+/// format `(bd32,%pc,%zd0)`: the plain `(to,%pc)` is the 16-bit form to GNU as
+/// (memcpy_runtime and memfuncs_runtime failed with ".text: a value of 70016
+/// does not fit its 2-byte field").
 #[test]
-fn medium_is_absolute_at_every_cpu() {
-    for cpu in ["68000", "68020"] {
-        assert!(!asm(cpu, CodeModel::Medium).contains("%pc"), "{cpu}: {}", asm(cpu, CodeModel::Medium));
+fn medium_is_absolute_on_the_68000_and_full_pc_relative_from_the_68020() {
+    assert!(!asm("68000", CodeModel::Medium).contains("%pc"), "{}", asm("68000", CodeModel::Medium));
+    for cpu in ["68020", "68040"] {
+        let text = asm(cpu, CodeModel::Medium);
+        assert!(text.contains("%pc,%zd0)") || text.contains("%pc,%d"), "{cpu}: {text}");
+        assert!(!text.contains(",%pc)"), "{cpu}: {text}");
     }
 }
 
@@ -72,7 +74,7 @@ fn binutils_assembles_the_big_array_in_the_medium_model_at_68000() {
     let text = asm("68000", CodeModel::Medium);
     let source = support::unique_path("model-s");
     let object = support::unique_path("model-o");
-    std::fs::write(&source, format!(".text\n.globl f\n{text}")).unwrap();
+    std::fs::write(&source, format!(".text\n.globl f\n.globl g\n.globl h\n{text}")).unwrap();
     let mut command = Command::new(format!("{root}/usr/bin/m68k-linux-gnu-as"));
     command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));
     let done = command.arg("-m68000").arg("-o").arg(&object).arg(&source).output().unwrap();
@@ -105,6 +107,16 @@ define i32 @f() {
   %r = zext i8 %s to i32
   ret i32 %r
 }
+define i32 @g() {
+  %a = getelementptr [70016 x i8], ptr @to, i32 0, i32 70000
+  %i = ptrtoint ptr %a to i32
+  ret i32 %i
+}
+define i32 @h() {
+  %b = getelementptr [70016 x i8], ptr @from, i32 0, i32 69999
+  %i = ptrtoint ptr %b to i32
+  ret i32 %i
+}
 ";
 
 /// A global 70016 B into `.bss` cannot be reached by `(d16,%pc)`: the small
@@ -125,7 +137,9 @@ fn a_displacement_past_the_field_is_refused_not_truncated() {
 }
 
 /// The far arrays read back what was stored, linked and run at 68000 and 68020
-/// (exit status 8).
+/// (exit status 8), and `g` and `h` return the addresses the linker gave them:
+/// a displacement off by the 2 bytes between the extension word and the base
+/// displacement stores and loads at one wrong address and still reads back 8.
 #[test]
 fn far_globals_work_in_the_medium_model_at_every_cpu() {
     let Some(root) = support::oracle_root() else { return };
@@ -135,14 +149,21 @@ fn far_globals_work_in_the_medium_model_at_every_cpu() {
         command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));
         command
     };
-    for cpu in ["68000", "68020"] {
-        let text =
-            assembly_in(FAR_IR, cpu_of(cpu).unwrap(), Level::O2, false, None, CodeModel::Medium).expect("compiles");
-        let source = support::unique_path("far-s");
+    let ir = FAR_IR.replace("internal ", "");
+    for (cpu, ours) in
+        [("68000", false), ("68020", false), ("68040", false), ("68000", true), ("68020", true), ("68040", true)]
+    {
         let object = support::unique_path("far-o");
+        let source = support::unique_path("far-s");
+        if ours {
+            let bytes = object_in(&ir, cpu_of(cpu).unwrap(), Level::O2, "far", CodeModel::Medium).expect("compiles");
+            std::fs::write(&object, bytes).unwrap();
+        } else {
+            let text = assembly_in(&ir, cpu_of(cpu).unwrap(), Level::O2, false, None, CodeModel::Medium).unwrap();
+            std::fs::write(&source, format!(".text\n.globl f\n.globl g\n.globl h\n{text}")).unwrap();
+            assert!(tool("as").arg(format!("-m{cpu}")).arg("-o").arg(&object).arg(&source).status().unwrap().success());
+        }
         let exe = support::unique_path("far-exe");
-        std::fs::write(&source, format!(".text\n.globl f\n{text}")).unwrap();
-        assert!(tool("as").arg(format!("-m{cpu}")).arg("-o").arg(&object).arg(&source).status().unwrap().success());
         let main = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data_rt/far_main.c");
         let linked = tool("gcc")
             .args(["-msoft-float", &format!("-m{cpu}"), "-O1", "-nostdlib", "-static", "-ffreestanding"])
@@ -157,6 +178,6 @@ fn far_globals_work_in_the_medium_model_at_every_cpu() {
         for path in [source, object, exe] {
             std::fs::remove_file(path).ok();
         }
-        assert_eq!(code, Some(8), "{cpu}");
+        assert_eq!(code, Some(8), "{cpu} object from our writer: {ours}");
     }
 }

@@ -55,6 +55,9 @@ enum Mode {
     AbsL,
     PcDisp,
     PcIndex,
+    /// `(bd32,%pc)` in the full format, the index (`%zd0` when absent) and
+    /// its scale free: the tables' `(d32,B)`.
+    PcFull,
     Imm,
 }
 
@@ -173,6 +176,9 @@ fn operand(text: &str) -> Result<Operand, String> {
             [_, base] if is_address(base) => Ok(Operand::Mode(Mode::Disp, 0)),
             [_, "%pc"] => Ok(Operand::Mode(Mode::PcDisp, 0)),
             [_, base, _] if is_address(base) => Ok(Operand::Mode(Mode::Index, 0)),
+            [_, "%pc", index] if index.starts_with("%zd") || index.contains(".l") || index.contains(".w") => {
+                Ok(Operand::Mode(Mode::PcFull, 0))
+            }
             [_, "%pc", _] => Ok(Operand::Mode(Mode::PcIndex, 0)),
             _ => Err(unsupported()),
         };

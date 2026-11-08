@@ -120,6 +120,8 @@ fn labels(mode: Mode) -> &'static [&'static str] {
         Mode::Disp => &["(d16,An)"],
         Mode::Index => &["(d8,An,Xn)"],
         Mode::AbsL => &["(xxx).L"],
+        // the 68000 and 68010 have no full format: no label, so no price
+        Mode::PcFull => &[],
         Mode::Imm => &["#<data>"],
     }
 }

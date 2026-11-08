@@ -158,6 +158,20 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     tl
 }
 
+/// How a global's address is formed (`M68kSubtarget::classifyGlobalReference`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DataAccess {
+    /// `(d16,%pc)`: the small model.
+    #[default]
+    PcDisp,
+    /// `(bd32,%pc)`, full format: the medium model from the 68020, where the
+    /// pin classifies PC-relative but selects only `(d16,%pc)`.
+    PcFull,
+    /// An absolute address: the medium model on the 68000 and 68010, the
+    /// large model.
+    Absolute,
+}
+
 /// The custom lowerings.
 #[derive(Default)]
 pub struct M68kLowering {
@@ -166,9 +180,8 @@ pub struct M68kLowering {
     /// The beyond-pin size rewrites (`addq`, `extb.l`, `sub` of a sign-extended
     /// compare).
     pub short: bool,
-    /// A global's address is an absolute one, not PC-relative (the medium
-    /// model on the 68000 and 68010, the large model).
-    pub absolute_data: bool,
+    /// How a global's address is formed ([`crate::compile::CodeModel`]).
+    pub data: DataAccess,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
@@ -232,7 +245,7 @@ impl Hooks for M68kLowering {
             ISD::SraParts => Some(lower_shift_right_parts(dag, node, true)),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
-            ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node, self.absolute_data)),
+            ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node, self.data == DataAccess::Absolute)),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::UMulLoHi | ISD::SMulLoHi => Some(lower_wide_multiply(dag, node)),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),

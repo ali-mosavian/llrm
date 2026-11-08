@@ -10,9 +10,12 @@
 //!   fixed bytes`; the addend already holds the correction for a byte inside
 //!   the opcode word (`encodePCRelImm`).
 //!
-//! DEVIATE: `encodeFPSYSSelect`, `encodeScale` and `encodeIndexSuppress` (FPU
-//! and 68020 index modes) are not translated. Reason: the slice does not reach
-//! them. Exit: M7.
+//! DEVIATE: `encodeFPSYSSelect` (the FPU) is not translated. Reason: the slice
+//! does not reach it. Exit: M7.
+//!
+//! A full-format extension word (`(bd32,%pc,..)`) makes the PC the address of
+//! that word, not of the base displacement after it: the fixup's addend
+//! carries the 2 bytes between them.
 //!
 //! # See also
 //! `llvm/lib/Target/M68k/MCTargetDesc/M68kMCCodeEmitter.cpp`, pin d1106deb71cc.
@@ -91,6 +94,7 @@ fn operand_value(
     index: usize,
     enc: Enc,
     at: u16,
+    full_extension: Option<usize>,
     fixups: &mut Vec<Fixup>,
 ) -> Result<u64, String> {
     let operand = inst.operands.get(index).ok_or_else(|| format!("{}: no operand {index}", inst.opcode))?;
@@ -120,7 +124,7 @@ fn operand_value(
             // below a word the field sits inside the opcode word: PC is the
             // next word for the first one, else the word's first byte
             let correction = match () {
-                _ if size >= 16 => 0,
+                _ if size >= 16 => full_extension.map_or(0, |word| offset as i64 - word as i64),
                 _ if at < 16 => offset as i64 - 2,
                 _ if offset % 2 == 1 => 1,
                 _ => 0,
@@ -135,6 +139,15 @@ fn operand_value(
             Ok(0)
         }
         (Enc::InverseMoveMask, Operand::Imm(mask)) => Ok((*mask as u16).reverse_bits() as u64),
+        // `encodeScale`: log2 of 1, 2, 4 or 8.
+        (Enc::Scale, Operand::Imm(scale)) if matches!(scale, 1 | 2 | 4 | 8) => Ok(u64::from(scale.trailing_zeros())),
+        // `encodeIndexSuppress`: bit 4 of the 5-bit "register" is IS, set when
+        // the index is `NoReg` (an immediate 0 here, as the machine function
+        // has no operand for it).
+        (Enc::IndexSuppress, Operand::Imm(0)) => Ok(1 << 4),
+        (Enc::IndexSuppress, Operand::Reg(id)) => {
+            register_value(*id).ok_or_else(|| format!("{}: register {id:?}", inst.opcode))
+        }
         _ => Err(format!("{}: operand {index} is not encodable as {enc:?}", inst.opcode)),
     }
 }
@@ -150,6 +163,16 @@ pub fn encode(inst: &Inst) -> Result<Encoded, String> {
     }
     let mut bits: u128 = 0;
     let mut fixups = Vec::new();
+    // the byte of the full-format extension word, which a PC-relative base
+    // displacement counts from
+    let full_extension = pieces
+        .iter()
+        .find_map(
+            |piece| match *piece {
+                Piece::Operand { lo, enc: Enc::IndexSuppress, .. } => Some(usize::from(lo / 16) * 2),
+                _ => None,
+            },
+        );
     for piece in pieces {
         let (lo, width, value) = match *piece {
             Piece::Const { lo, width, value } => (lo, width, value),
@@ -160,7 +183,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, String> {
                 // `d0` first: ours is the printed order.
                 let enc =
                     if at == 1 && matches!(inst.opcode, "MOVM32em" | "MOVM16em") { Enc::InverseMoveMask } else { enc };
-                let whole = operand_value(inst, at as usize, enc, lo, &mut fixups)?;
+                let whole = operand_value(inst, at as usize, enc, lo, full_extension, &mut fixups)?;
                 (lo, width, whole >> from)
             }
         };

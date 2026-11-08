@@ -20,14 +20,13 @@
 //! # See also
 //! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`, pin d1106deb71cc.
 
-use llrm_support::hash::HashMap;
-
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
 use llrm_dagisel::instr::{InstrDesc, OperandDesc};
 pub use llrm_spike_mf as mf;
 pub use llrm_spike_mf::{Block, Inst, Kind, Operand, Phi, Reg};
+use llrm_support::hash::HashMap;
 
 use crate::dagisel::function::Selected;
 use crate::dagisel::generated::ids::reg as pin;
@@ -254,6 +253,9 @@ impl Emitter<'_> {
         let node = self.dag.node(value);
         Ok(Some(match (node.opcode, node.data) {
             (ISD::RegisterMask, _) => return Ok(None),
+            // `NoReg` (a suppressed index): an immediate 0, spike-mf has no
+            // operand for it
+            (ISD::Register, NodeData::Register(0)) => Operand::Imm(0),
             (ISD::Register, _) => Operand::Use(self.register(value).ok_or("a register node with no register")?),
             (ISD::Constant | ISD::TargetConstant, NodeData::Const { bits, .. }) => {
                 let width = vt.size_in_bits().clamp(1, 64);

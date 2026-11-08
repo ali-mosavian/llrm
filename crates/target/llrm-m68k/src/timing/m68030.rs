@@ -111,6 +111,7 @@ fn mode_label(mode: Mode) -> Option<&'static str> {
         Mode::AbsW => "(xxx).W",
         Mode::AbsL => "(xxx).L",
         Mode::Index | Mode::PcIndex => "(d8,An,Xn) or (d8,PC,Xn)",
+        Mode::PcFull => "(d32,B)",
         Mode::Imm => return None,
     })
 }
