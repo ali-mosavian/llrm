@@ -2429,11 +2429,12 @@ impl<'a> TypeLegalizer<'a> {
         let carry_op = if op == ISD::SAddO { ISD::SAddOCarry } else { ISD::SSubOCarry };
         // DEVIATE SD549 (owner x86-m32, exit: a flags copy like
         // `X86FlagsCopyLowering` that tests the saved byte and rewrites the
-        // reader's condition, and the selects of one flag joined): a flag a
-        // select or a branch reads keeps the sign test, whose `test; jns` is
-        // one branch. On the carry chain's flag a wide select is two selects,
-        // each restoring it: two branches (sat_builtins -O1 m32 +8 B against
-        // the sign test). A flag stored as a value takes the carry chain.
+        // reader's condition, and the selects of one flag joined): the carry
+        // chain's flag is in EFLAGS once. A select or branch reading it is
+        // a flag reader that needs it restored for each select the legalizer
+        // makes of a wide one (two for an i64), a branch each; the sign test
+        // is one `test; jns`. A flag stored as a value is read once, by a
+        // `setcc`, and takes the carry chain.
         let read_by_branch = self.dag.users(SDValue { node: value.node, res: 1 }).any(|user| {
             matches!(self.dag.opcode(SDValue { node: user, res: 0 }), ISD::Select | ISD::SelectCC | ISD::BrCond | ISD::BrCC)
         });
