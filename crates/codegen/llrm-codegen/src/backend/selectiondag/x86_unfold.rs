@@ -28,8 +28,8 @@
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L9026
 
 use llrm_dagisel::generated::ids::x86;
-use llrm_dagisel::instr::desc;
 use llrm_x86_dagisel::generated::foldtables::{FOLDED_LOAD, FOLDED_STORE, INDEX_MASK, UNFOLD};
+use llrm_x86_dagisel::generated::instrinfo::desc;
 
 use super::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use super::{EVT, ISD};
