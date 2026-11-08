@@ -21,13 +21,37 @@ fn a_constant_return_round_trips() {
     lowers_checked("define i32 @f() {\n  ret i32 42\n}\n").expect("round trip is the identity");
 }
 
+/// Loads, stores in several address forms, `cbz` and a shifted add round-trip.
+#[test]
+fn memory_and_compare_branch_forms_round_trip() {
+    let ir = "define i64 @f(ptr %p, i64 %n, i64 %m) {
+entry:
+  %c = icmp eq i64 %n, 0
+  br i1 %c, label %out, label %body
+body:
+  %q = getelementptr i32, ptr %p, i64 %n
+  %v = load i32, ptr %q
+  %w = sext i32 %v to i64
+  %s = shl i64 %m, 3
+  %t = add i64 %w, %s
+  store i64 %t, ptr %p
+  br label %out
+out:
+  %r = phi i64 [ 0, %entry ], [ %t, %body ]
+  ret i64 %r
+}
+";
+    lowers_checked(ir).expect("round trip is the identity");
+}
+
 /// A form the producer does not map yet is named by its variant, so the first
-/// missing form of a program is the next one to write (here a load).
+/// missing form of a program is the next one to write (here the address of a
+/// global).
 #[test]
 fn the_first_unmapped_form_is_named() {
-    let ir = "define i32 @f(ptr %p) {\n  %v = load i32, ptr %p\n  ret i32 %v\n}\n";
-    let why = lowers_checked(ir).expect_err("a load has no mapping yet");
-    assert!(why.contains("unmapped form Load"), "{why}");
+    let ir = "@x = global i32 0\ndefine i32 @f() {\n  %v = load i32, ptr @x\n  ret i32 %v\n}\n";
+    let why = lowers_checked(ir).expect_err("a global's address has no mapping yet");
+    assert!(why.contains("unmapped form Adr"), "{why}");
 }
 
 /// Prints the first unmapped form of each fixture: `cargo test -p llrm-arm64
