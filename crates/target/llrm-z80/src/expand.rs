@@ -1188,10 +1188,16 @@ impl Printer<'_> {
                 self.out.push(Line::Label(skip));
             }
             (true, false) => {
-                self.push(format!("ld a, {}", name(al)));
-                self.push(format!("sub a, {bl}"));
-                self.push(format!("ld a, {}", name(ah)));
-                self.push(format!("sbc a, {bh}"));
+                // a low byte of zero subtracts nothing and clears the carry: the high bytes alone decide
+                if bl != "#0" {
+                    self.push(format!("ld a, {}", name(al)));
+                    self.push(format!("sub a, {bl}"));
+                    self.push(format!("ld a, {}", name(ah)));
+                    self.push(format!("sbc a, {bh}"));
+                } else {
+                    self.push(format!("ld a, {}", name(ah)));
+                    self.push(format!("sub a, {bh}"));
+                }
             }
             // a word against zero: its two bytes or-ed, which is zero only when
             // both are
