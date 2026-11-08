@@ -937,6 +937,15 @@ pub trait Target {
         None
     }
 
+    /// `frame_slot_scratch` for a function of `convention`, where the target's
+    /// frames differ by convention (m32's DOS ones keep Watcom's layout).
+    fn frame_slot_scratch_of(
+        &self,
+        _convention: &crate::calling::Convention,
+    ) -> Option<(RegId, RegId)> {
+        self.frame_slot_scratch()
+    }
+
     fn frame_wrap_split_size(&self) -> bool {
         false
     }
