@@ -4105,17 +4105,19 @@ fn a_parent_of_an_unrolled_loop_is_folded_by_indvars_at_m64_o3() {
 }
 
 /// A 31-byte struct copy at m64 -Os was a `call memcpy` (the real-mode string
-/// rule counted it as eight dwords); the pin copies it as two overlapping
-/// 16-byte pieces (memory_expansion Os, 8 insns -> 5 per copy).
+/// rule counted it as eight dwords); it is now whichever of two overlapping 16-byte pieces (16 B) or the call
+/// (14 B with the arguments) is smaller (DEVIATE MEM-OS, #7892): here the call, and never a mix of both.
 #[test]
-fn a_31_byte_copy_at_m64_os_is_two_16_byte_pieces() {
+fn a_31_byte_copy_at_m64_os_is_the_cheaper_of_pieces_and_a_call() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
                 define void @f(ptr %d, ptr %s) optsize {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 31, i1 false)\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.matches("movups").count() == 4 && !listing.contains("call"), "{listing}");
+    let call = listing.contains("memcpy");
+    let pieces = listing.matches("movups").count();
+    assert!((call && pieces == 0) || (!call && pieces == 4), "{listing}");
 }
 
 /// A 136-byte local read through an index at m64: the red zone put `-0x80` on
