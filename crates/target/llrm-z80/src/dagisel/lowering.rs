@@ -99,6 +99,8 @@ pub fn target_lowering() -> TargetLowering {
     set(&[MulHS, MulHU, UMulLoHi, SMulLoHi], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[SDivRem, UDivRem], &[MVT::I8], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], &[MVT::I8, MVT::I16], Action::Expand);
+    // no rotate or funnel shift instruction: shifts and an or (`expandROT`, `expandFunnelShift`)
+    set(&[Rotl, Rotr, FShl, FShr], &[MVT::I8, MVT::I16], Action::Expand);
     // the action is by the type extended from (`LegalizeDAG`): a word from a
     // byte is the byte sign-extended (`lower_sign_extend_inreg`)
     set(&[SignExtendInReg], &[MVT::I1, MVT::I16], Action::Expand);
