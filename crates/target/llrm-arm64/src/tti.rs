@@ -395,7 +395,7 @@ impl Tti for AArch64 {
     ///
     /// Refit scan (provisional: net = executed instructions + 0.3 x bytes, an
     /// instruction proxy, not clocks; 2026-11-08, 34 programs at -O2/-O3, release/next
-    /// 8d22165d6d, rerun from branch w15/rate-scan, tools/scans/):
+    /// 8d22165d6d, rerun from the knob and scripts in draft PR 8402):
     /// 30 and 10 clk/B change no cell against 62.5; 3 changes jpeg_fixed and
     /// jpeg_single only (+84 B, -1.6k instructions); the scoring rate 0.3 makes
     /// both worse in bytes and instructions (+540 B, +688k instructions on
