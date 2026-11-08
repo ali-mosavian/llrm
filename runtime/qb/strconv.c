@@ -23,7 +23,7 @@ int B_FASC(SD *sd)
     if (sd->len == 0)
         qb_error(BE_ILLFUN);
     code = (byte)sd->ptr[0];
-    str_tmp_free(sd);
+    str_free_if_tmp(sd);
     return code;
 }
 
@@ -94,7 +94,7 @@ static inline __attribute__((always_inline)) void bytes_of(SD *sd, void *into, u
     if (sd->len < size)
         qb_error(BE_ILLFUN);
     copy_bytes(into, sd->ptr, size);
-    str_tmp_free(sd);
+    str_free_if_tmp(sd);
 }
 
 int B_FCVI(SD *sd)

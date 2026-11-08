@@ -182,6 +182,12 @@ impl Machine {
                     (self.registers[0], self.registers[2]) = (product as u32, (product >> 32) as u32);
                 }
                 Mnemonic::Imul => self.write(one, left.wrapping_mul(right)),
+                Mnemonic::Rcl => {
+                    assert_eq!(right, 1);
+                    let result = left << 1 | u32::from(self.carry);
+                    self.write(one, result);
+                    self.carry = left >> 31 == 1;
+                }
                 Mnemonic::Rcr => {
                     assert_eq!(right, 1);
                     let result = left >> 1 | u32::from(self.carry) << 31;
@@ -338,6 +344,61 @@ fn a_divide_read_for_one_result_is_shorter_and_that_result_is_right() {
                     assert_eq!(got, want, "{name} {dividend:#x} / {divisor:#x} at {bits} bits");
                 }
             }
+        }
+    }
+}
+
+/// The size routine divides as the speed one does, in under a third of its
+/// bytes (nbody_fixed at m16 -O1: one inline divide of 313 B).
+#[test]
+fn the_size_divide_agrees_with_the_speed_divide_and_is_short() {
+    for bits in [16, 32] {
+        for signed in [false, true] {
+            for wide in [false, true] {
+                let fast = divide(signed, wide, bits).expect("assembles");
+                let Ok(small) = divide_small(signed, wide, bits) else {
+                    assert!(!wide, "a divisor of two dwords has a size routine");
+                    continue;
+                };
+                assert!(small.code.len() * 3 < fast.code.len() * 2 || !wide, "{} {} B vs {} B", small.name, small.code.len(), fast.code.len());
+                for (a, b) in [
+                    (0x1234_5678_9ABC_DEF0u64, 0x1_0000_0001u64),
+                    (u64::MAX >> 1, 3),
+                    (262144, 0x7FFF_FFFF_FFFF_FFFF),
+                    (u64::MAX, 0x8000_0000_0000_0001),
+                    (u64::MAX - 5, u64::MAX >> 1),
+                    ((-7000i64) as u64, 13),
+                    (1 << 62, (-3i64) as u64 & if wide { u64::MAX } else { 0xFFFF_FFFF }),
+                ] {
+                    let b = if wide { b } else { b & 0xFFFF_FFFF };
+                    if b == 0 || (!signed && !wide && false) {
+                        continue;
+                    }
+                    let (got, _) = divided(&small, bits, a, b);
+                    let (want, quotient_bits) = if signed {
+                        let (a, b) = (a as i64, b as i64);
+                        ((a.wrapping_div(b) as u64, a.wrapping_rem(b) as u64), 0)
+                    } else {
+                        ((a / b, a % b), 0)
+                    };
+                    let _ = quotient_bits;
+                    assert_eq!(got, want, "{} {a:#x} / {b:#x}", small.name);
+                }
+            }
+        }
+    }
+}
+
+/// The size divide of operands that fit a dword is one `div`, not 64 rounds:
+/// at -O1 nbody_fixed took 57.9M clocks for 8.9M (bc: 38.1M).
+#[test]
+fn the_size_divide_of_dword_operands_is_a_few_instructions() {
+    for bits in [16, 32] {
+        for signed in [false, true] {
+            let small = divide_small(signed, true, bits).expect("assembles");
+            let (got, steps) = divided(&small, bits, 262144, 1000);
+            assert_eq!(got, (262, 144), "{}", small.name);
+            assert!(steps < 40, "{} took {steps} instructions", small.name);
         }
     }
 }

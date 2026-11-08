@@ -161,6 +161,8 @@ pub struct Profile {
     /// target states a smaller bound than the pin's (`timings.times`);
     /// none: the pin's.
     pub tail_dup_threshold: Option<usize>,
+    /// `tail_dup_hot_threshold` of the target's table (DEVIATE TAILDUP-HOT).
+    pub tail_dup_hot_size: Option<usize>,
     /// Commuting prefers the operand the result is copied back into
     /// (DEVIATE TA-LC, from the target's table; off: the pin's order).
     pub commute_loop_carried: bool,
@@ -390,6 +392,7 @@ impl Profile {
             optimized: true,
             aggressive: false,
             tail_dup_threshold: None,
+            tail_dup_hot_size: None,
             commute_loop_carried: false,
             mispredict_penalty: None,
             mispredict_penalty_size: None,
@@ -426,6 +429,12 @@ impl Profile {
         self.optimized && !(self.size || self.min_size)
     }
 
+    /// Optimized code whose bytes are not traded for clocks: -O1 and size (no
+    /// speed rate), where a smaller routine of the same result wins.
+    pub fn bytes_strict(&self) -> bool {
+        self.optimized && (!self.has_speed_goal() || !self.speed_rate)
+    }
+
     /// Clocks a byte of code is worth at speed, in thousandths: the target's
     /// rate at -O2 and -O3, none at -O1 and for size.
     pub fn speed_milliclocks_per_byte(&self) -> i64 {
@@ -445,6 +454,20 @@ impl Profile {
             return 0;
         }
         machine.tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+    }
+
+    /// What placement's tail duplication may copy above the pin's bound
+    /// (DEVIATE TAILDUP-HOT): only where bytes are priced at speed (-O2, -O3),
+    /// by the jump a copy saves (`jmp_short`) against the rate.
+    pub fn tail_dup_hot(&self) -> Option<crate::backend::jumps::placement::HotTailDup> {
+        let size = self.tail_dup_hot_size?;
+        let per_byte = self.speed_milliclocks_per_byte();
+        let jump = self.cost("jmp_short").ok()?;
+        (per_byte > 0 && jump > 0).then_some(crate::backend::jumps::placement::HotTailDup {
+            size,
+            jump_clocks: jump as f64,
+            clocks_per_byte: per_byte as f64 / 1000.0,
+        })
     }
 
     /// Clocks a mispredicted branch costs in this function: the size row at
@@ -615,6 +638,7 @@ fn _profile(
         _latencies: std::sync::Arc::new(table.latency.clone()),
         address_prefix_stall: table.lcp_stall,
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
+        tail_dup_hot_size: table.tail_dup_hot_threshold.map(|n| n.max(0) as usize),
         commute_loop_carried: table.commute_loop_carried,
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
         mispredict_penalty: table.mispredict_penalty,
@@ -1177,5 +1201,22 @@ mod loop_carried_tests {
         assert!(!loop_carried_applies(true, true, false), "-Os");
         assert!(!loop_carried_applies(true, false, true), "-Oz");
         assert!(!loop_carried_applies(false, false, false), "no key: the pin's order");
+    }
+}
+
+#[cfg(test)]
+mod bytes_strict_tests {
+    use super::*;
+
+    /// nbody_fixed at -O1 kept a 313-byte inline divide because only `size`
+    /// asked for the small routine; -O1 trades no bytes for clocks either.
+    #[test]
+    fn o1_and_size_are_bytes_strict_and_o2_and_o0_are_not() {
+        let base = tuned("486", false).expect("a profile").clone();
+        let at = |optimized, size, speed_rate| Profile { optimized, size, speed_rate, ..base.clone() };
+        assert!(at(true, false, false).bytes_strict(), "-O1: no speed rate");
+        assert!(at(true, true, true).bytes_strict(), "-Os");
+        assert!(!at(true, false, true).bytes_strict(), "-O2 and -O3 price bytes in clocks");
+        assert!(!at(false, false, false).bytes_strict(), "-O0 is not tuned");
     }
 }

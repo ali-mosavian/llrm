@@ -5,7 +5,7 @@ Owner: w10. Date: 2026-10-27. Frontend: llrm-cc (clang), not llrm-c. These numbe
 ## Method
 
 ```sh
-export LLRM_OW=$OW_SRC LLRM_PIN_CLANG=$PIN_BUILD/bin/clang LLRM_CLANG_M16=$PIN_M16_BUILD/bin/clang
+export LLRM_PIN_CLANG=$PIN_BUILD/bin/clang LLRM_CLANG_M16=$PIN_M16_BUILD/bin/clang
 tools/cc_cost.py --dist <dir with llrm-cc> [--programs jpeg_fixed,matmul] [--configs m32-O2,m32-Os,m16-Os]
 ```
 

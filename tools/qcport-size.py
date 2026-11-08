@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """QCport's 65 modules at -Os: code bytes through llrm-cc and through llrm-cc, per module and in total.
 
-    QCPORT=.../src QCPORT_INC=... LLRM_BORLAND_INC=... LLRM_CLANG_M16=... LLRM_OW=... \\
+    QCPORT=.../src QCPORT_INC=... LLRM_BORLAND_INC=... LLRM_CLANG_M16=... \\
         tools/qcport-size.py [--row x86_16-dos-rp3] [--isel dag] [--top 12]
 
 --row is the llrm-cc target row (default x86_16-dos-rp3, the register convention llrm-cc has at m16, so the two columns compare like
@@ -41,7 +41,7 @@ def main() -> int:
     ask.add_argument("--top", type=int, default=12)
     args = ask.parse_args()
     qcport, include, borland = Path(need("QCPORT")), need("QCPORT_INC"), need("LLRM_BORLAND_INC")
-    need("LLRM_CLANG_M16"), need("LLRM_OW")
+    need("LLRM_CLANG_M16")
     bin_dir = ROOT / "target/release"
     extra = [f"--isel={args.isel}"] if args.isel else []
     dirs = [flag for part in (*PARTS, "qgl") for flag in ("-I", str(qcport / part))]

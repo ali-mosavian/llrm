@@ -1,6 +1,7 @@
 //! A loop whose phis start at constants runs its first trip folded when the
 //! clocks saved repay the copy (PL6): mandel's `x = y = 0` trip. Needs
-//! `LLRM_OW` and the m16 clang (`LLRM_CLANG_M16`).
+//! the Open Watcom tree (tools/ow-fetch.sh) and the m16 clang
+//! (`LLRM_CLANG_M16`).
 
 use std::path::Path;
 use std::process::Command;
@@ -20,9 +21,14 @@ fn asm_of(
     level: &str,
     tag: &str,
 ) -> String {
-    for name in ["LLRM_OW", "LLRM_CLANG_M16"] {
-        assert!(std::env::var_os(name).is_some(), "{name} is not set: this test needs it and does not skip");
-    }
+    assert!(
+        llrm_cc::ow_tree().is_dir(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
+    assert!(
+        std::env::var_os("LLRM_CLANG_M16").is_some(),
+        "LLRM_CLANG_M16 is not set: this test needs it and does not skip"
+    );
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("peelentry-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -48,10 +54,20 @@ fn peels_source(
     source: &str,
     level: &str,
 ) -> bool {
-    for name in ["LLRM_OW", "LLRM_CLANG_M16"] {
-        assert!(std::env::var_os(name).is_some(), "{name} is not set: this test needs it and does not skip");
-    }
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("peelentry-log-{}-{}-{}", level.trim_start_matches('-'), source.len(), std::process::id()));
+    assert!(
+        llrm_cc::ow_tree().is_dir(),
+        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
+    );
+    assert!(
+        std::env::var_os("LLRM_CLANG_M16").is_some(),
+        "LLRM_CLANG_M16 is not set: this test needs it and does not skip"
+    );
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "peelentry-log-{}-{}-{}",
+        level.trim_start_matches('-'),
+        source.len(),
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("d.c"), source).unwrap();
@@ -83,21 +99,25 @@ fn at_speed_the_first_trip_of_a_folding_loop_is_peeled_and_for_size_it_is_not() 
 fn at_speed_the_first_trip_of_a_remainder_loop_tests_the_low_bit() {
     let source = "long f(int n)\n{\n    int i, d, count = 0;\n    for (i = 2; i < n; ++i) { for (d = 2; d * d <= i; ++d) if (i % d == 0) break; if (d * d > i) ++count; }\n    return count;\n}\n";
     let text = asm_of(source, "-O2", "primes");
-    assert!(text.lines().any(|line| line.trim_start().starts_with("test") && line.trim_end().ends_with(", 1")), "{text}");
+    assert!(
+        text.lines().any(|line| line.trim_start().starts_with("test") && line.trim_end().ends_with(", 1")),
+        "{text}"
+    );
 }
 
-/// frames: `rest % 10` has a constant divisor in the rolled loop already. Priced
-/// as a divide on that side and an `and` after the peel, it read as 60 clocks
-/// folded and peeled digits() (+2.1M of 3.1M clocks). It is not peeled.
+/// frames: `rest % 10` has a constant divisor in the rolled loop already.
+/// Priced as a divide on that side and an `and` after the peel, it read as 60
+/// clocks folded and peeled digits() (+2.1M of 3.1M clocks). It is not peeled.
 #[test]
 fn at_speed_a_constant_divisor_the_loop_already_has_does_not_pay_for_a_peel() {
     let source = "int digits(long v)\n{\n    int total = 0;\n    long rest = v;\n    while (rest > 0) {\n        total += (int)(rest % 10);\n        rest /= 10;\n    }\n    return total;\n}\n";
     assert!(!peels_source(source, "-O2"), "the digit loop was peeled");
 }
 
-/// nbody_fixed: the inner loop's divides and multiplies read their operands from
-/// arrays, so the entry values fold nothing. A two-trip count that took the next
-/// trip's work as folded peeled it (-O2: +8999 clocks, +122 B). It is not peeled.
+/// nbody_fixed: the inner loop's divides and multiplies read their operands
+/// from arrays, so the entry values fold nothing. A two-trip count that took
+/// the next trip's work as folded peeled it (-O2: +8999 clocks, +122 B). It is
+/// not peeled.
 #[test]
 fn at_speed_a_loop_whose_multiplies_read_memory_does_not_peel() {
     let source = "static long px[6], py[6];\nlong f(void)\n{\n    long ax = 0, ay = 0, dx, dy, d2, fo;\n    int b, o;\n    for (b = 0; b < 6; ++b) {\n        ax = ay = 0;\n        for (o = 0; o < 6; ++o) {\n            if (o != b) {\n                dx = px[o] - px[b];\n                dy = py[o] - py[b];\n                d2 = dx * dx + dy * dy + 262144L;\n                fo = 512L / (d2 / 262144L + 1);\n                ax += (dx * fo) / 512L;\n                ay += (dy * fo) / 512L;\n            }\n        }\n        px[b] += ax;\n        py[b] += ay;\n    }\n    return px[0] + py[0];\n}\n";

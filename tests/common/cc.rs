@@ -2,7 +2,7 @@
 //! tests that spawned `CARGO_BIN_EXE_llrm-c` use instead. The target is the
 //! Watcom one the arguments name (`-m32`, else `-m16` as llrm-c defaulted).
 //! Needs the pinned clang (`LLRM_PIN_CLANG`, `LLRM_CLANG_M16` at m16) and the
-//! Open Watcom headers (`LLRM_OW`) in the environment.
+//! Open Watcom headers (`{ow}`, tools/ow-fetch.sh) in the environment.
 
 #![allow(dead_code)]
 
@@ -28,8 +28,10 @@ pub fn llrm_c() -> LlrmC {
     LlrmC::default()
 }
 
-/// The toolchain variables `llrm-cc` needs but finds unset or pointing nowhere. Without them it falls
-/// back to the system clang, whose datalayout differs: the tests then fail (or pass) for the wrong reason.
+/// The toolchain variables `llrm-cc` needs but finds unset or pointing nowhere
+/// (`OW_TREE`: the Open Watcom tree is missing, tools/ow-fetch.sh). Without
+/// them it falls back to the system clang, whose datalayout differs: the tests
+/// then fail (or pass) for the wrong reason.
 pub fn missing_env(
     value: impl Fn(&str) -> Option<OsString>,
     wide: bool,
@@ -37,7 +39,7 @@ pub fn missing_env(
 ) -> Vec<&'static str> {
     let mut wanted = vec!["LLRM_PIN_CLANG"];
     if !flat64 {
-        wanted.push("LLRM_OW");
+        wanted.push("OW_TREE");
     }
     if !wide && !flat64 {
         wanted.push("LLRM_CLANG_M16");
@@ -46,15 +48,20 @@ pub fn missing_env(
     wanted
 }
 
-/// Once per process: the clang `llrm-cc` will use, by path and md5, so a run's log says which toolchain it had.
+/// Once per process: the clang `llrm-cc` will use, by path and md5, so a run's
+/// log says which toolchain it had.
 fn announce_toolchain() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         let path = std::env::var("LLRM_PIN_CLANG").unwrap_or_default();
-        let sum = Command::new("md5sum").arg(&path).output().ok().map_or_else(
-            || "?".to_string(),
-            |done| String::from_utf8_lossy(&done.stdout).split_whitespace().next().unwrap_or("?").to_string(),
-        );
+        let sum = Command::new("md5sum")
+            .arg(&path)
+            .output()
+            .ok()
+            .map_or_else(
+                || "?".to_string(),
+                |done| String::from_utf8_lossy(&done.stdout).split_whitespace().next().unwrap_or("?").to_string(),
+            );
         eprintln!("llrm-cc toolchain: LLRM_PIN_CLANG={path} md5={sum}");
     });
 }
@@ -132,7 +139,11 @@ impl LlrmC {
     fn command(&mut self) -> Command {
         let wide = self.arguments.iter().any(|one| one == "-m32");
         let flat64 = self.arguments.iter().any(|one| one == "-m64");
-        let missing = missing_env(|name| std::env::var_os(name), wide, flat64);
+        let missing = missing_env(
+            |name| if name == "OW_TREE" { Some(llrm_cc::ow_tree().into()) } else { std::env::var_os(name) },
+            wide,
+            flat64,
+        );
         assert!(
             missing.is_empty(),
             "llrm-cc needs {missing:?} set to existing paths (the pinned clang, Open Watcom headers, the m16 clang); without them it falls back to the system clang"
@@ -153,7 +164,16 @@ impl LlrmC {
         };
         let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
         command
-            .env("LLRM_CC_TARGET", if flat64 { "x86_64-linux" } else if wide { "x86_32-wat" } else { "x86_16-wat" })
+            .env(
+                "LLRM_CC_TARGET",
+                if flat64 {
+                    "x86_64-linux"
+                } else if wide {
+                    "x86_32-wat"
+                } else {
+                    "x86_16-wat"
+                },
+            )
             .args(self.arguments.iter().filter(|one| *one != "-m16" && *one != "-m32"))
             .args(stop);
         // In the order they were asked, as `Command` does: a removal beside a

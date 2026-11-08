@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: LLRM_CC_DIR=<dir with llrm-cc> LLRM_OW=... LLRM_CLANG_M16=... tests/tmp_free_inline_test.sh
+# usage: LLRM_CC_DIR=<dir with llrm-cc> LLRM_CLANG_M16=... tests/tmp_free_inline_test.sh
 # Every freed string temporary cost two far calls (str_tmp_free -> str_release): 11 + 19 instructions plus the second frame, 196,740 times on stft_fixed.
 # The release is the hot path of str_tmp_free (a loop's temporaries), so it is inline there.
 cd "$(dirname "$0")/.." || exit 2

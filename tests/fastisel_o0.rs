@@ -583,3 +583,30 @@ fn fast_isel_materializes_a_wide_constant_with_movabs() {
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(asm.contains("20015998343868") || asm.to_uppercase().contains("123456789ABC"), "{asm}");
 }
+
+/// FastISel selects `llvm.lifetime.start`/`end` to nothing at -O0 (`FastISel::selectIntrinsicCall`). Ours declined at the
+/// call and sent the whole function to the DAG path: 13 of 14 functions of div_constants_short, +62 M Ir with the flag on.
+#[test]
+fn fast_isel_takes_a_function_with_lifetime_markers() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.ll"),
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+         target triple = \"x86_64-unknown-linux-gnu\"\n\
+         declare void @llvm.lifetime.start.p0(ptr)\n\
+         declare void @llvm.lifetime.end.p0(ptr)\n\
+         define i32 @marked(i32 %a) {\n  %s = alloca i32\n  call void @llvm.lifetime.start.p0(ptr %s)\n  \
+         store i32 %a, ptr %s\n  %v = load i32, ptr %s\n  call void @llvm.lifetime.end.p0(ptr %s)\n  ret i32 %v\n}\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-llc"))
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-m64", "-O0", "-S", "a.ll", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap_or_default();
+    assert!(report.lines().any(|line| line == "marked fast"), "{report}");
+}

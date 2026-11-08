@@ -147,6 +147,8 @@ impl Dos {
             // open rows (oversight rules): jpeg_single C -Os +1 B (-217 clk), jpeg_fixed and
             // jpeg_single nib -O2 +1 B each (-1 clk).
             slots_loop_width_rule: true,
+            // DEVIATE CARRY-SI (owner x86-m16, exit 2026-11-21): see Tuning.
+            carry_slot_indexes: false,
             // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
             // (partial and runtime on) copied matmul's outer body, 455 code
             // bytes against 297, past Borland C's 298.
@@ -393,6 +395,8 @@ impl Machine for Dos {
             // open rows (oversight rules): jpeg_single C -Os +1 B (-217 clk),
             // jpeg_fixed and jpeg_single nib -O2 +1 B each (-1 clk).
             slots_loop_width_rule: true,
+            // DEVIATE CARRY-SI (owner x86-m16, exit 2026-11-21): see Tuning.
+            carry_slot_indexes: false,
             // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
             // (partial and runtime on) copied matmul's outer body, 455 code
             // bytes against 297, past Borland C's 298.

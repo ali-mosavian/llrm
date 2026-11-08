@@ -122,7 +122,7 @@ fn test_callee_saved_registers_are_pushed_in_the_reverse_of_the_target_list() {
 /// The same at `-m32 -mabi=sysv`: the pin's `push ebp; push ebx; push edi; push
 /// esi`. llrm pushed `ebx, esi, edi, ebp`: its list was not the pin's CSR_32.
 #[test]
-#[ignore = "needs LLRM_OW"]
+#[ignore = "needs the Open Watcom tree"]
 fn test_m32_callee_saved_registers_are_pushed_ebp_ebx_edi_esi() {
     let scratch = tempfile::tempdir().unwrap();
     let source = scratch.path().join("a.c");

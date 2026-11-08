@@ -32,8 +32,10 @@ fn module() -> llrm_mir::module::Module {
     llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{CALLS}")).expect("parses")
 }
 
+/// Without the call-target register, which adds a `lea` and a saved register to
+/// the frame this test counts.
 fn size() -> Options {
-    Options { size: true, ..Options::default() }
+    Options { size: true, call_targets: false, ..Options::default() }
 }
 
 #[test]

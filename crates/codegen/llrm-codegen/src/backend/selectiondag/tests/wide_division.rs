@@ -7,7 +7,16 @@ fn quotient_of(
     op: ISD,
     narrow: bool,
 ) -> (SelectionDAG, SDValue) {
-    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    quotient_sized(op, narrow, false)
+}
+
+fn quotient_sized(
+    op: ISD,
+    narrow: bool,
+    small: bool,
+) -> (SelectionDAG, SDValue) {
+    let mut tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    tli.set_small_divide(small);
     let mut dag = dag();
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
@@ -76,6 +85,17 @@ fn quotient_and_remainder_are_read_from_their_own_registers() {
     assert_eq!(register(&remainder, rroot), NodeData::PhysReg(routine.remainder[0]));
 }
 
+/// nbody_fixed at m16 -O1 held a 313-byte inline `i64` divide: code whose
+/// bytes are strict (-O1, size) called the speed routine, though the target
+/// has a shorter one.
+#[test]
+fn a_function_built_for_size_calls_the_size_divide() {
+    let (dag, _) = quotient_sized(ISD::UDiv, false, true);
+    assert_eq!(call_of(&dag).0, "div64_u_small");
+    let (dag, _) = quotient_sized(ISD::UDiv, true, true);
+    assert_eq!(call_of(&dag).0, "div64_u32", "a dword divisor keeps the speed routine, which is shorter");
+}
+
 /// `a / d + a % d` on `i64` called the routine twice, once per op, and the
 /// pipeline's remainder was `a - q * d` (a 64-bit multiply per site, x_ll_div
 /// +9,534 clk over gcc). The pair is one call that returns both.
@@ -110,4 +130,13 @@ fn an_i64_quotient_and_remainder_of_the_same_operands_are_one_call() {
         .filter(|&node| dag.opcode(SDValue { node, res: 0 }) == x86isd::CALL)
         .count();
     assert_eq!(calls, 1, "one call makes the quotient and the remainder");
+}
+
+/// m32 -O1 took the 64-round divide too (clocks regress where both are strict):
+/// only m16 asks for the small routine at -O1.
+#[test]
+fn only_m16_takes_the_size_divide_at_o1() {
+    use llrm_target::Target;
+    assert!(llrm_x86_m16::M16.small_divide_at_o1());
+    assert!(!llrm_x86_m32::M32.small_divide_at_o1());
 }
