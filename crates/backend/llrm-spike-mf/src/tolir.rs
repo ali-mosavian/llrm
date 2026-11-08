@@ -887,7 +887,10 @@ impl<T: Target> Made<'_, T> {
             insn.early_clobbers = insn.defines.clone();
         }
         if inst.call {
-            insn.clobbers = T::caller_saved().into_iter().collect();
+            insn.clobbers = match &inst.call_clobbers {
+                Some(known) => known.as_ref().clone(),
+                None => T::caller_saved().into_iter().collect(),
+            };
             // The call writes each clobbered register it names: a value that
             // lives across it cannot be the register, and a read after it
             // sees what the call left.
