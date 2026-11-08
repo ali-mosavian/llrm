@@ -531,6 +531,31 @@ pub struct Semantics {
     pub pops: Option<i64>,
 }
 
+impl Semantics {
+    /// A copy with other operands and name, the rest carried over.
+    #[must_use]
+    pub fn with_operands(
+        &self,
+        name: Option<std::sync::Arc<str>>,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Semantics {
+        let Semantics { op, name: _, dests: _, sources: _, target, indirect, table, table_id, repeat, pops } = self;
+        Semantics {
+            op: *op,
+            name,
+            dests,
+            sources,
+            target: *target,
+            indirect: *indirect,
+            table: table.clone(),
+            table_id: *table_id,
+            repeat: *repeat,
+            pops: *pops,
+        }
+    }
+}
+
 impl std::hash::Hash for Semantics {
     fn hash<H: std::hash::Hasher>(
         &self,
