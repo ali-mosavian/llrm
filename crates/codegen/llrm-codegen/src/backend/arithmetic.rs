@@ -147,16 +147,23 @@ pub fn chain_bytes(
 /// The chain for a multiply by `number` where it takes fewer clocks than
 /// `imul r,r,imm` on the CPU's table, whatever its bytes (the search
 /// at speed).
+///
+/// With `no_growth` (-O1: bytes strict) the chain must also be no longer than
+/// the `imul`: the clocks it saves do not pay for bytes there.
 pub fn chain_by_clocks<'a>(
     number: i64,
     width: i64,
     cpu: impl Into<ProfileOrName<'a>>,
+    arch: &dyn llrm_target::Target,
+    no_growth: bool,
 ) -> Result<Option<Vec<(&'static str, i64)>>, String> {
     let target = targets::profile(cpu)?;
     let found = if width == 4 { cheapest_chain(number, target)? } else { cheapest_narrow_chain(number, target)? };
     let Some((chain, clocks)) = found else { return Ok(None) };
     let prefix = if width == 4 { dword_prefix(target) } else { 0 };
-    Ok((immediate_multiply(target, number)? + prefix - clocks > 0).then_some(chain))
+    let faster = immediate_multiply(target, number)? + prefix - clocks > 0;
+    let fits = !no_growth || chain_bytes(&chain, width, arch) <= arch.multiply_immediate_bytes(number, width);
+    Ok((faster && fits).then_some(chain))
 }
 
 /// The chain for a multiply by `number` of `width` bytes in a block `freq`

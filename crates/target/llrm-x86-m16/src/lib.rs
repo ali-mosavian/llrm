@@ -45,8 +45,8 @@ pub fn spaces() -> llrm_mir::spaces::Spaces {
 pub struct M16;
 
 /// The registers the description states.
-static REGISTERS: std::sync::LazyLock<Vec<llrm_target::registers::Register>> = std::sync::LazyLock::new(|| {
-    llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses")
+static REGISTERS: std::sync::LazyLock<std::sync::Arc<Vec<llrm_target::registers::Register>>> = std::sync::LazyLock::new(|| {
+    llrm_target::registers::file(include_str!("registers.regs")).expect("registers.regs parses")
 });
 
 /// The pin's register pressure sets for the registers described above:

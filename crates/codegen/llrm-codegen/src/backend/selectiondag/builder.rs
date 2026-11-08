@@ -82,6 +82,10 @@ pub struct BuilderTarget {
     pub shift_amount_of: Option<fn(EVT) -> EVT>,
     /// `getMinimumJumpTableEntries`.
     pub min_jump_table_entries: usize,
+    /// `getMinimumJumpTableDensity`, where the target states one.
+    pub min_jump_table_density: Option<u64>,
+    /// `isOperationLegal(SHL, pointer)`: a switch may be bit tests (`1 << x`).
+    pub variable_shift_legal: bool,
     /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit
     /// tests and peeling run.
     pub switch_optimize: bool,
@@ -268,6 +272,16 @@ impl BuilderTarget {
 
     /// This target with a divide by a constant kept where its priced clocks
     /// beat the multiply-high sequence's.
+    /// This target with a signed divide by a negative constant made from the
+    /// divide by its magnitude ([`DagConfig::sdiv_by_magnitude`]).
+    pub fn with_sdiv_by_magnitude(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.sdiv_by_magnitude = on;
+        self
+    }
+
     pub fn with_div_prices(
         mut self,
         prices: Option<super::dag::DivPrices>,
@@ -358,6 +372,8 @@ impl BuilderTarget {
             shift_amount: EVT::I8,
             shift_amount_of: None,
             min_jump_table_entries: 4,
+            min_jump_table_density: None,
+            variable_shift_legal: true,
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: std::iter::successors(Some(8), |width| Some(width * 2)).take_while(|width| *width <= bits.max(32)).collect(),

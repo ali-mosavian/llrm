@@ -34,6 +34,17 @@ fn two_words_are_compared_for_equality_with_sbc_hl() {
     assert!(text.contains("sbc hl, de") && !text.contains("sub a, e"), "{text}");
 }
 
+/// The biased copy a signed compare builds (`ld c, e; ld a, d; xor a, #128; ld b, a`) was read by nothing once the
+/// compare tested the high byte alone, and `bc` was rebuilt below (`ld c, e; ld b, d`): two dead loads in
+/// switch_peeled_table's loop at -Os.
+#[test]
+fn a_biased_copy_the_compare_no_longer_reads_is_not_loaded() {
+    let ir = include_str!("kernels/ir/switch_peeled_table.ll");
+    let out = llrm_z80::compile::text(ir, "main", 0, &llrm_z80::driver::Request::new(llrm_z80::driver::Level::Os))
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("xor a, #128\n\tld b, a"), "{out}");
+}
+
 /// `x < 256` on a signed word compared the low byte against 0 first (`ld a, c; sub a, #0; ld a, b; sbc a, #129`):
 /// subtracting 0 changes nothing and leaves the carry clear, so the high bytes alone are `ld a, b; sub a, #129`
 /// (switch_peeled_table's loop, 3 B and 7 T per test).

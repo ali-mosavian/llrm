@@ -4722,3 +4722,39 @@ fn an_i64_multiply_by_a_lea_constant_is_not_an_imul_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("imul"), "{listing}");
 }
+
+/// A call through a pointer pinned the frame register at m64 (`hasOpaqueSPAdjustment`
+/// read "the callee may pop"), though no m64 convention pops: rbp was never a value
+/// register, so memfuncs_runtime -O2 spent REX-prefixed r12-r15 where the pin has rbp (+111 B).
+#[test]
+fn a_function_calling_through_a_pointer_uses_rbp_as_a_value_register_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(ptr %p, ptr %fp) {\nentry:\n  \
+                %a = load volatile i64, ptr %p\n  %p1 = getelementptr i64, ptr %p, i64 1\n  %b = load volatile i64, ptr %p1\n  \
+                %p2 = getelementptr i64, ptr %p, i64 2\n  %c = load volatile i64, ptr %p2\n  %p3 = getelementptr i64, ptr %p, i64 3\n  %d = load volatile i64, ptr %p3\n  \
+                %p4 = getelementptr i64, ptr %p, i64 4\n  %e = load volatile i64, ptr %p4\n  %p5 = getelementptr i64, ptr %p, i64 5\n  %g = load volatile i64, ptr %p5\n  \
+                call void %fp()\n  \
+                store volatile i64 %a, ptr %p\n  store volatile i64 %b, ptr %p\n  store volatile i64 %c, ptr %p\n  \
+                store volatile i64 %d, ptr %p\n  store volatile i64 %e, ptr %p\n  store volatile i64 %g, ptr %p\n  ret i64 0\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rbp"), "{listing}");
+}
+
+/// A volatile `memcpy` kept eight-byte pieces at m64 (the 16-byte pieces carried no volatile mark, so the second
+/// read of the same source could be forwarded from the first); the pin copies it as `v4i32` pieces, each a volatile
+/// access (double_to_uint64 -O2: 80 bytes, ten pairs for five).
+#[test]
+fn a_volatile_copy_is_made_of_16_byte_pieces_and_each_is_read_and_written_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %src, ptr %d1, ptr %d2) {\n  \
+                call void @llvm.memcpy.p0.p0.i64(ptr align 16 %d1, ptr align 16 %src, i64 16, i1 true)\n  \
+                call void @llvm.memcpy.p0.p0.i64(ptr align 16 %d2, ptr align 16 %src, i64 16, i1 true)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let pieces = listing.matches("movups").count() + listing.matches("movaps").count();
+    assert_eq!(pieces, 4, "{listing}");
+}

@@ -180,6 +180,8 @@ pub struct MulPricing<'a> {
     /// `Tuning::price_pin_multiplies`: the pin's decompositions are priced
     /// too, and a tie keeps the `imul`.
     pub price_pin: bool,
+    /// -O1 with `by_clocks`: the chain may not be longer than the `imul`.
+    pub no_growth: bool,
 }
 
 impl CombineHooks for X86Lowering<'_> {
@@ -1523,6 +1525,28 @@ fn carry_through_add(
     (dag.constant(dag.operand(carry, 0))? == cond::B).then(|| dag.operand(carry, 1))
 }
 
+/// `needCarryOrOverflowFlag`: whether a reader of the flags result `flags`
+/// tests a condition that depends on the carry or overflow flag; any reader
+/// other than a `setcc`, `brcond` or `cmov` is assumed to.
+fn need_carry_or_overflow_flag(
+    dag: &SelectionDAG,
+    flags: SDValue,
+) -> bool {
+    dag.users(flags).any(|user| {
+        let user = SDValue { node: user, res: 0 };
+        let at = match dag.opcode(user) {
+            x86isd::SETCC | x86isd::SETCC_CARRY => 0,
+            x86isd::BRCOND | x86isd::CMOV => 2,
+            _ => return true,
+        };
+        let Some(code) = dag.constant(dag.operand(user, at)) else { return true };
+        matches!(
+            code,
+            cond::A | cond::AE | cond::B | cond::BE | cond::O | cond::NO | cond::G | cond::GE | cond::L | cond::LE
+        )
+    })
+}
+
 /// `combineADC` and `combineSBB`, the carry-through-add part: the carry in
 /// comes from the flags the `setb` read, so `setb; add al, -1; adc` is `adc`.
 /// (The `ADC 0, 0` strength reduction is not translated: it replaces both
@@ -1561,6 +1585,24 @@ fn combine_adc_sbb(
     }
     if let Some(flags) = carry_through_add(dag, carry) {
         return Some(dag.get_node_multi(opcode, &vt, &[lhs, rhs, flags]));
+    }
+    if opcode == x86isd::ADC && dag.constant(rhs) == Some(0) {
+        let flags = SDValue { node: node.node, res: 1 };
+        // Fold ADC(ADD(X,Y),0,Carry) -> ADC(X,Y,Carry) iff the flag result is
+        // dead.
+        if dag.opcode(lhs) == ISD::Add && !need_carry_or_overflow_flag(dag, flags) {
+            let (x, y) = (dag.operand(lhs, 0), dag.operand(lhs, 1));
+            return Some(dag.get_node_multi(opcode, &vt, &[x, y, carry]));
+        }
+        // Fold ADC(SHL(X,1),0,Carry) -> ADC(X,X,Carry) iff the flag result is
+        // dead.
+        if dag.opcode(lhs) == ISD::Shl
+            && dag.constant(dag.operand(lhs, 1)) == Some(1)
+            && !need_carry_or_overflow_flag(dag, flags)
+        {
+            let x = dag.get_node(ISD::Freeze, dag.value_type(lhs), &[dag.operand(lhs, 0)]);
+            return Some(dag.get_node_multi(opcode, &vt, &[x, x, carry]));
+        }
     }
     // Fold SBB(SUB(X,Y),0,Carry) -> SBB(X,Y,Carry) iff the flag result is dead.
     if opcode == x86isd::SBB && dag.opcode(lhs) == ISD::Sub && dag.constant(rhs) == Some(0) && !flags_used {
@@ -2690,9 +2732,9 @@ fn priced_chain(
 ) -> Option<SDValue> {
     use crate::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
-    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin } = pricing;
+    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin, no_growth } = pricing;
     let chain = if by_clocks {
-        arithmetic::chain_by_clocks(c, width, cpu)
+        arithmetic::chain_by_clocks(c, width, cpu, arch, no_growth)
     } else {
         arithmetic::priced_chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte, price_pin)
     }

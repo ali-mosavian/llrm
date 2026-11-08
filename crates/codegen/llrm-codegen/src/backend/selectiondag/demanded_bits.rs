@@ -401,6 +401,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                         return Self::combine_to(tlo, op, not);
                     }
                 }
+                // "If we can't turn this into a 'not', try to shrink the
+                // constant."
+                if self.dag.constant(op1) != Some(all) {
+                    self.shrink_demanded_constant(op, demanded, tlo)?;
+                    if tlo.is_some() {
+                        return Err(());
+                    }
+                }
                 if demanded != all {
                     let (d0, d1) = (
                         self.simplify_multiple_use_demanded_bits(op0, demanded, depth + 1),

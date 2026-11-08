@@ -585,14 +585,14 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
     slots
         .entry(bits)
         .or_insert_with(|| {
-            let forms = llrm_target::instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
+            let forms = llrm_target::instr::shared(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
             let opcodes = match bits {
                 16 => x86_m16::MACHINE_OPCODES,
                 64 => x86_x64::MACHINE_OPCODES,
                 _ => x86_i486::MACHINE_OPCODES,
             };
             std::sync::Arc::new(Tables {
-                map: OpcodeMap::new(forms),
+                map: OpcodeMap::shared(forms),
                 names: opcodes
                     .iter()
                     .copied()
@@ -835,7 +835,7 @@ impl super::emit::ConstantCells for PoolCells<'_> {
 fn narrow_divide_live(
     module: &llrm_mir::module::Module,
     function: &llrm_mir::module::Function,
-) -> HashMap<BlockId, u32> {
+) -> llrm_mir::dense::IdMap<BlockId, u32> {
     use llrm_mir::opcode::{BinaryOp, Opcode};
     let narrow = |inst: llrm_mir::module::InstId| {
         let op = function.instruction(inst);
@@ -845,7 +845,7 @@ fn narrow_divide_live(
     };
     let blocks: Vec<BlockId> =
         function.layout().iter().copied().filter(|&block| function.iter_block(block).any(narrow)).collect();
-    let mut live = HashMap::default();
+    let mut live = llrm_mir::dense::IdMap::new();
     if blocks.is_empty() {
         return live;
     }
@@ -1049,6 +1049,7 @@ fn selected_in(
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_div_live_limit(if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 })
         .with_div_prices(div_prices(cpu, &*machine, bitness))
+        .with_sdiv_by_magnitude(cpu.speed_rate && !(cpu.size || cpu.min_size) && machine.tti().is_some_and(|tti| tti.sdiv_by_magnitude()))
         .with_jump_tables(
             machine.costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
@@ -1162,7 +1163,7 @@ fn selected_in(
         } else {
             Cpu::I486
         },
-        opt_none: false,
+        opt_none: !cpu.optimized,
         opt_for_size: cpu.size,
         min_size: llrm_mir::memory::has(&function.attrs, "minsize"),
         has_frame_pointer: true,
@@ -1348,7 +1349,7 @@ fn selected_in(
         llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
     });
     let div_live = if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 };
-    let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { HashMap::default() };
+    let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { llrm_mir::dense::IdMap::new() };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
     for (block, parent, mut built) in work {
         if cpu.optimized && !fast_ids.contains(&block.0) && block == parent {
@@ -1426,6 +1427,7 @@ fn selected_in(
                             milliclocks_per_byte: mul_rate,
                             by_clocks: true,
                             price_pin: false,
+                            no_growth: cpu.bytes_strict(),
                         })
                     } else {
                         frequencies
@@ -1439,6 +1441,7 @@ fn selected_in(
                                     milliclocks_per_byte: mul_rate,
                                     by_clocks: false,
                                     price_pin,
+                                    no_growth: false,
                                 },
                             )
                     },

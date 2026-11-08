@@ -713,6 +713,10 @@ impl Tti for X86 {
         Some(Cost::of(tuning.call_sequence_fixed_clocks + words * tuning.call_sequence_argument_clocks + pop))
     }
 
+    fn sdiv_by_magnitude(&self) -> bool {
+        self.tuning.sdiv_by_magnitude
+    }
+
     fn speed_inline_rate_at_o1(&self) -> bool {
         self.tuning.speed_inline_rate_at_o1
     }
