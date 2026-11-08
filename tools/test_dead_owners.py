@@ -38,3 +38,15 @@ def test_the_fixture_allow_list_cannot_grow_silently():
 def test_no_row_in_the_tree_names_an_owner_that_is_not_in_owners_txt():
     run = subprocess.run([sys.executable, str(Path(owners.__file__))], capture_output=True, text=True)
     assert run.returncode == 0, run.stdout
+
+
+UNPLACED = 22  # rows that read "no owner (was NAME, unplaced 2026-11-09)": place one (owner or `closed <date>, #PR` from gh) and lower this number
+
+
+def test_the_unplaced_rows_can_only_go_down():
+    """A row whose dead owner could not be replaced with a verifiable owner or merged PR says so in one greppable phrase; the count is fixed."""
+    root = Path(__file__).resolve().parent.parent
+    hits = subprocess.run(
+        ["git", "grep", "-nI", "unplaced 2026-11-09", "--", "crates", "docs", "tools", ":!tools/test_dead_owners.py"], cwd=root, capture_output=True, text=True
+    ).stdout.splitlines()
+    assert len(hits) == UNPLACED, f"{len(hits)} unplaced rows, the test says {UNPLACED}: lower UNPLACED in the PR that places one"

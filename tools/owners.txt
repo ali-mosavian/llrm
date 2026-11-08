@@ -51,3 +51,5 @@ llrm-arm64-lir
 llrm-w10-instcombine
 w10-instcombine
 compile-time-bench
+llrm-oversight
+llrm-coordinator
