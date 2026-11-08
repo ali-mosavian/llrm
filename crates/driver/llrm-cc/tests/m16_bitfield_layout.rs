@@ -14,7 +14,7 @@ use std::process::Command;
 /// dword read-modify-write instead of a byte or a word.
 #[test]
 fn bit_fields_are_laid_out_in_units_of_their_declared_type() {
-    if std::env::var_os("LLRM_CLANG_M16").is_none() || !llrm_cc::ow_tree().is_dir() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || !llrm_cc::ow_present() {
         eprintln!("skipped: LLRM_CLANG_M16 is not set or the Open Watcom tree is missing (tools/ow-fetch.sh)");
         return;
     }

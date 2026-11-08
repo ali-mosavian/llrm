@@ -247,3 +247,8 @@ def test_a_program_that_never_resets_the_fpu_starts_at_dos_control_word(tmp_path
     subprocess.run([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{tmp_path}/F.OBJ", str(tmp_path / "F.ASM")], check=True)
     subprocess.run([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(tmp_path / "F.EXE"), "file", str(tmp_path / "F.OBJ")], check=True)
     assert icount.run(tmp_path / "F.EXE", None, tmp_path, whole=True).output == b"\x7f\x03"
+
+
+def test_the_default_limit_admits_the_slowest_reference_run():
+    """Turbo C's jpeg_fixed runs 431,861,107 instructions; the 400 M limit left tc and tcpp jpeg_fixed unmeasured (REFERENCE BROKEN) in the m16 bless."""
+    assert icount.LIMIT >= 431_861_107 or os.environ.get("LLRM_ICOUNT_LIMIT")
