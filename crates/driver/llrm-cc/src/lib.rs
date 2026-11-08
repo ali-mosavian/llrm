@@ -113,6 +113,15 @@ pub struct Target {
     pub llc_level: bool,
     /// Why the backend takes no `-O<n>`; required where `llc_level` is false.
     pub llc_level_reason: Option<String>,
+    /// Whether the backend takes the `-f[no-]PASS` switches (`BACKEND_PASSES`,
+    /// `-f[no-]unroll-loops`). Where it does not, the driver leaves them out
+    /// and says so: the pin's clang writes `noinline` and the loop hints into
+    /// the IR, and the backend reads them there.
+    #[serde(default = "yes")]
+    pub llc_passes: bool,
+    /// Why the backend takes no pass switch; required where `llc_passes` is
+    /// false.
+    pub llc_passes_reason: Option<String>,
     /// Whether the backend takes `-mcmodel=` (the pin's `llc -code-model`) and
     /// clang does not: the driver gives the flag to the backend alone.
     #[serde(default)]
@@ -629,6 +638,10 @@ pub fn clang_flags(
     if unrolls_at_o1(target, build) {
         flags.push("-funroll-loops".into());
     }
+    // Clang takes `-fexcess-precision=` where the backend does not.
+    if !target.llc_passes {
+        flags.extend(build.llc.iter().filter(|flag| flag.starts_with("-fexcess-precision=")).cloned());
+    }
     flags
 }
 
@@ -643,6 +656,25 @@ fn unrolls_at_o1(
         && !build.clang.iter().any(|flag| flag == "-funroll-loops" || flag == "-fno-unroll-loops")
 }
 
+/// Whether `flag` is one of the backend pipeline's `-f[no-]PASS` switches.
+fn is_pass_switch(flag: &str) -> bool {
+    backend_pass(flag).is_some()
+        || flag == "-funroll-loops"
+        || flag == "-fno-unroll-loops"
+        || flag.starts_with("-fexcess-precision=")
+}
+
+/// The build's switches that the target's backend does not take.
+pub fn dropped_pass_switches<'a>(
+    target: &Target,
+    build: &'a Build,
+) -> Vec<&'a str> {
+    if target.llc_passes {
+        return vec![];
+    }
+    build.llc.iter().map(String::as_str).filter(|flag| is_pass_switch(flag)).collect()
+}
+
 pub fn llc_args(
     target: &Target,
     build: &Build,
@@ -654,7 +686,8 @@ pub fn llc_args(
         args.push(format!("-O{}", build.level));
     }
     args.extend(target.llc.iter().cloned());
-    args.extend(build.llc.iter().cloned());
+    let dropped = dropped_pass_switches(target, build);
+    args.extend(build.llc.iter().filter(|flag| !dropped.contains(&flag.as_str())).cloned());
     if unrolls_at_o1(target, build) {
         args.push("-funroll-loops".into());
     }
@@ -914,6 +947,13 @@ fn build(
                     std::fs::write(&ir, translated).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
                 let object = want(if build.stop == Stop::Assembly { "s" } else { "o" });
+                // A switch clang got as well is taken there.
+                let taken = clang_flags(target, build);
+                for flag in
+                    dropped_pass_switches(target, build).into_iter().filter(|flag| !taken.iter().any(|one| one == flag))
+                {
+                    eprintln!("llrm-cc: warning: {flag} is not a switch of this target's backend: ignored");
+                }
                 run(&llc_path(&target.llc_program), &llc_args(target, build, &ir, Path::new(&object)))?;
                 objects.push(object);
             }

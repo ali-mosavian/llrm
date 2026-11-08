@@ -755,15 +755,21 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
 
 /// A `select` of a loaded value stopped the matcher at m64 ("node transform
 /// `GetOppositeBranchCondition` is not translated"): the table folds the load
-/// into `cmov` with the condition inverted (`inv_cond_XFORM`).
+/// into `cmov` with the condition inverted (`inv_cond_XFORM`). The pin's
+/// X86CmovConversion then turns a `cmov` with a memory operand into a branch
+/// over the load (`x86-cmov-converter-force-mem-operand` is on), outside a loop
+/// too: `mov rax, rcx; cmp; jl; mov rax, [rdi]; ret`, as the pin's llc has it.
 #[test]
-fn a_select_of_a_loaded_value_is_a_cmov_from_memory() {
+fn a_select_of_a_loaded_value_is_a_branch_over_the_load() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 define i64 @f(ptr %p, i64 %x, i64 %y, i64 %z) {\n  %a = load i64, ptr %p\n  %c = icmp slt i64 %x, %y\n  %r = select i1 %c, i64 %z, i64 %a\n  ret i64 %r\n}\n";
     let (built, _) = compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.lines().any(|line| line.trim().starts_with("cmovge") && line.contains('[')), "{listing}");
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    assert!(!lines.iter().any(|line| line.starts_with("cmov")), "{listing}");
+    assert!(lines.iter().any(|line| line.starts_with("jl ")), "{listing}");
+    assert!(lines.contains(&"mov rax, qword ptr [rdi]"), "{listing}");
 }
 
 /// `c ? 48 : 32` (a difference of 16) was two `mov`s and a `cmov`: the pin's
@@ -2509,13 +2515,14 @@ fn m32_over_aligned_local_realigns_the_stack_pointer() {
     assert!(lines.contains(&"mov esp, ebp"), "{listing}");
 }
 
-/// There is no pin alignment at 16 bits: an over-aligned local is refused with
-/// its reason, not compiled off its alignment.
+/// Real mode cannot realign the stack: an over-aligned local is clamped to the
+/// stack alignment (#7706), not refused, and no `and sp` is emitted.
 #[test]
-fn m16_over_aligned_local_is_refused() {
+fn m16_over_aligned_local_is_clamped_not_refused() {
     let text = format!("target datalayout = \"@m16-datalayout@-ni:2:3\"\n{ALIGNED_IR}");
-    let error = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().unwrap();
-    assert!(error.contains("in 16-bit code is not realigned"), "{error}");
+    let (built, _) = compiled(&flags(&["-m16", "-O1"]), &text, "aligned").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("and sp,"), "{listing}");
 }
 
 /// A callee-saved register pushed before the stack `sub` (the pin's order,
@@ -4105,17 +4112,19 @@ fn a_parent_of_an_unrolled_loop_is_folded_by_indvars_at_m64_o3() {
 }
 
 /// A 31-byte struct copy at m64 -Os was a `call memcpy` (the real-mode string
-/// rule counted it as eight dwords); the pin copies it as two overlapping
-/// 16-byte pieces (memory_expansion Os, 8 insns -> 5 per copy).
+/// rule counted it as eight dwords); it is now whichever of two overlapping 16-byte pieces (16 B) or the call
+/// (14 B with the arguments) is smaller (DEVIATE MEM-OS, #7892): here the call, and never a mix of both.
 #[test]
-fn a_31_byte_copy_at_m64_os_is_two_16_byte_pieces() {
+fn a_31_byte_copy_at_m64_os_is_the_cheaper_of_pieces_and_a_call() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
                 define void @f(ptr %d, ptr %s) optsize {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 31, i1 false)\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.matches("movups").count() == 4 && !listing.contains("call"), "{listing}");
+    let call = listing.contains("memcpy");
+    let pieces = listing.matches("movups").count();
+    assert!((call && pieces == 0) || (!call && pieces == 4), "{listing}");
 }
 
 /// A 136-byte local read through an index at m64: the red zone put `-0x80` on
@@ -4721,4 +4730,69 @@ fn an_i64_multiply_by_a_lea_constant_is_not_an_imul_at_m64() {
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("imul"), "{listing}");
+}
+
+/// A call through a pointer pinned the frame register at m64 (`hasOpaqueSPAdjustment`
+/// read "the callee may pop"), though no m64 convention pops: rbp was never a value
+/// register, so memfuncs_runtime -O2 spent REX-prefixed r12-r15 where the pin has rbp (+111 B).
+#[test]
+fn a_function_calling_through_a_pointer_uses_rbp_as_a_value_register_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(ptr %p, ptr %fp) {\nentry:\n  \
+                %a = load volatile i64, ptr %p\n  %p1 = getelementptr i64, ptr %p, i64 1\n  %b = load volatile i64, ptr %p1\n  \
+                %p2 = getelementptr i64, ptr %p, i64 2\n  %c = load volatile i64, ptr %p2\n  %p3 = getelementptr i64, ptr %p, i64 3\n  %d = load volatile i64, ptr %p3\n  \
+                %p4 = getelementptr i64, ptr %p, i64 4\n  %e = load volatile i64, ptr %p4\n  %p5 = getelementptr i64, ptr %p, i64 5\n  %g = load volatile i64, ptr %p5\n  \
+                call void %fp()\n  \
+                store volatile i64 %a, ptr %p\n  store volatile i64 %b, ptr %p\n  store volatile i64 %c, ptr %p\n  \
+                store volatile i64 %d, ptr %p\n  store volatile i64 %e, ptr %p\n  store volatile i64 %g, ptr %p\n  ret i64 0\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rbp"), "{listing}");
+}
+
+/// A volatile `memcpy` kept eight-byte pieces at m64 (the 16-byte pieces carried no volatile mark, so the second
+/// read of the same source could be forwarded from the first); the pin copies it as `v4i32` pieces, each a volatile
+/// access (double_to_uint64 -O2: 80 bytes, ten pairs for five).
+#[test]
+fn a_volatile_copy_is_made_of_16_byte_pieces_and_each_is_read_and_written_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %src, ptr %d1, ptr %d2) {\n  \
+                call void @llvm.memcpy.p0.p0.i64(ptr align 16 %d1, ptr align 16 %src, i64 16, i1 true)\n  \
+                call void @llvm.memcpy.p0.p0.i64(ptr align 16 %d2, ptr align 16 %src, i64 16, i1 true)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let pieces = listing.matches("movups").count() + listing.matches("movaps").count();
+    assert_eq!(pieces, 4, "{listing}");
+}
+
+/// The pin tail-calls the library routine of a `memmove`/`memcpy`/`memset` that ends a function (`jmp memmove`); ours
+/// pushed a slot, called, popped and returned: three bytes in each of the two hundred wrappers of memory_expansion
+/// (+4201 B at -O2).
+#[test]
+fn a_memmove_ending_a_function_is_a_tail_call_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %d, ptr %s) {\n  \
+                tail call void @llvm.memmove.p0.p0.i64(ptr %d, ptr %s, i64 300, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("jmp memmove") && !listing.contains("call memmove"), "{listing}");
+}
+
+/// `memcpycall` rebuilt a large `memcpy` as a plain call and dropped the `tail` marker, so the call kept its
+/// `push; call; pop; ret` where the pin jumps (memory_expansion -O2: ten `cp*` wrappers, +3 B each).
+#[test]
+fn a_memcpy_ending_a_function_is_a_tail_call_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %d, ptr %s) {\n  \
+                tail call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 600, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("jmp memcpy") && !listing.contains("call memcpy"), "{listing}");
 }

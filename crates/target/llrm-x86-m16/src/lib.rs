@@ -45,8 +45,8 @@ pub fn spaces() -> llrm_mir::spaces::Spaces {
 pub struct M16;
 
 /// The registers the description states.
-static REGISTERS: std::sync::LazyLock<Vec<llrm_target::registers::Register>> = std::sync::LazyLock::new(|| {
-    llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses")
+static REGISTERS: std::sync::LazyLock<std::sync::Arc<Vec<llrm_target::registers::Register>>> = std::sync::LazyLock::new(|| {
+    llrm_target::registers::file(include_str!("registers.regs")).expect("registers.regs parses")
 });
 
 /// The pin's register pressure sets for the registers described above:
@@ -645,6 +645,7 @@ mod tuning_tests {
         assert_eq!(table.unroll_partial_threshold, Some(0));
         assert_eq!(table.x87_stack_slots, Some(8));
         assert!(table.slots_loop_width_rule, "m16 keeps a word out of a loop-held wider stack slot (SLOTS-LOOPWIDTH)");
+        assert!(!table.carry_slot_indexes, "DEVIATE CARRY-SI: x86 numbers the function afresh after the scheduler until priced");
         assert_eq!(table.unswitch_threshold, Some(0));
         assert_eq!(
             Tuning {
@@ -666,6 +667,7 @@ mod tuning_tests {
                 unroll_partial_threshold: None,
                 x87_stack_slots: None,
                 slots_loop_width_rule: false,
+                carry_slot_indexes: true,
                 rotation_header_priced_at_size: false,
                 unswitch_threshold: None,
                 inline_threshold: None,

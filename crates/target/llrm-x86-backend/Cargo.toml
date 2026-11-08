@@ -1,0 +1,22 @@
+[package]
+name = "llrm-x86-backend"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "x86's code that sits above llrm-codegen: installed into its hooks, so the shared passes never name x86"
+
+[dependencies]
+llrm-codegen = { workspace = true }
+llrm-lir = { workspace = true }
+llrm-x86 = { workspace = true }
+llrm-support = { workspace = true }
+llrm-target = { workspace = true }
+llrm-mir = { workspace = true }
+llrm-analysis = { workspace = true }
+llrm-qbruntime = { workspace = true }
+llrm-dagisel = { path = "../../backend/llrm-dagisel" }
+iced-x86 = { workspace = true }
+indexmap = { workspace = true }
+
+[dev-dependencies]
+llrm-x86-m32 = { workspace = true }

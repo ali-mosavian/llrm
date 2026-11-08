@@ -191,7 +191,10 @@ const EDGE_MARGIN: f64 = 0.9;
 
 /// The PHI elimination pass (`phielimination::lowered`).
 #[derive(Default)]
-pub struct PhiElimination;
+pub struct PhiElimination {
+    /// -O0: no critical edge is split.
+    pub unoptimized: bool,
+}
 
 impl LIRTransform for PhiElimination {
     fn class_name(&self) -> &'static str {
@@ -206,7 +209,7 @@ impl LIRTransform for PhiElimination {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        crate::phielimination::lowered(&body)
+        crate::phielimination::lowered_with(&body, !self.unoptimized)
     }
 }
 
@@ -593,18 +596,41 @@ fn _renamed_phi(
     })
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many values the last `_widths_of` kept a width for.
+    pub(crate) static WIDTHS_KEPT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
+    _widths_of(body, None)
+}
+
+/// [`_widths`] of only the values in `wanted` (all where `None`): a phi's
+/// widths join only the values of its own phis, so no other value's is read.
+pub(crate) fn _widths_of(
+    body: &LirBody,
+    wanted: Option<&crate::support::hash::HashSet<u32>>,
+) -> IndexMap<u32, u32> {
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
+    let mut note = |value: u32, width: u32| {
+        if wanted.is_none_or(|set| set.contains(&value)) {
+            let known = widths.entry(value).or_insert(0);
+            *known = (*known).max(width);
+        }
+    };
     for block in &body.blocks {
         for op in &block.insns {
-            let mut operands: Vec<Held> = op.requires.iter().chain(&op.delivers).map(|(held, _)| *held).collect();
-            if let Some(what) = &op.what {
-                operands.extend(what.dests.iter().chain(&what.sources).flat_map(ir::values));
+            for &(value, width) in &op.widths {
+                note(value, width);
             }
-            for (value, width) in op.widths.iter().copied().chain(operands.iter().map(|held| (held.value, held.width)))
-            {
-                let known = widths.get(&value).copied().unwrap_or(0);
-                widths.insert(value, known.max(width));
+            for (held, _) in op.requires.iter().chain(&op.delivers) {
+                note(held.value, held.width);
+            }
+            if let Some(what) = &op.what {
+                for held in what.dests.iter().chain(&what.sources).flat_map(ir::values) {
+                    note(held.value, held.width);
+                }
             }
         }
     }
@@ -625,6 +651,8 @@ pub(crate) fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
             }
         }
     }
+    #[cfg(test)]
+    WIDTHS_KEPT.with(|kept| kept.set(widths.len()));
     widths
 }
 

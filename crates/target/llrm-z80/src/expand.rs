@@ -69,6 +69,8 @@ struct Printer<'a> {
     frame: Frame,
     /// The blocks that are only a `ret`.
     returns_bare: Vec<u32>,
+    /// The jump tables to print after the function: the index and the block of each entry.
+    tables: Vec<(i64, Vec<u32>)>,
     /// How many times each virtual register is read.
     reads: llrm_support::hash::HashMap<u32, usize>,
     /// A reload the next instruction reads from the frame itself: the register
@@ -145,6 +147,14 @@ impl Printer<'_> {
         {
             return;
         }
+        // `ex de, hl` twice is nothing; the flags are untouched
+        if text == "ex de, hl"
+            && matches!(self.out.last(), Some(Line::Inst(last)) if last == "ex de, hl")
+            && !PRICING.with(|one| one.get())
+        {
+            self.out.pop();
+            return;
+        }
         self.out.push(Line::Inst(text));
     }
 
@@ -178,9 +188,20 @@ impl Printer<'_> {
     ) -> Result<String, String> {
         match inst.operands.get(at) {
             Some(Operand::Imm(value)) => Ok(format!("#{}", value & mask)),
-            Some(Operand::Symbol(symbol, 0)) => Ok(format!("#{symbol}")),
+            Some(Operand::Symbol(symbol, 0)) => Ok(format!("#{}", self.symbol(symbol))),
             Some(Operand::Symbol(symbol, offset)) => Ok(format!("#{symbol}+{offset}")),
             other => Err(format!("operand {at} of {:?} is {other:?}, not an immediate", inst.kind)),
+        }
+    }
+
+    /// A symbol as printed: a jump table's placeholder is the function's own label.
+    fn symbol(
+        &self,
+        symbol: &str,
+    ) -> String {
+        match symbol.strip_prefix("$JT") {
+            Some(index) => format!("L{}_JT{index}", self.number),
+            None => symbol.to_owned(),
         }
     }
 
@@ -192,6 +213,63 @@ impl Printer<'_> {
         if to != from {
             self.push(format!("ld {}, {}", name(to), name(from)));
         }
+    }
+
+    /// Whether `a` holds 0 or 255 here: the last write to it in this straight line is `sbc a, a`, and the lines
+    /// since only store it.
+    fn a_is_mask(&self) -> bool {
+        for line in self.out.iter().rev() {
+            match line {
+                Line::Loc(_) => continue,
+                Line::Label(_) => return false,
+                Line::Inst(text) if text == "sbc a, a" => return true,
+                Line::Inst(text) => {
+                    let stores = text.strip_prefix("ld ").and_then(|rest| rest.split_once(", ")).is_some_and(
+                        |(to, from)| from == "a" && to != "a" && (to.len() == 1 || to.starts_with('(')),
+                    );
+                    if !stores {
+                        return false;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether byte register `lane` holds 0 here: its last write in this straight line is `ld lane, #0`, and
+    /// nothing since names its pair, jumps, calls or enters a label.
+    fn lane_is_zero(
+        &self,
+        lane: RegId,
+    ) -> bool {
+        let want = name(lane);
+        let pair = match want {
+            "b" | "c" => "bc",
+            "d" | "e" => "de",
+            "h" | "l" => "hl",
+            _ => return false,
+        };
+        for line in self.out.iter().rev() {
+            match line {
+                Line::Loc(_) => continue,
+                Line::Label(_) => return false,
+                Line::Inst(text) => {
+                    if text == &format!("ld {want}, #0") {
+                        return true;
+                    }
+                    // the other byte of the pair may be read or written; this one and the pair may not be named
+                    let named = text
+                        .split([' ', ',', '(', ')', '+'])
+                        .filter(|word| !word.is_empty())
+                        .skip(1)
+                        .any(|word| word == want || word == pair);
+                    if named || HIDDEN.contains(&text.split(' ').next().unwrap_or("")) {
+                        return false;
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// A copy: bytes with `ld`, a pair as its two bytes.
@@ -338,8 +416,11 @@ impl Printer<'_> {
                 let (pair, _) = (self.register(inst, 0)?, self.register(inst, 1)?);
                 let (dl, dh) = lanes(pair)?;
                 self.push(format!("ld {}, a", name(dl)));
-                self.push("rla");
-                self.push("sbc a, a");
+                // `a` is 0 or 255 already: its sign is itself
+                if !self.a_is_mask() {
+                    self.push("rla");
+                    self.push("sbc a, a");
+                }
                 self.push(format!("ld {}, a", name(dh)));
             }
             "SUBZX8" => {
@@ -407,22 +488,14 @@ impl Printer<'_> {
                 self.push("or a, a");
                 self.push(format!("sbc hl, {source}"));
             }
-            // in `a` a left shift is `add a, a` (1 B / 4 T a bit against `sla
-            // a`'s 2 B / 8 T), and a logical right shift by two or more, where
-            // nothing reads the flags, rotates the bits round (the shorter way)
-            // and masks: `rlca` x3, `and #7` for `>> 5`
-            "SHL8" if name_of(self, 0)? == "a" => {
-                for _ in 0..shift_count(inst)? {
-                    self.push("add a, a");
+            "SHL8" | "SRL8" => {
+                let (to, count) = (name_of(self, 0)?, shift_count(inst)?);
+                let left = op == "SHL8";
+                if !self.shift_byte(left, &to, &to, count, rest) {
+                    for _ in 0..count {
+                        self.push(plain_byte_shift(left, &to));
+                    }
                 }
-            }
-            "SRL8" if name_of(self, 0)? == "a" && (2..8).contains(&shift_count(inst)?) && self.flags_dead(rest) => {
-                let count = shift_count(inst)?;
-                let (rotate, turns) = if count <= 4 { ("rrca", count) } else { ("rlca", 8 - count) };
-                for _ in 0..turns {
-                    self.push(rotate);
-                }
-                self.push(format!("and a, #{}", 0xFFu32 >> count));
             }
             // the sign of the accumulator: its bit 7 into the carry and
             // out again (`sra a` seven times is 14 B)
@@ -439,28 +512,27 @@ impl Printer<'_> {
                 self.push("sbc a, a");
                 self.push(format!("ld {to}, a"));
             }
-            "SHL8" | "SRL8" | "SRA8" => {
+            "SRA8" => {
                 let to = name_of(self, 0)?;
-                let mnemonic = match op {
-                    "SHL8" => "sla",
-                    "SRL8" => "srl",
-                    _ => "sra",
-                };
                 for _ in 0..shift_count(inst)? {
-                    self.push(format!("{mnemonic} {to}"));
+                    self.push(format!("sra {to}"));
                 }
             }
             "SHL16" | "SRL16" if shift_count(inst)? >= 8 => {
                 // a whole byte moves across: the other byte is cleared, the
                 // rest is a byte shift
                 let count = shift_count(inst)?;
+                let left = op == "SHL16";
                 let (lo, hi) = lanes(self.register(inst, 0)?)?;
-                let (kept, cleared, shifted) = if op == "SHL16" { (lo, hi, "sla") } else { (hi, lo, "srl") };
-                self.push(format!("ld {}, {}", name(cleared), name(kept)));
-                self.push(format!("ld {}, #0", name(kept)));
-                if count > 8 {
-                    for _ in 0..count - 8 {
-                        self.push(format!("{shifted} {}", name(cleared)));
+                let (kept, cleared) = if left { (name(lo), name(hi)) } else { (name(hi), name(lo)) };
+                if count > 8 && self.shift_byte(left, kept, cleared, count - 8, rest) {
+                    self.push(format!("ld {kept}, #0"));
+                } else {
+                    // `ld cleared, kept; ld kept, #0` stay adjacent: `forward_high_bytes` reads them
+                    self.push(format!("ld {cleared}, {kept}"));
+                    self.push(format!("ld {kept}, #0"));
+                    for _ in 8..count {
+                        self.push(plain_byte_shift(left, cleared));
                     }
                 }
             }
@@ -472,6 +544,15 @@ impl Printer<'_> {
                 }
             }
             "SHL16" | "SRL16" | "SRA16" => {
+                if op == "SHL16"
+                    && let Some(lines) =
+                        word_double_through_hl(&name_of(self, 0)?, shift_count(inst)?, self.dead_after(reg::HL, rest))
+                {
+                    for line in lines {
+                        self.push(line);
+                    }
+                    return Ok(());
+                }
                 let (lo, hi) = lanes(self.register(inst, 0)?)?;
                 let (lo, hi) = (name(lo), name(hi));
                 for _ in 0..shift_count(inst)? {
@@ -635,6 +716,11 @@ impl Printer<'_> {
                 };
                 let ((dl, dh), (al, ah)) = (lanes(to)?, lanes(a)?);
                 for (d, x, byte) in [(dl, al, mask & 0xFF), (dh, ah, (mask >> 8) & 0xFF)] {
+                    // a lane known to be 0: `and` is 0, `or`/`xor` the mask byte itself
+                    if self.lane_is_zero(x) {
+                        self.push(format!("ld {}, #{}", name(d), if mnemonic == "and" { 0 } else { byte }));
+                        continue;
+                    }
                     match (mnemonic.as_str(), byte) {
                         ("and", 0xFF) | ("or", 0) | ("xor", 0) => self.byte_move(d, x),
                         ("and", 0) => self.push(format!("ld {}, #0", name(d))),
@@ -652,10 +738,35 @@ impl Printer<'_> {
                 let (to, a, b) = (self.register(inst, 0)?, self.register(inst, 1)?, self.register(inst, 2)?);
                 let ((dl, dh), (al, ah), (bl, bh)) = (lanes(to)?, lanes(a)?, lanes(b)?);
                 for (d, x, y) in [(dl, al, bl), (dh, ah, bh)] {
+                    // a lane known to be 0: `and` is 0, `or`/`xor` the other lane
+                    let (zero_x, zero_y) = (self.lane_is_zero(x), self.lane_is_zero(y));
+                    if mnemonic == "and" && (zero_x || zero_y) {
+                        self.push(format!("ld {}, #0", name(d)));
+                        continue;
+                    }
+                    if mnemonic != "and" && (zero_x || zero_y) {
+                        self.byte_move(d, if zero_y { x } else { y });
+                        continue;
+                    }
                     self.push(format!("ld a, {}", name(x)));
                     self.push(format!("{mnemonic} a, {}", name(y)));
                     self.push(format!("ld {}, a", name(d)));
                 }
+            }
+            // the block's operands past the table's index are its entries, the successors
+            "JPHL" => {
+                let Some(&Operand::Imm(index)) = inst.operands.get(1) else {
+                    return Err("a jump through a table with no index".to_owned());
+                };
+                if !self.tables.iter().any(|(one, _)| *one == index) {
+                    let entries =
+                        inst.operands[2..].iter().filter_map(|operand| match operand {
+                            Operand::Block(block) => Some(*block),
+                            _ => None,
+                        });
+                    self.tables.push((index, entries.collect()));
+                }
+                self.push("jp (hl)");
             }
             "JP" | "JPNZ" | "JPZ" | "JPNC" | "JPC" => {
                 let Some(Operand::Block(target)) = inst.operands.first() else {
@@ -696,9 +807,11 @@ impl Printer<'_> {
                 }
                 self.push(format!("jp {symbol}"));
             }
-            // The area is `push bc`s (bc is only saved and restored: no
-            // register is lost, and no result lives in it); a store into it is
-            // addressed from IX, so the frame is set up.
+            // The area is `push bc`s, which change nothing; a store into it is
+            // addressed from IX, so the frame is set up. The cleanup pops the
+            // words into a register nothing reads afterwards: the allocator
+            // may reload a value into bc between the call and the cleanup (a
+            // loop counter, lost to the pops), and a result lives in hl or de.
             "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" => {
                 let Some(Operand::Imm(bytes)) = inst.operands.first() else { return Ok(()) };
                 if *bytes == 0 {
@@ -709,8 +822,26 @@ impl Printer<'_> {
                     return Err(format!("{bytes} bytes of stack arguments"));
                 }
                 let down = op == "ADJCALLSTACKDOWN";
+                let discard = if down {
+                    Some("bc")
+                } else if let Some(pair) =
+                    [reg::BC, reg::DE, reg::HL].into_iter().find(|&pair| self.pair_unused_after(pair, rest))
+                {
+                    Some(name(pair))
+                } else if self.dead_after(reg::A, rest) && self.flags_dead(rest) {
+                    Some("af")
+                } else {
+                    None
+                };
                 for _ in 0..pushes {
-                    self.push(if down { "push bc" } else { "pop bc" });
+                    match discard {
+                        Some(pair) => self.push(format!("{} {pair}", if down { "push" } else { "pop" })),
+                        // `inc sp` needs no register and leaves the flags
+                        None => {
+                            self.push("inc sp");
+                            self.push("inc sp");
+                        }
+                    }
                 }
                 self.call_bytes = if down { 2 * pushes } else { 0 };
             }
@@ -1023,6 +1154,24 @@ impl Printer<'_> {
         ![pair, lo, hi].into_iter().any(|one| after.is_live(&REGISTER_INFO, one))
     }
 
+    /// [`Self::pair_dead_after`], or no byte of the pair live after this
+    /// instruction by the allocator's liveness (the scan stops at a byte
+    /// defined alone, e.g. a reload of `b` through `pop bc`).
+    fn pair_unused_after(
+        &self,
+        pair: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        if self.pair_dead_after(pair, rest) {
+            return true;
+        }
+        let Ok((lo, hi)) = lanes(pair) else { return false };
+        let after = self
+            .liveness
+            .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 1);
+        ![pair, lo, hi].into_iter().any(|one| after.is_live(&REGISTER_INFO, one))
+    }
+
     /// Whether the byte register `register` holds nothing a later instruction
     /// of the block reads: the first mention after this point defines it
     /// without reading it. A block that ends with `ret` before any mention
@@ -1133,10 +1282,16 @@ impl Printer<'_> {
                 self.out.push(Line::Label(skip));
             }
             (true, false) => {
-                self.push(format!("ld a, {}", name(al)));
-                self.push(format!("sub a, {bl}"));
-                self.push(format!("ld a, {}", name(ah)));
-                self.push(format!("sbc a, {bh}"));
+                // a low byte of zero subtracts nothing and clears the carry: the high bytes alone decide
+                if bl != "#0" {
+                    self.push(format!("ld a, {}", name(al)));
+                    self.push(format!("sub a, {bl}"));
+                    self.push(format!("ld a, {}", name(ah)));
+                    self.push(format!("sbc a, {bh}"));
+                } else {
+                    self.push(format!("ld a, {}", name(ah)));
+                    self.push(format!("sub a, {bh}"));
+                }
             }
             // a word against zero: its two bytes or-ed, which is zero only when
             // both are
@@ -1390,6 +1545,33 @@ impl Printer<'_> {
     /// `rest` and in the blocks it goes on to: a conditional return in the
     /// block after a compare reads the compare's flags, so an `xor a, a` or a
     /// `dec` in between would change what it sees.
+    /// `dst = src << count` (or `>>`, logical) through `a` where that is shorter than `count` `sla`/`srl`/`add a, a`
+    /// steps, or as short and quicker. Needs `a` and the flags dead after. False: nothing was pushed.
+    fn shift_byte(
+        &mut self,
+        left: bool,
+        src: &str,
+        dst: &str,
+        count: i64,
+        rest: &[Inst],
+    ) -> bool {
+        let Ok(count) = u32::try_from(count) else { return false };
+        if !(2..8).contains(&count) {
+            return false;
+        }
+        let (lines, bytes, clocks) = rotated_byte_shift(left, src, dst, count);
+        let (step_bytes, step_clocks) = if left && dst == "a" { (1, 4) } else { (2, 8) };
+        let moved = u32::from(src != dst);
+        let plain = (moved + count * step_bytes, 4 * moved + count * step_clocks);
+        if (bytes, clocks) >= plain || !(src == "a" || self.dead_after(reg::A, rest)) || !self.flags_dead(rest) {
+            return false;
+        }
+        for line in lines {
+            self.push(line);
+        }
+        true
+    }
+
     fn flags_dead(
         &self,
         rest: &[Inst],
@@ -1455,6 +1637,50 @@ fn flags_first(insts: &[Inst]) -> Option<bool> {
     }
     None
 }
+
+/// A word in `de` or `bc` shifted left by `bits`: `sla r; rl r'` is 4 B / 16 T a
+/// bit, `add hl, hl` 1 B / 11 T. `de` swaps with `hl` round the doublings
+/// (`ex de, hl` x2 keeps `hl`); `bc` goes through `hl` when nothing reads it.
+/// None where the bit by bit form is no longer or no slower, priced by the
+/// timing table.
+fn word_double_through_hl(
+    pair: &str,
+    bits: i64,
+    hl_dead: bool,
+) -> Option<Vec<String>> {
+    let bits = usize::try_from(bits).ok().filter(|bits| *bits >= 2)?;
+    let (head, tail, setup, teardown): (Vec<&str>, Vec<&str>, Vec<&str>, Vec<&str>) = match pair {
+        "de" => (vec!["ex de, hl"], vec!["ex de, hl"], vec!["ex de;hl"], vec!["ex de;hl"]),
+        "bc" if hl_dead => (
+            vec!["ld h, b", "ld l, c"],
+            vec!["ld b, h", "ld c, l"],
+            vec!["ld b;c", "ld b;c"],
+            vec!["ld b;c", "ld b;c"],
+        ),
+        _ => return None,
+    };
+    let price = |forms: &[&str]| {
+        forms.iter().fold(
+            (0u32, 0u32),
+            |(bytes, clocks), form| {
+                let one = crate::timing::cost(form).unwrap_or_else(|| panic!("timing/z80.csv has no form `{form}`"));
+                (bytes + one.bytes, clocks + one.taken)
+            },
+        )
+    };
+    let mut new = [setup, teardown].concat();
+    new.extend(std::iter::repeat_n("add hl;bc", bits));
+    let old: Vec<&str> = std::iter::repeat_n(["sla b", "rl b"], bits).flatten().collect();
+    let (new_price, old_price) = (price(&new), price(&old));
+    if !(new_price.0 < old_price.0 && new_price.1 <= old_price.1) {
+        return None;
+    }
+    let mut lines: Vec<String> = head.iter().map(|line| (*line).to_owned()).collect();
+    lines.extend(std::iter::repeat_n("add hl, hl".to_owned(), bits));
+    lines.extend(tail.iter().map(|line| (*line).to_owned()));
+    Some(lines)
+}
+
 
 fn shift_count(inst: &Inst) -> Result<i64, String> {
     match inst.operands.last() {
@@ -1696,6 +1922,7 @@ pub fn finish(
         out: Vec::new(),
         frame,
         returns_bare,
+        tables: Vec::new(),
         reads,
         folded: None,
         skip: 0,
@@ -1737,7 +1964,71 @@ pub fn finish(
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
     }
-    Ok(drop_unreachable(forward_high_bytes(cancel_steps(printer.out))))
+    // the tables follow the code: a word a block, each entry the label of its block
+    let tables = std::mem::take(&mut printer.tables);
+    for (index, entries) in tables {
+        printer.out.push(Line::Label(format!("L{number}_JT{index}")));
+        for block in entries {
+            printer.out.push(Line::Inst(format!(".dw {}", label(number, block))));
+        }
+    }
+    Ok(tidy(printer.out))
+}
+
+/// The post-printer passes. `forward_high_bytes` runs before `drop_overwritten_byte_stores`: the latter drops the
+/// `ld R1, S1` the former needs to see.
+fn tidy(lines: Vec<Line>) -> Vec<Line> {
+    branch_over_tail_jump(drop_unreachable(drop_overwritten_byte_stores(forward_byte_copies(forward_high_bytes(cancel_steps(lines))))))
+}
+
+/// `jp cc, L; M: jp SYMBOL; L:` with nothing else naming `M` is `jp !cc, SYMBOL; L:`: the conditional jump over a
+/// tail call is the tail call's own condition (the pin's branch folder reverses a branch over an unconditional one).
+fn branch_over_tail_jump(lines: Vec<Line>) -> Vec<Line> {
+    let named = |lines: &[Line], label: &str| {
+        lines.iter().any(|line| matches!(line, Line::Inst(text) if text.rsplit([' ', ',']).next() == Some(label)))
+    };
+    let opposite = |cc: &str| match cc {
+        "nz" => Some("z"),
+        "z" => Some("nz"),
+        "nc" => Some("c"),
+        "c" => Some("nc"),
+        _ => None,
+    };
+    let mut at = 0;
+    let mut lines = lines;
+    while at < lines.len() {
+        let folded = (|| {
+            let Line::Inst(branch) = &lines[at] else { return None };
+            let (cc, target) = branch.strip_prefix("jp ")?.split_once(", ")?;
+            let cc = opposite(cc)?;
+            let mut next = at + 1;
+            let mut step = |next: &mut usize| {
+                while matches!(lines.get(*next), Some(Line::Loc(_))) {
+                    *next += 1;
+                }
+            };
+            step(&mut next);
+            let Some(Line::Label(middle)) = lines.get(next) else { return None };
+            next += 1;
+            step(&mut next);
+            let Some(Line::Inst(jump)) = lines.get(next) else { return None };
+            let symbol = jump.strip_prefix("jp ")?;
+            if symbol.contains(',') || symbol.starts_with('(') || block_of(symbol).is_some() || symbol.ends_with('$') {
+                return None;
+            }
+            let jump_at = next;
+            next += 1;
+            step(&mut next);
+            let Some(Line::Label(after)) = lines.get(next) else { return None };
+            (after == target && !named(&lines, middle)).then(|| (format!("jp {cc}, {symbol}"), jump_at))
+        })();
+        if let Some((text, jump_at)) = folded {
+            lines[at] = Line::Inst(text);
+            lines.drain(at + 1..=jump_at);
+        }
+        at += 1;
+    }
+    lines
 }
 
 /// Whether `text` ends the flow: `ret`, `jp L` or `jr L` with no condition.
@@ -1840,6 +2131,20 @@ fn mentions(
         .any(|word| word == pair || (word.len() == 1 && pair.contains(word)))
 }
 
+/// `ld R, S; ld a, R` reads `S` itself: the copy may then be dead, which `drop_overwritten_byte_stores` finds
+/// (a byte shifted through `a` right after a copy of its source).
+fn forward_byte_copies(mut lines: Vec<Line>) -> Vec<Line> {
+    let is_byte = |register: &str| register.len() == 1 && "bcdehl".contains(register);
+    for at in 1..lines.len() {
+        let (Line::Inst(copy), Line::Inst(read)) = (&lines[at - 1], &lines[at]) else { continue };
+        let Some((to, from)) = copy.strip_prefix("ld ").and_then(|text| text.split_once(", ")) else { continue };
+        if is_byte(to) && is_byte(from) && read == &format!("ld a, {to}") {
+            lines[at] = Line::Inst(format!("ld a, {from}"));
+        }
+    }
+    lines
+}
+
 /// `ld R1, S1; ld R2, S2; ld R1, R2; ld R2, #0`: a pair copied in order to read
 /// the high byte of a copy, widened. The first load is overwritten and the
 /// second is read once: `ld R1, S2; ld R2, #0`, 2 B less.
@@ -1919,6 +2224,51 @@ fn cancel_steps(lines: Vec<Line>) -> Vec<Line> {
     out
 }
 
+/// `ld r, s` (a register or a constant) and a later `ld r, ...` with nothing between that names `r`, its
+/// pair, a label or a jump: the first load is never read. The printer leaves one when the instruction that read it
+/// was spared (`and a, #248; ld c, a; or a, #5; ld c, a`, or a signed compare of a word against a constant
+/// whose low byte is 0, which keeps only the high byte of the biased copy). The load leaves the flags alone.
+fn drop_overwritten_byte_stores(lines: Vec<Line>) -> Vec<Line> {
+    let is_byte = |register: &str| register.len() == 1 && "bcdehl".contains(register);
+    let byte = |text: &str| {
+        let (register, source) = text.strip_prefix("ld ")?.split_once(", ")?;
+        (is_byte(register) && (is_byte(source) || source == "a" || source.starts_with('#')))
+            .then_some(register.to_owned())
+    };
+    let pair_of = |register: &str| match register {
+        "b" | "c" => "bc",
+        "d" | "e" => "de",
+        _ => "hl",
+    };
+    // the register or its pair named: the other byte of the pair is no reader
+    let names = |text: &str, register: &str| {
+        text.split([' ', ',', '(', ')', '+']).filter(|word| !word.is_empty()).skip(1).any(|word| word == register || word == pair_of(register))
+    };
+    let mut keep = vec![true; lines.len()];
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Inst(text) = line else { continue };
+        let Some(register) = byte(text) else { continue };
+        for later in &lines[at + 1..] {
+            match later {
+                Line::Loc(_) => continue,
+                Line::Label(_) => break,
+                Line::Inst(next) => {
+                    if let Some(source) = next.strip_prefix(&format!("ld {register}, "))
+                        && !names(&format!("ld x, {source}"), &register)
+                    {
+                        keep[at] = false;
+                        break;
+                    }
+                    if names(next, &register) || HIDDEN.contains(&next.split(' ').next().unwrap_or("")) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    lines.into_iter().zip(keep).filter_map(|(line, keep)| keep.then_some(line)).collect()
+}
+
 /// `ret z` stands in for a branch to a block that is only a `ret`, which
 /// leaves the block with no reader: the code after an unconditional `ret` or
 /// jump, up to the next label something names, never runs.
@@ -1926,7 +2276,8 @@ fn drop_unreachable(lines: Vec<Line>) -> Vec<Line> {
     let named: llrm_support::hash::HashSet<&str> = lines
         .iter()
         .filter_map(|line| match line {
-            Line::Inst(text) => Some(text.split([' ', ',']).filter(|word| !word.is_empty())),
+            // an immediate names a label too: `ld hl, #L0_JT0`
+            Line::Inst(text) => Some(text.split([' ', ',']).filter(|word| !word.is_empty()).map(|word| word.trim_start_matches('#'))),
             _ => None,
         })
         .flatten()
@@ -2223,6 +2574,36 @@ fn bytes_of(line: &Line) -> u32 {
         .map_or(4, |cost| cost.bytes)
 }
 
+/// One logical shift step of byte register `to`.
+fn plain_byte_shift(left: bool, to: &str) -> String {
+    match (left, to) {
+        (true, "a") => "add a, a".to_owned(),
+        (true, _) => format!("sla {to}"),
+        (false, _) => format!("srl {to}"),
+    }
+}
+
+/// `src` shifted logically by `count` into `dst` through `a`: rotate round the shorter way, then mask (`rrca` x3,
+/// `and #224` for `<< 5`); with the bytes and clocks of the sequence.
+fn rotated_byte_shift(left: bool, src: &str, dst: &str, count: u32) -> (Vec<String>, u32, u32) {
+    let (rotate, turns) = match (count <= 4, left) {
+        (true, true) | (false, false) => ("rlca", if count <= 4 { count } else { 8 - count }),
+        _ => ("rrca", if count <= 4 { count } else { 8 - count }),
+    };
+    let mask = if left { (0xFFu32 << count) & 0xFF } else { 0xFFu32 >> count };
+    let mut lines = Vec::new();
+    if src != "a" {
+        lines.push(format!("ld a, {src}"));
+    }
+    lines.extend(std::iter::repeat_n(rotate.to_owned(), turns as usize));
+    lines.push(format!("and a, #{mask}"));
+    if dst != "a" {
+        lines.push(format!("ld {dst}, a"));
+    }
+    let loads = u32::from(src != "a") + u32::from(dst != "a");
+    (lines, loads + turns + 2, 4 * loads + 4 * turns + 7)
+}
+
 /// The label a `jp` names, and its condition if it has one.
 fn jump_of(text: &str) -> Option<(Option<&str>, &str)> {
     let rest = text.strip_prefix("jp ")?;
@@ -2507,6 +2888,52 @@ mod tests {
         assert_eq!(kept.len(), 3, "a store through the pointer reads it: {kept:?}");
     }
 
+    /// `and a, #248; ld c, a; or a, #5; ld c, a` (a volatile long's bit field
+    /// store) wrote `c` twice; the first write is never read.
+    #[test]
+    fn a_byte_store_overwritten_before_any_read_is_dropped() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let kept = drop_overwritten_byte_stores(vec![inst("and a, #248"), inst("ld c, a"), inst("or a, #5"), inst("ld c, a")]);
+        assert_eq!(kept, vec![inst("and a, #248"), inst("or a, #5"), inst("ld c, a")]);
+        for between in ["add hl, bc", "ld (bc), a", "call _f", "jr nz, 1$", "ld b, c"] {
+            let lines = vec![inst("ld c, a"), inst(between), inst("ld c, a")];
+            assert_eq!(drop_overwritten_byte_stores(lines.clone()), lines, "{between} reads c");
+        }
+        let lines = vec![inst("ld c, a"), Line::Label("L".to_owned()), inst("ld c, a")];
+        assert_eq!(drop_overwritten_byte_stores(lines.clone()), lines, "a label may be entered from elsewhere");
+        let lines = vec![inst("ld c, a"), inst("ld c, d"), inst("ld c, (hl)")];
+        assert_eq!(drop_overwritten_byte_stores(lines), vec![inst("ld c, (hl)")], "each load is overwritten by the next");
+    }
+
+    /// `ld l, c; ld h, b; ld l, h; ld h, #0` fuses to `ld l, b; ld h, #0`. Dropping the dead `ld l, c` first left
+    /// `ld h, b; ld l, h; ld h, #0` (struct_with_i64 -O3: 1 B and 4 T more, 8 sites).
+    #[test]
+    fn a_dead_load_is_dropped_after_the_high_byte_forward_has_used_it() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![inst("ld l, c"), inst("ld h, b"), inst("ld l, h"), inst("ld h, #0")];
+        assert_eq!(tidy(lines), vec![inst("ld l, b"), inst("ld h, #0")]);
+    }
+
+    /// `word >> 15` with `a` live kept the copy ahead of the shifts (`ld b, h; ld c, b; srl c` x7; `ld b, #0`, which
+    /// `forward_high_bytes` cannot fuse): idioms -Oz +1 B and 24 T over `ld c, h; ld b, #0; srl c` x7.
+    #[test]
+    fn a_word_shifted_by_a_byte_and_more_clears_the_pair_next_to_the_copy() {
+        let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n@g = global i16 0\n\
+                  define i8 @f(i8 %a, i16 %x) {\n  %s = lshr i16 %x, 15\n  %t = add i16 %s, %x\n\
+                  store volatile i16 %t, ptr @g\n  %r = add i8 %a, 1\n  ret i8 %r\n}\n";
+        let out = crate::compile::text(ir, "f", 0, &crate::driver::Request::new(crate::driver::Level::Oz)).unwrap();
+        assert!(out.contains("srl c") && !out.contains("ld c, b\n\tsrl"), "{out}");
+    }
+
+    /// `ld l, e; ld h, d; ld a, h; ...; ld l, a; ld h, #0` (a word's high byte shifted through `a`) read the copy
+    /// `h` of `d`: the copies were dead (loop_interchange -O2: +1 B and 9,216 T over `ld l, d; ld h, #0; srl l` x3).
+    #[test]
+    fn a_byte_read_through_a_copy_reads_the_source() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = ["ld l, e", "ld h, d", "ld a, h", "rrca", "and a, #31", "ld l, a", "ld h, #0"].map(inst).to_vec();
+        assert_eq!(tidy(lines), ["ld a, d", "rrca", "and a, #31", "ld l, a", "ld h, #0"].map(inst).to_vec());
+    }
+
     /// A pair stored to its slot and reloaded after lines that leave it alone
     /// was loaded again (loop_fusion -O3: 4 B and 34 T a trip).
     #[test]
@@ -2535,13 +2962,16 @@ mod tests {
         assert_eq!(forward_high_bytes(lines).len(), 3);
     }
 
-    /// A loop with two jumps back to its head was counted as two nested
-    /// loops, 8 times too heavy: lz4 -O2 priced a candidate with 40% fewer
-    /// real clocks as 40% dearer.
+    /// A loop with two jumps back to its head was counted as two nested loops, 8 times too heavy: lz4 -O2 priced
+    /// a candidate with 40% fewer real clocks as 40% dearer. Blocks are weighted by the IR frequencies since
+    /// then (Z80-BLOCK-WEIGHT): the head's frequency applies once, however many jumps return to it.
     #[test]
-    fn a_loop_with_two_jumps_back_is_one_loop() {
+    fn a_loop_with_two_jumps_back_is_weighted_once() {
         let inst = |text: &str| Line::Inst(text.to_owned());
-        let lines = vec![Line::Label("L1".into()), inst("ld a, b"), inst("jr nz, L1"), inst("jr z, L1")];
-        assert_eq!(price_in_loops(&lines).1, price(&lines).1 as u64 * 8);
+        let lines = vec![Line::Label("L1_1".into()), inst("ld a, b"), inst("jr nz, L1_1"), inst("jr z, L1_1")];
+        set_frequencies(&[(1, 8.0)]);
+        let priced = price_in_loops(&lines).1;
+        set_frequencies(&[]);
+        assert_eq!(priced, price(&lines).1 as u64 * 8);
     }
 }

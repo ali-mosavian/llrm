@@ -113,6 +113,7 @@ pub mod chain_combine;
 pub mod combine_andnot;
 pub mod combine_funnel;
 pub mod combine_lifetime_end;
+pub mod combine_mulo;
 pub mod combine_load;
 pub mod combine_load_combine;
 pub mod combine_store_merge;
@@ -120,8 +121,10 @@ pub mod combine_token_factor;
 pub mod combine_trunc_stores;
 pub mod combine_urem_eq;
 pub mod ctcount_combine;
-mod dag;
+pub mod dag;
 pub mod dag_combiner;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/dag_function.rs"]
 pub mod dag_function;
 pub mod dag_select;
 pub mod dag_target;
@@ -130,12 +133,15 @@ mod demanded_bits;
 pub mod div_combine;
 pub mod div_const;
 pub mod dump;
-pub mod emit;
+pub mod emit_api;
+pub mod select_api;
 pub mod expand_divrem_const;
 pub mod expand_fixed;
 pub mod expand_funnel;
 pub mod expand_overflow;
 pub mod expand_sat;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/fastisel.rs"]
 pub mod fastisel;
 pub mod fold;
 pub mod fp_combine;
@@ -162,6 +168,7 @@ pub mod switchcg;
 pub mod target_calling;
 pub mod x86_carry;
 pub mod x86_lowering;
+pub mod x86_postprocess;
 pub mod x86_preprocess;
 pub mod x86_unfold;
 
@@ -211,9 +218,10 @@ mod dag_select_tests;
 #[cfg(test)]
 mod dagisel_tests;
 #[cfg(test)]
-mod emit_tests;
 #[cfg(test)]
 mod exact_shift_tests;
+#[cfg(test)]
+mod or_as_add_tests;
 #[cfg(test)]
 mod extload_tests;
 #[cfg(test)]

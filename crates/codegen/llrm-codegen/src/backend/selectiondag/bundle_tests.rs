@@ -39,7 +39,7 @@ fn our_blocks(text: &str) -> (BTreeMap<String, String>, Vec<String>) {
         .datalayout
         .as_deref()
         .map_or_else(DataLayout::default, |text| DataLayout::parse(text).expect("a datalayout"));
-    let target = BuilderTarget::m32().with_libcalls(&["memcpy", "memmove", "memset"]);
+    let target = BuilderTarget::for_pointer_bits(32).with_libcalls(&["memcpy", "memmove", "memset"]);
     let mut built = BTreeMap::new();
     let mut refused = Vec::new();
     for (id, global, function) in module.functions() {
@@ -128,7 +128,7 @@ pub(super) fn ours(text: &str) -> std::collections::BTreeMap<String, Vec<String>
                 &module,
                 function,
                 &layout,
-                &BuilderTarget::m32().with_libcalls(&["memcpy", "memmove", "memset"]).with_stack_alignment(16),
+                &BuilderTarget::for_pointer_bits(32).with_libcalls(&["memcpy", "memmove", "memset"]).with_stack_alignment(16),
                 &llrm_x86_m32::M32,
                 &convention,
                 &mut info,
@@ -224,6 +224,22 @@ mod libcall_shape {
             let number = super::super::dagisel_adapter::pin_register(reg).expect("a pin number");
             assert!(masks[0].contains(&number), "{:?} lacks {name}", masks[0]);
         }
+    }
+
+    /// `pin_register` answers from a table made once (a scan of 200 numbers a
+    /// query cost 81 K Ir a call in memory_expansion); it is `phys_reg`'s inverse
+    /// and, where two numbers name one register, the lower one, as the scan did.
+    #[test]
+    fn pin_register_is_the_lowest_number_of_phys_reg() {
+        use super::super::dagisel_adapter::{phys_reg, pin_register};
+        let mut named = 0;
+        for number in 0..=200u16 {
+            let Some(reg) = phys_reg(number) else { continue };
+            let lowest = (0..=200u16).find(|&other| phys_reg(other) == Some(reg));
+            assert_eq!(pin_register(reg), lowest, "register of pin number {number}");
+            named += 1;
+        }
+        assert!(named > 10, "premise: phys_reg names registers ({named})");
     }
 
     /// A helper call with a stack argument and a register argument reads

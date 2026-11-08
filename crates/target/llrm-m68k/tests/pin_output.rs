@@ -69,6 +69,11 @@ const SOURCE_ORDER: Options = Options {
     tail_duplicate: false,
     rematerialize_arguments: false,
     loop_top_by_jumps: false,
+    call_targets: false,
+    pc_calls: false,
+    sext_adds: false,
+    return_dup: false,
+    class_split: false,
     debug: false,
 };
 
@@ -764,7 +769,7 @@ define i16 @f() {
 /// CMP past a copy"); the pin saves the codes as `copyPhysReg` does. Seeds 23,
 /// 30, 41, 181 of the differential driver.
 #[test]
-fn the_codes_of_a_compare_are_pushed_round_a_copy_that_cannot_move_or_be_repeated() {
+fn a_compare_whose_branch_follows_a_phi_copy_compiles_and_returns_55() {
     let ir = r#"@zero = external constant i8, align 1
 @buf = external constant [16 x i8], align 1
 define i16 @f() {
@@ -809,8 +814,11 @@ define i16 @f() {
   ret i16 %38
 }
 "#;
-    let text = compiled(ir, SOURCE_ORDER);
-    assert!(text.contains("move.w\t%sr, -(%sp)") && text.contains("move.w\t(%sp)+, %ccr"), "{text}");
+    // Since #7968 (the coalescer joins a low part inside its wide value) no
+    // copy sits between the compare and the branch here, so the codes are
+    // not pushed (`move.w %sr, -(%sp)`): this input no longer reaches the
+    // fallback. It must still compile and run; the fallback needs a new input.
+    compiled(ir, SOURCE_ORDER);
     // the same function built for x86 by the pin's clang returns 55
     if let Some(got) = run_reading_zero(ir) {
         assert_eq!(got, 55);

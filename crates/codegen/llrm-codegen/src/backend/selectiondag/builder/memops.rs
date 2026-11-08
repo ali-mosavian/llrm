@@ -452,6 +452,17 @@ impl Builder<'_> {
         self.dag.constant(size).map(|bits| bits as u64)
     }
 
+    /// A 16-byte piece of a volatile copy or fill is a volatile access: its loads and stores keep the mark
+    /// (`x86_memop128`).
+    fn mark_volatile_piece(
+        &mut self,
+        piece: SDValue,
+    ) {
+        if self.volatile_memory {
+            self.dag.volatile_accesses.insert(piece.node);
+        }
+    }
+
     /// `X86TargetLowering::getOptimalMemOpType` without SSE or 64-bit mode:
     /// `i32` outside 64-bit mode, `-m16` included (a dword store is a prefix
     /// away).
@@ -475,8 +486,9 @@ impl Builder<'_> {
     /// `getOptimalMemOpType` with SSE2: 16 bytes (`v4i32`, a `movups`/`movaps`
     /// pair; a zero is `xorps`) for a piece of 16 or more bytes, else
     /// [`Self::widest_mem_op`]. `integer_only` keeps the integer width: a
-    /// fill that is no zero, a volatile access or a constant source (stored as
-    /// immediates). x86-64 has SSE2 in its baseline; the 32-bit targets follow
+    /// fill that is no zero, a volatile move or a constant source (stored as
+    /// immediates). A volatile copy or fill keeps its 16-byte pieces, each a
+    /// volatile access (`MachineMemOperand`). x86-64 has SSE2 in its baseline; the 32-bit targets follow
     /// with their CPU's feature set.
     fn widest_mem_op_sse(
         &self,
@@ -484,7 +496,7 @@ impl Builder<'_> {
         integer_only: bool,
     ) -> u64 {
         let sse2 = self.target.dag.pointer.size_in_bits() == 64 && self.target.target_nodes.is_none();
-        if sse2 && !integer_only && !self.volatile_memory && size >= 16 { 16 } else { self.widest_mem_op(size) }
+        if sse2 && !integer_only && size >= 16 { 16 } else { self.widest_mem_op(size) }
     }
 
     /// `Tuning::x87_zero_fill_at_size` of this target's cost model.
@@ -577,6 +589,7 @@ impl Builder<'_> {
                 let from = self.dag.get_object_ptr_offset(src, src_off as i64);
                 let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
                 let copy = self.dag.get_node(x86isd::LLRM_COPY128, EVT::OTHER, &[order, to, from, align]);
+                self.mark_volatile_piece(copy);
                 if self.target.ordered_copies {
                     order = copy;
                 }
@@ -660,7 +673,7 @@ impl Builder<'_> {
         dst_align: u64,
         src_align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        let widest = self.widest_mem_op_sse(size, false);
+        let widest = self.widest_mem_op_sse(size, self.volatile_memory);
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
         if ops.contains(&16) {
             // DEVIATE SD540 (see `LLRM_MOVE128`): the pin's `v4i32` pieces are
@@ -938,6 +951,7 @@ impl Builder<'_> {
                         .get_node(super::super::x86_lowering::wrapper_kind(&self.dag, pointer), pointer, &[pool]);
                     self.dag.get_node(x86isd::LLRM_COPY128, EVT::OTHER, &[chain, to, from, align])
                 };
+                self.mark_volatile_piece(node);
                 chains.push(node);
                 off += width;
                 left = left.saturating_sub(width);
@@ -1327,6 +1341,7 @@ impl Builder<'_> {
                         return Err(Refused("memmove of far pointers: the runtime's routine takes near ones"));
                     }
                     _ => self.mem_libcall(
+                        info,
                         if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" },
                         root,
                         &[dst, other],
@@ -1388,7 +1403,7 @@ impl Builder<'_> {
                         self.rep_stos(root, dst, other, bytes, self.pointer_bytes())?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
-                    _ => self.mem_libcall("memset", root, &[dst, other], size)?,
+                    _ => self.mem_libcall(info, "memset", root, &[dst, other], size)?,
                 }
             }
         };
@@ -1524,17 +1539,25 @@ impl Builder<'_> {
         {
             return SDValue { node: rep.node, res: 0 };
         }
-        // The tail starts where the dword copy ended: `dst + (n - n % 4)`.
-        // Leaving di/si out reloaded the copy's start (the tail rewrote the
-        // first bytes and left the last ones uncopied).
+        // The tail goes on from where the dword copy left di/si (read back
+        // after the copy; the pin's constant tails add the offset instead).
         let three = self.dag.get_constant(3, pointer);
         let bytes = self.dag.get_node(ISD::And, pointer, &[count, three]);
-        let whole = self.dag.get_node(ISD::Sub, pointer, &[count, bytes]);
-        let next_dst = self.dag.get_node(ISD::Add, pointer, &[dst, whole]);
-        let next_src = self.dag.get_node(ISD::Add, pointer, &[src, whole]);
         let mut chain = SDValue { node: rep.node, res: 0 };
         let mut glue = SDValue { node: rep.node, res: 1 };
-        for (reg, value) in [(cx, bytes), (di, next_dst), (si, next_src)] {
+        let mut left = Vec::new();
+        for reg in [di, si] {
+            let reg_node = self.dag.get_phys_register(pointer, reg);
+            let read = self.dag.get_node_multi(
+                ISD::CopyFromReg,
+                &[pointer, EVT::OTHER, EVT::GLUE],
+                &[chain, reg_node, glue],
+            );
+            left.push(SDValue { node: read.node, res: 0 });
+            chain = SDValue { node: read.node, res: 1 };
+            glue = SDValue { node: read.node, res: 2 };
+        }
+        for (reg, value) in [(cx, bytes), (di, left[0]), (si, left[1])] {
             let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, Some(glue));
             chain = SDValue { node: copy.node, res: 0 };
             glue = SDValue { node: copy.node, res: 1 };
@@ -1852,6 +1875,7 @@ impl Builder<'_> {
     /// value, size)` for a set; the result is read and dropped.
     fn mem_libcall(
         &mut self,
+        info: &CallInfo,
         name: &str,
         chain_in: SDValue,
         first_two: &[SDValue],
@@ -1872,24 +1896,34 @@ impl Builder<'_> {
             if name == "memset" { types.int(self.dag.value_type(first_two[1]).size_in_bits()) } else { pointer_type };
         let arg_types = [pointer_type, value_type, word];
         let first = self.full_arch()?.first_argument_offset(false);
-        let plan: Convention = convention_for(
-            self.module,
-            self.layout,
-            self.full_arch()?,
-            first,
-            convention,
-            pointer_type,
-            false,
-            &arg_types,
-            &[],
-        )
-        .map_err(|_| Refused("libcall the convention does not describe"))?;
+        // `getMemcpy`'s `RetTy` is the destination's type: a call that is not a tail call reads the returned
+        // pointer and drops it (`CopyFromReg $eax` in the initial DAG); one ending the function is a tail call
+        // (`jmp memmove`), which returns nothing, so its plan is the void one the sibling-call check compares with
+        // the caller's.
+        let void = types.void();
+        let plan_of = |this: &Self, returns| {
+            convention_for(this.module, this.layout, this.full_arch()?, first, convention, returns, false, &arg_types, &[])
+                .map_err(|_| Refused("libcall the convention does not describe"))
+        };
+        let tail_plan = plan_of(self, void)?;
         let target_symbol = self.dag.get_target_external_symbol(self.target.dag.pointer, &routine_symbol);
         let _ = symbol;
         let values = vec![first_two[0], first_two[1], size];
         self.dag.set_root(chain_in);
         let extends = [ISD::AnyExtend; 3];
-        let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
+        // `isTailCall`: the intrinsic is marked `tail` and ends the function, and the target takes the sibling call.
+        let tail = match self.tail_candidate.take() {
+            Some(tail) if self.eligible_for_sibling_call(info, &tail_plan, false, None, first, &[]) => Some(tail),
+            _ => None,
+        };
+        if let Some(tail) = tail {
+            self.tail_calls.push(tail);
+            self.sibcall = self.target.tail_calls;
+            let _ = self.lower_call(target_symbol, values, &extends, &[], &tail_plan, first, void, false)?;
+        } else {
+            let plan = plan_of(self, pointer_type)?;
+            let _ = self.lower_call(target_symbol, values, &extends, &[], &plan, first, pointer_type, false)?;
+        }
         Ok(self.dag.get_root())
     }
 

@@ -8,8 +8,10 @@ pub mod addrroles;
 pub mod amiga;
 pub mod atari;
 pub mod callpush;
+pub mod calltarget;
 pub mod ccr;
 pub mod chain;
+pub mod classsplit;
 pub mod cmpdup;
 pub mod cmpelim;
 pub mod cmpshift;
@@ -41,12 +43,16 @@ pub mod narrow_add;
 pub mod negadd;
 pub mod object;
 pub mod opcosts;
+pub mod pccall;
 pub mod regalloc;
 pub mod scaledindex;
+pub mod sextacc;
 pub mod shiftadd;
 pub mod sizes;
+pub mod spillmove;
 pub mod target;
 pub mod timing;
+pub mod trial;
 
 use llrm_lir::registers::{RegId, Row};
 

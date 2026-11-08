@@ -97,7 +97,8 @@ impl RegisterClasses {
     pub fn of(arch: &dyn Target) -> Self {
         // A form that pins nothing has no requirement to give, and the
         // description is read at every compile.
-        let forms = parse::pinned(&arch.forms_text(), arch.dialect()).expect("the target's forms parse");
+        let all = llrm_target::instr::shared(&arch.forms_text(), arch.dialect()).expect("the target's forms parse");
+        let forms: Vec<&llrm_target::instr::Form> = all.iter().filter(|form| !form.fixed.is_empty()).collect();
         let operations: HashMap<&str, &'static str> =
             Operation::ALL.iter().map(|op| (op.as_str(), op.as_str())).collect();
         let mut pins: HashMap<Key, Vec<(Side, usize, RegId)>> = HashMap::default();
@@ -116,7 +117,7 @@ impl RegisterClasses {
                 .fixed
                 .iter()
                 .filter(|(side, index, root)| !chosen(*side, *index, root))
-                .map(|(side, index, root)| (*side, *index, root_register(root)))
+                .map(|(side, index, root)| (*side, *index, root_register(arch.registers(), root)))
                 .collect();
             pins.entry((form.name.clone(), operations[form.operation.as_str()], form.dests.len(), form.sources.len()))
                 .or_insert(required);
@@ -129,14 +130,15 @@ impl RegisterClasses {
             by_name.entry(name).or_default().push((operation, dests, sources, required));
         }
         let pins = by_name;
-        let file = llrm_target::registers::parse(&arch.registers_text()).expect("the target's registers parse");
+        let file = llrm_target::registers::file(&arch.registers_text()).expect("the target's registers parse");
         let named = |name: &str| iced(name);
-        let word = |root: &str| {
-            file.iter()
-                .find(|one| one.root == root && one.bits == 16)
-                .map(|one| iced(&one.name))
-                .expect("a register has a word view")
-        };
+        // The word view of each root, the first the file names: a scan of the file for every root of
+        // every class was most of this function.
+        let mut word_views: HashMap<&str, &str> = HashMap::default();
+        for one in file.iter().filter(|one| one.bits == 16) {
+            word_views.entry(one.root.as_str()).or_insert(one.name.as_str());
+        }
+        let word = |root: &str| word_views.get(root).map(|name| iced(name)).expect("a register has a word view");
         let held =
             |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(named).collect::<Vec<_>>();
         let words = |class: &str| {
@@ -150,6 +152,7 @@ impl RegisterClasses {
             |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(word).collect::<BTreeSet<_>>();
         let (encodable_bases, indexes) = (every("base"), every("index"));
         let addressing = encodable_bases.union(&indexes).copied().collect();
+        let xmm = held("xmm");
         let mut classes = Self {
             pins,
             available: held("gpr"),
@@ -158,8 +161,8 @@ impl RegisterClasses {
             frame: arch.frame_register(),
             addressing,
             encodable_bases,
-            xmm_set: held("xmm").into_iter().collect(),
-            xmm: held("xmm"),
+            xmm_set: xmm.iter().copied().collect(),
+            xmm,
             byte_words: {
                 let regs = llrm_lir::registers::Regs(arch.registers());
                 regs.entries()
@@ -274,34 +277,31 @@ impl RegisterClasses {
     }
 }
 
-/// The register a form's `fixed` column names by its root: `ax` is EAX.
-fn root_register(root: &str) -> RegId {
-    match root {
-        "ax" => RegId::EAX,
-        "bx" => RegId::EBX,
-        "cx" => RegId::ECX,
-        "dx" => RegId::EDX,
-        "si" => RegId::ESI,
-        "di" => RegId::EDI,
-        "bp" => RegId::EBP,
-        "sp" => RegId::ESP,
-        "es" => RegId::ES,
-        "ds" => RegId::DS,
-        "fs" => RegId::FS,
-        "gs" => RegId::GS,
-        other => unreachable!("x86.instr names no register `{other}`"),
-    }
+/// The register a form's `fixed` column names by its root: `ax` is EAX, and a
+/// register with no wider one (`es`) is itself.
+fn root_register(
+    registers: &llrm_lir::registers::Info,
+    root: &str,
+) -> RegId {
+    registers.by_name(root).unwrap_or_else(|| panic!("the target names no register `{root}`")).full_register32()
 }
 
 /// The iced register a description names.
 fn iced(name: &str) -> RegId {
-    RegId::values()
-        .find(|one| format!("{one:?}").eq_ignore_ascii_case(name))
-        .unwrap_or_else(|| panic!("no register {name}"))
+    RegId::named(name).unwrap_or_else(|| panic!("no register {name}"))
 }
 
 #[cfg(test)]
 mod tests {
+    /// A fixed root names its full register, found from the register, not a
+    /// table of x86 names: `ax` is EAX, `es` stays ES.
+    #[test]
+    fn test_a_root_names_its_full_register() {
+        for (root, full) in [("ax", RegId::EAX), ("sp", RegId::ESP), ("bp", RegId::EBP), ("es", RegId::ES), ("gs", RegId::GS)] {
+            assert_eq!(root_register(llrm_target::Target::registers(&llrm_x86_m16::M16), root), full, "{root}");
+        }
+    }
+
     use super::*;
 
     /// What `registers.regs` says of m16 is what the allocator's statics and
@@ -310,6 +310,17 @@ mod tests {
     #[test]
     fn the_status_word_is_where_the_form_table_stores_it() {
         assert_eq!(RegisterClasses::of(&llrm_x86_m16::M16).status_word(), Some(RegId::AX));
+    }
+
+    /// The class table read the forms a second time after the DAG tables had
+    /// read them (0.6 M Ir at start-up): the classes of one target, asked twice,
+    /// read its forms at most once.
+    #[test]
+    fn test_the_class_table_reads_the_forms_once() {
+        let before = llrm_target::instr::parsed();
+        let (first, second) = (RegisterClasses::of(&llrm_x86_m64::M64), RegisterClasses::of(&llrm_x86_m64::M64));
+        assert_eq!(first.status_word(), second.status_word());
+        assert!(llrm_target::instr::parsed() - before <= 1, "the forms were read twice");
     }
 
     #[test]
@@ -332,5 +343,19 @@ mod tests {
         assert!(!wide(&RegisterClasses::of(&llrm_x86_m16::M16)));
         assert!(wide(&RegisterClasses::of(&llrm_x86_m32::M32)));
         assert!(wide(&RegisterClasses::of(&llrm_x86_m64::M64)));
+    }
+}
+
+#[cfg(test)]
+mod cost_tests {
+    use super::*;
+
+    /// The register classes of a target are made at every compile; each root's
+    /// word view was a scan of the register file and the xmm class was made
+    /// twice. Measured in allocations, which follow the work.
+    #[test]
+    fn test_the_register_classes_of_a_target_are_made_from_one_pass_over_its_file() {
+        let (_, made) = llrm_support::alloc_count::counted(|| RegisterClasses::of(&llrm_x86_m64::M64));
+        assert!(made < 9000, "{made} allocations (9,771 before)");
     }
 }

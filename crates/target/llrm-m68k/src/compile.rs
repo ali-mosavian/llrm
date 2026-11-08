@@ -116,6 +116,22 @@ pub struct Options {
     /// A loop's top is chosen by the jumps its fall-throughs remove, not by
     /// the edges they cover (M68K-TOP, [`crate::regalloc::place_blocks`]).
     pub loop_top_by_jumps: bool,
+    /// A callee called again and again is called through an address register
+    /// where that makes the function cheaper ([`crate::calltarget`]).
+    pub call_targets: bool,
+    /// A call of a function this module defines is `jsr (name,%pc)`, 4 B for
+    /// the 6 of `jsr name`. Only for a driver that has checked the module's
+    /// code is within 16-bit reach of itself ([`crate::driver`]).
+    pub pc_calls: bool,
+    /// A sum in an address register adds a sign-extended word with `adda.w`
+    /// ([`crate::sextacc`]).
+    pub sext_adds: bool,
+    /// A block that only returns is copied into the predecessors that go only
+    /// there (`TailDuplicator`); kept when the function is cheaper for it.
+    pub return_dup: bool,
+    /// A value an address register would hold across a loop it is not used in
+    /// is held in a data register (`crate::classsplit`); kept when cheaper.
+    pub class_split: bool,
     /// Print the source places (`.loc`) of the instructions (`-g`).
     pub debug: bool,
 }
@@ -139,6 +155,11 @@ impl Options {
         tail_duplicate: false,
         rematerialize_arguments: false,
         loop_top_by_jumps: false,
+        call_targets: false,
+        pc_calls: false,
+        sext_adds: false,
+        return_dup: false,
+        class_split: false,
         debug: false,
     };
 }
@@ -161,6 +182,11 @@ impl Default for Options {
             tail_duplicate: true,
             rematerialize_arguments: true,
             loop_top_by_jumps: true,
+            call_targets: true,
+            pc_calls: false,
+            sext_adds: true,
+            return_dup: true,
+            class_split: true,
             debug: false,
         }
     }
@@ -177,6 +203,10 @@ pub fn items(
 }
 
 /// [`items`] with `options`.
+///
+/// A function an optional rewrite touched (the `adda`/`suba` fold, the copy of
+/// a return block into its predecessors) is also built without it, and the
+/// cheaper kept (`crate::trial`): each is priced before the code is known.
 pub fn items_with(
     module: &Module,
     name: &str,
@@ -190,6 +220,64 @@ pub fn items_with(
     } else {
         module
     };
+    let mut options = Options { mid_end: false, ..options };
+    let (mut kept, touched) = items_once(module, name, cpu, options)?;
+    if !touched.any() {
+        return Ok(kept);
+    }
+    let wants_size = options.size
+        || module
+            .named(name)
+            .and_then(|id| module.global(id).function())
+            .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
+    let price = crate::timing::Price::of(wants_size, options.strict);
+    if touched.sext_adds {
+        let without = Options { sext_adds: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
+    if touched.class_split {
+        let without = Options { class_split: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
+    if touched.return_dup {
+        let without = Options { return_dup: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+        }
+    }
+    Ok(kept)
+}
+
+/// The optional rewrites a build used.
+#[derive(Clone, Copy, Default)]
+struct Touched {
+    sext_adds: bool,
+    return_dup: bool,
+    class_split: bool,
+}
+
+impl Touched {
+    fn any(self) -> bool {
+        self.sext_adds || self.return_dup || self.class_split
+    }
+}
+
+/// One build of the function, and the optional rewrites that changed it.
+fn items_once(
+    module: &Module,
+    name: &str,
+    cpu: Cpu,
+    options: Options,
+) -> Result<(Vec<Item>, Touched), String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let number =
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
@@ -206,6 +294,7 @@ pub fn items_with(
         wants_size,
     )?;
     let mut function = emit(name, &blocks)?;
+    let mut touched = Touched::default();
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
@@ -222,6 +311,16 @@ pub fn items_with(
             crate::foldarg::fold_argument_loads(&mut function);
         }
         crate::addrroles::address_roles(&mut function);
+        if options.sext_adds {
+            touched.sext_adds = crate::sextacc::sign_extended_words(
+                &mut function,
+                cpu,
+                crate::timing::Price::of(wants_size, options.strict),
+            ) > 0;
+        }
+        if options.class_split {
+            touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;
+        }
         if cpu.at_least(Cpu::M68020) {
             crate::scaledindex::scale_indexes(&mut function);
         }
@@ -271,11 +370,20 @@ pub fn items_with(
     );
     if options.short {
         crate::cmpdup::drop_repeated_compares(&mut function, &assignment);
+        crate::spillmove::spills_as_moves(
+            &mut function,
+            &assignment,
+            cpu,
+            crate::timing::Price::of(wants_size, options.strict),
+        );
     }
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
     if options.tail_duplicate && !wants_size {
         llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
+        if options.return_dup {
+            touched.return_dup = llrm_spike_mf::taildup::duplicate_returns(&mut function, 2);
+        }
     }
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size, options.loop_top_by_jumps);
     let mut out = vec![Item::Label(name.to_owned())];
@@ -289,23 +397,54 @@ pub fn items_with(
             epilogue_begin: false,
         }));
     }
-    for line in finish_with(
-        &function,
-        &assignment,
-        number,
-        &slots,
-        cpu,
-        options.push_frame,
-        options.short,
-        options.push_arguments.then_some(crate::timing::Price::of(wants_size, options.strict)),
-    )? {
+    let price = crate::timing::Price::of(wants_size, options.strict);
+    let expand = |function: &crate::mfunc::MFunction| {
+        finish_with(
+            function,
+            &assignment,
+            number,
+            &slots,
+            cpu,
+            options.push_frame,
+            options.short,
+            options.push_arguments.then_some(price),
+        )
+    };
+    if options.short && options.pc_calls {
+        crate::pccall::local_calls(&mut function, |callee| is_local_callee(module, callee));
+    }
+    if options.short && options.call_targets {
+        let chosen = crate::calltarget::choose(&function, &assignment, cpu, price, expand)?;
+        crate::calltarget::through_registers(&mut function, &chosen)?;
+    }
+    for line in expand(&function)? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),
             Line::Loc(place) => Item::Loc(place),
         });
     }
-    Ok(out)
+    Ok((out, touched))
+}
+
+/// Whether `callee` is a function `module` defines that no other definition
+/// replaces at link time: a weak or linkonce one can be.
+fn is_local_callee(
+    module: &Module,
+    callee: &str,
+) -> bool {
+    module
+        .named(callee)
+        .is_some_and(
+            |id| {
+                let global = module.global(id);
+                global.function().is_some_and(|one| !one.is_declaration())
+                    && !matches!(
+                        llrm_mir::image::Export::of(global.linkage),
+                        llrm_mir::image::Export::Weak
+                    )
+            },
+        )
 }
 
 /// The IR's branch probabilities by `(from, to)` block number
@@ -357,14 +496,22 @@ pub fn text_with(
     cpu: Cpu,
     options: Options,
 ) -> Result<String, String> {
+    printed(items_with(module, name, cpu, options)?, options.debug)
+}
+
+/// `items` as assembly text, the `.loc` rows only with `debug`.
+pub fn printed(
+    items: Vec<Item>,
+    debug: bool,
+) -> Result<String, String> {
     let mut out = String::new();
     let mut previous = None;
-    for item in items_with(module, name, cpu, options)? {
+    for item in items {
         match item {
             Item::Label(label) => out.push_str(&format!("{label}:\n")),
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
             Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
-            Item::Loc(row) if options.debug => {
+            Item::Loc(row) if debug => {
                 // A row on the line the one before it was on does not start a
                 // statement.
                 let flags = format!(

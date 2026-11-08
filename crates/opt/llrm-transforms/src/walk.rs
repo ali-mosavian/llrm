@@ -268,6 +268,7 @@ impl ProgramPass for Walk {
             recursive_callee_limit: recursion.map_or(i64::MAX, |one| one.callee),
             recursive_edge_growth: edge_growth_bar(program.target.tti().as_deref(), self.inline.limit >= 250),
             last_call_to_static: self.inline.last,
+            o1_bound: !self.speed_rate,
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
         // The target's tuning table.
@@ -299,6 +300,9 @@ impl ProgramPass for Walk {
                     // made direct is inlined by another run
                     // of the inliner over the body.
                     let mut repeats = 0;
+                    // SZ2: the callees a trial rejected in this caller; a later round
+                    // of the loop does not try them again.
+                    let mut rejected: BTreeSet<GlobalId> = BTreeSet::new();
                     loop {
                         let mut decided = remarks.then(Vec::new);
                         // `sites` prices every block's frequency before it
@@ -333,7 +337,9 @@ impl ProgramPass for Walk {
                                 decided.as_mut(),
                                 (tti.as_deref().is_some_and(|tti| {
                                     size != crate::inlinecost::CallerSize::Speed
-                                        || tti.inline_policy().by_rate > 0
+                                        || (tti.inline_policy().by_rate > 0
+                                            && (self.speed_rate || tti.speed_inline_rate_at_o1()))
+                                        || (!self.speed_rate && tti.inline_trials_at_o1())
                                 }))
                                 .then_some(&mut trials),
                             )
@@ -453,7 +459,7 @@ impl ProgramPass for Walk {
                         // a caller of
                         // at most `TRIAL_CALLER` instructions.
                         let spliced_body = (!trials.is_empty()
-                            && function_mut(module, id).1.walk().count() <= TRIAL_CALLER)
+                            && function_mut(module, id).1.walk().count() <= tti.as_deref().map_or(TRIAL_CALLER, |tti| tti.inline_trial_caller_limit()))
                             .then(|| function_mut(module, id).1.clone());
                         let mid = calls_of(&module.context, module.global(id).function().expect("a procedure"));
                         // The calls the splice brought go to the inliner's
@@ -546,6 +552,11 @@ impl ProgramPass for Walk {
                             }
                             let mut accepted: Vec<llrm_mir::module::InstId> = Vec::new();
                             for (calls, credit) in units {
+                                if tti.inline_trial_skips_rejected()
+                                    && calls.iter().any(|one| trials[one].callee.is_some_and(|callee| rejected.contains(&callee)))
+                                {
+                                    continue;
+                                }
                                 let kept = function_mut(module, id).1.clone();
                                 let kept_clocks = function_clocks(module, &program.layout, tti, &kept);
                                 let mut chosen = accepted.clone();
@@ -741,10 +752,18 @@ impl ProgramPass for Walk {
                                 // instructions).
                                 let priced = rate > 0 && size == crate::inlinecost::CallerSize::Speed;
                                 let kept_bytes = function_bytes(module, &program.layout, &program.target.size_costs(), &kept);
-                                if trial_accepted(tti.opt_size_inline_byte_gate(), priced, tried, best, credit, saved, growth, rate, kept_bytes) {
+                                if trial_accepted(tti.opt_size_inline_byte_gate(), tti.inline_trial_keeps_shrinking_copy(), priced, tried, best, credit, saved, growth, rate, kept_bytes) {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
+                                    rejected.extend(calls.iter().filter_map(|one| trials[one].callee));
+                                    if remarks {
+                                        eprintln!(
+                                            "{} SZ2 trial rejected '{}'",
+                                            module.global(id).name.as_deref().unwrap_or("?"),
+                                            module.global(trials[&calls[0]].callee.expect("a callee")).name.as_deref().unwrap_or("?"),
+                                        );
+                                    }
                                     *function_mut(module, id).1 = kept;
                                     modules[at].changed(id);
                                     modules[at]
@@ -1226,7 +1245,8 @@ impl SelfInline {
 #[path = "walk_tests.rs"]
 mod tests;
 
-/// SZ2: the largest caller, in instructions, whose refused sites are tried.
+/// SZ2: the largest caller, in instructions, whose refused sites are tried
+/// (`Tti::inline_trial_caller_limit` where a target states one).
 const TRIAL_CALLER: usize = 300;
 
 /// SZ2: the bytes `function` becomes, by the target's byte prices
@@ -1336,6 +1356,7 @@ pub fn function_bytes(
 #[allow(clippy::too_many_arguments)]
 fn trial_accepted(
     byte_gate: bool,
+    keeps_shrinking: bool,
     priced: bool,
     tried: i64,
     best: i64,
@@ -1346,7 +1367,8 @@ fn trial_accepted(
     kept_bytes: i64,
 ) -> bool {
     if priced {
-        return credit > 0 && growth * rate <= saved * 1000;
+        // A copy that leaves the module no larger and runs in fewer clocks needs no callee to go with it.
+        return (credit > 0 || (keeps_shrinking && growth <= 0 && saved > 0)) && growth * rate <= saved * 1000;
     }
     (if byte_gate { tried <= best || (tried <= best + credit && growth <= 0) } else { tried <= best + credit })
         || (saved > 0 && growth * rate <= saved * 1000)

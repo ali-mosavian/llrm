@@ -60,7 +60,6 @@ pub fn machine<'a>(
 /// The phases -O0 leaves out: each only makes code better.
 const UNOPTIMIZED: &[&str] = &[
     "EarlyTailDuplicate",
-    "Peephole",
     "LoopSlots",
     "Scheduler",
     "Coalescer",
@@ -87,6 +86,19 @@ const UNOPTIMIZED: &[&str] = &[
     "CmpAsSub",
     "CallFrameOpt",
     "TailDuplicate",
+    // The pin's -O0 `addMachinePasses` has none of these (TargetPassConfig.cpp
+    // d1106deb71cc): `addMachineSSAOptimization` (DeadMachineInstructionElim)
+    // and `addOptimizedRegAlloc` (ProcessImplicitDefs) are O>0 only, as is
+    // `addMachineLateOptimization` (BranchFolder); the float and leaf rewrites
+    // are ours alone. `ControlFlow` stays: it also drops the jump to the next
+    // block, which the pin's FastISel never emits (gated, div_constants_short
+    // -O0 had 318 `jmp` against 132).
+    "DeadMachineInstructionElim",
+    "ProcessImplicitDefs",
+    "LeafFold",
+    "FloatUnhoist",
+    "FloatFold",
+    "FloatSink",
 ];
 
 /// The parity registry's slot of each machine phase, by class name.
@@ -255,7 +267,7 @@ pub fn machine_with<'a>(
         // instruction that clobbers them become a byte per condition
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
-        Box::new(phielim::PhiElimination),
+        Box::new(phielim::PhiElimination { unoptimized: !target.optimized }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
@@ -264,20 +276,25 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::floatunhoist::FloatUnhoist { cpu: target, basic_semantics }),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
-        Box::new(crate::backend::floatfold::FloatFold { cpu: target, registers: classes.available.len() }),
+        Box::new(crate::backend::floatfold::FloatFold {
+            cpu: target,
+            pool: pool.clone(),
+            registers: classes.available.len(),
+        }),
         // A float load waits for its reader where that saves an exchange.
         Box::new(crate::backend::floatsink::FloatSink { cpu: target, basic_semantics }),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatPrep {
             frame: frame.clone(),
-            pool,
+            pool: pool.clone(),
             basic_semantics,
             status_word: classes.status_word(),
         }),
-        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target) }),
+        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target), pool }),
         Box::new(twoaddr::TwoAddress {
             lea: target.three_address_for(target.size || target.min_size),
             loop_carried: target.commutes_loop_carried(),
+            unoptimized: !target.optimized,
         }),
         Box::new(Coalescer { size: target.size, moves: target.move_bytes, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
@@ -350,7 +367,13 @@ pub fn machine_with<'a>(
         }),
         // Last: this physical order decides which explicit edge is now
         // fall-through.
-        Box::new(jumps::ControlFlow { cpu: target, calls: calls.cloned() }),
+        Box::new(jumps::ControlFlow {
+            cpu: target,
+            calls: calls.cloned(),
+            saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+            free: registers.free,
+            pointer: registers.pointer,
+        }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
     ];
@@ -753,6 +776,24 @@ mod tests {
             let line = text.lines().find(|line| line.starts_with(&format!("const {name}:"))).expect("the list");
             assert!(line.contains(": &["), "{line}");
         }
+    }
+
+    /// The pin's -O0 `addMachinePasses` runs no `DeadMachineInstructionElim`
+    /// (`addMachineSSAOptimization` is O>0 only), no `ProcessImplicitDefs`
+    /// (`addOptimizedRegAlloc`: the fast allocator takes `addFastRegAlloc`) and
+    /// no tail duplication (`addMachineLateOptimization`).
+    /// Ours ran them at -O0: 12 M Ir of 78 M on div_constants_short.
+    #[test]
+    fn test_the_o0_pipeline_has_none_of_the_phases_the_pin_runs_only_when_optimizing() {
+        let o0 =
+            crate::backend::cpu::Profile { optimized: false, ..crate::backend::cpu::named("486").unwrap().clone() };
+        let phases = machine(&IndexMap::default(), None, None, None, false, &o0, &crate::backend::target::BUILT_IN)
+            .expect("the phases");
+        let names: Vec<&str> = phases.iter().map(|phase| phase.class_name()).collect();
+        for gone in ["DeadMachineInstructionElim", "ProcessImplicitDefs", "LeafFold", "FloatUnhoist", "TailDuplicate"] {
+            assert!(!names.contains(&gone), "{gone} runs at -O0: {names:?}");
+        }
+        assert!(names.contains(&"ControlFlow"), "the jump to the next block is dropped at -O0: {names:?}");
     }
 
     /// Every phase `-O0` leaves out is a phase with a slot.

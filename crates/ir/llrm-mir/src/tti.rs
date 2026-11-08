@@ -555,6 +555,67 @@ pub trait Tti {
         0
     }
 
+    /// Whether a speed caller's inline that gives a loop of the callee a constant
+    /// trip count is exempt from the byte rate (gcc's `INLINE_HINT_loop_iterations`:
+    /// the copy unrolls and folds, which the call's latency does not show).
+    fn inline_hints_known_loop_bound(&self) -> bool {
+        false
+    }
+
+    /// Whether a priced inline trial keeps a copy that leaves the module no
+    /// larger and saves clocks though no callee goes with it. False: the
+    /// callee's credit decides (arm64 -O3 jpeg `decode`: 5,828 -> 7,324 B and
+    /// +1.2M instructions when the copies were kept).
+    fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        false
+    }
+
+    /// The largest caller, in instructions, whose refused sites SZ2 tries inline: a trial
+    /// runs the simplifier over the whole caller once per callee tried.
+    fn inline_trial_caller_limit(&self) -> usize {
+        300
+    }
+
+    /// Whether a later round of the inliner over one caller skips a callee SZ2 rejected in an
+    /// earlier round: a round costs the simplifier over the caller per callee. False: tried again.
+    fn inline_trial_skips_rejected(&self) -> bool {
+        false
+    }
+
+    /// Whether a callee the -O1 size bound refused is tried inline as at -Os (SZ2: the copy
+    /// stays if the caller comes out smaller), where -O1 prices no byte in clocks. False: the
+    /// bound's verdict stands.
+    fn inline_trials_at_o1(&self) -> bool {
+        false
+    }
+
+    /// Whether `speed_inline_milliclocks_per_byte` also binds at -O1. False
+    /// (the default; -O1 is strict): -O1 prices no byte in clocks and keeps
+    /// the pin's threshold alone.
+    /// `Tuning::sdiv_by_magnitude`.
+    fn sdiv_by_magnitude(&self) -> bool {
+        false
+    }
+
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        false
+    }
+
+    /// Whether a full unroll's saving is counted over `ASSUMED_TRIPS` runs
+    /// of each unknown-count loop around it, as the pin's branch weights
+    /// say (up to two). False: such a loop counts once, the runs the
+    /// compiler can show.
+    fn unroll_assumes_unknown_loops_run(&self) -> bool {
+        true
+    }
+
+    /// Whether a call to a function of the module destroys what that function
+    /// writes, not every caller-saved register (`-enable-ipra`; off in the
+    /// pin, on in GCC from -O1).
+    fn interprocedural_register_use(&self) -> bool {
+        false
+    }
+
     /// Whether one wider store of constants may start off its own size
     /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
     /// at a multiple of its size.
@@ -602,6 +663,12 @@ pub trait Tti {
     /// exit test folds in the preheader (RS1). False: the pass's header limit
     /// alone.
     fn rotation_guard_must_fold_at_size(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE Z80-ROT: whether -Oz rotates a loop whose copied header folds away in
+    /// the preheader, the pin's no-copy limit notwithstanding. False: the pin.
+    fn rotation_free_guard_at_minsize(&self) -> bool {
         false
     }
 
@@ -717,6 +784,17 @@ pub trait Tti {
         0
     }
 
+    /// Whether a full unroll is credited a `move` for each read, in the loops
+    /// inside it, of a value its copies make constant: true where an immediate
+    /// operand saves a register copy (two-address or stack machines). False
+    /// where it saves nothing (3-address arm64: `cmp x, #n` = `cmp x, y`).
+    /// Credited, a nested read counts a run of the inner loop's assumed trips
+    /// (shellsort -O3 at 20 clocks a byte: 12,491 clocks "saved", 6,177 ->
+    /// 7,090 instructions run, 164 -> 560 B).
+    fn unroll_credits_immediate_operands(&self) -> bool {
+        true
+    }
+
     /// DEVIATE UP1: what a code byte a full unroll adds is worth in
     /// thousandths of a clock at -O2/-O3, where the unroll must save that many
     /// clocks to be made (`loopunrollprice`); 0: the pin's threshold alone.
@@ -724,8 +802,21 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE UNROLL-TRIAL (beyond the pin; owner 6502, exit 2026-12-05): the
+    /// unrolled size, in the unroll units, up to which a loop the threshold
+    /// refused is unrolled on trial: the function is simplified and priced
+    /// whole, and the unroll stays only if it pays. `None`: no trial.
+    fn unroll_trial_threshold(&self) -> Option<u32> {
+        None
+    }
+
     /// `Tuning::unroll_never_grows_at_o1`.
     fn unroll_never_grows_at_o1(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::second_ipsccp`.
+    fn second_ipsccp(&self) -> bool {
         false
     }
 
@@ -747,6 +838,16 @@ pub trait Tti {
     /// DEVIATE INL-O1: `Tuning::inline_never_grows_without_rate`.
     fn inline_never_grows_without_rate(&self) -> bool {
         false
+    }
+
+    /// `Tuning::inline_o1_weighs_entry`.
+    fn inline_o1_weighs_entry(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::inline_o1_unit_bytes_milli`.
+    fn inline_o1_unit_bytes_milli(&self) -> i64 {
+        1000
     }
 
     /// DEVIATE INL-O1: `Tuning::inline_o1_milliclocks_per_byte`.
@@ -799,6 +900,11 @@ pub trait Tti {
     ) -> i64 {
         let _ = optsize;
         0
+    }
+
+    /// `Tuning::carry_slot_indexes`.
+    fn carries_slot_indexes(&self) -> bool {
+        true
     }
 
     /// `Tuning::sink_select_arms`.
@@ -1413,6 +1519,17 @@ pub trait Tti {
         false
     }
 
+    /// Whether InstCombine makes `scmp`/`ucmp` of a select chain
+    /// (`foldSelectToCmp`). The pin does so on every target.
+    /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-21): off by default; on,
+    /// 62 other-target cells grew (arm64 sfm16 -Os +500 B, m68k -O2 +320 B,
+    /// x86_32 -O2 +28 B, 27 z80 cells): the compare's expansion and the
+    /// inline cost of the callee that holds it. Flip the default when fixed.
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineSelect.cpp#L4172)
+    fn folds_select_to_cmp(&self) -> bool {
+        false
+    }
+
     /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
     /// (default 4), for a function built for size or not: the operations
     /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
@@ -1519,6 +1636,15 @@ pub trait Tti {
     /// the pin promotes without a cap.
     fn licm_register_limit(&self) -> Option<u32> {
         Some(self.number_of_gpr_registers())
+    }
+
+    /// DEVIATE IND-MASK (beyond the pin; exit 2026-11-30): whether `indvars`
+    /// also widens a counter of an illegal narrow width whose chain is
+    /// masked by a constant and then extended (`(i*5+3)&1023` indexing a
+    /// table, `short i`). The pin sees only an extension of the counter's own
+    /// recurrence, so the chain stays narrow and `LSR` skips it.
+    fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
+        false
     }
 
     /// DEVIATE LSR-N: integer widths LSR takes as native induction variables

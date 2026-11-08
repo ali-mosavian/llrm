@@ -87,6 +87,12 @@ pub trait Target {
     ) -> bool {
         one == other
     }
+    /// The two byte registers a pair register is made of. Liveness follows
+    /// the bytes: a pair read after its bytes were written is not live from
+    /// the entry.
+    fn lanes_of(_register: RegId) -> Option<[RegId; 2]> {
+        None
+    }
     /// Whether a register worth `weight` (its mentions, each scaled by its loop
     /// depth) should take `root`, when `first_use` says no other register
     /// of the function has taken it yet. A target whose registers cost
@@ -145,6 +151,12 @@ pub trait Target {
         0
     }
 
+    /// What a callee-saved register and a spill cost in bytes, where `-Os`
+    /// prices the first use of a callee-saved register by them (DEVIATE CSR5).
+    fn size_bytes() -> Option<llrm_codegen::greedy::targetinfo::SizeBytes> {
+        None
+    }
+
     /// The percentage of that cost greedy charges (LLVM's default 30 prices
     /// it below its own spill weights).
     fn csr_cost_scale() -> u32 {
@@ -157,12 +169,18 @@ pub trait Target {
     /// true, as before, until a target's owner states otherwise.
     ///
     /// m68k (owner greedy-subreg, exit 2026-11-29): keeps true. False is the
-    /// pin's value and fixes `fib` -Os (the local copy `v7 = COPY a` joins before
-    /// the global `a := b`), but makes 7-9 cells per CPU/level worse (68000 O2
-    /// div_constants_long +284 B), as in idiv_loop_os, where the pin's own
-    /// order gives the same `bra` + `moveq #0`. Not flipped while a strict cell is worse.
+    /// pin's value and fixes `fib` -Os (the local copy `v7 = COPY a` joins
+    /// before the global `a := b`), but makes 7-9 cells per CPU/level worse
+    /// (68000 O2 div_constants_long +284 B), as in idiv_loop_os, where the
+    /// pin's own order gives the same `bra` + `moveq #0`. Not flipped while
+    /// a strict cell is worse.
     fn joins_global_copies() -> bool {
         true
+    }
+
+    /// DEVIATE C15 (`CoalescerEnv::joins_loop_carried_first`): the pin's order.
+    fn joins_loop_carried_first() -> bool {
+        false
     }
 
     /// DEVIATE C13: whether a copy between widths is joined (the pin always
@@ -249,9 +267,10 @@ pub trait Target {
         join.extra_cost() <= join.copy_frequency * Self::copy_cost() as f32
     }
 
-    /// Whether a move of a symbol's address is made again where it is read, as any literal is. The pin does for
-    /// `MOV32ri` of a global; the price is the target's: z80's `ld hl, #sym` is 3 B against a spill and a reload, 6502's
-    /// pair of immediates is not (the objects grew).
+    /// Whether a move of a symbol's address is made again where it is read, as
+    /// any literal is. The pin does for `MOV32ri` of a global; the price is
+    /// the target's: z80's `ld hl, #sym` is 3 B against a spill and a reload,
+    /// 6502's pair of immediates is not (the objects grew).
     fn remats_symbol_addresses() -> bool {
         false
     }
@@ -687,6 +706,19 @@ struct Nodes {
 }
 
 impl Nodes {
+    /// The nodes a register stands for: a physical pair is its two bytes.
+    fn all<T: Target>(
+        &mut self,
+        register: Reg,
+    ) -> Vec<usize> {
+        if let Reg::Phys(p) = register
+            && let Some(lanes) = T::lanes_of(T::root(p))
+        {
+            return lanes.iter().map(|lane| self.of::<T>(Reg::Phys(*lane))).collect();
+        }
+        vec![self.of::<T>(register)]
+    }
+
     fn of<T: Target>(
         &mut self,
         register: Reg,
@@ -721,8 +753,12 @@ fn effects<T: Target>(
     let mut uses = Vec::new();
     for operand in &inst.operands {
         match operand {
-            Operand::Def(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => defs.push(nodes.of::<T>(*r)),
-            Operand::Use(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => uses.push(nodes.of::<T>(*r)),
+            Operand::Def(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => {
+                defs.extend(nodes.all::<T>(*r))
+            }
+            Operand::Use(r) if !matches!(r, Reg::Phys(p) if T::reserved(T::root(*p))) => {
+                uses.extend(nodes.all::<T>(*r))
+            }
             _ => {}
         }
     }

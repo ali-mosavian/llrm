@@ -4,6 +4,7 @@
 //! body costs in code (x_ld_max: the 8-trip inner loop, copied 8 times,
 //! 232 -> 755 bytes at m32 -O2 for a few clocks).
 
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{Linkage, ValueDef, ValueId};
 use llrm_mir::opcode::BinaryOp;
 
@@ -60,7 +61,12 @@ pub(super) fn full_unroll_pays(
     // decided: the copies of the inner loops follow it (nbody -O2: the 4-trip
     // outer loop unrolls, its 3-, 2- and 1-trip inner copies were each priced
     // alone and kept rolled, +38,016).
-    if !run.first.contains(&lp.get_header()) {
+    // Only where nests are priced: at -O3 the pin prices these copies (matmul
+    // -O3 700 B; unpriced 1,208 B).
+    let carried = run.decided.contains(&lp.get_header())
+        && run.tti.unroll_prices_nest_loops_without_outer_counter()
+        && run.options.opt_level < 3;
+    if !run.first.contains(&lp.get_header()) || carried {
         why(run, lp, "unpriced unroll: a copy of this run");
         return true;
     }
@@ -68,11 +74,14 @@ pub(super) fn full_unroll_pays(
     // then the nest's unroll folds nothing here and the loop is priced as any
     // other (crc -O2: the bit loop reads the running value and constants only,
     // 64 B added for 232 instructions saved).
-    // -O3 is speed: the nest's decision holds there (matmul -O3: 672
-    // instructions kept against 4,148 priced, clang's 608).
+    // -O3 is speed: the pin's decision holds there. A byte rate priced at -O3
+    // (250 down to 3 clocks a byte) trades matmul 672 -> 5,009 instructions (or
+    // 857 at 6) for 700 -> 292 B, and no rate keeps shellsort and jpeg at the
+    // pin's bytes: DEVIATE ARM64-NEST-O3 (owner w15, exit 2026-11-30) leaves the
+    // rows slower than gcc and clang at the pin's value.
     let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3;
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count)
-        && (!prices_nest || reads_outer_counter(run, analyzed, lp))
+        && (!prices_nest || reads_outer_counter(run, se, analyzed, lp, up))
     {
         why(run, lp, "unpriced unroll: the nest bypass");
         return true;
@@ -86,15 +95,6 @@ pub(super) fn full_unroll_pays(
         why(run, lp, "unpriced unroll: inner loops of few trips");
         return true;
     }
-    let clocks = crate::profit::costs(run.outer);
-    let bytes = run.outer.target().byte_costs();
-    let blocks = lp.get_blocks();
-    let body_bytes = trip_cost(run.context, run.layout, run.function, run.callees, blocks.iter(), &bytes, true);
-    let body_clocks = trip_clocks(run.context, run.layout, run.function, run.callees, blocks.iter(), &clocks);
-    // What the copies need not run: the instructions the analysis simplifies
-    // (the counter, the exit test, folded loads), at the body's average clocks
-    // a unit; where it cannot analyze (a loop around loops), the back edge of
-    // every trip, and the operands the copies make constant (below).
     let analysis = analyze_loop_unroll_cost(
         run,
         se,
@@ -107,13 +107,188 @@ pub(super) fn full_unroll_pays(
         None,
         true,
     );
+    priced_verdict(&*run, se, analyzed, lp, up, trips, uce, analysis, None, prices_nest, prices_nest, rate)
+}
+
+/// The copies of each block a nest's unroll makes: the product of the trip
+/// counts of the loops inside the nest's root that hold it.
+pub(super) struct Projection {
+    weight: IdMap<BlockId, i64>,
+}
+
+impl Projection {
+    fn of(
+        &self,
+        block: BlockId,
+    ) -> i64 {
+        self.weight.get(&block).copied().unwrap_or(1)
+    }
+}
+
+/// `root`'s nest as already unrolled inside it, when every loop in it runs a
+/// known number of trips and the copies stay under a bound.
+fn project_nest(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    root: Loop,
+) -> Option<Projection> {
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let mut weight = IdMap::new();
+    for &block in root.get_blocks() {
+        let mut copies = 1i64;
+        let mut around = analyzed.loops.get_loop_for(block);
+        while let Some(one) = around {
+            if one.get_header() == root.get_header() {
+                break;
+            }
+            let trips = se.get_small_constant_trip_count(&cx, one.get_header());
+            if trips == 0 {
+                return None;
+            }
+            copies = copies.saturating_mul(i64::from(trips));
+            if copies > 1 << 16 {
+                return None;
+            }
+            around = one.get_parent_loop();
+        }
+        weight.insert(block, copies);
+    }
+    Some(Projection { weight })
+}
+
+/// The outermost loop above `lp`, itself included, whose chain down to `lp`
+/// runs known trips.
+fn known_root<'a>(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop<'a>,
+) -> Loop<'a> {
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let mut root = lp;
+    while let Some(parent) = root.get_parent_loop() {
+        if se.get_small_constant_trip_count(&cx, parent.get_header()) == 0 {
+            break;
+        }
+        root = parent;
+    }
+    root
+}
+
+/// Whether the full unroll of the nest rooted at `known_root(lp)` pays, priced
+/// with every loop inside unrolled; `None` where it has no known trips or
+/// cannot be priced. `memory_aware` off ends the recursion through
+/// `stays_in_memory`.
+fn root_pays(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    up: &UnrollingPreferences,
+    memory_aware: bool,
+) -> Option<bool> {
+    let root = known_root(run, se, analyzed, lp);
+    // A nest of loops that all run few trips is the pin's, unpriced.
+    if bounds_few_trips(run, se, analyzed, root, up.max_iterations_count_to_analyze) {
+        return Some(true);
+    }
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let trips = se.get_small_constant_trip_count(&cx, root.get_header());
+    if trips == 0 {
+        return None;
+    }
+    let projection = project_nest(run, se, analyzed, root)?;
+    let eph = ephemeral_values(run, analyzed, root);
+    let uce = cost_estimator(run, root, &eph, up.be_insns);
+    if !uce.can_unroll() {
+        return None;
+    }
+    let rate = run.tti.unroll_milliclocks_per_byte();
+    let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter();
+    Some(priced_verdict(run, se, analyzed, root, up, trips, &uce, None, Some(&projection), prices_nest, memory_aware, rate))
+}
+
+/// The profit rule of a priced unroll of `lp` by `trips`, from the loop's
+/// numbers: those of the rolled loop, or, with a `projection`, those of the
+/// nest it roots as if its inner loops were already unrolled.
+fn priced_verdict(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    up: &UnrollingPreferences,
+    trips: u32,
+    uce: &UnrollCostEstimator,
+    analysis: Option<EstimatedUnrollCost>,
+    projection: Option<&Projection>,
+    prices_nest: bool,
+    memory_aware: bool,
+    rate: i64,
+) -> bool {
+
+    let clocks = crate::profit::costs(run.outer);
+    let bytes = run.outer.target().byte_costs();
+    let blocks = lp.get_blocks();
+    let body_bytes = trip_cost(run.context, run.layout, run.function, run.callees, blocks.iter(), &bytes, true);
+    let body_clocks = trip_clocks(run.context, run.layout, run.function, run.callees, blocks.iter(), &clocks);
+    // A projected nest: every block counted once for each copy of it the inner
+    // loops' unrolls make.
+    let (body_bytes, body_clocks, grown) = match projection {
+        None => (body_bytes, body_clocks, (1, 1)),
+        Some(projection) => {
+            let (mut projected_bytes, mut projected_clocks) = (0, 0);
+            for block in blocks.iter() {
+                let weight = projection.of(*block);
+                let once = std::iter::once(block);
+                projected_bytes +=
+                    weight * trip_cost(run.context, run.layout, run.function, run.callees, once.clone(), &bytes, true);
+                projected_clocks +=
+                    weight * trip_clocks(run.context, run.layout, run.function, run.callees, once, &clocks);
+            }
+            (projected_bytes, projected_clocks, (projected_bytes.max(1), body_bytes.max(1)))
+        }
+    };
+    // What the copies need not run: the instructions the analysis simplifies
+    // (the counter, the exit test, folded loads), at the body's average clocks
+    // a unit; where it cannot analyze (a loop around loops), the back edge of
+    // every trip, and the operands the copies make constant (below).
     // The code the copies add, at the body's average bytes a unit: what the
     // analysis folds away is not emitted (byval_struct: a 41-trip loop of
     // constants is two instructions, not 41 copies).
-    let rolled_units = i64::from(uce.rolled_loop_size().max(1));
-    let unrolled_units = analysis
-        .as_ref()
-        .map_or(uce.unrolled_loop_size(up, trips) as i64, |cost| i64::from(cost.unrolled_cost));
+    let rolled_units = (i64::from(uce.rolled_loop_size().max(1)) * grown.0 / grown.1).max(1);
+    let unrolled_units = match (&analysis, projection) {
+        (_, Some(_)) => ((rolled_units - i64::from(up.be_insns)).max(0)) * i64::from(trips) + i64::from(up.be_insns),
+        (Some(cost), None) => i64::from(cost.unrolled_cost),
+        (None, None) => uce.unrolled_loop_size(up, trips) as i64,
+    };
     let added = match analysis.as_ref() {
         Some(cost) if cost.through_call => (cost.unrolled_bytes - body_bytes).max(0),
         _ => ((unrolled_units - rolled_units).max(0) * body_bytes) / rolled_units,
@@ -122,7 +297,7 @@ pub(super) fn full_unroll_pays(
     // The accesses of a local array the copies make constant-indexed: the
     // array is promoted to registers, so they cost no clocks and no bytes
     // (frameless: `local[i]` filled and read by two 12-trip loops).
-    let (mut promoted, mut promoted_runs, ints, floats, forwarded) = promoted_accesses(run, analyzed, lp, &known);
+    let (mut promoted, mut promoted_runs, ints, floats, forwarded) = promoted_accesses(run, se, analyzed, lp, &known, up, memory_aware, projection);
     let rmw = forwarded.len();
     // DEVIATE UP1-REG (owner m64, exit 2026-11-20): the promoted elements are
     // registers only while they fit: more than the file holds, and they are
@@ -155,7 +330,10 @@ pub(super) fn full_unroll_pays(
     let added = (added - merged_store_credit(run, se, analyzed, lp, trips)).max(0);
     let (saved_units, constant_clocks) = match analysis {
         Some(cost) => (i64::from(cost.rolled_dynamic_cost.saturating_sub(cost.unrolled_cost)), 0),
-        None => (i64::from(trips) * i64::from(up.be_insns), i64::from(trips) * nested_uses * clocks.r#move),
+        None => {
+            let credited = if run.tti.unroll_credits_immediate_operands() { nested_uses } else { 0 };
+            (i64::from(trips) * i64::from(up.be_insns), i64::from(trips) * credited * clocks.r#move)
+        }
     };
     // The loop's control costs what it runs, never less than the body's average
     // unit: a taken back edge is several clocks (the i486's `jne` 3), the
@@ -171,7 +349,7 @@ pub(super) fn full_unroll_pays(
     let runs = if prices_nest {
         enclosing_runs(run, se, analyzed, lp)
     } else {
-        ASSUMED_TRIPS.pow((lp.get_loop_depth() - 1).min(2))
+        if run.tti.unroll_assumes_unknown_loops_run() { ASSUMED_TRIPS.pow((lp.get_loop_depth() - 1).min(2)) } else { 1 }
     };
     // DEVIATE UP2-X87 (owner x87, exit 2026-11-20): an element past the stack
     // is stored and loaded again each run (nbody -O2 m32: the unroll priced
@@ -229,7 +407,7 @@ fn enclosing_runs(
         let trips = se.get_small_constant_trip_count(&cx, parent.get_header());
         if trips != 0 {
             runs = runs.saturating_mul(i64::from(trips)).min(1 << 24);
-        } else if assumed < 2 {
+        } else if run.tti.unroll_assumes_unknown_loops_run() && assumed < 2 {
             // As before: at most two unknown loops around count.
             assumed += 1;
             runs *= ASSUMED_TRIPS;
@@ -402,17 +580,16 @@ fn x87_spilled(
     trips: u32,
     room: i64,
 ) -> i64 {
-    use std::collections::HashSet;
     let function = &*run.function;
     let is_float = |value: ValueId| {
         llrm_mir::tti::Ty::of(&run.context.types, function.value(value).ty).is_some_and(|ty| ty.is_float())
     };
     let rolled = llrm_analysis::liveness::pressure_by_block(function, &|value| usize::from(is_float(value)));
     let peak_rolled = rolled.iter().map(|&(_, peak)| peak as i64).max().unwrap_or(0);
-    let inside: HashSet<BlockId> = lp.get_blocks().iter().copied().collect();
+    let inside: IdSet<BlockId> = lp.get_blocks().iter().copied().collect();
     // The blocks that run after the loop: from its exits, round any loop
     // around it.
-    let mut after: HashSet<BlockId> = HashSet::new();
+    let mut after: IdSet<BlockId> = IdSet::new();
     let mut work: Vec<BlockId> = lp.get_exit_blocks(function);
     while let Some(block) = work.pop() {
         if after.insert(block) {
@@ -435,17 +612,17 @@ fn x87_spilled(
             })
             .collect()
     };
-    let mut held: Vec<HashSet<BlockId>> = Vec::new();
+    let mut held: Vec<IdSet<BlockId>> = Vec::new();
     for root in forwarded.iter() {
-        let mut before: HashSet<BlockId> = HashSet::new();
+        let mut before: IdSet<BlockId> = IdSet::new();
         let mut work = reads_of(root);
         while let Some(block) = work.pop() {
             if before.insert(block) {
                 work.extend(function.predecessors(block));
             }
         }
-        let mut span: HashSet<BlockId> = after.intersection(&before).copied().collect();
-        span.extend(inside.iter().copied());
+        let mut span: IdSet<BlockId> = after.iter().filter(|block| before.contains(block)).collect();
+        span.extend(inside.iter());
         held.push(span);
     }
     let elements = i64::from(trips);
@@ -480,11 +657,16 @@ fn alloca_of(
 /// a full unroll each is at a constant offset and the array is promoted.
 fn promoted_accesses(
     run: &Run,
+    se: &mut ScalarEvolution,
     analyzed: &Analyzed,
     lp: Loop,
     known: &IdSet<ValueId>,
+    up: &UnrollingPreferences,
+    memory_aware: bool,
+    projection: Option<&Projection>,
 ) -> (i64, i64, usize, usize, IdSet<ValueId>) {
     let function = &*run.function;
+    let mut resident: std::collections::BTreeMap<u32, bool> = Default::default();
     let (mut found, mut runs) = (0, 0);
     let (mut ints, mut floats): (IdSet<ValueId>, IdSet<ValueId>) = (IdSet::new(), IdSet::new());
     // Float arrays the loop both reads and writes: after a full unroll their elements
@@ -520,9 +702,17 @@ fn promoted_accesses(
                 .captures_nothing(),
                 None => false,
             };
+            // A store the array survives is still run: the array is promoted only
+            // where every other access is a constant offset too.
+            let free = free
+                && !(memory_aware
+                    && matches!(one.opcode, Opcode::Store { .. })
+                    && matches!(local_array_at(run, pointer, known), Some(Base::Local(root))
+                        if *resident.entry(root.0).or_insert_with(|| stays_in_memory(run, se, analyzed, lp, root, up))));
             if free {
-                found += 1;
-                runs += ASSUMED_TRIPS.pow(nested.min(2));
+                let weight = projection.map_or(1, |projection| projection.of(block));
+                found += weight;
+                runs += projection.map_or(ASSUMED_TRIPS.pow(nested.min(2)), |_| weight);
                 if let Some(Base::Local(root)) = local_array_at(run, pointer, known) {
                     let stored = match one.opcode {
                         Opcode::Store { .. } => function.operand_type(run.context, one.operands[0]),
@@ -545,6 +735,111 @@ fn promoted_accesses(
         }
     }
     (found, runs, ints.len(), floats.len(), rmw)
+}
+
+/// Whether a local array keeps its memory after the full unroll of `lp`: some
+/// access outside `lp` is addressed by a value the unroll leaves a variable,
+/// one of a loop that stays rolled (it has no constant trip count, or its
+/// nest, priced as a whole, is not unrolled). The
+/// stores of `lp` into it are then still run (matmul -O2: the init nest fills
+/// `a` and `b`, read by the rolled `k` loop at run-time indices; the credit
+/// for 128 stores grew the function 660 B against gcc's 320).
+fn stays_in_memory(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    root: ValueId,
+    up: &UnrollingPreferences,
+) -> bool {
+    let function = &*run.function;
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let mut finishes: std::collections::BTreeMap<u32, bool> = Default::default();
+    // Only a read that can run after the loop keeps the stores (nbody -O2: the
+    // last update loop, after the step loop, is followed by reads of constants).
+    let mut after: IdSet<BlockId> = IdSet::new();
+    let mut work: Vec<BlockId> = lp.get_exit_blocks(function);
+    while let Some(block) = work.pop() {
+        if after.insert(block) {
+            work.extend(function.successors(block));
+        }
+    }
+    for &block in function.layout() {
+        if lp.get_blocks().contains(&block) || !after.contains(&block) {
+            continue;
+        }
+        for inst in function.iter_block(block) {
+            let one = function.instruction(inst);
+            let pointer = match one.opcode {
+                Opcode::Load { .. } => one.operands[0],
+                _ => continue,
+            };
+            if alloca_of(function, pointer) != Some(root) {
+                continue;
+            }
+            // The indices' sources: every loop whose counter feeds the address.
+            let mut work: Vec<Operand> = Vec::new();
+            let mut at = pointer;
+            while let Operand::Value(value) = at {
+                let ValueDef::Instruction(def) = function.value(value).def else { break };
+                let gep = function.instruction(def);
+                if !matches!(gep.opcode, Opcode::GetElementPtr { .. }) {
+                    break;
+                }
+                work.extend(gep.operands[1..].iter().copied());
+                at = gep.operands[0];
+            }
+            let mut seen: IdSet<ValueId> = IdSet::new();
+            while let Some(operand) = work.pop() {
+                let value = match operand {
+                    Operand::Constant(_) => continue,
+                    Operand::Block(_) => continue,
+                    Operand::Value(value) => value,
+                };
+                if !seen.insert(value) {
+                    continue;
+                }
+                let ValueDef::Instruction(def) = function.value(value).def else { return true };
+                let source = function.instruction(def);
+                match source.opcode {
+                    Opcode::Phi => {
+                        let header = function.parent(def);
+                        let counter = header.and_then(|header| {
+                            analyzed.loops.get_loop_for(header).filter(|one| one.get_header() == header)
+                        });
+                        if let Some(counter) = counter {
+                            let id = counter.get_header().0;
+                            // A loop an unroll of this run made is part of a nest decided
+                            // already; else the nest it belongs to is priced as a whole.
+                            let fits = *finishes.entry(id).or_insert_with(|| {
+                                !run.first.contains(&counter.get_header())
+                                    || run.decided.contains(&counter.get_header())
+                                    || root_pays(run, se, analyzed, counter, up, false).unwrap_or(false)
+                            });
+                            if !fits {
+                                return true;
+                            }
+                        }
+                        work.extend(source.operands.iter().copied());
+                    }
+                    Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::Select => {
+                        work.extend(source.operands.iter().copied());
+                    }
+                    _ => return true,
+                }
+            }
+        }
+    }
+    false
 }
 
 /// The float values a full unroll of `lp` by `trips` keeps live across its
@@ -789,10 +1084,11 @@ fn encloses_known_trips(
 /// is stored.
 fn reads_outer_counter(
     run: &Run,
+    se: &mut ScalarEvolution,
     analyzed: &Analyzed,
     lp: Loop,
+    up: &UnrollingPreferences,
 ) -> bool {
-    let _ = analyzed;
     let function = &*run.function;
     let Some(outermost) = std::iter::successors(lp.get_parent_loop(), |parent| parent.get_parent_loop()).last() else {
         return false;
@@ -821,7 +1117,7 @@ fn reads_outer_counter(
     let headers: Vec<InstId> = seeds.iter().map(|&(inst, ..)| inst).collect();
     let (known, real) = loop {
         let mut known: IdSet<ValueId> = IdSet::new();
-        let mut real = false;
+        let mut real: Vec<ValueId> = Vec::new();
         let mut grew = true;
         while grew {
             grew = false;
@@ -875,7 +1171,9 @@ fn reads_outer_counter(
                     let has_value = one.operands.iter().any(|&operand| matches!(operand, Operand::Value(_)));
                     if pure && has_value && all_known(&one.operands, &known) {
                         known.insert(result);
-                        real |= (element || divides) && inside.contains(&block);
+                        if (element || divides) && inside.contains(&block) {
+                            real.push(result);
+                        }
                         grew = true;
                     }
                 }
@@ -895,6 +1193,7 @@ fn reads_outer_counter(
     // Which of the constants are data: read by something that is not
     // addressing or counting, or by a computation of such a value.
     let mut data: IdSet<ValueId> = IdSet::new();
+    let mut resident: std::collections::BTreeMap<u32, bool> = Default::default();
     let mut grew = true;
     while grew {
         grew = false;
@@ -909,7 +1208,17 @@ fn reads_outer_counter(
                 // its address, which is addressing, not data (tile -O2: `tile[(y + dy) & 63]
                 // [(x + dx) & 63]` bypassed the pricing for 364 B and 2,155 instructions
                 // where the rolled loop is 68 B and 4,181).
-                let sink = !passes && !matches!(one.opcode, Opcode::Br | Opcode::Load { .. });
+                let mut sink = !passes && !matches!(one.opcode, Opcode::Br | Opcode::Load { .. });
+                // DEVIATE ARM64-UNROLL-PRICE: nor a store into a local array that
+                // stays in memory, which the copies still run (matmul -O2: `a` and
+                // `b` filled by `(i + j) % 3`, read by the rolled `k` loop).
+                if sink
+                    && matches!(one.opcode, Opcode::Store { .. })
+                    && let Some(Base::Local(root)) = local_array_at(run, one.operands[1], &known)
+                    && *resident.entry(root.0).or_insert_with(|| stays_in_memory(run, se, analyzed, outermost, root, up))
+                {
+                    sink = false;
+                }
                 let reads_data = if passes { one.result.is_some_and(|result| data.contains(&result)) } else { sink };
                 if !reads_data {
                     continue;
@@ -926,7 +1235,7 @@ fn reads_outer_counter(
         }
     }
     // Data the copies of `lp` itself make constant.
-    real || inside.iter().any(|&block| {
+    real.iter().any(|value| data.contains(value)) || inside.iter().any(|&block| {
         function.iter_block(block).any(|inst| {
             let one = function.instruction(inst);
             one.opcode != Opcode::Phi && one.result.is_some_and(|result| data.contains(&result))

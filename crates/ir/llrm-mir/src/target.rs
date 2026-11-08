@@ -79,9 +79,56 @@ pub struct Tuning {
     /// -O1 inline, in thousandths of a clock, against the call's latency at
     /// the site's frequency. m32: half the -O2 rate (-O1 weighs code size).
     pub inline_o1_milliclocks_per_byte: i64,
+    /// Thousandths of a byte one unit of the inliner's code size is: the
+    /// units count instructions (one each, a call 3 to 5), the bytes a callee
+    /// takes are 3.5 to 5 times that on x86 (22 callees of the m32 O1 corpus:
+    /// median 3.99 bytes per unit). Scales the growth the -O1 bytes-vs-clocks
+    /// check compares with its per-byte rate; 1000: one byte a unit.
+    /// DEVIATE INL-O1 unit scale (owner x86-m32, exit 2026-12-05). Stated cost,
+    /// exit 2026-11-15 (strict -O1 clocks, not waived): x_sf_cmp64 81196 ->
+    /// 93965 clk (best gcc/clang 90307), x_sf_div 146540 -> 152986 (149453),
+    /// x_sf_mul 82587 -> 88263 (88107). Recovery: weigh callee size against
+    /// the site's frequency and loop depth.
+    pub inline_o1_unit_bytes_milli: i64,
+    /// DEVIATE INL-O2 RATE (owner x86-m32, exit 2026-11-22): what a byte of
+    /// growth is worth, in thousandths of a clock, to a speed caller's inline
+    /// (`Tti::speed_inline_milliclocks_per_byte`; the pin has no such rule).
+    /// 0: the pin's threshold alone.
+    pub speed_inline_milliclocks_per_byte: i64,
+    /// `Tti::speed_inline_rate_at_o1`: whether that rate binds at -O1 too
+    /// (false by default; m32's -O1 has its own rule, INL-O1).
+    pub speed_inline_rate_at_o1: bool,
+    /// DEVIATE SD-DIVMAG (owner x86-m32, exit 2026-11-22): a signed divide by a
+    /// negative constant is the negation of the divide by its magnitude, so it
+    /// shares the multiply-high of the remainder (`x % -c` is `x % c`); the
+    /// pin multiplies twice (div_constants_long -O2 +4.1% clk over gcc).
+    /// false: the pin's `BuildSDIV`.
+    pub sdiv_by_magnitude: bool,
+    /// What one call costs in clocks when the inliner prices its latency
+    /// (`Tti::call_sequence_cost`): the call and return, each argument word
+    /// pushed, and the caller's pop of them. The pin prices the call as one
+    /// instruction (4 on x86), which at 486 prices (call 3, ret 5, a push and
+    /// a pop each) is a third of the sequence. 0 fixed: the pin's flat price.
+    pub call_sequence_fixed_clocks: i64,
+    pub call_sequence_argument_clocks: i64,
+    pub call_sequence_pop_clocks: i64,
+    /// DEVIATE INL-O1 ENTRY (owner x86-m32, exit 2026-11-15): the -O1
+    /// bytes-vs-clocks check weighs a site's frequency by how often its
+    /// function runs (the calls to it up the call graph), not by the
+    /// function's entry alone: the bottom-up walk prices a helper in the
+    /// function that calls it, which a hot loop up the graph runs 30 times
+    /// more. false: the site's own frequency. Costs at m32 -O1 (A/B
+    /// e09ff5f2a4^..e09ff5f2a4): x_jpeg_fixed +2.2% clk for -33% B (8415 ->
+    /// 5647), x_sf_mul +22 clk (0.03%) over the best external. Closes: jpeg
+    /// re-run against the best external (not yet measured); mul by the
+    /// frequency of the call's own loop depth, or the row stays to the exit.
+    pub inline_o1_weighs_entry: bool,
     /// Trips the -O1 no-growth rule above analyses for folds: the pin's
     /// `-unroll-max-iteration-count-to-analyze` (10) when `None`.
     pub unroll_o1_analyzed_trips: Option<u32>,
+    /// IPSCCP runs a second time after ArgumentPromotion changed a body (the
+    /// pin runs it once; DEVIATE SD443, interprocedural.rs).
+    pub second_ipsccp: bool,
     /// A multiply by a constant is decomposed only where the chain's saved
     /// clocks pay for its extra bytes at `speed_milliclocks_per_byte`, the
     /// pin's own decompositions included (a tie keeps the `imul`); false:
@@ -133,6 +180,14 @@ pub struct Tuning {
     /// wide (`slots::width_rule_allows`); false: the pin's `ColorSlot`,
     /// which shares any two slots whose ranges do not overlap.
     pub slots_loop_width_rule: bool,
+    /// DEVIATE CARRY-SI (x86 m16, m32, m64: owners the three x86 sessions, exit
+    /// 2026-11-21): the coalescer's slot indexes reach the allocator through the
+    /// pre-RA scheduler with the entries its erased and moved instructions left
+    /// empty (the pin's one `SlotIndexes`), so range sizes, and the dequeue and
+    /// spill weights that divide by them, are the pin's. false: the function
+    /// is numbered afresh after the scheduler, as the x86 numbers were tuned
+    /// (A/B 2026-11-07: x86_32 O1 14 cells +704 B worse).
+    pub carry_slot_indexes: bool,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
@@ -291,7 +346,16 @@ impl Tuning {
         unroll_never_grows_at_o1: false,
         inline_never_grows_without_rate: false,
         inline_o1_milliclocks_per_byte: 0,
+        inline_o1_unit_bytes_milli: 1000,
+        speed_inline_milliclocks_per_byte: 0,
+        sdiv_by_magnitude: false,
+        speed_inline_rate_at_o1: false,
+        call_sequence_fixed_clocks: 0,
+        call_sequence_argument_clocks: 0,
+        call_sequence_pop_clocks: 0,
+        inline_o1_weighs_entry: false,
         unroll_o1_analyzed_trips: None,
+        second_ipsccp: false,
         price_pin_multiplies: false,
         imul_at_size: false,
         unroll_threshold: None,
@@ -305,6 +369,7 @@ impl Tuning {
         x87_share_negated_products: false,
         x87_zero_fill_at_size: false,
         slots_loop_width_rule: false,
+        carry_slot_indexes: true,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
@@ -406,17 +471,17 @@ pub trait Machine {
         false
     }
 
+    /// `isOperationLegal(ISD::SHL, pointer)`: whether a shift of a pointer-wide value by a variable
+    /// count is an instruction, not a call or a loop. False: a switch builds no bit tests
+    /// (`1 << x` and a mask).
+    fn variable_shift_legal(&self) -> bool {
+        true
+    }
+
     /// The target's tuning limits: the pin's values, with this target's
     /// overrides. A target with no entry here takes `Tuning::PIN`.
     fn tuning(&self) -> Tuning {
         Tuning::PIN
-    }
-
-    /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
-    /// (DEVIATE SD443, owner w2, exit 2026-11-15: interprocedural.rs). The pin
-    /// runs it once; a target that matches the pin's output turns it off.
-    fn second_ipsccp(&self) -> bool {
-        true
     }
 
     /// Clocks a byte of code is worth, in thousandths, where a decision is
@@ -1140,6 +1205,7 @@ mod tests {
         assert!(!pin.unroll_promotion_fits_x87_stack);
         assert!(!pin.x87_zero_fill_at_size);
         assert!(!pin.slots_loop_width_rule);
+        assert!(pin.carry_slot_indexes);
         assert_eq!(pin.inline_threshold, None);
     }
 }

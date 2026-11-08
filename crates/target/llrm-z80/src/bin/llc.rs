@@ -1,4 +1,4 @@
-//! `llrm-z80-llc [-S] [-g] [-O<n>] [-o OUT] FILE.ll`: LLVM IR from clang's
+//! `llrm-z80-llc [-S] [-g] [-O<n>] [-f[no-]PASS...] [-o OUT] FILE.ll`: LLVM IR from clang's
 //! front end alone through the mid-end and the Z80 backend to sdasz80 text.
 //! `-S` is the only output; `-g` adds SDCC's `C$` line symbols (no `.adb`). A
 //! function the backend refuses is named on stderr and the exit status is 1;
@@ -17,6 +17,7 @@ fn main() {
 fn run() -> i32 {
     let mut level = Level::O2;
     let mut debug = false;
+    let mut passes = Vec::new();
     let mut output = None;
     let mut input = None;
     let mut arguments = std::env::args().skip(1);
@@ -24,6 +25,8 @@ fn run() -> i32 {
         match argument.as_str() {
             "-S" => {}
             "-g" => debug = true,
+            // `-f[no-]PASS`, as the program's own `// flags:` line gives it
+            other if other.starts_with("-f") => passes.push(other.to_owned()),
             "-o" => output = arguments.next(),
             other if other.starts_with("-O") => match Level::parse(&other[2..]) {
                 Ok(parsed) => level = parsed,
@@ -50,7 +53,7 @@ fn run() -> i32 {
             return 1;
         }
     };
-    let request = Request { debug, ..Request::new(level) };
+    let request = Request { debug, passes, ..Request::new(level) };
     let prepared = match prepare(&ir, &request) {
         Ok(prepared) => prepared,
         Err(why) => {

@@ -117,6 +117,7 @@ impl<T: Target> Converted<T> {
             joins_pinned,
             T::joins_sub_registers(),
             T::joins_lanes(),
+            T::joins_loop_carried_first(),
             registers,
             Some(Box::new(move |join| {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
@@ -388,6 +389,7 @@ impl<T: Target> Converted<T> {
             tri: &self.tri,
             lane_pins: true,
             size: false,
+            carry_slot_indexes: true,
         }
     }
 }
@@ -560,6 +562,7 @@ pub fn to_lir<T: Target>(
         tri: SpikeRegisterInfo {
             copy_cost: 1,
             csr_first_use_cost: T::csr_first_use_cost(),
+            size_bytes: T::size_bytes(),
             csr_cost_scale: T::csr_cost_scale(),
             csr_spill_first: T::csr_spill_first(),
             register_cost: T::register_cost,
@@ -885,7 +888,10 @@ impl<T: Target> Made<'_, T> {
             insn.early_clobbers = insn.defines.clone();
         }
         if inst.call {
-            insn.clobbers = T::caller_saved().into_iter().collect();
+            insn.clobbers = match &inst.call_clobbers {
+                Some(known) => known.as_ref().clone(),
+                None => T::caller_saved().into_iter().collect(),
+            };
             // The call writes each clobbered register it names: a value that
             // lives across it cannot be the register, and a read after it
             // sees what the call left.
@@ -1840,6 +1846,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
 pub struct SpikeRegisterInfo {
     pub copy_cost: u32,
     pub csr_first_use_cost: u32,
+    pub size_bytes: Option<llrm_codegen::greedy::targetinfo::SizeBytes>,
     pub csr_cost_scale: u32,
     pub csr_spill_first: bool,
     pub register_cost: fn(RegId) -> u8,
@@ -1859,6 +1866,10 @@ impl TargetRegisterInfo for SpikeRegisterInfo {
 
     fn csr_cost_scale(&self) -> u32 {
         self.csr_cost_scale
+    }
+
+    fn size_bytes(&self) -> Option<&llrm_codegen::greedy::targetinfo::SizeBytes> {
+        self.size_bytes.as_ref()
     }
 
     fn csr_spill_first(&self) -> bool {
@@ -2164,7 +2175,11 @@ pub fn from_lir<T: Target>(
             let (Some(what), Some(origin)) = (&insn.what, converted.origin.get((insn.at / 2) as usize)) else {
                 continue;
             };
-            if insn.defines.len() == 1 && insn.uses.is_empty() {
+            // A definition the target marks rematerializable may read a value
+            // (arm64's `add x, y, #n`): the spiller makes it again where it is
+            // read, and it is no less a definition for the register it uses.
+            let remakable = original.blocks[origin.0].insts[origin.1].rematerializable;
+            if insn.defines.len() == 1 && (insn.uses.is_empty() || remakable) {
                 definitions.entry(format!("{:?}{:?}", what.name, what.sources)).or_insert(*origin);
             }
         }
@@ -2210,8 +2225,9 @@ pub fn from_lir<T: Target>(
                     .find_map(|loc| if let Loc::Held(held) = loc { Some(*held) } else { None })
                     .ok_or("a spill of no value")?;
                 let numbered = number(value, &mut classes);
-                // A pinned value is no virtual register: its class is one that holds its register
-                // (vreg 0's class made a spill of `hl` a byte store, `ld -4(ix), hl`).
+                // A pinned value is no virtual register: its class is one that
+                // holds its register (vreg 0's class made a
+                // spill of `hl` a byte store, `ld -4(ix), hl`).
                 let class = match numbered {
                     Reg::Virt(v) => classes[v as usize],
                     Reg::Phys(register) => classes

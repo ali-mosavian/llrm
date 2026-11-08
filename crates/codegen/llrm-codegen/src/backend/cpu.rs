@@ -161,6 +161,8 @@ pub struct Profile {
     /// target states a smaller bound than the pin's (`timings.times`);
     /// none: the pin's.
     pub tail_dup_threshold: Option<usize>,
+    /// `tail_dup_hot_threshold` of the target's table (DEVIATE TAILDUP-HOT).
+    pub tail_dup_hot_size: Option<usize>,
     /// Commuting prefers the operand the result is copied back into
     /// (DEVIATE TA-LC, from the target's table; off: the pin's order).
     pub commute_loop_carried: bool,
@@ -390,6 +392,7 @@ impl Profile {
             optimized: true,
             aggressive: false,
             tail_dup_threshold: None,
+            tail_dup_hot_size: None,
             commute_loop_carried: false,
             mispredict_penalty: None,
             mispredict_penalty_size: None,
@@ -451,6 +454,20 @@ impl Profile {
             return 0;
         }
         machine.tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+    }
+
+    /// What placement's tail duplication may copy above the pin's bound
+    /// (DEVIATE TAILDUP-HOT): only where bytes are priced at speed (-O2, -O3),
+    /// by the jump a copy saves (`jmp_short`) against the rate.
+    pub fn tail_dup_hot(&self) -> Option<crate::backend::jumps::placement::HotTailDup> {
+        let size = self.tail_dup_hot_size?;
+        let per_byte = self.speed_milliclocks_per_byte();
+        let jump = self.cost("jmp_short").ok()?;
+        (per_byte > 0 && jump > 0).then_some(crate::backend::jumps::placement::HotTailDup {
+            size,
+            jump_clocks: jump as f64,
+            clocks_per_byte: per_byte as f64 / 1000.0,
+        })
     }
 
     /// Clocks a mispredicted branch costs in this function: the size row at
@@ -621,6 +638,7 @@ fn _profile(
         _latencies: std::sync::Arc::new(table.latency.clone()),
         address_prefix_stall: table.lcp_stall,
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
+        tail_dup_hot_size: table.tail_dup_hot_threshold.map(|n| n.max(0) as usize),
         commute_loop_carried: table.commute_loop_carried,
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
         mispredict_penalty: table.mispredict_penalty,
@@ -737,13 +755,11 @@ pub fn tuned_optimizing(
 
 /// The registers a value may be placed in: the description's `gpr` class.
 fn general_registers(arch: &dyn Target) -> Vec<RegId> {
-    let file = llrm_target::registers::parse(&arch.registers_text()).expect("the target's registers parse");
+    let file = llrm_target::registers::file(&arch.registers_text()).expect("the target's registers parse");
     llrm_target::registers::of_class(&file, "gpr")
         .into_iter()
         .map(|name| {
-            RegId::values()
-                .find(|one| format!("{one:?}").eq_ignore_ascii_case(name))
-                .unwrap_or_else(|| panic!("no register {name}"))
+            RegId::named(name).unwrap_or_else(|| panic!("no register {name}"))
         })
         .collect()
 }

@@ -498,6 +498,15 @@ pub fn select_arii<D: AddrDag>(
     if am.has_symbolic_displacement() {
         return None;
     }
+    // DEVIATE: the pin tries `ARII` before `ARID` for a store, and a constant that
+    // does not fit the 8-bit displacement becomes the index register
+    // (`move.w #650, %a1; move.l #x, (0,%a0,%a1)`: 12 B where `(650,%a0)` is 8,
+    // and a register). Reason: best of gcc and clang is the goal. The pin's
+    // `llc` makes the same pair. Owner m68k. Exit 2026-12-12: upstream the order
+    // (`ARID` first) or keep.
+    if dag.opcode(index.node) == isd::Constant && dag.constant(index).is_some_and(|value| i16::try_from(value).is_ok()) {
+        return None;
+    }
     if am.disp == 0 && !allow_arii_with_zero_disp(dag, parent) {
         return None;
     }

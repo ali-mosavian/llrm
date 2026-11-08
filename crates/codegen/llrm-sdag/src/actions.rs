@@ -135,6 +135,9 @@ pub struct TargetLowering {
     /// times the bits beyond them reach `least` (each is a shift instruction
     /// per granule).
     size_shift_call: Option<(u128, u128)>,
+    /// A constant factor the combiner turns into shifts and adds, so the
+    /// multiply is not the library call outside functions tuned for size.
+    inline_constant_mul: Option<fn(u128) -> bool>,
     /// The function is built for size: an `i64` divide calls the target's size routine.
     small_divide: bool,
     /// The object spelling of a routine's name where the convention decorates
@@ -146,6 +149,22 @@ pub struct TargetLowering {
     /// `X86TargetLowering::BuildSDIVPow2` builds the `cmov` form of a signed
     /// divide by a power of two: `Some(is64)`, `i64` too where `is64`.
     sdiv_pow2_cmov: Option<bool>,
+    /// DEVIATE WIDE-EQ-BYTES (owner z80, exit 2026-11-30): equality of a wide
+    /// integer with a constant is the or of its bytes' xors, not of its
+    /// halves' xors. The pin (`IntegerExpandSetCCOperands`) xors the halves;
+    /// on an 8-bit machine that is a byte write-back per xor, and the bytes
+    /// accumulate in the accumulator without them. Two registers keep both
+    /// operands' bytes live beside the accumulator and spilled (div_constants
+    /// +155 B), so they keep the pin's form. Exit: when the allocator holds
+    /// that pressure.
+    byte_equality: bool,
+    /// DEVIATE ASSERT-SEXT-HI (owner z80, exit 2026-11-30): an `AssertSext`
+    /// inside the low half keeps the operand's high half when it is a copy
+    /// from a register, where the pin (`ExpandIntRes_AssertSext`) makes it
+    /// `sra(lo, bits-1)`. The value is the same; the register already holds it
+    /// (a call's result, an argument), and the shift is seven instructions on
+    /// an 8-bit machine.
+    assert_sext_keeps_high: bool,
 }
 
 impl TargetLowering {
@@ -160,10 +179,13 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             size_shift_call: None,
+            inline_constant_mul: None,
             small_divide: false,
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
             sdiv_pow2_cmov: None,
+            byte_equality: false,
+            assert_sext_keeps_high: false,
         };
         table.set_default_integer_libcalls();
         // `TargetLoweringBase`: `VAARG` is expanded unless the target says
@@ -429,6 +451,48 @@ impl TargetLowering {
 
     pub fn small_divide(&self) -> bool {
         self.small_divide
+    }
+
+    pub fn set_byte_equality(
+        &mut self,
+        on: bool,
+    ) {
+        self.byte_equality = on;
+    }
+
+    pub fn byte_equality(&self) -> bool {
+        self.byte_equality
+    }
+
+    pub fn set_assert_sext_keeps_high(
+        &mut self,
+        on: bool,
+    ) {
+        self.assert_sext_keeps_high = on;
+    }
+
+    pub fn assert_sext_keeps_high(&self) -> bool {
+        self.assert_sext_keeps_high
+    }
+
+    /// `shouldOptimizeForSize` of the function being selected.
+    pub fn is_opt_for_size(&self) -> bool {
+        self.opt_for_size
+    }
+
+    pub fn set_inline_constant_mul(
+        &mut self,
+        decomposes: fn(u128) -> bool,
+    ) {
+        self.inline_constant_mul = Some(decomposes);
+    }
+
+    /// Whether a multiply by `c` stays inline here (see `inline_constant_mul`).
+    pub fn multiply_by_constant_stays_inline(
+        &self,
+        c: u128,
+    ) -> bool {
+        !self.opt_for_size && self.inline_constant_mul.is_some_and(|decomposes| decomposes(c))
     }
 
     /// `DAG.shouldOptForSize()` for the function selected next.

@@ -265,6 +265,7 @@ impl Peephole {
             return body;
         };
         let frame = frame.borrow();
+        let regs = body.regs();
         // The reserved call area is stack storage no cell names a spill of.
         if frame.size() == 0 || frame.call_area != 0 {
             return body;
@@ -285,7 +286,10 @@ impl Peephole {
                 if address.is_none() && through.is_some() {
                     return body;
                 }
-                if through.is_some_and(|through| [RegId::BP, RegId::EBP, RegId::SP, RegId::ESP].contains(&through))
+                if through.is_some_and(|through| {
+                    let root = regs.root(through);
+                    root == regs.root(regs.frame) || root == regs.root(regs.stack)
+                })
                     && address.is_none_or(|address| address.space != Space::Frame)
                 {
                     return body;
@@ -323,6 +327,20 @@ impl LIRTransform for Peephole {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
+        // The pin's -O0 has no peephole, but `ExpandPostRAPseudos` still turns a zero (`MOV32r0`) into `xor`
+        // where the flags are dead ([X86InstrInfo.cpp:6236]).
+        if !self.cpu.optimized {
+            // the flag liveness costs a dataflow: only a body with a zero to make pays it
+            let has_zero = body.blocks.iter().flat_map(|block| &block.insns).any(|one| {
+                one.what.as_ref().is_some_and(|what| {
+                    matches!(
+                        (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()),
+                        (Operation::Move, Some("mov"), [Loc::Reg(_)], [Loc::Imm(Imm { value: 0, address: None, .. })])
+                    )
+                })
+            });
+            return Ok(if has_zero { zeroes(&body) } else { body });
+        }
         self.once(body)
     }
 }
@@ -1903,7 +1921,7 @@ fn _loaded_scaled_add<'a>(
         || !regs.integer(temporary.register)
         || !regs.integer(total.register)
         || ir::root(temporary.register) == ir::root(total.register)
-        || ir::root(temporary.register) == RegId::ESP
+        || ir::root(temporary.register) == ir::root(regs.stack)
         || load.defines.len() != 1
         || shift.defines != load.defines
         || shift.uses != load.defines

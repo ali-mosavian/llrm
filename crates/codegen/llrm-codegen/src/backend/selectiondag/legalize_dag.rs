@@ -377,6 +377,55 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some((value, SDValue { node: any.node, res: 1 }))
     }
 
+    /// `LegalizeStoreOps`, a truncating store of memory that is not a whole
+    /// number of bytes ("TRUNCSTORE:i1 X -> TRUNCSTORE:i8 (and X, 1)"): a
+    /// byte-sized truncating store of the value with its upper bits zero.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L1260>
+    fn promote_sub_byte_trunc_store(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(node) != ISD::Store {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let vt = self.dag.value_type(value);
+        let bits = info.mem_vt.size_in_bits();
+        if !info.mem_vt.is_integer() || bits % 8 == 0 || bits >= vt.size_in_bits() {
+            return None;
+        }
+        let mask = self.dag.get_constant(super::fold::mask(bits), vt);
+        let value = self.dag.get_node(ISD::And, vt, &[value, mask]);
+        let byte = MemInfo { mem_vt: EVT::integer(bits.div_ceil(8) * 8), ..info };
+        Some(self.dag.get_store(chain, value, ptr, byte))
+    }
+
+    /// `LegalizeStoreOps`, a truncating store the target does not have
+    /// (`getTruncStoreAction` is `Expand`): the value truncated to the memory
+    /// type, then a plain store of it.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L1346>
+    fn expand_trunc_store(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(node) != ISD::Store {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let (EVT::Simple(wide), EVT::Simple(mem)) = (self.dag.value_type(value), info.mem_vt) else { return None };
+        if info.mem_vt.size_in_bits() >= self.dag.value_type(value).size_in_bits()
+            || self.tli.trunc_store_action(wide, mem) != Action::Expand
+        {
+            return None;
+        }
+        let truncated = self.dag.get_node(ISD::Truncate, info.mem_vt, &[value]);
+        Some(self.dag.get_store(chain, truncated, ptr, info))
+    }
+
     /// `LegalizeOp`.
     fn legalize_op(
         &mut self,
@@ -389,6 +438,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
         if self.dag.opcode(node) == ISD::ConstantFP {
             return self.legalize_constant_fp(node);
+        }
+        if let Some(store) = self.promote_sub_byte_trunc_store(node).or_else(|| self.expand_trunc_store(node)) {
+            self.replace_node(node, store);
+            return Ok(());
         }
         if let Some(result) = self
             .expand_odd_ext_load(node)
@@ -776,7 +829,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Some(vec![super::expand_sat::expand_add_sub_sat(self.dag, self.tli, node)])
             }
             ISD::UAddO | ISD::USubO => Some(super::expand_overflow::expand_uaddsubo(self.dag, self.tli, node)),
-            ISD::UMulO | ISD::SMulO => Some(super::expand_overflow::expand_mulo(self.dag, self.tli, node)),
+            ISD::UMulO | ISD::SMulO => {
+                Some(super::expand_overflow::expand_mulo(self.dag, self.tli, &mut *self.hooks, node))
+            }
             ISD::SAddO | ISD::SSubO => Some(super::expand_overflow::expand_saddsubo(self.dag, self.tli, node)),
             ISD::BuildPair => {
                 // `ExpandNode`: `zext lo | (anyext hi << half)` ([L4318][pin]).
@@ -815,6 +870,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     .map(|result| vec![result])
             }
             ISD::FShl | ISD::FShr => Some(vec![super::expand_funnel::expand_funnel_shift(self.dag, self.tli, node)]),
+            ISD::Rotl | ISD::Rotr => Some(vec![super::expand_funnel::expand_rotate(self.dag, self.tli, node)]),
             ISD::SShlSat | ISD::UShlSat => Some(vec![super::expand_fixed::expand_shl_sat(self.dag, self.tli, node)]),
             ISD::SCmp | ISD::UCmp => Some(vec![super::expand_fixed::expand_cmp(self.dag, self.tli, node)]),
             ISD::Abs | ISD::AbsMinPoison => Some(vec![self.expand_abs(node)]),

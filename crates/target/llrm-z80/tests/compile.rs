@@ -1152,6 +1152,96 @@ fn a_spilled_word_shifted_right_by_a_byte_reloads_one_byte() {
     assert!(byte, "{out}");
 }
 
+/// `w >> 29` of a spilled long reloaded the whole high word (`ld e, -8(ix)` / `ld d, -7(ix)`), then `ld e, d` threw the
+/// low byte away: 3 B and 19 T a site, in every `shape == k ? w >> n` of div_constants. A shift of 8 or more reads one byte.
+#[test]
+fn a_spilled_word_shifted_right_by_more_than_a_byte_reloads_one_byte() {
+    let ir = include_str!("kernels/ir/reload_high_lane_far.ll");
+    let out = text(ir, "g", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    let dead = lines
+        .windows(4)
+        .any(|w| w[0].starts_with("ld e, -") && w[1].starts_with("ld d, -") && w[2] == "ld e, d" && w[3] == "ld d, #0");
+    assert!(!dead, "{out}");
+    // The byte is reloaded alone, or copied where the word's high half is still in `d`.
+    assert!(
+        lines.windows(3).any(|w| (w[0].starts_with("ld e, -") || w[0] == "ld e, d") && w[1] == "ld d, #0" && w[2] == "srl e"),
+        "{out}"
+    );
+}
+
+/// A byte or word rotated (`llvm.fshl` of one value twice) was refused at -O2, `CannotSelect(Rotl)`: neither type had an
+/// action for the rotates, and the legalizer did not expand them. Both widths and both directions compile, to shifts and an `or`.
+#[test]
+fn a_byte_or_word_rotate_compiles_to_shifts() {
+    let ir = include_str!("kernels/ir/rotate_small.ll");
+    for name in ["rotl8", "rotr16", "rotr16_by_nine"] {
+        let out = text(ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{name}: {why}"));
+        assert!(out.contains("or a, "), "{name}: {out}");
+    }
+}
+
+/// A bit loaded and branched on at once (`while (!bad)`, `bad` a flag the program only sets to 1) was a byte made into a
+/// 0 or 1 by a diamond of jumps, then tested again: 14 instructions where `and a, (hl)` already sets the flag.
+#[test]
+fn a_loaded_bit_is_branched_on_without_a_diamond() {
+    let ir = include_str!("kernels/ir/bit_load_branch.ll");
+    let out = text(ir, "g", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("xor a, a"), "{out}");
+    assert!(out.contains("and a, (hl)"), "{out}");
+}
+
+/// A long compared with a constant was the xor of each half with it, the halves or-ed, each step written back to a
+/// pair: 8 instructions for `a == 0`, 17 for `a == K`. The bytes' differences accumulate in the accumulator.
+#[test]
+fn a_long_equality_with_a_constant_accumulates_its_bytes_in_a() {
+    let ir = include_str!("kernels/ir/wide_equality.ll");
+    let function = |name: &str| {
+        let out = text(ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{name}: {why}"));
+        out.lines().map(|line| line.trim().to_owned()).collect::<Vec<_>>()
+    };
+    let writes_back = |lines: &[String]| {
+        lines.iter().filter(|line| line.len() == 7 && line.starts_with("ld ") && line.ends_with(", a")).count()
+    };
+    let zero = function("zero");
+    assert!(zero.windows(4).any(|w| w[0].starts_with("ld a, ") && w[1..].iter().all(|l| l.starts_with("or a, "))), "{zero:#?}");
+    let constant = function("eqk");
+    assert!(writes_back(&constant) <= 3, "{constant:#?}");
+}
+
+/// A volatile long's low bits replaced (`and` then `or` of the low byte) wrote the byte back twice: `and a, #248; ld e, a;
+/// or a, #5; ld e, a`. The first write is never read.
+#[test]
+fn a_masked_then_set_byte_is_written_back_once() {
+    let ir = include_str!("kernels/ir/volatile_field_store.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "store_low_bits", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        let lines: Vec<&str> = out.lines().map(str::trim).collect();
+        let written_back = lines.iter().filter(|line| line.len() == 7 && line.starts_with("ld ") && line.ends_with(", a")).count();
+        assert_eq!(written_back, 1, "{level:?}: {lines:#?}");
+    }
+}
+
+/// A loop that fills an array is a `memset.pattern` the pin prices at 4 and this target expands into a loop of 30 to 60
+/// bytes: an external `fill` was inlined into its caller at -Os (pattern_fill, +82 B) while its own copy stayed.
+#[test]
+fn a_fill_loop_stays_a_call_at_size() {
+    let ir = include_str!("kernels/ir/fill_loop_callee.ll");
+    let out = text(ir, "caller", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("_fill") && !out.contains("ld (hl)"), "{out}");
+}
+
+/// A long returned with a signed range (`range(i32 -128, 128)`) had its high word made again from the low word's sign
+/// (`add a, a; sbc a, a; ...`, seven instructions a caller) though the call had returned it.
+#[test]
+fn a_call_result_with_a_signed_range_keeps_the_returned_high_word() {
+    let ir = include_str!("kernels/ir/call_result_in_range.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "caller", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("sbc a, a"), "{level:?}: {out}");
+    }
+}
+
 /// `memory_expansion` at -Os was refused ("a conditional return in a function
 /// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
 /// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The
@@ -1446,7 +1536,8 @@ fn a_jump_outside_every_loop_is_jr_even_when_speed_comes_first() {
 
 /// The driver turned the unroller off: sum4's four-trip loop ran 160 clocks at
 /// -O2, 104 unrolled. A loop of four trips is copied out where speed comes
-/// first, and stays a loop at -Oz.
+/// first, and stays a loop at -Oz. At -Oz the late LoopRotate (#8138, Z80-ROT)
+/// rotates it where the guard folds away: a `djnz` loop.
 #[test]
 fn a_four_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
     let ir = include_str!("kernels/ir/sum4.ll");
@@ -1737,8 +1828,8 @@ fn a_word_divide_and_remainder_of_the_same_operands_are_one_call() {
 /// A long multiplied by a constant was split into its halves, each half
 /// shifted and subtracted, in a function tuned for size: `x * 31` was 99 B and
 /// `x * 1000` 185 B, where a call is 14 (div_constants_short, mul_constants,
-/// -Os). A function tuned for size calls `__mulsi3`; the others keep the
-/// halves.
+/// -Os). A function calls `__mulsi3`, tuned for size or not (the halves
+/// cost more bytes and more T-states: phi_slot_unknown_arm -O1).
 #[test]
 fn a_function_tuned_for_size_calls_the_long_multiply() {
     let body = |attr: &str| {
@@ -1749,7 +1840,7 @@ fn a_function_tuned_for_size_calls_the_long_multiply() {
     let out = compiled(&body("optsize"), "f");
     assert!(out.contains("call __mulsi3"), "{out}");
     let out = compiled(&body(""), "f");
-    assert!(!out.contains("__mulsi3"), "{out}");
+    assert!(out.contains("call __mulsi3"), "{out}");
 }
 
 /// The routine is 57 B: one small multiply in a module called it at -Os and
@@ -1978,4 +2069,143 @@ fn an_internal_function_is_a_local_label_and_an_external_one_is_global() {
     assert!(internal.starts_with("_sum:\n"), "{internal}");
     let external = text(include_str!("kernels/ir/digits.ll"), "digits", 0, &Request::new(Level::Os)).expect("compiles");
     assert!(external.starts_with("_digits::\n"), "{external}");
+}
+
+/// A byte of growth is worth 3 T from -O2 (z80 `speed_inline_milliclocks_per_byte`): `scale`, a 100-trip loop that
+/// stays for other callers, is not copied into `caller` for the one jump the copy saves. (-O1 prices no byte in
+/// clocks: `a_rate_that_binds_from_o2_leaves_o1_to_the_pin`; since the O1 trials, `from` is copied at -O1 because
+/// the caller shrinks, `a_refused_inline_that_shrinks_the_caller_is_tried_at_o1`.)
+#[test]
+fn the_speed_rate_refuses_a_big_copy_at_o2() {
+    let text = text(include_str!("kernels/ir/scale_call.ll"), "caller", 0, &Request::new(Level::O2))
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(text.contains("jp _scale"), "{text}");
+}
+
+/// -O1 kept the size bound's refusals: `fives` (cost -40, folds into `main`) stayed a call, 498 B and 3,534 T against
+/// SDCC's 367 B and 2,548 T. Refused sites are tried inline as at -Os: the copy folds, 259 B and 355 T.
+#[test]
+fn a_refused_inline_that_shrinks_the_caller_is_tried_at_o1() {
+    let ir = include_str!("kernels/ir/struct_odd_sizes.ll");
+    let out = text(ir, "main", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("call _fives") && !out.contains("call _three"), "{out}");
+}
+
+/// A byte shifted by five or more took `sla`/`srl` a step each (`word << 13` of a volatile bit field: `ld b, c;
+/// ld c, #0; sla b` x5, 12 B and 48 T); `a` rotated round the shorter way and masked is 8 B and 27 T
+/// (volatile_bitfield, 6 sites).
+#[test]
+fn a_byte_shifted_far_rotates_through_a_and_masks() {
+    let ir = |op: &str, ty: &str, n: u32| {
+        format!(
+            "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+             define {ty} @f({ty} %x) {{\n  %y = {op} {ty} %x, {n}\n  ret {ty} %y\n}}\n"
+        )
+    };
+    for (op, ty, n, rotates) in [("shl", "i16", 13, "rrca\n\trrca\n\trrca\n\tand a, #224"), ("shl", "i8", 6, "rrca\n\trrca\n\tand a, #192")] {
+        let out = text(&ir(op, ty, n), "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(out.contains(rotates) && !out.contains("sla") && !out.contains("add a, a"), "{op} {ty} {n}\n{out}");
+    }
+}
+
+/// A test that tail-calls one function or falls on to a second test was `jr nz, L; L1: jp _h; L:` (sibling_call_callees:
+/// 5 B where `jp z, _h` is 3).
+#[test]
+fn a_branch_over_a_tail_call_is_the_tail_call_on_the_opposite_condition() {
+    let ir = include_str!("kernels/ir/sibling_call_callees.ll");
+    let out = text(ir, "g", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("jp z, _h") && !out.contains("jr nz") && !out.contains("jp nz"), "{out}");
+}
+
+/// A byte widened and combined with a word (`or`, `and`, `xor`, with a register or a constant) ran the zero high
+/// lane through `a` (`ld b, #0; ld a, b; or a, #129; ld b, a`): volatile_bitfield's bit-field inserts, 4 instructions
+/// where `ld b, #129` does.
+#[test]
+fn a_widened_byte_combined_with_a_word_skips_its_zero_lane() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i16 @or_const(i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %z, 33280\n  ret i16 %r\n}\n\
+              define i16 @or_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %x, %z\n  ret i16 %r\n}\n\
+              define i16 @and_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = and i16 %x, %z\n  ret i16 %r\n}\n";
+    let ors = |name| text(ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let constant = ors("or_const");
+    assert!(constant.contains("#130") && !constant.contains("or a,"), "{constant}");
+    let word = ors("or_word");
+    assert_eq!(word.matches("or a,").count(), 1, "only the low lane: {word}");
+    let both = ors("and_word");
+    assert_eq!(both.matches("and a,").count(), 1, "only the low lane: {both}");
+}
+
+/// The sign of a sign mask is the mask: widening `a` right after `sbc a, a` (0 or 255) ran `rla; sbc a, a` again
+/// (high_byte's signed_high, 2 B and 8 T).
+#[test]
+fn a_sign_mask_widens_without_taking_its_sign_again() {
+    let ir = include_str!("kernels/ir/high_byte.ll");
+    let out = text(ir, "signed_high", 0, &Request::new(Level::O1)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("rla").count(), 1, "{out}");
+}
+
+/// A dense switch of three targets became bit tests, `1 << x` and a mask per target, and the Z80's shift by a variable
+/// count is a call: two `__ashlhi3` calls (each tens of clocks) to pick among eight cases. `isOperationLegal(SHL)`
+/// is false here, so the pin builds no bit tests.
+#[test]
+fn a_dense_switch_builds_no_bit_tests_where_a_variable_shift_is_a_call() {
+    let ir = include_str!("kernels/ir/switch_dense_bit_tests.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("__ashlhi3"), "{out}");
+    }
+}
+
+/// Eight dense cases to three targets were a compare tree. The DAG builder
+/// now plans a jump table: one range check, `jp (hl)`, and the `.dw` table
+/// (kept by the branch folder, which took `jp (hl)` for a jump to its first
+/// block and dropped the table's label).
+#[test]
+fn a_dense_switch_jumps_through_a_table() {
+    let ir = include_str!("kernels/ir/switch_jump_table_dispatch.ll");
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("jp (hl)").count(), 1, "{out}");
+    assert_eq!(out.matches(".dw ").count(), 8, "{out}");
+    assert!(out.contains("_JT0:"), "{out}");
+    assert_eq!(out.matches("sbc a, #0").count(), 1, "one range check: {out}");
+}
+
+/// The block that follows a switch gets its case tested last, so it falls
+/// through. The block made for a phi edge sat between them, so no case was
+/// moved and div_constants_{long,short,ulong} reloaded a value per site
+/// (+24..+98 B): case 1 (the next block) is tested last, not first.
+#[test]
+fn a_switch_looks_past_phi_edge_blocks_for_the_next_block() {
+    let ir = include_str!("kernels/ir/switch_next_past_phi_edge.ll");
+    let out = text(ir, "h", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let tests: Vec<&str> = out.lines().map(str::trim).filter(|line| line.starts_with("cp a, #")).collect();
+    assert_eq!(tests, ["cp a, #3", "cp a, #2", "cp a, #1"], "{out}");
+}
+
+/// A long multiply in a function not tuned for size was four word multiplies
+/// and their sums inline, bigger and slower than the routine: phi_slot_unknown_arm
+/// -O1 980 B and 3.95M T, 664 B and 3.04M T called; idioms -O2 7763 B. A module
+/// with two or more of them calls `__mulsi3` at every level.
+#[test]
+fn a_long_multiply_calls_the_routine_at_every_level() {
+    let ir = include_str!("kernels/ir/long_multiply_call.ll");
+    for level in [Level::O1, Level::O2, Level::O3, Level::Os] {
+        let out = text(ir, "g", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert_eq!(out.matches("call __mulsi3").count(), 2, "{level:?}: {out}");
+        assert!(!out.contains("__mulhi3"), "{level:?}: {out}");
+    }
+}
+
+/// A long multiplied by a constant of the form `2^k +- 1` stays shifts and an
+/// add where the module calls `__mulsi3` for its other multiplies: called, the
+/// `x * 3` of an `i64` was a call per half (compare_to_int64: +8k T of 37k).
+#[test]
+fn a_constant_factor_of_a_long_stays_inline_beside_the_calls() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i64 @f(i64 %a) {\n  %m = mul i64 %a, 3\n  ret i64 %m\n}\n\
+              define i32 @g(i32 %a, i32 %b, i32 %c) {\n  %m = mul i32 %a, %b\n  %n = mul i32 %m, %c\n  ret i32 %n\n}";
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("__mulsi3"), "{out}");
+    let out = text(ir, "g", 1, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("call __mulsi3").count(), 2, "{out}");
 }

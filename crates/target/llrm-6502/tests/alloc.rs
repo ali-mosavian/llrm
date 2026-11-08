@@ -63,6 +63,21 @@ fn set(
     format!("  lda #{}\n  sta {register}\n", value & 0xFF)
 }
 
+/// Byte arguments: `a`, `x`, then `rc2`, `rc3`, ...; `a` is loaded last.
+fn bytes(values: &[u16]) -> String {
+    let mut text = String::new();
+    for (at, value) in values.iter().enumerate().skip(2) {
+        text += &set(&format!("rc{at}"), *value);
+    }
+    if let Some(value) = values.get(1) {
+        text += &format!("  ldx #{}\n", value & 0xFF);
+    }
+    if let Some(value) = values.first() {
+        text += &format!("  lda #{}\n", value & 0xFF);
+    }
+    text
+}
+
 const ADD16: &str = "define i16 @add16(i16 %a, i16 %b) {\n  %r = add i16 %a, %b\n  ret i16 %r\n}";
 
 /// A word add kept its low byte in `y` while the high byte was added; the cell
@@ -108,7 +123,7 @@ fn more_live_values_than_registers_spill_and_still_compute() {
     ir += &format!("  ret i8 %x{}\n}}", pairs.len() - 2);
     let text = compile(&ir, "many");
     assert!(text.contains("s_many_0"), "no spill in:\n{text}");
-    let setup: String = (1..=6).map(|n| set(&format!("rc{}", n + 1), n)).collect();
+    let setup = bytes(&[1, 2, 3, 4, 5, 6]);
     assert_eq!(common::run_with("alloc-many", &format!("{setup}  jsr many\n"), &text), 4);
 }
 
@@ -140,7 +155,7 @@ fn a_loop_with_selects_and_phis_runs_without_edge_jumps() {
     let text = compile(&ir, "gcd");
     assert!(!text.contains("gcd_e0_2"), "an edge block that only jumps is still there:\n{text}");
     for (a, b, want) in [(12, 18, 6), (7, 13, 1), (9, 9, 9)] {
-        let setup = set("rc2", a) + &set("rc3", b);
+        let setup = bytes(&[a, b]);
         assert_eq!(common::run_with(&format!("alloc-gcd-{a}"), &format!("{setup}  jsr gcd\n"), &text), want);
     }
 }
@@ -641,8 +656,8 @@ fn a_widened_byte_shifted_by_eight_and_xored_is_a_byte_move() {
     let ir = "define i16 @sh(i8 %b, i16 %c) {\n  %w = zext i8 %b to i16\n  %s = shl nuw i16 %w, 8\n  %r = xor i16 %s, %c\n  ret i16 %r\n}";
     let text = compile(ir, "sh");
     assert!(!text.contains("rol"), "{text}");
-    // b in rc2, c in rc4:rc5
-    let setup = set("rc2", 0x34) + &set("rc4", 0x1234) + &set("rc5", 0x12);
+    // b in a, c in rc2:rc3
+    let setup = set("rc2", 0x1234) + &set("rc3", 0x12) + "  lda #$34\n";
     let low = common::run_with("alloc-sh", &format!("{setup}  jsr sh\n"), &text);
     let high = common::run_with("alloc-sh", &format!("{setup}  jsr sh\n  txa\n"), &text);
     assert_eq!(((high as u16) << 8) | (low as u16 & 0xFF), 0x3400 ^ 0x1234);
@@ -904,7 +919,8 @@ fn a_function_short_of_cells_saves_and_restores_the_callee_saved_ones() {
         check += &format!("  lda rc{}\n  eor #{v}\n  ora rc2\n  sta rc2\n", 8 + i);
     }
     check += "  lda rc2\n";
-    let args = "  lda #<tab\n  sta rc2\n  lda #>tab\n  sta rc3\n  lda #4\n  sta rc4\n  lda #<twice\n  sta rc6\n  lda #>twice\n  sta rc7\n";
+    // p in rc2:rc3, f in rc4:rc5, n in a
+    let args = "  lda #<tab\n  sta rc2\n  lda #>tab\n  sta rc3\n  lda #<twice\n  sta rc4\n  lda #>twice\n  sta rc5\n  lda #4\n";
     for (name, call, want) in [("quad", false, 58), ("quadcall", true, 116)] {
         let ir = quad_ir(name, call);
         let text = compile(&ir, name) + &compile(&ir, "twice");
@@ -1089,7 +1105,8 @@ fn a_callee_saved_cell_goes_to_the_loop_values_only() {
     let text = compile(ir, "mix");
     let saved = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha"))).count();
     assert_eq!(saved, 3, "{text}");
-    assert!(text.contains("  lda rc2\n  sta s_mix"), "cold is in a slot: {text}");
+    // cold arrives in a
+    assert!(text.contains("  sta s_mix"), "cold is in a slot: {text}");
 }
 
 /// `shl i16 x, k` for k from 9 to 15 ran k - 8 asl/rol pairs over the whole
@@ -1189,9 +1206,9 @@ fn cells_saved_on_the_stack_leave_the_result_and_the_callers_cells_alone() {
 #[test]
 fn a_zero_or_sign_test_does_not_compare_again() {
     for (name, ir) in [
-        ("isz", "define i8 @isz(i8 %x) {\n  %c = icmp eq i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
-        ("nz", "define i8 @nz(i8 %x) {\n  %c = icmp ne i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
-        ("neg", "define i8 @neg(i8 %x) {\n  %c = icmp slt i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
+        ("isz", "define i8 @isz(ptr %p) {\n  %x = load i8, ptr %p\n  %c = icmp eq i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
+        ("nz", "define i8 @nz(ptr %p) {\n  %x = load i8, ptr %p\n  %c = icmp ne i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
+        ("neg", "define i8 @neg(ptr %p) {\n  %x = load i8, ptr %p\n  %c = icmp slt i8 %x, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}"),
         (
             "sum",
             "define i8 @sum(i8 %x, i8 %y) {\n  %s = add i8 %x, %y\n  %c = icmp eq i8 %s, 0\n  %r = select i1 %c, i8 7, i8 9\n  ret i8 %r\n}",
@@ -1199,8 +1216,13 @@ fn a_zero_or_sign_test_does_not_compare_again() {
     ] {
         let text = compile(ir, name);
         assert!(!text.contains("cmp #0"), "{name}: {text}");
+        // the first three load x from $0300; `a` arriving with no flags set needs its own test
         let run = |x: u16, y: u16| {
-            common::run_with("alloc-nzt", &format!("{}{}  jsr {name}\n", set("rc2", x), set("rc3", y)), &text)
+            let setup = match name {
+                "sum" => bytes(&[x, y]),
+                _ => format!("{}{}  lda #{x}\n  sta $0300\n", set("rc2", 0), set("rc3", 3)),
+            };
+            common::run_with("alloc-nzt", &format!("{setup}  jsr {name}\n"), &text)
         };
         let want = |x: u16, y: u16| -> i32 {
             let (x, y) = (x as u8, y as u8);
@@ -1345,7 +1367,7 @@ fn a_byte_select_loads_once_when_a_holds_a_value_or_the_condition_is_the_carry()
             assert!(!text.lines().any(|l| l.contains("jmp ") && l.contains("_cmd")), "{name}: {text}");
         }
         for (x, y) in [(0u8, 0u8), (1, 2), (2, 1), (200, 100), (100, 200), (255, 255), (7, 7)] {
-            let main = format!("{}{}  jsr {name}\n", set("rc2", u16::from(x)), set("rc3", u16::from(y)));
+            let main = format!("{}  jsr {name}\n", bytes(&[u16::from(x), u16::from(y)]));
             assert_eq!(
                 common::run_with(&format!("alloc-{name}"), &main, &text),
                 i32::from(f(x, y)),
@@ -1374,7 +1396,7 @@ fn two_selects_on_one_carry_compare_make_the_compare_once() {
     for (a, b) in [(5u8, 3u8), (3, 5), (4, 4), (200, 7), (0, 9), (255, 0)] {
         let (x, y) = if a > b { (b, 0) } else { (0, a) };
         let want = (a - x) ^ (b - y);
-        let setup = set("rc2", a.into()) + &set("rc3", b.into());
+        let setup = bytes(&[a.into(), b.into()]);
         assert_eq!(
             common::run_with(&format!("alloc-split-{a}-{b}"), &format!("{setup}  jsr split\n"), &text),
             want.into()
@@ -1400,7 +1422,7 @@ fn two_selects_on_an_equality_still_pick_by_it() {
     for (a, b) in [(5u8, 3u8), (4, 4), (0, 0), (200, 7), (9, 9)] {
         let (x, y) = if a == b { (7u8, a) } else { (b, 9) };
         let want = a.wrapping_sub(x) ^ b.wrapping_add(y);
-        let setup = set("rc2", a.into()) + &set("rc3", b.into());
+        let setup = bytes(&[a.into(), b.into()]);
         assert_eq!(
             common::run_with(&format!("alloc-same-{a}-{b}"), &format!("{setup}  jsr same\n"), &text),
             want.into()
@@ -1453,7 +1475,7 @@ fn a_product_of_two_zero_extended_bytes_is_a_widening_multiply() {
     assert!(text.contains("__umulqihi3"), "{text}");
     assert!(!text.contains("__mulhi3"), "{text}");
     for (a, b) in [(255u16, 255u16), (200, 100), (128, 2), (0, 77), (1, 255), (17, 15)] {
-        let setup = set("rc2", a) + &set("rc3", b);
+        let setup = bytes(&[a, b]);
         let want = (a * b) as i32;
         let lo = common::run_with(&format!("alloc-wide-lo-{a}-{b}"), &format!("{setup}  jsr wide\n"), &text);
         let hi = common::run_with(&format!("alloc-wide-hi-{a}-{b}"), &format!("{setup}  jsr wide\n  txa\n"), &text);
@@ -1461,19 +1483,23 @@ fn a_product_of_two_zero_extended_bytes_is_a_widening_multiply() {
     }
 }
 
-/// Siblings: a byte times a full word and a product of sign-extended bytes are
-/// not the zero-extended case, and keep their meaning. (-1) * 2 = 0xFFFE.
+/// Siblings: a byte times a full word keeps `__mulhi3`, and a product of two
+/// sign-extended bytes is the signed widening multiply `__mulqihi3` (eight
+/// iterations; `k_imul8x8r16` ran `__mulhi3`, 412 to 802 clocks by the order of
+/// its operands). Every sign combination, both bytes of the product.
 #[test]
-fn only_zero_extended_bytes_take_the_widening_multiply() {
+fn only_zero_extended_bytes_take_the_unsigned_widening_multiply() {
     let word = "define i16 @bw(i8 %a, i16 %w) {\n  %x = zext i8 %a to i16\n  %p = mul i16 %x, %w\n  ret i16 %p\n}";
     assert!(compile(word, "bw").contains("__mulhi3"));
     let signed = "define i16 @sw(i8 %a, i8 %b) {\n  %x = sext i8 %a to i16\n  %y = sext i8 %b to i16\n  %p = mul i16 %x, %y\n  ret i16 %p\n}";
     let text = compile(signed, "sw");
-    assert!(!text.contains("__umulqihi3"), "{text}");
-    let setup = set("rc2", 255) + &set("rc3", 2);
-    let lo = common::run_with("alloc-sw-lo", &format!("{setup}  jsr sw\n"), &text);
-    let hi = common::run_with("alloc-sw-hi", &format!("{setup}  jsr sw\n  txa\n"), &text);
-    assert_eq!(hi << 8 | lo, 0xFFFE);
+    assert!(text.contains("__mulqihi3") && !text.contains("__umulqihi3") && !text.contains("__mulhi3"), "{text}");
+    for (a, b) in [(-1i16, 2i16), (-128, -128), (127, 127), (-128, 127), (127, -128), (0, -5), (-7, 0), (-1, -1), (100, -3), (-3, 100), (1, -128)] {
+        let setup = bytes(&[a as u16 & 0xFF, b as u16 & 0xFF]);
+        let lo = common::run_with(&format!("alloc-sw-lo-{a}-{b}"), &format!("{setup}  jsr sw\n"), &text);
+        let hi = common::run_with(&format!("alloc-sw-hi-{a}-{b}"), &format!("{setup}  jsr sw\n  txa\n"), &text);
+        assert_eq!(((hi << 8 | lo) as u16) as i16, a * b, "{a} * {b}");
+    }
 }
 
 /// A quotient and a remainder of the same operands called the divide twice (or
@@ -1504,7 +1530,7 @@ fn a_quotient_and_remainder_are_one_divide() {
                     true,
                 )
             } else {
-                (set("rc2", x as u16) + &set("rc3", y as u16), false)
+                (bytes(&[x as u16, y as u16]), false)
             };
             let lo = common::run_with(&format!("alloc-{name}-lo-{x}"), &format!("{low}  jsr {name}\n"), &text);
             let got = if high {
@@ -1534,7 +1560,7 @@ fn a_remainder_alone_is_the_remainder_routine() {
         let setup = if bits == 16 {
             set("rc2", x & 0xFF) + &set("rc3", x >> 8) + &set("rc4", y & 0xFF) + &set("rc5", y >> 8)
         } else {
-            set("rc2", x) + &set("rc3", y)
+            bytes(&[x, y])
         };
         assert_eq!(common::run_with(&format!("alloc-{name}"), &format!("{setup}  jsr {name}\n"), &text), 4);
     }
@@ -1626,7 +1652,10 @@ fn a_greater_than_a_constant_compares_against_the_next_constant() {
                 "sgt" => sx > sc,
                 _ => sx <= sc,
             };
-            let setup = set("rc2", (x & 0xFF) as u16) + &set("rc3", (x >> 8) as u16);
+            let setup = match bits {
+                8 => bytes(&[x as u16]),
+                _ => set("rc2", (x & 0xFF) as u16) + &set("rc3", (x >> 8) as u16),
+            };
             let got = common::run_with(&format!("alloc-cc{n}-{x}"), &format!("{setup}  jsr t{n}\n"), &text);
             assert_eq!(got, i32::from(truth), "{pred} {ty} {x} vs {c}");
         }
@@ -1681,7 +1710,7 @@ fn a_platform_with_more_zero_page_keeps_more_values_in_scratch_cells() {
     let (narrow, wide) = (compile_on(&ir, "many", 16), compile_on(&ir, "many", 26));
     assert!(narrow.contains("s_many_0") || narrow.contains("pha"), "no pressure at 16:\n{narrow}");
     assert!(!wide.contains("s_many_") && !wide.contains("pha"), "the wider platform still spills or saves:\n{wide}");
-    let setup: String = (1..=6).map(|n| set(&format!("rc{}", n + 1), n)).collect();
+    let setup = bytes(&[1, 2, 3, 4, 5, 6]);
     assert_eq!(common::run_with("alloc-many-wide", &format!("{setup}  jsr many\n"), &wide), 4);
 }
 
@@ -1708,7 +1737,7 @@ done:
     let text = compile_on(ir, "sum", 26);
     let fill: String = (2..8).chain(16..26).map(|n| format!("  sta rc{n}\n")).collect();
     let callee = format!("clob:\n  lda #$EE\n{fill}  lda #3\n  rts\n");
-    let setup = set("rc2", 4);
+    let setup = bytes(&[4]);
     assert_eq!(
         common::run_with("alloc-sum-wide", &format!("{setup}  jsr sum\n"), &format!("{text}{callee}.export clob\n")),
         12
@@ -1940,11 +1969,9 @@ fn two_functions_in_one_file_do_not_share_internal_labels() {
         "define i8 @maxb(i8 %a, i8 %b) {\n  %c = icmp ugt i8 %a, %b\n  %r = select i1 %c, i8 %a, i8 %b\n  ret i8 %r\n}";
     let text = compile(one, "maxa") + &compile(two, "maxb");
     let main = format!(
-        "{}{}  jsr maxa\n  pha\n{}{}  jsr maxb\n  sta rc2\n  pla\n  clc\n  adc rc2\n",
-        set("rc2", 3),
-        set("rc3", 9),
-        set("rc2", 4),
-        set("rc3", 2)
+        "{}  jsr maxa\n  pha\n{}  jsr maxb\n  sta rc2\n  pla\n  clc\n  adc rc2\n",
+        bytes(&[3, 9]),
+        bytes(&[4, 2])
     );
     assert_eq!(common::run_with("alloc-two-files", &main, &text), 13);
 }
@@ -1968,7 +1995,7 @@ define i8 @slt(i8 %a, i8 %e) {
 }";
     let run = |name: &str, a: u16, e: u16| {
         let text = compile_within_ten_seconds(ir, name);
-        let setup = set("rc2", a) + &set("rc3", e);
+        let setup = bytes(&[a, e]);
         common::run_with(&format!("alloc-bits-{name}-{a}-{e}"), &format!("{setup}  jsr {name}\n"), &text)
     };
     for (a, e) in [(0u16, 77u16), (1, 77), (2, 5), (3, 5)] {
@@ -1995,7 +2022,7 @@ fn a_select_of_bits_as_a_condition_compiles_and_runs() {
 }";
     let text = compile_within_ten_seconds(ir, "bitsel");
     for (a, b, c) in [(0u16, 0u16, 0u16), (0, 0, 1), (1, 0, 0), (1, 1, 1), (1, 1, 0), (0, 1, 1)] {
-        let setup = set("rc2", a) + &set("rc3", b) + &set("rc4", c);
+        let setup = bytes(&[a, b, c]);
         let want = if if a & 1 == 1 { b == 0 } else { c & 1 == 1 } { 3 } else { 4 };
         assert_eq!(
             common::run_with(&format!("alloc-bitsel-{a}{b}{c}"), &format!("{setup}  jsr bitsel\n"), &text),
@@ -2024,7 +2051,10 @@ define i8 @tfrozen(i8 %a) {
     for (name, args) in [("tword", [0x0100u16, 0]), ("tword", [0x0001, 0]), ("tfrozen", [2, 0]), ("tfrozen", [3, 0])] {
         let text = compile_within_ten_seconds(ir, name);
         let want = if args[0] & 1 == 1 { 3 } else { 4 };
-        let setup = set("rc2", args[0] & 0xFF) + &set("rc3", args[0] >> 8);
+        let setup = match name {
+            "tfrozen" => bytes(&args[..1]),
+            _ => set("rc2", args[0] & 0xFF) + &set("rc3", args[0] >> 8),
+        };
         assert_eq!(
             common::run_with(&format!("alloc-trunc-{name}-{}", args[0]), &format!("{setup}  jsr {name}\n"), &text),
             want,
@@ -3226,6 +3256,7 @@ mod post_ra {
             optimize_for_size: false,
             returns_twice: false,
             places: Vec::new(),
+            odds: None,
             variables: Vec::new(),
         }
     }

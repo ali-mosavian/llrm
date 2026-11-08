@@ -41,3 +41,41 @@ fn the_o0_combiner_keeps_a_load_after_its_store() {
     assert_eq!(written(false), ISD::Register, "the control: the optimizing combiner forwards the stored value");
     assert_eq!(written(true), ISD::Load);
 }
+
+/// `copy_runs` -O0 spent 55 M of 89 M Ir in the combiner's chain walks: the
+/// x86 pipeline never told the combiner it was at `-O0`, so it ran every level
+/// as optimizing (the pin skips them). Through the pipeline's own entry the
+/// load stays after its store at `-O0`.
+#[test]
+fn the_x86_pipeline_passes_o0_to_the_combiner() {
+    use super::super::dag_select::legalized_with;
+    use super::super::x86_lowering::X86Lowering;
+    let through = |opt_none: bool| {
+        let mut dag = dag();
+        let entry = dag.entry_node();
+        let (ptr, out) = (dag.get_register(EVT::I32, 7), dag.get_register(EVT::I32, 8));
+        let value = dag.get_register(EVT::I32, 5);
+        let store = dag.get_store(entry, value, ptr, info());
+        let loaded = dag.get_load(EVT::I32, store, ptr, info());
+        let last = dag.get_store(SDValue { node: loaded.node, res: 1 }, loaded, out, info());
+        dag.set_root(last);
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut lowering = X86Lowering {
+            imul_if_smaller: false,
+            share_products: false,
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            three_address_adds: false,
+            i16_mul_chains: false,
+            sext_load: false,
+            zext_free: false,
+            profile: None,
+        };
+        legalized_with(&mut dag, &tli, &mut lowering, Some(&llrm_x86_m32::M32), opt_none).expect("legalizes");
+        let root = dag.get_root();
+        dag.opcode(dag.operand(root, 1))
+    };
+    assert_eq!(through(false), ISD::Register, "the control: the optimizing pipeline forwards the stored value");
+    assert_eq!(through(true), ISD::Load);
+}

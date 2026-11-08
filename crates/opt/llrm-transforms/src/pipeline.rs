@@ -143,7 +143,7 @@ use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
     fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
-    loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
+    loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, sccp, simpleloopunswitch, simplifycfg,
     switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
@@ -718,6 +718,115 @@ impl FunctionPass for Together {
     }
 }
 
+/// What a [`PerLoop`] left behind: the function as the group ended, so that the
+/// slots after the head can tell their work is done.
+type Fused = std::rc::Rc<std::cell::Cell<Option<llrm_mir::module::Mark>>>;
+
+/// LPM2's passes (indvars, loop-deletion, loop-unroll-full, indvars on the
+/// loops the unroll made) as the loop pass manager runs them: loop by loop,
+/// each loop through every pass before the next loop is looked at, so an
+/// unrolled loop is gone, and an earlier loop's exit test already rewritten,
+/// when the next loop's `indvars` asks what dominates it. The slot is the
+/// first of them (`indvars@738`) and runs all of `parts`, the loops being
+/// those the function has when it starts, in the order the unroll visits
+/// them. The slots after it, [`AfterGroup`], find the function as the group
+/// left it and do nothing.
+struct PerLoop {
+    head: Box<dyn FunctionPass>,
+    parts: Vec<Box<dyn FunctionPass>>,
+    fused: Fused,
+}
+
+impl FunctionPass for PerLoop {
+    fn name(&self) -> &'static str {
+        self.head.name()
+    }
+
+    fn translations(&self) -> Vec<&'static str> {
+        self.head.translations()
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        self.head.adds_memory_operations() || self.parts.iter().any(|part| part.adds_memory_operations())
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        self.parts.iter().fold(self.head.reads(), |all, part| all.with(part.reads()))
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let headers: Vec<llrm_mir::module::BlockId> = analyses
+            .get::<llrm_mir::passes::Loops>(unit.context, unit.layout, unit.function)
+            .get_loops_in_reverse_sibling_preorder()
+            .iter()
+            .rev()
+            .map(|one| one.get_header())
+            .collect();
+        let mut changed = false;
+        for header in headers {
+            let found = analyses.get::<llrm_mir::passes::Loops>(unit.context, unit.layout, unit.function);
+            if !unit.function.is_placed(header) || !found.is_loop_header(header) {
+                continue;
+            }
+            let _scope = crate::loopfilter::only(&[header]);
+            for part in std::iter::once(&mut self.head).chain(self.parts.iter_mut()) {
+                let preserved = llrm_mir::passes::run_checked(part.as_mut(), unit, analyses);
+                if !preserved.are_all_preserved() {
+                    changed = true;
+                    analyses.invalidate(unit.function, &preserved);
+                }
+            }
+        }
+        self.fused.set(Some(unit.function.mark()));
+        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
+
+/// A slot after the head of a [`PerLoop`]: run by the group already, it is
+/// skipped while the function is as the group left it, and runs as itself
+/// otherwise (alone, or after something else changed the function).
+struct AfterGroup {
+    inner: Box<dyn FunctionPass>,
+    fused: Fused,
+}
+
+impl FunctionPass for AfterGroup {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn translations(&self) -> Vec<&'static str> {
+        self.inner.translations()
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        self.inner.adds_memory_operations()
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        self.inner.reads()
+    }
+
+    fn wants_sizes(&self) -> bool {
+        self.inner.wants_sizes()
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        if self.fused.get() == Some(unit.function.mark()) {
+            return PreservedAnalyses::all();
+        }
+        self.inner.run(unit, analyses)
+    }
+}
+
 /// The passes of `phase`, each once in the place LLVM runs it (the line is the
 /// slot's name).
 pub(crate) fn llvm_order(
@@ -876,6 +985,7 @@ pub(crate) fn llvm_order(
                     duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
                     size: applied.options.prefers_size(),
                     check_exit_count: true,
+                    free_guard: false,
                 }),
             ),
             // LoopInterchangePass (l.1631), in the loop pass manager after
@@ -929,6 +1039,7 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
                     created: Default::default(),
+                    decided: Default::default(),
                 }),
             ),
             sroa("sroa@1494"),
@@ -998,6 +1109,7 @@ pub(crate) fn llvm_order(
                         duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
                         size: applied.options.prefers_size(),
                         check_exit_count: false,
+                        free_guard: false,
                     }),
                 ));
             }
@@ -1017,6 +1129,39 @@ pub(crate) fn llvm_order(
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             // What the unroll makes, for the slot after it.
             let created: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
+            let decided: std::rc::Rc<std::cell::RefCell<Vec<llrm_mir::module::BlockId>>> = Default::default();
+            // LPM2 runs loop by loop (`PerLoop`): the slot of indvars runs the
+            // passes of the slots after it too, each of which then finds its
+            // work done.
+            let fused: Fused = Default::default();
+            let deletion = || -> Box<dyn FunctionPass> {
+                Box::new(crate::loopidiom::pass::AfterDeletion {
+                    deletion: loopdeletion::LoopDeletion,
+                    idiom: crate::loopidiom::pass::LoopIdiom {
+                        for_size: size,
+                        ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
+                    },
+                })
+            };
+            let unroll = || -> Box<dyn FunctionPass> {
+                Box::new(loopunrollpass::LoopFullUnroll {
+                    opt_level: unroll_level(&applied.options),
+                    opt_size: size,
+                    only_when_forced: !applied.options.loop_unrolling,
+                    target_unrolling: false,
+                    created: std::rc::Rc::clone(&created),
+                    decided: std::rc::Rc::clone(&decided),
+                })
+            };
+            let on_created = || -> Box<dyn FunctionPass> {
+                Box::new(indvars::IndVarsOnCreated { created: std::rc::Rc::clone(&created) })
+            };
+            let tails: Vec<Box<dyn FunctionPass>> =
+                [("loopdeletion@749", deletion()), ("unroll@753", unroll()), ("indvars@753", on_created())]
+                    .into_iter()
+                    .filter(|(name, _)| applied.options.wanted(name))
+                    .map(|(_, pass)| pass)
+                    .collect();
             list.extend([
                 slot(
                     "loopidiom@737",
@@ -1027,30 +1172,19 @@ pub(crate) fn llvm_order(
                     }),
                 ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
-                slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size })),
                 slot(
-                    "loopdeletion@749",
-                    Box::new(crate::loopidiom::pass::AfterDeletion {
-                        deletion: loopdeletion::LoopDeletion,
-                        idiom: crate::loopidiom::pass::LoopIdiom {
-                            for_size: size,
-                            ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
-                        },
+                    "indvars@738",
+                    Box::new(PerLoop {
+                        head: Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size }),
+                        parts: tails,
+                        fused: std::rc::Rc::clone(&fused),
                     }),
                 ),
-                slot(
-                    "unroll@753",
-                    Box::new(loopunrollpass::LoopFullUnroll {
-                        opt_level: unroll_level(&applied.options),
-                        opt_size: size,
-                        only_when_forced: !applied.options.loop_unrolling,
-                        target_unrolling: false,
-                        created: std::rc::Rc::clone(&created),
-                    }),
-                ),
+                slot("loopdeletion@749", Box::new(AfterGroup { inner: deletion(), fused: std::rc::Rc::clone(&fused) })),
+                slot("unroll@753", Box::new(AfterGroup { inner: unroll(), fused: std::rc::Rc::clone(&fused) })),
                 // The loops the unroll made go on to LPM2's passes: indvars on
                 // them.
-                slot("indvars@753", Box::new(indvars::IndVarsOnCreated { created })),
+                slot("indvars@753", Box::new(AfterGroup { inner: on_created(), fused })),
                 sroa("sroa@776"),
             ]);
             // Not in the pin's `default<O1>` (a pipeline of its own); `pre` is
@@ -1312,6 +1446,13 @@ pub fn recorded(
     manager.add_program(Interprocedural {
         late,
         pipeline: Box::new(move |module, analyses, id, stage| {
+            // The pin runs nothing over a body `DeadArgumentEliminationPass`
+            // changed: the late function pipeline, which every body goes
+            // through, finds what the lost argument leaves (PassBuilderPipelines.cpp,
+            // `buildModuleOptimizationPipeline` follows the module pass).
+            if stage == "ipa-deadargs." {
+                return;
+            }
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
             let done =
                 // The stage that only retargets loads and stores of globals
@@ -1320,7 +1461,7 @@ pub fn recorded(
                     module,
                     analyses,
                     id,
-                    if matches!(stage, "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
+                    if stage == "ipsccp." { &mut cleaned } else { &mut again },
                     stage == "globalsra.",
                 )
                 .unwrap_or_else(|error| panic!("pipeline: {error}"));
@@ -1410,9 +1551,16 @@ pub fn recorded(
     if applied.options.wanted("window") {
         manager.add(window::Window { size: applied.options.prefers_size() });
     }
-    // Last, as the old drivers rotated in lowering: unroll and peel refuse
-    // a rotated loop.
-    manager.add(rotate::Rotate { proven: true, copy: false });
+    // DEVIATE Z80-ROT: after every loop pass, as the gcc tail rotate was, a counted loop
+    // proven to run is entered at its body at -Oz (target opt-in).
+    if applied.options.has_min_size {
+        manager.add(looprotate::LoopRotate {
+            duplicate_headers: false,
+            size: true,
+            check_exit_count: false,
+            free_guard: true,
+        });
+    }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if applied.options.wanted("hoist") && !llvm_motion(applied) {

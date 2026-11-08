@@ -108,6 +108,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg",
         "translated SimplifyCfg at the pin's default options runs here and Decide does not (#2907); untranslated: SimplifyCondBranchToCondBranch, simplifyUncondBranch's remainder, simplifySwitch, simplifyUnreachable's noreturn and assume folds; criterion: opt -passes=simplifycfg on the same inputs (tools/difftest/difftest.py inputs decide@1178) is identical on the rows corpus; exit: those pieces translated (simplifycfg-fold-2148, 2026-10-23)",
     ),
+    entry("vastart@1178", Early, "none (DEVIATE VASTART-PROMOTE, no pin pass)", Old, ""),
     entry("sroa@1179", Early, "sroa<modify-cfg>", Translated, "sroa.rs"),
     entry("earlycse@1180", Early, "early-cse", Translated, ""),
     entry("promote@1241", Cleanup, "mem2reg", Translated, "mem2reg.rs"),
@@ -456,8 +457,13 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: a join of at most two instructions (its jump counted) goes into every predecessor that jumps to it alone, a one-jump block is bypassed, phis and read-outside values get an SSA update; exit: the pin's merge into the layout predecessor is the same result here (ET3); EH pads and INLINEASM_BR have no counterpart (ET2)",
     ),
     // X86TargetLowering::EmitLoweredSelect: the diamond at selection
-    // (lir-cleanup-port, 2026-11-13).
+    // (lir-cleanup-port, 2026-11-22). Measured 2026-11-08 with CS2 (cgpselectarms)
+    // off, m32 -O2: -2510 B over 176 cells, but sfm16_float_mul/sub/div +758 clk
+    // and x_jpeg_fixed +2.9% clk; it needs a clock-priced CS2, not a switch.
     entry("emit-lowered-select", Backend, "x86-emit-lowered-select", Missing, ""),
+    // ExecutionDomainFix picks movdqa for integer data where ours picks movaps,
+    // one byte shorter; no domain-crossing penalty at 486/P5. Won't translate.
+    entry("execution-domain-fix", Backend, "x86-execution-domain-fix (ExecutionDomainFix.cpp)", Missing, ""),
     entry("stack-coloring", Backend, "stack-coloring", Missing, ""),
 ];
 

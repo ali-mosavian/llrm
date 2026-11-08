@@ -7,24 +7,36 @@
 //!   is dead after (likewise `ldy m`): the byte went through memory to leave
 //!   `a`.
 //! - [`fold_temp_operand`]: `lda x; sta t; lda y; [clc|sec]; adc t` (likewise
-//!   `sbc`, `and`, `ora`, `eor`, `cmp`) is `lda y; [clc|sec]; adc x` when `t` is
-//!   dead after: the first operand goes to the instruction straight from where
-//!   it was loaded (a memory cell, `(p),y`, an indexed byte), not through `a`
-//!   and a temporary.
+//!   `sbc`, `and`, `ora`, `eor`, `cmp`) is `lda y; [clc|sec]; adc x` when `t`
+//!   is dead after: the first operand goes to the instruction straight from
+//!   where it was loaded (a memory cell, `(p),y`, an indexed byte), not through
+//!   `a` and a temporary.
 //! - [`carry_stays_in_the_flag`]: `lda #0; rol a; tax` (or `sta m`), work that
-//!   leaves the carry and the saved byte alone, `txa` (or `lda m`), `lsr a` is the
-//!   work alone when `a` and the byte are dead after: a borrow chain that ran
-//!   through loads of its next operand carried its bit in a register for
+//!   leaves the carry and the saved byte alone, `txa` (or `lda m`), `lsr a` is
+//!   the work alone when `a` and the byte are dead after: a borrow chain that
+//!   ran through loads of its next operand carried its bit in a register for
 //!   nothing (a compare of two longs: 5 instructions at each word).
 //! - [`chain_ends_in_a`]: `(asl m; rol n)*k; [clc]; lda m` (also `lsr`/`ror`,
-//!   and `lda n`) is `lda m; (asl a; rol n)*k` when the loaded byte is dead after: the
-//!   byte that is returned shifts in `a`, not in memory and then loaded.
+//!   and `lda n`) is `lda m; (asl a; rol n)*k` when the loaded byte is dead
+//!   after: the byte that is returned shifts in `a`, not in memory and then
+//!   loaded.
+//!
+//! - [`forward_cell_copy`]: `lda s; sta t; ...; lda t` is `lda s; ...; lda s`
+//!   (likewise the other loads and the ALU instructions) when nothing between
+//!   writes `s` or `t` and the copy `t` is dead after: a value copied to a cell
+//!   to be loaded again, one instruction early, costs the store and the cell.
+//!
+//! - [`fold_spill_copy`]: `ldy m; sty t; ...; sbc t` (likewise `lda`, `ldx`
+//!   and the other readers) reads `m` when `m` is unchanged on every path to the
+//!   reads and `t` is written again before another read: a spilled byte
+//!   reloaded into a cell for its readers.
 //!
 //! Runs from [`crate::peephole::run`].
 
 use std::collections::BTreeSet;
 
-use crate::asm::{Asm, Index, Inst, Line, Op, Operand};
+use crate::asm::{Asm, Index, Inst, Line, Op, Operand, Registers};
+use crate::peephole::{Exits, dead_from};
 
 fn cell_number(name: &str) -> Option<u8> {
     name.strip_prefix("rc")?.parse().ok()
@@ -215,7 +227,8 @@ pub fn fold_temp_operand(asm: &mut Asm) {
 fn temp_operand_once(asm: &mut Asm) -> bool {
     let lines = &asm.lines;
     for at in 0..lines.len().saturating_sub(3) {
-        let (Line::Inst(first), Line::Inst(store), Line::Inst(second)) = (&lines[at], &lines[at + 1], &lines[at + 2]) else {
+        let (Line::Inst(first), Line::Inst(store), Line::Inst(second)) = (&lines[at], &lines[at + 1], &lines[at + 2])
+        else {
             continue;
         };
         let Operand::Direct(t) = &store.operand else { continue };
@@ -227,7 +240,10 @@ fn temp_operand_once(asm: &mut Asm) -> bool {
             continue;
         }
         let mut op_at = at + 3;
-        while matches!(lines.get(op_at), Some(Line::Inst(Inst { op: Op::Clc | Op::Sec, .. }))) {
+        while matches!(
+            lines.get(op_at),
+            Some(Line::Inst(Inst { op: Op::Clc | Op::Sec, .. }))
+        ) {
             op_at += 1;
         }
         let Some(Line::Inst(user)) = lines.get(op_at) else { continue };
@@ -245,11 +261,154 @@ fn temp_operand_once(asm: &mut Asm) -> bool {
     false
 }
 
+/// A spill slot's name (`s_<function>_<n>`): a cell nothing else names, writes
+/// through a pointer or reaches by another spelling (`buf+2+1` and `buf+3` are
+/// the same byte).
+fn spill_slot(name: &str) -> bool {
+    name.strip_prefix("s_")
+        .and_then(|rest| rest.rsplit_once('_'))
+        .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        && !name.contains(['+', '-', '(', ' '])
+}
+
+/// DEVIATE SPILL-COPY-FOLD (beyond the pin; owner 6502, exit 2026-11-15): the
+/// 2026-11-08 corpus A/B (mean over 4 pads, matched base 698373eaa2) lowers
+/// bytes in every changed program and instructions in each cell below, whose
+/// clocks are worse by page-crossing cliffs on one or two pads (the layouts of
+/// the base itself differ by 20k): O2 div_constants_short +12247 (-88 B), Os
+/// call_keeps +173 (-4 B), Os div_constants_short +45393 (-96 B).
+pub fn fold_spill_copy(asm: &mut Asm) {
+    let mut at = 0;
+    while at + 1 < asm.lines.len() {
+        if spill_copy_once(asm, at) {
+            continue;
+        }
+        at += 1;
+    }
+}
+
+/// `ld* m; st* t` at `at`, `t` a caller-saved cell: every read of `t` that
+/// reaches from the copy reads `m` instead when `m` is unchanged on the way and
+/// `t` is written again before anything else reads it. The store goes; the load
+/// goes with it where its register is dead after.
+fn spill_copy_once(
+    asm: &mut Asm,
+    at: usize,
+) -> bool {
+    let (Line::Inst(load), Line::Inst(store)) = (&asm.lines[at], &asm.lines[at + 1]) else { return false };
+    let register = match (load.op, store.op) {
+        (Op::Lda, Op::Sta) => Registers::A,
+        (Op::Ldx, Op::Stx) => Registers::X,
+        (Op::Ldy, Op::Sty) => Registers::Y,
+        _ => return false,
+    };
+    let (Operand::Direct(s), Operand::Direct(t)) = (&load.operand, &store.operand) else { return false };
+    let Some(n) = cell_number(t) else { return false };
+    if s == t || !caller_saved(n) || !(cell_number(s).is_some() || spill_slot(s)) {
+        return false;
+    }
+    let lines = &asm.lines;
+    let covers = |c: &String| cell_number(c).is_some_and(|m| m == n || m + 1 == n);
+    let covers_s = |c: &String| cell_number(c).zip(cell_number(s)).is_some_and(|(m, k)| m == k || m + 1 == k);
+    let position = |name: &str| lines.iter().position(|l| *l == Line::Label(name.to_owned()));
+    let mut reads = Vec::new();
+    let mut arrivals: std::collections::BTreeMap<usize, usize> = Default::default();
+    let mut seen = BTreeSet::new();
+    let mut work = vec![at + 2];
+    while let Some(mut p) = work.pop() {
+        loop {
+            if matches!(lines.get(p), Some(Line::Label(_))) {
+                *arrivals.entry(p).or_default() += 1;
+            }
+            if !seen.insert(p) {
+                break;
+            }
+            let inst = match lines.get(p) {
+                Some(Line::Label(_)) => {
+                    p += 1;
+                    continue;
+                }
+                Some(Line::Inst(inst)) => inst,
+                _ => return false,
+            };
+            p += 1;
+            if inst.op == Op::Rts {
+                if asm.result_cells.contains(t) {
+                    return false;
+                }
+                break;
+            }
+            if matches!(inst.op, Op::Jmp | Op::Bra) {
+                let Some(to) = inst.target().and_then(position) else { return false };
+                work.push(to);
+                break;
+            }
+            if inst.op.opposite().is_some() {
+                let Some(to) = inst.target().and_then(position) else { return false };
+                work.push(to);
+                continue;
+            }
+            // a call clobbers a caller-saved cell and reads none above the argument cells
+            if inst.op == Op::Jsr {
+                if n <= 7 {
+                    return false;
+                }
+                break;
+            }
+            if !straight(inst.op) {
+                return false;
+            }
+            match &inst.operand {
+                Operand::Indexed(c, _) if cell_number(c).is_some() || c == s => return false,
+                Operand::IndirectY(c) | Operand::IndirectX(c) | Operand::Indirect(c) if covers(c) || covers_s(c) => {
+                    return false;
+                }
+                Operand::Direct(c) if c == t => match inst.op {
+                    Op::Sta | Op::Stx | Op::Sty | Op::Stz => break,
+                    o if reads_only(o) => reads.push(p - 1),
+                    _ => return false,
+                },
+                Operand::Direct(c) if c == s && !reads_only(inst.op) => return false,
+                _ => {}
+            }
+        }
+    }
+    // a label that other paths also reach, with `t` live there, joins another value of `t`
+    for (&label, &came) in &arrivals {
+        let Line::Label(name) = &lines[label] else { continue };
+        let refs = lines.iter().filter(|l| matches!(l, Line::Inst(i) if i.target() == Some(name.as_str()))).count();
+        let falls = label > 0
+            && matches!(&lines[label - 1], Line::Inst(i) if !matches!(i.op, Op::Jmp | Op::Bra | Op::Rts))
+            || label > 0 && matches!(&lines[label - 1], Line::Label(_));
+        if came < refs + usize::from(falls) && !cell_dead_from(lines, label, t, &asm.result_cells, &mut BTreeSet::new())
+        {
+            return false;
+        }
+    }
+    // a read of `t` the walk could not reach from here is no fold's business; the store goes only if none remain
+    let exits = Exits::of(asm);
+    let dead_load = dead_from(lines, at + 2, register, &mut Default::default(), exits);
+    if reads.is_empty() || reads.len() > if dead_load { 4 } else { 1 } {
+        return false;
+    }
+    let source = s.clone();
+    for p in reads {
+        if let Line::Inst(inst) = &mut asm.lines[p] {
+            inst.operand = Operand::Direct(source.clone());
+        }
+    }
+    asm.lines.remove(at + 1);
+    true
+}
+
 /// An operand a later instruction reads as the load did: the same bytes as
 /// long as no store or index change comes between, which the three lines of the
 /// pattern guarantee.
 fn stable(operand: &Operand) -> bool {
-    matches!(operand, Operand::Direct(_) | Operand::Imm(_) | Operand::Indexed(..) | Operand::IndirectY(_))
+    matches!(
+        operand,
+        Operand::Direct(_) | Operand::Imm(_) | Operand::Indexed(..) | Operand::IndirectY(_)
+    )
 }
 
 pub fn carry_stays_in_the_flag(asm: &mut Asm) {
@@ -277,8 +436,14 @@ pub fn carry_stays_in_the_flag(asm: &mut Asm) {
         // `a` still holds the saved byte until a load replaces it
         let mut a_loaded = false;
         while let Some(Line::Inst(inst)) = asm.lines.get(end) {
-            let writes_m = matches!((&inst.operand, &saved_in), (Operand::Direct(c), Some(m)) if c == m);
-            let restore = matches!((&inst.op, &inst.operand, &saved_in), (Op::Lda, Operand::Direct(c), Some(m)) if c == m);
+            let writes_m = matches!(
+                (&inst.operand, &saved_in),
+                (Operand::Direct(c), Some(m)) if c == m
+            );
+            let restore = matches!(
+                (&inst.op, &inst.operand, &saved_in),
+                (Op::Lda, Operand::Direct(c), Some(m)) if c == m
+            );
             let quiet = match inst.op {
                 Op::Lda if restore => false,
                 Op::Lda => {
@@ -311,9 +476,16 @@ pub fn carry_stays_in_the_flag(asm: &mut Asm) {
             continue;
         }
         let exits = crate::peephole::Exits::of(asm);
-        let a_dead = crate::peephole::dead_from(&asm.lines, end + 2, crate::asm::Registers::A, &mut Default::default(), exits);
+        let a_dead =
+            crate::peephole::dead_from(&asm.lines, end + 2, crate::asm::Registers::A, &mut Default::default(), exits);
         let byte_dead = match &saved_in {
-            None => crate::peephole::dead_from(&asm.lines, end + 2, crate::asm::Registers::X, &mut Default::default(), exits),
+            None => crate::peephole::dead_from(
+                &asm.lines,
+                end + 2,
+                crate::asm::Registers::X,
+                &mut Default::default(),
+                exits,
+            ),
             Some(m) => cell_dead_from(&asm.lines, end + 2, m, &asm.result_cells, &mut BTreeSet::new()),
         };
         if !a_dead || !byte_dead {
@@ -357,14 +529,19 @@ fn chain_once(asm: &mut Asm) -> bool {
         }
         // a carry op between the chain and the load is kept after the chain
         let mut load = end;
-        while matches!(lines.get(load), Some(Line::Inst(Inst { op: Op::Clc | Op::Sec, .. }))) {
+        while matches!(
+            lines.get(load),
+            Some(Line::Inst(Inst { op: Op::Clc | Op::Sec, .. }))
+        ) {
             load += 1;
         }
         let Some(Line::Inst(Inst { op: Op::Lda, operand: Operand::Direct(x), .. })) = lines.get(load) else { continue };
         if x != &m && x != &n {
             continue;
         }
-        if !cell_dead_from(lines, load + 1, x, &asm.result_cells, &mut BTreeSet::new()) || !flags_unread(lines, load + 1) {
+        if !cell_dead_from(lines, load + 1, x, &asm.result_cells, &mut BTreeSet::new())
+            || !flags_unread(lines, load + 1)
+        {
             continue;
         }
         let in_a = |op: Op, cell: &String| {
@@ -464,4 +641,228 @@ pub fn arithmetic_chain_in_a(asm: &mut Asm) {
             _ => s = end,
         }
     }
+}
+
+/// The instructions that read a memory operand and write no memory.
+fn reads_only(op: Op) -> bool {
+    matches!(op, Op::Lda | Op::Ldx | Op::Ldy | Op::Cpx | Op::Cpy | Op::Bit) || alu(op)
+}
+
+pub fn forward_cell_copy(asm: &mut Asm) {
+    let mut at = 0;
+    while at + 1 < asm.lines.len() {
+        if forward_once(asm, at) {
+            continue;
+        }
+        at += 1;
+    }
+}
+
+/// `lda s; sta t` at `at`: the reads of `t` that follow in straight-line code
+/// read `s` instead, and the store goes when that leaves `t` dead.
+fn forward_once(
+    asm: &mut Asm,
+    at: usize,
+) -> bool {
+    let (Line::Inst(load), Line::Inst(store)) = (&asm.lines[at], &asm.lines[at + 1]) else { return false };
+    let (Operand::Direct(s), Operand::Direct(t)) = (&load.operand, &store.operand) else { return false };
+    if load.op != Op::Lda || store.op != Op::Sta || s == t || cell_number(s).is_none() || cell_number(t).is_none() {
+        return false;
+    }
+    let mut lines = asm.lines.clone();
+    let mut changed = false;
+    for line in lines.iter_mut().skip(at + 2) {
+        let Line::Inst(inst) = line else { break };
+        if !straight(inst.op) {
+            break;
+        }
+        let pointer_pair = |c: &String, cell: &String| {
+            cell_number(c).zip(cell_number(cell)).is_some_and(|(m, n)| m == n || m + 1 == n)
+        };
+        match &inst.operand {
+            // an index reaches the cells above its base; a pointer reads two
+            Operand::Indexed(c, _) if cell_number(c).is_some() => break,
+            Operand::IndirectY(c) | Operand::IndirectX(c) | Operand::Indirect(c)
+                if pointer_pair(c, t) || pointer_pair(c, s) =>
+            {
+                break;
+            }
+            Operand::Direct(c) if c == t => {
+                if !reads_only(inst.op) {
+                    break;
+                }
+                inst.operand = Operand::Direct(s.clone());
+                changed = true;
+            }
+            Operand::Direct(c) if c == s && !reads_only(inst.op) => break,
+            _ => {}
+        }
+    }
+    if !changed || !cell_dead_from(&lines, at + 2, t, &asm.result_cells, &mut BTreeSet::new()) {
+        return false;
+    }
+    lines.remove(at + 1);
+    asm.lines = lines;
+    true
+}
+
+/// Which bit a shift of a byte leaves in the carry: bit 7 of the old byte for
+/// `asl`/`rol`, bit 0 for `lsr`/`ror`.
+fn bit_out(op: Op) -> Option<u8> {
+    match op {
+        Op::Asl | Op::Rol => Some(7),
+        Op::Lsr | Op::Ror => Some(0),
+        _ => None,
+    }
+}
+
+/// `lda m; asl a` (or `lsr a`) whose `a` the next line replaces takes a bit of
+/// `m` into the carry. When the carry already holds that bit, from a shift in
+/// place of a cell `c` that held a copy of `m` (`lda m; sta c; ...; rol c`),
+/// the pair goes: the carry is unchanged and the next load sets the zero and
+/// sign flags the shift set.
+pub fn carry_holds_the_bit(asm: &mut Asm) {
+    let mut at = 1;
+    while at + 2 < asm.lines.len() {
+        if drop_second_extraction(asm, at) {
+            continue;
+        }
+        at += 1;
+    }
+}
+
+fn drop_second_extraction(
+    asm: &mut Asm,
+    at: usize,
+) -> bool {
+    let (Line::Inst(load), Line::Inst(shift), Line::Inst(next)) =
+        (&asm.lines[at], &asm.lines[at + 1], &asm.lines[at + 2])
+    else {
+        return false;
+    };
+    let Operand::Direct(m) = &load.operand else { return false };
+    let wanted = match (shift.op, &shift.operand) {
+        (Op::Asl, Operand::Acc) => 7,
+        (Op::Lsr, Operand::Acc) => 0,
+        _ => return false,
+    };
+    if load.op != Op::Lda || cell_number(m).is_none() || next.op != Op::Lda {
+        return false;
+    }
+    let writes =
+        |inst: &Inst, cell: &String| matches!(&inst.operand, Operand::Direct(c) if c == cell) && !reads_only(inst.op);
+    // the last line before that sets the carry must shift a cell `c` in place
+    let mut from = at;
+    let shifted = loop {
+        if from == 0 {
+            return false;
+        }
+        from -= 1;
+        let Line::Inst(inst) = &asm.lines[from] else { return false };
+        if !straight(inst.op) {
+            return false;
+        }
+        if let (Some(bit), Operand::Direct(c)) = (bit_out(inst.op), &inst.operand) {
+            if bit == wanted && c != m && cell_number(c).is_some() {
+                break c.clone();
+            }
+            return false;
+        }
+        if sets_carry(inst.op) || writes(inst, m) || matches!(inst.operand, Operand::Indexed(..)) {
+            return false;
+        }
+    };
+    // `c` was stored from `m` and neither changed since, but by that shift
+    let mut back = from;
+    loop {
+        if back == 0 {
+            return false;
+        }
+        back -= 1;
+        let Line::Inst(inst) = &asm.lines[back] else { return false };
+        if !straight(inst.op) || matches!(inst.operand, Operand::Indexed(..)) {
+            return false;
+        }
+        if inst.op == Op::Sta && matches!(&inst.operand, Operand::Direct(c) if *c == shifted) {
+            let Some(Line::Inst(source)) = back.checked_sub(1).map(|prior| &asm.lines[prior]) else { return false };
+            if source.op == Op::Lda && source.operand == Operand::Direct(m.clone()) {
+                break;
+            }
+            return false;
+        }
+        if writes(inst, &shifted) || writes(inst, m) {
+            return false;
+        }
+    }
+    asm.lines.drain(at..at + 2);
+    true
+}
+
+/// The instructions that change the carry.
+fn sets_carry(op: Op) -> bool {
+    use Op::*;
+    matches!(
+        op,
+        Adc | Asl | Clc | Cmp | Cpx | Cpy | Lsr | Rol | Ror | Sbc | Sec
+    )
+}
+
+/// `lda s; sta t` where `s` is dead after the copy and `t` is used only in the
+/// straight-line code that follows: that code uses `s` instead and the store
+/// goes. A shift or step of the copy then happens in the cell it came from.
+///
+/// The pin's analogue is the register coalescer joining a copy whose source
+/// dies (`RegisterCoalescer.cpp`, `joinCopy`).
+pub fn coalesce_copy(asm: &mut Asm) {
+    let mut at = 0;
+    while at + 1 < asm.lines.len() {
+        if coalesce_once(asm, at) {
+            continue;
+        }
+        at += 1;
+    }
+}
+
+fn coalesce_once(
+    asm: &mut Asm,
+    at: usize,
+) -> bool {
+    let (Line::Inst(load), Line::Inst(store)) = (&asm.lines[at], &asm.lines[at + 1]) else { return false };
+    let (Operand::Direct(s), Operand::Direct(t)) = (&load.operand, &store.operand) else { return false };
+    if load.op != Op::Lda || store.op != Op::Sta || s == t {
+        return false;
+    }
+    let (Some(sn), Some(tn)) = (cell_number(s), cell_number(t)) else { return false };
+    if !caller_saved(sn) || !caller_saved(tn) {
+        return false;
+    }
+    let mut lines = asm.lines.clone();
+    let mut renamed = false;
+    let mut end = at + 2;
+    while let Some(Line::Inst(inst)) = lines.get_mut(end) {
+        if !straight(inst.op) {
+            break;
+        }
+        let pair = |c: &String, n: u8| cell_number(c).is_some_and(|m| m == n || m + 1 == n);
+        match &inst.operand {
+            Operand::Indexed(c, _) if cell_number(c).is_some() => return false,
+            Operand::IndirectY(c) | Operand::IndirectX(c) | Operand::Indirect(c) if pair(c, sn) || pair(c, tn) => {
+                return false;
+            }
+            Operand::Direct(c) if c == s => return false,
+            Operand::Direct(c) if c == t => {
+                inst.operand = Operand::Direct(s.clone());
+                renamed = true;
+            }
+            _ => {}
+        }
+        end += 1;
+    }
+    let dead = |cell: &str| cell_dead_from(&asm.lines, end, cell, &asm.result_cells, &mut BTreeSet::new());
+    if !renamed || !dead(s) || !dead(t) {
+        return false;
+    }
+    lines.remove(at + 1);
+    asm.lines = lines;
+    true
 }

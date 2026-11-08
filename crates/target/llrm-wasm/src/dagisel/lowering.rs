@@ -92,6 +92,8 @@ pub fn target_lowering(
     set(&[DynamicStackAlloc], &[pointer(cpu)], Action::Expand);
     set(&[FrameIndex], &words, Action::Custom);
     set(&[BrCC, SelectCC], &words, Action::Expand);
+    // No floating-point truncating stores (WebAssemblyISelLowering.cpp#L405).
+    tl.set_trunc_store_action(MVT::F64, MVT::F32, Action::Expand);
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::ExtLoad, LoadExt::ZExtLoad, LoadExt::SExtLoad] {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
@@ -260,6 +262,57 @@ impl Hooks for WasmLowering<'_> {
             return Some(dag.get_load(ret, chain, address, info));
         }
         values.first().copied()
+    }
+
+    /// `makeLibCall` for an `i128` result the caller wants as its two `i64`
+    /// halves, low first (`forceExpandWideMUL`'s `__multi3`): the result comes
+    /// back through a frame object whose address is the first argument, and
+    /// each half is loaded from it.
+    fn make_lib_call_parts(
+        &mut self,
+        dag: &mut SelectionDAG,
+        name: &'static str,
+        args: &[SDValue],
+        rets: &[EVT],
+        _signed: bool,
+    ) -> Option<Vec<SDValue>> {
+        if rets != [EVT::I64, EVT::I64] || args.iter().any(|&arg| dag.value_type(arg) != EVT::I64) {
+            return None;
+        }
+        let pointer = EVT::I32;
+        let out = |value: SDValue, arg_vt: EVT, split: bool, sret: bool| Out {
+            value,
+            ext: Ext::Zero,
+            pointer: sret,
+            arg_vt,
+            split,
+            variadic: false,
+            sret,
+            byval: None,
+        };
+        let index = dag.create_stack_temporary(16, 16);
+        let address = dag.get_frame_index(pointer, index);
+        let mut outs = vec![out(address, pointer, false, true)];
+        outs.extend(args.iter().map(|&value| out(value, EVT::I64, false, false)));
+        let callee = dag.get_external_symbol(EVT::I32, name);
+        let root = dag.entry_node();
+        let (chain, _) =
+            WasmCalling { pointer: EVT::I32, bulk_memory_opt: true }.lower_call(dag, root, callee, &outs, &[]);
+        let mut halves = Vec::with_capacity(2);
+        for (at, offset) in [0i64, 8].into_iter().enumerate() {
+            let info = MemInfo {
+                mem_vt: EVT::I64,
+                align: if at == 0 { 16 } else { 8 },
+                volatile: false,
+                base: MemBase::Stack(index),
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
+            let at_offset = dag.get_object_ptr_offset(address, offset);
+            halves.push(dag.get_load(EVT::I64, chain, at_offset, info));
+        }
+        Some(halves)
     }
 }
 

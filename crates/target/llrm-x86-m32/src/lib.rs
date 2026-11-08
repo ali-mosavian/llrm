@@ -45,8 +45,8 @@ pub fn layout() -> llrm_target::layout::Layout {
 pub struct M32;
 
 /// The registers and the address forms the descriptions state.
-static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> =
-    LazyLock::new(|| llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"));
+static REGISTERS: LazyLock<std::sync::Arc<Vec<llrm_target::registers::Register>>> =
+    LazyLock::new(|| llrm_target::registers::file(include_str!("registers.regs")).expect("registers.regs parses"));
 
 /// How flat operations are priced from the instruction forms: `opcosts.txt`.
 static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
@@ -74,6 +74,16 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
 /// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 ///
+/// DEVIATE M32-MUL-O1-CHAIN (owner llrm-target-x86-m32, exit 2026-11-15): at
+/// -O1 that chain is the stated trade against the pin's `imul`, not a
+/// Pareto win. `x * 1664525`: 29 B and ~9 clocks against 6 B and 13-42. Rows
+/// (padded .text at the matrix flags, 2026-11-08): mul_constants -O1 ours 2279,
+/// pin llc 2061, clang 2063, gcc 3032 (gcc chains it too); x_iir -O1 49.5k clk
+/// against 130.5k with the `imul` (#8211 kept it and was reverted, #8222);
+/// urem_eq -O1 +86 B for the 0xAAAAAAAB constant. Exit: a general mechanism
+/// with the chain's clocks and `imul`-like bytes (a shorter chain search, or
+/// the block's frequency pricing the choice).
+///
 /// A code byte costs the CPU's instruction-cache fill, once per run: a line's
 /// fill clocks over its bytes (`line_fill_clocks` / `cache_line` of the CPU's
 /// sheet; 486: 5 / 16 = 312 milliclocks), so `speed_milliclocks_per_byte` is
@@ -95,6 +105,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // folds of up to 16 trips, gcc's `max-completely-peel-times`, not the pin's 10 (a 16-trip loop
         // over a constant table folds to nothing and stayed rolled: 64 -> 158 B).
         unroll_o1_analyzed_trips: Some(16),
+        // DEVIATE SD443 (owner w9, exit: a constant-argument pass after inlining, as gcc's
+        // IPA-CP): a function called directly only after inlining keeps its address-taken
+        // parameters through the pin's one IPSCCP; a second one after promotion folds them.
+        // m32 memory_expansion -1332 B (-O2/-O3), second_ipsccp.c -368 B.
+        second_ipsccp: true,
         // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
         // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
         // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
@@ -108,7 +123,14 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         promote_va_list: true,
         branch_compare_trees_at_size: true,
         inline_never_grows_without_rate: true,
-        inline_o1_milliclocks_per_byte: per_byte / 2,
+        inline_o1_milliclocks_per_byte: per_byte,
+        inline_o1_unit_bytes_milli: 3500,
+        speed_inline_milliclocks_per_byte: per_byte,
+        sdiv_by_magnitude: true,
+        call_sequence_fixed_clocks: costs.call + costs.return_,
+        call_sequence_argument_clocks: costs.argument,
+        call_sequence_pop_clocks: costs.adjust,
+        inline_o1_weighs_entry: true,
         x87_zero_fill_at_size: true,
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant
@@ -728,6 +750,30 @@ mod tests {
         assert!(!model.port_touches_memory((0x3DA, 0x3DA)), "the VGA status register");
         assert!(model.port_touches_memory((0x0B, 0x0B)), "the 8237's mode register may start a transfer");
         assert!(model.port_touches_memory((0x300, 0x300)), "a port the platform does not list");
+    }
+
+    /// CARRY-SI closed: carrying the coalescer's slot indexes through the
+    /// scheduler (the pin's numbering) moved x86_32 -O1 14 cells +704 B, each
+    /// still below the pin's own bytes (pindiff m32), so m32 takes it.
+    #[test]
+    fn test_m32_carries_the_slot_indexes() {
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout().spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M32.flat_ports(),
+        };
+        let tti = (M32.cost_model())(&prices).tti().expect("m32 states its cost model");
+        assert!(tti.carries_slot_indexes());
     }
 
     /// The pin's full-unroll thresholds made matmul 2188 B against gcc's 382 at

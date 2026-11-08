@@ -190,7 +190,9 @@ impl Builder<'_> {
         let target = SwitchTarget {
             jump_tables: self.target.jump_tables,
             min_jump_table_entries: self.target.min_jump_table_entries,
+            min_density: self.target.min_jump_table_density,
             optimize: self.target.switch_optimize,
+            shift_legal: self.target.variable_shift_legal,
             opt_size: self.target.opt_size || self.function_has("optsize") || self.function_has("minsize"),
             min_size: self.has_min_size(),
             ..SwitchTarget::x86(self.target.dag.pointer.size_in_bits())
@@ -461,7 +463,9 @@ impl Builder<'_> {
         unreachable_default: bool,
     ) -> Result<(), Refused> {
         let item_pos = self.order.iter().position(|one| *one == item.block).expect("a placed block");
-        let next = self.order.get(item_pos + 1).copied();
+        let next = self.order[item_pos + 1..].iter().copied().find(|&block| {
+            self.target.preselection_blocks.is_none_or(|prefix| !self.dag.block_name(block.0).starts_with(prefix))
+        });
         let size = item.last - item.first + 1;
         if size == 2 && item.block == self.block {
             let (small, big) = (clusters[item.first], clusters[item.last]);

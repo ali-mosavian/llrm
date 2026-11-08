@@ -53,12 +53,12 @@
 //! x_ll_div +1), -Os and m16 unchanged; the skip-edge zero of x_life waits on
 //! phi operands without a copy (DAG isel).
 //!
-//! DEVIATE CSE3 (owner w-1, exit 2026-11-08): both selectors mark a load
+//! DEVIATE CSE3 (owner w2, exit 2026-11-22): both selectors mark a load
 //! invariant when it reads a constant global or says so (`!invariant.load`, a
 //! `noalias readonly` argument), and the DAG selector the load of an incoming
 //! stack argument (an immutable fixed object) and of a constant-pool entry. The
-//! pin also takes GOT loads, which ours lacks; the old selector reads an incoming
-//! argument as a memory operand of its reader, not a load of its own.
+//! pin also takes GOT loads, which ours lacks; the old selector reads an
+//! incoming argument as a memory operand of its reader, not a load of its own.
 //!
 //! Row CSE5 (was DEVIATE CSE5, retired 2026-10-25): `machinecse.rs`, the same
 //! elimination after allocation, was ours alone (the pin runs MachineCSE once,
@@ -363,7 +363,7 @@ impl Walk<'_> {
         // the pin, which then makes it twice; sharing it costs nothing the
         // callee-saved pricing below does not count (sieve m64 -O2 made a
         // zero twice, 4 bytes and 6 instructions over release/next). Exit
-        // 2026-11-20 with CSE4.
+        // 2026-11-27 with CSE4.
         let reads_value = !one.uses.is_empty();
         if !reads_value
             && old_readers.iter().all(|reader| match reader {
@@ -380,9 +380,13 @@ impl Walk<'_> {
         // enough. The pin shares it (heuristic 2 asks only for a register use
         // or a non-copy reader). Not a qword symbol address (`LEA64r`): the
         // pin's allocator holds it in a register it pushes for the other
-        // addresses too, and a later loop reads it from there. Exit
-        // 2026-11-20.
-        if !qword_address(one)
+        // addresses too, and a later loop reads it from there. Measured off
+        // 2026-11-08 (m32 + m64, 176 rows, padfree bytes): O1 -91, O2 -21, O3 -21,
+        // Os -7 except memory_expansion m64 (O1 +123, Os +331: a shared movabs
+        // the allocator does not rematerialize). Exit 2026-11-27: RA remat of
+        // a movabs (owner llrm-greedy-subreg), then delete.
+        if std::env::var_os("LLRM_NO_CSE4").is_none()
+            && !qword_address(one)
             && !reads_value
             && self.freq[block] <= 2.0
             && self.crosses_call(shared, shared_block, block, index)
@@ -1549,6 +1553,65 @@ mod tests {
         assert_eq!(zeros(&shared(&next, &RegisterClasses::m16())), 1, "the next block reads the first");
         let far = build(2);
         assert_eq!(zeros(&shared(&far, &RegisterClasses::m16())), 2, "two edges away stays two");
+    }
+
+    /// A `movabs` made in one loop's preheader and again in the next stayed
+    /// two: heuristic 1 took every constant move for `isAsCheapAsAMove`,
+    /// but `MOV64ri` is not (a dword-sized `MOV64ri32` and `MOV32ri` are).
+    /// The pin shares it at any distance (div_constants_ulong m64 -O1: 21
+    /// `movabs` against its 10, +258 B; the same divisor twice in one
+    /// function).
+    #[test]
+    fn test_a_movabs_is_shared_across_blocks_but_a_dword_constant_is_not() {
+        let build = |value: i64| {
+            let make = |at: i64, result: u32| {
+                let imm = Loc::Imm(llrm_lir::Imm { value, width: 8, address: None });
+                let dest = Loc::Held(Held { value: result, width: 8, offset: 0 });
+                insn(at, Operation::Move, "mov", vec![dest], vec![imm], vec![result], vec![])
+            };
+            let read = |at: i64, value: u32, result: u32| {
+                insn(
+                    at,
+                    Operation::Binary,
+                    "add",
+                    vec![held(result)],
+                    vec![held(value), held(1)],
+                    vec![result],
+                    vec![value, 1],
+                )
+            };
+            let blocks = vec![
+                LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![make(0, 10), read(1, 10, 11)]) },
+                LirBlock { succ: vec![2].into(), ..LirBlock::new(1, vec![]) },
+                LirBlock::new(2, vec![make(20, 20), read(21, 20, 21)]),
+            ];
+            let mut body = LirBody::new(
+                "movabs",
+                0,
+                blocks.into_iter().map(Into::<Block>::into).collect::<Vec<Block>>(),
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [1].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+            body
+        };
+        let moves = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("mov"))
+                .count()
+        };
+        let wide = build(0xaaaa_aaaa_aaaa_aaabu64 as i64);
+        assert_eq!(moves(&wide), 2, "the premise: two movabs");
+        assert_eq!(
+            moves(&shared(&wide, &RegisterClasses::of(&llrm_x86_m64::M64))),
+            1,
+            "a movabs is shared two blocks away"
+        );
+        let narrow = build(0x1234_5678);
+        assert_eq!(moves(&shared(&narrow, &RegisterClasses::of(&llrm_x86_m64::M64))), 2, "a dword constant is not");
     }
 
     /// A load of a constant-pool entry (`isDereferenceableInvariantLoad`) with

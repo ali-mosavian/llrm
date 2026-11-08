@@ -74,6 +74,9 @@ impl Placer {
         // `jcc next; jmp other` is `jncc other` and a fall-through: the form
         // LLVM has once the branches are folded, which placement follows.
         let mut count = real.len();
+        if real.last().and_then(|one| one.what.as_ref()).is_some_and(|what| what.op == Operation::Return) {
+            count += self.epilogue;
+        }
         let ops: Vec<_> = real.iter().filter_map(|one| one.what.as_ref()).collect();
         if let Some(last) = ops.last()
             && last.op == Operation::Jump
@@ -86,7 +89,7 @@ impl Placer {
                 count -= 1;
             }
         }
-        count <= self.dup_size
+        count <= self.dup_size || (!self.latch[block] && self.hot.is_some_and(|hot| hot.pays(count, self.freq[block])))
     }
 
     fn at(

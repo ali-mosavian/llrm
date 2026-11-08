@@ -358,6 +358,19 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             && !self.divide_stays(vt, n0, n1, true)
             && !self.hardware_divide_wins(vt, n0, n1, true, false)
         {
+            // DEVIATE SD-DIVMAG: by a negative divisor the quotient is the
+            // negation of the one by its magnitude, which the remainder
+            // (`x % -c` is `x % c`) already multiplies by: one multiply-high.
+            if self.dag.config().sdiv_by_magnitude
+                && let Some(c) = self.dag.constant(n1)
+                && c >> (bits - 1) & 1 == 1
+                && !Self::is_signed_min(c, bits)
+                && !self.dag.is_opaque(n1)
+            {
+                let magnitude = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(bits), vt);
+                let quotient = self.dag.get_node(ISD::SDiv, vt, &[n0, magnitude]);
+                return Some(self.dag.get_negative(quotient, vt));
+            }
             return self.build_sdiv(n0, n1, node);
         }
         None

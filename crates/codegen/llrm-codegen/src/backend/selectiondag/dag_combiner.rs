@@ -464,6 +464,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// `visitSUB`'s `sub C, X` is `xor X, C` where X cannot borrow from C's bits
+    /// ([L4651](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4651)).
+    /// DEVIATE SW2 (owner w9, 2026-11-08): on only where a target states it;
+    /// the x86 targets do (the Dag switch-over: `c ? 4 : 5` at i16 is `setl;
+    /// xor 5`). Exit: every target on, after their integration sweeps.
+    fn sub_without_borrow_is_xor(&self) -> bool {
+        false
+    }
+
     /// `visitSUB`'s algebraic folds (`a - (b - c)` is `a + (c - b)`, the
     /// cancelling pairs, the constants that meet). DEVIATE: off by default.
     /// On x86 the regrouped remainder `x - (8q - q)` keeps `q` live longer and
@@ -956,10 +965,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 .or_else(|| self.reduce_load_width_of(node))
                 .or_else(|| self.simplify_demanded(node))
                 .or_else(|| self.and_of_extload(node)),
-            ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
+            ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)).or_else(|| self.visit_or_as_add(node)),
             ISD::Add => self.visit_add(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sub => self.visit_sub(node),
             ISD::UAddO => self.visit_uaddo(node),
+            ISD::UMulO | ISD::SMulO => self.visit_mulo(node),
             ISD::UAddOCarry => self.visit_uaddo_carry(node),
             ISD::FAdd => self.visit_fadd(node),
             ISD::FSub => self.visit_fsub(node),
@@ -1085,7 +1095,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // `ExpandSetCCOperands`: a pair equals a constant when both halves do
         // (`(lo ^ c.lo) | (hi ^ c.hi)` is zero), so a long a call returned in
         // dx:ax is compared by halves, not joined into one dword first.
-        if matches!(cond, CondCode::SetEq | CondCode::SetNe) && self.dag.opcode(n0) == ISD::BuildPair {
+        if matches!(cond, CondCode::SetEq | CondCode::SetNe)
+            && self.dag.opcode(n0) == ISD::BuildPair
+            && !self.tli.is_some_and(|tli| tli.byte_equality())
+        {
             let (low, high) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
             let half = self.dag.value_type(low);
             let bits = half.size_in_bits();
@@ -1446,15 +1459,16 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let flipped = self.dag.operand(n0, 0);
             return Some(self.dag.get_select(vt, flipped, n2, n1));
         }
-        if cond_vt != EVT::I1 {
-            return None;
-        }
         // The pin reaches the sign mask through `or (sext (setle x, -1)), 1`:
         // `SimplifySetCC` makes the compare `x < 0` and `visitSIGN_EXTEND`
         // folds `sext (setlt x, 0)` to `sra`. Neither is translated, so the
-        // sign folds run first, with the same result.
+        // sign folds run first, with the same result. Whatever the width of
+        // the condition (wasm's compare is an `i32`).
         if let Some(mask) = self.select_sign_folds(n0, n1, n2) {
             return Some(mask);
+        }
+        if cond_vt != EVT::I1 {
+            return None;
         }
         if let Some(math) = self.fold_select_of_constants(n0, n1, n2, vt) {
             return Some(math);
@@ -2022,9 +2036,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let NodeData::Mem(info) = self.dag.node(load).data else { return None };
-        if info.volatile {
-            return None;
-        }
         let op = self.dag.opcode(node);
         let wanted = match op {
             ISD::ZeroExtend => LoadExt::ZExtLoad,
@@ -2041,14 +2052,22 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let wide = self.dag.value_type(node);
         let others: Vec<u32> = self.dag.users(load).filter(|&user| user != node.node).collect();
         let mut compares = Vec::new();
+        let legal = match (wide, info.mem_vt) {
+            (EVT::Simple(wide_mvt), EVT::Simple(mem_mvt)) => {
+                self.tli.is_some_and(|tli| tli.load_ext_action(ext, wide_mvt, mem_mvt) == Action::Legal)
+            }
+            _ => false,
+        };
+        // `tryToFoldExtOfLoad`: a volatile (not simple) load is widened only
+        // when the extending load is legal.
+        if info.volatile && !legal {
+            return None;
+        }
         if !others.is_empty() {
             // `isLoadExtLegal`, and `ExtendUsesToFormExtLoad`: the other
             // readers are compares against a constant, which can be
             // widened, or take the value back through a (free)
             // truncate.
-            let EVT::Simple(wide_mvt) = wide else { return None };
-            let EVT::Simple(mem_mvt) = info.mem_vt else { return None };
-            let legal = self.tli.is_some_and(|tli| tli.load_ext_action(ext, wide_mvt, mem_mvt) == Action::Legal);
             if info.ext.is_some() || !legal || !self.extend_uses(node, load, op, &others, &mut compares) {
                 return None;
             }
@@ -2354,6 +2373,38 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
+        let flags = self.dag.node(node).flags;
+        self.visit_add_like(node, flags)
+    }
+
+    /// `visitOR`'s last step: "If OR can be rewritten into ADD, try combines
+    /// based on ADD" (`isADDLike`: a `disjoint` or whose operands share no
+    /// bits), after `SimplifyDemandedBits` as in the pin. `(or disjoint (add
+    /// x, c0), c1)` of a truncating store is `(add x, c0 + c1)`.
+    fn visit_or_as_add(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        if !vt.is_integer() || (self.legal_operations() && !self.fp_op_legal(ISD::Add, vt)) {
+            return None;
+        }
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if !(self.dag.node(node).flags.has(SDNodeFlags::DISJOINT) || super::dagisel_adapter::no_common_bits(self.dag, n0, n1)) {
+            return None;
+        }
+        // The add made of the or keeps no wrap flags (`getFlags` of an or has none).
+        let combined = self.visit_add_like(node, SDNodeFlags::default())?;
+        (combined != node).then_some(combined)
+    }
+
+    /// `visitADDLike`: the folds of `n0 + n1` as the add `node` spells them (or
+    /// as an add-like `or`); `flags` are the wrap flags the regrouped adds keep.
+    fn visit_add_like(
+        &mut self,
+        node: SDValue,
+        flags: SDNodeFlags,
+    ) -> Option<SDValue> {
         let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let vt = self.dag.value_type(node);
         if self.dag.constant(n0).is_some() && self.dag.constant(n1).is_none() {
@@ -2415,7 +2466,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 // `NewFlags`); DEVIATE: only where `global_addresses_constant`
                 // is set, until x86 is judged.
                 let nuw = |dag: &SelectionDAG, v: SDValue| dag.node(v).flags.has(SDNodeFlags::NO_UNSIGNED_WRAP);
-                let keep = self.dag.config().global_addresses_constant && nuw(self.dag, n0) && nuw(self.dag, node);
+                let keep = self.dag.config().global_addresses_constant
+                    && nuw(self.dag, n0)
+                    && flags.has(SDNodeFlags::NO_UNSIGNED_WRAP);
                 let flags = if keep { SDNodeFlags::NO_UNSIGNED_WRAP } else { SDNodeFlags::default() };
                 return Some(self.dag.get_node_flags(ISD::Add, vt, &[self.dag.operand(n0, 0), sum], flags));
             }
@@ -2459,7 +2512,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
-            && let Some(regrouped) = self.reassociate_ops(ISD::Add, n0, n1, self.dag.node(node).flags)
+            && let Some(regrouped) = self.reassociate_ops(ISD::Add, n0, n1, flags)
         {
             return Some(regrouped);
         }
@@ -3093,6 +3146,21 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         {
             return Some(folded);
         }
+        // `visitSUB` ([L4651][pin]): with no chance of borrowing from the
+        // adjacent bits, `sub C0, X` is `xor X, C0` (`5 - zext(c)` is `5 ^ c`).
+        //
+        // [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4651
+        if self.hooks.sub_without_borrow_is_xor()
+            && let Some(c0) = self.dag.constant(n0).filter(|_| !self.dag.is_opaque(n0))
+        {
+            let mask = super::fold::mask(vt.size_in_bits());
+            let maybe_ones = !super::known_bits::known_bits(self.dag, n1).zero & mask;
+            // `sub -1, x` is `~x`, a fold `sub_algebra_folds` keeps off (it moved
+            // x86_16 spills).
+            if c0 & mask != mask && c0.wrapping_sub(maybe_ones) & mask == (c0 ^ maybe_ones) & mask {
+                return Some(self.dag.get_node(ISD::Xor, vt, &[n1, n0]));
+            }
+        }
         let c = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1))?;
         let negated = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(vt.size_in_bits()), vt);
         Some(self.dag.get_node(ISD::Add, vt, &[n0, negated]))
@@ -3646,10 +3714,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(split) = self.split_pair_store(node) {
             return Some(split);
         }
-        // "Keep trying to merge store sequences until we are unable to do so":
-        // the merged stores are dead, the node is returned as handled.
-        if self.merge_consecutive_stores(node) {
-            return Some(node);
+        if let Some(truncating) = self.store_of_trunc(chain, value, ptr, info) {
+            return Some(truncating);
+        }
+        // "There can be multiple store sequences on the same chain. Keep trying
+        // to merge store sequences until we are unable to do so or until we
+        // merge the last store on the chain": the merged stores are dead, and
+        // the node is returned as handled once it is one of them.
+        while self.merge_consecutive_stores(node) {
+            if self.is_dead(node.node) {
+                return Some(node);
+            }
         }
         if let Some(done) = self.truncating_store_demanded_bits(node, chain, value, ptr, info) {
             return Some(done);
@@ -3746,6 +3821,32 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_store(chain, shorter, ptr, info));
         }
         None
+    }
+
+    /// `visitSTORE`'s "if this is an FP_ROUND or TRUNC followed by a store,
+    /// fold this into a truncating store"
+    /// ([L24881](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L24881)),
+    /// with `canCombineTruncStore`: the target takes that truncating store
+    /// (legal, or legal or custom before operations are legalized).
+    fn store_of_trunc(
+        &mut self,
+        chain: SDValue,
+        value: SDValue,
+        ptr: SDValue,
+        info: MemInfo,
+    ) -> Option<SDValue> {
+        if !matches!(self.dag.opcode(value), ISD::Truncate | ISD::FpRound)
+            || !self.dag.has_one_use(value.node)
+            || info.ordering.is_some()
+        {
+            return None;
+        }
+        let tli = self.tli?;
+        let source = self.dag.operand(value, 0);
+        let (EVT::Simple(wide), EVT::Simple(narrow)) = (self.dag.value_type(source), info.mem_vt) else { return None };
+        let action = tli.trunc_store_action(wide, narrow);
+        let takes = action == Action::Legal || (!self.legal_operations() && action == Action::Custom);
+        takes.then(|| self.dag.get_store(chain, source, ptr, info))
     }
 
     /// `splitMergedValStore`, for the `BUILD_PAIR` the builder makes before
@@ -4057,7 +4158,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let NodeData::Mem(info) = self.dag.node(load).data else { return None };
-        if info.mem_vt != ext || info.volatile {
+        if info.mem_vt != ext {
             return None;
         }
         let legal = match (vt, ext) {
@@ -4068,8 +4169,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         };
         let one_use = self.dag.has_one_use(load.node);
         let fold = match info.ext {
-            Some(LoadExt::ExtLoad) => (!self.legal_operations() && one_use) || legal,
-            Some(LoadExt::ZExtLoad) => one_use && !self.legal_operations() && legal,
+            Some(LoadExt::ExtLoad) => (!self.legal_operations() && !info.volatile && one_use) || legal,
+            Some(LoadExt::ZExtLoad) => one_use && !self.legal_operations() && !info.volatile && legal,
             _ => false,
         };
         if !fold {

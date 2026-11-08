@@ -84,7 +84,7 @@ use crate::backend::calleefacts;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::constpool::Pool;
 use crate::backend::cpu::{Profile, ProfileOrName};
-use crate::backend::isel::{self, Selected};
+use crate::backend::isel::{self, Selected, Unselected};
 use crate::backend::shadow::{self, Selector};
 use crate::backend::target::Segments;
 use crate::backend::{addressvalues, constrain, executed, frame, globals, jumps, masm, returnsplit, select};
@@ -414,7 +414,7 @@ pub fn assembled_by(
                 let interrupt = (function.calling_convention == llrm_mir::opcode::X86_INTR).then(|| {
                     let (space, index) = crate::hir::symbols::DGROUP;
                     names.insert((space, index), globals::DGROUP.to_owned());
-                    Addr { index, ..Addr::new(space, 0) }
+                    masm::Interrupt::of(arch, Addr { index, ..Addr::new(space, 0) })
                 });
                 if is_weak(global.linkage) {
                     weak.insert(names[&(Space::Segment, at as i64)].clone());
@@ -871,7 +871,11 @@ fn machined_once(
     let far = far_frame(&first, sp);
     // An over-aligned local lies on its alignment below the aligned top: a
     // layout that moves objects would break it.
-    let ordered = if far > 0 && first.body.over_aligned.is_empty() {
+    // Built only where it has fewer far cells than the first layout, which is told by counting them.
+    let ordered = if far > 0
+        && first.body.over_aligned.is_empty()
+        && crate::backend::relayout::far_ordered(&first, &frame, sp).is_none_or(|ordered| ordered < far)
+    {
         crate::backend::relayout::ordered(&first, &frame, sp).map(|(ordered, _)| ordered)
     } else {
         None
@@ -895,8 +899,15 @@ fn machined_once(
     // backend again; `LLRM_CHECK_FRAME=1` runs it again beside, and the two
     // must be the same function. A frame that cannot be moved keeps its first
     // layout.
-    let laid = timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled));
-    if llrm_support::env_flag!("LLRM_CHECK_FRAME") {
+    // Built only where it has fewer far cells, which is told by counting them.
+    let check = llrm_support::env_flag!("LLRM_CHECK_FRAME");
+    let worth = check || crate::backend::relayout::far_again(&first, &frame, spilled, sp).is_none_or(|again| again < far);
+    let laid = if worth {
+        timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled))
+    } else {
+        None
+    };
+    if check {
         let (again, _) = cheaper(&staged(module, name, abi, pool, target, spilled)?, name, pool, target)?;
         match &laid {
             Some((laid, _)) => {
@@ -1077,6 +1088,9 @@ struct Staged {
     /// The register classes the routes allocate from: the target's, with the
     /// frame register a value register where the function needs none.
     classes: Rc<RegisterClasses>,
+    /// Every block was selected by FastISel, which leaves out the jump to the
+    /// next block (`fastEmitBranch`) as the pin's does.
+    fast: bool,
 }
 
 impl Staged {
@@ -1142,7 +1156,7 @@ fn staged(
     SELECTED.with(|count| count.set(count.get() + 1));
     llrm_mir::counts::bump(llrm_mir::counts::Event::Selections);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
-    let contracts = Some(crate::backend::selectiondag::dag_function::RuntimeContracts {
+    let contracts = Some(crate::backend::selectiondag::select_api::RuntimeContracts {
         abi,
         segments: target.segments,
         runtime: abi.runtime_contracts(),
@@ -1159,7 +1173,7 @@ fn staged(
         // old selector.
         Selector::Dag | Selector::Shadow if !shadow::only(name) || calls_atomic(module, name) => None,
         Selector::Dag => Some(timed("dag isel", || {
-            crate::backend::selectiondag::dag_function::selected_in_pool(
+            select_in_pool(
                 module,
                 name,
                 target.arch,
@@ -1171,7 +1185,7 @@ fn staged(
         })),
         Selector::Shadow => {
             match timed("dag isel", || {
-                crate::backend::selectiondag::dag_function::selected_in_pool(
+                select_in_pool(
                     module,
                     name,
                     target.arch,
@@ -1189,9 +1203,11 @@ fn staged(
             }
         }
     };
+    let mut fast = false;
     let selected = if let Some(done) = dag {
         if done.is_ok() {
-            if crate::backend::selectiondag::fastisel::take_took() {
+            if crate::backend::hooks::installed().is_some_and(|hooks| hooks.take_fast_took()) {
+                fast = true;
                 shadow::record_fast(name);
             } else {
                 shadow::record(name, Selector::Dag);
@@ -1297,7 +1313,7 @@ fn staged(
         && !crate::backend::framefree::has_fp(
             &body,
             &registers,
-            &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),
+            &pops.iter().map(|(at, bytes)| (*at, *bytes)).chain(body.call_pops.iter().map(|(at, bytes)| (*at, *bytes))).collect(),
             // Tuned for size any inline code keeps the frame register until
             // masm has compared the two forms; x87 register operations alone
             // do not otherwise.
@@ -1384,6 +1400,7 @@ fn staged(
         landing,
         registers,
         classes,
+        fast,
     })
 }
 
@@ -1421,6 +1438,10 @@ fn phased(
     )? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
+            continue;
+        }
+        // The pin's -O0 has no BranchFolder, and what FastISel selects has no jump to the next block.
+        if staged.fast && !target.cpu.optimized && phase.class_name() == "ControlFlow" {
             continue;
         }
         if phase.class_name() == "PhiElimination" {
@@ -1556,4 +1577,22 @@ fn comdat_of(
         _ => return None,
     };
     Some(masm::Comdat { name: comdat.clone(), selection, extent: None, constant: false })
+}
+
+/// The installed backend's function selector. Without one no function is
+/// selected by the DAG path: a refusal, which `Selector::Shadow` takes to the
+/// old selector.
+fn select_in_pool(
+    module: &Module,
+    name: &str,
+    arch: &dyn llrm_target::Target,
+    cpu: &crate::backend::cpu::Profile,
+    libcalls: &[(String, u32, String)],
+    contracts: Option<&crate::backend::selectiondag::select_api::RuntimeContracts<'_>>,
+    pool: &mut Pool,
+) -> Result<Selected, Unselected> {
+    match crate::backend::hooks::installed() {
+        Some(hooks) => hooks.select_function(module, name, arch, cpu, libcalls, contracts, pool),
+        None => Err(Unselected("no backend installed (llrm_x86_backend::install)".to_owned())),
+    }
 }

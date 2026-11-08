@@ -36,12 +36,12 @@ use super::actions::TargetLowering;
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::dag_target::{DagTarget, Phases, Select, select_units};
 use super::dagisel_adapter::{DagisAdapter, PinRegisters};
-use super::emit::{EmitContext, EmitState, Emitted, emit_in};
+use super::emit_api::{EmitContext, EmitState, Emitted};
 use super::isd::ISD;
 use super::legalize_dag;
 use super::legalize_dag::DagLegalizer;
 use super::legalize_types::TypeLegalizer;
-use super::schedule::{SchedInfo, schedule};
+use super::schedule::{SchedInfo, Unit, schedule};
 use super::x86_lowering::X86Lowering;
 use super::{SDValue, SelectionDAG};
 
@@ -53,7 +53,7 @@ pub enum Refusal {
     CannotSelect(String),
     /// The selector named a register the target has no id for.
     UnknownRegister(String),
-    Emit(super::emit::EmitError),
+    Emit(super::emit_api::EmitError),
 }
 
 /// x86 as a [`DagTarget`]: its lowering tables, hooks and selector tables.
@@ -87,7 +87,12 @@ impl<'p> DagTarget for X86Target<'_, 'p> {
     type Lowering = X86Lowering<'p>;
 
     fn phases(&mut self) -> Phases<'_, X86Lowering<'p>> {
-        Phases { tli: self.tli, lowering: &mut *self.lowering, arch: Some(self.arch) }
+        Phases {
+            tli: self.tli,
+            lowering: &mut *self.lowering,
+            arch: Some(self.arch),
+            opt_none: self.chooser.hooks.options.opt_none,
+        }
     }
 
     fn selection(&mut self) -> (&dyn PinRegisters, &mut dyn Select) {
@@ -101,6 +106,16 @@ impl<'p> DagTarget for X86Target<'_, 'p> {
         dag: &mut SelectionDAG,
     ) {
         super::live_out::assert_live_out_copies(dag, self.live);
+    }
+
+    /// `PostprocessISelDAG`; skipped at -O0 like the pin's.
+    fn postprocess(
+        &mut self,
+        dag: &mut SelectionDAG,
+    ) {
+        if !self.chooser.hooks.options.opt_none {
+            super::x86_postprocess::postprocess(dag);
+        }
     }
 
     fn preprocess(
@@ -155,7 +170,7 @@ pub fn select_block(
         info,
         temporaries,
     )?;
-    crate::support::debug::timed("dag emit", || emit_in(dag, &units, ctx, state, first_at)).map_err(Refusal::Emit)
+    crate::support::debug::timed("dag emit", || emit_units(dag, &units, ctx, state, first_at)).map_err(Refusal::Emit)
 }
 
 /// [`select_block`] for a DAG FastISel already selected: scheduled and emitted.
@@ -168,7 +183,7 @@ pub fn select_block_fast(
 ) -> Result<Emitted, Refusal> {
     let root = dag.get_root();
     let units = crate::support::debug::timed("dag schedule", || schedule(dag, root, info));
-    crate::support::debug::timed("dag emit", || emit_in(dag, &units, ctx, state, first_at)).map_err(Refusal::Emit)
+    crate::support::debug::timed("dag emit", || emit_units(dag, &units, ctx, state, first_at)).map_err(Refusal::Emit)
 }
 
 /// `SelectCodeCommon` for `AssertSext` and `AssertZext`: each is its operand.
@@ -192,7 +207,7 @@ pub fn legalized(
     lowering: &mut X86Lowering<'_>,
     arch: &dyn llrm_target::Target,
 ) -> Result<(), Refusal> {
-    legalized_with(dag, tli, lowering, Some(arch))
+    legalized_with(dag, tli, lowering, Some(arch), false)
 }
 
 /// [`legalized`] for any target's lowering hooks. `arch` is the target whose
@@ -202,18 +217,23 @@ pub fn legalized_with<L: CombineHooks + legalize_dag::Hooks>(
     tli: &TargetLowering,
     lowering: &mut L,
     arch: Option<&dyn llrm_target::Target>,
+    opt_none: bool,
 ) -> Result<(), Refusal> {
-    DagCombiner::new(dag, lowering, CombineLevel::BeforeLegalizeTypes).with_tli(tli).run();
+    let combiner = |dag: &mut SelectionDAG, lowering: &mut L, level| {
+        let combiner = DagCombiner::new(dag, lowering, level).with_tli(tli);
+        if opt_none { combiner.with_opt_none() } else { combiner }.run();
+    };
+    combiner(dag, lowering, CombineLevel::BeforeLegalizeTypes);
     let mut types = TypeLegalizer::new(dag, tli);
     if let Some(arch) = arch {
         types = types.with_target(arch);
     }
     let types = types.with_hooks(lowering).run();
     types.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
-    DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeTypes).with_tli(tli).run();
+    combiner(dag, lowering, CombineLevel::AfterLegalizeTypes);
     let legal = DagLegalizer::new(dag, tli, lowering).run();
     legal.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
-    DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeDag).with_tli(tli).run();
+    combiner(dag, lowering, CombineLevel::AfterLegalizeDag);
     // `LLRM_DAGDUMP=all` prints every block's DAG as selection will see it.
     if llrm_support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
         eprintln!("legalized:\n{}", dag.dump());
@@ -332,4 +352,19 @@ pub(crate) fn users_first(dag: &SelectionDAG) -> Vec<u32> {
     }
     order.reverse();
     order
+}
+
+/// The installed backend's emitter. Without one nothing emits LIR: a
+/// refusal, never a skipped block.
+fn emit_units(
+    dag: &SelectionDAG,
+    units: &[Unit],
+    ctx: &EmitContext<'_>,
+    state: &mut EmitState,
+    first_at: i64,
+) -> Result<Emitted, super::emit_api::EmitError> {
+    match crate::backend::hooks::installed() {
+        Some(hooks) => hooks.emit_units(dag, units, ctx, state, first_at),
+        None => Err(super::emit_api::EmitError::Unsupported("no backend installed (llrm_x86_backend::install)".to_owned())),
+    }
 }

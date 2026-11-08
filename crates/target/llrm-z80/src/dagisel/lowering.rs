@@ -99,6 +99,8 @@ pub fn target_lowering() -> TargetLowering {
     set(&[MulHS, MulHU, UMulLoHi, SMulLoHi], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[SDivRem, UDivRem], &[MVT::I8], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], &[MVT::I8, MVT::I16], Action::Expand);
+    // no rotate or funnel shift instruction: shifts and an or (`expandROT`, `expandFunnelShift`)
+    set(&[Rotl, Rotr, FShl, FShr], &[MVT::I8, MVT::I16], Action::Expand);
     // the action is by the type extended from (`LegalizeDAG`): a word from a
     // byte is the byte sign-extended (`lower_sign_extend_inreg`)
     set(&[SignExtendInReg], &[MVT::I1, MVT::I16], Action::Expand);
@@ -168,7 +170,13 @@ pub fn target_lowering() -> TargetLowering {
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
+    // equality of a long is the bytes' xors or-ed in the accumulator
+    tl.set_byte_equality(true);
+    tl.set_assert_sext_keeps_high(true);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
+    // a jump table: the word at table + 2 * index, jumped to (`ExpandNode` of BR_JT)
+    tl.set_operation_action(BrJT, MVT::Other, Action::Expand);
+    tl.set_operation_action(JumpTable, MVT::I16, Action::Custom);
     tl
 }
 
@@ -353,6 +361,7 @@ impl Hooks for Z80Lowering {
             ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
             ISD::SignExtendInReg => lower_sign_extend_inreg(dag, node),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::JumpTable => lower_jump_table(dag, node),
             ISD::Load if dag.value_type(node) == EVT::I1 => lower_bit_load(dag, node),
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
             _ => None,
@@ -574,6 +583,16 @@ fn lower_global_address(
     let NodeData::Global { symbol, offset } = dag.node(node).data else { return None };
     let address = dag.get_target_global_address(EVT::I16, symbol, offset);
     Some(dag.get_node(z80isd::WRAPPER, EVT::I16, &[address]))
+}
+
+/// `LowerJumpTable`: `WRAPPER` of the table's address.
+fn lower_jump_table(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::JumpTable(index) = dag.node(node).data else { return None };
+    let table = dag.get_target_jump_table(EVT::I16, index);
+    Some(dag.get_node(z80isd::WRAPPER, EVT::I16, &[table]))
 }
 
 fn cc_operand(
@@ -833,6 +852,11 @@ fn condition_byte(
                 let one = dag.get_constant(1, EVT::I8);
                 dag.get_node(ISD::And, EVT::I8, &[byte, one])
             }
+            // a bit loaded and tested at once: the byte read, masked
+            ISD::Load => match lower_bit_load(dag, value) {
+                Some(lowered) => condition_byte(dag, lowered),
+                None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
+            },
             ISD::Freeze => {
                 let bit = dag.operand(value, 0);
                 condition_byte(dag, bit)

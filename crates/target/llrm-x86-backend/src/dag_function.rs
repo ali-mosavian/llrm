@@ -1,0 +1,2170 @@
+//! One function through the DAG path to the `Selected` the machine phases
+//! take: the other half of `--isel=dag`.
+//!
+//! # How it works
+//! [`selected`] builds the entry block's DAG, runs
+//! [`llrm_codegen::backend::selectiondag::dag_select::select_block`] and turns the emitted blocks into a
+//! `LirBody`: the blocks the select diamond made, their successors, the machine
+//! facts the phases read. A function the path cannot yet take (more than one
+//! MIR block, a call, a frame object, an unsupported opcode) is a refusal with
+//! its reason: the shadow harness counts them.
+//!
+//! ```text
+//! @f(a, b) = a + b      LIR:  v1 := mov [arg0]      (builder, legalizer,
+//!                              v2 := add v1, [arg1]   selector, scheduler,
+//!                              eax := mov v2          emitter)
+//!                              ret
+//! ```
+//!
+//! # Example
+//! `int f(int a, int b) { return a + b; }` at `-m32`: four instructions; the
+//! second load is folded into the add (`ADD32rm`).
+//!
+//! # Runs
+//! `assemble::staged` when `--isel=dag`.
+//!
+//! DEVIATE SD403: no counted-loop trip counts, so the executed-work estimate of
+//! a loop is lower than the old selector's until they are carried; branch
+//! probabilities (`odds`) are the builder's (`addSuccessorWithProb`: a branch's
+//! two edges, a merged condition's cases, `set_odds`); a switch's edges have
+//! none yet; and no calls, locals, register arguments,
+//! switch lowering or multi-register phis yet. Reason: they need the call
+//! sequence and frame objects in the emitter (D1e). Exit: D1e. Owner: sdag-d.
+//! Review 2026-12-03.
+
+use std::sync::{LazyLock, Mutex};
+
+use indexmap::IndexMap;
+use llrm_dagisel::generated::{x86_i486, x86_m16, x86_x64};
+use llrm_dagisel::interp::Selector;
+use llrm_dagisel::x86_addr::AddrMode;
+use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::module::{BlockId, Module, ValueDef, ValueId};
+use llrm_support::hash::{HashMap, HashSet};
+use llrm_target::Target;
+use llrm_target::routines::Used;
+
+use llrm_codegen::backend::selectiondag::actions::{Features, TargetLowering};
+use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, RuntimeAnswer, SizeTrade, build_block};
+use llrm_codegen::backend::selectiondag::dag_select::select_block;
+use llrm_codegen::backend::selectiondag::emit_api::{Callee, EmitBlock, EmitContext, EmitState, FrameMap, JumpTable};
+use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
+use llrm_codegen::backend::selectiondag::mvt::MVT;
+use llrm_codegen::backend::selectiondag::opcodes::OpcodeMap;
+use llrm_codegen::backend::selectiondag::schedule::SchedInfo;
+use llrm_codegen::backend::selectiondag::x86_lowering::X86Lowering;
+use llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects;
+use llrm_codegen::backend::constpool::Pool;
+use llrm_codegen::backend::isel::{Parameter, Selected, Unselected};
+use llrm_codegen::model::ir::{Addr, Held, Mem, Space};
+use llrm_codegen::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
+
+struct Info {
+    source_order: bool,
+    m64: bool,
+}
+
+impl SchedInfo for Info {
+    fn num_defs(
+        &self,
+        opcode: u32,
+    ) -> usize {
+        llrm_dagisel::instr::desc(opcode as u16).map_or(0, |d| usize::from(d.num_defs))
+    }
+
+    fn implicit_defs(
+        &self,
+        opcode: u32,
+    ) -> &[u16] {
+        llrm_dagisel::instr::desc(opcode as u16).map_or(&[], |d| d.implicit_defs)
+    }
+
+    fn is_call(
+        &self,
+        opcode: u32,
+    ) -> bool {
+        llrm_dagisel::instr::desc(opcode as u16).is_some_and(|d| d.is_call())
+    }
+
+    fn source_order(&self) -> bool {
+        self.source_order
+    }
+
+    fn unfold_memory_operand(
+        &self,
+        dag: &mut llrm_codegen::backend::selectiondag::SelectionDAG,
+        node: u32,
+    ) -> Option<[u32; 2]> {
+        llrm_codegen::backend::selectiondag::x86_unfold::unfold_memory_operand(dag, node)
+    }
+
+    fn has_cross_copy_class(
+        &self,
+        reg: u16,
+    ) -> bool {
+        Some(reg) == llrm_codegen::backend::selectiondag::dagisel_adapter::pin_register(llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID)
+    }
+
+    // `ADJCALLSTACKDOWN32`/`64` and `ADJCALLSTACKUP32`/`64`, numbered alike in
+    // every x86 table.
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(if self.m64 { 768 } else { 767 })
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(if self.m64 { 770 } else { 769 })
+    }
+}
+
+/// The frame's objects: fixed object `-k` is the k-th stack-passed
+/// parameter; a stack temporary or alloca `k >= 0` is a cell below BP, laid
+/// out as the old selector lays them (`depth` grows, a slot is at `-depth`).
+pub(super) struct Frame {
+    params: Vec<i64>,
+    /// (displacement, size) of each object made, by index.
+    locals: std::cell::RefCell<Vec<(i64, i64)>>,
+    depth: std::cell::Cell<i64>,
+    /// The widest alignment any object was made with.
+    align: std::cell::Cell<i64>,
+}
+
+impl Frame {
+    pub(super) fn new(
+        params: Vec<i64>,
+        hole: i64,
+    ) -> Frame {
+        Frame { params, locals: Default::default(), depth: std::cell::Cell::new(hole), align: std::cell::Cell::new(1) }
+    }
+}
+
+impl FrameMap for Frame {
+    fn cell(
+        &self,
+        index: i32,
+        width: u32,
+    ) -> Option<Mem> {
+        let disp = if index < 0 {
+            *self.params.get(usize::try_from(-index - 1).ok()?)?
+        } else {
+            self.locals.borrow().get(usize::try_from(index).ok()?)?.0
+        };
+        Some(Mem {
+            through: llrm_lir::registers::RegId::BP,
+            disp_width: 2,
+            ..Mem::new(Some(Addr::new(Space::Frame, disp)), width)
+        })
+    }
+
+    fn extent(
+        &self,
+        index: i32,
+    ) -> Option<(i64, i64)> {
+        self.locals.borrow().get(usize::try_from(index).ok()?).copied()
+    }
+}
+
+/// `CreateStackTemporary`: the preprocess makes its slots here.
+pub(super) struct Temporaries<'a>(pub(super) &'a Frame);
+
+impl FrameObjects for Temporaries<'_> {
+    fn objects(&self) -> i32 {
+        self.0.locals.borrow().len() as i32
+    }
+
+    fn create_stack_temporary(
+        &mut self,
+        size: u32,
+        align: u32,
+    ) -> i32 {
+        let (size, align) = (i64::from(size), i64::from(align.max(1)));
+        let depth = (self.0.depth.get() + size + align - 1).div_euclid(align) * align;
+        self.0.depth.set(depth);
+        self.0.align.set(self.0.align.get().max(align));
+        let mut locals = self.0.locals.borrow_mut();
+        locals.push((-depth, size));
+        (locals.len() - 1) as i32
+    }
+}
+
+/// The module's globals by `GlobalId`: where each symbol is.
+struct Globals<'a>(&'a Module, llrm_mir::spaces::Spaces);
+
+impl llrm_codegen::backend::selectiondag::emit_api::GlobalMap for Globals<'_> {
+    fn segment(
+        &self,
+        symbol: Option<u32>,
+    ) -> Addr {
+        let (space, index) = match symbol {
+            Some(symbol) if self.0.global(llrm_mir::context::GlobalId(symbol)).address_space != self.1.near => {
+                (Space::Group, llrm_codegen::backend::globals::segment_of(llrm_mir::context::GlobalId(symbol)))
+            }
+            _ => llrm_codegen::hir::symbols::DGROUP,
+        };
+        Addr { index, ..Addr::new(space, 0) }
+    }
+
+    fn address(
+        &self,
+        symbol: u32,
+        offset: i64,
+    ) -> Addr {
+        let space = llrm_codegen::backend::globals::space(self.0, llrm_mir::context::GlobalId(symbol));
+        Addr { index: i64::from(symbol), ..Addr::new(space, offset) }
+    }
+}
+
+/// What a call destroys, by the convention of the function it names: a
+/// declaration's own, the C one for a runtime routine, and for a call through
+/// a pointer (whose convention the node does not carry) the C one too.
+struct CallConventions<'a> {
+    module: &'a Module,
+    arch: &'a dyn Target,
+    contracts: Option<&'a RuntimeContracts<'a>>,
+    general: &'a [llrm_lir::registers::RegId],
+}
+
+/// The huge-pointer routine a call of `name` is, if any. Only a name with the
+/// routines' prefix is looked up: building a routine assembles its code, which
+/// a call of any other function (`memcpy`) must not pay for.
+fn huge_routine(
+    arch: &dyn Target,
+    name: &str,
+) -> Option<llrm_target::routines::HugeString> {
+    huge_routine_with(name, |cell| arch.huge_fill_routine(cell).ok(), |backward| arch.huge_copy_routine(backward).ok())
+}
+
+pub(super) fn huge_routine_with(
+    name: &str,
+    fill: impl Fn(u32) -> Option<llrm_target::routines::HugeString>,
+    copy: impl Fn(bool) -> Option<llrm_target::routines::HugeString>,
+) -> Option<llrm_target::routines::HugeString> {
+    if !name.starts_with(llrm_target::routines::HUGE_PREFIX) {
+        return None;
+    }
+    let fills = [1u32, 2, 4].into_iter().filter_map(fill);
+    let copies = [false, true].into_iter().filter_map(copy);
+    fills.chain(copies).find(|routine| routine.name == name)
+}
+
+pub use llrm_codegen::backend::selectiondag::select_api::RuntimeContracts;
+
+/// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
+/// convention models what its contract says (the callee pops what was pushed,
+/// it returns in a register and to the next instruction), else why not. The old
+/// selector models the rest.
+pub(crate) fn runtime_call_verdicts(
+    module: &Module,
+    function: &llrm_mir::module::Function,
+    layout: &DataLayout,
+    arch: &dyn Target,
+    abi: &dyn llrm_codegen::backend::assemble::Abi,
+) -> llrm_mir::dense::IdMap<llrm_mir::module::InstId, Result<RuntimeAnswer, &'static str>> {
+    use llrm_mir::module::Operand;
+    use llrm_mir::opcode::Opcode;
+    let mut out = llrm_mir::dense::IdMap::new();
+    for &block in function.layout() {
+        for inst in function.iter_block(block) {
+            let instruction = function.instruction(inst);
+            let (Opcode::Call(info) | Opcode::Invoke(info)) = &instruction.opcode else { continue };
+            let Some(&Operand::Constant(callee)) = instruction.operands.last() else { continue };
+            let llrm_mir::context::ConstantKind::Global(global) = module.context.get(callee).kind else { continue };
+            let name = module.global(global).name.owned().unwrap_or_default();
+            if !name.starts_with(llrm_codegen::hir::mir::RUNTIME) {
+                continue;
+            }
+            let keep = instruction.operands.len() - if matches!(instruction.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
+            let types: Option<Vec<_>> = instruction.operands[..keep]
+                .iter()
+                .map(|argument| function.operand_type(&module.context, *argument))
+                .collect();
+            let first = arch.first_argument_offset(false);
+            let (result, _, variadic) = module.signature(info.function_type);
+            let plan = types.and_then(|types| {
+                llrm_codegen::backend::isel::convention_for(
+                    module,
+                    layout,
+                    arch,
+                    first,
+                    info.calling_convention,
+                    result,
+                    variadic,
+                    &types,
+                    &info.argument_attrs,
+                )
+                .ok()
+            });
+            out.insert(inst, modelled(abi, &name, plan.as_ref(), first));
+        }
+    }
+    out
+}
+
+fn modelled(
+    abi: &dyn llrm_codegen::backend::assemble::Abi,
+    name: &str,
+    plan: Option<&llrm_codegen::backend::isel::Convention>,
+    first: i64,
+) -> Result<RuntimeAnswer, &'static str> {
+    let plan = plan.ok_or("QB runtime call the convention does not describe")?;
+    let pushed = (plan.stack_arguments - first).max(0);
+    if abi.registers(name).is_some() {
+        return Err("QB runtime routine with a register interface");
+    }
+    let contract = abi.contract(name, plan.popped > 0, pushed).map_err(|_| "QB runtime routine with no contract")?;
+    // Raising an error, entering user code or an unstated way back (a handler
+    // registration, `B$OEGA`) changes no selection: the old selector reads none
+    // of them. A routine that comes back at an inline table does.
+    if contract.control == llrm_qbruntime::Control::InlineTable {
+        return Err("QB runtime routine that returns to an inline table");
+    }
+    // The callee pops all it was pushed (16/32-bit routines), or the caller
+    // pops it and the routine cleans nothing (SysV, where QB calls are C). As
+    // the old selector reads it: the caller removes `caller_cleanup` bytes and
+    // the callee the rest, whatever its 16-bit table block declares.
+    if pushed - contract.caller_cleanup != plan.popped || (plan.popped != pushed && plan.popped != 0) {
+        return Err("QB runtime routine whose stack cleanup the convention does not model");
+    }
+    Ok(if contract.flags_result { RuntimeAnswer::Flags } else { RuntimeAnswer::Registers })
+}
+
+impl CallConventions<'_> {
+    /// The contract of a call of `callee` where its convention has no
+    /// description: the ABI's, named by the routine (`call_clobbers`).
+    fn contract(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<llrm_codegen::abi::runtime::Contract> {
+        let (contracts, Some(Callee::Global(id))) = (self.contracts?, callee) else { return None };
+        let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
+        contracts.abi.contract(&name, false, 0).ok()
+    }
+
+    /// Whether `callee` is a function the module defines whose convention has
+    /// no row in `calling.toml`.
+    fn defined_without_a_convention(
+        &self,
+        callee: Option<&Callee>,
+    ) -> bool {
+        let Some(Callee::Global(id)) = callee else { return false };
+        let global = self.module.global(llrm_mir::context::GlobalId(*id));
+        global.function().is_some_and(|function| !function.is_declaration())
+            && !global.name.owned().is_some_and(|name| name.starts_with(llrm_codegen::hir::mir::RUNTIME))
+            && self.convention_of(callee).is_none()
+    }
+
+    /// The convention a call of `callee` follows: its function's own, or, for
+    /// a variadic function, the one that entry names (`variadic = "cdecl32"`).
+    fn convention_of(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<&'static llrm_target::calling::Convention> {
+        let (number, variadic) = match callee {
+            Some(Callee::Global(id)) => self
+                .module
+                .global(llrm_mir::context::GlobalId(*id))
+                .function()
+                .map_or((0, false), |function| (function.calling_convention, self.module.signature(function.ty).2)),
+            _ => (0, false),
+        };
+        let calling = self.arch.calling();
+        let found = calling.by_number(number)?;
+        match found.variadic.as_deref().filter(|_| variadic) {
+            Some(name) => calling.named(name),
+            None => Some(found),
+        }
+    }
+
+    fn contract_clobbers(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>> {
+        let contract = self.contract(callee)?;
+        Some(llrm_codegen::backend::callregs::call_clobbers(&contract, self.contracts?.segments, self.general))
+    }
+
+    /// `call_clobbered_high_keeping`: what the callee keeps only the 16-bit
+    /// half of, less the registers it keeps whole.
+    fn contract_high(
+        &self,
+        callee: Option<&Callee>,
+    ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        let Some(contract) = self.contract(callee) else { return Default::default() };
+        let regs = llrm_lir::registers::Regs(self.arch.registers());
+        let whole: std::collections::BTreeSet<_> = self
+            .arch
+            .callee_saved()
+            .into_iter()
+            .filter(|(full, pushed)| full == pushed)
+            .map(|(full, _)| regs.root(full))
+            .collect();
+        llrm_codegen::backend::callregs::call_clobbered_high_keeping(
+            &contract,
+            self.contracts.expect("a contract implies contracts").segments,
+            self.general,
+            &whole,
+        )
+    }
+}
+
+impl llrm_codegen::backend::selectiondag::emit_api::Conventions for CallConventions<'_> {
+    fn effects(
+        &self,
+        callee: Option<&Callee>,
+    ) -> llrm_mir::memory::Effects {
+        let Some(Callee::Global(id)) = callee else { return llrm_mir::memory::Effects::ANY };
+        let callees = self.contracts.and_then(|contracts| contracts.facts).and_then(|facts| facts.callees());
+        callees
+            .and_then(|callees| callees.get(&llrm_mir::context::GlobalId(*id)).map(|summary| summary.effects))
+            .unwrap_or(llrm_mir::memory::Effects::ANY)
+    }
+
+    fn written(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<(
+        std::collections::BTreeSet<llrm_lir::registers::RegId>,
+        std::collections::BTreeSet<llrm_lir::registers::RegId>,
+    )> {
+        let Some(Callee::Global(id)) = callee else { return None };
+        let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned()?;
+        let written = self.contracts?.facts?.written(&name)?;
+        Some((written.whole, written.high))
+    }
+
+    fn clobbers_high(
+        &self,
+        callee: Option<&Callee>,
+    ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        let Some(found) = self.convention_of(callee) else { return self.contract_high(callee) };
+        let regs = llrm_lir::registers::Regs(self.arch.registers());
+        self.arch
+            .convention_callee_saved(found)
+            .into_iter()
+            .filter(|(full, pushed)| regs.bytes(*pushed) < regs.bytes(*full))
+            .map(|(full, _)| full)
+            .collect()
+    }
+
+    fn disturbs(
+        &self,
+        callee: Option<&Callee>,
+        clobbers: &std::collections::BTreeSet<llrm_lir::registers::RegId>,
+    ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        match self.contract(callee) {
+            Some(contract) if contract.control == llrm_qbruntime::Control::Never => Default::default(),
+            // A call of a BASIC function the module defines, which has no row
+            // in `calling.toml`, disturbs nothing: it keeps every register, as
+            // the old selector has it (`isel.rs`, `disturbs`). Anything else
+            // disturbs what `clobbers` says: a convention's row names only
+            // part (a watcall callee also changes the registers its arguments
+            // arrive in), and a runtime routine's contract names more still
+            // (SI and DI at m16, FS and GS).
+            _ if self.defined_without_a_convention(callee) && self.written(callee).is_none() => Default::default(),
+            _ => clobbers.clone(),
+        }
+    }
+
+    fn clobbers(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>> {
+        // inline assembly changes the registers its name states
+        if let Some(Callee::Named(name)) = callee
+            && let Some(block) = llrm_mir::intrinsics::asm(name)
+        {
+            let regs = llrm_lir::registers::Regs(self.arch.registers());
+            return Some(
+                block
+                    .clobbers
+                    .iter()
+                    .filter(|name| !matches!(name.as_str(), "flags" | "memory") && !name.starts_with("st"))
+                    .map(|reg| regs.root(self.arch.register_named(reg)))
+                    .collect(),
+            );
+        }
+        // a huge-pointer routine changes what it states and no more
+        if let Some(Callee::Named(name)) = callee
+            && let Some(routine) = huge_routine(self.arch, name)
+        {
+            let regs = llrm_lir::registers::Regs(self.arch.registers());
+            return Some(routine.clobbers.iter().map(|reg| regs.root(*reg)).collect());
+        }
+        // BASIC's convention (and any other with no row in calling.toml) is
+        // the ABI's contract of the routine, as the old selector reads it.
+        let Some(found) = self.convention_of(callee) else { return self.contract_clobbers(callee) };
+        let regs = llrm_lir::registers::Regs(self.arch.registers());
+        let mut out: std::collections::BTreeSet<_> = found
+            .clobbered
+            .iter()
+            .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
+            .map(|name| regs.root(self.arch.register_named(name)))
+            .collect();
+        // the contract names no FS or GS, yet the callee may use them
+        if let (Some(contract), Some(contracts)) = (self.contract(callee), self.contracts) {
+            out.extend(llrm_codegen::backend::callregs::unnamed_selectors_clobbered(
+                &contract,
+                contracts.segments,
+                self.general,
+            ));
+        }
+        // at m16 a routine also destroys what its contract says: runtime.toml
+        // names SI and DI for the routines whose assembly does not state them
+        // kept (B$DDIM), and a value held in SI across one was wrong
+        // code. At m32 the whole list over-spilled (jpeg_single +4.5%): the
+        // convention's is used.
+        let real_mode = llrm_lir::registers::Regs(self.arch.registers()).width_of(self.arch.stack_pointer()) == Some(2);
+        if let (true, Some(contracts), Some(Callee::Global(id))) = (real_mode, self.contracts, callee) {
+            let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
+            if name.starts_with(llrm_codegen::hir::mir::RUNTIME)
+                && let Ok(contract) = contracts.abi.contract(&name, false, 0)
+            {
+                out.extend(llrm_codegen::backend::callregs::call_clobbers(&contract, contracts.segments, self.general));
+            }
+        }
+        Some(out)
+    }
+}
+
+/// What does not change between functions: the opcode map and names, built
+/// once (`x86.instr` is parsed at 5,000 instructions a row).
+struct Tables {
+    map: OpcodeMap,
+    names: HashMap<u16, &'static str>,
+    /// `names` the other way, by the part before the first `|`; the first of a repeated name wins.
+    /// Built at the first lookup: a scan per name cost 4.9 M instructions in a compile of 3 K.
+    by_name: std::sync::OnceLock<HashMap<&'static str, u16>>,
+}
+
+impl Tables {
+    fn opcode_named(
+        &self,
+        wanted: &str,
+    ) -> Option<u16> {
+        self.by_name
+            .get_or_init(|| {
+                let mut ordered: Vec<_> = self.names.iter().map(|(op, name)| (*op, *name)).collect();
+                ordered.sort_unstable_by_key(|(op, _)| *op);
+                let mut by_name = HashMap::default();
+                for (op, name) in ordered {
+                    by_name.entry(name.split('|').next().unwrap_or(name)).or_insert(op);
+                }
+                by_name
+            })
+            .get(wanted)
+            .copied()
+    }
+}
+
+/// One per target width.
+static TABLES: LazyLock<Mutex<HashMap<u32, std::sync::Arc<Tables>>>> = LazyLock::new(|| Mutex::new(HashMap::default()));
+
+fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
+    let bits = arch.object().bitness;
+    let mut slots = TABLES.lock().expect("the DAG tables");
+    slots
+        .entry(bits)
+        .or_insert_with(|| {
+            let forms = llrm_target::instr::shared(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
+            let opcodes = match bits {
+                16 => x86_m16::MACHINE_OPCODES,
+                64 => x86_x64::MACHINE_OPCODES,
+                _ => x86_i486::MACHINE_OPCODES,
+            };
+            std::sync::Arc::new(Tables {
+                map: OpcodeMap::shared(forms),
+                names: opcodes
+                    .iter()
+                    .copied()
+                    .chain(llrm_dagisel::generated::ids::x86::NAMES.iter().copied())
+                    .chain([
+                        (llrm_dagisel::x86_llrm::FARCALL_OPCODE, "CALL_FAR"),
+                        (llrm_dagisel::x86_llrm::CODE_OPCODE, "CALL_CODE"),
+                        (llrm_dagisel::x86_llrm::PORT_OPCODE, "PORT_IO"),
+                        (llrm_dagisel::x86_llrm::TC_RETURN_OPCODE, "TCRETURN_16"),
+                        (llrm_dagisel::x86_llrm::FLN_OPCODE, "LN_Fp80"),
+                        (llrm_dagisel::x86_llrm::FEXP_OPCODE, "EXP_Fp80"),
+                        (llrm_dagisel::x86_llrm::FLOG2_OPCODE, "LOG2_Fp80"),
+                        (llrm_dagisel::x86_llrm::FEXP2_OPCODE, "EXP2_Fp80"),
+                        (llrm_dagisel::x86_llrm::FSIN_OPCODE, "SIN_Fp80"),
+                        (llrm_dagisel::x86_llrm::FCOS_OPCODE, "COS_Fp80"),
+                        (llrm_dagisel::x86_llrm::FATAN_OPCODE, "ATAN_Fp80"),
+                        (llrm_dagisel::x86_llrm::FRINT_OPCODE, "RNDINT_Fp80"),
+                        (llrm_dagisel::x86_llrm::IST16_OPCODES[0], "IST_Fp16m32"),
+                        (llrm_dagisel::x86_llrm::IST16_OPCODES[1], "IST_Fp16m64"),
+                        (llrm_dagisel::x86_llrm::IST16_OPCODES[2], "IST_Fp16m80"),
+                        (llrm_dagisel::x86_llrm::LLRM_ASM_OPCODE, "CALL_ASM"),
+                    ])
+                    .collect(),
+                by_name: Default::default(),
+            })
+        })
+        .clone()
+}
+
+/// The addresses each LIR block can go to: the targets of its jumps and
+/// branches, and the next block if it does not end in a jump or a return.
+fn successors(
+    emitted: &[EmitBlock],
+    sinks: &HashSet<i64>,
+) -> Vec<Vec<i64>> {
+    use llrm_codegen::model::ir::Operation;
+    emitted
+        .iter()
+        .enumerate()
+        .map(|(i, block)| {
+            let mut out: Vec<i64> = Vec::new();
+            for what in block.insns.iter().filter_map(|insn| insn.what.as_ref()) {
+                if let (Operation::Branch | Operation::Jump, Some(target)) = (what.op, what.target) {
+                    if !out.contains(&target) {
+                        out.push(target);
+                    }
+                }
+                for &target in &what.table {
+                    if !out.contains(&target) {
+                        out.push(target);
+                    }
+                }
+            }
+            let ends = block
+                .insns
+                .last()
+                .and_then(|insn| insn.what.as_ref())
+                .is_some_and(|w| matches!(w.op, Operation::Jump | Operation::Return));
+            if !ends && !sinks.contains(&block.at) {
+                if let Some(next) = emitted.get(i + 1) {
+                    if !out.contains(&next.at) {
+                        out.push(next.at);
+                    }
+                }
+            }
+            out
+        })
+        .collect()
+}
+
+/// The byte width of each live-in's value: the type of the `CopyFromReg` that
+/// reads it.
+fn arrival_widths(
+    dag: &llrm_codegen::backend::selectiondag::SelectionDAG,
+    live_ins: &[(llrm_lir::registers::RegId, u32)],
+) -> Vec<(u32, u32)> {
+    use llrm_codegen::backend::selectiondag::dag::NodeData;
+    let mut out = Vec::new();
+    for node in dag.nodes() {
+        if node.opcode != llrm_codegen::backend::selectiondag::isd::ISD::CopyFromReg {
+            continue;
+        }
+        if let NodeData::Register(vreg) = dag.node(node.ops[1]).data {
+            if live_ins.iter().any(|(_, v)| *v == vreg) {
+                out.push((vreg, node.values[0].size_in_bits() / 8));
+            }
+        }
+    }
+    out
+}
+
+fn arrived_width(
+    widths: &[(u32, u32)],
+    vreg: u32,
+) -> Option<u32> {
+    widths.iter().find(|(v, _)| *v == vreg).map(|(_, w)| *w)
+}
+
+/// The fixed objects the stack parameters make, as the builder numbers them (a
+/// byval aggregate one, a cell one for each register-sized part of its value:
+/// an integer of twice the widest legal integer is two). The widest legal
+/// integer is the builder's: 16 bits was assumed at m16 after `i32` became
+/// legal there, so an `i32` got two cells and an `i64` one, and the second half
+/// of an `i64` argument was read from the next parameter's cell.
+pub(super) fn stack_cells(
+    module: &Module,
+    function: &llrm_mir::module::Function,
+    convention: &llrm_codegen::backend::isel::Convention,
+    widest: u32,
+) -> Vec<i64> {
+    let mut cells = Vec::new();
+    for (at, parameter) in convention.parameters.iter().enumerate() {
+        match parameter {
+            Parameter::Bytes(disp) => cells.push(*disp),
+            Parameter::Cell(disp) => {
+                let two = function
+                    .parameters()
+                    .get(at)
+                    .is_some_and(
+                        |arg| matches!(
+                            module.context.types.get(function.value(*arg).ty),
+                            llrm_mir::types::Type::Int(bits) if *bits == 2 * widest
+                        ),
+                    );
+                cells.extend((0..if two { 2 } else { 1 }).map(|part| disp + part * i64::from(widest / 8)));
+            }
+            Parameter::Registers(_) => {}
+        }
+    }
+    cells
+}
+
+/// Sibling calls are the pin's default at -O1 and up; `LLRM_TAIL_CALLS=0` turns
+/// them off (kept for one release, then deleted).
+fn tail_calls_on() -> bool {
+    !TAIL_CALLS_OFF.get() && llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0")
+}
+
+fn refuse<T>(why: impl Into<String>) -> Result<T, Unselected> {
+    Err(Unselected(format!("--isel=dag: {}", why.into())))
+}
+
+thread_local! {
+    /// Sibling calls off for this thread: what `LLRM_TAIL_CALLS=0` does for the
+    /// process, for a test that cannot set the environment.
+    pub(super) static TAIL_CALLS_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `name` of `module` selected by the DAG path. A panic in a stage (a builder
+/// meeting a type it does not know) is a refusal of the function, as any other
+/// gap: it stopped 18 QCport modules from compiling in the shadow. Constants it
+/// needs in memory go to a pool of its own; [`selected_in_pool`] shares the
+/// module's.
+pub fn selected(
+    module: &Module,
+    name: &str,
+    arch: &dyn Target,
+    cpu: &llrm_codegen::backend::cpu::Profile,
+    libcalls: &[(String, u32, String)],
+) -> Result<Selected, Unselected> {
+    selected_in_pool(module, name, arch, cpu, libcalls, None, &mut Pool::new(module.globals.len() as i64))
+}
+
+/// The table for a target `bits` wide with `features`, built once per thread
+/// and copied for each function: the constructors fill thousands of entries
+/// (65.7 M instructions of tiny600's 4 724 M, 600 functions).
+fn lowering_for(
+    bits: u32,
+    features: Features,
+    build: impl FnOnce() -> TargetLowering,
+) -> TargetLowering {
+    type Key = (u32, [bool; 8]);
+    thread_local! {
+        static TABLES: std::cell::RefCell<Vec<(Key, TargetLowering)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let key: Key = (
+        bits,
+        [
+            features.cmov,
+            features.bmi,
+            features.lzcnt,
+            features.popcnt,
+            features.movbe,
+            features.shld_slow,
+            features.sse2,
+            features.soft_float,
+        ],
+    );
+    TABLES.with(|tables| {
+        let mut tables = tables.borrow_mut();
+        if let Some((_, found)) = tables.iter().find(|(known, _)| *known == key) {
+            return found.clone();
+        }
+        let made = build();
+        tables.push((key, made.clone()));
+        made
+    })
+}
+
+pub fn selected_in_pool(
+    module: &Module,
+    name: &str,
+    arch: &dyn Target,
+    cpu: &llrm_codegen::backend::cpu::Profile,
+    libcalls: &[(String, u32, String)],
+    contracts: Option<&RuntimeContracts<'_>>,
+    pool: &mut Pool,
+) -> Result<Selected, Unselected> {
+    let mark = pool.mark();
+    let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        selected_in(module, name, arch, cpu, libcalls, contracts, pool)
+    }))
+    .unwrap_or_else(|why| {
+        let why =
+            why.downcast_ref::<String>().cloned().or_else(|| why.downcast_ref::<&str>().map(|one| (*one).to_owned()));
+        refuse(format!("--isel=dag: a stage stopped: {}", why.unwrap_or_default()))
+    });
+    if done.is_err() {
+        pool.rewind(mark);
+    }
+    done
+}
+
+/// The module's constant pool as the emitter asks it.
+struct PoolCells<'a>(std::cell::RefCell<&'a mut Pool>);
+
+impl llrm_codegen::backend::selectiondag::emit_api::ConstantCells for PoolCells<'_> {
+    fn cell(
+        &self,
+        bytes: Vec<u8>,
+    ) -> Mem {
+        self.0.borrow_mut().cell(bytes)
+    }
+}
+
+/// DEVIATE DIV-LIVE: for each block with a divide by a constant of a type
+/// narrower than a word, the most values live across one (a value of more
+/// than a word counts its words). O(function) once, and only when the function
+/// has such a divide.
+fn narrow_divide_live(
+    module: &llrm_mir::module::Module,
+    function: &llrm_mir::module::Function,
+) -> llrm_mir::dense::IdMap<BlockId, u32> {
+    use llrm_mir::opcode::{BinaryOp, Opcode};
+    let narrow = |inst: llrm_mir::module::InstId| {
+        let op = function.instruction(inst);
+        matches!(op.opcode, Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem))
+            && matches!(op.operands.get(1), Some(llrm_mir::module::Operand::Constant(_)))
+            && op.result.and_then(|r| module.context.types.int_bits(function.value(r).ty)).is_some_and(|bits| bits < 32)
+    };
+    let blocks: Vec<BlockId> =
+        function.layout().iter().copied().filter(|&block| function.iter_block(block).any(narrow)).collect();
+    let mut live = llrm_mir::dense::IdMap::new();
+    if blocks.is_empty() {
+        return live;
+    }
+    let weight = |value: llrm_mir::module::ValueId| {
+        module.context.types.int_bits(function.value(value).ty).map_or(0, |bits| bits.div_ceil(32) as usize)
+    };
+    let found = llrm_analysis::liveness::live_where(function, &|value| weight(value) > 0);
+    for block in blocks {
+        let mut peak = 0;
+        llrm_analysis::liveness::each_across(function, &found, block, &mut |inst, across| {
+            if narrow(inst) {
+                let count: usize = function
+                    .walk()
+                    .filter_map(|(_, one)| function.instruction(one).result)
+                    .filter(|&value| across(value))
+                    .map(weight)
+                    .sum();
+                peak = peak.max(count);
+            }
+        });
+        live.insert(block, peak as u32);
+    }
+    live
+}
+
+/// The prices `isIntDivCheap` weighs per divisor (`DivPrices`): none for a
+/// target that does not price a divide above a multiply, which then keeps the
+/// pin's rule.
+fn div_prices(
+    cpu: &llrm_codegen::backend::cpu::Profile,
+    machine: &dyn llrm_mir::target::Machine,
+    bitness: u32,
+) -> Option<llrm_codegen::backend::selectiondag::dag::DivPrices> {
+    let costs = machine.costs();
+    if costs.divide <= costs.multiply {
+        return None;
+    }
+    let owned = cpu.clone();
+    let multiply = costs.multiply;
+    // What `combine_mul` emits for the constant: the `imul` by its immediate
+    // or a chain, whichever costs fewer clocks (`Machine::multiply_by`).
+    let product = move |factor: i64| {
+        let imul = llrm_codegen::backend::arithmetic::immediate_multiply(&owned, factor).unwrap_or(multiply);
+        match llrm_codegen::backend::arithmetic::cheapest_chain(factor, &owned) {
+            Ok(Some((_, clocks))) => clocks.min(imul),
+            _ => imul,
+        }
+    };
+    Some(llrm_codegen::backend::selectiondag::dag::DivPrices {
+        operand: i64::from(bitness.min(32) / 8),
+        prefix: costs.prefix,
+        add: costs.add,
+        shift: costs.shift,
+        extend: costs.extend,
+        multiply: costs.multiply,
+        multiply_long: costs.multiply_long,
+        multiply_high: costs.multiply_high,
+        divide: costs.divide,
+        divide_long: costs.divide_long,
+        margin: costs.divide_margin,
+        product: Some(llrm_codegen::backend::selectiondag::dag::ProductPrice(std::rc::Rc::new(product))),
+        bytes: {
+            let rate = cpu.speed_milliclocks_per_byte_on(machine);
+            let size = machine.size_costs();
+            (rate > 0 && machine.tti().is_some_and(|tti| tti.divide_by_bytes())).then(|| llrm_codegen::backend::selectiondag::dag::DivBytes {
+                prefix: size.prefix,
+                add: size.add,
+                shift: size.shift,
+                extend: size.extend,
+                multiply: size.multiply,
+                multiply_long: size.multiply_long,
+                multiply_high: size.multiply_high,
+                divide: size.divide,
+                divide_long: size.divide_long,
+                milliclocks_per_byte: rate,
+                frequency: 1.0,
+            })
+        },
+    })
+}
+
+/// The clock prices a size-only pick weighs against bytes (m16: the fill it
+/// prices is real mode's).
+fn size_trade(machine: &dyn llrm_mir::target::Machine) -> Option<SizeTrade> {
+    let rate = machine.tti().map_or(0, |tti| tti.speed_milliclocks_per_byte());
+    if rate == 0 {
+        return None;
+    }
+    let costs = machine.costs();
+    Some(SizeTrade {
+        milliclocks_per_byte: rate,
+        fill: costs.fill,
+        fill_cell: costs.fill_cell,
+        store: costs.store,
+        prefix: costs.prefix,
+    })
+}
+
+fn selected_in(
+    module: &Module,
+    name: &str,
+    arch: &dyn Target,
+    cpu: &llrm_codegen::backend::cpu::Profile,
+    libcalls: &[(String, u32, String)],
+    contracts: Option<&RuntimeContracts<'_>>,
+    pool: &mut Pool,
+) -> Result<Selected, Unselected> {
+    let bitness = arch.object().bitness;
+    // One cost model for the function: `Profile::target` builds one (and clones
+    // the price tables) per call.
+    let machine = cpu.target();
+    let m16 = match bitness {
+        16 => true,
+        32 | 64 => false,
+        _ => return refuse("only m16, m32 and m64 are built so far"),
+    };
+    // x86-64 has `cmov` (`canUseCMOV`); the 486 and P5 targets have none
+    let m64 = bitness == 64;
+    let Some(id) = module.named(name) else { return refuse(format!("no function @{name}")) };
+    let Some(function) = module.global(id).function().filter(|one| !one.is_declaration()) else {
+        return refuse(format!("@{name} has no body"));
+    };
+    let Some(text) = module.datalayout.as_deref() else { return refuse("a module with no datalayout") };
+    let layout = DataLayout::parse(text).map_err(Unselected)?;
+    // The pin's combineMul declines only at `minsize`. Where a pointer is
+    // narrower than the widest native integer (m16), -Os keeps `imul` as well:
+    // the chains grow its objects (27 of 175 by 3550 B, tests/run/c -Os).
+    let bytes_beat_clocks = cpu.size && layout.pointer(0).bits < layout.largest_legal_integer();
+    let convention = llrm_codegen::backend::isel::convention(module, &layout, id, arch)?;
+    let mut info = FunctionLoweringInfo::new(function);
+    info.module_tables = pool.symbols.clone();
+    if contracts.is_some_and(|contracts| contracts.frame_zeroed) {
+        info.prezeroed = llrm_codegen::backend::prezeroed::prezeroed(module, function);
+    }
+    let mut tli = if m16 {
+        // `useSoftFloat()`, or no x87 among the function's target features.
+        let soft_float = llrm_codegen::backend::isel::soft_float(&function.attrs);
+        let features = Features { soft_float, ..Features::default() };
+        lowering_for(16, features, || TargetLowering::x86_16(features, MVT::I16))
+    } else if m64 {
+        let features = Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() };
+        lowering_for(64, features, || TargetLowering::x86_64(features, MVT::I64))
+    } else {
+        // The machine fact is the cost model's: the same `has_cmov` SimplifyCFG
+        // reads.
+        let cmov = machine.tti().is_some_and(|tti| tti.has_cmov());
+        let features = Features { cmov, ..Features::default() };
+        lowering_for(32, features, || TargetLowering::x86_32(features, MVT::I32))
+    };
+    tli.set_small_divide(cpu.bytes_strict() && (cpu.size || arch.small_divide_at_o1()));
+    // The soft-float routines are spelled as the C compiler spelled their
+    // definitions.
+    for (name, number, symbol) in libcalls {
+        tli.set_libcall_symbol(name, symbol.clone(), *number);
+    }
+    // SD214: with a math library the pin calls it for these; the call is not
+    // translated yet, so the node is refused rather than selected inline.
+    if arch.has_libm() {
+        for op in [
+            llrm_codegen::backend::selectiondag::isd::ISD::FLog,
+            llrm_codegen::backend::selectiondag::isd::ISD::FLog2,
+            llrm_codegen::backend::selectiondag::isd::ISD::FExp,
+            llrm_codegen::backend::selectiondag::isd::ISD::FExp2,
+            llrm_codegen::backend::selectiondag::isd::ISD::FSin,
+            llrm_codegen::backend::selectiondag::isd::ISD::FCos,
+            llrm_codegen::backend::selectiondag::isd::ISD::FAtan,
+            llrm_codegen::backend::selectiondag::isd::ISD::FRint,
+        ] {
+            for vt in [MVT::F32, MVT::F64, MVT::F80] {
+                tli.set_operation_action(op, vt, llrm_codegen::backend::selectiondag::actions::Action::LibCall);
+            }
+        }
+    }
+    let (builder_target, address_mode) = match bitness {
+        16 => (BuilderTarget::for_pointer_bits(16), AddrMode::Real16),
+        64 => (BuilderTarget::for_pointer_bits(64), AddrMode::Flat64),
+        _ => (BuilderTarget::for_pointer_bits(32), AddrMode::Flat32),
+    };
+    let mut builder_target = builder_target;
+    // Static code: every symbol is `dso_local`. A 64-bit PIE reaches a symbol
+    // defined elsewhere through the GOT
+    // (X86Subtarget::classifyGlobalReference).
+    builder_target.dag.dso_local_symbols = bitness != 64 || !module.position_independent();
+    builder_target.dag.defined_dso_local = !builder_target.dag.dso_local_symbols;
+    builder_target.dag.absolute_symbols = !module.position_independent();
+    let builder_target = builder_target
+        .with_tuning(machine.tuning())
+        .with_runtime_calls(libcalls)
+        .with_float_store(cpu.float_store)
+        // DEVIATE DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin:
+        // minsize only). Measured 2026-11-06, m32 -Os, 71 programs, pin-exact
+        // flip: 14 programs change, +203 B in all, matmul only -4 B, and four
+        // cells pass -> fail on bytes against the best of gcc/clang
+        // (recmany +36, recsum +18, x_binsearch +18, x_switch_dense +13).
+        // Isolated divides are smaller kept than in gcc or clang. Decision:
+        // keep the divide at
+        // -Os, the pin's `int_div_cheap(min_size)` is not taken. Owner x86-m32;
+        // open, exit 2026-11-20 (kept by measurement 2026-11-06). m16 -Os was
+        // +763 B over 309 programs (2026-10-27). Cost: an idiv is ~40 clocks
+        // on a 486 where the multiply is ~13.
+        .with_int_div_cheap(cpu.size || cpu.min_size)
+        .with_div_live_limit(if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 })
+        .with_div_prices(div_prices(cpu, &*machine, bitness))
+        .with_sdiv_by_magnitude(cpu.speed_rate && !(cpu.size || cpu.min_size) && machine.tti().is_some_and(|tti| tti.sdiv_by_magnitude()))
+        .with_jump_tables(
+            machine.costs().jump_table != 0
+                && !function.attrs.iter().any(|attr| {
+                    matches!(
+                        attr,
+                        llrm_mir::Attribute::Str(name, Some(value)) if name == "no-jump-tables" && value == "true"
+                    )
+                }),
+        )
+        .with_opt_size(cpu.size || cpu.min_size)
+        .with_min_size(cpu.min_size)
+        .with_size_trade(size_trade(&*machine))
+        .with_tail_calls(tail_calls_on())
+        .with_tti(machine.tti())
+        .with_runtime_call_verdicts(
+            contracts
+                .filter(|contracts| contracts.runtime)
+                .map(|contracts| runtime_call_verdicts(module, function, &layout, arch, contracts.abi)),
+        );
+    let tables = tables(arch);
+    // The builder numbers the fixed objects the stack parameters make: a byval
+    // aggregate one, a cell one for each register-sized part of its value (an
+    // integer of twice the widest register is two). Dropping a byval one
+    // moved every later parameter by its size (byvalue_struct_address passed
+    // the wrong address).
+    let widest = *builder_target.legal_ints.iter().max().expect("a legal integer type");
+    let mut cells = stack_cells(module, function, &convention, widest);
+    // `LowerFormalArguments`: the first variadic argument is the next fixed
+    // object, where the convention puts the first stack argument it does not
+    // name.
+    // Under Win64 the unnamed register arguments are homed in the caller's
+    // shadow space, one cell each, contiguous with the stack ones.
+    let positional = arch.calling().by_number(function.calling_convention).filter(|found| found.positional);
+    if module.signature(function.ty).2 {
+        match &positional {
+            Some(found) if convention.parameters.len() < found.argument_registers.len() => {
+                cells.extend(
+                    (convention.parameters.len()..found.argument_registers.len())
+                        .map(|at| arch.first_argument_offset(false) + at as i64 * 8),
+                );
+            }
+            _ => cells.push(convention.stack_arguments),
+        }
+    }
+    let frame = Frame::new(cells, contracts.map_or(0, |one| one.hole));
+    // The function's static allocas are frame objects 0, 1, ... in the order
+    // `FunctionLoweringInfo` numbered them: laid out below BP, each on its
+    // type's alignment. Locals whose lifetime markers say they are never live
+    // together are one object (StackColoring).
+    let mut sizes: Vec<(llrm_mir::module::ValueId, i64, i64)> = Vec::new();
+    for (value, _) in info.static_allocas.iter() {
+        let ValueDef::Instruction(def) = function.value(value).def else {
+            return refuse("an alloca that is not an instruction");
+        };
+        let instruction = function.instruction(def);
+        let llrm_mir::opcode::Opcode::Alloca { allocated, align: wanted, .. } = instruction.opcode else {
+            return refuse("an alloca that is not an alloca");
+        };
+        // `FunctionLoweringInfo`: a constant count multiplies the type's size
+        let count = match instruction.operands.first() {
+            None => 1,
+            Some(llrm_mir::module::Operand::Constant(id)) => match module.context.get(*id).kind {
+                llrm_mir::context::ConstantKind::Int(count) => count,
+                _ => return refuse("an alloca whose count is not a number"),
+            },
+            Some(_) => return refuse("an alloca with a count that is not a constant"),
+        };
+        let types = &module.context.types;
+        let size = layout.alloc_size(types, allocated) as i64;
+        let Some(size) = i64::try_from(count)
+            .ok()
+            .and_then(|count| size.checked_mul(count))
+            .filter(|size| *size <= i64::from(i32::MAX))
+        else {
+            return refuse("an alloca too large for the frame");
+        };
+        let align =
+            llrm_codegen::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
+        // The declared alignment wins over the natural one; above what the
+        // frame keeps the stack aligned to, the frame realigns the stack
+        // pointer.
+        let align = align.max(wanted.map_or(0, |one| one as i64));
+        sizes.push((value, size, align));
+    }
+    sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
+    let objects = llrm_codegen::backend::stackcoloring::share_frame(module, function, &mut info, &sizes);
+    let alloca_count = objects.len() as i32;
+    // A local above the alignment the stack keeps realigns it: the pin's
+    // `MaxAlignment > StackAlignment`
+    // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineFrameInfo.h#L641).
+    // DEVIATE OA-1: at least two slots, see `isel.rs`.
+    let kept = arch.stack_alignment().max(2 * arch.stack_slot_bytes());
+    let mut over_aligned: Vec<(i64, i64)> = Vec::new();
+    for (index, (size, align)) in objects.into_iter().enumerate() {
+        let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
+        debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
+        if arch.can_realign_stack() && align > kept {
+            over_aligned.push((frame.locals.borrow()[index].0, align));
+        }
+    }
+    // `LowerFormalArguments`' register save area: 6 * 8 bytes of integer
+    // registers and 8 * 16 of vector ones.
+    if m64 && module.signature(function.ty).2 && positional.is_none() {
+        info.variadic_save = Some(Temporaries(&frame).create_stack_temporary(176, 16));
+    }
+    let mut hooks = X86Hooks::new(Options {
+        cpu: if m16 {
+            Cpu::M16
+        } else if m64 {
+            Cpu::X64
+        } else {
+            Cpu::I486
+        },
+        opt_none: !cpu.optimized,
+        opt_for_size: cpu.size,
+        min_size: llrm_mir::memory::has(&function.attrs, "minsize"),
+        has_frame_pointer: true,
+        multiply_early_out: llrm_codegen::backend::timing::signed_multiply(cpu, 4, false)
+            .ok()
+            .flatten()
+            .is_some_and(|clocks| clocks.minimum < clocks.maximum),
+        address_mode,
+    });
+    let selector = Selector::new(if m16 {
+        x86_m16::TABLE
+    } else if m64 {
+        x86_x64::TABLE
+    } else {
+        x86_i486::TABLE
+    });
+    let mut state = EmitState::default();
+    // A block's address is fixed before any block is emitted: a branch names
+    // the blocks after it.
+    let mut block_at: HashMap<u32, i64> = function.layout().iter().map(|b| (b.0, state.next_address())).collect();
+    // Every block is built before any is emitted: the blocks a `switch`
+    // lowering makes (`CreateMachineBasicBlock`) are named by the branches
+    // before them, so their addresses are fixed here too. Each is emitted
+    // after the block that made it and its LIR blocks belong to that block's
+    // range, where the phis of its successors look for their edges.
+    let mut work: Vec<(BlockId, BlockId, llrm_codegen::backend::selectiondag::builder::BlockDag)> = Vec::new();
+    let mut fast_blocks = (!cpu.optimized && super::fastisel::enabled())
+        .then(|| {
+            super::fastisel::build_all(
+                module,
+                function,
+                &builder_target,
+                &|wanted: &str| tables.opcode_named(wanted),
+                &layout,
+                &convention,
+                arch,
+                &mut info,
+            )
+        })
+        .unwrap_or_default();
+    let taken = fast_blocks.iter().flatten().count();
+    super::fastisel::note(taken > 0 && taken == function.layout().len());
+    if taken > 0 {
+        llrm_support::debug!("isel", "fast took {taken} of {} blocks", function.layout().len());
+    }
+    let mut fast_ids = llrm_support::hash::HashSet::default();
+    for (at, &block) in function.layout().iter().enumerate() {
+        let mut built = match fast_blocks.get_mut(at).and_then(Option::take) {
+            Some(built) => {
+                fast_ids.insert(block.0);
+                built
+            }
+            None => build_block(module, function, &layout, &builder_target, &arch, &convention, &mut info, block)
+                .map_err(|why| Unselected(format!("--isel=dag: {}", why.0)))?,
+        };
+        let extras = std::mem::take(&mut built.extra);
+        work.push((block, block, built));
+        for (id, extra) in extras {
+            block_at.insert(id.0, state.next_address());
+            work.push((id, block, extra));
+        }
+    }
+    let (fixed_objects, fixed_depth) = (frame.locals.borrow().len(), frame.depth.get());
+    // The stack objects the builder made (a rounded float's slot) follow the
+    // static allocas in the frame.
+    for (at, (size, align)) in info.objects.iter().enumerate() {
+        let made = Temporaries(&frame).create_stack_temporary(*size, *align);
+        debug_assert_eq!(made, alloca_count + at as i32, "frame objects are numbered as the builder numbered them");
+    }
+    if let Some(tables) = &info.tables {
+        pool.symbols.get_or_insert_with(|| (tables.global_names.clone(), tables.local_symbols.clone()));
+    }
+    // Each jump table is a data object the pool names; its entries are the
+    // addresses of the blocks.
+    let tables_of_function: Vec<JumpTable> = info
+        .jump_tables
+        .iter()
+        .map(|blocks| JumpTable { id: pool.table(), targets: blocks.iter().map(|block| block_at[block]).collect() })
+        .collect();
+    let globals = Globals(module, arch.layout().spaces.roles);
+    // What a call destroys: the general registers the convention does not
+    // keep for the caller.
+    let regs = llrm_lir::registers::Regs(arch.registers());
+    let kept: std::collections::BTreeSet<_> = arch
+        .callee_saved()
+        .into_iter()
+        .filter(|(full, pushed)| full == pushed)
+        .map(|(full, _)| regs.root(full))
+        .collect();
+    let stack_pointer = arch.stack_pointer();
+    let frame_registers = [stack_pointer, llrm_lir::registers::RegId::BP].map(|r| regs.root(r));
+    let caller_saved: std::collections::BTreeSet<_> = cpu
+        .general
+        .iter()
+        .map(|r| regs.root(*r))
+        .filter(|r| !kept.contains(r) && !frame_registers.contains(r))
+        .collect();
+    let x87_prices = (!arch.scalar_sse())
+        .then(|| {
+            let cost = |name: &str| cpu.cost(name).ok();
+            Some(llrm_codegen::backend::selectiondag::emit_api::X87Prices {
+                load: cost("x87_load")?,
+                add: cost("x87_add")?,
+                add_m: cost("x87_add_m")?,
+                mul: cost("x87_mul")?,
+                mul_m: cost("x87_mul_m")?,
+                div: cost("x87_div")?,
+                div_m: cost("x87_div_m")?,
+                milliclocks_per_byte: cpu.speed_milliclocks_per_byte_on(&*machine),
+                memory_bytes: if matches!(address_mode, AddrMode::Real16) { 4 } else { 6 },
+            })
+        })
+        .flatten();
+    let ctx = EmitContext {
+        x87_prices,
+        tables: &tables_of_function,
+        caller_saved: &caller_saved,
+        conventions: &CallConventions { module, arch, contracts, general: &cpu.general },
+        constants: &PoolCells(std::cell::RefCell::new(pool)),
+        stack_pointer,
+        strings: arch.string_registers(),
+        registers: arch.registers(),
+        globals: &globals,
+        block_at: &block_at,
+        frame: &frame,
+        address_mode,
+        opt_size: cpu.size || cpu.min_size,
+        reserved_calls: module
+            .named(name)
+            .and_then(|id| module.global(id).function())
+            .and_then(|function| arch.calling().by_number(function.calling_convention))
+            .is_some_and(|convention| convention.reserve_call_frame),
+        call_alignment: if arch.aligned_calls() { (arch.stack_alignment() as i64).max(1) } else { 1 },
+        map: &tables.map,
+        names: &tables.names,
+    };
+    let mut emitted: Vec<EmitBlock> = Vec::new();
+    // What the debug records name: the LIR value of each IR value, and the
+    // address each IR instruction's code starts at.
+    let mut noted_values: llrm_mir::dense::IdMap<ValueId, u32> = Default::default();
+    let mut noted_wides: llrm_mir::dense::IdMap<ValueId, (Held, Held)> = Default::default();
+    let mut noted_ats: llrm_mir::dense::IdMap<llrm_mir::module::InstId, i64> = Default::default();
+    let mut calls = IndexMap::default();
+    let mut pops = IndexMap::default();
+    let mut call_pops = IndexMap::default();
+    // the landing pad the runtime enters, which no edge reaches
+    let mut landing: Option<i64> = None;
+    let mut sinks: HashSet<i64> = HashSet::default();
+    let mut inline_places = IndexMap::default();
+    // the call sites whose callee is far code (address space 1): a far call
+    let mut far = std::collections::BTreeSet::new();
+    // The LIR blocks each MIR block became, and the phi inputs each exports.
+    let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::default();
+    let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
+    let sse2 = arch.scalar_sse();
+    // SD446: a target that trades bytes for clocks at speed prices a constant
+    // multiply by its block's frequency (the IR one: no machine block exists
+    // before selection).
+    let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks { 0 } else { cpu.speed_milliclocks_per_byte_on(&*machine) };
+    let speed_goal = cpu.has_speed_goal() && !bytes_beat_clocks;
+    let mul_by_clocks = speed_goal && machine.tti().is_some_and(|tti| tti.multiply_by_clocks());
+    let price_pin = speed_goal && machine.tti().is_some_and(|tti| tti.price_pin_multiplies());
+    // The function's one `BranchProbabilityInfo`: the builder's edge
+    // probabilities read the same one (the pin has it as an analysis).
+    // The divide weighs its bytes by the block's frequency too (SD446), whether
+    // or not the multiplies are priced by clocks alone (m16): without it
+    // every divide was priced as run once.
+    let divide_bytes = mul_rate > 0 && machine.tti().is_some_and(|tti| tti.divide_by_bytes());
+    let frequencies = (((mul_rate > 0 || price_pin) && !mul_by_clocks) || divide_bytes).then(|| {
+        let bpi = info
+            .bpi
+            .get_or_insert_with(
+                || llrm_analysis::bpi::BranchProbabilityInfo::of(
+                    llrm_analysis::bpi::Module {
+                        context: &module.context,
+                        declarations: &module.globals,
+                        metadata: &module.metadata,
+                        layout: &layout,
+                    },
+                    function,
+                ),
+            );
+        llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
+    });
+    let div_live = if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 };
+    let div_live = if div_live > 0 { narrow_divide_live(module, function) } else { llrm_mir::dense::IdMap::new() };
+    let mut selected_blocks = llrm_support::hash::HashSet::default();
+    for (block, parent, mut built) in work {
+        if cpu.optimized && !fast_ids.contains(&block.0) && block == parent {
+            // `SelectAllBasicBlocks`: a phi knows what its incoming values do
+            // once all its predecessors are selected.
+            let ready = function.predecessors(block).iter().all(|pred| selected_blocks.contains(pred));
+            let phis: Vec<_> = function
+                .iter_block(block)
+                .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                .collect();
+            for phi in phis {
+                if ready {
+                    let bits = |bits: u32| match bits {
+                        1..=8 => Some(8),
+                        9..=16 => Some(16),
+                        17..=32 => Some(32),
+                        33..=64 if m64 => Some(64),
+                        _ => None,
+                    };
+                    llrm_codegen::backend::selectiondag::live_out::compute_phi_live_out_reg_info(module, function, phi, &bits, &mut info);
+                } else if let Some(reg) = function.instruction(phi).result.and_then(|r| info.value_regs.get(&r)) {
+                    info.live_out.remove(reg);
+                }
+            }
+        }
+        if block == parent {
+            selected_blocks.insert(block);
+        }
+        if !built.live_ins.is_empty() && block != function.layout()[0] {
+            return refuse("register arguments outside the entry block");
+        }
+        if let Some(frequencies) = &frequencies {
+            built.dag.set_divide_frequency(frequencies.relative_to_entry(parent));
+        }
+        built.dag.set_divide_live(div_live.get(&parent).copied().unwrap_or(0));
+        built.dag.live_in_phys = built.live_ins.iter().map(|&(register, vreg)| (vreg, register)).collect();
+        let arrived = arrival_widths(&built.dag, &built.live_ins);
+        let done = if fast_ids.contains(&block.0) {
+            llrm_codegen::backend::selectiondag::dag_select::select_block_fast(
+                &mut built.dag,
+                &Info { source_order: true, m64 },
+                &ctx,
+                &mut state,
+                block_at[&block.0],
+            )
+            .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?
+        } else {
+            select_block(
+                &mut info,
+                &mut built.dag,
+                &tli,
+                &mut X86Lowering {
+                    cmov: tli.can_use_cmov(),
+                    share_products: machine.tti().is_some_and(|tti| tti.x87_share_negated_products()),
+                    sse2,
+                    min_size: cpu.min_size
+                        || bytes_beat_clocks
+                        || (cpu.size && machine.tti().is_some_and(|tti| tti.imul_at_size())),
+                    imul_if_smaller: cpu.size && !cpu.min_size && machine.tti().is_some_and(|tti| tti.imul_at_size()),
+                    three_address_adds: !(cpu.size || cpu.min_size)
+                        && !matches!(
+                            cpu.three_address(),
+                            llrm_codegen::twoaddress::ThreeAddress::Off
+                                | llrm_codegen::twoaddress::ThreeAddress::AddSub
+                                | llrm_codegen::twoaddress::ThreeAddress::AddSubWords
+                        ),
+                    i16_mul_chains: !llrm_codegen::backend::selectiondag::x86_lowering::promotes_i16(&tli),
+                    sext_load: true,
+                    zext_free: m64,
+                    profile: if mul_by_clocks {
+                        Some(llrm_codegen::backend::selectiondag::x86_lowering::MulPricing {
+                            cpu,
+                            arch,
+                            freq: 1.0,
+                            milliclocks_per_byte: mul_rate,
+                            by_clocks: true,
+                            price_pin: false,
+                        })
+                    } else {
+                        frequencies
+                            .as_ref()
+                            .filter(|_| mul_rate > 0 || price_pin)
+                            .map(
+                                |frequencies| llrm_codegen::backend::selectiondag::x86_lowering::MulPricing {
+                                    cpu,
+                                    arch,
+                                    freq: frequencies.relative_to_entry(parent),
+                                    milliclocks_per_byte: mul_rate,
+                                    by_clocks: false,
+                                    price_pin,
+                                },
+                            )
+                    },
+                },
+                &selector,
+                &mut hooks,
+                &Info { source_order: true, m64 },
+                &ctx,
+                &mut state,
+                block_at[&block.0],
+                arch,
+                &mut Temporaries(&frame),
+            )
+            .map_err(|why| Unselected(format!("--isel=dag: {why:?}")))?
+        };
+        let mut done = done;
+        if !built.live_ins.is_empty() {
+            // The entry says which registers the arguments arrive in; it is no
+            // code, and nothing placed at the entry may come before
+            // it.
+            let regs = llrm_lir::registers::Regs(arch.registers());
+            let mut arrival =
+                Insn::new(block_at[&block.0], None, Some(llrm_codegen::model::lir::inert()), Vec::new(), Vec::new());
+            for (register, vreg) in &built.live_ins {
+                let value = state.vreg(*vreg);
+                // The argument arrives in the view of the register as wide as
+                // its type.
+                let width = arrived_width(&arrived, *vreg).unwrap_or_else(|| regs.bytes(*register).unwrap_or(4) as u32);
+                let view = regs.view(regs.root(*register), width * 8).unwrap_or(*register);
+                arrival.defines.push(value);
+                arrival.delivers.push((Held { value, width, offset: 0 }, view));
+            }
+            // A sibling call through an argument that arrives in a register
+            // the epilogue leaves alone jumps through that register, as the
+            // pin's does (`jmp *rdi`), not through a copy of it.
+            let arrives: HashMap<u32, llrm_lir::registers::RegId> =
+                arrival.delivers.iter().map(|(held, view)| (held.value, *view)).collect();
+            for block in &mut done.blocks {
+                for insn in &mut block.insns {
+                    let jump =
+                        insn.what.as_ref().is_some_and(|what| what.indirect && what.name.as_deref() == Some("jmp"));
+                    let Some(&(callee, _)) = insn.requires.last().filter(|_| jump) else { continue };
+                    let Some(&view) = arrives.get(&callee.value) else { continue };
+                    let others = &insn.requires[..insn.requires.len() - 1];
+                    if caller_saved.contains(&regs.root(view))
+                        && others.iter().all(|(_, taken)| regs.root(*taken) != regs.root(view))
+                    {
+                        std::sync::Arc::make_mut(insn).requires.last_mut().expect("the callee").1 = view;
+                    }
+                }
+            }
+            done.blocks[0].insns.insert(0, std::sync::Arc::new(arrival));
+        }
+        let from = emitted.len();
+        pops.extend(done.pops.iter().copied());
+        call_pops.extend(done.indirect_pops.iter().copied());
+        calls.extend(done.calls.iter().map(|(at, callee)| {
+            let name = match callee {
+                Callee::Global(symbol) => {
+                    let global = module.global(llrm_mir::context::GlobalId(*symbol));
+                    if llrm_codegen::backend::isel::far(global).unwrap_or(false) {
+                        far.insert(*at);
+                    }
+                    global.name.as_deref().unwrap_or_default().to_owned()
+                }
+                // the runtime's routines are far procedures where code is in
+                // segments
+                Callee::Named(name) => {
+                    // inline code is laid down at the site: no call
+                    if arch.object().bitness == 16
+                        && llrm_mir::intrinsics::code(name).is_none()
+                        && llrm_mir::intrinsics::asm(name).is_none()
+                    {
+                        far.insert(*at);
+                    }
+                    name.clone()
+                }
+            };
+            (*at, name)
+        }));
+        inline_places.extend(done.inline_places.iter().cloned());
+        let mut next_at = None;
+        for &(inst, order) in built.dag.inst_order.iter().rev() {
+            next_at = done.first_at.get(&order).copied().or(next_at);
+            if let Some(at) = next_at {
+                noted_ats.insert(inst, at);
+            }
+        }
+        for &(id, value) in &built.values {
+            if let Some(&made) = done.values.get(&built.dag.resolve(value)) {
+                noted_values.get_or_insert_with(id, || made);
+            }
+            // A value type legalization expanded is its two halves.
+            if let Some(&(low, high)) = built.dag.expanded_integers.get(&value)
+                && let (Some(&low_made), Some(&high_made)) =
+                    (done.values.get(&built.dag.resolve(low)), done.values.get(&built.dag.resolve(high)))
+            {
+                let width = built.dag.value_type(low).size_in_bits() / 8;
+                noted_wides.get_or_insert_with(id, || {
+                    (Held { value: low_made, width, offset: 0 }, Held { value: high_made, width, offset: 0 })
+                });
+            }
+        }
+        emitted.extend(done.blocks);
+        if block == parent && is_pad(function, block) {
+            let Some(contracts) = contracts.filter(|contracts| contracts.runtime) else {
+                return refuse("a landing pad of a program with no runtime contracts");
+            };
+            if landing.replace(emitted[from].at).is_some() {
+                return refuse("more than one landing pad");
+            }
+            let at = emitted[from].at;
+            let pad = landing_pad_insn(at, contracts.segments, &cpu.general);
+            emitted[from].insns.insert(0, std::sync::Arc::new(pad));
+            calls.insert(at, LANDING.to_owned());
+        }
+        // A block that ends in `unreachable` (after a call that does not
+        // return) leads nowhere: it does not fall into the next one.
+        if block == parent
+            && function
+                .terminator(block)
+                .is_some_and(|inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Unreachable)
+        {
+            sinks.extend(emitted.last().map(|last| last.at));
+        }
+        let start = made.get(&parent.0).map_or(from, |range| range.start);
+        made.insert(parent.0, start..emitted.len());
+        exports.push((parent, built.phi_updates));
+    }
+    let succ = successors(&emitted, &sinks);
+    // Phis: the successor's phi takes, from each LIR block of the predecessor
+    // that leaves for it, the register the predecessor copied its value to.
+    for (pred, updates) in &exports {
+        for (at_update, (phi, reg_in)) in updates.iter().enumerate() {
+            let ValueDef::Instruction(def) = function.value(*phi).def else {
+                return refuse("a phi that is not an instruction");
+            };
+            let Some(phi_block) = function.parent(def) else { return refuse("a phi outside a block") };
+            let at = block_at[&phi_block.0];
+            let Some(reg_out) = info.value_regs.get(phi).copied() else { return refuse("a phi with no register") };
+            // A value of two registers (a far pointer, an `i64`) has one entry
+            // for each part, in order: the k-th is the phi's k-th register.
+            let part = updates[..at_update].iter().filter(|(one, _)| one == phi).count();
+            let reg_out = if part == 0 { reg_out } else { info.part_regs(reg_out, part + 1)[part] };
+            let (result, incoming) = (state.vreg(reg_out), state.vreg(*reg_in));
+            let edges: Vec<i64> =
+                made[&pred.0].clone().filter(|i| succ[*i].contains(&at)).map(|i| emitted[i].at).collect();
+            let target = made[&phi_block.0].start;
+            for edge in edges {
+                let block = &mut emitted[target];
+                match block.phis.iter_mut().find(|p| p.result == result) {
+                    Some(p) => {
+                        if !p.incoming.iter().any(|(e, _)| *e == edge) {
+                            p.incoming.push((edge, incoming));
+                        }
+                    }
+                    None => block.phis.push(Phi { result, incoming: vec![(edge, incoming)] }),
+                }
+            }
+        }
+    }
+    // `UnreachableMachineBlockElim`: a block no edge leads to (the
+    // `unreachable` default of a switch whose cases cover its values) is
+    // dropped, with the phi inputs that came from it.
+    let (emitted, succ) = without_unreachable(emitted, succ, landing);
+    // Every value read is defined on every path to the read (a phi, an
+    // instruction, an arrival): a LIR that reads one nothing defines on some
+    // path stops the allocator's liveness, so it is a refusal here.
+    if let Some((value, name)) = read_before_defined(&emitted, &succ, landing) {
+        return refuse(format!("--isel=dag: value {value} is read and not defined on every path ({name:?})"));
+    }
+    // A floating value is a 10-byte register value: read at another width it is
+    // an integer's bits taken from an x87 register (`bitcast` of a double to
+    // its words, reaching the matcher as a no-op), which no code can do.
+    {
+        let floating: llrm_support::hash::HashSet<u32> = emitted
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter_map(|insn| insn.what.as_ref())
+            .flat_map(|what| what.dests.iter())
+            .filter_map(|dest| match dest {
+                llrm_codegen::model::ir::Loc::Held(held) if held.width == 10 => Some(held.value),
+                _ => None,
+            })
+            .collect();
+        for insn in emitted.iter().flat_map(|block| block.insns.iter()) {
+            let Some(what) = insn.what.as_ref() else { continue };
+            let mentions = what.dests.iter().chain(&what.sources);
+            if mentions.into_iter().any(|loc| {
+                matches!(
+                    loc,
+                    llrm_codegen::model::ir::Loc::Held(held) if held.width != 10 && floating.contains(&held.value)
+                )
+            }) {
+                return refuse(format!("--isel=dag: a floating value used as an integer ({:?})", what.name));
+            }
+        }
+    }
+    // The x87 stack is empty at a call: a floating value live across one is
+    // spilled by the pin's allocator, which no pass here does for this LIR, so
+    // the function is refused (the stackifier would fail the compile).
+    // A function with a pad is entered through a root block that never branches
+    // to it, so the pad is reachable in the machine's graph.
+    let root_at = landing.map(|_| state.next_address());
+    let blocks: Vec<Block> = root_at
+        .zip(landing)
+        .map(|(at, pad)| {
+            let never = [
+                llrm_codegen::backend::isel::insn(
+                    at,
+                    llrm_codegen::backend::isel::semantics(
+                        llrm_codegen::model::ir::Operation::Compare,
+                        "cmp",
+                        vec![],
+                        vec![
+                            llrm_codegen::model::ir::Loc::Reg(llrm_codegen::model::ir::Reg {
+                                register: llrm_codegen::model::ir::STACK,
+                                width: 2,
+                            }),
+                            llrm_codegen::model::ir::Loc::Imm(llrm_codegen::model::ir::Imm { value: 0, width: 2, address: None }),
+                        ],
+                    ),
+                ),
+                llrm_codegen::backend::isel::insn(
+                    at,
+                    llrm_codegen::model::ir::Semantics {
+                        target: Some(pad),
+                        ..llrm_codegen::backend::isel::semantics(llrm_codegen::model::ir::Operation::Branch, "je", vec![], vec![])
+                    },
+                ),
+            ];
+            Block::from(LirBlock { succ: vec![pad, emitted[0].at].into(), ..LirBlock::new(at, never.to_vec().into()) })
+        })
+        .into_iter()
+        .chain(emitted.iter().zip(succ).map(|(block, succ)| -> Block {
+            LirBlock {
+                succ: succ.into(),
+                phis: block.phis.clone().into(),
+                ..LirBlock::new(block.at, block.insns.iter().cloned().collect::<Vec<_>>().into())
+            }
+            .into()
+        }))
+        .collect();
+    let entry = root_at.unwrap_or(emitted[0].at);
+    let mut body = LirBody::new(name, entry, blocks, IndexMap::default(), IndexMap::default());
+    body.bits = arch.object().bitness;
+    body.registers = Some(llrm_lir::registers::Regs(arch.registers()));
+    body.float_stack = arch.float_stack();
+    // The old route's table of each float value's type: a spill rounds to it
+    // (C, `rounds_float_spills`) or, for BASIC, keeps the 10 bytes
+    // (`spills_extended`). Without it every spill of an x87 value was a qword
+    // (`pow_unrolled.bas` lost 11 bits of log2(10) across a call).
+    if cpu.rounds_float_spills || cpu.spills_extended {
+        let table =
+            state.float_bytes.iter().map(|(number, bytes)| (*number, if cpu.spills_extended { 10 } else { *bytes }));
+        body.float_bytes = std::sync::Arc::new(table.collect());
+    } else {
+        // Nib keeps the qword (D-RFP1), but not for what is exactly an f32:
+        // a dword holds it whole (`fld dword` and back), and is what the
+        // value's own type spills as.
+        let exact = |number: &u32, bytes: &u32| *bytes == 4 && state.float_exact.get(number) == Some(&true);
+        let table = state.float_bytes.iter().map(|(number, bytes)| (*number, if exact(number, bytes) { 4 } else { 8 }));
+        body.float_bytes = std::sync::Arc::new(table.collect());
+    }
+    body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
+    body.min_size = cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize");
+    body.call_pops = std::sync::Arc::new(call_pops);
+    body.sealed_arguments = true;
+    body.ordered = true;
+    // `-g`: the parameters where the convention passes them, and each declared
+    // variable in the frame cell its alloca has.
+    body.variables = llrm_codegen::backend::isel::parameters(module, function, name, &convention, &IndexMap::default());
+    body.cfa_variables = true;
+    for record in function.debug_records() {
+        let (llrm_mir::DebugWhat::Declare(llrm_mir::Operand::Value(address)), Some(variable)) =
+            (record.what, llrm_mir::debuginfo::read_variable(module, record.variable))
+        else {
+            continue;
+        };
+        let Some((disp, _)) =
+            info.static_allocas.get(&address).and_then(|&k| frame.locals.borrow().get(k as usize).copied())
+        else {
+            continue;
+        };
+        if variable.scope != name {
+            continue;
+        }
+        let said = llrm_codegen::model::lir::DebugVariable {
+            name: variable.name,
+            r#type: variable.r#type,
+            place: llrm_codegen::model::lir::DebugPlace::At(Addr::new(Space::Frame, disp + variable.offset)),
+            parameter: variable.parameter,
+            argument: variable.argument,
+            arrives: None,
+            scope: variable.block,
+        };
+        // A parameter is said once. One the convention passes in a register is
+        // in its declared cell (`-O0`'s copy of it), not in the register the
+        // allocator then reuses; the register it arrived in is `arrives`, until
+        // the store.
+        match body.variables.iter_mut().find(|one| said.parameter && one.parameter && one.name == said.name) {
+            Some(one) if matches!(one.place, llrm_codegen::model::lir::DebugPlace::Register(_)) => {
+                *one = llrm_codegen::model::lir::DebugVariable { argument: said.argument.or(one.argument), ..said }
+            }
+            // passed in a cell, which holds it from the entry
+            Some(_) => {}
+            None => body.variables.push(said),
+        }
+    }
+    for one in &mut body.variables {
+        if let (Some(argument), llrm_codegen::model::lir::DebugPlace::At(_)) = (one.argument, &one.place) {
+            one.arrives = match usize::try_from(argument).ok().and_then(|argument| convention.parameters.get(argument))
+            {
+                Some(Parameter::Registers(registers)) if registers.len() == 1 => Some(registers[0]),
+                _ => None,
+            };
+        }
+    }
+    // The values a debug record names, in the register the value was made in
+    // or the one that carries it out of its block.
+    for (id, &vreg) in info.value_regs.iter() {
+        if let Some(&made) = state.vregs.get(&vreg) {
+            noted_values.get_or_insert_with(id, || made);
+        }
+    }
+    let mut body =
+        llrm_codegen::backend::isel::noted(module, function, name, &noted_ats, &noted_values, &noted_wides, &[], body);
+    set_odds(&mut body, &info.edge_probs, &block_at);
+    // The loops whose trips `induction` proves, as the old route states them:
+    // the executed-work estimate (the route choice's, `LLRM_DEBUG=cost`) reads
+    // 31 in 32 for a loop without them.
+    // A function without a loop has none to prove, and the facts below are a
+    // fixed point over the whole body.
+    let shape = llrm_analysis::cfg::Shape::of(function);
+    if !shape.loops.is_empty() {
+        let unit = llrm_analysis::memory::Unit::of(module, &layout, function)
+            .with_spaces(arch.layout().spaces.roles)
+            .with_shape(&shape);
+        let exposed = llrm_analysis::memory::exposed_frames(&unit);
+        let unit = unit.with_exposed(&exposed);
+        // The mid-end's `Registers` is empty by design (constants are folded
+        // into the body), so the trips are proven from the body alone.
+        let registers = IndexMap::default();
+        let unit = unit.with_registers(&registers);
+        body.loop_trip_counts =
+            llrm_codegen::backend::isel::proven_trips(&unit, &shape, &registers, |block| block_at.get(&block.0).copied());
+    }
+    body.frequencies = Some(llrm_codegen::analysis::frequency::Frequency::over(&body, &body.blocks).table());
+    // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
+    // their bytes are laid down at the call, as the old route did.
+    let mut inline = IndexMap::default();
+    // (assembling a routine costs 1.8 M instructions, so only a call that
+    // names one asks for it)
+    for (at, name) in calls.iter().filter(|(_, name)| name.starts_with(llrm_target::routines::DIVIDE_PREFIX)) {
+        for signed in [true, false] {
+            for wide in [true, false] {
+                for used in [Used::Both, Used::Quotient, Used::Remainder] {
+                    if let Ok(routine) = arch.divide_routine_used(signed, wide, used) {
+                        if routine.name == name.as_str() {
+                            inline.insert(*at, routine.code);
+                        }
+                    }
+                }
+                if let Ok(routine) = arch.divide_routine_small(signed, wide) {
+                    if routine.name == name.as_str() {
+                        inline.insert(*at, routine.code);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(at) = landing {
+        inline.insert(at, vec![CLD]);
+    }
+    // Inline code: its bytes with each frame place patched as a displacement
+    // from BP (the old route's `inline_code`).
+    for (at, name) in &calls {
+        if let Some((mut bytes, places)) = llrm_mir::intrinsics::code(name) {
+            for (offset, disp, addend) in inline_places.get(at).map_or(&[][..], |one: &Vec<(usize, i64, i64)>| &one[..])
+            {
+                bytes[*offset..*offset + 2].copy_from_slice(&((disp + addend) as u16).to_le_bytes());
+            }
+            let _ = places;
+            inline.insert(*at, bytes);
+        }
+    }
+    // The huge-pointer routines the calls name (`huge_memory`): their bytes
+    // are laid down at the call as well.
+    for (at, name) in &calls {
+        if let Some(routine) = huge_routine(arch, name) {
+            inline.insert(*at, routine.code);
+        }
+    }
+    // An inline assembly block's bytes are laid down at its site.
+    for (at, name) in &calls {
+        if let Some(block) = llrm_mir::intrinsics::asm(name) {
+            inline.insert(*at, block.code);
+        }
+    }
+    Ok(Selected {
+        body,
+        convention,
+        calls,
+        inline,
+        inline_places,
+        inline_symbols: IndexMap::default(),
+        far,
+        pops,
+        depth: fixed_depth,
+        align: frame.align.get(),
+        extents: frame.locals.borrow().clone(),
+        temporaries: frame.locals.borrow().len() - fixed_objects,
+        over_aligned,
+        landing,
+    })
+}
+
+/// `emitted` and `succ` without the blocks no path from the entry or the
+/// landing pad reaches.
+fn without_unreachable(
+    mut emitted: Vec<EmitBlock>,
+    succ: Vec<Vec<i64>>,
+    landing: Option<i64>,
+) -> (Vec<EmitBlock>, Vec<Vec<i64>>) {
+    let index: HashMap<i64, usize> = emitted.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
+    let mut reached = vec![false; emitted.len()];
+    let mut work: Vec<usize> = vec![0];
+    work.extend(landing.and_then(|at| index.get(&at).copied()));
+    while let Some(at) = work.pop() {
+        if std::mem::replace(&mut reached[at], true) {
+            continue;
+        }
+        work.extend(succ[at].iter().filter_map(|next| index.get(next).copied()));
+    }
+    if reached.iter().all(|one| *one) {
+        return (emitted, succ);
+    }
+    let gone: llrm_support::hash::HashSet<i64> =
+        emitted.iter().zip(&reached).filter(|(_, kept)| !**kept).map(|(block, _)| block.at).collect();
+    let succ: Vec<Vec<i64>> = succ.into_iter().zip(&reached).filter(|(_, kept)| **kept).map(|(s, _)| s).collect();
+    let mut kept = reached.iter();
+    emitted.retain(|_| *kept.next().expect("a flag for each block"));
+    for block in &mut emitted {
+        for phi in &mut block.phis {
+            phi.incoming.retain(|(from, _)| !gone.contains(from));
+        }
+    }
+    (emitted, succ)
+}
+
+/// What starts a landing pad: `cld`, the one state it sets, as a call that
+/// leaves no register as it was (`isel/unwind.rs`).
+const LANDING: &str = "__LANDING";
+const CLD: u8 = 0xFC;
+
+/// Whether `block` starts a landing pad, which the runtime enters.
+fn is_pad(
+    function: &llrm_mir::module::Function,
+    block: BlockId,
+) -> bool {
+    function
+        .iter_block(block)
+        .any(|one| matches!(
+            function.instruction(one).opcode,
+            llrm_mir::opcode::Opcode::LandingPad { .. }
+        ))
+}
+
+fn landing_pad_insn(
+    at: i64,
+    segments: &llrm_codegen::backend::target::Segments,
+    general: &[llrm_lir::registers::RegId],
+) -> Insn {
+    use llrm_codegen::backend::callregs::{call_clobbered_high, call_clobbers};
+    let contract =
+        llrm_codegen::backend::lower_int64::_helper(LANDING, Default::default(), llrm_codegen::abi::runtime::EVERY.clone());
+    Insn {
+        clobbers: call_clobbers(&contract, segments, general),
+        clobbers_high: call_clobbered_high(&contract, segments, general),
+        ..Insn::new(
+            at,
+            Some((at, at)),
+            Some(llrm_codegen::backend::isel::semantics(llrm_codegen::model::ir::Operation::Call, "call", vec![], vec![])),
+            vec![],
+            vec![],
+        )
+    }
+}
+
+/// A set of values, one bit each: values are dense per body (`fresh` counts
+/// up), so a block's set is a few words, not a hash table.
+#[derive(Clone, PartialEq, Eq)]
+struct Values(Vec<u64>);
+
+impl Values {
+    fn new(bits: usize) -> Self {
+        Values(vec![0; bits.div_ceil(64)])
+    }
+
+    fn insert(
+        &mut self,
+        value: u32,
+    ) {
+        self.0[value as usize / 64] |= 1 << (value % 64);
+    }
+
+    fn contains(
+        &self,
+        value: u32,
+    ) -> bool {
+        self.0[value as usize / 64] >> (value % 64) & 1 == 1
+    }
+
+    fn union(
+        &self,
+        other: &Values,
+    ) -> Values {
+        Values(self.0.iter().zip(&other.0).map(|(a, b)| a | b).collect())
+    }
+
+    fn intersection(
+        &self,
+        other: &Values,
+    ) -> Values {
+        Values(self.0.iter().zip(&other.0).map(|(a, b)| a & b).collect())
+    }
+}
+
+/// The branch probabilities of the body: the edges the builder stated
+/// (`addSuccessorWithProb`: a conditional branch's two, a merged condition's
+/// cases), on the blocks whose machine edges they are. An edge nobody stated
+/// has none.
+pub(super) fn set_odds(
+    body: &mut LirBody,
+    edges: &[(llrm_mir::module::BlockId, llrm_mir::module::BlockId, u32)],
+    block_at: &HashMap<u32, i64>,
+) {
+    let mut stated: IndexMap<(i64, i64), u64> = IndexMap::default();
+    // The pieces a block became: it, then the blocks after it in the body that
+    // no IR block starts.
+    let first_of_ir: HashSet<i64> = block_at.values().copied().collect();
+    let mut piece_of: HashMap<i64, i64> = HashMap::default();
+    let mut current = None;
+    for one in &body.blocks {
+        if first_of_ir.contains(&one.at) {
+            current = Some(one.at);
+        }
+        if let Some(current) = current {
+            piece_of.insert(one.at, current);
+        }
+    }
+    // The blocks that end in a branch, by the piece they belong to: an edge
+    // looks in its piece, not in every block of the body.
+    let mut branching: HashMap<i64, Vec<(i64, &[i64])>> = HashMap::default();
+    for one in body.blocks.iter().filter(|one| one.succ.len() >= 2) {
+        if let Some(&piece) = piece_of.get(&one.at) {
+            branching.entry(piece).or_default().push((one.at, one.succ.as_slice()));
+        }
+    }
+    for &(from, to, probability) in edges {
+        let (Some(&first), Some(&to_at)) = (block_at.get(&from.0), block_at.get(&to.0)) else { continue };
+        // A select made into branches splits the block, and the branch ends
+        // the last piece (`transferSuccessorsAndUpdatePHIs`): the edges are
+        // that piece's.
+        let candidates = branching.get(&first).map_or(&[][..], Vec::as_slice);
+        body.facts.0.bump_by("odds-examined", candidates.len());
+        let Some(&(at, _)) = candidates.iter().rfind(|(_, succ)| succ.contains(&to_at)) else {
+            continue;
+        };
+        *stated.entry((at, to_at)).or_insert(0) += u64::from(probability);
+    }
+    // The machine CFG lists successors in `addSuccessor` order, true edge
+    // first, whichever side the jump ends up on; placement breaks ties by it.
+    let mut order: IndexMap<i64, Vec<i64>> = IndexMap::default();
+    for &(at, to_at) in stated.keys() {
+        order.entry(at).or_default().push(to_at);
+    }
+    for block in &mut body.blocks {
+        let Some(stated_order) = order.get(&block.at).filter(|_| block.succ.len() > 1) else { continue };
+        let mut reordered: Vec<i64> = stated_order.iter().copied().filter(|to| block.succ.contains(to)).collect();
+        let rest: Vec<i64> = block.succ.iter().copied().filter(|to| !reordered.contains(to)).collect();
+        reordered.extend(rest);
+        if reordered[..] != block.succ[..] {
+            block.succ = reordered.into();
+        }
+    }
+    // `normalizeSuccProbs`: the edges of a block share one.
+    let mut total: IndexMap<i64, u64> = IndexMap::default();
+    for (&(at, _), &probability) in &stated {
+        *total.entry(at).or_insert(0) += probability;
+    }
+    for (&(at, to_at), &probability) in &stated {
+        let sum = total[&at];
+        if sum == 0 {
+            continue;
+        }
+        let scaled = u128::from(probability) * (1u128 << 31) / u128::from(sum);
+        body.odds.taken.insert((at, to_at), scaled.min(1 << 31) as u32);
+    }
+}
+
+/// A value read where some path to it defines nothing: (value, instruction).
+pub(super) fn read_before_defined(
+    blocks: &[EmitBlock],
+    succ: &[Vec<i64>],
+    landing: Option<i64>,
+) -> Option<(u32, Option<String>)> {
+    let index: llrm_support::hash::HashMap<i64, usize> = blocks.iter().enumerate().map(|(i, b)| (b.at, i)).collect();
+    // A copy of a value to itself defines nothing.
+    let defines = |insn: &Insn| -> Vec<u32> {
+        let itself = insn
+            .what
+            .as_ref()
+            .is_some_and(
+                |what| matches!(
+                    (&what.dests[..], &what.sources[..]),
+                    ([llrm_codegen::model::ir::Loc::Held(to)], [llrm_codegen::model::ir::Loc::Held(from)]) if to.value == from.value
+                ),
+            );
+        if itself { Vec::new() } else { insn.defines.clone() }
+    };
+    let highest = blocks
+        .iter()
+        .flat_map(|block| {
+            block
+                .phis
+                .iter()
+                .flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|&(_, v)| v)))
+                .chain(block.insns.iter().flat_map(|insn| insn.defines.iter().chain(&insn.uses).copied()))
+        })
+        .max()
+        .unwrap_or(0) as usize;
+    let bits = highest + 1;
+    let own: Vec<Values> = blocks
+        .iter()
+        .map(|block| {
+            let mut set = Values::new(bits);
+            for phi in &block.phis {
+                set.insert(phi.result);
+            }
+            for insn in &block.insns {
+                for value in defines(insn) {
+                    set.insert(value);
+                }
+            }
+            set
+        })
+        .collect();
+    // What is defined on every path to the start of each block (`None`: no
+    // path has reached it yet).
+    let mut entry: Vec<Option<Values>> = vec![None; blocks.len()];
+    entry[0] = Some(Values::new(bits));
+    // The runtime enters a landing pad with no value defined: a root of its
+    // own.
+    if let Some(&pad) = landing.and_then(|at| index.get(&at)) {
+        entry[pad] = Some(Values::new(bits));
+    }
+    let mut work: std::collections::VecDeque<usize> = (0..blocks.len()).filter(|&at| entry[at].is_some()).collect();
+    let mut queued: Vec<bool> = (0..blocks.len()).map(|at| entry[at].is_some()).collect();
+    while let Some(at) = work.pop_front() {
+        queued[at] = false;
+        let out = entry[at].as_ref().expect("a reached block").union(&own[at]);
+        for next in &succ[at] {
+            let Some(&to) = index.get(next) else { continue };
+            let merged = match &entry[to] {
+                None => out.clone(),
+                Some(known) => known.intersection(&out),
+            };
+            if entry[to].as_ref() != Some(&merged) {
+                entry[to] = Some(merged);
+                if !queued[to] {
+                    queued[to] = true;
+                    work.push_back(to);
+                }
+            }
+        }
+    }
+    for (at, block) in blocks.iter().enumerate() {
+        let Some(mut known) = entry[at].clone() else { continue };
+        for phi in &block.phis {
+            known.insert(phi.result);
+        }
+        for insn in &block.insns {
+            if let Some(value) = insn.uses.iter().find(|value| !known.contains(**value)) {
+                return Some((*value, insn.what.as_ref().and_then(|what| what.name.as_ref().map(|n| n.to_string()))));
+            }
+            for value in defines(insn) {
+                known.insert(value);
+            }
+        }
+        // What a phi takes from an edge is defined at the end of that edge's
+        // block.
+        for phi in &block.phis {
+            for (edge, value) in &phi.incoming {
+                let Some(&from) = index.get(edge) else { continue };
+                let Some(start) = entry[from].as_ref() else { continue };
+                if !start.contains(*value) && !own[from].contains(*value) {
+                    return Some((*value, Some("phi".to_owned())));
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod lowering_cache_tests {
+    use super::*;
+
+    /// Every function built its target's action tables again: 109 K
+    /// instructions each, 65.7 M of tiny600's 4 724 M. One build per kind of
+    /// target and feature set, however many functions ask.
+    #[test]
+    fn test_the_action_tables_of_a_target_are_built_once_for_all_its_functions() {
+        let features = Features { sse2: true, cmov: true, ..Features::default() };
+        let built = std::cell::Cell::new(0);
+        for _ in 0..50 {
+            lowering_for(64, features, || {
+                built.set(built.get() + 1);
+                TargetLowering::x86_64(features, MVT::I64)
+            });
+        }
+        assert_eq!(built.get(), 1);
+        let other = Features { sse2: false, ..features };
+        lowering_for(64, other, || {
+            built.set(built.get() + 1);
+            TargetLowering::x86_64(other, MVT::I64)
+        });
+        assert_eq!(built.get(), 2, "another feature set is another table");
+    }
+
+    /// FastISel's table of opcode names found each of its 51 names by scanning every opcode: 4.9 M
+    /// instructions in a 207 M compile of 3 K instructions. One index, built at the first lookup,
+    /// and the lowest opcode of a repeated name, not whichever the hash order met first.
+    #[test]
+    fn test_opcodes_are_found_by_name_through_one_index() {
+        let tables = Tables {
+            map: OpcodeMap::new(Default::default()),
+            names: HashMap::from_iter([(7, "ADD|x"), (3, "ADD"), (9, "SUB")]),
+            by_name: Default::default(),
+        };
+        assert!(tables.by_name.get().is_none(), "built at the first lookup, not before");
+        assert_eq!(tables.opcode_named("ADD"), Some(3));
+        assert_eq!(tables.opcode_named("SUB"), Some(9));
+        assert_eq!(tables.opcode_named("MUL"), None);
+        assert!(tables.by_name.get().is_some(), "a lookup is a search of the index, not of the names");
+    }
+}

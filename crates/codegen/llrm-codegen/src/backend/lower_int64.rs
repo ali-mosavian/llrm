@@ -23,7 +23,7 @@ use llrm_lir::registers::{RegId, Regs};
 
 use crate::abi::runtime::{self, Reg};
 
-pub(crate) fn _helper(
+pub fn _helper(
     name: &str,
     inputs: BTreeSet<Reg>,
     clobbers: BTreeSet<Reg>,
