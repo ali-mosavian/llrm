@@ -307,7 +307,7 @@ pub fn pinned_by(
                 Operation::Exchange | Operation::Escape | Operation::Barrier => return Some(Pinned::OpaqueSpAdjustment),
                 Operation::Nothing if what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")) => return Some(Pinned::OpaqueSpAdjustment),
                 Operation::Call => {
-                    if what.indirect && !in_call_frame {
+                    if what.indirect && !in_call_frame && !pops.contains_key(&one.at) {
                         return Some(Pinned::OpaqueSpAdjustment);
                     }
                     depth -= pops.get(&one.at).copied().unwrap_or(0);
