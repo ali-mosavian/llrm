@@ -26,7 +26,9 @@
 //! their folds. Owner llrm-target-wasm, review 2026-12-10.
 //! Covered opcodes: `and`, `or`, `xor`, `shl`, `srl`, `rotl` and `rotr` by a
 //! constant, the three extensions' zero and any forms, `trunc`. The rest fall
-//! back to `computeKnownBits`.
+//! back to `computeKnownBits`. A right shift by one of a sum of two extended
+//! values is an `avgfloor` or `avgceil` of the narrow values where the target
+//! has the node (`combine_avg.rs`, DEVIATE SD600).
 //!
 //! `ShrinkDemandedOp` and the half-width shift rewrites run where the target
 //! hook `free_narrowing` says the casts are free (x86-64; at m32 the pin's
@@ -519,6 +521,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 }
                 if is_shl {
                     KnownBits { zero: ((k.zero << amount) | mask(amount)) & all, one: (k.one << amount) & all, width }
+                // "Try to match AVG patterns (after shift simplification)."
+                if !is_shl {
+                    if let Some(avg) = self.combine_shift_to_avg(op, demanded) {
+                        return Self::combine_to(tlo, op, avg);
+                    }
+                }
                 } else {
                     KnownBits { zero: (k.zero >> amount) | (all & !(all >> amount)), one: k.one >> amount, width }
                 }
