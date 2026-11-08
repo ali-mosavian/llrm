@@ -1006,3 +1006,39 @@ out:
     );
     assert_eq!(llrm_analysis::cfg::shapes_derived(), before, "a shape was made again");
 }
+
+/// Compile time: the unroll pass closed its function's SSA form through a
+/// dominator tree and loops of its own (755 calls, 748 M Ir on memexp -O2,
+/// every one of them a no-op) while the manager held both. A function the
+/// pass left as it found it makes none.
+#[test]
+fn test_the_unroll_pass_closes_over_the_managers_tree_and_loops() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %next
+}
+",
+    );
+    crate::lcssa::TREES_MADE.with(|count| count.set(0));
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            created: Default::default(),
+        },
+    );
+    assert_eq!(crate::lcssa::TREES_MADE.with(std::cell::Cell::get), 0, "a tree was made again");
+}
