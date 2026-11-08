@@ -355,13 +355,21 @@ mod tests {
         assert_eq!((frame.red_zone, frame.optional), (0, false));
     }
 
-    /// First x86 fact of `RegisterClasses::of` (classes.rs: every base and
-    /// index root must have a 16-bit view; arm64's general registers have
-    /// none). Goes red when the table stops assuming it: delete this test then.
+    /// `RegisterClasses::of` needed a 16-bit view of every base and index root
+    /// (panic "a register has a word view") and named registers through x86's
+    /// table ("no register x0"). arm64 addresses through whole registers.
     #[test]
-    #[should_panic(expected = "a register has a word view")]
-    fn the_class_table_stops_at_the_x86_word_view() {
-        llrm_codegen::backend::classes::RegisterClasses::of(&Arm64);
+    fn the_class_table_builds_for_arm64() {
+        let classes = llrm_codegen::backend::classes::RegisterClasses::of(&Arm64);
+        let general: std::collections::BTreeSet<RegId> =
+            (0..=30).map(|n| register(&format!("x{n}"))).chain([reg::SP]).collect();
+        assert_eq!(classes.addressing, general);
+        assert!(classes.encodable_bases.is_subset(&general) && !classes.encodable_bases.contains(&reg::XZR));
+        assert_eq!(classes.frame, reg::X29);
+        let names: Vec<&str> = classes.available.iter().map(|one| REGISTER_INFO.name(*one).unwrap()).collect();
+        assert_eq!(names.first(), Some(&"x0"));
+        assert!(!names.contains(&"x29") && !names.contains(&"sp") && names.contains(&"x28"), "{names:?}");
+        assert!(classes.xmm.is_empty());
     }
 
     /// A `double` took the stack (the file named no float argument registers):
