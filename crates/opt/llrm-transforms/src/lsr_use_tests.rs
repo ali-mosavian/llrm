@@ -94,7 +94,6 @@ fn rated_by(
         hardware_loop_profitable: false,
         as_written: false,
         other_register_units: 0,
-        real_register_units: 0,
         size: false,
         across_call: false,
     };
@@ -235,7 +234,6 @@ fn a_visited_register_loses_and_a_chosen_one_is_free() {
             hardware_loop_profitable: false,
             as_written: false,
             other_register_units: 0,
-            real_register_units: 0,
             size: false,
             across_call: false,
         };
@@ -457,7 +455,6 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
                 hardware_loop_profitable: false,
                 as_written: false,
                 other_register_units: 0,
-                real_register_units: 0,
                 size: false,
                 across_call: false,
             };
@@ -610,7 +607,6 @@ fn a_pointer_stepping_by_a_constant_is_free_where_post_indexed_access_is_favored
                 hardware_loop_profitable: false,
                 as_written: false,
                 other_register_units: 0,
-                real_register_units: 0,
                 size: false,
                 across_call: false,
             };
@@ -644,7 +640,6 @@ fn a_zero_ending_counter_pays_the_targets_zero_test() {
                 hardware_loop_profitable: false,
                 as_written: false,
                 other_register_units: 0,
-                real_register_units: 0,
                 size: false,
                 across_call: false,
             };

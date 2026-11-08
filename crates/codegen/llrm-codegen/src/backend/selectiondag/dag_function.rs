@@ -1049,6 +1049,7 @@ fn selected_in(
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_div_live_limit(if cpu.size { machine.tti().map_or(0, |tti| tti.narrow_divide_live_limit()) } else { 0 })
         .with_div_prices(div_prices(cpu, &*machine, bitness))
+        .with_sdiv_by_magnitude(cpu.speed_rate && !(cpu.size || cpu.min_size) && machine.tti().is_some_and(|tti| tti.sdiv_by_magnitude()))
         .with_jump_tables(
             machine.costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
