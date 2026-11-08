@@ -761,3 +761,58 @@ fn fast_isel_takes_char_and_short_values() {
         assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
     }
 }
+
+/// The pin folds a GEP into the access that uses it and a load into the compare after it
+/// (`X86SelectAddress`, `tryToFoldLoad`); FastISel emitted `lea` + load and `mov` + `cmp` (`div_constants_short`
+/// `.text` 10569 B against the pin's 9576 B).
+#[test]
+fn fast_isel_folds_an_address_and_a_load_into_the_access() {
+    for (target, base) in [("x86_32-linux", "ebp"), ("x86_64-linux", "rbp")] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(
+            scratch.path().join("a.c"),
+            "int h(int n)\n{\n    int a[8];\n    for (int i = 0; i < 8; i++)\n        a[i] = i * n;\n    return a[3];\n}\n",
+        )
+        .unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "-masm=intel", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(asm.contains(&format!("cmp dword ptr [{base}-")) && asm.contains(", 8"), "{target}: no cmp on memory: {asm}");
+        assert!(asm.contains("*4-") && !asm.contains("lea "), "{target}: the element address was made apart: {asm}");
+        assert!(asm.contains(&format!("imul eax, dword ptr [{base}-")), "{target}: the load was not folded into the imul: {asm}");
+    }
+}
+
+/// A `short` read and widened was a `mov ax, [m]` and a `movsx` (6 B); the pin folds the load: `movsx eax, word ptr [m]`.
+#[test]
+fn fast_isel_folds_a_narrow_load_into_its_extension() {
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), "int h(short *p, unsigned char *q)\n{\n    return *p + *q;\n}\n").unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_FAST_ISEL", "1")
+            .env("LLRM_VERIFY", "1")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "-masm=intel", "a.c", "-o", "a.s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+        assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "{target}: h not taken: {report}");
+        let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+        assert!(asm.contains("movsx eax, word ptr [") || asm.contains("movsx ecx, word ptr ["), "{target}: {asm}");
+        assert!(asm.contains("movzx eax, byte ptr [") || asm.contains("movzx ecx, byte ptr ["), "{target}: {asm}");
+    }
+}
