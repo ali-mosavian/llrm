@@ -267,23 +267,3 @@ class CleanEnvTests(unittest.TestCase):
         self.assertEqual(llrmbin.assert_clean_env({"LLRM_NO_STACKS": "1", "AB_ALLOW_ENV": "LLRM_NO_STACKS"}), ["LLRM_NO_STACKS=1"])
 
 
-
-
-def test_a_pair_sharing_the_targets_own_backend_is_refused_for_every_non_x86_row(tmp_path):
-    """The 9-target AVG identity run (2026-11-09) compared dists whose llrm-llc differed; arm64, m68k, z80 and 6502 run their own llrm-<family>-llc, and a pair sharing it
-    reads SAME on every row of that target. `backends_of` names the programs a target needs distinct.
-    Not caught by md5: two worktrees built into one CARGO_TARGET_DIR reuse each other's workspace crates (hashed by relative path) when the outputs are newer than the sources;
-    a stale crate that still compiles gives binaries with differing md5 and the wrong code. Build each tree in its own target dir."""
-    import pytest
-
-    assert llrmbin.backends_of("x86_64-linux") == ("llrm-llc",)
-    base, head = tmp_path / "base", tmp_path / "head"
-    for target, own in (("arm64-linux", "llrm-arm64-llc"), ("m68k-68020", "llrm-m68k-llc"), ("z80-sdcc", "llrm-z80-llc"), ("6502-sim65", "llrm-6502-llc"), ("wasm32", "llrm-wasm-llc")):
-        assert llrmbin.backends_of(target) == ("llrm-llc", own)
-        for folder in (base, head):
-            folder.mkdir(exist_ok=True)
-            (folder / "llrm-cc").write_bytes(folder.name.encode())
-            (folder / "llrm-llc").write_bytes(folder.name.encode())
-            (folder / own).write_bytes(b"one backend")
-        with pytest.raises(SystemExit, match=f"same {own}"):
-            llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=llrmbin.backends_of(target), required=True)

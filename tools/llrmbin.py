@@ -246,13 +246,6 @@ def assert_distinct(base, new, same_source: bool = False) -> str:
     return f"binaries: base {a[:12]} {base} | new {b[:12]} {new}" + (" (same binary, same source)" if a == b else "")
 
 
-def backends_of(target: str) -> tuple[str, ...]:
-    """The programs beside llrm-cc that compile for `target` (an LLRM_CC_TARGET row): llrm-llc, and the target's own llrm-<family>-llc where it has one. A pair that shares
-    the target's own backend reads SAME on every row of that target, whatever llrm-llc is."""
-    own = {"wasm32": "wasm", "arm64-linux": "arm64", "z80-sdcc": "z80", "6502-sim65": "6502"}.get(target) or ("m68k" if target.startswith("m68k") else None)
-    return ("llrm-llc", f"llrm-{own}-llc") if own else ("llrm-llc",)
-
-
 def assert_distinct_llc(base, new, same_llc: bool = False, names=("llrm-llc",), required: bool = False) -> None:
     """SystemExit when a backend named in `names` beside `base` and the one beside `new` are the same bytes: llrm-cc only drives, so two dists sharing one backend read SAME on every
     row. A name missing from either is skipped, or refused when `required` (wasm32 runs llrm-wasm-llc: a pair sharing one gave a 0-DIFF identity run where nbody -O2 moves 939 -> 910 B).
