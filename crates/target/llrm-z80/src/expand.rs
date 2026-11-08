@@ -1842,7 +1842,13 @@ pub fn finish(
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
     }
-    Ok(drop_unreachable(forward_high_bytes(drop_overwritten_byte_stores(cancel_steps(printer.out)))))
+    Ok(tidy(printer.out))
+}
+
+/// The post-printer passes. `forward_high_bytes` runs before `drop_overwritten_byte_stores`: the latter drops the
+/// `ld R1, S1` the former needs to see.
+fn tidy(lines: Vec<Line>) -> Vec<Line> {
+    drop_unreachable(drop_overwritten_byte_stores(forward_high_bytes(cancel_steps(lines))))
 }
 
 /// Whether `text` ends the flow: `ret`, `jp L` or `jr L` with no condition.
@@ -2024,19 +2030,25 @@ fn cancel_steps(lines: Vec<Line>) -> Vec<Line> {
     out
 }
 
-/// `ld r, a` and a later `ld r, ...` with nothing between that names the pair of
-/// `r`, a label or a jump: the first store is never read. The printer leaves it
-/// when the `ld a, r` that read it was spared (`and a, #248; ld c, a; or a, #5;
-/// ld c, a`). The load leaves the flags alone.
+/// `ld r, s` (a register or a constant) and a later `ld r, ...` with nothing between that names `r`, its
+/// pair, a label or a jump: the first load is never read. The printer leaves one when the instruction that read it
+/// was spared (`and a, #248; ld c, a; or a, #5; ld c, a`, or a signed compare of a word against a constant
+/// whose low byte is 0, which keeps only the high byte of the biased copy). The load leaves the flags alone.
 fn drop_overwritten_byte_stores(lines: Vec<Line>) -> Vec<Line> {
+    let is_byte = |register: &str| register.len() == 1 && "bcdehl".contains(register);
     let byte = |text: &str| {
-        let register = text.strip_prefix("ld ")?.strip_suffix(", a")?;
-        (register.len() == 1 && "bcdehl".contains(register)).then_some(register.to_owned())
+        let (register, source) = text.strip_prefix("ld ")?.split_once(", ")?;
+        (is_byte(register) && (is_byte(source) || source == "a" || source.starts_with('#')))
+            .then_some(register.to_owned())
     };
     let pair_of = |register: &str| match register {
         "b" | "c" => "bc",
         "d" | "e" => "de",
         _ => "hl",
+    };
+    // the register or its pair named: the other byte of the pair is no reader
+    let names = |text: &str, register: &str| {
+        text.split([' ', ',', '(', ')', '+']).filter(|word| !word.is_empty()).skip(1).any(|word| word == register || word == pair_of(register))
     };
     let mut keep = vec![true; lines.len()];
     for (at, line) in lines.iter().enumerate() {
@@ -2048,12 +2060,12 @@ fn drop_overwritten_byte_stores(lines: Vec<Line>) -> Vec<Line> {
                 Line::Label(_) => break,
                 Line::Inst(next) => {
                     if let Some(source) = next.strip_prefix(&format!("ld {register}, "))
-                        && !mentions(&format!("ld x, {source}"), pair_of(&register))
+                        && !names(&format!("ld x, {source}"), &register)
                     {
                         keep[at] = false;
                         break;
                     }
-                    if mentions(next, pair_of(&register)) || HIDDEN.contains(&next.split(' ').next().unwrap_or("")) {
+                    if names(next, &register) || HIDDEN.contains(&next.split(' ').next().unwrap_or("")) {
                         break;
                     }
                 }
@@ -2665,7 +2677,16 @@ mod tests {
         let lines = vec![inst("ld c, a"), Line::Label("L".to_owned()), inst("ld c, a")];
         assert_eq!(drop_overwritten_byte_stores(lines.clone()), lines, "a label may be entered from elsewhere");
         let lines = vec![inst("ld c, a"), inst("ld c, d"), inst("ld c, (hl)")];
-        assert_eq!(drop_overwritten_byte_stores(lines).len(), 2, "a load of another register overwrites it");
+        assert_eq!(drop_overwritten_byte_stores(lines), vec![inst("ld c, (hl)")], "each load is overwritten by the next");
+    }
+
+    /// `ld l, c; ld h, b; ld l, h; ld h, #0` fuses to `ld l, b; ld h, #0`. Dropping the dead `ld l, c` first left
+    /// `ld h, b; ld l, h; ld h, #0` (struct_with_i64 -O3: 1 B and 4 T more, 8 sites).
+    #[test]
+    fn a_dead_load_is_dropped_after_the_high_byte_forward_has_used_it() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![inst("ld l, c"), inst("ld h, b"), inst("ld l, h"), inst("ld h, #0")];
+        assert_eq!(tidy(lines), vec![inst("ld l, b"), inst("ld h, #0")]);
     }
 
     /// A pair stored to its slot and reloaded after lines that leave it alone
