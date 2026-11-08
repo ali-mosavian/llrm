@@ -94,6 +94,9 @@ impl Cpu {
 /// 1.2 instructions a byte, above the 0.8 break-even; it cannot know the code is cold.
 const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 500;
 
+/// Thousandths of a clock one byte costs at -O2/-O3 (0.3 clock).
+const SCORING_MILLICLOCKS_PER_BYTE: i64 = 300;
+
 /// AArch64's scalar profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AArch64 {
@@ -365,11 +368,12 @@ impl Tti for AArch64 {
         true
     }
 
-    /// 0.004 B/clock, provisional: one byte of growth is 250 frequency-weighted
-    /// clocks. The median of the -O2/-O3 cells where inlining grew the code
-    /// (w15-arm64-rate-proposal-11-03.md); widened to 30 clean cells by 11-12.
+    /// The scoring rate (oversight ruling 2026-11-08): 0.3 clock a byte at
+    /// -O2/-O3, the derived price of one byte (m32 0.312, m16 0.5). The 250
+    /// clocks a byte it was (w15-arm64-rate-proposal-11-03.md) is the trade
+    /// point gcc and clang sit at over whole runs, not what a byte costs.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
-        250_000
+        SCORING_MILLICLOCKS_PER_BYTE
     }
 
     /// DEVIATE UP1-RUNS (owner w15, exit 2026-11-20): an unknown-count loop
@@ -393,9 +397,9 @@ impl Tti for AArch64 {
         true
     }
 
-    /// 250 clocks a byte (the bar's price, as UP1 and the speed inline rate).
+    /// The scoring rate, as the speed inline rate.
     fn speed_milliclocks_per_byte(&self) -> i64 {
-        250_000
+        SCORING_MILLICLOCKS_PER_BYTE
     }
 
     /// DEVIATE REC-1 (arm64, owner w15, exit 2026-11-30): a tree-recursive
