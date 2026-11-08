@@ -308,6 +308,14 @@ impl Tti for AArch64 {
         250_000
     }
 
+    /// DEVIATE ARM64-INL-O1 (owner w15, exit 2026-11-30): the rate binds at -O1
+    /// too, as it did before #8148 made it opt-in. -O1 is judged by bytes
+    /// here: without it jpeg_fixed -O1 is 6,556 B (5,440 with), jpeg_single
+    /// 6,676 (5,376), for 3% fewer instructions.
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        true
+    }
+
     /// 250 clocks a byte (the bar's price, as UP1 and the speed inline rate).
     fn speed_milliclocks_per_byte(&self) -> i64 {
         250_000
