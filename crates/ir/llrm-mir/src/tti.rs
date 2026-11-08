@@ -562,6 +562,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE OB1 (`unrollbound.rs`): the most trips the unroller takes from the
+    /// size of the object a loop's accesses run through, as a bound it unrolls
+    /// completely by; none: the pin's bound alone.
+    fn unroll_object_bound(&self) -> Option<u32> {
+        None
+    }
+
     /// Whether a priced inline trial keeps a copy that leaves the module no
     /// larger and saves clocks though no callee goes with it. False: the
     /// callee's credit decides (arm64 -O3 jpeg `decode`: 5,828 -> 7,324 B and
