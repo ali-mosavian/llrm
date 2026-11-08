@@ -1,61 +1,114 @@
-reason = "inputs read through volatile or DATA so no build folds the kernel; reference counts change with the source"
-blessed = "2026-10-25"
+reason = "store reference clocks and the stamp (m16 corpus, one run)"
+blessed = "2026-11-08"
+corpus = "521af385e9e60b430ecaad0e9a3b8c86"
+
+[ow.O1]
+instructions = 94
+memory_operands = 8
+clocks = 324
+code_bytes = 130
+data_bytes = 4
+bss_bytes = 2
+kernel_ms = 0.0022
 
 [ow.O2]
 instructions = 94
 memory_operands = 8
+clocks = 324
 code_bytes = 130
 data_bytes = 4
 bss_bytes = 2
+kernel_ms = 0.0022
 
 [ow.Os]
 instructions = 94
 memory_operands = 8
+clocks = 324
 code_bytes = 130
 data_bytes = 4
 bss_bytes = 2
+kernel_ms = 0.0022
+
+[bcc.O1]
+instructions = 56
+memory_operands = 12
+clocks = 214
+code_bytes = 135
+data_bytes = 4
+bss_bytes = 2
+kernel_ms = 0.0018
 
 [bcc.O2]
 instructions = 55
 memory_operands = 12
+clocks = 192
 code_bytes = 157
 data_bytes = 4
 bss_bytes = 2
+kernel_ms = 0.0018
 
 [bcc.Os]
 instructions = 56
 memory_operands = 12
+clocks = 214
 code_bytes = 135
 data_bytes = 4
 bss_bytes = 2
+kernel_ms = 0.0018
+
+[tc.O1]
+instructions = 110
+memory_operands = 13
+clocks = 358
+code_bytes = 138
+data_bytes = 4
+bss_bytes = 2
+kernel_ms = 0.0025
 
 [tc.O2]
 instructions = 113
 memory_operands = 13
+clocks = 342
 code_bytes = 143
 data_bytes = 4
 bss_bytes = 2
+kernel_ms = 0.0025
 
 [tc.Os]
 instructions = 110
 memory_operands = 13
+clocks = 358
 code_bytes = 138
 data_bytes = 4
 bss_bytes = 2
+kernel_ms = 0.0025
+
+[tcpp.O1]
+instructions = 115
+memory_operands = 14
+clocks = 394
+code_bytes = 152
+data_bytes = 4
+bss_bytes = 2
+kernel_ms = 0.0025
 
 [tcpp.O2]
 instructions = 117
 memory_operands = 14
+clocks = 377
 code_bytes = 158
 data_bytes = 4
 bss_bytes = 2
+kernel_ms = 0.0025
 
 [tcpp.Os]
 instructions = 115
 memory_operands = 14
+clocks = 394
 code_bytes = 152
 data_bytes = 4
 bss_bytes = 2
+kernel_ms = 0.0025
 
 [bc.O2]
 instructions = 225
