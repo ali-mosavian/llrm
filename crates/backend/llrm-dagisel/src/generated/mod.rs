@@ -2,5 +2,3 @@
 
 pub mod aarch64;
 pub mod ids;
-pub mod instrinfo;
-pub use instrinfo::memory_flags;

@@ -670,9 +670,10 @@ mod real_mode_addresses {
 
 mod instr_desc {
     use llrm_dagisel::generated::ids::x86;
-    use llrm_dagisel::instr::{desc, operand_type};
+    use llrm_dagisel::instr::operand_type;
 
     use super::*;
+    use crate::generated::instrinfo::desc;
 
     fn opcode(name: &str) -> u16 {
         table::MACHINE_OPCODES
@@ -846,9 +847,9 @@ mod far_pointer_loads {
 
 mod pointer_classes {
     use llrm_dagisel::addr::AddrMode;
-    use llrm_dagisel::instr::desc;
 
     use super::*;
+    use crate::generated::instrinfo::desc;
     use crate::x86_classes::{Role, class_tag, memory_reference, role_of};
 
     fn opcode(name: &str) -> u16 {

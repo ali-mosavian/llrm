@@ -144,7 +144,7 @@ impl<'p> DagTarget for X86Target<'_, 'p> {
             let hooks = &*self.chooser.hooks;
             super::x86_preprocess::move_callee_loads(dag, facts, &mut |dag, node| {
                 let adapter = DagisAdapter::new(dag);
-                llrm_dagisel::dag::X86Predicates::check_tc_ret_enough_regs(hooks, &adapter, node)
+                llrm_x86_dagisel::x86_predicates::X86Predicates::check_tc_ret_enough_regs(hooks, &adapter, node)
             });
         }
     }

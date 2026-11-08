@@ -21,7 +21,7 @@ impl SchedInfo for Info {
         &self,
         opcode: u32,
     ) -> usize {
-        llrm_dagisel::instr::desc(opcode as u16).map_or(0, |d| usize::from(d.num_defs))
+        llrm_x86_dagisel::generated::instrinfo::desc(opcode as u16).map_or(0, |d| usize::from(d.num_defs))
     }
 
     fn implicit_defs(

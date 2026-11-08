@@ -656,12 +656,12 @@ fn test_m16_prices_a_narrow_trunc_with_the_x86_model_and_a_scaled_address_dear()
 
 #[test]
 fn test_a_decided_site_is_remarked_as_opt_remarks_it() {
-    let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0, blocked: false };
+    let priced = InlineCost::Cost { cost: 40, threshold: 225, static_bonus: 0, blocked: false, hot: false };
     assert_eq!(
         crate::inlinecost::remark("_main@0", "_f@3", &priced, true),
         "'_f@3' inlined into '_main@0' with (cost=40, threshold=225)"
     );
-    let dear = InlineCost::Cost { cost: 300, threshold: 225, static_bonus: 0, blocked: false };
+    let dear = InlineCost::Cost { cost: 300, threshold: 225, static_bonus: 0, blocked: false, hot: false };
     assert_eq!(
         crate::inlinecost::remark("g", "f", &dear, false),
         "'f' not inlined into 'g' because too costly to inline (cost=300, threshold=225)"
@@ -853,9 +853,9 @@ b0:
 /// so the 350-instruction benchmark body was copied into `__main` and kept.
 #[test]
 fn test_a_verdict_of_cost_zero_at_threshold_zero_does_not_pay() {
-    assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
-    assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
-    assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0, blocked: false }.is_ok());
+    assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0, blocked: false, hot: false }.is_ok());
+    assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0, blocked: false, hot: false }.is_ok());
+    assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0, blocked: false, hot: false }.is_ok());
 }
 
 /// `-fno-inline-functions-called-once` set `Threshold::last` and nothing read
@@ -1173,9 +1173,9 @@ fn the_default_inline_policy_is_made_from_the_hooks_a_target_states() {
 #[test]
 fn a_verdict_is_described_with_its_cost_and_threshold() {
     use crate::inlinecost::describe;
-    let cost = InlineCost::Cost { cost: 90, threshold: 225, static_bonus: 0, blocked: false };
+    let cost = InlineCost::Cost { cost: 90, threshold: 225, static_bonus: 0, blocked: false, hot: false };
     assert_eq!(describe(&cost), "cost=90 threshold=225 inline");
-    let over = InlineCost::Cost { cost: 90, threshold: 90, static_bonus: 0, blocked: false };
+    let over = InlineCost::Cost { cost: 90, threshold: 90, static_bonus: 0, blocked: false, hot: false };
     assert_eq!(describe(&over), "cost=90 threshold=90 no");
     assert_eq!(describe(&InlineCost::Never("recursive".into())), "never (recursive)");
 }
