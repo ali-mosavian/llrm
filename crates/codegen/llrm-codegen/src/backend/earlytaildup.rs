@@ -27,7 +27,7 @@
 //! read from the tail, the tail's edge odds move to the predecessor, and the
 //! tail goes when nothing reaches it.
 //!
-//! DEVIATE ET1 (owner w-1, exit: step 3): a tail with a phi, or whose values
+//! DEVIATE ET1 (owner anyisa, exit: step 3): a tail with a phi, or whose values
 //! are read outside it, is left (`processPHI`, `updateSuccessorsPHIs`, the SSA
 //! update). Nothing calls `tail_duplicate` yet.
 //!
