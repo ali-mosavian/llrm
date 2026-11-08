@@ -913,3 +913,56 @@ fn o0_makes_a_zero_with_xor_on_both_selectors() {
         }
     }
 }
+
+/// The reason a block was declined was formatted for every instruction, the
+/// `isel` channel on or off: 4.7 M of a 196 M compile. It is made only when the
+/// channel is on, and says where the block was declined.
+#[test]
+fn the_decline_reason_is_made_for_the_isel_channel_and_names_the_instruction() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), "int h(int x)\n{\n    return (int)(x * 1.5);\n}\n").unwrap();
+    let said = |channel: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
+        command.env("LLRM_CC_TARGET", "x86_32-linux").current_dir(scratch.path()).args(["-O0", "-c", "a.c", "-o", "a.o"]);
+        if let Some(channel) = channel {
+            command.env("LLRM_DEBUG", channel);
+        }
+        let out = command.output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    assert!(said(Some("isel")).contains("fast declined at Cast(SIToFP) double"));
+    assert!(!said(None).contains("declined"));
+}
+
+/// FastISel's conditional branch ended in a `jmp` to the false block even when
+/// that block comes next, and `ControlFlow` (the pin has no BranchFolder at
+/// -O0) ran to remove it: 5.2 M of a 179 M compile. A function FastISel
+/// selects whole has no jump to the next block, and no such phase.
+#[test]
+fn a_function_fastisel_selects_has_no_jump_to_the_next_block_and_no_control_flow_phase() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        scratch.path().join("a.c"),
+        "int f(int x)\n{\n    int s = 0;\n    while (x > 0) {\n        if (x & 1)\n            s += x;\n        else\n            s -= 1;\n        x--;\n    }\n    return s;\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_DEBUG", "time")
+        .env("LLRM_TIME_TOP", "100000")
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!said.contains("lir jumps"), "{said}");
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = asm.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    for pair in lines.windows(2) {
+        if let Some(target) = pair[0].strip_prefix("jmp ") {
+            assert_ne!(pair[1], format!("{target}:"), "a jump to the next block:\n{asm}");
+        }
+    }
+}

@@ -972,7 +972,7 @@ pub fn _code_by(
     symbols: &mut IndexMap<String, (usize, usize)>,
     sizes: &mut IndexMap<String, usize>,
     pref_align: bool,
-    listed: impl Fn(&masm::Procedure, usize) -> Result<Vec<masm::Item>, String>,
+    listed: impl for<'p> Fn(&'p masm::Procedure, usize) -> Result<Vec<masm::Item<'p>>, String>,
 ) -> Result<(), Error> {
     let regs = module.registers;
     let mut items: Vec<Encoded> = Vec::new();
@@ -1100,13 +1100,10 @@ pub fn _items(
         masm::Item::TailIf { condition, callee } => {
             vec![Encoded::Near(Near { name: callee.clone(), tail: true, cond: Some(condition.clone()) })]
         }
-        masm::Item::Semantics(Semantics {
-            op: Operation::Branch | Operation::Jump,
-            name,
-            target,
-            indirect: false,
-            ..
-        }) => {
+        masm::Item::Semantics(jump)
+            if matches!(jump.op, Operation::Branch | Operation::Jump) && !jump.indirect =>
+        {
+            let Semantics { name, target, .. } = &**jump;
             let name = name.as_deref().filter(|one| !one.is_empty());
             let Some(target) = target else {
                 return Err(Unencodable(format!("{} with no target", name.unwrap_or("jump"))));
@@ -2332,12 +2329,12 @@ mod tests {
             module.object = llrm_target::Target::object(&llrm_x86_m32::M32);
             module
         };
-        let body_of = |_: &masm::Procedure, _: usize| -> Result<Vec<masm::Item>, String> {
+        fn body_of<'p>(_: &'p masm::Procedure, _: usize) -> Result<Vec<masm::Item<'p>>, String> {
             Ok(vec![masm::Item::Callee(masm::Callee {
                 code: vec![masm::InlinePart::Bytes(vec![0x41, 0x42, 0xC3])],
                 ..masm::Callee::new("", false)
             })])
-        };
+        }
         let offsets_with = |pref_align: bool, size: bool| {
             let module = small(size);
             let mut segment = Segment::new("M_TEXT", Role::Text, true);
@@ -2369,7 +2366,8 @@ mod tests {
         let aligned = lir::LirBlock { align: 4, max_skip: 7, ..block(2, vec![returned], vec![]) };
         let anchor = insn(1, semantics(Operation::Nothing, "", vec![], vec![]));
         let body = body("a", vec![block(1, vec![anchor], vec![2]).into(), aligned.into()]);
-        let items = masm::listing(&procedure("_a", false, body, 0, vec![]), 0).unwrap();
+        let held = procedure("_a", false, body, 0, vec![]);
+        let items = masm::listing(&held, 0).unwrap();
         let at = items.iter().position(|one| matches!(one, masm::Item::Align(_))).expect("an align item");
         assert_eq!(items[at], masm::Item::Align(masm::CodeAlign { log2: 4, max_skip: 7 }));
         assert!(matches!(&items[at + 1], masm::Item::Label(label) if label.name == "L0_2"), "{items:?}");

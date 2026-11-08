@@ -1045,3 +1045,100 @@ out:
     );
     assert_eq!(crate::lcssa::TREES_MADE.with(std::cell::Cell::get), 0, "a tree was made again");
 }
+
+/// Compile time: a full unroll run for one loop of the loop pass manager
+/// (`loopfilter::only`) still put the whole function in simplified and closed
+/// form first, 755 runs, 403 of them over one function of 403 loops (a
+/// quadratic 1.1 B Ir on memexp -O2). The pin's `LoopFullUnrollPass` does
+/// neither: no loop is asked, no shape made.
+#[test]
+fn test_a_full_unroll_for_one_loop_does_not_re_form_the_function() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %head ]
+  %next = add i16 %i, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %next
+}
+",
+    );
+    let _scope = crate::loopfilter::only(&[llrm_mir::module::BlockId(1)]);
+    crate::lcssa::LOOPS_FORMED.with(|count| count.set(0));
+    let shapes = llrm_analysis::cfg::shapes_derived();
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            target_unrolling: false,
+            created: Default::default(),
+        },
+    );
+    assert_eq!(crate::lcssa::LOOPS_FORMED.with(std::cell::Cell::get), 0, "the function was closed again");
+    assert_eq!(llrm_analysis::cfg::shapes_derived(), shapes, "a shape was made again");
+}
+
+/// fib(20) at m64 -O3 with its copies priced panicked in ScalarEvolution ("the
+/// header of a loop"): ten outer trips round an inner loop started from the
+/// outer counter (`%start = %i - 1`). The full unroll of the outer loop kept
+/// `%start` with a constant, and its cached expression, an add recurrence of
+/// the gone outer loop, was read by the next inner loop's trip count.
+#[test]
+fn a_full_unroll_of_a_nest_forgets_the_expressions_of_its_kept_values() {
+    let text = "declare i32 @g(i32)
+
+define i32 @f(i32 %x) {
+b0:
+  br label %o
+
+o:
+  %i = phi i32 [ 20, %b0 ], [ %i.next, %ol ]
+  %acc = phi i32 [ 0, %b0 ], [ %r, %ol ]
+  %start = add nsw i32 %i, -1
+  %skip = icmp ult i32 %i, 3
+  br i1 %skip, label %ol, label %pre
+
+pre:
+  br label %h
+
+h:
+  %j = phi i32 [ %start, %pre ], [ %j.next, %h ]
+  %a = phi i32 [ 0, %pre ], [ %a.next, %h ]
+  %j1 = add nsw i32 %j, -1
+  %c = tail call i32 @g(i32 %j1)
+  %j.next = add nsw i32 %j, -2
+  %a.next = add i32 %c, %a
+  %low = icmp ult i32 %j, 4
+  br i1 %low, label %hx, label %h
+
+hx:
+  %jl = phi i32 [ %j.next, %h ]
+  %al = phi i32 [ %a.next, %h ]
+  br label %ol
+
+ol:
+  %m = phi i32 [ %start, %o ], [ %jl, %hx ]
+  %t = phi i32 [ 0, %o ], [ %al, %hx ]
+  %i.next = add nsw i32 %i, -2
+  %r1 = add i32 %m, %acc
+  %r = add i32 %r1, %t
+  %done = icmp eq i32 %i.next, 0
+  br i1 %done, label %out, label %o
+
+out:
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let created = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let out = crate::testing::managed(&mut module, super::LoopFullUnroll { opt_level: 3, opt_size: false, only_when_forced: false, target_unrolling: false, created });
+    assert!(!out.contains("%i = phi"), "the outer loop is gone: {out}");
+}

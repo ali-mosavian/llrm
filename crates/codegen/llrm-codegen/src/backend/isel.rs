@@ -498,7 +498,10 @@ pub fn convention(
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
     let interrupt = function.calling_convention == llrm_mir::opcode::X86_INTR;
     let first = match () {
-        _ if interrupt => crate::backend::masm::interrupt_parameters(),
+        _ if interrupt => crate::backend::masm::interrupt_parameters(&crate::backend::masm::Interrupt::of(
+            arch,
+            crate::model::ir::Addr::new(crate::model::ir::Space::Group, 0),
+        )),
         _ => arch.first_argument_offset(far(global)?),
     };
     let param_types: Vec<TypeId> = function.parameters().iter().map(|&one| function.value(one).ty).collect();

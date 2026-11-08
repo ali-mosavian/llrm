@@ -1444,6 +1444,13 @@ pub fn recorded(
     manager.add_program(Interprocedural {
         late,
         pipeline: Box::new(move |module, analyses, id, stage| {
+            // The pin runs nothing over a body `DeadArgumentEliminationPass`
+            // changed: the late function pipeline, which every body goes
+            // through, finds what the lost argument leaves (PassBuilderPipelines.cpp,
+            // `buildModuleOptimizationPipeline` follows the module pass).
+            if stage == "ipa-deadargs." {
+                return;
+            }
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
             let done =
                 // The stage that only retargets loads and stores of globals
@@ -1452,7 +1459,7 @@ pub fn recorded(
                     module,
                     analyses,
                     id,
-                    if matches!(stage, "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
+                    if stage == "ipsccp." { &mut cleaned } else { &mut again },
                     stage == "globalsra.",
                 )
                 .unwrap_or_else(|error| panic!("pipeline: {error}"));

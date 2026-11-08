@@ -105,6 +105,39 @@ pub fn laid_again(
     Some((machined, again))
 }
 
+/// How many frame cells of `first` a one-byte displacement would not reach in
+/// the layout [`laid_again`] makes, counted by moving each cell's displacement
+/// and nothing else: the second body is not built to be compared and dropped.
+/// `sp` says whether the frame is addressed from the stack pointer, as
+/// `assemble::far_frame`. None where `laid_again` is None.
+pub fn far_again(
+    first: &Machined,
+    frame: &Frame,
+    hole: i64,
+    sp: bool,
+) -> Option<usize> {
+    if frame.native.is_some() || frame.hole != 0 {
+        return None;
+    }
+    let (again, homes) = replayed(frame, hole)?;
+    let moved = Moves { frame: Some(frame), homes: &homes, hole };
+    let reserve = -std::cmp::min(again.slots.values().copied().min().unwrap_or(0), again.floor) + frame.call_area;
+    let above = if sp { reserve } else { 0 };
+    let mut far = 0;
+    for insn in first.body.insns() {
+        let Some(what) = insn.what.as_ref() else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            let Some(addr) = place.address().and_then(|one| one.addr) else { continue };
+            if addr.space != Space::Frame {
+                continue;
+            }
+            let (new, _) = moved.addr(addr, 0)?;
+            far += usize::from(!(-128..128).contains(&(new.disp + above)));
+        }
+    }
+    Some(far)
+}
+
 /// `first` with every cell, inline-code displacement and debug home moved by
 /// `moved`; its reserve is the caller's to set.
 fn shifted(
@@ -200,6 +233,61 @@ pub fn ordered(
     frame: &Frame,
     sp: bool,
 ) -> Option<(Machined, Frame)> {
+    let (homes, grown) = order_plan(first, frame, sp)?;
+    let mut again = frame.clone();
+    let moved = |home: &i64| homes.get(home).copied().unwrap_or(*home);
+    again.extents = frame.extents.iter().map(|(start, size)| (moved(start), *size)).collect();
+    again.slots = frame.slots.iter().map(|(key, home)| (key.clone(), moved(home))).collect();
+    again.capacities = frame.capacities.iter().map(|(home, size)| (moved(home), *size)).collect();
+    again.stacks = frame.stacks.iter().map(|(home, ranges)| (moved(home), ranges.clone())).collect();
+    let moves = Moves { frame: Some(frame), homes: &homes, hole: 0 };
+    let mut machined = shifted(first, frame, &moves)?;
+    machined.reserve = first.reserve + grown;
+    again.floor -= grown;
+    if llrm_support::env_flag!("LLRM_CHECK_SLOTS") && llrm_support::env_flag!("LLRM_COUNT_RELAYOUT_SKIPS") {
+        eprintln!("RELAYOUT-CHECKED");
+    }
+    if llrm_support::env_flag!("LLRM_CHECK_SLOTS")
+        && let Some(cell) = reaching_past_its_slot(&machined.body, &again)
+    {
+        panic!("the frame laid again has a cell reaching past its spill slot: {cell:?}");
+    }
+    Some((machined, again))
+}
+
+/// How many frame cells of `first` a one-byte displacement would not reach in
+/// the layout [`ordered`] makes, counted by moving each cell's displacement
+/// and nothing else, as [`far_again`] does for [`laid_again`].
+pub fn far_ordered(
+    first: &Machined,
+    frame: &Frame,
+    sp: bool,
+) -> Option<usize> {
+    let (homes, grown) = order_plan(first, frame, sp)?;
+    let moved = Moves { frame: Some(frame), homes: &homes, hole: 0 };
+    let above = if sp { first.reserve + grown } else { 0 };
+    let mut far = 0;
+    for insn in first.body.insns() {
+        let Some(what) = insn.what.as_ref() else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            let Some(addr) = place.address().and_then(|one| one.addr) else { continue };
+            if addr.space != Space::Frame {
+                continue;
+            }
+            let (new, _) = moved.addr(addr, 0)?;
+            far += usize::from(!(-128..128).contains(&(new.disp + above)));
+        }
+    }
+    Some(far)
+}
+
+/// The homes of the objects of `first` in the pin's order, and how many bytes
+/// the frame grows; None where no order applies.
+fn order_plan(
+    first: &Machined,
+    frame: &Frame,
+    sp: bool,
+) -> Option<(IndexMap<i64, i64>, i64)> {
     if frame.native.is_some() || frame.hole != 0 {
         return None;
     }
@@ -261,25 +349,7 @@ pub fn ordered(
     for home in frame.slots.values() {
         homes.entry(*home).or_insert(*home);
     }
-    let mut again = frame.clone();
-    let moved = |home: &i64| homes.get(home).copied().unwrap_or(*home);
-    again.extents = frame.extents.iter().map(|(start, size)| (moved(start), *size)).collect();
-    again.slots = frame.slots.iter().map(|(key, home)| (key.clone(), moved(home))).collect();
-    again.capacities = frame.capacities.iter().map(|(home, size)| (moved(home), *size)).collect();
-    again.stacks = frame.stacks.iter().map(|(home, ranges)| (moved(home), ranges.clone())).collect();
-    let moves = Moves { frame: Some(frame), homes: &homes, hole: 0 };
-    let mut machined = shifted(first, frame, &moves)?;
-    machined.reserve = first.reserve + grown;
-    again.floor -= grown;
-    if llrm_support::env_flag!("LLRM_CHECK_SLOTS") && llrm_support::env_flag!("LLRM_COUNT_RELAYOUT_SKIPS") {
-        eprintln!("RELAYOUT-CHECKED");
-    }
-    if llrm_support::env_flag!("LLRM_CHECK_SLOTS")
-        && let Some(cell) = reaching_past_its_slot(&machined.body, &again)
-    {
-        panic!("the frame laid again has a cell reaching past its spill slot: {cell:?}");
-    }
-    Some((machined, again))
+    Some((homes, grown))
 }
 
 /// A frame cell of `body` longer than the spill slot it is tagged with in
@@ -402,6 +472,15 @@ struct Moves<'a> {
     hole: i64,
 }
 
+/// Whether `place` is a cell of the frame, the only kind a move changes.
+fn in_frame(place: &Loc) -> bool {
+    match place {
+        Loc::Mem(cell) => cell.addr.is_some_and(|addr| addr.space == Space::Frame),
+        Loc::Address(cell) => cell.addr.is_some_and(|addr| addr.space == Space::Frame),
+        _ => false,
+    }
+}
+
 impl Moves<'_> {
     /// The first byte of the slot `home` in the new layout: what a cell moved
     /// out of it is tagged with.
@@ -505,6 +584,7 @@ impl Moves<'_> {
         // Most instructions name no cell that moves: they are shared as they
         // are, without a copy of their semantics.
         let what = match &one.what {
+            Some(what) if !what.dests.iter().chain(&what.sources).any(in_frame) => None,
             Some(what) => {
                 let dests: Vec<Loc> = what.dests.iter().map(|place| self.loc(place)).collect::<Option<_>>()?;
                 let sources: Vec<Loc> = what.sources.iter().map(|place| self.loc(place)).collect::<Option<_>>()?;
@@ -912,6 +992,28 @@ mod tests {
         assert_eq!(done.reserve, -lowest + 12, "the locals lie above the outgoing area");
     }
 
+    /// The second layout was built, and dropped, in every one of a -O0 compile's
+    /// functions that had far cells and a spill area: 10.5 M of 207 M
+    /// instructions. Its far cells are counted from the moved displacements
+    /// alone, and the count is the one of the body `laid_again` builds.
+    #[test]
+    fn test_the_far_cells_of_the_second_layout_are_counted_without_building_it() {
+        use super::{far_again, laid_again};
+        use crate::backend::assemble::far_frame;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(-304);
+        frame.align = 4;
+        frame.extents = vec![(-300, 300)];
+        let home = frame.slot(7_i64, 4).expect("a spill slot");
+        let first = machined(reading(&[(home, home), (home, home), (-300, -300)]));
+        for sp in [false, true] {
+            let (done, _) = laid_again(&first, &frame, 8).expect("it can be laid again");
+            assert_eq!(far_again(&first, &frame, 8, sp), Some(far_frame(&done, sp)), "sp {sp}");
+        }
+        let (done, _) = laid_again(&first, &frame, 8).unwrap();
+        assert_ne!(far_frame(&done, false), far_frame(&first, false), "the premise: the layout moves cells");
+    }
+
     /// matmul bq32 -O2 (no frame pointer) laid its hot spill slots at the top
     /// of the frame, `[esp+148..196]`, and the cold ones at `[esp+24]`: the
     /// FP order on an SP-addressed frame, +200 bytes. The hot word lies
@@ -927,6 +1029,42 @@ mod tests {
         let (_, again) = ordered(&machined(body), &frame, true).expect("the order fits");
         let word = again.extents.iter().find(|(_, size)| *size == 2).expect("the word");
         assert_eq!(word.0, -94, "below both arrays");
+    }
+
+    /// The pin's order was built, and dropped, in every function with far cells
+    /// that it did not improve: 5.3 M of a 170 M -O0 compile. Its far cells are
+    /// counted from the moved displacements alone, and the count is the one of
+    /// the body `ordered` builds, on an FP and on an SP frame.
+    #[test]
+    fn test_the_far_cells_of_the_pins_order_are_counted_without_building_it() {
+        use super::{far_ordered, ordered};
+        use crate::backend::assemble::far_frame;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(-304);
+        frame.align = 4;
+        frame.extents = vec![(-300, 300)];
+        let home = frame.slot(7_i64, 4).expect("a spill slot");
+        let first = machined(reading(&[(home, home), (home, home), (home, home), (-300, -300)]));
+        for sp in [false, true] {
+            let (done, _) = ordered(&first, &frame, sp).expect("the order fits");
+            assert_eq!(far_ordered(&first, &frame, sp), Some(far_frame(&done, sp)), "sp {sp}");
+        }
+        let (done, _) = ordered(&first, &frame, false).unwrap();
+        assert_ne!(far_frame(&done, false), far_frame(&first, false), "the premise: the order moves cells");
+        // an SP frame counts the reserve, whatever it is: cells near the top of it are far
+        let mut frame = Frame::new(-9);
+        frame.align = 4;
+        frame.extents = vec![(-4, 4), (-8, 4), (-9, 1)];
+        let mut crossing = false;
+        for reserve in 100..160 {
+            let mut first = machined(reading(&[(-9, -9), (-4, -4), (-4, -4), (-4, -4), (-8, -8)]));
+            first.reserve = reserve;
+            let (done, _) = ordered(&first, &frame, true).expect("the order is taken");
+            let counted = far_ordered(&first, &frame, true);
+            assert_eq!(counted, Some(far_frame(&done, true)), "reserve {reserve}");
+            crossing |= counted != Some(far_frame(&first, true));
+        }
+        assert!(crossing, "the premise: the order changes the far cells at some reserve");
     }
 
     /// An order that needs more room than the objects have (padding) grows
