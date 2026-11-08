@@ -382,18 +382,16 @@ fn trial_unrolled(
     let (saved, added) = (kept.clocks - tried.clocks, tried.bytes - kept.bytes);
     let pays = trial_pays(request.level, rate, saved, added);
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
-        eprintln!(
-            "trial unroll: {added:+} bytes, {saved:+} clocks saved: {}",
-            if pays { "kept" } else { "put back" }
-        );
+        eprintln!("trial unroll: {added:+} bytes, {saved:+} clocks saved: {}", if pays { "kept" } else { "put back" });
     }
     Ok(if pays { tried.text } else { kept.text })
 }
 
 /// The instructions a trial may add before it is priced: the byte limit below
-/// at about eight bytes an instruction (the programs' trials cost 5 to 60). Pricing
-/// selects every function, which is where the time goes: `fcmp_all`'s trial
-/// grew 1,423 instructions to 4,231 and took 14 s to price, 85,508 bytes more.
+/// at about eight bytes an instruction (the programs' trials cost 5 to 60).
+/// Pricing selects every function, which is where the time goes: `fcmp_all`'s
+/// trial grew 1,423 instructions to 4,231 and took 14 s to price, 85,508 bytes
+/// more.
 const TRIAL_GROWTH_INSTRUCTIONS: usize = 2048;
 
 /// Whether a trial that adds `growth` instructions is priced at all.
@@ -406,8 +404,9 @@ fn instructions(program: &Program) -> usize {
 }
 
 /// The most code a trial may add: a quarter of the 6502's 64 KiB address space,
-/// which the stack, the data and the runtime share. `fcmp_all` unrolled to 85,508
-/// bytes more (2,008,446 clocks saved, 23 clk/B) and would not have fitted.
+/// which the stack, the data and the runtime share. `fcmp_all` unrolled to
+/// 85,508 bytes more (2,008,446 clocks saved, 23 clk/B) and would not have
+/// fitted.
 const TRIAL_GROWTH_LIMIT: i64 = 16 * 1024;
 
 /// Whether a trial that saved `saved` clocks for `added` bytes is kept. Bytes

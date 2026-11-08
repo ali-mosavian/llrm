@@ -91,8 +91,8 @@ fn a_trial_that_grows_the_code_past_the_limit_is_put_back() {
     assert!(!trial_pays(Level::Os, 0, 1_000_000, 17_000));
 }
 
-/// `fcmp_all`'s trial took 14 s of selection to price 85,508 bytes more: a 4 min
-/// corpus compile became 6 (+76%, 2026-11-08). A trial past the instruction
+/// `fcmp_all`'s trial took 14 s of selection to price 85,508 bytes more: a 4
+/// min corpus compile became 6 (+76%, 2026-11-08). A trial past the instruction
 /// growth limit is put back before it is priced.
 #[test]
 fn a_trial_that_grows_the_ir_past_the_limit_is_not_priced() {
