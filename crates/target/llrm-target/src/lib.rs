@@ -524,17 +524,24 @@ pub trait Target {
         self.layout().expands(operation)
     }
 
-    /// The processors this target prices, as a platform description names them.
-    fn cpus(&self) -> &'static [&'static str];
+    /// The processors this target prices, as a platform description names them;
+    /// none: any `-mcpu` is refused.
+    fn cpus(&self) -> &'static [&'static str] {
+        &[]
+    }
 
     /// The CPU gcc's `-march=NAME` names, from the target's `timings.times`.
     fn march(
         &self,
-        name: &str,
-    ) -> Option<&'static str>;
+        _name: &str,
+    ) -> Option<&'static str> {
+        None
+    }
 
-    /// The names `-march` and `-mtune` take.
-    fn marches(&self) -> Vec<&'static str>;
+    /// The names `-march` and `-mtune` take; none where it has no table.
+    fn marches(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
 
     /// The data layout programs are built under and the address spaces a
     /// frontend's addresses are.
@@ -664,8 +671,10 @@ pub trait Target {
     /// target prices it.
     fn cpu_table(
         &self,
-        name: &str,
-    ) -> Option<timings::CpuTable>;
+        _name: &str,
+    ) -> Option<timings::CpuTable> {
+        None
+    }
 
     /// The target's register file, in `registers.regs`'s format.
     fn registers_text(&self) -> String;
@@ -683,15 +692,19 @@ pub trait Target {
     /// The inline routine that fills `cell`-byte cells through a huge pointer.
     fn huge_fill_routine(
         &self,
-        cell: u32,
-    ) -> Result<routines::HugeString, String>;
+        _cell: u32,
+    ) -> Result<routines::HugeString, String> {
+        Err("the target has no huge pointers".to_owned())
+    }
 
     /// The inline routine that copies through huge pointers, upward or, `down`,
     /// from the last byte.
     fn huge_copy_routine(
         &self,
-        down: bool,
-    ) -> Result<routines::HugeString, String>;
+        _down: bool,
+    ) -> Result<routines::HugeString, String> {
+        Err("the target has no huge pointers".to_owned())
+    }
 
     /// Whether the target links a C math library (`log`, `exp`, `log2` ...). It
     /// has none: the natural logarithm and the exponentials are x87
@@ -704,9 +717,11 @@ pub trait Target {
     /// one.
     fn divide_routine(
         &self,
-        signed: bool,
-        wide_divisor: bool,
-    ) -> Result<routines::Divide, String>;
+        _signed: bool,
+        _wide_divisor: bool,
+    ) -> Result<routines::Divide, String> {
+        Err("the target divides natively".to_owned())
+    }
 
     /// `divide_routine` for a caller that reads only `used` of the results: a
     /// target may have a shorter routine that leaves the rest unfixed.
@@ -741,7 +756,9 @@ pub trait Target {
     fn float_width(
         &self,
         bytes: u32,
-    ) -> u32;
+    ) -> u32 {
+        bytes
+    }
 
     /// Bytes of a two-register operation on `width`-byte registers.
     fn register_op_bytes(
@@ -817,9 +834,11 @@ pub trait Target {
     /// operand-size prefix cost.
     fn operation_costs(
         &self,
-        price: &dyn Fn(&str) -> i64,
-        prefix: i64,
-    ) -> OperationCosts;
+        _price: &dyn Fn(&str) -> i64,
+        _prefix: i64,
+    ) -> OperationCosts {
+        OperationCosts::default()
+    }
 
     /// The registers an allocator may hold values in.
     fn register_capacity(&self) -> i64;
@@ -840,9 +859,11 @@ pub trait Target {
     /// operand-size prefix in `prefix`) and `address_stall`: native form first.
     fn address_forms(
         &self,
-        costs: &OperationCosts,
-        address_stall: i64,
-    ) -> Vec<AddressForm>;
+        _costs: &OperationCosts,
+        _address_stall: i64,
+    ) -> Vec<AddressForm> {
+        Vec::new()
+    }
 
     /// How this target's passes are given the prices of a CPU.
     fn cost_model(&self) -> CostModel;
