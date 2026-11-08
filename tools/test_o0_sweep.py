@@ -53,8 +53,18 @@ def test_exit_zero_without_an_object_is_a_refusal(tmp_path, stub):
     assert (row["compiled"], len(row["refused"])) == (0, 1)
 
 
-def test_a_target_that_compiled_nothing_is_red_even_with_no_refusals():
-    assert sweep.verdict({"z80-sdcc": {"programs": 0, "na": 5, "compiled": 0, "refused": {}}}, set())
+def test_a_target_with_no_applicable_program_is_red_and_so_is_one_that_compiled_nothing():
+    """0 applicable programs is a broken applies filter, 0 compiled a broken compiler: both loud, and told apart."""
+    none = sweep.verdict({"z80-sdcc": {"programs": 0, "na": 5, "compiled": 0, "refused": {}}}, set())
+    nothing = sweep.verdict({"z80-sdcc": {"programs": 5, "na": 0, "compiled": 0, "refused": {}}}, set())
+    assert "0 applicable" in none[0] and "compiled 0 of 5" in nothing[0]
+
+
+def test_a_baseline_entry_needs_an_owner_an_exit_date_and_the_error_and_expires():
+    good = "wasm32 builtins_table | wasm owner | EXIT 2026-11-20 | llvm.is.constant unsupported"
+    assert sweep.parse_baseline(good, "2026-11-10") == ({"wasm32 builtins_table"}, [])
+    assert sweep.parse_baseline("wasm32 builtins_table\n", "2026-11-10")[1], "no owner, date or error: red"
+    assert sweep.parse_baseline(good, "2026-11-21")[1], "past its exit date: red"
 
 
 def test_a_refusal_outside_the_baseline_is_red_and_one_inside_is_not():

@@ -7,7 +7,9 @@ the successes, not the non-failures: a compiler that is not there, or a target t
 
 Flags from the program's first `// flags:` configuration: its `-D` and `-f` tokens only (`-m*` and `-O*` name a CPU or level the target
 row and this sweep already fix). `-I` the POSIX OS layer. LLRM_BIN picks the binaries; JOBS the parallelism (default 4).
-Exit 1: a target compiled nothing, or a refusal is not in tools/o0-sweep.baseline (`TARGET PROGRAM`, one per line: a ratchet that only shrinks).
+Exit 1: a target with no applicable program (a broken `applies` filter) or none compiled, or a refusal not in tools/o0-sweep.baseline.
+The baseline is a ratchet that only shrinks, one entry per line: `TARGET PROGRAM | OWNER | EXIT YYYY-MM-DD | ERROR LINE`. An entry missing a field, or past its
+exit date, is red: a list of known refusals must not hide a tier-1 row.
 """
 import os
 import re
@@ -22,7 +24,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import corpus_targets as ct  # noqa: E402
 
-TARGETS = ["x86_16-dos", "x86_32-linux", "x86_64-linux", "arm64-linux", "wasm32", "m68k-68020", "6502-sim65", "z80-sdcc"]
+TARGETS = ["x86_16-dos", "x86_32-linux", "x86_64-linux", "arm64-linux", "wasm32", "m68k-68000", "m68k-68020", "6502-sim65", "z80-sdcc"]
 TIMEOUT = 180
 
 
@@ -73,11 +75,30 @@ def sweep(targets: list[str], programs: list[Path], cc: str, jobs: int) -> dict[
     return result
 
 
+def parse_baseline(text: str, today: str) -> tuple[set[str], list[str]]:
+    """(the TARGET PROGRAM keys that are excused, the entries that are malformed or past their exit date)."""
+    keys, bad = set(), []
+    for line in text.splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        fields = [f.strip() for f in line.split("|")]
+        date = fields[2].removeprefix("EXIT ").strip() if len(fields) == 4 else ""
+        if len(fields) != 4 or not all(fields) or not re.fullmatch(r"\d{4}-\d\d-\d\d", date):
+            bad.append(f"baseline entry needs 'TARGET PROGRAM | OWNER | EXIT YYYY-MM-DD | ERROR': {line}")
+        elif date < today:
+            bad.append(f"baseline entry past its exit date {date}: {fields[0]}")
+        else:
+            keys.add(fields[0])
+    return keys, bad
+
+
 def verdict(result: dict[str, dict], baseline: set[str]) -> list[str]:
-    """What is red: a target that compiled nothing, a refusal outside the baseline."""
+    """What is red: a target with no applicable program, one that compiled nothing, a refusal outside the baseline."""
     bad = []
     for target, row in result.items():
-        if row["compiled"] == 0:
+        if row["programs"] == 0:
+            bad.append(f"{target}: 0 applicable programs (a broken applies filter?)")
+        elif row["compiled"] == 0:
             bad.append(f"{target}: compiled 0 of {row['programs']} programs")
         bad += [f"{target} {name}: {msg}" for name, msg in row["refused"].items() if f"{target} {name}" not in baseline]
     return bad
@@ -87,7 +108,8 @@ def main(argv: list[str]) -> int:
     targets = argv[1:] or TARGETS
     programs = sorted((ROOT / "tests/run/c").glob("*.c"))
     baseline_file = HERE / "o0-sweep.baseline"
-    baseline = {l.strip() for l in baseline_file.read_text().splitlines() if l.strip() and not l.startswith("#")} if baseline_file.exists() else set()
+    import datetime
+    baseline, baseline_bad = parse_baseline(baseline_file.read_text() if baseline_file.exists() else "", datetime.date.today().isoformat())
     cc = compiler()
     if not Path(cc).exists():
         print(f"o0_sweep: no compiler at {cc}", file=sys.stderr)
@@ -98,7 +120,7 @@ def main(argv: list[str]) -> int:
         print(f"{target}: programs {row['programs']} compiled {row['compiled']} refused {len(row['refused'])} n/a {row['na']}")
         for name, msg in sorted(row["refused"].items()):
             print(f"  REFUSED {name}: {msg}")
-    bad = verdict(result, baseline)
+    bad = baseline_bad + verdict(result, baseline)
     for line in bad:
         print("RED", line)
     return 1 if bad else 0
