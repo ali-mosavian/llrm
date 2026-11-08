@@ -21,9 +21,10 @@
 //! [case]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L6085
 
-use crate::addr::AddrDag;
-use crate::dag::SDValue;
-use crate::generated::ids::{isd, mvt, x86};
+use llrm_dagisel::addr::AddrDag;
+use llrm_dagisel::dag::SDValue;
+use llrm_dagisel::generated::ids::{isd, mvt, x86};
+
 use crate::x86_divrem::copy_results;
 use crate::x86_hooks::{Cpu, X86Hooks};
 
@@ -39,7 +40,7 @@ fn constant_is_wider<D: AddrDag>(
     flat: bool,
 ) -> bool {
     let Some(value) = dag.constant(c) else { return true };
-    let width = crate::addr::vt_bits(dag.value_type(other));
+    let width = llrm_dagisel::addr::vt_bits(dag.value_type(other));
     let narrow = if width >= 64 { value } else { value & ((1i64 << width) - 1) };
     let bits = if signed {
         let shift = 64 - width.min(64);
@@ -126,7 +127,7 @@ pub fn select_mul_lohi<D: AddrDag>(
         && hooks.options.multiply_early_out
         && dag.opcode(n1.node) == isd::Constant
         && dag.opcode(n0.node) != isd::Constant
-        && constant_is_wider(dag, n1, n0, is_signed, hooks.options.address_mode != crate::addr::AddrMode::Real16)
+        && constant_is_wider(dag, n1, n0, is_signed, hooks.options.address_mode != llrm_dagisel::addr::AddrMode::Real16)
     {
         std::mem::swap(&mut n0, &mut n1);
     }

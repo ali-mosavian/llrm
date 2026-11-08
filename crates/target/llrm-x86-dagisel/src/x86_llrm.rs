@@ -16,7 +16,7 @@
 //! # Used by
 //! [`crate::x86_select::select_node`].
 
-use crate::dag::{Dag, SDValue};
+use llrm_dagisel::dag::{Dag, SDValue};
 
 /// `X86ISD::LLRM_ASM` and `LLRM_WINDOW` (`tools/dagisel/own_ids.txt`).
 pub const LLRM_NODES: [u16; 2] = [24578, 24581];

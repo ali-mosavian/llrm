@@ -59,9 +59,9 @@ use llrm_codegen::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semanti
 use llrm_codegen::model::lir::{Insn, PairKind, Phi};
 use llrm_dagisel::addr::AddrMode;
 use llrm_dagisel::instr::{self, InstrDesc, operand_type};
-use llrm_dagisel::x86_classes::{Role, class_tag};
 use llrm_lir::registers::RegId;
 use llrm_support::hash::HashMap;
+use llrm_x86_dagisel::x86_classes::{Role, class_tag};
 
 struct Emitter<'a, 'd> {
     dag: &'d SelectionDAG,
@@ -1427,7 +1427,7 @@ impl Emitter<'_, '_> {
         opcode: u32,
     ) -> Result<(), EmitError> {
         // `SEGMENT_OF` (sdag-c's pseudo, SD305): the segment word of a global.
-        if opcode == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
+        if opcode == u32::from(llrm_x86_dagisel::x86_llrm::SEGMENT_OF_OPCODE) {
             let held = self.fresh(2);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);
             let word = self.segment_word(SDValue { node: n, res: 0 });
@@ -3626,7 +3626,7 @@ impl Emitter<'_, '_> {
                 && ins.iter().any(|one| one.kind == operand_type::MEMORY)
                 && matches!(
                     self.dag.opcode(ops[i]),
-                    ISD::Machine(op) if op == u32::from(llrm_dagisel::x86_llrm::SEGMENT_OF_OPCODE)
+                    ISD::Machine(op) if op == u32::from(llrm_x86_dagisel::x86_llrm::SEGMENT_OF_OPCODE)
                 )
             {
                 // A store of a segment is the immediate's store, as one of

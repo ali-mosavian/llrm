@@ -8,10 +8,10 @@
 
 use llrm_dagisel::dag::{LoadExt, SDValue};
 use llrm_dagisel::generated::ids::{isd, mvt};
-use llrm_dagisel::generated::x86_i486 as table;
 use llrm_dagisel::interp::{Outcome, Scratch, Selector};
 use llrm_dagisel::testing::{Node, TestDag};
-use llrm_dagisel::x86_testing::TestHooks;
+use llrm_x86_dagisel::generated::x86_i486 as table;
+use llrm_x86_dagisel::x86_testing::TestHooks;
 
 fn main() {
     let rounds: usize = std::env::args().nth(1).and_then(|n| n.parse().ok()).unwrap_or(1000);

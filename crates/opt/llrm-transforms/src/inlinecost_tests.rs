@@ -1144,10 +1144,19 @@ fn a_constant_loop_bound_exempts_a_copy_from_the_rate_where_the_target_hints_it(
 /// make; one that states nothing gets the pin's.
 #[test]
 fn the_default_inline_policy_is_made_from_the_hooks_a_target_states() {
-    use llrm_mir::tti::{InlinePolicy, Tti};
+    use llrm_mir::tti::{InlinePolicy, SizeRule, Tti};
     assert_eq!(llrm_mir::tti::Basic.inline_policy(), InlinePolicy::PIN);
     let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
-    assert_eq!(arm.inline_policy(), InlinePolicy { by_size: None, by_rate: arm.speed_inline_milliclocks_per_byte() });
+    // At -Os an inline must not grow the code (#8228): the size rule is the hooks'.
+    let by_size = SizeRule {
+        min_sites: arm.opt_size_inline_guard_min_sites(),
+        yields_to_negative_cost: arm.opt_size_inline_guard_yields_to_negative_cost(),
+    };
+    assert!(arm.opt_size_inline_by_code_size());
+    assert_eq!(
+        arm.inline_policy(),
+        InlinePolicy { by_size: Some(by_size), by_rate: arm.speed_inline_milliclocks_per_byte() }
+    );
     assert!(arm.inline_policy().by_rate > 0);
     let x86 = |guard: bool| {
         llrm_x86::tti::X86::of_cpu("x86-64")

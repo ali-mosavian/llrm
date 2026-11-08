@@ -140,6 +140,9 @@ pub struct TargetLowering {
     inline_constant_mul: Option<fn(u128) -> bool>,
     /// The function is built for size: an `i64` divide calls the target's size routine.
     small_divide: bool,
+    /// The function is built for size alone (-Os), not -O1 where clocks are strict too: an `i64` divide by a
+    /// dword takes the size form that always does two `div`s.
+    size_only: bool,
     /// The object spelling of a routine's name where the convention decorates
     /// it (`___addsf3@3`).
     libcall_symbols: HashMap<String, (String, u32)>,
@@ -181,6 +184,7 @@ impl TargetLowering {
             size_shift_call: None,
             inline_constant_mul: None,
             small_divide: false,
+            size_only: false,
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
             sdiv_pow2_cmov: None,
@@ -451,6 +455,17 @@ impl TargetLowering {
 
     pub fn small_divide(&self) -> bool {
         self.small_divide
+    }
+
+    pub fn set_size_only(
+        &mut self,
+        size_only: bool,
+    ) {
+        self.size_only = size_only;
+    }
+
+    pub fn size_only(&self) -> bool {
+        self.size_only
     }
 
     pub fn set_byte_equality(

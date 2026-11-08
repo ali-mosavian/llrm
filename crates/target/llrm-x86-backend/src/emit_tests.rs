@@ -4,10 +4,10 @@ use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, schedule};
 use llrm_codegen::backend::selectiondag::*;
 use llrm_codegen::model::ir::{Loc, Reg};
 use llrm_dagisel::addr::AddrMode;
-use llrm_dagisel::generated::x86_i486::MACHINE_OPCODES;
 use llrm_lir::registers::RegId;
 use llrm_support::hash::HashMap;
 use llrm_target::Target;
+use llrm_x86_dagisel::generated::x86_i486::MACHINE_OPCODES;
 
 use crate::emit::emit;
 
