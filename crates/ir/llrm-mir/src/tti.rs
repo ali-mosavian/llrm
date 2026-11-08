@@ -749,6 +749,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::inline_o1_unit_bytes_milli`.
+    fn inline_o1_unit_bytes_milli(&self) -> i64 {
+        1000
+    }
+
     /// DEVIATE INL-O1: `Tuning::inline_o1_milliclocks_per_byte`.
     fn inline_o1_milliclocks_per_byte(&self) -> i64 {
         0
