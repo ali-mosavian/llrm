@@ -27,7 +27,6 @@ def variants(src):
     return res
 LIBC = OUT / "libc.o"
 subprocess.run([PC, "--target=wasm32", "-ffreestanding", "-O2", "-fno-builtin", "-c", "runtime/wasm/libc.c", "-o", str(LIBC)], check=True)
-subprocess.run([PC, "--target=wasm32", "-ffreestanding", "-O1", "-fno-builtin", "-c", str(Path(__file__).parent / "multi3.c"), "-o", str(OUT / "multi3.o")], check=True)
 CRT = OUT / "crt.a"; CR = Path("runtime/compiler-rt"); objs = []
 (OUT / "crt").mkdir(exist_ok=True)
 for f in subprocess.run(["sh", str(CR / "tests/fp_sources.sh"), "f128"], capture_output=True, text=True, check=True).stdout.split() + ["lib/int/int128.c"]:
@@ -35,7 +34,7 @@ for f in subprocess.run(["sh", str(CR / "tests/fp_sources.sh"), "f128"], capture
     r = subprocess.run([PC, "--target=wasm32", "-ffreestanding", "-O2", "-fno-builtin", "-include", str(CR / "config/wasm/config.h"), "-I", str(CR / "include"), "-I", str(CR / "lib/fp/f128"), "-c", str(CR / f), "-o", str(o)], capture_output=True, text=True)
     if r.returncode == 0: objs.append(str(o))
     else: print("crt skip", f, r.stderr.strip().splitlines()[-1:] )
-objs.append(str(OUT / "multi3.o")); CRT.unlink(missing_ok=True); subprocess.run(["ar", "rcs", str(CRT), *objs], check=True)
+CRT.unlink(missing_ok=True); subprocess.run(["ar", "rcs", str(CRT), *objs], check=True)
 def one(job):
     name, flags = job; src = C / f"{name}.c"; lvl = next((w for w in flags if re.match(r"-O(\d|s|max)$", w)), "-O?")
     w = Path(tempfile.mkdtemp(prefix="wc-"))
