@@ -54,3 +54,17 @@ def test_the_same_dist_with_another_environment_is_a_second_build():
 
     ab_bins.compare("d", "d", CELLS[:1], ["-O2"], 500, run=run, base_env=[("W", "3")], head_env=[("W", "1")])
     assert seen == [("d", (("W", "3"),)), ("d", (("W", "1"),))]
+
+
+def test_two_builds_in_one_run_each_link_from_their_own_llrm_bin(monkeypatch):
+    """dosbatch reads LLRM_BIN once, at import and links that dist's runtime; one process measuring two dists could only ever use one (since #8501 it
+    refuses, before it shared one silently). Each measurement runs in its own process with its own dist as LLRM_BIN."""
+    seen = []
+
+    class Done:
+        stdout = '[1, 1, "ok"]'
+        stderr = ""
+
+    monkeypatch.setattr(ab_bins.subprocess, "run", lambda argv, **kw: (seen.append((argv[2:3], kw["env"]["LLRM_BIN"])), Done())[1])
+    ab_bins.compare("/dist/base", "/dist/head", CELLS[:1], ["-O2"], 500)
+    assert seen == [(["--measure"], "/dist/base"), (["--measure"], "/dist/head")]
