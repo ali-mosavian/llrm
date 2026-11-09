@@ -2359,7 +2359,7 @@ impl<'a> Analyzer<'a> {
             // (`inline_o1_milliclocks_per_byte`).
             let rate = self.site.tti.map_or(0, |tti| tti.inline_o1_milliclocks_per_byte());
             !self.site.sole_call_to_local && self.grows_the_code() && !(rate > 0 && !self.grows_more_than_it_saves_at(rate, self.site.tti.map_or(1000, |tti| tti.inline_o1_unit_bytes_milli()), self.site.tti.is_some_and(|tti| tti.inline_o1_weighs_entry())))
-        } else {
+        } else if self.site.caller_size != CallerSize::Speed {
             !self.site.sole_call_to_local
                 && self.site.tti.is_some_and(|tti| {
                     tti.inline_policy().by_size.is_some_and(|rule| {
@@ -2368,6 +2368,9 @@ impl<'a> Analyzer<'a> {
                     })
                 })
                 && self.grows_the_code()
+        } else {
+            // -O1 with the rate off: the pin's threshold alone; `by_size` is the -Os and -Oz rule.
+            false
         };
         self.blocked_by_bound = grows && self.cost < pin;
         if grows {

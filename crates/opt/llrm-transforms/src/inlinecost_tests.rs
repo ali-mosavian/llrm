@@ -1089,6 +1089,25 @@ fn a_target_stating_only_a_rate_leaves_o1_to_the_pin() {
     assert!(cost < threshold, "the rate refused a copy at -O1");
 }
 
+/// wasm -O1 kept `next` (3 sites) out of getbit_inpos.ll where the pin's `default<O1>` inlines it: with the rate off at
+/// -O1 a speed caller fell into the `-Os` size rule (`by_size`), which holds a growing inline. -O1 is the pin's threshold alone.
+#[test]
+fn the_size_rule_does_not_hold_a_speed_caller_at_o1() {
+    use llrm_mir::tti::{InlinePolicy, SizeRule};
+    let sized = PolicyOnly(
+        InlinePolicy { by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false }), by_rate: 0 },
+        Some(false),
+        false,
+    );
+    let verdict = |size, o1_bound| {
+        let params = InlineParams { compute_full_inline_cost: true, o1_bound, ..InlineParams::from_level(2) };
+        let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, size, Some(&sized), params, (2, false));
+        cost < threshold
+    };
+    assert!(!verdict(CallerSize::MinSize, false), "the premise: -Os holds a growing inline");
+    assert!(verdict(CallerSize::Speed, true), "-O1 keeps the pin's verdict");
+}
+
 const BOUNDED_LOOP: &str = "@dst = internal global [1200 x i8] zeroinitializer
 @ref = internal global [1200 x i8] zeroinitializer
 @sum = internal global i16 0
