@@ -96,3 +96,20 @@ fn a_gep_without_inbounds_masks_the_wrapped_index() {
         &["and i32 %t, 2147483647", "icmp eq i32", ", 3\n"],
     );
 }
+
+/// A load with another user stays; the pin still rewrites the compare
+/// (`foldCmpLoadFromIndexedGlobal` allows multi-use loads).
+#[test]
+fn a_table_load_with_another_user_stays_and_its_compare_is_the_index() {
+    let mut module = parsed(&format!(
+        "{TABLES}declare void @use(i16)\ndefine i1 @f(i32 %t) {{\nb0:\n  %p = getelementptr inbounds [2 x i8], ptr @ns, i32 %t\n  %v = load i16, ptr %p, align 2\n  call void @use(i16 %v)\n  %r = icmp eq i16 %v, 17\n  ret i1 %r\n}}\n"
+    ));
+    let layout = module.datalayout.clone();
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    let layout = DataLayout::parse(layout.as_deref().expect("a layout")).expect("parses");
+    combine_with(context, &globals, &metadata, &layout, function, visit);
+    let out = printed(&module);
+    assert!(out.contains("load i16") && out.contains("icmp eq i32 %t, 3"), "{out}");
+}

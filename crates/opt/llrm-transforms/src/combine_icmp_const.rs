@@ -248,7 +248,9 @@ fn sub_ov(
 /// turns the compare into a range test of `X`; an equality with a huge
 /// quotient splits into `X == C && Y == 1`.
 ///
-/// OWED: `foldICmpUDivConstant`, which the pin tries first for a `udiv`.
+/// OWED 1 (owner llrm-wasm-b, exit 2026-11-20): `foldICmpUDivConstant`, which
+/// the pin tries before this fold for a `udiv`
+/// ([L4157](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L4157)).
 fn fold_icmp_div_constant(
     c: &mut Combiner,
     inst: InstId,

@@ -346,3 +346,11 @@ fn a_quotient_above_the_largest_is_false_and_the_edge_is_one_value() {
     check("i16 %x", "  %d = udiv i16 %x, 5\n  %r = icmp ugt i16 %d, 13107\n", &["ret i1 false"]);
     check("i16 %x", "  %d = udiv i16 %x, 5\n  %r = icmp ugt i16 %d, 13106\n", &["icmp eq i16 %x, -1"]);
 }
+
+/// The divisor is `INT_MIN`: `-INT_MIN` is `INT_MIN`, so the high bound
+/// overflows and the quotient is zero for every dividend but `INT_MIN`.
+#[test]
+fn a_divide_by_int_min_compared_with_zero_is_one_edge_of_the_dividend() {
+    check("i16 %x", "  %d = sdiv i16 %x, -32768\n  %r = icmp eq i16 %d, 0\n", &["icmp ne i16 %x, -32768"]);
+    check("i16 %x", "  %d = sdiv i16 %x, -32768\n  %r = icmp sgt i16 %d, 0\n", &["icmp eq i16 %x, -32768"]);
+}
