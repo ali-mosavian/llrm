@@ -193,6 +193,15 @@ impl Tti for M68k {
         1
     }
 
+    /// A stack slot's base is `%sp` and a displacement, so as the base of an
+    /// address it takes no register of its own (LU6, set for x86 too; the pin
+    /// counts it). Several stack arrays then share one index register in
+    /// place of one pointer IV each; the backend forms the address with a
+    /// `lea` per access (`(d,%sp,Xn)` is not folded yet).
+    fn frame_address_is_free(&self) -> bool {
+        true
+    }
+
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
     /// by the access size for free (descriptors in `indexed.rs`), so LSR keeps
     /// a pointer walk rather than an index beside a counter. Exit: 2026-11-20,
