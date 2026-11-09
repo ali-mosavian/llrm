@@ -126,7 +126,7 @@ class Tools:
                 asm.write_text(".text\n" + relaxing_branches(asm.read_text()))
                 ok, timed, err = self.run([self.as_, "--fatal-warnings", f"-m{cpu}", "-o", str(obj), str(asm)])
         elif compiler == "gcc":
-            ok, timed, err = self.run([self.gcc, "-ffreestanding", "-nostdlib", "-w", *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-c", str(path), "-o", str(obj)])
+            ok, timed, err = self.run([self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-c", str(path), "-o", str(obj)])
         else:
             ir = work / f"{stem}.ll"
             ok, timed, err = self.run([self.clang, "--target=m68k-linux-gnu", "-ffreestanding", "-fno-pic", "-w", *self.clang_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-S", "-emit-llvm", str(path), "-o", str(ir)])
