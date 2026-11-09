@@ -67,3 +67,27 @@ def test_a_missing_or_empty_object_is_an_error(tmp_path):
     empty.write_bytes(b"")
     assert run("x86_32-linux", empty).returncode == 2
     assert run("x86_32-linux", tmp_path / "absent.o").returncode == 2
+
+
+def test_a_65c02_object_gives_its_code_not_an_unreadable_error(tmp_path):
+    """cells.sh listed every 65c02 cell EMPTY (`no reader`, then ca65 refusing `stz` without --cpu 65C02) beside 6502 cells that read."""
+    source = tmp_path / "o.s"
+    source.write_text("\t.segment \"CODE\"\n_f:\n\tstz $10\n\trts\n")
+    done = run("65c02-sim65", source)
+    assert done.returncode == 0 and done.stdout.split() == ["3", "0"], done.stderr
+
+
+def test_a_6502_object_still_refuses_a_65c02_instruction(tmp_path):
+    source = tmp_path / "o.s"
+    source.write_text("\t.segment \"CODE\"\n_f:\n\tstz $10\n\trts\n")
+    done = run("6502-sim65", source)
+    assert done.returncode == 2 and done.stdout == "", done.stdout
+
+
+def test_a_wasm_object_counts_its_code_and_data_sections(tmp_path):
+    """cells.sh listed every wasm cell EMPTY: wasm was refused outright. A module with one empty function: Code section 4 bytes, no Data."""
+    module = bytes.fromhex("0061736d01000000" "010401600000" "03020100" "0a040102000b")
+    obj = tmp_path / "o.wasm"
+    obj.write_bytes(module)
+    done = run("wasm32", obj)
+    assert done.returncode == 0 and done.stdout.split() == ["4", "0"], done.stderr
