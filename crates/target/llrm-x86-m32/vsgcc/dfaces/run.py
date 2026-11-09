@@ -196,7 +196,7 @@ def run(variant, limit=400_000_000):
     assert total["ins"], f"{variant}: d_faces was never entered"
     covered = struct.unpack(f"<{len(COVERAGE)}I", bytes(uc.mem_read(env_symbols["coverage"], 4 * len(COVERAGE))))
     return dict(prog="dfaces", variant=variant, ins=total["ins"], mem=total["mem"], misaligned=total["misaligned"], nops=total["nops"],
-                clocks=total["clocks"], code=harness.code_bytes("dfaces", variant), reports=reports, coverage=dict(zip(COVERAGE, covered)))
+                clocks=total["clocks"], code=harness.code_bytes("dfaces", variant), data=harness.data_bytes("dfaces", variant), reports=reports, coverage=dict(zip(COVERAGE, covered)))
 
 
 def run_m16(level):

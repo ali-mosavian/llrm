@@ -13,7 +13,7 @@ fn a_call_has_only_its_own_stack_arguments_pushed() {
     let source = dir.join("g.ll");
     std::fs::write(
         &source,
-        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\ntarget triple = \"z80-unknown-none\"\n\
+        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\ntarget triple = \"z80-unknown-none\"\n\
          @x = global double 1.5\n@z = global double 5.5\n\
          define i16 @main() {\n\
            %1 = load volatile double, ptr @x\n  %2 = fmul double %1, 4.0\n  %3 = fptosi double %2 to i32\n\
@@ -30,7 +30,16 @@ fn a_call_has_only_its_own_stack_arguments_pushed() {
     assert_eq!(done.status.code(), Some(0), "{}", String::from_utf8_lossy(&done.stderr));
     let text = std::fs::read_to_string(out).unwrap();
     let mut pushed = 0i32;
+    // A large area is one sum, `ld r, #-n` / `add r, sp` / `ld sp, r` (the
+    // frame's own comes before the first label).
+    let (mut in_body, mut amount) = (false, 0i32);
     for line in text.lines().map(str::trim) {
+        in_body |= line.ends_with(':') && line.starts_with('L');
+        if let Some(n) = line.strip_prefix("ld hl, #").or_else(|| line.strip_prefix("ld iy, #")) {
+            amount = n.parse().unwrap_or(0);
+        } else if in_body && (line == "ld sp, hl" || line == "ld sp, iy") {
+            pushed -= amount / 2;
+        }
         if line == "push ix" || line == "pop ix" {
             continue;
         }
