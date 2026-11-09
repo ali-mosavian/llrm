@@ -453,3 +453,39 @@ fn lftr_counts_any_constant_stride() {
     use llrm_mir::tti::Tti;
     assert!(AArch64::of_cpu("generic").unwrap().lftr_any_stride());
 }
+
+/// AArch64 has no `isSExtCheaperThanZExt` override at the pin (the base class says no,
+/// TargetLowering.h#L3329); the hook said yes for 32 -> 64 and cited a pin line that does not exist.
+#[test]
+fn sign_extension_is_not_cheaper_than_zero_extension() {
+    for (from, to) in [(8, 32), (16, 32), (32, 64), (8, 64)] {
+        assert!(!AArch64Lowering.is_sext_cheaper_than_zext(from, to), "{from} -> {to}");
+    }
+}
+
+/// The pin expands a sign-extending load from i1 on AArch64 (AArch64ISelLowering.cpp#L1141); the hook said
+/// legal, as the base class does.
+#[test]
+fn a_sign_extending_load_of_a_bit_is_not_legal() {
+    use llrm_mir::lowering::LoadExt;
+    let arm64 = AArch64Lowering;
+    assert!(!arm64.is_load_ext_legal(LoadExt::Sign, 32, 1) && !arm64.is_load_ext_legal(LoadExt::Sign, 64, 1));
+    assert!(arm64.is_load_ext_legal(LoadExt::Zero, 32, 1) && arm64.is_load_ext_legal(LoadExt::Any, 32, 1));
+    assert!(arm64.is_load_ext_legal(LoadExt::Sign, 32, 8) && arm64.is_load_ext_legal(LoadExt::Sign, 64, 32));
+    assert!(!arm64.is_load_ext_legal(LoadExt::Zero, 32, 24));
+}
+
+/// The IR-level ext promotion asks `isOperationLegalOrCustom` of the promoted operation; the hook said
+/// no to everything (the base class has no registers), so no promotion could pass its legality check.
+#[test]
+fn arithmetic_is_legal_on_the_registers_and_the_remainders_are_expanded() {
+    use llrm_mir::lowering::Isd::*;
+    let arm64 = AArch64Lowering;
+    for bits in [32, 64] {
+        for op in [Add, Sub, Mul, UDiv, SDiv, Shl, Srl, Sra, And, Or, Xor, Select, SetCc, Truncate, ZeroExtend, SignExtend] {
+            assert!(arm64.is_operation_legal_or_custom(op, bits), "{op:?} i{bits}");
+        }
+        assert!(!arm64.is_operation_legal_or_custom(URem, bits) && !arm64.is_operation_legal_or_custom(SRem, bits));
+    }
+    assert!(!arm64.is_operation_legal_or_custom(Add, 8) && !arm64.is_operation_legal_or_custom(Add, 16));
+}

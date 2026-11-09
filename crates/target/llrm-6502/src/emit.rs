@@ -414,6 +414,13 @@ pub fn expand(
             }
         }
         // one bit crosses between two words, through the carry of a shift
+        // a byte shifted right by one: the bit that left stays in the carry
+        op::SRL1C8 => {
+            let (d, a): (String, String) = (reg(&o[0])?.into(), reg(&o[2])?.into());
+            copy_byte(&mut out, "a", &a);
+            writeln!(out, "  lsr a").unwrap();
+            copy_byte(&mut out, &d, "a");
+        }
         op::FSHL1 | op::FSHR1 => {
             let ((dl, dh), (al, ah), (bl, bh)) = (word(&o[0])?, word(&o[1])?, word(&o[2])?);
             if inst.opcode == op::FSHL1 {

@@ -1849,6 +1849,15 @@ pub fn build_with_places(
                 b.shift_a(step, immediate(&o[2])?);
                 b.copy(d, acc);
             }
+            // `lsr a` leaves the bit that left in the carry; the operands are `d`, `co`, `a`
+            op::SRL1C8 => {
+                let acc = Reg::Phys(reg::A);
+                b.define(name(&o[0])?);
+                let (d, a) = (b.byte(name(&o[0])?)?, b.byte(name(&o[2])?)?);
+                b.copy(acc, a);
+                b.shift_a("LSR", 1);
+                b.copy(d, acc);
+            }
             op::STZABS => {
                 let symbol = address(&o[0], &o[1]).map_err(Unsupported)?;
                 b.push(Inst::new(Kind::Op("STZM"), vec![Operand::Symbol(symbol, 0)]));
@@ -4285,6 +4294,7 @@ fn emit_with<const STACK: bool>(
         }
     }
     let lines_of = source.map(|(file, scope)| (file, scope, &function.places[..]));
+    out.cmos = cmos;
     let tails = ((!returns_a, a_callees), (!returns_x, x_callees), (!returns_y, y_callees), result_cells);
     let priced = own_labels(
         &finish(out.clone(), false, None, tails.0.clone(), tails.1.clone(), tails.2.clone(), tails.3.clone()),

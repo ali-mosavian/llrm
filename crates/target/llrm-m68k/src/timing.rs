@@ -295,13 +295,14 @@ pub fn trade_passes(
 }
 
 /// What a choice between two priced candidates minimizes: the level's price.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Price {
     /// Bytes, then clocks (`-Os`).
     Size,
     /// A candidate is taken only when no larger and no slower (`-O1`).
     Strict,
     /// Clocks plus bytes at the CPU's byte price (`-O2`, `-O3`).
+    #[default]
     Rate,
 }
 
@@ -417,7 +418,10 @@ pub fn cost_on(
         && operands.len() == 2;
     let partial = if cpu == Cpu::M68060 {
         m68060::partial(base, suffix)
-    } else if cpu == Cpu::M68020 {
+    } else if matches!(cpu, Cpu::M68020 | Cpu::M68030 | Cpu::M68040) {
+        // bit fields and `cas` are a bound on the 68020 and 68030 (the "< 5
+        // bytes" and successful-compare rows) and omit the long-word-boundary
+        // term on the 68040
         matches!(base, "mulu" | "muls" | "divu" | "divs") || m68020::partial(base)
     } else {
         matches!(base, "mulu" | "muls" | "divu" | "divs")

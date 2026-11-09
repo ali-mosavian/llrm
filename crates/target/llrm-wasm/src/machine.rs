@@ -95,6 +95,11 @@ impl Machine for WasmMachine {
         OperationCosts { load: 3, store: 3, float_load: 3, float_store: 3, branch: 2, call: 6, ..self.costs() }
     }
 
+    /// The wasm triple's default thread model is `Single`.
+    fn single_threaded(&self) -> bool {
+        true
+    }
+
     fn registers(&self) -> i64 {
         REGISTERS
     }
@@ -177,6 +182,12 @@ impl Tti for Wasm {
     /// Executed instructions (informational, wasm has no rate): 27 of 31 rows
     /// above the pin, at most +14.6% (sfm16_float_f2i), +0.04% in total.
     fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// SZ2 tries the sites of a callee that stays as one unit: the pin inlines every site on its cost
+    /// and sinks the common call after (switch_header_marker_loop -Os: three `report(const)`).
+    fn inline_trial_groups_sites(&self) -> bool {
         true
     }
 
