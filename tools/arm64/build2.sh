@@ -4,7 +4,6 @@ ulimit -v 16000000  # one unbounded run must not take the box
 H=$(cd "$(dirname "$0")" && pwd)  # this directory: prep.py, host_shim.h, rt.c
 P=$1; L=$2; C=$3;  B=${B:-$(cd "$H/../.." && pwd)}; V=${LLVM_BIN:-$HOME/scratch/llvm-build-aarch64/bin}  # B: the tree, V: clang/ld.lld of the pin
 O=${OUT:-${TMPDIR:-/tmp}/arm64-bench-out}; mkdir -p $O; mkdir -p $O/src; python3 $H/prep.py $B/bench/$P/$P.c $O/src/$P.c.$$ && mv -f $O/src/$P.c.$$ $O/src/$P.c; S=$O/src/$P.c; X=$O/$P.$L.$C
-[ -f $O/bench_io.h ] || cp $B/bench/bench_io.h $O/  # the sources include it from one directory up
 LLC="timeout 600 ${LLC:-$B/target/debug/llrm-arm64-llc}"
 T="-target aarch64-unknown-linux-gnu -I $B/runtime/shared/posix -Dfar= -Dnear= -Dhuge= -D__huge= -D__386__=1 -include $H/host_shim.h"
 case $C in

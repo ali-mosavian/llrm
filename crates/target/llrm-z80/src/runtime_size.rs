@@ -60,6 +60,30 @@ const LSHRSI3_PER: u32 = 45;
 const ASHRSI3_BASE: u32 = 59;
 const ASHRSI3_PER: u32 = 45;
 
+/// The long divide and remainder routines' clocks, the call instruction through the return (`runtime/clocks.py`):
+/// (routine, base, per step). The speed family does a step per quotient bit, `base + per * max(0, na - nb)` with `na`
+/// and `nb` the bit lengths of dividend and divisor (a divide by 10 of a 24-bit value is 6.6k T); the size family
+/// does 32 steps whatever the operands, one constant. The step cost depends on the quotient bits, so the model is
+/// within 13% (speed) and 8% (size) of the measured clocks, not exact.
+const DIVIDES: [(&str, u32, u32); 12] = [
+    ("__udivsi3", 1091, 322),
+    ("__umodsi3", 1087, 322),
+    ("__divsi3", 1153, 329),
+    ("__modsi3", 1134, 329),
+    ("__udivremsi4", 1159, 322),
+    ("__divremsi4", 1289, 334),
+    ("__s_udivsi3", 6126, 0),
+    ("__s_umodsi3", 6130, 0),
+    ("__s_divsi3", 6341, 0),
+    ("__s_modsi3", 6329, 0),
+    ("__s_udivremsi4", 6292, 0),
+    ("__s_divremsi4", 6466, 0),
+];
+
+/// The dividend and divisor bit lengths assumed for a long divide whose operand is not a constant in sight.
+const TYPICAL_DIVIDEND_BITS: u32 = 24;
+const TYPICAL_DIVISOR_BITS: u32 = 8;
+
 /// The clocks a `call` adds beyond the call instruction itself: the routine's body, where the runtime has a model
 /// for it. `before` are the instruction texts that precede the call in its function, nearest last. `__mulsi3`
 /// takes the multiplier from the last write of `bc` before the call when that is `ld bc, #n` (the high word is
@@ -100,7 +124,10 @@ pub fn routine_clocks(
         "__ashlsi3" => counted(ASHLSI3_BASE, ASHLSI3_PER),
         "__lshrsi3" => counted(LSHRSI3_BASE, LSHRSI3_PER),
         "__ashrsi3" => counted(ASHRSI3_BASE, ASHRSI3_PER),
-        _ => 0,
+        _ => DIVIDES.iter().find(|(name, ..)| *name == routine).map_or(0, |&(_, base, per)| {
+            let divisor_bits = immediate("bc").map_or(TYPICAL_DIVISOR_BITS, |divisor| u32::BITS - divisor.leading_zeros());
+            base + per * TYPICAL_DIVIDEND_BITS.saturating_sub(divisor_bits) - CALL
+        }),
     }
 }
 
@@ -154,6 +181,20 @@ mod tests {
         // a long shifted by 5: 59 + 40 * 5 = 259 T for the call (ucsim), 242 of them the routine
         assert_eq!(routine_clocks("call __ashlsi3", &["ld a, #5"]), 59 + 40 * 5 - 17);
         assert_eq!(routine_clocks("call __lshrsi3", &["ld a, #5"]), 59 + 45 * 5 - 17);
+    }
+
+    /// The price counted a long divide call as the 17 T call alone: a 32-bit divide by a variable is 6.3k T (ucsim), which
+    /// hid what a function that divides in a loop costs (div_constants_long: 33M T measured, 3M priced), so a change
+    /// of that function's multiplies looked 42% slower when it is 3.6% of the program.
+    #[test]
+    fn a_long_divide_call_prices_the_routine_by_the_divisor_bits() {
+        assert_eq!(routine_clocks("call __udivsi3", &["ld bc, #10"]), 1091 + 322 * (24 - 4) - 17);
+        assert_eq!(routine_clocks("call __modsi3", &["ld bc, #1000", "ld a, #3"]), 1134 + 329 * (24 - 10) - 17);
+        assert_eq!(routine_clocks("call __udivsi3", &["ld c, -4(ix)"]), 1091 + 322 * (24 - 8) - 17);
+        // a divisor wider than the dividend takes the base alone
+        assert_eq!(routine_clocks("call __udivsi3", &["ld bc, #65535", "ld a, #1"]), 1091 + 322 * (24 - 16) - 17);
+        assert_eq!(routine_clocks("call __s_divsi3", &["ld bc, #10"]), 6341 - 17);
+        assert_eq!(routine_clocks("call __divremsi4", &["ld bc, #10"]), 1289 + 334 * 20 - 17);
     }
 
     /// Clocks measured in ucsim (runtime/clocks.py): 0 -> 287, 1 -> 316, 100 -> 1094, 0xFFFF -> 2551, 0xFFFFFFFF -> 4935.

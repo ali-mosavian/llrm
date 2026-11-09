@@ -589,6 +589,14 @@ pub trait Tti {
         false
     }
 
+    /// Whether SZ2 tries all the sites of a callee that stays in one caller as one unit, not one
+    /// site at a time: the pin inlines each site on its cost and lets later passes merge the
+    /// copies (three `report(const)` calls sink into one), which a trial of one site cannot see.
+    /// False: a site alone. Part of DEVIATE SZ1 (the pin has no SZ2 trial): wasm, exit 2026-11-20.
+    fn inline_trial_groups_sites(&self) -> bool {
+        false
+    }
+
     /// Whether a later round of the inliner over one caller skips a callee SZ2 rejected in an
     /// earlier round: a round costs the simplifier over the caller per callee. False: tried again.
     fn inline_trial_skips_rejected(&self) -> bool {
@@ -820,6 +828,16 @@ pub trait Tti {
 
     fn loop_micro_op_buffer_size(&self) -> u32 {
         0
+    }
+
+    /// `getSchedModel().IssueWidth`; 0: the model states none.
+    fn issue_width(&self) -> u32 {
+        0
+    }
+
+    /// `Tuning::unroll_recurrence_veto`.
+    fn vetoes_recurrence_bound_unroll(&self) -> bool {
+        false
     }
 
     /// What a byte of code is worth in thousandths of a clock at speed, where
