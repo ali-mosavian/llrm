@@ -22,10 +22,10 @@ def own_flags(configuration: list[str]) -> list[str]:
     return [t for t in configuration if not t.startswith("-O") and t not in MODE]
 
 
-def classify(target: str, source: str, compile_with) -> tuple:
+def classify(target: str, source: str, compile_with, path: Path | None = None) -> tuple:
     """`compile_with(flags) -> (returncode, stderr)`; flags are the program's own plus the include dirs."""
-    if not corpus_targets.applies(target, source):
-        return ("na", corpus_targets.reason(source))
+    if not corpus_targets.applies(target, source, path):
+        return ("na", corpus_targets.reason(source, path))
     error = ""
     for configuration in corpus_targets.flag_configurations(source) or [[]]:
         code, stderr = compile_with([*own_flags(configuration), *INCLUDES])
@@ -49,7 +49,7 @@ def main(argv: list[str]) -> int:
             ran = subprocess.run([driver, *mode, f"--target={target}", level, *flags, "-c", str(path), "-o", "/dev/null"], capture_output=True, text=True, cwd=path.parent)
             return ran.returncode, ran.stderr
 
-        print(path.stem, *classify(target, path.read_text(), compile_with), sep="\t")
+        print(path.stem, *classify(target, path.read_text(), compile_with, path), sep="\t")
     return 0
 
 
