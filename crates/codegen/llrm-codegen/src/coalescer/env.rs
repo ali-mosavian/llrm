@@ -81,6 +81,10 @@ pub struct TargetEnv {
     /// `LLRM_CHECK_USE_SUMMARY`: each [`JoinSide`] also lists its instructions,
     /// for the target to check the summary against.
     pub check_kinds: bool,
+    /// A join that leaves both values the registers they had is taken without
+    /// building a [`Join`] (`Target::joins_unnarrowed_for_free`): the rule
+    /// prices only what a join takes away.
+    pub free_when_unnarrowed: bool,
     /// `TII->isAsCheapAsAMove(DefMI) && TII->isReMaterializable(DefMI)`: the
     /// target's own test of a definition worth making again. None: a move of
     /// an immediate or an address as x86 names them.
@@ -450,6 +454,13 @@ impl CoalescerEnv for TargetEnv {
             let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
             self.freq.get(block).copied().unwrap_or(1.0)
         };
+        // A join that narrows neither value takes nothing away: both sides
+        // price 0 and the target's rule says yes (the pin asks no price at all
+        // where the target has no opinion, TargetRegisterInfo.h:1031).
+        let same_width = super::pair::move_copy(lis.instr(copy)).is_none_or(|(d, s)| d.width == s.width);
+        if self.free_when_unnarrowed && same_width && (Rc::ptr_eq(x, y) || x == y) {
+            return true;
+        }
         self.catch_up(lis);
         let side = |value: u32, palette: &BTreeSet<RegId>| {
             let mut kinds = self.use_kinds(lis, value);
@@ -581,6 +592,7 @@ pub fn coalesce(
     joins_sub_registers: bool,
     joins_lanes: bool,
     joins_loop_carried_first: bool,
+    free_when_unnarrowed: bool,
     regs: llrm_lir::registers::Regs,
     should_join: Option<Box<dyn Fn(&Join) -> bool>>,
     remat: Option<Box<dyn Fn(&Insn) -> bool>>,
@@ -623,6 +635,7 @@ pub fn coalesce(
         kind_of: Some(kind_of),
         kinds: RefCell::default(),
         check_kinds: llrm_support::env_flag!("LLRM_CHECK_USE_SUMMARY"),
+        free_when_unnarrowed,
     };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();

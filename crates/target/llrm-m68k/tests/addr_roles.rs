@@ -44,11 +44,15 @@ fn options() -> Options {
 fn the_pointer_is_the_base_and_the_counter_the_index() {
     for cpu in [Cpu::M68000, Cpu::M68020] {
         let out = text_with(&module(), "f", cpu, options()).expect("compiles");
-        let store =
-            out.lines().find(|line| line.starts_with("\tmove.b\t%d") && line.contains("(0,%a")).expect("a store");
+        // the array is addressed from the stack pointer (`frameindexed`) or a register holding its `lea`
+        let store = out
+            .lines()
+            .find(|line| line.starts_with("\tmove.b\t%d") && (line.contains("(0,%a") || line.contains(",%sp,%d")))
+            .expect("a store");
         let inner = &store[store.find('(').unwrap() + 1..store.rfind(')').unwrap()];
         let parts: Vec<&str> = inner.split(',').collect();
-        assert!(parts[1].starts_with("%a") && parts[2].starts_with("%d"), "{cpu:?}: the counter is the base:\n{out}");
+        let base_is_a_pointer = parts[1].starts_with("%a") || parts[1] == "%sp";
+        assert!(base_is_a_pointer && parts[2].starts_with("%d"), "{cpu:?}: the counter is the base:\n{out}");
         assert!(!out.contains("move.l\t%a"), "{cpu:?}: the counter goes through a copy:\n{out}");
     }
 }

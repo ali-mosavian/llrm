@@ -352,6 +352,35 @@ __modhi3:                       ; rs1 % rs2 -> A:X
   ldx rc7
   rts
 
+; the compact signed variants, called at size: the same sign handling over the bit loop alone (no short-divisor path)
+.export __divhi3c
+__divhi3c:                       ; rs1 / rs2 -> A:X, compact
+  lda rc3
+  eor rc5
+  tay
+  jsr abs16_pair
+  jsr udivmod16c
+  cpy #0
+  bpl @done
+  neg16 rc2, rc3
+@done:
+  lda rc2
+  ldx rc3
+  rts
+
+.export __modhi3c
+__modhi3c:                       ; rs1 % rs2 -> A:X, compact
+  ldy rc3
+  jsr abs16_pair
+  jsr udivmod16c
+  cpy #0
+  bpl @done
+  neg16 rc6, rc7
+@done:
+  lda rc6
+  ldx rc7
+  rts
+
 ; ---- shifts by a variable count: rs1 or rc2 shifted by rc4 or rc3 ---------------------------------
 
 .export __ashlqi3
