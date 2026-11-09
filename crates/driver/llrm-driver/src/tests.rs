@@ -4836,6 +4836,20 @@ fn a_loop_bounded_by_the_object_it_indexes_is_peeled_at_m32_o3() {
     assert!(bench.matches("fmul").count() >= 12, "{listing}");
 }
 
+/// An `i64` select of two constants was branched in MIR before the DAG saw it
+/// (`jne; xor; mov; jmp; xor; mov 2`, compare_to_int64 -Os); the pin gives
+/// `setne; add eax, eax` (type legalization splits the select, isel folds it).
+#[test]
+fn an_i64_select_of_constants_is_no_branch_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i64 @f(i32 %a, i32 %b) optsize {\n  %c = icmp eq i32 %a, %b\n\
+                  %s = select i1 %c, i64 0, i64 2\n  ret i64 %s\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("setne") && !listing.contains("\n    jne") && !listing.contains("jmp"), "{listing}");
+}
+
 /// `cvtsi2ss xmm1, eax` in a loop rewrote only the low lane of `xmm1`, so each
 /// iteration waited for the last one's result (the pin: `xorps xmm1, xmm1`
 /// first, BreakFalseDeps). sfm16_float_i2f m64 -O2: 9 converts, no `xorps`.
