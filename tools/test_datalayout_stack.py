@@ -45,7 +45,7 @@ def test_a_pending_target_that_declared_one_leaves_the_list():
 # Each target crate checks S against what its frames keep, and against the pin's string where there is one, with one shared helper.
 HELPER = "assert_stack_facts"  # or assert_unstated_stack, for a target whose pin string names no S
 # Crates that do not call it yet: the set may not grow (owner and date in the coordinator's list, 2026-11-10 12:00Z).
-UNCHECKED = {"llrm-6502", "llrm-m68k", "llrm-arm64", "llrm-x86-m32", "llrm-x86-m64"}
+UNCHECKED = {"llrm-6502", "llrm-arm64", "llrm-x86-m32", "llrm-x86-m64"}
 
 
 def calls_helper(crate: Path) -> bool:
