@@ -689,3 +689,16 @@ mod tuning_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod stack_natural_alignment_tests {
+    /// The m16 datalayout named no stack alignment, so passes raised allocas to 32 (matmul, nbody at -O2) in frames that keep 2 bytes.
+    #[test]
+    fn the_datalayout_names_the_stack_alignment_the_frames_keep() {
+        let layout = llrm_mir::datalayout::DataLayout::parse(
+            super::DATALAYOUT_TOML.lines().find_map(|line| line.strip_prefix("datalayout = \"")?.strip_suffix('"')).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(layout.stack_align, Some(2));
+    }
+}
