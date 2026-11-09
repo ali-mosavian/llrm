@@ -1,6 +1,4 @@
 // flags: -O2 -march=i486 -m32 | -O2 -march=i486 -m32 -mabi=sysv | -O1 -march=i486 -m32 | -O2 -march=i486
-// targets: !z80-sdcc
-// Z80-X87ARGS-REFUSAL: z80 refuses -O2/-Os ("a pushed spill inside the stack arguments of a call") since #8590; llrm-target-z80 fixes it by 2026-11-12 18:00Z, then this skip goes.
 /* Float and double arguments to a call, mixed with integers: each goes into the space made for it on the stack, the order the callee reads. */
 extern void report(long value);
 
