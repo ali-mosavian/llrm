@@ -102,3 +102,16 @@ def test_the_table_is_not_written_from_a_stale_oz_column(tmp_path):
     except SystemExit as stop:
         raised = stop.code == 1
     assert raised and not (tmp_path / "out.tsv").exists()
+
+
+def test_an_allowed_stale_oz_table_says_so_in_its_header(tmp_path):
+    for lv, b in (("s", 907), ("z", 953)):
+        d = tmp_path / "ours"
+        d.mkdir(exist_ok=True)
+        (d / f"full.{lv}.tsv").write_text(f"a\tours\t{b}\t1\n")
+    (tmp_path / "sdcc").mkdir()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.c").write_text("int x;")
+    out = tmp_path / "out.tsv"
+    t.main([str(out), "--ours", str(tmp_path / "ours"), "--sdcc", str(tmp_path / "sdcc"), "--programs", str(tmp_path / "src"), "--allow-stale-oz"])
+    assert "# STALE-OZ ALLOWED: a" in out.read_text().splitlines()
