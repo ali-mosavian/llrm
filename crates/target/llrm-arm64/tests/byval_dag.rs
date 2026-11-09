@@ -32,6 +32,7 @@ fn a_byval_argument_is_copied_to_the_stack_before_the_call() {
     let call = asm.find("bl g").unwrap_or_else(|| panic!("{asm}"));
     assert!(asm[..call].contains("[sp"), "the bytes are stored to the stack before the call:\n{asm}");
     assert!(asm[..call].contains("#5"), "{asm}");
+    assert!(!asm.lines().any(|line| line.trim().starts_with("mov x") && line.trim().ends_with(", sp")), "{asm}");
 }
 
 /// `isEligibleForTailCallOptimization`: a caller's `byval` parameter is a pointer into the area a tail call would
