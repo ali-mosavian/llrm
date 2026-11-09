@@ -71,16 +71,18 @@ pub fn prepare(
     ir: &str,
     request: &Request,
 ) -> Result<Prepared, String> {
+    let best_of = request.level == Level::Oz && request.oz_best_of;
     let request = &effective(ir, request)?;
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
     let sources = if request.debug { crate::driver::sources_of(ir) } else { Default::default() };
-    let (selections, alternatives) = selections_with_alternatives(ir, request)?;
-    Ok(Prepared {
-        selections: Selections::new(selections),
-        alternatives: Selections::new(alternatives),
-        sources,
-        level: request.level,
-    })
+    // -Oz has just compiled the module both ways (`effective`) and holds both: the one it keeps is not selected again
+    let (selections, alternatives) = if best_of {
+        cached_both(ir, request)?
+    } else {
+        let (selections, alternatives) = selections_with_alternatives(ir, request)?;
+        (Selections::new(selections), Selections::new(alternatives))
+    };
+    Ok(Prepared { selections, alternatives, sources, level: request.level })
 }
 
 type SelectionKey = (String, Vec<(String, String)>);
@@ -99,6 +101,10 @@ thread_local! {
     /// -Os, then reads the one it keeps), most recent first, with what each was run for.
     static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// The lines `module_bytes` allocated, kept for the module it chose: (selection, function, number) -> lines. The
+    /// choice allocates every function at both levels; the one kept is not allocated a third time for its text.
+    static KEPT_LINES: std::cell::RefCell<std::collections::HashMap<(usize, String, usize), Vec<Line>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
     /// The level `effective` chose for the module most recently asked about.
     static CHOSEN: std::cell::RefCell<Option<(String, SelectionKey, Level)>> = const { std::cell::RefCell::new(None) };
 }
@@ -134,6 +140,9 @@ pub fn effective(
                 (Ok(oz), Ok(os)) if os < oz => Level::Os,
                 _ => Level::Oz,
             };
+            // keep only the lines of the module that stays
+            let kept = cached_both(ir, &Request { level, ..request.clone() }).map(|(selected, _)| std::rc::Rc::as_ptr(&selected) as usize);
+            KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
             CHOSEN.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, level)));
             level
         }
@@ -149,10 +158,12 @@ fn module_bytes(
 ) -> Result<u32, String> {
     let (selected, alternatives) = cached_both(ir, request)?;
     let (mut bytes, mut reached) = (0, std::collections::HashSet::new());
-    for (name, ..) in selected.iter() {
-        let lines = lines_in(&selected, &alternatives, name, 0, request)?;
+    let at = std::rc::Rc::as_ptr(&selected) as usize;
+    for (number, (name, ..)) in selected.iter().enumerate() {
+        let lines = lines_in(&selected, &alternatives, name, number, request)?;
         bytes += expand::price_emitted(&lines, false).0;
         reached.extend(crate::runtime_size::referenced(&lines));
+        KEPT_LINES.with(|kept| kept.borrow_mut().insert((at, name.clone(), number), lines));
     }
     Ok(bytes + crate::runtime_size::reached(&reached) + crate::data::image_bytes(&crate::data::text_at(ir, request)?))
 }
@@ -2471,7 +2482,13 @@ fn text_of(
         .find(|(one, ..)| one == name)
         .is_some_and(|(_, source, _)| source.as_ref().is_ok_and(|s| s.local));
     out.push_str(&format!("{}{}\n", crate::data::symbol(name), if local { ":" } else { "::" }));
-    for line in lines_in(selected, alternatives, name, number, request)? {
+    let at = std::rc::Rc::as_ptr(selected) as usize;
+    let kept = KEPT_LINES.with(|kept| kept.borrow_mut().remove(&(at, name.to_owned(), number)));
+    let lines = match kept {
+        Some(lines) => lines,
+        None => lines_in(selected, alternatives, name, number, request)?,
+    };
+    for line in lines {
         match line {
             Line::Label(label) => out.push_str(&format!("{label}:\n")),
             Line::Inst(text) => out.push_str(&format!("\t{text}\n")),
