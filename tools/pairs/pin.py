@@ -98,6 +98,7 @@ def retarget(text: str, of: Target) -> str:
         text = f'target datalayout = "{of.datalayout}"\n{text}'
     if not re.search(r"^target triple", text, re.M):
         text = re.sub(r"^(target datalayout = .*)$", rf'\1\ntarget triple = "{of.triple}"', text, count=1, flags=re.M)
+    text = re.sub(r"^(define [^\n]*?)(?: llrm-[a-z][a-z-]*)+( \{)$", r"\1\2", text, flags=re.M)  # our words; the pin's parser stops at them
     text = re.sub(r"^(define [^\n]*?) \{$", r"\1 #9999 {", text, flags=re.M)
     # An intrinsic lives in address space 0 in LLVM; ours declares and calls it in the code space (m16 `addrspace(1)` after the
     # parameters of a declare and after `call cc N`). A pointer parameter in that space stays.

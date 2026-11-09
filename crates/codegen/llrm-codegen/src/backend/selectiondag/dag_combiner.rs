@@ -982,6 +982,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::UAddOCarry => self.visit_uaddo_carry(node),
             ISD::USubO => self.visit_usubo(node),
             ISD::USubOCarry => self.visit_usubo_carry(node),
+            ISD::SetCCCarry => self.visit_setcc_carry(node),
             ISD::FAdd => self.visit_fadd(node),
             ISD::FSub => self.visit_fsub(node),
             ISD::FMul => self.visit_fmul(node),
@@ -3285,7 +3286,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> bool {
         let (ka, kb) = (super::known_bits::known_bits(self.dag, a), super::known_bits::known_bits(self.dag, b));
         let all = super::fold::mask(ka.width);
-        (!ka.zero & all) + (!kb.zero & all) <= all
+        // At 128 bits the sum of the two maxima wraps in a `u128`, which read as "fits".
+        (!ka.zero & all).checked_add(!kb.zero & all).is_some_and(|sum| sum <= all)
     }
 
     /// `visitUADDO_CARRY`
@@ -3409,6 +3411,24 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node_multi(ISD::USubOCarry, &values, &[a, b, carry]));
         }
         None
+    }
+
+    /// `visitSETCCCARRY`
+    /// ([L15188](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15188)):
+    /// with no borrow in, the node is a plain `setcc` of its operands. The low
+    /// words' `usubo x, 0` folds to a zero borrow, so a compare of a long with
+    /// a constant whose low words are zero reaches here.
+    fn visit_setcc_carry(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (lhs, rhs, carry, cond) =
+            (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2), self.dag.operand(node, 3));
+        if !self.dag.is_null_constant(carry) {
+            return None;
+        }
+        let vt = self.dag.value_type(node);
+        Some(self.dag.get_node(ISD::SetCC, vt, &[lhs, rhs, cond]))
     }
 
     /// The algebraic folds of `visitSUB`

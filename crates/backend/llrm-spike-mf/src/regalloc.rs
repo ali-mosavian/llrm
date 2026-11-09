@@ -178,6 +178,14 @@ pub trait Target {
         true
     }
 
+    /// Whether a join that leaves both values the registers they had is
+    /// always taken, without pricing it ([`Target::should_coalesce`] prices
+    /// only what a join takes away, so it says yes). A target whose
+    /// `should_coalesce` can refuse such a join says no.
+    fn joins_unnarrowed_for_free() -> bool {
+        true
+    }
+
     /// DEVIATE C15 (`CoalescerEnv::joins_loop_carried_first`): the pin's order.
     fn joins_loop_carried_first() -> bool {
         false

@@ -1,5 +1,6 @@
-//! At -Os, a run of stores of one literal becomes the literal loaded once into
-//! a dead register, then register stores.
+//! At -Os (and at -O1 on a target that allows it), a run of stores of one
+//! literal becomes the literal loaded once into a dead register, then register
+//! stores.
 //!
 //! # How it works
 //! `mov dword ptr [bp-8],0` is 8 bytes, `mov [bp-8],eax` is 4 and the one `xor
@@ -121,15 +122,18 @@ pub fn shared(
     classes: &RegisterClasses,
 ) -> LirBody {
     let regs = body.regs();
-    // -O1 keeps clocks strict: the shared load is a clock a call (queens +512,
-    // lru +3 clocks at -O1).
-    if !cpu.size && !(cpu.share_literal_stores && cpu.speed_rate) {
+    // Where the target allows it (`share_literal_stores`) a run is also shared
+    // at -O1, where bytes decide (`Profile::bytes_strict`).
+    if !cpu.size && !(cpu.share_literal_stores && (cpu.speed_rate || cpu.bytes_strict())) {
         return body.clone();
     }
     // DEVIATE ISS1 (owner x86-m32, exit 2026-11-30): at -O2/-O3 the load costs
     // a clock a run, so a run is shared only outside any cycle (it runs
     // once a call) and where its bytes at the speed rate outweigh that
-    // clock.
+    // clock. DEVIATE ISS2 (owner x87, exit 2026-12-10): at -O1 the same rule
+    // with no rate, so a run outside any cycle is shared where it saves a byte
+    // (nbody -O1 kept 24 immediate stores of its f64 constants, +82 B against
+    // gcc's 427 B with 3.8% fewer clocks; the pin keeps them too).
     let speed = !cpu.size;
     let cyclic = if speed { blocks_in_cycles(body) } else { Default::default() };
     let rate = if speed && cpu.speed_rate { cpu.speed_milliclocks_per_byte() } else { 0 };
