@@ -200,6 +200,8 @@ pub struct M68kLowering {
     /// A global's address is an absolute one, not PC-relative (the medium
     /// model on the 68000 and 68010, the large model).
     pub absolute_data: bool,
+    /// `Subtarget.atLeastM68020()`, which `decomposeMulByConstant` reads.
+    pub at_least_m68020: bool,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
@@ -215,6 +217,17 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         _shifted: EVT,
     ) -> EVT {
         EVT::I32
+    }
+
+    /// `M68kTargetLowering::decomposeMulByConstant`: the 68000's multiply is
+    /// 16 bit, so a product of up to 32 bits is shifts and adds
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kISelLowering.cpp#L1547>).
+    fn decompose_mul_by_constant(
+        &self,
+        vt: EVT,
+        _c: u128,
+    ) -> bool {
+        vt.size_in_bits() <= 32 || self.at_least_m68020
     }
 
     fn sub_of_sign_extended_bool(&self) -> bool {
