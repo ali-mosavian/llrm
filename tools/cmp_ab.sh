@@ -9,7 +9,7 @@
 #   the same with the control skewed 5% (must be flagged NOISY); A at level against A at -O1 (instructions must differ
 #   by >= 1%). CMP_AB_BREAK=1 makes B the binary of A, as a broken instrument would: the last check must then fail.
 # Env: REPO (tree with bench/ and runtime/), TOOLS (dir with instrcount_driver.c), CORE (cpu to pin, default 6).
-: "${REPO:?set REPO}" "${TOOLS:?set TOOLS}"; CORE=${CORE:-6}
+: "${REPO:?set REPO}" "${TOOLS:?set TOOLS}"; CORE=${CORE:-6}; here=$(cd "$(dirname "$0")" && pwd)
 R=$REPO/runtime/shared/posix
 if [ "$1" = --selftest ]; then
   shift; dist=$1; prog=$2; self=$(readlink -f "$0")
@@ -38,7 +38,7 @@ for pl in "$@"; do p=${pl%%:*}; L=${pl##*:}; LA=${L%%/*}; LB=${L##*/}; ctlmax=0;
  for k in a b; do d=$A; lv=$LA; [ $k = b ] && { d=$B; lv=$LB; }
   (cd $REPO/bench/$p; LLRM_CC_TARGET=x86_64-linux $d/llrm-cc -m64 -$lv -c -Dmain=bench_main_ -I $REPO/bench -I $R -o $t/o.$k.o $p.c) >/dev/null 2>&1 || { echo "$p $L compile-fail $k" >> $OUT; continue 2; }
  done
- bytesA=$(size $t/o.a.o | awk 'NR==2{print $1}'); bytesB=$(size $t/o.b.o | awk 'NR==2{print $1}')
+ bytesA=$(python3 $here/ab/object_bytes.py x86_64-linux $t/o.a.o | awk '{print $1 + $2}'); bytesB=$(python3 $here/ab/object_bytes.py x86_64-linux $t/o.b.o | awk '{print $1 + $2}')
  for pd in 0 16 32 48; do
   for k in a b; do gcc -static -no-pie -o $t/x.$k $t/pad$pd.o $t/o.$k.o $TOOLS/instrcount_driver.c $R/os.c -lm >/dev/null 2>&1; done
   cp $t/x.a $t/x.ctl; [ -n "$CMP_AB_BREAK" ] && cp $t/x.a $t/x.b
