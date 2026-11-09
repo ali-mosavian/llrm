@@ -217,3 +217,17 @@ def test_a_program_aligning_a_local_past_a_byte_stack_is_not_run_on_z80():
     source = (RUN / "over_aligned_local_after_even_pushes.c").read_text()
     assert not ct.applies("z80-sdcc", source)
     assert ct.applies("x86_64-linux", source) and ct.applies("m68k-68020", source) and ct.applies("wasm32", source)
+
+
+def test_programs_that_assume_a_32_bit_int_or_an_80_bit_long_double_are_not_run_on_6502_or_z80():
+    """6502 reported WRONG for bitcount_u32 (15 want 31), bitcount_idioms and long_double_decimal_literal (0x999A want 0xCCCD, the
+    double's low word) at both levels: a 16-bit `unsigned` and a 64-bit long double answered correctly for their types, and the
+    sweep counted three unmeasured cells as miscompiles. Only 6502 and z80 leave long_double_decimal_literal: m68k measures it
+    against its own `.m68k.out` and arm64 and wasm32 keep it as before."""
+    for name in ("bitcount_u32", "bitcount_idioms", "long_double_decimal_literal"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not any(ct.applies(t, source) for t in ("6502-sim65", "z80-sdcc")), name
+        assert ct.applies("x86_64-linux", source), name
+    literal = (RUN / "long_double_decimal_literal.c").read_text()
+    assert all(ct.applies(t, literal) for t in ("m68k-68020", "arm64-linux", "wasm32", "x86_16-dos", "x86_32-linux"))
+    assert ct.applies("arm64-linux", (RUN / "bitcount_u32.c").read_text())
