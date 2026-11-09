@@ -208,3 +208,29 @@ def test_the_second_arm_is_called_new_in_every_printed_line_and_the_arms_are_sta
     text = "\n".join(module.out)
     assert "failed in new" in text and "failed in main" not in text
     assert text.startswith("arms: base=sbp-base llrm-cc md5 aaaa exit 0; new=sbp-new llrm-cc md5 bbbb exit 0")
+
+
+def test_the_dfaces_size_line_counts_the_constants_gcc_keeps_in_rodata(tmp_path, monkeypatch):
+    """The line printed `code` alone: gcc's 50 B of .rodata constants were free, so gcc read 100 B against llrm's 120 B instead of 150 B."""
+    import json
+
+    work = load(tmp_path, monkeypatch)
+    levels = ("O1", "O2", "O3", "Os")
+    for name in ("base", "main"):
+        lines = ""
+        for level in levels:
+            llrm = "llrm" if level == "O2" else "llrm" + level
+            lines += row("p", llrm, 100) + row("p", "gcc" + level, 100) + row("p", "clang" + level, 110)
+        (work / name / "results.jsonl").write_text(lines)
+
+        def dface(variant):
+            data = 50 if variant.startswith("gcc") else 0
+            return json.dumps({"prog": "dfaces", "variant": variant, "ins": 100, "mem": 1, "misaligned": 0, "clocks": 100, "code": 120 if variant.startswith("llrm") else 100, "data": data, "ok": True}) + "\n"
+
+        (work / f"df-{name}.json").write_text("".join(dface(v) for v in ("llrm", "llrmO1", "llrmO3", "llrmOs", "gccO1", "gccO2", "gccO3", "gccOs", "clangO1", "clangO2", "clangO3", "clangOs")))
+    (work / "qcport.json").write_text(json.dumps([[n, "m", level, 5] for n in ("base", "main") for level in ("-O1", "-O2", "-O3", "-Os")]))
+    spec = importlib.util.spec_from_file_location("analyse", HERE / "analyse.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    text = "\n".join(module.out)
+    assert "bytes 120 text+data (gcc 150, clang 100)" in text
