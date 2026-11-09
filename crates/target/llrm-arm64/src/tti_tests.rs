@@ -474,3 +474,18 @@ fn a_sign_extending_load_of_a_bit_is_not_legal() {
     assert!(arm64.is_load_ext_legal(LoadExt::Sign, 32, 8) && arm64.is_load_ext_legal(LoadExt::Sign, 64, 32));
     assert!(!arm64.is_load_ext_legal(LoadExt::Zero, 32, 24));
 }
+
+/// The IR-level ext promotion asks `isOperationLegalOrCustom` of the promoted operation; the hook said
+/// no to everything (the base class has no registers), so no promotion could pass its legality check.
+#[test]
+fn arithmetic_is_legal_on_the_registers_and_the_remainders_are_expanded() {
+    use llrm_mir::lowering::Isd::*;
+    let arm64 = AArch64Lowering;
+    for bits in [32, 64] {
+        for op in [Add, Sub, Mul, UDiv, SDiv, Shl, Srl, Sra, And, Or, Xor, Select, SetCc, Truncate, ZeroExtend, SignExtend] {
+            assert!(arm64.is_operation_legal_or_custom(op, bits), "{op:?} i{bits}");
+        }
+        assert!(!arm64.is_operation_legal_or_custom(URem, bits) && !arm64.is_operation_legal_or_custom(SRem, bits));
+    }
+    assert!(!arm64.is_operation_legal_or_custom(Add, 8) && !arm64.is_operation_legal_or_custom(Add, 16));
+}

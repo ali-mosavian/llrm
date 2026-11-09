@@ -51,7 +51,7 @@
 //! # See also
 //! `llrm_mir::tti`, the interface; `llrm_x86::tti`, the x86 model.
 
-use llrm_mir::lowering::{ExtUser, LoadExt, Lowering};
+use llrm_mir::lowering::{ExtUser, Isd, LoadExt, Lowering};
 use llrm_mir::tti::*;
 
 use crate::expand_imm::mov_imm;
@@ -1164,6 +1164,43 @@ impl Lowering for AArch64Lowering {
     // up.
     fn runs_type_promotion(&self) -> bool {
         true
+    }
+
+    // `isOperationLegalOrCustom`, read from the table the DAG legalizer uses
+    // (`TargetLowering::aarch64`, AArch64ISelLowering.cpp#L481): one table, so the IR-level
+    // answer cannot drift from the legalizer's.
+    fn is_operation_legal_or_custom(
+        &self,
+        op: Isd,
+        bits: u32,
+    ) -> bool {
+        use llrm_sdag::actions::{Aarch64Features, TargetLowering};
+        use llrm_sdag::isd::ISD;
+        use llrm_sdag::mvt::EVT;
+        let node = match op {
+            Isd::Add => ISD::Add,
+            Isd::Sub => ISD::Sub,
+            Isd::Mul => ISD::Mul,
+            Isd::UDiv => ISD::UDiv,
+            Isd::SDiv => ISD::SDiv,
+            Isd::URem => ISD::URem,
+            Isd::SRem => ISD::SRem,
+            Isd::Shl => ISD::Shl,
+            Isd::Srl => ISD::Srl,
+            Isd::Sra => ISD::Sra,
+            Isd::And => ISD::And,
+            Isd::Or => ISD::Or,
+            Isd::Xor => ISD::Xor,
+            Isd::Select => ISD::Select,
+            Isd::SetCc => ISD::SetCC,
+            Isd::Truncate => ISD::Truncate,
+            Isd::ZeroExtend => ISD::ZeroExtend,
+            Isd::SignExtend => ISD::SignExtend,
+        };
+        thread_local! {
+            static TABLE: TargetLowering = TargetLowering::aarch64(Aarch64Features::default());
+        }
+        TABLE.with(|table| table.is_operation_legal_or_custom(node, EVT::integer(bits)))
     }
 
     // AArch64ISelLowering.cpp#L1141, `setLoadExtAction(SEXTLOAD, VT, i1, Expand)` for every
