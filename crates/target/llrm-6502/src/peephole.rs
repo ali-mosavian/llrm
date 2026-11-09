@@ -1190,11 +1190,14 @@ pub fn drop_known_loads(asm: &mut Asm) {
 }
 
 /// The loads to keep and to turn into transfers, once the values at the labels
-/// hold; none if eight walks do not settle them.
+/// hold. A walk that does not settle them loses a value at some label (each
+/// label starts absent, then holds three registers, and values are only lost),
+/// so `4 * labels + 2` walks reach the fixed point; a cap of eight left a
+/// 3800-line function (jpeg_single, nine walks) with every redundant load.
 fn decide_known_loads(lines: &[Line]) -> Option<(Vec<bool>, Vec<(usize, Op)>, Vec<(usize, Inst)>)> {
     let (targets, quiet) = branch_targets(lines);
     let mut at_label: HashMap<&str, Known> = HashMap::default();
-    for _ in 0..8 {
+    for _ in 0..4 * targets.len() + 2 {
         let (keep, transfers, stores, carried) = walk(lines, &targets, &quiet, &at_label);
         if carried == at_label {
             return Some((keep, transfers, stores));
