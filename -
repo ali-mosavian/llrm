@@ -1,35 +1,88 @@
 	.area _CODE
-_first::
+_h::
 	push ix
 	ld ix, #0
 	add ix, sp
-	push af
+	ld iy, #-10
+	add iy, sp
+	ld sp, iy
 L0_0:
+	ld bc, #7
+	ld -2(ix), c
+	ld -1(ix), b
+	call _next
+	ld c, e
+	ld b, d
+	ld l, d
+	ld h, #0
+	ld -4(ix), l
+	ld -3(ix), h
+	ld e, d
+	ld d, #0
+	srl e
+	srl e
+	srl e
+	srl e
+	srl e
+	ld -6(ix), e
+	ld -5(ix), d
+	ld -8(ix), c
+	ld -7(ix), b
+L0_11:
+	ld -10(ix), c
+	ld -9(ix), b
+	call _next
+	ld a, e
+	and a, #7
+	ld c, a
+	ld b, #0
+	ld a, c
+	cp a, #1
+	jr z, L0_5
+L0_9:
+	ld a, c
+	cp a, #2
+	jr z, L0_4
+L0_10:
+	ld a, c
+	cp a, #3
+	jr z, L0_3
+L0_7:
+	pop bc
+	push bc
+	jr L0_12
+L0_5:
+	ld c, -8(ix)
+	ld b, -7(ix)
+	jr L0_12
+L0_4:
+	ld c, -4(ix)
+	ld b, -3(ix)
+	jr L0_12
+L0_3:
+	ld c, -6(ix)
+	ld b, -5(ix)
+L0_12:
+	ld -10(ix), c
+	ld -9(ix), b
+	call _next
+	push de
+	ld e, -2(ix)
+	ld d, -1(ix)
+	ld l, -10(ix)
+	ld h, -9(ix)
+	call __udivhi3
+	ex de, hl
+	pop bc
+	add hl, bc
+	ld a, l
+	sub a, #100
+	or a, h
 	ld c, l
 	ld b, h
-	ld hl, #6
-	add hl, sp
-	ex de, hl
-	ld -2(ix), e
-	ld -1(ix), d
-	ld hl, #2
-	add hl, de
-	ld -2(ix), l
-	ld -1(ix), h
-	ld e, 4(ix)
-	ld d, 5(ix)
-	ld l, c
-	ld h, b
-	add hl, de
-	ex de, hl
+	jr nz, L0_11
+L0_6:
+	ld de, #100
 	ld sp, ix
 	pop ix
-	ret
-_caller::
-L1_0:
-	push bc
-	push de
-	call _first
-	pop bc
-	pop bc
 	ret
