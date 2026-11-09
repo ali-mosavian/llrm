@@ -566,7 +566,8 @@ pub fn optimized(
         program.modules.iter_mut().try_for_each(|module| crate::backend::libmcalls::expanded(module, &options.libcalls))
     })?;
     if let Some((_, convention, symbol)) = options.libcalls.iter().find(|(name, ..)| name == "memcpy") {
-        let inline_variable = options.cpu()?.target().tti().is_some_and(|tti| tti.inlines_variable_memcpy());
+        let inline_variable = !options.cpu()?.bytes_strict()
+            && options.cpu()?.target().tti().is_some_and(|tti| tti.inlines_variable_memcpy());
         let rep_movsb = options.cpu()?.min_size
             || (options.cpu()?.size && options.cpu()?.target().tti().is_some_and(|tti| tti.rep_movs_at_size()));
         timed("mir memcpy calls", || {
