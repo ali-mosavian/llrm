@@ -759,6 +759,9 @@ struct Emitter<'a> {
     /// Some block writes the stack pointer (a dynamic `alloca`, `llvm.stackrestore`): the outgoing area is no longer
     /// reserved in the frame (`hasReservedCallFrame`), each call makes room for it.
     moves_sp: bool,
+    /// The register each phi's edges copy into, by the phi's register
+    /// (`PHIElimination`'s `IncomingReg`): the block's first copies read it.
+    incoming: HashMap<u32, Reg>,
 }
 
 /// A block split in two where a pseudo-instruction is expanded to control flow
@@ -1962,6 +1965,7 @@ pub fn emit(
         cuts: Vec::new(),
         splits: 0,
         sp_copies: rustc_hash::FxHashSet::default(),
+        incoming: HashMap::default(),
         moves_sp: blocks.iter().any(|block| {
             block.units.iter().flat_map(|unit| &unit.nodes).any(|&node| {
                 let node = block.dag.node(SDValue { node, res: 0 });
