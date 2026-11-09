@@ -223,6 +223,7 @@ fn allocated_with(
     duplicate: bool,
 ) -> Result<Allocated, String> {
     SLOT_BY_CONFLICTS.with(|one| one.set(request.slot_by_conflicts));
+    expand::BYTES_FIRST.with(|one| one.set(!matches!(request.level, Level::O2 | Level::O3 | Level::Omax)));
     expand::set_frequencies(&frequencies_of(selected, name));
     let mut function = machine_function_with(selected, name, duplicate)?;
     eliminate_phis_with(&mut function, false);

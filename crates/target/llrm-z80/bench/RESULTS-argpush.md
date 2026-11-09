@@ -66,3 +66,13 @@ Wider sweep (`run.py`, `applies`-kept corpus, 116 programs): O2 and Os, base and
 | recmany_o1 | Oz | 750 / 32329350 | 750 / 32329350 | none | - |
 
 WORSE than base on an axis: none
+
+## Z80-ARGPUSH-SPILL (spilled stack words stored in place)
+
+Same harness, base = release/next `62ed3db6e0`, new = + `spilled_args.rs`. Only one cell moves (static counts, -m32-forced): the other 12 are identical at Os/O2/O1/Oz.
+
+| cell | level | before B / T | after B / T | best SDCC B / T |
+|---|---|---|---|---|
+| os_locals_between_pushes (static) | Os | 938 / 131113 | 891 / 130373 | 1201 / 80170 |
+| os_locals_between_pushes (static) | O2, O1 | 1262 / 45609 | 1215 / 44869 | 1201 / 80170 |
+| os_locals_between_pushes (static) | Oz | 946 / 131221 | 899 / 130481 | 1201 / 80170 |

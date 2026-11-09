@@ -126,6 +126,12 @@ thread_local! {
     pub static PRICING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+thread_local! {
+    /// Set for the size levels, where bytes decide and clocks may not grow
+    /// (-O0, -O1, -Os, -Oz); at -O2 and -O3 one byte is three clocks.
+    pub static BYTES_FIRST: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
 fn is_pair(register: RegId) -> bool {
     register == reg::BC || register == reg::DE || register == reg::HL
 }
@@ -2861,6 +2867,13 @@ fn push_arguments(
                 at += 1;
                 continue;
             };
+            let stores: Vec<usize> = places.iter().map(|&(store, _)| store).collect();
+            let bytes_first = BYTES_FIRST.with(std::cell::Cell::get);
+            if let Some(stored) = crate::spilled_args::store_spilled(&block.insts, at, &stores, assignment, bytes_first) {
+                block.insts = stored;
+                at += 1;
+                continue;
+            }
             let mut pushes: Vec<Vec<Inst>> = vec![Vec::new(); block.insts.len()];
             let mut stores = vec![false; block.insts.len()];
             for (store, after) in places {
