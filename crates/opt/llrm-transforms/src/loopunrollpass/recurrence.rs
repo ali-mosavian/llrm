@@ -16,7 +16,7 @@
 //! between the walks is the latency a trip adds. Only a single-block loop is
 //! priced: its operations all run each trip, so the sums are the trip's.
 //!
-//! A load of the address a store of the trip wrote waits for that store, as a
+//! A load of the address a store wrote, an address the same every trip, waits for it, as a
 //! phi waits for its latch value: a variable kept in memory (`volatile double
 //! value`, floats -O2) is a chain like any other. Known limits, not claims: a
 //! chain through different addresses (`a[i] = a[i - 1] * c`) shows no growth and
@@ -79,6 +79,15 @@ fn chain_growth(
     let mut stored: Vec<(Operand, i64)> = Vec::new();
     let mut longest = [0i64; 2];
     for longest in &mut longest {
+        // A store reaches the next trip's load only at an address that is the
+        // same every trip: one a trip computes (`counts[i]++`) is another cell.
+        stored.retain(|(address, _)| match address {
+            Operand::Value(value) => match function.value(*value).def {
+                ValueDef::Instruction(def) => function.parent(def) != Some(block),
+                _ => true,
+            },
+            _ => true,
+        });
         for inst in function.iter_block(block) {
             let operands = function
                 .instruction(inst)

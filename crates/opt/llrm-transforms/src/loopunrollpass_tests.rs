@@ -1343,3 +1343,34 @@ done:
     assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
     assert!(!runtime_unrolled_text(text, true));
 }
+
+/// histo -O2/-O3 (`++counts[(data[i] * 7 + seed) & 255]`): the store of one trip
+/// was read as feeding the next trip's load because both name the same SSA
+/// address, a chain of 7 that the loop does not have. Its partial unroll was
+/// vetoed, +7% instructions. The address changes every trip.
+#[test]
+fn test_a_counter_in_memory_at_a_new_address_each_trip_is_still_unrolled() {
+    let text = "define i64 @f(ptr %counts, ptr %data) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %d = getelementptr i8, ptr %data, i64 %i
+  %b = load i8, ptr %d
+  %k = zext i8 %b to i64
+  %p = getelementptr i64, ptr %counts, i64 %k
+  %c = load i64, ptr %p
+  %c1 = add i64 %c, 1
+  store i64 %c1, ptr %p
+  %next = add i64 %i, 1
+  %more = icmp ne i64 %next, 4096
+  br i1 %more, label %loop, label %done
+
+done:
+  ret i64 0
+}
+";
+    assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
+    assert!(runtime_unrolled_text(text, true), "vetoed for a chain through an address that moves");
+}
