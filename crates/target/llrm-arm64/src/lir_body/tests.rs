@@ -389,6 +389,17 @@ fn the_producer_names_registers_at_their_own_width() {
     assert!(widths.is_empty(), "{} of {}: {:?}", widths.len(), complaints.len(), widths.first());
 }
 
+/// No shared phase panics on arm64's body. `CopyPropagation` (and `Peephole`
+/// through it) asserted x86's 72 byte-lane units, so it panicked on all 43
+/// functions of the corpus: "the general registers' byte lanes left: 15 right: 72".
+#[test]
+fn no_shared_phase_panics_on_the_producers_body() {
+    let lowered = to_lir(&function(vec![Op::I(Inst::Nop)])).expect("a nop maps");
+    let (_, stages) = stages::run(lowered.body).expect("the phases build");
+    let panicked: Vec<_> = stages.iter().filter(|one| matches!(one.outcome, stages::Outcome::Panicked(_))).collect();
+    assert!(panicked.is_empty(), "{panicked:?}");
+}
+
 /// The operations that are not instructions.
 #[test]
 fn every_pseudo_operation_round_trips() {
