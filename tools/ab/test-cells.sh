@@ -19,11 +19,18 @@ cat > "$d/fake-cc" <<'FAKE'
 #!/bin/sh
 echo "$@" >> "$ARGS"
 for a in "$@"; do [ "$prev" = -o ] && out=$a; prev=$a; done
-printf '\tnop\n' > "$out"
+if [ -n "$FAKE_TEXT" ]; then printf '\tnop\n' > "$out"; else
+  case " $* " in *" -c "*) printf 'int f(void){return 1;}' | cc -x c -c -o "$out" - ;; *) printf '\tnop\n' > "$out" ;; esac
+fi
 FAKE
 for v in base new; do { cat "$d/fake-cc"; echo "# $v"; } > "$d/$v/llrm-cc"; chmod +x "$d/$v/llrm-cc"; done
 export ARGS="$d/args"
+# Regression (2026-11-10): size(1) failing on a z80/6502/OMF object made cells.sh print `stat -c %s` of the file as the code bytes
+# (+1052 where the assembled _CODE was +175). A text "object" no reader parses is an EMPTY cell naming why, never a number.
 echo "x t -O2 $d/p.c" > "$d/list"
+out=$(FAKE_TEXT=1 "$here/cells.sh" "$d" "$d/list" 2>&1)
+case $out in "EMPTY t -O2 $d/p.c"*) ;; *) echo "FAIL: unreadable object reported as: $out"; exit 1;; esac
+case $out in *" bytes "[0-9]*) echo "FAIL: a size was printed for an unreadable object: $out"; exit 1;; esac
 out=$("$here/cells.sh" "$d" "$d/list" 2>&1)
 case $out in *"flags: -fno-inline-functions") ;; *) echo "FAIL: stamp lacks the file's flags: $out"; exit 1;; esac
 grep -q -- "-fno-inline-functions" "$d/args" || { echo "FAIL: cell compiled without the file's flags"; exit 1; }
