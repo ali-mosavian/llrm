@@ -256,6 +256,14 @@ impl llrm_mir::target::Machine for Z80Machine {
     fn tti(&self) -> Option<Rc<dyn llrm_mir::tti::Tti>> {
         Some(Rc::new(crate::tti::Z80Tti::new()))
     }
+
+    fn kept_stack_align(&self) -> Option<u64> {
+        Some(crate::KEPT_STACK_ALIGN)
+    }
+
+    fn max_alloca_align(&self) -> Option<u64> {
+        Some(crate::MAX_ALLOCA_ALIGN)
+    }
 }
 
 thread_local! {
