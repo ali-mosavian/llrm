@@ -9,11 +9,15 @@ listed. `ours` is the shipped llrm-cc path; `ours-ir` (the backend on the bench 
 what ships) is never judged.
 A cell with only one of the two external columns is named, and refused unless --allow-one-sided: judged
 against the one that exists it can understate the gap to the one that is missing (z80's table did, by 1.7 kB).
-O1 cells where no single compiler attains both axes are VIRTUAL-OK when ours is Pareto-optimal and not behind the pin (verdict()).
+O1 cells follow the VIRTUAL-OK rule of tools/virtual_ok.py (verdict()).
 Usage: m68k_worse_cells.py m68k.tsv [-v] [--allow-one-sided]
 """
+import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from virtual_ok import virtual_ok  # noqa: E402
 
 RATES = re.compile(r"byte_rate: (.*?) B per clk")
 
@@ -44,23 +48,15 @@ def excess(level: str, rate: float, ours: tuple[int, int | None], other: tuple[i
 def verdict(level: str, rate: float, ours, refs: dict) -> str:
     """"ok", "VIRTUAL-OK" or "WORSE" for one cell (oversight, 2026-11-09, as fputable.verdict for the m32 FPU table).
 
-    `ours` and each of `refs` (gcc, clang) are (bytes, clocks). O1 has a per-axis bar. A cell where no single real compiler
-    attains both axes (gcc has the best clocks and clang the best bytes, or the reverse) is VIRTUAL: it passes when ours is
-    Pareto-optimal among {ours, gcc, clang} and no worse than the pin (clang) on both axes. Where one compiler has both, ours
-    behind it on either axis is WORSE. Other levels, and a cell without both columns or without clocks, are one metric.
+    `ours` and each of `refs` (gcc, clang) are (bytes, clocks). O1 has a per-axis bar and the rule of tools/virtual_ok.py
+    (pin: clang). Other levels, and a cell without both columns or without clocks, are one metric.
     """
     if max(excess(level, rate, ours, ref) for ref in refs.values()) <= 0:
         return "ok"
     gcc, clang = refs.get("gcc"), refs.get("clang")
     if level != "O1" or gcc is None or clang is None or None in (*ours, *gcc, *clang):
         return "WORSE"
-    best_clocks = min(refs.values(), key=lambda ref: ref[1])
-    best_bytes = min(refs.values(), key=lambda ref: ref[0])
-    if best_clocks is best_bytes or gcc == clang:
-        return "WORSE"
-    dominated = any(ref[0] <= ours[0] and ref[1] <= ours[1] and ref != ours for ref in (gcc, clang))
-    behind_pin = ours[0] > clang[0] or ours[1] > clang[1]
-    return "WORSE" if dominated or behind_pin else "VIRTUAL-OK"
+    return "VIRTUAL-OK" if virtual_ok(ours, [gcc, clang], clang) else "WORSE"
 
 
 def _seen(lines):
