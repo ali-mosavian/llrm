@@ -303,6 +303,9 @@ pub(crate) struct FrameInputs {
     used: Vec<RegId>,
     has_calls: bool,
     short: bool,
+    /// `MachineFrameInfo::hasVarSizedObjects`: the body writes the stack
+    /// pointer (a dynamic `alloca`).
+    has_var_sized: bool,
     /// The frame indices, in the order of `objects`.
     pub(crate) frame_indices: Vec<i32>,
 }
@@ -353,7 +356,18 @@ impl FrameInputs {
             .chain(function.locals.iter().map(|local| local.0))
             .chain(slots.iter().copied())
             .collect();
-        FrameInputs { fixed, objects, used, has_calls, short, frame_indices }
+        // the pin sets it where a dynamic alloca is built (`visitAlloca`); here
+        // the live body shows it
+        let has_var_sized = insts
+            .iter()
+            .any(
+                |inst| inst.kind == Kind::Copy
+                    && matches!(
+                        inst.operands.first(),
+                        Some(Operand::Def(r)) if physical(*r, assignment) == reg::SP
+                    ),
+            );
+        FrameInputs { fixed, objects, used, has_calls, short, has_var_sized, frame_indices }
     }
 
     /// The laid-out frame for a call area of `max_call_frame` bytes.
@@ -368,6 +382,7 @@ impl FrameInputs {
             max_call_frame,
             stack_align: if self.short { frame::SHIPPED_STACK_ALIGN } else { 0 },
             adjusts_stack: self.has_calls,
+            has_var_sized: self.has_var_sized,
             ..Function::default()
         })
     }
