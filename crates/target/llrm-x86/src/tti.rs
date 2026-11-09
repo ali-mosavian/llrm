@@ -1472,6 +1472,10 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    fn congruent_ivs_truncate_to_narrowest_integer(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     fn mirrors_conditional_counters(&self) -> bool {
         self.real_mode.is_some()
     }

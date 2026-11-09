@@ -1411,12 +1411,13 @@ define i8 @rem() {
 /// the first was `65535 - lo` (`ldx #255` and a swapped `cmp`), of the second
 /// `lo - 0`: the pin folds `X > MAX` and `X < MIN` to false, and a half known
 /// false is dropped. The code of a softfloat `sf_clz32` caller changed with the
-/// polarity InstCombine happened to pick (`__divsf3` +14 lines).
+/// polarity InstCombine happened to pick (`__divsf3` +14 lines). The arms call different functions: with one callee the
+/// pin merges them into `g(2 - c)`, and the `sbc` that merge leaves read as a compare chain (red on release/next 5a1802c07e).
 #[test]
 fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities() {
     let branch = |compare: &str, then: &str, other: &str| {
         module(&format!(
-            "declare i8 @g(i8)\ndefine i8 @f(i32 %x) {{\n  %c = icmp {compare}\n  br i1 %c, label %{then}, label %{other}\nt:\n  %a = call i8 @g(i8 1)\n  ret i8 %a\ne:\n  %b = call i8 @g(i8 2)\n  ret i8 %b\n}}"
+            "declare i8 @g(i8)\ndeclare i8 @h(i8)\ndefine i8 @f(i32 %x) {{\n  %c = icmp {compare}\n  br i1 %c, label %{then}, label %{other}\nt:\n  %a = call i8 @g(i8 1)\n  ret i8 %a\ne:\n  %b = call i8 @h(i8 2)\n  ret i8 %b\n}}"
         ))
     };
     let instructions = |text: &str| without_equates(text).lines().filter(|l| l.starts_with("  ")).count();
@@ -1899,6 +1900,27 @@ fn a_zero_filled_variable_is_bss_not_image_bytes() {
     assert_eq!(exit_code_of(&text, "g"), 1, "{text}");
     assert!(text.contains("buf: .res 4096"), "{text}");
     assert!(!text.contains(".byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n  .byte 0,0,0,0"), "{text}");
+}
+
+/// `a / b` and `a % b` of signed words at -Os linked the short-divisor path too (`__divhi3`: 149 B against SDCC's 131
+/// for a bare divide, `k_tosdivax`): the signed pair had no compact variant while the unsigned pair did. Each in its own
+/// function: a divide and a remainder of the same operands are one `__divhi3` and a multiply, so `__modhi3c` is only
+/// asked for by a remainder alone (the first form of this test asserted both calls in one function and saw no `__modhi3c`).
+#[test]
+fn a_signed_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_speed() {
+    let ir = module(
+        "@a = global i16 -1000\n@b = global i16 7\n\
+         define i8 @g() {\n\
+         \x20 %a = load volatile i16, ptr @a\n  %b = load volatile i16, ptr @b\n\
+         \x20 %q = sdiv i16 %a, %b\n  %t = lshr i16 %q, 8\n  %u = xor i16 %q, %t\n  %v = trunc i16 %u to i8\n  ret i8 %v\n}\n\
+         define i8 @h() {\n\
+         \x20 %a = load volatile i16, ptr @a\n  %b = load volatile i16, ptr @b\n\
+         \x20 %r = srem i16 %a, %b\n  %t = lshr i16 %r, 8\n  %u = xor i16 %r, %t\n  %v = trunc i16 %u to i8\n  ret i8 %v\n}",
+    );
+    let size = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(size.contains("jsr __divhi3c") && size.contains("jsr __modhi3c"), "{size}");
+    let speed = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(speed.contains("jsr __divhi3\n") && speed.contains("jsr __modhi3\n"), "{speed}");
 }
 
 #[test]
@@ -2775,7 +2797,8 @@ fn a_carry_branch_on_the_old_counter_is_compared_before_the_step() {
     let ir = counter_loop("samesign ult i16 %i, 63");
     for level in [Level::Os, Level::O2] {
         let text = assembly(&ir, &Request::new(level)).unwrap();
-        let (compare, step) = (text.find("cmp #63"), text.find("inx"));
+        // `txa; cmp #63` is `cpx #63` where `a` is dead after it
+        let (compare, step) = (text.find("cmp #63").or(text.find("cpx #63")), text.find("inx"));
         assert!(compare.is_some() && step.is_some(), "no compare or no step:\n{text}");
         assert!(compare < step, "the compare comes after the step:\n{text}");
         assert!(!text.contains("stx rc") && !text.contains("sty rc"), "a copy of the counter:\n{text}");
