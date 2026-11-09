@@ -197,7 +197,7 @@ fn signed_word_division() {
 #[test]
 fn compact_signed_word_division_matches_the_fast_routines() {
     for (a, b, quotient, remainder) in [
-        (64536u16, 7u16, 65394u16, 65530u16),
+        (64536u16, 7u16, 65394i32, 65530i32),
         (7, 65534, 65533, 1),
         (64536, 65236, 3, 65436),
         (30000, 300, 100, 0),
