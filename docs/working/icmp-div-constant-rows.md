@@ -10,7 +10,7 @@ Exit 2026-11-20 for every row. Fix: a Tti-priced hook (default = the pin) or a b
 |---|---|---|
 | WIDE-CMP-Z80 | llrm-target-z80 | jpeg_fixed O2 7669 -> 7844 (+175, +83 instrs, one function); spill_store_order O2 +6 |
 | WIDE-CMP-6502 | llrm-target-6502 | jpeg_fixed O2 13532 -> 13632 (+100), Os +87 |
-| DIGITS-6502 | llrm-6502-b (proposed by 6502-c, unconfirmed) | tests/bench/kernels.c K_digits Os 104 -> 129 B (3403 cy at 129 B); the fold compares the dividend (`icmp ugt %5, 99`), so n and the quotient stay live across the udiv call: 3 callee-saved cells pushed and popped. llvm-mos has the same IR (314 B). Reported by 6502-c, not re-measured here |
+| DIGITS-6502 | llrm-6502-b (confirmed to 6502-c; re-measures on its #8724 head first) | tests/bench/kernels.c K_digits Os 104 -> 129 B (104 is the matrix table value, not rebuilt; 129 B linked / 3403 cy measured at b6034d7663, 74 B body); the fold compares the dividend (`icmp ugt %5, 99`), so n and the quotient stay live across the udiv call: 3 callee-saved cells pushed and popped. llvm-mos has the same IR (314 B). Reported by 6502-c, not re-measured here |
 | WIDE-CMP-M68K | llrm-target-m68k | 68000 jpeg O2 +48, Os +34, idioms O2 +72, Os +64; 68020 jpeg O2 +54, Os +36, idioms O2 +32, Os +62; pattern_fill +2 |
 | MID-END-FOLD-COST-M32 | llrm-target-x86-m32 | jpeg_fixed Os +42; memfuncs_runtime O2 +16, Os +7; spill_store_order O2 +16 |
 | MID-END-FOLD-COST-M64 | llrm-target-x86-m64 | memfuncs_runtime O2 +127, Os +20; idioms O2 +32, Os +3; jpeg_fixed Os +23 |
