@@ -18,8 +18,11 @@ use crate::dagisel::hooks::Cpu;
 use crate::dagisel::lowering::target_lowering;
 use crate::features::Features;
 
-/// The steps of CodeGenPrepare that run on wasm so far.
-const STEPS: &[CgpStep] = &[CgpStep::SwitchType];
+/// The steps of CodeGenPrepare that run on wasm so far. DEVIATE: the others
+/// (`Branches`, `OverflowMath`, `Compares`, `MaskSinking`, `CastSinking`,
+/// `SplitStores`) are enabled one at a time, each after its wasm A/B.
+/// Owner: llrm-wasm-b. Exit: 2026-11-20.
+const STEPS: &[CgpStep] = &[CgpStep::SwitchType, CgpStep::ExtPromotion];
 
 /// The action table of wasm32, built once.
 fn table() -> &'static TargetLowering {
