@@ -1,5 +1,5 @@
 source_filename = "carry32.c"
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"
+target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
 
 ; The high word of a + b: the carry out of the low words, a compare used as a value.
 define i16 @carry32(i32 %a, i8 %b) {

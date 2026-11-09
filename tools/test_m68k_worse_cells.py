@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from m68k_worse_cells import count, missing, one_sided, single_input, skipped  # noqa: E402
+from m68k_worse_cells import count, missing, missing_levels, one_sided, single_input, skipped  # noqa: E402
 
 HEADER = "# m68k matrix; (CpuTable::byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved)\n"
 COLS = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
@@ -69,6 +69,24 @@ class WorseCells(unittest.TestCase):
         """A matrix with an absent column passed as 'fewer worse cells'; it must fail instead."""
         rows = [("m68k-68000", "muldiv", "Os", n, b, "", "", "") for n, b in (("ours", ""), ("gcc", 66))]
         self.assertEqual(missing(tsv(*rows)), [("m68k-68000", "muldiv", "Os")])
+
+    def test_o1_is_strict_on_clocks(self):
+        """O1 prices no byte rate: same bytes and more clocks than gcc is worse (O2 would trade them at the rate)."""
+        rows = cell("m68k-68000", "fib", "O1", (20, 110), (20, 100), (24, 120))
+        self.assertEqual(count(tsv(*rows)), (1, 1))
+
+    def test_o1_one_byte_over_is_worse_even_when_faster(self):
+        rows = cell("m68k-68000", "fib", "O1", (21, 90), (20, 100), (24, 120))
+        self.assertEqual(count(tsv(*rows)), (1, 1))
+
+    def test_o1_no_worse_on_either_axis_is_clean(self):
+        rows = cell("m68k-68000", "fib", "O1", (20, 100), (20, 100), (24, 120))
+        self.assertEqual(count(tsv(*rows)), (0, 1))
+
+    def test_a_program_with_no_o1_cell_is_reported(self):
+        """The matrix measured O2 and Os only: O1 (strict) had no judged cell, so 'N worse' said nothing about it."""
+        rows = [r for level in ("O2", "O3", "Os") for r in cell("m68k-68000", "fib", level, (20, 100), (20, 100), (24, 120))]
+        self.assertEqual(missing_levels(tsv(*rows)), [("m68k-68000", "fib", "O1")])
 
     def test_max_run_on_one_input_is_reported(self):
         """max(7, 42) alone: gcc skipped the move, ours ran it; the other order reverses it (+6.4 B-eq at 060)."""
