@@ -15,7 +15,6 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 import elfsize  # noqa: E402
-import sizes  # noqa: E402
 
 Z80_CODE_AREAS = {"_CODE", "_HOME", "_GSINIT", "_GSFINAL", "_INITIALIZER"}
 Z80_DATA_AREAS = {"_DATA", "_CONST", "_INITIALIZED"}
@@ -87,6 +86,8 @@ def object_bytes(target: str, obj: Path) -> tuple[int, int]:
         return mos6502_bytes(obj, "65C02")
     if target.startswith("wasm"):
         return wasm_bytes(obj)
+    import sizes  # here, not at the top: it imports dosbatch, which refuses a tree without fresh release binaries (z80, 6502, wasm need none)
+
     if sizes.is_elf(obj):
         return elf_bytes(obj)
     if target.startswith("x86_16"):
