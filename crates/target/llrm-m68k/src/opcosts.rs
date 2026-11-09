@@ -144,12 +144,12 @@ pub const AT_DEFAULT: &[(&str, &str)] = &[
 ];
 
 /// What the lowering adds that no IR operation names (spills, branch relaxation, copies the allocator leaves), as a
-/// scale and a per-function constant: `(operations + function) * scale`, fit to the objects' function sizes over
-/// `tests/run/c` (`tools/m68k_size_fit.py --corpus --dump`, 1950 functions per CPU, -O2 and -Os, 2026-11-09). One median
-/// scale of 1.50 priced small functions right and large ones 30% over (aggregate 1.30 of the objects): the residue is
-/// a constant plus a share of the size, not a share alone. Fit on the train split (crc32 of `file:function`), the same
-/// pair at both CPUs: hold-out median |error| 0.12 at the 68000 and 0.13 at the 68020 against 0.17 and 0.16 at 1.50;
-/// aggregate 0.97 to 1.11 of the objects.
+/// scale and a per-function constant: `(operations + function) * scale`. Fit (`tools/m68k_size_fit.py --corpus --dump`,
+/// 2026-11-09, -O2 and -Os) on the functions of `tests/run/c` WITHOUT the 22 fixtures of `tests/data_size`, graded on
+/// the 124 functions of those fixtures (disjoint): one median scale of 1.50 priced large functions 30% over. The fit
+/// surface is flat (1.20 + 3 B is within 0.005 of the best pair, median |error| 0.123 on 1826 functions); on the
+/// fixtures the median |error| is 0.25 (68000) and 0.24 (68020) against 0.41 and 0.32 at 1.50, aggregate 1.03 against
+/// 1.24.
 const FUNCTION_SCALE_PERCENT: i64 = 120;
 
 /// Bytes added to every function's estimate beyond the saved register (see `FUNCTION_SCALE_PERCENT`): the frame and
