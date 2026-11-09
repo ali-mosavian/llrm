@@ -2282,15 +2282,15 @@ fn an_intrinsic_nobody_lowered_is_refused_by_name() {
 }
 
 /// A call with 18 B of stack arguments was refused ("18 bytes of stack
-/// arguments"; five programs). The area is opened by one sum through IY and
-/// not released before the return that restores SP from IX.
+/// arguments"; five programs). It compiles, and each of the nine words is
+/// pushed: no reserve, no store through `ix` or `iy`, whose sum came first.
 #[test]
-fn a_large_stack_argument_area_is_one_sum_not_a_refusal() {
+fn a_large_stack_argument_area_is_pushed_not_a_refusal() {
     let ir = include_str!("kernels/ir/stack_args_nine_words.ll");
     for level in [Level::O0, Level::O2, Level::Os] {
         let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
-        assert!(out.contains("ld iy, #-18") && out.contains("add iy, sp"), "{level:?}: {out}");
-        assert!(!out.contains("push bc"), "{level:?}: {out}");
+        assert_eq!(out.matches("push bc").count(), 9, "{level:?}: {out}");
+        assert!(!out.contains("(ix)") && !out.contains("(iy)") && !out.contains("ld iy, #-18"), "{level:?}: {out}");
     }
 }
 
