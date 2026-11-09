@@ -668,6 +668,8 @@ mod tuning_tests {
                 multiply_by_clocks: false,
                 divide_by_bytes: false,
                 price_pin_multiplies: false,
+                // The pin's value: m16 sets it (DEVIATE LFTR1, `target.rs`).
+                lftr_any_stride: false,
                 imul_at_size: false,
                 speed_milliclocks_per_byte: 0,
                 price_fills: false,

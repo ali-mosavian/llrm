@@ -1346,12 +1346,59 @@ pub fn refuse_vectors(program: &Program) -> Result<(), String> {
     Ok(())
 }
 
+/// An `alloca` asking more than the target's frames keep and no more than it
+/// accepts (`Machine::kept_stack_align`, `max_alloca_align`) is clamped to what
+/// they keep; one asking more than it accepts is refused by name. Alignment is
+/// the explicit one, else the type's, as known-bits reads it.
+pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
+    let (kept, max) = (program.target.kept_stack_align(), program.target.max_alloca_align());
+    if kept.is_none() && max.is_none() {
+        return Ok(());
+    }
+    // The passes that raise an alloca's alignment stop at the datalayout's
+    // stack alignment (`tryEnforceAlignment`); no frame here keeps more.
+    if let Some(kept) = kept {
+        let held = program.layout.stack_align;
+        program.layout.stack_align = Some(held.map_or(kept, |held| held.min(kept)));
+    }
+    let layout = program.layout.clone();
+    for module in &mut program.modules {
+        let names: Vec<String> = module
+            .functions()
+            .filter(|(_, _, function)| !function.is_declaration())
+            .filter_map(|(_, global, _)| global.name.as_deref().map(str::to_owned))
+            .collect();
+        for name in names {
+            let (context, function) = module.function_mut(&name).expect("a defined function");
+            for block in function.layout().to_vec() {
+                for inst in function.iter_block(block).collect::<Vec<_>>() {
+                    let llrm_mir::opcode::Opcode::Alloca { allocated, align, .. } = function.instruction(inst).opcode
+                    else {
+                        continue;
+                    };
+                    let wanted = align.unwrap_or_else(|| layout.align(&context.types, allocated));
+                    if let Some(max) = max.filter(|max| wanted > *max) {
+                        return Err(format!(
+                            "@{name}: an object aligned to {wanted} needs stack realignment, not supported yet (accepts {max})"
+                        ));
+                    }
+                    if let Some(kept) = kept.filter(|kept| wanted > *kept) {
+                        function.set_alloca_align(inst, kept);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `applied`, with what the pipeline did to each function.
 pub fn recorded(
     program: &mut Program,
     applied: &Applied,
 ) -> Result<Vec<Stage>, String> {
     refuse_vectors(program)?;
+    constrain_allocas(program)?;
     timed();
     let mut manager = PassManager::default();
     manager.verify_each = llrm_support::debug::verifying();

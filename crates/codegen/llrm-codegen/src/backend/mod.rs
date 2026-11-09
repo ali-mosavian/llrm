@@ -354,6 +354,7 @@ pub mod regclass;
 pub mod registerinfo;
 pub mod repbsf;
 pub mod rewriter;
+pub mod floatslotcopy;
 pub mod sharedstores;
 pub mod spillplacement;
 pub mod storecombine;

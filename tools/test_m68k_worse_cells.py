@@ -18,6 +18,22 @@ def cell(target, prog, level, ours, gcc, clang):
     return [(target, prog, level, name, b, k, 1, "") for name, (b, k) in (("ours", ours), ("gcc", gcc), ("clang", clang))]
 
 
+class HeaderRates(unittest.TestCase):
+    def test_a_flat_two_bytes_per_clock_header_is_refused(self):
+        stale = "# m68k matrix; byte_rate: 68000/68020/68040/68060 2 B per clk saved (O2: 1 clk = 2 B)\n"
+        rows = cell("m68k-68000", "partition", "O2", (98, 1264), (92, 1226), (150, 2104))
+        body = stale + COLS + "".join("\t".join(map(str, r)) + "\n" for r in rows)
+        with self.assertRaises(SystemExit) as why:
+            count(io.StringIO(body))
+        self.assertIn("timings.times", str(why.exception))
+
+    def test_the_committed_rates_are_per_cpu(self):
+        from m68k_worse_cells import committed_rates
+
+        rates = committed_rates()
+        self.assertEqual((rates["68000"], round(rates["68020"], 2), rates["68040"]), (0.5, 1.33, 3.2))
+
+
 class WorseCells(unittest.TestCase):
     def test_two_byte_loss_at_os_counts(self):
         rows = cell("m68k-68000", "fib", "Os", (22, 100), (20, 100), (24, 100))
@@ -135,7 +151,10 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(self.judge("O1", (90, 210), (80, 200), (120, 100)), "WORSE")
 
     def test_other_levels_have_no_virtual_exception(self):
-        self.assertEqual(self.judge("O2", (100, 150), (80, 200), (120, 100)), "ok")  # 20 B over, 50 clk * 0.5 saved
+        # ahead of gcc by the allowance (20 B over, 50 clk * 0.5 = 25 B allowed) and of clang (20 B under, 10 clk slower = 5 B)
+        self.assertEqual(self.judge("O2", (100, 150), (80, 200), (120, 160)), "ok")
+        # the same cell against a faster clang: 20 B under but 50 clk slower is 25 B at 0.5 B per clk, 5 B past the bar
+        self.assertEqual(self.judge("O2", (100, 150), (80, 200), (120, 100)), "WORSE")
         self.assertEqual(self.judge("Os", (100, 100), (80, 200), (120, 100)), "WORSE")
 
     def test_a_virtual_cell_is_not_counted_worse(self):

@@ -230,7 +230,10 @@ pub fn machine_with<'a>(
         }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
-        Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
+        Box::new(crate::backend::precse::MachineCse {
+            classes: Rc::clone(classes),
+            keep_compare: classes.cse_keeps_compare_with_live_minuend,
+        }),
         // On SSA, where a def with phi users alone can go to its edge.
         Box::new(crate::backend::machinesink::MachineSink {
             size: target.size,
