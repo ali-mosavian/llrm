@@ -62,7 +62,8 @@ def cc_env() -> dict[str, str]:
 
 
 def compile_one(cc: str, target: str, path: Path, workdir: Path, level: str = "O0") -> tuple[str, str]:
-    """("ok", "") when an object was written, else ("refused", first error line)."""
+    """("ok", "") when an object was written, ("timeout", ...) when the compiler ran out of time (a cell not tested, under host load: not a
+    refusal), else ("refused", first error line)."""
     out = workdir / f"{target}.{level}.{path.stem}.o"
     # The DOS rows find their own llrm_os.h (Watcom's); the POSIX layer's would shadow it.
     posix = [] if target.endswith("-wat") or target.endswith("-dos") else ["-I", str(ROOT / "runtime/shared/posix")]
@@ -70,7 +71,7 @@ def compile_one(cc: str, target: str, path: Path, workdir: Path, level: str = "O
     try:
         run = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT, env={**os.environ, **cc_env(), "LLRM_CC_TARGET": target})
     except subprocess.TimeoutExpired:
-        return "refused", f"timeout {TIMEOUT}s"
+        return "timeout", f"timeout {TIMEOUT}s"
     if run.returncode == 0 and out.exists() and out.stat().st_size > 0:
         out.unlink()
         return "ok", ""
@@ -92,6 +93,7 @@ def sweep(targets: list[str], programs: list[Path], cc: str, jobs: int, levels: 
                     "na": len(programs) - len(applicable),
                     "compiled": sum(1 for _, s, _ in rows if s == "ok"),
                     "refused": {n: m for n, s, m in rows if s == "refused"},
+                    "timeouts": sorted(n for n, s, _ in rows if s == "timeout"),
                     "applicable": sorted(p.stem for p in applicable),
                 }
     return result
@@ -137,12 +139,13 @@ def verdict(result: dict[str, dict[str, dict]], baseline: set[tuple[str, str, st
             elif row["compiled"] == 0:
                 bad.append(f"{at}: compiled 0 of {row['programs']} programs")
             bad += [f"{at} {name}: {explain(msg)}" for name, msg in row["refused"].items() if (target, level, name) not in baseline]
+            bad += [f"{at} {name}: timed out, not tested (not a refusal): rerun it" for name in row.get("timeouts", [])]
             for t, l, name in sorted(baseline):
                 if (t, l) != (target, level):
                     continue
                 if name not in row["applicable"]:
                     bad.append(f"{at} {name}: in the baseline but never ran (not an applicable program): remove the row")
-                elif name not in row["refused"]:
+                elif name not in row["refused"] and name not in row.get("timeouts", []):
                     bad.append(f"{at} {name}: in the baseline but compiled: remove the row")
     return bad
 
@@ -175,9 +178,11 @@ def main(argv: list[str]) -> int:
     result = sweep(targets, programs, cc, int(os.environ.get("JOBS", "4")), levels)
     for target, by_level in result.items():
         for level, row in by_level.items():
-            print(f"{target} {level}: programs {row['programs']} compiled {row['compiled']} refused {len(row['refused'])} n/a {row['na']}")
+            print(f"{target} {level}: programs {row['programs']} compiled {row['compiled']} refused {len(row['refused'])} timeout {len(row['timeouts'])} n/a {row['na']}")
             for name, msg in sorted(row["refused"].items()):
                 print(f"  REFUSED {name}: {explain(msg)}")
+            for name in row["timeouts"]:
+                print(f"  TIMEOUT {name}: not tested")
     bad = baseline_bad + verdict(result, baseline)
     if os.environ.get("O0_SWEEP_ROWS"):
         print("candidate baseline rows:", *candidate_rows(result), sep="\n")

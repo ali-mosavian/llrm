@@ -148,3 +148,25 @@ def test_candidate_rows_merge_the_levels_of_one_refusal_and_keep_owners_to_fill(
     assert sweep.parse_baseline(rows[0], "2026-11-10")[1], "an unfilled row is red"
     keys, bad = sweep.parse_baseline(rows[0].replace("OWNER?", "w15-arm64").replace("EXIT?", "EXIT 2026-12-01"), "2026-11-10")
     assert not bad and len(keys) == 4
+
+
+def test_a_compiler_that_outlasts_the_timeout_is_a_timeout_not_a_refusal(tmp_path, monkeypatch):
+    """Under host load 60-90 eight x86_32-wat O1 cells timed out at 180 s and were listed as refusals: untested cells read as compiler faults."""
+    slow = tmp_path / "slow-cc"
+    slow.write_text("#!/bin/sh\nsleep 5\n")
+    slow.chmod(0o755)
+    monkeypatch.setattr(sweep, "TIMEOUT", 1)
+    program = tmp_path / "p.c"
+    program.write_text("int main(void) { return 0; }\n")
+    assert sweep.compile_one(str(slow), "x86_32-linux", program, tmp_path)[0] == "timeout"
+    result = sweep.sweep(["x86_32-linux"], [program], str(slow), 1, ["O1"])
+    row = result["x86_32-linux"]["O1"]
+    assert row["refused"] == {} and row["timeouts"] == ["p"] and row["compiled"] == 0
+    problems = sweep.verdict(result, set())
+    assert "x86_32-linux O1 p: timed out, not tested (not a refusal): rerun it" in problems
+
+
+def test_a_baseline_row_whose_cell_timed_out_is_neither_compiled_nor_never_ran():
+    row = {"programs": 2, "compiled": 1, "refused": {}, "timeouts": ["slow"], "applicable": ["slow", "other"]}
+    problems = sweep.verdict({"wasm32": {"O1": row}}, {("wasm32", "O1", "slow")})
+    assert problems == ["wasm32 O1 slow: timed out, not tested (not a refusal): rerun it"]
