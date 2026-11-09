@@ -96,3 +96,38 @@ fn a_stack_area_over_sixteen_bytes_is_pushed_last_argument_first() {
     let want: Vec<String> = (104..=112).rev().map(|k| k.to_string()).collect();
     assert_eq!(pushed, want, "{text}");
 }
+
+/// The stores of a call's stack arguments came out of the scheduler in any
+/// order (`10, 8, 6, 4, 0, 2`), a reload between them reused the pair just
+/// stored, and the call kept its reserve: six `push bc` to open the area, then
+/// a store through `ix` per word (`__udivdi3` of two loaded `i64`).
+/// The stores are chained top word first, so every one is a push.
+#[test]
+fn stack_arguments_that_the_scheduler_would_reorder_are_pushed() {
+    let dir = std::env::temp_dir().join("llrm-call-frames-z80-order");
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("g.ll");
+    std::fs::write(
+        &source,
+        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\ntarget triple = \"z80-unknown-none\"\n\
+         @x = global i64 0\n@y = global i64 0\n\
+         define i64 @g() {\n\
+           %a = load volatile i64, ptr @x\n  %b = load volatile i64, ptr @y\n  %q = udiv i64 %a, %b\n\
+           %c = load volatile i64, ptr @x\n  %r = add i64 %q, %c\n  %d = udiv i64 %r, %b\n  ret i64 %d\n}\n",
+    )
+    .unwrap();
+    for level in ["-O2", "-Os"] {
+        let out = dir.join("g.s");
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-z80-llc"))
+            .args(["-S", level, "-o", out.to_str().unwrap(), source.to_str().unwrap()])
+            .output()
+            .expect("the driver runs");
+        assert_eq!(done.status.code(), Some(0), "{}", String::from_utf8_lossy(&done.stderr));
+        let text = std::fs::read_to_string(out).unwrap();
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        assert!(
+            lines.windows(2).all(|pair| pair != ["push bc", "push bc"]),
+            "{level}: a reserved area (push bc, push bc, ...) is stored into instead of pushed:\n{text}"
+        );
+    }
+}
