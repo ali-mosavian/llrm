@@ -53,10 +53,35 @@ fn the_68020_and_later_count_with_bfffo_and_the_68000_does_not() {
 /// `bfffo %d0{#0:#0}, %d1` is `edc0 1000` to GNU as.
 #[test]
 fn bfffo_encodes_as_edc0_with_the_result_in_the_extension_word() {
-    let inst = Inst { opcode: "BFFFO32", operands: vec![Operand::Reg(reg::D1), Operand::Reg(reg::D0)] };
+    let inst = Inst { opcode: "BFFFO32dd", operands: vec![Operand::Reg(reg::D1), Operand::Reg(reg::D0)] };
     assert_eq!(encode(&inst).unwrap().bytes, [0xed, 0xc0, 0x10, 0x00]);
-    let inst = Inst { opcode: "BFFFO32", operands: vec![Operand::Reg(reg::D7), Operand::Reg(reg::D3)] };
+    let inst = Inst { opcode: "BFFFO32dd", operands: vec![Operand::Reg(reg::D7), Operand::Reg(reg::D3)] };
     assert_eq!(encode(&inst).unwrap().bytes, [0xed, 0xc3, 0x70, 0x00]);
+}
+
+/// `bfffo (4,%sp){#0:#0}, %d1` is `edef 1000 0004` to GNU as: the displacement
+/// follows the bit-field word.
+#[test]
+fn bfffo_from_a_displacement_encodes_with_the_displacement_after_the_field_word() {
+    let inst = Inst {
+        opcode: "BFFFO32dp",
+        operands: vec![Operand::Reg(reg::D1), Operand::Imm(4), Operand::Reg(reg::SP)],
+    };
+    assert_eq!(encode(&inst).unwrap().bytes, [0xed, 0xef, 0x10, 0x00, 0x00, 0x04]);
+}
+
+/// A stack argument only the count reads was `move.l (4,%sp), %d0; bfffo
+/// %d0{#0:#0}, %d0`, 10 B against gcc's 6 (`bfffo (4,%sp){#0:#0}, %d0`).
+#[test]
+fn a_stack_argument_only_the_count_reads_is_counted_in_place_at_size() {
+    let ir = format!(
+        "{HEAD}declare i32 @llvm.ctlz.i32(i32, i1)\n\
+         define i32 @f(i32 %x) optsize {{ %r = call i32 @llvm.ctlz.i32(i32 %x, i1 false) ret i32 %r }}"
+    );
+    let module = llrm_mir::parse::module(&ir).expect("parses");
+    let out = text_with(&module, "f", Cpu::M68020, Options::default()).expect("compiles");
+    assert!(out.contains("bfffo\t(4,%sp){#0:#0}, %d0"), "{out}");
+    assert!(!out.contains("move.l\t(4,%sp)"), "{out}");
 }
 
 const CLZ: [(i64, i64); 8] =
@@ -73,21 +98,25 @@ fn program() -> String {
     );
     for (name, intrinsic, bits, poison) in [
         ("clz", "ctlz", 32, false),
+        ("clzs", "ctlz", 32, false),
         ("clzp", "ctlz", 32, true),
         ("ctz", "cttz", 32, false),
         ("ctzp", "cttz", 32, true),
         ("clz64", "ctlz", 64, false),
         ("ctz64", "cttz", 64, false),
     ] {
+        // the stack argument is counted in place in a function built for size
+        let size = if name == "clzs" { " optsize" } else { "" };
         let wide = if bits == 64 { "\n  %t = trunc i64 %r to i32\n  ret i32 %t" } else { "\n  ret i32 %r" };
         text.push_str(&format!(
-            "define i32 @{name}(i{bits} %x) {{\n  %r = call i{bits} @llvm.{intrinsic}.i{bits}(i{bits} %x, i1 {poison}){wide}\n}}\n"
+            "define i32 @{name}(i{bits} %x){size} {{\n  %r = call i{bits} @llvm.{intrinsic}.i{bits}(i{bits} %x, i1 {poison}){wide}\n}}\n"
         ));
     }
     // each case adds its own number when the answer is wrong; the inputs come
     // through calls the mid-end is off for
     let mut cases: Vec<(&str, &str, i64, i64)> = Vec::new();
     cases.extend(CLZ.iter().map(|&(x, e)| ("clz", "i32", x, e)));
+    cases.extend(CLZ.iter().map(|&(x, e)| ("clzs", "i32", x, e)));
     cases.extend(CLZ.iter().filter(|c| c.0 != 0).map(|&(x, e)| ("clzp", "i32", x, e)));
     cases.extend(CTZ.iter().map(|&(x, e)| ("ctz", "i32", x, e)));
     cases.extend(CTZ.iter().filter(|c| c.0 != 0).map(|&(x, e)| ("ctzp", "i32", x, e)));
@@ -118,7 +147,7 @@ fn the_counts_give_the_right_answers_on_qemu_at_68020_68040_68060() {
     for (cpu, name) in [(Cpu::M68020, "m68020"), (Cpu::M68040, "m68040"), (Cpu::M68060, "m68060")] {
         let options = Options { mid_end: false, ..Options::default() };
         let mut all = start("f", &[]);
-        for function in ["f", "clz", "clzp", "ctz", "ctzp", "clz64", "ctz64"] {
+        for function in ["f", "clz", "clzs", "clzp", "ctz", "ctzp", "clz64", "ctz64"] {
             all.extend(items_with(&module, function, cpu, options).unwrap_or_else(|why| panic!("{cpu:?}: {why}")));
         }
         let path = support::unique_path("bfffo");
