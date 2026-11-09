@@ -2331,6 +2331,9 @@ pub fn from_lir<T: Target>(
             for (stand_in, slot) in folds {
                 made = T::fold_spill(&made, stand_in, slot).ok_or("a memory source the target has no form for")?;
             }
+            if insn.rematerialized && T::remade_sets_no_flags() {
+                made.sets_flags = false;
+            }
             insts.push(made);
         }
         blocks.push(Block { id: original.blocks[at].id, insts, phis: Vec::new() });

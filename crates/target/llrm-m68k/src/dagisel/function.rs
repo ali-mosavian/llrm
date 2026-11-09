@@ -56,6 +56,9 @@ pub fn builder_target() -> BuilderTarget {
             big_endian: true,
             calling: Some(&*CALLING),
         }),
+        // the ABI packs stack arguments at 4 (gcc callers do); DEVIATE VA-ALIGN
+        // in `BuilderTarget`
+        va_arg_align_cap: Some(4),
         ..BuilderTarget::for_pointer_bits(32)
     }
 }
@@ -95,13 +98,13 @@ pub fn select_function(
     name: &str,
     cpu: Cpu,
 ) -> Result<Vec<Selected>, String> {
-    select_function_with(module, name, cpu, false, false, false, false, false)
+    select_function_with(module, name, cpu, false, false, false, false, false, true, &[])
 }
 
 /// [`select_function`], with `source_order`: the pin's source-order scheduler
 /// in place of the ILP list scheduler, and `indexed`: `(An)+` and `-(An)`
-/// accesses, `short`: `addq` and `subq`, and `absolute_data`: a global's address
-/// is an absolute one, not PC-relative ([`crate::compile::CodeModel`]).
+/// accesses, `short`: `addq` and `subq`, and `absolute_data`: a global's
+/// address is an absolute one, not PC-relative ([`crate::compile::CodeModel`]).
 pub fn select_function_with(
     module: &Module,
     name: &str,
@@ -111,6 +114,8 @@ pub fn select_function_with(
     short: bool,
     absolute_data: bool,
     size: bool,
+    carry_chain: bool,
+    libcalls: &[crate::libcalls::Kind],
 ) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
@@ -139,8 +144,18 @@ pub fn select_function_with(
         // follow the block that made them, as x86's driver lays them
         // out
         let extras = std::mem::take(&mut built.extra);
-        let units = select_block_with(&mut built.dag, cpu, source_order, indexed, short, absolute_data, &mut temporaries)
-            .map_err(|why| format!("{why:?}"))?;
+        let units = select_block_with(
+            &mut built.dag,
+            cpu,
+            source_order,
+            indexed,
+            short,
+            absolute_data,
+            carry_chain,
+            libcalls,
+            &mut temporaries,
+        )
+        .map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
         let ends_unreachable = function
             .terminator(block)
@@ -155,8 +170,18 @@ pub fn select_function_with(
             ends_unreachable,
         });
         for (id, mut extra) in extras {
-            let units = select_block_with(&mut extra.dag, cpu, source_order, indexed, short, absolute_data, &mut temporaries)
-                .map_err(|why| format!("{why:?}"))?;
+            let units = select_block_with(
+                &mut extra.dag,
+                cpu,
+                source_order,
+                indexed,
+                short,
+                absolute_data,
+                carry_chain,
+                libcalls,
+                &mut temporaries,
+            )
+            .map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
             selected.push(Selected {
                 block: id,

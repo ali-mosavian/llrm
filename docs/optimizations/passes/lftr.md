@@ -27,7 +27,7 @@ conditional branch and belongs to the loop itself:
 
 The test it replaces is left to `dead`.
 
-DEVIATE LFTR1 (owner llrm-w12-lsr; exit: the pin's `isLoopCounter`
+DEVIATE LFTR1 (owner w12; exit: the pin's `isLoopCounter`
 (IndVarSimplify.cpp#L913, `m_scev_One`) takes any constant step): a loop
 that steps by two, `for (o = 0; o <= 3998; o += 2)`, kept `ult` for the
 pin's LSR, which turns only equality tests into zero-ending counters; main's

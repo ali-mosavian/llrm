@@ -1382,6 +1382,46 @@ impl<'a> TypeLegalizer<'a> {
                 };
                 self.dag.get_node(op, to, &[wide, self.dag.operand(value, 1)])
             }
+            op @ (ISD::Rotl | ISD::Rotr) => {
+                // `PromoteIntRes_Rotate`
+                // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L1533>):
+                // with room for the value twice, a
+                // variable rotate is one shift of the value concatenated
+                // with itself; otherwise the rotate becomes shifts and ORs
+                // (`expandROT`) that promote on their own.
+                let amount = self.dag.operand(value, 1);
+                let (old_bits, new_bits) = (vt.size_in_bits(), to.size_in_bits());
+                let custom_shifts = self.tli.operation_action(ISD::Shl, vt) == super::actions::Action::Custom
+                    || self.tli.operation_action(ISD::Srl, vt) == super::actions::Action::Custom;
+                if new_bits >= 2 * old_bits
+                    && self.dag.constant(amount).is_none()
+                    && !self.tli.is_operation_legal_or_custom(op, to)
+                    && !custom_shifts
+                {
+                    let op0 = self.promoted_integer(self.dag.operand(value, 0));
+                    let amount = if self.action(self.dag.value_type(amount)) == TypeAction::PromoteInteger {
+                        self.zext_promoted_integer(amount)
+                    } else {
+                        amount
+                    };
+                    let amount_vt = self.dag.value_type(amount);
+                    // The amount is taken modulo the old width.
+                    let width = self.dag.get_constant(u128::from(old_bits), amount_vt);
+                    let amount = self.dag.get_node(ISD::URem, amount_vt, &[amount, width]);
+                    let hi_shift = self.shift_const(u128::from(old_bits), to);
+                    let hi = self.dag.get_node(ISD::Shl, to, &[op0, hi_shift]);
+                    let mask = self.dag.get_constant(super::fold::mask(old_bits), to);
+                    let lo = self.dag.get_node(ISD::And, to, &[op0, mask]);
+                    let both = self.dag.get_node(ISD::Or, to, &[hi, lo]);
+                    let is_right = op == ISD::Rotr;
+                    let rotated = self.dag.get_node(if is_right { ISD::Srl } else { ISD::Shl }, to, &[both, amount]);
+                    if is_right { rotated } else { self.dag.get_node(ISD::Srl, to, &[rotated, hi_shift]) }
+                } else {
+                    let expanded = super::expand_funnel::expand_rotate(self.dag, self.tli, value);
+                    self.replace_value_with(value, expanded);
+                    return Ok(());
+                }
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);
@@ -2296,8 +2336,9 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// `ExpandIntRes_ADDSUB`, the carry forms: the low halves with an overflow
-    /// result, the high halves with that carry in. The ADDC/ADDE form (glue)
-    /// is not translated.
+    /// result, the high halves with that carry in; failing that, `ADDC` and
+    /// `ADDE` (`SUBC`, `SUBE`) joined by glue, where the target has them. The
+    /// `UADDO` form (`hasOVF`) is not translated.
     fn expand_add_sub(
         &mut self,
         value: SDValue,
@@ -2312,6 +2353,13 @@ impl<'a> TypeLegalizer<'a> {
             (ISD::USubO, ISD::USubOCarry, ISD::Sub)
         };
         if !self.tli.is_operation_legal_or_custom(carry_op, self.tli.types.type_to_expand_to(half)) {
+            let (first, second) = if op == ISD::Add { (ISD::AddC, ISD::AddE) } else { (ISD::SubC, ISD::SubE) };
+            if self.tli.is_operation_legal_or_custom(first, self.tli.types.type_to_expand_to(half)) {
+                let lo = self.dag.get_node_multi(first, &[half, EVT::GLUE], &[ll, rl]);
+                let glue = SDValue { node: lo.node, res: 1 };
+                let hi = self.dag.get_node_multi(second, &[half, EVT::GLUE], &[lh, rh, glue]);
+                return Ok((SDValue { node: lo.node, res: 0 }, SDValue { node: hi.node, res: 0 }));
+            }
             // Without a carry operation: the plain halves, the carry (a borrow
             // for a subtract) a compare of the low result with its operand.
             let lo = self.dag.get_node(plain, half, &[ll, rl]);

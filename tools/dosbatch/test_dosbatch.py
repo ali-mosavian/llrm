@@ -84,8 +84,6 @@ class LinkTests(unittest.TestCase):
             self.assertTrue(all(one.exists() for one in dosbatch.link_files(source, ["@c-runtime"], target)))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class NibCutTests(unittest.TestCase):
@@ -265,3 +263,21 @@ def test_a_failed_assembly_leaves_no_err_file_in_the_working_directory(tmp_path,
     with pytest.raises(Exception):  # noqa: B017
         dosbatch.assemble(tmp_path / "missing" / "init.asm", tmp_path / "x.obj")
     assert list(cwd.iterdir()) == []
+
+
+class LlrmBinIsReadOnce(unittest.TestCase):
+    """The m16 A/B of 2026-11-09 set LLRM_BIN inside the script after dosbatch had read it, so both sides ran the same compiler and the sweep
+    called them identical. A changed variable is now an error at the build, not a silent use of the old binaries."""
+
+    def test_a_build_refuses_when_the_variable_changed_after_the_import(self):
+        with mock.patch.dict(os.environ, {"LLRM_BIN": "/somewhere/other-dist"}):
+            with self.assertRaisesRegex(dosbatch.BuildError, "LLRM_BIN"):
+                dosbatch.c_compile(Path("a.c"), Path("a.obj"), dosbatch.REAL_MODE, "-O2", None, [])
+
+    def test_a_build_with_the_variable_as_read_is_not_refused(self):
+        command, _ = dosbatch.c_compile(Path("a.c"), Path("a.obj"), dosbatch.REAL_MODE, "-O2", None, [])
+        self.assertTrue(command[0].endswith("llrm-cc"))
+
+
+if __name__ == "__main__":
+    unittest.main()

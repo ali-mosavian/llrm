@@ -832,10 +832,33 @@ impl Printer<'_> {
                     return Ok(());
                 }
                 let pushes = (*bytes + 1) / 2;
-                if pushes > 8 {
-                    return Err(format!("{bytes} bytes of stack arguments"));
-                }
                 let down = op == "ADJCALLSTACKDOWN";
+                // The return restores SP from IX: the release before it is dead.
+                if !down && self.frame.active && rest.first().is_some_and(|next| next.kind == Kind::Op("RET")) {
+                    self.call_bytes = 0;
+                    return Ok(());
+                }
+                // A large area moves SP by a sum: `ld hl, #n; add hl, sp; ld sp,
+                // hl` (5 B / 27 T) once the pops are longer and slower, or the
+                // same through IY (8 B / 39 T) where `hl` holds a result. Both
+                // change the flags; the pushes and pops change nothing.
+                let sum = if !self.flags_dead(rest) {
+                    None
+                } else if !down && pushes >= 5 && self.pair_unused_after(reg::HL, rest) {
+                    Some("hl")
+                } else if pushes >= 8 && !self.iy_is_live() {
+                    Some("iy")
+                } else {
+                    None
+                };
+                if let Some(pair) = sum {
+                    let amount = if down { -*bytes } else { *bytes };
+                    self.push(format!("ld {pair}, #{amount}"));
+                    self.push(format!("add {pair}, sp"));
+                    self.push(format!("ld sp, {pair}"));
+                    self.call_bytes = if down { 2 * pushes } else { 0 };
+                    return Ok(());
+                }
                 let discard = if down {
                     Some("bc")
                 } else if let Some(pair) =
@@ -2906,8 +2929,14 @@ fn tail_calls(function: &MFunction) -> MFunction {
         let falls = !returns && n >= 1 && falls_into_return[index] && (bare_adjust(&insts[n - 1]) || insts[n - 1].call);
         let end = n + usize::from(falls);
         if end >= 2 && (returns || falls) {
-            let at = if bare_adjust(&insts[end - 2]) { end - 3 } else { end - 2 };
-            if at < n && insts[at].call && insts[at].kind == Kind::Op("CALL") && (at == end - 2 || at == end - 3) {
+            // a block of only the bare adjust, falling into the return, has no call before it
+            let at = if bare_adjust(&insts[end - 2]) { end.checked_sub(3) } else { Some(end - 2) };
+            if let Some(at) = at
+                && at < n
+                && insts[at].call
+                && insts[at].kind == Kind::Op("CALL")
+                && (at == end - 2 || at == end - 3)
+            {
                 let symbol = insts[at].operands.first().cloned();
                 if let Some(symbol @ Operand::Symbol(..)) = symbol {
                     // the call's argument registers stay read: the copies that
@@ -3004,7 +3033,7 @@ mod tests {
     /// `forward_high_bytes` cannot fuse): idioms -Oz +1 B and 24 T over `ld c, h; ld b, #0; srl c` x7.
     #[test]
     fn a_word_shifted_by_a_byte_and_more_clears_the_pair_next_to_the_copy() {
-        let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n@g = global i16 0\n\
+        let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n@g = global i16 0\n\
                   define i8 @f(i8 %a, i16 %x) {\n  %s = lshr i16 %x, 15\n  %t = add i16 %s, %x\n\
                   store volatile i16 %t, ptr @g\n  %r = add i8 %a, 1\n  ret i8 %r\n}\n";
         let out = crate::compile::text(ir, "f", 0, &crate::driver::Request::new(crate::driver::Level::Oz)).unwrap();
