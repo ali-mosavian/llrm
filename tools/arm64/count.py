@@ -6,7 +6,20 @@ The range is chosen, never defaulted: `--kernel` counts the compiled kernels (ev
 """
 import argparse, hashlib, os, struct, sys
 
-DATA = os.environ.get('ARM64_BENCH_DATA', os.path.expanduser('~/scratch/w15-bar/data'))
+BENCH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'bench')
+
+
+def find_input(name):
+    """The file a program opens by its DOS name: ARM64_BENCH_DATA/NAME, else the same name, any case, in a bench/<prog>/ dir."""
+    wanted = name.upper()
+    if os.environ.get('ARM64_BENCH_DATA'):
+        return os.path.join(os.environ['ARM64_BENCH_DATA'], wanted)
+    for folder in sorted(os.listdir(BENCH)):
+        directory = os.path.join(BENCH, folder)
+        for entry in os.listdir(directory) if os.path.isdir(directory) else ():
+            if entry.upper() == wanted:
+                return os.path.join(directory, entry)
+    return wanted
 
 
 def run(path, limit=300_000_000, kernel=None):
@@ -58,7 +71,7 @@ def run(path, limit=300_000_000, kernel=None):
         nr = u.reg_read(UC_ARM64_REG_X8); a0, a1, a2 = (u.reg_read(r) for r in (UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2))
         ret = -38
         if nr == 56:
-            path = os.path.join(DATA, cstr(a1).upper())
+            path = find_input(cstr(a1))
             if a2 & 0x3:  # created: kept in memory, hashed as written
                 fd = nextfd[0]; nextfd[0] += 1; files[fd] = ('w', None); ret = fd
             elif os.path.exists(path):

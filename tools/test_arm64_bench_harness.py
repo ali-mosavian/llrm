@@ -38,5 +38,32 @@ class Harness(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(out, "fib.2.clang.elf")))
 
 
+class Table(unittest.TestCase):
+    ROWS = "a\tO2\tours\t10\t100\t{m}\na\tO2\tclang\t10\t90\t{m}\na\tO2\tgcc\t10\t120\t{m}\n"
+
+    def run_table(self, rows_metric, flag):
+        with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as rows:
+            rows.write(self.ROWS.format(m=rows_metric))
+        try:
+            return subprocess.run(
+                [sys.executable, os.path.join(HERE, "table.py"), rows.name, "--metric", flag], capture_output=True, text=True
+            )
+        finally:
+            os.unlink(rows.name)
+
+    def test_rows_counted_whole_are_refused_under_a_kernel_header(self):
+        # A table headed "kernel" held whole-program counts (count.py without the kernel flag).
+        done = self.run_table("whole", "kernel")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("counted as 'whole'", done.stderr)
+
+    def test_matching_metric_gives_verdicts_and_a_header_naming_it(self):
+        done = self.run_table("kernel", "kernel")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("# instrs metric: kernel (count.py --kernel)", done.stdout)
+        self.assertIn("a\tO2\tworse", done.stdout)  # 130 net against clang's 120
+        self.assertIn("# O2: better 0, same 0, worse 1", done.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
