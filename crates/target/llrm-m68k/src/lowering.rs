@@ -27,9 +27,8 @@ pub fn runs(step: CgpStep) -> bool {
         | CgpStep::OverflowMath
         | CgpStep::Compares
         | CgpStep::MaskSinking
-        | CgpStep::ExtPromotion
         | CgpStep::SplitStores => false,
-        CgpStep::CastSinking => true,
+        CgpStep::CastSinking | CgpStep::ExtPromotion => true,
     }
 }
 
