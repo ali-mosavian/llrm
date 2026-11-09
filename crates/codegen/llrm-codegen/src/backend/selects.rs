@@ -58,8 +58,8 @@
 //!   scheduler puts the CMOV diamond before the SETCC (`f409`, 32 B; pin 28
 //!   B), so FixupSetCC cannot fire and MaskByAnd emits `and eax,255`. General
 //!   scheduling cause (SD31, NodeNum), filed with sdag-d; not patched here.
-//! - I64SEL-2, owner x86-m64 SD447 (oversight to rule the tie rule; w12 until
-//!   then), exit 2026-11-20: m64 `word_compares` -O1/-O2/-O3 295 -> 309 B,
+//! - I64SEL-2, owner llrm-target-x86-m64 (SD447; oversight 2026-11-09: ties go
+//!   to the pin), exit 2026-11-12: m64 `word_compares` -O1/-O2/-O3 295 -> 309 B,
 //!   `main` 167 -> 173 B (pin 175 B); native instructions 139969 -> 140364
 //!   (O1, +0.28%), 139968 -> 140365 (O2), 139969 -> 140364 (O3); cycles within
 //!   noise, output equal; m32 `word_compares` identical. Cause: SD447 keeps
