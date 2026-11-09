@@ -1407,6 +1407,13 @@ pub(crate) fn compute_unroll_count(
         up.partial |= pinfo.explicit_unroll;
     }
 
+    // DEVIATE RU-REC: the same veto as runtime unrolling, for a known trip
+    // count, unless the user asked for the unroll.
+    if trip_count != 0 && !up.force && !pinfo.explicit_unroll && recurrence::recurrence_bound(run, lp) {
+        why(run, lp, "partial unroll: the loop-carried chain bounds a trip (RU-REC)");
+        return 0;
+    }
+
     // 6th priority is partial unrolling, when the trip count is known.
     if let Some(factor) = should_partial_unroll(loop_size, trip_count, uce, up) {
         return factor;

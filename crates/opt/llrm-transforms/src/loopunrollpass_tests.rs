@@ -1316,3 +1316,30 @@ out:
     assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
     assert!(runtime_unrolled_text(text, true));
 }
+
+/// recfloat -O2: `bench_recfloat` inlined into `main` with a trip count of
+/// 1000 was unrolled by 5 (`decay`'s chain is `mulsd`, `addsd`), 209 bytes
+/// against gcc's 153 for the same clocks. A known trip count is no reason to
+/// copy a loop its own chain bounds.
+#[test]
+fn test_a_known_trip_loop_bound_by_its_chain_is_not_unrolled() {
+    let text = "define double @f(ptr %a) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %x = phi double [ 1.0, %entry ], [ %y, %loop ]
+  %m = fmul double %x, 0.5
+  %y = fadd double %m, 1.0
+  %next = add i64 %i, 1
+  %more = icmp ne i64 %next, 1000
+  br i1 %more, label %loop, label %done
+
+done:
+  ret double %y
+}
+";
+    assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
+    assert!(!runtime_unrolled_text(text, true));
+}
