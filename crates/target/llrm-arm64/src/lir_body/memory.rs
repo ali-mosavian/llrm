@@ -28,7 +28,7 @@ const BARRIERS: [Barrier; 3] = [Barrier::Ish, Barrier::IshLd, Barrier::IshSt];
 fn place(register: Gpr) -> (RegId, Option<Held>) {
     match lir_register(Reg::Gpr(register)) {
         MfReg::Phys(register) => (register, None),
-        MfReg::Virt(value) => (RegId::None, Some(Held { value, width: 64, offset: 0 })),
+        MfReg::Virt(value) => (RegId::None, Some(Held { value, width: 8, offset: 0 })),
     }
 }
 
@@ -38,7 +38,7 @@ fn unplace(
 ) -> Gpr {
     gpr_of(&match held {
         Some(held) => Loc::Held(held),
-        None => Loc::Reg(LirRegLoc { register: through, width: 64 }),
+        None => Loc::Reg(LirRegLoc { register: through, width: 8 }),
     })
 }
 

@@ -1110,6 +1110,87 @@ pub fn lower_xalu(
     Some(dag.get_node_multi(ISD::MergeValues, &[dag.value_type(value), EVT::I32], &[value, overflow]))
 }
 
+/// `valueToCarryFlag`
+/// ([L4796](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L4796)):
+/// the flags with `C` set from a 0/1 value. Not inverted, `C` is the value; inverted, `C`
+/// is set when it is 0 (a borrow is the absence of a carry).
+fn value_to_carry_flag(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+    invert: bool,
+) -> SDValue {
+    let vt = dag.value_type(value);
+    let (op0, op1) = if invert {
+        (dag.get_constant(0, vt), value)
+    } else {
+        (value, dag.get_constant(1, vt))
+    };
+    let subs = dag.get_node_multi(ISD::Target(a64::SUBS), &[vt, EVT::I32], &[op0, op1]);
+    SDValue { node: subs.node, res: 1 }
+}
+
+/// `lowerADDSUBO_CARRY`
+/// ([L4831](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L4831)):
+/// `UADDO_CARRY`, `USUBO_CARRY` and the signed forms as `ADCS` or `SBCS`
+/// with the carry-in set from the value, and the carry (or the overflow, if
+/// signed) read back by a `CSEL`. `None` for a type that is not `i32` or `i64`,
+/// which the pin declines.
+pub fn lower_add_sub_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (subtract, signed) = match dag.opcode(node) {
+        ISD::UAddOCarry => (false, false),
+        ISD::USubOCarry => (true, false),
+        ISD::SAddOCarry => (false, true),
+        ISD::SSubOCarry => (true, true),
+        _ => return None,
+    };
+    let vt0 = dag.value_type(node);
+    let vt1 = dag.value_type(SDValue { node: node.node, res: 1 });
+    if vt0 != EVT::I32 && vt0 != EVT::I64 {
+        return None;
+    }
+    let (lhs, rhs, carry) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let carry_in = value_to_carry_flag(dag, carry, subtract);
+    let opcode = if subtract { a64::SBCS } else { a64::ADCS };
+    let sum = dag.get_node_multi(ISD::Target(opcode), &[vt0, EVT::I32], &[lhs, rhs, carry_in]);
+    let flags = SDValue { node: sum.node, res: 1 };
+    let (zero, one) = (dag.get_constant(0, vt1), dag.get_constant(1, vt1));
+    let condition = match (signed, subtract) {
+        (true, _) => cc::VS,
+        (false, true) => cc::LO,
+        (false, false) => cc::HS,
+    };
+    let ccode = cond_const(dag, condition);
+    let out = dag.get_node(ISD::Target(a64::CSEL), vt1, &[one, zero, ccode, flags]);
+    Some(dag.get_node_multi(ISD::MergeValues, &[vt0, vt1], &[SDValue { node: sum.node, res: 0 }, out]))
+}
+
+/// `LowerSETCCCARRY`
+/// ([L12953](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L12953)):
+/// the compare of two halves as `SBCS`, its carry-in the inverted borrow, and
+/// a `CSEL` of the inverted condition with the operands swapped so one `CSINC`
+/// matches it.
+pub fn lower_setcc_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (lhs, rhs, carry) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let vt = dag.value_type(lhs);
+    if vt != EVT::I32 && vt != EVT::I64 {
+        return None;
+    }
+    let inverted_carry = value_to_carry_flag(dag, carry, true);
+    let compare = dag.get_node_multi(ISD::Target(a64::SBCS), &[vt, EVT::I32], &[lhs, rhs, inverted_carry]);
+    let flags = SDValue { node: compare.node, res: 1 };
+    let result = dag.value_type(node);
+    let (tval, fval) = (dag.get_constant(1, result), dag.get_constant(0, result));
+    let condition = cond_of(dag, dag.operand(node, 3)).inverse_integer();
+    let ccode = cond_const(dag, int_cc(condition, false));
+    Some(dag.get_node(ISD::Target(a64::CSEL), result, &[fval, tval, ccode, flags]))
+}
+
 /// `isOverflowIntrOpRes` for the forms `xalu_flags` lowers.
 fn is_xalu_overflow(
     dag: &SelectionDAG,

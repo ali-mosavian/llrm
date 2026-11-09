@@ -1,6 +1,6 @@
 //! The `"frame-pointer"` attribute on arm64 (`AArch64FrameLowering::hasFP`).
 
-use llrm_arm64::driver::{self, IselMode};
+use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
 fn asm(attr: &str) -> String {
@@ -14,7 +14,6 @@ define i32 @leaf(i32 %a) uwtable {attr} {{\n  %x = alloca [4 x i32], align 16\n 
   %v = load volatile i32, ptr %x\n  ret i32 %v\n}}\n",
         platform.datalayout()
     );
-    driver::set_isel_mode(IselMode::Dag);
     driver::assembly(&ir, platform, true).expect("lowers")
 }
 
