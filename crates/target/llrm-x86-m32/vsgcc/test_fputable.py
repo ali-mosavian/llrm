@@ -43,3 +43,9 @@ def test_a_row_dominated_by_a_compiler_is_worse_and_a_row_at_or_below_the_best_i
     assert fputable.verdict("O1", (18734, 307), (18060, 296), (19336, 303)) == "WORSE"
     assert fputable.verdict("O1", (990, 190), (1000, 200), (1100, 195)) == "ok"
     assert fputable.verdict("Os", (1, 163), (1, 162), (1, 170)) == "WORSE"
+
+
+def test_the_virtual_rule_is_the_shared_module_not_a_copy():
+    """Two copies of the rule drift: the 6502 table and this one must judge the same cell the same way."""
+    assert fputable.virtual_ok.__file__.endswith("tools/virtual_ok.py")
+    assert "def is_virtual" not in open(fputable.__file__).read()
