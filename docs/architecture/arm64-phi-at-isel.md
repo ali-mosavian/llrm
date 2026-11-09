@@ -1,5 +1,8 @@
 # arm64: the selector emits phis (ARM64-PHI-AT-ISEL)
 
+Done (#8597). The hand selector this plan names was deleted 2026-11-09; the
+sections below are the plan as written.
+
 Ruling (oversight, 2026-11-09): selection emits real phis, as the pin's ISel
 emits `PHI`; the shared `PhiElimination` runs after it. No SSA reconstruction.
 Owner llrm-arm64-lir (design, plan); implementation goes to a second arm64

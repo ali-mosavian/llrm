@@ -8,7 +8,7 @@ fn body(name: &str) -> String {
     let output = dir.path().join("t.s");
     let ir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/funnel_shift.ll");
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
-        .args(["-S", "-O2", "--isel=dag", "-o"])
+        .args(["-S", "-O2", "-o"])
         .arg(&output)
         .arg(ir)
         .output()
