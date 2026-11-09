@@ -3285,7 +3285,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> bool {
         let (ka, kb) = (super::known_bits::known_bits(self.dag, a), super::known_bits::known_bits(self.dag, b));
         let all = super::fold::mask(ka.width);
-        (!ka.zero & all) + (!kb.zero & all) <= all
+        // At 128 bits the sum of the two maxima wraps in a `u128`, which read as "fits".
+        (!ka.zero & all).checked_add(!kb.zero & all).is_some_and(|sum| sum <= all)
     }
 
     /// `visitUADDO_CARRY`
