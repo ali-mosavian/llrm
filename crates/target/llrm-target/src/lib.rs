@@ -18,6 +18,7 @@ pub mod routines;
 pub mod runtime;
 pub mod timings;
 pub mod tune;
+pub mod testing;
 
 use std::rc::Rc;
 
@@ -588,6 +589,14 @@ pub trait Target {
     /// A `mov imm; jmp` block with one predecessor is folded into it at -Os
     /// (LEAF-FOLD-OS).
     fn leaf_fold_at_size(&self) -> bool {
+        false
+    }
+
+    /// MachineCSE keeps a compare whose difference nothing reads apart from the
+    /// same difference made in a later block, when that difference overwrites
+    /// an operand still live (CSE-CMP): sharing them moves the subtract in
+    /// front of the branch and adds a copy of the operand. The pin shares.
+    fn cse_keeps_compare_with_live_minuend(&self) -> bool {
         false
     }
 

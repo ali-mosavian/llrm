@@ -4,6 +4,12 @@ Values are (clocks, code bytes). O1 has two axes, a row is worse when either is 
 O2 and O3 are one metric, clocks + RATE x bytes; Os is code bytes.
 """
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools"))
+import virtual_ok  # noqa: E402
+
 RATE = 0.312
 
 
@@ -26,3 +32,15 @@ def worse(level, value, refs):
     if level == "O1":
         return value[0] > min(r[0] for r in refs) or value[1] > min(r[1] for r in refs)
     return metric(level, value) > min(metric(level, r) for r in refs)
+
+
+def verdict(level, value, gcc, clang):
+    """"ok", "VIRTUAL-OK" or "WORSE" for one row. `clang` is the pin's clang.
+
+    O1 has a per-axis bar; a virtual cell (no real compiler attains both axes) passes by tools/virtual_ok.py, the one rule of
+    the owner tables. Other levels have one metric.
+    """
+    refs = [gcc, clang]
+    if not worse(level, value, refs):
+        return "ok"
+    return "VIRTUAL-OK" if level == "O1" and virtual_ok.virtual_ok(value, refs, clang) else "WORSE"

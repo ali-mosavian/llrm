@@ -17,6 +17,7 @@ pub mod narrow;
 pub mod prepare;
 pub mod regalloc;
 pub mod runtime_size;
+pub mod spilled_args;
 pub mod step;
 pub mod target;
 pub mod timing;
@@ -51,3 +52,17 @@ fn rows(
 }
 
 include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
+
+#[cfg(test)]
+mod stack_natural_alignment_tests {
+    /// The z80 datalayout named no stack alignment, so a pass raising an alloca to a type's preferred alignment had no bound.
+    #[test]
+    fn the_datalayout_states_the_stack_alignment_the_frames_keep() {
+        llrm_target::testing::assert_stack_facts(
+            "z80",
+            super::LAYOUT.lines().find_map(|line| line.strip_prefix("datalayout = \"")?.strip_suffix('"')).unwrap(),
+            llrm_target::Target::stack_alignment(&super::target::Z80) as u64,
+            None,
+        );
+    }
+}

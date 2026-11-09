@@ -131,8 +131,20 @@ impl Default for Z80Tti {
 }
 
 impl Tti for Z80Tti {
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; off, `variadic` grows +30/+51 B.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "z80"
+    }
+
+    /// `long i < 12` compares four bytes a test where a byte would do (`narrowiv`;
+    /// div_constants_short -Oz: -1189 B of 9887 with the counter an `int`).
+    fn narrows_counters(&self) -> bool {
+        true
     }
 
     fn cmp_sel_cost(
