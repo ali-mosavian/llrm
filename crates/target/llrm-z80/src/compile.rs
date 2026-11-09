@@ -2049,8 +2049,8 @@ thread_local! {
 /// 57 B for the calls, the shift routines the copies call), so the functions
 /// the call makes smaller keep it only where together they save what the
 /// routines cost (switch_table_holes -Os: 40 B saved, 57 B routine).
-/// DEVIATE z80-mul-function-price: the pin's `decomposeMulByConstant` has no
-/// such choice. Owner z80. Every runtime routine a variant reaches is already
+/// DEVIATE z80-callinline-price (replaces z80-mul-function-price; see `prefers`): the pin's
+/// `decomposeMulByConstant` has no such choice. Owner z80. Every runtime routine a variant reaches is already
 /// priced (`runtime_size`), so no libcall is left out of the total.
 fn decomposes(
     selected: &Selections,
@@ -2248,7 +2248,8 @@ fn decomposed_functions(
 /// smaller relative regret (a form's worse axis against the best of the two on that axis), so a form that gives
 /// up a few percent of one axis for a large part of the other wins, and the reverse does not.
 /// DEVIATE z80-callinline-price: the pin keys a call against inline on `optsize` alone (`ForCodeSize`) and
-/// prices neither the routine's clocks nor the bytes against each other. Owner z80, exit 2026-11-20.
+/// prices neither the routine's clocks nor the bytes against each other. It prices the multiply calls and the long
+/// shift calls (`size_shift_call`) by the same model (`runtime_size::routine_clocks`). Owner z80, exit 2026-11-20.
 fn prefers(
     level: Level,
     new: (u32, u64),
