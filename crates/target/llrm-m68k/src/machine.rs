@@ -42,6 +42,10 @@ impl Machine for M68kMachine {
         Some(Rc::new(M68k::for_cpu(self.cpu)))
     }
 
+    fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
+        Some(Rc::new(crate::lowering::M68kLowering))
+    }
+
     fn spaces(&self) -> Spaces {
         Spaces::FLAT
     }
