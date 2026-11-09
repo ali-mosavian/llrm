@@ -203,3 +203,37 @@ def test_a_sweep_leaves_no_scratch_directory_behind(tmp_path, monkeypatch):
     args = type("A", (), {"old": stub, "new": _stub(tmp_path, "other", "R_386_PC32"), "targets": "m32", "levels": "O2", "jobs": 1})()
     objsweep.sweep(args, [tmp_path / "x.c"], "old")
     assert made and not any(Path(one).exists() for one in made), made
+
+
+def _selector_stub(tmp_path, refuses):
+    """A compiler that writes an object unless it is given `--isel=<refuses>`; arm64's llc takes hand, dag and shadow, not old."""
+    stub = tmp_path / "cc"
+    stub.write_text(
+        f'#!/bin/sh\nfor a in "$@"; do [ "$a" = "--isel={refuses}" ] && {{ echo "choose hand, dag or shadow" >&2; exit 1; }}; done\n'
+        'for a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && { printf "obj" > "$a"; next=; };; esac; done\nexit 0\n'
+    )
+    stub.chmod(0o755)
+    return str(stub)
+
+
+def test_a_selector_the_target_refuses_is_a_fault_not_untested_programs(tmp_path, capsys):
+    """The a64 sweep took --isel=old, which arm64's llc refuses: 355 cells read "failed on both sides" and the objects went uncompared."""
+    (tmp_path / "x.c").write_text("")
+    stub = _selector_stub(tmp_path, "old")
+    args = type("A", (), {"old": stub, "new": stub, "targets": "m32", "levels": "O2", "jobs": 1})()
+    assert objsweep.sweep(args, [tmp_path / "x.c"], "old") == 2
+    out = capsys.readouterr().out
+    assert "SELECTOR FAULT x m32 -O2" in out and "NOT TESTED" in out
+
+
+def test_the_result_line_counts_the_cells_not_tested_and_names_every_one(tmp_path, capsys):
+    """A sweep that failed on 55 of 355 cells named 10 of them and said "identical" for the rest."""
+    for name in "abcdefghijklm":
+        (tmp_path / f"{name}.c").write_text("")
+    stub = tmp_path / "cc"
+    stub.write_text("#!/bin/sh\necho 'error: boom' >&2\nexit 1\n")
+    stub.chmod(0o755)
+    args = type("A", (), {"old": str(stub), "new": str(stub), "targets": "m32", "levels": "O2", "jobs": 1})()
+    objsweep.sweep(args, sorted(tmp_path.glob("*.c")), "old")
+    out = capsys.readouterr().out
+    assert "13 cells NOT TESTED" in out and out.count("failed on both") >= 13
