@@ -695,22 +695,26 @@ pub fn gpr_caller_saved_count() -> usize {
     15 + 1 + usize::from(!darwin())
 }
 
-fn gpr_order() -> Vec<RegId> {
+fn gpr_order(
+    darwin: bool,
+    scratch_free: bool,
+    frame_pointer_free: bool,
+) -> Vec<RegId> {
     // The caller-saved registers first, then x19..x28. x16 and x17 are the
     // frame lowerer's scratch registers; x15 and, off Darwin, x18 are
     // allocatable (the pin's `getReservedRegs` reserves x18 on Darwin only).
     let mut extra: Vec<u32> = vec![15];
-    if scratch_free() {
+    if scratch_free {
         extra.extend([16, 17]);
     }
-    if !darwin() {
+    if !darwin {
         extra.push(18);
     }
     (9..=14u32)
         .chain((0..=8).rev())
         .chain(extra)
         .chain(19..=28)
-        .chain(frame_pointer_free().then_some(29))
+        .chain(frame_pointer_free.then_some(29))
         .map(|n| id(Class::Gpr, n))
         .collect()
 }
@@ -733,20 +737,29 @@ pub fn candidate_orders_built() -> usize {
 /// interval allocated, 4,274 times for shellsort's two functions: it is built
 /// once per such state.
 pub fn candidate_order(class: Class) -> Vec<RegId> {
-    let state = (class, darwin(), scratch_free(), frame_pointer_free());
+    cached_order((class, darwin(), scratch_free(), frame_pointer_free()))
+}
+
+/// [`candidate_order`] for an explicit state; the cache is keyed by all of it.
+fn cached_order(state: Flags) -> Vec<RegId> {
     ORDERS.with(|orders| {
         if let Some((_, order)) = orders.borrow().iter().find(|(known, _)| *known == state) {
             return order.clone();
         }
         ORDERS_BUILT.with(|built| built.set(built.get() + 1));
-        let order = match class {
-            Class::Gpr => gpr_order(),
-            Class::Fpr => fpr_order(),
-            Class::Quad => fpr_order().into_iter().filter(|id| !callee_saved_fpr(*id)).collect(),
-        };
+        let order = built_order(state);
         orders.borrow_mut().push((state, order.clone()));
         order
     })
+}
+
+/// The order itself: a function of the class and the three flags only.
+fn built_order((class, darwin, scratch_free, frame_pointer_free): Flags) -> Vec<RegId> {
+    match class {
+        Class::Gpr => gpr_order(darwin, scratch_free, frame_pointer_free),
+        Class::Fpr => fpr_order(),
+        Class::Quad => fpr_order().into_iter().filter(|id| !callee_saved_fpr(*id)).collect(),
+    }
 }
 
 fn callee_saved_fpr(id: RegId) -> bool {
@@ -954,19 +967,44 @@ mod tests {
 
     /// `candidates` rebuilt its register order (a chain of ranges mapped to ids
     /// into a vector) on every call: 3.5 M of shellsort's 583 M, 4,274 calls.
-    /// The order is built once per target state and class. (The state flags are
-    /// process-wide, so the test leaves them alone.)
+    /// The order is built once per target state and class. The state flags are
+    /// process-wide, so the test passes each state itself.
     #[test]
     fn the_candidate_order_is_built_once_per_state() {
         let before = candidate_orders_built();
-        let first = candidate_order(Class::Gpr);
+        let base = (Class::Gpr, false, false, false);
+        let first = cached_order(base);
         for _ in 0..50 {
-            assert_eq!(candidate_order(Class::Gpr), first);
+            assert_eq!(cached_order(base), first);
         }
         assert_eq!(candidate_orders_built() - before, 1, "built again for the same state");
-        let (fpr, quad) = (candidate_order(Class::Fpr), candidate_order(Class::Quad));
-        assert!(quad.len() < fpr.len() && !first.is_empty(), "the premise: the classes have their own orders");
-        assert_eq!(candidate_orders_built() - before, 3);
+        assert!(!first.is_empty(), "the premise: an order");
+    }
+
+    /// Each input of the order is in the cache's key: flipping one gives the
+    /// order that input makes, never a cached one of another state.
+    #[test]
+    fn every_input_of_the_candidate_order_is_in_the_cache_key() {
+        let order = |state| cached_order(state);
+        let base = order((Class::Gpr, false, false, false));
+        let (darwin, scratch, fp) = (
+            order((Class::Gpr, true, false, false)),
+            order((Class::Gpr, false, true, false)),
+            order((Class::Gpr, false, false, true)),
+        );
+        let x = |n: u32| id(Class::Gpr, n);
+        assert!(base.contains(&x(18)) && !darwin.contains(&x(18)), "x18 is the platform register on Darwin");
+        assert!(
+            !base.contains(&x(16)) && scratch.contains(&x(16)) && scratch.contains(&x(17)),
+            "x16, x17 when the frame needs no scratch"
+        );
+        assert!(!base.contains(&x(29)) && fp.contains(&x(29)), "x29 when there is no frame record");
+        // Asking again returns each state's own order, not the last one's.
+        assert_eq!(order((Class::Gpr, false, false, false)), base);
+        assert_eq!(order((Class::Gpr, true, false, false)), darwin);
+        assert_eq!(order((Class::Gpr, false, false, true)), fp);
+        let (fpr, quad) = (order((Class::Fpr, false, false, false)), order((Class::Quad, false, false, false)));
+        assert!(quad.len() < fpr.len(), "the classes have their own orders");
     }
 
     /// `movk` reads and writes its register: the view needs a def, a use and a
