@@ -43,6 +43,7 @@ fn run() -> i32 {
             "-mattr=+exception-handling" => handling = true,
             other if other.starts_with("-mtriple=") => triple = other["-mtriple=".len()..].to_owned(),
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
+            other if other.starts_with("-f") && driver::pass_flag(other) => {}
             // `bounds` checks nothing in IR (llrm-cc); `stack` needs a C
             // runtime this target lacks.
             "-fsanitize=bounds" | "-fno-sanitize=bounds" | "-fno-sanitize=stack" => {}

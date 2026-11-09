@@ -173,3 +173,11 @@ def test_a_program_including_stdio_is_not_run_on_a_freestanding_target():
     source = (RUN / "widening_multiply.c").read_text()
     assert not any(ct.applies(t, source) for t in ("wasm32", "z80-sdcc", "6502-sim65"))
     assert ct.applies("x86_16-wat", source) and ct.applies("x86_64-linux", source)
+
+
+def test_long_double_variadic_runs_on_m68k_and_its_row_is_closed():
+    """The pin prints 0 for it (M68K-VA-DOUBLE); ours reads the double at the ABI slot (#8453), so it is a cell again, not a skip."""
+    source = (RUN / "long_double_variadic.c").read_text()
+    assert all(ct.applies(t, source) for t in ("m68k-68000", "m68k-68020", "x86_32-linux"))
+    row = (RUN.parents[2] / "docs/working/m68k-va-double-row.md").read_text()
+    assert "CLOSED by #8453" in row and "Owner: m68k" in row and "Review: 2026-12-20" in row
