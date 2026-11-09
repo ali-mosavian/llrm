@@ -1789,7 +1789,10 @@ fn writes_register(
 /// not changed since. The shift put that bit in the carry, so `bcc` replaces
 /// `bpl` or `beq` (`bcs` for `bmi`, `bne`) and the test (`ldx m`, `txa`,
 /// `and #1`, ...) goes, when the register it set is written again before
-/// anything reads it. [`LEFT`] and [`RIGHT`] say which shifts and tests pair.
+/// anything reads it; `cmp|cpx|cpy #0` is a test too (it sets no register, but
+/// it sets the carry, which the shift's carry replaces: it must be dead on
+/// both paths).
+/// [`LEFT`] and [`RIGHT`] say which shifts and tests pair.
 ///
 /// DEVIATE (6502-8): neither LLVM's pin nor llvm-mos folds a bit test of a
 /// value into the carry of its own shift (the pin has ARM Thumb1's `LSLS`
@@ -1824,30 +1827,38 @@ fn carry_branch(
         _ => Op::Bcs,
     };
     // what the test reads, the register it sets, and its first line
-    let (source, tested, from) = if shape.masked {
+    let (source, tested, from, sets_carry) = if shape.masked {
         let Line::Inst(Inst { op: Op::And, operand: Operand::Imm(one), .. }) = &asm.lines[at - 1] else { return None };
         if one != "1" {
             return None;
         }
         match asm.lines.get(at - 2) {
             Some(Line::Inst(Inst { op: Op::Lda, operand, .. })) if operand.is_cell() => {
-                (Source::Cell(operand), Registers::A, at - 2)
+                (Source::Cell(operand), Some(Registers::A), at - 2, false)
             }
-            Some(Line::Inst(Inst { op: Op::Txa, .. })) => (Source::Register(Registers::X), Registers::A, at - 2),
-            Some(Line::Inst(Inst { op: Op::Tya, .. })) => (Source::Register(Registers::Y), Registers::A, at - 2),
+            Some(Line::Inst(Inst { op: Op::Txa, .. })) => (Source::Register(Registers::X), Some(Registers::A), at - 2, false),
+            Some(Line::Inst(Inst { op: Op::Tya, .. })) => (Source::Register(Registers::Y), Some(Registers::A), at - 2, false),
             // `and #1` alone tests the accumulator as it is
-            _ => (Source::Register(Registers::A), Registers::A, at - 1),
+            _ => (Source::Register(Registers::A), Some(Registers::A), at - 1, false),
         }
     } else {
         let Line::Inst(Inst { op: read, operand, .. }) = &asm.lines[at - 1] else { return None };
         match read {
-            Op::Lda if operand.is_cell() => (Source::Cell(operand), Registers::A, at - 1),
-            Op::Ldx if operand.is_cell() => (Source::Cell(operand), Registers::X, at - 1),
-            Op::Ldy if operand.is_cell() => (Source::Cell(operand), Registers::Y, at - 1),
-            Op::Tax => (Source::Register(Registers::A), Registers::X, at - 1),
-            Op::Tay => (Source::Register(Registers::A), Registers::Y, at - 1),
-            Op::Txa => (Source::Register(Registers::X), Registers::A, at - 1),
-            Op::Tya => (Source::Register(Registers::Y), Registers::A, at - 1),
+            Op::Lda if operand.is_cell() => (Source::Cell(operand), Some(Registers::A), at - 1, false),
+            Op::Ldx if operand.is_cell() => (Source::Cell(operand), Some(Registers::X), at - 1, false),
+            Op::Ldy if operand.is_cell() => (Source::Cell(operand), Some(Registers::Y), at - 1, false),
+            Op::Tax => (Source::Register(Registers::A), Some(Registers::X), at - 1, false),
+            Op::Tay => (Source::Register(Registers::A), Some(Registers::Y), at - 1, false),
+            Op::Txa => (Source::Register(Registers::X), Some(Registers::A), at - 1, false),
+            Op::Tya => (Source::Register(Registers::Y), Some(Registers::A), at - 1, false),
+            Op::Cmp | Op::Cpx | Op::Cpy if *operand == Operand::Imm("0".to_owned()) => {
+                let register = match read {
+                    Op::Cmp => Registers::A,
+                    Op::Cpx => Registers::X,
+                    _ => Registers::Y,
+                };
+                (Source::Register(register), None, at - 1, true)
+            }
             _ => return None,
         }
     };
@@ -1913,8 +1924,19 @@ fn carry_branch(
             return None;
         }
     };
-    (copied && dead_from(&asm.lines, at + 1, tested, &mut HashSet::default(), Exits::default()))
-        .then_some((carry, from))
+    let carry_free = !sets_carry || {
+        let taken = branch
+            .target()
+            .and_then(|label| asm.lines.iter().position(|l| *l == Line::Label(label.to_owned())));
+        carry_dead_from(&asm.lines, at + 1, &mut HashSet::default())
+            && taken.is_some_and(|to| carry_dead_from(&asm.lines, to, &mut HashSet::default()))
+    };
+    (copied
+        && carry_free
+        && tested.is_none_or(|register| {
+            dead_from(&asm.lines, at + 1, register, &mut HashSet::default(), Exits::default())
+        }))
+    .then_some((carry, from))
 }
 
 /// The memory byte a step of one was added to and stored back, and the step

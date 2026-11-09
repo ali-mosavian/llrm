@@ -3534,6 +3534,10 @@ fn emit_with<const STACK: bool>(
         Operand::Block(id) => labels[*id as usize][0].clone(),
         other => unreachable!("{other:?} is not a block"),
     };
+    // `__csave` changes a, x and y: where it could not be called and the cells
+    // were pushed here, `__crest` is not jumped to either, or a function the
+    // module did not count as a user would link it
+    let mut pushed_inline = false;
     for (b, block) in function.blocks.iter().enumerate() {
         for label in &labels[block.id as usize] {
             writeln!(out, "{label}:").unwrap();
@@ -4087,6 +4091,7 @@ fn emit_with<const STACK: bool>(
                         if a_live && keep.is_none() {
                             return Err("a register is live where the callee-saved cells are saved".into());
                         }
+                        pushed_inline = true;
                         if let (true, Some((_, r))) = (a_live, keep) {
                             writeln!(out, "  ta{r}").unwrap();
                         }
@@ -4103,7 +4108,9 @@ fn emit_with<const STACK: bool>(
                 // the restore is the function's return: `jmp` to the routine
                 // that pops and returns, unless x holds a result, when the
                 // cells are popped here
-                (Kind::Op("CREST"), _) if !after[b][i].contains(&reg::X) && !after[b][i].contains(&reg::Y) => {
+                (Kind::Op("CREST"), _)
+                    if !pushed_inline && !after[b][i].contains(&reg::X) && !after[b][i].contains(&reg::Y) =>
+                {
                     if a_live {
                         out.push_str("  tay\n");
                     }
