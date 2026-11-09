@@ -2565,9 +2565,11 @@ fn test_a_recursion_with_a_loop_in_it_is_not_copied_for_its_calls() {
   store i32 %z, ptr %q
   %acc1 = add i32 %z, %v",
     ));
-    // walk's own two calls (m16 TRE keeps them when the accumulator loop would
-    // spill) and main's: a copy would add more.
-    assert!(heavy <= 3, "the loop-bodied recursion was copied: {heavy} calls");
+    // No copy of the loop for its calls: walk's own two calls plus main's.
+    // That count is the DEVIATE TRE-1 form (m16 keeps a tree recursion's calls
+    // when the accumulator loop would spill; the pin's TRE would loop the
+    // second one, leaving 2). A copy adds calls to it.
+    assert_eq!(heavy, 3, "the loop-bodied recursion was copied for its calls");
 }
 
 const CALL_BOUND: &str = "define i32 @fib(i32 %n) {
