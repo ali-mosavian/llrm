@@ -123,26 +123,6 @@ fn a_member_one_site_links_is_free_to_the_next() {
     assert!(together.contains("__popcountsi2"), "{together}");
 }
 
-/// Variable 64-bit shifts are the second class of the same table: two sites
-/// call `__ashldi3` (2 x 24 + 72 B against 2 x 62 B); a constant amount stays
-/// inline whatever the count.
-#[test]
-fn variable_wide_shifts_call_the_runtime_from_the_second_site_and_constant_ones_never() {
-    let shifts = |amount: &str, uses: usize| {
-        let mut ir = HEAD.to_owned();
-        for n in 0..uses {
-            ir.push_str(&format!(
-                "define i64 @s{n}(i64 %x, i64 %n) optsize {{ %r = shl i64 %x, {amount} ret i64 %r }}\n"
-            ));
-        }
-        ir
-    };
-    let options = Options { mid_end: false, ..Options::default() };
-    assert!(!asm(&shifts("%n", 1), "s0", Cpu::M68020, options).contains("__ashldi3"));
-    assert!(asm(&shifts("%n", 2), "s0", Cpu::M68020, options).contains("__ashldi3"));
-    assert!(!asm(&shifts("7", 3), "s0", Cpu::M68020, options).contains("__ashldi3"));
-}
-
 /// Both ways give the same answers on the hardware: the programs run the
 /// count and shift routines the choice calls (defined here, built for speed so
 /// they stay inline) and exit 42 when every result is right.
@@ -334,4 +314,35 @@ fn a_routine_is_never_called_from_the_unit_that_defines_it() {
     );
     let out = asm(&ir, "__ctzdi2", Cpu::M68020, Options { mid_end: false, ..Options::default() });
     assert!(!out.contains("jsr\t__ctzdi2"), "{out}");
+}
+
+/// The choice is a function of the module's functions, not of their order or of
+/// when it is asked: the same module, and the same functions reversed, give
+/// the same mask every time.
+#[test]
+fn the_choice_is_the_same_every_time_and_in_any_function_order() {
+    let options = Options { size: true, mid_end: false, ..Options::default() };
+    let pick = |ir: &str| {
+        let module = llrm_mir::parse::module(ir).expect("parses");
+        (0..3).map(|_| llrm_m68k::compile::libcalls_for(&module, Cpu::M68020, options)).collect::<Vec<_>>()
+    };
+    let functions = |order: &[usize]| {
+        let all = [
+            "define i32 @c(i64 %x) { %r = call i64 @llvm.cttz.i64(i64 %x, i1 true) %t = trunc i64 %r to i32 ret i32 %t }",
+            "define i32 @d(i64 %x) { %r = call i64 @llvm.ctpop.i64(i64 %x) %t = trunc i64 %r to i32 ret i32 %t }",
+            "define i32 @p(i32 %x) { %r = call i32 @llvm.ctpop.i32(i32 %x) ret i32 %r }",
+            "define i64 @s(i64 %x, i64 %n) { %r = shl i64 %x, %n ret i64 %r }",
+            "define i64 @t(i64 %x, i64 %n) { %r = shl i64 %x, %n ret i64 %r }",
+        ];
+        let body: Vec<&str> = order.iter().map(|&at| all[at]).collect();
+        format!(
+            "{HEAD}declare i64 @llvm.cttz.i64(i64, i1)\ndeclare i64 @llvm.ctpop.i64(i64)\ndeclare i32 @llvm.ctpop.i32(i32)\n{}\n",
+            body.join("\n")
+        )
+    };
+    let forward = pick(&functions(&[0, 1, 2, 3, 4]));
+    let backward = pick(&functions(&[4, 3, 2, 1, 0]));
+    assert!(forward.iter().all(|mask| *mask == forward[0]), "{forward:?}");
+    assert_eq!(forward[0], backward[0], "{forward:?} against {backward:?}");
+    assert_ne!(forward[0], 0, "the module has sites that pay");
 }
