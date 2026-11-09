@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """clocks.py [--check]: measure __mulsi3 in ucsim (the call instruction through the return) for a spread of multipliers, fit
-T = BASE + PASS * bit_length(b) + ADD * popcount(b), and with --check fail unless src/runtime_size.rs carries the same
-constants. The routine shifts b right once per pass until b is spent and adds on each set bit (z80_rt.s), so the
+T = BASE + PASS * max(1, bit_length(b)) + ADD * popcount(b), and with --check fail unless src/runtime_size.rs carries the same
+constants. The routine shifts b right once per pass until b is spent (at least one pass: b = 0 takes one) and adds on each set bit (z80_rt.s), so the
 multiplicand does not matter."""
 import os, re, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RT = os.path.join(HERE, "z80_rt.s")
 RUST = os.path.join(HERE, "..", "src", "runtime_size.rs")
+# The three points that fix BASE, PASS and ADD are the first three (bit lengths 1, 2, 2 with popcounts 1, 1, 2); the
+# rest of POINTS spans bit lengths 3..32 and popcounts 1..32 and must agree with the fit. HELD_OUT were chosen after
+# the fit and never used in it: zero, one, a large power of two, 2^31 - 1, three fixed-seed random 32-bit values.
 POINTS = (1, 2, 3, 5, 7, 11, 100, 255, 256, 0xFFFF, 0x10001, 0xFFFFFFFF)
+HELD_OUT = (0, 1, 1 << 31, 0x7FFFFFFF, 0x9E3779B9, 0x2545F491, 0xC2B2AE35)
+# the multiplicand does not change the clocks: checked with these as well
+MULTIPLICANDS = (0x12345678, 0, 1, 0xFFFFFFFF, 0xDEADBEEF)
 
 
 def measure(work, a, b):
@@ -32,7 +38,7 @@ def measure(work, a, b):
 def fit(rows):
     """BASE, PASS, ADD from three points, then every point must agree."""
     (b1, t1), (b2, t2), (b3, t3) = rows[0], rows[1], rows[2]
-    bits = lambda b: b.bit_length()
+    bits = lambda b: max(1, b.bit_length())
     pops = lambda b: bin(b).count("1")
     pass_ = (t2 - t1) // (bits(b2) - bits(b1))
     add = (t3 - t2) // (pops(b3) - pops(b2))
@@ -44,9 +50,15 @@ def fit(rows):
 def main():
     with tempfile.TemporaryDirectory() as work:
         rows = [(b, measure(work, 0x12345678, b)) for b in POINTS]
-    base, pass_, add, bad = fit(rows)
-    if bad:
-        sys.exit(f"clocks.py: the model does not fit: {bad}")
+        base, pass_, add, bad = fit(rows)
+        if bad:
+            sys.exit(f"clocks.py: the model does not fit: {bad}")
+        model = lambda b: base + pass_ * max(1, b.bit_length()) + add * bin(b).count("1")
+        held = [(hex(a), hex(b), measure(work, a, b), model(b)) for b in HELD_OUT for a in MULTIPLICANDS[:2]]
+        held += [(hex(a), hex(b), measure(work, a, b), model(b)) for a in MULTIPLICANDS[2:] for b in (3, 0xFFFF, 0x9E3779B9)]
+        wrong = [row for row in held if row[2] != row[3]]
+        if wrong:
+            sys.exit(f"clocks.py: held-out points disagree (a, b, measured, model): {wrong}")
     print(f"MULSI3_BASE={base} MULSI3_PASS={pass_} MULSI3_ADD={add}")
     if "--check" in sys.argv:
         rust = open(RUST).read()
