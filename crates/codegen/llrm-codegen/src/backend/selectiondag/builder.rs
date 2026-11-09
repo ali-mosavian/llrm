@@ -146,6 +146,9 @@ pub struct BuilderTarget {
     /// The function is tuned for size (`-Os`, `optsize`, `minsize`: the pin's
     /// `hasOptSize`): a jump table needs 40% density.
     pub opt_size: bool,
+    /// Bytes decide over clocks (`Profile::bytes_strict`: -O1, -Os): a
+    /// deviation that trades bytes for clocks at speed stays off.
+    pub bytes_strict: bool,
     /// The build is for the least size (`-Oz`, the pin's `minsize`).
     pub min_size: bool,
     /// The store limits a memset, memcpy or memmove is inlined for: the
@@ -428,6 +431,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target's bytes decide over clocks (-O1, -Os) or not.
+    pub fn with_bytes_strict(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.bytes_strict = on;
+        self
+    }
+
     /// This target tuned for the least size or not.
     pub fn with_min_size(
         mut self,
@@ -510,6 +522,7 @@ impl BuilderTarget {
             float_store: false,
             jump_tables: true,
             opt_size: false,
+            bytes_strict: false,
             min_size: false,
             tuning: llrm_mir::target::Tuning::PIN,
             size_trade: None,

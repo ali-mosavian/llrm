@@ -1078,6 +1078,13 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-9: whether a linear recursion (one call of itself) called from another function is copied into the caller and peeled
+    /// there, as gcc does, without the pin's `recursive` refusal or the bytes-against-clocks rule (gcc prices no clocks; the peeling's
+    /// own caps bound it). false: REC-1's bounds and the price, as for a tree.
+    fn peels_linear_recursion(&self) -> bool {
+        false
+    }
+
     /// DEVIATE REC-7: the depth of the copies at (-O2, -O3); none: the depth
     /// of `recursive_inlining`.
     fn recursive_inlining_depth(&self) -> Option<(u32, u32)> {
@@ -1666,6 +1673,16 @@ pub trait Tti {
 
     /// `shouldDropLSRSolutionIfLessProfitable`.
     fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LU15 (owner z80, exit 2026-12-15: a baseline that prices the
+    /// loop as written): with `should_drop_lsr_solution_if_less_profitable`,
+    /// a loop that has an address use keeps LSR's solution. The baseline
+    /// rates every address as one pointer register, so a solution that adds
+    /// the pointer beside a count always looks worse, and dropping it keeps
+    /// `base + i` (strlen: +17 B, a frame). The pin has no drop here.
+    fn lsr_dropped_solution_spares_addresses(&self) -> bool {
         false
     }
 

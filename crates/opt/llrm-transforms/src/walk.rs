@@ -281,6 +281,7 @@ impl ProgramPass for Walk {
             let private = private(program, at);
             let module = &mut program.modules[at];
             let mut recursive = crate::inline::recursive(module);
+            let mut linear_recursive = crate::inline::linear_recursive(module, &recursive);
             let addressed = llrm_mir::callgraph::addressed(module);
             // The calls to each function as the splices leave them, as LLVM's
             // use lists do (`isSoleCallToLocalFunction`), and a callee with
@@ -332,6 +333,7 @@ impl ProgramPass for Walk {
                                 live.references(),
                                 &addressed,
                                 &recursive,
+                                &linear_recursive,
                                 params,
                                 size,
                                 self.inline.limit == 0,
@@ -495,6 +497,7 @@ impl ProgramPass for Walk {
                             live.spliced(module, &mut modules[at], was, mid);
                             if recursive.contains(&id) {
                                 recursive = crate::inline::recursive(module);
+                                linear_recursive = crate::inline::linear_recursive(module, &recursive);
                             }
                             repeats += 1;
                             continue;
@@ -612,6 +615,7 @@ impl ProgramPass for Walk {
                                         live.references(),
                                         &addressed,
                                         &recursive,
+                                        &linear_recursive,
                                         params,
                                         size,
                                         self.inline.limit == 0,
@@ -828,6 +832,7 @@ impl ProgramPass for Walk {
                         live.spliced(module, &mut modules[at], was, now.clone());
                         if recursive.contains(&id) {
                             recursive = crate::inline::recursive(module);
+                            linear_recursive = crate::inline::linear_recursive(module, &recursive);
                         }
                         repeats += 1;
                         if repeats >= DEVIRT_REPEATS || !exposed {
