@@ -1269,7 +1269,7 @@ define i8 @minus(i8 %n) {
 fn a_float_is_carried_as_the_integer_of_its_width() {
     let request = Request::new(Level::O2);
     let pass = assembly(&module("define float @f(float %x, float %y) {\n  ret float %x\n}"), &request).unwrap();
-    assert!(pass.contains("ldy rc5"), "the high word moved down:\n{pass}");
+    assert!(pass.contains("f:\n  rts\n"), "x arrives in a:x where the result leaves, so nothing moves:\n{pass}");
     let copy = "define void @g(ptr %p, ptr %q) {\n  %v = load float, ptr %p\n  store float %v, ptr %q\n  ret void\n}";
     let copied = assembly(&module(copy), &request).unwrap();
     assert_eq!(copied.matches("sta (").count(), 4, "four bytes stored:\n{copied}");

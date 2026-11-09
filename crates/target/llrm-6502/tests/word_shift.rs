@@ -24,18 +24,18 @@ fn bytes(
     (estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes, body)
 }
 
-/// The chain through A, by hand under the ABI (rc2:rc3 in, A:X out):
-/// shl `lda rc2; (asl a; rol rc3)*k; ldx rc3; rts`, shr
-/// `lda rc3; (lsr a; ror rc2)*k; tax; lda rc2; rts`, sar the same with
-/// `cmp #$80; ror a; ror rc2`.
+/// The chain by hand under the ABI (lo in a, hi in x, in and out): shl `stx
+/// rc3; (asl a; rol rc3)*k; ldx rc3; rts`; shr `sta rc2; txa; (lsr a; ror
+/// rc2)*k; tax; lda rc2; rts`; sar the same with `cmp #$80; ror a; ror rc2`
+/// (the sign needs the high byte in a, so the low byte is stored first).
 fn target(
     op: &str,
     k: u32,
 ) -> u32 {
     match op {
         "shl" => 3 * k + 5,
-        "lshr" => 3 * k + 6,
-        _ => 5 * k + 6,
+        "lshr" => 3 * k + 7,
+        _ => 5 * k + 7,
     }
 }
 

@@ -115,12 +115,17 @@ fn a_trial_selects_each_build_once() {
     assert_eq!(functions, 2 * once, "two builds, one selection each");
 }
 
-/// A 4-trip loop that calls out each trip: unrolled it saves 252 clocks for 96
-/// more bytes (2.6 clk/B, measured 235 for +96, 2.4), under the 3 clk/B a byte
-/// is worth at -O2. The estimate weighed the loop at ten trips and kept it at
-/// four times the clocks (`extension_chain_fused`, 2026-11-08).
+/// A 4-trip loop that calls out each trip, and three times more on a volatile
+/// word: unrolled it saves 252 clocks for 186 more bytes (1.4 clk/B), under the
+/// 3 clk/B a byte is worth at -O2. The estimate weighed the loop at ten trips
+/// and kept it at four times the clocks (`extension_chain_fused`, 2026-11-08).
+/// The first call alone (the original body) unrolls since the arguments arrive
+/// in a:x: 78 bytes for 252 clocks, 3.2 clk/B, so the other calls keep the
+/// loop's price under the rate.
 const FOUR_TRIPS: &str = "@owner = global [4 x i8] c\"\\01\\FE\\03\\FC\"
 declare void @report(i32)
+declare void @other(i16)
+@vol = global i16 0
 define i16 @main() {
 entry:
   br label %loop
@@ -132,6 +137,12 @@ loop:
   %a = add i16 %s, -1
   %w = sext i16 %a to i32
   call void @report(i32 %w)
+  %q0 = load volatile i16, ptr @vol
+  call void @other(i16 %q0)
+  %q1 = load volatile i16, ptr @vol
+  call void @other(i16 %q1)
+  %q2 = load volatile i16, ptr @vol
+  call void @other(i16 %q2)
   %kn = add i16 %k, 1
   %c = icmp ult i16 %kn, 4
   br i1 %c, label %loop, label %done
