@@ -226,6 +226,25 @@ impl Tti for M68k {
         1
     }
 
+    /// DEVIATE M68K-LSR-FRAME (owner m68k-lsr-addressing, exit none while the
+    /// backend folds `(d8,%sp,Xn)`, `frameindexed.rs`): the pin's M68k has no
+    /// TTI, so its LSR keeps one pointer IV per stack array (`llc
+    /// -print-after=loop-reduce`, d1106deb); its x86 shares one index, as LU6
+    /// does here. A stack slot is `%sp` and a displacement, no register.
+    ///
+    /// Rows, owner m68k-lsr-addressing, exit 2026-11-30, fix a general
+    /// index-versus-pointer cost via Tti (no per-program patch):
+    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`.
+    ///   O1 cells leaving the bar (clocks, executed): bintree 68000 +1784
+    ///   (+0.06%), 68020 +894 (+0.18%), each for -4 B; frameless O1 68000
+    ///   +68 (+0.12%), 68020 +10 (+0.05%), each for -2 B. O2/Os frameless
+    ///   cost the same clocks.
+    /// - M68K-LSR-D2U64-BYTES: double_to_uint64 +8..+26 B (68000 +10 at
+    ///   O1/O2/Os; 68020 O1 +8, O2 +26, Os +10); executed clocks equal.
+    fn frame_address_is_free(&self) -> bool {
+        true
+    }
+
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
     /// by the access size for free (descriptors in `indexed.rs`), so LSR keeps
     /// a pointer walk rather than an index beside a counter. Exit: 2026-11-20,

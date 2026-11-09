@@ -18,10 +18,8 @@ fn run(
     l: u8,
     callee: &str,
 ) -> u8 {
-    static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let n = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("z80-frame-{}-{n}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("makes a directory");
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let body = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     let asm = format!(
         "\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n\tld a,#{a}\n\tld l,#{l}\n\tcall _f\n\tld (0x8f00),a\n\thalt\n\
