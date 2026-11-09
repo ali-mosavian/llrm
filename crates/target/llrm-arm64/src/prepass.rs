@@ -454,7 +454,8 @@ fn sink(
                     continue;
                 }
                 let Some(register) = defined(op) else { continue };
-                let once = |one: &Reg| definitions.get(one) == Some(&1);
+                // The zero register is a constant (`isConstantPhysReg`), not a value some definition makes.
+                let once = |one: &Reg| definitions.get(one) == Some(&1) || *one == Reg::Gpr(Gpr::R31);
                 if !once(&register) || !(zero || op.defs_and_uses().1.iter().all(once)) {
                     continue;
                 }
@@ -839,7 +840,8 @@ fn invariants(
                         .1
                         .iter()
                         .all(|used| !inside_defs.contains(used) || !used.is_virtual() && false)
-                    && op.defs_and_uses().1.iter().all(|used| used.is_virtual());
+                    // The zero register is a constant, not a value the loop could change.
+                    && op.defs_and_uses().1.iter().all(|used| used.is_virtual() || *used == Reg::Gpr(Gpr::R31));
                 if invariant {
                     inside_defs.remove(&defined(&op).expect("a definition"));
                     hoisted.push(op);
@@ -1591,6 +1593,31 @@ mod tests {
                 .iter()
                 .filter(|op| matches!(op, Op::I(Inst::MoveWide { imm16: 5000, .. })))
                 .count()
+        };
+        assert_eq!((count(0), count(1)), (1, 0), "{function:#?}");
+    }
+
+    /// `0.0` is `fmov s, wzr`; the zero register is a constant, so a loop that
+    /// makes it each trip has it made once before the loop (nbody_single -O2:
+    /// 6,000 executed `fmov s28, wzr`, the pin's one hoisted zero).
+    #[test]
+    fn a_float_zero_the_loop_makes_is_hoisted() {
+        let mut function = function();
+        function.blocks[0].ops.remove(0);
+        let zero = Op::I(Inst::FpInt {
+            op: FpConvert::Bits { to_fp: true },
+            width: Width::W,
+            size: FpSize::S,
+            gpr: Gpr(31),
+            fpr: Vreg(80),
+        });
+        let sum = Op::I(Inst::FpBinary { op: FpBinary::Add, size: FpSize::S, rd: Vreg(81), rn: Vreg(80), rm: Vreg(80) });
+        function.blocks[1].ops.insert(0, sum);
+        function.blocks[1].ops.insert(0, zero);
+        function.blocks[2].ops = vec![Op::Return { uses: vec![Reg::Fpr(Vreg(81))], tail: None }].into();
+        run(&mut function, false);
+        let count = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::FpInt { .. }))).count()
         };
         assert_eq!((count(0), count(1)), (1, 0), "{function:#?}");
     }
