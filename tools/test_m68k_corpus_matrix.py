@@ -44,6 +44,30 @@ class CorpusMatrix(unittest.TestCase):
         plain = str(Path(__file__).resolve().parent.parent / "tests/run/c/bit_test.c")
         self.assertNotIn("-D__clang__", tools.commands("gcc", "68000", "Os", plain, [], "/tmp/o")[0])
 
+    def test_the_header_stamps_every_compiler_and_the_dist_commit(self):
+        """A table whose ours column came from a stale build was read as a regression: the md5 of each binary and the commit it was built
+        from are in the header, and a run without the commit is refused."""
+        import os
+        with tempfile.TemporaryDirectory() as dist:
+            cc = Path(dist) / "llrm-cc"
+            cc.write_bytes(b"cc")
+            os.environ.update({"GCC_M68K": "/x/g", "LLRM_CC": str(cc), "LLRM_PIN_CLANG": "/x/c", "LLVM_M68K": "/x/l"})
+            os.environ.pop("DIST_COMMIT", None)
+            with self.assertRaises(SystemExit):
+                mx.Tools().stamps()
+            os.environ["DIST_COMMIT"] = "abcdef1234"
+            line = mx.Tools().stamps()
+            self.assertIn("dist commit abcdef1234", line)
+            self.assertIn("ours llrm-cc md5 " + __import__("hashlib").md5(b"cc").hexdigest()[:8], line)
+            self.assertIn("ours llrm-m68k-llc md5 missing", line)
+
+    def test_the_header_states_the_inline_setting_of_each_column(self):
+        """-fno-inline for gcc against the program's own flag for ours and clang: the header says they are the nearest, not the same."""
+        import os
+        for name in ("GCC_M68K", "LLRM_CC", "LLRM_PIN_CLANG", "LLVM_M68K"):
+            os.environ.setdefault(name, "/x/" + name)
+        self.assertIn("-fno-inline", mx.Tools().column_lines().split("# inlining:", 1)[1])
+
     def test_the_header_prints_every_columns_compile_lines(self):
         """A reader of a table saw only a hash of the setup; the three faults of 11-09 (hard float, rodata, inlining) were in command lines nobody printed."""
         import os

@@ -120,6 +120,22 @@ class WorseCells(unittest.TestCase):
         self.assertEqual(count(tsv(*rows)), (0, 1))
         self.assertEqual(count(with_library(tsv(*rows))), (1, 1))
 
+    def test_a_cell_worse_only_with_the_library_estimate_is_listed_not_counted(self):
+        """--whole made `40 B + 30 B of our members` against gcc's `44 B + 0` a verdict: gcc's library bytes are our archive's for the helpers
+        it calls, an estimate. The count stays the measured one; the cell is named under ESTIMATE."""
+        import subprocess
+        import tempfile
+        rows = [("m68k-68000", "p", lv, name, bytes_, "", "", "", lib) for lv in ("O1", "O2", "O3", "Os")
+                for name, bytes_, lib in (("ours", 40, 30 if lv == "Os" else 0), ("gcc", 44, 0))]
+        with tempfile.NamedTemporaryFile("w", suffix=".tsv") as table:
+            table.write(tsv(*rows).read())
+            table.flush()
+            out = subprocess.run([sys.executable, __file__.rsplit("/", 1)[0] + "/m68k_worse_cells.py", table.name, "--whole", "--allow-one-sided"],
+                                 capture_output=True, text=True).stdout
+        self.assertIn("0 worse of 4 judged cells", out)
+        self.assertIn("ESTIMATE (never in the count above): 1 more cells", out)
+        self.assertIn("m68k-68000/p/Os", out.split("ESTIMATE", 1)[1])
+
     def test_a_cell_whose_every_column_failed_still_counts_as_measured_at_that_level(self):
         """sum_three (x86 far pointers) fails in all three columns: its O1 row exists, it was reported 'level not measured'."""
         rows = [("m68k-68000", "p", lv, n, "", "", "", "n/a: compile-fail: x") for lv in ("O1", "O2", "O3", "Os") for n in ("ours", "gcc", "clang")]

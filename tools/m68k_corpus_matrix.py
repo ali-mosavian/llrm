@@ -165,10 +165,28 @@ class Tools:
         return [[self.clang, "--target=m68k-linux-gnu", "-ffreestanding", "-fno-pic", "-w", *self.clang_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-S", "-emit-llvm", path, "-o", out + ".ll"],
                 [self.llc, "-mtriple=m68k-linux-gnu", "-relocation-model=static", "-O2", "-filetype=obj", f"-mcpu=M{cpu}", out + ".ll", "-o", out + ".o"]]
 
+    def stamps(self) -> str:
+        """Header text: md5 of every compiler binary a column runs, and the commit the dist was built from (`DIST_COMMIT`, required: a
+        table whose ours column came from an unknown build compared a stale compiler once)."""
+        commit = os.environ.get("DIST_COMMIT")
+        if not commit:
+            raise SystemExit("DIST_COMMIT: the commit the dist (LLRM_CC and its llc) was built from")
+
+        def md5(path: str) -> str:
+            return hashlib.md5(Path(path).read_bytes()).hexdigest()[:8] if Path(path).is_file() else "missing"
+
+        dist = Path(self.cc).parent
+        tools = {"ours llrm-cc": self.cc, "ours llrm-m68k-llc": str(dist / "llrm-m68k-llc"), "ours llrm-llc": str(dist / "llrm-llc"),
+                 "gcc": self.gcc, "clang": self.clang, "pin llc": self.llc}
+        return f"# stamps: dist commit {commit}; " + ", ".join(f"{name} md5 {md5(path)}" for name, path in tools.items()) + "\n"
+
     def column_lines(self) -> str:
         """Header text: every column's compile lines, so the next reader sees the setup (the flags hash is in the same header)."""
         lines = "".join(f"# {c}: " + " ; ".join(" ".join(cmd) for cmd in self.commands(c, "<cpu>", "<level>", "<program.c>", ["<program flags>"], "<out>")) + "\n" for c in ("ours", "gcc", "clang"))
-        return lines + "# gcc also gets -D__clang__ for a source that tests it (the branch ours and clang build)\n"
+        return (lines + "# gcc also gets -D__clang__ for a source that tests it (the branch ours and clang build)\n"
+                "# inlining: ours and clang get the program's flags verbatim (`-fno-inline-functions` in clang's frontend, the same for both); gcc gets"
+                " `-fno-inline`, its nearest (it still inlines the called-once and small functions under -fno-inline-functions); the three are not"
+                " verified to leave the same functions out of line cell by cell\n")
 
     def library(self, cpu: str, level: str, obj: Path, work: Path) -> tuple[int | None, str]:
         """(bytes of the compiler-rt members the object pulls, unresolved helpers). Only the referenced members link, as in a real link.
@@ -294,7 +312,7 @@ def main() -> int:
               f"cells {len(jobs)} ({len(na)} program-CPU pairs not targeted); " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())) + f"; whole-program unknown (a column calls a helper our archive lacks) {unknown}"
               + "; byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved (unused: no clocks)"
               + "; external flags: tools/external_flags.py --target none, hash cd1e12d510e4\n")
-    (out / "m68k-corpus.tsv").write_text(header + tools.column_lines() + "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\tlib_bytes\n" + "\n".join(rows) + "\n")
+    (out / "m68k-corpus.tsv").write_text(header + tools.stamps() + tools.column_lines() + "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\tlib_bytes\n" + "\n".join(rows) + "\n")
     (out / "reasons.tsv").write_text("target\tprog\tlevel\treason\tcause\n" + "\n".join(reasons) + "\n" + "".join(f"m68k-{c}\t{i}\t-\tnot-targeted\t\n" for c, i in na))
     (out / "same.tsv").write_text("".join(f"{a}\t{b}\n" for a, b in same))
     print(header.strip())

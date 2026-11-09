@@ -10,7 +10,7 @@ what ships) is never judged.
 A cell with only one of the two external columns is named, and refused unless --allow-one-sided: judged
 against the one that exists it can understate the gap to the one that is missing (z80's table did, by 1.7 kB).
 O1 cells follow the VIRTUAL-OK rule of tools/virtual_ok.py (verdict()).
-Usage: m68k_worse_cells.py m68k.tsv [-v] [--whole] [--allow-one-sided]   (--whole: add the corpus table's lib_bytes column to code_bytes)
+Usage: m68k_worse_cells.py m68k.tsv [-v] [--whole] [--allow-one-sided]   (--whole: also list the cells worse only with the table's lib_bytes added: an estimate, not counted)
 """
 import os
 import re
@@ -193,47 +193,61 @@ def one_sided(lines) -> list[tuple[str, str, str, str]]:
     return found
 
 
-def count(lines) -> tuple[int, int]:
-    """(worse, judged). A cell where ours failed to build and an external did is judged and worse: not building is the worst result.
+def worse_keys(lines) -> set[tuple[str, str, str]]:
+    """The cells judged WORSE; one where ours failed to build and an external did is worse too (not building is the worst result).
     A VIRTUAL-OK cell is not worse."""
     lines = list(lines)
-    results = list(verdicts(lines))
+    _, seen, _ = _seen(lines)
+    broken = {key for key in ours_failed(lines) if {"gcc", "clang"} & set(seen.get(key, {}))}
+    return {(t, p, lv) for t, p, lv, v, _ in verdicts(lines) if v == "WORSE"} | broken
+
+
+def count(lines) -> tuple[int, int]:
+    """(worse, judged)."""
+    lines = list(lines)
     _, seen, _ = _seen(lines)
     broken = [key for key in ours_failed(lines) if {"gcc", "clang"} & set(seen.get(key, {}))]
-    return sum(1 for _, _, _, v, _ in results if v == "WORSE") + len(broken), len(results) + len(broken)
+    return len(worse_keys(lines)), len(list(verdicts(lines))) + len(broken)
+
+
+def estimate_only(lines) -> list[tuple[str, str, str]]:
+    """The cells worse only once the library members are added (`with_library`): ours' members are measured, gcc's and clang's are our
+    archive's for the helpers they call, an estimate. Such a cell is listed as an estimate and never counted in a verdict."""
+    lines = list(lines)
+    return sorted(worse_keys(with_library(lines)) - worse_keys(lines))
 
 
 if __name__ == "__main__":
     path = next(arg for arg in sys.argv[1:] if not arg.startswith("-"))
 
-    def source():
-        """The table's rows; with --whole their sizes include the library members (corpus tables)."""
-        return with_library(open(path)) if "--whole" in sys.argv else open(path)
-
     if "-v" in sys.argv:
-        for target, prog, level, v, e in sorted(verdicts(source()), key=lambda c: -c[4]):
+        for target, prog, level, v, e in sorted(verdicts(open(path)), key=lambda c: -c[4]):
             if v != "ok":
                 print(f"{target} {prog} {level} +{e:.1f} B {v}")
-    lost = missing(source())
+    lost = missing(open(path))
     if lost:
         print("no `ours` number (the matrix is incomplete): " + ", ".join("/".join(key) for key in lost))
         sys.exit(2)
-    gaps = missing_levels(source())
+    gaps = missing_levels(open(path))
     if gaps:
         print("level not measured (unknown, not clean): " + ", ".join("/".join(key) for key in gaps[:8]))
         sys.exit(2)
-    once = single_input(source())
+    once = single_input(open(path))
     if once:
         print("order-sensitive program run on fewer inputs than " + str(INPUTS) + ": "
               + ", ".join("/".join(key) for key in once[:6]))
         sys.exit(2)
-    half = one_sided(source())
+    half = one_sided(open(path))
     if half:
         print("cells with one external column only (the best of gcc and clang is unknown): "
               + ", ".join("/".join(key[:3]) + f" (no {key[3]})" for key in half))
         if "--allow-one-sided" not in sys.argv:
             sys.exit(2)
-    worse, total = count(source())
-    left = skipped(source())
+    worse, total = count(open(path))
+    left = skipped(open(path))
     print(f"{worse} worse of {total} judged cells; {len(left)} skipped (no ours or no external number): "
           + ", ".join("/".join(key) for key in left))
+    if "--whole" in sys.argv:
+        est = estimate_only(open(path))
+        print(f"ESTIMATE (never in the count above): {len(est)} more cells are worse only with the library members added, gcc's and clang's "
+              "being our archive's for the helpers they call: " + ", ".join("/".join(key) for key in est))
