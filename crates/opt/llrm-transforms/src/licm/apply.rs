@@ -11,7 +11,7 @@ use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CallInfo, Flags, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::passes::Outer;
@@ -146,6 +146,7 @@ fn reassociate(
     graph: &mut Graph,
     preheader: BlockId,
     one: &Reassociation,
+    renamed: &mut Renamed,
 ) -> Result<(), String> {
     let terminator = function.terminator(preheader).ok_or("a preheader with no terminator")?;
     if let Reassociation::MinMax { .. } = one {
@@ -178,8 +179,12 @@ fn reassociate(
             function.set_flags(add, kept);
         }
         let ty = function.instruction(*i).ty;
-        let mut variant = *variant;
-        for &(ins, slot, invariant) in changes {
+        let mut variant = renamed.value(*variant);
+        for &(ins, slot, _) in changes {
+            // A product an earlier reassociation of the loop changed stands as
+            // the instruction that took its place, with its factor in `slot`.
+            let ins = renamed.inst(ins);
+            let invariant = function.instruction(ins).operands[slot];
             let mul = function.create_instruction(
                 Opcode::Binary(BinaryOp::Mul),
                 ty,
@@ -213,9 +218,12 @@ fn reassociate(
             function.replace_all_uses_with(old_result, new_result);
             graph.erase(function, ins);
             function.erase(ins)?;
+            renamed.insts.insert(ins, new);
+            renamed.values.insert(old_result, new_result);
         }
         let result = function.instruction(*i).result.ok_or("a product with no result")?;
         function.replace_all_uses_with(result, variant);
+        renamed.values.insert(result, variant);
         graph.erase(function, *i);
         function.erase(*i)?;
         return Ok(());
@@ -282,6 +290,40 @@ fn reassociate(
         function.erase(gone)?;
     }
     Ok(())
+}
+
+/// What the reassociations of a loop applied so far replaced: a later decision
+/// names the instructions and values the loop had when it was made.
+#[derive(Default)]
+struct Renamed {
+    insts: IdMap<InstId, InstId>,
+    values: IdMap<ValueId, Operand>,
+}
+
+impl Renamed {
+    /// The instruction standing now for `inst`.
+    fn inst(
+        &self,
+        mut inst: InstId,
+    ) -> InstId {
+        while let Some(&to) = self.insts.get(&inst) {
+            inst = to;
+        }
+        inst
+    }
+
+    /// The operand standing now for `operand`.
+    fn value(
+        &self,
+        mut operand: Operand,
+    ) -> Operand {
+        while let Operand::Value(value) = operand
+            && let Some(&to) = self.values.get(&value)
+        {
+            operand = to;
+        }
+        operand
+    }
 }
 
 /// The edit of a [`Reassociation::MinMax`] (`hoistMinMax`): the min or max of
@@ -489,11 +531,12 @@ pub fn apply_loop(
     }
     // A reassociation goes to the preheader where the visit found it, among
     // the hoists.
+    let mut renamed = Renamed::default();
     let mut pending = reassociated.iter().peekable();
     for (at, &super::hoist::Hoist { inst, guaranteed, .. }) in hoisted.iter().enumerate() {
         while let Some((_, one)) = pending.next_if(|(after, _)| *after <= at) {
             let preheader = preheader.ok_or("a reassociation with no preheader")?;
-            reassociate(function, context, declared, graph, preheader, one)?;
+            reassociate(function, context, declared, graph, preheader, one, &mut renamed)?;
         }
         let preheader = preheader.ok_or("a hoist with no preheader")?;
         // Hoisting a call that was not guaranteed to execute strips what would
@@ -506,7 +549,7 @@ pub fn apply_loop(
     }
     for (_, one) in pending {
         let preheader = preheader.ok_or("a reassociation with no preheader")?;
-        reassociate(function, context, declared, graph, preheader, one)?;
+        reassociate(function, context, declared, graph, preheader, one, &mut renamed)?;
         changed = true;
     }
     Ok(changed)

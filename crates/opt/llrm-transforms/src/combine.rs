@@ -368,6 +368,9 @@ pub struct Combiner<'a> {
     /// `SQ.getWithoutDomCondCache()`: ValueTracking queries drop the
     /// dominating conditions while set (`foldICmpUsingKnownBits`).
     pub without_dom_conditions: bool,
+    /// The intrinsics this run declared that `env.globals` lacks, which a pattern must still read as intrinsics (`ValueTracking`'s
+    /// `Query::pending_intrinsics`).
+    pub pending_intrinsics: Vec<(u32, llrm_mir::valuetracking::pattern::IntrinsicId)>,
 }
 
 impl Combiner<'_> {
@@ -739,6 +742,7 @@ pub(crate) fn combine_for(
         worklist: InstWorklist::default(),
         declared,
         without_dom_conditions: false,
+        pending_intrinsics: Vec::new(),
     };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
     changed |= drain(&mut c, visit);

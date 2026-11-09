@@ -1,7 +1,7 @@
 //! Cells a function leaves dead at its return, and the shifts of a word that
 //! end in `a`.
 //!
-//! - [`drop_dead_stores`]: `sta rc2` (likewise `stx`, `sty`) of a caller-saved
+//! - [`drop_dead_stores`]: `sta rc2` (likewise `stx`, `sty`, and the 65C02's `stz`) of a caller-saved
 //!   cell that nothing reads before an `rts` that does not return it.
 //! - [`store_then_index_load`]: `sta m; lda n; ldx m` is `tax; lda n` when `m`
 //!   is dead after (likewise `ldy m`): the byte went through memory to leave
@@ -72,6 +72,7 @@ fn straight(op: Op) -> bool {
             | Lsr
             | Nop
             | Ora
+            | Pla
             | Rol
             | Ror
             | Sbc
@@ -93,6 +94,13 @@ fn straight(op: Op) -> bool {
 /// reads nothing new. A call, a raw line or an instruction not listed is not
 /// known to leave it dead.
 ///
+/// A callee-saved cell (`rc8`..`rc15`) is the caller's at the return: a store to it is dead only
+/// when a write to it (the epilogue's restore) comes before every `rts`, and a call neither reads
+/// nor changes it (the callee saves it on entry and restores it), so the scan goes on past a `jsr`.
+/// `float_conversions_loop` kept a `ldy #0; sty rc10` that only the restore ever followed. A `pla` is
+/// straight (the epilogue's restore); a `pha` is not: `pha; pha; rts` is a call through a pointer, and the
+/// `rts` there reads the argument cells (`function_table`, `static_pointers` miscompiled by 3 B of stores).
+///
 /// The pin's analogue is the liveness of a physical register at a return
 /// (`DeadMachineInstructionElim.cpp`, `LivePhysRegs`): a def with no use on any
 /// path out is dead.
@@ -104,9 +112,11 @@ fn cell_dead_from(
     seen: &mut BTreeSet<usize>,
 ) -> bool {
     let Some(n) = cell_number(cell) else { return false };
-    if !caller_saved(n) {
+    // the soft stack pointer is read by every frame access
+    if n < 2 {
         return false;
     }
+    let callee_saved = !caller_saved(n);
     let mut at = from;
     while let Some(line) = lines.get(at) {
         if !seen.insert(at) {
@@ -119,7 +129,10 @@ fn cell_dead_from(
             Line::Inst(inst) => inst,
         };
         if inst.op == Op::Rts {
-            return !results.contains(cell);
+            return !callee_saved && !results.contains(cell);
+        }
+        if inst.op == Op::Jsr && callee_saved {
+            continue;
         }
         let label = |inst: &Inst| {
             let name = inst.target()?;
@@ -155,7 +168,7 @@ fn cell_dead_from(
 pub fn drop_dead_stores(asm: &mut Asm) {
     let mut at = 0;
     while at < asm.lines.len() {
-        if let Line::Inst(Inst { op: Op::Sta | Op::Stx | Op::Sty, operand: Operand::Direct(cell), .. }) = &asm.lines[at]
+        if let Line::Inst(Inst { op: Op::Sta | Op::Stx | Op::Sty | Op::Stz, operand: Operand::Direct(cell), .. }) = &asm.lines[at]
             && cell_dead_from(&asm.lines, at + 1, cell, &asm.result_cells, &mut BTreeSet::new())
         {
             asm.lines.remove(at);

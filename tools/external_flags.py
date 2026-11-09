@@ -32,6 +32,35 @@ def flags(target, reloc=(), gcc_major=None):
     return (*reloc, *TARGET[target], *COMMON, *((ZERO_INIT_PADDING,) if gcc_major and gcc_major >= 15 else ()))
 
 
+# A test's own flags go to clang and to ours as written, where `-fno-inline-functions` means no inlining. gcc's flag only stops
+# -finline-functions: called-once and small functions still inline at -Os (frameless x86_32 -Os: gcc 304 B with or without it; ours 378,
+# the pin 625, gcc -fno-inline 501). gcc has no mode that keeps `inline`-declared functions only, so the whole of it is -fno-inline.
+GCC_PROGRAM_FLAGS = {"-fno-inline-functions": "-fno-inline"}
+# What gcc has no flag for. Left in, `-fno-inline=NAME` and `-fsanitize=stack` fail the compile, but `-ffixed-point` is read as
+# `-ffixed-REG` and only warns ("unknown register name: point"): a column that compiled a different program.
+CLANG_ONLY = ("-fno-inline=", "-fsanitize=stack", "-ffixed-point")
+
+
+def gcc_program_flags(tokens):
+    """The tokens of a test's `// flags:` as gcc must take them for the same meaning; ValueError for one gcc cannot take (the cell is n/a for gcc)."""
+    for token in tokens:
+        if token.startswith(CLANG_ONLY):
+            raise ValueError(f"gcc has no {token}: this cell has no gcc column")
+    return [GCC_PROGRAM_FLAGS.get(token, token) for token in tokens]
+
+
+def check_gcc_flags(program_tokens, gcc_tokens, allowed_extra=()):
+    """Refuses a gcc flag list that differs from the test's own flags by anything but `GCC_PROGRAM_FLAGS` (and `allowed_extra`).
+
+    A column built with a flag set nobody compared moves its cells silently (arm64: ours without -fomit-frame-pointer against
+    externals with it, 24 of 72 cells -4..-16 B). ValueError names every difference, or that the cell has no gcc column."""
+    want = [*gcc_program_flags(program_tokens), *allowed_extra]
+    missing = [flag for flag in want if flag not in gcc_tokens]
+    extra = [flag for flag in gcc_tokens if flag not in want]
+    if missing or extra:
+        raise ValueError(f"gcc's flags differ from the test's beyond GCC_PROGRAM_FLAGS: missing {missing}, extra {extra}")
+
+
 def config_hash():
     text = repr((COMMON, sorted(TARGET.items()), ZERO_INIT_PADDING))
     return hashlib.sha256(text.encode()).hexdigest()[:12]
