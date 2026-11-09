@@ -1,7 +1,7 @@
 """Executed-instruction count of an arm64 ELF under unicorn.
 
 The range is chosen, never defaulted: `--kernel` counts the compiled kernels (every function of the object, up to
-`main`); `--whole` counts the program, runtime included. A count with no flag once ran whole and was read as the kernel
+`report`, the runtime's first function, without `main`'s own bytes); `--whole` counts the program, runtime included. A count with no flag once ran whole and was read as the kernel
 (a constant +12..13 offset that was not one: tile clang 980 vs 16866).
 """
 import argparse, hashlib, os, struct, sys
@@ -22,6 +22,16 @@ def find_input(name):
     return wanted
 
 
+def kernel_range(funcs, sizes):
+    """(lo, hi, (main_lo, main_hi)): the program object's text, runtime and `main` left out.
+
+    The object links first and the runtime (rt.c, from `report`) after it, so the kernels are everything
+    below `report`. A helper the linker places after `main` is a kernel too: the range once ended at `main` and
+    dropped it (jpeg_single `getbit`, 965,879 instrs ours / 1,881,194 clang no-vec, in no count).
+    """
+    return min(funcs.values()), funcs['report'], (funcs['main'], funcs['main'] + sizes['main'])
+
+
 def run(path, limit=300_000_000, kernel=None):
     from unicorn import Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_INTR
     from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_CPACR_EL1, UC_ARM64_REG_X30, UC_ARM64_REG_X8, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_PC
@@ -30,6 +40,7 @@ def run(path, limit=300_000_000, kernel=None):
     phoff, = struct.unpack_from('<Q', d, 32); phsz, phn = struct.unpack_from('<HH', d, 54)
     syms = {}
     funcs = {}
+    sizes = {}
     shoff, = struct.unpack_from('<Q', d, 40); shsz, shn, shstr = struct.unpack_from('<HHH', d, 58)
     secs = [struct.unpack_from('<IIQQQQIIQQ', d, shoff + i * shsz) for i in range(shn)]
     for s in secs:
@@ -38,7 +49,7 @@ def run(path, limit=300_000_000, kernel=None):
             for off in range(s[4], s[4] + s[5], 24):
                 nm, info, oth, shn_, val, sz = struct.unpack_from('<IBBHQQ', d, off)
                 e = d.index(b'\0', strs[4] + nm); syms[d[strs[4]+nm:e].decode()] = val
-                if info & 0xf == 2: funcs[d[strs[4]+nm:e].decode()] = val
+                if info & 0xf == 2: funcs[d[strs[4]+nm:e].decode()] = val; sizes[d[strs[4]+nm:e].decode()] = sz
     uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     for i in range(phn):
         t, fl, off, va, pa, fsz, msz, al = struct.unpack_from('<IIQQQQQQ', d, phoff + i * phsz)
@@ -53,11 +64,11 @@ def run(path, limit=300_000_000, kernel=None):
     uc.reg_write(UC_ARM64_REG_X30, 0xdead0000)
     n = [0]
     lo, hi = (0, 1 << 64)
+    skip = (0, 0)
     if kernel:
-        # the compiled kernels: from the first bench_* symbol to main (the objects link in that order)
-        lo = min(funcs.values()); hi = syms['main']  # every function of the object: a static helper may precede bench_*
+        lo, hi, skip = kernel_range(funcs, sizes)
     def hook(u, a, s, ud):
-        if lo <= a < hi: n[0] += 1
+        if lo <= a < hi and not skip[0] <= a < skip[1]: n[0] += 1
     uc.hook_add(UC_HOOK_CODE, hook)
     files, written, nextfd = {}, hashlib.md5(), [3]
     def cstr(addr):
