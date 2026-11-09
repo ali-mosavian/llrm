@@ -265,7 +265,36 @@ def data_bytes(obj: Path) -> tuple[int, int]:
     if is_elf(obj):
         return elfsize.data_bytes(obj)
     kept = [one for one in segments(obj) if not is_code(one) and one.klass.upper() not in NOT_THE_PROGRAMS]
-    return sum(one.loaded for one in kept), sum(one.size - one.loaded for one in kept)
+    initialised = sum(stored(one) for one in kept)
+    return initialised, sum(one.size for one in kept) - initialised
+
+
+# A zero run this long is left to the linker's zero fill by llrm-omf (write.rs HOLE); the instrument counts it as uninitialised whichever
+# way the object holds it, so a compiler that stores the zeros as LEDATA and one that declares them (bc's BC_DATA) read the same.
+HOLE = 8
+
+
+def stored(one: Segment) -> int:
+    """The bytes of segment `one` that are initialised in the linked image: the nonzero bytes, and the zero runs shorter than HOLE between them (a byte no
+    record covers is zero, so stored zeros and a declared hole read the same). Iterated data and a COMDAT, whose bytes are not all in `pieces`, count as loaded."""
+    placed = [(at, body) for at, body in one.pieces if at is not None]
+    if sum(len(body) for _, body in placed) != one.loaded or one.loaded > one.size:
+        return one.loaded
+    image = bytearray(one.size)
+    for at, body in placed:
+        image[at : at + len(body)] = body
+    kept, at = 0, 0
+    while at < one.size:
+        if image[at]:  # a nonzero byte is stored
+            kept += 1
+            at += 1
+            continue
+        start = at
+        while at < one.size and not image[at]:
+            at += 1
+        if at - start < HOLE and 0 < start and at < one.size:  # a short zero run between data stays, stored or not
+            kept += at - start
+    return kept
 
 
 def selected(command: list[str]) -> list[str]:
