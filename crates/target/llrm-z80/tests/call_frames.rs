@@ -30,7 +30,16 @@ fn a_call_has_only_its_own_stack_arguments_pushed() {
     assert_eq!(done.status.code(), Some(0), "{}", String::from_utf8_lossy(&done.stderr));
     let text = std::fs::read_to_string(out).unwrap();
     let mut pushed = 0i32;
+    // A large area is one sum, `ld r, #-n` / `add r, sp` / `ld sp, r` (the
+    // frame's own comes before the first label).
+    let (mut in_body, mut amount) = (false, 0i32);
     for line in text.lines().map(str::trim) {
+        in_body |= line.ends_with(':') && line.starts_with('L');
+        if let Some(n) = line.strip_prefix("ld hl, #").or_else(|| line.strip_prefix("ld iy, #")) {
+            amount = n.parse().unwrap_or(0);
+        } else if in_body && (line == "ld sp, hl" || line == "ld sp, iy") {
+            pushed -= amount / 2;
+        }
         if line == "push ix" || line == "pop ix" {
             continue;
         }
