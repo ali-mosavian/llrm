@@ -22,15 +22,15 @@
 //! `lea __mulsi3, %a6` stops paying; `muls.w` of a halfword is 4 B against an
 //! 8 B chain). A function that used the chain is also built with the multiply
 //! kept (`Mode::Kept`) and the cheaper by the level's price is kept
-//! (`crate::trial`): -Os by bytes, -O1 only when the chain is no worse in bytes
-//! and clocks, -O2/-O3 by `bytes + 2 * clocks`; a tie keeps the multiply. The
-//! library routine's clocks come from [`crate::routine`]. Owner m68k-b. Exit
-//! 2026-12-20, with the price above. Cells (68000, against #8532 alone):
-//! select_of_constants -O1/-Os, int64_division -O1/-Os, matmul -O1/-Os,
-//! nbody_fixed -O1 and div_constants_short -Os smaller (8, -3942 B); none
-//! larger. -O1 trades the clocks of three of them back (select_of_constants
-//! +4.29M, int64_division +120808, matmul +4192): neither build is no worse in
-//! both, so the multiply stays, as before #8532.
+//! (`crate::trial`): -Os by bytes, -O2/-O3 by `bytes + 2 * clocks`, a tie keeps
+//! the multiply; -O1 (no worse in bytes and clocks) replaces the chain only
+//! where the multiply is no worse in both, and keeps it where each build wins
+//! one axis. The library routine's clocks come from [`crate::routine`]. Owner
+//! m68k-b. Exit 2026-12-20, with the price above. Cells (68000, against
+//! #8532 alone): select_of_constants -Os, int64_division -Os, matmul -Os,
+//! nbody_fixed -O1 and div_constants_short -Os smaller; none larger, none
+//! slower. The -O1 cells of select_of_constants, int64_division and matmul
+//! keep the chain: bytes above the pin's `__mulsi3` build, clocks far below.
 //!
 //! Complexity: O(1) per multiply; a function that used the chain is compiled
 //! twice (1150 of 12320 corpus functions).

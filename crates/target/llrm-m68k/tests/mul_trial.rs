@@ -25,8 +25,17 @@ fn bytes(
     ir: &str,
     mode: Mode,
 ) -> usize {
+    bytes_at(ir, mode, true, false)
+}
+
+fn bytes_at(
+    ir: &str,
+    mode: Mode,
+    size: bool,
+    strict: bool,
+) -> usize {
     let module = llrm_mir::parse::module(ir).expect("parses");
-    let options = Options { mul: mode, size: true, ..Options::default() };
+    let options = Options { mul: mode, size, strict, ..Options::default() };
     items_bytes(&items_with(&module, "f", Cpu::M68000, options).expect("compiles"))
 }
 
@@ -53,6 +62,7 @@ fn a_tie_keeps_the_build_without() {
     let build = items_with(&module, "f", Cpu::M68000, Options::default()).expect("compiles");
     for price in [Price::Size, Price::Strict, Price::Rate] {
         assert!(!llrm_m68k::trial::keeps(&build, &build, Cpu::M68000, price), "{price:?}: equal builds kept the first");
+        assert!(llrm_m68k::trial::prefers_without(&build, &build, Cpu::M68000, price), "{price:?}: a tie kept the chain");
     }
 }
 
@@ -67,4 +77,17 @@ fn a_call_through_the_hoisted_target_register_is_priced_as_the_routine() {
     let out = llrm_m68k::driver::assembly(ir, llrm_m68k::driver::cpu_of("68000").unwrap(), llrm_m68k::driver::Level::O2).expect("compiles");
     let calls = out.matches("jsr").count();
     assert!(calls <= 1, "{calls} library calls kept:\n{out}");
+}
+
+/// -O1 asks for no worse in bytes AND clocks. With 100 calls the function is
+/// smaller with the multiply kept and slower (a library routine of 162 clocks
+/// or more against two shifts): neither build is no worse in both, and giving
+/// the clocks up for the bytes put select_of_constants -O1 at +4.29M clocks over
+/// the chain. The chain stands.
+#[test]
+fn at_the_strict_level_the_chain_stands_where_each_build_wins_one_axis() {
+    let ir = hash_of(100);
+    let (chain, kept) = (bytes_at(&ir, Mode::Pin, false, true), bytes_at(&ir, Mode::Kept, false, true));
+    assert!(chain > kept, "premise: the multiply is smaller ({kept} B against {chain} B)");
+    assert_eq!(bytes_at(&ir, Mode::Trial, false, true), chain, "the trial gave the clocks up for bytes");
 }

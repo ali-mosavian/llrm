@@ -286,7 +286,7 @@ pub fn items_with(
     if touched.mul_trial {
         let without = Options { mul: crate::dagisel::mulprice::Mode::Kept, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
-        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+        if crate::trial::prefers_without(&kept, &plain, cpu, price) {
             kept = plain;
             options = without;
         }
