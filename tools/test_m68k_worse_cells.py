@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from m68k_worse_cells import count, missing, ours_failed, single_input, skipped  # noqa: E402
+from m68k_worse_cells import count, missing, missing_levels, one_sided, ours_failed, single_input, skipped  # noqa: E402
 
 HEADER = "# m68k matrix; (CpuTable::byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved)\n"
 COLS = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
@@ -85,6 +85,24 @@ class WorseCells(unittest.TestCase):
         rows = [("m68k-68000", "p", "O2", "ours", "", "", "", ""), ("m68k-68000", "p", "O2", "gcc", 40, "", "", "")]
         self.assertEqual(missing(tsv(*rows)), [("m68k-68000", "p", "O2")])
 
+    def test_o1_is_strict_on_clocks(self):
+        """O1 prices no byte rate: same bytes and more clocks than gcc is worse (O2 would trade them at the rate)."""
+        rows = cell("m68k-68000", "fib", "O1", (20, 110), (20, 100), (24, 120))
+        self.assertEqual(count(tsv(*rows)), (1, 1))
+
+    def test_o1_one_byte_over_is_worse_even_when_faster(self):
+        rows = cell("m68k-68000", "fib", "O1", (21, 90), (20, 100), (24, 120))
+        self.assertEqual(count(tsv(*rows)), (1, 1))
+
+    def test_o1_no_worse_on_either_axis_is_clean(self):
+        rows = cell("m68k-68000", "fib", "O1", (20, 100), (20, 100), (24, 120))
+        self.assertEqual(count(tsv(*rows)), (0, 1))
+
+    def test_a_program_with_no_o1_cell_is_reported(self):
+        """The matrix measured O2 and Os only: O1 (strict) had no judged cell, so 'N worse' said nothing about it."""
+        rows = [r for level in ("O2", "O3", "Os") for r in cell("m68k-68000", "fib", level, (20, 100), (20, 100), (24, 120))]
+        self.assertEqual(missing_levels(tsv(*rows)), [("m68k-68000", "fib", "O1")])
+
     def test_max_run_on_one_input_is_reported(self):
         """max(7, 42) alone: gcc skipped the move, ours ran it; the other order reverses it (+6.4 B-eq at 060)."""
         once = [("m68k-68060", "max", "O2", n, 16, 10, 5, "") for n in ("ours", "gcc", "clang")]
@@ -92,6 +110,14 @@ class WorseCells(unittest.TestCase):
         self.assertEqual(len(single_input(tsv(*once))), 3)
         self.assertEqual(single_input(tsv(*both)), [])
 
+
+    def test_a_cell_with_one_external_column_is_listed_not_judged_silently(self):
+        """z80's table took the next-best column for a row missing its best variant and understated the gaps by up
+        to 1.7 kB: a cell with gcc but no clang (or the reverse) is judged against what exists, and named."""
+        rows = cell("m68k-68000", "both", "Os", (22, 100), (20, 100), (24, 100))
+        rows += [("m68k-68000", "gcc_only", "Os", "ours", 22, 100, 1, ""), ("m68k-68000", "gcc_only", "Os", "gcc", 20, 100, 1, "")]
+        rows += [("m68k-68000", "clang_only", "Os", "ours", 22, 100, 1, ""), ("m68k-68000", "clang_only", "Os", "clang", 20, 100, 1, "")]
+        self.assertEqual(one_sided(tsv(*rows)), [("m68k-68000", "gcc_only", "Os", "clang"), ("m68k-68000", "clang_only", "Os", "gcc")])
 
 if __name__ == "__main__":
     unittest.main()

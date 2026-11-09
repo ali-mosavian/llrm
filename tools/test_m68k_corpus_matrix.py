@@ -28,9 +28,18 @@ class CorpusMatrix(unittest.TestCase):
         listing = LISTING + "  3 .rodata       00000030  00000000  00000000  00000050  2**1\n                  CONTENTS, ALLOC, LOAD, READONLY, DATA\n  4 .comment      00000026  00000000\n                  CONTENTS, READONLY\n"
         self.assertEqual(mx.code_bytes(listing), 0x18 + 0x4 + 0x30)
 
-    def test_gcc_keeps_a_called_once_static_function_out_of_line(self):
+    def test_gcc_keeps_a_static_function_out_of_line(self):
         """frameless.c asks for -fno-inline-functions: gcc inlined all five statics into main (260 B against our 558 B, not like-for-like)."""
-        self.assertEqual(mx.gcc_program_flags(["-DX", "-fno-inline-functions"]), ["-DX", "-fno-inline-functions", "-fno-inline-functions-called-once"])
+        self.assertEqual(mx.gcc_program_flags(["-DX", "-fno-inline-functions"]), ["-DX", "-fno-inline"])
+
+    def test_the_header_prints_every_columns_compile_lines(self):
+        """A reader of a table saw only a hash of the setup; the three faults of 11-09 (hard float, rodata, inlining) were in command lines nobody printed."""
+        import os
+        for name in ("GCC_M68K", "LLRM_CC", "LLRM_PIN_CLANG", "LLVM_M68K"):
+            os.environ.setdefault(name, "/x/" + name)
+        lines = mx.Tools().column_lines()
+        for needle in ("# ours:", "# gcc:", "# clang:", "-msoft-float", "-fomit-frame-pointer", "--fatal-warnings", "-relocation-model=static"):
+            self.assertIn(needle, lines)
 
     def test_gcc_is_built_soft_float(self):
         """gcc defaults to 68881 hardware floating point at 68020/040/060 and ours has no FPU: nbody was 578 B for gcc against 946 B soft."""

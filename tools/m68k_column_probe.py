@@ -79,17 +79,32 @@ def object_violations(kinds: set[str]) -> list[str]:
 PADDING_SOURCE = "union u { char c; long l[4]; };\nextern void use(void *);\nvoid f(void) { union u a = { 1 }; use(&a); }\n"
 
 
+def gcc_assembly(gcc: str, source_text: str, flags: list[str]) -> str:
+    with tempfile.TemporaryDirectory() as tmp:
+        source, out = os.path.join(tmp, "p.c"), os.path.join(tmp, "p.s")
+        open(source, "w").write(source_text)
+        subprocess.run([gcc, "-m68020", "-O2", "-ffreestanding", *flags, "-S", "-o", out, source], check=True)
+        return open(out).read()
+
+
+def flags_change_gcc_output(gcc: str, source_text: str, a: list[str], b: list[str]) -> bool:
+    """Whether the two flag sets give different assembly for the source: a flag the shared list names, or its opposite, is live."""
+    return gcc_assembly(gcc, source_text, a) != gcc_assembly(gcc, source_text, b)
+
+
 def padding_flag_reaches_gcc(gcc: str) -> bool:
     """Whether `-fzero-init-padding-bits=all` and `=standard` give different assembly: the flag is live in this gcc."""
-    with tempfile.TemporaryDirectory() as tmp:
-        source = os.path.join(tmp, "p.c")
-        open(source, "w").write(PADDING_SOURCE)
-        asm = {}
-        for mode in ("all", "standard"):
-            out = os.path.join(tmp, mode + ".s")
-            subprocess.run([gcc, "-m68000", "-O2", "-ffreestanding", f"-fzero-init-padding-bits={mode}", "-S", "-o", out, source], check=True)
-            asm[mode] = open(out).read()
-    return asm["all"] != asm["standard"]
+    return flags_change_gcc_output(gcc, PADDING_SOURCE, ["-fzero-init-padding-bits=all"], ["-fzero-init-padding-bits=standard"])
+
+
+# A local array handed away (stack protector) and a loop with frame use (frame pointer): the opposite of the shared choices must
+# change the bytes, so the byte-identical table is a result of this gcc's own defaults, not of flags that never arrive.
+ARRAY_SOURCE = "extern void use(char *);\nint k(int n) { char b[16]; b[0] = n; use(b); return b[0]; }\n"
+FRAME_SOURCE = "int k(int *a, int n) { int s = 0; for (int i = 0; i < n; i++) s += a[i] * 3; return s; }\n"
+PROBES = (
+    (ARRAY_SOURCE, ["-fno-stack-protector"], ["-fstack-protector-strong"]),
+    (FRAME_SOURCE, ["-fomit-frame-pointer"], ["-fno-omit-frame-pointer"]),
+)
 
 
 if __name__ == "__main__":

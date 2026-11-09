@@ -82,9 +82,10 @@ def code_bytes(listing: str) -> int:
 
 
 def gcc_program_flags(flags: list[str]) -> list[str]:
-    """The program's flags as gcc reads them. `-fno-inline-functions` keeps a static function out of line for clang and llrm-cc; gcc still
-    inlines one called once, so frameless.c (five static helpers) was one `main` of 83 instructions against our 173 in five functions."""
-    return [g for flag in flags for g in ([flag, "-fno-inline-functions-called-once"] if flag == "-fno-inline-functions" else [flag])]
+    """The program's flags as gcc reads them. `-fno-inline-functions` keeps a function out of line for clang and llrm-cc; gcc still
+    inlines the ones called once and the small ones (frameless.c: five static helpers became one `main` of 105 instructions, 260 B,
+    against our five functions, 558 B; with `-fno-inline` gcc keeps three functions, 178 instructions)."""
+    return ["-fno-inline" if flag == "-fno-inline-functions" else flag for flag in flags]
 
 
 def relaxing_branches(text: str) -> str:
@@ -136,24 +137,35 @@ class Tools:
     def size(self, obj: Path) -> int:
         return code_bytes(subprocess.run([self.objdump, "-h", str(obj)], capture_output=True, text=True, env=self.env).stdout)
 
+    def commands(self, compiler: str, cpu: str, level: str, path: str, flags: list[str], out: str) -> list[list[str]]:
+        """The command lines of one column, in order: build() runs these and the table header prints them (`path`/`out` are placeholders there)."""
+        if compiler == "ours":
+            return [[self.cc, f"-{level}", "-w", "-S", *flags, "-isystem", str(POSIX), path, "-o", out + ".s"],
+                    [self.as_, "--fatal-warnings", f"-m{cpu}", "-o", out + ".o", out + ".s"]]
+        if compiler == "gcc":
+            return [[self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *GCC_FLOAT,
+                     *(["-isystem", self.headers] if self.headers else []), *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *gcc_program_flags(flags), "-isystem", str(POSIX), "-c", path, "-o", out + ".o"]]
+        return [[self.clang, "--target=m68k-linux-gnu", "-ffreestanding", "-fno-pic", "-w", *self.clang_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-S", "-emit-llvm", path, "-o", out + ".ll"],
+                [self.llc, "-mtriple=m68k-linux-gnu", "-relocation-model=static", "-O2", "-filetype=obj", f"-mcpu=M{cpu}", out + ".ll", "-o", out + ".o"]]
+
+    def column_lines(self) -> str:
+        """Header text: every column's compile lines, so the next reader sees the setup (the flags hash is in the same header)."""
+        return "".join(f"# {c}: " + " ; ".join(" ".join(cmd) for cmd in self.commands(c, "<cpu>", "<level>", "<program.c>", ["<program flags>"], "<out>")) + "\n" for c in ("ours", "gcc", "clang"))
+
     def build(self, compiler: str, cpu: str, level: str, path: Path, flags: list[str], work: Path) -> tuple[int | None, str, str]:
         """(code bytes, reason, cause) of one program in one column."""
         stem = f"{path.parent.name}_{path.stem}.{cpu}.{level}.{compiler}"
-        obj = work / f"{stem}.o"
-        if compiler == "ours":
-            asm = work / f"{stem}.s"
-            env = {**os.environ, "LLRM_CC_TARGET": f"m68k-{cpu}"}
-            ok, timed, err = self.run([self.cc, f"-{level}", "-w", "-S", *flags, "-isystem", str(POSIX), str(path), "-o", str(asm)], env)
-            if ok:
-                asm.write_text(".text\n" + relaxing_branches(asm.read_text()))
-                ok, timed, err = self.run([self.as_, "--fatal-warnings", f"-m{cpu}", "-o", str(obj), str(asm)])
-        elif compiler == "gcc":
-            ok, timed, err = self.run([self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *GCC_FLOAT, *(["-isystem", self.headers] if self.headers else []), *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *gcc_program_flags(flags), "-isystem", str(POSIX), "-c", str(path), "-o", str(obj)])
-        else:
-            ir = work / f"{stem}.ll"
-            ok, timed, err = self.run([self.clang, "--target=m68k-linux-gnu", "-ffreestanding", "-fno-pic", "-w", *self.clang_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-S", "-emit-llvm", str(path), "-o", str(ir)])
-            if ok:
-                ok, timed, err = self.run([self.llc, "-mtriple=m68k-linux-gnu", "-relocation-model=static", "-O2", "-filetype=obj", f"-mcpu=M{cpu}", str(ir), "-o", str(obj)])
+        out = str(work / stem)
+        env = {**os.environ, "LLRM_CC_TARGET": f"m68k-{cpu}"} if compiler == "ours" else None
+        timed, err = False, ""
+        ok = True
+        for at, cmd in enumerate(self.commands(compiler, cpu, level, str(path), flags, out)):
+            ok, timed, err = self.run(cmd, env if at == 0 else None)
+            if ok and compiler == "ours" and at == 0:
+                Path(out + ".s").write_text(".text\n" + relaxing_branches(Path(out + ".s").read_text()))
+            if not ok:
+                break
+        obj = Path(out + ".o")
         if not ok:
             reason, cause = failure(compiler, timed, err)
             return None, reason, cause
@@ -230,7 +242,7 @@ def main() -> int:
               f"cells {len(jobs)} ({len(na)} program-CPU pairs not targeted); " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
               + "; byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved (unused: no clocks)"
               + "; external flags: tools/external_flags.py --target none, hash cd1e12d510e4\n")
-    (out / "m68k-corpus.tsv").write_text(header + "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n" + "\n".join(rows) + "\n")
+    (out / "m68k-corpus.tsv").write_text(header + tools.column_lines() + "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n" + "\n".join(rows) + "\n")
     (out / "reasons.tsv").write_text("target\tprog\tlevel\treason\tcause\n" + "\n".join(reasons) + "\n" + "".join(f"m68k-{c}\t{i}\t-\tnot-targeted\t\n" for c, i in na))
     (out / "same.tsv").write_text("".join(f"{a}\t{b}\n" for a, b in same))
     print(header.strip())
