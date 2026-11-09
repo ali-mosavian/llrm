@@ -58,3 +58,20 @@ define ptr @set(ptr %p) nounwind {
     let asm = text(ir, "set", 0, &Request::new(Level::Os)).expect("compiles");
     assert!(asm.contains("dec hl"), "the returned pointer is not restored:\n{asm}");
 }
+
+/// value_of_valueless -Os: one constant stored to four words was four
+/// `ld (hl), #0` pairs (5 B each) where a pair loaded once stores it at 3 B a
+/// word: the program grew 109 B to 113 B.
+#[test]
+fn a_constant_stored_twice_is_loaded_once() {
+    let ir = r#"target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
+define void @set(ptr %p, ptr %q) nounwind {
+  store i16 7, ptr %p
+  store i16 7, ptr %q
+  ret void
+}
+"#;
+    let asm = text(ir, "set", 0, &Request::new(Level::Os)).expect("compiles");
+    assert!(!asm.contains("ld (hl), #7"), "each store carries the constant:\n{asm}");
+    assert_eq!(asm.matches("#7").count(), 1, "the constant is loaded more than once:\n{asm}");
+}

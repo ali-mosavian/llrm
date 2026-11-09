@@ -188,6 +188,12 @@ def LD8ri : Z80Inst<(outs GR8:$d), (ins i8imm:$v), "ld $d, $v", [(set i8:$d, imm
 def LD16ri : Z80Inst<(outs GR16:$d), (ins i16imm:$v), "ld $d, $v", [(set i16:$d, imm:$v)]>;
 }
 
+// A constant with one user. Several stores of it load it into a pair once (3 B and 20 T each after), which beats
+// 5 B and 26 T a store from two users. The pin's `imm_su` (`shouldAvoidImmediateInstFormsForSize`) counts the users
+// the same way, but only at optsize: x86 prices an immediate store as a register one.
+// DEVIATE Z80-IMM-USES: not gated on optsize. Owner llrm-z80-c, exit 2026-11-30.
+def imm_one_use : PatLeaf<(imm), [{ return N->hasOneUse(); }]>;
+
 // ld r,(hl) / ld (hl),r / ld (hl),n: the pointer is HL.
 let mayLoad = 1 in
   def LD8rm : Z80Inst<(outs GR8:$d), (ins HLR:$p), "ld $d, ($p)", [(set i8:$d, (load i16:$p))]>;
@@ -203,7 +209,7 @@ let mayLoad = 1, Defs = [A] in
 let mayStore = 1 in
   def LD16mr : Z80Inst<(outs), (ins GR16:$s, HLR:$p), "ld16 ($p), $s", [(store i16:$s, i16:$p)]>;
   // A constant word: two `ld (hl),n`, no pair to load first (x86's MOV16mi).
-  def LD16mi : Z80Inst<(outs), (ins i16imm:$v, HLR:$p), "ld16 ($p), $v", [(store (i16 imm:$v), i16:$p)]>;
+  def LD16mi : Z80Inst<(outs), (ins i16imm:$v, HLR:$p), "ld16 ($p), $v", [(store (i16 imm_one_use:$v), i16:$p)]>;
 let mayStore = 1 in {
   def LD8mr : Z80Inst<(outs), (ins GR8:$s, HLR:$p), "ld ($p), $s", [(store i8:$s, i16:$p)]>;
   def LD8mi : Z80Inst<(outs), (ins i8imm:$v, HLR:$p), "ld ($p), $v", [(store (i8 imm:$v), i16:$p)]>;

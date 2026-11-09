@@ -8,7 +8,7 @@ use llrm_dagisel::dag::{Dag, Hooks, PatternContext, SDValue};
 use llrm_dagisel::matcher::{Emit, Matcher::*, Slice, Table, Vt};
 use crate::dagisel::predicates;
 
-pub static ITEMS: [llrm_dagisel::matcher::Matcher; 1062] = [
+pub static ITEMS: [llrm_dagisel::matcher::Matcher; 1063] = [
     SwitchOpcode,
     OpcodeCase { size: 100, opcode: 316 },
     RecordMemRef,
@@ -111,7 +111,7 @@ pub static ITEMS: [llrm_dagisel::matcher::Matcher; 1062] = [
     Alt(0),
     Alt(0),
     Alt(0),
-    OpcodeCase { size: 168, opcode: 317 },
+    OpcodeCase { size: 169, opcode: 317 },
     RecordMemRef,
     RecordNode,
     RecordChild(1),
@@ -199,7 +199,7 @@ pub static ITEMS: [llrm_dagisel::matcher::Matcher; 1062] = [
     EmitNodeXForm { xform: 0, record: 2 },
     EmitConvertToTarget(3),
     MorphNodeTo(Emit { opcode: 373, flags: 9, vts: [Vt(0), Vt(0)], num_vts: 0, operands: Slice { start: 13, len: 3 } }),
-    Alt(37),
+    Alt(38),
     MoveChild(1),
     CheckOpcode(12),
     SwitchType,
@@ -227,7 +227,8 @@ pub static ITEMS: [llrm_dagisel::matcher::Matcher; 1062] = [
     EmitConvertToTarget(1),
     MorphNodeTo(Emit { opcode: 386, flags: 9, vts: [Vt(0), Vt(0)], num_vts: 0, operands: Slice { start: 19, len: 2 } }),
     Alt(0),
-    TypeCase { size: 8, vt: Vt(6) },
+    TypeCase { size: 9, vt: Vt(6) },
+    CheckPredicate(7),
     MoveParent,
     RecordChild(2),
     CheckChildType { child: 2, vt: Vt(6) },
@@ -1095,6 +1096,7 @@ pub fn node_predicate<D: Dag, H: Hooks<D>>(dag: &D, hooks: &H, value: SDValue, i
         4 => predicates::memory_vt_i8(args),
         5 => predicates::zext_load(args),
         6 => predicates::ext_load(args),
+        7 => predicates::has_one_use(args),
         _ => unreachable!("node predicate {id} is not in this table"),
     }
 }
