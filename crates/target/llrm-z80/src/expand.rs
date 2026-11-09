@@ -2835,13 +2835,13 @@ fn flag_and_b_free(text: &str) -> bool {
 /// else in the sequence stores to the stack or touches it, and the pushes run
 /// from the top word down.
 ///
-/// DEVIATE: the pin runs on virtual registers and puts every push at the
+/// DEVIATE Z80-ARGPUSH (owner z80-argpush, exit 2026-11-14): the pin runs on virtual registers and puts every push at the
 /// call, bailing when an instruction defines a register an earlier store
 /// read (`classifyInstruction`). This runs after allocation, where the
 /// argument registers are loaded between the stores and the call, so a push
 /// stands at its store, or behind the push above it when that comes later:
 /// the same legality (no def of the stored register in between), the least
-/// motion. Owner z80-argpush, review 2026-11-14.
+/// motion.
 ///
 /// <https://github.com/llvm/llvm-project/blob/29eff20316/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L358>
 fn push_arguments(

@@ -16,8 +16,10 @@
 //! address and saved IX in front of the first argument
 //! (`first_argument_offset`) are the frame resolver's, added in one place.
 //!
-//! DEVIATE: the stores are not `PUSH`. Reason: the pin turns stores into pushes
-//! in a separate pass (`X86CallFrameOptimization`). Exit: that pass (row 7).
+//! DEVIATE Z80-ARGPUSH (owner z80-argpush, exit 2026-11-14): the stores are not
+//! `PUSH`. Reason: the pin turns stores into pushes in a separate pass
+//! (`X86CallFrameOptimization`); `expand::push_arguments` is that pass, after
+//! allocation.
 //!
 //! # See also
 //! `llvm/lib/Target/AVR/AVRISelLowering.cpp`: `LowerCall` (L1311),
