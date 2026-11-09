@@ -296,6 +296,100 @@ pub fn finish(
     finish_with(function, assignment, number, slots, cpu, push_frame, false, None)
 }
 
+/// What the frame is laid out from, and so what a frame index is at.
+pub(crate) struct FrameInputs {
+    fixed: Vec<i32>,
+    objects: Vec<Object>,
+    used: Vec<RegId>,
+    has_calls: bool,
+    short: bool,
+    /// The frame indices, in the order of `objects`.
+    pub(crate) frame_indices: Vec<i32>,
+}
+
+impl FrameInputs {
+    pub(crate) fn of(
+        insts: &[&crate::mfunc::Inst],
+        function: &MFunction,
+        assignment: &Assignment,
+        slots: &[i32],
+        short: bool,
+    ) -> Self {
+        // a tail call has no call sequence: it leaves the frame it is in
+        let has_calls = insts.iter().any(|inst| inst.call && inst.kind != Kind::Op("TCRETURNq"));
+        // the callee-saved registers the allocation used, in `CSR_STD` order
+        let used: Vec<RegId> = frame::callee_saved()
+            .into_iter()
+            .filter(|saved| {
+                insts
+                    .iter()
+                    .flat_map(|inst| &inst.operands)
+                    .any(
+                        |operand| match operand {
+                            Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == *saved,
+                            _ => false,
+                        },
+                    )
+            })
+            .collect();
+        let fixed: Vec<i32> = function.fixed.keys().rev().copied().collect();
+        let mut objects: Vec<Object> = fixed
+            .iter()
+            .map(|index| Object { size: 4, align: 4, offset: function.fixed[index], callee_saved: false, dead: false })
+            .collect();
+        // the static allocas, then the spill slots, are locals after the fixed
+        // objects (`getStackSlotRange`: one long each)
+        objects.extend(function.locals.iter().map(|&(_, size, align)| Object {
+            size,
+            align,
+            offset: 0,
+            callee_saved: false,
+            dead: false,
+        }));
+        objects.extend(slots.iter().map(|_| Object { size: 4, align: 4, offset: 0, callee_saved: false, dead: false }));
+        let frame_indices: Vec<i32> = fixed
+            .iter()
+            .copied()
+            .chain(function.locals.iter().map(|local| local.0))
+            .chain(slots.iter().copied())
+            .collect();
+        FrameInputs { fixed, objects, used, has_calls, short, frame_indices }
+    }
+
+    /// The laid-out frame for a call area of `max_call_frame` bytes.
+    pub(crate) fn layout(
+        &self,
+        max_call_frame: i64,
+    ) -> frame::Layout {
+        frame::layout(&Function {
+            fixed: self.fixed.len(),
+            objects: self.objects.clone(),
+            saved: self.used.clone(),
+            max_call_frame,
+            stack_align: if self.short { frame::SHIPPED_STACK_ALIGN } else { 0 },
+            adjusts_stack: self.has_calls,
+            ..Function::default()
+        })
+    }
+}
+
+/// The largest `ADJCALLSTACKDOWN` among `insts` whose sequence `kept` keeps.
+pub(crate) fn call_area(
+    insts: &[&crate::mfunc::Inst],
+    kept: &dyn Fn(usize) -> bool,
+) -> i64 {
+    insts
+        .iter()
+        .enumerate()
+        .filter(|(at, inst)| inst.kind == Kind::Op("ADJCALLSTACKDOWN") && kept(*at))
+        .filter_map(|(_, inst)| match inst.operands.first() {
+            Some(Operand::Imm(bytes)) => Some(*bytes),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 /// [`finish`], with the outgoing arguments pushed where [`crate::callpush`]
 /// finds that cheaper: `pushes` is `Some(price)` to allow it.
 pub fn finish_with(
@@ -308,6 +402,9 @@ pub fn finish_with(
     short: bool,
     pushes: Option<crate::timing::Price>,
 ) -> Result<Vec<Line>, String> {
+    if let Some(folded) = crate::frameindexed::fold(function, assignment, slots, short) {
+        return finish_with(&folded, assignment, number, slots, cpu, push_frame, short, pushes);
+    }
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
         .iter()
@@ -328,63 +425,10 @@ pub fn finish_with(
             _ => None,
         })
         .collect();
-    // a tail call has no call sequence: it leaves the frame it is in
-    let has_calls = insts.iter().any(|inst| inst.call && inst.kind != Kind::Op("TCRETURNq"));
-    // the callee-saved registers the allocation used, in `CSR_STD` order
-    let used: Vec<RegId> = frame::callee_saved()
-        .into_iter()
-        .filter(|saved| {
-            insts
-                .iter()
-                .flat_map(|inst| &inst.operands)
-                .any(
-                    |operand| match operand {
-                        Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == *saved,
-                        _ => false,
-                    },
-                )
-        })
-        .collect();
-    let fixed: Vec<i32> = function.fixed.keys().rev().copied().collect();
-    let mut objects: Vec<Object> = fixed
-        .iter()
-        .map(|index| Object { size: 4, align: 4, offset: function.fixed[index], callee_saved: false, dead: false })
-        .collect();
-    // the static allocas, then the spill slots, are locals after the fixed
-    // objects (`getStackSlotRange`: one long each)
-    objects.extend(function.locals.iter().map(|&(_, size, align)| Object {
-        size,
-        align,
-        offset: 0,
-        callee_saved: false,
-        dead: false,
-    }));
-    objects.extend(slots.iter().map(|_| Object { size: 4, align: 4, offset: 0, callee_saved: false, dead: false }));
-    let frame_indices: Vec<i32> =
-        fixed.iter().copied().chain(function.locals.iter().map(|local| local.0)).chain(slots.iter().copied()).collect();
-    let call_area = |kept_sequences: &dyn Fn(usize) -> bool| -> i64 {
-        insts
-            .iter()
-            .enumerate()
-            .filter(|(at, inst)| inst.kind == Kind::Op("ADJCALLSTACKDOWN") && kept_sequences(*at))
-            .filter_map(|(_, inst)| match inst.operands.first() {
-                Some(Operand::Imm(bytes)) => Some(*bytes),
-                _ => None,
-            })
-            .max()
-            .unwrap_or(0)
-    };
-    let frame_of = |max_call_frame: i64| {
-        frame::layout(&Function {
-            fixed: fixed.len(),
-            objects: objects.clone(),
-            saved: used.clone(),
-            max_call_frame,
-            stack_align: if short { frame::SHIPPED_STACK_ALIGN } else { 0 },
-            adjusts_stack: has_calls,
-            ..Function::default()
-        })
-    };
+    let inputs = FrameInputs::of(&insts, function, assignment, slots, short);
+    let frame_indices = &inputs.frame_indices;
+    let call_area = |kept_sequences: &dyn Fn(usize) -> bool| call_area(&insts, kept_sequences);
+    let frame_of = |max_call_frame: i64| inputs.layout(max_call_frame);
     let wants_size = pushes == Some(crate::timing::Price::Size);
     let pushes = match pushes {
         Some(price) => crate::callpush::plan(&insts, &blocks, assignment, cpu, price, short, |max_call_frame| {
@@ -495,7 +539,10 @@ pub fn finish_with(
             }
             if inst.terminator
                 || inst.barrier
-                || matches!(inst.kind, Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN"))
+                || matches!(
+                    inst.kind,
+                    Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN")
+                )
                 || crate::callpush::names_sp(inst, assignment)
             {
                 return true;
@@ -536,7 +583,9 @@ pub fn finish_with(
         if inst.origin != 0 {
             last_origin = inst.origin;
         }
-        if owed > 0 && (pushes.is_push(index) || (pushes.flushes(index) && !waiting.is_empty())) && pays_before_call(index)
+        if owed > 0
+            && (pushes.is_push(index) || (pushes.flushes(index) && !waiting.is_empty()))
+            && pays_before_call(index)
         {
             frame_op(&FrameOp::AddSp(owed), &mut out, short);
             pushed -= owed;
