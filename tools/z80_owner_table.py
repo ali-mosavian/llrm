@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import corpus_targets  # noqa: E402
 import virtual_ok  # noqa: E402
+import z80_flag_check  # noqa: E402
 
 LEVELS = [("1", "O1"), ("s", "Os"), ("z", "Oz"), ("2", "O2"), ("3", "O3")]
 STRICT = {"O1", "Os", "Oz"}
@@ -65,6 +66,9 @@ def applicable(sources, target="z80-sdcc"):
     return {name for name, text in sources.items() if corpus_targets.applies(target, text)}
 
 
+REFUSED = []  # (program, level, variant, why): a variant whose codegen flags differ from ours never sets a bar
+
+
 def rows(ours, sdcc, sources):
     """Table rows for each level: every applicable program; one without an ours row is UNMEASURED."""
     out = []
@@ -73,6 +77,11 @@ def rows(ours, sdcc, sources):
         for prog in programs:
             o = ours.get(lv, {}).get(prog, {}).get("ours")
             s = {k: v for k, v in sdcc.get(lv, {}).get(prog, {}).items() if k.startswith("sdcc")}
+            for k in list(s):
+                why = z80_flag_check.cell_mismatch(sources.get(prog, ""), lv, k)
+                if why:
+                    REFUSED.append((prog, name, k, why))
+                    del s[k]
             double = is_double(sources.get(prog, ""))
             v = verdict(name, o, s, double)
             if o is None or not s:
@@ -106,6 +115,7 @@ def main(argv):
     sources = {p.stem: p.read_text() for p in Path(a.programs).glob("*.c")}
     table = rows(ours, sdcc, sources)
     with open(a.out, "w") as f:
+        f.write(f"# flag parity: tools/z80_flag_check.py, {len(REFUSED)} SDCC cells refused for differing codegen flags\n")
         for line in a.header_line:
             f.write("# " + line + "\n")
         f.write("prog\tlevel\tours_B\tours_T\tbest_B\tbest_B_variant\tbest_T\tbest_T_variant\tdB\tdT\tverdict\tvirtual\tn_sdcc\n")
