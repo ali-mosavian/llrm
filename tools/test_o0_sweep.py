@@ -117,6 +117,14 @@ def test_feature_m_flags_are_given_to_x86_targets_only():
     assert sweep.flags_of(source, "m68k-68020") == ["-DX"]
 
 
+def test_f_flags_of_the_shared_line_are_given_to_x86_targets_only():
+    """int_compared_with_float and tail_calls_edges were listed as refused on arm64 and wasm32 ("llrm-arm64-llc: unrecognized argument -fexcess-precision=standard"): flags the sweep gave, not the compiler's refusal."""
+    source = "// flags: -O2 -DX -fexcess-precision=standard -fno-inline=sum5\nint x;\n"
+    assert sweep.flags_of(source, "x86_32-linux") == ["-DX", "-fexcess-precision=standard", "-fno-inline=sum5"]
+    for target in ("arm64-linux", "wasm32", "m68k-68020", "6502-sim65", "z80-sdcc"):
+        assert sweep.flags_of(source, target) == ["-DX"]
+
+
 def test_the_family_flags_line_is_given_to_that_family_only():
     """memcpy_runtime carries `// flags-m68k: -mcmodel=medium`; the sweep dropped it and m68k refused the program (a pc-relative overflow)."""
     source = "// flags: -O0 -DX\n// flags-m68k: -mcmodel=medium\nint x;\n"

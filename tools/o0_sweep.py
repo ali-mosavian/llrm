@@ -41,7 +41,8 @@ def flags_of(source: str, target: str = "x86") -> list[str]:
         if line.startswith("// flags:"):
             first = line.removeprefix("// flags:").split("|")[0].split()
             feature = target.startswith("x86")  # -mlong-double-80 and the like are x87 options; other drivers reject them
-            kept = [t for t in first if t.startswith(("-D", "-f", "-W")) or (feature and t.startswith("-m") and not t.startswith(CPU_OR_ABI) and t not in ("-m16", "-m32", "-m64"))]
+            # -f tokens (-fexcess-precision, -fno-inline=NAME) are llrm-cc's x86 options: the other backends refuse an unknown one, so a non-x86 sweep would list its own flags as refusals
+            kept = [t for t in first if t.startswith(("-D", "-W")) or (feature and t.startswith("-f")) or (feature and t.startswith("-m") and not t.startswith(CPU_OR_ABI) and t not in ("-m16", "-m32", "-m64"))]
             break
     return [*kept, *ct.flags_for(target.split("-")[0], source)]
 
