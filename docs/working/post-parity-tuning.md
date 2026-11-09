@@ -20,7 +20,7 @@ vsgcc priced streams, i486): llrm 37207 instructions, 42090 clocks, 619 B; pin's
 Kept: 11 one-clock steps against an `imul` of 13 to 42 clocks. At -Os llrm does not chain (0 `lea`, 2 `imul`; 218 B, 125401 clocks against
 clang's 233 B, 129588), as the pin does. Revisit only if the profile's multiply price changes.
 
-## x_switch keeps 3 more copies than the pin (parked, owner w-13)
+## x_switch keeps 3 more copies than the pin (parked, owner w12)
 
 `x_switch` m32 -O2 with a single imul (no chain): copies pin/ours, PhiElimination 72/68, TwoAddress 102/104, Coalescer 14/17. Ours carries the switch
 state in 12 copies against the pin's 8, at the switch head blocks; every copy left is interference by our liveness. The lea chain is not the cause.

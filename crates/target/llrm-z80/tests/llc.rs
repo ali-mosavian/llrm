@@ -21,7 +21,7 @@ fn a_kernel_is_written_as_sdasz80_text() {
 fn a_refused_function_fails_the_exit_status() {
     let dir = env!("CARGO_MANIFEST_DIR");
     let source = std::env::temp_dir().join("llrm-z80-llc-refused.ll");
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i128 @g(i128 %a, i128 %b) {\n  %r = mul i128 %a, %b\n  ret i128 %r\n}\n";
     std::fs::write(&source, ir).unwrap();
     let out = std::env::temp_dir().join("llrm-z80-llc-refused.s");
@@ -35,7 +35,7 @@ fn a_refused_function_fails_the_exit_status() {
 #[test]
 fn defined_variables_are_written_as_data() {
     let source = std::env::temp_dir().join("llrm-z80-llc-data.ll");
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               @tab = constant [4 x i8] c\"\\01\\02\\03\\04\"\n\
               @.str.1 = private constant [3 x i8] c\"ab\\00\"\n\
               @p = global ptr getelementptr (i8, ptr @tab, i16 2)\n\
@@ -104,7 +104,7 @@ fn a_byte_read_of_a_reloaded_pair_names_the_byte() {
 #[test]
 fn g_writes_the_line_symbols() {
     let source = std::env::temp_dir().join("llrm-z80-llc-g.ll");
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i16 @f(i16 %a, i16 %b) !dbg !5 {\n  %c = add i16 %a, %b, !dbg !7\n  ret i16 %c, !dbg !7\n}\n\
               !llvm.dbg.cu = !{!0}\n!llvm.module.flags = !{!2}\n\
               !0 = distinct !DICompileUnit(language: DW_LANG_C11, file: !1, producer: \"t\", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug)\n\

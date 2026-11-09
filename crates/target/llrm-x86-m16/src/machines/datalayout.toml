@@ -11,6 +11,11 @@ tti = "X86"
 
 datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32"
 
+# No `S` on purpose: the pin's m16 datalayout (the clang fork's, `llrm-cc/targets.toml` x86_16-*) names none, so the pin's alloca raise to a type's
+# preferred alignment is unbounded at m16 and ours follows it (bench/parity/qbsp -Os: the packed 16-byte local is raised to 4 and zeroed by
+# `rep stosw` x8; S16 made it `rep stosb` x16). tools/test_datalayout_stack.py and assert_stack_facts read this key: a target with it must not declare an S.
+stack_alignment_unstated = "the pin's m16 datalayout has no S"
+
 # The operations this machine has no instruction for, which the compiler expands before selection: fptoui to a 64-bit integer
 # (fistp stores signed qwords), a conditional move (none before the Pentium Pro), `ctpop` (no popcnt; `ctlz` and `cttz` are `bsr` and
 # `bsf`, as at m32), `bswap` and the three-way compares `scmp` and `ucmp` (none is selected yet), and `abs`, `fshl` and

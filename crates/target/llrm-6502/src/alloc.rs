@@ -170,6 +170,11 @@ fn is_pair(register: RegId) -> bool {
     pairs().any(|one| one == register)
 }
 
+/// A pair or the soft stack pointer `rs0`, which no value is allocated to.
+fn is_word(register: RegId) -> bool {
+    register == reg::RS0 || is_pair(register)
+}
+
 /// The zero-page byte of a pair: lane 0 is the low byte.
 fn lane(
     pair: RegId,
@@ -3526,10 +3531,16 @@ fn emit_with<const STACK: bool>(
                 .find(|(r, _)| !after[b][i].contains(r) && !regs.contains(r))
                 .map(|(_, name)| name);
             match (inst.kind, &inst.operands[..]) {
-                (Kind::Copy, _) if is_pair(regs[0]) || is_pair(regs[1]) => {
+                (Kind::Copy, _) if is_word(regs[0]) && is_word(regs[1]) => {
                     let moves: Vec<_> = (0..2).map(|n| (lane(regs[0], n), lane(regs[1], n))).collect();
                     parallel_move(&mut out, &moves, a_live);
                 }
+                // a word copied into a byte is its low half (`trunc` at -O0); `lane` of
+                // a byte register named a cell no pair has
+                (Kind::Copy, _) if is_word(regs[1]) => {
+                    move_byte(&mut out, regs[0], lane(regs[1], 0), a_live, spare);
+                }
+                (Kind::Copy, _) if is_word(regs[0]) => return Err("a byte copied into a word".into()),
                 (Kind::Copy, _) => move_byte(&mut out, regs[0], regs[1], a_live, spare),
                 // a lane nothing reads is not moved (a word truncated to a byte)
                 (Kind::Op("UNPACK"), _) => {

@@ -150,6 +150,9 @@ pub fn run_with(
     crate::peephole_cells::drop_dead_stores(asm);
     drop_dead_writes(asm);
     crate::peephole_cells::store_then_index_load(asm);
+    // last of the cell passes: the choice is by the final size, after the
+    // chain passes have taken what they take from the loop's neighbours
+    crate::peephole_cells::shift_loop_in_a(asm);
     branch_on_shift_carry(asm);
     jump_to_return(asm);
 }
