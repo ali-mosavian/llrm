@@ -67,11 +67,7 @@
 //!   expansion for the select of two i64 constants as a priced DEVIATE (or
 //!   the pass the pin uses to keep `mov -1` out of the first CMOV window).
 //!   The scheduler is right (traced: `MOV32r0` goes first, held by the live
-//!   EFLAGS). `f409` (`x<y ? INT64_MIN/2^31 : 0`, symbol size): base 25 B
-//!   (O1, O2), head 30 / 32 B, clang 28 / 28, gcc 32 / 27, so head is over base
-//!   and over the best external (+2 at O1, +5 at O2); the head shape is
-//!   `setl al; and eax,255; shl` (FixupSetCC does not fire; the CMOV diamond
-//!   comes before the SETCC; cause not traced). Same exit as above.
+//!   EFLAGS). `f409` is its own row, I64SEL-6.
 //! - I64SEL-2, owner llrm-target-x86-m64 (SD447; oversight 2026-11-09: ties go
 //!   to the pin), exit 2026-11-12: m64 `word_compares` -O1/-O2/-O3 295 -> 309 B,
 //!   `main` 167 -> 173 B (pin 175 B); native instructions 139969 -> 140364
@@ -94,6 +90,13 @@
 //!   hl,de` (11 T) becomes `ex de,hl; or a,a; sbc hl,bc` (23 T), +12 T per
 //!   execution of the site (static estimate, not measured; ucsim run PASS,
 //!   the runner prints no T).
+//! - I64SEL-6, owner w12 (w9 traces), exit 2026-11-12: `f409` (`x<y ? INT64_MIN/2^31
+//!   : 0`, m32 -march=i486, symbol size): base 25 B (O1, O2), head 30 / 32 B,
+//!   clang 28 / 28, gcc 32 / 27: over the best external by +2 (O1) and +5
+//!   (O2). Head emits `setl al; and eax,255; shl eax,31`: the CMOV diamond
+//!   comes before the SETCC, FixupSetCC does not fire, MaskByAnd masks. Card:
+//!   ~/scratch/handoff/f409-cmov-before-setcc-2026-11-09.md. Its growth is part
+//!   of I64SEL-1's .text total.
 //!
 //! The loop is repeated until no select is left in any function, so two selects
 //! in one block each get their own split. The result is checked by an
