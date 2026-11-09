@@ -4,15 +4,23 @@ import sys
 import unittest
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from m68k_column_probe import column_flags, padding_flag_reaches_gcc, object_violations, reloc_kinds, violations  # noqa: E402
+from m68k_column_probe import column_flags, padding_flag_reaches_gcc, object_violations, reloc_kinds, shared_violations, violations  # noqa: E402
 
 SOURCE = '''
+const EXTERNAL_FLAGS: [&str; 5] = [
+    "-fomit-frame-pointer",
+    "-fno-stack-protector",
+    "-fno-stack-clash-protection",
+    "-U_FORTIFY_SOURCE",
+    "-fno-asynchronous-unwind-tables",
+];
+const GCC_ZERO_INIT_PADDING: &str = "-fzero-init-padding-bits=standard";
 fn gcc_object() {
-    .args(["-ffreestanding", "-nostdlib", "-fno-asynchronous-unwind-tables"])
+    .args(["-ffreestanding", "-nostdlib"]).args(EXTERNAL_FLAGS).arg(GCC_ZERO_INIT_PADDING)
     .arg(format!("-mcpu={cpu}"))
 }
 fn clang_object() {
-    .args(["--target=m68k-linux-gnu", "-ffreestanding", "-fno-asynchronous-unwind-tables", "-fno-pic"])
+    .args(["--target=m68k-linux-gnu", "-ffreestanding", "-fno-pic"]).args(EXTERNAL_FLAGS)
     .args(["-mtriple=m68k-linux-gnu", "-relocation-model=static", "-O2", "-filetype=obj"])
 }
 '''
@@ -29,6 +37,12 @@ class ColumnProbe(unittest.TestCase):
     def test_a_clang_column_without_the_static_model_is_refused(self):
         flags = column_flags(SOURCE.replace('"-fno-pic"', '"-O0"').replace("-relocation-model=static", "-O1"))
         self.assertEqual(len(violations(flags)), 2)
+
+    def test_the_fixture_matches_the_shared_config_and_a_missing_flag_or_constant_is_named(self):
+        self.assertEqual(shared_violations(SOURCE), [])
+        self.assertEqual(len(shared_violations(SOURCE.replace('    "-fomit-frame-pointer",\n', ""))), 1)
+        self.assertEqual(len(shared_violations(SOURCE.replace("standard", "all"))), 1)
+        self.assertEqual(shared_violations(SOURCE.replace(".arg(GCC_ZERO_INIT_PADDING)", "")), ["gcc_object: does not pass GCC_ZERO_INIT_PADDING"])
 
     def test_got_and_plt_kinds_are_refused_and_pc_kinds_are_not(self):
         kinds = reloc_kinds("00000a  R_68K_PC16  .bss\n00000c  R_68K_GOT16O  x\n000010  R_68K_PLT32  f\n000014  R_68K_32  g")

@@ -11,9 +11,12 @@ import re
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import external_flags  # noqa: E402
 
 PIC = re.compile(r"-f(pic|PIC|pie|PIE)\b")
-HARDENING = re.compile(r"-f(stack-protector|stack-clash-protection|cf-protection|hardened)|_FORTIFY_SOURCE")
+HARDENING = re.compile(r"-f(stack-protector|stack-clash-protection|cf-protection(?!=none)|hardened)\b|-D_FORTIFY_SOURCE")
 FORBIDDEN_KINDS = re.compile(r"GOT|PLT|TLS|COPY|JMP_SLOT|RELATIVE")
 
 
@@ -28,6 +31,26 @@ def column_flags(source: str) -> dict[str, list[str]]:
     return flags
 
 
+def shared_flags(source: str) -> list[str]:
+    """The literals of `const EXTERNAL_FLAGS` plus `GCC_ZERO_INIT_PADDING`, and whether each column's code uses its constant."""
+    block = re.search(r"const EXTERNAL_FLAGS[^=]*=\s*\[(.*?)\];", source, re.S)
+    pad = re.search(r'const GCC_ZERO_INIT_PADDING[^=]*=\s*"([^"]*)"', source)
+    return (re.findall(r'"([^"]*)"', block.group(1)) if block else []) + ([pad.group(1)] if pad else [])
+
+
+def shared_violations(source: str) -> list[str]:
+    """The matrix's list must be the shared config's for m68k (target `none`, gcc 15, no relocation flag), used by both columns."""
+    want = sorted(external_flags.flags("none", (), 15))
+    have = sorted(shared_flags(source))
+    found = [] if have == want else [f"matrix.rs shared flags {have} differ from external_flags.py {want}"]
+    for name, constants in (("gcc_object", ("EXTERNAL_FLAGS", "GCC_ZERO_INIT_PADDING")), ("clang_object", ("EXTERNAL_FLAGS",))):
+        start = source.index(f"fn {name}(")
+        end = source.find("\nfn ", start + 1)
+        body = source[start : end if end != -1 else len(source)]
+        found += [f"{name}: does not pass {c}" for c in constants if c not in body]
+    return found
+
+
 def violations(flags: dict[str, list[str]]) -> list[str]:
     found = []
     gcc, clang = flags["gcc_object"], flags["clang_object"]
@@ -38,8 +61,8 @@ def violations(flags: dict[str, list[str]]) -> list[str]:
         found.append("clang_object: no -fno-pic")
     if "-relocation-model=static" not in clang:
         found.append("clang_object: no -relocation-model=static")
-    if "-ffreestanding" not in gcc or "-fno-asynchronous-unwind-tables" not in gcc:
-        found.append("gcc_object: -ffreestanding and -fno-asynchronous-unwind-tables are the explicit neutral set")
+    if "-ffreestanding" not in gcc:
+        found.append("gcc_object: no -ffreestanding")
     return found
 
 
@@ -71,7 +94,8 @@ def padding_flag_reaches_gcc(gcc: str) -> bool:
 
 if __name__ == "__main__":
     path = sys.argv[1] if len(sys.argv) > 1 else "crates/target/llrm-m68k/examples/matrix.rs"
-    problems = violations(column_flags(open(path).read()))
+    text = open(path).read()
+    problems = violations(column_flags(text)) + shared_violations(text)
     for obj in sys.argv[2:]:
         listing = subprocess.run(["objdump", "-r", obj], capture_output=True, text=True).stdout
         problems += [f"{obj}: {kind}" for kind in object_violations(reloc_kinds(listing))]
