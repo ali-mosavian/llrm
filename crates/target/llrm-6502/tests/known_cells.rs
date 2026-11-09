@@ -92,3 +92,14 @@ fn a_byte_kept_in_a_cell_round_a_loop_is_not_reloaded() {
     let reloads = body.iter().filter(|l| l.starts_with("lda rc")).count();
     assert_eq!(reloads, 0, "{body:?}");
 }
+
+/// The values at the labels need nine walks to settle (each walk loses `y` at
+/// one more label through the back edges): an eight-walk cap gave up and kept
+/// every load. jpeg_single's 3800-line function did the same, with 54
+/// `lda #0; sta X; lda #0` (~108 B at -Os) kept.
+#[test]
+fn values_that_need_nine_walks_still_settle() {
+    let text = "b5:\n  lda #0\nb6:\n  bne b18\nb7:\n  lda #0\n  ldy #0\nb14:\n  bne b22\n  ldy #0\n  tya\nb18:\n  tay\nb19:\n  bne b31\nb22:\n  bne b19\nb24:\n  bne b14\n  ldy #0\n  lda rc3\n  bne b36\nb31:\n  tya\n  bne b6\nb36:\n  tay\n  bne b24\n";
+    // `b7` is only fallen into, with `a` = 0: `ldy #0` is the 1-byte `tay`
+    assert_eq!(known(text), text.replacen("b7:\n  lda #0\n  ldy #0\n", "b7:\n  lda #0\n  tay\n", 1));
+}

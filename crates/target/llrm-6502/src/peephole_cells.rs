@@ -1,7 +1,7 @@
 //! Cells a function leaves dead at its return, and the shifts of a word that
 //! end in `a`.
 //!
-//! - [`drop_dead_stores`]: `sta rc2` (likewise `stx`, `sty`) of a caller-saved
+//! - [`drop_dead_stores`]: `sta rc2` (likewise `stx`, `sty`, and the 65C02's `stz`) of a caller-saved
 //!   cell that nothing reads before an `rts` that does not return it.
 //! - [`store_then_index_load`]: `sta m; lda n; ldx m` is `tax; lda n` when `m`
 //!   is dead after (likewise `ldy m`): the byte went through memory to leave
@@ -168,7 +168,7 @@ fn cell_dead_from(
 pub fn drop_dead_stores(asm: &mut Asm) {
     let mut at = 0;
     while at < asm.lines.len() {
-        if let Line::Inst(Inst { op: Op::Sta | Op::Stx | Op::Sty, operand: Operand::Direct(cell), .. }) = &asm.lines[at]
+        if let Line::Inst(Inst { op: Op::Sta | Op::Stx | Op::Sty | Op::Stz, operand: Operand::Direct(cell), .. }) = &asm.lines[at]
             && cell_dead_from(&asm.lines, at + 1, cell, &asm.result_cells, &mut BTreeSet::new())
         {
             asm.lines.remove(at);
