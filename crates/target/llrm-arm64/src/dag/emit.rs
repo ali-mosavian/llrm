@@ -1612,6 +1612,12 @@ impl Emitter<'_> {
                     }
                     return Ok(());
                 }
+                if name == "BRK" {
+                    let [Operand::Imm(imm16)] = operands.as_slice() else { return Err("a BRK without an immediate".into()) };
+                    let imm16 = u16::try_from(*imm16).map_err(|_| format!("a BRK immediate {imm16} over 16 bits"))?;
+                    self.ops.push(Op::I(Inst::Brk { imm16 }));
+                    return Ok(());
+                }
                 if name == "DMB" {
                     let barrier = match operands.as_slice() {
                         [Operand::Imm(11)] => Barrier::Ish,

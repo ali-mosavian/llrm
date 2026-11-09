@@ -796,6 +796,8 @@ impl TargetLowering {
         t.set_ops(&[SetCC, BrCC, Select, SelectCC, Xor], &words, Custom);
         t.set_ops(&[BrCond, BrJT, BrInd], &[MVT::Other], Custom);
         t.set_ops(&[SetCCCarry], &[MVT::I64], Custom);
+        // `AArch64InstrInfo.td`: `(trap)` is `BRK 1`, `(debugtrap)` is `BRK 0xF000`.
+        t.set_ops(&[Trap, DebugTrap], &[MVT::Other], Legal);
         t.set_ops(&[ShlParts, SraParts, SrlParts], &[MVT::I64], Custom);
         t.set_ops(&[BitReverse, CtLs], &words, Legal);
         t.set_ops(&[BuildPair], &[MVT::I64], Expand);
