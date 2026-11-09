@@ -147,6 +147,14 @@ pub fn pass_flag(flag: &str) -> bool {
     POLICY.lock().unwrap().take(flag)
 }
 
+/// What the pin runs before selection at every level, -O0 included: the
+/// selector never sees `memset_pattern` (PreISelIntrinsicLowering), nor
+/// `llvm.is.constant` and `llvm.objectsize` (LowerConstantIntrinsics).
+pub fn lowered_before_selection(program: &mut Program) -> Result<(), String> {
+    program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+    program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)
+}
+
 /// `program` through the shared mid-end at `level`.
 pub fn optimized_at(
     program: &mut Program,
@@ -161,9 +169,7 @@ pub fn optimized_at(
     }
     options.library = c_library();
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
-    // The pin's PreISelIntrinsicLowering: the selector never sees the
-    // intrinsic.
-    program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+    lowered_before_selection(program)?;
     // `addIRPasses`: GlobalMerge, after the mid-end, before selection.
     if let Some(merge) = program.target.global_merge(level == Level::O3) {
         for module in &mut program.modules {
@@ -489,6 +495,8 @@ pub fn object_with(
     }
     if level != Level::O0 {
         optimized_at(&mut program, level)?;
+    } else {
+        lowered_before_selection(&mut program)?;
     }
     let lowered = functions_with(&program, debug)?;
     let object = crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)?;
@@ -517,6 +525,8 @@ pub fn assembly(
     let level = level.into();
     if level != Level::O0 {
         optimized_at(&mut program, level)?;
+    } else {
+        lowered_before_selection(&mut program)?;
     }
     let mut out = String::new();
     for function in functions(&program)? {
