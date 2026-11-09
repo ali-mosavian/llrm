@@ -248,6 +248,52 @@ fn at_os_a_constant_stored_twice_is_loaded_once() {
     assert_eq!(moves(false), 2, "speed: both stores take the immediate");
     assert_eq!(moves(true), 3, "-Os: the constant is loaded once and both stores take the register");
 }
+/// `and`, `or`, `xor` and `add` of a large constant on two values that are
+/// also used elsewhere (so their loads do not fold), in one block at `-Os`: the pin's `Select` (`ISD::ADD`..`ISD::XOR`, "avoid folding
+/// immediates with multiple uses") picks the register form directly, so the
+/// constant is loaded once. Ours had only the table's predicate, which that
+/// path never reaches, and kept `and r, imm32` twice: sfm16 `add_bits` m32
+/// `-Os` spent 3 B more per extra use and a register pair more on the masks.
+#[test]
+fn at_os_a_large_immediate_used_twice_by_arithmetic_is_loaded_once() {
+    // (op, (immediate ops, immediate movs)) at speed and at -Os, for every op at once.
+    let mut got = Vec::new();
+    for op in ["and", "or", "xor", "add"] {
+        let text = format!(
+            "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {{
+  %x = {op} i32 %a, 2147483647
+  %y = {op} i32 %b, 2147483647
+  %t = mul i32 %x, %y
+  %s = add i32 %a, %b
+  %r = sub i32 %t, %s
+  ret i32 %r
+}}
+"
+        );
+        let module = crate::testing::module(&text).expect("parses");
+        let immediates = |size: bool| {
+            let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+            cpu.size = size;
+            let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+            let insns = done.body.insns();
+            let with_imm = |name: &str| {
+                insns
+                    .iter()
+                    .filter_map(|i| i.what.as_ref())
+                    .filter(|w| w.name.as_deref() == Some(name))
+                    .filter(|w| w.sources.iter().any(|l| matches!(l, crate::model::ir::Loc::Imm(_))))
+                    .count()
+            };
+            (with_imm(op), with_imm("mov"))
+        };
+        got.push((op, immediates(false), immediates(true)));
+    }
+    // Speed: both take the immediate. -Os: the constant is loaded once, both take the register.
+    let want: Vec<_> = ["and", "or", "xor", "add"].into_iter().map(|op| (op, (2, 0), (0, 1))).collect();
+    assert_eq!(got, want);
+}
+
 const TIMES_SEVEN_PLUS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %a, i32 %y) {
   %b = xor i32 %a, %y

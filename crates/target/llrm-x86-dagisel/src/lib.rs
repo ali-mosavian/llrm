@@ -1,6 +1,7 @@
 pub mod fastisel;
 #[rustfmt::skip]
 pub mod generated;
+pub mod x86_arith_imm;
 pub mod x86_classes;
 pub mod x86_divrem;
 pub mod x86_fcmp;
