@@ -55,6 +55,8 @@ pub struct Prepared {
     /// With `-g`: the source file and start line of each function, from one
     /// parse of the module.
     sources: llrm_support::hash::HashMap<String, (String, Option<u32>)>,
+    /// The level the module is compiled at: -Os for a module `oz_best_of` found smaller there.
+    level: Level,
 }
 
 impl Prepared {
@@ -69,10 +71,16 @@ pub fn prepare(
     ir: &str,
     request: &Request,
 ) -> Result<Prepared, String> {
+    let request = &effective(ir, request)?;
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
     let sources = if request.debug { crate::driver::sources_of(ir) } else { Default::default() };
     let (selections, alternatives) = selections_with_alternatives(ir, request)?;
-    Ok(Prepared { selections: Selections::new(selections), alternatives: Selections::new(alternatives), sources })
+    Ok(Prepared {
+        selections: Selections::new(selections),
+        alternatives: Selections::new(alternatives),
+        sources,
+        level: request.level,
+    })
 }
 
 type SelectionKey = (String, Vec<(String, String)>);
@@ -87,10 +95,66 @@ type Selections = std::rc::Rc<
 >;
 
 thread_local! {
-    /// The module most recently run through the mid-end and selection, with
-    /// what it was run for.
-    static SELECTED: std::cell::RefCell<Option<(String, SelectionKey, Selections, Selections)>> =
-        const { std::cell::RefCell::new(None) };
+    /// The two modules most recently run through the mid-end and selection (two: -Oz compiles a module as -Oz and as
+    /// -Os, then reads the one it keeps), most recent first, with what each was run for.
+    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// The level `effective` chose for the module most recently asked about.
+    static CHOSEN: std::cell::RefCell<Option<(String, SelectionKey, Level)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// What a compile of `ir` reads besides the text: the request and the LLRM_ and Z80_ switches of the environment.
+fn selection_key(request: &Request) -> SelectionKey {
+    let mut environment: Vec<(String, String)> =
+        std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
+    environment.sort();
+    (
+        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips, request.oz_best_of)),
+        environment,
+    )
+}
+
+/// The request `ir` is compiled with. DEVIATE z80-oz-best-of (see `Request::oz_best_of`): at -Oz, the -Os one where
+/// the module is smaller in bytes (the runtime it reaches included), else the request itself.
+pub fn effective(
+    ir: &str,
+    request: &Request,
+) -> Result<Request, String> {
+    if request.level != Level::Oz || !request.oz_best_of {
+        return Ok(request.clone());
+    }
+    let key = selection_key(request);
+    let held = CHOSEN.with(|held| held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(.., level)| *level));
+    let level = match held {
+        Some(level) => level,
+        None => {
+            let os = Request { level: Level::Os, ..request.clone() };
+            // an -Os compile that is refused, or whose lines are, leaves -Oz
+            let level = match (module_bytes(ir, request), module_bytes(ir, &os)) {
+                (Ok(oz), Ok(os)) if os < oz => Level::Os,
+                _ => Level::Oz,
+            };
+            CHOSEN.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, level)));
+            level
+        }
+    };
+    Ok(Request { level, ..request.clone() })
+}
+
+/// The module's code bytes at `request.level`: its functions as emitted and the runtime routines they reach, each
+/// once.
+fn module_bytes(
+    ir: &str,
+    request: &Request,
+) -> Result<u32, String> {
+    let (selected, alternatives) = cached_both(ir, request)?;
+    let (mut bytes, mut reached) = (0, std::collections::HashSet::new());
+    for (name, ..) in selected.iter() {
+        let lines = lines_in(&selected, &alternatives, name, 0, request)?;
+        bytes += expand::price_emitted(&lines, false).0;
+        reached.extend(crate::runtime_size::referenced(&lines));
+    }
+    Ok(bytes + crate::runtime_size::reached(&reached) + crate::data::image_bytes(&crate::data::text_at(ir, request)?))
 }
 
 /// [`selections`] of `ir`, kept for the next function of the same module:
@@ -113,16 +177,10 @@ fn cached_both(
     // everything the result reads: the text, the request, and the LLRM_ and
     // Z80_ switches of the environment. Compared whole: hashing the text of a
     // large module for each of its functions was a tenth of the compile.
-    let mut environment: Vec<(String, String)> =
-        std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
-    environment.sort();
     TEXT_COMPARES.with(|one| one.set(one.get() + 1));
-    let key = (
-        format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8, request.slot_by_conflicts, request.flat_loop_trips)),
-        environment,
-    );
+    let key = selection_key(request);
     let held = SELECTED.with(|held| {
-        held.borrow().as_ref().filter(|(text, was, ..)| text == ir && *was == key).map(|(_, _, one, other)| (one.clone(), other.clone()))
+        held.borrow().iter().find(|(text, was, ..)| text == ir && *was == key).map(|(_, _, one, other)| (one.clone(), other.clone()))
     });
     if let Some(one) = held {
         return Ok(one);
@@ -130,7 +188,11 @@ fn cached_both(
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
     let (main, alternatives) = selections_with_alternatives(ir, request)?;
     let (one, other) = (Selections::new(main), Selections::new(alternatives));
-    SELECTED.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, one.clone(), other.clone())));
+    SELECTED.with(|held| {
+        let mut held = held.borrow_mut();
+        held.insert(0, (ir.to_owned(), key, one.clone(), other.clone()));
+        held.truncate(2);
+    });
     Ok((one, other))
 }
 
@@ -2364,6 +2426,7 @@ pub fn text(
     number: usize,
     request: &Request,
 ) -> Result<String, String> {
+    let request = &effective(ir, request)?;
     let source = request.debug.then(|| crate::driver::source_of(ir, name)).flatten();
     let (selected, alternatives) = cached_both(ir, request)?;
     text_of(source, &selected, &alternatives, name, number, request)
@@ -2377,6 +2440,7 @@ pub fn text_in(
     request: &Request,
 ) -> Result<String, String> {
     let source = prepared.sources.get(name).cloned();
+    let request = &Request { level: prepared.level, ..request.clone() };
     text_of(source, &prepared.selections, &prepared.alternatives, name, number, request)
 }
 
