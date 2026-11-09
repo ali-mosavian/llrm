@@ -515,9 +515,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
         let refused = LegalizeError::Unsupported { op, ty: vt, what: "convert node to libcall" };
-        // `ExpandBitCountingLibCall` (CTLZ_ZERO_POISON, CTPOP; DEVIATE BC1 adds
-        // CTTZ_ZERO_POISON): the value as is, the routine's `int`
-        // result sign-extended or truncated to the node's type.
+        // `ExpandBitCountingLibCall` (CTLZ_ZERO_POISON, CTPOP; DEVIATE BC1 adds CTTZ_ZERO_POISON): the value as is, the
+        // routine's `int` result sign-extended or truncated to the node's type.
         if matches!(op, ISD::CtLzZeroPoison | ISD::CtPop | ISD::CtTzZeroPoison) {
             let Some(name) = self.tli.libcall_name(op, vt) else { return Err(refused) };
             let int = EVT::integer(self.tli.types.int_size());
@@ -939,8 +938,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             // `expandVAArg`: load the list pointer, round it up to the
             // type's ABI alignment when that exceeds the minimum stack
-            // argument alignment (`getMinStackArgumentAlignment`), step it by
-            // the type's allocation size, store it back and load the value.
+            // argument alignment (1: no target here sets one), step it by the
+            // type's allocation size, store it back and load the value.
             ISD::VAArg => {
                 let vt = self.dag.value_type(node);
                 let (chain, list) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
@@ -957,7 +956,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 };
                 let list_load = self.dag.get_load(pointer, chain, list, info(pointer, pointer.size_in_bits() / 8));
                 let mut at = SDValue { node: list_load.node, res: 0 };
-                if align > self.tli.min_stack_argument_alignment() {
+                if align > 1 {
                     let add = self.dag.get_constant(u128::from(align - 1), pointer);
                     at = self.dag.get_node(ISD::Add, pointer, &[at, add]);
                     let mask = self.dag.get_constant((-i128::from(align)) as u128, pointer);
