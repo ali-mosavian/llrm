@@ -65,3 +65,15 @@ define i1 @f(i128 %a, i128 %b) {\n  %r = call {i128, i1} @llvm.uadd.with.overflo
     );
     assert!(asm.contains("adcs") && asm.matches("csinc").count() == 2, "{asm}");
 }
+
+/// A `select` on an `i128` compare was refused ("Unsupported SelectCC i128: expand operand"): the pin expands the
+/// compare to a boolean and selects on it (`ExpandIntOp_SELECT_CC`), so the min and max of two wide values did not
+/// build (f128 compare and conversion routines of compiler-rt).
+#[test]
+fn a_select_on_an_i128_compare_is_expanded_to_a_boolean() {
+    for code in ["ult", "slt", "eq", "sge"] {
+        selects(&format!(
+            "define i64 @f(i128 %a, i128 %b, i64 %x, i64 %y) {{\n  %c = icmp {code} i128 %a, %b\n  %r = select i1 %c, i64 %x, i64 %y\n  ret i64 %r\n}}\n"
+        ));
+    }
+}

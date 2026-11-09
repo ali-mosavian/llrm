@@ -3873,6 +3873,20 @@ impl<'a> TypeLegalizer<'a> {
                 let vt = self.dag.value_type(node);
                 self.dag.get_node(ISD::SetCCCarry, vt, &[lh, rh, SDValue { node: low.node, res: 1 }, cc])
             }
+            ISD::SelectCC if at < 2 && self.setcc_code(node).is_some() => {
+                // `ExpandIntOp_SELECT_CC`: the compare expanded to a boolean,
+                // and the select on that boolean against zero.
+                let code = self.setcc_code(node).expect("checked");
+                let (lhs, rhs) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let bool_vt = self.tli.types.set_cc_result_type(self.dag.value_type(lhs));
+                let compare = self.dag.get_setcc(bool_vt, lhs, rhs, code);
+                let flag = self.expand_setcc(compare, code);
+                let zero = self.dag.get_constant(0, self.dag.value_type(flag));
+                let not_equal = self.dag.get_cond_code(CondCode::SetNe);
+                let vt = self.dag.value_type(node);
+                let (tval, fval) = (self.dag.operand(node, 2), self.dag.operand(node, 3));
+                self.dag.get_node(ISD::SelectCC, vt, &[flag, zero, tval, fval, not_equal])
+            }
             ISD::SetCC => match self.setcc_code(node) {
                 Some(code) => self.expand_setcc(node, code),
                 None => {
