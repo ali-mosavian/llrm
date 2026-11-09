@@ -37,6 +37,21 @@ class Harness(unittest.TestCase):
             self.assertGreater(matrix_kb.kernel_bytes(os.path.join(out, "fib.2.clang.o")), 0)
             self.assertTrue(os.path.exists(os.path.join(out, "fib.2.clang.elf")))
 
+    def test_a_source_reads_bench_io_h_from_the_repo_not_from_a_shared_copy(self):
+        # Parallel A/B jobs rewrote one copy of bench_io.h beside the output while others compiled: 2 builds
+        # in 40 failed with "call to undeclared function 'bench_read'" (stft_fixed O1, jpeg_fixed O3).
+        tools = [os.path.join(LLVM_BIN, "clang"), os.path.join(LLVM_BIN, "ld.lld")]
+        if not all(os.path.exists(t) for t in tools) or not shutil.which("aarch64-linux-gnu-nm"):
+            self.skipTest("clang/ld.lld (LLVM_BIN) or aarch64 binutils missing")
+        with tempfile.TemporaryDirectory() as out:
+            done = subprocess.run(
+                ["bash", os.path.join(HERE, "build2.sh"), "jpeg_fixed", "2", "clang"],
+                env={**os.environ, "OUT": out, "LLVM_BIN": LLVM_BIN}, capture_output=True, text=True,
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertFalse(os.path.exists(os.path.join(out, "bench_io.h")), "a shared copy of the header")
+            self.assertNotIn("../bench_io.h", open(os.path.join(out, "src", "jpeg_fixed.c")).read())
+
 
 class Table(unittest.TestCase):
     ROWS = "a\tO2\tours\t10\t100\t{m}\tok\na\tO2\tclang\t10\t90\t{m}\tok\na\tO2\tgcc\t10\t120\t{m}\texception\n"
