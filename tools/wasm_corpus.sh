@@ -44,6 +44,14 @@ int run(void)
 EOF
 "$clang" --target=wasm32 -O2 -c "$out/stub.c" -o "$out/stub.o" || { echo "wasm_corpus: the pin clang cannot compile the stub" >&2; exit 2; }
 
+# The two sides must compile with the same codegen flags (arm64: 24/72 cells off to one side's -fomit-frame-pointer). Both command lines
+# are taken from what actually ran: ours through a wrapper around the same clang, the pin's from the one list used below.
+pin_flags=(--target=wasm32 -ffreestanding "-$level" $cpu)
+printf '#!/bin/bash\necho "$@" >> "%s/ours.argv"\nexec "%s" "$@"\n' "$out" "$clang" > "$out/clang-wrap"; chmod +x "$out/clang-wrap"
+LLRM_CLANG_WASM=$out/clang-wrap LLRM_CC_TARGET=wasm32 "$llrm_cc" "-$level" $cpu -c "$out/stub.c" -o "$out/stub.l.o" 2> /dev/null ||
+  { echo "wasm_corpus: llrm-cc cannot compile the stub" >&2; exit 2; }
+python3 "$root/tools/wasm_flag_check.py" "$(grep -e '-emit-llvm' "$out/ours.argv" | head -1)" "${pin_flags[@]}" || exit 2
+
 # Section sizes of a relocatable object, summed over its sections of that name.
 section() { wasm-objdump -h "$2" | sed -n "s/^ *$1 start=.*(size=0x\\([0-9a-f]*\\)).*/\\1/p" | while read -r h; do echo $((16#$h)); done; }
 code() { section Code "$1"; }
@@ -63,7 +71,7 @@ for f in "$@"; do
   n=$(basename "$f" .c)
   LLRM_CLANG_WASM=$clang LLRM_CC_TARGET=wasm32 timeout 300 "$llrm_cc" "-$level" $cpu -c "$f" -I"$root/bench" -I"$root/runtime/shared/posix" -o "$out/$n.l.o" 2> "$out/$n.err" ||
     { printf '%-22s llrm-cc FAIL: %s\n' "$n" "$(head -c 90 "$out/$n.err" | tr '\n' ' ')"; continue; }
-  timeout 300 "$clang" --target=wasm32 -ffreestanding "-$level" $cpu -c "$f" -I"$root/bench" -I"$root/runtime/shared/posix" -o "$out/$n.c.o" 2> /dev/null ||
+  timeout 300 "$clang" "${pin_flags[@]}" -c "$f" -I"$root/bench" -I"$root/runtime/shared/posix" -o "$out/$n.c.o" 2> /dev/null ||
     { printf '%-22s clang FAIL\n' "$n"; continue; }
   # A program that reads or writes through the `llrm_os_*` layer gets it in memory, with its `// data:` file (the same bytes on
   # both sides); without it the import is unresolved and the run has no result.
