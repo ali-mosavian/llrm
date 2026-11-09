@@ -47,6 +47,15 @@
 //! first (`MaybeDeadCopies`), else a dead `lda` is kept alive as a transfer's
 //! source. Off unless `LLRM_6502_MCP` is set.
 //!
+//! # Not subsumed
+//! With the pass on, skipping a special-case peephole (162 cells, 2026-11-09)
+//! makes cells larger: `load_straight_into_a` +19 B (lz4c, hand_memmove),
+//! `coalesce_copy` +8 B (hand_shrax7), `fold_spill_copy` +8 B (hand_strncpy),
+//! `store_then_index_load` +3 B (hand_shrax3); `drop_reloads`,
+//! `drop_cancelling_transfers` and `forward_cell_copy` are equal there but
+//! +10..13 executed programs larger per run (82 programs, both CPUs, O2/Os).
+//! None is deleted; each exits with its own row.
+//!
 //! # See also
 //! LLVM [`MachineCopyPropagation`]
 //! (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCopyPropagation.cpp#L926)
