@@ -13,7 +13,7 @@ TL;DR: with each column linking only the library members it references (`tools/m
 | bitcount_u64 | 68000 | Os, O2 | 370 + 292 = 662 | 382 + 292 = 674 | -12 |
 | bitcount_u32 | 68000 | Os, O2 | 248 + 176 = 424 | 264 + 176 = 440 | -16 |
 
-`.text` bytes of the program object and of the archive members pulled (ld map), -Os routines at the same level, llrm-cc at `6c1c66fd91` plus the `foldarg` bfffo fold. The gcc column is gcc's code with our compiler-rt (libgcc's m68k routines are not in the gcc root), so its library bytes are an estimate.
+`.text` bytes of the program object and of the archive members pulled (ld map), -Os routines at the same level, llrm-cc built from release/next `5087459800` plus the `foldarg` bfffo fold (#8455). The gcc column is gcc's code with our compiler-rt (libgcc's m68k routines are not in the gcc root), so its library bytes are an estimate.
 
 ## Open cells (68020 `bitcount_u32`)
 - Per function at -Os, ours vs gcc: `lead` 10 vs 8, `lead0` 18 vs 8 (`x ? clz(x) : 32` keeps a branch: pin InstCombine `foldSelectCttzCtlz`, w10-instcombine), `ones` inline 62 vs a 14 B call (+70 B library, so the inline form wins by 22 B whole-program).
