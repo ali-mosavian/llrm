@@ -1411,7 +1411,7 @@ entry:
 
 /// The carry out of a 128-bit unsigned add was the constant false: the combiner's "cannot overflow" test summed the two
 /// operands' possible maxima in a `u128`, which wraps at 128 bits and read as "fits". `llvm.uadd.with.overflow.i128`
-/// compiled to `add; adc` and `xor eax, eax` (the sum plus its overflow lost the overflow).
+/// compiled to `add; adc` and `xor eax, eax` (u128 max + 1 reported no overflow).
 #[test]
 fn an_m64_128_bit_unsigned_add_keeps_its_carry_out() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"

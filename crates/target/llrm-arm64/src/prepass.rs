@@ -423,6 +423,7 @@ fn sink(
     function: &mut MFunc,
     cfg: &Cfg,
 ) {
+    forward_coalesce(function);
     for _ in 0..16 {
         let definitions = definitions(function);
         let loops = natural_loops(function, cfg);
@@ -484,6 +485,53 @@ fn sink(
                 function.blocks[target].ops.insert(0, op);
             }
         }
+    }
+}
+
+/// A copy of a once-defined register that nothing else reads is its source
+/// under the copy's name, and the copy goes: the pin's
+/// `PerformTrivialForwardCoalescing`, run on each instruction `MachineSink`
+/// looks at. Without it the copies a phi's constant passes through (`Imm`,
+/// `copy`, `copy`) keep it from sinking onto its edge.
+fn forward_coalesce(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let mut reads: HashMap<Reg, usize> = HashMap::default();
+    for block in &function.blocks {
+        for op in &block.ops {
+            for register in op.defs_and_uses().1 {
+                *reads.entry(register).or_default() += 1;
+            }
+        }
+    }
+    let mut rename: HashMap<Reg, Reg> = HashMap::default();
+    let mut gone: Vec<(usize, usize)> = Vec::new();
+    for (at, block) in function.blocks.iter().enumerate() {
+        for (index, op) in block.ops.iter().enumerate() {
+            let Op::Copy { dst, src } = op else { continue };
+            if dst.is_virtual()
+                && src.is_virtual()
+                && std::mem::discriminant(dst) == std::mem::discriminant(src)
+                && definitions.get(dst) == Some(&1)
+                && definitions.get(src) == Some(&1)
+                && reads.get(src) == Some(&1)
+            {
+                rename.insert(*dst, *src);
+                gone.push((at, index));
+            }
+        }
+    }
+    if rename.is_empty() {
+        return;
+    }
+    let none = HashMap::default();
+    for block in &mut function.blocks {
+        for index in 0..block.ops.len() {
+            let op = renamed(&block.ops[index], &rename, &none);
+            *block.ops.op_mut(index) = op;
+        }
+    }
+    for &(at, index) in gone.iter().rev() {
+        function.blocks[at].ops.remove(index);
     }
 }
 
@@ -1397,6 +1445,38 @@ mod tests {
             function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
         };
         assert_eq!((made(1), made(2)), (1, 0), "{function:#?}");
+    }
+
+    /// A phi's constant reaches its edge through copies (`Imm`, `copy`, `copy`),
+    /// and the copies kept the sink from moving it: `movz w9, #1` ran in the
+    /// entry of the `power` of recpow at -O2, took `x9` and not `x0`, and cost
+    /// a `mov x0, x9` on every return (+4.2% net against the pin).
+    #[test]
+    fn a_constant_reaching_its_edge_through_copies_is_made_on_that_edge() {
+        let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
+        let skip = Op::I(Inst::CompareBranch {
+            nonzero: false,
+            width: Width::W,
+            rt: Gpr(1),
+            target: Target::Label("edge".into()),
+        });
+        let mut function = MFunc::new("f");
+        function.next_register = 80;
+        function.blocks = vec![
+            MBlock {
+                label: "entry".into(),
+                ops: vec![movz(66, 1), copy(67, 66), copy(68, 67), skip, branch_to("body")].into(),
+            },
+            MBlock { label: "body".into(), ops: vec![add(72, 0, 0), copy(71, 72), branch_to("join")].into() },
+            MBlock { label: "edge".into(), ops: vec![copy(71, 68), branch_to("join")].into() },
+            MBlock { label: "join".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
+        ];
+        let graph = cfg(&function);
+        sink(&mut function, &graph);
+        let made = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!((made(0), made(2)), (0, 1), "{function:#?}");
     }
 
     /// `sp + 0` before a dynamic allocation and after it are different values:

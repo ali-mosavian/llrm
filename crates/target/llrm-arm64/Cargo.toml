@@ -26,7 +26,6 @@ llrm-dagisel = { path = "../../backend/llrm-dagisel" }
 llrm-spike-mf = { path = "../../backend/llrm-spike-mf" }
 
 [build-dependencies]
-llrm-alloc = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-target = { workspace = true }
 

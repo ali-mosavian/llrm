@@ -16,6 +16,7 @@ use std::fmt::Write;
 use llrm_codegen::model::ir::Loc;
 use llrm_codegen::model::lir::Insn;
 use llrm_lir::registers::RegId;
+use llrm_spike_mf::commute_accumulator;
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{
@@ -197,6 +198,14 @@ fn is_cell(register: RegId) -> bool {
 pub struct Mos<const STACK: bool>;
 
 impl<const STACK: bool> Target for Mos<STACK> {
+    /// The second source of a byte op on the accumulator is a zero-page cell.
+    fn operand_class(
+        name: &str,
+        index: usize,
+    ) -> Option<Class> {
+        (index == 2 && matches!(name, "ADC" | "AND" | "ORA" | "EOR")).then_some(Class::MEM)
+    }
+
     /// A copy is priced as the load of a cell into a register, `ldx rc2`: the
     /// join of a value with its argument cell removes that copy.
     fn copy_cost() -> u32 {
@@ -1150,7 +1159,7 @@ impl Builder {
             self.push(Inst::new(Kind::Op(carry), vec![]));
         }
         self.copy(acc, a);
-        self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second]));
+        self.push(accumulate(mnemonic, second));
         self.copy(d, acc);
         Ok(())
     }
@@ -1253,7 +1262,7 @@ impl Builder {
         }
         for ((d, a), b) in [(dl, al), (dh, ah)].into_iter().zip(second) {
             self.copy(acc, a);
-            self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), b]));
+            self.push(accumulate(mnemonic, b));
             self.copy(d, acc);
         }
         Ok(())
@@ -1386,7 +1395,7 @@ impl Builder {
                 self.push(Inst::new(Kind::Op(carry), vec![]));
             }
             self.copy(acc, a);
-            self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), b]));
+            self.push(accumulate(mnemonic, b));
             self.copy(d, acc);
         }
         Ok(())
@@ -1430,6 +1439,18 @@ fn memory_holds_until_flags_are_read(
                 _ => true,
             },
         )
+}
+
+/// `mnemonic a, a, second`: the byte op on the accumulator. `ADC`, `AND`, `ORA`
+/// and `EOR` may swap their sources (`isCommutable`).
+fn accumulate(
+    mnemonic: &'static str,
+    second: Operand,
+) -> Inst {
+    let acc = Reg::Phys(reg::A);
+    let mut inst = Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second]);
+    inst.commutable = matches!(mnemonic, "ADC" | "AND" | "ORA" | "EOR");
+    inst
 }
 
 /// A logical op whose immediate leaves the byte as it was: `x ^ 0`, `x | 0`, `x
@@ -2622,6 +2643,60 @@ fn keep_carry_in_c(function: &mut MFunction<Class>) {
     }
 }
 
+/// `a := cc ? t : f` copied into the register of `t` or `f` (`lo = v < lo ? v
+/// : lo`) is the tied conditional move: that value is in place, and the
+/// branch skips the one move to it, where the form through `a` loads both and
+/// stores one back. The pair `CMOV` and the copy out of `a` is one `CMOVT`
+/// (which still writes `a`: its move goes through it) when `a` is dead after
+/// the copy.
+///
+/// DEVIATE (6502-TIED-CMOV): the pin's x86 `CMOV` is two-address (`$dst =
+/// $src1`, `X86InstrCMovSetCC.td`), tied before allocation, so the coalescer
+/// joins the destination with `$src1`. A byte select is written in `a` here
+/// (the only register an ALU result is made in), and the register of the
+/// destination is known after allocation only. Exit: 2026-11-30, with the
+/// select tied before allocation (as `CMOV16` is).
+pub fn tie_conditional_moves(
+    function: &mut MFunction<Class>,
+    at: &dyn Fn(Reg) -> RegId,
+) {
+    let after = live_after(function, at);
+    for (b, block) in function.blocks.iter_mut().enumerate() {
+        // from the end: the liveness is of the block as it was, and a pair
+        // joined removes a copy after the ones still to see
+        for i in (0..block.insts.len().saturating_sub(1)).rev() {
+            let tied = match (&block.insts[i], &block.insts[i + 1]) {
+                (select, copy) if select.kind == Kind::Op("CMOV") && copy.kind == Kind::Copy => {
+                    match (&select.operands[..], &copy.operands[..]) {
+                        ([_, if_false, if_true, code, flags], [Operand::Def(to), Operand::Use(from)])
+                            if at(*from) == reg::A && !after[b][i + 1].contains(&reg::A) =>
+                        {
+                            let kept = |value: &Operand| matches!(value, Operand::Use(r) if at(*r) == at(*to));
+                            (kept(if_false) || kept(if_true)).then(|| {
+                                vec![
+                                    Operand::Def(*to),
+                                    Operand::Def(Reg::Phys(reg::A)),
+                                    if_false.clone(),
+                                    if_true.clone(),
+                                    code.clone(),
+                                    flags.clone(),
+                                ]
+                            })
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(operands) = tied {
+                block.insts[i].kind = Kind::Op("CMOVT");
+                block.insts[i].operands = operands;
+                block.insts.remove(i + 1);
+            }
+        }
+    }
+}
+
 /// A flag compare of the old value of a word, made after the step that
 /// replaced it, is made before the step: `inx; bne; iny` and `inc m; bne; inc
 /// m+1` leave the carry as it was (they set N and Z), and a branch on the
@@ -3378,6 +3453,7 @@ fn emit_with<const STACK: bool>(
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
+    commute_accumulator::<Mos<STACK>>(&mut function);
     two_address(&mut function);
     let (assignment, mut slots) = allocate::<STACK>(&mut function)?;
     save_preserved::<STACK>(&mut function, &assignment, &mut slots);
@@ -3403,6 +3479,7 @@ fn emit_with<const STACK: bool>(
         Reg::Phys(p) => p,
     };
     compare_before_step(&mut function, &at);
+    tie_conditional_moves(&mut function, &at);
     remove_identity_copies::<Mos<STACK>>(&mut function, &assignment);
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     // a reload of a slot whose register nothing has written is that register; x
@@ -3888,6 +3965,36 @@ fn emit_with<const STACK: bool>(
                     if function.blocks.get(b + 1).map(|next| next.id) != Some(*id) {
                         writeln!(out, "  {} {}", jump.to_lowercase(), target(to)).unwrap();
                     }
+                }
+                // d := cc ? if_true : if_false, d the register of one of them
+                // (`tie_conditional_moves`): the branch skips the move of the
+                // other
+                (Kind::Op("CMOVT"), [_, _, if_false, if_true, Operand::Imm(code), _]) => {
+                    made += 1;
+                    let done = format!("_cmd{made}");
+                    let to = regs[0];
+                    let mut read =
+                        inst.operands.iter().filter_map(|o| if let Operand::Use(r) = o { Some(at(*r)) } else { None });
+                    let false_at = matches!(if_false, Operand::Use(_)).then(|| read.next()).flatten();
+                    let true_at = matches!(if_true, Operand::Use(_)).then(|| read.next()).flatten();
+                    let (skip, moved, moved_at) = if Some(to) == false_at {
+                        (["bne", "beq", "bcs", "bcc", "bpl", "bmi"][*code as usize], if_true, true_at)
+                    } else {
+                        (["beq", "bne", "bcc", "bcs", "bmi", "bpl"][*code as usize], if_false, false_at)
+                    };
+                    writeln!(out, "  {skip} {done}").unwrap();
+                    match (moved, moved_at) {
+                        (Operand::Imm(v), _) if to == reg::A || to == reg::X || to == reg::Y => {
+                            writeln!(out, "  ld{} #{v}", register_name(to)).unwrap()
+                        }
+                        (Operand::Imm(0), _) if cmos => writeln!(out, "  stz {}", register_name(to)).unwrap(),
+                        (Operand::Imm(v), _) => {
+                            through_a(&mut out, false, spare, &format!("  lda #{v}\n  sta {}\n", register_name(to)))
+                        }
+                        (_, Some(from)) => move_byte(&mut out, to, from, false, spare),
+                        (_, None) => unreachable!(),
+                    }
+                    writeln!(out, "{done}:").unwrap();
                 }
                 // a := cc ? if_true : if_false, the branch first: loads set N
                 // and Z
