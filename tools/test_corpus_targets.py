@@ -87,9 +87,9 @@ def test_a_program_written_for_one_abi_is_tagged_for_it():
 
 
 def test_the_os_layer_programs_whose_out_is_dos_semantics_are_dos_only():
-    """os_files, os_find, os_names and os_console_in print the DOS layer's answers (error codes, ordering): on the POSIX layer ours
+    """os_files, os_find, os_names, os_console and os_console_in print the DOS layer's answers (error codes, ordering, the console's \r\n translation: os_console.out is \"ab\\ncd\\n\", native gcc on the POSIX layer writes \"ab\\r\\ncd\\r\\n\"): on the POSIX layer ours
     and host gcc agree with each other and both differ from the .out. os_execute runs COMSPEC. Unmarked, x86_32-linux read them as miscompiles."""
-    for name in ("os_files", "os_find", "os_names", "os_console_in", "os_execute"):
+    for name in ("os_files", "os_find", "os_names", "os_console", "os_console_in", "os_execute"):
         source = (RUN / f"{name}.c").read_text()
         assert not ct.applies("x86_32-linux", source) and not ct.applies("m68k-68020", source) and ct.applies("x86_32-dos", source)
 
@@ -181,3 +181,12 @@ def test_long_double_variadic_runs_on_m68k_and_its_row_is_closed():
     assert all(ct.applies(t, source) for t in ("m68k-68000", "m68k-68020", "x86_32-linux"))
     row = (RUN.parents[2] / "docs/working/m68k-va-double-row.md").read_text()
     assert "CLOSED by #8453" in row and "Owner: m68k" in row and "Review: 2026-12-20" in row
+
+def test_a_program_with_no_reference_output_is_not_in_the_corpus_uncompared():
+    """shl_of_a_narrow_load_keeps_the_top_byte and widening_multiply had no .out: every runner ran them and compared nothing (the m68k
+    executed sweep counted 6 cells per CPU as noref). Each now has the output of native gcc and clang -m32 (the two agree at -O0 and -O2);
+    widening_multiply's is ILP32, so it is not for the LP64 targets."""
+    for name in ("shl_of_a_narrow_load_keeps_the_top_byte", "widening_multiply"):
+        assert (RUN / f"{name}.out").exists(), name
+    source = (RUN / "widening_multiply.c").read_text()
+    assert ct.applies("m68k-68020", source) and not ct.applies("x86_64-linux", source)
