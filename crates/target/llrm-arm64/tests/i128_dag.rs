@@ -26,3 +26,15 @@ fn i128_shifts_are_expanded_into_i64_parts() {
         selects(&format!("define i128 @f(i128 %x, i128 %n) {{\n  %r = {op} i128 %x, %n\n  ret i128 %r\n}}\n"));
     }
 }
+
+/// `tryShiftAmountMod` ran inside the last DAG combine, so the known-bits fold saw `(~zext n) & 63` as `~zext n`, a
+/// shift by 2^32 or more, and made the funnel term of the high half 0: `(u128)v << n` for an unsigned `n` lost the
+/// low half's top bits (n = 7 of `0x0123456789abcdeffedcba9876543210` gave `...f780`, not `...f7ff`, under qemu).
+/// The pin does it when it selects the shift, after every combine.
+#[test]
+fn an_i128_shift_by_a_zero_extended_amount_keeps_the_bits_carried_from_the_low_half() {
+    let asm = selects(
+        "define i128 @f(i128 %x, i32 %n) {\n  %z = zext i32 %n to i128\n  %r = shl i128 %x, %z\n  ret i128 %r\n}\n",
+    );
+    assert!(asm.contains("lsr") || asm.contains("ubfm"), "no low-half bits are shifted into the high half:\n{asm}");
+}
