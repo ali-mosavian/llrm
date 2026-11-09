@@ -49,6 +49,7 @@ pub fn builder_target() -> BuilderTarget {
         refuse_unknown_intrinsics: true,
         variable_shift_legal: false,
         string_instructions: false,
+        max_alloca_align: Some(crate::MAX_ALLOCA_ALIGN),
         // the runtime's own routines (runtime/z80_rt.s). `memcpy` and `memmove`
         // take the C library's registers. The compiler's `memset` has the byte
         // as `i8` (in A) where C's takes an `int`: its own entry, `__memseta`.

@@ -21,7 +21,7 @@ from dosbatch import BIN  # noqa: E402
 DRIVER = Path(__file__).with_name("native_driver.c")
 POSIX = ROOT / "runtime" / "shared" / "posix"
 OURS = "c64"
-NOPIC = "c64nopic"  # ours with -fno-pic: the column that compares to gcc and clang, which are -fno-pic; never gated, no base leg
+NOPIC = "c64nopic"  # NOPIC, not the bar: ours -fno-pic (absolute code, flagged); reported only, never gated, never counted toward at-or-below-best; the externals are -fPIE like the gated column
 REPORTED = {NOPIC: "ours", "gcc64": "gcc", "clang64": "clang", "pin64": "pin"}  # pin: the pinned LLVM clang (LLRM_PIN_CLANG), the compiler llrm tracks  # columns beside ours, never gated
 FAR = re.compile(r"\b(far|huge|__huge|__far)\b")  # a DOS far or huge pointer: the program has no x86_64 reading
 LONG32 = re.compile(r"\btypedef\s+(?:unsigned\s+)?long\s+\w*32\b")  # a 32-bit type spelled `long`: 64 bits here, so the program computes another result (sfm16_* printed 620745305, want 1984619853, in gcc, clang and ours alike)
@@ -130,7 +130,7 @@ def compile_command(compiler: str, binary: Path, source: Path, opt: str, out: Pa
     if compiler in (OURS, NOPIC):
         return [str(binary / "llrm-cc"), "-m64", *(["-fno-pic"] if compiler == NOPIC else []), *flags], {**os.environ, "LLRM_CC_TARGET": "x86_64-linux"}
     program = os.environ.get("LLRM_PIN_CLANG", "") if compiler == "pin64" else shutil.which(REPORTED[compiler]) or REPORTED[compiler]
-    return [program, *external_flags.flags("x86", ("-fno-pic",)), *flags], dict(os.environ)
+    return [program, *external_flags.flags("x86", ("-fPIE",)), *flags], dict(os.environ)
 
 
 COMPILE_SECONDS = int(os.environ.get("LLRM_BENCH_COMPILE_TIMEOUT", 600))  # wall clock for one external compile or link
