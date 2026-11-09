@@ -113,6 +113,10 @@ pub fn target_lowering() -> TargetLowering {
     set(&[SetCCCarry], &[MVT::I1, MVT::I8, MVT::I16], Action::Custom);
     // i1 is a register type here, but its memory is a byte (`lower_bit_load`)
     set(&[Load, Store], &[MVT::I1], Action::Custom);
+    // `va_start` stores the address of the first unnamed argument (`lower_vastart_frame_index`); the rest of a
+    // `va_list` is a pointer the generic expansions walk
+    set(&[VAStart], &[MVT::Other], Action::Custom);
+    set(&[VAEnd, VACopy], &[MVT::Other], Action::Expand);
     for (vt, names) in [
         (MVT::I8, ["__mulqi3", "__divqi3", "__udivqi3", "__modqi3", "__umodqi3"]),
         (MVT::I16, ["__mulhi3", "__divhi3", "__udivhi3", "__modhi3", "__umodhi3"]),
@@ -363,6 +367,9 @@ impl Hooks for Z80Lowering {
             ISD::SignExtendInReg => lower_sign_extend_inreg(dag, node),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
+            ISD::VAStart => {
+                llrm_codegen::backend::selectiondag::target_calling::lower_vastart_frame_index(dag, node, EVT::I16, 1)
+            }
             ISD::Load if dag.value_type(node) == EVT::I1 => lower_bit_load(dag, node),
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
             _ => None,

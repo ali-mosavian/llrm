@@ -1,0 +1,35 @@
+	.area _CODE
+_first::
+	push ix
+	ld ix, #0
+	add ix, sp
+	push af
+L0_0:
+	ld c, l
+	ld b, h
+	ld hl, #6
+	add hl, sp
+	ex de, hl
+	ld -2(ix), e
+	ld -1(ix), d
+	ld hl, #2
+	add hl, de
+	ld -2(ix), l
+	ld -1(ix), h
+	ld e, 4(ix)
+	ld d, 5(ix)
+	ld l, c
+	ld h, b
+	add hl, de
+	ex de, hl
+	ld sp, ix
+	pop ix
+	ret
+_caller::
+L1_0:
+	push bc
+	push de
+	call _first
+	pop bc
+	pop bc
+	ret

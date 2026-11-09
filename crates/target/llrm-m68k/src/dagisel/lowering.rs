@@ -836,13 +836,5 @@ fn lower_vastart(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let index = dag.var_args_frame_index?;
-    let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
-    let first = dag.get_frame_index(EVT::I32, index);
-    let base = match dag.node(list).data {
-        NodeData::FrameIndex(slot) => MemBase::Stack(slot),
-        _ => MemBase::Unknown,
-    };
-    let info = MemInfo { mem_vt: EVT::I32, align: 2, volatile: false, base, ext: None, space: 0, ordering: None };
-    Some(dag.get_store(chain, first, list, info))
+    llrm_codegen::backend::selectiondag::target_calling::lower_vastart_frame_index(dag, node, EVT::I32, 2)
 }

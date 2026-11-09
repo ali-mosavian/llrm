@@ -2271,3 +2271,25 @@ fn a_large_stack_argument_area_is_one_sum_not_a_refusal() {
         assert!(!out.contains("push bc"), "{level:?}: {out}");
     }
 }
+
+/// A function with `...` was refused ("CannotSelect VAStart", then "VAEnd"; `variadic.c`, `long_double_variadic.c`),
+/// and `va_start` is the address of the first unnamed argument: above the return address and the saved ix.
+#[test]
+fn va_start_names_the_first_unnamed_argument_on_the_stack() {
+    let ir = include_str!("kernels/ir/variadic_unnamed_on_stack.ll");
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let callee = text(ir, "first", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(callee.contains("ld e, 4(ix)") && callee.contains("ld d, 5(ix)"), "{level:?}: {callee}");
+    }
+}
+
+/// The unnamed words of a call passed in the registers the named ones left free, where the callee reads them from the
+/// stack. Both go on the stack, pushed in reverse, though the second would fit in de.
+#[test]
+fn the_unnamed_arguments_of_a_variadic_call_go_on_the_stack() {
+    let ir = include_str!("kernels/ir/variadic_unnamed_on_stack.ll");
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let caller = text(ir, "caller", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert_eq!(caller.matches("push").count(), 2, "{level:?}: both unnamed words are pushed\n{caller}");
+    }
+}
