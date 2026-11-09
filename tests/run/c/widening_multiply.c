@@ -1,4 +1,4 @@
-// targets: !freestanding !lp64
+// targets: !freestanding
 /* A product of two ints added to a long: the 64-bit multiply of the extended factors where the product
    cannot overflow, at the edges of what fits. */
 #include <stdio.h>

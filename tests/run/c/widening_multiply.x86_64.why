@@ -1,0 +1,1 @@
+ABI: long is 8 bytes (LP64), so s + a * b and the unsigned products do not wrap at 32 bits; widening_multiply.out is the ILP32 result. Written from native gcc and clang -O0/-O2 on x86_64 Linux (all four agree).

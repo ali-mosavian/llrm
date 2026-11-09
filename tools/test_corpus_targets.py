@@ -185,8 +185,11 @@ def test_long_double_variadic_runs_on_m68k_and_its_row_is_closed():
 def test_a_program_with_no_reference_output_is_not_in_the_corpus_uncompared():
     """shl_of_a_narrow_load_keeps_the_top_byte and widening_multiply had no .out: every runner ran them and compared nothing (the m68k
     executed sweep counted 6 cells per CPU as noref). Each now has the output of native gcc and clang -m32 (the two agree at -O0 and -O2);
-    widening_multiply's is ILP32, so it is not for the LP64 targets."""
+    widening_multiply's is ILP32, and its LP64 targets read their own file (long is 8 bytes there)."""
     for name in ("shl_of_a_narrow_load_keeps_the_top_byte", "widening_multiply"):
         assert (RUN / f"{name}.out").exists(), name
-    source = (RUN / "widening_multiply.c").read_text()
-    assert ct.applies("m68k-68020", source) and not ct.applies("x86_64-linux", source)
+    source = RUN / "widening_multiply.c"
+    assert ct.expected_output(source, "x86_64-linux").name == "widening_multiply.x86_64.out"
+    assert ct.expected_output(source, "arm64-linux").name == "widening_multiply.arm64.out"
+    assert ct.expected_output(source, "m68k-68020").name == "widening_multiply.out"
+    assert (RUN / "widening_multiply.x86_64.why").exists() and (RUN / "widening_multiply.arm64.why").exists()
