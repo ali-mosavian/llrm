@@ -2318,3 +2318,16 @@ fn a_library_call_on_each_arm_of_a_diamond_compiles() {
         assert!(out.contains("ret"), "{level:?}: {out}");
     }
 }
+
+/// `(a & 0x80000000) != 0` as a branch condition with a phi after it (the soft-float library's `x < 0 ? -m : m`) was
+/// refused in the legalizer: `SetCCCarry` with the low words' borrow folded to a constant (`x - 0` never borrows),
+/// which the Custom lowering did not take ("Unsupported SetCCCarry I1 convert node to libcall"; 19 of 24 soft-float
+/// members, every level above -O0). The sign is one `bit 7, d`.
+#[test]
+fn a_long_sign_test_whose_low_borrow_folded_compiles_as_a_bit_test() {
+    let ir = include_str!("kernels/ir/long_compare_folded_borrow.ll");
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let out = text(ir, "sign_branch", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(out.contains("bit 7, d"), "{level:?}: {out}");
+    }
+}
