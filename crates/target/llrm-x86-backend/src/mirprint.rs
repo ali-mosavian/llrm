@@ -501,6 +501,24 @@ fn instruction(
             immediate(i)?
         )
         .unwrap(),
+        // The widening multiply: the low operand arrives in eax (a `requires`
+        // copy above), the product leaves in eax and edx (the `delivers` copies).
+        (op @ ("mul" | "imul"), Some(Loc::Held(_)), [Loc::Held(_), operand]) if what.dests.len() == 2 => {
+            let (form, right) = match operand {
+                Loc::Held(b) if b.width == 4 => ("r", vreg(b)?),
+                Loc::Mem(m) if m.width == 4 => ("m", cell(m, symbols)?),
+                _ => return Err(format!("a widening {op} by that operand")),
+            };
+            writeln!(
+                out,
+                "    {}32{form} {right}, implicit-def $eax, implicit-def $edx, {eflags}, implicit $eax",
+                op.to_uppercase()
+            )
+            .unwrap();
+            for (held, register) in &one.delivers {
+                writeln!(out, "    {} = COPY ${}", vreg(held)?, format!("{register:?}").to_lowercase()).unwrap();
+            }
+        }
         ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Imm(i)]) if what.dests.len() == 1 => {
             writeln!(out, "    {} = IMUL{}rri {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, immediate(i)?)
                 .unwrap()
@@ -516,6 +534,19 @@ fn instruction(
         ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(b)]) if what.dests.len() == 1 => {
             writeln!(out, "    {} = IMUL{}rr {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, vreg(b)?).unwrap()
         }
+        // A double-register shift by an immediate: the first source is the
+        // destination, the second supplies the bits shifted in.
+        (op @ ("shld" | "shrd"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(b), Loc::Imm(count)]) => writeln!(
+            out,
+            "    {} = {}{}rri8 {}, {}, {}, {eflags}",
+            vreg(d)?,
+            op.to_uppercase(),
+            bits(d.width)?,
+            vreg(a)?,
+            vreg(b)?,
+            immediate(count)?
+        )
+        .unwrap(),
         (op @ ("sar" | "shl" | "shr"), Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(_)]) => writeln!(
             out,
             "    {} = {}{}rCL {}, {eflags}, implicit $cl",
@@ -926,15 +957,36 @@ mod tests {
 
     /// The widening `v8, v9 := imul v6, v7` has two destinations; the printer
     /// took the first and wrote `IMUL32rr` with two undefined registers, which
-    /// the pin refused as a register of no class.
+    /// the pin refused as a register of no class. It is the one-operand
+    /// `IMUL32r`, eax in and eax:edx out, so a soft-float `__mulsf3`
+    /// (`mul` of two words) reaches the pin's greedy.
     #[test]
-    fn test_a_widening_multiply_is_refused_not_misprinted() {
-        let widening = insn("imul", Operation::Binary, vec![held(8), held(9)], vec![held(6), held(7)]);
+    fn test_a_widening_multiply_prints_as_the_one_operand_form() {
+        let mut widening = Insn::new(
+            0,
+            None,
+            Some(Semantics {
+                name: Some("imul".into()),
+                dests: vec![held(8), held(9)],
+                sources: vec![held(6), held(7)],
+                ..Semantics::new(Operation::Multiply)
+            }),
+            vec![8, 9],
+            vec![6, 7],
+        );
+        let word = |value| Held { value, width: 4, offset: 0 };
+        widening.requires = vec![(word(6), RegId::EAX)];
+        widening.delivers = vec![(word(8), RegId::EAX), (word(9), RegId::EDX)];
         let ret = insn("", Operation::Return, vec![], vec![]);
-        let blocks = vec![Block::from(LirBlock::new(0, vec![widening, ret]))];
+        let blocks = vec![Block::from(LirBlock::new(0, vec![Arc::new(widening), ret]))];
         let body = LirBody::new("wide", 0, blocks, IndexMap::default(), IndexMap::default());
-        let refused = mir(&body, &IndexMap::default()).expect_err("refused");
-        assert!(refused.contains("imul"), "{refused}");
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(
+            text.contains(
+                "$eax = COPY %6\n    IMUL32r %7, implicit-def $eax, implicit-def $edx, implicit-def dead $eflags, implicit $eax\n    %8 = COPY $eax\n    %9 = COPY $edx"
+            ),
+            "{text}"
+        );
     }
 
     /// `place` of the queens row calls itself: the pin's `llc` refused the MIR
@@ -1266,6 +1318,20 @@ mod tests {
         let text = mir(&body, &IndexMap::default()).expect("prints");
         assert!(text.contains("REP_STOSD_32 implicit-def $ecx, implicit-def $edi, implicit $ecx, implicit $eax"), "{text}");
         assert!(text.contains("%3 = COPY $ecx\n    %4 = COPY $edi"), "{text}");
+    }
+
+    /// `shld` (a double-register shift, the carry of a multi-word shift) was
+    /// refused ("`shld` (Funnel) with 1 destinations and 3 sources"), so
+    /// `___mulsf3` at m32 never reached the pin's greedy.
+    #[test]
+    fn test_a_double_shift_by_an_immediate_prints() {
+        let count = Loc::Imm(Imm { value: 1, width: 1, address: None });
+        let shld = insn("shld", Operation::Funnel, vec![held(2)], vec![held(2), held(1), count]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![shld, ret]))];
+        let body = LirBody::new("shld", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("%2 = SHLD32rri8 %2, %1, 1, implicit-def dead $eflags"), "{text}");
     }
 
     #[test]
