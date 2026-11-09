@@ -11,7 +11,7 @@ use crate::mc::visit::{Reg, RegList, RegRef, Role};
 
 /// A machine instruction: a real one, or a pseudo that a later phase turns into
 /// real ones (LLVM's pseudo instructions and `COPY`).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Op {
     I(Inst),
     /// `dst = src`, registers of one class (LLVM's `COPY`): `mov` or `fmov`
@@ -74,7 +74,7 @@ pub enum Op {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Callee {
     Symbol(String),
     Register(Gpr),
