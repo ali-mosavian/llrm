@@ -28,7 +28,9 @@ define void @f() #0 {{\n  %a = alloca [{bytes} x i8], align 16\n  call void @g(p
 #[test]
 fn a_frame_larger_than_the_single_access_update_range_is_encoded() {
     driver::set_isel_mode(IselMode::Dag);
-    for bytes in (200..=520).step_by(8) {
+    // 200..=520: the single-access range ends; past 512 the locals are split
+    // off and the old rule never applied (a guard, not a red test).
+    for bytes in (200..=520).step_by(8).chain([600, 1024, 5000, 70_000]) {
         for level in [Level::O1, Level::Os] {
             driver::object(&frame_of(bytes), Platform::Linux, "t", level)
                 .unwrap_or_else(|why| panic!("{bytes} bytes at {level:?}: {why}"));
