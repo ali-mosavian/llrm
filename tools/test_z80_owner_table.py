@@ -49,3 +49,32 @@ def test_a_program_for_other_targets_is_not_a_row():
     sources = {"p": "int x;", "dosonly": "// targets: dos\nint y;\n", "wide": "// flags: -O2 -m32\nint z;\n"}
     ours = {"s": {"dosonly": {"ours": (1, 2)}}}
     assert {r[0] for r in t.rows(ours, {}, sources)} == {"p"}
+
+
+def test_a_variant_with_other_flags_never_sets_a_bar():
+    """An unknown SDCC column (flags we cannot vouch for) was a bar like any other; now it is refused and the cell is NO-SDCC."""
+    refused = t.REFUSED = getattr(t, "REFUSED", [])
+    refused.clear()
+    sdcc = {"2": {"p": {"sdcc-weird": (50, 100)}}}
+    ours = {"2": {"p": {"ours": (100, 500)}}}
+    out = t.rows(ours, sdcc, {"p": "int main(void) { return 0; }"})
+    assert [r[10] for r in out if r[1] == "O2"] == ["NO-SDCC"]
+    assert refused and "unknown SDCC variant" in refused[0][3]
+
+
+def test_a_program_flag_sdcc_cannot_take_refuses_every_variant():
+    refused = t.REFUSED = getattr(t, "REFUSED", [])
+    refused.clear()
+    sdcc = {"2": {"p": {"sdcc-size": (50, 100), "sdcc-speed": (60, 90)}}}
+    ours = {"2": {"p": {"ours": (100, 500)}}}
+    out = t.rows(ours, sdcc, {"p": "// flags: -O2 -ffixed-point\nint main(void) { return 0; }"})
+    assert [r[10] for r in out if r[1] == "O2"] == ["NO-SDCC"] and len(refused) == 2
+
+
+def test_the_real_variants_are_kept():
+    refused = t.REFUSED = getattr(t, "REFUSED", [])
+    refused.clear()
+    sdcc = {"2": {"p": {k: (50, 100) for k in ("sdcc-size", "sdcc-size-ma", "sdcc-speed", "sdcc-speed-ma")}}}
+    ours = {"2": {"p": {"ours": (100, 500)}}}
+    out = t.rows(ours, sdcc, {"p": "int main(void) { return 0; }"})
+    assert [r[12] for r in out if r[1] == "O2"] == [4] and not refused
