@@ -40,6 +40,8 @@
 //! - [`branch_on_shift_carry`]: `ldx m; bpl` after `asl|rol c` where `c` held
 //!   what `m` holds: the shift's carry is `m`'s top bit, so `bcc` replaces
 //!   both.
+//! - [`zero_cells_with_stz`]: 65C02 `lda #0; sta m` (a run of stores of the zero)
+//!   with `a` dead after: `stz m` each.
 //! - [`step_in_place`]: `lda #1; clc; adc m; sta m` (also `lda m; clc; adc #1;
 //!   sta m`, `lda m; sec; sbc #1; sta m` and the 65C02's `lda m; inc a; sta m`,
 //!   each a step of 1) of a byte in memory, with `a` and the carry dead after:
@@ -84,8 +86,8 @@ pub(crate) fn flags_unread_after(
         }
         let Line::Inst(inst) = line else { return false };
         // a jump leaves the block: no block reads the flags its predecessor
-        // left
-        if inst.op == Op::Jmp {
+        // left (`bra` is the 65C02's)
+        if matches!(inst.op, Op::Jmp | Op::Bra) {
             return true;
         }
         match inst.flags() {
@@ -130,6 +132,7 @@ pub fn run_with(
     drop_reloads(asm);
     drop_flag_reload(asm);
     drop_dead_repeat_load(asm);
+    zero_cells_with_stz(asm);
     if known_loads {
         drop_known_loads(asm);
     }
@@ -2033,6 +2036,58 @@ fn carry_dead_from(
         }
     }
     false
+}
+
+/// 65C02: `lda #0; sta m` (and further `[lda #0;] sta n` after it) with `a`
+/// dead after the last store: `stz m`, `stz n`. The zero reaches the cell
+/// without `a`: 2 bytes and 2 clocks fewer, and `a` is not clobbered.
+pub fn zero_cells_with_stz(asm: &mut Asm) {
+    if !asm.cmos {
+        return;
+    }
+    let runs = {
+        let exits = Exits::of(asm);
+        let lines = &asm.lines;
+        let zero = |n: usize| {
+            lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == Op::Lda && i.operand == Operand::Imm("0".into()))
+        };
+        let cell = |n: usize| {
+            lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == Op::Sta && matches!(i.operand, Operand::Direct(_)))
+        };
+        let mut runs = Vec::new();
+        let mut at = 0;
+        while at + 1 < lines.len() {
+            if !(zero(at) && cell(at + 1)) {
+                at += 1;
+                continue;
+            }
+            // the run: stores, each after a `lda #0` or straight after the last store
+            let mut end = at + 2;
+            loop {
+                if cell(end) {
+                    end += 1;
+                } else if zero(end) && cell(end + 1) {
+                    end += 2;
+                } else {
+                    break;
+                }
+            }
+            if flags_unread_after(lines, end) && dead_from(lines, end, Registers::A, &mut HashSet::default(), exits) {
+                runs.push((at, end));
+            }
+            at = end;
+        }
+        runs
+    };
+    for (at, end) in runs.into_iter().rev() {
+        let stores: Vec<Line> = asm.lines[at..end]
+            .iter()
+            .filter_map(Line::inst)
+            .filter(|i| i.op == Op::Sta)
+            .map(|i| Line::Inst(Inst { op: Op::Stz, operand: i.operand.clone(), place: i.place }))
+            .collect();
+        asm.lines.splice(at..end, stores);
+    }
 }
 
 /// A step of one of a byte in memory as `inc m` or `dec m`.

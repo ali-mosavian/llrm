@@ -684,6 +684,14 @@ pub trait Machine {
         true
     }
 
+    /// Whether the module is single-threaded, so every object is thread-local
+    /// ([`Triple::getDefaultThreadModel`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/TargetParser/Triple.cpp#L2546)
+    /// is `Single` for wasm, `POSIX` for every other triple here). LICM's
+    /// `isThreadLocalObject` reads it.
+    fn single_threaded(&self) -> bool {
+        false
+    }
+
     /// Where `Intrinsic::Window` makes a huge pointer far: the far pointers'
     /// space, and the bytes from the one it makes that no displacement
     /// carries out of. None where the target has no such window.
