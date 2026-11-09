@@ -15,7 +15,7 @@
 //! | CPU   | zero | bits 1 | 5   | 8   | 15   | 32   | fit             |
 //! |-------|------|--------|-----|-----|------|------|-----------------|
 //! | 68000 | 70   | 162    | 426 | 624 | 1086 | 2208 | 96 + 66 * bits  |
-//! | 68010 | 72   | 150    | -   | 556 | 962  | -    | 92 + 58 * bits  |
+//! | 68010 | 72   | 150    | 382 | 556 | 962  | 1948 | 92 + 58 * bits  |
 //! | 68020 | 36   | 69     | 165 | 237 | 405  | 813  | 45 + 24 * bits  |
 //!
 //! The price of a call site counts the routine at `b` = 1, one pass of the
@@ -28,16 +28,34 @@
 /// and the table above is measured again.
 pub const MULSI3_SOURCE_STAMP: u64 = 0x2553_bcc3_7a5c_33dd;
 
-/// Clocks of one `__mulsi3` call with `b` = 1 on `cpu`; 0 where no table was
+/// `(zero, base, per_bit)` of the routine on `cpu`; `None` where no table was
 /// measured (the 68030 and later, where a multiply is an instruction).
-pub fn mulsi3_floor(cpu: crate::dagisel::hooks::Cpu) -> u32 {
+fn fit(cpu: crate::dagisel::hooks::Cpu) -> Option<(u32, u32, u32)> {
     use crate::dagisel::hooks::Cpu;
     match cpu {
-        Cpu::M68000 => 96 + 66,
-        Cpu::M68010 => 92 + 58,
-        Cpu::M68020 => 45 + 24,
-        Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => 0,
+        Cpu::M68000 => Some((70, 96, 66)),
+        Cpu::M68010 => Some((72, 92, 58)),
+        Cpu::M68020 => Some((36, 45, 24)),
+        Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => None,
     }
+}
+
+/// Clocks of one `__mulsi3(a, b)` call on `cpu`, `bits` the bit length of `b`
+/// (0 for 0, 32 for a negative `b`); 0 where no table was measured.
+pub fn mulsi3_clocks(
+    cpu: crate::dagisel::hooks::Cpu,
+    bits: u32,
+) -> u32 {
+    match fit(cpu) {
+        Some((zero, _, _)) if bits == 0 => zero,
+        Some((_, base, per_bit)) => base + per_bit * bits.min(32),
+        None => 0,
+    }
+}
+
+/// [`mulsi3_clocks`] with `b` = 1: the floor a trial counts for a call.
+pub fn mulsi3_floor(cpu: crate::dagisel::hooks::Cpu) -> u32 {
+    mulsi3_clocks(cpu, 1)
 }
 
 #[cfg(test)]
@@ -63,6 +81,21 @@ mod tests {
     fn the_measured_routine_is_the_shipped_one() {
         let hash = body().bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, byte| (h ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3));
         assert_eq!(hash, MULSI3_SOURCE_STAMP, "__mulsi3 changed: measure the table in routine.rs again");
+    }
+
+    /// The fit reproduces the measured rows of the table at the top.
+    #[test]
+    fn the_fit_is_the_measured_table() {
+        use crate::dagisel::hooks::Cpu;
+        for (cpu, row) in [
+            (Cpu::M68000, [(0, 70), (1, 162), (5, 426), (8, 624), (15, 1086), (32, 2208)]),
+            (Cpu::M68010, [(0, 72), (1, 150), (5, 382), (8, 556), (15, 962), (32, 1948)]),
+            (Cpu::M68020, [(0, 36), (1, 69), (5, 165), (8, 237), (15, 405), (32, 813)]),
+        ] {
+            for (bits, clocks) in row {
+                assert_eq!(mulsi3_clocks(cpu, bits), clocks, "{cpu:?} bits {bits}");
+            }
+        }
     }
 
     #[test]
