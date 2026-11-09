@@ -99,6 +99,23 @@ impl Machine for M68kMachine {
     }
 }
 
+/// Whether `(d8,An,Xn)` is dearer than `(An)` on `cpu`, read from the timing
+/// tables: clocks first, then the extension word's bytes at the CPU's price
+/// (`timing::order`). On the 68000 it is 14 clk against 8 for a long.
+pub fn index_is_dearer_than_plain(cpu: crate::dagisel::hooks::Cpu) -> bool {
+    use crate::dagisel::hooks::Cpu;
+    static DEARER: std::sync::LazyLock<[bool; 6]> = std::sync::LazyLock::new(|| {
+        [Cpu::M68000, Cpu::M68010, Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060].map(|cpu| {
+            let price = |text: &str, bytes: u32| {
+                let clocks = crate::timing::cost(cpu, text, bytes, false).expect("a priced move").clocks;
+                crate::timing::order(cpu, false, clocks, bytes)
+            };
+            price("move.l (0,%a1,%d1), %d0", 4) > price("move.l (%a1), %d0", 2)
+        })
+    });
+    DEARER[cpu as usize]
+}
+
 /// The m68k `TargetTransformInfo`: the base class's answers.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct M68k {
@@ -207,6 +224,29 @@ impl Tti for M68k {
             2 if !self.scaled_index => !(has_base_reg || base_offset != 0),
             2 | 4 | 8 => self.scaled_index,
             _ => false,
+        }
+    }
+
+    /// `getScalingFactorCost`: a second register in the address is one where
+    /// the tables say it is dearer than a plain address
+    /// ([`index_is_dearer_than_plain`]), else nothing; an illegal mode is
+    /// invalid. The pin's M68k has no override (the base class prices every
+    /// legal mode 0); x86 and arm64 state the rule
+    /// ([X86TargetTransformInfo.cpp#L8045](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L8045)).
+    /// DEVIATE M68K-LSR-INDEX (owner m68k-lsr-addressing, exit none: the
+    /// table is the cause): LSR keeps a pointer where an index needs as many
+    /// registers. Closes M68K-LSR-IDX-CLOCKS.
+    fn scaling_factor_cost(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> Cost {
+        if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) {
+            Cost::of(i64::from(scale != 0 && index_is_dearer_than_plain(self.cpu)))
+        } else {
+            Cost::INVALID
         }
     }
 
