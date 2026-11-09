@@ -11,6 +11,7 @@ pub mod frequency;
 pub mod inline_rt;
 pub mod bump;
 pub mod carry;
+pub mod commute;
 pub mod ldir;
 pub mod mfunc;
 pub mod narrow;
