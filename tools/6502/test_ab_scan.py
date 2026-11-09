@@ -21,6 +21,13 @@ class Applicable(unittest.TestCase):
         self.assertIn("stack_arrays_copy", names)
 
 
+class ArgsAx(unittest.TestCase):
+    def test_the_report_glue_is_chosen_per_dist(self):
+        with tempfile.TemporaryDirectory() as old, tempfile.TemporaryDirectory() as new:
+            (Path(new) / "ARGS_AX").write_text("")
+            self.assertEqual((ab_scan.args_ax(old), ab_scan.args_ax(new)), ("0", "1"))
+
+
 @unittest.skipUnless(DIST and os.path.isfile(f"{DIST}/mos_rt.s"), "AB_DIST is not a dist")
 class OneCell(unittest.TestCase):
     def test_one_applicable_program_passes_under_a_dist(self):

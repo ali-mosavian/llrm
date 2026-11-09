@@ -3,7 +3,7 @@
 assembly, and their bytes and clocks (4 pads, sim65) under each dist.
 usage: ab_scan.py NEW_DIST BASE_DIST OUTDIR [--levels O2,Os] [--programs a,b] [--jobs N]
 A dist is a directory with llrm-cc and mos_rt.s (and a COMMIT file naming its tree). The report starts with a stamp naming this script's
-tree and both dists, so a table that cites it names what ran. OURS_ARGS_AX=1 in the environment selects the A:X `report` glue.
+tree and both dists, so a table that cites it names what ran. A dist with an ARGS_AX file selects the A:X `report` glue, per dist.
 Two defects made earlier tables wrong: programs for other targets were scanned (x86 -m32 programs read WRONG, 2026-11-09) and the
 runtime linked was cut short (see test_ours_cr.py ReachableRuntime). Both are tests in test_ab_scan.py."""
 import os, subprocess, sys, tempfile
@@ -51,10 +51,17 @@ def changed(new, base, level, names, jobs=4):
             return [n for n, differs in pool.map(one, names) if differs]
 
 
+def args_ax(dist):
+    """`1` where the dist passes words in a:x (it has an ARGS_AX file), else `0`: `report`'s glue differs per dist, and one environment
+    variable for both made the base dist's long arguments read from the wrong registers."""
+    return "1" if (Path(dist) / "ARGS_AX").exists() else "0"
+
+
 def cell(dist, level, name, out):
     """(verdict, data) of one program under one dist, by ours_cr.py: 4 pads, sim65."""
     env = {**os.environ, "OURS_RT": f"{dist}/mos_rt.s", "OURS_PADS": os.environ.get("OURS_PADS", "0,37,101,200"),
-           "OURS_CORPUS": str(CORPUS), "OURS_FLAGS": "honor"}
+           "OURS_CORPUS": str(CORPUS), "OURS_FLAGS": "honor",
+           "OURS_ARGS_AX": args_ax(dist)}
     run = subprocess.run([sys.executable, str(HERE / "ours_cr.py"), f"{dist}/llrm-cc", level, str(out), name], env=env, capture_output=True, text=True, timeout=900)
     import json
     try:
