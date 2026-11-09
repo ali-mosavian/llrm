@@ -1885,6 +1885,12 @@ impl Builder<'_> {
         {
             return Err(Refused("a calling convention the target's hook does not place"));
         }
+        if let Some(name) = direct.and_then(|global| self.module.global(global).name.owned())
+            && name.starts_with("llvm.")
+            && self.calling().is_some_and(|calling| !calling.calls_unlowered_intrinsic(&name))
+        {
+            return Err(Refused(Box::leak(format!("intrinsic call {name} has no lowering").into_boxed_str())));
+        }
         let mut flags_answer = false;
         if let Some(verdicts) = &self.target.runtime_calls
             && direct
