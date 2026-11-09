@@ -3,6 +3,7 @@
 // It was `mov eax, 100; sub eax, ecx`. SD448 takes the low-mask shapes first.
 unsigned f(unsigned n) { return 100u - (n ^ 0xF0u); }
 // CHECK-LABEL: _f proc
-// CHECK: xor eax, -241
+// CHECK: mov eax, -241
+// CHECK-NEXT: xor eax, dword ptr [esp+4]
 // CHECK-NEXT: add eax, 101
 // CHECK-NEXT: ret
