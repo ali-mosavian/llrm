@@ -35,3 +35,20 @@ fn the_name_and_content_of_an_operation_allocate_nothing_once_seen() {
     });
     assert_eq!(made, 0, "{made} allocations for 50 operations");
 }
+
+/// `keyed` (the key of `cse` and of the hoist's value groups) was the debug
+/// text of the operation, and flagcse's key was the same: 0.5 M of queens'
+/// prepass and a string per operation. An operation is its own key.
+#[test]
+fn the_key_of_an_operation_allocates_nothing() {
+    let op = add();
+    let (key, made) = counted(|| llrm_arm64::prepass::keyed(&op));
+    assert_eq!(made, 0, "{made} allocations for one key");
+    assert_eq!(key, llrm_arm64::prepass::keyed(&op), "the premise: equal operations are one key");
+    let Op::I(Inst::AddSubShifted { rd, .. }) = &op else { unreachable!() };
+    let mut other = op.clone();
+    if let Op::I(Inst::AddSubShifted { rd: slot, .. }) = &mut other {
+        *slot = Gpr(rd.0 + 9);
+    }
+    assert_eq!(key, llrm_arm64::prepass::keyed(&other), "the destination is blanked: it does not make the key differ");
+}

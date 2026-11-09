@@ -7,8 +7,8 @@ fn assembly(
     name: &str,
     ir: &str,
 ) -> String {
-    let dir = std::env::temp_dir().join(format!("llrm-sign-extend-z80-{name}"));
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
     std::fs::write(
         &source,
