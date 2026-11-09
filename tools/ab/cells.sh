@@ -24,13 +24,12 @@ while read -r _ tg lvl f; do
     LLRM_CC_TARGET=$tg fresh_compile "$w/$v.o" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_INC:-} -c "$f" -o "$w/$v.o" >/dev/null 2>&1 || continue
     LLRM_CC_TARGET=$tg fresh_compile "$w/$v.s" "$D/$v/llrm-cc" $fl $pf $lvl ${CELLS_INC:-} -S "$f" -o "$w/$v.s" >/dev/null 2>&1 || continue
     [ -s "$w/$v.o" ] && [ -s "$w/$v.s" ] || continue
-    # OMF (m16) objects defeat size(1): the file size then, symbols being equal on both sides.
-    text[$v]=$(size "$w/$v.o" 2>/dev/null | awk 'NR==2{print $1}')
-    [ -n "${text[$v]}" ] || text[$v]=$(stat -c %s "$w/$v.o")
+    # Code bytes of the object (object_bytes.py: per target; z80/6502 assemble their .s). Never the file's size: a failure is an EMPTY cell.
+    text[$v]=$("$(dirname "$0")/object_bytes.py" "$tg" "$w/$v.o" 2>>"$w/err") || unset "text[$v]"
     ins[$v]=$(grep -cE '^[[:space:]]+[a-z][a-z0-9.]*([[:space:]]|$)' "$w/$v.s")
   done
   if [ -z "${text[base]:-}" ] || [ -z "${text[new]:-}" ] || [ "${ins[base]:-0}" -eq 0 ] || [ "${ins[new]:-0}" -eq 0 ]; then
-    echo "EMPTY $tg $lvl $f" ; empty=$((empty + 1)); unset 'text[base]' 'text[new]' 'ins[base]' 'ins[new]'; continue
+    echo "EMPTY $tg $lvl $f$( [ -s "$w/err" ] && printf ' (%s)' "$(head -1 "$w/err")" )" ; : > "$w/err"; empty=$((empty + 1)); unset 'text[base]' 'text[new]' 'ins[base]' 'ins[new]'; continue
   fi
   echo "$tg $lvl $(basename "$f") bytes ${text[base]} ${text[new]} instrs ${ins[base]} ${ins[new]} flags: ${pf:--}"
   unset 'text[base]' 'text[new]' 'ins[base]' 'ins[new]'
