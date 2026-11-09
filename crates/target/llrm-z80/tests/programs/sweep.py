@@ -46,6 +46,15 @@ CRT0_SDCC = (
 )
 
 
+def verdict(got, want):
+    """Raises `Void` naming the first value that differs, or the lengths when one output is a prefix of the other."""
+    if got == want:
+        return
+    first = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), min(len(got), len(want)))
+    at = lambda values: values[first] if first < len(values) else "none"
+    raise Void(f"WRONG value {first}: got {at(got)}, want {at(want)}")
+
+
 class Void(Exception):
     """A cell without a row; the message is the reason that is written next to it."""
 
@@ -128,8 +137,7 @@ def ours_cell(path, w, ctx, want):
         if a.returncode:
             raise Void("ASM " + (a.stdout + a.stderr).strip().splitlines()[-1][:80])
     size, clocks, got = link_and_run(w, ["p.rel", "rt.rel"], ["-k", ctx.libc, "-l", "libc"], (w / "p.s").read_text(), ctx)
-    if got != want:
-        raise Void("WRONG")
+    verdict(got, want)
     return size, clocks
 
 
@@ -145,8 +153,7 @@ def sdcc_cell(path, w, tag, flags, ctx, want):
         err = re.search(r"error \d+: .*", s.stdout + s.stderr)
         raise Void("SDCC " + (err.group(0)[:90] if err else "failed"))
     size, clocks, got = link_and_run(d, ["p.rel"], ["-k", "/usr/share/sdcc/lib/z80", "-l", "z80"], None, ctx)
-    if got != want:
-        raise Void("WRONG")
+    verdict(got, want)
     return size, clocks
 
 

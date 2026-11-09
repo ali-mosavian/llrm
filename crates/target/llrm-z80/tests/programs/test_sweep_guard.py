@@ -42,6 +42,21 @@ class RowCount(unittest.TestCase):
         self.assertIn("a(LINKFAIL)", line)
 
 
+class Verdict(unittest.TestCase):
+    def test_a_wrong_output_names_the_first_value_that_differs(self):
+        """`WRONG` alone left 11 SDCC cells unreadable: a 32-bit `double` or a missing `long long` looks like a miscompile."""
+        sweep_spec = importlib.util.spec_from_file_location("sweep_under_test", Path(__file__).resolve().parent / "sweep.py")
+        sweep = importlib.util.module_from_spec(sweep_spec)
+        sweep_spec.loader.exec_module(sweep)
+        with self.assertRaises(sweep.Void) as raised:
+            sweep.verdict([1, 2, 9], [1, 2, 3])
+        self.assertEqual(str(raised.exception), "WRONG value 2: got 9, want 3")
+        with self.assertRaises(sweep.Void) as raised:
+            sweep.verdict([1], [1, 2])
+        self.assertEqual(str(raised.exception), "WRONG value 1: got none, want 2")
+        sweep.verdict([1, 2], [1, 2])
+
+
 class Imports(unittest.TestCase):
     def test_measure_is_importable_without_running_its_command_line(self):
         """`tests/kernels/measure.py` called `main()` at import, so the sweep could not load its helpers and exec'd a split
