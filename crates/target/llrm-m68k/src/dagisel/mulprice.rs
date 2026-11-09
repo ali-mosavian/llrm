@@ -17,8 +17,51 @@
 //!
 //! Complexity: O(1) per multiply.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use super::hooks::Cpu;
 use crate::timing::Price;
+
+/// How a build treats a multiply by a constant.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    /// The decomposition stands, as the pin's M68k has it.
+    Pin,
+    /// The decomposition stands; a function that used it is also built with
+    /// [`Mode::Kept`], and the cheaper kept.
+    Trial,
+    /// The multiply stays: `muls.l`, or the library call before the 68020.
+    Kept,
+}
+
+/// Whether the combiner may decompose a multiply in this build of a function,
+/// and whether it did: DEVIATE M68K-MUL-LATE builds a function that did also
+/// without, and keeps the cheaper (`crate::trial`).
+#[derive(Clone, Default)]
+pub struct Chain {
+    off: bool,
+    used: Rc<Cell<bool>>,
+}
+
+impl Chain {
+    pub fn of(mode: Mode) -> Chain {
+        Chain { off: mode == Mode::Kept, used: Rc::default() }
+    }
+
+    /// Whether this build decomposed at least one multiply.
+    pub fn used(&self) -> bool {
+        self.used.get()
+    }
+
+    pub(super) fn allows(&self, yes: bool) -> bool {
+        let yes = yes && !self.off;
+        if yes {
+            self.used.set(true);
+        }
+        yes
+    }
+}
 
 /// `(bytes, clocks)` of `text` on `cpu`: `bytes` are the instruction's length.
 fn one(

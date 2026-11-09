@@ -203,6 +203,7 @@ pub struct M68kLowering {
     /// The CPU and the level's price, which [`super::mulprice`] reads.
     pub cpu: Cpu,
     pub price: crate::timing::Price,
+    pub mul: super::mulprice::Chain,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
@@ -227,7 +228,7 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         vt: EVT,
         c: u128,
     ) -> bool {
-        super::mulprice::decomposes(self.cpu, self.price, vt.size_in_bits(), c)
+        self.mul.allows(super::mulprice::decomposes(self.cpu, self.price, vt.size_in_bits(), c))
     }
 
     fn sub_of_sign_extended_bool(&self) -> bool {

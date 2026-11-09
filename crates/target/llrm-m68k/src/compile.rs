@@ -159,6 +159,9 @@ pub struct Options {
     /// tuning); a function that saved a register is also built without, and
     /// the cheaper kept. False is the pin's M68k.
     pub global_copies: bool,
+    /// Multiplies by `(2^n +- 1) << k` (DEVIATE M68K-MUL-LATE,
+    /// [`crate::dagisel::mulprice`]).
+    pub mul: crate::dagisel::mulprice::Mode,
     /// The coalescer tries first the block whose copies read a value carried
     /// around the loop (`joins_loop_carried_first`, DEVIATE C15); false is the
     /// pin's block order.
@@ -196,6 +199,7 @@ impl Options {
         compare_destinations: false,
         carry_chain: true,
         global_copies: true,
+        mul: crate::dagisel::mulprice::Mode::Pin,
         loop_carried_first: false,
         debug: false,
     };
@@ -229,6 +233,7 @@ impl Default for Options {
             compare_destinations: true,
             carry_chain: true,
             global_copies: true,
+            mul: crate::dagisel::mulprice::Mode::Trial,
             loop_carried_first: true,
             debug: false,
         }
@@ -276,6 +281,16 @@ pub fn items_with(
             .and_then(|id| module.global(id).function())
             .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
     let price = crate::timing::Price::of(wants_size, options.strict);
+    // first: the multiply decides the shape of the rest, and its price counts
+    // the library routine, which the other rewrites do not touch
+    if touched.mul_trial {
+        let without = Options { mul: crate::dagisel::mulprice::Mode::Kept, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
     if touched.sext_adds {
         let without = Options { sext_adds: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
@@ -357,6 +372,8 @@ struct Touched {
     /// The build saved a callee-saved register: the join order may have cost
     /// it.
     global_copies: bool,
+    /// The build decomposed a multiply ([`crate::dagisel::mulprice::Chain`]).
+    mul_trial: bool,
 }
 
 impl Touched {
@@ -367,6 +384,7 @@ impl Touched {
             || self.compare_destinations
             || self.carry_chain
             || self.global_copies
+            || self.mul_trial
     }
 }
 
@@ -421,6 +439,7 @@ fn items_once(
     } else {
         Vec::new()
     };
+    let chain = crate::dagisel::mulprice::Chain::of(options.mul);
     let blocks = select_function_with(
         module,
         name,
@@ -432,11 +451,13 @@ fn items_once(
         wants_size,
         options.carry_chain,
         crate::timing::Price::of(wants_size, options.strict),
+        &chain,
         &libcalls,
     )?;
     let mut function = emit(name, &blocks)?;
     let mut touched = Touched::default();
     touched.carry_chain = options.carry_chain && uses_extend(&function);
+    touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && chain.used();
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {

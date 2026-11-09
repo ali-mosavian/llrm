@@ -95,6 +95,17 @@ fn relaxed_sizes(
     }
 }
 
+/// The clocks of the runtime routine `inst` calls, which the call instruction
+/// does not show ([`crate::routine`]).
+fn callee_clocks(
+    inst: &mc::Inst,
+    cpu: Cpu,
+) -> u32 {
+    let calls_mulsi3 = inst.opcode.starts_with("CALL")
+        && inst.operands.iter().any(|operand| matches!(operand, mc::Operand::Symbol(name, 0) if name == "__mulsi3"));
+    if calls_mulsi3 { crate::routine::mulsi3_floor(cpu) } else { 0 }
+}
+
 /// Bytes, and clocks of `items` on `cpu` weighted by how often each runs: an
 /// instruction counts the share of runs that reach it (a two-way branch splits
 /// evenly) times ten per loop it sits in (a backward branch to a label makes
@@ -153,7 +164,8 @@ fn price_of(
     for (at, item) in items.iter().enumerate() {
         let Item::Inst(inst) = item else { continue };
         let size = sizes[at];
-        let cost = crate::timing::cost(cpu, &mc::print(inst).ok()?, size as u32, false).ok()?.clocks;
+        let cost = crate::timing::cost(cpu, &mc::print(inst).ok()?, size as u32, false).ok()?.clocks
+            + callee_clocks(inst, cpu);
         let depth = loops.iter().filter(|(from, to)| *from <= at && at <= *to).count().min(3);
         bytes += size;
         clocks += u64::from(cost) * share[at] * 10u64.pow(depth as u32);
