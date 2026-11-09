@@ -22,7 +22,7 @@ fn dag_with(
     let output = dir.path().join("t.s");
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
         .envs(env.iter().copied())
-        .args(["-S", "--no-opt", "--isel=dag", "-o"])
+        .args(["-S", "--no-opt", "-o"])
         .arg(&output)
         .arg(&input)
         .output()
@@ -63,9 +63,8 @@ fn a_ten_case_switch_is_a_jump_table_in_the_const_section() {
 /// is the address of the block that calls the function of that case. The
 /// text's own relocations (the `bl` of each block) say which block that is.
 fn entries_reach_their_calls(platform: llrm_arm64::machine::Platform) {
-    use llrm_arm64::driver::{self, IselMode, Level};
+    use llrm_arm64::driver::{self, Level};
     use llrm_object::{Role, Target};
-    driver::set_isel_mode(IselMode::Dag);
     let header = format!("target datalayout = \"{}\"\n", platform.datalayout());
     let object = driver::object(&format!("{header}{}", switch_ir()), platform, "t", Level::O0).expect("compiles");
     let text = &object.sections[0];

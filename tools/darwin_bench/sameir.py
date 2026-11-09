@@ -18,14 +18,13 @@ def measure(prog, o):
     if not o1: return None
     k = max(1, int(150000 / max(float(o1[0]), 0.1)))
     return statistics.median(float(x) for x in sh([t, str(k), "11"]).stdout.split())
-print(f"{level}: prog | pin B/insn | llc-dag(pinIR) | llc-hand(pinIR) | llrm-cc")
+print(f"{level}: prog | pin B/insn | llc(pinIR) | llrm-cc")
 for prog in progs:
     d = f"{WORK}/novec/{prog}.{level}.pin-nv"; ll = f"{d}/pin.ll"
     r = sh([PIN, "-isysroot", SDK, f"-{level}", "-I", f"{REPO}/bench", "-Dmain=orig_main", "-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm", f"{d}/src.c", "-o", ll])
     cols = []
-    for lab, o in (("pin", f"{d}/k.o"), ("dag", f"{d}/dag.o"), ("hand", f"{d}/hand.o"), ("cc", f"{WORK}/novec/{prog}.{level}.llrm-cc/k.o")):
-        if lab in ("dag", "hand"):
-            mode = lab; llo = {"dag": "2", "hand": "2"}[lab]
-            if sh([LLC, "-O" + ("2" if level == "Os" else level[1]), f"--isel={mode}", "-o", o, ll]).returncode: cols.append(f"{lab} llc failed"); continue
+    for lab, o in (("pin", f"{d}/k.o"), ("llc", f"{d}/llc.o"), ("cc", f"{WORK}/novec/{prog}.{level}.llrm-cc/k.o")):
+        if lab == "llc":
+            if sh([LLC, "-O" + ("2" if level == "Os" else level[1]), "-o", o, ll]).returncode: cols.append(f"{lab} llc failed"); continue
         cols.append(f"{kernel(o)[0]}/{kernel(o)[1]}")
     print(f"{prog:13}" + " | ".join(f"{c:>16}" for c in cols), flush=True)

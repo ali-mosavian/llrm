@@ -1,6 +1,6 @@
 //! `llvm.trap` and `llvm.debugtrap` on the DAG path alone.
 
-use llrm_arm64::driver::{self, IselMode};
+use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
 const LAYOUT: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
@@ -15,7 +15,6 @@ fn trap_and_debugtrap_are_brk_on_the_dag_path() {
 define void @t() {{\n  call void @llvm.trap()\n  unreachable\n}}\n\
 define void @d() {{\n  call void @llvm.debugtrap()\n  ret void\n}}\n"
     );
-    driver::set_isel_mode(IselMode::Dag);
     let asm = driver::assembly(&ir, Platform::Linux, true).expect("the DAG path selects trap and debugtrap");
     assert!(asm.contains("brk #1\n"), "{asm}");
     assert!(asm.contains("brk #61440\n"), "{asm}");

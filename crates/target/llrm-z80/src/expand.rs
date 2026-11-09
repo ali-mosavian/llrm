@@ -2660,11 +2660,18 @@ pub fn weighted(
 pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
     let frequencies = FREQUENCIES.with(|one| one.borrow().clone());
     let (mut bytes, mut clocks) = (0, 0.0);
-    for (line, weight) in weighted(lines, &frequencies) {
-        let Line::Inst(text) = line else { continue };
-        let cost = table_cost(&form(&text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
+    let weighted = weighted(lines, &frequencies);
+    let mut before: Vec<&str> = Vec::new();
+    for (line, weight) in &weighted {
+        let Line::Inst(text) = line else {
+            before.clear();
+            continue;
+        };
+        let cost = table_cost(&form(text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
         bytes += cost.0;
-        clocks += f64::from(cost.1) * weight;
+        // the routine a call reaches runs too (`runtime_size::routine_clocks`: `__mulsi3` is 120 T a multiplier bit)
+        clocks += (f64::from(cost.1) + f64::from(crate::runtime_size::routine_clocks(text, &before))) * weight;
+        before.push(text);
     }
     (bytes, clocks.round() as u64)
 }

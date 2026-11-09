@@ -188,3 +188,45 @@ fn test_a_negated_counter_is_the_negated_remainder() {
     assert!(!text.contains("udiv") && !text.contains("mul"), "{text}");
     assert!(!text.contains("%y"), "the dead -x counter is gone: {text}");
 }
+
+/// What LSR left of `i % 97 + 2` in recpow's loop at m64 -Os: the counter `%n` (= `%x` + 40) is added
+/// after `3 - q * 97`, so the subtrahend's left operand is the constant 3. The divide, multiply and
+/// subtract stayed (`div`, `imul`, `neg`, `lea` where gcc has `idiv` and `add edx, 2`): recpow -Os
+/// 209 B against gcc's 175.
+const SHIFTED: &str = "define void @f(ptr %p) {
+entry:
+  br label %loop
+
+loop:
+  %x = phi i32 [ 1, %entry ], [ %xn, %loop ]
+  %n = phi i32 [ 41, %entry ], [ %nn, %loop ]
+  %q = udiv i32 %x, 97
+  %m = mul nuw nsw i32 %q, 97
+  %s = sub i32 3, %m
+  %t = add i32 %n, %s
+  %r = add i32 %t, -41
+  store i32 %r, ptr %p
+  %xn = add nuw i32 %x, 1
+  %nn = add nuw i32 %n, 1
+  %c = icmp ult i32 %xn, 400
+  br i1 %c, label %loop, label %exit
+
+exit:
+  ret void
+}
+";
+
+#[test]
+fn test_a_counter_added_after_a_constant_minus_the_product_is_one_remainder() {
+    let text = after(SHIFTED, true);
+    assert!(text.contains("urem i32 %x, 97"), "{text}");
+    assert!(!text.contains("udiv") && !text.contains("mul"), "{text}");
+    assert!(text.contains(", 43"), "k = 40 (the counter) + 3: {text}");
+}
+
+/// A constant that is not added to a counter of the dividend is another number.
+#[test]
+fn test_a_constant_minus_the_product_added_to_an_unrelated_value_stays() {
+    let text = after(&SHIFTED.replace("%nn = add nuw i32 %n, 1", "%nn = add nuw i32 %n, 2"), true);
+    assert!(text.contains("udiv") && !text.contains("urem"), "{text}");
+}

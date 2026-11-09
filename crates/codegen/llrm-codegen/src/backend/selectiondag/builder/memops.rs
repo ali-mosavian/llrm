@@ -437,6 +437,13 @@ impl Builder<'_> {
         self.target.opt_size || self.function_has("optsize") || self.function_has("minsize")
     }
 
+    /// A constant copy is `rep movsb`: `hasMinSize`, or `-Os` on a target
+    /// that says so (DEVIATE REP-MOVS-OS, `Tuning::rep_movs_at_size`).
+    pub(super) fn rep_movsb_copy(&self) -> bool {
+        self.has_min_size()
+            || (self.has_opt_size() && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_movs_at_size()))
+    }
+
     /// The pin's `hasMinSize` (`-Oz`), as [`Self::has_opt_size`].
     pub(super) fn has_min_size(&self) -> bool {
         self.target.min_size || self.function_has("minsize")
@@ -1312,7 +1319,7 @@ impl Builder<'_> {
                 match (inline, which, constant) {
                     (Some(chain), _, _) => chain,
                     (None, Intrinsic::MemCpy, _) if hooked.is_some() => hooked.expect("checked"),
-                    (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.has_min_size() => {
+                    (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.rep_movsb_copy() => {
                         self.rep_movs(root, dst, other, bytes, 1, dst_align, src_align)?
                     }
                     (None, Intrinsic::MemCpy, Some(bytes))
@@ -2111,7 +2118,7 @@ impl Builder<'_> {
     ) -> Result<SDValue, Refused> {
         let chain_in = chain;
         let pointer = self.target.dag.pointer;
-        let block = if self.has_min_size() { 1 } else { alignment };
+        let block = if self.rep_movsb_copy() { 1 } else { alignment };
         let (count, left) = (size / block, size % block);
         let (cx, di, si) = self.string_registers();
         let count = self.dag.get_constant(u128::from(count), pointer);

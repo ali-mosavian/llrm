@@ -377,6 +377,14 @@ impl BuilderTarget {
     /// beat the multiply-high sequence's.
     /// This target with a signed divide by a negative constant made from the
     /// divide by its magnitude ([`DagConfig::sdiv_by_magnitude`]).
+    pub fn with_sdiv_pow2_stays(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.sdiv_pow2_stays = on;
+        self
+    }
+
     pub fn with_sdiv_by_magnitude(
         mut self,
         on: bool,
