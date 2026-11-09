@@ -811,26 +811,32 @@ define i32 @f(i32 %a) {
     assert_eq!(names.iter().filter(|n| *n == "imul").count(), 0, "{names:?}");
 }
 
-/// #7754 made m32 -O1 keep an `imul` where the chain was longer in bytes: x_iir
-/// -O1 went 49525 -> 130525 clocks (x_hash +63%, x_histo2 +83%), a clock
-/// regression -O1 does not allow. At -O1 (no byte rate) a multiply whose chain
-/// takes fewer clocks stays the chain.
+/// #7754 kept an `imul` at m32 -O1 where the chain was longer in bytes
+/// (x_iir -O1 49525 -> 130525 clocks); the fix to that clock loss made -O1 take
+/// every faster chain, which is +547 B on mul_constants against the pin's
+/// `imul`. -O1 is strict in bytes and clocks (no rate to trade one for the
+/// other): a chain only where it is no longer than the `imul` as well as
+/// faster; `x * 1664525` stays the 6-byte `imul` the pin emits, `x * 5` is
+/// one `lea`.
 #[test]
-fn at_m32_o1_a_multiply_whose_chain_is_faster_stays_a_chain() {
-    let module = crate::testing::module(
-        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
-define i32 @f(i32 %a) {
-  %r = mul i32 %a, 1664525
+fn at_m32_o1_a_multiply_is_a_chain_only_where_it_is_no_longer_than_the_imul() {
+    let imuls_of = |constant: u32| {
+        let module = crate::testing::module(&format!(
+            "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {{
+  %r = mul i32 %a, {constant}
   ret i32 %r
-}
-",
-    )
-    .expect("parses");
-    let mut cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu").clone();
-    cpu.speed_rate = false;
-    let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
-    let imuls = done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
-    assert_eq!(imuls, 0, "-O1: the chain");
+}}
+"
+        ))
+        .expect("parses");
+        let mut cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu").clone();
+        cpu.speed_rate = false;
+        let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count()
+    };
+    assert_eq!(imuls_of(1664525), 1, "-O1: the imul, as the pin");
+    assert_eq!(imuls_of(5), 0, "-O1: one lea");
 }
 
 /// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:

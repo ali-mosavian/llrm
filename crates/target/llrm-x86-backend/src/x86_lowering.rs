@@ -2859,7 +2859,9 @@ fn priced_chain(
     use llrm_codegen::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
     let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin } = pricing;
-    let chain = if by_clocks {
+    let chain = if by_clocks && milliclocks_per_byte == 0 {
+        arithmetic::chain_dominating_imul(c, width, cpu, arch)
+    } else if by_clocks {
         arithmetic::chain_by_clocks_then_bytes(c, width, cpu, arch)
     } else {
         arithmetic::priced_chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte, price_pin)
