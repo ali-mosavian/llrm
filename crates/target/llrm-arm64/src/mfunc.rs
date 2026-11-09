@@ -118,20 +118,21 @@ impl Op {
                     visit_reg(register, Role::Use, f);
                 }
             }
-            // Not a use: the allocator renames it by hand (`regalloc::rewrite`).
+            // Not a use: the allocator renames it by hand
+            // (`regalloc::rewrite`).
             Op::DbgValue { .. } => {}
         }
     }
 
-    /// Whether the operation is debug information only (`MachineInstr::isDebugInstr`).
+    /// Whether the operation is debug information only
+    /// (`MachineInstr::isDebugInstr`).
     pub fn is_debug(&self) -> bool {
         matches!(self, Op::DbgValue { .. })
     }
 
     pub fn defs_and_uses(&self) -> (Vec<Reg>, Vec<Reg>) {
         let (mut defs, mut uses) = (Vec::new(), Vec::new());
-        self.clone().visit(&mut |register, role| {
-            let key = register.key();
+        self.for_each_register(&mut |key, role| {
             if role.writes() {
                 defs.push(key);
             }
@@ -140,6 +141,15 @@ impl Op {
             }
         });
         (defs, uses)
+    }
+
+    /// `f` on each register operand with its role, without collecting them:
+    /// the passes that walk every operation of a function many times ask this.
+    pub fn for_each_register(
+        &self,
+        f: &mut dyn FnMut(Reg, Role),
+    ) {
+        self.clone().visit(&mut |register, role| f(register.key(), role));
     }
 }
 

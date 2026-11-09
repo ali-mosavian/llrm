@@ -96,7 +96,7 @@ fn keyed(op: &Op) -> String {
     format!("{copy:?}")
 }
 
-pub(crate) struct Cfg {
+pub struct Cfg {
     successors: Vec<Vec<usize>>,
     predecessors: Vec<Vec<usize>>,
     /// Immediate dominators; the entry's is itself.
@@ -105,7 +105,7 @@ pub(crate) struct Cfg {
     order: Vec<usize>,
 }
 
-pub(crate) fn cfg(function: &MFunc) -> Cfg {
+pub fn cfg(function: &MFunc) -> Cfg {
     let count = function.blocks.len();
     let labels: HashMap<&str, usize> =
         function.blocks.iter().enumerate().map(|(at, one)| (one.label.as_str(), at)).collect();
@@ -194,9 +194,11 @@ pub(crate) fn definitions(function: &MFunc) -> HashMap<Reg, usize> {
     let mut count: HashMap<Reg, usize> = HashMap::default();
     for block in &function.blocks {
         for op in &block.ops {
-            for register in op.defs_and_uses().0 {
-                *count.entry(register).or_default() += 1;
-            }
+            op.for_each_register(&mut |register, role| {
+                if role.writes() {
+                    *count.entry(register).or_default() += 1;
+                }
+            });
         }
     }
     count
@@ -576,8 +578,8 @@ fn readers_of(function: &MFunc) -> HashMap<Reg, Vec<(usize, usize)>> {
 /// node in the pin); at `optsize` they always merge (a shared constant is the
 /// smaller code; the heuristics guard register pressure). Translating 1 and 3
 /// moved 29 of 144 arm64 cells (5 better on both axes, 17 worse on one or
-/// both: lru -O2 93 -> 99 instructions, the pin 103; handoff/arm64-nest-cse1-ab-2026-11-07.md).
-/// Owner w15. Exit: 11-30.
+/// both: lru -O2 93 -> 99 instructions, the pin 103;
+/// handoff/arm64-nest-cse1-ab-2026-11-07.md). Owner w15. Exit: 11-30.
 fn profitable(
     readers: &HashMap<Reg, Vec<(usize, usize)>>,
     definitions: &HashMap<Reg, usize>,
@@ -613,9 +615,7 @@ fn profitable(
         }
         false
     };
-    let only_copied = reads(register)
-        .iter()
-        .all(|&(block, index)| matches!(blocks[block].ops[index], Op::Copy { .. }))
+    let only_copied = reads(register).iter().all(|&(block, index)| matches!(blocks[block].ops[index], Op::Copy { .. }))
         && !phi_input(register);
     !(no_register_operand && only_copied)
 }
@@ -661,7 +661,9 @@ fn cse(
                     // (`MachineCSE`, `PhysRegDefsReach`).
                     Some(&earlier)
                         if (!setter || flags_dead(&function.blocks[*block].ops, index))
-                            && (optsize || home.get(&earlier) == Some(block) || profitable(&readers, &definitions, &function.blocks, earlier, register, op)) =>
+                            && (optsize
+                                || home.get(&earlier) == Some(block)
+                                || profitable(&readers, &definitions, &function.blocks, earlier, register, op)) =>
                     {
                         rename.insert(register, earlier);
                         removed.insert((*block, index));
@@ -758,42 +760,110 @@ fn invariants(
     hoisted
 }
 
-/// The registers among `candidates` (what `probe`, the loop without them,
-/// would have hoisted) worth a register for the whole loop: those the loop
-/// reads most, as many as the registers not already held by what the loop
-/// reads from outside, plus what they are made from.
-/// The virtual registers live into each block.
-pub(crate) fn live_in(
+/// The virtual registers live into each block: one row of bits per block over
+/// the virtual registers the function mentions.
+pub struct Liveness {
+    index: HashMap<Reg, u32>,
+    registers: Vec<Reg>,
+    words: usize,
+    rows: Vec<u64>,
+}
+
+impl Liveness {
+    fn row(
+        &self,
+        block: usize,
+    ) -> &[u64] {
+        &self.rows[block * self.words..(block + 1) * self.words]
+    }
+
+    pub fn contains(
+        &self,
+        block: usize,
+        register: Reg,
+    ) -> bool {
+        self.index.get(&register).is_some_and(|&at| self.row(block)[at as usize / 64] >> (at % 64) & 1 == 1)
+    }
+
+    /// The registers live into `block`.
+    pub fn iter(
+        &self,
+        block: usize,
+    ) -> impl Iterator<Item = Reg> + '_ {
+        self.row(block).iter().enumerate().flat_map(move |(word, &bits)| {
+            (0..64).filter(move |bit| bits >> bit & 1 == 1).map(move |bit| self.registers[word * 64 + bit])
+        })
+    }
+}
+
+pub fn live_in(
     function: &MFunc,
     cfg: &Cfg,
-) -> Vec<HashSet<Reg>> {
+) -> Liveness {
     let count = function.blocks.len();
-    let mut gen_kill: Vec<(HashSet<Reg>, HashSet<Reg>)> = Vec::with_capacity(count);
-    for block in &function.blocks {
-        let (mut gen_set, mut kill) = (HashSet::default(), HashSet::default());
+    // One walk of the operations: what each reads and writes, by number.
+    let (mut index, mut registers): (HashMap<Reg, u32>, Vec<Reg>) = (HashMap::default(), Vec::new());
+    let mut touches: Vec<(u32, bool, bool)> = Vec::new();
+    let mut ends: Vec<(usize, usize)> = Vec::new();
+    for (at, block) in function.blocks.iter().enumerate() {
         for op in &block.ops {
-            let (defs, uses) = op.defs_and_uses();
-            gen_set.extend(uses.into_iter().filter(|used| used.is_virtual() && !kill.contains(used)));
-            kill.extend(defs.into_iter().filter(|def| def.is_virtual()));
+            op.for_each_register(&mut |register, role| {
+                if register.is_virtual() {
+                    let next = registers.len() as u32;
+                    let number = *index.entry(register).or_insert(next);
+                    if number == next {
+                        registers.push(register);
+                    }
+                    touches.push((number, role.reads(), role.writes()));
+                }
+            });
+            ends.push((at, touches.len()));
         }
-        gen_kill.push((gen_set, kill));
     }
-    let mut live: Vec<HashSet<Reg>> = vec![HashSet::default(); count];
+    let words = registers.len().div_ceil(64);
+    let mut gen_rows = vec![0u64; count * words];
+    let mut kill_rows = vec![0u64; count * words];
+    let mut from = 0;
+    for &(block, end) in &ends {
+        let row = block * words..(block + 1) * words;
+        let (gen_row, kill_row) = (&mut gen_rows[row.clone()], &mut kill_rows[row]);
+        // Reads happen before the writes of the same operation.
+        for &(number, reads, _) in &touches[from..end] {
+            let (word, bit) = (number as usize / 64, number % 64);
+            if reads && kill_row[word] >> bit & 1 == 0 {
+                gen_row[word] |= 1 << bit;
+            }
+        }
+        for &(number, _, writes) in &touches[from..end] {
+            if writes {
+                kill_row[number as usize / 64] |= 1 << (number % 64);
+            }
+        }
+        from = end;
+    }
+    let mut rows = vec![0u64; count * words];
+    let mut input = vec![0u64; words];
     let mut changed = true;
     while changed {
         changed = false;
         for &block in cfg.order.iter().rev() {
-            let mut input: HashSet<Reg> =
-                cfg.successors[block].iter().flat_map(|&next| live[next].iter().copied()).collect();
-            input.retain(|register| !gen_kill[block].1.contains(register));
-            input.extend(gen_kill[block].0.iter().copied());
-            if input != live[block] {
-                live[block] = input;
+            input.fill(0);
+            for &next in &cfg.successors[block] {
+                for (word, bits) in input.iter_mut().zip(&rows[next * words..(next + 1) * words]) {
+                    *word |= bits;
+                }
+            }
+            let row = block * words..(block + 1) * words;
+            for ((word, kill), gen_bits) in input.iter_mut().zip(&kill_rows[row.clone()]).zip(&gen_rows[row.clone()]) {
+                *word = *word & !kill | gen_bits;
+            }
+            if input != rows[row.clone()] {
+                rows[row].copy_from_slice(&input);
                 changed = true;
             }
         }
     }
-    live
+    Liveness { index, registers, words, rows }
 }
 
 /// The most virtual registers (general, floating point) live at once at a
@@ -803,7 +873,7 @@ pub(crate) fn peak_pressure(
     function: &MFunc,
     blocks: &[usize],
     cfg: &Cfg,
-    live: &[HashSet<Reg>],
+    live: &Liveness,
     skip: &HashMap<Reg, &Op>,
 ) -> (usize, usize) {
     let count = |set: &HashSet<Reg>| {
@@ -814,7 +884,7 @@ pub(crate) fn peak_pressure(
     for &block in blocks {
         let mut now: HashSet<Reg> = cfg.successors[block]
             .iter()
-            .flat_map(|&next| live[next].iter().copied())
+            .flat_map(|&next| live.iter(next))
             .filter(|register| register.is_virtual() && !skip.contains_key(register))
             .collect();
         let (g, f) = count(&now);
@@ -832,12 +902,16 @@ pub(crate) fn peak_pressure(
     (gprs, fprs)
 }
 
+/// The registers among `candidates` (what `probe`, the loop without them,
+/// would have hoisted) worth a register for the whole loop: those the loop
+/// reads most, as many as the registers not already held by what the loop
+/// reads from outside, plus what they are made from.
 fn within_pressure(
     probe: &MFunc,
     blocks: &[usize],
     candidates: &[Op],
     cfg: &Cfg,
-    live: &[HashSet<Reg>],
+    live: &Liveness,
 ) -> HashSet<Reg> {
     use crate::regalloc::pool;
     let made: HashMap<Reg, &Op> =
@@ -1033,6 +1107,19 @@ mod tests {
         function
     }
 
+    /// A value made in the entry and read in the exit is live into the loop
+    /// and the exit, not into the entry that makes it; a value made and read
+    /// in the loop is live into no block.
+    #[test]
+    fn a_value_is_live_from_its_block_to_its_last_reader() {
+        let function = function();
+        let live = live_in(&function, &cfg(&function));
+        let (b, c) = (Reg::Gpr(Gpr(65)), Reg::Gpr(Gpr(66)));
+        assert!(live.contains(1, b) && !live.contains(0, b), "b is made in the entry and read in the loop");
+        assert!(!live.contains(1, c) && !live.contains(0, c), "c is made and read in the loop");
+        assert_eq!(live.iter(1).collect::<Vec<_>>(), vec![b]);
+    }
+
     /// The loop made 5000 again on each trip although the entry had it in a
     /// register: `executed` was 1.4x of `llc` on loops of this shape.
     #[test]
@@ -1074,7 +1161,13 @@ mod tests {
             },
             MBlock {
                 label: "after".into(),
-                ops: vec![movz(c, 5000), copy(e, c), add(69, e, d), Op::Return { uses: vec![Reg::Gpr(Gpr(69))], tail: None }].into(),
+                ops: vec![
+                    movz(c, 5000),
+                    copy(e, c),
+                    add(69, e, d),
+                    Op::Return { uses: vec![Reg::Gpr(Gpr(69))], tail: None },
+                ]
+                .into(),
             },
         ];
         run(&mut function, false);
@@ -1380,7 +1473,7 @@ fn unsplit_edges(function: &mut MFunc) {
                 return None;
             }
             let touched = defined.clone();
-            if others.iter().any(|&one| touched.iter().any(|reg| live[one].contains(reg))) {
+            if others.iter().any(|&one| touched.iter().any(|reg| live.contains(one, *reg))) {
                 return None;
             }
             let reads_defined = function.blocks[from]
