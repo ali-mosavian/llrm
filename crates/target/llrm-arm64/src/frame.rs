@@ -957,5 +957,8 @@ mod tests {
         let single = frame(256, Save::GprPair(30, None));
         assert_eq!((single.folded_bump(true), single.folded_bump(false)), (Some(256), None));
         assert_eq!(frame(272, Save::GprPair(30, None)).folded_bump(true), None);
+        // A lone `d8` is a single access too (`ldr d8, [sp], #256`).
+        let float = frame(256, Save::FprPair(8, None));
+        assert_eq!((float.folded_bump(true), float.folded_bump(false)), (Some(256), None));
     }
 }

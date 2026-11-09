@@ -45,3 +45,19 @@ fn an_out_of_range_update_is_a_separate_adjustment() {
     assert!(text.contains("sub\tsp, sp, #") || text.contains("sub sp, sp, #"), "{text}");
     assert!(!text.contains("]!"), "a folded update that cannot be encoded:\n{text}");
 }
+
+/// Two programs of the corpus whose first save is a single register at a
+/// frame past the range: a leaf saving `x29` (`str x29, [sp, #-368]!`) and
+/// a function saving `x30` (`str x30, [sp, #-272]!`).
+#[test]
+fn the_corpus_frames_with_a_single_first_save_are_encoded() {
+    driver::set_isel_mode(IselMode::Dag);
+    for (name, ir) in [
+        ("frame_pointer_free", include_str!("data/frame_pointer_free.ll")),
+        ("store_merge_interleaved", include_str!("data/store_merge_interleaved.ll")),
+    ] {
+        for level in [Level::O1, Level::Os, Level::Oz] {
+            driver::object(ir, Platform::Linux, "t", level).unwrap_or_else(|why| panic!("{name} at {level:?}: {why}"));
+        }
+    }
+}
