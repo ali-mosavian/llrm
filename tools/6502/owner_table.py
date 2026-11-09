@@ -27,6 +27,9 @@ import collections
 import os
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import virtual_ok as shared  # noqa: E402
+
 REQUIRED = ("llvm-mos", "cc65")
 # SDCC is never quoted at its default optimisation: the Os bar (strict bytes)
 # comes from the size variants, the O2 bar from the best of all four.
@@ -72,17 +75,10 @@ def grade(cells, programs, programs_no_bar, ungraded_cpus=()):
 
 
 def virtual_ok(d, lv, sdcc):
-    """The cell is virtual (no reference attains both per-axis bars), ours is Pareto-optimal among the
-    references, and no worse than llvm-mos on both axes (fputable.verdict's rule, #8509; x86-specific, so not imported)."""
-    ob, oc = d["ours"]
-    ext = [d[c] for c in REQUIRED + sdcc]
-    bb, bc = min(v[0] for v in ext), min(v[1] for v in ext)
-    if any(v == (bb, bc) for v in ext):
-        return False
-    if any(v[0] <= ob and v[1] <= oc and (v[0] < ob or v[1] < oc) for v in ext):
-        return False
-    pb, pc = d["llvm-mos"]
-    return ob <= pb and oc <= pc
+    """The cell is virtual and ours passes `tools/virtual_ok.py`'s rule; the pin-equivalent is llvm-mos."""
+    return shared.virtual_ok(
+        tuple(d["ours"]), [tuple(d[c]) for c in REQUIRED + sdcc], pin=tuple(d["llvm-mos"])
+    )
 
 
 def virtual_notes(cells, graded):
