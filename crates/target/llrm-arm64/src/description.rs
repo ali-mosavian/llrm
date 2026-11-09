@@ -376,7 +376,9 @@ mod tests {
         let names: Vec<&str> = classes.available.iter().map(|one| REGISTER_INFO.name(*one).unwrap()).collect();
         assert_eq!(names.first(), Some(&"x0"));
         assert!(!names.contains(&"x29") && !names.contains(&"sp") && names.contains(&"x28"), "{names:?}");
-        assert!(classes.xmm.is_empty());
+        // No xmm in the file: floats are confined to the fpr class, v0..v31.
+        let float: Vec<RegId> = (0..=31).map(|n| register(&format!("v{n}"))).collect();
+        assert_eq!(classes.xmm, float);
     }
 
     /// A `double` took the stack (the file named no float argument registers):

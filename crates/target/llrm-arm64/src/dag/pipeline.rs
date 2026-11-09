@@ -27,7 +27,6 @@ use llrm_lir::registers::RegId;
 use llrm_sdag::actions::{Aarch64Features, TargetLowering};
 
 use super::globals::Globals;
-use super::ids::Aarch64Ids;
 
 /// Combine hooks and legalizer hooks of arm64: none. A Custom operation the
 /// table asks for is recorded, and the block refused after legalization.
@@ -521,7 +520,7 @@ impl SchedInfo for Aarch64Sched {
         &self,
         id: RegId,
     ) -> Option<u16> {
-        llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters::pin_register(&Aarch64Ids::new(), id)
+        llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters::pin_register(&*super::ids::IDS, id)
     }
 
     fn num_defs(
@@ -570,6 +569,40 @@ impl SchedInfo for Aarch64Sched {
 /// (`dagisel.toml` `cpus`).
 const APPLE_M1: Aarch64Features = Aarch64Features { cssc: false, lse: true, outline_atomics: false, lse2: true };
 
+thread_local! {
+    /// The action tables built so far, by the subtarget features and
+    /// `shouldOptForSize` they were built for: the pin builds
+    /// `AArch64TargetLowering` once per subtarget, not per block (2.3 M of
+    /// rectwo's isel in 17 blocks). Two subtargets in one process get two.
+    static ACTIONS: std::cell::RefCell<Vec<(([bool; 4], bool), std::rc::Rc<TargetLowering>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The action table of `features`, built on first ask on this thread.
+fn actions(
+    features: Aarch64Features,
+    opt_for_size: bool,
+) -> std::rc::Rc<TargetLowering> {
+    let key = ([features.cssc, features.lse, features.outline_atomics, features.lse2], opt_for_size);
+    if let Some(found) = ACTIONS.with(|all| all.borrow().iter().find(|(one, _)| *one == key).map(|(_, tli)| tli.clone())) {
+        return found;
+    }
+    let mut tli = TargetLowering::aarch64(features);
+    tli.set_opt_for_size(opt_for_size);
+    tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
+    BUILT.with(|built| built.set(built.get() + 1));
+    let tli = std::rc::Rc::new(tli);
+    ACTIONS.with(|all| all.borrow_mut().push((key, tli.clone())));
+    tli
+}
+
+/// How many action tables this thread has built: one per subtarget and size
+/// setting, however many blocks were selected.
+pub fn action_tables_built() -> usize {
+    BUILT.with(std::cell::Cell::get)
+}
+
 /// `CodeGenAndEmitDAG` up to the end of scheduling: the units, in order.
 pub fn select_block(
     dag: &mut SelectionDAG,
@@ -578,12 +611,9 @@ pub fn select_block(
     opt_for_size: bool,
     linux: bool,
 ) -> Result<Vec<Unit>, Refusal> {
-    let mut tli = TargetLowering::aarch64(APPLE_M1);
-    tli.set_opt_for_size(opt_for_size);
-    tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
     llrm_codegen::backend::selectiondag::live_out::assert_live_out_copies(dag, info);
     let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone(), linux };
-    let legal = legalized_with(dag, &tli, &mut lowering, None, false);
+    let legal = legalized_with(dag, &actions(APPLE_M1, opt_for_size), &mut lowering, None, false);
     // The reason the legalizer stopped is the Custom operation it could not
     // lower.
     if let Some(why) = lowering.custom {
@@ -595,7 +625,7 @@ pub fn select_block(
     super::combine::shift_amounts_mod(dag);
     let selector = Selector::new(table::TABLE);
     let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone(), opt_for_size);
-    do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {
+    do_instruction_selection_with(dag, &*super::ids::IDS, |adapter, node| {
         select_frame_index(adapter, node)
             .or_else(|| select_indexed_load(adapter, node))
             .or_else(|| super::bitfield::select_bitfield_extract(adapter, node))

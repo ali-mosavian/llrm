@@ -15,6 +15,15 @@ use crate::machine::{Arm64Machine, Platform};
 pub fn without_triple(text: &str) -> (Option<String>, String) {
     let mut triple = None;
     let mut kept = String::with_capacity(text.len());
+    // The words are one line's, so the text is rewritten once, and only if one
+    // is there.
+    let rewritten;
+    let text = if text.contains(" dso_local") || text.contains(" = ptrtoaddr ") {
+        rewritten = text.replace(" dso_local", "").replace(" = ptrtoaddr ", " = ptrtoint ");
+        rewritten.as_str()
+    } else {
+        text
+    };
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("target triple") {
             triple = rest.split('"').nth(1).map(str::to_owned);
@@ -26,7 +35,7 @@ pub fn without_triple(text: &str) -> (Option<String>, String) {
         // DEVIATE 4: newer clang's `ptrtoaddr` is read as `ptrtoint` (the same
         // where a pointer and its address are one width); MIR refuses the
         // instruction on purpose.
-        kept.push_str(&line.replace(" dso_local", "").replace(" = ptrtoaddr ", " = ptrtoint "));
+        kept.push_str(line);
         kept.push('\n');
     }
     (triple, kept)
@@ -137,12 +146,14 @@ pub fn optimized(program: &mut Program) -> Result<(), String> {
     optimized_at(program, Level::O2)
 }
 
-/// The `-f` switches of the command line (`-fno-unroll-loops`, `-fno-inline=NAME`, `-fexcess-precision=`), applied to every mid-end
+/// The `-f` switches of the command line (`-fno-unroll-loops`,
+/// `-fno-inline=NAME`, `-fexcess-precision=`), applied to every mid-end
 /// run of the process: the same parser as every other backend's `llc`.
 static POLICY: std::sync::Mutex<llrm_codegen::driver::policy::Policy> =
     std::sync::Mutex::new(llrm_codegen::driver::policy::Policy::new());
 
-/// Records `flag` if the driver passes it on to a backend; false when it is not one.
+/// Records `flag` if the driver passes it on to a backend; false when it is not
+/// one.
 pub fn pass_flag(flag: &str) -> bool {
     POLICY.lock().unwrap().take(flag)
 }

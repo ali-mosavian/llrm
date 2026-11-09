@@ -75,12 +75,19 @@ pub(crate) fn from_lir(
 }
 
 /// The instruction's name for the allocator: its variant (`AddSubImm`).
-pub(crate) fn name_of(inst: &Inst) -> &'static str {
-    static NAMES: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
-    let debug = format!("{inst:?}");
-    let variant = debug.split([' ', '(', '{']).next().unwrap_or_default().to_owned();
+pub fn name_of(inst: &Inst) -> &'static str {
+    // The variant is told from its debug text once; every later instruction of
+    // it is found by discriminant.
+    static NAMES: OnceLock<Mutex<HashMap<std::mem::Discriminant<Inst>, &'static str>>> = OnceLock::new();
     let mut names = NAMES.get_or_init(Default::default).lock().unwrap();
-    names.entry(variant.clone()).or_insert_with(|| Box::leak(variant.into_boxed_str()))
+    names
+        .entry(std::mem::discriminant(inst))
+        .or_insert_with(
+            || {
+                let debug = format!("{inst:?}");
+                Box::leak(debug.split([' ', '(', '{']).next().unwrap_or_default().to_owned().into_boxed_str())
+            },
+        )
 }
 
 fn label_of(inst: &Inst) -> Option<&str> {
@@ -120,7 +127,7 @@ fn is_zero_copy(op: &Op) -> bool {
     matches!(op, Op::Copy { dst: Reg::Gpr(_), src: Reg::Gpr(Gpr(31)) })
 }
 
-fn content(op: &Op) -> i64 {
+pub fn content(op: &Op) -> i64 {
     use std::hash::{Hash, Hasher};
     let mut blank = op.clone();
     blank.visit(&mut |register, _| match register {
@@ -128,8 +135,8 @@ fn content(op: &Op) -> i64 {
         RegRef::Fpr(register) if register.is_virtual() => *register = Vreg(Gpr::FIRST_VIRTUAL),
         _ => {}
     });
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    format!("{blank:?}").hash(&mut hasher);
+    let mut hasher = rustc_hash::FxHasher::default();
+    blank.hash(&mut hasher);
     hasher.finish() as i64
 }
 

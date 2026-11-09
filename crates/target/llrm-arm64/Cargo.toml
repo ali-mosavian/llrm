@@ -7,6 +7,7 @@ description = "The arm64 (AArch64) target: its descriptions, translated from LLV
 
 [dependencies]
 rustc-hash = { workspace = true }
+llrm-alloc = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-object = { workspace = true }
 llrm-debug = { workspace = true }
@@ -25,6 +26,7 @@ llrm-dagisel = { path = "../../backend/llrm-dagisel" }
 llrm-spike-mf = { path = "../../backend/llrm-spike-mf" }
 
 [build-dependencies]
+llrm-alloc = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-target = { workspace = true }
 
