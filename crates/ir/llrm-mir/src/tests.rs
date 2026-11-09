@@ -1483,6 +1483,25 @@ fn a_globals_intrinsic_follows_its_name_through_renames_and_copies() {
     assert_eq!(intrinsic(&module), None);
 }
 
+/// clang 24 prints `/* (nan) */` before the class mask of `llvm.is.fpclass`; the reader stopped at it
+/// (`unexpected character `/``), so `runtime/compiler-rt/tests/host_fp8.c` did not compile on arm64 at any level.
+/// A C comment is white space, and it counts its lines.
+#[test]
+fn a_c_style_comment_in_the_text_is_white_space() {
+    let text = "declare i1 @llvm.is.fpclass.f64(double, i32)\ndefine i1 @f(double %x) {\nentry:\n  %c = call i1 @llvm.is.fpclass.f64(double %x, /* (nan) */ i32 3)\n  ret i1 %c\n}\n";
+    let without = text.replace("/* (nan) */ ", "");
+    assert_eq!(round(text), round(&without));
+    let spanning = text.replace("/* (nan) */", "/* a\nb */");
+    assert_eq!(round(&spanning), round(&without));
+}
+
+/// An unterminated comment is an error at the line it opens, not the end of the text read as nothing.
+#[test]
+fn an_unterminated_c_comment_is_refused_at_its_line() {
+    let why = refusal("define void @f() {\n  ret void /* open\n}\n");
+    assert!(why.contains("line 2") && why.contains("unterminated"), "{why}");
+}
+
 /// LLVM's `+inf`, `-qnan`, `+nan(0x..)` and `snan(0x..)` spellings were
 /// refused (`unexpected character +`): 84 of the 619 floating-point test files
 /// of Transforms/InstSimplify and Transforms/InstCombine stopped at the first
