@@ -54,6 +54,7 @@ pub fn machine<'a>(
         &crate::backend::targets::x86_m16::RULES,
         &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         crate::backend::shadow::Selector::Old,
+        &[],
     )
 }
 
@@ -169,6 +170,7 @@ pub fn machine_with<'a>(
     rules: &'static crate::backend::peep::Rules,
     registers: &llrm_target::FrameRegisters,
     selector: crate::backend::shadow::Selector,
+    omitted: &[&str],
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     let target = targets::profile(cpu)?;
     let mut pinned = pinned.clone();
@@ -225,7 +227,9 @@ pub fn machine_with<'a>(
         // Where the block runs often enough, `and d,s,mask` for `movzx d,s.low`
         // (DEVIATE MA1).
         Box::new(crate::backend::maskbyand::MaskByAnd {
-            clocks_saved: target.cost("movzx")? - target.cost("alu_ri")?,
+            // A profile that states neither clock (the target prices through its cost
+            // model) gets no pass, not a free one.
+            clocks_saved: target.cost("movzx").ok().zip(target.cost("alu_ri").ok()).map(|(movzx, and)| movzx - and),
             milliclocks_per_byte: target.speed_milliclocks_per_byte(),
         }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
@@ -349,8 +353,10 @@ pub fn machine_with<'a>(
         // After the peephole, as the pin runs it late (X86FixupBWInsts).
         Box::new(crate::backend::fixupbw::FixupBw {
             size: target.size,
-            widens_byte: target.widens_load(1)?,
-            widens_word: target.widens_load(2)?,
+            // A CPU that states no clocks widens nothing: the rewrite is priced
+            // against the load it replaces, and there is no price.
+            widens_byte: target.widens_load(1).unwrap_or(false),
+            widens_word: target.widens_load(2).unwrap_or(false),
             strict_bytes: target.size || target.min_size || !target.speed_rate,
         }),
         Box::new(crate::backend::fixupleas::FixupLeas {
@@ -384,6 +390,14 @@ pub fn machine_with<'a>(
         // The pin's pre-emit pass: the distances are those of the final order.
         Box::new(crate::backend::breakfalsedeps::BreakFalseDeps),
     ];
+    // A target's own phase list (the pin's TargetPassConfig): what it names is
+    // left out, and a name that is no phase is an error, not a silent no-op.
+    for name in omitted {
+        if !phases.iter().any(|phase| phase.class_name() == *name) {
+            return Err(format!("the target omits {name:?}, which is no machine phase here (or is named twice)"));
+        }
+        phases.retain(|phase| phase.class_name() != *name);
+    }
     if !target.post_ra_tail_duplicate {
         phases.retain(|phase| phase.class_name() != "TailDuplicate");
     }
@@ -403,8 +417,9 @@ pub fn machine_with<'a>(
         // must be, and none of those is.
         let slot_of = |class: &str| SLOTS.iter().find(|(one, _)| *one == class).map_or("unknown", |(_, slot)| *slot);
         let built: Vec<&str> = phases.iter().map(|phase| slot_of(phase.class_name())).collect();
-        let off: Vec<&str> =
+        let mut off: Vec<&str> =
             if target.optimized { Vec::new() } else { UNOPTIMIZED.iter().map(|one| slot_of(one)).collect() };
+        off.extend(omitted.iter().map(|one| slot_of(one)));
         llrm_transforms::parity::check_backend(&built, &off)?;
     }
     Ok(phases)
@@ -561,6 +576,34 @@ mod tests {
     use crate::model::ir::{self, Loc, Operation};
     use crate::model::lir::{Insn, LirBlock};
     use crate::support::hash::IndexMap;
+
+    /// A target's omitted phase that is no phase (a typo, or a phase renamed)
+    /// was a silent no-op; it is an error, and an x86 target omits none.
+    #[test]
+    fn test_an_omitted_phase_that_does_not_exist_is_an_error() {
+        let build = |omitted: &[&str]| {
+            machine_with(
+                &IndexMap::default(),
+                None,
+                None,
+                None,
+                false,
+                "486",
+                &crate::backend::target::BUILT_IN,
+                &crate::backend::classes::RegisterClasses::m16(),
+                &crate::backend::targets::x86_m16::RULES,
+                &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
+                crate::backend::shadow::Selector::Old,
+                omitted,
+            )
+            .map(|phases| phases.iter().map(|phase| phase.class_name()).collect::<Vec<_>>())
+        };
+        let all = build(&[]).unwrap();
+        assert!(llrm_target::Target::omitted_phases(&llrm_x86_m16::M16).is_empty());
+        let without = build(&["FlagsCopy"]).unwrap();
+        assert_eq!(without.len() + 1, all.len());
+        assert!(build(&["NoSuchPhase"]).unwrap_err().contains("NoSuchPhase"));
+    }
 
     struct LosesDefinition;
 

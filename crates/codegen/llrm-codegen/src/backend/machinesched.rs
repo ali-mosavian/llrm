@@ -1129,7 +1129,7 @@ pub fn scheduled(
                         // in the region ties it (two-address).
                         let tied: HashSet<u32> = slice
                             .iter()
-                            .filter(|one| one.what.as_ref().is_some_and(twoaddr::ties))
+                            .filter(|one| one.what.as_ref().is_some_and(|what| twoaddr::ties_in(body.registers, what)))
                             .flat_map(|one| one.defines.iter().copied())
                             .collect();
                         let live_thru = live_out.iter().copied().filter(|value| !tied.contains(value)).collect();

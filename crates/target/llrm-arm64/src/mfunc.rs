@@ -7,7 +7,7 @@ use llrm_codegen::model::lir::SrcLoc;
 use rustc_hash::FxHashMap as HashMap;
 
 use crate::mc::inst::{Gpr, Inst, Target, Vreg};
-use crate::mc::visit::{Reg, RegRef, Role};
+use crate::mc::visit::{Reg, RegList, RegRef, Role};
 
 /// A machine instruction: a real one, or a pseudo that a later phase turns into
 /// real ones (LLVM's pseudo instructions and `COPY`).
@@ -72,6 +72,14 @@ pub enum Op {
         variable: llrm_mir::MetadataId,
         reg: Option<Reg>,
     },
+    /// `dst = PHI [value, predecessor]..`, first in its block: the value it
+    /// takes from each predecessor, named by that block's label. Selection
+    /// makes it (as the pin's ISel does) and [`lower_phis`] turns it into
+    /// copies (`PHIElimination`); no later phase sees one.
+    Phi {
+        dst: Reg,
+        incoming: Vec<(Reg, String)>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -118,20 +126,27 @@ impl Op {
                     visit_reg(register, Role::Use, f);
                 }
             }
-            // Not a use: the allocator renames it by hand (`regalloc::rewrite`).
+            Op::Phi { dst, incoming } => {
+                visit_reg(dst, Role::Def, f);
+                for (value, _) in incoming {
+                    visit_reg(value, Role::Use, f);
+                }
+            }
+            // Not a use: the allocator renames it by hand
+            // (`regalloc::rewrite`).
             Op::DbgValue { .. } => {}
         }
     }
 
-    /// Whether the operation is debug information only (`MachineInstr::isDebugInstr`).
+    /// Whether the operation is debug information only
+    /// (`MachineInstr::isDebugInstr`).
     pub fn is_debug(&self) -> bool {
         matches!(self, Op::DbgValue { .. })
     }
 
-    pub fn defs_and_uses(&self) -> (Vec<Reg>, Vec<Reg>) {
-        let (mut defs, mut uses) = (Vec::new(), Vec::new());
-        self.clone().visit(&mut |register, role| {
-            let key = register.key();
+    pub fn defs_and_uses(&self) -> (RegList, RegList) {
+        let (mut defs, mut uses) = (RegList::new(), RegList::new());
+        self.for_each_register(&mut |key, role| {
             if role.writes() {
                 defs.push(key);
             }
@@ -140,6 +155,15 @@ impl Op {
             }
         });
         (defs, uses)
+    }
+
+    /// `f` on each register operand with its role, without collecting them:
+    /// the passes that walk every operation of a function many times ask this.
+    pub fn for_each_register(
+        &self,
+        f: &mut dyn FnMut(Reg, Role),
+    ) {
+        self.clone().visit(&mut |register, role| f(register.key(), role));
     }
 }
 
@@ -507,6 +531,180 @@ pub fn sequence_copies(
         }
     }
     out
+}
+
+/// `UnreachableMachineBlockElim`: the blocks no path from the entry reaches are deleted, and the phi operands that
+/// came from them. Selection makes one for every IR block, such as the `unreachable` default of a `switch`.
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/UnreachableBlockElim.cpp>
+pub fn remove_unreachable_blocks(function: &mut MFunc) {
+    let count = function.blocks.len();
+    let labels: HashMap<&str, usize> =
+        function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
+    let mut reached = vec![false; count];
+    let mut pending = vec![0usize];
+    while let Some(at) = pending.pop() {
+        if at >= count || std::mem::replace(&mut reached[at], true) {
+            continue;
+        }
+        pending.extend(successors_of(&function.blocks[at], at, count, &labels));
+    }
+    if reached.iter().all(|&one| one) {
+        return;
+    }
+    let dead: rustc_hash::FxHashSet<String> = function
+        .blocks
+        .iter()
+        .zip(&reached)
+        .filter(|(_, reached)| !**reached)
+        .map(|(block, _)| block.label.clone())
+        .collect();
+    let mut at = 0;
+    function.blocks.retain(|_| {
+        at += 1;
+        reached[at - 1]
+    });
+    let mut at = 0;
+    function.block_ids.retain(|_| {
+        at += 1;
+        reached[at - 1]
+    });
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            if let Op::Phi { incoming, .. } = op {
+                incoming.retain(|(_, from)| !dead.contains(from));
+            }
+        }
+    }
+}
+
+/// Phi elimination (`PHIElimination::LowerPHINode`,
+/// llvm/lib/CodeGen/PHIElimination.cpp): each phi `d = phi [v, p]..` gets a
+/// register `i` of its own; `i = COPY v` goes at the end of each predecessor
+/// `p`, before its branches, and `d = COPY i` at the top of the phi's block. A
+/// predecessor with several successors gets a block on the edge for its copies
+/// (laid out after the function's), so a copy never runs on a path that does
+/// not take the phi.
+///
+/// DEVIATE ARM64-PHI-SHAPE (owner arm64-phi, exit 2026-11-17 with the shared
+/// pass, gap 3 of docs/architecture/arm64-spike.md): every such edge is split,
+/// where the pin splits by liveness (`SplitPHIEdges`). Selection used to split
+/// the same edges, so the code is the same; the registers of the phis' edges
+/// are numbered after selection, so the allocator's tie-breaks can name other
+/// registers (3 of 675 corpus cells differ in register names only).
+pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
+    let count = function.blocks.len();
+    let labels: HashMap<&str, usize> =
+        function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
+    // The edges' copies `(via, value)` by `(predecessor, block)`, in phi order.
+    let mut edge_copies: HashMap<(usize, usize), Vec<(Reg, Reg)>> = HashMap::default();
+    let mut heads: Vec<Vec<(Reg, Reg)>> = vec![Vec::new(); count];
+    let mut phis: Vec<Vec<(Reg, Vec<(Reg, String)>)>> = vec![Vec::new(); count];
+    for (at, block) in function.blocks.iter().enumerate() {
+        for op in block.ops.iter().take_while(|op| matches!(op, Op::Phi { .. })) {
+            let Op::Phi { dst, incoming } = op else { unreachable!("filtered to phis") };
+            phis[at].push((*dst, incoming.clone()));
+        }
+    }
+    let labels: HashMap<String, usize> = labels.into_iter().map(|(label, at)| (label.to_owned(), at)).collect();
+    for (at, block_phis) in phis.iter().enumerate() {
+        for (dst, incoming) in block_phis {
+            let via = match dst {
+                Reg::Gpr(_) => Reg::Gpr(function.gpr()),
+                Reg::Fpr(_) => Reg::Fpr(function.fpr()),
+            };
+            heads[at].push((*dst, via));
+            for (value, from) in incoming {
+                let from = *labels.get(from).ok_or_else(|| format!("a phi names the unknown block {from}"))?;
+                edge_copies.entry((from, at)).or_default().push((via, *value));
+            }
+        }
+    }
+    for (at, block) in function.blocks.iter_mut().enumerate() {
+        if phis[at].is_empty() {
+            continue;
+        }
+        let skip = phis[at].len();
+        let rest = std::mem::take(&mut block.ops).into_iter().skip(skip);
+        block.ops = heads[at].iter().map(|&(dst, via)| (Op::Copy { dst, src: via }, None)).chain(rest).collect();
+    }
+    if edge_copies.is_empty() {
+        return Ok(());
+    }
+    let by_label: HashMap<&str, usize> = labels.iter().map(|(label, &at)| (label.as_str(), at)).collect();
+    let successors: Vec<Vec<usize>> = function
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(at, block)| {
+            let mut out = successors_of(block, at, count, &by_label);
+            let mut seen = Vec::new();
+            out.retain(|to| {
+                let fresh = !seen.contains(to);
+                seen.push(*to);
+                fresh
+            });
+            out
+        })
+        .collect();
+    let is_branch = |op: &Op| {
+        matches!(
+            op,
+            Op::I(Inst::Branch { .. } | Inst::BranchCond { .. } | Inst::CompareBranch { .. } | Inst::TestBranch { .. })
+        )
+    };
+    let mut edges = Vec::new();
+    for (from, targets) in successors.iter().enumerate() {
+        let carrying: Vec<usize> =
+            targets.iter().copied().filter(|to| edge_copies.contains_key(&(from, *to))).collect();
+        if carrying.is_empty() {
+            continue;
+        }
+        let copies = |to: usize| -> Vec<Op> {
+            edge_copies[&(from, to)].iter().map(|&(via, value)| Op::Copy { dst: via, src: value }).collect()
+        };
+        if targets.len() == 1 {
+            let ops = &mut function.blocks[from].ops;
+            let first_branch = ops.iter().rposition(|op| !is_branch(op)).map_or(0, |last| last + 1);
+            for (offset, copy) in copies(carrying[0]).into_iter().enumerate() {
+                ops.insert(first_branch + offset, copy);
+            }
+            continue;
+        }
+        for to in carrying {
+            let label = function.blocks[to].label.clone();
+            let edge = format!(".L{}.e{}", function.name, edges.len());
+            let mut body = copies(to);
+            body.push(branch_to(&label));
+            edges.push(MBlock { label: edge.clone(), ops: body.into() });
+            // Retarget the branches to `to`; a fall-through becomes a branch.
+            let mut retargeted = false;
+            for op in &mut function.blocks[from].ops {
+                match op {
+                    Op::I(
+                        Inst::Branch { target, .. }
+                        | Inst::BranchCond { target, .. }
+                        | Inst::CompareBranch { target, .. }
+                        | Inst::TestBranch { target, .. },
+                    ) if *target == Target::Label(label.clone()) => {
+                        *target = Target::Label(edge.clone());
+                        retargeted = true;
+                    }
+                    Op::JumpTable { targets, .. } => {
+                        for entry in targets.iter_mut().filter(|entry| **entry == label) {
+                            *entry = edge.clone();
+                            retargeted = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !retargeted {
+                function.blocks[from].ops.push(branch_to(&edge));
+            }
+        }
+    }
+    function.blocks.extend(edges);
+    Ok(())
 }
 
 /// The virtual registers some path reads before writing: a phi copy that

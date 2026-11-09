@@ -690,6 +690,14 @@ pub trait Machine {
         true
     }
 
+    /// Whether the module is single-threaded, so every object is thread-local
+    /// ([`Triple::getDefaultThreadModel`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/TargetParser/Triple.cpp#L2546)
+    /// is `Single` for wasm, `POSIX` for every other triple here). LICM's
+    /// `isThreadLocalObject` reads it.
+    fn single_threaded(&self) -> bool {
+        false
+    }
+
     /// Where `Intrinsic::Window` makes a huge pointer far: the far pointers'
     /// space, and the bytes from the one it makes that no displacement
     /// carries out of. None where the target has no such window.
@@ -881,6 +889,10 @@ pub struct OperationCosts {
     /// by for what the lowering adds that no operation names (spills, branch
     /// relaxation), measured against objects; 100: none.
     pub function_scale: i64,
+    /// Whether a call to an intrinsic the cost model calls free (`llvm.lifetime.*`, `llvm.assume`) is 0 bytes in a
+    /// function's estimate. False: priced as a call, which is what the inlining bars of the targets fit before this
+    /// field were calibrated on (x86 m16: a stack-record call stopped being inlined when it was 0).
+    pub free_intrinsics: bool,
     /// Bytes of one line of the CPU's data cache (its first level); 0: the
     /// target states none (no cache, or not known).
     pub cache_line: i64,
@@ -1035,6 +1047,7 @@ impl Default for OperationCosts {
             jump_table: 0,
             function: 0,
             function_scale: 100,
+            free_intrinsics: false,
             cache_line: 0,
             line_fill_clocks: 0,
         }
