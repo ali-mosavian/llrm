@@ -259,6 +259,7 @@ dependencies = [
 name = "llrm-arm64"
 version = "0.1.0"
 dependencies = [
+ "llrm-alloc",
  "llrm-analysis",
  "llrm-codegen",
  "llrm-dagisel",
