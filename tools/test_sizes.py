@@ -112,6 +112,27 @@ def test_zeros_stored_or_declared_read_as_the_same_data(tmp_path):
     assert data_bytes(stored_zeros) == data_bytes(with_hole) == (40, 0)
 
 
+def mz(image: int, header: int = 2) -> bytes:
+    """A DOS executable header of `header` paragraphs for an image of `image` bytes, then the image."""
+    size = header * 16 + image
+    return b"MZ" + (size % 512).to_bytes(2, "little") + ((size + 511) // 512).to_bytes(2, "little") + bytes(2) + header.to_bytes(2, "little") + bytes(header * 16 - 10) + bytes(image)
+
+
+def test_a_bss_segment_before_the_stack_is_stored_where_the_image_holds_it(tmp_path):
+    """49 of the Nib executables had a class-BSS `_BSS` (272-492 B) just below the stack that jwlink stored: the image ended at its end, not
+    before it. The axis counted it not stored; the linked image is the arbiter."""
+    obj = tmp_path / "n.obj"
+    obj.write_bytes(record(0x80, name("x")) + lnames("_DATA", "DATA", "_BSS", "BSS") + segdef(10, 1, 2) + segdef(30, 3, 4) + stored_data(1, bytes([1]) * 10))
+    listing = tmp_path / "n.map"
+    listing.write_text("\n Start  Stop   Length Name                   Class\n 00000H 00009H 0000AH _DATA                  DATA\n 0000AH 00027H 0001EH _BSS                   BSS\n 00030H 000FFH 000D0H STACK                  STACK\n")
+    stored, loose = tmp_path / "s.exe", tmp_path / "l.exe"
+    stored.write_bytes(mz(40))  # the image ends where _BSS does: stored
+    loose.write_bytes(mz(10))  # the image ends where _DATA does: _BSS is the loader's
+    assert data_bytes(obj, stored, listing) == (40, 0)
+    assert data_bytes(obj, loose, listing) == (10, 30)
+    assert data_bytes(obj) == (10, 30), "without an image the class decides"
+
+
 def test_the_stack_and_debug_records_are_not_the_programs_data(tmp_path):
     path = tmp_path / "s.obj"
     path.write_bytes(record(0x80, name("x")) + lnames("STACK", "STACK", "$$SYMBOLS", "DEBSYM", "$$TYPES", "DEBTYP") + segdef(4096, 1, 2) + segdef(300, 3, 4) + segdef(90, 5, 6))
