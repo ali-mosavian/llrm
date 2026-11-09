@@ -19,7 +19,11 @@ define i64 @f(i64 %n) {{\n  %v = alloca i32, i64 %n, align 4\n  call void @use(p
 ret i64 %r\n}}\n"
     );
     let asm = driver::assembly(&ir, Platform::Linux, true).unwrap_or_else(|why| panic!("{why}"));
-    let down = asm.find("sub sp, sp, #16").unwrap_or_else(|| panic!("no room made for the arguments:\n{asm}"));
+    // The room opens as `sub sp, sp, #16` or, folded into the first argument store, `[sp, #-16]!`.
+    let down = asm
+        .find("sub sp, sp, #16")
+        .or_else(|| asm.find("[sp, #-16]!"))
+        .unwrap_or_else(|| panic!("no room made for the arguments:\n{asm}"));
     let call = asm.find("bl many").expect("the call");
     let up = asm.rfind("add sp, sp, #16").expect("the room given back");
     assert!(down < call && call < up, "{asm}");

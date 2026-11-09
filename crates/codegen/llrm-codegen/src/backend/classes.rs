@@ -159,7 +159,8 @@ impl RegisterClasses {
             |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(word).collect::<BTreeSet<_>>();
         let (encodable_bases, indexes) = (every("base"), every("index"));
         let addressing = encodable_bases.union(&indexes).copied().collect();
-        let xmm = held("xmm");
+        // Scalar floats live in `xmm`, or in `fpr` where the file has no xmm.
+        let xmm = Some(held("xmm")).filter(|set| !set.is_empty()).unwrap_or_else(|| held("fpr"));
         let mut classes = Self {
             pins,
             available: held("gpr"),

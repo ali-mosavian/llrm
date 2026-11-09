@@ -28,25 +28,23 @@ impl Test {
     }
 }
 
-/// A phi's incoming value, to put in its register.
-struct PhiCopy {
-    dst: Reg,
-    src: PhiSource,
-}
-
-enum PhiSource {
-    Reg(Reg),
-    Value(Src),
-}
-
 impl Selector<'_> {
-    /// The phi copies for the edge `from` to `to`.
-    fn phi_copies(
+    /// What the edge from the block being filled to `to` gives each phi of
+    /// `to`, as the phis' incoming pairs. A value that is no register (a
+    /// constant, a symbolic address) is made in a register of its own here, in
+    /// the block that branches, as the pin exports it.
+    fn phi_values(
         &mut self,
         from: BlockId,
         to: BlockId,
-    ) -> Selected<Vec<PhiCopy>> {
-        let mut copies = Vec::new();
+    ) -> Selected<()> {
+        let from_label = self.mf.blocks[self.current].label.clone();
+        let Some(at) = self.block_index(to) else { return refuse("a branch to an unreachable block") };
+        // One pair for each predecessor block, however many branches it makes
+        // to `to` (a `switch` with several cases to one block).
+        if !self.phi_edges.insert((from_label.clone(), at)) {
+            return Ok(());
+        }
         for inst in self.function.iter_block(to).collect::<Vec<_>>() {
             let phi = self.function.instruction(inst);
             if phi.opcode != Opcode::Phi {
@@ -61,8 +59,7 @@ impl Selector<'_> {
             let src = self.src(incoming)?;
             // An aggregate moves member by member.
             let sources: Vec<Src> = match (&value, &src) {
-                (Val::Agg(_), Src::Val(Val::Agg(_))) => {
-                    let Src::Val(whole) = &src else { unreachable!() };
+                (Val::Agg(_), Src::Val(whole @ Val::Agg(_))) => {
                     whole.leaves().into_iter().map(|leaf| Src::Val(leaf.clone())).collect()
                 }
                 (Val::Agg(_), _) => return refuse("an aggregate phi of a value held whole"),
@@ -74,46 +71,23 @@ impl Selector<'_> {
             }
             for (dst, src) in dsts.into_iter().zip(sources) {
                 let dst = self.reg_of(dst).ok_or("a phi with no register")?;
-                let src = match &src {
-                    Src::Val(value) => match self.reg_of(value) {
-                        Some(reg) => PhiSource::Reg(reg),
-                        None => PhiSource::Value(src),
-                    },
-                    _ => PhiSource::Value(src),
+                let value = match &src {
+                    Src::Val(value) => self.reg_of(value),
+                    _ => None,
                 };
-                copies.push(PhiCopy { dst, src });
+                let value = match value {
+                    Some(register) => register,
+                    None => {
+                        let made = match dst {
+                            Reg::Gpr(_) => Reg::Gpr(self.mf.gpr()),
+                            Reg::Fpr(_) => Reg::Fpr(self.mf.fpr()),
+                        };
+                        self.load_into(made, src)?;
+                        made
+                    }
+                };
+                self.phi_incoming.entry(dst).or_default().push((value, from_label.clone()));
             }
-        }
-        Ok(copies)
-    }
-
-    /// Emits `copies` as a parallel copy: no copy reads a register an earlier
-    /// one wrote.
-    fn emit_copies(
-        &mut self,
-        copies: Vec<PhiCopy>,
-    ) -> Selected<()> {
-        let mut moves: Vec<(Reg, Reg)> = Vec::new();
-        let mut loads = Vec::new();
-        for copy in copies {
-            match copy.src {
-                PhiSource::Reg(src) if src != copy.dst => moves.push((copy.dst, src)),
-                PhiSource::Reg(_) => {}
-                PhiSource::Value(src) => loads.push((copy.dst, src)),
-            }
-        }
-        let ops = crate::mfunc::sequence_copies(moves, |src| {
-            let made = match src {
-                Reg::Gpr(_) => Reg::Gpr(self.mf.gpr()),
-                Reg::Fpr(_) => Reg::Fpr(self.mf.fpr()),
-            };
-            made
-        });
-        for op in ops {
-            self.emit(op);
-        }
-        for (dst, src) in loads {
-            self.load_into(dst, src)?;
         }
         Ok(())
     }
@@ -145,40 +119,20 @@ impl Selector<'_> {
         }
     }
 
-    /// The label to branch to for the edge from the current block to `to`;
-    /// copies on a critical edge are in a block made for them.
+    /// The label of the block `to`, once the phi values of the edge from the
+    /// block being filled are recorded. A critical edge's copies get a block
+    /// of their own in `mfunc::lower_phis`.
     fn edge(
         &mut self,
         from: BlockId,
         to: BlockId,
-        branches: usize,
     ) -> Selected<String> {
         let Some(index) = self.block_index(to) else { return refuse("a branch to an unreachable block") };
         let label = self.mf.blocks[index].label.clone();
-        let has_phis = self
-            .function
-            .iter_block(to)
-            .next()
-            .is_some_and(|first| self.function.instruction(first).opcode == Opcode::Phi);
-        if !has_phis {
-            return Ok(label);
+        if self.has_phis(to) {
+            self.phi_values(from, to)?;
         }
-        let copies = self.phi_copies(from, to)?;
-        if branches == 1 {
-            self.emit_copies(copies)?;
-            return Ok(label);
-        }
-        // A block of its own, after the function's: the copies, then the
-        // branch.
-        let saved = self.current;
-        let edge_label = format!(".L{}.e{}", self.mf.name, self.mf.blocks.len());
-        self.mf.blocks.push(MBlock { label: edge_label.clone(), ops: Default::default() });
-        self.current = self.mf.blocks.len() - 1;
-        let result = self.emit_copies(copies);
-        self.emit(branch_to(&label));
-        self.current = saved;
-        result?;
-        Ok(edge_label)
+        Ok(label)
     }
 
     /// How to branch on the i1 `operand`: a comparison with zero is `cbz`, a
@@ -278,8 +232,7 @@ impl Selector<'_> {
             cases.push((value as u64, block));
         }
         cases.sort_by_key(|one| one.0);
-        let default_label = self.edge(from, default, 2)?;
-        self.switch_tree(from, g.reg, bits, &cases, &default_label)
+        self.switch_tree(from, g.reg, bits, &cases, default)
     }
 
     fn switch_tree(
@@ -288,7 +241,7 @@ impl Selector<'_> {
         reg: Gpr,
         bits: u32,
         cases: &[(u64, BlockId)],
-        default: &str,
+        default: BlockId,
     ) -> Selected<()> {
         let width = super::val::width_of(bits);
         let compare = |this: &mut Self, value: u64| {
@@ -319,16 +272,18 @@ impl Selector<'_> {
         if cases.len() <= 3 {
             for &(value, block) in cases {
                 compare(self, value);
-                let label = self.edge(from, block, 2)?;
+                let label = self.edge(from, block)?;
                 self.emit(jump(Cond::Eq, &label));
             }
-            self.emit(branch_to(default));
+            // The leaf is the predecessor of the default that the phis name.
+            let default_label = self.edge(from, default)?;
+            self.emit(branch_to(&default_label));
             return Ok(());
         }
         let middle = cases.len() / 2;
         let (value, block) = cases[middle];
         compare(self, value);
-        let label = self.edge(from, block, 2)?;
+        let label = self.edge(from, block)?;
         self.emit(jump(Cond::Eq, &label));
         // Below the pivot: the left half in a block of its own; above, the
         // right half where the branch falls through.
@@ -361,7 +316,7 @@ impl Selector<'_> {
         };
         if instruction.operands.len() == 1 {
             let to = target(instruction.operands[0])?;
-            let label = self.edge(from, to, 1)?;
+            let label = self.edge(from, to)?;
             if next != Some(to) {
                 self.emit(branch_to(&label));
             }
@@ -378,8 +333,8 @@ impl Selector<'_> {
                 || vec![instruction.operands[0]],
                 |chain| chain.leaves.iter().map(|&leaf| Operand::Value(leaf)).collect(),
             );
-        let true_label = self.edge(from, on_true, leaves.len() + 1)?;
-        let false_label = self.edge(from, on_false, leaves.len() + 1)?;
+        let true_label = self.edge(from, on_true)?;
+        let false_label = self.edge(from, on_false)?;
         let jump = |test: &Test, label: &str| {
             let target = Target::Label(label.to_owned());
             Op::I(match *test {
@@ -400,9 +355,9 @@ impl Selector<'_> {
             }
         }
         let test = self.branch_test(*last)?;
-        if next == Some(on_false) && !self.is_edge_label(&false_label) {
+        if next == Some(on_false) && !self.has_phis(on_false) {
             self.emit(jump(&test, &true_label));
-        } else if next == Some(on_true) && !self.is_edge_label(&true_label) {
+        } else if next == Some(on_true) && !self.has_phis(on_true) {
             self.emit(jump(&test.inverted(), &false_label));
         } else {
             self.emit(jump(&test, &true_label));
