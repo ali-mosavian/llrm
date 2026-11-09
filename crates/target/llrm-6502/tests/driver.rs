@@ -2775,7 +2775,8 @@ fn a_carry_branch_on_the_old_counter_is_compared_before_the_step() {
     let ir = counter_loop("samesign ult i16 %i, 63");
     for level in [Level::Os, Level::O2] {
         let text = assembly(&ir, &Request::new(level)).unwrap();
-        let (compare, step) = (text.find("cmp #63"), text.find("inx"));
+        // `txa; cmp #63` is `cpx #63` where `a` is dead after it
+        let (compare, step) = (text.find("cmp #63").or(text.find("cpx #63")), text.find("inx"));
         assert!(compare.is_some() && step.is_some(), "no compare or no step:\n{text}");
         assert!(compare < step, "the compare comes after the step:\n{text}");
         assert!(!text.contains("stx rc") && !text.contains("sty rc"), "a copy of the counter:\n{text}");
