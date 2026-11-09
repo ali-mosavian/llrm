@@ -567,13 +567,12 @@ pub fn optimized(
     })?;
     if let Some((_, convention, symbol)) = options.libcalls.iter().find(|(name, ..)| name == "memcpy") {
         let inline_variable = options.cpu()?.target().tti().is_some_and(|tti| tti.inlines_variable_memcpy());
+        let rep_movsb = options.cpu()?.min_size
+            || (options.cpu()?.size && options.cpu()?.target().tti().is_some_and(|tti| tti.rep_movs_at_size()));
         timed("mir memcpy calls", || {
-            program
-                .modules
-                .iter_mut()
-                .try_for_each(
-                    |module| crate::backend::memcpycall::expanded(module, *convention, symbol, inline_variable),
-                )
+            program.modules.iter_mut().try_for_each(|module| {
+                crate::backend::memcpycall::expanded(module, *convention, symbol, inline_variable, rep_movsb)
+            })
         })?;
     }
     timed("mir constant intrinsics", || {
