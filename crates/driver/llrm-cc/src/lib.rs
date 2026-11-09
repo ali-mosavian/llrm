@@ -133,6 +133,12 @@ pub struct Target {
     /// gcc's 16k).
     #[serde(default)]
     pub unroll_at_o1: bool,
+    /// DEVIATE JUMPTHREAD-O1 (owner m68k-lsr-addressing, exit 2026-12-04):
+    /// `-fthread-jumps` is the default at `-O1`. The pin's -O1 pipeline has no
+    /// `JumpThreadingPass` (PassBuilderPipelines.cpp#L495), so clang's IR keeps
+    /// a latch branch on a compare tested one block up.
+    #[serde(default)]
+    pub thread_jumps_at_o1: bool,
     pub object: String,
     pub link: Vec<String>,
     /// The command that runs an executable of the target, the executable last;
@@ -458,6 +464,7 @@ const BACKEND_PASSES: &[&str] = &[
     "inline-recursive",
     "gcse",
     "tree-pre",
+    "thread-jumps",
     "tree-switch-conversion",
     "jump-tables",
     "tree-dse",
@@ -668,6 +675,19 @@ fn unrolls_at_o1(
         && !build.clang.iter().any(|flag| flag == "-funroll-loops" || flag == "-fno-unroll-loops")
 }
 
+/// Whether the target's `-O1` takes `-fthread-jumps` as its default: unless the
+/// command line states either `-f[no-]thread-jumps`, and only where the backend
+/// takes pass switches.
+fn threads_jumps_at_o1(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.thread_jumps_at_o1
+        && target.llc_passes
+        && build.level == "1"
+        && !build.llc.iter().any(|flag| flag == "-fthread-jumps" || flag == "-fno-thread-jumps")
+}
+
 /// Whether `flag` is one of the backend pipeline's `-f[no-]PASS` switches.
 fn is_pass_switch(flag: &str) -> bool {
     backend_pass(flag).is_some()
@@ -702,6 +722,9 @@ pub fn llc_args(
     args.extend(build.llc.iter().filter(|flag| !dropped.contains(&flag.as_str())).cloned());
     if unrolls_at_o1(target, build) {
         args.push("-funroll-loops".into());
+    }
+    if threads_jumps_at_o1(target, build) {
+        args.push("-fthread-jumps".into());
     }
     if target.llc_mcmodel {
         args.extend(build.clang.iter().filter(|flag| flag.starts_with("-mcmodel=")).cloned());
