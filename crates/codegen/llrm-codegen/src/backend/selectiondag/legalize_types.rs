@@ -1342,6 +1342,13 @@ impl<'a> TypeLegalizer<'a> {
                 };
                 self.dag.get_node(op, to, &[wide])
             }
+            op @ (ISD::Abs | ISD::AbsMinPoison) => {
+                // `PromoteIntRes_ABS`: the absolute value of the
+                // sign-extended operand.
+                let promoted = self.sext_promoted_integer(self.dag.operand(value, 0));
+                let wide = self.dag.value_type(promoted);
+                self.dag.get_node(op, wide, &[promoted])
+            }
             op @ (ISD::BitReverse | ISD::BSwap) => {
                 // `PromoteIntRes_BSWAP` and `PromoteIntRes_BITREVERSE`: the
                 // wider reversal, shifted down by the bits added.
