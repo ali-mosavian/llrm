@@ -6353,40 +6353,6 @@ fn test_a_volatile_frame_access_stops_the_forwarding() {
     assert_eq!(reload_across_with(Loc::Mem(indexed), false, true), 3);
 }
 
-/// nbody -O1 kept 24 `mov dword ptr [m], imm` stores of its f64 constants (7 B
-/// each, +82 B against gcc with 3.8% fewer clocks): -Os shared one register for
-/// them. At -O1, where bytes decide, a target that allows sharing
-/// (`share_literal_stores`) shares a run outside any cycle, and not in a loop.
-#[test]
-fn test_stores_of_one_literal_are_shared_at_o1_outside_any_loop() {
-    let mut cpu = crate::backend::cpu::tuned("486", false).unwrap().clone();
-    cpu.share_literal_stores = true;
-    cpu.speed_rate = false;
-    assert!(cpu.bytes_strict(), "-O1");
-    let classes = crate::backend::classes::RegisterClasses::m16();
-    let shared = |looped: bool| {
-        let stores: Vec<Arc<Insn>> =
-            [-4, -8].iter().enumerate().map(|(at, disp)| literal_store(at as i64, 4, *disp, 0)).collect();
-        let next = after_stores(false, &[]);
-        let first = block(0, stores, if looped { vec![0, 1] } else { vec![1] });
-        let input = body("stores", 0, vec![first.into(), block(1, next, vec![]).into()]);
-        names(&sharedstores::shared(&input, &cpu, &saved(), &classes).blocks[0].insns)
-    };
-    assert_eq!(shared(false), ["xor", "mov", "mov"], "outside a loop: one zero, two register stores");
-    assert_eq!(shared(true), ["mov", "mov"], "in a loop the load is a clock every trip");
-
-    cpu.share_literal_stores = false;
-    let stores: Vec<Arc<Insn>> =
-        [-4, -8].iter().enumerate().map(|(at, disp)| literal_store(at as i64, 4, *disp, 0)).collect();
-    let input =
-        body("stores", 0, vec![block(0, stores, vec![1]).into(), block(1, after_stores(false, &[]), vec![]).into()]);
-    assert_eq!(
-        names(&sharedstores::shared(&input, &cpu, &saved(), &classes).blocks[0].insns),
-        ["mov", "mov"],
-        "a target that does not allow it"
-    );
-}
-
 /// `fld dword [from]` then `fstp dword [to]` in the frame, an anchor between,
 /// then a tail that writes (so frees) every general register in `tail_writes`
 /// and reads those in `tail_reads`.
@@ -6597,4 +6563,38 @@ fn test_a_float_slot_copy_is_skipped_on_a_register_file_without_x87() {
     assert!(float_copy(&input, false).is_some(), "with the x86 register file the pair is copied");
     input.registers = Some(bare);
     assert!(float_copy(&input, false).is_none(), "without x87 registers it is not");
+}
+
+/// nbody -O1 kept 24 `mov dword ptr [m], imm` stores of its f64 constants (7 B
+/// each, +82 B against gcc with 3.8% fewer clocks): -Os shared one register for
+/// them. At -O1, where bytes decide, a target that allows sharing
+/// (`share_literal_stores`) shares a run outside any cycle, and not in a loop.
+#[test]
+fn test_stores_of_one_literal_are_shared_at_o1_outside_any_loop() {
+    let mut cpu = crate::backend::cpu::tuned("486", false).unwrap().clone();
+    cpu.share_literal_stores = true;
+    cpu.speed_rate = false;
+    assert!(cpu.bytes_strict(), "-O1");
+    let classes = crate::backend::classes::RegisterClasses::m16();
+    let shared = |looped: bool| {
+        let stores: Vec<Arc<Insn>> =
+            [-4, -8].iter().enumerate().map(|(at, disp)| literal_store(at as i64, 4, *disp, 0)).collect();
+        let next = after_stores(false, &[]);
+        let first = block(0, stores, if looped { vec![0, 1] } else { vec![1] });
+        let input = body("stores", 0, vec![first.into(), block(1, next, vec![]).into()]);
+        names(&sharedstores::shared(&input, &cpu, &saved(), &classes).blocks[0].insns)
+    };
+    assert_eq!(shared(false), ["xor", "mov", "mov"], "outside a loop: one zero, two register stores");
+    assert_eq!(shared(true), ["mov", "mov"], "in a loop the load is a clock every trip");
+
+    cpu.share_literal_stores = false;
+    let stores: Vec<Arc<Insn>> =
+        [-4, -8].iter().enumerate().map(|(at, disp)| literal_store(at as i64, 4, *disp, 0)).collect();
+    let input =
+        body("stores", 0, vec![block(0, stores, vec![1]).into(), block(1, after_stores(false, &[]), vec![]).into()]);
+    assert_eq!(
+        names(&sharedstores::shared(&input, &cpu, &saved(), &classes).blocks[0].insns),
+        ["mov", "mov"],
+        "a target that does not allow it"
+    );
 }
