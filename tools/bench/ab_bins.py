@@ -47,12 +47,23 @@ def programs(bench: Path, only: set[str] | None = None) -> list[tuple[str, str]]
 
 
 def measure(job: tuple[str, str, str, str, tuple]) -> tuple[int, int, str] | str:
-    """(code bytes, clocks, program output) of one build of one cell; a string is why it could not be measured."""
+    """(code bytes, clocks, program output) of one build of one cell; a string is why it could not be measured. One process per
+    measurement: `dosbatch` reads LLRM_BIN once, at import, and links the runtime from that directory, so two builds in one process
+    would link one build's runtime into both."""
+    bindir, source, region, level, extra = job
+    done = subprocess.run([sys.executable, __file__, "--measure", json.dumps(job)], capture_output=True, text=True, env={**os.environ, "LLRM_BIN": bindir})
+    try:
+        said = json.loads(done.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return "measure: " + (done.stderr or done.stdout)[-120:]
+    return said if isinstance(said, str) else tuple(said)
+
+
+def measure_here(job: tuple[str, str, str, str, tuple]) -> tuple[int, int, str] | str:
     bindir, source, region, level, extra = job
     sys.path[:0] = [str(ROOT / "tools"), str(ROOT / "tools/bench"), str(ROOT / "crates/target/llrm-x86-m16/bench"), str(ROOT / "tools/dosbatch")]
     import dosbatch, icount, maps, sizes  # noqa: E401
 
-    os.environ["LLRM_BIN"] = bindir
     work = Path(tempfile.mkdtemp(prefix="ab."))
     obj, exe, lst = work / "a.obj", work / "a.exe", work / "a.map"
     env = {**os.environ, "LLRM_CC_TARGET": "x86_16-wat", **dict(extra)}
@@ -93,6 +104,9 @@ def compare(base_bin: str, head_bin: str, cells, levels, rate: int, run=measure,
 
 
 def main(argv=None) -> int:
+    if argv is None and sys.argv[1:2] == ["--measure"]:
+        print(json.dumps(measure_here(tuple(json.loads(sys.argv[2])))))
+        return 0
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
     ap.add_argument("head")
@@ -104,6 +118,7 @@ def main(argv=None) -> int:
     ap.add_argument("--head-env", action="append", default=[], metavar="NAME=VALUE")
     args = ap.parse_args(argv)
     sys.path[:0] = [str(ROOT / "tools/bench")]
+    os.environ.setdefault("LLRM_BIN", args.base)  # bench reads it at import, for the rate only
     import bench
 
     cells = programs(ROOT / "bench", set(args.only.split(",")) if args.only else None)
