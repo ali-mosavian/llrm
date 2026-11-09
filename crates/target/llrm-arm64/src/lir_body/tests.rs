@@ -655,3 +655,23 @@ fn an_invariant_shift_in_a_loop_is_made_before_it() {
     assert!(in_block(&body, 1, "LSLVXr"), "the premise: the shift starts in the loop");
     assert!(in_block(&after, 0, "LSLVXr") && !in_block(&after, 1, "LSLVXr"), "the shift stayed in the loop");
 }
+
+/// `v4` is a float register, not a segment register: the one-address-space
+/// check listed x86's segment ids, and the 128-bit `v4` is id 71, x86's `ES`
+/// (`v5` is `CS`...), so a function copying a wide value (sum, mix, fmt)
+/// carried 8-10 inherited complaints.
+#[test]
+fn a_float_register_is_not_a_segment_register() {
+    use llrm_target::Target as _;
+    let (a, b) = (Vreg(4), Vreg(5));
+    let mut function = function(vec![Op::Copy { dst: Reg::Fpr(a), src: Reg::Fpr(b) }]);
+    function.wide = vec![Reg::Fpr(a), Reg::Fpr(b)];
+    let lowered = to_lir(&function).expect("a wide copy maps");
+    let complaints = llrm_codegen::backend::verify::verify_for(
+        &lowered.body,
+        false,
+        &crate::description::Arm64.layout().spaces.roles,
+    );
+    let segment: Vec<_> = complaints.iter().filter(|one| one.contains("segment")).collect();
+    assert!(segment.is_empty(), "{segment:?}");
+}
