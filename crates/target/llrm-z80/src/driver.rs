@@ -180,7 +180,7 @@ pub fn selections_with_alternatives(
         one
     };
     // A function with the routine for its long multiplies (`prepare::mark_long_multiplies`) is also selected the
-    // other way: a sized one with every multiply inline (`DECOMPOSE_MULS`), an unsized one with every multiply a
+    // other way: a sized one with every multiply inline (`DECOMPOSE_MULS`), an unsized one (at -O1 only) with every multiply a
     // call (`CALL_MULS`); the caller prices the two (`compile::decomposed_functions`).
     let calls_the_routine = |name: &str| -> Option<bool> {
         module.globals.iter().find_map(|global| {
@@ -195,6 +195,12 @@ pub fn selections_with_alternatives(
         .iter()
         .filter_map(|name| {
             let sized = calls_the_routine(name)?;
+            // The all-calls form is priced by relative regret at -O1 only. Above it the rate (1 B = 3 T) needs the
+            // clocks in absolute terms, and the static loop weights run about 5x under the measured ones (call_keeps:
+            // 11124 priced, 57813 run), which made -368 B for +5970 T look like a gain.
+            if !sized && request.level != Level::O1 {
+                return None;
+            }
             let switch = if sized { &crate::dagisel::pipeline::DECOMPOSE_MULS } else { &crate::dagisel::pipeline::CALL_MULS };
             switch.with(|one| one.set(true));
             let selected = (name.clone(), select(name, false), select(name, true));

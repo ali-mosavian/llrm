@@ -95,3 +95,19 @@ fn a_function_keeps_the_call_when_the_shifts_pull_in_more_runtime_than_the_routi
     let called = asm.contains("call __mulsi3");
     assert!(if called { calls < shifts } else { shifts <= calls }, "calls {calls} B, shifts {shifts} B, called {called}:\n{asm}");
 }
+
+/// call_keeps -O2 priced the all-calls form as a gain (-368 B for 1115 of 11124 priced clocks) and ran +5970 T
+/// of 57813: the static loop weights run about 5x under the measured ones, so a rate of 1 B = 3 T misjudged it.
+/// -O1 compares forms by relative regret, which the scale does not touch, and takes the routines; -O2 keeps the
+/// shifts and adds inline.
+#[test]
+fn the_routines_replace_long_shifts_and_multiplies_at_o1_and_not_at_o2() {
+    let calls = |level| {
+        let asm = llrm_z80::compile::text(include_str!("data/call_keeps.ll"), "churn", 0, &llrm_z80::driver::Request::new(level))
+            .expect("compiles");
+        (asm.matches("call __ashlsi3").count() + asm.matches("call __lshrsi3").count(), asm.matches("call __mulsi3").count())
+    };
+    let (o1, o2) = (calls(llrm_z80::driver::Level::O1), calls(llrm_z80::driver::Level::O2));
+    assert!(o1.0 > 0 && o1.1 > 0, "O1 calls the routines: {o1:?}");
+    assert_eq!(o2.0, 0, "O2 keeps the shifts inline: {o2:?}");
+}
