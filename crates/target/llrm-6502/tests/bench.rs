@@ -160,14 +160,18 @@ fn ours_level(default: &'static str) -> &'static str {
 /// level and `BENCH_PAD`: two runs sharing `bench/<name>` raced on `pad.c` and
 /// the link files, and external-compiler cells came out n/a at random
 /// (2026-11-08: 22 of them in one Os log, the pad merge refused the logs).
-fn work_dir(root: &Path, level: &str, pad: &str, name: &str) -> PathBuf {
-    root.join(format!("bench{level}-pad{pad}")).join(name)
+/// It is keyed by the test too: the by-hand calibration tests measure `zero`
+/// while a table test does, in one run, and SDCC's `zero` cell was n/a in some
+/// pads (2026-11-09: `pad.c` syntax error, the O2 variant pad merges refused).
+fn work_dir(root: &Path, level: &str, pad: &str, test: &str, name: &str) -> PathBuf {
+    root.join(format!("bench{level}-pad{pad}")).join(test).join(name)
 }
 
 fn work(name: &str) -> PathBuf {
     let level = std::env::var("BENCH_OURS").unwrap_or_default();
     let pad = std::env::var("BENCH_PAD").unwrap_or_default();
-    let dir = work_dir(Path::new(env!("CARGO_TARGET_TMPDIR")), &level, &pad, name);
+    let test = std::thread::current().name().unwrap_or("unnamed").replace("::", "-");
+    let dir = work_dir(Path::new(env!("CARGO_TARGET_TMPDIR")), &level, &pad, &test, name);
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -175,10 +179,15 @@ fn work(name: &str) -> PathBuf {
 #[test]
 fn runs_at_different_levels_or_pads_do_not_share_a_work_dir() {
     let root = Path::new("/t");
-    let base = work_dir(root, "-O2", "0", "slen");
-    assert_ne!(base, work_dir(root, "-Os", "0", "slen"));
-    assert_ne!(base, work_dir(root, "-O2", "37", "slen"));
-    assert_ne!(base, work_dir(root, "-O2", "0", "zero"));
+    let base = work_dir(root, "-O2", "0", "the_first_table", "slen");
+    assert_ne!(base, work_dir(root, "-Os", "0", "the_first_table", "slen"));
+    assert_ne!(base, work_dir(root, "-O2", "37", "the_first_table", "slen"));
+    assert_ne!(base, work_dir(root, "-O2", "0", "the_first_table", "zero"));
+    // the calibration test and a table test measure the same kernel in one run
+    assert_ne!(
+        work_dir(root, "-O2", "0", "the_sdcc_column_prices_an_empty_call_by_hand", "zero"),
+        work_dir(root, "-O2", "0", "the_first_table", "zero")
+    );
 }
 
 /// Which compiler's convention the driver uses.
