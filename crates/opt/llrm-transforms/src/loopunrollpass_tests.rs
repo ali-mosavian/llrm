@@ -1225,13 +1225,14 @@ const CHAIN: &str = "  %m = mul i64 %x, 3\n  %y = add i64 %m, %v";
 const WIDE: &str = "  %m = mul i64 %v, 5\n  %w = add i64 %m, 7\n  %y = add i64 %x, %w";
 const FDIV: &str = "  %q = fdiv double %x, %v\n  %y = fadd double %q, 1.0";
 
-/// floats -O2 394 B and recfloat 318 B against gcc's 207 and 153 at the same
-/// clocks: a loop whose trip is the latency of `x = x * 3 + a[i]` was unrolled
-/// by 4 at run time, with a guard and a remainder loop that bought no clock.
+/// quicksort -O3 (`x = x * 25173 + 13849; values[i] = x & 0x7FFF`): an integer
+/// chain of constants is not a bound, the unrolled copies compose into one
+/// multiply and add per pair (instcombine), halving the chain. Its unroll was
+/// vetoed: 1731 -> 1708 B and +7.3% clocks (spread 4%).
 #[test]
-fn test_a_runtime_loop_bound_by_its_chain_is_not_unrolled() {
+fn test_a_runtime_loop_of_integer_arithmetic_is_left_to_the_pin() {
     assert!(runtime_unrolled("i64", "1", CHAIN, false), "premise: the pin's rule unrolls this loop");
-    assert!(!runtime_unrolled("i64", "1", CHAIN, true), "unrolled although a trip waits on the last one");
+    assert!(runtime_unrolled("i64", "1", CHAIN, true), "an integer chain composes when unrolled");
 }
 
 /// The same for a divide chain, `s = s / a[i] + 1.0` (floats -O2, recfloat).

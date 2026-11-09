@@ -67,6 +67,23 @@ pub(super) fn recurrence_bound(
     chain * width > issue
 }
 
+/// Integer arithmetic the copies of an unrolled body compose: `x * a + b` twice
+/// is `x * a * a + (a + 1) * b`, one multiply and add for two trips, so the
+/// chain it makes is not a bound unrolling cannot loosen (quicksort -O3: the
+/// LCG fill, +7.3% clocks when vetoed). Floating point, divides, selects and
+/// memory do not compose, so only they are counted.
+fn composes(opcode: &Opcode) -> bool {
+    use llrm_mir::opcode::{BinaryOp::*, CastOp};
+    matches!(
+        opcode,
+        Opcode::Phi
+            | Opcode::GetElementPtr { .. }
+            | Opcode::ICmp(_)
+            | Opcode::Cast(CastOp::Trunc | CastOp::ZExt | CastOp::SExt)
+            | Opcode::Binary(Add | Sub | Mul | Shl | LShr | AShr | And | Or | Xor)
+    )
+}
+
 /// The longest dependence path through two walks of `block`, the second minus
 /// the first: what one more trip adds. `None` when an operation has no price.
 fn chain_growth(
@@ -107,7 +124,8 @@ fn chain_growth(
                 Opcode::Load { .. } => stored.iter().find(|(address, _)| *address == instruction.operands[0]),
                 _ => None,
             };
-            let here = operands.max(forwarded.map_or(0, |&(_, path)| path)) + latency(inst)?;
+            let own = if composes(&instruction.opcode) { 0 } else { latency(inst)? };
+            let here = operands.max(forwarded.map_or(0, |&(_, path)| path)) + own;
             if let Opcode::Store { .. } = instruction.opcode {
                 let address = instruction.operands[1];
                 stored.retain(|(one, _)| *one != address);
