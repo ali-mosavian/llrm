@@ -390,6 +390,64 @@ fn a_wide_add_of_one_is_an_add_and_an_adc_not_an_inc_and_a_byte_round_trip() {
     );
 }
 
+const WIDE_SELECT_OF_CONSTANTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i32 %a, i32 %b) optsize {
+  %c = icmp eq i32 %a, %b
+  %s = select i1 %c, i64 0, i64 2
+  ret i64 %s
+}
+";
+
+/// An `i64` select of two constants was branched in MIR before the DAG saw it
+/// (`jne; xor; mov; jmp; xor; mov 2`, compare_to_int64 -Os), so the pin's
+/// `foldSelectOfConstants` and the legalizer's one-select-per-half never ran:
+/// the pin has `setne; add eax, eax`.
+#[test]
+fn an_i64_select_of_constants_is_arithmetic_on_the_flag_not_a_branch() {
+    let module = llrm_mir::parse::module(WIDE_SELECT_OF_CONSTANTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter_map(|w| w.name.as_deref().map(str::to_owned))
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "setne" || n == "setcc" || n.starts_with("set"))
+            && !names.iter().any(|n| n.starts_with('j')),
+        "{names:?}"
+    );
+}
+
+const WIDE_SELECT_OF_ADJACENT_CONSTANTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i32 %a, i32 %b) optsize {
+  %c = icmp slt i32 %a, %b
+  %s = select i1 %c, i64 5, i64 6
+  ret i64 %s
+}
+";
+
+/// `select c, 5, 6` is `add (sext c), 6`; the pin's `add (sext i1 Y), X` is
+/// `sub X, (zext i1 Y)` (visitADDLikeCommutative), which `setge; add 5` is.
+/// Without the fold the i64 select was `setl; neg; mov; add 6; adc 0`
+/// (select_of_constants f301, +5 B each).
+#[test]
+fn an_i64_select_of_adjacent_constants_adds_the_flag_not_a_negated_one() {
+    let module = llrm_mir::parse::module(WIDE_SELECT_OF_ADJACENT_CONSTANTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter_map(|w| w.name.as_deref().map(str::to_owned))
+        .collect();
+    assert!(!names.iter().any(|n| n == "neg" || n == "adc" || n == "sbb" || n.starts_with('j')), "{names:?}");
+}
+
 const AFTER_UNREACHABLE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 declare void @abort()
 define i32 @f(i32 %x, i1 %c) {

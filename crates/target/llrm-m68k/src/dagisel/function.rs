@@ -56,6 +56,9 @@ pub fn builder_target() -> BuilderTarget {
             big_endian: true,
             calling: Some(&*CALLING),
         }),
+        // the ABI packs stack arguments at 4 (gcc callers do); DEVIATE VA-ALIGN
+        // in `BuilderTarget`
+        va_arg_align_cap: Some(4),
         ..BuilderTarget::for_pointer_bits(32)
     }
 }
@@ -95,7 +98,7 @@ pub fn select_function(
     name: &str,
     cpu: Cpu,
 ) -> Result<Vec<Selected>, String> {
-    select_function_with(module, name, cpu, false, false, false, false, false, true)
+    select_function_with(module, name, cpu, false, false, false, false, false, true, &[])
 }
 
 /// [`select_function`], with `source_order`: the pin's source-order scheduler
@@ -112,6 +115,7 @@ pub fn select_function_with(
     absolute_data: bool,
     size: bool,
     carry_chain: bool,
+    libcalls: &[crate::libcalls::Kind],
 ) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
@@ -148,6 +152,7 @@ pub fn select_function_with(
             short,
             absolute_data,
             carry_chain,
+            libcalls,
             &mut temporaries,
         )
         .map_err(|why| format!("{why:?}"))?;
@@ -173,6 +178,7 @@ pub fn select_function_with(
                 short,
                 absolute_data,
                 carry_chain,
+                libcalls,
                 &mut temporaries,
             )
             .map_err(|why| format!("{why:?}"))?;

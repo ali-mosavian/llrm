@@ -122,6 +122,12 @@ pub struct Options {
     /// A load of an incoming stack argument is made again where it is read
     /// ([`crate::regalloc::Registers`], M68K-ARGREMAT).
     pub rematerialize_arguments: bool,
+    /// How a size-built function chooses between an inline expansion and a call
+    /// to the runtime ([`crate::libcalls`], M68K-SIZE-LIBCALL).
+    pub size_libcalls: crate::libcalls::Mode,
+    /// The kinds that choice made for the module, as [`crate::libcalls::mask`];
+    /// none given, the module is scanned for the function.
+    pub libcalls: Option<u8>,
     /// A loop's top is chosen by the jumps its fall-throughs remove, not by
     /// the edges they cover (M68K-TOP, [`crate::regalloc::place_blocks`]).
     pub loop_top_by_jumps: bool,
@@ -168,6 +174,8 @@ impl Options {
         code_model: CodeModel::Small,
         mid_end: false,
         size: false,
+        size_libcalls: crate::libcalls::Mode::Auto,
+        libcalls: None,
         strict: false,
         source_order: false,
         indexed: false,
@@ -199,6 +207,8 @@ impl Default for Options {
             code_model: CodeModel::Small,
             mid_end: true,
             size: false,
+            size_libcalls: crate::libcalls::Mode::Auto,
+            libcalls: None,
             strict: false,
             source_order: false,
             indexed: true,
@@ -360,6 +370,38 @@ impl Touched {
     }
 }
 
+/// The bytes of `items` as assembled (a branch not yet sized counts 6).
+pub fn items_bytes(items: &[Item]) -> usize {
+    items
+        .iter()
+        .map(|item| match item {
+            Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
+            Item::Bytes(bytes) => bytes.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// The runtime calls the size-built functions of `module` make, as a
+/// [`crate::libcalls::mask`]: chosen once for the module (M68K-SIZE-LIBCALL),
+/// by the bytes each function builds to with and without them.
+pub fn libcalls_for(
+    module: &Module,
+    cpu: Cpu,
+    options: Options,
+) -> u8 {
+    let kinds = crate::libcalls::chosen(
+        module,
+        options.size_libcalls,
+        |one| options.size || has(&one.attrs, "optsize") || has(&one.attrs, "minsize"),
+        |name, kinds| {
+            let options = Options { libcalls: Some(crate::libcalls::mask(kinds)), ..options };
+            items_with(module, name, cpu, options).map(|items| items_bytes(&items))
+        },
+    );
+    crate::libcalls::mask(&kinds)
+}
+
 /// One build of the function, and the optional rewrites that changed it.
 fn items_once(
     module: &Module,
@@ -372,6 +414,13 @@ fn items_once(
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
+    // DEVIATE M68K-SIZE-LIBCALL (`crate::libcalls`): the 68000 and 68010 always
+    // call
+    let libcalls = if wants_size && cpu.at_least(crate::dagisel::hooks::Cpu::M68020) {
+        crate::libcalls::from_mask(options.libcalls.unwrap_or_else(|| libcalls_for(module, cpu, options)))
+    } else {
+        Vec::new()
+    };
     let blocks = select_function_with(
         module,
         name,
@@ -382,6 +431,7 @@ fn items_once(
         options.code_model.absolute_data(),
         wants_size,
         options.carry_chain,
+        &libcalls,
     )?;
     let mut function = emit(name, &blocks)?;
     let mut touched = Touched::default();

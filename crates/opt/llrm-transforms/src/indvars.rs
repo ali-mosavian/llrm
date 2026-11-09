@@ -316,6 +316,10 @@ impl FunctionPass for IndVars {
         let strengthened = crate::exitne::enabled()
             && outer.target().tti().is_some_and(|tti| tti.prefers_exit_ne())
             && crate::exitne::strengthened_in(&mut session, unit.context, unit.layout, unit.function, &outer);
+        // Beyond the pin, after LFTR has settled the exits: a counter of a width
+        // the target does not hold natively whose range fits one that it does.
+        let narrowed = crate::narrowiv::enabled()
+            && crate::narrowiv::narrowed_in(&mut session, unit.context, unit.layout, unit.function, &outer);
         // The body's loops, the manager's: this pass keeps the tree and loops,
         // so the shape stands from one run to the next of the loop passes.
         let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
@@ -336,6 +340,7 @@ impl FunctionPass for IndVars {
             || optimized
             || predicated
             || tested
+            || narrowed
             || sunk
             || merged)
             && {
@@ -363,7 +368,7 @@ impl FunctionPass for IndVars {
             true,
         );
         held.put(session.into_scev());
-        if compared || rewrote || canonical || optimized || predicated || tested || sunk || merged || dead {
+        if compared || rewrote || canonical || optimized || predicated || tested || narrowed || sunk || merged || dead {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>().preserve::<Scevs>()
         } else {
