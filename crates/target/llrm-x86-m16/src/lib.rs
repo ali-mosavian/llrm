@@ -692,16 +692,14 @@ mod tuning_tests {
 
 #[cfg(test)]
 mod stack_natural_alignment_tests {
-    /// The m16 datalayout named no stack alignment, so passes raised allocas to 32 (matmul, nbody at -O2) in frames that keep 2 bytes.
+    /// The m16 datalayout named no stack alignment, so the alloca raise to a type's preferred alignment had no bound.
     #[test]
-    fn the_datalayout_names_the_stack_alignment_the_frames_keep() {
-        let layout = llrm_mir::datalayout::DataLayout::parse(
+    fn the_datalayout_states_the_stack_alignment_the_frames_keep() {
+        llrm_target::testing::assert_stack_facts(
+            "x86-m16",
             super::DATALAYOUT_TOML.lines().find_map(|line| line.strip_prefix("datalayout = \"")?.strip_suffix('"')).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(layout.stack_align, Some(2));
-        // No target has a pin string for this triple, so S is stated here and equals what the frames keep; S may never exceed it, or a pass
-        // raises an alloca past what the frame keeps.
-        assert!(layout.stack_align.is_some_and(|stated| stated <= llrm_target::Target::stack_alignment(&super::M16) as u64));
+            llrm_target::Target::stack_alignment(&super::M16) as u64,
+            None,
+        );
     }
 }
