@@ -1495,6 +1495,17 @@ fn a_c_style_comment_in_the_text_is_white_space() {
     assert_eq!(round(&spanning), round(&without));
 }
 
+/// A comment opener inside a string is text: a `c"..."` constant, a quoted name and a metadata string holding `/*`
+/// and `*/` read as the base lexer read them. (A guard: it passes on the base too, as it must.)
+#[test]
+fn a_comment_opener_inside_a_string_is_not_a_comment() {
+    let text = "@s = constant [6 x i8] c\"a/*b*/\"\n@\"x/*y\" = global i32 0\n@t = constant [5 x i8] c\"*/ /*\"\ndefine void @f() !dbg !0 {\n  ret void\n}\n!0 = !{!\"p/*q*/r\"}\n";
+    let printed = round(text);
+    for kept in ["a/*b*/", "x/*y", "*/ /*", "p/*q*/r"] {
+        assert!(printed.contains(kept), "{kept} was lost:\n{printed}");
+    }
+}
+
 /// An unterminated comment is an error at the line it opens, not the end of the text read as nothing.
 #[test]
 fn an_unterminated_c_comment_is_refused_at_its_line() {
