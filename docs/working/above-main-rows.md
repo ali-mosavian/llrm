@@ -159,6 +159,13 @@ Named by the coordinator and not yet filled: QO-SIZE-1, r_bsp, x_bubble, lru m32
 | UMIN1-65C02 | qlight (65c02) | Os | bytes | 1836 | 1839 | +3 (+0.2%) | as UMIN1-Z80, cause not examined; same flip gains 65c02 O2 -6 (3341 -> 3335) and 6502 O2 -12, Os -1 (3390 -> 3378, 1863 -> 1862) | llrm-target-6502 | 2026-11-20 | #8716 |
 | Z80-OZ-1 | memmove_overlap (z80) | Oz | bytes | 326 B (Os) | 334 B (Oz) | +8 B over its own Os | `oz_best_of` keeps the Os build on the module's estimated bytes; the assembled bytes disagree, so Oz is bigger than Os. Estimator gap, not a stale row; still 234 B under the best SDCC (568 B) | llrm-target-z80 | 2026-12-15, estimator fix card 2026-11-11 18:00Z | #8679 |
 | Z80-OZ-2 | switch_peeled_table (z80) | Oz | bytes | 238 B (Os) | 250 B (Oz) | +12 B over its own Os | same as Z80-OZ-1; Oz is +25 B against SDCC's 225 B, Os +13 B (Z80-OS-PEEL) | llrm-target-z80 | 2026-12-15, estimator fix card 2026-11-11 18:00Z | #8679 |
+| WASM-UNROLL-8675 | shellsort wasm32 | O2, O3 | bytes | 2119 / 949 (tip before #8675) | 2411 / 1241 | +292 / +292 (+13.8% / +30.8%); instrs 20639 -> 20467, 20986 -> 20814 | the pin's full unroll of the inner loop (max trip 3, `Runtime = false` at `Count == MaxTripCount`, LoopUnroll.cpp L1019-1026); before #8675 the loop stayed rolled. The pin's clang: 2418 / 1248 (gcc has no wasm32 target, so the pin is the best external): ours is 7 B under it at both levels. One-commit A/B, own llrm-cc and llrm-wasm-llc each side: 2912a6fd95 vs 69436e2826 | llrm-target-wasm | 2026-11-20 | #8675 |
+
+## Recorded, not worse than the bar
+
+No owner or exit: a cell under the best external at its judging metric is not a worse cell. It reopens if the bar moves under ours.
+
+- **WASM-OS-JPEG-CLAMP-8669** (#8669): jpeg_fixed wasm32 Os, 21318 B / 51836453 instrs -> 21320 B / 51983909 (+2 B, +147456 instrs). 80 B under the best external (the pin's clang, 21400 B / 51291412); instrs are an instrs-only regression, unjudged at Os. `clamp` is a call whose body is now the pin's 12-instruction form (11 before), one more instruction on each of 3 x 49152 calls. The pin inlines it (cost -25, threshold 75); SZ1/D11 (`opt_size_inline_by_code_size`, own row and exit) refuses it. With the pin's rule: 21381 B / 51291418 instrs, so SZ1 holds 61 B for +692491 instrs.
 
 ## D-row: expression-carrying debug records and `salvageDebugInfo` (AM-DBG-1)
 
