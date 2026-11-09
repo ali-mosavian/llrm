@@ -66,6 +66,10 @@ pub struct X86 {
     /// the rest (`LoopMicroOpBufferSize = -1`).
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86SchedSandyBridge.td#L28
     pub loop_micro_op_buffer: u32,
+    /// `getSchedModel().IssueWidth`: 4 for the `SandyBridgeModel`, 0 for the
+    /// `GenericModel` of the rest.
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86SchedSandyBridge.td#L22
+    pub issue_width: u32,
     /// The program's code is position independent (clang's "PIC Level"); set
     /// by `Program::new`. A symbol in long mode is then `[rip + symbol]`
     /// without index or displacement.
@@ -236,6 +240,7 @@ impl X86 {
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
                 loop_micro_op_buffer: 0,
+                issue_width: 0,
                 position_independent: std::cell::Cell::new(true),
             }),
             "core2" => Some(X86 {
@@ -248,6 +253,7 @@ impl X86 {
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
                 loop_micro_op_buffer: 28,
+                issue_width: 4,
                 position_independent: std::cell::Cell::new(true),
             }),
             // `-march=x86-64`: the baseline of long mode, SSE2
@@ -262,6 +268,7 @@ impl X86 {
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
                 loop_micro_op_buffer: 28,
+                issue_width: 4,
                 position_independent: std::cell::Cell::new(true),
             }),
             _ => None,
@@ -779,6 +786,10 @@ impl Tti for X86 {
         self.tuning.imul_at_size
     }
 
+    fn push_imm_at_size(&self) -> bool {
+        self.tuning.push_imm_at_size
+    }
+
     fn rep_movs_at_size(&self) -> bool {
         self.tuning.rep_movs_at_size
     }
@@ -808,6 +819,14 @@ impl Tti for X86 {
 
     fn loop_micro_op_buffer_size(&self) -> u32 {
         self.loop_micro_op_buffer
+    }
+
+    fn issue_width(&self) -> u32 {
+        self.issue_width
+    }
+
+    fn vetoes_recurrence_bound_unroll(&self) -> bool {
+        self.tuning.unroll_recurrence_veto
     }
 
     fn x87_stack_slots(&self) -> Option<u32> {
