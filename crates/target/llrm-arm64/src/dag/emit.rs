@@ -722,6 +722,9 @@ struct Emitter<'a> {
     /// The register each phi's edges copy into, by the phi's register
     /// (`PHIElimination`'s `IncomingReg`): the block's first copies read it.
     incoming: HashMap<u32, Reg>,
+    /// Some block writes the stack pointer (a dynamic `alloca`, `llvm.stackrestore`): the outgoing area is no longer
+    /// reserved in the frame (`hasReservedCallFrame`), each call makes room for it.
+    moves_sp: bool,
 }
 
 impl Emitter<'_> {
@@ -1450,6 +1453,31 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// `AArch64FrameLowering::eliminateCallFramePseudoInstr` where the call frame is not reserved: `sub sp, sp, #n`
+    /// before the call's stores, `add sp, sp, #n` after it, `n` the bytes aligned to 16 (`emitFrameOffset`: 12 bits,
+    /// then the next 12 shifted).
+    fn adjust_stack(
+        &mut self,
+        bytes: u64,
+        subtract: bool,
+    ) {
+        let mut left = bytes.next_multiple_of(16);
+        for (shift12, unit) in [(true, 1u64 << 12), (false, 1)] {
+            let chunk = if shift12 { (left / unit) & 0xfff } else { left & 0xfff };
+            left -= chunk * unit;
+            if chunk > 0 {
+                self.ops.push(Op::I(Inst::AddSubImm {
+                    op: AddSub { subtract, set_flags: false },
+                    width: Width::X,
+                    rd: Gpr::R31,
+                    rn: Gpr::R31,
+                    imm12: chunk as u16,
+                    shift12,
+                }));
+            }
+        }
+    }
+
     fn node(
         &mut self,
         id: u32,
@@ -1523,9 +1551,6 @@ impl Emitter<'_> {
                 ) =>
             {
                 let Operand::Reg(src) = self.operand(node.ops[2])? else { return Err("a copy of a constant".into()) };
-                if self.mf.outgoing > 0 {
-                    return Err("a call with stack arguments in a function that moves the stack pointer".into());
-                }
                 self.mf.dynamic = true;
                 self.ops.push(Op::I(Inst::AddSubImm {
                     op: AddSub { subtract: false, set_flags: false },
@@ -1593,10 +1618,21 @@ impl Emitter<'_> {
                         let Some(bytes) = node.ops.first().and_then(|op| self.dag.constant(*op)) else {
                             return Err("a call sequence of no size".into());
                         };
-                        self.mf.outgoing = self.mf.outgoing.max(bytes as u64);
+                        if self.moves_sp {
+                            self.adjust_stack(bytes as u64, true);
+                        } else {
+                            self.mf.outgoing = self.mf.outgoing.max(bytes as u64);
+                        }
                         return Ok(());
                     }
-                    "ADJCALLSTACKUP" => return Ok(()),
+                    "ADJCALLSTACKUP" => {
+                        if self.moves_sp
+                            && let Some(bytes) = node.ops.first().and_then(|op| self.dag.constant(*op))
+                        {
+                            self.adjust_stack(bytes as u64, false);
+                        }
+                        return Ok(());
+                    }
                     "LLRM_MEMCPY_Q" | "LLRM_MEMMOVE_Q" | "LLRM_MEMSET_Q" => return self.block_memory(id, name),
                     "LLRM_SAVE_Q" => return self.save_q(id),
                     // The jump through a table is one terminator, made at its
@@ -1897,6 +1933,13 @@ pub fn emit(
         ops: Vec::new(),
         pool: std::cell::RefCell::new(Vec::new()),
         incoming: HashMap::default(),
+        moves_sp: blocks.iter().any(|block| {
+            block.units.iter().flat_map(|unit| &unit.nodes).any(|&node| {
+                let node = block.dag.node(SDValue { node, res: 0 });
+                node.opcode == ISD::CopyToReg
+                    && matches!(block.dag.node(node.ops[1]).data, NodeData::PhysReg(id) if id == crate::reg::SP)
+            })
+        }),
     };
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
