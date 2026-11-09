@@ -1,0 +1,1 @@
+Host: the Linux OS layer writes the bytes it is given, so the program's literal \r\n reaches stdout; the DOS console layer translates them, which is what os_console.out records.
