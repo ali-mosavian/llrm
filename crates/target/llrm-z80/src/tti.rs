@@ -131,6 +131,12 @@ impl Default for Z80Tti {
 }
 
 impl Tti for Z80Tti {
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; off, `variadic` grows +30/+51 B.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "z80"
     }
