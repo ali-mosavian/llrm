@@ -57,8 +57,12 @@ class CorpusMatrix(unittest.TestCase):
             self.assertEqual([i for i, _ in kept], ["run/a"])
             self.assertEqual(same, [("run/a", "bench/x/a")])
 
+    def test_rewritten_listing_ends_in_a_newline(self):
+        """Without it gas warned 'end of file not at end of a line' on every ours cell; a warning on our output can hide a bad line."""
+        self.assertTrue(mx.relaxing_branches("\trts\n").endswith("\n"))
+
     def test_plain_branches_become_relaxing_jumps(self):
-        self.assertEqual(mx.relaxing_branches("\tbne\tL1\n\tbsr\tf"), "\tjne\tL1\n\tbsr\tf")
+        self.assertEqual(mx.relaxing_branches("\tbne\tL1\n\tbsr\tf"), "\tjne\tL1\n\tbsr\tf\n")
 
 
 if __name__ == "__main__":

@@ -76,7 +76,7 @@ def relaxing_branches(text: str) -> str:
             out.append(f"\tj{words[0][1:]}\t{words[1]}")
         else:
             out.append(line)
-    return "\n".join(out)
+    return "".join(line + "\n" for line in out)
 
 
 def failure(compiler: str, timed_out: bool, stderr: str) -> tuple[str, str]:
@@ -124,7 +124,7 @@ class Tools:
             ok, timed, err = self.run([self.cc, f"-{level}", "-w", "-S", *flags, "-isystem", str(POSIX), str(path), "-o", str(asm)], env)
             if ok:
                 asm.write_text(".text\n" + relaxing_branches(asm.read_text()))
-                ok, timed, err = self.run([self.as_, f"-m{cpu}", "-o", str(obj), str(asm)])
+                ok, timed, err = self.run([self.as_, "--fatal-warnings", f"-m{cpu}", "-o", str(obj), str(asm)])
         elif compiler == "gcc":
             ok, timed, err = self.run([self.gcc, "-ffreestanding", "-nostdlib", "-w", *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-c", str(path), "-o", str(obj)])
         else:
