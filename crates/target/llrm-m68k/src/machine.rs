@@ -89,6 +89,13 @@ pub struct M68k {
     /// The processor the code is for; the 68000 where none is given.
     pub cpu: crate::dagisel::hooks::Cpu,
     /// The 68020's scaled index, `(d8, An, Xn*2/4/8)`; the 68000 has none.
+    ///
+    /// DEVIATE M68K-TTI-SCALED (owner m68k, review 2026-12-20): the pin's
+    /// `isLegalAddressingMode` is the base class's, which allows `2*r` alone
+    /// and no scale of 4 or 8
+    /// ([TargetLoweringBase.cpp#L2139-L2171](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetLoweringBase.cpp#L2139-L2171));
+    /// the 68020 addresses `(d8, An, Xn*2/4/8)` in one instruction. A hardware
+    /// fact, so the exit is the pin giving M68k its own hook.
     pub scaled_index: bool,
     /// `CodeSize` in bytes of code, which the inliner counts a callee with
     /// ([`Tti::inline_size_view`]); the other passes' thresholds are in the
