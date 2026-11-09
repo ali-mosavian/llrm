@@ -349,17 +349,35 @@ impl<'a> InlineSpiller<'a> {
         if by_value_number && self.tables.remat_cells.borrow().is_empty() {
             return None;
         }
-        let mut def: Option<InstrKey> = None;
+        let mut defs: Vec<InstrKey> = Vec::new();
         for operand in lis.operands(reg) {
-            if operand.is_def {
-                if def.is_some_and(|seen| seen != operand.instr) {
-                    return None;
-                }
-                def = Some(operand.instr);
+            if operand.is_def && !defs.contains(&operand.instr) {
+                defs.push(operand.instr);
+            }
+        }
+        // `reMaterializeFor` asks the original's value number at each use, and
+        // the pin's split editor makes a piece of a literal by remaking the
+        // literal at each switch (`defFromParent`, "recalc"): a piece that
+        // several literals define holds one value. They are the same
+        // literal, so any stands in for the others; each goes with the piece.
+        // Only literals: they read no register, so nothing has to be
+        // available at the use.
+        if defs.len() > 1 {
+            let first = Arc::clone(lis.instr(defs[0]));
+            let same = |one: &Insn| {
+                one.uses.is_empty()
+                    && one.group.is_none()
+                    && self.tii.remat_shape(one)
+                    && one.what.as_ref().zip(first.what.as_ref()).is_some_and(|(a, b)| {
+                        a.op == b.op && a.name == b.name && a.sources == b.sources && a.dests.len() == b.dests.len()
+                    })
+            };
+            if !own_remat || !defs.iter().all(|key| same(lis.instr(*key))) {
+                return None;
             }
         }
         // The instruction that defines `reg`: what goes once it is made again.
-        let own = Arc::clone(lis.instr(def?));
+        let own = Arc::clone(lis.instr(*defs.first()?));
         let mut def = Arc::clone(&own);
         if by_value_number {
             // `scanRemattable` asks the original's value number at the copy
@@ -395,15 +413,20 @@ impl<'a> InlineSpiller<'a> {
         }
         let what = def.what.clone()?;
         let Loc::Held(defined) = what.dests[0] else { return None };
-        let units: Vec<(usize, Vec<InstrKey>)> =
-            Self::units(lis, reg).into_iter().filter(|(_, members)| members != &[own.id()]).collect();
+        let units: Vec<(usize, Vec<InstrKey>)> = Self::units(lis, reg)
+            .into_iter()
+            .filter(|(_, members)| !(members.len() == 1 && defs.contains(&members[0])))
+            .collect();
         for (_, members) in &units {
             let first = lis.indexes.get_instruction_index(members[0]);
             if !def.uses.is_empty() && !vrai.all_uses_available_at(def.id(), &first, lis) {
                 return None;
             }
         }
-        let def_block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(own.id()));
+        let def_blocks: Vec<(usize, InstrKey)> = defs
+            .iter()
+            .map(|key| (lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(*key)), *key))
+            .collect();
         let mut made = Vec::new();
         for (block, members) in units {
             // The registers a copy's members write: a definition that reads one
@@ -511,7 +534,9 @@ impl<'a> InlineSpiller<'a> {
             made.push(value);
         }
         if own_remat {
-            lis.remove_instr(def_block, own.id());
+            for (def_block, key) in def_blocks {
+                lis.remove_instr(def_block, key);
+            }
         } else {
             // A copy reads a register whose range it was holding up:
             // `eliminateDeadDefs` cuts it back (`spill` calls it).
