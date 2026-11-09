@@ -15,7 +15,25 @@
 //! Owner m68k. Exit 2026-12-20: the price from the selected instructions (G2,
 //! `synth_mult` for any constant).
 //!
-//! Complexity: O(1) per multiply.
+//!
+//! DEVIATE M68K-MUL-LATE: the per-site answer cannot see what the chain does to
+//! the function (the scheduler hoists independent calls above the chain and
+//! spills their results, 15 B a call in select_of_constants -Os; the shared
+//! `lea __mulsi3, %a6` stops paying; `muls.w` of a halfword is 4 B against an
+//! 8 B chain). A function that used the chain is also built with the multiply
+//! kept (`Mode::Kept`) and the cheaper by the level's price is kept
+//! (`crate::trial`): -Os by bytes, -O1 only when the chain is no worse in bytes
+//! and clocks, -O2/-O3 by `bytes + 2 * clocks`; a tie keeps the multiply. The
+//! library routine's clocks come from [`crate::routine`]. Owner m68k-b. Exit
+//! 2026-12-20, with the price above. Cells (68000, against #8532 alone):
+//! select_of_constants -O1/-Os, int64_division -O1/-Os, matmul -O1/-Os,
+//! nbody_fixed -O1 and div_constants_short -Os smaller (8, -3942 B); none
+//! larger. -O1 trades the clocks of three of them back (select_of_constants
+//! +4.29M, int64_division +120808, matmul +4192): neither build is no worse in
+//! both, so the multiply stays, as before #8532.
+//!
+//! Complexity: O(1) per multiply; a function that used the chain is compiled
+//! twice (1150 of 12320 corpus functions).
 
 use std::cell::Cell;
 use std::rc::Rc;
