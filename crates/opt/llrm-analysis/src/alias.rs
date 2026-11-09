@@ -3683,11 +3683,11 @@ pub fn annotated(unit: &Unit) -> Result<IndexMap<InstId, MemRef>, String> {
 /// `annotated`, given the points-to facts and what `consts::known` finds
 /// without memory.
 ///
-/// DEVIATE AN1 (owner funcattrs-port, review 2026-11-13): Annotated keeps the
+/// DEVIATE AN1 (owner w10-instcombine, review 2026-11-13): Annotated keeps the
 /// MemRef path (Accesses/PlainAccesses consume its slices); exit: they ask
 /// BasicAA per query and Annotated is deleted.
 ///
-/// DEVIATE AN2 (owner funcattrs-port, review 2026-11-13): an index's range is
+/// DEVIATE AN2 (owner w10-instcombine, review 2026-11-13): an index's range is
 /// `computeConstantRange` at the access, with the dominator tree and no
 /// assumption cache; BasicAA's `analyzeVariableOffsets` passes both. It asks no
 /// SCEV and no LVI range of an index, so a loop counter's interval is its

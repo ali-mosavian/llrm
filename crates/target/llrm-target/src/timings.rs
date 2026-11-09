@@ -66,6 +66,11 @@ pub struct CpuTable {
     /// x86-m32, exit 2026-11-30): -Os does it everywhere, -O1 never. Off: the pin's
     /// `MOV32mi`s.
     pub share_literal_stores: bool,
+    /// At `-Os` a register set to 1 is `xor r,r; inc r` (three bytes, the pin's
+    /// `MOV32r1`: `OptForSize, Not64BitMode`, [X86InstrCompiler.td#L335]).
+    ///
+    /// [X86InstrCompiler.td#L335]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L335
+    pub size_one_is_xor_inc: bool,
     /// A select of two constants on a CPU with no `cmov` is a branch, not
     /// `setcc` and arithmetic on its flag (DEVIATE SELB, owner x86-m32,
     /// exit 2026-11-30): `xor r,r; cmp; setcc; lea` is 7-9 clocks on the 486
@@ -224,6 +229,7 @@ impl Timings {
                     ("scalars", "share_congruent_phis") => table.share_congruent_phis = number()? != 0,
                     ("scalars", "post_ra_tail_duplicate") => table.post_ra_tail_duplicate = number()? != 0,
                     ("scalars", "share_literal_stores") => table.share_literal_stores = number()? != 0,
+                    ("scalars", "size_one_is_xor_inc") => table.size_one_is_xor_inc = number()? != 0,
                     ("scalars", "branch_constant_selects") => table.branch_constant_selects = number()? as u32,
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),

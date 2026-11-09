@@ -39,7 +39,7 @@
 //! before.
 //!
 //! DEVIATE P6 (exit: a class set at creation, once isel allocates classes,
-//! CF-3 in docs/working/vreg-class-field-plan.md; owner mir-undef; review
+//! CF-3 in docs/working/vreg-class-field-plan.md; owner anyisa; review
 //! 2026-11-14): a temporary is made in its result's class by name
 //! (`LirBody::class_like`), where the pin's `createVirtualRegister` gives it
 //! the class the result has, which the type gave the result when isel made it.

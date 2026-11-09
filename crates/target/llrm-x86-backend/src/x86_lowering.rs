@@ -1563,7 +1563,18 @@ fn carry_through_add(
     if !matches!(dag.opcode(carry), x86isd::SETCC | x86isd::SETCC_CARRY) {
         return None;
     }
-    (dag.constant(dag.operand(carry, 0))? == cond::B).then(|| dag.operand(carry, 1))
+    let code = dag.constant(dag.operand(carry, 0))?;
+    let tested = dag.operand(carry, 1);
+    if code == cond::B {
+        return Some(tested);
+    }
+    // A check of the zero flag of an add of 1 (`getX86XALUOOp` tests `COND_E`
+    // for it) is the carry flag of that add: `inc; sete; add al, -1; adc` is
+    // `add 1; adc`.
+    (code == cond::E
+        && dag.opcode(tested) == x86isd::ADD
+        && dag.constant(dag.operand(tested, 1)) == Some(1))
+    .then_some(tested)
 }
 
 /// `needCarryOrOverflowFlag`: whether a reader of the flags result `flags`

@@ -1,0 +1,14 @@
+target datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
+define void @f(ptr %p0, ptr %p1) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %a0 = getelementptr i32, ptr %p0, i32 %i
+  store i32 7, ptr %a0
+  %next = add nuw i32 %i, 2
+  %c = icmp eq i32 %next, 100
+  br i1 %c, label %exit, label %loop
+exit:
+  ret void
+}
