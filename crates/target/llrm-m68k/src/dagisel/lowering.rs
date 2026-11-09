@@ -206,8 +206,9 @@ pub struct M68kLowering {
     /// A global's address is an absolute one, not PC-relative (the medium
     /// model on the 68000 and 68010, the large model).
     pub absolute_data: bool,
-    /// `Subtarget.atLeastM68020()`, which `decomposeMulByConstant` reads.
-    pub at_least_m68020: bool,
+    /// The CPU and the level's price, which [`super::mulprice`] reads.
+    pub cpu: Cpu,
+    pub price: crate::timing::Price,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
@@ -225,15 +226,14 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         EVT::I32
     }
 
-    /// `M68kTargetLowering::decomposeMulByConstant`: the 68000's multiply is
-    /// 16 bit, so a product of up to 32 bits is shifts and adds
-    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kISelLowering.cpp#L1547>).
+    /// `M68kTargetLowering::decomposeMulByConstant`, priced: DEVIATE
+    /// M68K-MUL-PRICE, see [`super::mulprice`].
     fn decompose_mul_by_constant(
         &self,
         vt: EVT,
-        _c: u128,
+        c: u128,
     ) -> bool {
-        vt.size_in_bits() <= 32 || self.at_least_m68020
+        super::mulprice::decomposes(self.cpu, self.price, vt.size_in_bits(), c)
     }
 
     fn sub_of_sign_extended_bool(&self) -> bool {
