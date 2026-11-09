@@ -1885,12 +1885,18 @@ fn use_lanes_once(
                 continue;
             }
             // the byte's own register may be read by an instruction that names
-            // it, a call's argument whose copy allocation made the identity
+            // it: a call's argument whose copy allocation made the identity,
+            // or another value allocated to the same register (`x >> 31` of a
+            // spilled long: the byte and the sign share `a`, the copy between
+            // them is gone, and removing the load left `add a, a` on stale `a`)
             let own = register(Reg::Virt(byte));
             let overlaps = <Z80Registers as llrm_spike_mf::Target>::overlaps;
             let mut named = false;
             for later in &insts[at + 1..] {
-                named |= later.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Phys(id)) if overlaps(*id, own)));
+                named |= later
+                    .operands
+                    .iter()
+                    .any(|o| matches!(o, Operand::Use(r) if *r != Reg::Virt(byte) && overlaps(register(*r), own)));
                 if named || later.operands.iter().any(|o| matches!(o, Operand::Def(r) if overlaps(register(*r), own))) {
                     break;
                 }

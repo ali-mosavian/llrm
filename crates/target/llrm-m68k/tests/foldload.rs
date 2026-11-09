@@ -54,9 +54,11 @@ fn every_post_increment_source_encodes_as_binutils_does() {
     for name in indexed::source_rows() {
         let one =
             Inst { opcode: name, operands: vec![Operand::Reg(reg::D3), Operand::Reg(reg::D3), Operand::Reg(reg::A2)] };
-        // a compare has no tied source
+        // a compare has no tied source; `cmpa` compares into an address
+        // register
         let inst = if name.starts_with("CMP") {
-            Inst { opcode: name, operands: vec![Operand::Reg(reg::D3), Operand::Reg(reg::A2)] }
+            let dest = if name.starts_with("CMPA") { reg::A3 } else { reg::D3 };
+            Inst { opcode: name, operands: vec![Operand::Reg(dest), Operand::Reg(reg::A2)] }
         } else {
             one
         };
