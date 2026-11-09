@@ -223,6 +223,7 @@ fn allocated_with(
     duplicate: bool,
 ) -> Result<Allocated, String> {
     SLOT_BY_CONFLICTS.with(|one| one.set(request.slot_by_conflicts));
+    expand::BYTES_FIRST.with(|one| one.set(!matches!(request.level, Level::O2 | Level::O3 | Level::Omax)));
     expand::set_frequencies(&frequencies_of(selected, name));
     let mut function = machine_function_with(selected, name, duplicate)?;
     eliminate_phis_with(&mut function, false);
@@ -362,6 +363,14 @@ mod tests {
 /// size levels and clocks plus 3 a byte otherwise: the argument copies joined
 /// or not (a constant kept in a register of its own, or not), and a byte wanted
 /// both in `a` and in a register of its own loaded through `a` or through `hl`.
+///
+/// DEVIATE Z80-ALLOC-EXPLORE (owner llrm-target-z80, exit 2026-11-30): the pin allocates a function once
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2942>,
+/// `RAGreedy::run`). Here a function is allocated up to 12 times: the Source
+/// and ILP schedules (Z80S1) x the plain and the constant-hoisted function
+/// (`allocated_with`) x this first allocation and its two `improved` choices;
+/// the cheapest stays. tests/run/c/fixed_point -O2: 12 allocations are 88% of
+/// a 2.0 s compile. Exit: a size-priced budget (Tti), today's behaviour below its size.
 fn allocate(
     function: MFunction,
     name: &str,
@@ -1885,12 +1894,18 @@ fn use_lanes_once(
                 continue;
             }
             // the byte's own register may be read by an instruction that names
-            // it, a call's argument whose copy allocation made the identity
+            // it: a call's argument whose copy allocation made the identity,
+            // or another value allocated to the same register (`x >> 31` of a
+            // spilled long: the byte and the sign share `a`, the copy between
+            // them is gone, and removing the load left `add a, a` on stale `a`)
             let own = register(Reg::Virt(byte));
             let overlaps = <Z80Registers as llrm_spike_mf::Target>::overlaps;
             let mut named = false;
             for later in &insts[at + 1..] {
-                named |= later.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Phys(id)) if overlaps(*id, own)));
+                named |= later
+                    .operands
+                    .iter()
+                    .any(|o| matches!(o, Operand::Use(r) if *r != Reg::Virt(byte) && overlaps(register(*r), own)));
                 if named || later.operands.iter().any(|o| matches!(o, Operand::Def(r) if overlaps(register(*r), own))) {
                     break;
                 }

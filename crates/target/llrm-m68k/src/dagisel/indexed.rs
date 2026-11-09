@@ -33,6 +33,7 @@ use llrm_dagisel::interp::Outcome;
 
 use super::asm::{AsmOperand, asm};
 use super::enc::{Piece, encoding};
+use super::generated::ids::reg as pin;
 use super::generated::instrinfo;
 use super::generated::m68k_m68000::MACHINE_OPCODES;
 
@@ -63,6 +64,9 @@ struct Writeback {
     slot: bool,
     /// How many leading operands are updated bases the printed row lacks.
     drops: usize,
+    /// A compare whose destination is an address register: `cmpa.l (%a1)+,
+    /// %a0`.
+    address_dest: bool,
 }
 
 macro_rules! writeback {
@@ -78,6 +82,7 @@ macro_rules! writeback {
             memory_move: false,
             slot: false,
             drops: 1,
+            address_dest: false,
         }),*]
     };
 }
@@ -118,6 +123,25 @@ static WRITEBACKS: LazyLock<Vec<Writeback>> = LazyLock::new(|| {
             memory_move: false,
             slot: false,
             drops: 1,
+            address_dest: false,
+        });
+    }
+    // the compare of a long with `(An)+` whose destination is an address
+    // register: the source twin of the pin's `CMP32dj` with the
+    // address-destination encoding (`crate::addrcmp` makes it after allocation)
+    if has_register_indirect_source("CMP32dj") {
+        all.push(Writeback {
+            name: "CMPA32o_WB",
+            prints_as: "CMPA32o",
+            load: true,
+            pre: false,
+            drop: 0,
+            base: "CMP32dj",
+            source: true,
+            memory_move: false,
+            slot: false,
+            drops: 1,
+            address_dest: true,
         });
     }
     // a load through `(An)+` stored at once: the pin's move from `(An)+` to an
@@ -139,6 +163,7 @@ static WRITEBACKS: LazyLock<Vec<Writeback>> = LazyLock::new(|| {
                 memory_move: true,
                 slot: false,
                 drops: updates + 1,
+                address_dest: false,
             });
         }
     }
@@ -159,6 +184,7 @@ static WRITEBACKS: LazyLock<Vec<Writeback>> = LazyLock::new(|| {
             memory_move: false,
             slot: true,
             drops: 1,
+            address_dest: false,
         });
     }
     // a byte or word loaded through `(An)+` and extended: the pin's extension
@@ -182,6 +208,7 @@ static WRITEBACKS: LazyLock<Vec<Writeback>> = LazyLock::new(|| {
             memory_move: false,
             slot: false,
             drops: 1,
+            address_dest: false,
         });
     }
     all
@@ -364,6 +391,10 @@ static DESCS: LazyLock<Vec<InstrDesc>> = LazyLock::new(|| {
                     operands.extend_from_slice(&base.operands[1..]);
                 }
             }
+            if one.address_dest {
+                // the updated base first, then the destination
+                operands[one.drop + 1].reg_class = pin::AR32RegClassID as i16;
+            }
             InstrDesc {
                 num_operands: operands.len() as u8,
                 num_defs: base.num_defs + one.drops as u8,
@@ -395,6 +426,10 @@ pub fn source_asm(name: &str) -> Option<&'static (&'static str, &'static str, &'
                         },
                     })
                     .collect();
+                let text = match text.split_once('.').filter(|_| one.address_dest) {
+                    Some((_, rest)) => leak(format!("cmpa.{rest}")),
+                    None => text,
+                };
                 (one.prints_as, text, &*Box::leak(kept.into_boxed_slice()))
             })
             .collect();
@@ -415,6 +450,15 @@ pub fn source_encoding(name: &str) -> Option<(u16, &'static [Piece])> {
                 let mut pieces = pieces.to_vec();
                 let at = indirect_mode(one.base).expect("the mode of (An)");
                 pieces[at] = Piece::Const { lo: 3, width: 3, value: 3 };
+                if one.address_dest {
+                    // the opmode: long to a data register is 010, to an address
+                    // register 111
+                    for piece in &mut pieces {
+                        if matches!(piece, Piece::Const { lo: 6, width: 3, value: 2 }) {
+                            *piece = Piece::Const { lo: 6, width: 3, value: 7 };
+                        }
+                    }
+                }
                 (one.prints_as, width, &*Box::leak(pieces.into_boxed_slice()))
             })
             .collect();

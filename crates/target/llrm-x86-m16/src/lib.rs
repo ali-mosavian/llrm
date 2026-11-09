@@ -668,6 +668,8 @@ mod tuning_tests {
                 multiply_by_clocks: false,
                 divide_by_bytes: false,
                 price_pin_multiplies: false,
+                // The pin's value: m16 sets it (DEVIATE LFTR1, `target.rs`).
+                lftr_any_stride: false,
                 imul_at_size: false,
                 speed_milliclocks_per_byte: 0,
                 price_fills: false,
@@ -683,6 +685,9 @@ mod tuning_tests {
                 split_merged_conditions: false,
                 inline_size_guard_at_size: false,
                 keep_constant_displacements: false,
+                x87_share_negated_products: false,
+                x87_zero_fill_at_size: false,
+                unroll_promotion_fits_x87_stack: false,
                 ..table
             },
             Tuning::PIN

@@ -427,6 +427,8 @@ impl llrm_target::Target for M64 {
                             // only where the chain is no larger than
                             // the `imul`.
                             price_pin_multiplies: true,
+                            // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
+                            lftr_any_stride: true,
                             // DEVIATE REC-2, as m32
                             recursive_inlining: Some((8, 450)),
                             // gcc's 15/30 size units in `gcc_insns` (m64 counts the sext/gep of its IR).
