@@ -144,6 +144,38 @@ pub fn assembly_dumping(
     assembly_with(text, cpu, level, false, dump)
 }
 
+/// The size table's estimate of each defined function of the module the backend gets at `level`, before the
+/// `function_scale` residue: the numerator `tools/m68k_size_fit.py` divides the objects' symbol sizes by.
+pub fn size_estimates(
+    text: &str,
+    cpu: Cpu,
+    level: Level,
+) -> Result<Vec<(String, i64)>, String> {
+    use llrm_mir::datalayout::DataLayout;
+    let module = lowered_for(text, cpu, level)?;
+    let layout = DataLayout::parse(module.datalayout.as_deref().ok_or("no datalayout")?)?;
+    let costs = llrm_mir::target::OperationCosts { function_scale: 100, ..M68kMachine { cpu }.size_costs() };
+    Ok(module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .map(|(_, global, function)| {
+            (
+                global.name.owned().unwrap_or_default(),
+                llrm_transforms::walk::function_bytes(&module, &layout, &costs, function),
+            )
+        })
+        .collect())
+}
+
+/// [`lowered`] with the default flags: the module the backend gets at `level`, what a size estimate is of.
+pub fn lowered_for(
+    text: &str,
+    cpu: Cpu,
+    level: Level,
+) -> Result<Module, String> {
+    lowered(text, cpu, level, None, &Policy::default())
+}
+
 /// `text` through the shared mid-end, the expansions m68k needs, and the
 /// module's own mid-end, once: what both the assembly and the object print.
 fn lowered(

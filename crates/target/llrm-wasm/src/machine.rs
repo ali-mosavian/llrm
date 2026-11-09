@@ -95,6 +95,11 @@ impl Machine for WasmMachine {
         OperationCosts { load: 3, store: 3, float_load: 3, float_store: 3, branch: 2, call: 6, ..self.costs() }
     }
 
+    /// The wasm triple's default thread model is `Single`.
+    fn single_threaded(&self) -> bool {
+        true
+    }
+
     fn registers(&self) -> i64 {
         REGISTERS
     }
@@ -349,12 +354,23 @@ impl Tti for Wasm {
         from: Ty,
         _kind: CostKind,
     ) -> Option<Cost> {
-        let legal = matches!(op, CastKind::SExt | CastKind::ZExt)
+        self.ext_load_free(op, to, from).then_some(Cost::FREE)
+    }
+
+    /// The same fact for the inline cost (`visitCastInst` asks the target for
+    /// the `sext` of a load): without it `report(text[0])` cost 10 where the
+    /// pin's 5.
+    fn ext_load_free(
+        &self,
+        op: CastKind,
+        to: Ty,
+        from: Ty,
+    ) -> bool {
+        matches!(op, CastKind::SExt | CastKind::ZExt)
             && matches!(
                 (from, to),
                 (Ty::Int(8 | 16), Ty::Int(32 | 64)) | (Ty::Int(32), Ty::Int(64))
-            );
-        legal.then_some(Cost::FREE)
+            )
     }
 
     /// `BasicTTIImplBase::getArithmeticInstrCost` answers only the throughput
@@ -426,6 +442,18 @@ mod tests {
         assert_eq!(cost(CastKind::SExt, Ty::Int(64), Ty::Int(32)), Some(Cost::FREE));
         assert_eq!(cost(CastKind::ZExt, Ty::Int(32), Ty::Int(1)), None);
         assert_eq!(cost(CastKind::Trunc, Ty::Int(8), Ty::Int(32)), None);
+    }
+
+    /// The inliner asks `ext_load_free`, not `cast_of_load_cost`: `message`
+    /// (`report(text[0])`, a `sext i8` of a load) cost 10 against the pin's 5
+    /// (switch_header_marker_loop -Os). Cost only: the SZ1 bound still holds
+    /// that inline.
+    #[test]
+    fn the_inliner_sees_the_free_extension_of_a_load() {
+        assert!(Wasm.ext_load_free(CastKind::SExt, Ty::Int(32), Ty::Int(8)));
+        assert!(Wasm.ext_load_free(CastKind::ZExt, Ty::Int(64), Ty::Int(32)));
+        assert!(!Wasm.ext_load_free(CastKind::ZExt, Ty::Int(32), Ty::Int(1)));
+        assert!(!Wasm.ext_load_free(CastKind::Trunc, Ty::Int(8), Ty::Int(32)));
     }
 
     /// `llvm.fmuladd` had no price, so a loop that held one could not be
