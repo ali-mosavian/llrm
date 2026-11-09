@@ -126,6 +126,12 @@ thread_local! {
     pub static PRICING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+thread_local! {
+    /// Set for the size levels, where bytes decide and clocks may not grow
+    /// (-O0, -O1, -Os, -Oz); at -O2 and -O3 one byte is three clocks.
+    pub static BYTES_FIRST: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
 fn is_pair(register: RegId) -> bool {
     register == reg::BC || register == reg::DE || register == reg::HL
 }
@@ -2014,7 +2020,8 @@ pub fn finish(
     reads: llrm_support::hash::HashMap<u32, usize>,
 ) -> Result<Vec<Line>, String> {
     let mut function = tail_calls(function);
-    push_arguments(&mut function, assignment);
+    let below_ix = layout(&function, slots).below_ix();
+    push_arguments(&mut function, assignment, below_ix);
     let frame = layout(&function, slots);
     let pushed = entry_pushes(&mut function, assignment, &frame);
     let function = &function;
@@ -2849,8 +2856,10 @@ fn flag_and_b_free(text: &str) -> bool {
 fn push_arguments(
     function: &mut MFunction,
     assignment: &Assignment,
+    below_ix: i64,
 ) {
-    for block in &mut function.blocks {
+    let entry = call_bytes_at_entry(function);
+    for (index, block) in function.blocks.iter_mut().enumerate() {
         let mut at = 0;
         while at < block.insts.len() {
             let Kind::Op("ADJCALLSTACKDOWN") = block.insts[at].kind else {
@@ -2861,6 +2870,13 @@ fn push_arguments(
                 at += 1;
                 continue;
             };
+            let stores: Vec<usize> = places.iter().map(|&(store, _)| store).collect();
+            let bytes_first = BYTES_FIRST.with(std::cell::Cell::get);
+            if let Some(stored) = crate::spilled_args::store_spilled(&block.insts, at, &stores, assignment, bytes_first, below_ix + entry[index].1) {
+                block.insts = stored;
+                at += 1;
+                continue;
+            }
             let mut pushes: Vec<Vec<Inst>> = vec![Vec::new(); block.insts.len()];
             let mut stores = vec![false; block.insts.len()];
             for (store, after) in places {
