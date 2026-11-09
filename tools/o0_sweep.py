@@ -146,6 +146,17 @@ def verdict(result: dict[str, dict[str, dict]], baseline: set[tuple[str, str, st
     return bad
 
 
+def candidate_rows(result: dict[str, dict[str, dict]]) -> list[str]:
+    """Baseline lines for every refusal, the levels of one (target, program, error) merged: `TARGET O1,O2 PROGRAM | OWNER? | EXIT? | ERROR`.
+    OWNER? and EXIT? are placeholders a person fills; parse_baseline rejects a line that keeps EXIT? (not a date), so an unfilled row is red."""
+    merged: dict[tuple[str, str, str], list[str]] = {}
+    for target, by_level in result.items():
+        for level, row in by_level.items():
+            for name, msg in row["refused"].items():
+                merged.setdefault((target, name, explain(msg)), []).append(level)
+    return [f"{t} {','.join(sorted(ls, key=LEVELS.index))} {n} | OWNER? | EXIT? | {m}" for (t, n, m), ls in sorted(merged.items())]
+
+
 def main(argv: list[str]) -> int:
     args, levels = argv[1:], LEVELS
     if args[:1] == ["--levels"]:
@@ -167,6 +178,8 @@ def main(argv: list[str]) -> int:
             for name, msg in sorted(row["refused"].items()):
                 print(f"  REFUSED {name}: {explain(msg)}")
     bad = baseline_bad + verdict(result, baseline)
+    if os.environ.get("O0_SWEEP_ROWS"):
+        print("candidate baseline rows:", *candidate_rows(result), sep="\n")
     for line in bad:
         print("RED", line)
     return 1 if bad else 0

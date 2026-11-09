@@ -129,3 +129,14 @@ def test_the_family_flags_line_is_given_to_that_family_only():
 def test_warning_flags_of_the_program_are_kept():
     """long_double_union_pun needs -Wno-incompatible-ms-struct; dropping it made the m16 -O0 sweep list a clang error (ms_struct layout) as a refusal."""
     assert "-Wno-incompatible-ms-struct" in sweep.flags_of("// flags: -O0 -mlong-double-80 -Wno-incompatible-ms-struct\nint x;\n", "x86_16-wat")
+
+
+def test_candidate_rows_merge_the_levels_of_one_refusal_and_keep_owners_to_fill():
+    """arm64 rotate_small refused at O1, O2, Os, O3 but not O0: one baseline line `O1,O2,Os,O3`, not four; a line is not an excuse until a person fills OWNER? and EXIT?."""
+    refused = {"rotate_small": 'llrm-llc: Legalize("Unsupported { op: Rotr, ty: Simple(I8), what: \\"promote result\\" }")'}
+    result = {"arm64-linux": {lv: level(2, 1, dict(refused)) for lv in ("O1", "O2", "Os", "O3")} | {"O0": level(2, 2)}}
+    rows = sweep.candidate_rows(result)
+    assert rows == ["arm64-linux O1,O2,Os,O3 rotate_small | OWNER? | EXIT? | Legalize Unsupported Rotr I8 (promote result)"]
+    assert sweep.parse_baseline(rows[0], "2026-11-10")[1], "an unfilled row is red"
+    keys, bad = sweep.parse_baseline(rows[0].replace("OWNER?", "w15-arm64").replace("EXIT?", "EXIT 2026-12-01"), "2026-11-10")
+    assert not bad and len(keys) == 4
