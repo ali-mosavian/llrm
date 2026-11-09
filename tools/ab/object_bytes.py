@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """object_bytes.py TARGET OBJECT: `CODE DATA ALIGN` bytes of one compiled object, printed. Exit 2 and a message where they cannot be read.
 DATA is the initialised, constant and zero-filled data the object carries (an audit row is code + data). ALIGN is the alignment padding CODE leaves out.
-CODE is padding-free for x86 (x86_32 and x86_64 ELF through sizes.code_size, the OMF through sizes.code_bytes), ALIGN its padding. Every other ELF target
-(m68k is big-endian, elfsize reads little-endian only) keeps size(1)'s `.text*` section size WITH padding and prints ALIGN 0: its CODE is not comparable
+CODE is padding-free for x86 (x86_32 and x86_64 ELF through elfsize.code_size with the x86 decoder, the OMF through sizes.code_size), ALIGN its padding. Every other ELF target
+(arm64, m68k: their padding hides in the section just as well; m68k is big-endian and elfsize reads little-endian only) keeps size(1)'s `.text*` section size WITH padding and prints ALIGN 0: its CODE is not comparable
 with an x86 CODE, whose padding is left out.
 
 Never the file's size: an OMF object's records, a z80 `.s` text and a 6502 `.s` text each held 4-6x the code of tables that read them
@@ -19,7 +19,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 import elfsize  # noqa: E402
-import sizes  # noqa: E402
+
+sys.path.insert(0, str(HERE.parent.parent / "crates/target/llrm-x86/bench"))
 
 Z80_CODE_AREAS = {"_CODE", "_HOME", "_GSINIT", "_GSFINAL", "_INITIALIZER"}
 Z80_DATA_AREAS = {"_DATA", "_CONST", "_INITIALIZED"}
@@ -73,12 +74,14 @@ class Footprint:
 
 
 def elf_footprint(target: str, obj: Path) -> Footprint:
-    """x86 ELF: sizes.code_size and sizes.data_bytes, the readers the bench and the matrix use (padding-free code; data = allocated non-executable sections but
+    """x86 ELF: elfsize.code_size and elfsize.data_bytes, the readers sizes.py wraps for the bench (padding-free code; data = allocated non-executable sections but
     `.eh_frame` and `.note*`). Other ELF: size(1) reads every endianness: `.text*` is the code, `.data`/`.rodata*` the data, `.bss` the bss."""
     if target.startswith(("x86_32", "x86_64")):
-        size = sizes.code_size(obj)
-        data, bss = sizes.data_bytes(obj)
-        return Footprint(size.code, data, bss, size.align)
+        from padding import padding  # the x86 decoder (iced_x86), imported where an x86 ELF is read: no other target needs it
+
+        code, align, _ = elfsize.code_size(obj, padding)
+        data, bss = elfsize.data_bytes(obj)
+        return Footprint(code, data, bss, align)
     listing = run(["size", "-A", str(obj)]).stdout
     rows = [line.split() for line in listing.splitlines()]
     sized = [(row[0], int(row[1])) for row in rows if len(row) > 1 and row[1].isdigit()]
@@ -100,9 +103,11 @@ def footprint(target: str, obj: Path) -> Footprint:
         return Footprint(code, data, 0)
     if target.startswith("wasm"):
         raise Unreadable("wasm objects are not read: a module's code section is not an object's .text")
-    if sizes.is_elf(obj):
+    if obj.read_bytes()[:4] == b"\x7fELF":
         return elf_footprint(target, obj)
     if target.startswith("x86_16"):
+        import sizes  # the OMF reader, which imports the compiler tooling: only a 16-bit object needs it
+
         size = sizes.code_size(obj)
         initialised, zero = sizes.data_bytes(obj)
         return Footprint(size.code, initialised, zero, size.align)
