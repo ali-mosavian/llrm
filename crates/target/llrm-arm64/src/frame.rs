@@ -425,7 +425,11 @@ impl Layout {
     /// pair's offset (`AArch64FrameLowering`, the first CSR push).
     fn folded_bump(&self) -> Option<i64> {
         let first = self.saves.first().map(|(_, at)| *at).or(self.frame_record)?;
-        (first == 0 && self.size <= 512).then_some(self.size as i64)
+        // A lone register's pre-index store takes imm9 (-256), a pair's imm7 scaled (-512); past
+        // its range the pin bumps with a separate `sub sp`.
+        let single = matches!(self.saves.first(), Some((Save::GprPair(_, None) | Save::FprPair(_, None), _)));
+        let range = if single { 256 } else { 512 };
+        (first == 0 && self.size <= range).then_some(self.size as i64)
     }
 
     /// The locals' bytes where the saved registers are pushed first and the
