@@ -7,7 +7,7 @@ use llrm_codegen::model::lir::SrcLoc;
 use rustc_hash::FxHashMap as HashMap;
 
 use crate::mc::inst::{Gpr, Inst, Target, Vreg};
-use crate::mc::visit::{Reg, RegRef, Role};
+use crate::mc::visit::{Reg, RegList, RegRef, Role};
 
 /// A machine instruction: a real one, or a pseudo that a later phase turns into
 /// real ones (LLVM's pseudo instructions and `COPY`).
@@ -130,8 +130,8 @@ impl Op {
         matches!(self, Op::DbgValue { .. })
     }
 
-    pub fn defs_and_uses(&self) -> (Vec<Reg>, Vec<Reg>) {
-        let (mut defs, mut uses) = (Vec::new(), Vec::new());
+    pub fn defs_and_uses(&self) -> (RegList, RegList) {
+        let (mut defs, mut uses) = (RegList::new(), RegList::new());
         self.for_each_register(&mut |key, role| {
             if role.writes() {
                 defs.push(key);

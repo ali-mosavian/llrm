@@ -481,7 +481,9 @@ fn every_instruction_states_its_effect() {
     let lowered = to_lir(&function).expect("maps");
     let _file = enter(Regs(&crate::REGISTER_INFO));
     let (flags, memory) = (Lanes::flags(1), Lanes::flags(Lanes::MEMORY));
-    let machine = |list: Vec<Reg>| list.into_iter().filter(|r| !r.is_virtual() && *r != Reg::Gpr(Gpr::R31)).count();
+    let machine = |list: crate::mc::visit::RegList| {
+        list.into_iter().filter(|r| !r.is_virtual() && *r != Reg::Gpr(Gpr::R31)).count()
+    };
     for (op, insn) in function.blocks[0].ops.iter().zip(lowered.body.blocks[0].insns.iter()) {
         let (reads, writes) = insn.declared.unwrap_or_else(|| panic!("{op:?} states no effect"));
         let facts = crate::facts::of(op);
@@ -579,7 +581,10 @@ fn only_a_row_with_a_tied_operand_is_untied_by_the_two_address_pass() {
         .map(|what| (what.name.as_deref().map(str::to_owned), ties_in(regs, what)))
         .collect();
     assert!(tied.contains(&(Some("SUBSWri".into()), false)), "{tied:?}");
-    assert!(tied.iter().any(|(name, tied)| name.as_deref().is_some_and(|n| n.starts_with("MOVK")) && *tied), "{tied:?}");
+    assert!(
+        tied.iter().any(|(name, tied)| name.as_deref().is_some_and(|n| n.starts_with("MOVK")) && *tied),
+        "{tied:?}"
+    );
     let after = untied_only(&body);
     assert_eq!(after.iter_insns().count(), body.iter_insns().count(), "a copy was put before an untied form");
 }
@@ -608,7 +613,11 @@ fn a_float_operand_is_confined_to_the_float_registers() {
     let found = confinement_of(lowered.body.regs(), lowered.body.iter_insns().map(|one| &**one), defined, &sets);
     match found {
         Confinement::Only(only) => {
-            assert!(!only.is_empty() && only.iter().all(|one| lowered.body.regs().in_class(*one, llrm_lir::registers::class::FPR)), "{only:?}")
+            assert!(
+                !only.is_empty()
+                    && only.iter().all(|one| lowered.body.regs().in_class(*one, llrm_lir::registers::class::FPR)),
+                "{only:?}"
+            )
         }
         _ => panic!("an fadd's result is not confined to the float registers"),
     }
@@ -627,7 +636,8 @@ fn an_invariant_shift_in_a_loop_is_made_before_it() {
     let wide = |rd| Inst::MoveWide { op: Wide::Zero, width: WIDTHS[1], rd, imm16: 7, lsl: 0 };
     let mut function = MFunc::new("t");
     function.next_register = Gpr::FIRST_VIRTUAL + 16;
-    let block = |label: &str, ops: Vec<Op>| MBlock { label: label.into(), ops: ops.into_iter().map(|op| (op, None)).collect() };
+    let block =
+        |label: &str, ops: Vec<Op>| MBlock { label: label.into(), ops: ops.into_iter().map(|op| (op, None)).collect() };
     function.blocks = vec![
         block("pre", vec![Op::I(wide(amount)), Op::I(wide(value)), Op::I(wide(counter))]),
         block(

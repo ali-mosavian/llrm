@@ -17,7 +17,7 @@
 //! ```
 
 use crate::mc::inst::*;
-use crate::mc::visit::Reg;
+use crate::mc::visit::RegList;
 use crate::mfunc::{MFunc, Op};
 
 /// Whether `inst` only compares: sets the flags and writes no register.
@@ -51,7 +51,7 @@ pub(crate) fn writes_flags(op: &Op) -> bool {
 pub fn run(function: &mut MFunc) {
     for block in &mut function.blocks {
         // The last comparison, as text, and the registers it read.
-        let mut held: Option<(String, Vec<Reg>)> = None;
+        let mut held: Option<(String, RegList)> = None;
         block
             .ops
             .retain(

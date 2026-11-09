@@ -1,6 +1,7 @@
 //! Liveness is computed without allocating per operation or per iteration.
 
 use llrm_arm64::mc::inst::*;
+use llrm_arm64::mc::visit::Reg;
 use llrm_arm64::mfunc::{MBlock, MFunc, Op, branch_to};
 use llrm_arm64::prepass::{cfg, live_in};
 use llrm_support::alloc_count::{Counting, counted};
@@ -48,4 +49,18 @@ fn liveness_of_a_loop_allocates_per_block_not_per_operation() {
     let (live, made) = counted(|| live_in(&function, &graph));
     std::hint::black_box(live);
     assert!(made <= 64, "{made} allocations for 200 operations in 8 blocks");
+}
+
+/// `defs_and_uses` built two vectors for every operation looked at (58 call
+/// sites; 0.6 M of queens' prepass after liveness stopped using it): an
+/// ordinary operation allocated twice, and the answer is unchanged.
+#[test]
+fn the_registers_of_an_ordinary_operation_are_listed_without_allocating() {
+    let op = add(100, 101, 102);
+    let ((defs, uses), made) = counted(|| op.defs_and_uses());
+    assert_eq!(
+        (defs.to_vec(), uses.to_vec()),
+        (vec![Reg::Gpr(Gpr(100))], vec![Reg::Gpr(Gpr(101)), Reg::Gpr(Gpr(102))])
+    );
+    assert_eq!(made, 0, "{made} allocations for one operation");
 }
