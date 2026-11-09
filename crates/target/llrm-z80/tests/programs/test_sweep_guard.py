@@ -57,6 +57,29 @@ class Verdict(unittest.TestCase):
         sweep.verdict([1, 2], [1, 2])
 
 
+class Preinclude(unittest.TestCase):
+    def test_sdcc_gets_the_type_macros_its_preprocessor_lacks(self):
+        """`typedef __INT32_TYPE__ s32;` made 5 programs read as "SDCC cannot compile this" (no bar) when SDCC has no
+        such predefined macro; the sweep now hands SDCC clang's type, size and byte-order macros."""
+        import os, shutil, tempfile
+        clang = os.environ.get("LLRM_PIN_CLANG", os.path.expanduser("~/scratch/llvm-build/bin/clang"))
+        if not os.path.exists(clang):
+            self.skipTest("no pin clang")
+        sweep_spec = importlib.util.spec_from_file_location("sweep_pre", Path(__file__).resolve().parent / "sweep.py")
+        sweep = importlib.util.module_from_spec(sweep_spec)
+        sweep_spec.loader.exec_module(sweep)
+        d = Path(tempfile.mkdtemp())
+        try:
+            flags = sweep.sdcc_preinclude(clang, d / "predefined.h")
+            text = (d / "predefined.h").read_text()
+        finally:
+            shutil.rmtree(d, True)
+        for macro in ("__INT32_TYPE__", "__SIZE_TYPE__", "__BYTE_ORDER__", "__INT_MAX__"):
+            self.assertIn(f"#define {macro} ", text)
+        self.assertTrue(flags[0].startswith("-Wp-include,"))
+        self.assertLess(len([f for f in flags if f.startswith("-D")]), 10)  # sdcc aborts past ~90 -D flags
+
+
 class Imports(unittest.TestCase):
     def test_measure_is_importable_without_running_its_command_line(self):
         """`tests/kernels/measure.py` called `main()` at import, so the sweep could not load its helpers and exec'd a split

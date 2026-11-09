@@ -55,6 +55,20 @@ def verdict(got, want):
     raise Void(f"WRONG value {first}: got {at(got)}, want {at(want)}")
 
 
+PREDEFINED = re.compile(r"#define (__[A-Z0-9_]*_TYPE__|__SIZEOF_[A-Z0-9_]*__|__[A-Z0-9_]*_(?:MAX|WIDTH)__|__BYTE_ORDER__|__ORDER_[A-Z0-9_]*__|__CHAR_BIT__) (.+)")
+
+
+def sdcc_preinclude(clang, path):
+    """A header of the type, size, limit and byte-order macros the corpus's clang predefines (for a 16-bit int target) and SDCC's
+    preprocessor lacks: `typedef __INT32_TYPE__ s32;` is a syntax error there, not an unsupported feature. One force-included
+    file, not `-D` flags: sdcc aborts with a buffer overflow past about 90 of them. A macro SDCC defines itself keeps its
+    value (`#ifndef`), so a program that checks `sizeof` against it reads SDCC's real sizes."""
+    out = run.sh([clang, "-target", "msp430", "-dM", "-E", "-"], run.ROOT, inp="").stdout
+    macros = [m for m in map(PREDEFINED.fullmatch, out.splitlines()) if m]
+    path.write_text("".join(f"#ifndef {m.group(1)}\n#define {m.group(1)} {m.group(2)}\n#endif\n" for m in macros))
+    return [f"-Wp-include,{path}", "-D__inline=", "-D__inline__="]
+
+
 class Void(Exception):
     """A cell without a row; the message is the reason that is written next to it."""
 
@@ -146,7 +160,7 @@ def sdcc_cell(path, w, tag, flags, ctx, want):
     d.mkdir()
     assemble(d, REPORT_SDCC, CRT0_SDCC)
     try:
-        s = run.sh(["sdcc", "-mz80", "-c", *flags, "-D__attribute__(x)=", str(path), "-o", "p.rel"], d, timeout=300)
+        s = run.sh(["sdcc", "-mz80", "-c", *flags, "-D__attribute__(x)=", *ctx.defines, str(path), "-o", "p.rel"], d, timeout=300)
     except subprocess.TimeoutExpired:
         raise Void("SDCC timeout")
     if s.returncode or not (d / "p.rel").exists():
@@ -204,6 +218,7 @@ def main():
     work = tempfile.mkdtemp(prefix="zprogs-")
     try:
         ctx.libc = run.libc_library(work)
+        ctx.defines = sdcc_preinclude(ctx.clang, Path(work) / "predefined.h")
         ctx.graph = measure.runtime_calls(str(run.RUNTIME))
         ctx.harness_ours = harness(run.REPORT, run.CRT0)
         ctx.harness_sdcc = harness(REPORT_SDCC, CRT0_SDCC)
