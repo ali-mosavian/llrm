@@ -32,6 +32,18 @@ class CorpusMatrix(unittest.TestCase):
         """frameless.c asks for -fno-inline-functions: gcc inlined all five statics into main (260 B against our 558 B, not like-for-like)."""
         self.assertEqual(mx.gcc_program_flags(["-DX", "-fno-inline-functions"]), ["-DX", "-fno-inline"])
 
+    def test_gcc_compiles_the_branch_of_a_source_that_tests_clang(self):
+        """variadic.c: `#ifdef __clang__` is the real stdarg walk, the rest a macro walk. gcc built the macro branch (178 B at 68000 -Os);
+        ours and clang built the stdarg one (gcc with it: 276 B), so the gcc column was a different program."""
+        import os
+        for name in ("GCC_M68K", "LLRM_CC", "LLRM_PIN_CLANG", "LLVM_M68K"):
+            os.environ.setdefault(name, "/x/" + name)
+        tools = mx.Tools()
+        source = str(Path(__file__).resolve().parent.parent / "tests/run/c/variadic.c")
+        self.assertIn("-D__clang__", tools.commands("gcc", "68000", "Os", source, [], "/tmp/o")[0])
+        plain = str(Path(__file__).resolve().parent.parent / "tests/run/c/bit_test.c")
+        self.assertNotIn("-D__clang__", tools.commands("gcc", "68000", "Os", plain, [], "/tmp/o")[0])
+
     def test_the_header_prints_every_columns_compile_lines(self):
         """A reader of a table saw only a hash of the setup; the three faults of 11-09 (hard float, rodata, inlining) were in command lines nobody printed."""
         import os

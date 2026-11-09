@@ -94,11 +94,14 @@ def long_double_abi_mismatch(source: str) -> bool:
     return bool(re.search(r"\blong\s+double\b", code_without_comments(source)))
 
 
-def gcc_program_flags(flags: list[str]) -> list[str]:
+def gcc_program_flags(flags: list[str], source: str = "") -> list[str]:
     """The program's flags as gcc reads them. `-fno-inline-functions` keeps a function out of line for clang and llrm-cc; gcc still
     inlines the ones called once and the small ones (frameless.c: five static helpers became one `main` of 105 instructions, 260 B,
     against our five functions, 558 B; with `-fno-inline` gcc keeps three functions, 178 instructions)."""
-    return ["-fno-inline" if flag == "-fno-inline-functions" else flag for flag in flags]
+    flags = ["-fno-inline" if flag == "-fno-inline-functions" else flag for flag in flags]
+    # A source that tests `__clang__` has one branch for clang and another for the rest; all three columns build the clang one
+    # (variadic.c: gcc built the macro walk, 178 B at 68000 -Os, against 276 B with the stdarg one ours and clang build).
+    return [*flags, "-D__clang__"] if "__clang__" in source else flags
 
 
 def relaxing_branches(text: str) -> str:
@@ -158,13 +161,14 @@ class Tools:
                     [self.as_, "--fatal-warnings", f"-m{cpu}", "-o", out + ".o", out + ".s"]]
         if compiler == "gcc":
             return [[self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *GCC_FLOAT,
-                     *(["-isystem", self.headers] if self.headers else []), *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *gcc_program_flags(flags), "-isystem", str(POSIX), "-c", path, "-o", out + ".o"]]
+                     *(["-isystem", self.headers] if self.headers else []), *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *gcc_program_flags(flags, Path(path).read_text(errors="replace") if Path(path).is_file() else ""), "-isystem", str(POSIX), "-c", path, "-o", out + ".o"]]
         return [[self.clang, "--target=m68k-linux-gnu", "-ffreestanding", "-fno-pic", "-w", *self.clang_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-S", "-emit-llvm", path, "-o", out + ".ll"],
                 [self.llc, "-mtriple=m68k-linux-gnu", "-relocation-model=static", "-O2", "-filetype=obj", f"-mcpu=M{cpu}", out + ".ll", "-o", out + ".o"]]
 
     def column_lines(self) -> str:
         """Header text: every column's compile lines, so the next reader sees the setup (the flags hash is in the same header)."""
-        return "".join(f"# {c}: " + " ; ".join(" ".join(cmd) for cmd in self.commands(c, "<cpu>", "<level>", "<program.c>", ["<program flags>"], "<out>")) + "\n" for c in ("ours", "gcc", "clang"))
+        lines = "".join(f"# {c}: " + " ; ".join(" ".join(cmd) for cmd in self.commands(c, "<cpu>", "<level>", "<program.c>", ["<program flags>"], "<out>")) + "\n" for c in ("ours", "gcc", "clang"))
+        return lines + "# gcc also gets -D__clang__ for a source that tests it (the branch ours and clang build)\n"
 
     def library(self, cpu: str, level: str, obj: Path, work: Path) -> tuple[int | None, str]:
         """(bytes of the compiler-rt members the object pulls, unresolved helpers). Only the referenced members link, as in a real link.
