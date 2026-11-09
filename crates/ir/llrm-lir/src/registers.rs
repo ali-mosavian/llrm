@@ -303,6 +303,7 @@ pub type Rows = fn(&str, usize, usize) -> &'static [Row];
 pub struct Cache {
     integers: [std::sync::OnceLock<Vec<RegId>>; 4],
     xmm_bytes: std::sync::OnceLock<u32>,
+    float: std::sync::OnceLock<u32>,
     rfp: std::sync::OnceLock<Vec<RegId>>,
 }
 
@@ -316,6 +317,7 @@ impl Cache {
                 std::sync::OnceLock::new(),
             ],
             xmm_bytes: std::sync::OnceLock::new(),
+            float: std::sync::OnceLock::new(),
             rfp: std::sync::OnceLock::new(),
         }
     }
@@ -677,8 +679,24 @@ impl Info {
             .cache
             .xmm_bytes
             .get_or_init(
-                || self.entries().find(|(_, one)| one.classes & class::XMM != 0).map_or(0, |(_, one)| one.bits / 8),
+                || self.entries().find(|(_, one)| one.classes & self.float_class() != 0).map_or(0, |(_, one)| one.bits / 8),
             )
+    }
+
+    /// The class scalar floats and vectors live in: `xmm` where the file has
+    /// it, else `fpr` (arm64's `v` registers), else none.
+    pub fn float_class(&self) -> u32 {
+        *self.cache.float.get_or_init(|| {
+            if self.entries().any(|(_, one)| one.classes & class::XMM != 0) { class::XMM } else { class::FPR }
+        })
+    }
+
+    /// Whether `register` is in the file's float class.
+    pub fn in_float_class(
+        &self,
+        register: RegId,
+    ) -> bool {
+        self.in_class(register, self.float_class())
     }
 
     /// How wide this register is, or None where the target does not say: a

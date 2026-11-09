@@ -614,4 +614,75 @@ fn a_writeback_base_is_a_value_of_its_own_in_the_body() {
         .collect();
     assert_eq!(twice, Vec::<String>::new());
     assert_eq!(round_trip(&function).expect("round-trips").blocks[0].ops.len(), 3);
+
+/// A value an `fadd` defines is confined to the float registers. The class
+/// rule knew `xmm` only, so an arm64 `d` value was free to take a general
+/// register (3 of the corpus's 43 functions got one for a 16-byte value).
+#[test]
+fn a_float_operand_is_confined_to_the_float_registers() {
+    use llrm_codegen::backend::classes::RegisterClasses;
+    use llrm_codegen::backend::regclass::{Confinement, Sets, confinement_of};
+
+    let size = FpSize::D;
+    let rd = Vreg(Gpr::FIRST_VIRTUAL + 3);
+    let lowered = to_lir(&function(vec![Op::I(Inst::FpBinary {
+        op: FpBinary::Add,
+        size,
+        rd,
+        rn: Vreg(Gpr::FIRST_VIRTUAL + 4),
+        rm: Vreg(Gpr::FIRST_VIRTUAL + 5),
+    })]))
+    .expect("an fadd maps");
+    let classes = RegisterClasses::of(&crate::description::Arm64);
+    let sets = Sets::of(&classes);
+    let defined = lowered.body.iter_insns().find_map(|one| one.defines.first().copied()).expect("a definition");
+    let found = confinement_of(lowered.body.regs(), lowered.body.iter_insns().map(|one| &**one), defined, &sets);
+    match found {
+        Confinement::Only(only) => {
+            assert!(!only.is_empty() && only.iter().all(|one| lowered.body.regs().in_class(*one, llrm_lir::registers::class::FPR)), "{only:?}")
+        }
+        _ => panic!("an fadd's result is not confined to the float registers"),
+    }
+}
+
+/// A shift of two values the loop never writes is made before the loop. The
+/// pin: MachineLICM moves arm64 forms (it changed 0 of 43 corpus functions
+/// only because the mid-end had already hoisted them).
+#[test]
+fn an_invariant_shift_in_a_loop_is_made_before_it() {
+    use llrm_codegen::backend::classes::RegisterClasses;
+    use llrm_codegen::backend::machinelicm::hoisted;
+
+    let r = |n| Gpr(Gpr::FIRST_VIRTUAL + n);
+    let (amount, value, shifted, counter) = (r(1), r(2), r(3), r(4));
+    let wide = |rd| Inst::MoveWide { op: Wide::Zero, width: WIDTHS[1], rd, imm16: 7, lsl: 0 };
+    let mut function = MFunc::new("t");
+    function.next_register = Gpr::FIRST_VIRTUAL + 16;
+    let block = |label: &str, ops: Vec<Op>| MBlock { label: label.into(), ops: ops.into_iter().map(|op| (op, None)).collect() };
+    function.blocks = vec![
+        block("pre", vec![Op::I(wide(amount)), Op::I(wide(value)), Op::I(wide(counter))]),
+        block(
+            "loop",
+            vec![
+                Op::I(Inst::Divide { op: Div::Lslv, width: WIDTHS[1], rd: shifted, rn: value, rm: amount }),
+                Op::I(Inst::AddSubImm {
+                    op: AddSub { subtract: true, set_flags: false },
+                    width: WIDTHS[1],
+                    rd: counter,
+                    rn: counter,
+                    imm12: 1,
+                    shift12: false,
+                }),
+                Op::I(Inst::CompareBranch { nonzero: true, width: Width::X, rt: counter, target: label("loop") }),
+            ],
+        ),
+        block("done", vec![Op::Return { uses: vec![], tail: None }]),
+    ];
+    let body = to_lir(&function).expect("the forms map").body;
+    let after = hoisted(&body, &RegisterClasses::of(&crate::description::Arm64));
+    let in_block = |body: &LirBody, at: usize, name: &str| {
+        body.blocks[at].insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(name)))
+    };
+    assert!(in_block(&body, 1, "LSLVXr"), "the premise: the shift starts in the loop");
+    assert!(in_block(&after, 0, "LSLVXr") && !in_block(&after, 1, "LSLVXr"), "the shift stayed in the loop");
 }

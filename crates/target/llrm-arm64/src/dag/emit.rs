@@ -1456,6 +1456,28 @@ impl Emitter<'_> {
                     NodeData::Register(number) => self.fvreg(number),
                     other => return Err(format!("a register operand that is {other:?}")),
                 };
+                // `EmitCopyToRegNode`: the copy of an undefined value is an
+                // `IMPLICIT_DEF` of the register, defined as zero here as the
+                // integer copy's is.
+                if matches!(
+                    self.dag.opcode(node.ops[2]),
+                    ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF")
+                ) {
+                    let size = match self.dag.value_type(node.ops[2]) {
+                        EVT::Simple(MVT::F32) => FpSize::S,
+                        EVT::Simple(MVT::F64) => FpSize::D,
+                        other => return Err(format!("a copy of an undefined {other:?}")),
+                    };
+                    let width = if size == FpSize::D { Width::X } else { Width::W };
+                    self.ops.push(Op::I(Inst::FpInt {
+                        op: FpConvert::Bits { to_fp: true },
+                        width,
+                        size,
+                        gpr: Gpr::R31,
+                        fpr: dst,
+                    }));
+                    return Ok(());
+                }
                 let Operand::Fpr(src) = self.operand(node.ops[2])? else {
                     return Err("a float copy of a constant".into());
                 };
