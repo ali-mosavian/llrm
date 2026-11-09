@@ -241,28 +241,24 @@ pub fn expand(
         // The carry in is already in C.
         op::ADDOC8 => byte3(&mut out, "", "adc", reg(&o[0])?, reg(&o[2])?, reg(&o[3])?),
         op::SUBOC8 => byte3(&mut out, "", "sbc", reg(&o[0])?, reg(&o[2])?, reg(&o[3])?),
-        // a byte op reading its second operand through a pointer: `ldy #off; op (p),y`
+        // an op reading its second operand through a pointer: `ldy #off; op (p),y`, a lane at a time
         code if crate::pointer_alu::pointer_alu(code).is_some() => {
             let fold = crate::pointer_alu::pointer_alu(code).expect("guarded");
             let ((lo, hi), off) = (word(&o[fold.ptr])?, imm(&o[fold.ptr + 1])?);
             let lo = zero_page_pointer(&mut out, &lo, &hi);
+            let (mnemonic, lanes) = (fold.mnemonic.to_lowercase(), if fold.word { 2 } else { 1 });
             if let Some(carry) = fold.carry {
                 writeln!(out, "  {}", carry.to_lowercase()).unwrap();
             }
-            writeln!(out, "  ldy #{off}\n  lda {}\n  {} ({lo}),y\n  sta {}", reg(&o[fold.a])?, fold.mnemonic.to_lowercase(), reg(&o[0])?)
-                .unwrap();
-        }
-        op::AND8 => {
-            let (d, a, b) = simple(o)?;
-            byte3(&mut out, "", "and", &d, &a, &b);
-        }
-        op::OR8 => {
-            let (d, a, b) = simple(o)?;
-            byte3(&mut out, "", "ora", &d, &a, &b);
-        }
-        op::XOR8 => {
-            let (d, a, b) = simple(o)?;
-            byte3(&mut out, "", "eor", &d, &a, &b);
+            for lane in 0..lanes {
+                let (dest, from) = if fold.word {
+                    let ((dl, dh), (al, ah)) = (word(&o[0])?, word(&o[fold.a])?);
+                    if lane == 0 { (dl, al) } else { (dh, ah) }
+                } else {
+                    (reg(&o[0])?.to_owned(), reg(&o[fold.a])?.to_owned())
+                };
+                writeln!(out, "  ldy #{}\n  lda {from}\n  {mnemonic} ({lo}),y\n  sta {dest}", off + lane).unwrap();
+            }
         }
         op::ADD8M | op::SUB8M | op::AND8M | op::OR8M | op::XOR8M => {
             let (carry, mnemonic) = match inst.opcode {

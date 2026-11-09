@@ -1189,6 +1189,34 @@ impl Builder {
         Ok(())
     }
 
+    /// The same on a word: the carry runs from the low byte to the high, the high byte of the second operand being at
+    /// `off + 1`.
+    fn alu16_pointer(
+        &mut self,
+        fold: &crate::pointer_alu::PointerAlu,
+        d: &str,
+        a: &str,
+        pointer: &str,
+        off: i64,
+    ) -> Result<(), Unsupported> {
+        let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
+        let ptr = self.pointer(pointer)?;
+        self.require(ptr, Class::PAIR)?;
+        let (al, ah) = self.read_word(a)?;
+        let (dl, dh) = self.write_word(d)?;
+        if let Some(carry) = fold.carry {
+            self.push(Inst::new(Kind::Op(carry), vec![]));
+        }
+        for (lane, (to, from)) in [(dl, al), (dh, ah)].into_iter().enumerate() {
+            self.copy(acc, from);
+            let operands =
+                vec![Operand::Def(acc), Operand::Use(acc), Operand::Use(ptr), Operand::Imm(off + lane as i64), Operand::Def(y)];
+            self.push(Inst::new(Kind::Op(pointer_kind(fold.mnemonic)), operands));
+            self.copy(to, acc);
+        }
+        Ok(())
+    }
+
     /// `d := a op g[i]` for a global indexed by a byte: x takes the index, the
     /// op reads `g,x`.
     fn alu_indexed(
@@ -1803,7 +1831,12 @@ pub fn build_with_places(
             code if crate::pointer_alu::pointer_alu(code).is_some() => {
                 let fold = crate::pointer_alu::pointer_alu(code).expect("guarded");
                 let offset = immediate(&o[fold.ptr + 1])?;
-                b.alu_pointer(fold.mnemonic, fold.carry, name(&o[0])?, name(&o[fold.a])?, name(&o[fold.ptr])?, offset)?
+                let (d, a, pointer) = (name(&o[0])?, name(&o[fold.a])?, name(&o[fold.ptr])?);
+                if fold.word {
+                    b.alu16_pointer(&fold, d, a, pointer, offset)?
+                } else {
+                    b.alu_pointer(fold.mnemonic, fold.carry, d, a, pointer, offset)?
+                }
             }
             op::ADD8MX | op::SUB8MX | op::AND8MX | op::OR8MX | op::XOR8MX => {
                 let (mnemonic, carry) = match inst.opcode {

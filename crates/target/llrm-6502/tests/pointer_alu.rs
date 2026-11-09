@@ -1,4 +1,5 @@
-//! A byte loaded through a pointer and used once by an ALU op is that op's memory operand: `x + *p` was
+//! A value loaded through a pointer and used once by an ALU op is that op's memory operand (bytes, words
+//! and the carry chains of wider sums): `x + *p` was
 //! `ldy #0; lda (p),y; sta t; clc; txa; adc t` and is `clc; ldy #0; adc (p),y` (the 65C02 with offset 0: `clc; adc (p)`),
 //! as llvm-mos does (scmp's final subtract, 2026-11-09).
 
@@ -15,8 +16,12 @@ const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a
     define i8 @andp(ptr %p, i8 %x) {\n  %v = load i8, ptr %p\n  %r = and i8 %x, %v\n  ret i8 %r\n}\n\
     define i8 @orp(ptr %p, i8 %x) {\n  %v = load i8, ptr %p\n  %r = or i8 %x, %v\n  ret i8 %r\n}\n\
     define i8 @twice(ptr %p, i8 %x) {\n  %v = load i8, ptr %p\n  %r = add i8 %x, %v\n  %s = add i8 %r, %v\n  ret i8 %s\n}\n\
+    define i16 @addw(ptr %p, i16 %x) {\n  %q = getelementptr i16, ptr %p, i16 1\n  %v = load i16, ptr %q, align 1\n  %r = add i16 %x, %v\n  ret i16 %r\n}\n\
+    define i16 @subw(ptr %p, i16 %x) {\n  %v = load i16, ptr %p, align 1\n  %r = sub i16 %x, %v\n  ret i16 %r\n}\n\
+    define i16 @addz(ptr %p, i16 %x) {\n  %b = load i8, ptr %p\n  %v = zext i8 %b to i16\n  %r = add i16 %x, %v\n  ret i16 %r\n}\n\
+    define i16 @sum32(ptr %p, i16 %unused) {\n  %q = getelementptr i8, ptr %p, i16 4\n  %r = getelementptr i8, ptr %p, i16 8\n  %a = load i32, ptr %q, align 1\n  %b = load i32, ptr %r, align 1\n  %s = add i32 %a, %b\n  %h = lshr i32 %s, 16\n  %t = trunc i32 %h to i16\n  ret i16 %t\n}\n\
     define i8 @after_store(ptr %p, i8 %x) {\n  %v = load i8, ptr %p\n  store i8 1, ptr %p\n  %r = add i8 %x, %v\n  ret i8 %r\n}";
-const DATA: &str = ".segment \"DATA\"\nbuf: .byte 5, 9, 200, 77\n.segment \"CODE\"\n";
+const DATA: &str = ".segment \"DATA\"\nbuf: .byte 5, 9, 200, 77, 255, 255, 1, 0, 1, 0, 0, 0\n.segment \"CODE\"\n";
 
 fn text(
     cpu: Cpu,
@@ -88,5 +93,56 @@ fn the_folded_ops_compute_what_the_loads_did() {
             assert_eq!(run(cpu, "twice", x), i32::from(x.wrapping_add(10)), "{cpu:?} {x} + 5 + 5");
             assert_eq!(run(cpu, "after_store", x), i32::from(x.wrapping_add(5)), "{cpu:?} {x} + old 5");
         }
+    }
+}
+
+/// A word run: `x` in rc4:rc5, the result's low byte in A and its high byte in X.
+fn run_word(
+    cpu: Cpu,
+    name: &str,
+    x: u16,
+    high: bool,
+) -> i32 {
+    let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
+    let (target, tag) = if cpu == Cpu::Mos6502 { ("sim6502", "n") } else { ("sim65c02", "c") };
+    let main = format!(
+        "  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n  lda #<{x}\n  sta rc4\n  lda #>{x}\n  sta rc5\n  jsr {name}\n{}",
+        if high { "  txa\n" } else { "" }
+    );
+    common::run_on(target, &format!("pointer-alu-{name}-{x}-{high}-{tag}"), &main, &format!("{}{DATA}", text(cpu, name))).0
+}
+
+/// Words and a 32-bit sum read the memory through `(rc2),y` lane by lane, with no copy of the loaded
+/// bytes, on both CPUs.
+#[test]
+fn a_loaded_word_is_read_lane_by_lane_by_the_op_that_uses_it() {
+    for cpu in [Cpu::Mos6502, Cpu::W65c02] {
+        for (name, op, lanes) in [("addw", "adc", 2), ("subw", "sbc", 2), ("sum32", "adc", 4)] {
+            let text = text(cpu, name);
+            let reads = text.matches(&format!("  {op} (rc2)")).count();
+            assert!(reads >= lanes, "{cpu:?} {name}: {reads} reads, want {lanes}:\n{text}");
+            // `sum32` adds two loaded values: one of them is still loaded, the other is the operand
+            assert!(name == "sum32" || !text.contains("lda (rc2)"), "{cpu:?} {name} still loads a lane into A first:\n{text}");
+        }
+    }
+}
+
+/// The word ops, with carries and borrows across the lanes, against the bytes in memory: the word at buf+2 is 77*256+200 =
+/// 19912, the word at buf is 9*256+5 = 2309, the byte at buf is 5, and buf+4 and buf+8 hold 0x0001FFFF and 1.
+#[test]
+fn the_word_ops_compute_what_the_loads_did() {
+    for cpu in [Cpu::Mos6502, Cpu::W65c02] {
+        for x in [0u16, 1, 255, 256, 0xFFFF, 40000] {
+            let sum = x.wrapping_add(19912);
+            assert_eq!(run_word(cpu, "addw", x, false), i32::from(sum as u8), "{cpu:?} {x} + 19912, low");
+            assert_eq!(run_word(cpu, "addw", x, true), i32::from((sum >> 8) as u8), "{cpu:?} {x} + 19912, high");
+            let diff = x.wrapping_sub(2309);
+            assert_eq!(run_word(cpu, "subw", x, false), i32::from(diff as u8), "{cpu:?} {x} - 2309, low");
+            assert_eq!(run_word(cpu, "subw", x, true), i32::from((diff >> 8) as u8), "{cpu:?} {x} - 2309, high");
+            let plus = x.wrapping_add(5);
+            assert_eq!(run_word(cpu, "addz", x, false), i32::from(plus as u8), "{cpu:?} {x} + 5, low");
+            assert_eq!(run_word(cpu, "addz", x, true), i32::from((plus >> 8) as u8), "{cpu:?} {x} + 5, high");
+        }
+        assert_eq!(run_word(cpu, "sum32", 0, false), 2, "{cpu:?} 0x0001FFFF + 1 carries into bit 17");
     }
 }

@@ -225,6 +225,24 @@ let mayLoad = 1, AddedComplexity = 10 in {
   def SUBOC8P : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, Carry:$ci, memri:$p), "suboc8p $d, $co, $a, $ci, ($p)",
                         [(set i8:$d, i1:$co, (usubo_carry i8:$a, (load MOSAddr:$p), i1:$ci))]>;
 }
+// The same on a word: LDY #off; LDA alo; ADC (p),Y; STA dlo; LDY #off+1; LDA ahi; ADC (p),Y; STA dhi.
+let mayLoad = 1, AddedComplexity = 10 in {
+  let Defs = [P] in {
+    def ADD16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "add16p $d, $a, ($p)", [(set i16:$d, (add i16:$a, (load MOSAddr:$p)))]>;
+    def SUB16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "sub16p $d, $a, ($p)", [(set i16:$d, (sub i16:$a, (load MOSAddr:$p)))]>;
+    def AND16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "and16p $d, $a, ($p)", [(set i16:$d, (and i16:$a, (load MOSAddr:$p)))]>;
+    def OR16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "or16p $d, $a, ($p)", [(set i16:$d, (or i16:$a, (load MOSAddr:$p)))]>;
+    def XOR16P : MOSInst<(outs Imag16:$d), (ins Imag16:$a, memri:$p), "xor16p $d, $a, ($p)", [(set i16:$d, (xor i16:$a, (load MOSAddr:$p)))]>;
+  }
+  def ADDO16P : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, memri:$p), "addo16p $d, $co, $a, ($p)",
+                        [(set i16:$d, i1:$co, (uaddo i16:$a, (load MOSAddr:$p)))]>;
+  def SUBO16P : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, memri:$p), "subo16p $d, $co, $a, ($p)",
+                        [(set i16:$d, i1:$co, (usubo i16:$a, (load MOSAddr:$p)))]>;
+  def ADDOC16P : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, Carry:$ci, memri:$p), "addoc16p $d, $co, $a, $ci, ($p)",
+                         [(set i16:$d, i1:$co, (uaddo_carry i16:$a, (load MOSAddr:$p), i1:$ci))]>;
+  def SUBOC16P : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, Carry:$ci, memri:$p), "suboc16p $d, $co, $a, $ci, ($p)",
+                         [(set i16:$d, i1:$co, (usubo_carry i16:$a, (load MOSAddr:$p), i1:$ci))]>;
+}
 // The same with a global indexed by a byte: LDX i; LDA a; ADC g,x.
 let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {
   def ADD8MX : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absx:$m), "add8mx $d, $a, $m", [(set i8:$d, (add i8:$a, (load MOSAbsX:$m)))]>;
