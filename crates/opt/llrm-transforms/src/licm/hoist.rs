@@ -86,6 +86,7 @@ pub fn hoist_region(
                 .or_else(|| hoist_sub_add_association(unit, ctx, inst))
             {
                 ctx.state.gone.borrow_mut().extend([one.inst()].into_iter().chain(one.erased()));
+                one.forward(unit.function, ctx);
                 // The preheader gets it where the visit reached it, after the
                 // hoists found so far.
                 reassociated.push((found.len(), one));
@@ -221,6 +222,23 @@ impl Reassociation {
             Self::MinMax { logic, .. } => logic,
             Self::SubAdd { i, .. } | Self::MulAdd { i, .. } => i,
             Self::IcmpAddSub { dead, .. } => dead,
+        }
+    }
+
+    /// What the next decisions of the loop read of this one, as the pin's
+    /// in-place edit leaves it (`hoistMulAddAssociation`).
+    fn forward(
+        &self,
+        function: &Function,
+        ctx: &LoopCtx,
+    ) {
+        let Self::MulAdd { i, variant, changes, .. } = self else { return };
+        if let Some(result) = function.instruction(*i).result {
+            ctx.state.forwarded.borrow_mut().insert(result, *variant);
+        }
+        let mut factored = ctx.state.factored.borrow_mut();
+        for &(ins, slot, _) in changes {
+            factored.insert(ins, slot);
         }
     }
 
@@ -421,8 +439,9 @@ fn hoist_gep(
 /// `(LV op C1) op C2` and its commuted forms, the integer `add`, `mul`, `and`,
 /// `or` and `xor`. DEVIATE: an instruction another reassociation of the loop
 /// has replaced, or one reading a value it erased, is left alone, where LLVM
-/// would reassociate the new one in turn (the next round of the pipeline
-/// does).
+/// would reassociate the new one in turn (a later round of the pipeline
+/// does; `hoist_mul_add_association` follows the edits, the one cascade a
+/// measured cell needed).
 fn hoist_bo_association(
     unit: &passes::Unit,
     ctx: &LoopCtx,
@@ -612,9 +631,11 @@ fn hoist_add_sub(
 /// for integers: `((A1 * B1) + (A2 * B2) + ...) * C` with `A1`, `A2`, ... and
 /// `C` invariant becomes `((A1 * C) * B1) + ((A2 * C) * B2) + ...`, the
 /// invariant products made in the preheader. At most 5 of them
-/// (`licm-max-num-int-reassociations`). DEVIATE: as for
-/// [`hoist_bo_association`], an instruction another reassociation of the loop
-/// has replaced is left alone.
+/// (`licm-max-num-int-reassociations`). The pin edits in place, so a later
+/// product of the loop reads the product it replaced as its variant and a
+/// leaf it changed as a product with an invariant factor (`State::forwarded`
+/// and `State::factored` say so); the sum a long unrolled chain builds is
+/// multiplied once.
 fn hoist_mul_add_association(
     unit: &passes::Unit,
     ctx: &LoopCtx,
@@ -634,19 +655,30 @@ fn hoist_mul_add_association(
         return None;
     }
     let factor = invariant;
-    let binary_def = |operand: Operand| -> Option<InstId> {
+    // The instruction `operand` is after the earlier edits of the loop, and
+    // how many users it has: a replaced product's users are its variant's.
+    let binary_def = |operand: Operand| -> Option<(InstId, Option<usize>)> {
+        let mut users = None;
+        let mut operand = operand;
+        while let Operand::Value(value) = operand
+            && let Some(&to) = ctx.state.forwarded.borrow().get(&value)
+        {
+            users = Some(function.users(value).iter().count());
+            operand = to;
+        }
         let Operand::Value(value) = operand else { return None };
         let ValueDef::Instruction(def) = function.value(value).def else { return None };
-        matches!(function.instruction(def).opcode, Opcode::Binary(_)).then_some(def)
+        matches!(function.instruction(def).opcode, Opcode::Binary(_)).then_some((def, users))
     };
     let gone = |def: InstId| ctx.state.gone.borrow().contains(&def);
     let mut changes = Vec::new();
     let mut adds = Vec::new();
-    let mut worklist: Vec<InstId> = binary_def(variant).into_iter().collect();
-    while let Some(bo) = worklist.pop() {
+    let mut worklist: Vec<(InstId, Option<usize>)> = binary_def(variant).into_iter().collect();
+    while let Some((bo, users)) = worklist.pop() {
         let instruction = function.instruction(bo);
         let result = instruction.result?;
-        if function.users(result).iter().count() != 1 || gone(bo) {
+        let factored = ctx.state.factored.borrow().get(&bo).copied();
+        if users.unwrap_or_else(|| function.users(result).iter().count()) != 1 || (gone(bo) && factored.is_none()) {
             return None;
         }
         if instruction.opcode == Opcode::Binary(BinaryOp::Add)
@@ -659,7 +691,9 @@ fn hoist_mul_add_association(
         if instruction.opcode != Opcode::Binary(BinaryOp::Mul) || !ctx.contains(bo) {
             return None;
         }
-        let slot = if ctx.is_loop_invariant(instruction.operands[0]) {
+        let slot = if let Some(slot) = factored {
+            slot
+        } else if ctx.is_loop_invariant(instruction.operands[0]) {
             0
         } else if ctx.is_loop_invariant(instruction.operands[1]) {
             1
