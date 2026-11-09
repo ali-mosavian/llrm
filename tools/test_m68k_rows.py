@@ -18,3 +18,8 @@ def test_the_known_wrong_align_row_names_owner_exit_and_its_executed_evidence():
     assert "M68K-KNOWN-WRONG-ALIGN" in row and "Owner: m68k" in row and "Exit:" in row
     for name in ("aligned16_local.c", "aligned16_main.c"):
         assert name in row and (ROOT / "crates/target/llrm-m68k/tests/data_rt" / name).exists(), name
+
+
+def test_the_known_wrong_align_row_exits_on_the_shared_realign_date():
+    row = (ROOT / "docs/working/m68k-known-wrong-align.md").read_text()
+    assert "stack realign 2026-11-14" in row
