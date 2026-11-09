@@ -179,23 +179,35 @@ pub fn selections_with_alternatives(
         crate::dagisel::pipeline::ILP.with(|one| one.set(false));
         one
     };
-    let calls_the_routine = |name: &str| {
-        module.globals.iter().any(|global| {
-            global.name.as_deref() == Some(name)
-                && global.function().is_some_and(|one| {
-                    llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_MULTIPLY)
-                        && ["optsize", "minsize"].into_iter().any(|attr| llrm_mir::memory::has(&one.attrs, attr))
-                })
+    // A function with the routine for its long multiplies (`prepare::mark_long_multiplies`) is also selected the
+    // other way: a sized one with every multiply inline (`DECOMPOSE_MULS`), an unsized one (at -O1 only) with every multiply a
+    // call (`CALL_MULS`); the caller prices the two (`compile::decomposed_functions`).
+    let calls_the_routine = |name: &str| -> Option<bool> {
+        module.globals.iter().find_map(|global| {
+            let one = global.function().filter(|_| global.name.as_deref() == Some(name))?;
+            llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_MULTIPLY).then(|| {
+                ["optsize", "minsize"].into_iter().any(|attr| llrm_mir::memory::has(&one.attrs, attr))
+            })
         })
     };
     let main: Vec<Selected> = names.iter().map(|name| (name.clone(), select(name, false), select(name, true))).collect();
-    crate::dagisel::pipeline::DECOMPOSE_MULS.with(|one| one.set(true));
     let alternatives: Vec<Selected> = names
         .iter()
-        .filter(|name| calls_the_routine(name))
-        .map(|name| (name.clone(), select(name, false), select(name, true)))
+        .filter_map(|name| {
+            let sized = calls_the_routine(name)?;
+            // The all-calls form is priced by relative regret at -O1 only. Above it the rate (1 B = 3 T) needs the
+            // clocks in absolute terms, and the static loop weights run about 5x under the measured ones (call_keeps:
+            // 11124 priced, 57813 run), which made -368 B for +5970 T look like a gain.
+            if !sized && request.level != Level::O1 {
+                return None;
+            }
+            let switch = if sized { &crate::dagisel::pipeline::DECOMPOSE_MULS } else { &crate::dagisel::pipeline::CALL_MULS };
+            switch.with(|one| one.set(true));
+            let selected = (name.clone(), select(name, false), select(name, true));
+            switch.with(|one| one.set(false));
+            Some(selected)
+        })
         .collect();
-    crate::dagisel::pipeline::DECOMPOSE_MULS.with(|one| one.set(false));
     Ok((main, alternatives))
 }
 
@@ -255,6 +267,14 @@ impl llrm_mir::target::Machine for Z80Machine {
 
     fn tti(&self) -> Option<Rc<dyn llrm_mir::tti::Tti>> {
         Some(Rc::new(crate::tti::Z80Tti::new()))
+    }
+
+    fn kept_stack_align(&self) -> Option<u64> {
+        Some(crate::KEPT_STACK_ALIGN)
+    }
+
+    fn max_alloca_align(&self) -> Option<u64> {
+        Some(crate::MAX_ALLOCA_ALIGN)
     }
 }
 

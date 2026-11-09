@@ -1,4 +1,6 @@
-"""The x86_64 rows: which programs run natively, and that a row is a count of the program's own run."""
+"""The x86_64 rows: which programs run natively, and that a row is a count of the program's own run.
+
+Run: `uv run --with pytest --with iced-x86 pytest tools/bench/test_native.py` (the ours rows need `cargo build --release --bins`; without a dist they skip as UNMEASURED)."""
 
 import shutil
 import sys
@@ -57,15 +59,15 @@ def test_a_program_that_prints_the_wrong_value_is_an_error_not_a_count(tmp_path)
     assert "prints" in row.get("error", "") and "instructions" not in row
 
 
-def test_the_gated_column_is_flagless_and_the_columns_beside_it_are_no_pic(tmp_path):
-    """llrm-cc -m64 without -fno-pic writes rip-relative code (memcpy_runtime -Os 235 B, 209 B with it) and main ignores the flag: the gate compares flagless head to flagless
-    base, and the column that compares to gcc and clang (both -fno-pic) is ours with the flag, reported only."""
+def test_ours_is_flagless_pie_and_the_externals_beside_it_are_fpie(tmp_path):
+    """llrm-cc -m64 is flagless PIE (rip-relative); gcc and clang built -fno-pic wrote absolute data references and faked a +10.6% hanoi2 gap. Every external column is -fPIE."""
     def command(column):
         return native.compile_command(column, tmp_path, tmp_path / "a.c", "O2", tmp_path / "a.o", tmp_path)[0]
 
     assert "-fno-pic" not in command(native.OURS)
-    assert all("-fno-pic" in command(column) for column in native.REPORTED)
-    assert command(native.NOPIC)[0] == command(native.OURS)[0]
+    assert all("-fno-pic" not in command(column) for column in (native.OURS, *(c for c in native.REPORTED if c != native.NOPIC)))
+    assert all("-fPIE" in command(column) for column in native.REPORTED if column != native.NOPIC)
+    assert "-fno-pic" in command(native.NOPIC), "NOPIC, not the bar: ours -fno-pic stays reported"
 
 
 def test_one_binary_measured_twice_reads_the_same_count_to_the_rounding(tmp_path):
@@ -95,7 +97,7 @@ def test_the_pin_column_compiles_with_the_pinned_clang(tmp_path, monkeypatch):
     """The scoreboard compares ours to gcc and clang; the pinned LLVM clang is the compiler llrm tracks, and its column is named by LLRM_PIN_CLANG."""
     monkeypatch.setenv("LLRM_PIN_CLANG", "/pin/bin/clang")
     command, _ = native.compile_command("pin64", tmp_path, tmp_path / "a.c", "O2", tmp_path / "a.o", tmp_path)
-    assert command[0] == "/pin/bin/clang" and "-fno-pic" in command
+    assert command[0] == "/pin/bin/clang" and "-fPIE" in command
 
 
 def test_nbody_single_prints_its_checksum_on_x86_64(tmp_path):
@@ -196,7 +198,13 @@ def test_pic_mode_reads_a_known_object_of_each_compiler_as_its_mode(compiler, tm
     source = tmp_path / "t.c"
     source.write_text("static int a[100];\nstatic int b;\nstatic const float k[4] = {1.5f, 2.5f, 3.5f, 4.5f};\nint f(int i) { return a[i]++ + b; }\nfloat g(int i) { return k[i & 3]; }\n")
     if compiler == "ours":
-        program, env = [str(llrmbin.compiler(llrmbin.bin_dir())), "-m64"], {**__import__("os").environ, "LLRM_CC_TARGET": "x86_64-linux"}
+        try:
+            driver = llrmbin.compiler(llrmbin.bin_dir())
+        except SystemExit as why:
+            pytest.skip(f"UNMEASURED: no usable llrm-cc dist ({why})")
+        if not Path(driver).exists():
+            pytest.skip(f"UNMEASURED: no built llrm-cc at {driver}")
+        program, env = [str(driver), "-m64"], {**__import__("os").environ, "LLRM_CC_TARGET": "x86_64-linux"}
     else:
         if shutil.which(compiler) is None or shutil.which("readelf") is None:
             pytest.skip(f"no {compiler} or readelf")

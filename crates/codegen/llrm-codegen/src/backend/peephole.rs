@@ -365,6 +365,7 @@ impl Peephole {
             Some(merged) => self.released(merged),
             None => body,
         };
+        let body = crate::backend::floatslotcopy::copied(&body, &self.cpu, &self.saved, &self.classes).unwrap_or(body);
         let body = forwarded_reloads(self.rules, &body);
         let body = forwarded_float_reloads(self.rules, &body);
         let body = forwarded_copies(self.rules, &body);
@@ -613,7 +614,9 @@ pub fn _lanes(
         return Lanes::new();
     }
     let start = regs.get(register).map_or(0, |one| one.lane / 8);
-    Lanes::span(full, start, register.size() as u32)
+    // The file's width; `iced`'s only for a register the file does not list.
+    let bytes = regs.bytes(register).map_or_else(|| register.size() as u32, |bytes| bytes as u32);
+    Lanes::span(full, start, bytes)
 }
 
 /// Write only the live low word of a register-only dword move
@@ -1337,6 +1340,15 @@ pub fn _moved_by(
     Some((moved, _lanes(regs, destination).or(&source.map(|one| _lanes(regs, one)).unwrap_or_default())))
 }
 
+/// The x87 control-word save and load. They are barriers so that nothing moves
+/// across a rounding-mode switch, but they touch one memory cell and no
+/// register: as unknown instructions they made every register live before them,
+/// so no register was free anywhere a function converts a float to an integer.
+fn control_word(what: &Semantics) -> bool {
+    matches!(what.name.as_deref(), Some("fnstcw" | "fldcw"))
+        && what.dests.iter().chain(&what.sources).all(|place| matches!(place, Loc::Mem(_)))
+}
+
 /// `_register_effects` of an instruction that says only what it does: no
 /// required or delivered register, no clobber and no symbol. Asked of a
 /// proposed rewrite of one, which needs no instruction made of it to ask (copy
@@ -1351,7 +1363,7 @@ pub fn _register_effects_of_what(
     if what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty) {
         return Some((Lanes::new(), Lanes::new()));
     }
-    if what.op == Operation::Barrier {
+    if what.op == Operation::Barrier && !control_word(what) {
         return None;
     }
     let key = EffectKey { bits, may_write, flags, what, requires: &[], delivers: &[] };
@@ -1407,7 +1419,7 @@ fn _register_effects_worked(
         return None;
     }
     let what = match &one.what {
-        Some(what) if what.op != Operation::Barrier => what,
+        Some(what) if what.op != Operation::Barrier || control_word(what) => what,
         // `getattr(one.op, "node", None)`: a `mir.Op` has no `node`, so the
         // decoded-opaque fallback never applies and this is unknown.
         _ => return None,

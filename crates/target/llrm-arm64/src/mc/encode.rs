@@ -304,6 +304,14 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 | width.sf() << 31
                 | place(*rn, *rd)?
         }
+        Inst::AddCarry { op, width, rd, rn, rm } => {
+            width.sf() << 31
+                | u32::from(op.subtract) << 30
+                | u32::from(op.set_flags) << 29
+                | 0b11010000 << 21
+                | reg(*rm)? << 16
+                | place(*rn, *rd)?
+        }
         Inst::CondCompare { negate, width, rn, rm_or_imm, nzcv, cond } => {
             let (second, immediate) = match rm_or_imm {
                 CcOperand::Reg(rm) => (reg(*rm)?, 0),

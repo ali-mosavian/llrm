@@ -771,8 +771,16 @@ impl Tti for X86 {
         self.tuning.price_pin_multiplies
     }
 
+    fn lftr_any_stride(&self) -> bool {
+        self.tuning.lftr_any_stride
+    }
+
     fn imul_at_size(&self) -> bool {
         self.tuning.imul_at_size
+    }
+
+    fn rep_movs_at_size(&self) -> bool {
+        self.tuning.rep_movs_at_size
     }
 
     fn rep_stos_at_size(&self) -> bool {
@@ -1465,6 +1473,10 @@ impl Tti for X86 {
     }
 
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    fn congruent_ivs_truncate_to_narrowest_integer(&self) -> bool {
         self.real_mode.is_some()
     }
 

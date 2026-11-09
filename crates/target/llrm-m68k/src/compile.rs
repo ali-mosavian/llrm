@@ -431,6 +431,7 @@ fn items_once(
         options.code_model.absolute_data(),
         wants_size,
         options.carry_chain,
+        crate::timing::Price::of(wants_size, options.strict),
         &libcalls,
     )?;
     let mut function = emit(name, &blocks)?;

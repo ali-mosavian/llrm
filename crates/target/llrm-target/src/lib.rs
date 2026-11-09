@@ -583,12 +583,28 @@ pub trait Target {
         false
     }
 
+    /// The machine phases (`flow::machine_with`'s class names) this target does
+    /// not run, each with why. The pin's `TargetPassConfig` adds each target's
+    /// own passes while the phase list here is x86's, so a target names what
+    /// its pin has no pass for. An unknown name is an error in `machine_with`.
+    fn omitted_phases(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 
     /// A `mov imm; jmp` block with one predecessor is folded into it at -Os
     /// (LEAF-FOLD-OS).
     fn leaf_fold_at_size(&self) -> bool {
+        false
+    }
+
+    /// MachineCSE keeps a compare whose difference nothing reads apart from the
+    /// same difference made in a later block, when that difference overwrites
+    /// an operand still live (CSE-CMP): sharing them moves the subtract in
+    /// front of the branch and adds a copy of the operand. The pin shares.
+    fn cse_keeps_compare_with_live_minuend(&self) -> bool {
         false
     }
 

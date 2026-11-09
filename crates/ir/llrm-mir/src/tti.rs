@@ -924,8 +924,18 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::lftr_any_stride` (DEVIATE LFTR1).
+    fn lftr_any_stride(&self) -> bool {
+        false
+    }
+
     /// `Tuning::imul_at_size`.
     fn imul_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::rep_movs_at_size`.
+    fn rep_movs_at_size(&self) -> bool {
         false
     }
 
@@ -1477,6 +1487,22 @@ pub trait Tti {
     /// by their bytes first when the function is built for size; false is the
     /// pin's order at every level.
     fn lsr_size_order(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE CIV1 (owner alloc-small, exit 2026-11-30): `replaceCongruentIVs`
+    /// maps each wide counter's truncation to the type of the header's last
+    /// phi (`Phis.back()`, ScalarEvolutionExpander.cpp#L1965), which is a
+    /// pointer phi when the loop has one (pointers sort to the back), and
+    /// `isTruncateFree` to a pointer is false: a loop that steps a pointer keeps
+    /// a narrow counter beside the wide one it truncates to. True takes the
+    /// narrowest integer phi. The divergence is our real-mode `huge_space`
+    /// addressing mode (a bare base register only), which the pin has no
+    /// counterpart for: under the pin's ordinary p3 modes LSR shares the wide
+    /// counter (GenerateTruncates) and `llc -print-after=loop-reduce` leaves no
+    /// duplicate i16 phi. m16 huge bq16 -O1: 357 -> 339 B.
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L1965
+    fn congruent_ivs_truncate_to_narrowest_integer(&self) -> bool {
         false
     }
 

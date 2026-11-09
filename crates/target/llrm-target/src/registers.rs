@@ -48,6 +48,12 @@ pub fn byte_lanes(text: &str) -> bool {
     order(text, "@lanes").iter().any(|word| word == "bytes")
 }
 
+/// Whether a `@ties rows` line says the rows of the file's instructions state
+/// which operand is tied to the dest.
+pub fn ties_by_row(text: &str) -> bool {
+    order(text, "@ties").iter().any(|word| word == "rows")
+}
+
 /// The 8-bit allocation order a `@bytes al cl dl ah ch dh bl bh` line states
 /// (the GR8 class of X86RegisterInfo.td): the high bytes are in it.
 pub fn bytes(text: &str) -> Vec<String> {
@@ -270,7 +276,7 @@ pub fn source_with(
     let columns: Vec<String> = (0..WIDTH_COLUMNS).map(|at| widths.get(at).copied().unwrap_or(0).to_string()).collect();
     // Each root at each width: the first register by iced's number.
     code.push_str(&format!(
-        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let bytes: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root.index();\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, bytes, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views, byte_lanes: {} }}\n}};\n",
+        "    let loads: &'static [({id}, &'static str)] = &[{}];\n    let scratch: &'static [{id}] = &[{}];\n    let bytes: &'static [{id}] = &[{}];\n    let widths: [u32; {WIDTH_COLUMNS}] = [{}];\n    let mut views: [[Option<{id}>; {WIDTH_COLUMNS}]; 256] = [[None; {WIDTH_COLUMNS}]; 256];\n    let mut at = 0;\n    while at < 256 {{\n        if let Some(entry) = table[at] {{\n            let mut column = 0;\n            while column < {WIDTH_COLUMNS} {{\n                let root = entry.root.index();\n                if widths[column] == entry.bits && views[root][column].is_none() {{\n                    views[root][column] = Some(entry.id);\n                }}\n                column += 1;\n            }}\n        }}\n        at += 1;\n    }}\n    llrm_lir::registers::Info {{ table, frame: {}, stack: {}, loads, scratch, bytes, data_segment: {}, stack_segment: {}, code_segment: {}, far_segment: {}, widths, effects: {effects}, cache: llrm_lir::registers::Cache::new(), views, byte_lanes: {}, ties_by_row: {} }}\n}};\n",
         loads.join(", "),
         scratch.join(", "),
         bytes.join(", "),
@@ -281,7 +287,8 @@ pub fn source_with(
         optional("stack_segment")?,
         optional("code_segment")?,
         optional("far_segment")?,
-        byte_lanes(text)
+        byte_lanes(text),
+        ties_by_row(text)
     ));
     Ok(code)
 }
