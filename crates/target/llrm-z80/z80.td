@@ -202,6 +202,8 @@ let mayLoad = 1, Defs = [A] in
   def LD16rm : Z80Inst<(outs GR16:$d), (ins HLR:$p), "ld16 $d, ($p)", [(set i16:$d, (load i16:$p))]>;
 let mayStore = 1 in
   def LD16mr : Z80Inst<(outs), (ins GR16:$s, HLR:$p), "ld16 ($p), $s", [(store i16:$s, i16:$p)]>;
+  // A constant word: two `ld (hl),n`, no pair to load first (x86's MOV16mi).
+  def LD16mi : Z80Inst<(outs), (ins i16imm:$v, HLR:$p), "ld16 ($p), $v", [(store (i16 imm:$v), i16:$p)]>;
 let mayStore = 1 in {
   def LD8mr : Z80Inst<(outs), (ins GR8:$s, HLR:$p), "ld ($p), $s", [(store i8:$s, i16:$p)]>;
   def LD8mi : Z80Inst<(outs), (ins i8imm:$v, HLR:$p), "ld ($p), $v", [(store (i8 imm:$v), i16:$p)]>;

@@ -669,6 +669,15 @@ impl Printer<'_> {
                 self.push(format!("ld (hl), {}", name(hi)));
                 self.push("dec hl");
             }
+            "LD16mi" => {
+                let Some(Operand::Imm(value)) = inst.operands.first() else {
+                    return Err("LD16mi without a constant".to_owned());
+                };
+                self.push(format!("ld (hl), #{}", value & 0xFF));
+                self.push("inc hl");
+                self.push(format!("ld (hl), #{}", (value >> 8) & 0xFF));
+                self.push("dec hl");
+            }
             "LD8am" | "LD16rg" => {
                 let (to, at) = (name_of(self, 0)?, self.address(inst, 1)?);
                 self.push(format!("ld {to}, ({at})"));
