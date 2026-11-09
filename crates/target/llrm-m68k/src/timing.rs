@@ -418,7 +418,10 @@ pub fn cost_on(
         && operands.len() == 2;
     let partial = if cpu == Cpu::M68060 {
         m68060::partial(base, suffix)
-    } else if cpu == Cpu::M68020 {
+    } else if matches!(cpu, Cpu::M68020 | Cpu::M68030 | Cpu::M68040) {
+        // bit fields and `cas` are a bound on the 68020 and 68030 (the "< 5
+        // bytes" and successful-compare rows) and omit the long-word-boundary
+        // term on the 68040
         matches!(base, "mulu" | "muls" | "divu" | "divs") || m68020::partial(base)
     } else {
         matches!(base, "mulu" | "muls" | "divu" | "divs")
