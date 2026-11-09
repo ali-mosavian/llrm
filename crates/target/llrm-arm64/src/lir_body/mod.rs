@@ -17,6 +17,8 @@ mod control;
 mod float;
 mod integer;
 mod memory;
+#[cfg(test)]
+mod opcode_tests;
 pub mod stages;
 #[cfg(test)]
 mod tests;

@@ -1,0 +1,262 @@
+# The arm64 forms the producer (`lir_body`) emits, one row per form name, with what
+# the shared passes ask of a form: its operands (`r` general register, `x`
+# floating-point/vector register, `i` immediate, `a` address, `m` memory cell),
+# which source is tied to a dest (`^0`), the flags it reads and writes, and its cost class.
+#
+# This file is a BRIDGE, and the one place these facts live (`arm64.instr`
+# keeps only what the pattern matcher reads). The name column is the producer's;
+# the last column is LLVM's AArch64 opcode as the pin names it
+# (`AArch64GenInstrInfo.inc`, checked by `tools/arm64/check_opcodes.py`), with
+# `[A|B]` where one name is several opcodes (a load's destination width is in its
+# operand, not its name). A name with an addressing-mode suffix (`LDRX.ui`, `.pre`,
+# `.post`, `.ro21`, `.pg`, `.gotpg`, `.fi`) or atomic suffix (`CAS.3al`) is not
+# LLVM's: it is renamed to LLVM's with the .td matcher step (arm64 moves to the
+# pin's .td matcher after the main merge, spike row 9's successor), and this file
+# is deleted when that matcher reads `AArch64InstrInfo.td`. A call, a tail call
+# and the return carry a variable number of registers: no row.
+#
+# Read by `llrm_target::instr::parse_opcodes` with `dialect.toml`; `rows()` is
+# generated from it by `build.rs`. Placeholders: `{g}` W/X at `g32,g64`; `{f}` and
+# `{s}` H/S/D at `f16,f32,f64`; `{z}` B/H/W/X and `{zn}` 0..3 at `z8,z16,z32,z64`;
+# `{a|b}` is one alternative per row, in step across the name and the last column.
+#
+# name  operation  shape  widths  cost  fixed  reads  writes  flags  llvm
+# ---- integer arithmetic and logic
+ADD{g}ri       binary   r/r,i,i      g32,g64  alu        -  -  -  -/-          ADD{g}ri
+ADD{g}rs       binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/-          ADD{g}rs
+ADD{g}rx       binary   r/r,r,i,i    g32,g64  alu_ext    -  -  -  -/-          ADD{g}rx
+ADDS{g}ri      binary   r/r,i,i      g32,g64  alu        -  -  -  -/N,Z,C,V    ADDS{g}ri
+ADDS{g}rs      binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/N,Z,C,V    ADDS{g}rs
+ADDS{g}rx      binary   r/r,r,i,i    g32,g64  alu_ext    -  -  -  -/N,Z,C,V    ADDS{g}rx
+SUB{g}ri       binary   r/r,i,i      g32,g64  alu        -  -  -  -/-          SUB{g}ri
+SUB{g}rs       binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/-          SUB{g}rs
+SUB{g}rx       binary   r/r,r,i,i    g32,g64  alu_ext    -  -  -  -/-          SUB{g}rx
+SUBS{g}ri      binary   r/r,i,i      g32,g64  alu        -  -  -  -/N,Z,C,V    SUBS{g}ri
+SUBS{g}rs      binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/N,Z,C,V    SUBS{g}rs
+SUBS{g}rx      binary   r/r,r,i,i    g32,g64  alu_ext    -  -  -  -/N,Z,C,V    SUBS{g}rx
+ADDXri.lo12    binary   r/r,a        g64      alu        -  -  -  -/-          ADDXri
+AND{g}ri       binary   r/r,i        g32,g64  alu        -  -  -  -/-          AND{g}ri
+AND{g}rs       binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/-          AND{g}rs
+ANDS{g}ri      binary   r/r,i        g32,g64  alu        -  -  -  -/N,Z,C,V    ANDS{g}ri
+ANDS{g}rs      binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/N,Z,C,V    ANDS{g}rs
+BIC{g}rs       binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/-          BIC{g}rs
+BICS{g}rs      binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/N,Z,C,V    BICS{g}rs
+EON{g}rs       binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/-          EON{g}rs
+EOR{g}ri       binary   r/r,i        g32,g64  alu        -  -  -  -/-          EOR{g}ri
+EOR{g}rs       binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/-          EOR{g}rs
+ORN{g}rs       binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/-          ORN{g}rs
+ORR{g}ri       binary   r/r,i        g32,g64  alu        -  -  -  -/-          ORR{g}ri
+ORR{g}rs       binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/-          ORR{g}rs
+ASRV{g}r       binary   r/r,r        g32,g64  shift      -  -  -  -/-          ASRV{g}r
+LSLV{g}r       binary   r/r,r        g32,g64  shift      -  -  -  -/-          LSLV{g}r
+LSRV{g}r       binary   r/r,r        g32,g64  shift      -  -  -  -/-          LSRV{g}r
+RORV{g}r       binary   r/r,r        g32,g64  shift      -  -  -  -/-          RORV{g}r
+CLS{g}r        unary    r/r          g32,g64  alu        -  -  -  -/-          CLS{g}r
+CLZ{g}r        unary    r/r          g32,g64  alu        -  -  -  -/-          CLZ{g}r
+RBIT{g}r       unary    r/r          g32,g64  alu        -  -  -  -/-          RBIT{g}r
+REV{g}r        unary    r/r          g32,g64  alu        -  -  -  -/-          REV{g}r
+REV16{g}r      unary    r/r          g32,g64  alu        -  -  -  -/-          REV16{g}r
+EXTR{g}rri     funnel   r/r,r,i      g32,g64  alu        -  -  -  -/-          EXTR{g}rri
+MOVK{g}i       move     r/^0,i,i     g32,g64  alu        -  -  -  -/-          MOVK{g}i
+MOVN{g}i       move     r/i,i        g32,g64  alu        -  -  -  -/-          MOVN{g}i
+MOVZ{g}i       move     r/i,i        g32,g64  alu        -  -  -  -/-          MOVZ{g}i
+BFM{g}ri       bitfield r/^0,r,i,i   g32,g64  alu        -  -  -  -/-          BFM{g}ri
+SBFM{g}ri      bitfield r/r,i,i      g32,g64  alu        -  -  -  -/-          SBFM{g}ri
+UBFM{g}ri      bitfield r/r,i,i      g32,g64  alu        -  -  -  -/-          UBFM{g}ri
+CCMN{g}i       ccmp     -/r,i,i,i    g32,g64  alu        -  -  -  N,Z,C,V/N,Z,C,V  CCMN{g}i
+CCMN{g}r       ccmp     -/r,r,i,i    g32,g64  alu        -  -  -  N,Z,C,V/N,Z,C,V  CCMN{g}r
+CCMP{g}i       ccmp     -/r,i,i,i    g32,g64  alu        -  -  -  N,Z,C,V/N,Z,C,V  CCMP{g}i
+CCMP{g}r       ccmp     -/r,r,i,i    g32,g64  alu        -  -  -  N,Z,C,V/N,Z,C,V  CCMP{g}r
+CSEL{g}r       select   r/r,r,i      g32,g64  alu        -  -  -  N,Z,C,V/-    CSEL{g}r
+CSINC{g}r      select   r/r,r,i      g32,g64  alu        -  -  -  N,Z,C,V/-    CSINC{g}r
+CSINV{g}r      select   r/r,r,i      g32,g64  alu        -  -  -  N,Z,C,V/-    CSINV{g}r
+CSNEG{g}r      select   r/r,r,i      g32,g64  alu        -  -  -  N,Z,C,V/-    CSNEG{g}r
+MADD{g}rrr     muladd   r/r,r,r      g32,g64  mul        -  -  -  -/-          MADD{g}rrr
+MSUB{g}rrr     muladd   r/r,r,r      g32,g64  mul        -  -  -  -/-          MSUB{g}rrr
+SMADDLXrrr     muladd   r/r,r,r      g64      mul        -  -  -  -/-          SMADDLrrr
+SMSUBLXrrr     muladd   r/r,r,r      g64      mul        -  -  -  -/-          SMSUBLrrr
+UMADDLXrrr     muladd   r/r,r,r      g64      mul        -  -  -  -/-          UMADDLrrr
+UMSUBLXrrr     muladd   r/r,r,r      g64      mul        -  -  -  -/-          UMSUBLrrr
+SMULHXrrr      mul      r/r,r,r      g64      mul        -  -  -  -/-          SMULHrr
+UMULHXrrr      mul      r/r,r,r      g64      mul        -  -  -  -/-          UMULHrr
+SDIV{g}r       div      r/r,r        g32,g64  div        -  -  -  -/-          SDIV{g}r
+UDIV{g}r       div      r/r,r        g32,g64  div        -  -  -  -/-          UDIV{g}r
+ADR            addr     r/a          -        alu        -  -  -  -/-          ADR
+ADRP           addr     r/a          -        alu        -  -  -  -/-          ADRP
+ADRP.got       addr     r/a          -        alu        -  -  -  -/-          ADRP
+# ---- control
+B                        jump     -/-           -                        branch     - - - -/-                B
+BL                       call     -/a           -                        call       - - - -/-                BL
+BLR                      call     -/r           -                        call       - - - -/-                BLR
+BR                       jump     -/r           -                        branch     - - - -/-                BR
+BRK                      escape   -/i           -                        branch     - - - -/-                BRK
+Bcc                      branch   -/i           -                        branch     - - - N,Z,C,V/-          Bcc
+CB{Z|NZ}{g}              branch   -/r           g32,g64                  branch     - - - -/-                CB{Z|NZ}{g}
+TBZ                      branch   -/r,i         -                        branch     - - - -/-                TBZ[W|X]
+TBNZ                     branch   -/r,i         -                        branch     - - - -/-                TBNZ[W|X]
+DMB                      barrier  -/i           -                        barrier    - - - -/-                DMB
+NOP                      nothing  -/-           -                        alu        - - - -/-                HINT
+PRFM                     nothing  -/i,r         -                        load       - - - -/-                PRFMui
+RET                      ret      -/r           -                        branch     - - - -/-                RET
+SVC                      escape   -/i           -                        branch     - - - -/-                SVC
+# ---- floating point (x: a floating-point register)
+FADD{f}rr                binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FADD{f}rr
+FSUB{f}rr                binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FSUB{f}rr
+FMUL{f}rr                binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMUL{f}rr
+FDIV{f}rr                binary   x/x,x         f16,f32,f64              fp_div     - - - -/-                FDIV{f}rr
+FNMUL{f}rr               binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FNMUL{f}rr
+FMAX{f}rr                binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMAX{f}rr
+FMAXNM{f}rr              binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMAXNM{f}rr
+FMIN{f}rr                binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMIN{f}rr
+FMINNM{f}rr              binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMINNM{f}rr
+FABS{f}r                 unary    x/x           f16,f32,f64              fp_arith   - - - -/-                FABS{f}r
+FNEG{f}r                 unary    x/x           f16,f32,f64              fp_arith   - - - -/-                FNEG{f}r
+FSQRT{f}r                unary    x/x           f16,f32,f64              fp_div     - - - -/-                FSQRT{f}r
+FRINT{A|I|M|N|P|X|Z}{f}r unary    x/x           f16,f32,f64              fp_cvt     - - - -/-                FRINT{A|I|M|N|P|X|Z}{f}r
+FMADD{f}rrr              fmuladd  x/x,x,x       f16,f32,f64              fp_arith   - - - -/-                FMADD{f}rrr
+FMSUB{f}rrr              fmuladd  x/x,x,x       f16,f32,f64              fp_arith   - - - -/-                FMSUB{f}rrr
+FNMADD{f}rrr             fmuladd  x/x,x,x       f16,f32,f64              fp_arith   - - - -/-                FNMADD{f}rrr
+FNMSUB{f}rrr             fmuladd  x/x,x,x       f16,f32,f64              fp_arith   - - - -/-                FNMSUB{f}rrr
+FCSEL{f}rrr              select   x/x,x,i       f16,f32,f64              fp_arith   - - - N,Z,C,V/-          FCSEL{f}rrr
+FCMP{f}rr                cmp      -/x,x         f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMP{f}rr
+FCMP{f}rz                cmp      -/x           f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMP{f}ri
+FCMPE{f}rr               cmp      -/x,x         f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMPE{f}rr
+FCMPE{f}rz               cmp      -/x           f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMPE{f}ri
+FCVT{D|D|S|S|H|H}{S|H|D|H|D|S}r unary    x/x           -                        fp_cvt     - - - -/-                FCVT{D|D|S|S|H|H}{S|H|D|H|D|S}r
+FCVTZS{g}{f}r            unary    r/x           g32,g64,f16,f32,f64      fp_cvt     - - - -/-                FCVTZSU{g}{f}r
+FCVTZS{g}{f}ri           unary    r/x,i         g32,g64,f16,f32,f64      fp_cvt     - - - -/-                FCVTZSS{g}{f}ri
+FCVTZU{g}{f}r            unary    r/x           g32,g64,f16,f32,f64      fp_cvt     - - - -/-                FCVTZUU{g}{f}r
+FCVTZU{g}{f}ri           unary    r/x,i         g32,g64,f16,f32,f64      fp_cvt     - - - -/-                FCVTZUS{g}{f}ri
+SCVTF{g}{f}r             unary    x/r           g32,g64,f16,f32,f64      fp_cvt     - - - -/-                SCVTFU{g}{f}ri
+SCVTF{g}{f}ri            unary    x/r,i         g32,g64,f16,f32,f64      fp_cvt     - - - -/-                SCVTFS{g}{f}ri
+UCVTF{g}{f}r             unary    x/r           g32,g64,f16,f32,f64      fp_cvt     - - - -/-                UCVTFU{g}{f}ri
+UCVTF{g}{f}ri            unary    x/r,i         g32,g64,f16,f32,f64      fp_cvt     - - - -/-                UCVTFS{g}{f}ri
+FMOVSWr                  unary    x/r           -                        fp_cvt     - - - -/-                FMOVSWr
+FMOVDXr                  unary    x/r           -                        fp_cvt     - - - -/-                FMOVDXr
+FMOVH{g}r                unary    x/r           g32,g64                  fp_cvt     - - - -/-                FMOVH{g}r
+FMOVWSr                  unary    r/x           -                        fp_cvt     - - - -/-                FMOVWSr
+FMOVXDr                  unary    r/x           -                        fp_cvt     - - - -/-                FMOVXDr
+FMOV{g}Hr                unary    r/x           g32,g64                  fp_cvt     - - - -/-                FMOV{g}Hr
+FMOV{f}r                 move     x/x           f16,f32,f64              fp_arith   - - - -/-                FMOV{f}r
+FMOV{f}i                 move     x/i           f16,f32,f64              fp_arith   - - - -/-                FMOV{f}i
+# ---- vector register moves
+DUPv16b                  move     x/r           -                        fp_arith   - - - -/-                DUPv16i8gpr
+MOVIv16b                 move     x/i           -                        fp_arith   - - - -/-                MOVIv16b_ns
+MOVIv2d                  move     x/-           -                        fp_arith   - - - -/-                MOVIv2d_ns
+ORRv16b                  move     x/x           -                        fp_arith   - - - -/-                ORRv16i8
+# ---- pseudo operations (a call, a tail call and the return carry a variable number of
+# registers: no row, their effects are the contract's)
+COPY                     move     r/r           -                        alu        - - - -/-                COPY
+COPY_FPR                 move     x/x           -                        fp_arith   - - - -/-                COPY
+MOVImm                   move     r/i           -                        alu        - - - -/-                MOVi64imm
+ADDXri.fi                addr     r/a           -                        alu        - - - -/-                ADDXri
+DBG_VALUE                nothing  -/-           -                        alu        - - - -/-                DBG_VALUE
+JumpTableDest32          jump     r,r/r,r       -                        branch     - - - -/-                JumpTableDest32
+# ---- loads and stores: the addressing mode is in the name (`ui` offset, `fi` frame slot,
+# `pg` page offset, `gotpg` GOT page offset, `ro21` register offset; `pre`/`post` write the base back)
+LDRB.{ui|fi|pg|gotpg}    move     r/m           -                        load       - - - -/-                LDRBBui
+LDRB.ro21                move     r/m           -                        load       - - - -/-                LDRBB[roW|roX]
+LDRB.{pre|post}          move     r,r/m         -                        load       - - - -/-                LDRBB{pre|post}
+LDRH.{ui|fi|pg|gotpg}    move     r/m           -                        load       - - - -/-                LDRHHui
+LDRH.ro21                move     r/m           -                        load       - - - -/-                LDRHH[roW|roX]
+LDRH.{pre|post}          move     r,r/m         -                        load       - - - -/-                LDRHH{pre|post}
+LDRW.{ui|fi|pg|gotpg}    move     r/m           -                        load       - - - -/-                LDRWui
+LDRW.ro21                move     r/m           -                        load       - - - -/-                LDRW[roW|roX]
+LDRW.{pre|post}          move     r,r/m         -                        load       - - - -/-                LDRW{pre|post}
+LDRX.{ui|fi|pg|gotpg}    move     r/m           -                        load       - - - -/-                LDRXui
+LDRX.ro21                move     r/m           -                        load       - - - -/-                LDRX[roW|roX]
+LDRX.{pre|post}          move     r,r/m         -                        load       - - - -/-                LDRX{pre|post}
+LDRSB.{ui|fi|pg|gotpg}   move     r/m           -                        load       - - - -/-                LDRSB[W|X]ui
+LDRSB.ro21               move     r/m           -                        load       - - - -/-                LDRSB[WroW|WroX|XroW|XroX]
+LDRSB.{pre|post}         move     r,r/m         -                        load       - - - -/-                LDRSB[W|X]{pre|post}
+LDRSH.{ui|fi|pg|gotpg}   move     r/m           -                        load       - - - -/-                LDRSH[W|X]ui
+LDRSH.ro21               move     r/m           -                        load       - - - -/-                LDRSH[WroW|WroX|XroW|XroX]
+LDRSH.{pre|post}         move     r,r/m         -                        load       - - - -/-                LDRSH[W|X]{pre|post}
+LDRSW.{ui|fi|pg|gotpg}   move     r/m           -                        load       - - - -/-                LDRSWui
+LDRSW.ro21               move     r/m           -                        load       - - - -/-                LDRSW[roW|roX]
+LDRSW.{pre|post}         move     r,r/m         -                        load       - - - -/-                LDRSW{pre|post}
+LDRF2.{ui|fi|pg|gotpg}   move     x/m           -                        load       - - - -/-                LDRHui
+LDRF2.ro21               move     x/m           -                        load       - - - -/-                LDRH[roW|roX]
+LDRF2.{pre|post}         move     x,r/m         -                        load       - - - -/-                LDRH{pre|post}
+LDRF4.{ui|fi|pg|gotpg}   move     x/m           -                        load       - - - -/-                LDRSui
+LDRF4.ro21               move     x/m           -                        load       - - - -/-                LDRS[roW|roX]
+LDRF4.{pre|post}         move     x,r/m         -                        load       - - - -/-                LDRS{pre|post}
+LDRF8.{ui|fi|pg|gotpg}   move     x/m           -                        load       - - - -/-                LDRDui
+LDRF8.ro21               move     x/m           -                        load       - - - -/-                LDRD[roW|roX]
+LDRF8.{pre|post}         move     x,r/m         -                        load       - - - -/-                LDRD{pre|post}
+LDRF16.{ui|fi|pg|gotpg}  move     x/m           -                        load       - - - -/-                LDRQui
+LDRF16.ro21              move     x/m           -                        load       - - - -/-                LDRQ[roW|roX]
+LDRF16.{pre|post}        move     x,r/m         -                        load       - - - -/-                LDRQ{pre|post}
+STRB.{ui|fi|pg|gotpg}    move     -/r,m         -                        store      - - - -/-                STRBBui
+STRB.ro21                move     -/r,m         -                        store      - - - -/-                STRBB[roW|roX]
+STRB.{pre|post}          move     r/r,m         -                        store      - - - -/-                STRBB{pre|post}
+STRH.{ui|fi|pg|gotpg}    move     -/r,m         -                        store      - - - -/-                STRHHui
+STRH.ro21                move     -/r,m         -                        store      - - - -/-                STRHH[roW|roX]
+STRH.{pre|post}          move     r/r,m         -                        store      - - - -/-                STRHH{pre|post}
+STRW.{ui|fi|pg|gotpg}    move     -/r,m         -                        store      - - - -/-                STRWui
+STRW.ro21                move     -/r,m         -                        store      - - - -/-                STRW[roW|roX]
+STRW.{pre|post}          move     r/r,m         -                        store      - - - -/-                STRW{pre|post}
+STRX.{ui|fi|pg|gotpg}    move     -/r,m         -                        store      - - - -/-                STRXui
+STRX.ro21                move     -/r,m         -                        store      - - - -/-                STRX[roW|roX]
+STRX.{pre|post}          move     r/r,m         -                        store      - - - -/-                STRX{pre|post}
+STRSB.{ui|fi|pg|gotpg}   move     -/r,m         -                        store      - - - -/-                STRBBui
+STRSB.ro21               move     -/r,m         -                        store      - - - -/-                STRBB[roW|roX]
+STRSB.{pre|post}         move     r/r,m         -                        store      - - - -/-                STRBB{pre|post}
+STRSH.{ui|fi|pg|gotpg}   move     -/r,m         -                        store      - - - -/-                STRHHui
+STRSH.ro21               move     -/r,m         -                        store      - - - -/-                STRHH[roW|roX]
+STRSH.{pre|post}         move     r/r,m         -                        store      - - - -/-                STRHH{pre|post}
+STRSW.{ui|fi|pg|gotpg}   move     -/r,m         -                        store      - - - -/-                STRWui
+STRSW.ro21               move     -/r,m         -                        store      - - - -/-                STRW[roW|roX]
+STRSW.{pre|post}         move     r/r,m         -                        store      - - - -/-                STRW{pre|post}
+STRF2.{ui|fi|pg|gotpg}   move     -/x,m         -                        store      - - - -/-                STRHui
+STRF2.ro21               move     -/x,m         -                        store      - - - -/-                STRH[roW|roX]
+STRF2.{pre|post}         move     r/x,m         -                        store      - - - -/-                STRH{pre|post}
+STRF4.{ui|fi|pg|gotpg}   move     -/x,m         -                        store      - - - -/-                STRSui
+STRF4.ro21               move     -/x,m         -                        store      - - - -/-                STRS[roW|roX]
+STRF4.{pre|post}         move     r/x,m         -                        store      - - - -/-                STRS{pre|post}
+STRF8.{ui|fi|pg|gotpg}   move     -/x,m         -                        store      - - - -/-                STRDui
+STRF8.ro21               move     -/x,m         -                        store      - - - -/-                STRD[roW|roX]
+STRF8.{pre|post}         move     r/x,m         -                        store      - - - -/-                STRD{pre|post}
+STRF16.{ui|fi|pg|gotpg}  move     -/x,m         -                        store      - - - -/-                STRQui
+STRF16.ro21              move     -/x,m         -                        store      - - - -/-                STRQ[roW|roX]
+STRF16.{pre|post}        move     r/x,m         -                        store      - - - -/-                STRQ{pre|post}
+# ---- pairs
+LDPX.ui                  ldpair   r,r/m         -                        load       - - - -/-                LDPXi
+LDPX.{pre|post}          ldpair   r,r,r/m       -                        load       - - - -/-                LDPX{pre|post}
+LDPW.ui                  ldpair   r,r/m         -                        load       - - - -/-                LDPWi
+LDPW.{pre|post}          ldpair   r,r,r/m       -                        load       - - - -/-                LDPW{pre|post}
+LDPSW.ui                 ldpair   r,r/m         -                        load       - - - -/-                LDPSWi
+LDPSW.{pre|post}         ldpair   r,r,r/m       -                        load       - - - -/-                LDPSW{pre|post}
+LDPF4.ui                 ldpair   x,x/m         -                        load       - - - -/-                LDPSi
+LDPF4.{pre|post}         ldpair   r,x,x/m       -                        load       - - - -/-                LDPS{pre|post}
+LDPF8.ui                 ldpair   x,x/m         -                        load       - - - -/-                LDPDi
+LDPF8.{pre|post}         ldpair   r,x,x/m       -                        load       - - - -/-                LDPD{pre|post}
+LDPF16.ui                ldpair   x,x/m         -                        load       - - - -/-                LDPQi
+LDPF16.{pre|post}        ldpair   r,x,x/m       -                        load       - - - -/-                LDPQ{pre|post}
+STPX.ui                  stpair   -/r,r,m       -                        store      - - - -/-                STPXi
+STPX.{pre|post}          stpair   r/r,r,m       -                        store      - - - -/-                STPX{pre|post}
+STPW.ui                  stpair   -/r,r,m       -                        store      - - - -/-                STPWi
+STPW.{pre|post}          stpair   r/r,r,m       -                        store      - - - -/-                STPW{pre|post}
+STPSW.ui                 stpair   -/r,r,m       -                        store      - - - -/-                STPWi
+STPSW.{pre|post}         stpair   r/r,r,m       -                        store      - - - -/-                STPW{pre|post}
+STPF4.ui                 stpair   -/x,x,m       -                        store      - - - -/-                STPSi
+STPF4.{pre|post}         stpair   r/x,x,m       -                        store      - - - -/-                STPS{pre|post}
+STPF8.ui                 stpair   -/x,x,m       -                        store      - - - -/-                STPDi
+STPF8.{pre|post}         stpair   r/x,x,m       -                        store      - - - -/-                STPD{pre|post}
+STPF16.ui                stpair   -/x,x,m       -                        store      - - - -/-                STPQi
+STPF16.{pre|post}        stpair   r/x,x,m       -                        store      - - - -/-                STPQ{pre|post}
+# ---- atomics: `.<size><a|-><l|->` is the size (0 byte .. 3 doubleword), acquire and release
+# (the producer names the release store `a-` too)
+CAS.{zn}{--|a-|-l|al}    xchg     r/^0,r,m      z8,z16,z32,z64           atomic     - - - -/-                CAS{|A|L|AL}{z}
+SWP.{zn}{--|a-|-l|al}    xchg     r/r,m         z8,z16,z32,z64           atomic     - - - -/-                SWP{|A|L|AL}{z}
+LDADD.{zn}{--|a-|-l|al}  xchg     r/r,m         z8,z16,z32,z64           atomic     - - - -/-                LDADD{|A|L|AL}{z}
+LDCLR.{zn}{--|a-|-l|al}  xchg     r/r,m         z8,z16,z32,z64           atomic     - - - -/-                LDCLR{|A|L|AL}{z}
+LDEOR.{zn}{--|a-|-l|al}  xchg     r/r,m         z8,z16,z32,z64           atomic     - - - -/-                LDEOR{|A|L|AL}{z}
+LDSET.{zn}{--|a-|-l|al}  xchg     r/r,m         z8,z16,z32,z64           atomic     - - - -/-                LDSET{|A|L|AL}{z}
+LDSMAX.{zn}{--|a-|-l|al} xchg     r/r,m         z8,z16,z32,z64           atomic     - - - -/-                LDSMAX{|A|L|AL}{z}
+LDSMIN.{zn}{--|a-|-l|al} xchg     r/r,m         z8,z16,z32,z64           atomic     - - - -/-                LDSMIN{|A|L|AL}{z}
+LDUMAX.{zn}{--|a-|-l|al} xchg     r/r,m         z8,z16,z32,z64           atomic     - - - -/-                LDUMAX{|A|L|AL}{z}
+LDUMIN.{zn}{--|a-|-l|al} xchg     r/r,m         z8,z16,z32,z64           atomic     - - - -/-                LDUMIN{|A|L|AL}{z}
+LDAR.{zn}a-              move     r/m           z8,z16,z32,z64           atomic     - - - -/-                LDAR{z}
+LDAPR.{zn}a-             move     r/m           z8,z16,z32,z64           atomic     - - - -/-                LDAPR{z}
+STLR.{zn}a-              move     -/r,m         z8,z16,z32,z64           atomic     - - - -/-                STLR{z}

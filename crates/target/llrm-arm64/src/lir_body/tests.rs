@@ -35,7 +35,7 @@ const WIDTHS: [Width; 2] = [Width::W, Width::X];
 const SIZES: [FpSize; 3] = [FpSize::S, FpSize::D, FpSize::H];
 
 /// One instance of each member of each closed set an instruction carries.
-fn instructions() -> Vec<Inst> {
+pub(super) fn instructions() -> Vec<Inst> {
     let mut out = Vec::new();
     let (rd, rn, rm, ra) = (g(0), Gpr(3), g(1), Gpr(31));
     for width in WIDTHS {
@@ -335,7 +335,7 @@ const ALL: [&str; 45] = [
     "Prefetch",
 ];
 
-fn function(ops: Vec<Op>) -> MFunc {
+pub(super) fn function(ops: Vec<Op>) -> MFunc {
     let mut function = MFunc::new("t");
     function.slots = vec![crate::mfunc::Slot { size: 16, align: 8 }; 4];
     function.next_register = Gpr::FIRST_VIRTUAL + 16;
@@ -391,7 +391,8 @@ fn the_producer_names_registers_at_their_own_width() {
 
 /// No shared phase panics on arm64's body. `CopyPropagation` (and `Peephole`
 /// through it) asserted x86's 72 byte-lane units, so it panicked on all 43
-/// functions of the corpus: "the general registers' byte lanes left: 15 right: 72".
+/// functions of the corpus: "the general registers' byte lanes left: 15 right:
+/// 72".
 #[test]
 fn no_shared_phase_panics_on_the_producers_body() {
     let lowered = to_lir(&function(vec![Op::I(Inst::Nop)])).expect("a nop maps");
@@ -407,9 +408,8 @@ fn no_shared_phase_panics_on_the_producers_body() {
 #[test]
 fn the_producer_names_only_registers_the_file_describes() {
     use llrm_target::Target as _;
-    let float_registers = SIZES.map(|size| {
-        Op::I(Inst::FpBinary { op: FpBinary::Add, size, rd: Vreg(0), rn: Vreg(1), rm: Vreg(2) })
-    });
+    let float_registers =
+        SIZES.map(|size| Op::I(Inst::FpBinary { op: FpBinary::Add, size, rd: Vreg(0), rn: Vreg(1), rm: Vreg(2) }));
     let lowered = to_lir(&function(float_registers.into())).expect("a float add maps");
     let complaints = llrm_codegen::backend::verify::verify_for(
         &lowered.body,
