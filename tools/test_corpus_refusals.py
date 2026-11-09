@@ -33,10 +33,10 @@ def test_the_level_and_the_x86_mode_are_not_taken_from_the_header():
     assert seen[0][0] == "-DA" and "-O1" not in seen[0] and "-m32" not in seen[0]
 
 
-def test_register_upper_half_names_its_dos_abi_so_m64_does_not_run_it():
-    """`-mabi=watcom` only exists on the DOS rows; with no `// targets:` line m64 refused it (`no ABI "watcom"`)."""
+def test_register_upper_half_is_not_run_at_m64_where_there_is_no_watcom_abi():
+    """`-mabi=watcom` is not an m64 ABI (`no ABI "watcom": this target has sysv, win64`): m64 refused the program. Only the m64 row changes."""
     import corpus_targets
 
     source = (Path(__file__).parent.parent / "tests/run/c/register_upper_half.c").read_text()
     assert not corpus_targets.applies("x86_64-linux", source)
-    assert corpus_targets.applies("x86_32-dos", source)
+    assert all(corpus_targets.applies(t, source) for t in ("x86_32-linux", "x86_32-dos", "x86_16-dos", "arm64-linux", "m68k-68020", "wasm32"))
