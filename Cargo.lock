@@ -792,6 +792,7 @@ dependencies = [
  "llrm-object",
  "llrm-support",
  "llrm-target",
+ "llrm-transforms",
  "llrm-x86",
  "num-bigint",
  "num-traits",
