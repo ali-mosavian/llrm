@@ -374,14 +374,62 @@ impl llrm_mir::target::Machine for SingleThreaded {
     }
 }
 
-/// Every object of a single-threaded module is thread-local, so a store the
-/// loop runs on some paths only is sunk with its load (the pin's
-/// `isThreadLocalObject`). long_double_variadic -Os wasm32: `sum`'s `va_list`
-/// slot, handed to `va_start`, kept its load and store in the loop, +12 B.
+/// A slot whose address a call took before the loop, stored on one path only.
+fn captured_slot_loop() -> String {
+    "declare void @use(ptr)
+
+define i32 @f(i32 %n) {
+b0:
+  %s = alloca i32
+  call void @use(ptr %s)
+  store i32 0, ptr %s
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b4 ]
+  %c = icmp slt i32 %i, %n
+  br i1 %c, label %b2, label %b5
+
+b2:
+  %x = load i32, ptr %s
+  %t = icmp eq i32 %x, 3
+  br i1 %t, label %b3, label %b4
+
+b3:
+  store i32 %i, ptr %s
+  br label %b4
+
+b4:
+  %i1 = add i32 %i, 1
+  br label %b1
+
+b5:
+  ret i32 %n
+}
+"
+    .to_owned()
+}
+
+/// The pin's `isThreadLocalObject` takes every object of a single-threaded
+/// module, so a slot a call captured before the loop still has its store sunk
+/// with its load; in a `POSIX` module a captured slot is not thread-local.
+/// long_double_variadic -Os wasm32: `sum`'s `va_list` slot, handed to
+/// `va_start`, kept its store and was read back, +12 B.
 #[test]
-fn test_a_global_stored_on_some_paths_is_sunk_in_a_single_threaded_module() {
+fn test_a_captured_slot_stored_on_some_paths_is_sunk_only_in_a_single_threaded_module() {
+    let text = captured_slot_loop();
+    assert_eq!(promoted(&text), [(vec!["s".to_owned()], false)]);
+    assert_eq!(promoted_on(&text, SingleThreaded(llrm_mir::target::Neutral)), [(vec!["s".to_owned()], true)]);
+}
+
+/// The pin's `isWritableObject` takes no global ("we may not have provenance
+/// to perform the write"), so single-threaded or not a global stored on some
+/// paths keeps its store in the loop: jpeg_fixed `emit` -O1 wasm32 stored
+/// `adler_a` and `adler_b` on the path where the loop does not run, +28 B.
+#[test]
+fn test_a_global_stored_on_some_paths_keeps_its_store_in_a_single_threaded_module() {
     let text = conditional_store_loop("  %x = load i32, ptr @g\n  %t = icmp eq i32 %x, 3\n");
-    assert_eq!(promoted_on(&text, SingleThreaded(llrm_mir::target::Neutral)), [(vec!["constant".to_owned()], true)]);
+    assert_eq!(promoted_on(&text, SingleThreaded(llrm_mir::target::Neutral)), [(vec!["constant".to_owned()], false)]);
 }
 
 /// A call that is handed the slot's address may read or write it: no promotion.

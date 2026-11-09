@@ -9,7 +9,7 @@ use llrm_analysis::mssa::Mssa;
 use llrm_analysis::mssa::alias::{AliasQuery, Location};
 use llrm_mir::context::ConstantKind;
 use llrm_mir::dense::IdSet;
-use llrm_mir::module::{BlockId, GlobalKind, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{self, Outer};
 
@@ -367,28 +367,16 @@ fn is_not_visible_on_unwind_in_loop(
     is_alloca(unit, object) && !is_captured(unit, outer, exposed, object)
 }
 
-/// `isWritableObject`: an alloca or a variable that is not constant.
+/// [`isWritableObject`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AliasAnalysis.cpp#L1000):
+/// an alloca. "We don't consider globals as writable: While the physical
+/// memory is writable, we may not have provenance to perform the write."
+/// DEVIATE: the pin also takes a `writable` `noalias` argument, a `byval`
+/// argument and a `noalias` call's result; MIR has none of them here.
 pub(crate) fn is_writable_object(
-    context: &llrm_mir::Context,
     function: &llrm_mir::module::Function,
-    outer: &Outer,
     object: Operand,
 ) -> bool {
-    if is_alloca_in(function, object) {
-        return true;
-    }
-    match object {
-        Operand::Constant(id) => match context.get(id).kind {
-            ConstantKind::Global(global) => outer.globals.get(global.0 as usize).is_some_and(|one| {
-                matches!(
-                    &one.kind,
-                    GlobalKind::Variable(variable) if !variable.constant
-                )
-            }),
-            _ => false,
-        },
-        _ => false,
-    }
+    is_alloca_in(function, object)
 }
 
 /// [`isThreadLocalObject`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1672):
@@ -582,9 +570,7 @@ pub fn promote_loop_accesses_to_scalars(
     // violating the memory model.
     if store_safety == StoreSafety::Unknown {
         let object = underlying_object(unit, first_pointer);
-        if is_writable_object(&*unit.context, &*unit.function, outer, object)
-            && is_thread_local_object(unit, outer, exposed, object)
-        {
+        if is_writable_object(&*unit.function, object) && is_thread_local_object(unit, outer, exposed, object) {
             store_safety = StoreSafety::Safe;
         }
     }
