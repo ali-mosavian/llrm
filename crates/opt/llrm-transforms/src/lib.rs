@@ -170,6 +170,7 @@ pub mod combine_ptrcast;
 pub mod combine_select;
 pub mod combine_select_bit_test;
 pub mod combine_select_bools;
+pub mod combine_select_cttz_ctlz;
 pub mod combine_select_ext_const;
 pub mod combine_select_fabs;
 pub mod combine_select_into_op;
