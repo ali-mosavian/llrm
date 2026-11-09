@@ -49,6 +49,9 @@ F="$REF_LD -Dfar= -m32 -march=i486 $(python3 "$R/tools/external_flags.py" --relo
 # VSGCC_NOVEC=1: the scalar column, both competitors with their vectorizers off (gcc 13 runs its vectorizer at O2/O3 even with no SIMD)
 NV_GCC=; NV_CLANG=; [ -z "${VSGCC_NOVEC:-}" ] || { NV_GCC="-fno-tree-vectorize -fno-tree-slp-vectorize"; NV_CLANG="-fno-vectorize -fno-slp-vectorize"; }
 for o in O1 O2 O3 Os; do
+  # flag parity (flagcheck.py): a flag on one external's line only is refused, not measured (the NV_* switches are on both)
+  python3 "$(dirname "$0")/flagcheck.py" externals gcc $o $F -mpreferred-stack-boundary=2 -$o || fail "FAIL flag parity gcc$o $P"
+  python3 "$(dirname "$0")/flagcheck.py" externals clang $o $F -mstack-alignment=4 -$o || fail "FAIL flag parity clang$o $P"
   gcc $F $NV_GCC -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || fail "FAIL gcc$o $P"
   $CLANG $F $NV_CLANG -mstack-alignment=4 -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || fail "FAIL clang$o $P"
   # the objects above carry no unwind tables, as the other columns need; the .eh_frame column reads these (llrm always writes one)
