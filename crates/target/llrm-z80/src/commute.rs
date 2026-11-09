@@ -24,6 +24,15 @@
 //! DEVIATE Z80-COMMUTE: the shared `two_address` does not commute; the pin's
 //! is run before it, here. owner: llrm-z80-c, exit: 2026-11-30, or when the
 //! shared pass commutes.
+//!
+//! DEVIATE Z80-COMMUTE-MADE: the pin commutes when the tied source stays live
+//! and the other dies (`tryInstructionCommute`, TwoAddressInstructionPass.cpp
+//! L1312-1313) and has no test on how the dying source is made; its copies
+//! are joined later by the register coalescer. This pass runs before
+//! allocation, so it asks that an instruction makes the dying source (a copy
+//! of a live value would move into `hl` where the unswapped form needs none:
+//! phi_slot_unknown_arm +5 B / +3892 T without it). owner: llrm-z80-c, exit:
+//! 2026-11-30, or when the allocator's coalescing sees the copy.
 
 use llrm_spike_mf::regalloc::successors;
 use llrm_spike_mf::{Kind, Operand, Reg};
