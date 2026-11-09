@@ -2319,6 +2319,20 @@ fn a_library_call_on_each_arm_of_a_diamond_compiles() {
     }
 }
 
+/// `(float)1L` was 0xCF800000 and `(long)(float)100000L` INT_MIN: in `__floatsisf` the sign mask of the argument,
+/// `x >> 31` of a spilled long, shared register `a` with its high byte; `use_lanes_in_place` removed the load of that
+/// byte (`ld a, d`) because only a physical use of `a` stopped it, so `add a, a; sbc a, a` shifted a stale `a`.
+#[test]
+fn the_high_byte_is_loaded_into_a_before_its_sign_is_taken() {
+    let ir = include_str!("kernels/ir/long_sign_byte_shared_register.ll");
+    for level in [Level::Os, Level::O2] {
+        let out = text(ir, "__floatsisf", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        let lines: Vec<&str> = out.lines().map(str::trim).collect();
+        let sign = lines.iter().position(|line| *line == "add a, a").unwrap_or_else(|| panic!("{level:?}: no sign step\n{out}"));
+        assert!(lines[..sign].contains(&"ld a, d"), "{level:?}: `add a, a` reads a stale a\n{out}");
+    }
+}
+
 /// `(a & 0x80000000) != 0` as a branch condition with a phi after it (the soft-float library's `x < 0 ? -m : m`) was
 /// refused in the legalizer: `SetCCCarry` with the low words' borrow folded to a constant (`x - 0` never borrows),
 /// which the Custom lowering did not take ("Unsupported SetCCCarry I1 convert node to libcall"; 19 of 24 soft-float
