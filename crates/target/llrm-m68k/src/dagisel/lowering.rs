@@ -182,6 +182,12 @@ pub fn target_lowering_with(
     // `RTLIB::MUL_I64`: what `forceExpandWideMUL` calls for the product of two
     // `i32`s (a `smul.fix` with no `MULHS`, as the 68000's and the pin's)
     tl.set_libcall_name(Mul, MVT::I64, "__muldi3");
+    // `setMinStackArgumentAlignment`: the pin's M68k leaves it at 1, so its
+    // `va_arg` rounds the list to the type's alignment (2 for an `i32`) with
+    // `addq #1; and #-2`. Every stack argument takes a 4-byte slot (gcc's
+    // `PARM_BOUNDARY`), the 68000's stack stays even; no round is owed. Owner
+    // m68k. DEVIATE M68K-VA-MIN-ALIGN, review 2026-12-20.
+    tl.set_min_stack_argument_alignment(4);
     // `RTLIB::SDIV_I64` and the others: no CPU divides 64 bits
     for (op, name) in [(SDiv, "__divdi3"), (UDiv, "__udivdi3"), (SRem, "__moddi3"), (URem, "__umoddi3")] {
         tl.set_libcall_name(op, MVT::I64, name);

@@ -938,7 +938,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             // `expandVAArg`: load the list pointer, round it up to the
             // type's ABI alignment when that exceeds the minimum stack
-            // argument alignment (1: no target here sets one), step it by the
+            // argument alignment (`getMinStackArgumentAlignment`), step it by the
             // type's allocation size, store it back and load the value.
             ISD::VAArg => {
                 let vt = self.dag.value_type(node);
@@ -956,7 +956,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 };
                 let list_load = self.dag.get_load(pointer, chain, list, info(pointer, pointer.size_in_bits() / 8));
                 let mut at = SDValue { node: list_load.node, res: 0 };
-                if align > 1 {
+                if align > self.tli.min_stack_argument_alignment() {
                     let add = self.dag.get_constant(u128::from(align - 1), pointer);
                     at = self.dag.get_node(ISD::Add, pointer, &[at, add]);
                     let mask = self.dag.get_constant((-i128::from(align)) as u128, pointer);

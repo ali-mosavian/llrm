@@ -168,6 +168,9 @@ pub struct TargetLowering {
     /// (a call's result, an argument), and the shift is seven instructions on
     /// an 8-bit machine.
     assert_sext_keeps_high: bool,
+    /// `getMinStackArgumentAlignment`: a `va_arg` rounds the list pointer
+    /// only to an alignment above it. The pin's default is 1.
+    min_stack_argument_alignment: u32,
 }
 
 impl TargetLowering {
@@ -190,6 +193,7 @@ impl TargetLowering {
             sdiv_pow2_cmov: None,
             byte_equality: false,
             assert_sext_keeps_high: false,
+            min_stack_argument_alignment: 1,
         };
         table.set_default_integer_libcalls();
         // `TargetLoweringBase`: `VAARG` is expanded unless the target says
@@ -278,6 +282,18 @@ impl TargetLowering {
     /// A shift by a constant of a `bits`-wide value is a call to the shift
     /// routine in a function tuned for size where the granules still shifted
     /// times the bits beyond whole granules reach `least`.
+    pub fn set_min_stack_argument_alignment(
+        &mut self,
+        align: u32,
+    ) {
+        self.min_stack_argument_alignment = align;
+    }
+
+    /// `getMinStackArgumentAlignment`, in bytes.
+    pub fn min_stack_argument_alignment(&self) -> u32 {
+        self.min_stack_argument_alignment
+    }
+
     pub fn set_size_shift_call(
         &mut self,
         granule: u128,
