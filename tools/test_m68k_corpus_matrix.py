@@ -28,6 +28,10 @@ class CorpusMatrix(unittest.TestCase):
         listing = LISTING + "  3 .rodata       00000030  00000000  00000000  00000050  2**1\n                  CONTENTS, ALLOC, LOAD, READONLY, DATA\n  4 .comment      00000026  00000000\n                  CONTENTS, READONLY\n"
         self.assertEqual(mx.code_bytes(listing), 0x18 + 0x4 + 0x30)
 
+    def test_gcc_keeps_a_called_once_static_function_out_of_line(self):
+        """frameless.c asks for -fno-inline-functions: gcc inlined all five statics into main (260 B against our 558 B, not like-for-like)."""
+        self.assertEqual(mx.gcc_program_flags(["-DX", "-fno-inline-functions"]), ["-DX", "-fno-inline-functions", "-fno-inline-functions-called-once"])
+
     def test_gcc_is_built_soft_float(self):
         """gcc defaults to 68881 hardware floating point at 68020/040/060 and ours has no FPU: nbody was 578 B for gcc against 946 B soft."""
         self.assertIn("-msoft-float", mx.GCC_FLOAT)

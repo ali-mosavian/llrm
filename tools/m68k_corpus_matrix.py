@@ -81,6 +81,12 @@ def code_bytes(listing: str) -> int:
     return sum(sections(listing))
 
 
+def gcc_program_flags(flags: list[str]) -> list[str]:
+    """The program's flags as gcc reads them. `-fno-inline-functions` keeps a static function out of line for clang and llrm-cc; gcc still
+    inlines one called once, so frameless.c (five static helpers) was one `main` of 83 instructions against our 173 in five functions."""
+    return [g for flag in flags for g in ([flag, "-fno-inline-functions-called-once"] if flag == "-fno-inline-functions" else [flag])]
+
+
 def relaxing_branches(text: str) -> str:
     """Plain `bcc label` lines as gas's relaxing `jcc label` (gas lengthens a plain forward `bcc`; examples/matrix.rs does the same)."""
     out = []
@@ -142,7 +148,7 @@ class Tools:
                 asm.write_text(".text\n" + relaxing_branches(asm.read_text()))
                 ok, timed, err = self.run([self.as_, "--fatal-warnings", f"-m{cpu}", "-o", str(obj), str(asm)])
         elif compiler == "gcc":
-            ok, timed, err = self.run([self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *GCC_FLOAT, *(["-isystem", self.headers] if self.headers else []), *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-c", str(path), "-o", str(obj)])
+            ok, timed, err = self.run([self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *GCC_FLOAT, *(["-isystem", self.headers] if self.headers else []), *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *gcc_program_flags(flags), "-isystem", str(POSIX), "-c", str(path), "-o", str(obj)])
         else:
             ir = work / f"{stem}.ll"
             ok, timed, err = self.run([self.clang, "--target=m68k-linux-gnu", "-ffreestanding", "-fno-pic", "-w", *self.clang_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-S", "-emit-llvm", str(path), "-o", str(ir)])
