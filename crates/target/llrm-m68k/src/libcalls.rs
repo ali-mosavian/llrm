@@ -10,6 +10,9 @@
 //! once. A function built for speed never calls: the library is slower
 //! (bitcount_u64 -O2: +8% clocks at the 68020, +18% at the 68060).
 //!
+//! A unit that defines a routine named in `libcalls.tsv` never calls it (the
+//! body would recurse).
+//!
 //! DEVIATE M68K-SIZE-LIBCALL: see [`llrm_codegen::backend::libcall_choice`].
 //! The 68000 and 68010 call these always (BC1, `dagisel/lowering.rs`). Owner
 //! m68k. Review: 2026-12-20.
