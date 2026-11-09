@@ -10,14 +10,47 @@ import re, sys
 CELL = re.compile(r"(\d+) B(?: linked)?(?:, (\d+) B body)?, (\d+) cy(?:, (\d+) in)?")
 
 
+def _cells(text):
+    """{(table header, kernel, column): the cell text} of every table row in a log. A log prints its tables in the order the
+    parallel tests finish, so two logs of one run need not list them in the same order (2026-11-09: the O2 variant merges
+    averaged the cycles of different kernels)."""
+    out, header = {}, None
+    for line in text.splitlines():
+        if not line.startswith("|"):
+            header = None if not line.strip() else header
+            continue
+        row = [c.strip() for c in line.strip().strip("|").split("|")]
+        if row[0] == "kernel":
+            header = tuple(row)
+        elif header and len(row) == len(header) and not set(row[0]) <= {"-"}:
+            for column, cell in zip(header[1:], row[1:]):
+                out[(header, row[0], column)] = cell
+    return out
+
+
 def merged(texts, reduce=None):
-    """The first text with every cell's cycles the mean (or `reduce`, e.g. min) of the same cell in all texts."""
-    cells = [CELL.findall(t) for t in texts]
-    assert all(len(c) == len(cells[0]) for c in cells), "the logs have different cells"
+    """The first text with every cell's cycles the mean (or `reduce`, e.g. min) of the same cell, found by table, kernel and
+    column, in all texts. The logs must hold the same cells, and a cell's bytes cannot move with the padding."""
+    tables = [_cells(t) for t in texts]
+    assert all(t.keys() == tables[0].keys() for t in tables), "the logs have different cells"
     pick = reduce or (lambda v: round(sum(v) / len(v)))
-    means = [pick([int(c[i][2]) for c in cells]) for i in range(len(cells[0]))]
-    at = iter(means)
-    return CELL.sub(lambda m: m.group(0).replace(f"{m.group(3)} cy", f"{next(at)} cy"), texts[0])
+    out_lines, header = [], None
+    for line in texts[0].splitlines(keepends=True):
+        if line.startswith("|"):
+            row = [c.strip() for c in line.strip().strip("|").split("|")]
+            if row[0] == "kernel":
+                header = tuple(row)
+            elif header and len(row) == len(header) and not set(row[0]) <= {"-"}:
+                for column, cell in zip(header[1:], row[1:]):
+                    found = [CELL.search(t[(header, row[0], column)]) for t in tables]
+                    if not all(found):
+                        assert not any(found), f"{row[0]} {column}: a cell in some logs only"
+                        continue
+                    assert len({f.group(1) for f in found}) == 1, f"{row[0]} {column}: bytes differ between the logs"
+                    mean = pick([int(f.group(3)) for f in found])
+                    line = line.replace(cell, CELL.sub(lambda m: m.group(0).replace(f"{m.group(3)} cy", f"{mean} cy"), cell), 1)
+        out_lines.append(line)
+    return "".join(out_lines)
 
 
 if __name__ == "__main__":
