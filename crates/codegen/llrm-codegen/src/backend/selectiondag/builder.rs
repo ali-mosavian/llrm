@@ -2499,6 +2499,8 @@ impl Builder<'_> {
         // `IsTailCall`: the call in tail position, if the target takes it, ends
         // the block
         if let Some(tail) = self.tail_candidate.take()
+            && !(calling.byval_parameter_blocks_tail_call()
+                && self.function.parameter_attrs.iter().any(|attrs| self.byval_of(attrs).is_some()))
             && let Some(node) = calling.lower_tail_call(&mut self.dag, root, callee_node, &outs)
         {
             self.tail_calls.push(tail);
