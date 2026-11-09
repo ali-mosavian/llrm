@@ -482,6 +482,43 @@ fn linsym(
         .collect()
 }
 
+/// Zero runs of at least `HOLE` bytes in initialised data are left out of the LEDATA: the linker zero-fills the segment, and the file then
+/// holds only what is initialised. BC declares its BC_DATA and its zeroed arrays and stores none of them; ours stored 8 B in every BASIC
+/// object and 29 KB in jpeg_fixed (`data 29191 > 765 (bc)`). A run under `HOLE` is cheaper stored than split (a record costs about that),
+/// and a run touching a fixup field stays.
+const HOLE: usize = 8;
+
+fn stored_spans(
+    spans: &[[usize; 2]],
+    image: &[u8],
+    covered: &[[usize; 2]],
+) -> Vec<[usize; 2]> {
+    let mut out = Vec::new();
+    for &[start, end] in spans {
+        let (mut from, mut at) = (start, start);
+        while at < end {
+            if image[at] != 0 {
+                at += 1;
+                continue;
+            }
+            let run = at;
+            while at < end && image[at] == 0 {
+                at += 1;
+            }
+            if at - run >= HOLE && !covered.iter().any(|[from, to]| *from < at && run < *to) {
+                if run > from {
+                    out.push([from, run]);
+                }
+                from = at;
+            }
+        }
+        if from < end {
+            out.push([from, end]);
+        }
+    }
+    out
+}
+
 /// Section `index`'s LEDATA and FIXUPP records, or its COMDAT and FIXUPP
 /// records where `named`.
 fn ledata(
@@ -522,7 +559,13 @@ fn ledata(
     let (mut out, mut placed) = (Vec::new(), 0);
     let group =
         object.omf_groups.iter().position(|group| group.members.contains(&index)).map_or(0, |one| one as i64 + 1);
-    for &[mut start, end] in &section.spans {
+    let spans = if named.is_none() && section.role == Role::Data {
+        let covered: Vec<[usize; 2]> = at_sorted.iter().map(|&at| [at, at + subrecords[&at].2]).collect();
+        stored_spans(&section.spans, &image, &covered)
+    } else {
+        section.spans.clone()
+    };
+    for &[mut start, end] in &spans {
         while start < end {
             let mut stop = end.min(start + CHUNK);
             for &at in &at_sorted {
@@ -994,6 +1037,27 @@ mod tests {
         assert_eq!(comdat_names(&made), ["helper"]);
         assert_eq!(records.iter().filter(|one| one.r#type == 0xC2).count(), 1);
         assert_eq!(records.iter().filter(|one| one.r#type == omf::PUBDEF).count(), 0);
+    }
+
+    /// BASIC objects stored BC_DATA's 8 zero bytes and jpeg_fixed 29 KB of zeroed arrays as LEDATA where bc declares them and stores
+    /// nothing: every BASIC row read `data 15 > 7 (bc)`. A zero run of 8 or more in data is left to the linker's zero fill; a shorter
+    /// one, and a run holding a fixed-up field, stay.
+    #[test]
+    fn long_zero_runs_in_a_data_section_are_not_stored() {
+        let data = |image: Vec<u8>| Section { role: Role::Data, ..section("D", image, Vec::new()) };
+        let stored = |image: Vec<u8>| -> Vec<(usize, usize)> {
+            let made = object(16u8, vec![data(image)], Vec::new());
+            let records = crate::omf::parse(&write(&made).unwrap()).unwrap();
+            records
+                .iter()
+                .filter(|one| one.r#type == omf::LEDATA)
+                .map(|one| (usize::from(one.body[1]) | usize::from(one.body[2]) << 8, one.body.len() - 3))
+                .collect()
+        };
+        assert_eq!(stored([vec![1, 2], vec![0; 8]].concat()), vec![(0, 2)], "the zero tail is left out");
+        assert_eq!(stored([vec![1], vec![0; 8], vec![2]].concat()), vec![(0, 1), (9, 1)], "a long run in the middle is a hole");
+        assert_eq!(stored(vec![1, 0, 0, 2, 0]), vec![(0, 5)], "a short run stays");
+        assert_eq!(stored(vec![0; 64]), Vec::<(usize, usize)>::new(), "an all-zero segment has no LEDATA");
     }
 
     /// NDMAX's 60-dimensional HARY expansion exceeded one LEDATA and was
