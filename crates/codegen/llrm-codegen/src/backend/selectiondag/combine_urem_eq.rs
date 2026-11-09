@@ -47,8 +47,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if !vt.is_integer() || width > 64 || !self.dag.has_one_use(rem.node) {
             return None;
         }
-        // `!isIntDivCheap(VT) && !MinSize` (DEVIATE SD206: never for `i8`).
-        if self.dag.config().int_div_cheap && vt != EVT::I8 {
+        // `!isIntDivCheap(VT) && !MinSize`.
+        if self.dag.config().int_div_cheap {
             return None;
         }
         let (n, d) = (self.dag.operand(rem, 0), self.dag.constant(self.dag.operand(rem, 1))?);

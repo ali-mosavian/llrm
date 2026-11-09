@@ -65,3 +65,19 @@ fn both_registers_of_a_wide_phi_are_copied_on_the_back_edge() {
         assert!(n >= 2, "register {r} set {n} time(s) in:\n{asm}");
     }
 }
+
+/// The zero an `fp128` phi starts from was bitcast to `i128` and expanded through a stack slot
+/// (`ExpandRes_BITCAST` skipped `TypeSoftenFloat`), leaving a dead 16-byte frame object per use: the
+/// frame was 48 bytes where the pin's is 16 (`long_double_variadic` -Os wasm32, +33 B).
+#[test]
+fn the_zero_an_fp128_phi_starts_from_takes_no_frame_object() {
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/fp128_phi.ll");
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-S", "-O2", "-o", "-"])
+        .arg(ir)
+        .output()
+        .expect("llrm-wasm-llc");
+    let asm = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(asm.contains("global.get\t__stack_pointer\n\ti32.const\t16\n\ti32.sub"), "frame is not 16 bytes in:\n{asm}");
+}

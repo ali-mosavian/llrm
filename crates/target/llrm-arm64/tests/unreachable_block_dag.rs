@@ -1,6 +1,6 @@
 //! A block nothing branches to, on the DAG path alone.
 
-use llrm_arm64::driver::{self, IselMode};
+use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
 const LAYOUT: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
@@ -11,7 +11,6 @@ const LAYOUT: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:
 /// arm64. The pin deletes such blocks right after selection (`UnreachableMachineBlockElim`).
 #[test]
 fn a_switch_with_an_unreachable_default_compiles() {
-    driver::set_isel_mode(IselMode::Dag);
     // `runtime/qb/dev/host/video.c`'s `blend`, from clang -Oz.
     let ir = format!(
         "{LAYOUT}@width = external global i32\n@pixel_mask = external global i32\n@pixels = external global ptr\n\

@@ -307,7 +307,13 @@ pub fn greedy_rewritten(
         sets: Some(&sets),
         stable_loads: targets::profile(cpu).map_or(true, |profile| profile.stable_loads),
         saved,
-        tii: &crate::greedy::tii::X86InstrInfo { bits: current.bits, classes, basic_semantics },
+        tii: &crate::greedy::tii::X86InstrInfo {
+            bits: current.bits,
+            classes,
+            basic_semantics,
+            address_reference_milliweight: targets::profile(cpu)
+                .map_or(1000, |profile| profile.target().tuning().address_reference_milliweight),
+        },
         tri: &crate::greedy::targetinfo::X86RegisterInfo,
         size: crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get),
         lane_pins: false,

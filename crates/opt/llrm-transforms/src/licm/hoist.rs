@@ -342,6 +342,7 @@ fn hoist_min_max(
         dom_conditions: None,
         cond_context: None,
         cxt: Some(inst),
+        pending_intrinsics: &[],
     };
     use llrm_mir::valuetracking::pattern;
     let (inverse, (cond1, cond2)) = if let Some(operands) = pattern::logical_or(&query, Operand::Value(result)) {
@@ -426,6 +427,7 @@ fn hoist_gep(
         dom_conditions: None,
         cond_context: None,
         cxt: Some(inst),
+        pending_intrinsics: &[],
     };
     let non_negative = |operand: &Operand| llrm_mir::valuetracking::known::is_known_non_negative(&query, *operand, 0);
     let in_bounds = src.flags.contains(Wrap::INBOUNDS)
@@ -574,6 +576,7 @@ fn hoist_add_sub(
         dom_conditions: None,
         cond_context: None,
         cxt: Some(inst),
+        pending_intrinsics: &[],
     };
     let (new_op, a, b, overflow) = match (op, subtracted) {
         // LV + C1 < C2: LV < C2 - C1.

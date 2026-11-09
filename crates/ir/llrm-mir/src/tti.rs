@@ -589,6 +589,14 @@ pub trait Tti {
         false
     }
 
+    /// Whether SZ2 tries all the sites of a callee that stays in one caller as one unit, not one
+    /// site at a time: the pin inlines each site on its cost and lets later passes merge the
+    /// copies (three `report(const)` calls sink into one), which a trial of one site cannot see.
+    /// False: a site alone. Part of DEVIATE SZ1 (the pin has no SZ2 trial): wasm, exit 2026-11-20.
+    fn inline_trial_groups_sites(&self) -> bool {
+        false
+    }
+
     /// Whether a later round of the inliner over one caller skips a callee SZ2 rejected in an
     /// earlier round: a round costs the simplifier over the caller per callee. False: tried again.
     fn inline_trial_skips_rejected(&self) -> bool {
@@ -822,6 +830,16 @@ pub trait Tti {
         0
     }
 
+    /// `getSchedModel().IssueWidth`; 0: the model states none.
+    fn issue_width(&self) -> u32 {
+        0
+    }
+
+    /// `Tuning::unroll_recurrence_veto`.
+    fn vetoes_recurrence_bound_unroll(&self) -> bool {
+        false
+    }
+
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
@@ -934,6 +952,21 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::push_imm_at_size`.
+    fn push_imm_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::sdiv_pow2_stays_at_size`.
+    fn sdiv_pow2_stays_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::rep_movs_at_size`.
+    fn rep_movs_at_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::rep_stos_at_size`.
     fn rep_stos_at_size(&self) -> bool {
         false
@@ -1043,6 +1076,13 @@ pub trait Tti {
     /// those and nothing else. None: no bound.
     fn recursive_inlining_call_share(&self) -> Option<(i64, i64)> {
         None
+    }
+
+    /// DEVIATE REC-9: whether a linear recursion (one call of itself) called from another function is copied into the caller and peeled
+    /// there, as gcc does, without the pin's `recursive` refusal or the bytes-against-clocks rule (gcc prices no clocks; the peeling's
+    /// own caps bound it). false: REC-1's bounds and the price, as for a tree.
+    fn peels_linear_recursion(&self) -> bool {
+        false
     }
 
     /// DEVIATE REC-7: the depth of the copies at (-O2, -O3); none: the depth
@@ -1628,6 +1668,16 @@ pub trait Tti {
 
     /// `shouldDropLSRSolutionIfLessProfitable`.
     fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LU15 (owner z80, exit 2026-12-15: a baseline that prices the
+    /// loop as written): with `should_drop_lsr_solution_if_less_profitable`,
+    /// a loop that has an address use keeps LSR's solution. The baseline
+    /// rates every address as one pointer register, so a solution that adds
+    /// the pointer beside a count always looks worse, and dropping it keeps
+    /// `base + i` (strlen: +17 B, a frame). The pin has no drop here.
+    fn lsr_dropped_solution_spares_addresses(&self) -> bool {
         false
     }
 

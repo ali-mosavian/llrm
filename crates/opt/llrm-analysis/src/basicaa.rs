@@ -48,6 +48,9 @@ thread_local! {
     pub static ARGUMENT_FACTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// The nesting of queries `aliasCheck` allows (`AAQI.Depth >= 512`).
+const MAX_QUERY_DEPTH: u32 = 512;
+
 /// `MaxLookupSearchDepth`.
 const MAX_LOOKUP: usize = 6;
 
@@ -826,11 +829,21 @@ impl<'a> BasicAA<'a> {
             (a.size, b.size)
         };
         let (l1, l2) = (MemoryLocation { ptr: v1, size: s1, ..*a }, MemoryLocation { ptr: v2, size: s2, ..*b });
+        // The pin's limit on nested queries ([L1687][depth]), reached by a long
+        // chain of phis and selects.
+        //
+        // [depth]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L1687
+        if aaqi.depth >= MAX_QUERY_DEPTH {
+            return AliasResult::MayAlias;
+        }
         let mark = match aaqi.enter(&l1, &l2) {
             crate::aa::Entered::Known(found) => return found,
             crate::aa::Entered::Fresh(mark) => mark,
         };
+        aaqi.depth += 1;
         let result = self.alias_recursive(&l1, &l2, o1, o2, aaqi);
+        aaqi.depth -= 1;
         aaqi.exit(mark, result)
     }
 
@@ -2416,6 +2429,34 @@ b0:
             assert_eq!(ask(one, other), want, "%{one} against %{other}");
             assert_eq!(ask(other, one), want, "%{other} against %{one}");
         }
+    }
+
+    /// A chain of thirty thousand selects asks the pin's nesting limit
+    /// (512 open queries) to end it: the walk down the true arms overflowed a
+    /// 16 MiB stack.
+    #[test]
+    fn a_long_chain_of_selects_is_asked_no_deeper_than_the_limit() {
+        let mut text = String::from(
+            "define void @f(ptr %a, i1 %c) {\nb0:\n  %s = alloca i16\n  %s0 = select i1 %c, ptr %a, ptr %a\n",
+        );
+        for at in 1..30_000 {
+            text += &format!("  %s{at} = select i1 %c, ptr %s{}, ptr %a\n", at - 1);
+        }
+        text += "  ret void\n}\n";
+        let answer = std::thread::Builder::new()
+            .stack_size(16 << 20)
+            .spawn(move || {
+                let module = parsed(&text);
+                let layout = layout(&module);
+                let f = function(&module, "f");
+                let unit = Unit::of(&module, &layout, f);
+                let at = |name: &str| MemoryLocation::new(Operand::Value(value(f, name)), LocationSize::Precise(2));
+                BasicAA::new(&unit).alias(&at("s29999"), &at("s"), &mut AAQueryInfo::default(), None)
+            })
+            .expect("a thread")
+            .join()
+            .expect("the walk ends");
+        assert_eq!(answer, AliasResult::MayAlias);
     }
 
     /// Two pointers that step through the loop that holds them (each a phi

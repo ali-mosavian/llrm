@@ -15,7 +15,6 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 import elfsize  # noqa: E402
-import sizes  # noqa: E402
 
 Z80_CODE_AREAS = {"_CODE", "_HOME", "_GSINIT", "_GSFINAL", "_INITIALIZER"}
 Z80_DATA_AREAS = {"_DATA", "_CONST", "_INITIALIZED"}
@@ -47,16 +46,25 @@ def z80_bytes(source: Path) -> tuple[int, int]:
     return sum(size for area, size in sizes_by_area if area in Z80_CODE_AREAS), sum(size for area, size in sizes_by_area if area in Z80_DATA_AREAS)
 
 
-def mos6502_bytes(source: Path) -> tuple[int, int]:
-    """The `.s` llrm-cc writes for 6502, assembled by ca65: the CODE segment od65 reports."""
+def mos6502_bytes(source: Path, cpu: str) -> tuple[int, int]:
+    """The `.s` llrm-cc writes for 6502 or 65c02 (`cpu`: ca65's name for it, 65C02 takes `stz`), assembled by ca65: the CODE segment od65 reports."""
     with tempfile.TemporaryDirectory() as work:
         Path(work, "o.s").write_text(".autoimport +\n" + source.read_text())
-        run(["ca65", "-t", "sim6502", f"{work}/o.s", "-o", f"{work}/o.o"])
+        run(["ca65", "-t", "sim6502", "--cpu", cpu, f"{work}/o.s", "-o", f"{work}/o.o"])
         listing = run(["od65", "--dump-segsize", f"{work}/o.o"]).stdout
     found = re.search(r"CODE:\s+(\d+)", listing)
     if not found:
         raise Unreadable(f"{source}: od65 reports no CODE segment")
     return int(found.group(1)), sum(int(m.group(2)) for m in re.finditer(r"(RODATA|DATA|BSS):\s+(\d+)", listing))
+
+
+def wasm_bytes(obj: Path) -> tuple[int, int]:
+    """wasm-objdump's Code and Data section sizes of the module llrm-cc writes."""
+    listing = run(["wasm-objdump", "-h", str(obj)]).stdout
+    sizes_by_section = {m.group(1): int(m.group(2), 16) for m in re.finditer(r"^\s*(\w+) start=\S+ end=\S+ \(size=0x([0-9a-f]+)\)", listing, re.M)}
+    if "Code" not in sizes_by_section:
+        raise Unreadable(f"{obj}: no Code section")
+    return sizes_by_section["Code"], sizes_by_section.get("Data", 0)
 
 
 def elf_bytes(obj: Path) -> tuple[int, int]:
@@ -73,9 +81,13 @@ def object_bytes(target: str, obj: Path) -> tuple[int, int]:
     if target.startswith("z80"):
         return z80_bytes(obj)
     if target.startswith("6502"):
-        return mos6502_bytes(obj)
+        return mos6502_bytes(obj, "6502")
+    if target.startswith("65c02"):
+        return mos6502_bytes(obj, "65C02")
     if target.startswith("wasm"):
-        raise Unreadable("wasm objects are not read: a module's code section is not an object's .text")
+        return wasm_bytes(obj)
+    import sizes  # here, not at the top: it imports dosbatch, which refuses a tree without fresh release binaries (z80, 6502, wasm need none)
+
     if sizes.is_elf(obj):
         return elf_bytes(obj)
     if target.startswith("x86_16"):

@@ -155,12 +155,17 @@ impl CombineHooks for MosCombines {
         _level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Add => borrow_of_ult(dag, node).or_else(|| widened_add_with_carry(dag, node)).or_else(|| funnel_by_one(dag, node)),
+            ISD::Add => borrow_of_ult(dag, node)
+                .or_else(|| widened_add_with_carry(dag, node))
+                .or_else(|| funnel_by_one(dag, node))
+                .or_else(|| low_bit_in_carry(dag, node)),
             ISD::Sub => borrow_of_ult(dag, node),
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
             ISD::Or => funnel_by_one(dag, node),
             ISD::SetCC => range_on_low_byte(dag, node),
-            _ => decompose_mul(dag, node, self.sized),
+            ISD::Mul => decompose_mul(dag, node, self.sized),
+            // the combiner offers every target node to the hook
+            _ => None,
         }
     }
 }
@@ -230,6 +235,67 @@ fn funnel_by_one(
         }
     }
     None
+}
+
+/// `x + (y & 1)` of a byte: `y >> 1` and the bit that leaves, the carry of one
+/// `lsr`, added to `x` by an add with carry. A loop that counts the bits of a
+/// byte (`c += x & 1; x >>= 1`) was `txa; and #1; clc; adc c; sta c; txa; lsr
+/// a; tax`: the shift and the bit were two instructions on `x`. The plain shift
+/// of `y` by one, if the function has one, is the value of the same node.
+///
+/// The pin's analogue is the target's `combineAddOrSubToADCOrSBB`
+/// ([X86ISelLowering.cpp#L53776](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L53776),
+/// `X + (Y & 1)` to `ADC X, 0` on the flags `LowerAndToBT`
+/// ([L24380](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24380))
+/// makes of the bit). DEVIATE 6502-SRL1C: there the bit test is its own
+/// instruction (`BT`); here it is made by the shift, a node of two results
+/// merged with the shift that uses the same operand, as the pin merges a divide
+/// and a remainder into `UDIVREM` (`useDivRem`,
+/// [DAGCombiner.cpp#L5181](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5112)).
+/// Bytes only. Owner: llrm-6502-a. Exit: 2026-12-01, when a word shift by one
+/// reads the carry the same way (`FSHR1`).
+fn low_bit_in_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    if dag.value_type(node) != EVT::I8 {
+        return None;
+    }
+    let low_bit = |dag: &SelectionDAG, v: SDValue| {
+        (dag.opcode(v) == ISD::And && dag.has_one_use(v.node))
+            .then(|| {
+                let (a, b) = (dag.operand(v, 0), dag.operand(v, 1));
+                if dag.constant(b) == Some(1) {
+                    Some(a)
+                } else if dag.constant(a) == Some(1) {
+                    Some(b)
+                } else {
+                    None
+                }
+            })
+            .flatten()
+    };
+    let (x, y) = [(0, 1), (1, 0)]
+        .into_iter()
+        .find_map(|(x, b)| low_bit(dag, dag.operand(node, b)).map(|y| (dag.operand(node, x), y)))?;
+    if dag.value_type(y) != EVT::I8 {
+        return None;
+    }
+    let shifted = dag.get_node_multi(mosisd::SRL1C, &[EVT::I8, EVT::I1], &[y]);
+    let plain: Vec<u32> = dag
+        .users(y)
+        .filter(|&user| {
+            let v = SDValue { node: user, res: 0 };
+            dag.opcode(v) == ISD::Srl && dag.operand(v, 0) == y && dag.constant(dag.operand(v, 1)) == Some(1)
+        })
+        .collect();
+    for user in plain {
+        dag.replace_all_uses_with(SDValue { node: user, res: 0 }, SDValue { node: shifted.node, res: 0 });
+    }
+    let zero = dag.get_constant(0, EVT::I8);
+    let carry = SDValue { node: shifted.node, res: 1 };
+    let sum = dag.get_node_multi(ISD::UAddOCarry, &[EVT::I8, EVT::I1], &[x, zero, carry]);
+    Some(SDValue { node: sum.node, res: 0 })
 }
 
 /// `x + sext(a <u b)` and `x - zext(a <u b)` in a word of two or more bytes: the
