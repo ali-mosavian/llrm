@@ -369,7 +369,7 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
         return {"instructions": 0, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
     if result.region.instructions < FOLDED_BELOW:
         return {"error": f"unmeasured: kernel folded away: {region} ran {result.region.instructions} instructions (a kernel that did its work runs {FOLDED_BELOW} or more)"}
-    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
+    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, "layout_clocks": result.region.layout_clocks, "pad_nops": result.region.pad_nops, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
 
 
 def references_available() -> bool:
