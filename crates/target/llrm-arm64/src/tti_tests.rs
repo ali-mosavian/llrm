@@ -445,3 +445,11 @@ fn the_machine_returns_its_platforms_cost_model() {
     };
     assert_eq!((latency(Platform::Darwin), latency(Platform::Linux)), (Cost::of(5), Cost::of(7)));
 }
+
+/// DEVIATE LFTR1: following the pin's step-one rule left byte-loops of
+/// stride 2..8 unreduced and cost bytes; the knob must stay on here.
+#[test]
+fn lftr_counts_any_constant_stride() {
+    use llrm_mir::tti::Tti;
+    assert!(AArch64::of_cpu("generic").unwrap().lftr_any_stride());
+}
