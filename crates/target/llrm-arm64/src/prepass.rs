@@ -83,7 +83,7 @@ fn defined(op: &Op) -> Option<Reg> {
 
 /// `op` with its destination register made a fixed one, so that equal
 /// computations compare equal.
-fn keyed(op: &Op) -> String {
+pub fn keyed(op: &Op) -> Op {
     let mut copy = op.clone();
     copy.visit(&mut |register, role| {
         if role == Role::Def {
@@ -93,7 +93,7 @@ fn keyed(op: &Op) -> String {
             }
         }
     });
-    format!("{copy:?}")
+    copy
 }
 
 pub struct Cfg {
@@ -639,13 +639,13 @@ fn cse(
     }
     let mut rename: HashMap<Reg, Reg> = HashMap::default();
     let mut removed: HashSet<(usize, usize)> = HashSet::default();
-    let mut table: HashMap<String, Reg> = HashMap::default();
+    let mut table: HashMap<Op, Reg> = HashMap::default();
     // The block each table entry's register is defined in: equal operations in
     // one block are one DAG node in the pin, shared whatever their readers.
     let mut home: HashMap<Reg, usize> = HashMap::default();
     let copies = single_copies(function, &definitions);
     let readers = readers_of(function);
-    let mut stack: Vec<(usize, usize, Vec<String>)> = vec![(0, 0, Vec::new())];
+    let mut stack: Vec<(usize, usize, Vec<Op>)> = vec![(0, 0, Vec::new())];
     // Depth-first over the tree, undoing a block's entries when it is left.
     while let Some((block, next, added)) = stack.last_mut() {
         if *next == 0 {
@@ -959,7 +959,7 @@ fn within_pressure(
     };
     // Equal values made in different blocks are one value once hoisted (the
     // `cse` after it joins them): they cost one register, and are read by all.
-    let mut groups: HashMap<String, (Vec<Reg>, usize)> = HashMap::default();
+    let mut groups: HashMap<Op, (Vec<Reg>, usize)> = HashMap::default();
     for (register, count) in reads {
         let group = groups.entry(keyed(made[&register])).or_default();
         group.0.push(register);

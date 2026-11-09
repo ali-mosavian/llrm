@@ -51,7 +51,7 @@ pub(crate) fn writes_flags(op: &Op) -> bool {
 pub fn run(function: &mut MFunc) {
     for block in &mut function.blocks {
         // The last comparison, as text, and the registers it read.
-        let mut held: Option<(String, RegList)> = None;
+        let mut held: Option<(Inst, RegList)> = None;
         block
             .ops
             .retain(
@@ -64,11 +64,10 @@ pub fn run(function: &mut MFunc) {
                     }
                     match op {
                         Op::I(inst) if is_compare(inst) => {
-                            let key = format!("{inst:?}");
-                            if held.as_ref().is_some_and(|(kept, _)| *kept == key) {
+                            if held.as_ref().is_some_and(|(kept, _)| kept == inst) {
                                 return false;
                             }
-                            held = Some((key, uses));
+                            held = Some((inst.clone(), uses));
                         }
                         _ if writes_flags(op) => held = None,
                         _ => {}
