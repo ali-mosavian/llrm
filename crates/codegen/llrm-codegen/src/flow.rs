@@ -237,6 +237,7 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::precse::MachineCse {
             classes: Rc::clone(classes),
             keep_compare: classes.cse_keeps_compare_with_live_minuend,
+            constrain: None,
         }),
         // On SSA, where a def with phi users alone can go to its edge.
         Box::new(crate::backend::machinesink::MachineSink {

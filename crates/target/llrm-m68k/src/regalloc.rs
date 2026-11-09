@@ -302,8 +302,10 @@ pub fn shared_cse(function: &MFunction) -> Result<MFunction, String> {
         static CLASSES: std::rc::Rc<llrm_codegen::backend::classes::RegisterClasses> =
             std::rc::Rc::new(llrm_codegen::backend::classes::RegisterClasses::of(&crate::target::M68k));
     }
-    let mut stage = llrm_codegen::backend::precse::MachineCse { classes: CLASSES.with(std::rc::Rc::clone), keep_compare: false };
-    llrm_spike_mf::tolir::host_ssa::<M68kRegisters>(function, llrm_lir::registers::Regs(&REGISTER_INFO), &mut stage)
+    let classes = CLASSES.with(std::rc::Rc::clone);
+    llrm_spike_mf::tolir::host_ssa::<M68kRegisters>(function, llrm_lir::registers::Regs(&REGISTER_INFO), |constrain| {
+        Box::new(llrm_codegen::backend::precse::MachineCse { classes, keep_compare: false, constrain: Some(constrain) })
+    })
 }
 
 /// `BranchFolder` over the m68k function.

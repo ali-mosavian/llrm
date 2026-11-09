@@ -32,3 +32,21 @@ fn with_cse_the_zeros_of_the_return_phi_are_one_definition() {
     assert_eq!(zero_exits(&shared), 0, "a zero exit stayed:\n{shared}");
     assert!(shared.lines().count() < plain.lines().count(), "no smaller:\n{shared}");
 }
+
+/// `bench_nbody` (the pin's -O2 IR): the hosted CSE propagated the copy that
+/// moved a loaded pointer into an address register, and the pointer stayed in
+/// a data register: `move.l (4,%d7), %a1`, which is no m68k instruction. The
+/// pin's `constrainRegClass` refuses that propagation.
+#[test]
+fn a_propagated_pointer_stays_in_an_address_register() {
+    let mut module = llrm_mir::parse::module(include_str!("fixtures/nbody_pin_o2.ll")).expect("parses");
+    llrm_mir::parse::upgrade_lifetimes(&mut module);
+    let asm = text_with(&module, "bench_nbody", Cpu::M68000, Options { shared_cse: true, ..Options::default() })
+        .expect("compiles");
+    let through_data = asm.lines().filter(|line| {
+        let Some(open) = line.find('(') else { return false };
+        let inside = &line[open + 1..line.find(')').unwrap_or(line.len())];
+        inside.split(',').next_back().is_some_and(|base| base.trim().starts_with("%d")) && !inside.contains("%a")
+    });
+    assert_eq!(through_data.count(), 0, "an address through a data register:\n{asm}");
+}
