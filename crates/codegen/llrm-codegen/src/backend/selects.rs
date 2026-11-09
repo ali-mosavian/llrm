@@ -54,13 +54,18 @@
 //!   puts the CMOV diamond before the SETCC (`f409`, 32 B; pin 28 B), so
 //!   FixupSetCC cannot fire and MaskByAnd emits `and eax,255`. General
 //!   scheduling cause (SD31, NodeNum), filed with sdag-d; not patched here.
-//! - I64SEL-2, exit 2026-11-12: m64 `word_compares` `main` 167 -> 173 B (pin
-//!   175 B). Cause: `x*257` stays `imul` at m64 (pin: `(x<<8)+x`), so the ADC
-//!   takes `2*setbe` as an `add` before it, the flags are clobbered, the `cmp`
-//!   is repeated with its load unfolded, and one more value is live (R15D).
-//! - I64SEL-3, exit 2026-11-10 18:00Z: m64 `sfm16_float*` -O1 +8, -Os +10 B
-//!   (`__divsf3` register naming and one `mov`; pin 560 B vs 503 B) and m32
-//!   `x_sf_cmp64` -Os +1302 instructions at equal bytes (branch layout flip).
+//! - I64SEL-2, exit tied to the m64 `x*257` decomposition PR (owner w12, by
+//!   2026-11-12): m64 `word_compares` -O1/-O2/-O3 295 -> 309 B, `main` 167 ->
+//!   173 B (pin 175 B). Cause: `x*257` stays `imul` at m64 (pin: `(x<<8)+x`),
+//!   so the ADC takes `2*setbe` as an `add` before it, the flags are
+//!   clobbered, the `cmp` is repeated with its load unfolded, and one more
+//!   value is live (R15D).
+//! - I64SEL-3, exit 2026-11-10 18:00Z: m64 `sfm16_float*` -O1 +8 B, -Os +10 B
+//!   (only `__divsf3`: 493 -> 503 B, pin 560 B; register naming and one
+//!   `mov`).
+//! - I64SEL-4, exit 2026-11-10 18:00Z: m32 `x_sf_cmp64` -Os +1302 executed
+//!   instructions at equal bytes (`test; js` became `test; jns`, a branch
+//!   layout flip).
 //!
 //! The loop is repeated until no select is left in any function, so two selects
 //! in one block each get their own split. The result is checked by an
