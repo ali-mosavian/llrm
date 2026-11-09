@@ -1,4 +1,6 @@
-"""The x86_64 rows: which programs run natively, and that a row is a count of the program's own run."""
+"""The x86_64 rows: which programs run natively, and that a row is a count of the program's own run.
+
+Run: `uv run --with pytest --with iced-x86 pytest tools/bench/test_native.py` (the ours rows need `cargo build --release --bins`; without a dist they skip as UNMEASURED)."""
 
 import shutil
 import sys
@@ -196,7 +198,13 @@ def test_pic_mode_reads_a_known_object_of_each_compiler_as_its_mode(compiler, tm
     source = tmp_path / "t.c"
     source.write_text("static int a[100];\nstatic int b;\nstatic const float k[4] = {1.5f, 2.5f, 3.5f, 4.5f};\nint f(int i) { return a[i]++ + b; }\nfloat g(int i) { return k[i & 3]; }\n")
     if compiler == "ours":
-        program, env = [str(llrmbin.compiler(llrmbin.bin_dir())), "-m64"], {**__import__("os").environ, "LLRM_CC_TARGET": "x86_64-linux"}
+        try:
+            driver = llrmbin.compiler(llrmbin.bin_dir())
+        except SystemExit as why:
+            pytest.skip(f"UNMEASURED: no usable llrm-cc dist ({why})")
+        if not Path(driver).exists():
+            pytest.skip(f"UNMEASURED: no built llrm-cc at {driver}")
+        program, env = [str(driver), "-m64"], {**__import__("os").environ, "LLRM_CC_TARGET": "x86_64-linux"}
     else:
         if shutil.which(compiler) is None or shutil.which("readelf") is None:
             pytest.skip(f"no {compiler} or readelf")

@@ -584,7 +584,7 @@ pub fn joined_with_map(
 /// come back narrowed to what each surviving value may take.
 pub fn coalesce(
     body: &LirBody,
-    palettes: IndexMap<u32, BTreeSet<RegId>>,
+    palettes: IndexMap<u32, Rc<BTreeSet<RegId>>>,
     pins: IndexMap<u32, RegId>,
     size: bool,
     joins_global_copies: bool,
@@ -598,7 +598,7 @@ pub fn coalesce(
     remat: Option<Box<dyn Fn(&Insn) -> bool>>,
     remat_wins: Option<RematWins>,
     kind_of: Box<dyn Fn(&Insn, u32) -> Option<u32>>,
-) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>, JoinMap) {
+) -> (LirBody, IndexMap<u32, Rc<BTreeSet<RegId>>>, JoinMap) {
     let aliases = pins
         .iter()
         .map(|(value, register)| {
@@ -617,7 +617,7 @@ pub fn coalesce(
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq = (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
     let env = TargetEnv {
-        palettes: RefCell::new(palettes.into_iter().map(|(value, set)| (value, Rc::new(set))).collect()),
+        palettes: RefCell::new(palettes),
         pins,
         size,
         keep_pinned: true,
@@ -640,9 +640,7 @@ pub fn coalesce(
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
     let (after, map) = joined_with_map(body, &env, &depth);
-    let palettes =
-        env.palettes.into_inner().into_iter().map(|(value, set)| (value, Rc::unwrap_or_clone(set))).collect();
-    (after, palettes, map)
+    (after, env.palettes.into_inner(), map)
 }
 
 /// `LLRM_COALESCE_WHY=1`: the reason for each register copy the joins left. A
