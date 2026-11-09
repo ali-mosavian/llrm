@@ -392,18 +392,18 @@ pub(crate) fn is_writable_object(
 }
 
 /// [`isThreadLocalObject`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1672):
-/// an identified function-local object (here an alloca) not captured. The pin
-/// also takes every object of a `ThreadModel::Single` module; the pin binary
-/// keeps a global's stores in the loop at wasm32 too, so there is no module
-/// flag to read and no such case. DEVIATE: `is_captured` asks of the whole
-/// function, not before the loop header.
+/// an identified function-local object (here an alloca) not captured, or any
+/// object of a single-threaded module (wasm: `Machine::single_threaded`; the
+/// other triples are `POSIX`, so a global's stores stay in the loop there).
+/// DEVIATE: `is_captured` asks of the whole function, not before the loop
+/// header.
 fn is_thread_local_object(
     unit: &passes::Unit,
     outer: &Outer,
     exposed: &Exposed,
     object: Operand,
 ) -> bool {
-    is_alloca(unit, object) && !is_captured(unit, outer, exposed, object)
+    (is_alloca(unit, object) && !is_captured(unit, outer, exposed, object)) || outer.target().single_threaded()
 }
 
 /// [`promoteLoopAccessesToScalars`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1692):
