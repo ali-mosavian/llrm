@@ -3097,6 +3097,36 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         }
     }
 
+    /// The inclusive signed bounds `value` is known to have: its own, if a
+    /// constant, or its defining instruction's `!range`.
+    fn signed_bounds(
+        &self,
+        value: Value,
+    ) -> Option<(i128, i128)> {
+        let signed = |constant: ConstantId| -> Option<i128> {
+            let constant = self.b.context.get(constant);
+            let width = self.b.context.types.int_bits(constant.ty)?;
+            let llrm_mir::ConstantKind::Int(bits) = constant.kind else { return None };
+            let shift = 128 - width;
+            Some(((bits << shift) as i128) >> shift)
+        };
+        match value {
+            Value::Constant(constant) => signed(constant).map(|one| (one, one)),
+            Value::Value(id) => {
+                let llrm_mir::ValueDef::Instruction(inst) = self.b.function.value(id).def else { return None };
+                let (_, node) = self.b.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "range")?;
+                let [MetadataOperand::Constant(low), MetadataOperand::Constant(high)] =
+                    self.b.metadata[node.0 as usize].operands[..]
+                else {
+                    return None;
+                };
+                let (low, high) = (signed(low)?, signed(high)?);
+                (low < high).then_some((low, high - 1))
+            }
+            _ => None,
+        }
+    }
+
     /// The `!range` node saying a value of `ty` is within `bounds`, if `ty` is
     /// an integer.
     fn range_node(
@@ -3734,6 +3764,25 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     // spec states, `(a << fraction) / b` in 64 bits, is
                     // truncating by itself, where `sdiv.fix` took a floor
                     // and a correction (115 bytes a divide at m16 -Os).
+                    //
+                    // DEVIATE FD-1 (the pin's -O1 has no CVP; frontend side;
+                    // exit: CVP at -O1 or isel narrows; owner m16, review
+                    // 2026-11-20): where the dividend's known bounds (a
+                    // constant, or the language's range fact) shifted by the
+                    // fraction stay inside i32 without INT_MIN, the quotient
+                    // fits 32 bits and `/ -1` cannot overflow, so the divide
+                    // is `sdiv i32`; a 64-bit divide at m16 is ~170 B inline.
+                    if let Some((low, high)) = self.signed_bounds(a)
+                        && (0..32).contains(&fraction)
+                        && (low << fraction) > i128::from(i32::MIN)
+                        && (high << fraction) <= i128::from(i32::MAX)
+                    {
+                        let shift = self.b.int(32, fraction);
+                        let scaled = self.b.binary(BinaryOp::Shl, a, shift, Flags::default(), "");
+                        let quotient = self.b.binary(BinaryOp::SDiv, scaled, b, Flags::default(), "");
+                        self.define(instruction, quotient);
+                        return Ok(());
+                    }
                     let wide = self.b.context.types.int(64);
                     let shift = self.b.int(64, fraction);
                     let (a, b) = (self.b.cast(CastOp::SExt, a, wide, ""), self.b.cast(CastOp::SExt, b, wide, ""));
