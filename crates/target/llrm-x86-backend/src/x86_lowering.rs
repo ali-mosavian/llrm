@@ -146,8 +146,9 @@ pub struct X86Lowering<'a> {
     /// than the pin's chain (DEVIATE MUL-OS): `min_size` then holds for the
     /// other rules, not for `combineMul`.
     pub imul_if_smaller: bool,
-    /// The target adds three-address (`lea`) and the build is for speed. Unread since
-    /// DEVIATE SD448 went; the field stays so the struct literals in other branches' tests compile.
+    /// The target adds three-address (`lea`) and the build is for speed: flat
+    /// 32-bit and 64-bit, not `-Os`. DEVIATE SD448
+    /// ([`combine_masked_xor_difference`]) is made there only.
     pub three_address_adds: bool,
     /// The pin chains an `i16` multiply by a constant: it promotes it to `i32`
     /// ([L64277][promote]) and `combineMul` builds the `lea`/shift chain there.
@@ -518,7 +519,7 @@ impl CombineHooks for X86Lowering<'_> {
                 .or_else(|| combine_or(dag, node)),
             ISD::Xor => combine_or_xor_with_setcc(dag, node),
             ISD::And => combine_compare_equal(dag, node, self.sse2, self.zext_free),
-            ISD::Sub => combine_sub(dag, node),
+            ISD::Sub => combine_sub(dag, node, self.three_address_adds),
             ISD::FAdd | ISD::FSub => combine_shared_product(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
             ISD::Select | x86isd::CMOV if self.branch_constants() => None,
@@ -1956,13 +1957,21 @@ fn combine_sub_carry(
 /// `SUB(X, SBB(Y,Z,W))` and `~A - ~B` folds ([`combine_sub_carry`]),
 /// `combineAddOrSubToADCOrSBB` ([`super::x86_carry`]), then `combineSubSetcc`.
 ///
+/// DEVIATE SD448: where `lea_adds`, [`combine_masked_xor_difference`] runs
+/// before the pin's first fold, not after it as the pin has no such fold: for a
+/// low-bit mask the pin's `xor`+`add` is two instructions where it is one.
+///
 /// [pin]:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L60916
 fn combine_sub(
     dag: &mut SelectionDAG,
     node: SDValue,
+    lea_adds: bool,
 ) -> Option<SDValue> {
-    combine_sub_xor_constant(dag, node)
+    lea_adds
+        .then(|| combine_masked_xor_difference(dag, node))
+        .flatten()
+        .or_else(|| combine_sub_xor_constant(dag, node))
         .or_else(|| combine_sub_carry(dag, node))
         .or_else(|| super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node))
         .or_else(|| combine_sub_setcc(dag, node))
@@ -1971,7 +1980,7 @@ fn combine_sub(
 /// The first fold of `combineSub`: x86 cannot encode an immediate left side of
 /// a `sub`, so `sub C1, (xor X, C2)` (the `xor` used once, `C1` not zero: that
 /// is a `neg`) becomes `add (xor X, ~C2), C1 + 1`, which saves a register.
-/// `26 - ((n & 31) ^ 31)` is then `(n | -32) + 27`.
+/// `100 - (n ^ 0xF0)` is then `(n ^ -241) + 101`.
 fn combine_sub_xor_constant(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -1989,6 +1998,38 @@ fn combine_sub_xor_constant(
     let new_xor = dag.get_node(ISD::Xor, vt, &[dag.operand(xor, 0), inverted]);
     let bumped = dag.get_constant(c1.wrapping_add(1) & bits, vt);
     Some(dag.get_node(ISD::Add, vt, &[new_xor, bumped]))
+}
+
+/// DEVIATE SD448 (owner x87; recheck 2026-11-20 and at every pin bump,
+/// dropped where the pin has the fold): `sub C, (xor X, M)` is `add X, C - M`
+/// when `M` is a low-bit mask and `X` has no bits above it, so the `xor` is
+/// `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`: one
+/// `lea` where the `sub` took `mov cl, 26; sub cl, bl`. The pin has no such
+/// fold, and its `convertToThreeAddressWithLEA` takes no 8-bit add on 32-bit
+/// targets (TA-10). 0 larger cells over 18 row-levels; m32 -O2 2 smaller,
+/// -O3 9 smaller (to -32 B); m64 and arm64 identical. Where the target has
+/// no three-address add (m16) the `add` needs a copy and is a byte longer,
+/// so it is not made there.
+fn combine_masked_xor_difference(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let (minuend, xor) = (dag.operand(node, 0), dag.operand(node, 1));
+    let c = dag.constant(minuend)?;
+    if dag.opcode(xor) != ISD::Xor {
+        return None;
+    }
+    let (x, m) = (dag.operand(xor, 0), dag.constant(dag.operand(xor, 1))?);
+    if m == 0 || m & m.wrapping_add(1) != 0 {
+        return None;
+    }
+    let mask = llrm_codegen::backend::selectiondag::fold::mask(vt.size_in_bits());
+    if (m | llrm_codegen::backend::selectiondag::known_bits::known_bits(dag, x).zero) & mask != mask {
+        return None;
+    }
+    let delta = dag.get_constant(c.wrapping_sub(m) & mask, vt);
+    Some(dag.get_node(ISD::Add, vt, &[x, delta]))
 }
 
 /// `combineSubSetcc` ([L60838][pin]): `sub C, zext(setcc)` is
