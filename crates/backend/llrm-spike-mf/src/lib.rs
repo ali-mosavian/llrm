@@ -24,7 +24,7 @@ pub mod taildup;
 pub mod tailmerge;
 pub mod tolir;
 
-pub use commute::commute_tied;
+pub use commute::{commute_accumulator, commute_tied};
 pub use fold::{
     branch_fold, branch_fold_hoisting, branch_fold_hoisting_across_loops, remove_identity_copies,
     remove_redundant_copies, remove_redundant_copies_between,
