@@ -685,6 +685,9 @@ mod tuning_tests {
                 split_merged_conditions: false,
                 inline_size_guard_at_size: false,
                 keep_constant_displacements: false,
+                x87_share_negated_products: false,
+                x87_zero_fill_at_size: false,
+                unroll_promotion_fits_x87_stack: false,
                 ..table
             },
             Tuning::PIN
