@@ -2284,22 +2284,50 @@ pub fn from_ssa<T: Target>(
     Ok(function)
 }
 
-/// `stage` run on `function` in SSA form by the shared flow's
-/// [`LIRTransform`](llrm_codegen::model::passes::LIRTransform), and the result
-/// back as a machine function.
+/// A stage of the shared flow run on `function` in SSA form
+/// ([`LIRTransform`](llrm_codegen::model::passes::LIRTransform)), and the
+/// result back as a machine function. `stage` is made with the oracle that
+/// holds the register classes: a value may stand for another only where the
+/// target's classes of the two meet, and then is held to that class
+/// (`constrainRegClass`).
 pub fn host_ssa<T: Target>(
     function: &MFunction<T::Class>,
     registers: Regs,
-    stage: &mut dyn llrm_codegen::model::passes::LIRTransform,
-) -> Result<MFunction<T::Class>, String> {
+    stage: impl FnOnce(llrm_codegen::backend::precse::Constrain) -> Box<dyn llrm_codegen::model::passes::LIRTransform>,
+) -> Result<MFunction<T::Class>, String>
+where
+    T::Class: 'static,
+{
     let converted = to_ssa_lir::<T>(function, registers)?;
+    let known = function.classes.len() as u32;
+    let classes = Rc::new(RefCell::new(function.classes.clone()));
+    let oracle: llrm_codegen::backend::precse::Constrain = {
+        let classes = Rc::clone(&classes);
+        Rc::new(move |from: u32, to: u32| {
+            // a pinned value has no class to constrain
+            if from == 0 || to == 0 || from > known || to > known {
+                return true;
+            }
+            let mut held = classes.borrow_mut();
+            match T::meet(held[from as usize - 1], held[to as usize - 1]) {
+                Some(both) => {
+                    held[to as usize - 1] = both;
+                    true
+                }
+                None => false,
+            }
+        })
+    };
+    let mut stage = stage(oracle);
     // The shared stages read an instruction's effects (the flags it sets, the
     // memory it touches) off the instruction; the spike target states them
     // here, as the pre-RA scheduler's input has them.
     let _lanes = llrm_codegen::backend::lanes::enter(registers);
     let input = converted.with_effects(function, registers);
     let body = stage.transform(input)?;
-    from_ssa(function, &converted, &body)
+    let mut out = from_ssa(function, &converted, &body)?;
+    out.classes = classes.borrow().clone();
+    Ok(out)
 }
 
 /// What greedy's edited function is as a machine function again.
