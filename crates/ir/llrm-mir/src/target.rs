@@ -165,6 +165,20 @@ pub struct Tuning {
     /// and pop. DEVIATE REP-MOVS-OS (owner x86-m32, exit 2026-11-30): the pin
     /// does this at `-Oz` only (`EmitTargetCodeForMemcpy`, `hasMinSize`).
     pub rep_movs_at_size: bool,
+    /// A signed divide by a power of two stays an `idiv` at `-Os` and `-Oz`
+    /// (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at `minsize` only, so the pin keeps
+    /// the `idiv` at `-Oz` and expands at `-Os`; clang `-Os` does not set
+    /// `minsize`). DEVIATE SDIV-POW2-OS (owner x86-m32, exit 2026-11-30): at
+    /// `-Os` this is a DEVIATION from the pin's optsize. 4 m32 cells, -131 B,
+    /// none worse (jpeg_fixed 3149 -> 3104, stft_fixed 980 -> 929, nbody_fixed
+    /// 416 -> 395, sat_builtins 520 -> 506). Clocks on a 486: `idiv` ~40 against
+    /// ~6 for `sar; shr; add; sar`; jpeg_fixed +60% clocks (measured by x87),
+    /// nbody_fixed ~2.4M clk (72000 executed divides x ~34, estimated),
+    /// stft_fixed and sat_builtins unmeasured. The level is bytes-strict, so
+    /// it is off at `-O2` and `-O3`.
+    ///
+    /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
+    pub sdiv_pow2_stays_at_size: bool,
     /// `-Os` loads a small immediate with `push imm8; pop r` (3 B against the
     /// `mov`'s 5), as the pin does at `-Oz` (`ExpandMOVImmSExti8`). DEVIATE
     /// PUSH-IMM-OS (owner x86-m32, exit 2026-11-30): two clocks on the 486
@@ -428,6 +442,7 @@ impl Tuning {
         imul_at_size: false,
         rep_stos_at_size: false,
         rep_movs_at_size: false,
+        sdiv_pow2_stays_at_size: false,
         push_imm_at_size: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,

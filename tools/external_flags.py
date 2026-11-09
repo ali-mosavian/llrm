@@ -32,6 +32,17 @@ def flags(target, reloc=(), gcc_major=None):
     return (*reloc, *TARGET[target], *COMMON, *((ZERO_INIT_PADDING,) if gcc_major and gcc_major >= 15 else ()))
 
 
+# A test's own flags go to clang and to ours as written, where `-fno-inline-functions` means no inlining. gcc's flag only stops
+# -finline-functions: called-once and small functions still inline at -Os (frameless x86_32 -Os: gcc 304 B with or without it; ours 378,
+# the pin 625, gcc -fno-inline 501). gcc has no mode that keeps `inline`-declared functions only, so the whole of it is -fno-inline.
+GCC_PROGRAM_FLAGS = {"-fno-inline-functions": "-fno-inline"}
+
+
+def gcc_program_flags(tokens):
+    """The tokens of a test's `// flags:` as gcc must take them for the same meaning."""
+    return [GCC_PROGRAM_FLAGS.get(token, token) for token in tokens]
+
+
 def config_hash():
     text = repr((COMMON, sorted(TARGET.items()), ZERO_INIT_PADDING))
     return hashlib.sha256(text.encode()).hexdigest()[:12]

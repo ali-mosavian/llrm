@@ -52,6 +52,7 @@ pub mod regalloc;
 pub mod scaledindex;
 pub mod sextacc;
 pub mod shiftadd;
+pub mod routine;
 pub mod sizes;
 pub mod spillmove;
 pub mod target;
