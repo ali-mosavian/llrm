@@ -45,3 +45,21 @@ define i32 @f(ptr %p, i32 %a) {{\nentry:\n  br label %b0\n{blocks}b12:\n  br lab
     driver::assembly(&ir, Platform::Linux, true).expect("lowers again");
     assert_eq!(llrm_arm64::dag::pipeline::action_tables_built(), first, "a second compile built a table");
 }
+
+/// Making the selection hooks decoded the table's complex patterns again for
+/// every block (a vector and a name match per pattern: 0.33 M of rectwo's isel
+/// in 17 blocks).
+#[test]
+fn making_the_selection_hooks_decodes_no_table() {
+    use llrm_arm64::dag::globals::Globals;
+    use llrm_arm64::dag::hooks::Aarch64Hooks;
+
+    let globals = Globals::default();
+    drop(Aarch64Hooks::new(globals.clone(), false));
+    let (_, made) = counted(|| {
+        for _ in 0..20 {
+            drop(std::hint::black_box(Aarch64Hooks::new(globals.clone(), false)));
+        }
+    });
+    assert_eq!(made, 0, "{made} allocations for 20 hooks");
+}
