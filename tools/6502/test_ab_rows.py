@@ -98,5 +98,13 @@ class Void(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(ab_rows.main(["x", a, b, "--level", "Os", "--allow-unmeasured", "1"]), 0)
 
+    def test_a_helper_source_without_an_out_is_not_a_program_and_does_not_void_the_run(self):
+        import contextlib, io, json
+        a, b = tsv([("p", 10, 10)]), tsv([("p", 10, 10)])
+        for path in (a, b):
+            json.dump([["p", "PASS", {}], ["helper", "NO-OUT", "no .out"]], open(path + ".json", "w"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(ab_rows.main(["x", a, b, "--level", "Os"]), 0)
+
 if __name__ == "__main__":
     unittest.main()

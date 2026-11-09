@@ -30,7 +30,7 @@ def unmeasured(path):
     import json, os
     if not os.path.exists(path + ".json"):
         return set()
-    return {name for name, verdict, _ in json.load(open(path + ".json")) if verdict != "PASS"}
+    return {name for name, verdict, _ in json.load(open(path + ".json")) if verdict not in ("PASS", "NO-OUT")}
 
 CLOCKS_PER_BYTE = 3
 
