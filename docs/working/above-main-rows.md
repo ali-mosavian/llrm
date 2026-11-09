@@ -151,3 +151,15 @@ Design only; no code before the coordinator's go.
 3. Backend: `NoteValue::Expr(vreg, ops)` in isel `noted`, and the DWARF writer emits `DW_OP_bregN 0; ops; DW_OP_stack_value` (CodeView keeps the plain value).
 
 **Cost** (estimate, not measured): about 700 lines and 3 PRs; compile time unchanged without `-g` (records exist only then); objects identical with and without `-g` (the `g_leaves_*` tests guard it). Done when `a_variable_reads_the_same_at_o2_as_at_o0...` passes at floor 18 and loses its `ignore`.
+
+## m68k onto `machine_with` (owner m68k-lsr-addressing, ruling 2026-11-09; closes JT-O1-1..3)
+
+Estimates, not measurements; CSE comes through the shared flow. Gap card: `~/scratch/handoff/m68k-onto-machine-with-gaps-2026-11-09.md`. Every step: x86 md5 identity, m68k A/B bytes and clocks (68000/68020, O1/O2/Os), compile time linear at 600 and 1200 functions.
+
+- 2026-11-12 20:00Z: pre-phi `MFunction` to `LirBody` and back, round trip md5-equal on sieve; `precse` runs on it.
+- 2026-11-14: `precse` hosted behind a flag, corpus A/B; JT-O1-1..3 re-measured.
+- 2026-11-18: optimizephis, deadmi, machinelicm, machinesink hosted one at a time (the spike `machine_sink` goes).
+- 2026-11-24: shared phielim, two-address, coalescer, greedy through `machine_with` (m68k classes, rules, frame facts from llrm-target-m68k).
+- 2026-11-30: post-RA copyprop, branch folding, block placement shared.
+- 2026-12-04: frame/epilogue from `FrameRegisters`; the replaced private passes deleted; JT-O1-1..3 closed.
+
