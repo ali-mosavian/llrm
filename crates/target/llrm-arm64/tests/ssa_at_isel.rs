@@ -1,5 +1,5 @@
 //! The selector's output is SSA: a loop-carried value is one phi, not a copy
-//! into the same register on each path. Both selectors made `i` below a
+//! into the same register on each path. The selector made `i` below a
 //! register defined twice (an `orr` on the entry edge, another on the back
 //! edge), so the shared SSA phases, which read one definition per value, could
 //! not run on arm64 (184 such registers in the -O1 corpus).
@@ -8,7 +8,6 @@ use std::collections::HashMap;
 
 use llrm_arm64::dag::emit::emit;
 use llrm_arm64::dag::function::select_function;
-use llrm_arm64::machine::Platform;
 use llrm_arm64::mfunc::MFunc;
 
 const DATALAYOUT: &str = "e-m:o-i64:64-i128:128-n32:64-S128";
@@ -38,14 +37,5 @@ fn defined_twice(function: &MFunc) -> Vec<String> {
 #[test]
 fn the_dag_selectors_loop_carried_value_has_one_definition() {
     let function = emit("f", &select_function(&module(), "f").expect("selects"), false).expect("emits");
-    assert_eq!(defined_twice(&function), Vec::<String>::new(), "{function:?}");
-}
-
-#[test]
-fn the_hand_selectors_loop_carried_value_has_one_definition() {
-    let module = module();
-    let layout = llrm_mir::datalayout::DataLayout::parse(DATALAYOUT).unwrap();
-    let (id, ..) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("a function");
-    let function = llrm_arm64::isel::selected(&module, id, &layout, Platform::Darwin, false).expect("selects");
     assert_eq!(defined_twice(&function), Vec::<String>::new(), "{function:?}");
 }
