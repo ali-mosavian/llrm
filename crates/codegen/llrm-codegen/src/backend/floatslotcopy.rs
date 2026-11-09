@@ -19,9 +19,10 @@
 //! The pair is a plain `fld` of a 4 or 8 byte cell
 //! and the `fstp` of the same width that pops it next (anchors may sit
 //! between). The price is the target's own (`x87_load`, `x87_store`, `mov_rm`,
-//! `mov_mr`), the encoded sizes are the selector's. Nothing is done where bytes
-//! are strict (-O1, -Os), where the target has no speed rate, or where a cost
-//! is missing.
+//! `mov_mr`), the encoded sizes are the selector's. The clocks saved are
+//! weighted by the block's runs a call (`LirBody::frequencies`, one where there
+//! are none). Nothing is done where bytes are strict (-O1, -Os), where the
+//! target has no speed rate, or where a cost is missing.
 //!
 //! # Example
 //! The ten-float rotation of `x87rotate.c` at -O2 -m16 spills the carried set
@@ -189,6 +190,7 @@ fn copy_through_register(
     load: &Arc<Insn>,
     store: &Arc<Insn>,
     prices: &Prices,
+    runs: f64,
     scratch: &[RegId],
     dead: &DeadAfter,
 ) -> Option<Vec<Arc<Insn>>> {
@@ -219,8 +221,10 @@ fn copy_through_register(
     let after =
         moves.iter().map(|(load, store)| Some(bytes(bits, load)? + bytes(bits, store)?)).sum::<Option<usize>>()?;
     let clocks = prices.load + prices.store - words * (prices.mov_load + prices.mov_store);
-    // Clocks saved against the bytes added, at the speed rate.
-    if clocks * 1000 <= (after as i64 - before as i64) * prices.rate {
+    // Clocks saved a call (the block's runs a call) against the bytes added, at
+    // the speed rate: a block that runs less than once a call, a cold one,
+    // does not repay them.
+    if (clocks * 1000) as f64 * runs <= (after as i64 - before as i64) as f64 * prices.rate as f64 {
         return None;
     }
     let mut out = Vec::with_capacity(moves.len() * 2);
@@ -255,13 +259,17 @@ pub fn copied(
         .blocks
         .iter()
         .map(|block| {
+            // Without frequencies a block runs once a call.
+            let runs = body.frequencies.as_ref().and_then(|kept| kept.0.get(&block.at)).copied().unwrap_or(1.0);
             let dead = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
             let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len());
             let mut at = 0;
             while at < block.insns.len() {
                 if let Some(end) = popped_by(&block.insns, at) {
                     let (load, store) = (&block.insns[at], &block.insns[end]);
-                    if let Some(made) = copy_through_register(regs, body.bits, load, store, &prices, &scratch, &dead) {
+                    if let Some(made) =
+                        copy_through_register(regs, body.bits, load, store, &prices, runs, &scratch, &dead)
+                    {
                         insns.extend(made);
                         // the anchors between the pair keep their place after
                         // the moves

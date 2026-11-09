@@ -6500,3 +6500,18 @@ fn test_a_float_slot_copy_finds_a_free_register_before_a_control_word_switch() {
 
     assert!(float_copy(&input, false).is_some());
 }
+
+/// A block that runs once in ten calls does not repay the bytes the register
+/// moves add to a double copy (6 clocks saved, +8 B): the saving is per run,
+/// not per site (m32 regparm3_matrix_31_callee grew 8 B for a copy outside any
+/// loop).
+#[test]
+fn test_a_double_slot_copy_in_a_cold_block_stays() {
+    let mut input = float_copy_body((-8, 8), (-16, 8), &[]);
+    let at = input.blocks[0].at;
+    let table = |runs: f64| Some(Arc::new(crate::model::lir::BlockFrequencies([(at, runs)].into_iter().collect())));
+    input.frequencies = table(0.1);
+    assert!(float_copy(&input, false).is_none(), "cold: stays");
+    input.frequencies = table(1.0);
+    assert!(float_copy(&input, false).is_some(), "once a call: the saving repays the bytes");
+}
