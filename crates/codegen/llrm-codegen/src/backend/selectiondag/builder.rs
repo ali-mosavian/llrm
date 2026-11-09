@@ -111,6 +111,19 @@ pub struct BuilderTarget {
     /// The stack alignment `alloca` rounds to, when not the target's own: the
     /// pin's i486-linux goldens say 16.
     pub stack_align: Option<u64>,
+    /// The largest alignment the platform ABI gives a variadic argument's
+    /// stack slot; `VAARG` rounds its list pointer to the type's ABI alignment
+    /// capped at this. None: the type's own, as the pin's `expandVAArg` does.
+    ///
+    /// DEVIATE VA-ALIGN (row M68K-VA-DOUBLE): m68k sets 4. The pin leaves it
+    /// to the IR alignment (`double` is 8 under a datalayout with no `f64`
+    /// entry, [`M68kISelLowering.cpp:169`]: `VAARG` is `Expand`), so a callee
+    /// skipped the word a gcc caller, and ours, put the first `double` in.
+    /// Exit: none while the ABI packs stack arguments at 4.
+    ///
+    /// [`M68kISelLowering.cpp:169`]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kISelLowering.cpp#L169
+    pub va_arg_align_cap: Option<u32>,
     /// Sibling calls become `TC_RETURN`s (tail-call step 3); off until the
     /// emitter lays them (step 5).
     pub tail_calls: bool,
@@ -468,6 +481,7 @@ impl BuilderTarget {
             soft_float: false,
             libcalls: None,
             stack_align: None,
+            va_arg_align_cap: None,
             float_store: false,
             jump_tables: true,
             opt_size: false,
