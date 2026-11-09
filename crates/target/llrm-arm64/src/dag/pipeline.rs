@@ -330,25 +330,50 @@ impl LegalizeHooks for Aarch64Lowering {
     ) -> Option<SDValue> {
         use llrm_codegen::backend::selectiondag::target_calling::{Ext, In, Out, TargetCalling};
         let ext = if signed { Ext::Sign } else { Ext::Zero };
-        let outs: Vec<Out> = args
-            .iter()
-            .map(|&value| Out {
+        // `getCopyToParts` of an `i128`: its two halves, which AAPCS64 passes
+        // in a register pair, low half first (`split`).
+        let quad = EVT::integer(128);
+        let mut outs: Vec<Out> = Vec::new();
+        for &value in args {
+            let arg_vt = dag.value_type(value);
+            let pieces = if arg_vt == quad {
+                let (zero, one) = (dag.get_constant(0, EVT::I64), dag.get_constant(1, EVT::I64));
+                vec![
+                    dag.get_node(ISD::ExtractElement, EVT::I64, &[value, zero]),
+                    dag.get_node(ISD::ExtractElement, EVT::I64, &[value, one]),
+                ]
+            } else {
+                vec![value]
+            };
+            let split = pieces.len() > 1;
+            outs.extend(pieces.into_iter().map(|value| Out {
                 value,
                 ext,
                 pointer: false,
-                arg_vt: dag.value_type(value),
-                split: false,
+                arg_vt,
+                split,
                 variadic: false,
                 sret: false,
                 byval: None,
-            })
-            .collect();
-        let ins = [In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any, byval: None }];
+            }));
+        }
+        let ins: Vec<In> = if ret == quad {
+            vec![
+                In { vt: EVT::I64, pointer: false, arg_vt: ret, split: true, sret: false, ext: Ext::Any, byval: None };
+                2
+            ]
+        } else {
+            vec![In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any, byval: None }]
+        };
         let calling = super::call::Aarch64Calling { linux: self.linux };
         calling.accepts(dag, llrm_codegen::backend::selectiondag::target_calling::Site::Call, &outs, &ins).ok()?;
         let callee = dag.get_external_symbol(EVT::I64, name);
         let root = dag.entry_node();
         let (_chain, values) = calling.lower_call(dag, root, callee, &outs, &ins);
+        if ret == quad {
+            // `getCopyFromParts`: the halves joined.
+            return Some(dag.get_node(ISD::BuildPair, quad, &[*values.first()?, *values.get(1)?]));
+        }
         values.first().copied()
     }
 
