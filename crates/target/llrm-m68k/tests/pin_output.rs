@@ -79,6 +79,7 @@ const SOURCE_ORDER: Options = Options {
     compare_destinations: false,
     carry_chain: true,
     global_copies: true,
+    mul: llrm_m68k::dagisel::mulprice::Mode::Pin,
     loop_carried_first: false,
     debug: false,
 };
