@@ -46,6 +46,22 @@
 //! registry slot `emit-lowered-select` (lir-cleanup-port, PR by 2026-11-13;
 //! #3052).
 //!
+//! Rows opened by the i64 select moving to the DAG (owner w12, 2026-11-09;
+//! each cell is at or under the pin llc, over the previous MIR expansion;
+//! bytes before -> after, release/next only):
+//! - I64SEL-1, exit 2026-11-12: m32 `select_of_constants` .text +32 (-O1, -O2)
+//!   and +64 (-O3), 12 of 420 functions grow by 1..7 B. Cause: the scheduler
+//!   puts the CMOV diamond before the SETCC (`f409`, 32 B; pin 28 B), so
+//!   FixupSetCC cannot fire and MaskByAnd emits `and eax,255`. General
+//!   scheduling cause (SD31, NodeNum), filed with sdag-d; not patched here.
+//! - I64SEL-2, exit 2026-11-12: m64 `word_compares` `main` 167 -> 173 B (pin
+//!   175 B). Cause: `x*257` stays `imul` at m64 (pin: `(x<<8)+x`), so the ADC
+//!   takes `2*setbe` as an `add` before it, the flags are clobbered, the `cmp`
+//!   is repeated with its load unfolded, and one more value is live (R15D).
+//! - I64SEL-3, exit 2026-11-10 18:00Z: m64 `sfm16_float*` -O1 +8, -Os +10 B
+//!   (`__divsf3` register naming and one `mov`; pin 560 B vs 503 B) and m32
+//!   `x_sf_cmp64` -Os +1302 instructions at equal bytes (branch layout flip).
+//!
 //! The loop is repeated until no select is left in any function, so two selects
 //! in one block each get their own split. The result is checked by an
 //! interpreter test that runs a function before and after.
