@@ -60,6 +60,44 @@ fn multiply_bytes_gives_the_low_byte() {
     }
 }
 
+/// A multiplier of 0, 1 or 255 and the full eight bits: the loop ends when the
+/// multiplier is spent.
+#[test]
+fn multiply_bytes_ends_with_the_multiplier() {
+    for (a, b, want) in [(200, 0, 0), (0, 200, 0), (200, 1, 200), (1, 255, 255), (255, 1, 255), (3, 128, 128)] {
+        assert_eq!(byte(&format!("mulqi-end-{a}-{b}"), &two_bytes(a, b), "__mulqi3"), want, "{a} * {b}");
+    }
+}
+
+/// `7 * 1` ran the eight trips of a fixed count (`dex; bne`): a multiplier of 1
+/// is one trip, the loop ends on the flags `lsr` leaves.
+#[test]
+fn multiply_bytes_with_a_small_multiplier_is_one_trip() {
+    let spent = routine_clocks("mulqi-small", &two_bytes(7, 1));
+    assert!(spent <= 50, "the routine and its jsr took {spent} clocks");
+}
+
+/// An early exit read from `ldx rc3` costs a clock a trip over `dex`: `0xB3 *
+/// i` for sixteen `i` ran 96 clocks over the counter loop (`huffman_decode`).
+/// The multiplier with bit 7 set takes eight trips and must not be slower.
+#[test]
+fn multiply_bytes_by_a_full_width_multiplier_is_no_slower_than_a_counter() {
+    let spent = routine_clocks("mulqi-wide", &two_bytes(3, 0xB3));
+    assert!(spent <= WIDE_MULTIPLIER_COUNTER_LOOP, "the routine and its jsr took {spent} clocks");
+}
+
+/// The counter loop's clocks for `3 * 0xB3`, `jsr` and `rts` included.
+const WIDE_MULTIPLIER_COUNTER_LOOP: i64 = 179;
+
+fn routine_clocks(
+    name: &str,
+    setup: &str,
+) -> i64 {
+    let with = common::cycles_with(name, &format!("{setup}  jsr __mulqi3\n"), "");
+    let without = common::cycles_with(&format!("{name}-none"), setup, "");
+    with - without
+}
+
 /// The full product of two bytes, A low and X high: 255 * 255 = 65025 = 0xFE01,
 /// 200 * 100 = 0x4E20, 0 either side is 0.
 #[test]
