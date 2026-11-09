@@ -349,7 +349,8 @@ mod tests {
     #[test]
     fn the_trait_defaults_answer_what_arm64_does_not_state() {
         assert_eq!((Arm64.march("armv8"), Arm64.marches().len(), Arm64.cpu_table("generic")), (None, 0, None));
-        // An unsupported default is loud: the error names the target and the method.
+        // An unsupported default is loud: the error names the target and the
+        // method.
         let refusal = |text: Result<_, String>| -> String { text.map(|_: ()| ()).unwrap_err() };
         assert_eq!(
             refusal(Arm64.divide_routine(true, true).map(drop)),
@@ -358,6 +359,27 @@ mod tests {
         assert!(refusal(Arm64.huge_fill_routine(4).map(drop)).starts_with("arm64: huge_fill_routine"));
         assert!(refusal(Arm64.huge_copy_routine(false).map(drop)).starts_with("arm64: huge_copy_routine"));
         assert_eq!((Arm64.float_width(4), Arm64.float_width(8)), (4, 8));
+    }
+
+    /// First fact of `flow::machine_with` (cpu.rs `_profile`): the CPU profile
+    /// the stages read is built from the target's `cpu_table`, whose columns
+    /// and form clocks are x86's. arm64 has none, so no profile exists.
+    /// Goes red when arm64 states a table: replace it with that test.
+    #[test]
+    #[should_panic(expected = "unknown CPU target: generic")]
+    fn the_cpu_profile_needs_a_cpu_table() {
+        let _ = llrm_codegen::backend::cpu::tuned_for(&Arm64, "generic", false);
+    }
+
+    /// Second fact of `machine_with`'s inputs: even a flat machine's
+    /// `Segments::of` asks the register file for `data` (DS, "what string
+    /// operations read"); arm64 names no data segment, so it panics.
+    /// Goes red when `Segments` allows none: replace with the flat test.
+    #[test]
+    #[should_panic(expected = "names no data segment")]
+    fn the_segments_of_a_flat_machine_ask_for_a_data_segment() {
+        let regs = llrm_lir::registers::Regs(Arm64.registers());
+        let _ = llrm_codegen::backend::target::Segments::of(&Arm64.machine(), regs, Arm64.operand_bytes());
     }
 
     /// The shared passes' prices are the private driver's: one `Arm64Machine`.
