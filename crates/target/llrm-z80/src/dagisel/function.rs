@@ -46,6 +46,7 @@ pub fn builder_target() -> BuilderTarget {
         // from a third of its range filled, at speed as well as size.
         min_jump_table_density: Some(40),
         preselection_blocks: Some(crate::prepare::PHI_EDGE),
+        refuse_unknown_intrinsics: true,
         variable_shift_legal: false,
         string_instructions: false,
         // the runtime's own routines (runtime/z80_rt.s). `memcpy` and `memmove`
