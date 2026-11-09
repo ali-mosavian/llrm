@@ -66,6 +66,10 @@
 //! - I64SEL-4, exit 2026-11-10 18:00Z: m32 `x_sf_cmp64` -Os +1302 executed
 //!   instructions at equal bytes (`test; js` became `test; jns`, a branch
 //!   layout flip).
+//! - I64SEL-5, exit 2026-11-12: z80-sdcc `call_clobbers_flags` -O2/-Os .text
+//!   602 -> 618 B. Cause: the shared `add (sext i1 c), x` -> `sub x, (zext c)`
+//!   fold (pin `visitADDLikeCommutative`) now fires; z80 prices the `sbc hl,bc`
+//!   form eight bytes above `add hl,de` (z80 owner).
 //!
 //! The loop is repeated until no select is left in any function, so two selects
 //! in one block each get their own split. The result is checked by an
