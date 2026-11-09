@@ -88,6 +88,9 @@ pub struct BuilderTarget {
     /// (phi edges): the pin has none at this point, so a switch's layout
     /// successor is the next block without it.
     pub preselection_blocks: Option<&'static str>,
+    /// A call of an `llvm.` name nothing lowered is refused by name; where unset it stays a call of that
+    /// symbol (a target that names its own intrinsics by call).
+    pub refuse_unknown_intrinsics: bool,
     /// `isOperationLegal(SHL, pointer)`: a switch may be bit tests (`1 << x`).
     pub variable_shift_legal: bool,
     /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit
@@ -458,6 +461,7 @@ impl BuilderTarget {
             min_jump_table_entries: 4,
             min_jump_table_density: None,
             preselection_blocks: None,
+            refuse_unknown_intrinsics: false,
             variable_shift_legal: true,
             switch_optimize: true,
             trap_unreachable: false,
@@ -1879,6 +1883,15 @@ impl Builder<'_> {
             .and_then(|name| self.calling().and_then(|calling| calling.intrinsic(&name)))
         {
             return self.visit_target_intrinsic(instruction, info, found);
+        }
+        // An `llvm.` name that no case above lowered is an intrinsic nobody
+        // wrote: a call to a symbol of that name is silent wrong code
+        // (`llvm.frameaddress` was tail called by name on z80).
+        if self.target.refuse_unknown_intrinsics
+            && let Some(name) = direct.and_then(|global| self.module.global(global).name.owned())
+            && name.starts_with("llvm.")
+        {
+            return Err(Refused(Box::leak(format!("intrinsic call {name}").into_boxed_str())));
         }
         if let Some(calling) = self.calling()
             && !calling.supports_convention(info.calling_convention)
