@@ -207,6 +207,16 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         false
     }
 
+    /// `getScalarShiftAmountTy`: the pin's m68k keeps the default, the pointer
+    /// type (`i32`). A shift a combine made after legalization with the
+    /// shared `i8` amount had no pattern: `CannotSelect(Shl)`.
+    fn shift_amount_type(
+        &self,
+        _shifted: EVT,
+    ) -> EVT {
+        EVT::I32
+    }
+
     fn sub_of_sign_extended_bool(&self) -> bool {
         self.short
     }
