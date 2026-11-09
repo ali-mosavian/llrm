@@ -3,7 +3,8 @@
 Ruling (oversight, 2026-11-09): selection emits real phis, as the pin's ISel
 emits `PHI`; the shared `PhiElimination` runs after it. No SSA reconstruction.
 Owner llrm-arm64-lir (design, plan); implementation goes to a second arm64
-session. Exit 2026-11-15.
+session. Exit 2026-11-15 if the arm64-phi session starts by 2026-11-10 06:00Z, else
+2026-11-17 (6 working days from the start).
 
 ## Measured today (-O1, 43 functions of the 24 programs, 2026-11-09)
 
@@ -33,9 +34,18 @@ session. Exit 2026-11-15.
    the construction.
 4. The producer maps `Op::Phi` to a `PHI` LIR instruction. The stage harness
    (`LLRM_ARM64_STAGES`) calls `to_lir` on the MFunc *before* `lower_phis`, so
-   the 13 SSA stages get an SSA body.
+   the 13 SSA stages get an SSA body. The object-bytes path never sees that
+   form: it calls `lower_phis` first, so the harness's body is not what a real
+   compile holds. Check: one executed program compiled with the harness on and
+   off, object md5 equal and the program's output equal.
 5. Writeback: `ldst_update.rs` gives the updated base a new register tied to the
-   base (the pin's `$wback = LDRXpost %base`). Needed for `verify_for(in_ssa)`.
+   base (the pin's `$wback = LDRXpost %base`). Each writeback is then one
+   def-use pair for the SSA stages: the load/store defines `%new` (its address
+   operand reads `%old`), every later use of the base reads `%new`; `%old` is
+   untouched. `verify_for(in_ssa)` then sees one definition per register. The
+   allocator must give `%new` the register of `%old` (the tie), as it does for
+   `MOVK`. Fail-first: a loop with `ldr x, [b], #8` verifies as SSA (today:
+   "defined twice") and keeps its bytes.
 6. Gap 3 later: the shared `PhiElimination` replaces `lower_phis`. It places
    copies differently (a register per phi, split edges by liveness), so that
    step moves bytes; it gets its own A/B and its moved cells listed.
