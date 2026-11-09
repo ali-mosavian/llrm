@@ -67,6 +67,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
+use llrm_lir::registers::Regs;
+
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{IndexMap, IndexSet};
@@ -122,7 +124,7 @@ pub fn untied_only(body: &LirBody) -> LirBody {
     for block in &mut done.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len() + block.insns.len() / 4);
         for one in block.insns.iter() {
-            match _untied(one, &mut mint) {
+            match _untied(body.registers, one, &mut mint) {
                 Some(fix) => insns.extend(fix),
                 None => insns.push(Arc::clone(one)),
             }
@@ -182,7 +184,7 @@ pub fn tied_with(
             // The copies to and from registers this instruction carries.
             walk.process_copy(&one);
             // `scanUses(regA)` of a tied instruction that is not yet tied.
-            if let Some(what) = one.what.as_ref().filter(|what| ties(what))
+            if let Some(what) = one.what.as_ref().filter(|what| ties_in(body.registers, what))
                 && let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first())
                 && into.value != first.value
             {
@@ -256,7 +258,7 @@ pub fn tied_with(
                 && let Some((load, add)) = _unfolded(&one, &mut mint)
                 && let Some(Loc::Held(first)) = add.what.as_ref().and_then(|what| what.sources.get(1))
                 && !walk.killed_at(&work[place], first.value)
-                && let Some(fix) = _untied(&add, &mut mint)
+                && let Some(fix) = _untied(body.registers, &add, &mut mint)
             {
                 place += 1;
                 walk.remove_clobbered_src_reg_map(&one);
@@ -275,7 +277,7 @@ pub fn tied_with(
             }
             place += 1;
             walk.remove_clobbered_src_reg_map(&one);
-            let Some(fix) = _untied(&one, &mut mint) else {
+            let Some(fix) = _untied(body.registers, &one, &mut mint) else {
                 insns.push(one);
                 continue;
             };
@@ -384,7 +386,7 @@ fn _reused(body: &LirBody) -> LirBody {
             }
         };
         for at in 0..insns.len() {
-            let Some(what) = insns[at].what.as_ref().filter(|what| ties(what)) else { continue };
+            let Some(what) = insns[at].what.as_ref().filter(|what| ties_in(body.registers, what)) else { continue };
             let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first()) else {
                 continue;
             };
@@ -618,8 +620,22 @@ pub fn ties(what: &Semantics) -> bool {
                 && !matches!(what.sources[1], Loc::Imm(_))))
 }
 
+/// Whether `what` is tied on the target `regs` names. A file stating
+/// `@ties rows` has each instruction's row say it (`^0`), so a three-address
+/// `ADDWri` is not tied and a `MOVKXi` is; otherwise the rule is by operation
+/// (`ties`), x86's.
+pub fn ties_in(
+    regs: Option<Regs>,
+    what: &Semantics,
+) -> bool {
+    let Some(regs) = regs.filter(|regs| regs.ties_by_row) else { return ties(what) };
+    let name = what.name.as_deref().unwrap_or("");
+    (regs.effects)(name, what.dests.len(), what.sources.len()).first().is_some_and(|row| row.ties.contains(&(0, 0)))
+}
+
 /// The copy and the fixed instruction, or None where it is already tied.
 fn _untied(
+    regs: Option<Regs>,
     one: &Insn,
     mint: &mut dyn FnMut() -> u32,
 ) -> Option<Vec<Arc<Insn>>> {
@@ -627,7 +643,7 @@ fn _untied(
     if what.dests.is_empty() || what.sources.is_empty() {
         return None;
     }
-    if !ties(what) {
+    if !ties_in(regs, what) {
         return None;
     }
     let (into, first) = (&what.dests[0], &what.sources[0]);
@@ -1064,7 +1080,7 @@ mod tests {
             assert_eq!(sources(&chosen), reversed(&one), "{name}");
             assert!(chosen.uses == one.uses && chosen.defines == one.defines, "{name}");
             let mut counter = 1000..2000;
-            let (copy, tied) = match _untied(&chosen, &mut || counter.next().unwrap()).expect(name).as_slice() {
+            let (copy, tied) = match _untied(None, &chosen, &mut || counter.next().unwrap()).expect(name).as_slice() {
                 [copy, tied] => (copy.clone(), tied.clone()),
                 other => panic!("{name}: {} instructions", other.len()),
             };
@@ -1094,7 +1110,7 @@ mod tests {
         let one = Insn::new(0, Some((0, 0)), Some(what), vec![3], vec![1, 2]);
 
         let mut counter = 1000..2000;
-        let fix = _untied(&one, &mut || counter.next().unwrap()).expect("untied");
+        let fix = _untied(None, &one, &mut || counter.next().unwrap()).expect("untied");
         let [copy, tied] = fix.as_slice() else { panic!("{} instructions", fix.len()) };
 
         assert_eq!(sources(copy), vec![held(1, 4)]);
@@ -1812,7 +1828,7 @@ mod tests {
 
     fn fixed(one: &Insn) -> Option<Vec<std::sync::Arc<Insn>>> {
         let mut counter = 1000..2000;
-        _untied(one, &mut || counter.next().unwrap())
+        _untied(None, one, &mut || counter.next().unwrap())
     }
 
     /// hotlop printed 420 for 630 when 21 + accumulator lost its 21.

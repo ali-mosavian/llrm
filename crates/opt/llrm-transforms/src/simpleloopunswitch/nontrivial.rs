@@ -138,6 +138,7 @@ pub(super) fn query_at<'a>(
         dom_conditions: None,
         cond_context: None,
         cxt,
+        pending_intrinsics: &[],
     }
 }
 

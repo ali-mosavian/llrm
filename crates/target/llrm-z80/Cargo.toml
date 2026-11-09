@@ -19,6 +19,9 @@ llrm-mir = { workspace = true }
 llrm-spike-mf = { workspace = true }
 llrm-transforms = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [build-dependencies]
 llrm-target = { workspace = true }
 llrm-lir = { workspace = true }

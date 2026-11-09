@@ -268,7 +268,6 @@ dependencies = [
  "llrm-dwarf",
  "llrm-elf",
  "llrm-env",
- "llrm-iselgen",
  "llrm-lir",
  "llrm-macho",
  "llrm-mir",
@@ -878,6 +877,7 @@ dependencies = [
  "llrm-support",
  "llrm-target",
  "llrm-transforms",
+ "tempfile",
 ]
 
 [[package]]

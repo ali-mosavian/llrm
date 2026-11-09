@@ -31,7 +31,7 @@ define dso_local i32 @main() #0 {
 
 11:                                               ; preds = %8
   %12 = load i64, ptr %1, align 8
-  %13 = mul nsw i64 %12, 3
+  %13 = mul nsw i64 %12, 25
   %14 = load i32, ptr %2, align 2
   %15 = load i32, ptr %3, align 2
   %16 = call i64 @lt(i32 noundef %14, i32 noundef %15) #4
@@ -39,13 +39,13 @@ define dso_local i32 @main() #0 {
   %18 = load i32, ptr %2, align 2
   %19 = load i32, ptr %3, align 2
   %20 = call i64 @ne(i32 noundef %18, i32 noundef %19) #4
-  %21 = mul nsw i64 %20, 2
+  %21 = mul nsw i64 %20, 100
   %22 = add nsw i64 %17, %21
   %23 = load i32, ptr %2, align 2
   %24 = load i32, ptr %3, align 2
   %25 = call i64 @both(i32 noundef %23, i32 noundef %24) #4
   %26 = lshr i64 %25, 33
-  %27 = mul nsw i64 %26, 5
+  %27 = mul nsw i64 %26, 45
   %28 = add nsw i64 %22, %27
   %29 = load i32, ptr %2, align 2
   %30 = load i32, ptr %3, align 2

@@ -377,6 +377,14 @@ impl BuilderTarget {
     /// beat the multiply-high sequence's.
     /// This target with a signed divide by a negative constant made from the
     /// divide by its magnitude ([`DagConfig::sdiv_by_magnitude`]).
+    pub fn with_sdiv_pow2_stays(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.sdiv_pow2_stays = on;
+        self
+    }
+
     pub fn with_sdiv_by_magnitude(
         mut self,
         on: bool,
@@ -2503,6 +2511,8 @@ impl Builder<'_> {
         // `IsTailCall`: the call in tail position, if the target takes it, ends
         // the block
         if let Some(tail) = self.tail_candidate.take()
+            && !(calling.byval_parameter_blocks_tail_call()
+                && self.function.parameter_attrs.iter().any(|attrs| self.byval_of(attrs).is_some()))
             && let Some(node) = calling.lower_tail_call(&mut self.dag, root, callee_node, &outs)
         {
             self.tail_calls.push(tail);
