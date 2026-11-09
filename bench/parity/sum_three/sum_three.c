@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32
+// targets: dos
 extern void report(long value);
 
 typedef struct {
