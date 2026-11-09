@@ -250,7 +250,7 @@ impl To<'_> {
 }
 
 /// The number of `name` in `symbols`, added if it has none.
-fn intern(
+pub(crate) fn intern(
     symbols: &mut Vec<String>,
     name: &str,
 ) -> i64 {
@@ -262,7 +262,7 @@ fn intern(
 }
 
 /// What a load or store reaches, as the body carries it (`Insn::memory`).
-fn memref_of(
+pub(crate) fn memref_of(
     mem: &Memory,
     mmo: &MemOperand,
     store: bool,

@@ -588,6 +588,38 @@ fn a_load_from_another_slot_is_not_ordered_after_a_store() {
     assert_eq!(graph.preds[2], [0], "a load of slot 1 follows the store to it");
 }
 
+/// The allocator's own path (`lir_view` -> the spike converter -> the scheduler's
+/// body) carried only the memory lane, so the scheduler's graph ordered a load
+/// after a store to another slot; `lir_body::to_lir`, which the check path
+/// uses, was not the producer the default compile runs.
+#[test]
+fn the_default_producer_tells_the_scheduler_what_an_access_reaches() {
+    let at = |slot: u32| MemOperand { object: crate::mc::inst::MemObject::Slot(slot), offset: Some(0), volatile: false };
+    let store = |slot: u32| {
+        Op::I(Inst::Store {
+            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: g(0) },
+            addr: Addr::Offset { base: g(1), imm: 0 },
+            mmo: at(slot),
+        })
+    };
+    let load = |slot: u32, into: u32| {
+        Op::I(Inst::Load {
+            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: g(into) },
+            addr: Addr::Offset { base: g(1), imm: 0 },
+            mmo: at(slot),
+        })
+    };
+    let function = function(vec![store(1), load(2, 2), load(1, 3)]);
+    let registers = Regs(&crate::REGISTER_INFO);
+    let view = crate::lir_view::view(&function);
+    let converted = llrm_spike_mf::tolir::to_lir::<crate::lir_view::Arm64>(&view, registers).expect("converts");
+    let _file = enter(registers);
+    let body = converted.with_effects(&view, registers);
+    let graph = llrm_codegen::backend::machinesched::graph(&body.blocks[0].insns, registers, body.bits);
+    assert!(graph.preds[1].is_empty(), "a load of slot 2 waits for a store to slot 1: {:?}", graph.preds);
+    assert_eq!(graph.preds[2], [0], "a load of slot 1 follows the store to it");
+}
+
 /// An arm64 register prints by its file's name. `Debug` was iced's, so `x0`
 /// showed as `AL` and `x1` as `R12W` in every dump and assertion of arm64 code.
 #[test]
