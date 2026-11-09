@@ -38,7 +38,7 @@ def test_the_data_of_an_object_counts_bss_and_a_const_table(tmp_path):
         import pytest
 
         pytest.skip("needs gcc")
-    (tmp_path / "t.c").write_text("static char bss[4096];\nconst int table[16] = {1,2,3};\nint f(int i) { return bss[i] + table[i & 15]; }\n")
+    (tmp_path / "t.c").write_text("char bss[4096];\nconst int table[16] = {1,2,3};\nint f(int i) { bss[i] = 1; return bss[i + 1] + table[i & 15]; }\n")
     subprocess.run(["gcc", "-O1", "-fPIE", "-c", str(tmp_path / "t.c"), "-o", str(tmp_path / "t.o")], check=True)
     assert worse_cells.object_data(tmp_path / "t.o") >= 4096 + 64
 
