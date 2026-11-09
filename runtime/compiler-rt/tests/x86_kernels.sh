@@ -3,6 +3,8 @@
 # crates/target/llrm-x86-m32/vsgcc/kernels/, for harness.py (486-table clocks, llrm/gcc/clang variants). NV vectors from tests/gen_vectors.c.
 set -e
 cd "$(dirname "$0")/.."
+# Without the target's config the compare entries are seven full copies in every compiler: x_sf_* once read +100 B over gcc for it (x_sf_add -Os 1720 vs 1570).
+[ -n "${SF_CFG-}" ] || { echo "x86_kernels.sh: SF_CFG=x86_m32 is required (kernels built without the config duplicate the compare wrappers)" >&2; exit 2; }
 NV=${1:-400}; SF_CFG=${SF_CFG-}; [ -n "$SF_CFG" ] && SF_CFG=$(sed -E 's/\buint(32|64)_t\b/sfu\1/g' config/$SF_CFG/config.h); export SF_CFG; K=$(cd ../../crates/target/llrm-x86-m32/vsgcc/kernels && pwd); T=$(mktemp -d); trap 'rm -r $T' EXIT
 cc -O2 -ffp-contract=off tests/gen_vectors.c -o $T/gen && $T/gen $NV > $T/vectors.h
 for op in add sub mul div; do
