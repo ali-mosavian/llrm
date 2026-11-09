@@ -196,7 +196,18 @@ impl FunctionPass for CgpAddr {
         // `optimizeSelectInst` returns for `shouldOptimizeForSize`
         // ([CodeGenPrepare.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L7811)).
         let costs = analyses.outer().target().costs();
-        let converted = !crate::looploadelim::has_opt_size(unit.function)
+        // Only where a select is a branch around a copy whatever is done
+        // (no conditional move, `sinks_select_arms` as for CS2): the conversion
+        // then moves into one arm for nothing. Where the select is cheap the
+        // diamond is a cost the pin does not pay without a profile (m68k
+        // sfm16_float -O1 +58 B, spills).
+        let branches_anyway = analyses
+            .outer()
+            .target()
+            .tti()
+            .is_some_and(|tti| !tti.has_cmov() && tti.sinks_select_arms());
+        let converted = branches_anyway
+            && !crate::looploadelim::has_opt_size(unit.function)
             && crate::cgpselect::casts_branched(
                 unit.context,
                 unit.layout,

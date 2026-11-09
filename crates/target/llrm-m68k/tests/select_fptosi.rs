@@ -1,9 +1,9 @@
-//! `costs()` priced a soft `fptosi` at one clock, so CS1 (`cgpselect`: a select
-//! around a dear conversion becomes a branch that skips it) never fired on
-//! m68k. With clocks (`__fixsfsi`, 600 to 1,000) it fires, and in a function
-//! optimized for size it added a branch and blocks the pin does not make:
-//! `optimizeSelectInst` returns for `shouldOptimizeForSize` (sfm16_float -Os
-//! +58 B at the 68000, +48 B at the 68020).
+//! CS1 (`cgpselect`: a select around a dear conversion becomes a branch that
+//! skips it) fired on m68k once `costs()` carried clocks (`__fixsfsi`, 600 to
+//! 1,000), and added a branch, blocks and spills the pin does not make
+//! (sfm16_float -O1 +58 B at the 68000, +48 B at the 68020). It is for targets
+//! whose select is a branch around a copy anyway (`sinks_select_arms`); m68k's
+//! select is not, so the select stays at every level.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
@@ -28,18 +28,13 @@ fn branches_around_the_call(asm: &str) -> bool {
     asm[..call].lines().any(|line| line.trim_start().starts_with('b') && !line.contains("bsr"))
 }
 
+/// The select stays whole: no branch before the call to the conversion.
 #[test]
-fn a_function_optimized_for_size_keeps_the_select_around_a_conversion() {
+fn a_select_around_a_conversion_stays_a_select_at_every_level() {
     for cpu in ["68000", "68020"] {
-        let asm = assembly(&clamp("optsize"), cpu_of(cpu).unwrap(), Level::Os).expect("compiles");
-        assert!(!branches_around_the_call(&asm), "{cpu}:\n{asm}");
-    }
-}
-
-#[test]
-fn a_function_optimized_for_speed_skips_the_conversion_on_the_constant_path() {
-    for cpu in ["68000", "68020"] {
-        let asm = assembly(&clamp(""), cpu_of(cpu).unwrap(), Level::O2).expect("compiles");
-        assert!(branches_around_the_call(&asm), "{cpu}:\n{asm}");
+        for (level, attrs) in [(Level::O1, ""), (Level::O2, ""), (Level::O3, ""), (Level::Os, "optsize")] {
+            let asm = assembly(&clamp(attrs), cpu_of(cpu).unwrap(), level).expect("compiles");
+            assert!(!branches_around_the_call(&asm), "{cpu} {level:?}:\n{asm}");
+        }
     }
 }

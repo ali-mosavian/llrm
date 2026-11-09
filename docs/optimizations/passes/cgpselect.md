@@ -38,6 +38,12 @@ the compare has the select's type) and its x86 has no price that makes a
 conversion dear. gcc converts the constant at compile time (x_ldcmp -O2:
 2020 `fistp` against 1180).
 
+Gated by the target, as CS2 is: only where there is no conditional move and the target
+states `sinks_select_arms`, so the select is a branch around a copy anyway and the
+conversion moves into its arm for nothing. Where the select is cheap (m68k) the
+diamond costs blocks and spills the pin does not pay without a profile
+(sfm16_float -O1 +58 B at the 68000, +48 B at the 68020).
+
 The condition is branched on as it is (no `freeze`): a poison condition
 made a poison select, and now a branch on poison, which the pin's
 `optimizeSelectInst` guards with `freeze`.
