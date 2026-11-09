@@ -274,8 +274,21 @@ def link_strays(root: Path) -> list[str]:
     return found
 
 
+def stale_lock(root: Path) -> str:
+    """What `cargo metadata --locked` says when Cargo.lock does not match the manifests (llrm-6502 declared llrm-alloc in #8562 with no
+    lock entry: every `--locked` build failed). Empty when it is current or there is no lock. A build rewrites a stale lock, so this
+    has to run before one: the `static` group does."""
+    if not (root / "Cargo.lock").is_file():
+        return ""
+    done = subprocess.run(["cargo", "metadata", "--locked", "--offline", "--format-version", "1"], cwd=root, capture_output=True, text=True)
+    return "" if done.returncode == 0 else done.stderr.strip()
+
+
 def products_main(root: Path | None = None) -> int:
     root = root or ROOT
+    if stale := stale_lock(root):
+        print(f"Cargo.lock is stale: {stale}")
+        return 1
     listed = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True).stdout.split("\n")
     if found := strays([n for n in listed if n]):
         print(f"build products are tracked: {found}")
