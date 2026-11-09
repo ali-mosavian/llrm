@@ -222,6 +222,11 @@ pub struct Tuning {
     /// is numbered afresh after the scheduler, as the x86 numbers were tuned
     /// (A/B 2026-11-07: x86_32 O1 14 cells +704 B worse).
     pub carry_slot_indexes: bool,
+    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose loop-carried
+    /// latency exceeds its issue-bound time is not unrolled at run time
+    /// (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks nothing of
+    /// the loop. false: the pin's.
+    pub unroll_recurrence_veto: bool,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
@@ -412,6 +417,7 @@ impl Tuning {
         x87_zero_fill_at_size: false,
         slots_loop_width_rule: false,
         carry_slot_indexes: true,
+        unroll_recurrence_veto: false,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
