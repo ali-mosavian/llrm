@@ -27,8 +27,10 @@ entry:
 #[ignore = "ALLOCA-ALIGN-2: an align-2 local is odd on an odd frame; the folded bit is 0"]
 fn an_align_2_local_on_an_odd_frame_has_the_address_bit_the_code_returns() {
     let compiled = assembly(PROBE, &Request::new(Level::O2)).unwrap();
-    let functions: String = compiled.lines().filter(|line| !line.contains(" = $")).map(|line| format!("{line}\n")).collect();
-    // `g` has a one-byte frame; `use` keeps the low bit of the pointer it is given.
+    let functions: String =
+        compiled.lines().filter(|line| !line.contains(" = $")).map(|line| format!("{line}\n")).collect();
+    // `g` has a one-byte frame; `use` keeps the low bit of the pointer it is
+    // given.
     let extra = format!(
         "{functions}
 g:

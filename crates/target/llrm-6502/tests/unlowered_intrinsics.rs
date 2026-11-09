@@ -1,6 +1,7 @@
 //! A call of an `llvm.*` intrinsic nothing lowers was emitted as a call to a
-//! symbol of that name: `llvm.frameaddress.p0` became `jmp llvm.frameaddress.p0`
-//! and failed only at link. The 6502 names the intrinsic and refuses.
+//! symbol of that name: `llvm.frameaddress.p0` became `jmp
+//! llvm.frameaddress.p0` and failed only at link. The 6502 names the intrinsic
+//! and refuses.
 
 use llrm_6502::driver::{Level, Request, assembly};
 
