@@ -201,3 +201,12 @@ def test_long_double_variadic_runs_on_m68k_and_its_row_is_closed():
     assert all(ct.applies(t, source) for t in ("m68k-68000", "m68k-68020", "x86_32-linux"))
     row = (RUN.parents[2] / "docs/working/m68k-va-double-row.md").read_text()
     assert "CLOSED by #8453" in row and "Owner: m68k" in row and "Review: 2026-12-20" in row
+
+def test_a_program_whose_flags_all_force_a_32_bit_x86_mode_is_not_run_on_z80_or_6502():
+    """urem_eq (`-m32 -march=i486`) and spill_store_order (`-m32`) were run on z80 and 6502 and read WRONG: their .out is the 32-bit-int result (74938 for a 16-bit 57373), and spill_store_order shifts a 16-bit unsigned by 16 (poison)."""
+    for name in ("urem_eq", "spill_store_order"):
+        source = (RUN / f"{name}.c").read_text()
+        assert ct.x86_32_only(source)
+        assert not any(ct.applies(t, source) for t in ("z80-sdcc", "6502-sim65"))
+        assert ct.applies("arm64-linux", source) and ct.applies("x86_32-linux", source)
+    assert not ct.x86_32_only("// flags: -O2 -m32 | -O2 -m16\nint x;\n")
