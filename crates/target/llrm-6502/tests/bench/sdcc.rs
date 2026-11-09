@@ -20,6 +20,48 @@ use std::process::Command;
 
 use super::{Arg, BUF, Kernel, LZ, Row, kernel_source, pad_bytes, run_sim, work};
 
+/// One way to run SDCC: its optimisation goal and allocator effort. The bar
+/// is the best of these per cell (`--opt-code-size` for the strict-bytes Os
+/// bar, size or speed for O2), never SDCC's default, which is neither.
+pub struct Variant {
+    pub name: &'static str,
+    pub flags: &'static [&'static str],
+}
+
+pub const VARIANTS: [Variant; 4] = [
+    Variant { name: "size", flags: &["--opt-code-size"] },
+    Variant { name: "speed", flags: &["--opt-code-speed"] },
+    Variant { name: "size-ma", flags: &["--opt-code-size", "--max-allocs-per-node", "200000"] },
+    Variant { name: "speed-ma", flags: &["--opt-code-speed", "--max-allocs-per-node", "200000"] },
+];
+
+/// The variant `BENCH_SDCC` names (`size` when unset).
+pub fn variant() -> &'static Variant {
+    let wanted = std::env::var("BENCH_SDCC").unwrap_or_else(|_| "size".to_owned());
+    VARIANTS.iter().find(|v| v.name == wanted).unwrap_or_else(|| panic!("BENCH_SDCC={wanted}: not one of size, speed, size-ma, speed-ma"))
+}
+
+/// The arguments every compile step carries before its own: the CPU and the
+/// variant's flags.
+pub fn compile_args(
+    target: &str,
+    variant: &Variant,
+) -> Vec<String> {
+    std::iter::once(target).chain(variant.flags.iter().copied()).map(str::to_owned).collect()
+}
+
+/// `sdcc -c`, with the common arguments and `rest`.
+fn compile(
+    dir: &Path,
+    target: &str,
+    rest: &[&str],
+) -> Result<(), String> {
+    let mut args = compile_args(target, variant());
+    args.extend(rest.iter().map(|a| (*a).to_owned()));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    tool(dir, &args)
+}
+
 /// `sdcc` and `sim65` versions, for the table's footer.
 pub fn versions() -> String {
     let first = |tool: &str, arg: &str| {
@@ -33,7 +75,14 @@ pub fn versions() -> String {
     let sim = std::env::var("LLRM_SIM65").unwrap_or_else(|_| "sim65".to_owned());
     let sdcc = first("sdcc", "--version");
     let version = sdcc.rsplit("TD- ").next().unwrap_or("");
-    format!("sdcc {}, {}", version.split(" (").next().unwrap_or(""), first(&sim, "--version"))
+    let variant = variant();
+    format!(
+        "sdcc {} variant {} ({}), {}",
+        version.split(" (").next().unwrap_or(""),
+        variant.name,
+        variant.flags.join(" "),
+        first(&sim, "--version")
+    )
 }
 
 /// The C declaration of the kernel in its source: `ret name(params)`.
@@ -204,27 +253,27 @@ pub fn row(
     kernel: &Kernel,
     cmos: bool,
 ) -> Result<Row, String> {
-    let tag = if cmos { "sdccm" } else { "sdcc" };
+    let tag = &format!("sdcc{}{}", variant().name, if cmos { "m" } else { "" });
     let dir = work(kernel.name);
     let (define, source) = kernel_source(kernel);
     let (ret, params) = prototype(kernel, source.to_str().unwrap())?;
     let target = if cmos { "-mmos65c02" } else { "-mmos6502" };
     let kernel_object = format!("{tag}-k.rel");
-    tool(&dir, &[target, &define, "-c", source.to_str().unwrap(), "-o", &kernel_object])?;
+    compile(&dir, target, &[&define, "-c", source.to_str().unwrap(), "-o", &kernel_object])?;
     // two stubs, each one `rts`: the kernel's own signature (for the bytes) and
     // none (for the loop: no argument set-up is made for it)
     let stub_params = if params.is_empty() { "void" } else { params.as_str() };
     for (suffix, signature) in [("s", stub_params), ("n", "void")] {
         std::fs::write(dir.join(format!("{tag}-{suffix}.c")), format!("void {}({signature}) {{}}\n", kernel.name))
             .unwrap();
-        tool(&dir, &[target, "-c", &format!("{tag}-{suffix}.c"), "-o", &format!("{tag}-{suffix}.rel")])?;
+        compile(&dir, target, &["-c", &format!("{tag}-{suffix}.c"), "-o", &format!("{tag}-{suffix}.rel")])?;
     }
     // `k`: the kernel, `s`: its stub, `n`: the empty call without arguments
     let build = |calls: u32, which: &str| -> Result<std::path::PathBuf, String> {
         let name = format!("{tag}-{which}{calls}");
         std::fs::write(dir.join(format!("{name}.c")), driver(kernel, &ret, &params, calls, which != "n", SDCC_EXITS))
             .unwrap();
-        tool(&dir, &[target, "-c", &format!("{name}.c"), "-o", &format!("{name}-d.rel")])?;
+        compile(&dir, target, &["-c", &format!("{name}.c"), "-o", &format!("{name}-d.rel")])?;
         let ihx = format!("{name}.ihx");
         let function = if which == "k" { kernel_object.clone() } else { format!("{tag}-{which}.rel") };
         let pad = pad_bytes();
@@ -233,7 +282,7 @@ pub fn row(
         } else {
             // code bytes before the function, as the other columns get
             std::fs::write(dir.join("pad.c"), format!("void pad(void) {{ __asm .ds {pad} __endasm; }}\n")).unwrap();
-            tool(&dir, &[target, "-c", "pad.c", "-o", "pad.rel"])?;
+            compile(&dir, target, &["-c", "pad.c", "-o", "pad.rel"])?;
             tool(&dir, &[target, &format!("{name}-d.rel"), "pad.rel", &function, "-o", &ihx])?;
         }
         Ok(dir.join(ihx))
@@ -255,4 +304,18 @@ pub fn row(
         i1.zip(i101).zip(j1.zip(j101)).map(|((i1, i101), (j1, j101))| (i101 - i1) / 100 - (j101 - j1) / 100 + 2);
     let bytes = image_bytes(&one)? - image_bytes(&build(1, "s")?)? + 1;
     Ok(Row { bytes, body: bytes, cycles, instructions })
+}
+
+#[test]
+fn every_variant_carries_its_optimisation_flags_to_the_compiler() {
+    assert_eq!(compile_args("-mmos6502", &VARIANTS[0]), ["-mmos6502", "--opt-code-size"]);
+    assert_eq!(compile_args("-mmos65c02", &VARIANTS[1]), ["-mmos65c02", "--opt-code-speed"]);
+    assert_eq!(
+        compile_args("-mmos6502", &VARIANTS[2]),
+        ["-mmos6502", "--opt-code-size", "--max-allocs-per-node", "200000"]
+    );
+    assert_eq!(
+        compile_args("-mmos6502", &VARIANTS[3]),
+        ["-mmos6502", "--opt-code-speed", "--max-allocs-per-node", "200000"]
+    );
 }

@@ -101,7 +101,7 @@ pub fn row(
     let dir = work(kernel.name);
     let (define, source) = kernel_source(kernel);
     let (ret, params) = prototype(kernel, source.to_str().unwrap())?;
-    let cpu: &[&str] = if cmos { &["-fno-lto", "-mcpu=mosw65c02"] } else { &["-fno-lto"] };
+    let cpu = cpu_flags(cmos);
     let kernel_object = format!("{tag}-k.o");
     let mut compile = vec![level, &define, "-c", source.to_str().unwrap(), "-o", &kernel_object];
     compile.extend(cpu);
@@ -152,4 +152,15 @@ pub fn row(
     let cycles = (t101 - t1) / 100 - (n101 - n1) / 100 + 12;
     let bytes = image_bytes(&one)? - image_bytes(&build(1, "s")?)? + 1;
     Ok(Row { bytes, body: bytes, cycles, instructions: None })
+}
+
+/// What every llvm-mos compile carries after the level: no LTO, and the 65C02.
+fn cpu_flags(cmos: bool) -> &'static [&'static str] {
+    if cmos { &["-fno-lto", "-mcpu=mosw65c02"] } else { &["-fno-lto"] }
+}
+
+#[test]
+fn llvm_mos_carries_its_cpu_flags() {
+    assert_eq!(cpu_flags(false), ["-fno-lto"]);
+    assert_eq!(cpu_flags(true), ["-fno-lto", "-mcpu=mosw65c02"]);
 }

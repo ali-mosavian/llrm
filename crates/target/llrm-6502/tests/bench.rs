@@ -429,14 +429,30 @@ fn kernel_source(kernel: &Kernel) -> (String, PathBuf) {
     }
 }
 
+/// The arguments `cc65` starts with: the target (the 65C02 one implies the CPU)
+/// and the optimiser flags.
+fn cc65_flags(
+    cmos: bool,
+    flags: &[&str],
+) -> Vec<String> {
+    ["-t", if cmos { "sim65c02" } else { "sim6502" }].iter().chain(flags).map(|a| (*a).to_owned()).collect()
+}
+
+#[test]
+fn cc65_carries_its_target_and_optimiser_flags() {
+    assert_eq!(cc65_flags(false, &["-O"]), ["-t", "sim6502", "-O"]);
+    assert_eq!(cc65_flags(true, &["-O"]), ["-t", "sim65c02", "-O"]);
+    assert_eq!(cc65_flags(false, &[]), ["-t", "sim6502"]);
+}
+
 fn cc65_row(
     kernel: &Kernel,
     flags: &[&str],
     tag: &str,
 ) -> Result<Row, String> {
     let dir = work(kernel.name);
-    let mut args = vec!["-t", if cmos(tag) { "sim65c02" } else { "sim6502" }];
-    args.extend_from_slice(flags);
+    let args = cc65_flags(cmos(tag), flags);
+    let mut args: Vec<&str> = args.iter().map(String::as_str).collect();
     let (define, source) = kernel_source(kernel);
     let source = source.to_str().unwrap();
     let output = format!("f-{tag}.s");
@@ -613,7 +629,7 @@ fn hand_kernels() -> Vec<Kernel> {
 /// that say who wins.
 fn table4() {
     let mut out = String::from(
-        "| kernel | cc65 -O | cc65 hand | ours | ours 65C02 | sdcc | sdcc 65C02 | llvm-mos -O2 | llvm-mos -Os | llvm-mos 65C02 |\n|---|---|---|---|---|---|---|---|---|---|\n",
+        "| kernel | cc65 -O | cc65 hand | ours | ours 65C02 | sdcc | sdcc 65C02 | llvm-mos -O2 | llvm-mos -Os | llvm-mos 65C02 | cc65 -O 65C02 |\n|---|---|---|---|---|---|---|---|---|---|---|\n",
     );
     let cell = |row: &Result<Row, String>| match row {
         Ok(r) => format!("{} B, {} cy{}", r.bytes, r.cycles, r.executed()),
@@ -635,6 +651,7 @@ fn table4() {
             llvmmos::row(kernel, "-O2", false),
             llvmmos::row(kernel, "-Os", false),
             llvmmos::row(kernel, "-O2", true),
+            cc65_row(kernel, &[cc65_optimize()], "c1m"),
         ];
         for row in rows.iter().filter(|row| matches!(row, Err(why) if !why.starts_with("no hand"))) {
             eprintln!("{}: {}", kernel.name, row.as_ref().unwrap_err());
@@ -681,7 +698,7 @@ fn table4() {
 
 fn table3() {
     let mut out = String::from(
-        "| kernel | cc65 -O | cc65 lz4.s (hand) | ours | ours 65C02 | sdcc | sdcc 65C02 | llvm-mos -O2 | llvm-mos -Os | llvm-mos 65C02 |\n|---|---|---|---|---|---|---|---|---|---|\n",
+        "| kernel | cc65 -O | cc65 lz4.s (hand) | ours | ours 65C02 | sdcc | sdcc 65C02 | llvm-mos -O2 | llvm-mos -Os | llvm-mos 65C02 | cc65 -O 65C02 |\n|---|---|---|---|---|---|---|---|---|---|---|\n",
     );
     let cell = |row: &Result<Row, String>| match row {
         Ok(r) if r.body != r.bytes => {
@@ -703,6 +720,7 @@ fn table3() {
             llvmmos::row(kernel, "-O2", false),
             llvmmos::row(kernel, "-Os", false),
             llvmmos::row(kernel, "-O2", true),
+            cc65_row(kernel, &[cc65_optimize()], "c1m"),
         ];
         for row in rows.iter().filter(|row| !matches!(row, Err(why) if why.starts_with("no hand"))) {
             if let Err(why) = row {
