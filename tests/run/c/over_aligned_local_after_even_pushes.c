@@ -1,4 +1,5 @@
 // flags: -O1 | -O2
+// targets: !byte-stack
 // A 64-bit function that pushes six registers had its 16-aligned array at [rsp+8]: the pad that rounds the frame sat above the locals, so the base lost the array's alignment and the `movaps` that zeroed it faulted (long_compare_chain -O1 segfault).
 extern void report(long value);
 

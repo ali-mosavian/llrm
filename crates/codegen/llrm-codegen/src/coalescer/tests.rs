@@ -703,6 +703,7 @@ fn test_a_constant_the_target_names_its_own_way_is_made_again() {
         kind_of: None,
         kinds: Default::default(),
         check_kinds: false,
+        free_when_unnarrowed: false,
     };
     let mut lis = LiveIntervals::new(&was);
     let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
@@ -744,6 +745,7 @@ fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
         kind_of: None,
         kinds: Default::default(),
         check_kinds: false,
+        free_when_unnarrowed: false,
     };
     let mut lis = LiveIntervals::new(&was);
     join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
@@ -829,6 +831,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         kind_of: None,
         kinds: Default::default(),
         check_kinds: false,
+        free_when_unnarrowed: false,
     };
     let (base, index) = (copy(2, 1), copy(3, 1));
     // `v1` has two values to `v2`'s one, so the join keeps it as the surviving
@@ -1289,6 +1292,7 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         kind_of: None,
         kinds: Default::default(),
         check_kinds: false,
+        free_when_unnarrowed: false,
         remat: None,
         remat_wins: None,
     }
@@ -1347,6 +1351,7 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
             kind_of: None,
             kinds: Default::default(),
             check_kinds: false,
+            free_when_unnarrowed: false,
             remat: None,
             remat_wins: None,
         };
@@ -1710,7 +1715,9 @@ fn test_a_target_without_lane_joins_leaves_every_lane_copy() {
 /// `TargetEnv::should_coalesce` built a `Join` (two palette clones, use-kind
 /// sums) for every copy and handed it to a `should_join` that said yes: 13 M of
 /// the 88 M the coalescer costs on jpeg_fixed (1839 calls, 7 K instructions
-/// each). A target with no opinion builds none.
+/// each), and on arm64 shellsort 17.6 M of 41 M (571 joins, 31 K each). A
+/// target with no opinion builds none, and neither does a join that leaves
+/// both values the registers they had (it prices 0, so the rule says yes).
 #[test]
 fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
     use std::collections::BTreeSet;
@@ -1718,13 +1725,13 @@ fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
     use llrm_lir::registers::RegId;
 
     use super::env::{JOINS_BUILT, TargetEnv};
-    let run = |should_join: Option<Box<dyn Fn(&super::env::Join) -> bool>>| {
+    let run = |should_join: Option<Box<dyn Fn(&super::env::Join) -> bool>>, free: bool, narrows: bool| {
         let c = copy(2, 1);
         let was = body(&[(&[constant_named(1, "CONST_I32"), Arc::clone(&c)], &[1]), (&[read(2)], &[])]);
         let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+        let narrower: BTreeSet<RegId> = if narrows { [RegId::AX].into_iter().collect() } else { palette.clone() };
         let env = TargetEnv {
-            palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette.clone())), (2, std::rc::Rc::new(palette))])
-                .into(),
+            palettes: IndexMap::from_iter([(1, std::rc::Rc::new(palette)), (2, std::rc::Rc::new(narrower))]).into(),
             pins: IndexMap::default(),
             size: false,
             keep_pinned: false,
@@ -1742,6 +1749,7 @@ fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
             kind_of: None,
             kinds: Default::default(),
             check_kinds: false,
+            free_when_unnarrowed: free,
         };
         let mut lis = LiveIntervals::new(&was);
         let before = JOINS_BUILT.with(std::cell::Cell::get);
@@ -1749,8 +1757,11 @@ fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
         assert_eq!(result, JoinResult::Joined);
         JOINS_BUILT.with(std::cell::Cell::get) - before
     };
-    assert_eq!(run(Some(Box::new(|_| true))), 1, "premise: an opinion is built a join for");
-    assert_eq!(run(None), 0);
+    let yes = || Some(Box::new(|_: &super::env::Join| true) as Box<dyn Fn(&super::env::Join) -> bool>);
+    assert_eq!(run(yes(), false, false), 1, "premise: an opinion is built a join for");
+    assert_eq!(run(None, false, false), 0);
+    assert_eq!(run(yes(), true, false), 0, "a join that narrows nothing is priced 0 and taken unbuilt");
+    assert_eq!(run(yes(), true, true), 1, "a join that takes a register away is priced");
 }
 
 /// `v := implicit_def`: the value a phi's predecessor gets where the phi's
@@ -1879,6 +1890,7 @@ fn size_copy_of_def_is_remade_after(
         kind_of: None,
         kinds: Default::default(),
         check_kinds: false,
+        free_when_unnarrowed: false,
     };
     let mut lis = LiveIntervals::new(&was);
     let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
