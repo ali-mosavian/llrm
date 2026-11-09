@@ -20,7 +20,7 @@ A comparison that skipped them was withdrawn once: `_place` (queens, m32 -O2) wa
 
 ## Method caveat: re-parsed text
 
-`pin.py` runs the pin on re-parsed text, so use-list-order ties differ from the pin's own pipeline (IvUsers visits users in descending program order since IU1). See [ivusers-order.md](ivusers-order.md) (#3750) and its follow-up rows IU2-IU6.
+`pin.py` runs the pin on re-parsed text, so use-list-order ties differ from the pin's own pipeline (IvUsers visits users in use-list order since #7651; IU1 was descending program order). See [ivusers-order.md](ivusers-order.md) (#3750) and its follow-up rows IU2-IU6.
 
 ## The internal-function convention
 

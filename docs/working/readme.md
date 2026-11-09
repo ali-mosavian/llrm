@@ -108,7 +108,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [joins-window](joins-window.md) | joins/fjoins steps over the slope limit at N=128 and N=256 (2026-10-28); the N=64 window rows are in `tools/budgets.toml` |
 | [homes-spares](homes-spares.md) | Homes and Spares against the pin's InlineSpiller: what each decides, measured effect, plan to 11-17 |
 | [intervals-once](intervals-once.md) | Live intervals built once, as the pin does: three builders today, steps, owners, dates |
-| [ivusers-order](ivusers-order.md) | IVUsers user order (IU1) |
+| [ivusers-order](ivusers-order.md) | IVUsers user order (IU1, M16-LSR-IVORDER) |
 | [lazy-annotated-plan](lazy-annotated-plan.md) | Lazy Annotated and the MemorySSA cost: plan |
 | [lea-fixup-plan](lea-fixup-plan.md) | X86 LEA Fixup (row 100): plan |
 | [ledger-command](ledger-command.md) | The ledger command |

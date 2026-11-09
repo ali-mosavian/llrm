@@ -1,11 +1,17 @@
-# IVUsers user order (IU1)
+# IVUsers user order (IU1, M16-LSR-IVORDER)
 
-`IvUsers` visits a value's users in descending program order, not use-list order.
-Use-list order is edit history; the pin's order on parsed IR is the only reproducible oracle.
-It decides LSR's tie between registers with equal use counts.
+Since #7651 `IvUsers` visits a value's users in use-list order, as the pin does
+([IVUsers.cpp#L174](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVUsers.cpp#L174)).
+Before it, IU1 visited them in descending program order, which equals the pin's order on freshly parsed text.
+The two differ where an earlier pass relinked uses differently from LLVM.
 
-- Exit: use lists keep LLVM's order. Owner: w-5. Review: 2026-11-19.
-- Test: `tests/ivusers_order.rs` (nbody_single force loop, `{-24,+,4}`, no `cmp ecx, 24`).
+## M16-LSR-IVORDER
+
+DEVIATE M16-LSR-IVORDER (owner w12, exit 2026-11-12): QB PLASMA's b32 loop gets its induction variables in another order than the pin's
+loop-reduce run on the same parsed text (the 0-start counter third, the pin's last); `test_hir_part3::test_a_register_live_through_a_loop_is_parked_for_its_counters` is red (69 -> 72 `[bp]` references).
+First bad commit #7651. Not a mistranslation of `IVUsers.cpp#L174` (every consumer reads `function.users()`, the arena model of LLVM's list):
+the use-list state reaching LSR differs. Trace: pin asserts `opt` against ours on parsed `in.ll` (ours [2,14,20,746,10], pin [14,10,746,2,20]).
+- Fix: the order mirrors the pin's; fail-first: the PLASMA test on parsed text and a pinned-IR order test.
 
 ## Method caveat for the pin-comparison checklist (#3584)
 
