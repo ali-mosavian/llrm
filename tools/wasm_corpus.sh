@@ -59,13 +59,6 @@ code() { section Code "$1"; }
 # The bytes a cell is judged by: the code and the initialised data it loads (a lookup table, a string).
 image() { echo $(($(code "$1") + $(section Data "$1" | tr -d "\n" | grep . || echo 0))); }
 
-# "result instructions" of one object linked with the stub ($2: the stub object, this program's).
-count() {
-  wasm-ld --no-entry --export=run --allow-undefined "$1" "${2:-$out/stub.o}" -o "$1.wasm" 2>/dev/null || { echo "none 0"; return; }
-  timeout 120 wasm-interp "$1.wasm" -r run --trace > "$1.trace" 2>&1
-  echo "$(sed -n 's/^run() => i32:\(-*[0-9]*\)$/\1/p' "$1.trace" | head -1 | grep . || echo none) $(grep -c '^#' "$1.trace")"
-}
-
 printf '%-22s %9s %9s %12s %12s %9s %9s  %s\n' program llrm_B clang_B llrm_instr clang_instr llrm_code clang_code result
 measured=0; unjudged=
 for f in "$@"; do
@@ -81,8 +74,8 @@ for f in "$@"; do
     cat "$out/stub.c" "$out/$n.os.c" > "$out/$n.stub.c"
     "$clang" --target=wasm32 -O2 -c "$out/$n.stub.c" -o "$out/$n.stub.o" 2> /dev/null && stub="$out/$n.stub.o"
   fi
-  lm=$(stub_md5 "$stub"); read -r lv li <<< "$(count "$out/$n.l.o" "$stub")"
-  cm=$(stub_md5 "$stub"); read -r cv ci <<< "$(count "$out/$n.c.o" "$stub")"
+  read -r lv li lm <<< "$(count "$out/$n.l.o" "$stub")"
+  read -r cv ci cm <<< "$(count "$out/$n.c.o" "$stub")"
   # A side that did not run (unresolved import, trap) has no result, and sides on different stubs have nothing to compare: unjudged, never "same".
   ok=$(judge "$lv" "$cv" "$lm" "$cm")
   printf '%-22s %9s %9s %12s %12s %9s %9s  %s\n' "$n" "$(image "$out/$n.l.o")" "$(image "$out/$n.c.o")" "${li:-0}" "${ci:-0}" \
