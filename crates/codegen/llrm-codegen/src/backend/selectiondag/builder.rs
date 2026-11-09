@@ -1880,6 +1880,11 @@ impl Builder<'_> {
         {
             return self.visit_target_intrinsic(instruction, info, found);
         }
+        // An `llvm.` name nothing above lowers is an intrinsic with no lowering (the pin: "cannot select"). Emitted as a call it
+        // became an import named after the intrinsic (`llvm.frameaddress.p0` on wasm32).
+        if let Some(name) = direct.and_then(|global| self.module.global(global).name.owned()).filter(|name| name.starts_with("llvm.")) {
+            return Err(Refused(Box::leak(format!("intrinsic call {name} has no lowering").into_boxed_str())));
+        }
         if let Some(calling) = self.calling()
             && !calling.supports_convention(info.calling_convention)
         {
