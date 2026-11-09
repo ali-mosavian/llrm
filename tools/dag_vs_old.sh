@@ -17,7 +17,7 @@ one() { # SRC LEVEL ISEL
     n=$(basename "$1" .c)_$(echo "$1" | md5sum | cut -c1-6); out=$work/${n}_$2_$3.o
     LLRM_CC_TARGET=$target "$bin/llrm-cc-bin" $flags $2 --isel=$3 -w -I "$root/runtime/shared/posix" -I "$root/bench" \
         -I "$root/runtime/compiler-rt/lib/fp" -c -o "$out" "$1" >/dev/null 2>&1 || { echo "$n FAIL"; return; }
-    t=$(size -A "$out" 2>/dev/null | awk '$1==".text"{print $2}')
+    t=$(size -A "$out" 2>/dev/null | awk '$1==".text"{print $2}')  # text-only by design: Dag and Old read the same data; the compared quantity is code
     if [ -n "$t" ]; then echo "$n $t"; rm -f "$out"; else echo "$n OBJ:$out"; fi
 }
 export -f one; export root target flags work bin
