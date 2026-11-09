@@ -1664,6 +1664,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LU15 (owner z80, exit 2026-12-15: a baseline that prices the
+    /// loop as written): with `should_drop_lsr_solution_if_less_profitable`,
+    /// a loop that has an address use keeps LSR's solution. The baseline
+    /// rates every address as one pointer register, so a solution that adds
+    /// the pointer beside a count always looks worse, and dropping it keeps
+    /// `base + i` (strlen: +17 B, a frame). The pin has no drop here.
+    fn lsr_dropped_solution_spares_addresses(&self) -> bool {
+        false
+    }
+
     /// Instructions the exit test of a counter that ends at zero costs beyond
     /// the step: 0 where the step's flags (or a branch on the register) end
     /// the loop, 1 where the zero has to be tested by its own instruction
