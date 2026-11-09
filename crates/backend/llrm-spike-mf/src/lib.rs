@@ -11,6 +11,7 @@
 
 pub mod cfg;
 pub mod commute;
+pub mod commute_classes;
 pub mod fold;
 pub mod livephys;
 pub mod mfunc;
@@ -25,6 +26,7 @@ pub mod tailmerge;
 pub mod tolir;
 
 pub use commute::commute_tied;
+pub use commute_classes::commute_for_classes;
 pub use fold::{
     branch_fold, branch_fold_hoisting, branch_fold_hoisting_across_loops, remove_identity_copies,
     remove_redundant_copies, remove_redundant_copies_between,

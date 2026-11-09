@@ -962,6 +962,8 @@ impl Builder {
         let mut cmp =
             Inst::new(Kind::Op("CMP"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(tested), rhs[0].clone()]);
         cmp.sets_flags = true;
+        // BEQ and BNE read only Z: the operands may swap places
+        cmp.commutable = branch && !word && matches!(code, 0 | 1);
         self.push(cmp);
         if word {
             self.copy(acc, lhs[1]);
@@ -3139,7 +3141,33 @@ fn emit_on(
         let better = |a: Result<(u32, u64), String>, b: Result<(u32, u64), String>| matches!((a, b), (Ok(a), Ok(b)) if a.0 > b.0 || a.1 > b.1);
         better(price(kept.1, kept.2), price(other.1, other.2)) && better(price(kept.0, kept.2), price(other.0, other.2))
     };
-    let (mut code, mut priced, mut slots, sunk, shared, moved) = run(function.clone(), true, true, false, true)?;
+    let mut function = function;
+    let mut first = run(function.clone(), true, true, false, true)?;
+    // A compare whose operands the classes would have the other way round is
+    // kept commuted where that code is no larger and no slower, with its loops
+    // weighed by the text's own jumps back, before and after the transfer of
+    // known constants (`commute_for_classes` models classes only: it
+    // ignores the copies to physical registers and the interference the
+    // coalescer checks).
+    let mut commuted = function.clone();
+    let swapped = if stack {
+        llrm_spike_mf::commute_for_classes::<Mos<true>>(&mut commuted)
+    } else {
+        llrm_spike_mf::commute_for_classes::<Mos<false>>(&mut commuted)
+    };
+    if swapped > 0
+        && let Ok(alt) = run(commuted.clone(), true, true, false, true)
+    {
+        let no_worse = |a: Result<(u32, u64), String>, b: Result<(u32, u64), String>| matches!((a, b), (Ok(a), Ok(b)) if a.0 <= b.0 && a.1 <= b.1);
+        let (kept, other) = ((&first.0, &first.1, &first.2), (&alt.0, &alt.1, &alt.2));
+        if no_worse(price(other.1, other.2), price(kept.1, kept.2))
+            && no_worse(price(other.0, other.2), price(kept.0, kept.2))
+            && price(other.0, other.2) != price(kept.0, kept.2)
+        {
+            (function, first) = (commuted, alt);
+        }
+    }
+    let (mut code, mut priced, mut slots, sunk, shared, moved) = first;
     // a layout that rotates a loop is kept only where it is no larger and no
     // slower than the order the blocks came in
     let mut place = true;
