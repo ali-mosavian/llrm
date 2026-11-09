@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import corpus_targets  # noqa: E402
 import virtual_ok  # noqa: E402
+import z80_flag_check  # noqa: E402
 
 LEVELS = [("1", "O1"), ("s", "Os"), ("z", "Oz"), ("2", "O2"), ("3", "O3")]
 STRICT = {"O1", "Os", "Oz"}
@@ -65,6 +66,27 @@ def applicable(sources, target="z80-sdcc"):
     return {name for name, text in sources.items() if corpus_targets.applies(target, text)}
 
 
+def stale_oz(ours):
+    """Programs whose Oz bytes exceed their Os bytes in `ours` ({level: {program: {"ours": (B, T)}}}).
+
+    llrm-z80 at -Oz keeps the -Os build where that is smaller (`Request::oz_best_of`), so from one binary Oz is never
+    bigger than Os. A row that is was measured by another binary, or before the best-of: loop_fusion Oz read 953 B
+    against Os 907 B in the 2026-11-09 table, when the binary gives 907 for both.
+
+    `oz_best_of` chooses per module (`compile::effective`), and a module is one corpus program, so the invariant holds
+    per program, not per function.
+    """
+    return sorted(
+        (prog, os_row["ours"][0], oz_row["ours"][0])
+        for prog, os_row in ours.get("s", {}).items()
+        if (oz_row := ours.get("z", {}).get(prog)) and "ours" in os_row and "ours" in oz_row
+        and oz_row["ours"][0] > os_row["ours"][0]
+    )
+
+
+REFUSED = []  # (program, level, variant, why): a variant whose codegen flags differ from ours never sets a bar
+
+
 def rows(ours, sdcc, sources):
     """Table rows for each level: every applicable program; one without an ours row is UNMEASURED."""
     out = []
@@ -73,6 +95,11 @@ def rows(ours, sdcc, sources):
         for prog in programs:
             o = ours.get(lv, {}).get(prog, {}).get("ours")
             s = {k: v for k, v in sdcc.get(lv, {}).get(prog, {}).items() if k.startswith("sdcc")}
+            for k in list(s):
+                why = z80_flag_check.cell_mismatch(sources.get(prog, ""), lv, k)
+                if why:
+                    REFUSED.append((prog, name, k, why))
+                    del s[k]
             double = is_double(sources.get(prog, ""))
             v = verdict(name, o, s, double)
             if o is None or not s:
@@ -92,6 +119,7 @@ def main(argv):
     ap.add_argument("--sdcc", action="append", required=True)
     ap.add_argument("--programs", required=True)
     ap.add_argument("--header-line", action="append", default=[])
+    ap.add_argument("--allow-stale-oz", action="store_true", help="write the table although an Oz row is bigger than its Os row")
     a = ap.parse_args(argv)
     ours, sdcc = {}, {}
     for lv, _ in LEVELS:
@@ -103,9 +131,18 @@ def main(argv):
                         for prog, v in read_pairs(p).items():
                             into.setdefault(lv, {}).setdefault(prog, {}).update(
                                 {k: x for k, x in v.items() if (k == "ours") == (into is ours)})
+    stale = stale_oz(ours)
+    if stale and a.allow_stale_oz:
+        a.header_line.append("STALE-OZ ALLOWED: " + " ".join(prog for prog, _, _ in stale))
+    elif stale:
+        for prog, os_b, oz_b in stale:
+            print(f"stale Oz row: {prog} Oz {oz_b} B > Os {os_b} B", file=sys.stderr)
+        print("regenerate the Oz column from the binary of the Os column (or --allow-stale-oz)", file=sys.stderr)
+        sys.exit(1)
     sources = {p.stem: p.read_text() for p in Path(a.programs).glob("*.c")}
     table = rows(ours, sdcc, sources)
     with open(a.out, "w") as f:
+        f.write(f"# flag parity: tools/z80_flag_check.py, {len(REFUSED)} SDCC cells refused for differing codegen flags\n")
         for line in a.header_line:
             f.write("# " + line + "\n")
         f.write("prog\tlevel\tours_B\tours_T\tbest_B\tbest_B_variant\tbest_T\tbest_T_variant\tdB\tdT\tverdict\tvirtual\tn_sdcc\n")
