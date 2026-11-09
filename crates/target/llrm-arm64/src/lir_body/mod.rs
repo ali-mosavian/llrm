@@ -7,7 +7,8 @@
 //! register `Loc::Reg`; the instruction's name is LLVM's opcode (`ADDXri`), its
 //! width the letter before the form. A symbol is an `Addr` of `Space::External`
 //! (a label of `Space::Segment`) whose `index` is its place in
-//! [`Lowered::symbols`]; a block is its position in the function.
+//! [`LirBody::symbols`]; a block is its position in the function. A load or
+//! store carries what it reaches as [`Insn::memory`] (its `MachineMemOperand`).
 //! The class of a `COPY`'s registers is in its name (`COPY`, `COPY_FPR`) until
 //! `LirBody::class_like` carries it. A location's width is in bytes, as the
 //! shared phases read it (the verifier compares it with the register's bytes);

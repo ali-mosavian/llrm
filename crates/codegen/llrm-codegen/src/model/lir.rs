@@ -2370,4 +2370,44 @@ mod tests {
 
         assert!(odds.taken[&(1, 4)] > 0, "the split edge has {} units", odds.taken[&(1, 4)]);
     }
+    fn access(
+        store: bool,
+        slot: i64,
+    ) -> crate::model::lir::Insn {
+        let mut one = crate::model::lir::Insn::new(0, None, None, vec![], vec![]);
+        one.memory = Some(crate::model::memref::MemRef {
+            object: Some(llrm_analysis::placealias::Object::Frame { id: slot, fixed: false }),
+            offset: Some(0),
+            bytes: Some(4),
+            store,
+        });
+        one
+    }
+
+    /// `MachineInstr::mayAlias`: two loads never alias; a store and an access
+    /// of another object do not; a call and an access with no operand may.
+    #[test]
+    fn test_may_alias_follows_the_pins_order_of_questions() {
+        assert!(!access(false, 1).may_alias(&access(false, 1)), "two loads");
+        assert!(!access(true, 1).may_alias(&access(false, 2)), "another object");
+        assert!(access(true, 1).may_alias(&access(false, 1)), "the same object");
+        let bare = crate::model::lir::Insn::new(1, None, None, vec![], vec![]);
+        assert!(access(false, 1).may_alias(&bare), "no operand says nothing");
+        let mut call = access(false, 2);
+        call.call = Some(Arc::new(crate::model::lir::CallMemory {
+            effects: Default::default(),
+            private: Vec::new(),
+            disturbs: Default::default(),
+            block: false,
+        }));
+        assert!(access(false, 1).may_alias(&call), "a call");
+    }
+
+    /// A copy made to say something else (`with_what`) was built field by field:
+    /// the memory operand must come with it.
+    #[test]
+    fn test_a_copy_with_other_semantics_keeps_its_memory_operand() {
+        let one = access(true, 3);
+        assert_eq!(one.with_what(None).memory, one.memory);
+    }
 }
