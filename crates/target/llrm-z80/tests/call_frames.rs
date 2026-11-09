@@ -8,8 +8,8 @@ use std::process::Command;
 /// `object_extent_loop` reported 33564 for 82).
 #[test]
 fn a_call_has_only_its_own_stack_arguments_pushed() {
-    let dir = std::env::temp_dir().join("llrm-call-frames-z80");
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
     std::fs::write(
         &source,
@@ -58,13 +58,13 @@ fn a_call_has_only_its_own_stack_arguments_pushed() {
     }
 }
 
-/// Nine stack words were reserved by one sum and stored through `ix` (`ld bc, #112;
-/// ld -2(ix), c; ld -1(ix), b`: 9 B / 31 T a word) because only areas up to
-/// 16 B were pushed. Each is `ld bc, #k; push bc`, the last argument first.
+/// Nine stack words were reserved by one sum and stored through `ix` (`ld bc,
+/// #112; ld -2(ix), c; ld -1(ix), b`: 9 B / 31 T a word) because only areas up
+/// to 16 B were pushed. Each is `ld bc, #k; push bc`, the last argument first.
 #[test]
 fn a_stack_area_over_sixteen_bytes_is_pushed_last_argument_first() {
-    let dir = std::env::temp_dir().join("llrm-call-frames-z80-wide");
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
     let args: Vec<String> = (101..=112).map(|k| format!("i16 {k}")).collect();
     std::fs::write(
@@ -104,8 +104,8 @@ fn a_stack_area_over_sixteen_bytes_is_pushed_last_argument_first() {
 /// The stores are chained top word first, so every one is a push.
 #[test]
 fn stack_arguments_that_the_scheduler_would_reorder_are_pushed() {
-    let dir = std::env::temp_dir().join("llrm-call-frames-z80-order");
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
     std::fs::write(
         &source,
@@ -155,8 +155,8 @@ fn spilled_stack_words_are_stored_in_place_and_held_ones_are_pushed() {
              define void @g() {{\n{loads}  call void @f({values})\n  ret void\n}}\n"
         )
     };
-    let dir = std::env::temp_dir().join("llrm-call-frames-z80-spilled");
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let pushes = |args: usize, level: &str| {
         let source = dir.join(format!("g{args}.ll"));
         std::fs::write(&source, call(args)).unwrap();
@@ -195,8 +195,8 @@ fn a_frame_deeper_than_ix_reaches_keeps_the_pushes() {
          @v = global [{args} x i16] zeroinitializer\ndeclare void @f({calls})\ndeclare void @use(ptr)\n\
          define void @g() {{\n  %big = alloca [200 x i8]\n  call void @use(ptr %big)\n{loads}  call void @f({values})\n  ret void\n}}\n"
     );
-    let dir = std::env::temp_dir().join("llrm-call-frames-z80-deep");
-    std::fs::create_dir_all(&dir).unwrap();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
     std::fs::write(&source, ir).unwrap();
     for level in ["-O2", "-Os"] {

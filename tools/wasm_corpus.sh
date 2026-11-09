@@ -50,23 +50,30 @@ code() { section Code "$1"; }
 # The bytes a cell is judged by: the code and the initialised data it loads (a lookup table, a string).
 image() { echo $(($(code "$1") + $(section Data "$1" | tr -d "\n" | grep . || echo 0))); }
 
-# "result instructions" of one object linked with the stub.
+# "result instructions" of one object linked with the stub ($2: the stub object, this program's).
 count() {
-  wasm-ld --no-entry --export=run --allow-undefined "$1" "$out/stub.o" -o "$1.wasm" 2>/dev/null || { echo "none 0"; return; }
+  wasm-ld --no-entry --export=run --allow-undefined "$1" "${2:-$out/stub.o}" -o "$1.wasm" 2>/dev/null || { echo "none 0"; return; }
   timeout 120 wasm-interp "$1.wasm" -r run --trace > "$1.trace" 2>&1
   echo "$(sed -n 's/^run() => i32:\(-*[0-9]*\)$/\1/p' "$1.trace" | head -1 | grep . || echo none) $(grep -c '^#' "$1.trace")"
 }
 
 printf '%-22s %9s %9s %12s %12s %9s %9s  %s\n' program llrm_B clang_B llrm_instr clang_instr llrm_code clang_code result
-measured=0
+measured=0; unjudged=
 for f in "$@"; do
   n=$(basename "$f" .c)
   LLRM_CLANG_WASM=$clang LLRM_CC_TARGET=wasm32 timeout 300 "$llrm_cc" "-$level" $cpu -c "$f" -I"$root/bench" -I"$root/runtime/shared/posix" -o "$out/$n.l.o" 2> "$out/$n.err" ||
     { printf '%-22s llrm-cc FAIL: %s\n' "$n" "$(head -c 90 "$out/$n.err" | tr '\n' ' ')"; continue; }
   timeout 300 "$clang" --target=wasm32 -ffreestanding "-$level" $cpu -c "$f" -I"$root/bench" -I"$root/runtime/shared/posix" -o "$out/$n.c.o" 2> /dev/null ||
     { printf '%-22s clang FAIL\n' "$n"; continue; }
-  read -r lv li <<< "$(count "$out/$n.l.o")"
-  read -r cv ci <<< "$(count "$out/$n.c.o")"
+  # A program that reads or writes through the `llrm_os_*` layer gets it in memory, with its `// data:` file (the same bytes on
+  # both sides); without it the import is unresolved and the run has no result.
+  stub="$out/stub.o"
+  if python3 "$root/tools/wasm_stub_os.py" "$f" > "$out/$n.os.c" 2> "$out/$n.os.err" && [ -s "$out/$n.os.c" ]; then
+    cat "$out/stub.c" "$out/$n.os.c" > "$out/$n.stub.c"
+    "$clang" --target=wasm32 -O2 -c "$out/$n.stub.c" -o "$out/$n.stub.o" 2> /dev/null && stub="$out/$n.stub.o"
+  fi
+  read -r lv li <<< "$(count "$out/$n.l.o" "$stub")"
+  read -r cv ci <<< "$(count "$out/$n.c.o" "$stub")"
   # A side that did not run (unresolved import, trap) has no result: the row is unjudged, never "same".
   if [ "${lv:-none}" = none ] || [ "${cv:-none}" = none ]; then ok="n/a(no result: llrm ${lv:-none}, clang ${cv:-none})"
   elif [ "$lv" = "$cv" ]; then ok=same
@@ -74,5 +81,8 @@ for f in "$@"; do
   printf '%-22s %9s %9s %12s %12s %9s %9s  %s\n' "$n" "$(image "$out/$n.l.o")" "$(image "$out/$n.c.o")" "${li:-0}" "${ci:-0}" \
     "$(code "$out/$n.l.o")" "$(code "$out/$n.c.o")" "$ok"
   measured=$((measured + 1))
+  case $ok in n/a*) unjudged="$unjudged $n";; esac
 done
 [ "$measured" -gt 0 ] || { echo "wasm_corpus: no program was measured" >&2; exit 1; }
+# A program that did not run is not a pass: the run fails and names it.
+[ -z "$unjudged" ] || { echo "wasm_corpus: NO RESULT for:$unjudged" >&2; exit 3; }

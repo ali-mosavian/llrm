@@ -878,6 +878,7 @@ dependencies = [
  "llrm-support",
  "llrm-target",
  "llrm-transforms",
+ "tempfile",
 ]
 
 [[package]]

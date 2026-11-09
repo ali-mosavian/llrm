@@ -4260,6 +4260,7 @@ fn emit_with<const STACK: bool>(
         }
     }
     let lines_of = source.map(|(file, scope)| (file, scope, &function.places[..]));
+    out.cmos = cmos;
     let tails = (
         (!returns_a, a_callees),
         (!returns_x, x_callees),
