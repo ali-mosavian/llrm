@@ -15,12 +15,35 @@ use iced_x86::Register;
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RegId(u8);
 
+thread_local! {
+    static NAMED_BY: std::cell::Cell<Option<&'static Info>> = const { std::cell::Cell::new(None) };
+}
+
+/// Restores the file `Debug` names registers by when dropped.
+pub struct NamedBy(Option<&'static Info>);
+
+impl Drop for NamedBy {
+    fn drop(&mut self) {
+        NAMED_BY.with(|file| file.set(self.0));
+    }
+}
+
+/// Makes `Debug` of a [`RegId`] the name `file` gives it (`x0`) on this thread
+/// while the guard lives; `None` is iced's, x86's (`AL`). Without it an arm64
+/// id prints as the x86 register of the same number.
+pub fn named_by(file: Option<&'static Info>) -> NamedBy {
+    NamedBy(NAMED_BY.with(|cell| cell.replace(file)))
+}
+
 impl std::fmt::Debug for RegId {
     fn fmt(
         &self,
         formatter: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        self.iced().fmt(formatter)
+        match NAMED_BY.with(std::cell::Cell::get).and_then(|file| file.name(*self)) {
+            Some(name) => formatter.write_str(name),
+            None => self.iced().fmt(formatter),
+        }
     }
 }
 

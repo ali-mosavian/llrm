@@ -213,7 +213,7 @@ thread_local! {
 }
 
 /// The register file's lane table in force until this drops.
-pub struct Guard(Option<&'static Table>);
+pub struct Guard(Option<&'static Table>, #[allow(dead_code)] llrm_lir::registers::NamedBy);
 
 impl Drop for Guard {
     fn drop(&mut self) {
@@ -232,7 +232,9 @@ pub fn is_x86(regs: Regs) -> bool {
 pub fn enter(regs: Regs) -> Guard {
     let table = table_of(regs);
     let was = ACTIVE.with(|active| active.replace((!std::ptr::eq(table, &*X86)).then_some(table)));
-    Guard(was)
+    // A register prints by its file's name, iced's only for x86.
+    let named = llrm_lir::registers::named_by((!std::ptr::eq(table, &*X86)).then_some(regs.0));
+    Guard(was, named)
 }
 
 fn bit(lane: &Lane) -> Option<u32> {

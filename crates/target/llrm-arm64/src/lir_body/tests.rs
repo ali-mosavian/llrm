@@ -546,3 +546,11 @@ fn a_load_rebuilt_without_its_memory_operand_is_refused() {
     let Err(Unmapped(why)) = from_lir(&lowered, &function) else { panic!("rebuilt a load with no memory operand") };
     assert!(why.starts_with("LDR"), "{why}");
 }
+
+/// An arm64 register prints by its file's name. `Debug` was iced's, so `x0`
+/// showed as `AL` and `x1` as `R12W` in every dump and assertion of arm64 code.
+#[test]
+fn a_register_prints_by_the_arm64_names() {
+    let _file = enter(Regs(&crate::REGISTER_INFO));
+    assert_eq!(format!("{:?} {:?} {:?}", crate::reg::X0, crate::reg::W3, crate::reg::V1), "x0 w3 v1");
+}
