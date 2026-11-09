@@ -1,6 +1,6 @@
 //! Stack arguments of a call, on the DAG path alone.
 
-use llrm_arm64::driver::{self, IselMode};
+use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
 const LAYOUT: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
@@ -10,7 +10,6 @@ const LAYOUT: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:
 /// used, with no copy.
 #[test]
 fn stack_arguments_are_stored_from_the_stack_pointer_itself() {
-    driver::set_isel_mode(IselMode::Dag);
     let ir = format!(
         "{LAYOUT}declare i64 @many(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64)\n\
 define i64 @f(i64 %a) {{\n  %r = call i64 @many(i64 %a, i64 2, i64 3, i64 4, i64 5, i64 6, i64 7, i64 8, i64 9, i64 10)\n  ret i64 %r\n}}\n"
