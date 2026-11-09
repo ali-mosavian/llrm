@@ -19,6 +19,13 @@ OURS_ONLY_SDCC = {
     "-fno-inline-functions": "SDCC has no inliner", "-fno-inline-functions-called-once": "SDCC has no inliner",
     "-fwrapv": "SDCC wraps signed overflow", "-fexcess-precision=standard": "SDCC float has no excess precision",
 }
+# The four variants of the owner table: the one list the harness scripts and the table's check read.
+SDCC_VARIANTS = {
+    "sdcc-size": ["--fsigned-char", "--opt-code-size"],
+    "sdcc-size-ma": ["--fsigned-char", "--opt-code-size", "--max-allocs-per-node", "200000"],
+    "sdcc-speed": ["--fsigned-char", "--opt-code-speed"],
+    "sdcc-speed-ma": ["--fsigned-char", "--opt-code-speed", "--max-allocs-per-node", "200000"],
+}
 # A SDCC variant is exactly these: a char signedness, one optimisation goal, optionally the allocator budget.
 SDCC_GOALS = {"--opt-code-size", "--opt-code-speed"}
 # gcc-only, no counterpart on ours.
@@ -66,6 +73,23 @@ def sdcc_mismatch(ours, variant):
     if unknown:
         return f"ours-only flags with no SDCC counterpart listed: {unknown}"
     return ""
+
+
+def cell_mismatch(source, level, variant, run_py=None):
+    """The check for one owner-table cell: `source` the program's text, `level` 1 s z 2 3, `variant` a table column name.
+    Ours is the corpus CLANG_FLAGS plus the program's -f flags (tests/programs/run.py); an unknown variant is refused."""
+    if variant not in SDCC_VARIANTS:
+        return f"unknown SDCC variant {variant}"
+    import importlib.util
+    from pathlib import Path
+    path = run_py or Path(__file__).resolve().parent.parent / "crates/target/llrm-z80/tests/programs/run.py"
+    spec = importlib.util.spec_from_file_location("z80_run", path)
+    run = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run)
+    class Text:
+        def read_text(self):
+            return source
+    return sdcc_mismatch(["-O" + level, *run.CLANG_FLAGS, *run.program_flags(Text())[0]], SDCC_VARIANTS[variant])
 
 
 def gcc_mismatch(ours, gcc):
