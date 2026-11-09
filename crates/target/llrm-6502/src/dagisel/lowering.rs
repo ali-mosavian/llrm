@@ -145,6 +145,10 @@ pub fn target_lowering() -> TargetLowering {
     for op in [Load, Store] {
         tl.set_operation_action(op, MVT::I1, Action::Custom);
     }
+    // a word joined from two bytes (an argument in `a:x`) is the pair itself:
+    // expanded to `lo | hi << 8`, the shift of it was distributed over the two
+    // halves and no `SHL16` was left to select
+    tl.set_operation_action(BuildPair, MVT::I16, Action::Legal);
     // a word copied between two objects is bytes in turn (`lower_word_copy`)
     tl.set_operation_action(Store, MVT::I16, Action::Custom);
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);

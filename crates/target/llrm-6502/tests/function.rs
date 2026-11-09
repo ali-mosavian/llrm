@@ -38,13 +38,26 @@ fn a_byte_add_is_one_instruction() {
     assert_eq!(selected(ir, "f"), [["ADD8", "RET"]]);
 }
 
-/// Hand-read: a word argument is one value in a pair, the add is `ADD16`, and
-/// the result leaves as two bytes. Before the target's calling hook the builder
-/// joined each argument from its bytes.
+/// Hand-read: a word argument arrives as two bytes (`a:x`, then `rc2:rc3`) and
+/// is joined into a pair, the add is `ADD16`, and the result leaves as two
+/// bytes. Before the target's calling hook the builder joined each argument
+/// from its bytes.
 #[test]
 fn a_word_add_joins_and_splits_the_bytes() {
     let ir = "define i16 @f(i16 %a, i16 %b) {\n  %r = add i16 %a, %b\n  ret i16 %r\n}";
-    assert_eq!(selected(ir, "f"), [["ADD16", "EXTRACT_SUBREG", "EXTRACT_SUBREG", "RET"]]);
+    assert_eq!(selected(ir, "f"), [["REG_SEQUENCE", "REG_SEQUENCE", "ADD16", "EXTRACT_SUBREG", "EXTRACT_SUBREG", "RET"]]);
+}
+
+/// A word argument arrives as two bytes joined by `BUILD_PAIR`. Expanded to
+/// `lo | hi << 8`, a shift of it was distributed over the two halves and no
+/// `SHL16` was selected (`x << 1` was 22 bytes, 8 by hand).
+#[test]
+fn a_word_joined_from_two_bytes_is_shifted_as_a_pair() {
+    let ir = "define i16 @f(i16 %x) {\n  %r = shl i16 %x, 1\n  ret i16 %r\n}";
+    assert_eq!(
+        selected(ir, "f"),
+        [["REG_SEQUENCE", "SHL16", "EXTRACT_SUBREG", "EXTRACT_SUBREG", "RET"]]
+    );
 }
 
 /// With every argument in a register the call is `JSR` between the stack

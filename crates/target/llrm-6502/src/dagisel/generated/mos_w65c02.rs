@@ -8,7 +8,7 @@ use llrm_dagisel::dag::{Dag, Hooks, PatternContext, SDValue};
 use llrm_dagisel::matcher::{Emit, Matcher::*, Slice, Table, Vt};
 use crate::dagisel::predicates;
 
-pub static ITEMS: [llrm_dagisel::matcher::Matcher; 1382] = [
+pub static ITEMS: [llrm_dagisel::matcher::Matcher; 1391] = [
     SwitchOpcode,
     OpcodeCase { size: 98, opcode: 59 },
     Scope,
@@ -1293,6 +1293,15 @@ pub static ITEMS: [llrm_dagisel::matcher::Matcher; 1382] = [
     CaptureGlueInput,
     EmitMergeInputChains(Slice { start: 5, len: 1 }),
     MorphNodeTo(Emit { opcode: 396, flags: 19, vts: [Vt(0), Vt(0)], num_vts: 0, operands: Slice { start: 73, len: 0 } }),
+    OpcodeCase { size: 8, opcode: 57 },
+    RecordChild(0),
+    CheckChildType { child: 0, vt: Vt(5) },
+    RecordChild(1),
+    CheckType(Vt(6)),
+    EmitInteger { vt: Vt(7), value: 4 },
+    EmitInteger { vt: Vt(7), value: 2 },
+    EmitInteger { vt: Vt(7), value: 1 },
+    MorphNodeTo(Emit { opcode: 19, flags: 0, vts: [Vt(6), Vt(0)], num_vts: 1, operands: Slice { start: 18, len: 5 } }),
     OpcodeCase { size: 4, opcode: 16 },
     RecordNode,
     CheckType(Vt(6)),

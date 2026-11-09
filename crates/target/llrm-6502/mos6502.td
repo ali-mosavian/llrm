@@ -333,6 +333,9 @@ let AddedComplexity = 10 in {
   def : Pat<(i16 (extloadi8 MOSIdx:$a)), (REG_SEQUENCE Imag16, (LDPI8 MOSIdx:$a), sub_lo, (LDI8 0), sub_hi)>;
 }
 // The builder joins two bytes as `lo | (hi << 8)` over either kind of extension: that is the pair.
+def MOSbuild_pair : SDNode<"ISD::BUILD_PAIR", SDTypeProfile<1, 2, [SDTCisInt<0>, SDTCisInt<1>, SDTCisSameAs<1, 2>]>>;
+def : Pat<(i16 (MOSbuild_pair Imag8:$lo, Imag8:$hi)),
+          (REG_SEQUENCE Imag16, Imag8:$lo, sub_lo, Imag8:$hi, sub_hi)>;
 def ext8 : PatFrags<(ops node:$a), [(zext node:$a), (anyext node:$a)]>;
 def : Pat<(i16 (or (ext8 Imag8:$lo), (shl (ext8 Imag8:$hi), (i8 8)))),
           (REG_SEQUENCE Imag16, Imag8:$lo, sub_lo, Imag8:$hi, sub_hi)>;
