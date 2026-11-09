@@ -9,7 +9,13 @@ def row(prog, lv, comp, b, c):
     return ["6502", prog, lv, comp, str(b), str(c)]
 
 
-FULL = [row("k", "Os", "ours", 10, 100), row("k", "Os", "llvm-mos", 12, 90), row("k", "Os", "cc65", 14, 90), row("k", "Os", "sdcc", 9, 95)]
+FULL = [
+    row("k", "Os", "ours", 10, 100),
+    row("k", "Os", "llvm-mos", 12, 90),
+    row("k", "Os", "cc65", 14, 90),
+    row("k", "Os", "sdcc-size", 9, 95),
+    row("k", "Os", "sdcc-size-ma", 11, 95),
+]
 
 
 class OwnerTable(unittest.TestCase):
@@ -20,10 +26,10 @@ class OwnerTable(unittest.TestCase):
 
     def test_a_cell_missing_a_reference_is_refused_not_graded_on_the_rest(self):
         """z80's table took the next-best column and understated gaps by up to 1.7 kB."""
-        short = [r for r in FULL if r[3] != "sdcc"]
+        short = [r for r in FULL if r[3] != "sdcc-size-ma"]
         rows, refused = t.grade(t.cells_of(short), set(), False)
         self.assertEqual(rows, [])
-        self.assertEqual(refused, [("k", "Os", "6502", ["sdcc"])])
+        self.assertEqual(refused, [("k", "Os", "6502", ["sdcc-size-ma"])])
 
     def test_program_cells_with_no_reference_are_refused_unless_declared_no_bar(self):
         """172 program cells had `ours` and no external column and were skipped without a line."""
@@ -32,6 +38,21 @@ class OwnerTable(unittest.TestCase):
         self.assertEqual(len(refused), 1)
         rows, refused = t.grade(cells, {"prog"}, True)
         self.assertEqual((rows[0][-1], refused), ("NO_BAR", []))
+
+    def test_sdcc_at_its_default_optimisation_is_not_a_reference(self):
+        """The SDCC columns passed no optimisation flag: the Os bar was looser than SDCC's best."""
+        old = [r for r in FULL if not r[3].startswith("sdcc")] + [row("k", "Os", "sdcc", 9, 95)]
+        rows, refused = t.grade(t.cells_of(old), set(), False)
+        self.assertEqual(rows, [])
+        self.assertEqual(refused[0][3], ["sdcc-size", "sdcc-size-ma"])
+
+    def test_the_os_bar_comes_from_the_size_variants_and_o2_from_all_four(self):
+        speed = row("k", "Os", "sdcc-speed", 5, 50)  # fewer bytes, but not a size variant
+        rows, _ = t.grade(t.cells_of(FULL + [speed]), set(), False)
+        self.assertEqual(rows[0][5], 9)  # the Os bar ignores the speed variant
+        o2 = [row("k", "O2", c, b, k) for c, b, k in (("ours", 10, 100), ("llvm-mos", 12, 90), ("cc65", 14, 90), ("sdcc-size", 9, 95), ("sdcc-speed", 12, 60), ("sdcc-size-ma", 9, 94), ("sdcc-speed-ma", 12, 59))]
+        rows, refused = t.grade(t.cells_of(o2), set(), False)
+        self.assertEqual((refused, rows[0][-1]), ([], "WORSE"))  # 100 + 30 against SDCC's 59 + 36
 
     def test_a_cpu_declared_ungraded_is_listed_not_graded_and_not_refused(self):
         """The matrix has no cc65 65C02 column: 116 kernel cells would otherwise be graded on two columns."""

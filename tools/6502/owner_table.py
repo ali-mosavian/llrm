@@ -3,7 +3,9 @@
 
     owner_table.py MATRIX.tsv OUT.tsv --corpus tests/run/c [--programs-no-bar]
 
-A cell needs all three references. One that lacks any is refused (exit 2) and
+A cell needs every reference: llvm-mos, cc65 and the SDCC variants of its level
+(Os: size, size-ma; O2: size, speed, size-ma, speed-ma; a plain `sdcc` column is
+SDCC's default optimisation and is not a reference). One that lacks any is refused (exit 2) and
 listed: taking the best of the columns that happen to be present understated
 gaps (z80, up to 1.7 kB), and a cell with none was skipped without a line
 (6502: 172 program cells, so "125 worse of 324" was kernels only).
@@ -19,7 +21,10 @@ import collections
 import os
 import sys
 
-REQUIRED = ("llvm-mos", "cc65", "sdcc")
+REQUIRED = ("llvm-mos", "cc65")
+# SDCC is never quoted at its default optimisation: the Os bar (strict bytes)
+# comes from the size variants, the O2 bar from the best of all four.
+SDCC_VARIANTS = {"Os": ("sdcc-size", "sdcc-size-ma"), "O2": ("sdcc-size", "sdcc-speed", "sdcc-size-ma", "sdcc-speed-ma")}
 
 
 def cells_of(rows):
@@ -40,9 +45,10 @@ def grade(cells, programs, programs_no_bar, ungraded_cpus=()):
     for (prog, lv, cpu), d in sorted(cells.items()):
         if "ours" not in d:
             continue
-        absent = [c for c in REQUIRED if c not in d]
+        sdcc = SDCC_VARIANTS.get(lv, SDCC_VARIANTS["O2"])
+        absent = [c for c in REQUIRED + sdcc if c not in d]
         ob, oc = d["ours"]
-        if absent == list(REQUIRED) and prog in programs and programs_no_bar:
+        if len(absent) == len(REQUIRED + sdcc) and prog in programs and programs_no_bar:
             rows.append((prog, lv, cpu, ob, oc, "", "", "NO_BAR"))
             continue
         if absent and cpu in ungraded_cpus:
@@ -51,7 +57,7 @@ def grade(cells, programs, programs_no_bar, ungraded_cpus=()):
         if absent:
             refused.append((prog, lv, cpu, absent))
             continue
-        ext = [d[c] for c in REQUIRED]
+        ext = [d[c] for c in REQUIRED + sdcc]
         bb, bc = min(v[0] for v in ext), min(v[1] for v in ext)
         ok = ob <= bb if lv == "Os" else oc + 3 * ob <= min(v[1] + 3 * v[0] for v in ext)
         rows.append((prog, lv, cpu, ob, oc, bb, bc, "OK" if ok else "WORSE"))
