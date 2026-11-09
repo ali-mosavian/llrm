@@ -29,6 +29,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import corpus_targets as ct  # noqa: E402
 import llrmbin  # noqa: E402
+import m68k_runtime_guard as guard  # noqa: E402
 import o0_sweep  # noqa: E402
 
 TIMEOUT = 180
@@ -73,8 +74,13 @@ def cache_dir(cc: str) -> Path:
     return base / digest.hexdigest()[:12]
 
 
-def build_support(cc: str, root: str, cpu: str, cache: Path, jobs: int, level: str = "O2") -> list[str]:
-    """The stubs and the compiler-rt archive for CPU, built at LEVEL once per compiler binary: the link arguments after the program's object."""
+def build_support(cc: str, root: str, cpu: str, cache: Path, jobs: int, level: str = "O2", runnable: bool = True) -> list[str]:
+    """The stubs and the compiler-rt archive for CPU, built at LEVEL once per compiler binary: the link arguments after the program's object.
+
+    `runnable`: the archive will be executed, so a routine that reaches itself through a libcall (int32.c at -O1: `udivmod` and `__udivsi3`)
+    is refused (m68k_runtime_guard); a size-only build passes False."""
+    if runnable and (loops := guard.runtime_cycles(cc, cpu, level)):
+        raise SystemExit(f"m68k_exec_sweep: the runtime built at -{level} calls itself ({'; '.join(' -> '.join(c) for c in loops)}): build it at -O2 or -Os")
     cache.mkdir(parents=True, exist_ok=True)
     env = tool_env(root)
     stubs = []
