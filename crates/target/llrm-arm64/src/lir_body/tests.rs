@@ -613,3 +613,45 @@ fn a_float_operand_is_confined_to_the_float_registers() {
         _ => panic!("an fadd's result is not confined to the float registers"),
     }
 }
+
+/// A shift of two values the loop never writes is made before the loop. The
+/// pin: MachineLICM moves arm64 forms (it changed 0 of 43 corpus functions
+/// only because the mid-end had already hoisted them).
+#[test]
+fn an_invariant_shift_in_a_loop_is_made_before_it() {
+    use llrm_codegen::backend::classes::RegisterClasses;
+    use llrm_codegen::backend::machinelicm::hoisted;
+
+    let r = |n| Gpr(Gpr::FIRST_VIRTUAL + n);
+    let (amount, value, shifted, counter) = (r(1), r(2), r(3), r(4));
+    let wide = |rd| Inst::MoveWide { op: Wide::Zero, width: WIDTHS[1], rd, imm16: 7, lsl: 0 };
+    let mut function = MFunc::new("t");
+    function.next_register = Gpr::FIRST_VIRTUAL + 16;
+    let block = |label: &str, ops: Vec<Op>| MBlock { label: label.into(), ops: ops.into_iter().map(|op| (op, None)).collect() };
+    function.blocks = vec![
+        block("pre", vec![Op::I(wide(amount)), Op::I(wide(value)), Op::I(wide(counter))]),
+        block(
+            "loop",
+            vec![
+                Op::I(Inst::Divide { op: Div::Lslv, width: WIDTHS[1], rd: shifted, rn: value, rm: amount }),
+                Op::I(Inst::AddSubImm {
+                    op: AddSub { subtract: true, set_flags: false },
+                    width: WIDTHS[1],
+                    rd: counter,
+                    rn: counter,
+                    imm12: 1,
+                    shift12: false,
+                }),
+                Op::I(Inst::CompareBranch { nonzero: true, width: Width::X, rt: counter, target: label("loop") }),
+            ],
+        ),
+        block("done", vec![Op::Return { uses: vec![], tail: None }]),
+    ];
+    let body = to_lir(&function).expect("the forms map").body;
+    let after = hoisted(&body, &RegisterClasses::of(&crate::description::Arm64));
+    let in_block = |body: &LirBody, at: usize, name: &str| {
+        body.blocks[at].insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(name)))
+    };
+    assert!(in_block(&body, 1, "LSLVXr"), "the premise: the shift starts in the loop");
+    assert!(in_block(&after, 0, "LSLVXr") && !in_block(&after, 1, "LSLVXr"), "the shift stayed in the loop");
+}
