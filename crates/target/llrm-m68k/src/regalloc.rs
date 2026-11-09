@@ -293,10 +293,16 @@ const CONDITIONAL: [(&str, &str); 7] = [
     ("Bgt8", "Ble8"),
 ];
 
-/// The shared flow's `MachineCSE` over the m68k function, still in SSA form
-/// (before phi elimination): the function through `to_ssa_lir`, the stage and
-/// `from_ssa`.
-pub fn shared_cse(function: &MFunction) -> Result<MFunction, String> {
+/// A shared machine stage over the m68k function, still in SSA form (before phi
+/// elimination): the function through `to_ssa_lir`, the stage and `from_ssa`.
+/// `stage` is made with the register-class oracle (`constrainRegClass`).
+pub fn shared_stage(
+    function: &MFunction,
+    stage: impl FnOnce(
+        std::rc::Rc<llrm_codegen::backend::classes::RegisterClasses>,
+        llrm_codegen::backend::precse::Constrain,
+    ) -> Box<dyn llrm_codegen::model::passes::LIRTransform>,
+) -> Result<MFunction, String> {
     // the classes read the target's description: once per thread, not per function
     thread_local! {
         static CLASSES: std::rc::Rc<llrm_codegen::backend::classes::RegisterClasses> =
@@ -304,8 +310,24 @@ pub fn shared_cse(function: &MFunction) -> Result<MFunction, String> {
     }
     let classes = CLASSES.with(std::rc::Rc::clone);
     llrm_spike_mf::tolir::host_ssa::<M68kRegisters>(function, llrm_lir::registers::Regs(&REGISTER_INFO), |constrain| {
+        stage(classes, constrain)
+    })
+}
+
+/// The shared flow's `MachineCSE` over the m68k function.
+pub fn shared_cse(function: &MFunction) -> Result<MFunction, String> {
+    shared_stage(function, |classes, constrain| {
         Box::new(llrm_codegen::backend::precse::MachineCse { classes, keep_compare: false, constrain: Some(constrain) })
     })
+}
+
+/// The shared flow's early `MachineLICM` over the m68k function; `size` is a
+/// size build.
+pub fn shared_licm(
+    function: &MFunction,
+    size: bool,
+) -> Result<MFunction, String> {
+    shared_stage(function, |classes, _| Box::new(llrm_codegen::backend::machinelicm::MachineLicm { classes, size }))
 }
 
 /// `BranchFolder` over the m68k function.

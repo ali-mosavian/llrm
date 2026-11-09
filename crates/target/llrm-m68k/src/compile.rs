@@ -124,6 +124,10 @@ pub struct Options {
     /// register, as in the pin's MIR: what the hosted stages (MachineLICM) need
     /// to see it as loop-invariant ([`crate::mfunc::emit_with`]).
     pub direct_copies: bool,
+    /// The shared flow's early `MachineLICM` runs on the function in SSA form,
+    /// before `MachineCSE` ([`crate::regalloc::shared_licm`]). It sees a
+    /// loop-invariant only where `direct_copies` made no copy of it.
+    pub shared_licm: bool,
     /// A small conditional block is copied into the predecessors that jump to
     /// it, inside a loop ([`llrm_spike_mf::taildup`]); not in a size build.
     pub tail_duplicate: bool,
@@ -198,6 +202,7 @@ impl Options {
         post_inc_across_blocks: false,
         shared_cse: false,
         direct_copies: false,
+        shared_licm: false,
         tail_duplicate: false,
         rematerialize_arguments: false,
         loop_top_by_jumps: false,
@@ -234,6 +239,7 @@ impl Default for Options {
             post_inc_across_blocks: true,
             shared_cse: false,
             direct_copies: false,
+            shared_licm: false,
             tail_duplicate: true,
             rematerialize_arguments: true,
             loop_top_by_jumps: true,
@@ -508,6 +514,9 @@ fn items_once(
     }
     function.odds = Some(edge_odds(module, name)?);
     expand_cmov(&mut function)?;
+    if options.shared_licm {
+        function = crate::regalloc::shared_licm(&function, wants_size)?;
+    }
     if options.shared_cse {
         function = crate::regalloc::shared_cse(&function)?;
     }
