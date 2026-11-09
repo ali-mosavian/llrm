@@ -57,14 +57,25 @@ fn leak(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
 }
 
+/// The compare through `(An)+` ([`crate::dagisel::indexed`]'s source twin of
+/// `CMP32dj`) and its address-destination twin; the destination follows the
+/// updated base.
+const POST_INCREMENT: (&str, &str, usize) = ("CMP32do_WB", "CMPA32o_WB", 1);
+
 /// The destination operand of the pin's row `base`.
 pub fn dest_of(base: &str) -> Option<usize> {
-    ROWS.iter().find(|row| row.base == base && !row.word).map(|row| row.dest)
+    ROWS.iter()
+        .find(|row| row.base == base && !row.word)
+        .map(|row| row.dest)
+        .or((base == POST_INCREMENT.0).then_some(POST_INCREMENT.2))
 }
 
 /// The address-destination row of the pin's compare `base`, if it has one.
 pub fn sibling(base: &str) -> Option<&'static str> {
-    ROWS.iter().find(|row| row.base == base && !row.word).map(|row| row.name)
+    ROWS.iter()
+        .find(|row| row.base == base && !row.word)
+        .map(|row| row.name)
+        .or((base == POST_INCREMENT.0).then_some(POST_INCREMENT.1))
 }
 
 /// The machine code of the row `name`.

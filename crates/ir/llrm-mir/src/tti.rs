@@ -924,6 +924,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::lftr_any_stride` (DEVIATE LFTR1).
+    fn lftr_any_stride(&self) -> bool {
+        false
+    }
+
     /// `Tuning::imul_at_size`.
     fn imul_at_size(&self) -> bool {
         false
