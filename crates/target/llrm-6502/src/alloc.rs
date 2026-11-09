@@ -171,6 +171,11 @@ fn is_pair(register: RegId) -> bool {
     pairs().any(|one| one == register)
 }
 
+/// A pair or the soft stack pointer `rs0`, which no value is allocated to.
+fn is_word(register: RegId) -> bool {
+    register == reg::RS0 || is_pair(register)
+}
+
 /// The zero-page byte of a pair: lane 0 is the low byte.
 fn lane(
     pair: RegId,
@@ -1102,6 +1107,34 @@ impl Builder {
         self.alu_with(mnemonic, carry, d, a, second)
     }
 
+    /// `d := (a + b [+ 1]) >> 1` with the sum's ninth bit: `ADC` leaves it in
+    /// C and `ROR` brings it in as bit 7. Nothing may sit between the two.
+    fn average(
+        &mut self,
+        carry: &'static str,
+        d: &str,
+        a: &str,
+        b: &str,
+    ) -> Result<(), Unsupported> {
+        let acc = Reg::Phys(reg::A);
+        let second = match self.constants.get(b) {
+            Some(value) => Operand::Imm(*value & 0xFF),
+            None => {
+                let b = self.byte(b)?;
+                self.require(b, Class::MEM)?;
+                Operand::Use(b)
+            }
+        };
+        self.define(d);
+        let (d, a) = (self.byte(d)?, self.byte(a)?);
+        self.push(Inst::new(Kind::Op(carry), vec![]));
+        self.copy(acc, a);
+        self.push(Inst::new(Kind::Op("ADC"), vec![Operand::Def(acc), Operand::Use(acc), second]));
+        self.push(Inst::new(Kind::Op("ROR"), vec![Operand::Def(acc), Operand::Use(acc)]));
+        self.copy(d, acc);
+        Ok(())
+    }
+
     /// The same with the second operand made.
     fn alu_with(
         &mut self,
@@ -1713,6 +1746,10 @@ pub fn build_with_places(
                 }
             }
             op::ADD8 => b.alu("ADC", Some("CLC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
+            op::AVGFLOORU8 | op::AVGCEILU8 => {
+                let carry = if inst.opcode == op::AVGFLOORU8 { "CLC" } else { "SEC" };
+                b.average(carry, name(&o[0])?, name(&o[1])?, name(&o[2])?)?
+            }
             op::ADD8M | op::SUB8M | op::AND8M | op::OR8M | op::XOR8M => {
                 let (mnemonic, carry) = match inst.opcode {
                     op::ADD8M => ("ADC", Some("CLC")),
@@ -3488,10 +3525,16 @@ fn emit_with<const STACK: bool>(
                 .find(|(r, _)| !after[b][i].contains(r) && !regs.contains(r))
                 .map(|(_, name)| name);
             match (inst.kind, &inst.operands[..]) {
-                (Kind::Copy, _) if is_pair(regs[0]) || is_pair(regs[1]) => {
+                (Kind::Copy, _) if is_word(regs[0]) && is_word(regs[1]) => {
                     let moves: Vec<_> = (0..2).map(|n| (lane(regs[0], n), lane(regs[1], n))).collect();
                     parallel_move(&mut out, &moves, a_live);
                 }
+                // a word copied into a byte is its low half (`trunc` at -O0); `lane` of
+                // a byte register named a cell no pair has
+                (Kind::Copy, _) if is_word(regs[1]) => {
+                    move_byte(&mut out, regs[0], lane(regs[1], 0), a_live, spare);
+                }
+                (Kind::Copy, _) if is_word(regs[0]) => return Err("a byte copied into a word".into()),
                 (Kind::Copy, _) => move_byte(&mut out, regs[0], regs[1], a_live, spare),
                 // a lane nothing reads is not moved (a word truncated to a byte)
                 (Kind::Op("UNPACK"), _) => {
@@ -3678,6 +3721,7 @@ fn emit_with<const STACK: bool>(
                 // the sign into every bit: the carry out of `asl` is the
                 // sign, `sbc #0` turns it into 0 or $FF and `eor` flips it
                 (Kind::Op("SPLAT"), _) => out.push_str("  asl a\n  lda #0\n  sbc #0\n  eor #$ff\n"),
+                (Kind::Op("ROR"), _) => out.push_str("  ror a\n"),
                 // `x >> 7` and `x << 7` of a byte: four bytes, not seven shifts
                 (Kind::Op("TOPBIT"), _) => out.push_str("  asl a\n  lda #0\n  rol a\n"),
                 (Kind::Op("LOWBIT"), _) => out.push_str("  lsr a\n  lda #0\n  ror a\n"),

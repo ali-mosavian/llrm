@@ -39,6 +39,7 @@ pub mod m68kisd {
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
     pub const ADD: ISD = ISD::Target(ids::ADD);
     pub const SUB: ISD = ISD::Target(ids::SUB);
+    pub const ADDX: ISD = ISD::Target(ids::ADDX);
     pub const SUBX: ISD = ISD::Target(ids::SUBX);
     pub const UMUL: ISD = ISD::Target(ids::UMUL);
     pub const SMUL: ISD = ISD::Target(ids::SMUL);
@@ -78,6 +79,16 @@ pub mod cond {
 /// `ATOMIC_FENCE` rows are left out: [`ISD`] has no such opcodes yet. Exit:
 /// with the atomics in the DAG.
 pub fn target_lowering(cpu: Cpu) -> TargetLowering {
+    target_lowering_with(cpu, true)
+}
+
+/// [`target_lowering`], with `carry_chain` false leaving `ADDC`, `ADDE`,
+/// `SUBC` and `SUBE` to the legalizer's compare form (see
+/// `Options::carry_chain`).
+pub fn target_lowering_with(
+    cpu: Cpu,
+    carry_chain: bool,
+) -> TargetLowering {
     use ISD::*;
     let int = [MVT::I8, MVT::I16, MVT::I32];
     let m68020 = cpu.at_least(Cpu::M68020);
@@ -131,12 +142,32 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     set(&[SMulO, UMulO], &[MVT::I8, MVT::I16], Action::Custom);
     set(&[SMulO, UMulO], &[MVT::I32], if m68020 { Action::Custom } else { Action::Expand });
     set(&[ShlParts, SraParts, SrlParts], &[MVT::I32], Action::Custom);
-    set(&[AddC, AddE, SubC, SubE, SAddO, UAddO, SSubO, USubO], &int, Action::Custom);
+    set(&[SAddO, UAddO, SSubO, USubO], &int, Action::Custom);
+    set(&[AddC, AddE, SubC, SubE], &int, if carry_chain { Action::Custom } else { Action::Expand });
     set(&[BrCond], &[MVT::Other], Action::Custom);
     set(&[Select, SetCC, SetCCCarry], &int, Action::Custom);
     set(&[BSwap], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[BSwap], &[MVT::I32], Action::Legal);
     set(&[CtTz, CtLz, CtPop], &int, Action::Expand);
+    // DEVIATE BC1 (llrm-sdag `actions`): the shared compiler-rt routines
+    // (`__clzsi2`, `__ctzdi2`, `__popcountsi2`, ...) against the inline
+    // expansion; the pin keeps `Expand` here. gcc calls libgcc for all six on
+    // the 68000 and 68010, and so does this. From the 68020 gcc counts a
+    // 32-bit `clz`, a 64-bit `clz` and a 32-bit `ctz` with `bfffo`
+    // (M68K-BFFFO, see `bfffo`). Whole linked programs, 2026-11-09, every
+    // count called against inline: u64 O2 -12 B and +1000 clk (+3% to +18% in
+    // all six cells), u32 +24 B, so the 68020 and later stay inline at speed
+    // levels; size-built functions choose per module (M68K-SIZE-LIBCALL, see
+    // `libcalls`). Owner m68k. Exit: 2026-11-30.
+    if !m68020 {
+        set(&[CtLzZeroPoison, CtTzZeroPoison, CtPop], &[MVT::I32, MVT::I64], Action::LibCall);
+    }
+    // DEVIATE M68K-BFFFO (see `bfffo`): `bfffo` counts the leading zeros of an
+    // `i32`, 32 for zero, so both forms are one instruction. The pin keeps
+    // `Expand`. Owner m68k. Exit: 2026-11-30.
+    if cpu.has_bit_field_find() {
+        set(&[CtLz, CtLzZeroPoison], &[MVT::I32], Action::Legal);
+    }
     set(&[ConstantPool, JumpTable, GlobalAddress, ExternalSymbol], &[MVT::I32], Action::Custom);
     set(&[VAStart], &[MVT::Other], Action::Custom);
     set(&[VAEnd, VACopy, StackSave, StackRestore], &[MVT::Other], Action::Expand);
@@ -174,6 +205,16 @@ pub struct M68kLowering {
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
     fn little_endian(&self) -> bool {
         false
+    }
+
+    /// `getScalarShiftAmountTy`: the pin's m68k keeps the default, the pointer
+    /// type (`i32`). A shift a combine made after legalization with the
+    /// shared `i8` amount had no pattern: `CannotSelect(Shl)`.
+    fn shift_amount_type(
+        &self,
+        _shifted: EVT,
+    ) -> EVT {
+        EVT::I32
     }
 
     fn sub_of_sign_extended_bool(&self) -> bool {
@@ -236,6 +277,7 @@ impl Hooks for M68kLowering {
             ISD::VAStart => lower_vastart(dag, node),
             ISD::UMulLoHi | ISD::SMulLoHi => Some(lower_wide_multiply(dag, node)),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
+            ISD::AddC | ISD::AddE | ISD::SubC | ISD::SubE => lower_carry_chain(dag, node),
             _ => None,
         }
     }
@@ -383,6 +425,31 @@ fn lower_xalu(
         &[result_vt, overflow_vt],
         &[SDValue { node: arith.node, res: 0 }, overflow],
     ))
+}
+
+/// `LowerADDC_ADDE_SUBC_SUBE`: the arithmetic as `add`/`sub`, and with the
+/// carry in as `addx`/`subx`; the carry out is the codes, not glue. A type the
+/// legalizer has not made legal is left to it.
+fn lower_carry_chain(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let result_vt = dag.value_type(SDValue { node: node.node, res: 0 });
+    if !matches!(result_vt, EVT::I8 | EVT::I16 | EVT::I32) {
+        return None;
+    }
+    let (base, extra) = match dag.opcode(node) {
+        ISD::AddC => (m68kisd::ADD, false),
+        ISD::AddE => (m68kisd::ADDX, true),
+        ISD::SubC => (m68kisd::SUB, false),
+        ISD::SubE => (m68kisd::SUBX, true),
+        other => unreachable!("not a carry chain operation: {other:?}"),
+    };
+    let mut operands = vec![dag.operand(node, 0), dag.operand(node, 1)];
+    if extra {
+        operands.push(dag.operand(node, 2));
+    }
+    Some(dag.get_node_multi(base, &[result_vt, EVT::I8], &operands))
 }
 
 /// `UMUL_LOHI` / `SMUL_LOHI` of two `i32`s as `mulu.l` / `muls.l` with a

@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import sizes  # noqa: E402
+import external_flags  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "tools" / "dosbatch"))
 from dosbatch import BIN  # noqa: E402
@@ -129,7 +130,7 @@ def compile_command(compiler: str, binary: Path, source: Path, opt: str, out: Pa
     if compiler in (OURS, NOPIC):
         return [str(binary / "llrm-cc"), "-m64", *(["-fno-pic"] if compiler == NOPIC else []), *flags], {**os.environ, "LLRM_CC_TARGET": "x86_64-linux"}
     program = os.environ.get("LLRM_PIN_CLANG", "") if compiler == "pin64" else shutil.which(REPORTED[compiler]) or REPORTED[compiler]
-    return [program, "-fno-pic", *flags], dict(os.environ)
+    return [program, *external_flags.flags("x86", ("-fno-pic",)), *flags], dict(os.environ)
 
 
 COMPILE_SECONDS = int(os.environ.get("LLRM_BENCH_COMPILE_TIMEOUT", 600))  # wall clock for one external compile or link

@@ -74,6 +74,7 @@ pub fn install(hooks: &'static dyn BackendHooks) {
 pub fn installed() -> Option<&'static dyn BackendHooks> {
     #[cfg(test)]
     if INSTALLED.get().is_none() {
+        crate::backend::selectiondag::target_names::install(&crate::backend::selectiondag::x86isd::NAMES);
         return Some(&in_tests::TESTS);
     }
     INSTALLED.get().copied()

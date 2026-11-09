@@ -4,7 +4,7 @@ target triple = "aarch64-unknown-linux-gnu"
 declare void @fill(ptr)
 declare i32 @tally(ptr, i32)
 
-define i32 @buffer_frame(i32 %n) {
+define i32 @buffer_frame(i32 %n) "frame-pointer"="non-leaf" {
   %buf = alloca [1024 x i32], align 4
   call void @fill(ptr %buf)
   %r = call i32 @tally(ptr %buf, i32 %n)

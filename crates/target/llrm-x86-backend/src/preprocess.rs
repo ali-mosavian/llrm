@@ -288,20 +288,20 @@ pub fn move_callee_loads(
             continue;
         }
         let opcode = dag.opcode(call);
-        let call_ok = opcode == llrm_codegen::backend::selectiondag::x86isd::CALL
+        let call_ok = opcode == super::x86isd::CALL
             && !facts.slow_two_mem_ops
             && !facts.slow_indirect_call;
-        let tail_ok = opcode == llrm_codegen::backend::selectiondag::x86isd::TC_RETURN
+        let tail_ok = opcode == super::x86isd::TC_RETURN
             && (facts.is_64 || !facts.position_independent);
         if !call_ok && !tail_ok || dag.node(call).ops.len() < 2 {
             continue;
         }
         let mut chain = dag.operand(call, 0);
         let load = dag.operand(call, 1);
-        if !is_callee_load(dag, load, &mut chain, opcode == llrm_codegen::backend::selectiondag::x86isd::CALL) {
+        if !is_callee_load(dag, load, &mut chain, opcode == super::x86isd::CALL) {
             continue;
         }
-        if opcode == llrm_codegen::backend::selectiondag::x86isd::TC_RETURN && !enough_regs(dag, node) {
+        if opcode == super::x86isd::TC_RETURN && !enough_regs(dag, node) {
             continue;
         }
         move_below_orig_chain(dag, load, call, chain);

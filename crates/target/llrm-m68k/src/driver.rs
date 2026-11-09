@@ -21,6 +21,8 @@ pub enum Level {
     O1,
     O2,
     O3,
+    /// -Omax: `Options::aggressive()`.
+    Omax,
     Os,
     Oz,
 }
@@ -28,14 +30,15 @@ pub enum Level {
 impl Level {
     /// The level `-O<text>` names.
     pub fn parse(text: &str) -> Result<Self, String> {
-        Ok(match text {
-            "0" => Self::O0,
-            "" | "1" => Self::O1,
-            "2" => Self::O2,
-            "3" => Self::O3,
-            "s" => Self::Os,
-            "z" => Self::Oz,
-            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Os or -Oz")),
+        use llrm_transforms::pipeline::LevelName as Name;
+        Ok(match Name::parse(text)? {
+            Name::O0 => Self::O0,
+            Name::O1 => Self::O1,
+            Name::O2 => Self::O2,
+            Name::O3 => Self::O3,
+            Name::Omax => Self::Omax,
+            Name::Os => Self::Os,
+            Name::Oz => Self::Oz,
         })
     }
 
@@ -45,77 +48,14 @@ impl Level {
             Self::O1 => MidEnd::basic(),
             Self::O2 => MidEnd::default(),
             Self::O3 => MidEnd::speed(),
+            Self::Omax => MidEnd::aggressive(),
             Self::Os => MidEnd::size(),
             Self::Oz => MidEnd::min_size(),
         }
     }
 }
 
-/// What a driver flag asks of the mid-end past the level: gcc's `-f` pass
-/// flags (`-fno-inline-functions`, `-fno-unroll-loops`...) and
-/// `-fno-inline=NAME`, as `llrm-cc` passes them on.
-#[derive(Clone, Debug, Default)]
-pub struct Policy {
-    passes: Vec<String>,
-    no_inline: Vec<String>,
-}
-
-impl Policy {
-    /// Takes `flag` when it is one of these; false leaves it to the caller.
-    /// `-fexcess-precision` and `-ffloat-store` are taken and change nothing:
-    /// the software float of m68k rounds every operation to its type, so there
-    /// is no wider register to keep a value in.
-    pub fn take(
-        &mut self,
-        flag: &str,
-    ) -> bool {
-        if let Some(name) = flag.strip_prefix("-fno-inline=") {
-            self.no_inline.push(name.to_owned());
-        } else if matches!(flag, "-fexcess-precision=standard" | "-fexcess-precision=fast" | "-ffloat-store" | "-fno-float-store") {
-        } else if llrm_codegen::driver::flags::apply_pass_flag(&mut MidEnd::default(), flag) {
-            self.passes.push(flag.to_owned());
-        } else {
-            return false;
-        }
-        true
-    }
-
-    fn apply(
-        &self,
-        options: &mut MidEnd,
-    ) {
-        for flag in &self.passes {
-            llrm_codegen::driver::flags::apply_pass_flag(options, flag);
-        }
-    }
-
-    /// Each function of `program` that `-fno-inline=` names marked `noinline`;
-    /// a name that no function defines is an error, not a flag that did
-    /// nothing.
-    fn mark(
-        &self,
-        program: &mut Program,
-    ) -> Result<(), String> {
-        for name in &self.no_inline {
-            let mut found = false;
-            for global in program.modules.iter_mut().flat_map(|module| &mut module.globals) {
-                if global.name.as_deref() != Some(name.as_str()) {
-                    continue;
-                }
-                if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
-                    && !function.is_declaration()
-                {
-                    function.attrs.push(llrm_mir::facts::Fact::Inline(llrm_mir::facts::Inlining::Never).carrier());
-                    found = true;
-                }
-            }
-            if !found {
-                return Err(format!("-fno-inline={name}: the program defines no function of that name"));
-            }
-        }
-        Ok(())
-    }
-}
+pub use llrm_codegen::driver::policy::Policy;
 
 /// The CPU `-mcpu=` names.
 pub fn cpu_of(name: &str) -> Result<Cpu, String> {
@@ -271,6 +211,11 @@ fn function_items(
             names.push(global.name.owned().ok_or("an unnamed function")?);
         }
     }
+    // chosen once for the module, not per function (M68K-SIZE-LIBCALL)
+    let backend = Options {
+        libcalls: backend.libcalls.or_else(|| Some(crate::compile::libcalls_for(module, cpu, backend))),
+        ..backend
+    };
     let compile = |pc_calls: bool| -> Result<Vec<(String, Vec<Item>)>, String> {
         names
             .iter()
@@ -282,16 +227,9 @@ fn function_items(
             .collect()
     };
     let near = compile(true)?;
-    let calls = near.iter().flat_map(|(_, items)| items).any(|item| matches!(item, Item::Inst(inst) if inst.opcode == "CALLq"));
-    let bytes: usize = near
-        .iter()
-        .flat_map(|(_, items)| items)
-        .map(|item| match item {
-            Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
-            Item::Bytes(bytes) => bytes.len(),
-            _ => 0,
-        })
-        .sum();
+    let calls =
+        near.iter().flat_map(|(_, items)| items).any(|item| matches!(item, Item::Inst(inst) if inst.opcode == "CALLq"));
+    let bytes: usize = near.iter().map(|(_, items)| crate::compile::items_bytes(items)).sum();
     if calls && bytes > crate::pccall::REACH { compile(false) } else { Ok(near) }
 }
 

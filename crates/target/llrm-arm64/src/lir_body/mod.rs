@@ -419,10 +419,10 @@ fn effects(
     if facts.sets_flags {
         writes.extend(flags.iter().copied());
     }
-    if facts.may_load || facts.may_store {
+    if facts.may_load || facts.may_store || facts.call {
         reads.extend(memory.iter().copied());
     }
-    if facts.may_store {
+    if facts.may_store || facts.call {
         writes.extend(memory.iter().copied());
     }
     (reads, writes)
@@ -447,7 +447,7 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
             let facts = crate::facts::of(op);
             let mut insn = Insn::new(at, None, Some(what), defines.clone(), uses);
             insn.line = block.ops.loc(place);
-            insn.volatile = facts.side_effects;
+            insn.volatile = facts.side_effects || facts.call;
             if facts.early_clobber {
                 insn.early_clobbers = defines;
             }
