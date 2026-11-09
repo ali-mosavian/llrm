@@ -242,3 +242,24 @@ fn a_constant_first_operand_keeps_the_ordinary_forms() {
         }
     }
 }
+
+/// `wide_shift_by_one`: `(u64)a << 32 | v[j]` folded the load into `ora (p),y`
+/// with `a` holding a zero (`ldx #0; txa; ora (rc6),y`), where the load was
+/// `lda (rc6),y`; one instruction more a trip, +196 instructions (2026-11-10).
+#[test]
+fn an_or_or_xor_of_a_zero_accumulator_through_a_pointer_is_the_load() {
+    use llrm_6502::asm::Asm;
+    use llrm_6502::peephole::drop_known_loads;
+    for (operand, want) in [("(rc6),y", "(rc6),y"), ("(rc6)", "(rc6)")] {
+        for op in ["ora", "eor"] {
+            let mut asm = Asm::parse(&format!("f:\n  ldx #0\n  txa\n  ldy #2\n  {op} {operand}\n  sta rc14\n  rts\n"));
+            drop_known_loads(&mut asm);
+            let text = asm.text();
+            assert!(text.contains(&format!("  lda {want}\n")) && !text.contains(op), "{op} {operand}:\n{text}");
+        }
+    }
+    let live = "f:\n  lda rc2\n  ldy #2\n  ora (rc6),y\n  sta rc14\n  rts\n";
+    let mut asm = Asm::parse(live);
+    drop_known_loads(&mut asm);
+    assert_eq!(asm.text(), live, "a is not zero");
+}
