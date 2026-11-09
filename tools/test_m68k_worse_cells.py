@@ -151,7 +151,10 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(self.judge("O1", (90, 210), (80, 200), (120, 100)), "WORSE")
 
     def test_other_levels_have_no_virtual_exception(self):
-        self.assertEqual(self.judge("O2", (100, 150), (80, 200), (120, 100)), "ok")  # 20 B over, 50 clk * 0.5 saved
+        # ahead of gcc by the allowance (20 B over, 50 clk * 0.5 = 25 B allowed) and of clang (20 B under, 10 clk slower = 5 B)
+        self.assertEqual(self.judge("O2", (100, 150), (80, 200), (120, 160)), "ok")
+        # the same cell against a faster clang: 20 B under but 50 clk slower is 25 B at 0.5 B per clk, 5 B past the bar
+        self.assertEqual(self.judge("O2", (100, 150), (80, 200), (120, 100)), "WORSE")
         self.assertEqual(self.judge("Os", (100, 100), (80, 200), (120, 100)), "WORSE")
 
     def test_a_virtual_cell_is_not_counted_worse(self):
