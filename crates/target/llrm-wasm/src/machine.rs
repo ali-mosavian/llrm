@@ -150,6 +150,12 @@ fn legalized(ty: Ty) -> (u32, u32) {
 }
 
 impl Tti for Wasm {
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
     /// `FSQRT` is legal on `f32` and `f64`.
     fn have_fast_sqrt(
         &self,
@@ -166,6 +172,10 @@ impl Tti for Wasm {
     /// several callers (sfm16_dbg -Os: `cmp_bits`, 101 B once or 7 x 105 B).
     /// The pin's `OptSizeThreshold` 50 allows the growth.
     /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-20): the pin inlines it.
+    /// It holds at -O1 too, where the rate is off: 33 of 44 -O1 rows are below
+    /// the pin, 29 147 B in all (jpeg_fixed 22099 vs 26245), none above.
+    /// Executed instructions (informational, wasm has no rate): 27 of 31 rows
+    /// above the pin, at most +14.6% (sfm16_float_f2i), +0.04% in total.
     fn opt_size_inline_by_code_size(&self) -> bool {
         true
     }
@@ -398,6 +408,13 @@ impl Tti for Wasm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DEVIATE LFTR1: the pin's step-one rule cost wasm bytes in
+    /// byte_multiply and variadic; the knob must stay on here.
+    #[test]
+    fn lftr_counts_any_constant_stride() {
+        assert!(Wasm.lftr_any_stride());
+    }
 
     /// A `zext` of a loaded byte cost one unit, where the pin prices it at none
     /// (`i32.load8_u` is legal): crc's rolled loop read 387 against the pin's

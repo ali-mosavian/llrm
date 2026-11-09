@@ -210,3 +210,51 @@ def test_a_program_whose_flags_all_force_a_32_bit_x86_mode_is_not_run_on_z80_or_
         assert not any(ct.applies(t, source) for t in ("z80-sdcc", "6502-sim65"))
         assert ct.applies("arm64-linux", source) and ct.applies("x86_32-linux", source)
     assert not ct.x86_32_only("// flags: -O2 -m32 | -O2 -m16\nint x;\n")
+
+
+def test_a_program_aligning_a_local_past_a_byte_stack_is_not_run_on_z80():
+    """z80 passed over_aligned_local_after_even_pushes on a folded `ptr & 15` (frames keep one byte): now a named refusal."""
+    source = (RUN / "over_aligned_local_after_even_pushes.c").read_text()
+    assert not ct.applies("z80-sdcc", source)
+    assert ct.applies("x86_64-linux", source) and ct.applies("m68k-68020", source) and ct.applies("wasm32", source)
+
+
+def test_programs_that_assume_a_32_bit_int_or_an_80_bit_long_double_are_not_run_on_6502_or_z80():
+    """6502 reported WRONG for bitcount_u32 (15 want 31), bitcount_idioms and long_double_decimal_literal (0x999A want 0xCCCD, the
+    double's low word) at both levels: a 16-bit `unsigned` and a 64-bit long double answered correctly for their types, and the
+    sweep counted three unmeasured cells as miscompiles. Only 6502 and z80 leave long_double_decimal_literal: m68k measures it
+    against its own `.m68k.out` and arm64 and wasm32 keep it as before."""
+    for name in ("bitcount_u32", "bitcount_idioms", "long_double_decimal_literal"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not any(ct.applies(t, source) for t in ("6502-sim65", "z80-sdcc")), name
+        assert ct.applies("x86_64-linux", source), name
+    literal = (RUN / "long_double_decimal_literal.c").read_text()
+    assert all(ct.applies(t, literal) for t in ("m68k-68020", "arm64-linux", "wasm32", "x86_16-dos", "x86_32-linux"))
+    assert ct.applies("arm64-linux", (RUN / "bitcount_u32.c").read_text())
+
+
+NON_X86 = ("arm64-linux", "m68k-68020", "wasm32", "z80-sdcc", "6502-cc65", "x86_64-linux")
+
+
+def test_an_untagged_program_in_a_dos_only_directory_is_for_dos_only():
+    """arm64's sweep counted the 21 untagged tests/fixtures/callconv files, runtime/qb/dos and tests/cc/models programs as failures: only 58 of 861 C files carry a targets line."""
+    source = "int f(void){return 0;}\n"
+    for path in ("tests/fixtures/callconv/c/pncallee.c", "runtime/qb/dos/m16/far.c", "tests/cc/models/pointers.c"):
+        assert not any(ct.applies(t, source, Path(path)) for t in NON_X86), path
+        assert ct.applies("x86_16-dos", source, Path(path)) and ct.applies("x86_32-wat", source, Path(path)), path
+
+
+def test_a_dos_marker_in_an_untagged_source_makes_it_dos_only():
+    for source in ("int f(void){ __asm { mov ax, 1 } return 0; }\n", "QB_FAR char *p;\n", "char __far *p;\n", "#include <dos.h>\n", "void f(void){ __emit__(0x90); }\n"):
+        assert not any(ct.applies(t, source) for t in NON_X86), source
+        assert ct.applies("x86_16-dos", source), source
+
+
+def test_an_explicit_targets_line_beats_the_directory_default():
+    source = "// targets: !z80-sdcc\nint f(void){return 0;}\n"
+    assert ct.applies("arm64-linux", source, Path("tests/fixtures/callconv/c/x.c"))
+    assert not ct.applies("z80-sdcc", source, Path("tests/fixtures/callconv/c/x.c"))
+
+
+def test_a_plain_untagged_program_outside_those_directories_still_applies_everywhere():
+    assert all(ct.applies(t, "int f(void){return 0;}\n", Path("tests/run/c/plain.c")) for t in NON_X86)

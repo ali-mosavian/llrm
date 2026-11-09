@@ -15,7 +15,8 @@ fn after(code: &str) -> String {
 #[test]
 fn a_zero_trip_path_returns_its_constant() {
     let before = "  ldx rc6\n  bne b21\nb23:\n  lda #0\n  sta rc7\n  jmp b3\nb21:\n  lda #0\n  sta rc7\n  tay\nb2:\n  lda (rc4),y\n  clc\n  adc rc7\n  sta rc7\n  iny\n  cpy rc6\n  bne b2\nb3:\n  lda rc7\n  rts\n";
-    let want = "  ldx rc6\n  bne b21\nb23:\n  lda #0\n  rts\nb21:\n  lda #0\n  sta rc7\n  tay\nb2:\n  lda (rc4),y\n  clc\n  adc rc7\n  sta rc7\n  iny\n  cpy rc6\n  bne b2\nb3:\n  lda rc7\n  rts\n";
+    // `b3` is reached by the loop alone now: `a` holds `rc7` there
+    let want = "  ldx rc6\n  bne b21\nb23:\n  lda #0\n  rts\nb21:\n  lda #0\n  sta rc7\n  tay\nb2:\n  lda (rc4),y\n  clc\n  adc rc7\n  sta rc7\n  iny\n  cpy rc6\n  bne b2\nb3:\n  rts\n";
     assert_eq!(after(before), want);
 }
 

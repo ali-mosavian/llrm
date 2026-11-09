@@ -42,6 +42,26 @@ impl Machine for M68kMachine {
         Some(Rc::new(M68k::for_cpu(self.cpu)))
     }
 
+    /// Frames keep what the shipped targets ask for (m68k Linux, AmigaOS and
+    /// TOS: 4) and nothing realigns them (`frame.rs`): an object asking more
+    /// is clamped to it, so the optimizer never folds `ptr & 7` to 0 on a
+    /// frame that gives an address ending in 4.
+    fn kept_stack_align(&self) -> Option<u64> {
+        Some(crate::frame::SHIPPED_STACK_ALIGN as u64)
+    }
+
+    /// The datalayout gives `double` an 8-byte alignment and `i64` an 8-byte
+    /// preferred one, so locals of those are accepted (and clamped); an
+    /// object aligned further needs the realignment the pin does and this
+    /// target does not translate yet, and is refused by name.
+    fn max_alloca_align(&self) -> Option<u64> {
+        Some(8)
+    }
+
+    fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
+        Some(Rc::new(crate::lowering::M68kLowering))
+    }
+
     fn spaces(&self) -> Spaces {
         Spaces::FLAT
     }
@@ -85,6 +105,13 @@ pub struct M68k {
     /// The processor the code is for; the 68000 where none is given.
     pub cpu: crate::dagisel::hooks::Cpu,
     /// The 68020's scaled index, `(d8, An, Xn*2/4/8)`; the 68000 has none.
+    ///
+    /// DEVIATE M68K-TTI-SCALED (owner m68k, review 2026-12-20): the pin's
+    /// `isLegalAddressingMode` is the base class's, which allows `2*r` alone
+    /// and no scale of 4 or 8
+    /// ([TargetLoweringBase.cpp#L2139-L2171](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TargetLoweringBase.cpp#L2139-L2171));
+    /// the 68020 addresses `(d8, An, Xn*2/4/8)` in one instruction. A hardware
+    /// fact, so the exit is the pin giving M68k its own hook.
     pub scaled_index: bool,
     /// `CodeSize` in bytes of code, which the inliner counts a callee with
     /// ([`Tti::inline_size_view`]); the other passes' thresholds are in the
@@ -100,6 +127,12 @@ impl M68k {
 }
 
 impl Tti for M68k {
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
     fn opt_size_inline_byte_gate(&self) -> bool {
         true
     }
@@ -191,6 +224,21 @@ impl Tti for M68k {
         _optsize: bool,
     ) -> u32 {
         1
+    }
+
+    /// DEVIATE M68K-LSR-FRAME (owner m68k-lsr-addressing, exit none while the
+    /// backend folds `(d8,%sp,Xn)`, `frameindexed.rs`): the pin's M68k has no
+    /// TTI, so its LSR keeps one pointer IV per stack array (`llc
+    /// -print-after=loop-reduce`, d1106deb); its x86 shares one index, as LU6
+    /// does here. A stack slot is `%sp` and a displacement, no register.
+    ///
+    /// Rows, owner m68k-lsr-addressing, exit 2026-11-30, fix a general
+    /// index-versus-pointer cost via Tti (no per-program patch):
+    /// - M68K-LSR-IDX-CLOCKS: `(d8,An,Xn)` is 14 clk against 8 for `(An)`;
+    ///   bintree O1 +0.06/+0.18%, frameless +0.05..+0.13%.
+    /// - M68K-LSR-D2U64-BYTES: double_to_uint64 +8..+26 B.
+    fn frame_address_is_free(&self) -> bool {
+        true
     }
 
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
@@ -363,5 +411,16 @@ impl Tti for M68k {
             return Cost::EXPENSIVE;
         }
         Basic.arithmetic_cost(op, ty, kind, left, right)
+    }
+}
+
+#[cfg(test)]
+mod lftr_tests {
+    use super::*;
+    /// DEVIATE LFTR1: following the pin's step-one rule left byte-loops of
+    /// stride 2..8 unreduced and cost bytes; the knob must stay on here.
+    #[test]
+    fn lftr_counts_any_constant_stride() {
+        assert!(M68k::default().lftr_any_stride());
     }
 }

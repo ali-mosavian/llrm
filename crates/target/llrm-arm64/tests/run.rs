@@ -107,6 +107,13 @@ fn a_loop_and_a_call() {
     compare("loop");
 }
 
+/// Stack arguments of a call after a dynamic `alloca` were stored at `[sp]`, over the array: the program printed 826
+/// where the pinned clang's build printed 1213.
+#[test]
+fn a_call_with_stack_arguments_after_a_dynamic_alloca_keeps_the_array() {
+    compare("vla_call");
+}
+
 #[test]
 fn recursion() {
     compare("fib");
