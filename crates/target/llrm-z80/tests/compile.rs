@@ -2259,6 +2259,17 @@ fn is_constant_is_lowered_at_o0() {
     assert!(out.contains("ret"), "{out}");
 }
 
+/// `llvm.frameaddress` has no lowering; it was tail called as a symbol named
+/// `llvm$2eframeaddress$2ep0` (silent wrong code). Now a refusal naming it.
+#[test]
+fn an_intrinsic_nobody_lowered_is_refused_by_name() {
+    let ir = include_str!("kernels/ir/frameaddress_refused.ll");
+    for level in [Level::O0, Level::O2] {
+        let why = text(ir, "f", 0, &Request::new(level)).expect_err("a refusal");
+        assert!(why.contains("llvm.frameaddress"), "{level:?}: {why}");
+    }
+}
+
 /// A call with 18 B of stack arguments was refused ("18 bytes of stack
 /// arguments"; five programs). The area is opened by one sum through IY and
 /// not released before the return that restores SP from IX.
@@ -2269,6 +2280,28 @@ fn a_large_stack_argument_area_is_one_sum_not_a_refusal() {
         let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
         assert!(out.contains("ld iy, #-18") && out.contains("add iy, sp"), "{level:?}: {out}");
         assert!(!out.contains("push bc"), "{level:?}: {out}");
+    }
+}
+
+/// A function with `...` was refused ("CannotSelect VAStart", then "VAEnd"; `variadic.c`, `long_double_variadic.c`),
+/// and `va_start` is the address of the first unnamed argument: above the return address and the saved ix.
+#[test]
+fn va_start_names_the_first_unnamed_argument_on_the_stack() {
+    let ir = include_str!("kernels/ir/variadic_unnamed_on_stack.ll");
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let callee = text(ir, "first", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(callee.contains("ld e, 4(ix)") && callee.contains("ld d, 5(ix)"), "{level:?}: {callee}");
+    }
+}
+
+/// The unnamed words of a call passed in the registers the named ones left free, where the callee reads them from the
+/// stack. Both go on the stack, pushed in reverse, though the second would fit in de.
+#[test]
+fn the_unnamed_arguments_of_a_variadic_call_go_on_the_stack() {
+    let ir = include_str!("kernels/ir/variadic_unnamed_on_stack.ll");
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let caller = text(ir, "caller", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert_eq!(caller.matches("push").count(), 2, "{level:?}: both unnamed words are pushed\n{caller}");
     }
 }
 
