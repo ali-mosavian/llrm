@@ -300,6 +300,20 @@ mod tests {
         assert_eq!(routine_clocks("call __call_iy", &[]), 8);
     }
 
+    /// What the compiler's decisions read is `expand::price_emitted`, not `routine_clocks`: a function that calls
+    /// `__mulhi3` in a loop must cost the routine's clocks there (it cost the 17 T call: 2.4M T priced, 5.8M with
+    /// the divides and multiplies of c_short_3 counted).
+    #[test]
+    fn a_function_calling_a_short_routine_is_priced_with_its_clocks() {
+        let line = |text: &str| Line::Inst(text.to_owned());
+        let with = |routine: &str| {
+            crate::expand::price_emitted(&[line("ld de, #100"), line(&format!("call {routine}")), line("ret")], true).1
+        };
+        let (multiply, unknown) = (with("__mulhi3"), with("_unknown"));
+        assert_eq!(multiply - unknown, u64::from(routine_clocks("call __mulhi3", &["ld de, #100"])), "{multiply} vs {unknown}");
+        assert!(multiply - unknown > 400);
+    }
+
     /// A routine added to `z80_rt.s` is priced by clocks.py and `runtime_size.rs`, internal, or named with an owner
     /// and a date in `UNPRICED`: no called routine reads as free again (the long divides and `__mulhi3` did).
     #[test]
