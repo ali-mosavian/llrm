@@ -1759,9 +1759,10 @@ define i64 @f(i64 %d) {
 
 /// rectwo -O2 at m32: gcc's depth-8 copies of `paths` into itself made 1965 B
 /// that ran 1449397 clk (gcc 849 B, 555823 clk). Depth 2 at -O2 is 277 B and
-/// 347314 clk; -O3 keeps gcc's 8.
+/// 347314 clk. -O3 had gcc's 8 and lost to -O2 on fib, frames and rectwo
+/// (REC-8): two at both.
 #[test]
-fn at_m32_the_copies_of_a_recursive_function_are_two_deep_at_o2_and_eight_at_o3() {
+fn at_m32_the_copies_of_a_recursive_function_are_two_deep_at_o2_and_o3() {
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
     let target = cpu.target();
     let tti = target.tti();
@@ -1770,7 +1771,7 @@ fn at_m32_the_copies_of_a_recursive_function_are_two_deep_at_o2_and_eight_at_o3(
             .expect("m32 copies recursion")
             .depth
     };
-    assert_eq!((depth(false), depth(true)), (2, 8));
+    assert_eq!((depth(false), depth(true)), (2, 2));
 }
 
 /// `(x & 0x7f800000) == 0x7f800000` (a float's exponent all ones) at m32 was
