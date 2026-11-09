@@ -185,6 +185,9 @@ pub struct Insn {
     /// A load of memory that never changes (a constant global:
     /// `isDereferenceableInvariantLoad`).
     pub invariant: bool,
+    /// What its load or store reaches (`MachineMemOperand`), where the target
+    /// knows; none: it may reach anything (`Insn::may_alias`).
+    pub memory: Option<crate::model::memref::MemRef>,
     /// A return that reads only its `requires` and the epilogue's registers.
     pub reads_complete: bool,
     /// It joins two words into one dword (DEVIATE PAIR1: the `or`/`shrd` of a
@@ -572,6 +575,7 @@ impl Insn {
             rematerialized,
             volatile,
             invariant,
+            memory,
             reads_complete,
             pair,
             disjoint,
@@ -610,6 +614,7 @@ impl Insn {
             rematerialized: rematerialized.clone(),
             volatile: volatile.clone(),
             invariant: invariant.clone(),
+            memory: memory.clone(),
             reads_complete: reads_complete.clone(),
             pair: pair.clone(),
             disjoint: disjoint.clone(),
@@ -809,6 +814,7 @@ impl Insn {
             rematerialized: false,
             volatile: false,
             invariant: false,
+            memory: None,
             reads_complete: false,
             pair: None,
             disjoint: false,
@@ -879,6 +885,23 @@ impl Insn {
     #[must_use]
     pub fn volatile(&self) -> bool {
         self.volatile
+    }
+
+    /// `MachineInstr::mayAlias` of two memory accesses (MachineInstr.cpp#L1558):
+    /// a call may; two loads do not; an access whose object a target did not say
+    /// may reach the other's. Ask it of accesses only.
+    #[must_use]
+    pub fn may_alias(
+        &self,
+        other: &Insn,
+    ) -> bool {
+        if self.call.is_some() || other.call.is_some() {
+            return true;
+        }
+        match (&self.memory, &other.memory) {
+            (Some(one), Some(two)) => (one.store || two.store) && one.may_alias(two),
+            _ => true,
+        }
     }
 
     /// Whether it loads memory that never changes.
@@ -1525,6 +1548,10 @@ pub struct LirBody {
     /// The values (by number) that arrive in a cell above the frame, with the
     /// cell's displacement and size: arguments the caller pushed.
     pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
+    /// The names the addresses and memory operands of this body refer to, by
+    /// index (`LirAddr::index`, `Object::Global`): kept with the body so a copy
+    /// made by a shared phase still says what they name.
+    pub symbols: Arc<Vec<String>>,
     /// The argument bytes the callee of each indirect call pops, by the call's
     /// address (`callframe`'s `call_frame_destroy N, M`): the stack depth after
     /// it, which `masm` cannot read from a call it does not name.
@@ -1726,6 +1753,7 @@ impl LirBody {
             notes: Arc::default(),
             placed: Arc::default(),
             arguments_in_cells: Arc::default(),
+            symbols: Arc::default(),
             call_pops: Arc::default(),
             facts: Default::default(),
         }
@@ -1802,6 +1830,7 @@ impl LirBody {
             notes: Arc::clone(&self.notes),
             placed: Arc::clone(&self.placed),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
+            symbols: Arc::clone(&self.symbols),
             call_pops: Arc::clone(&self.call_pops),
             facts: self.facts.clone(),
         }

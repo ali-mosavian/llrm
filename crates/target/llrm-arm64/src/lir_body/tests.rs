@@ -538,8 +538,8 @@ fn a_call_and_a_trap_are_barriers() {
     assert!(insns[0].volatile && insns[1].volatile);
 }
 
-/// The side tables stand in for the instruction's own memory operand: a body
-/// rebuilt without them refuses a load rather than inventing one (DEVIATE 5).
+/// A load whose instruction carries no memory operand is refused on the way
+/// back rather than given an invented one.
 #[test]
 fn a_load_rebuilt_without_its_memory_operand_is_refused() {
     let load = Inst::Load {
@@ -549,9 +549,43 @@ fn a_load_rebuilt_without_its_memory_operand_is_refused() {
     };
     let function = function(vec![Op::I(load)]);
     let mut lowered = to_lir(&function).expect("maps");
-    lowered.memory_operands.clear();
+    lowered.body.blocks[0].insns.edit(|insns| {
+        for one in insns.iter_mut() {
+            let mut bare = (**one).clone();
+            bare.memory = None;
+            *one = Arc::new(bare);
+        }
+    });
     let Err(Unmapped(why)) = from_lir(&lowered, &function) else { panic!("rebuilt a load with no memory operand") };
     assert!(why.starts_with("LDR"), "{why}");
+}
+
+/// The shared scheduler's graph ordered a load after every earlier store (the
+/// memory lane is all arm64 stated), so a load from one frame slot waited for
+/// a store to another. The instruction's own memory operand now tells them
+/// apart; the same slot stays ordered.
+#[test]
+fn a_load_from_another_slot_is_not_ordered_after_a_store() {
+    let at = |slot: u32| MemOperand { object: crate::mc::inst::MemObject::Slot(slot), offset: Some(0), volatile: false };
+    let store = |slot: u32| {
+        Op::I(Inst::Store {
+            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: g(0) },
+            addr: Addr::Offset { base: g(1), imm: 0 },
+            mmo: at(slot),
+        })
+    };
+    let load = |slot: u32, into: u32| {
+        Op::I(Inst::Load {
+            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: g(into) },
+            addr: Addr::Offset { base: g(1), imm: 0 },
+            mmo: at(slot),
+        })
+    };
+    let lowered = to_lir(&function(vec![store(1), load(2, 2), load(1, 3)])).expect("maps");
+    let _file = enter(Regs(&crate::REGISTER_INFO));
+    let graph = llrm_codegen::backend::machinesched::graph(&lowered.body.blocks[0].insns, Regs(&crate::REGISTER_INFO), 64);
+    assert!(graph.preds[1].is_empty(), "a load of slot 2 waits for a store to slot 1: {:?}", graph.preds);
+    assert_eq!(graph.preds[2], [0], "a load of slot 1 follows the store to it");
 }
 
 /// An arm64 register prints by its file's name. `Debug` was iced's, so `x0`
