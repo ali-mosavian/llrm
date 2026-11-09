@@ -1591,10 +1591,16 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(if c2 == 1 { dag.get_zext_or_trunc(not, vt) } else { dag.get_sext_or_trunc(not, vt) });
         }
         if c1.wrapping_sub(1) & mask == c2 {
-            // DEVIATE SC-NEG1 (owner m68k-lsr-addressing, exit none): where a
-            // true boolean is all ones, `zext c` costs a mask (`Scc; and #1`),
+            // DEVIATE SC-NEG1 (owner m68k-lsr-addressing, review 2026-12-20; ends
+            // if the pin's M68k lowers a select of constants itself or
+            // `convertSelectOfConstantsToMath` is answered per target): where
+            // a true boolean is all ones, `zext c` costs a mask (`Scc; and #1`),
             // and `sext (not c)` is the inverted `Scc` with no mask:
-            // `c ? C : C-1` is `C + sext (!c)`, the pin's own sext arm below.
+            // `c ? C : C-1` is `C + sext (!c)`. The pin's own forms: the sext
+            // arm ([L13102][sext]) and `or (sext (not c)), C` ([L13122][not]).
+            //
+            // [sext]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13102
+            // [not]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L13122
             // Only in a register-wide type: an expanded one pays the sext's
             // high half (`add` with carry of `zext` is cheaper there).
             if dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrNegativeOne && register_wide {
