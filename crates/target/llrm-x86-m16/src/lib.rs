@@ -700,5 +700,8 @@ mod stack_natural_alignment_tests {
         )
         .unwrap();
         assert_eq!(layout.stack_align, Some(2));
+        // No target has a pin string for this triple, so S is stated here and equals what the frames keep; S may never exceed it, or a pass
+        // raises an alloca past what the frame keeps.
+        assert!(layout.stack_align.is_some_and(|stated| stated <= llrm_target::Target::stack_alignment(&super::M16) as u64));
     }
 }
