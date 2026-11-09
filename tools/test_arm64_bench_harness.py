@@ -148,6 +148,34 @@ class FlagSet(unittest.TestCase):
 
         self.assertNotEqual(flagset.canonical(["-fno-pic"]), flagset.canonical(["-fno-pic", "-fomit-frame-pointer"]))
 
+    def check_gcc(self, flags):
+        with tempfile.NamedTemporaryFile("w", suffix=".flags", delete=False) as handle:
+            handle.write(flags)
+        try:
+            return subprocess.run([sys.executable, os.path.join(HERE, "flagset.py"), "--check-gcc", handle.name], capture_output=True, text=True)
+        finally:
+            os.unlink(handle.name)
+
+    def test_the_gcc_column_flags_are_the_neutral_set_by_membership(self):
+        # check_gcc_flags (#8711): the gcc column takes exactly the neutral set, plus its vectorizer switch on a no-vector column.
+        sys.path.insert(0, os.path.dirname(HERE))
+        import external_flags
+
+        neutral = " ".join(external_flags.flags("arm64", ["-fno-pic", "-fno-pie"], 15))
+        self.assertEqual(self.check_gcc(neutral).returncode, 0)
+        self.assertEqual(self.check_gcc(neutral + " -fno-tree-vectorize").returncode, 0)
+
+    def test_a_gcc_column_with_a_flag_the_neutral_set_lacks_is_refused(self):
+        sys.path.insert(0, os.path.dirname(HERE))
+        import external_flags
+
+        neutral = " ".join(external_flags.flags("arm64", ["-fno-pic", "-fno-pie"], 15))
+        done = self.check_gcc(neutral + " -fno-inline")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("extra ['-fno-inline']", done.stderr)
+        done = self.check_gcc(neutral.replace("-fomit-frame-pointer", ""))
+        self.assertIn("missing ['-fomit-frame-pointer']", done.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -78,3 +78,40 @@ def test_the_real_variants_are_kept():
     ours = {"2": {"p": {"ours": (100, 500)}}}
     out = t.rows(ours, sdcc, {"p": "int main(void) { return 0; }"})
     assert [r[12] for r in out if r[1] == "O2"] == [4] and not refused
+
+
+def test_an_oz_row_bigger_than_its_os_row_is_stale():
+    """loop_fusion Oz read 953 B beside Os 907 B in the 2026-11-09 table; one binary gives Oz no bigger than Os."""
+    ours = {"s": {"a": {"ours": (907, 1)}, "b": {"ours": (5, 1)}}, "z": {"a": {"ours": (953, 1)}, "b": {"ours": (5, 1)}}}
+    assert t.stale_oz(ours) == [("a", 907, 953)]
+    assert t.stale_oz({"s": {"a": {"ours": (907, 1)}}, "z": {"a": {"ours": (901, 1)}}}) == []
+
+
+def test_the_table_is_not_written_from_a_stale_oz_column(tmp_path):
+    for lv, b in (("s", 907), ("z", 953)):
+        d = tmp_path / "ours"
+        d.mkdir(exist_ok=True)
+        (d / f"full.{lv}.tsv").write_text(f"a\tours\t{b}\t1\n")
+    (tmp_path / "sdcc").mkdir()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.c").write_text("int x;")
+    args = [str(tmp_path / "out.tsv"), "--ours", str(tmp_path / "ours"), "--sdcc", str(tmp_path / "sdcc"), "--programs", str(tmp_path / "src")]
+    try:
+        t.main(args)
+        raised = False
+    except SystemExit as stop:
+        raised = stop.code == 1
+    assert raised and not (tmp_path / "out.tsv").exists()
+
+
+def test_an_allowed_stale_oz_table_says_so_in_its_header(tmp_path):
+    for lv, b in (("s", 907), ("z", 953)):
+        d = tmp_path / "ours"
+        d.mkdir(exist_ok=True)
+        (d / f"full.{lv}.tsv").write_text(f"a\tours\t{b}\t1\n")
+    (tmp_path / "sdcc").mkdir()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.c").write_text("int x;")
+    out = tmp_path / "out.tsv"
+    t.main([str(out), "--ours", str(tmp_path / "ours"), "--sdcc", str(tmp_path / "sdcc"), "--programs", str(tmp_path / "src"), "--allow-stale-oz"])
+    assert "# STALE-OZ ALLOWED: a" in out.read_text().splitlines()
