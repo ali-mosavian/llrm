@@ -59,10 +59,16 @@
 //!   diamond for both halves in MIR (29 B); the DAG makes two CMOV pseudos
 //!   and the second one's `mov -1` sits between them, so the cascade does not
 //!   merge them (33 B). The pin's `f381` is 33 B too (clang -O2 -march=i486),
-//!   so this is pin parity against a luckier base. The scheduler is right
-//!   (traced: `MOV32r0` goes first, held by the live EFLAGS). `f409` (32 B,
-//!   pin 28 B) is the one function above the pin: the CMOV diamond comes
-//!   before the SETCC (cause not traced; sdag-d).
+//!   so head is pin parity and base was a non-pin win (the MIR one-diamond
+//!   expansion, which the pin does not make). External bars (m32 -march=i486,
+//!   tools/external_flags.py cd1e12d510e4) for f381/f383: gcc 13.4 O1 32 B, O2
+//!   43 B; clang O1 33 B, O2 33 B: head is 1 B over the best at O1, level at
+//!   O2; base (29 B) beat both. Exit 2026-11-12: re-add the one-diamond
+//!   expansion for the select of two i64 constants as a priced DEVIATE (or
+//!   the pass the pin uses to keep `mov -1` out of the first CMOV window).
+//!   The scheduler is right (traced: `MOV32r0` goes first, held by the live
+//!   EFLAGS). `f409` (32 B, pin 28 B) is the one function above the pin: the
+//!   CMOV diamond comes before the SETCC (cause not traced; w9 traces).
 //! - I64SEL-2, owner llrm-target-x86-m64 (SD447; oversight 2026-11-09: ties go
 //!   to the pin), exit 2026-11-12: m64 `word_compares` -O1/-O2/-O3 295 -> 309 B,
 //!   `main` 167 -> 173 B (pin 175 B); native instructions 139969 -> 140364
