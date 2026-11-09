@@ -106,6 +106,7 @@ pub struct Cfg {
 }
 
 pub fn cfg(function: &MFunc) -> Cfg {
+    CFGS_BUILT.with(|built| built.set(built.get() + 1));
     let count = function.blocks.len();
     let labels: HashMap<&str, usize> =
         function.blocks.iter().enumerate().map(|(at, one)| (one.label.as_str(), at)).collect();
@@ -267,12 +268,14 @@ pub fn run(
     if function.blocks.len() < 2 && function.blocks.iter().all(|block| block.ops.len() < 3) {
         return;
     }
-    cse(function, optsize);
-    hoist(function);
+    // No stage below adds, removes or retargets a block: the edges stay.
+    let graph = cfg(function);
+    cse(function, &graph, optsize);
+    hoist(function, &graph);
     // What was hoisted from several blocks is one value in the preheader.
-    cse(function, optsize);
-    sink(function);
-    crate::sinkfold::run(function);
+    cse(function, &graph, optsize);
+    sink(function, &graph);
+    crate::sinkfold::run(function, &graph);
     dead_definitions(function);
     non_flag_setting(function);
     redundant_zero_extends(function);
@@ -416,11 +419,13 @@ fn non_flag_setting(function: &mut MFunc) {
 /// skip them do not pay for it (`MachineSink`; a phi's constant is made on its
 /// edge). A block in a loop the maker is not in is no target. A value moves one
 /// step at a time: what it reads goes next, in the following round.
-fn sink(function: &mut MFunc) {
+fn sink(
+    function: &mut MFunc,
+    cfg: &Cfg,
+) {
     for _ in 0..16 {
-        let cfg = cfg(function);
         let definitions = definitions(function);
-        let loops = natural_loops(function, &cfg);
+        let loops = natural_loops(function, cfg);
         let depth = |block: usize| loops.iter().filter(|(_, body)| body.contains(&block)).count();
         let mut readers: HashMap<Reg, Vec<usize>> = HashMap::default();
         for (at, block) in function.blocks.iter().enumerate() {
@@ -449,7 +454,7 @@ fn sink(function: &mut MFunc) {
                 let Some(blocks) = readers.get(&register) else { continue };
                 let mut target = blocks[0];
                 for &reader in &blocks[1..] {
-                    while !dominates(&cfg, target, reader) {
+                    while !dominates(cfg, target, reader) {
                         target = cfg.idom[target];
                     }
                 }
@@ -457,7 +462,7 @@ fn sink(function: &mut MFunc) {
                 // each trip of an inner loop.
                 if target != from
                     && cfg.order.contains(&target)
-                    && dominates(&cfg, from, target)
+                    && dominates(cfg, from, target)
                     && depth(target) <= depth(from)
                 {
                     moves.push((from, index, target));
@@ -622,9 +627,9 @@ fn profitable(
 
 fn cse(
     function: &mut MFunc,
+    cfg: &Cfg,
     optsize: bool,
 ) {
-    let cfg = cfg(function);
     let definitions = definitions(function);
     // The table, scoped by the dominator tree: a block sees what its
     // dominators computed.
@@ -796,10 +801,27 @@ impl Liveness {
     }
 }
 
+thread_local! {
+    static LIVENESS_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static CFGS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has built a [`Cfg`].
+pub fn cfgs_built() -> usize {
+    CFGS_BUILT.with(std::cell::Cell::get)
+}
+
+/// How many times this thread has computed liveness (for the tests that pin
+/// when a stage asks for it).
+pub fn liveness_runs() -> usize {
+    LIVENESS_RUNS.with(std::cell::Cell::get)
+}
+
 pub fn live_in(
     function: &MFunc,
     cfg: &Cfg,
 ) -> Liveness {
+    LIVENESS_RUNS.with(|runs| runs.set(runs.get() + 1));
     let count = function.blocks.len();
     // One walk of the operations: what each reads and writes, by number.
     let (mut index, mut registers): (HashMap<Reg, u32>, Vec<Reg>) = (HashMap::default(), Vec::new());
@@ -1001,11 +1023,13 @@ fn natural_loops(
 }
 
 /// Loop-invariant pure definitions move to the end of the loop's preheader.
-fn hoist(function: &mut MFunc) {
-    let cfg = cfg(function);
+fn hoist(
+    function: &mut MFunc,
+    cfg: &Cfg,
+) {
     let definitions = definitions(function);
-    let live = live_in(function, &cfg);
-    let mut loops = natural_loops(function, &cfg);
+    let live = live_in(function, cfg);
+    let mut loops = natural_loops(function, cfg);
     // Innermost first, so a value hoisted out of an inner loop can go on out of
     // the outer one.
     loops.sort_by_key(|(_, body)| body.len());
@@ -1024,7 +1048,7 @@ fn hoist(function: &mut MFunc) {
         // What the loop would hoist, on a copy, and how much of it fits.
         let mut probe = function.clone();
         let candidates = invariants(&mut probe, &order, &definitions, inside_defs.clone(), None);
-        let chosen = within_pressure(&probe, &order, &candidates, &cfg, &live);
+        let chosen = within_pressure(&probe, &order, &candidates, cfg, &live);
         let hoisted = invariants(function, &order, &definitions, inside_defs, Some(&chosen));
         if hoisted.is_empty() {
             continue;
@@ -1105,6 +1129,60 @@ mod tests {
             MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
         ];
         function
+    }
+
+    /// head -> head.e1 -> head | exit: the back edge's block holds one phi
+    /// copy.
+    fn split_back_edge() -> MFunc {
+        let mut function = MFunc::new("f");
+        let (a, b, c, d) = (64, 65, 66, 67);
+        function.next_register = 70;
+        let cbnz = |target: &str| {
+            Op::I(Inst::CompareBranch {
+                nonzero: true,
+                width: Width::X,
+                rt: Gpr(d),
+                target: Target::Label(target.into()),
+            })
+        };
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(a, 1), movz(b, 2), branch_to("head")].into() },
+            MBlock { label: "head".into(), ops: vec![add(d, a, b), cbnz("head.e1"), branch_to("exit")].into() },
+            MBlock {
+                label: "head.e1".into(),
+                ops: vec![Op::Copy { dst: Reg::Gpr(Gpr(c)), src: Reg::Gpr(Gpr(a)) }, branch_to("head")].into(),
+            },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
+        ];
+        function
+    }
+
+    /// `unsplit_edges` computed liveness for every function at the top of each
+    /// round, 3 of queens' 9 liveness runs, although only an edge that passes
+    /// every other test asks what is live.
+    #[test]
+    fn a_function_with_no_edge_block_computes_no_liveness_to_unsplit_edges() {
+        let mut quiet = function();
+        let before = liveness_runs();
+        unsplit_edges(&mut quiet);
+        assert_eq!(liveness_runs(), before, "liveness computed for a function with no edge block");
+        let mut split = split_back_edge();
+        let before = liveness_runs();
+        unsplit_edges(&mut split);
+        assert_eq!(split.blocks.len(), 3, "the premise: the back edge's block is merged");
+        assert!(liveness_runs() > before, "the premise: a merge asks what is live");
+    }
+
+    /// Every stage of `run` built the block graph again (13 times in queens'
+    /// one function, 0.3 M of its prepass) although none changes the edges.
+    #[test]
+    fn the_prepass_builds_the_block_graph_once_for_its_stages() {
+        let mut function = function();
+        let before = cfgs_built();
+        run(&mut function, false);
+        let built = cfgs_built() - before;
+        // One for `unsplit_edges`' look at the edges, one for the stages.
+        assert!(built <= 2, "{built} block graphs for one function");
     }
 
     /// A value made in the entry and read in the exit is live into the loop
@@ -1246,7 +1324,8 @@ mod tests {
             MBlock { label: "loop".into(), ops: ops.into() },
             MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
         ];
-        hoist(&mut function);
+        let graph = cfg(&function);
+        hoist(&mut function, &graph);
         let made = |block: usize| {
             function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
         };
@@ -1312,7 +1391,8 @@ mod tests {
             MBlock { label: "latch".into(), ops: vec![back(0, "outer"), branch_to("exit")].into() },
             MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
         ];
-        sink(&mut function);
+        let graph = cfg(&function);
+        sink(&mut function, &graph);
         let made = |block: usize| {
             function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
         };
@@ -1426,7 +1506,7 @@ pub fn order_copies(function: &mut MFunc) {
 /// it (the copy's destinations are dead on the other successor). Exit: phi
 /// elimination onto the shared machine function with liveness (dated 11-20),
 /// then this pass goes.
-fn unsplit_edges(function: &mut MFunc) {
+pub fn unsplit_edges(function: &mut MFunc) {
     let is_edge = |label: &str| {
         label.rsplit_once(".e").is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
     };
@@ -1438,7 +1518,8 @@ fn unsplit_edges(function: &mut MFunc) {
     };
     loop {
         let graph = cfg(function);
-        let live = live_in(function, &graph);
+        // Only an edge that passes every other test asks what is live.
+        let mut live: Option<Liveness> = None;
         let found = (0..function.blocks.len()).find_map(|edge| {
             let block = &function.blocks[edge];
             if !is_edge(&block.label) || graph.predecessors[edge].len() != 1 {
@@ -1473,6 +1554,7 @@ fn unsplit_edges(function: &mut MFunc) {
                 return None;
             }
             let touched = defined.clone();
+            let live = live.get_or_insert_with(|| live_in(function, &graph));
             if others.iter().any(|&one| touched.iter().any(|reg| live.contains(one, *reg))) {
                 return None;
             }
