@@ -160,7 +160,7 @@ Estimates, not measurements; CSE comes through the shared flow. Gap card: `~/scr
 - 2026-11-09 attribution: hosted CSE and the pin's direct `CopyFromReg` are one effect (68000 O2 +394 B, 16 of 20 worse cells shared): the pin's MIR shape on private passes tuned on copies (shiftadd, addrroles, loopinc, allocator hints). CSE stays off until they are shape-robust or retired by step 4.
 - 2026-11-12 20:00Z: report (this list, per-pass losses, the verdicts).
 - 2026-11-18: step 4a: shared PhiElimination and TwoAddress hosted (`from_ssa` takes new copies, renamed defs, new vregs); private `eliminate_phis_with`, `fold_reserved_copies`, `commute_tied`, `two_address`, `machine_sink` retired; m68k classes, rules and the omitted-phase list from the target description.
-- 2026-11-24: step 4b: the copy-shape cells re-measured (CSE and `direct_copies` on); the private passes that still lose a cell are made shape-robust or replaced.
+- 2026-11-24: step 4b: the copy-shape cells re-measured (CSE and `direct_copies` on); the private passes that still lose a cell are made shape-robust or replaced. Part of the cost is decided before phi elimination: `addrroles`/`addrarith` put a value in a data register once its copy is gone (nbody), so step 4a does not retire it; the class choice moves to the allocator, as in the pin. The omitted-phase list stays open (x86-only phases inert is unproven: no frame, calls, rules or verifier in the test).
 - 2026-11-30: post-RA copyprop, branch folding, block placement shared.
 - 2026-12-04: frame/epilogue from `FrameRegisters`; replaced private passes deleted; JT-O1-1..3 closed.
 
