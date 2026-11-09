@@ -23,6 +23,8 @@
 //!   branches here reach, the values every edge agrees on stay.
 //! - [`zero_test_through_an_index`]: `cmp #0` of `a` before a branch on zero or
 //!   sign is `tax` (`tay`) when that register and the carry are dead.
+//! - [`compare_through_an_index`]: `txa; cmp m` is `cpx m` when `a` is dead
+//!   after it (likewise `tya`, `cpy`).
 //! - [`drop_zero_compares`]: `cmp #0` (likewise `cpx`, `cpy`) before a branch
 //!   on zero or sign, after an instruction that set those flags from that
 //!   register. Labels between the two do not matter: a path that jumps to one
@@ -138,6 +140,7 @@ pub fn run_with(
     step_in_place(asm);
     shift_in_place(asm);
     load_straight_into_a(asm);
+    compare_through_an_index(asm);
     store_before_transfer(asm);
     drop_cancelling_transfers(asm);
     crate::peephole_cells::carry_stays_in_the_flag(asm);
@@ -777,6 +780,36 @@ pub fn zero_test_through_an_index(asm: &mut Asm) {
         if let Some((_, transfer)) = free {
             asm.lines[at] = Line::Inst(Inst { op: transfer, operand: Operand::None, place });
         }
+    }
+}
+
+/// `txa; cmp m` (likewise `tya`, `cpy`) with `a` dead after the compare:
+/// `cpx m` sets the same flags in a byte less and 2 clocks fewer. The compare
+/// of a value kept in an index register is staged through `a`, the one
+/// register the instruction selection compares in.
+pub fn compare_through_an_index(asm: &mut Asm) {
+    let mut at = 1;
+    while at < asm.lines.len() {
+        at += 1;
+        let (Line::Inst(transfer), Line::Inst(compare)) = (&asm.lines[at - 2], &asm.lines[at - 1]) else { continue };
+        let index = match transfer.op {
+            Op::Txa => Op::Cpx,
+            Op::Tya => Op::Cpy,
+            _ => continue,
+        };
+        // `cpx`/`cpy` have no indexed or indirect form
+        if compare.op != Op::Cmp || !matches!(compare.operand, Operand::Imm(_)) && !compare.operand.is_cell() {
+            continue;
+        }
+        let exits = Exits::of(asm);
+        if !dead_from(&asm.lines, at, Registers::A, &mut HashSet::default(), exits) {
+            continue;
+        }
+        let place = compare.place;
+        let operand = compare.operand.clone();
+        asm.lines[at - 1] = Line::Inst(Inst { op: index, operand, place });
+        asm.lines.remove(at - 2);
+        at -= 1;
     }
 }
 
@@ -1610,8 +1643,10 @@ pub(crate) fn dead_from(
                 (stored == Some(bit) || indexed(if bit == Registers::X { Index::X } else { Index::Y }), false)
             }
             (Op::Cpx | Op::Inx | Op::Dex, Registers::X) | (Op::Cpy | Op::Iny | Op::Dey, Registers::Y) => (true, false),
-            // the other index register's own steps and compares leave it alone
-            (Op::Cpx | Op::Inx | Op::Dex, Registers::Y) | (Op::Cpy | Op::Iny | Op::Dey, Registers::X) => (false, false),
+            // the other registers are left alone by an index register's own
+            // steps and compares
+            (Op::Cpx | Op::Inx | Op::Dex, Registers::Y | Registers::A)
+            | (Op::Cpy | Op::Iny | Op::Dey, Registers::X | Registers::A) => (false, false),
             (Op::Adc | Op::And | Op::Ora | Op::Eor | Op::Sbc | Op::Cmp | Op::Pha, Registers::A) => (true, false),
             (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, Registers::A) => {
                 (matches!(inst.operand, Operand::Acc | Operand::None), false)
