@@ -28,6 +28,19 @@ class Reach(unittest.TestCase):
         self.assertIn("__one:", out)
         self.assertNotIn("__two:", out)
 
+    def test_the_cpu_names_the_targets(self):
+        """`OURS_CPU=65c02` had no effect: every 65C02 A/B ran the 6502 target (none could be run, 2026-11-09)."""
+        with tempfile.NamedTemporaryFile("w", suffix=".s", delete=False) as f:
+            f.write(RUNTIME)
+        code = "import ours_cr; print(ours_cr.CPU, ours_cr.SIM)"
+        here = os.path.dirname(os.path.abspath(__file__))
+        got = {}
+        for cpu in ("6502", "65c02"):
+            env = dict(os.environ, OURS_RT=f.name, OURS_CPU=cpu)
+            got[cpu] = subprocess.run([sys.executable, "-c", code], cwd=here, env=env, capture_output=True, text=True, check=True).stdout.split()
+        os.unlink(f.name)
+        self.assertEqual(got, {"6502": ["6502", "sim6502"], "65c02": ["65c02", "sim65c02"]})
+
 
 if __name__ == "__main__":
     unittest.main()

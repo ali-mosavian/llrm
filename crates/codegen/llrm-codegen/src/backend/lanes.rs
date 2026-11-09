@@ -213,7 +213,7 @@ thread_local! {
 }
 
 /// The register file's lane table in force until this drops.
-pub struct Guard(Option<&'static Table>);
+pub struct Guard(Option<&'static Table>, #[allow(dead_code)] llrm_lir::registers::NamedBy);
 
 impl Drop for Guard {
     fn drop(&mut self) {
@@ -221,12 +221,20 @@ impl Drop for Guard {
     }
 }
 
+/// Whether `regs` is a file the x86 table serves: byte lanes under a root of
+/// four, the shapes `machinecp` has its fixed units for.
+pub fn is_x86(regs: Regs) -> bool {
+    std::ptr::eq(table_of(regs), &*X86)
+}
+
 /// Makes the lanes of `regs`' file the ones this thread reads. A mask made
 /// under one file is not meaningful under another.
 pub fn enter(regs: Regs) -> Guard {
     let table = table_of(regs);
     let was = ACTIVE.with(|active| active.replace((!std::ptr::eq(table, &*X86)).then_some(table)));
-    Guard(was)
+    // A register prints by its file's name, iced's only for x86.
+    let named = llrm_lir::registers::named_by((!std::ptr::eq(table, &*X86)).then_some(regs.0));
+    Guard(was, named)
 }
 
 fn bit(lane: &Lane) -> Option<u32> {
@@ -572,6 +580,19 @@ mod tests {
 
     /// Every x86 file stands under x86's table, so a pass of an x86 target
     /// reads the lanes it always did.
+    #[test]
+    fn an_x86_register_is_as_wide_in_the_file_as_iced_says() {
+        // `peephole::_lanes` sizes a register by its file; the x86 numbers must
+        // not move by it.
+        for regs in
+            [Regs(&llrm_x86_m16::REGISTER_INFO), Regs(&llrm_x86_m32::REGISTER_INFO), Regs(&llrm_x86_m64::REGISTER_INFO)]
+        {
+            for (id, entry) in regs.entries().filter(|(_, entry)| entry.classes & llrm_lir::registers::class::INT != 0) {
+                assert_eq!(regs.bytes(id), Some(id.size() as i64), "{id:?}");
+            }
+        }
+    }
+
     #[test]
     fn an_x86_file_enters_the_x86_table() {
         for regs in
