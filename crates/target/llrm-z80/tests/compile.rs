@@ -2259,6 +2259,17 @@ fn is_constant_is_lowered_at_o0() {
     assert!(out.contains("ret"), "{out}");
 }
 
+/// `llvm.frameaddress` has no lowering; it was tail called as a symbol named
+/// `llvm$2eframeaddress$2ep0` (silent wrong code). Now a refusal naming it.
+#[test]
+fn an_intrinsic_nobody_lowered_is_refused_by_name() {
+    let ir = include_str!("kernels/ir/frameaddress_refused.ll");
+    for level in [Level::O0, Level::O2] {
+        let why = text(ir, "f", 0, &Request::new(level)).expect_err("a refusal");
+        assert!(why.contains("llvm.frameaddress"), "{level:?}: {why}");
+    }
+}
+
 /// A call with 18 B of stack arguments was refused ("18 bytes of stack
 /// arguments"; five programs). The area is opened by one sum through IY and
 /// not released before the return that restores SP from IX.

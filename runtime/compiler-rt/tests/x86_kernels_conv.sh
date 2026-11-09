@@ -1,8 +1,10 @@
 #!/bin/bash
-# usage: [SF_CFG=x86_m32] tests/x86_kernels_conv.sh [NV] -> kernels x_{sf,crt,sfp}_{cmp,floatsi,fixsi}: binary32 compare (__lesf2), int to float and float to int, ours / compiler-rt
+# usage: SF_CFG=x86_m32 tests/x86_kernels_conv.sh [NV] -> kernels x_{sf,crt,sfp}_{cmp,floatsi,fixsi}: binary32 compare (__lesf2), int to float and float to int, ours / compiler-rt
 # / libgcc soft-fp over the vectors of tests/gen_vectors.c, in crates/target/llrm-x86-m32/vsgcc/kernels/. Their .out must agree: the same function.
 set -e
 cd "$(dirname "$0")/.."
+# Without the target's config the compare entries are seven full copies in every compiler (x_sf_* read +100 B over gcc for it).
+[ -n "${SF_CFG-}" ] || { echo "x86_kernels_conv.sh: SF_CFG=x86_m32 is required (kernels built without the config duplicate the compare wrappers)" >&2; exit 2; }
 NV=${1:-400}; SF_CFG=${SF_CFG-}; [ -n "$SF_CFG" ] && SF_CFG=$(sed -E 's/\buint(32|64)_t\b/sfu\1/g' config/$SF_CFG/config.h); export SF_CFG
 K=$(cd ../../crates/target/llrm-x86-m32/vsgcc/kernels && pwd); T=$(mktemp -d); trap 'rm -r $T' EXIT
 P=/opt/llrm-pin/bin/clang; CRT=${COMPILER_RT:-$HOME/scratch/llvm-src-m16/compiler-rt/lib/builtins}; S=${LIBGCC_SRC:-$HOME/scratch/sf-libgcc-src/libgcc}
