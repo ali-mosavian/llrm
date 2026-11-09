@@ -69,8 +69,8 @@ def cache_dir(cc: str) -> Path:
     return base / digest.hexdigest()[:12]
 
 
-def build_support(cc: str, root: str, cpu: str, cache: Path, jobs: int) -> list[str]:
-    """The stubs and the compiler-rt archive for CPU, built once per compiler binary: the link arguments after the program's object."""
+def build_support(cc: str, root: str, cpu: str, cache: Path, jobs: int, level: str = "O2") -> list[str]:
+    """The stubs and the compiler-rt archive for CPU, built at LEVEL once per compiler binary: the link arguments after the program's object."""
     cache.mkdir(parents=True, exist_ok=True)
     env = tool_env(root)
     stubs = []
@@ -85,15 +85,15 @@ def build_support(cc: str, root: str, cpu: str, cache: Path, jobs: int) -> list[
             if built.returncode != 0:
                 raise SystemExit(f"m68k_exec_sweep: stub {name} does not build: {built.stderr}")
         stubs.append(str(obj))
-    archive = cache / f"compiler-rt_{cpu}.a"
+    archive = cache / f"compiler-rt_{cpu}_{level}.a"
     if not archive.exists():
         sources = sorted([*RUNTIME.glob("lib/*/*.c"), *RUNTIME.glob("lib/fp/*/*.c")])
         cenv = {**env, **llrmbin.cc_environment(), "LLRM_CC_TARGET": f"m68k-{cpu}"}
 
         def compile_one(src: Path) -> str | None:
-            obj = cache / f"rt_{cpu}_{src.parent.name}_{src.stem}.o"
+            obj = cache / f"rt_{cpu}_{level}_{src.parent.name}_{src.stem}.o"
             run = subprocess.run(
-                [cc, "-O2", "-w", "-c", "-o", str(obj), "-I", str(RUNTIME / "include"), "-I", str(RUNTIME / "config/m68k"), str(src)],
+                [cc, f"-{level}", "-w", "-c", "-o", str(obj), "-I", str(RUNTIME / "include"), "-I", str(RUNTIME / "config/m68k"), str(src)],
                 capture_output=True, text=True, env=cenv, timeout=TIMEOUT,
             )
             return str(obj) if run.returncode == 0 else None
