@@ -140,9 +140,12 @@ pub fn commute_to_the_dying_source(function: &mut MFunction) {
             // the other source dies here; the first is read again later in the
             // block or elsewhere (made in this block: a constant
             // hoisted out of a loop is read every trip)
+            // by an instruction that can make it in `hl`: a copy of a live
+            // value would move into `hl` where the unswapped form needs none
             let made_here = block.insts[..at]
                 .iter()
-                .any(|i| i.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(w)) if *w == dying)));
+                .find(|i| i.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(w)) if *w == dying)))
+                .is_some_and(|i| i.kind != Kind::Copy);
             let dies = made_here && reads.get(&dying) == Some(&1) && defs.get(&dying) == Some(&1);
             let after = reads_in(&block.insts[at + 1..], kept) > 0 || live_out[b].contains(&kept);
             // a call after it takes every register: the first source is in the
