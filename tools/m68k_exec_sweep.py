@@ -93,7 +93,7 @@ def build_support(cc: str, root: str, cpu: str, cache: Path, jobs: int, level: s
         def compile_one(src: Path) -> str | None:
             obj = cache / f"rt_{cpu}_{level}_{src.parent.name}_{src.stem}.o"
             run = subprocess.run(
-                [cc, f"-{level}", "-w", "-c", "-o", str(obj), "-I", str(RUNTIME / "include"), "-I", str(RUNTIME / "config/m68k"), str(src)],
+                [cc, f"-{level}", "-w", "-c", "-o", str(obj), "-I", str(RUNTIME / "include"), "-I", str(RUNTIME / "config/m68k"), "-include", str(RUNTIME / "config/m68k/config.h"), str(src)],
                 capture_output=True, text=True, env=cenv, timeout=TIMEOUT,
             )
             return str(obj) if run.returncode == 0 else None
