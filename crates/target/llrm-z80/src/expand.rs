@@ -2929,8 +2929,14 @@ fn tail_calls(function: &MFunction) -> MFunction {
         let falls = !returns && n >= 1 && falls_into_return[index] && (bare_adjust(&insts[n - 1]) || insts[n - 1].call);
         let end = n + usize::from(falls);
         if end >= 2 && (returns || falls) {
-            let at = if bare_adjust(&insts[end - 2]) { end - 3 } else { end - 2 };
-            if at < n && insts[at].call && insts[at].kind == Kind::Op("CALL") && (at == end - 2 || at == end - 3) {
+            // a block of only the bare adjust, falling into the return, has no call before it
+            let at = if bare_adjust(&insts[end - 2]) { end.checked_sub(3) } else { Some(end - 2) };
+            if let Some(at) = at
+                && at < n
+                && insts[at].call
+                && insts[at].kind == Kind::Op("CALL")
+                && (at == end - 2 || at == end - 3)
+            {
                 let symbol = insts[at].operands.first().cloned();
                 if let Some(symbol @ Operand::Symbol(..)) = symbol {
                     // the call's argument registers stay read: the copies that
@@ -3027,7 +3033,7 @@ mod tests {
     /// `forward_high_bytes` cannot fuse): idioms -Oz +1 B and 24 T over `ld c, h; ld b, #0; srl c` x7.
     #[test]
     fn a_word_shifted_by_a_byte_and_more_clears_the_pair_next_to_the_copy() {
-        let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n@g = global i16 0\n\
+        let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n@g = global i16 0\n\
                   define i8 @f(i8 %a, i16 %x) {\n  %s = lshr i16 %x, 15\n  %t = add i16 %s, %x\n\
                   store volatile i16 %t, ptr @g\n  %r = add i8 %a, 1\n  ret i8 %r\n}\n";
         let out = crate::compile::text(ir, "f", 0, &crate::driver::Request::new(crate::driver::Level::Oz)).unwrap();

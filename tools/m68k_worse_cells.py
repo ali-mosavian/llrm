@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Count the m68k matrix cells where ours is worse than gcc or clang, strictly (no tolerance).
 
-Os: bytes. O2 and above: bytes over, minus the per-CPU allowance (B per clock saved, read from
+O1: strict, bytes and clocks (worse on either axis). Os: bytes. O2 and O3: bytes over, minus the per-CPU allowance (B per clock saved, read from
 the tsv header) times the clocks saved. A cell is judged against every external number present (gcc, clang or both): a
 cell with no clang number (it calls a runtime) is still judged against gcc.
 Only a cell with no `ours` or no external number is skipped, and the skipped cells are
@@ -35,6 +35,8 @@ def excess(level: str, rate: float, ours: tuple[int, int | None], other: tuple[i
     extra = ours[0] - other[0]
     if level == "Os" or ours[1] is None or other[1] is None:
         return extra
+    if level == "O1":
+        return max(extra, ours[1] - other[1])
     return extra - rate * (other[1] - ours[1])
 
 
@@ -101,6 +103,17 @@ def missing(lines) -> list[tuple[str, str, str]]:
     return [key for key in keys if "ours" not in seen.get(key, {})]
 
 
+LEVELS = ("O1", "O2", "O3", "Os")
+
+
+def missing_levels(lines) -> list[tuple[str, str, str]]:
+    """The (target, prog, level) cells absent from a table that measured some level of that program: an unmeasured
+    level is unknown, not clean (the matrix measured O2 and Os only, and O1, a strict level, went unjudged)."""
+    _, seen, keys = _seen(lines)
+    have = {(target, prog) for target, prog, _ in keys}
+    return [(target, prog, level) for target, prog in sorted(have) for level in LEVELS if (target, prog, level) not in seen]
+
+
 def one_sided(lines) -> list[tuple[str, str, str, str]]:
     """The cells with `ours` and exactly one of gcc and clang, with the column that is missing."""
     _, seen, keys = _seen(lines)
@@ -125,6 +138,10 @@ if __name__ == "__main__":
     lost = missing(open(sys.argv[1]))
     if lost:
         print("no `ours` number (the matrix is incomplete): " + ", ".join("/".join(key) for key in lost))
+        sys.exit(2)
+    gaps = missing_levels(open(sys.argv[1]))
+    if gaps:
+        print("level not measured (unknown, not clean): " + ", ".join("/".join(key) for key in gaps[:8]))
         sys.exit(2)
     once = single_input(open(sys.argv[1]))
     if once:
