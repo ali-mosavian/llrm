@@ -28,7 +28,13 @@ pub fn of(op: &Op) -> Facts {
     Facts {
         reads_flags: matches!(
             op,
-            Op::I(Inst::BranchCond { .. } | Inst::CondSelect { .. } | Inst::CondCompare { .. } | Inst::FpSelect { .. })
+            Op::I(
+                Inst::BranchCond { .. }
+                    | Inst::CondSelect { .. }
+                    | Inst::CondCompare { .. }
+                    | Inst::FpSelect { .. }
+                    | Inst::AddCarry { .. }
+            )
         ),
         sets_flags: writes_flags(op),
         call: matches!(

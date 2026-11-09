@@ -1436,6 +1436,7 @@ fn phased(
         target.selection.rules(),
         &registers,
         target.selector,
+        &target.arch.omitted_phases().iter().map(|(name, _)| *name).collect::<Vec<_>>(),
     )? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
