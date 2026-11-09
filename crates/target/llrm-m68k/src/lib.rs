@@ -36,6 +36,7 @@ pub mod isa;
 pub mod kernels;
 pub mod libcalls;
 pub mod loopinc;
+pub mod lowering;
 pub mod mac;
 pub mod machine;
 pub mod mc;
