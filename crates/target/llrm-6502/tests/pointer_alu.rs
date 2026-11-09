@@ -24,6 +24,9 @@ const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a
     define i8 @addi(ptr %p, i8 %i, i8 %x) {\n  %z = zext i8 %i to i16\n  %q = getelementptr i8, ptr %p, i16 %z\n  %v = load i8, ptr %q\n  %r = add i8 %x, %v\n  ret i8 %r\n}\n\
     @g = global i32 0\n\
     define i32 @addg(i32 %x) {\n  %v = load i32, ptr @g\n  %r = add i32 %x, %v\n  ret i32 %r\n}\n\
+    define i8 @and_all(ptr %p) {\n  %v = load i8, ptr %p\n  %r = and i8 %v, 255\n  ret i8 %r\n}\n\
+    define i8 @rsub(ptr %p) {\n  %q = getelementptr i8, ptr %p, i16 3\n  %v = load i8, ptr %q\n  %r = sub i8 5, %v\n  ret i8 %r\n}\n\
+    define i16 @add_const(ptr %p, i16 %unused) {\n  %v = load i16, ptr %p, align 1\n  %r = add i16 %v, 4660\n  ret i16 %r\n}\n\
     define i8 @after_store(ptr %p, i8 %x) {\n  %v = load i8, ptr %p\n  store i8 1, ptr %p\n  %r = add i8 %x, %v\n  ret i8 %r\n}";
 const DATA: &str = ".segment \"DATA\"\nbuf: .byte 5, 9, 200, 77, 255, 255, 1, 0, 1, 0, 0, 0\n.segment \"CODE\"\n";
 
@@ -204,5 +207,35 @@ fn a_global_is_not_folded_as_a_pointer() {
     for cpu in [Cpu::Mos6502, Cpu::W65c02] {
         let text = text(cpu, "addg");
         assert!(!text.contains("),y") && !text.contains("lda #<"), "{cpu:?}:\n{text}");
+    }
+}
+
+/// A constant first operand keeps its own forms: `x & 255` is the load alone (no `and`), `5 - *p` and `*p + 0x1234` run as
+/// the ordinary ops on a loaded cell. Folding them put the constant in `a` first and grew compiler-rt's `__unorddf2`
+/// (2026-11-09).
+#[test]
+fn a_constant_first_operand_keeps_the_ordinary_forms() {
+    for cpu in [Cpu::Mos6502, Cpu::W65c02] {
+        let asm = text(cpu, "and_all");
+        assert!(!asm.contains("  and"), "{cpu:?}:\n{asm}");
+        for name in ["rsub", "add_const"] {
+            let asm = text(cpu, name);
+            assert!(!asm.contains("sbc (rc") && !asm.contains("adc (rc"), "{cpu:?} {name}:\n{asm}");
+        }
+    }
+    let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
+    for cpu in [Cpu::Mos6502, Cpu::W65c02] {
+        let (target, tag) = if cpu == Cpu::Mos6502 { ("sim6502", "n") } else { ("sim65c02", "c") };
+        for (name, want) in [("and_all", 5), ("rsub", 5u8.wrapping_sub(77).into()), ("add_const", (2309u16 + 4660) as i32 & 0xFF)] {
+            let main = "  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n";
+            let got = common::run_on(
+                target,
+                &format!("pointer-alu-{name}-{tag}"),
+                &format!("{main}  jsr {name}\n"),
+                &format!("{}{DATA}", text(cpu, name)),
+            )
+            .0;
+            assert_eq!(got, want, "{cpu:?} {name}");
+        }
     }
 }

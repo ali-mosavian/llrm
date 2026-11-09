@@ -1191,6 +1191,56 @@ impl Builder {
         Ok(())
     }
 
+    /// A folded op whose first operand has a constant (half): the constant has its own forms (`x & 255`, `n - 1`, an `adc #0`),
+    /// which an operand in memory would hide, so the load is made into a cell and the ordinary op runs on it.
+    fn pointer_op_with_constant(
+        &mut self,
+        fold: &crate::pointer_alu::PointerAlu,
+        at: usize,
+        d: &str,
+        a: &str,
+        pointer: &str,
+        place: Place,
+    ) -> Result<(), Unsupported> {
+        let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
+        let ptr = self.pointer(pointer)?;
+        self.require(ptr, Class::PAIR)?;
+        // the loaded cell is the left operand, as the ordinary form has it, except in a subtraction
+        let sub = fold.mnemonic == "SBC";
+        if fold.word {
+            let cell = format!("w___p{at}");
+            let Place::Offset(off) = place else { return Err(Unsupported("an indexed word".into())) };
+            let (low, high) = self.write_word(&cell)?;
+            for (lane, to) in [low, high].into_iter().enumerate() {
+                let operands = vec![Operand::Def(acc), Operand::Use(ptr), Operand::Imm(off + lane as i64), Operand::Def(y)];
+                self.push(Inst::new(Kind::Op("LDPY"), operands));
+                self.copy(to, acc);
+            }
+            let (left, right) = if sub { (a, cell.as_str()) } else { (cell.as_str(), a) };
+            if fold.a == 1 && self.word_step(fold.mnemonic, d, left, right)? {
+                return Ok(());
+            }
+            return self.alu16(fold.mnemonic, fold.carry, d, left, right);
+        }
+        let cell = format!("v___p{at}");
+        self.define(&cell);
+        let loaded = self.byte(&cell)?;
+        match place {
+            Place::Offset(off) => {
+                let operands = vec![Operand::Def(acc), Operand::Use(ptr), Operand::Imm(off), Operand::Def(y)];
+                self.push(Inst::new(Kind::Op("LDPY"), operands));
+            }
+            Place::Index(index) => {
+                let index = self.byte(index)?;
+                self.copy(y, index);
+                self.push(Inst::new(Kind::Op("LDPX"), vec![Operand::Def(acc), Operand::Use(ptr), Operand::Use(y)]));
+            }
+        }
+        self.copy(loaded, acc);
+        let (left, right) = if sub { (a, cell.as_str()) } else { (cell.as_str(), a) };
+        self.alu(fold.mnemonic, fold.carry, d, left, right)
+    }
+
     /// `d := a op *(p + index)`: the index byte goes to `y`, the op reads
     /// `(p),y`.
     fn alu_pointer_indexed(
@@ -1546,6 +1596,12 @@ fn accumulate(
     inst
 }
 
+/// Where a folded op's operand lies from its pointer: a constant offset, or a byte index register.
+enum Place<'a> {
+    Offset(i64),
+    Index(&'a str),
+}
+
 /// The kind of an ALU op reading `(p),y`.
 fn pointer_kind(mnemonic: &str) -> &'static str {
     match mnemonic {
@@ -1874,7 +1930,15 @@ pub fn build_with_places(
             code if crate::pointer_alu::pointer_alu(code).is_some() => {
                 let fold = crate::pointer_alu::pointer_alu(code).expect("guarded");
                 let (d, a, pointer) = (name(&o[0])?, name(&o[fold.a])?, name(&o[fold.ptr])?);
-                if fold.indexed {
+                let constant_first = if fold.word { b.has_known_half(a) } else { b.constants.contains_key(a) };
+                if constant_first {
+                    let place = if fold.indexed {
+                        Place::Index(name(&o[fold.ptr + 1])?)
+                    } else {
+                        Place::Offset(immediate(&o[fold.ptr + 1])?)
+                    };
+                    b.pointer_op_with_constant(&fold, at, d, a, pointer, place)?
+                } else if fold.indexed {
                     b.alu_pointer_indexed(fold.mnemonic, fold.carry, d, a, pointer, name(&o[fold.ptr + 1])?)?
                 } else if fold.word {
                     let offset = immediate(&o[fold.ptr + 1])?;
