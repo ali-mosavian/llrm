@@ -37,6 +37,9 @@ CPUS = ("68000", "68020", "68040", "68060")
 LEVELS = ("O1", "O2", "O3", "Os")
 POSIX = ROOT / "runtime/shared/posix"
 GCC_ONLY = ("-fzero-init-padding-bits",)
+# gcc's m68k defaults to 68881 hardware floating point (`__HAVE_68881__`) at -mcpu=68020/040/060; ours and the pin's clang
+# have no FPU, so the like-for-like gcc column is soft-float (nbody 68020 O2: 578 B hardware, 946 B soft; ours 1294 B)
+GCC_FLOAT = ("-msoft-float",)
 CONDITIONS = ("ra", "hi", "ls", "cc", "cs", "ne", "eq", "vc", "vs", "pl", "mi", "ge", "lt", "gt", "le", "hs")
 
 
@@ -56,15 +59,26 @@ def programs(run_dir: Path = ROOT / "tests/run/c", bench: Path = benchlist.BENCH
     return kept, same
 
 
-def code_bytes(listing: str) -> int:
-    """The summed size of the sections an `objdump -h` listing flags CODE (`.text`, `.text.startup`, `.text.unlikely`...)."""
+def sections(listing: str) -> tuple[int, int]:
+    """(code, data) bytes of an `objdump -h` listing: the sections flagged CODE (`.text`, `.text.startup`, `.text.unlikely`...), and the
+    `.rodata*` and `.data*` ones (a jump table is data: gcc's 48 B against ours 12 B hid in `.rodata`). Debug, notes and `.comment` are in neither."""
     lines = listing.splitlines()
-    total = 0
+    code = data = 0
     for at, line in enumerate(lines):
         fields = line.split()
-        if len(fields) >= 3 and fields[0].isdigit() and at + 1 < len(lines) and "CODE" in lines[at + 1].replace(",", " ").split():
-            total += int(fields[2], 16)
-    return total
+        if len(fields) < 3 or not fields[0].isdigit():
+            continue
+        size = int(fields[2], 16)
+        if at + 1 < len(lines) and "CODE" in lines[at + 1].replace(",", " ").split():
+            code += size
+        elif fields[1].startswith((".rodata", ".data", ".sdata")):
+            data += size
+    return code, data
+
+
+def code_bytes(listing: str) -> int:
+    """The code plus the read-only and initialised data of an object: the size column."""
+    return sum(sections(listing))
 
 
 def relaxing_branches(text: str) -> str:
@@ -128,7 +142,7 @@ class Tools:
                 asm.write_text(".text\n" + relaxing_branches(asm.read_text()))
                 ok, timed, err = self.run([self.as_, "--fatal-warnings", f"-m{cpu}", "-o", str(obj), str(asm)])
         elif compiler == "gcc":
-            ok, timed, err = self.run([self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *(["-isystem", self.headers] if self.headers else []), *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-c", str(path), "-o", str(obj)])
+            ok, timed, err = self.run([self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *GCC_FLOAT, *(["-isystem", self.headers] if self.headers else []), *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-c", str(path), "-o", str(obj)])
         else:
             ir = work / f"{stem}.ll"
             ok, timed, err = self.run([self.clang, "--target=m68k-linux-gnu", "-ffreestanding", "-fno-pic", "-w", *self.clang_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-S", "-emit-llvm", str(path), "-o", str(ir)])
@@ -199,8 +213,13 @@ def main() -> int:
     have = {tuple(r.split("\t")[:3]) for r in rows if r.split("\t")[3] == "ours"}
     skipped = {(f"m68k-{c}", i, lv) for c, i in na for lv in levels}
     missing = holes([i for i, _ in chosen], cpus, levels, have | skipped)
+    hdir = tools.headers
+    headers_note = ""
+    if hdir:
+        stddef = Path(hdir) / "stddef.h"
+        headers_note = f", gcc headers {hdir} (host gcc 15 include dir, stddef.h md5 {hashlib.md5(stddef.read_bytes()).hexdigest()[:12]})"
     n_bench = sum(1 for i, _ in corpus if i.startswith("bench/"))
-    header = (f"# m68k corpus matrix (code bytes of the whole object, NO CLOCKS: no libc is linked); denominator {len(corpus)} programs = "
+    header = (f"# m68k corpus matrix (size = code + rodata + data of the whole object; NO CLOCKS: no libc is linked, so O2/O3 are judged on bytes alone, an upper bound; gcc -msoft-float like ours{headers_note}; denominator {len(corpus)} programs = "
               f"{len(corpus) - n_bench} tests/run/c + {n_bench} bench, {len(same)} more in both (counted once, same.tsv); "
               f"cells {len(jobs)} ({len(na)} program-CPU pairs not targeted); " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
               + "; byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved (unused: no clocks)"

@@ -19,9 +19,18 @@ Idx Name          Size      VMA       LMA       File off  Algn
 
 
 class CorpusMatrix(unittest.TestCase):
-    def test_code_bytes_sums_every_code_section_and_no_data(self):
+    def test_code_bytes_sums_every_code_section(self):
         """Counting `.text` alone dropped main's `.text.startup` (the kernel matrix had the same trap)."""
-        self.assertEqual(mx.code_bytes(LISTING), 0x18)
+        self.assertEqual(mx.sections(LISTING)[0], 0x18)
+
+    def test_a_jump_table_in_rodata_is_counted(self):
+        """bench/switch: gcc 364 B text + 48 B .rodata, ours 314 + 12: the size column read text alone and hid the table."""
+        listing = LISTING + "  3 .rodata       00000030  00000000  00000000  00000050  2**1\n                  CONTENTS, ALLOC, LOAD, READONLY, DATA\n  4 .comment      00000026  00000000\n                  CONTENTS, READONLY\n"
+        self.assertEqual(mx.code_bytes(listing), 0x18 + 0x4 + 0x30)
+
+    def test_gcc_is_built_soft_float(self):
+        """gcc defaults to 68881 hardware floating point at 68020/040/060 and ours has no FPU: nbody was 578 B for gcc against 946 B soft."""
+        self.assertIn("-msoft-float", mx.GCC_FLOAT)
 
     def test_a_program_with_no_ours_row_is_a_hole(self):
         """The 22-kernel whitelist dropped 208 of 230 programs without a word: a denominator program with no row is refused."""
