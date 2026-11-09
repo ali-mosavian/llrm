@@ -106,6 +106,15 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // branch, more than the jump rotation removes). m32 -Os kernels (73): x_hash -29 B,
         // x_rle -8 B, none larger; limits 1..3 grow x_insertion/x_jpeg_single, 1 grows 60 cells.
         size_rotation_header_limit: Some(4),
+        // DEVIATE RS1 at m32 (owners x86-m32-bytes, exit 2026-12-20, as m64 and arm64): -Os rotates a
+        // loop only if its copied exit test folds in the preheader or counts its trips, as gcc's
+        // `ch_base::copy_headers` does at -Os (the copy is a compare and a branch, more than the
+        // jump it removes). 296 kernels, -Os: 17 shrink (-296 B: x_jpeg_fixed 2995 -> 2898, x_jpeg_single
+        // 3041 -> 2960, x_primes 100 -> 85), gap to best(gcc, clang) 4361 -> 4102 B. Os is strict bytes,
+        // clocks not bound: shellsort/x_isqrt/x_popcount/x_collatz +9..11%, 8 others +-1%.
+        // ROW M32-RS1-COLLATZ (owner x86-m32-bytes, exit 2026-11-27): x_collatz 84 -> 85 B (best 74),
+        // an unrotated inner loop changes the outer loop's registers (cause card to the greedy owners).
+        rotation_guard_must_fold_at_size: true,
         // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27, with `unroll_at_o1`): at -O1
         // a full unroll is made only where its simulated cost does not exceed the rolled loop's
         // size; O1 is strict (no cell larger), gcc's complete unroll is size-neutral.
