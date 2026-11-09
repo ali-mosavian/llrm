@@ -153,11 +153,14 @@ pub fn remat_shape(one: &Insn) -> bool {
                     [Loc::Held(held)] if held.value == one.defines[0]
                 )
                 && (w.sources.len() == 1
-                    // a cheap operation on registers: the registers it reads, then the identity of
-                    // the operation (`isReMaterializable` with `allUsesAvailableAt`)
+                    // a cheap operation on registers: the registers it reads,
+                    // then the identity of the operation (`isReMaterializable`
+                    // with `allUsesAvailableAt`)
                     || (w.op == Operation::Move
-                        && matches!(w.sources.split_last(), Some((Loc::Imm(_), reads))
-                            if reads.iter().all(|loc| matches!(loc, Loc::Held(_)))))
+                        && matches!(
+                            w.sources.split_last(),
+                            Some((Loc::Imm(_), reads)) if reads.iter().all(|loc| matches!(loc, Loc::Held(_)))
+                        ))
                     || (w.op == Operation::FloatLoad
                         && w.sources.is_empty()
                         && matches!(w.name.as_deref(), Some("fld1" | "fldz"))))
@@ -836,13 +839,13 @@ impl InlineSpiller<'_> {
     /// spills at 10 bytes (`spills_extended`, D-RFP5). Exit: the
     /// class width once the classes are split.
     ///
-    /// OPEN D-RFP3 (RFP-5, owner: greedy-subreg, exit: 2026-11-20): where the qword is kept (Nib
-    /// fast), a promoted float phi lives unrounded in a register or cell next
-    /// to the f32 memory copy a store wrote, so which one a read sees
-    /// follows the spill choice (nbody_single.bas printed 86015 or 86016
-    /// across unrelated commits; BASIC now rounds each assignment, Nib has
-    /// no row that shows it). Exit: a Nib row that fails, then rounding
-    /// where promotion splits a copy.
+    /// OPEN D-RFP3 (RFP-5, owner: greedy-subreg, exit: 2026-11-20): where the
+    /// qword is kept (Nib fast), a promoted float phi lives unrounded in a
+    /// register or cell next to the f32 memory copy a store wrote, so which
+    /// one a read sees follows the spill choice (nbody_single.bas printed
+    /// 86015 or 86016 across unrelated commits; BASIC now rounds each
+    /// assignment, Nib has no row that shows it). Exit: a Nib row that
+    /// fails, then rounding where promotion splits a copy.
     ///
     /// DEVIATE D-RFP2 (#TBD, RFP-4): an arithmetic instruction that only reads
     /// the value reads the cell as its memory operand (`fadd qword ptr [m]`),
@@ -2482,7 +2485,8 @@ mod tests {
             let tables = Rc::new(Tables::default());
             tables.widths.borrow_mut().insert(1, 2);
             let order_of = |_: u32| Vec::new();
-            let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
+            let mut spiller =
+                InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
             let (env, original) = (Env, Default::default());
             let mut vrai = VirtRegAuxInfo::new(&env, &original);
             let (mut shrunk, mut made) = (Vec::new(), Vec::new());
@@ -2639,7 +2643,8 @@ mod tests {
         let (mut shrunk, mut made) = (Vec::new(), Vec::new());
         let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
         spiller.spill(ctx, 1, &mut made);
-        let before_store = lis.block_insns(0).iter().take_while(|one| !one.spill_store).filter(|one| one.spill_reload).count();
+        let before_store =
+            lis.block_insns(0).iter().take_while(|one| !one.spill_store).filter(|one| one.spill_reload).count();
         assert_eq!(before_store, 1, "the reload that was there, and no other before the store");
     }
 

@@ -249,14 +249,16 @@ fn at_os_a_constant_stored_twice_is_loaded_once() {
     assert_eq!(moves(true), 3, "-Os: the constant is loaded once and both stores take the register");
 }
 /// `and`, `or`, `xor` and `add` of a large constant on two values that are
-/// also used elsewhere (so their loads do not fold), in one block at `-Os`: the pin's `Select` (`ISD::ADD`..`ISD::XOR`, "avoid folding
-/// immediates with multiple uses") picks the register form directly, so the
-/// constant is loaded once. Ours had only the table's predicate, which that
-/// path never reaches, and kept `and r, imm32` twice: sfm16 `add_bits` m32
-/// `-Os` spent 3 B more per extra use and a register pair more on the masks.
+/// also used elsewhere (so their loads do not fold), in one block at `-Os`: the
+/// pin's `Select` (`ISD::ADD`..`ISD::XOR`, "avoid folding immediates with
+/// multiple uses") picks the register form directly, so the constant is loaded
+/// once. Ours had only the table's predicate, which that path never reaches,
+/// and kept `and r, imm32` twice: sfm16 `add_bits` m32 `-Os` spent 3 B more per
+/// extra use and a register pair more on the masks.
 #[test]
 fn at_os_a_large_immediate_used_twice_by_arithmetic_is_loaded_once() {
-    // (op, (immediate ops, immediate movs)) at speed and at -Os, for every op at once.
+    // (op, (immediate ops, immediate movs)) at speed and at -Os, for every op
+    // at once.
     let mut got = Vec::new();
     for op in ["and", "or", "xor", "add"] {
         let text = format!(
@@ -289,7 +291,8 @@ define i32 @f(i32 %a, i32 %b) {{
         };
         got.push((op, immediates(false), immediates(true)));
     }
-    // Speed: both take the immediate. -Os: the constant is loaded once, both take the register.
+    // Speed: both take the immediate. -Os: the constant is loaded once, both
+    // take the register.
     let want: Vec<_> = ["and", "or", "xor", "add"].into_iter().map(|op| (op, (2, 0), (0, 1))).collect();
     assert_eq!(got, want);
 }
@@ -1275,9 +1278,9 @@ define i32 @f(float %x) {
     assert!(!seen.iter().any(|n| n.starts_with("fld") || n.starts_with("fst")), "{seen:?}");
 }
 
-/// `bitcast (xor (bitcast double %x to i64), signbit) to double` (`__negdf2`) kept
-/// the integer xor: 20 B on wasm against the pin's `f64.neg`, 7 B. It is `fneg`
-/// (`fchs` on x87), as `foldBitcastedFPLogic` has it.
+/// `bitcast (xor (bitcast double %x to i64), signbit) to double` (`__negdf2`)
+/// kept the integer xor: 20 B on wasm against the pin's `f64.neg`, 7 B. It is
+/// `fneg` (`fchs` on x87), as `foldBitcastedFPLogic` has it.
 #[test]
 fn a_sign_bit_xor_of_a_double_bits_is_fneg() {
     let ir = "target datalayout = \"@m32-datalayout@\"
@@ -1705,8 +1708,9 @@ fn four_byte_loads_combined_high_byte_first_are_one_load_and_a_bswap() {
 /// work. An edge looks in its own piece.
 #[test]
 fn the_odds_of_a_branch_are_found_in_its_piece_not_in_every_block() {
-    use crate::model::lir::{LirBlock, LirBody};
     use llrm_mir::module::BlockId;
+
+    use crate::model::lir::{LirBlock, LirBody};
     let odds = |count: i64| {
         let blocks = (0..count)
             .map(|at| LirBlock { succ: vec![(at + 1) % count, (at + 2) % count].into(), ..LirBlock::new(at, vec![]) })
@@ -1761,7 +1765,10 @@ out:
     let (derived, trips) = derivations(looped);
     // The mid-end's `Registers` is empty by design; a fixed point over the
     // body for the trips (33.6 M, memory_expansion -O2 m64) bought nothing.
-    assert!(derived == 0 && trips == 1, "the loop lost its trips or derived the facts: {derived} derivations, {trips} counts");
+    assert!(
+        derived == 0 && trips == 1,
+        "the loop lost its trips or derived the facts: {derived} derivations, {trips} counts"
+    );
 }
 
 /// A function's branch probabilities were calculated twice in a selection, once
@@ -1908,13 +1915,14 @@ fn at_os_a_multiply_that_ties_in_bytes_takes_the_chain_on_m32() {
     let module = crate::testing::module(&TIMES_ELEVEN.replace("11", "5")).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
-    let imuls = done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
+    let imuls =
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
     assert_eq!(imuls, 0, "a tie in bytes is the chain's");
 }
 
-/// `t[3 * i]` on `int` is `mul i, 12` feeding an add: the `shl 2` folds into the
-/// address scale, so the chain is one `lea` (bintree -Os: `imul` kept, 0 B saved,
-/// +40k clk): the chain wins.
+/// `t[3 * i]` on `int` is `mul i, 12` feeding an add: the `shl 2` folds into
+/// the address scale, so the chain is one `lea` (bintree -Os: `imul` kept, 0 B
+/// saved, +40k clk): the chain wins.
 #[test]
 fn at_os_a_multiply_whose_shift_folds_into_an_address_takes_the_chain_on_m32() {
     let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -1928,6 +1936,7 @@ define i32 @f(ptr %t, i32 %a) {
     let module = crate::testing::module(ir).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
-    let imuls = done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
+    let imuls =
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
     assert_eq!(imuls, 0, "the scale folds, so the chain ties the imul");
 }

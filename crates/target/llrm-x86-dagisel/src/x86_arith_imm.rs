@@ -8,9 +8,10 @@
 //! `ri`. The table's own `imm_su` predicate never gets the chance: the
 //! patterns it guards are unavailable to FastISel, so the pin made this case.
 //! `ADD` of 1 or -1 is left to `INC`/`DEC`. The APX `_ND` forms are not
-//! translated. In the pin `AND`/`OR`/`XOR` first try `tryShrinkShlLogicImm`, and `AND`
-//! `shrinkAndImmediate` and `matchBEXTRFromAndImm`: none is translated (SD301), so this
-//! case sees those nodes earlier than the pin's does.
+//! translated. In the pin `AND`/`OR`/`XOR` first try `tryShrinkShlLogicImm`,
+//! and `AND` `shrinkAndImmediate` and `matchBEXTRFromAndImm`: none is
+//! translated (SD301), so this case sees those nodes earlier than the pin's
+//! does.
 //!
 //! [case]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L5836
@@ -62,8 +63,9 @@ pub fn select_arith_register_form<D: AddrDag>(
     hooks: &X86Hooks,
     node: u32,
 ) -> bool {
-    // `CurDAG->shouldOptForSize()`. Not at m16 (see `should_opt_for_size`): the pin has no
-    // 16-bit target and its 32-bit size model does not describe one.
+    // `CurDAG->shouldOptForSize()`. Not at m16 (see `should_opt_for_size`): the
+    // pin has no 16-bit target and its 32-bit size model does not describe
+    // one.
     if !hooks.should_opt_for_size() {
         return false;
     }

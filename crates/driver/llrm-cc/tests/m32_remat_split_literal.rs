@@ -1,8 +1,9 @@
-//! A literal that the split editor made again in two blocks (`MOV32ri` twice into one
-//! piece) was not rematerialized when the piece was spilled: sfm16 `__mulsf3` m32 `-Os`
-//! stored `8388608` to a stack slot and read it back as a memory operand, 20 B more than
-//! the pin, which remakes it before each use. The fixture is the function as the
-//! backend receives it (the last mid-end stage of `sfm16_float_add`).
+//! A literal that the split editor made again in two blocks (`MOV32ri` twice
+//! into one piece) was not rematerialized when the piece was spilled: sfm16
+//! `__mulsf3` m32 `-Os` stored `8388608` to a stack slot and read it back as a
+//! memory operand, 20 B more than the pin, which remakes it before each use.
+//! The fixture is the function as the backend receives it (the last mid-end
+//! stage of `sfm16_float_add`).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -29,10 +30,12 @@ fn test_a_literal_defined_twice_in_a_split_piece_is_remade_not_spilled() {
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     let asm = std::fs::read_to_string(dir.join("d.s")).unwrap();
 
-    // Premise: the literal is still made at least twice around the two `__clzsi2` calls.
+    // Premise: the literal is still made at least twice around the two
+    // `__clzsi2` calls.
     assert!(asm.matches(", 8388608").count() >= 2, "the fixture no longer makes the literal twice:\n{asm}");
     assert_eq!(asm.lines().filter(|l| l.trim_start().starts_with("call") && l.contains("clzsi2")).count(), 2, "{asm}");
 
-    let stored: Vec<&str> = asm.lines().filter(|l| l.contains("ptr [esp") && l.trim_end().ends_with(", 8388608")).collect();
+    let stored: Vec<&str> =
+        asm.lines().filter(|l| l.contains("ptr [esp") && l.trim_end().ends_with(", 8388608")).collect();
     assert!(stored.is_empty(), "the literal was spilled to the stack instead of remade: {stored:?}");
 }
