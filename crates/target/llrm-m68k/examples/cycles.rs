@@ -6,7 +6,7 @@
 //! `$GCC_M68K` (the unpacked m68k binutils, for `objdump`: the pin's
 //! `llvm-objdump` shows `addq` and `tst` as `<unknown>`) and `qemu-m68k`.
 //! `cycles --exe PATH...`: prices each prebuilt ELF: every executed instruction
-//! outside the functions `h_*`, `main` and `_start`, per processor of
+//! outside the functions `h_*` and `_start` (`main` included), per processor of
 //! `CYCLES_CPUS`, and per call (`CYCLES_CALLS`, default 3000). qemu runs
 //! `CYCLES_QEMU_CPU` (default `m68020` for a path containing `68020`, else
 //! `m68000`). The clocks are the tables' instruction clocks, not bus cycles.
@@ -92,18 +92,31 @@ fn listing(
         .arg(exe)
         .output()
         .expect("m68k-linux-gnu-objdump runs");
-    let wanted = functions();
+    parse_listing(&String::from_utf8_lossy(&out.stdout), harness, &functions())
+}
+
+/// `harness`: every function but the test harness's own helpers (`h_*`) and
+/// the entry stub. `main` is priced: the optimizer inlines the hot functions
+/// of a small program into it, and its clocks are the program's.
+fn is_harness_function(name: &str) -> bool {
+    name.starts_with("h_") || name == "_start"
+}
+
+fn parse_listing(
+    text: &str,
+    harness: bool,
+    wanted: &[String],
+) -> (Vec<(u32, String)>, Vec<std::ops::Range<u32>>) {
     let mut lines = Vec::new();
     let mut ranges = Vec::new();
     let mut open: Option<u32> = None;
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
+    for line in text.lines() {
         if let Some((address, name)) = line.split_once(" <").and_then(|(a, rest)| Some((a, rest.strip_suffix(">:")?))) {
             let address = u32::from_str_radix(address, 16).unwrap();
             if let Some(start) = open.take() {
                 ranges.push(start..address);
             }
-            // `harness`: every function but the test harness's own
-            let outside = harness && !(name.starts_with("h_") || name == "main" || name == "_start");
+            let outside = harness && !is_harness_function(name);
             if outside || wanted.iter().any(|one| one == name) {
                 open = Some(address);
             }
@@ -150,7 +163,17 @@ fn qemu_cpu_of(exe: &Path) -> &'static str {
 mod tests {
     use std::path::Path;
 
-    use super::qemu_cpu_of;
+    use super::{parse_listing, qemu_cpu_of};
+
+    /// A small program's hot loop is inlined into `main`; the default priced
+    /// everything but `main`, so a 100-iteration loop read as 0 clocks and an
+    /// A/B of two compilers as "same" (rep_tails 68020 -O2, 2026-11-09).
+    #[test]
+    fn main_is_priced_with_the_functions_inlined_into_it() {
+        let text = "00000100 <_start>:\n 100:\tjsr 0x120\n00000120 <main>:\n 120:\taddql #1,%d0\n 122:\tbnes 0x120\n 124:\trts\n00000130 <h_report>:\n 130:\trts\n00000140 <sum>:\n 140:\trts\n";
+        let (_, ranges) = parse_listing(text, true, &[]);
+        assert_eq!(ranges, vec![0x120..0x130, 0x140..0x142]);
+    }
 
     /// The 040 and 060 matrix columns priced the instruction counts of a trace
     /// on `m68000` (partition 040: 202 instructions for gcc's 121).
