@@ -163,3 +163,7 @@ Estimates, not measurements; CSE comes through the shared flow. Gap card: `~/scr
 - 2026-11-30: post-RA copyprop, branch folding, block placement shared.
 - 2026-12-04: frame/epilogue from `FrameRegisters`; the replaced private passes deleted; JT-O1-1..3 closed.
 
+Files, one writer each (merge direction one way: m68k-machine-with branches off `alim/m68k-machine-with` b654939e04):
+- m68k-lsr-addressing: this section, the first-running-step report (2026-11-12 20:00Z), the A/B scripts (`~/scratch/handoff/m68k-mw/`); no code from b654939e04 on.
+- m68k-machine-with: step 3 and on: `llrm-spike-mf/src/tolir.rs`, `llrm-codegen/src/backend/precse.rs`, `llrm-m68k/src/{mfunc,regalloc,compile}.rs`, their tests.
+
