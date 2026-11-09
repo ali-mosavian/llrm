@@ -689,3 +689,17 @@ mod tuning_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod stack_natural_alignment_tests {
+    /// The m16 datalayout named no stack alignment, so the alloca raise to a type's preferred alignment had no bound.
+    #[test]
+    fn the_datalayout_states_the_stack_alignment_the_frames_keep() {
+        llrm_target::testing::assert_stack_facts(
+            "x86-m16",
+            super::DATALAYOUT_TOML.lines().find_map(|line| line.strip_prefix("datalayout = \"")?.strip_suffix('"')).unwrap(),
+            llrm_target::Target::stack_alignment(&super::M16) as u64,
+            None,
+        );
+    }
+}

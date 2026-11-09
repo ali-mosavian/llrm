@@ -7,7 +7,9 @@ cell with no clang number (it calls a runtime) is still judged against gcc.
 Only a cell with no `ours` or no external number is skipped, and the skipped cells are
 listed. `ours` is the shipped llrm-cc path; `ours-ir` (the backend on the bench IR, not
 what ships) is never judged.
-Usage: m68k_worse_cells.py m68k.tsv [-v]
+A cell with only one of the two external columns is named, and refused unless --allow-one-sided: judged
+against the one that exists it can understate the gap to the one that is missing (z80's table did, by 1.7 kB).
+Usage: m68k_worse_cells.py m68k.tsv [-v] [--allow-one-sided]
 """
 import re
 import sys
@@ -112,6 +114,17 @@ def missing_levels(lines) -> list[tuple[str, str, str]]:
     return [(target, prog, level) for target, prog in sorted(have) for level in LEVELS if (target, prog, level) not in seen]
 
 
+def one_sided(lines) -> list[tuple[str, str, str, str]]:
+    """The cells with `ours` and exactly one of gcc and clang, with the column that is missing."""
+    _, seen, keys = _seen(lines)
+    found = []
+    for key in keys:
+        by = seen.get(key, {})
+        if "ours" in by and ("gcc" in by) != ("clang" in by):
+            found.append((*key, "clang" if "gcc" in by else "gcc"))
+    return found
+
+
 def count(lines) -> tuple[int, int]:
     results = list(cells(lines))
     return sum(1 for *_, e in results if e > 0), len(results)
@@ -135,6 +148,12 @@ if __name__ == "__main__":
         print("order-sensitive program run on fewer inputs than " + str(INPUTS) + ": "
               + ", ".join("/".join(key) for key in once[:6]))
         sys.exit(2)
+    half = one_sided(open(sys.argv[1]))
+    if half:
+        print("cells with one external column only (the best of gcc and clang is unknown): "
+              + ", ".join("/".join(key[:3]) + f" (no {key[3]})" for key in half))
+        if "--allow-one-sided" not in sys.argv:
+            sys.exit(2)
     worse, total = count(open(sys.argv[1]))
     left = skipped(open(sys.argv[1]))
     print(f"{worse} worse of {total} judged cells; {len(left)} skipped (no ours or no external number): "

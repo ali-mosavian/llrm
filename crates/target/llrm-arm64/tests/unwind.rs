@@ -61,7 +61,7 @@ fn a_function_with_a_frame_record_states_where_its_caller_is() {
     let directory = tempfile::tempdir().unwrap();
     let object = object(
         directory.path(),
-        "declare i32 @g(ptr)\ndefine i32 @caller(i32 %a) {\n  %r = call i32 @g(ptr null)\n  %s = add i32 %r, 1\n  ret i32 %s\n}\n",
+        "declare i32 @g(ptr)\ndefine i32 @caller(i32 %a) \"frame-pointer\"=\"non-leaf\" {\n  %r = call i32 @g(ptr null)\n  %s = add i32 %r, 1\n  ret i32 %s\n}\n",
     );
     assert_eq!(
         rules(&object),
@@ -96,7 +96,7 @@ fn a_saved_float_register_is_stated_with_the_extended_form() {
     let directory = tempfile::tempdir().unwrap();
     let object = object(
         directory.path(),
-        "declare i32 @g(ptr)\ndefine double @f(double %a) {\n  %x = fadd double %a, 1.0\n  %r = call i32 @g(ptr null)\n  %y = fadd double %x, 2.0\n  ret double %y\n}\n",
+        "declare i32 @g(ptr)\ndefine double @f(double %a) \"frame-pointer\"=\"non-leaf\" {\n  %x = fadd double %a, 1.0\n  %r = call i32 @g(ptr null)\n  %y = fadd double %x, 2.0\n  ret double %y\n}\n",
     );
     let rules = rules(&object);
     assert!(
@@ -118,7 +118,7 @@ fn code_laid_out_after_the_epilogue_states_the_frame_again() {
     let directory = tempfile::tempdir().unwrap();
     let object = object(
         directory.path(),
-        "declare i32 @g(ptr)\ndeclare i32 @h(ptr)\ndefine i32 @f(i32 %a) {\n  %c = icmp eq i32 %a, 0\n  br i1 %c, label %early, label %late\nearly:\n  %r = call i32 @g(ptr null)\n  %q = mul i32 %r, 3\n  ret i32 %q\nlate:\n  %s = call i32 @h(ptr null)\n  %t = add i32 %s, %a\n  ret i32 %t\n}\n",
+        "declare i32 @g(ptr)\ndeclare i32 @h(ptr)\ndefine i32 @f(i32 %a) \"frame-pointer\"=\"non-leaf\" {\n  %c = icmp eq i32 %a, 0\n  br i1 %c, label %early, label %late\nearly:\n  %r = call i32 @g(ptr null)\n  %q = mul i32 %r, 3\n  ret i32 %q\nlate:\n  %s = call i32 @h(ptr null)\n  %t = add i32 %s, %a\n  ret i32 %t\n}\n",
     );
     let rules = &rules(&object)[0];
     let torn_down = rules.iter().rposition(|rule| rule == "DW_CFA_def_cfa_offset: 0").expect("the epilogue");

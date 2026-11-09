@@ -5,7 +5,7 @@ use llrm_z80::driver::{Level, Request};
 
 fn asm(constant: u32) -> String {
     let ir = format!(
-        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+        "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
          define i16 @f(i16 %n) {{\n %c = icmp eq i16 %n, {constant}\n br i1 %c, label %a, label %b\na:\n ret i16 5\nb:\n ret i16 6\n}}"
     );
     text(&ir, "f", 0, &Request::new(Level::O2)).expect("compiles")
