@@ -3,7 +3,8 @@ use std::process::Command;
 
 /// CodeGenPrepare's `combineToUAddWithOverflow` did not run on wasm: `icmp
 /// ult (add a, b), a` with the sum also read kept the add and the compare
-/// apart. The pin forms `llvm.uadd.with.overflow`, as the backend's input shows.
+/// apart. The pin forms `llvm.uadd.with.overflow`, as the backend's input
+/// shows.
 #[test]
 fn a_wrapped_sum_check_with_the_sum_used_becomes_an_overflow_add() {
     let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/sum_compared_with_operand.ll");
