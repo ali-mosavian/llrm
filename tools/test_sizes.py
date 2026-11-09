@@ -259,6 +259,17 @@ def test_multibyte_nops_and_register_self_moves_are_padding_in_32_bit_code(tmp_p
     assert (got.code, got.align) == (2, 15)
 
 
+def test_a_dword_register_self_move_is_code_in_64_bit_and_padding_in_32_bit():
+    """`mov eax,eax` clears rax's upper half at 64 bits: it was read as padding where it ended on a boundary, so a layout shift moved bytes
+    between code and padding (m64 -Os jpeg_single +3 B code from one shorter instruction)."""
+    from sizes import padding
+
+    move = b"\x89\xc0"  # mov eax,eax
+    code = b"\x31\xc0" + move + b"\xc3"  # xor eax,eax; mov eax,eax; ret: the move ends at 4
+    assert padding(code, 64)[0] == 0
+    assert padding(code, 32)[0] == 2
+
+
 def test_a_nop_run_that_does_not_end_on_a_boundary_or_fills_one_stays_counted(tmp_path):
     """An instruction run that looks like padding is code unless it ends where an alignment would end it and is shorter than that alignment."""
     assert code_size(code_object(tmp_path, RET + NOP * 4 + RET)) == sizes.CodeSize(6, 0, 0)  # ends at 5
