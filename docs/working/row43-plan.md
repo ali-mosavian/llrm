@@ -1,4 +1,4 @@
-# Row 43: Machine CSE — what is left (owner w-1, from funcattrs-port)
+# Row 43: Machine CSE — what is left (owner anyisa, from funcattrs-port)
 
 Pin d1106deb71cc, `llvm/lib/CodeGen/MachineCSE.cpp`. Ours: `backend/precse.rs` (before phi elimination, #3734) and `backend/machinecse.rs` (after allocation, not the pin's). Translated: `isCSECandidate`, `isProfitableToCSE`, `ProcessBlockCSE`, `PerformCSE`, `EnterScope`/`ExitScope`, `isPRECandidate`, `ProcessBlockPRE`, `PerformSimplePRE`, `isProfitableToHoistInto`, `run`. The DEVIATEs below are the rest, in the order they leave:
 

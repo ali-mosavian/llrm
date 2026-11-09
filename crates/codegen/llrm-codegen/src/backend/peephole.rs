@@ -529,7 +529,7 @@ pub fn extensions(
 /// `movzx r,m8` as the register cleared and its low byte loaded, where the
 /// target prices the pair lower (`peephole.peep`).
 ///
-/// DEVIATE ZL1 (owner w1, w2 for the DAG path; permanent target tuning): the
+/// DEVIATE ZL1 (owner anyisa, DAG path w12, w2 for the DAG path; permanent target tuning): the
 /// pin keeps `movzx` on the i486 as on every x86 (X86InstrCompiler.td keeps
 /// `zextloadi8` as `MOVZX32rm8`); this pair is two clocks against three there.
 /// Both selectors run it since 2026-10-31 (textfill c -O2 m16, +4000 clocks
