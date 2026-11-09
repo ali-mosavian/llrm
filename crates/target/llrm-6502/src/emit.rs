@@ -50,6 +50,11 @@ pub mod spill {
     /// The end of a block IR `unreachable` closes (a call that never
     /// returns): control does not fall into the next block. Prints nothing.
     pub const UNREACHABLE: u16 = 0xF004;
+    /// The compare of the carry branch that follows, redone here (operand: the
+    /// branch's condition code), so what `select::expand_selects` puts between
+    /// them runs after the compare, as a phi copy does in the pin. Prints
+    /// nothing.
+    pub const COMPARE: u16 = 0xF005;
 }
 
 #[derive(Clone, Debug)]
@@ -556,7 +561,11 @@ pub fn expand(
         // the words' compare, then the high words subtract with its borrow
         op::CMP32 => {
             let ((al, ah), (bl, bh), (cl, ch), (dl, dh)) = (word(&o[1])?, word(&o[2])?, word(&o[3])?, word(&o[4])?);
-            writeln!(out, "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}\n  lda {cl}\n  sbc {dl}\n  lda {ch}\n  sbc {dh}").unwrap();
+            writeln!(
+                out,
+                "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}\n  lda {cl}\n  sbc {dl}\n  lda {ch}\n  sbc {dh}"
+            )
+            .unwrap();
         }
         // Z only if both bytes are equal: the first mismatch leaves Z clear.
         op::CMPZ16 => {
@@ -629,7 +638,7 @@ pub fn expand(
         spill::LOAD_CARRY => writeln!(out, "  lda {}\n  lsr a", reg(&o[0])?).unwrap(),
         spill::SAVE_FLAGS => writeln!(out, "  php\n  pla\n  sta {}", reg(&o[0])?).unwrap(),
         spill::LOAD_FLAGS => writeln!(out, "  lda {}\n  pha\n  plp", reg(&o[0])?).unwrap(),
-        spill::UNREACHABLE => {}
+        spill::UNREACHABLE | spill::COMPARE => {}
         other => return Err(format!("opcode {other} has no expansion")),
     }
     Ok(out)

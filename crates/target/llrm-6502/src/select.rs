@@ -354,7 +354,151 @@ pub fn function_items_with_places(
         }
     }
     body.extend(edges);
-    Ok((body, (cells.bytes, cells.words), places))
+    Ok((expand_selects(name, body), (cells.bytes, cells.words), places))
+}
+
+/// `EmitInstrWithCustomInserter` for `SELECT_CC`: every `SETCC8`, `CMOV8` and
+/// `CMOV16` becomes a head that branches over a block holding the true arm's
+/// move, so the blocks are real ones for everything after selection (the pin
+/// splits the machine block at the pseudo into head, true and join blocks).
+///
+/// A constant whose only use is an arm is loaded into the result in that arm
+/// (`sole_use_constants`), as `MachineSink` moves a `MOV32ri` into the block of
+/// the phi edge that reads it.
+///
+/// The result cell takes the false arm before the branch and the true arm in
+/// the new block: the cell is written on both edges, as a phi copy writes it.
+/// The condition is redone at the branch (`alloc::Builder::redo_compare`), so
+/// the head's copy does not need the flags kept.
+///
+/// DEVIATE: the new blocks' labels are `<fn>_cm<n>`, not `_b<n>`: the
+/// loop depth of a block is read from the last `_b<n>` label (`timing`), and
+/// a block made here is as deep as the block it was cut from. Reason: the
+/// depth table is the IR's. Exit: a depth table of the machine blocks.
+fn expand_selects(
+    name: &str,
+    items: Vec<Item>,
+) -> Vec<Item> {
+    const BRANCHES: [u16; 6] = [op::BEQ, op::BNE, op::BCC, op::BCS, op::BMI, op::BPL];
+    let sunk = sole_use_constants(&items);
+    let mut out = Vec::with_capacity(items.len());
+    let mut made = 0;
+    for (at, item) in items.into_iter().enumerate() {
+        let Item::Inst(inst) = &item else {
+            out.push(item);
+            continue;
+        };
+        if sunk.defs.contains(&at) {
+            continue;
+        }
+        // (result, first value, second value, the condition under which the
+        // second is taken, move)
+        let o = &inst.operands;
+        let (moves, code) = match (inst.opcode, o.as_slice()) {
+            (op::SETCC8, [d, Operand::Imm(code), ..]) => {
+                let load = |value| MInst::new(op::LDI8, vec![d.clone(), Operand::Imm(value)]);
+                ((load(1), load(0)), *code)
+            }
+            (op::CMOV8, [d, f, t, Operand::Imm(code), ..]) => {
+                let arm = |v: &Operand| sunk.value(at, v, d, op::LDI8, 8);
+                ((arm(f), arm(t)), *code ^ 1)
+            }
+            (op::CMOV16, [d, f, t, Operand::Imm(code), ..]) => {
+                let arm = |v: &Operand| sunk.value(at, v, d, op::LDI16, 16);
+                ((arm(f), arm(t)), *code ^ 1)
+            }
+            _ => {
+                out.push(item);
+                continue;
+            }
+        };
+        made += 1;
+        let (join, arm) = (format!("{name}_cm{made}"), format!("{name}_cm{made}t"));
+        let place = |mut m: MInst| {
+            m.origin = inst.origin;
+            Item::Inst(m)
+        };
+        // the head's move runs after the compare where the branch reads only C
+        // (`BCC`, `BCS`): a load or a transfer sets N and Z, not C
+        if matches!(BRANCHES[code as usize], op::BCC | op::BCS) {
+            out.push(place(MInst::new(spill::COMPARE, vec![Operand::Imm(i64::from(code))])));
+        }
+        out.push(place(moves.0));
+        out.push(place(MInst::new(BRANCHES[code as usize], vec![Operand::Label(join.clone())])));
+        out.push(Item::Label(arm));
+        out.push(place(moves.1));
+        out.push(Item::Label(join));
+    }
+    out
+}
+
+/// The constants (`LDI8`, `LDI16`) written once and read once, by a select.
+struct SoleUse {
+    /// The item positions of the constant definitions that move into an arm.
+    defs: std::collections::HashSet<usize>,
+    /// (select position, cell) -> the constant's value.
+    uses: HashMap<(usize, String), i64>,
+}
+
+impl SoleUse {
+    /// The arm's move into `d`: a load when `v` is such a constant, else a
+    /// copy.
+    fn value(
+        &self,
+        at: usize,
+        v: &Operand,
+        d: &Operand,
+        load: u16,
+        bits: u32,
+    ) -> MInst {
+        match v {
+            Operand::Reg(name) => match self.uses.get(&(at, name.clone())) {
+                Some(value) => MInst::new(load, vec![d.clone(), Operand::Imm(*value)]),
+                None => copy(bits, d.clone(), v.clone()),
+            },
+            _ => copy(bits, d.clone(), v.clone()),
+        }
+    }
+}
+
+fn sole_use_constants(items: &[Item]) -> SoleUse {
+    // occurrences of each cell, a word and its high half counted as one
+    let base = |name: &str| name.strip_suffix("+1").unwrap_or(name).to_owned();
+    let mut seen: HashMap<String, usize> = HashMap::default();
+    for item in items {
+        let Item::Inst(inst) = item else { continue };
+        for o in &inst.operands {
+            if let Operand::Reg(name) = o {
+                *seen.entry(base(name)).or_default() += 1;
+            }
+        }
+    }
+    let mut loads: HashMap<String, (usize, i64)> = HashMap::default();
+    for (at, item) in items.iter().enumerate() {
+        let Item::Inst(inst) = item else { continue };
+        if let (op::LDI8 | op::LDI16, [Operand::Reg(d), Operand::Imm(value)]) = (inst.opcode, inst.operands.as_slice())
+            && (d.starts_with("v_") || d.starts_with("w_"))
+            && seen[&base(d)] == 2
+        {
+            loads.insert(d.clone(), (at, *value));
+        }
+    }
+    let mut sunk = SoleUse { defs: Default::default(), uses: HashMap::default() };
+    for (at, item) in items.iter().enumerate() {
+        let Item::Inst(inst) = item else { continue };
+        if let (op::CMOV8 | op::CMOV16, [_, f, t, ..]) = (inst.opcode, inst.operands.as_slice()) {
+            for v in [f, t] {
+                if let Operand::Reg(name) = v
+                    && let Some(&(def, value)) = loads.get(name)
+                    && def < at
+                {
+                    sunk.defs.insert(def);
+                    sunk.uses.insert((at, name.clone()), value);
+                }
+            }
+        }
+    }
+    sunk
 }
 
 /// The frame: the fixed objects (the stack arguments, at the offsets the

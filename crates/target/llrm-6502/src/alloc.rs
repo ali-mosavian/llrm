@@ -516,6 +516,9 @@ struct Builder {
     /// The compare whose flags the next branch reads, and the ones saved to
     /// cells for later.
     pending: Option<Compare>,
+    /// The compare of the next branch is already in the block
+    /// (`spill::COMPARE`).
+    compared: bool,
     saved: HashMap<String, Compare>,
     /// Compares are redone where the flags are read: nothing keeps `P` alive.
     /// The block instructions go to.
@@ -1683,6 +1686,7 @@ pub fn build_with_places(
         versions: HashMap::default(),
         lost_halves: HashSet::default(),
         pending: None,
+        compared: false,
         saved: HashMap::default(),
         current: 0,
     };
@@ -2059,11 +2063,8 @@ pub fn build_with_places(
                 let (bl, bh) = b.read_word(name(&o[2])?)?;
                 let (dl, dh) = b.write_word(name(&o[0])?)?;
                 let acc = Reg::Phys(reg::A);
-                let (kind, kept, gives, first, second) = if code == op::FSHL1 {
-                    ("FSHL1", (al, ah), bh, dl, dh)
-                } else {
-                    ("FSHR1", (bl, bh), al, dh, dl)
-                };
+                let (kind, kept, gives, first, second) =
+                    if code == op::FSHL1 { ("FSHL1", (al, ah), bh, dl, dh) } else { ("FSHR1", (bl, bh), al, dh, dl) };
                 b.copy(dl, kept.0);
                 b.copy(dh, kept.1);
                 for r in [dl, dh] {
@@ -2172,9 +2173,15 @@ pub fn build_with_places(
                     b.saved.get(name(&o[0])?).cloned().ok_or_else(|| Unsupported("loaded flags never saved".into()))?,
                 );
             }
+            spill_op if spill_op == spill::COMPARE => {
+                b.redo_compare(immediate(&o[0])?, true)?;
+                b.compared = true;
+            }
             code @ (op::BEQ | op::BNE | op::BCC | op::BCS | op::BMI | op::BPL) => {
                 let condition = [op::BEQ, op::BNE, op::BCC, op::BCS, op::BMI, op::BPL].iter().position(|c| *c == code);
-                b.redo_compare(condition.map_or(-1, |c| c as i64), true)?;
+                if !std::mem::take(&mut b.compared) {
+                    b.redo_compare(condition.map_or(-1, |c| c as i64), true)?;
+                }
                 let mnemonic = match code {
                     op::BEQ => "BEQ",
                     op::BNE => "BNE",
@@ -3357,9 +3364,13 @@ fn save_preserved<const STACK: bool>(
     // stack pointer
     let entry = &mut function.blocks[0].insts;
     let mut at = usize::from(entry.first().is_some_and(|inst| inst.kind == Kind::Op("ADJSP")));
-    // an argument that arrives in `a` or `x` is copied out first: a push goes through `a`
+    // an argument that arrives in `a` or `x` is copied out first: a push goes
+    // through `a`
     while let Some(Inst { kind: Kind::Copy, operands, .. }) = entry.get(at) {
-        if !matches!(operands.get(1), Some(Operand::Use(Reg::Phys(r))) if [reg::A, reg::X].contains(r)) {
+        if !matches!(
+            operands.get(1),
+            Some(Operand::Use(Reg::Phys(r))) if [reg::A, reg::X].contains(r)
+        ) {
             break;
         }
         at += 1;
@@ -3543,9 +3554,8 @@ fn emit_with<const STACK: bool>(
             // an argument in `a` that the entry block reads before it writes
             let first = block.insts.first();
             let a_in = first.is_some_and(|inst| {
-                let touches = |want: fn(&Operand) -> Option<Reg>| {
-                    inst.operands.iter().filter_map(want).any(|r| at(r) == reg::A)
-                };
+                let touches =
+                    |want: fn(&Operand) -> Option<Reg>| inst.operands.iter().filter_map(want).any(|r| at(r) == reg::A);
                 touches(|o| if let Operand::Use(r) = o { Some(*r) } else { None })
                     || (after[0][0].contains(&reg::A)
                         && !touches(|o| if let Operand::Def(r) = o { Some(*r) } else { None }))
@@ -3584,14 +3594,15 @@ fn emit_with<const STACK: bool>(
                     let moves: Vec<_> = (0..2).map(|n| (lane(regs[0], n), lane(regs[1], n))).collect();
                     parallel_move(&mut out, &moves, a_live);
                 }
-                // a word copied into a byte is its low half (`trunc` at -O0); `lane` of
-                // a byte register named a cell no pair has
+                // a word copied into a byte is its low half (`trunc`
+                // at -O0); `lane` of a byte register named a cell no pair has
                 (Kind::Copy, _) if is_word(regs[1]) => {
                     move_byte(&mut out, regs[0], lane(regs[1], 0), a_live, spare);
                 }
                 (Kind::Copy, _) if is_word(regs[0]) => return Err("a byte copied into a word".into()),
                 (Kind::Copy, _) => move_byte(&mut out, regs[0], regs[1], a_live, spare),
-                // a lane nothing reads is not moved (a word truncated to a byte)
+                // a lane nothing reads is not moved (a word truncated to a
+                // byte)
                 (Kind::Op("UNPACK"), _) => {
                     let moves: Vec<_> = [(regs[0], lane(regs[2], 0)), (regs[1], lane(regs[2], 1))]
                         .into_iter()
@@ -3751,12 +3762,15 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("JSRI"), _) => {
                     made += 1;
                     let (lo, hi) = (register_name(lane(regs[0], 0)), register_name(lane(regs[0], 1)));
-                    // an argument in `a` waits in `y`; one in `x` rules `x` out as the
-                    // scratch, and the borrow of target-1 comes from `cmp #1`
+                    // an argument in `a` waits in `y`; one in `x` rules `x` out
+                    // as the scratch, and the borrow of
+                    // target-1 comes from `cmp #1`
                     let (in_a, in_x) = (regs[1..].contains(&reg::A), regs[1..].contains(&reg::X));
                     let (keep, restore) = if in_a { ("  tay\n", "  tya\n") } else { ("", "") };
                     let target = if in_x {
-                        format!("  lda {lo}\n  cmp #1\n  lda {hi}\n  sbc #0\n  pha\n  lda {lo}\n  sec\n  sbc #1\n  pha\n")
+                        format!(
+                            "  lda {lo}\n  cmp #1\n  lda {hi}\n  sbc #0\n  pha\n  lda {lo}\n  sec\n  sbc #1\n  pha\n"
+                        )
                     } else {
                         let push_low = if cmos { "phx" } else { "txa\n  pha" };
                         format!("  lda {lo}\n  sec\n  sbc #1\n  tax\n  lda {hi}\n  sbc #0\n  pha\n  {push_low}\n")
@@ -3822,16 +3836,24 @@ fn emit_with<const STACK: bool>(
                         _ => writeln!(out, "  {first} {one}\n  {second} {two}").unwrap(),
                     }
                 }
-                // `lda give; asl|lsr a` leaves the bit in the carry; the word rotates it in
+                // `lda give; asl|lsr a` leaves the bit in the carry; the word
+                // rotates it in
                 (Kind::Op(step @ ("FSHL1" | "FSHR1")), _) => {
-                    let (shift, first, second) = if step == "FSHL1" { ("asl", "rol", "rol") } else { ("lsr", "ror", "ror") };
+                    let (shift, first, second) =
+                        if step == "FSHL1" { ("asl", "rol", "rol") } else { ("lsr", "ror", "ror") };
                     match regs[1] {
                         r if r == reg::A => {}
                         r if r == reg::X => out.push_str("  txa\n"),
                         r if r == reg::Y => out.push_str("  tya\n"),
                         r => writeln!(out, "  lda {}", register_name(r)).unwrap(),
                     }
-                    writeln!(out, "  {shift} a\n  {first} {}\n  {second} {}", register_name(regs[2]), register_name(regs[4])).unwrap();
+                    writeln!(
+                        out,
+                        "  {shift} a\n  {first} {}\n  {second} {}",
+                        register_name(regs[2]),
+                        register_name(regs[4])
+                    )
+                    .unwrap();
                 }
                 (Kind::Op("SRA1"), _) => {
                     let (lo, hi) = (register_name(regs[1]), register_name(regs[3]));
@@ -3896,7 +3918,8 @@ fn emit_with<const STACK: bool>(
                     if n > 0 && spilled > 0 {
                         pending = Some(n + spilled);
                     } else {
-                        // an argument still in `a` (never copied out) waits on the stack
+                        // an argument still in `a` (never copied out) waits on
+                        // the stack
                         if a_live {
                             out.push_str("  pha\n");
                         }
@@ -4028,8 +4051,9 @@ fn emit_with<const STACK: bool>(
                         },
                         _ => None,
                     });
-                    // `tax; cmp #k` (likewise `tay`): the compare left `a` alone, so
-                    // the register copied from it still holds what `a` does
+                    // `tax; cmp #k` (likewise `tay`): the compare left `a`
+                    // alone, so the register copied from it
+                    // still holds what `a` does
                     let held = held.or_else(|| {
                         let n = out.lines.len();
                         match (n.checked_sub(2).map(|first| &out.lines[first]), out.lines.last()) {
@@ -4069,7 +4093,8 @@ fn emit_with<const STACK: bool>(
                 // (see `save_preserved`); the restore keeps the result in `a`
                 // safe in `y`, which no result uses
                 (Kind::Op("PUSHC"), _) => {
-                    // an argument still in `a` waits in an index register nothing holds
+                    // an argument still in `a` waits in an index register
+                    // nothing holds
                     let keep = [(reg::Y, "y"), (reg::X, "x")].into_iter().find(|(r, _)| !after[b][i].contains(r));
                     match (a_live, keep) {
                         (false, _) => writeln!(out, "  lda {}\n  pha", register_name(regs[0])).unwrap(),
@@ -4081,10 +4106,10 @@ fn emit_with<const STACK: bool>(
                 }
                 (Kind::Op("CSAVE"), _) => {
                     if after[b][i].contains(&reg::Y) || after[b][i].contains(&reg::X) || a_live {
-                        // `__csave` changes a, x and y: the same bytes pushed one at a time,
-                        // the argument in `a` waiting in an index register nothing holds
-                        let keep =
-                            [(reg::Y, "y"), (reg::X, "x")].into_iter().find(|(r, _)| !after[b][i].contains(r));
+                        // `__csave` changes a, x and y: the same bytes pushed
+                        // one at a time, the argument
+                        // in `a` waiting in an index register nothing holds
+                        let keep = [(reg::Y, "y"), (reg::X, "x")].into_iter().find(|(r, _)| !after[b][i].contains(r));
                         if a_live && keep.is_none() {
                             return Err("a register is live where the callee-saved cells are saved".into());
                         }
@@ -4260,12 +4285,7 @@ fn emit_with<const STACK: bool>(
         }
     }
     let lines_of = source.map(|(file, scope)| (file, scope, &function.places[..]));
-    let tails = (
-        (!returns_a, a_callees),
-        (!returns_x, x_callees),
-        (!returns_y, y_callees),
-        result_cells,
-    );
+    let tails = ((!returns_a, a_callees), (!returns_x, x_callees), (!returns_y, y_callees), result_cells);
     let priced = own_labels(
         &finish(out.clone(), false, None, tails.0.clone(), tails.1.clone(), tails.2.clone(), tails.3.clone()),
         &function.name,
