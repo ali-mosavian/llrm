@@ -90,3 +90,44 @@ fn a_select_is_right_for_every_byte_on_both_cpus() {
     let cycles = common::cycles_on("sim6502", "sel-cycles", main, &extra);
     assert!(cycles > 10_000, "the driver ran {cycles} cycles for 256 calls");
 }
+
+/// A word select on each kind of flag, run for pairs that differ in the high
+/// byte, in the low byte only, and not at all: the carry (`ult`), the sign
+/// (`slt`) and the zero flag (`eq`) each reach the branch over the arm.
+#[test]
+fn a_word_select_is_right_on_the_carry_the_sign_and_the_zero_flag() {
+    let pairs: [(u16, u16); 7] =
+        [(0, 0), (1, 2), (2, 1), (0x0100, 0x00FF), (0x00FF, 0x0100), (0x8000, 0x7FFF), (0x7FFF, 0x8000)];
+    let mut functions = String::new();
+    let mut main = String::from("  lda #0\n  sta bad\n");
+    type Pick = fn(u16, u16) -> bool;
+    let kinds: [(&str, Pick); 3] =
+        [("ult", |a, b| a < b), ("slt", |a, b| (a as i16) < (b as i16)), ("eq", |a, b| a == b)];
+    for (n, (name, pick)) in kinds.into_iter().enumerate() {
+        let ir = format!(
+            "define i16 @k_{name}(i16 %a, i16 %b) {{\n  %c = icmp {name} i16 %a, %b\n  %r = select i1 %c, i16 %a, i16 %b\n  ret i16 %r\n}}"
+        );
+        let ir = format!("target datalayout = \"{}\"\n{ir}", datalayout());
+        let compiled = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+        let kept = compiled.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $"));
+        functions.extend(kept.map(|l| format!("{l}\n")));
+        for (k, (a, b)) in pairs.into_iter().enumerate() {
+            let want = if pick(a, b) { a } else { b };
+            main += &format!(
+                "  lda #{}\n  sta rc2\n  lda #{}\n  sta rc3\n  lda #{}\n  sta rc4\n  lda #{}\n  sta rc5\n  jsr k_{name}\n  \
+                 cmp #{}\n  bne bad{n}_{k}\n  cpx #{}\n  beq ok{n}_{k}\nbad{n}_{k}:\n  lda #1\n  sta bad\nok{n}_{k}:\n",
+                a & 0xFF,
+                a >> 8,
+                b & 0xFF,
+                b >> 8,
+                want & 0xFF,
+                want >> 8
+            );
+        }
+    }
+    main += "  lda bad\n";
+    let extra = format!("{functions}.segment \"BSS\"\nbad: .res 1\n.segment \"CODE\"\n");
+    for target in ["sim6502", "sim65c02"] {
+        assert_eq!(common::run_on(target, &format!("selw-{target}"), &main, &extra).0, 0, "{target}");
+    }
+}

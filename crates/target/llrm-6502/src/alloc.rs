@@ -349,7 +349,7 @@ impl<const STACK: bool> Target for Mos<STACK> {
 
     /// In stack mode a spill is `ldy #offset; sta (rc0),y`: it overwrites `y`.
     fn reads_flags_set_just_before(inst: &Inst) -> bool {
-        inst.reads_flags && (inst.terminator || matches!(inst.kind, Kind::Op(name) if name.starts_with("CMOV")))
+        inst.reads_flags && inst.terminator
     }
 
     fn lane_moves(inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
@@ -1849,7 +1849,8 @@ pub fn build_with_places(
                 b.shift_a(step, immediate(&o[2])?);
                 b.copy(d, acc);
             }
-            // `lsr a` leaves the bit that left in the carry; the operands are `d`, `co`, `a`
+            // `lsr a` leaves the bit that left in the carry; the operands
+            // are `d`, `co`, `a`
             op::SRL1C8 => {
                 let acc = Reg::Phys(reg::A);
                 b.define(name(&o[0])?);
@@ -1986,24 +1987,6 @@ pub fn build_with_places(
                 let acc = Reg::Phys(reg::A);
                 b.copy(acc, s);
                 b.push(Inst::new(Kind::Op("LOADC"), vec![Operand::Def(acc), Operand::Use(acc)]));
-            }
-            op::SETCC8 => {
-                b.redo_compare(immediate(&o[1])?, false)?;
-                b.define(name(&o[0])?);
-                let d = b.byte(name(&o[0])?)?;
-                let mut set = Inst::new(
-                    Kind::Op("CMOV"),
-                    vec![
-                        Operand::Def(Reg::Phys(reg::A)),
-                        Operand::Imm(0),
-                        Operand::Imm(1),
-                        Operand::Imm(immediate(&o[1])?),
-                        Operand::Use(Reg::Phys(reg::FLAGS)),
-                    ],
-                );
-                set.reads_flags = true;
-                b.push(set);
-                b.copy(d, Reg::Phys(reg::A));
             }
             // 8 or more: one byte moves across, shifted by the rest of the
             // count
@@ -2211,58 +2194,6 @@ pub fn build_with_places(
                 jump.terminator = true;
                 jump.barrier = true;
                 b.push(jump);
-            }
-            op::CMOV8 => {
-                b.redo_compare(immediate(&o[3])?, false)?;
-                b.define(name(&o[0])?);
-                let d = b.byte(name(&o[0])?)?;
-                let value = |b: &mut Builder, operand: &Machine| -> Result<Operand, Unsupported> {
-                    match b.constants.get(name(operand)?) {
-                        Some(v) => Ok(Operand::Imm(*v & 0xFF)),
-                        None => {
-                            let r = b.byte(name(operand)?)?;
-                            b.require(r, Class(Class::X | Class::Y | Class::M))?;
-                            Ok(Operand::Use(r))
-                        }
-                    }
-                };
-                let (if_false, if_true) = (value(&mut b, &o[1])?, value(&mut b, &o[2])?);
-                let mut cmov = Inst::new(
-                    Kind::Op("CMOV"),
-                    vec![
-                        Operand::Def(Reg::Phys(reg::A)),
-                        if_false,
-                        if_true,
-                        Operand::Imm(immediate(&o[3])?),
-                        Operand::Use(Reg::Phys(reg::FLAGS)),
-                    ],
-                );
-                cmov.reads_flags = true;
-                b.push(cmov);
-                b.copy(d, Reg::Phys(reg::A));
-            }
-            // d := cc ? t : f, as a pair `n` that starts as `f` (a copy the
-            // allocator joins with `f`'s register when it can) and takes `t`
-            // on the taken path
-            op::CMOV16 => {
-                let (fl, fh) = b.read_word(name(&o[1])?)?;
-                let (tl, th) = b.read_word(name(&o[2])?)?;
-                let (nl, nh) = (b.fresh(), b.fresh());
-                b.copy(nl, fl);
-                b.copy(nh, fh);
-                b.redo_compare(immediate(&o[3])?, false)?;
-                for r in [nl, nh, tl, th] {
-                    b.require(r, Class(Class::X | Class::Y | Class::M))?;
-                }
-                let (dl, dh) = b.write_word(name(&o[0])?)?;
-                let mut operands = vec![Operand::Def(nl), Operand::Def(nh), Operand::Def(Reg::Phys(reg::A))];
-                operands.extend([nl, nh, tl, th].map(Operand::Use));
-                operands.extend([Operand::Imm(immediate(&o[3])?), Operand::Use(Reg::Phys(reg::FLAGS))]);
-                let mut cmov = Inst::new(Kind::Op("CMOV16"), operands);
-                cmov.reads_flags = true;
-                b.push(cmov);
-                b.copy(dl, nl);
-                b.copy(dh, nh);
             }
             // `ldy #off; lda (p),y` is one instruction, so spill code for the
             // pointer cannot land between the two and clobber `y`
@@ -2654,60 +2585,6 @@ fn keep_carry_in_c(function: &mut MFunction<Class>) {
                     block.insts.drain(at..at + 2);
                 }
                 _ => at += 1,
-            }
-        }
-    }
-}
-
-/// `a := cc ? t : f` copied into the register of `t` or `f` (`lo = v < lo ? v
-/// : lo`) is the tied conditional move: that value is in place, and the
-/// branch skips the one move to it, where the form through `a` loads both and
-/// stores one back. The pair `CMOV` and the copy out of `a` is one `CMOVT`
-/// (which still writes `a`: its move goes through it) when `a` is dead after
-/// the copy.
-///
-/// DEVIATE (6502-TIED-CMOV): the pin's x86 `CMOV` is two-address (`$dst =
-/// $src1`, `X86InstrCMovSetCC.td`), tied before allocation, so the coalescer
-/// joins the destination with `$src1`. A byte select is written in `a` here
-/// (the only register an ALU result is made in), and the register of the
-/// destination is known after allocation only. Exit: 2026-11-30, with the
-/// select tied before allocation (as `CMOV16` is).
-pub fn tie_conditional_moves(
-    function: &mut MFunction<Class>,
-    at: &dyn Fn(Reg) -> RegId,
-) {
-    let after = live_after(function, at);
-    for (b, block) in function.blocks.iter_mut().enumerate() {
-        // from the end: the liveness is of the block as it was, and a pair
-        // joined removes a copy after the ones still to see
-        for i in (0..block.insts.len().saturating_sub(1)).rev() {
-            let tied = match (&block.insts[i], &block.insts[i + 1]) {
-                (select, copy) if select.kind == Kind::Op("CMOV") && copy.kind == Kind::Copy => {
-                    match (&select.operands[..], &copy.operands[..]) {
-                        ([_, if_false, if_true, code, flags], [Operand::Def(to), Operand::Use(from)])
-                            if at(*from) == reg::A && !after[b][i + 1].contains(&reg::A) =>
-                        {
-                            let kept = |value: &Operand| matches!(value, Operand::Use(r) if at(*r) == at(*to));
-                            (kept(if_false) || kept(if_true)).then(|| {
-                                vec![
-                                    Operand::Def(*to),
-                                    Operand::Def(Reg::Phys(reg::A)),
-                                    if_false.clone(),
-                                    if_true.clone(),
-                                    code.clone(),
-                                    flags.clone(),
-                                ]
-                            })
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
-            };
-            if let Some(operands) = tied {
-                block.insts[i].kind = Kind::Op("CMOVT");
-                block.insts[i].operands = operands;
-                block.insts.remove(i + 1);
             }
         }
     }
@@ -3499,7 +3376,6 @@ fn emit_with<const STACK: bool>(
         Reg::Phys(p) => p,
     };
     compare_before_step(&mut function, &at);
-    tie_conditional_moves(&mut function, &at);
     remove_identity_copies::<Mos<STACK>>(&mut function, &assignment);
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     // a reload of a slot whose register nothing has written is that register; x
@@ -3723,16 +3599,6 @@ fn emit_with<const STACK: bool>(
                             &format!("  lda #{part}({symbol})\n  sta {}\n", register_name(d)),
                         );
                     }
-                }
-                // n := t when cc, n already holding f: the branch skips the
-                // moves on the other path
-                (Kind::Op("CMOV16"), [.., Operand::Imm(code), _]) => {
-                    made += 1;
-                    let done = format!("_cmd{made}");
-                    let skip = ["bne", "beq", "bcs", "bcc", "bpl", "bmi"][*code as usize];
-                    writeln!(out, "  {skip} {done}").unwrap();
-                    parallel_move(&mut out, &[(regs[0], regs[5]), (regs[1], regs[6])], false);
-                    writeln!(out, "{done}:").unwrap();
                 }
                 (Kind::Op("JSR"), [Operand::Symbol(callee, _), ..]) => {
                     let jump = tail_call(block, i, pending);
@@ -3980,8 +3846,7 @@ fn emit_with<const STACK: bool>(
                                 Line::Inst(AsmInst { op: AsmOp::Txa, .. })
                             )
                         );
-                    let next_reads_a = block.insts.get(i + 1).is_some_and(|next| next.kind == Kind::Op("CMOV"));
-                    if !a_live && !next_reads_a && stepped {
+                    if !a_live && stepped {
                         out.pop();
                     }
                 }
@@ -3997,105 +3862,6 @@ fn emit_with<const STACK: bool>(
                     if function.blocks.get(b + 1).map(|next| next.id) != Some(*id) {
                         writeln!(out, "  {} {}", jump.to_lowercase(), target(to)).unwrap();
                     }
-                }
-                // d := cc ? if_true : if_false, d the register of one of them
-                // (`tie_conditional_moves`): the branch skips the move of the
-                // other
-                (Kind::Op("CMOVT"), [_, _, if_false, if_true, Operand::Imm(code), _]) => {
-                    made += 1;
-                    let done = format!("_cmd{made}");
-                    let to = regs[0];
-                    let mut read =
-                        inst.operands.iter().filter_map(|o| if let Operand::Use(r) = o { Some(at(*r)) } else { None });
-                    let false_at = matches!(if_false, Operand::Use(_)).then(|| read.next()).flatten();
-                    let true_at = matches!(if_true, Operand::Use(_)).then(|| read.next()).flatten();
-                    let (skip, moved, moved_at) = if Some(to) == false_at {
-                        (["bne", "beq", "bcs", "bcc", "bpl", "bmi"][*code as usize], if_true, true_at)
-                    } else {
-                        (["beq", "bne", "bcc", "bcs", "bmi", "bpl"][*code as usize], if_false, false_at)
-                    };
-                    writeln!(out, "  {skip} {done}").unwrap();
-                    match (moved, moved_at) {
-                        (Operand::Imm(v), _) if to == reg::A || to == reg::X || to == reg::Y => {
-                            writeln!(out, "  ld{} #{v}", register_name(to)).unwrap()
-                        }
-                        (Operand::Imm(0), _) if cmos => writeln!(out, "  stz {}", register_name(to)).unwrap(),
-                        (Operand::Imm(v), _) => {
-                            through_a(&mut out, false, spare, &format!("  lda #{v}\n  sta {}\n", register_name(to)))
-                        }
-                        (_, Some(from)) => move_byte(&mut out, to, from, false, spare),
-                        (_, None) => unreachable!(),
-                    }
-                    writeln!(out, "{done}:").unwrap();
-                }
-                // a := cc ? if_true : if_false, the branch first: loads set N
-                // and Z
-                (Kind::Op("CMOV"), [_, if_false, if_true, Operand::Imm(code), _]) => {
-                    made += 1;
-                    let (taken, done) = (format!("_cmt{made}"), format!("_cmd{made}"));
-                    let branch = ["beq", "bne", "bcc", "bcs", "bmi", "bpl"][*code as usize];
-                    let load = |out: &mut Asm, value: &Operand, at: Option<RegId>| match (value, at) {
-                        (Operand::Imm(v), _) => writeln!(out, "  lda #{v}").unwrap(),
-                        // a value already in `a`
-                        (_, Some(r)) if r == reg::A => {}
-                        (_, Some(r)) if r == reg::X => out.push_str("  txa\n"),
-                        (_, Some(r)) if r == reg::Y => out.push_str("  tya\n"),
-                        (_, Some(r)) => writeln!(out, "  lda {}", register_name(r)).unwrap(),
-                        (_, None) => unreachable!(),
-                    };
-                    let mut read =
-                        inst.operands.iter().filter_map(|o| if let Operand::Use(r) = o { Some(at(*r)) } else { None });
-                    let false_at = matches!(if_false, Operand::Use(_)).then(|| read.next()).flatten();
-                    let true_at = matches!(if_true, Operand::Use(_)).then(|| read.next()).flatten();
-                    // `a` holds the compare's left side: `lda lhs; cmp rhs`
-                    // just before
-                    let held = i.checked_sub(2).and_then(|first| match (&block.insts[first], &block.insts[i - 1]) {
-                        (copy, compare) if compare.kind == Kind::Op("CMP") => match (copy.kind, &copy.operands[..]) {
-                            (Kind::Copy, [Operand::Def(tested), Operand::Use(lhs)])
-                                if compare.operands.get(1) == Some(&Operand::Use(*tested)) && at(*tested) == reg::A =>
-                            {
-                                Some(at(*lhs))
-                            }
-                            _ => None,
-                        },
-                        _ => None,
-                    });
-                    // `tax; cmp #k` (likewise `tay`): the compare left `a`
-                    // alone, so the register copied from it
-                    // still holds what `a` does
-                    let held = held.or_else(|| {
-                        let n = out.lines.len();
-                        match (n.checked_sub(2).map(|first| &out.lines[first]), out.lines.last()) {
-                            (
-                                Some(Line::Inst(AsmInst { op: copy @ (AsmOp::Tax | AsmOp::Tay), .. })),
-                                Some(Line::Inst(AsmInst { op: AsmOp::Cmp, .. })),
-                            ) => Some(if *copy == AsmOp::Tax { reg::X } else { reg::Y }),
-                            _ => None,
-                        }
-                    });
-                    let opposite = ["bne", "beq", "bcs", "bcc", "bpl", "bmi"][*code as usize];
-                    if held.is_some() && held == true_at {
-                        // the value to keep is already in `a`: skip the load of
-                        // the other
-                        writeln!(out, "  {branch} {done}").unwrap();
-                        load(&mut out, if_false, false_at);
-                    } else if held.is_some() && held == false_at {
-                        writeln!(out, "  {opposite} {done}").unwrap();
-                        load(&mut out, if_true, true_at);
-                    } else if matches!(code, 2 | 3) {
-                        // a load leaves the carry alone: the value for a true
-                        // condition goes in first,
-                        // and the branch skips the other
-                        load(&mut out, if_true, true_at);
-                        writeln!(out, "  {branch} {done}").unwrap();
-                        load(&mut out, if_false, false_at);
-                    } else {
-                        writeln!(out, "  {branch} {taken}").unwrap();
-                        load(&mut out, if_false, false_at);
-                        writeln!(out, "  jmp {done}\n{taken}:").unwrap();
-                        load(&mut out, if_true, true_at);
-                    }
-                    writeln!(out, "{done}:").unwrap();
                 }
                 // a slot is a byte, or two for a pair
                 // a callee-saved cell on the hardware stack

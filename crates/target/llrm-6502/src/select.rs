@@ -360,21 +360,38 @@ pub fn function_items_with_places(
 /// `EmitInstrWithCustomInserter` for `SELECT_CC`: every `SETCC8`, `CMOV8` and
 /// `CMOV16` becomes a head that branches over a block holding the true arm's
 /// move, so the blocks are real ones for everything after selection (the pin
-/// splits the machine block at the pseudo into head, true and join blocks).
+/// splits the machine block at the pseudo into head, true and join blocks and
+/// makes a phi of the two values,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L38957>).
 ///
-/// A constant whose only use is an arm is loaded into the result in that arm
-/// (`sole_use_constants`), as `MachineSink` moves a `MOV32ri` into the block of
-/// the phi edge that reads it.
+/// The result cell is written on both edges, as the phi's copies write it:
+/// the false arm before the branch, the true arm in the new block.
 ///
-/// The result cell takes the false arm before the branch and the true arm in
-/// the new block: the cell is written on both edges, as a phi copy writes it.
-/// The condition is redone at the branch (`alloc::Builder::redo_compare`), so
-/// the head's copy does not need the flags kept.
+/// A constant an arm takes is loaded into the result in that arm: the pin's
+/// phi copy of a constant is a `MOV32ri` made in the predecessor, and
+/// `MachineSink` moves one into the block of the edge that reads it
+/// (`machine_sink_in_place` keeps a rematerializable instruction where it is:
+/// DEVIATE there). The load stays in its block where something else reads it.
 ///
-/// DEVIATE: the new blocks' labels are `<fn>_cm<n>`, not `_b<n>`: the
-/// loop depth of a block is read from the last `_b<n>` label (`timing`), and
-/// a block made here is as deep as the block it was cut from. Reason: the
-/// depth table is the IR's. Exit: a depth table of the machine blocks.
+/// DEVIATE 6502-SELECT-1: the expansion is on the item list, before the
+/// builder makes the machine function, not on machine blocks. Reason: this
+/// target has no shared machine function to split. Exit: the day the 6502
+/// reaches the shared flow (`crate::dagisel` into `llrm_codegen`).
+///
+/// DEVIATE 6502-SELECT-2: for `BCC` and `BCS` the compare is made before the
+/// head's move (`spill::COMPARE`), where the pin copies at the end of the
+/// block, after the compare (`findPHICopyInsertPoint`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/PHIElimination.cpp>).
+/// For the other conditions the compare is redone at the branch, after the
+/// move: a load or a transfer sets N and Z. Reason: the flags are not
+/// allocated, so the carry alone survives a move. Exit: 2026-11-20, a
+/// generated flags description (see `compare_before_step`).
+///
+/// DEVIATE 6502-SELECT-3: the new blocks' labels are `<fn>_cm<n>`, not
+/// `_b<n>`: the loop depth of a block is read from the last `_b<n>` label
+/// (`timing`), and a block made here is as deep as the block it was cut from.
+/// Reason: the depth table is the IR's. Exit: a depth table of the machine
+/// blocks.
 fn expand_selects(
     name: &str,
     items: Vec<Item>,
@@ -432,7 +449,7 @@ fn expand_selects(
     out
 }
 
-/// The constants (`LDI8`, `LDI16`) written once and read once, by a select.
+/// The constants (`LDI8`, `LDI16`) written once that a select reads.
 struct SoleUse {
     /// The item positions of the constant definitions that move into an arm.
     defs: std::collections::HashSet<usize>,
@@ -462,14 +479,19 @@ impl SoleUse {
 }
 
 fn sole_use_constants(items: &[Item]) -> SoleUse {
-    // occurrences of each cell, a word and its high half counted as one
+    // occurrences of each cell, a word and its high half counted as one, and
+    // how many instructions write it
     let base = |name: &str| name.strip_suffix("+1").unwrap_or(name).to_owned();
     let mut seen: HashMap<String, usize> = HashMap::default();
+    let mut written: HashMap<String, usize> = HashMap::default();
     for item in items {
         let Item::Inst(inst) = item else { continue };
-        for o in &inst.operands {
+        for (at, o) in inst.operands.iter().enumerate() {
             if let Operand::Reg(name) = o {
                 *seen.entry(base(name)).or_default() += 1;
+                if at == 0 {
+                    *written.entry(base(name)).or_default() += 1;
+                }
             }
         }
     }
@@ -478,7 +500,7 @@ fn sole_use_constants(items: &[Item]) -> SoleUse {
         let Item::Inst(inst) = item else { continue };
         if let (op::LDI8 | op::LDI16, [Operand::Reg(d), Operand::Imm(value)]) = (inst.opcode, inst.operands.as_slice())
             && (d.starts_with("v_") || d.starts_with("w_"))
-            && seen[&base(d)] == 2
+            && written[&base(d)] == 1
         {
             loads.insert(d.clone(), (at, *value));
         }
@@ -492,7 +514,10 @@ fn sole_use_constants(items: &[Item]) -> SoleUse {
                     && let Some(&(def, value)) = loads.get(name)
                     && def < at
                 {
-                    sunk.defs.insert(def);
+                    // the load moves when the select is its only reader
+                    if seen[&base(name)] == 2 {
+                        sunk.defs.insert(def);
+                    }
                     sunk.uses.insert((at, name.clone()), value);
                 }
             }
