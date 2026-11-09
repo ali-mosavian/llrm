@@ -46,6 +46,16 @@ fn untranslated_features_are_refused_not_dropped() {
     assert!(parse(&words("-g0 x.c")).is_ok());
 }
 
+/// `-fpeel-loops` was refused by name once `Options::peel` was deleted, which
+/// broke a command line that gcc and clang take: it is the backend's, accepted
+/// and ignored, like `-fno-peel-loops`.
+#[test]
+fn fpeel_loops_and_fno_peel_loops_compile() {
+    for flag in ["-fpeel-loops", "-fno-peel-loops"] {
+        assert_eq!(built(&format!("{flag} -O2 -c x.c")).llc, words(flag), "{flag}");
+    }
+}
+
 /// `-fsanitize=stack` and `bounds` were refused with "not translated yet",
 /// so stackover.c, stackdeep.c, es_across_copy.c and idioms.c (8 configs)
 /// could not compile under llrm-cc; the backend takes them.

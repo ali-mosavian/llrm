@@ -4,6 +4,7 @@
 mod common;
 
 use common::{Two, branch, op, v};
+use llrm_spike_mf::commute::liveness_steps;
 use llrm_spike_mf::regalloc::{eliminate_phis_with, successors};
 use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Phi, commute_tied};
 
@@ -104,7 +105,8 @@ fn a_phi_copy_goes_before_the_last_read_of_its_source() {
 /// `Facts::of` solved liveness over a boolean per (block, register) with a
 /// scan of every register per block per round: 3000 blocks and 30000
 /// registers took 450 ms (div_constants_long at m68k spent 16% of its
-/// instructions there). Bit sets take milliseconds.
+/// instructions there). Bit sets visit one word per 64 registers; the bound
+/// is a count, so a loaded machine cannot fail it.
 #[test]
 fn liveness_of_many_blocks_and_registers_is_cheap() {
     let blocks = 3000u32;
@@ -118,10 +120,10 @@ fn liveness_of_many_blocks_and_registers_is_cheap() {
         function.blocks.push(Block { id: b, insts, phis: vec![] });
     }
     function.classes = vec![(); 10 * blocks as usize];
-    let start = std::time::Instant::now();
-    commute_tied::<Two>(&mut function);
-    let took = start.elapsed();
-    assert!(took.as_millis() < 100, "{blocks} blocks took {took:?}");
+    let steps = liveness_steps(&function);
+    let words = (10 * blocks as u64).div_ceil(64);
+    let rounds = steps / (blocks as u64 * words);
+    assert!(rounds <= 4, "{rounds} rounds of {blocks} blocks x {words} words ({steps} steps)");
 }
 
 mod accumulator {

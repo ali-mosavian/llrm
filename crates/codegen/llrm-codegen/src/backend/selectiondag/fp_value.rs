@@ -3,7 +3,8 @@
 //! arithmetic of `foldConstantFPMath`.
 //!
 //! DEVIATE FP1: `f32` and `f64` fold on the host's IEEE arithmetic; `f80`
-//! (x87) and `f16` classify and negate but do not fold. A NaN result or NaN
+//! (x87), `f128` and `f16` classify and negate but do not fold (an `f128`
+//! also builds the integers `from_integer` is asked for). A NaN result or NaN
 //! operand does not fold either (`APFloat` makes a canonical quiet NaN, the
 //! host keeps a payload and a sign), so the node stays and runs. Exit: an
 //! `APFloat` port. Owner sdag-c.
@@ -31,6 +32,7 @@ fn layout(vt: EVT) -> Option<(u32, u32, u32)> {
         EVT::Simple(MVT::F32) => Some((31, 8, 23)),
         EVT::Simple(MVT::F64) => Some((63, 11, 52)),
         EVT::Simple(MVT::F80) => Some((79, 15, 64)),
+        EVT::Simple(MVT::F128) => Some((127, 15, 112)),
         _ => None,
     }
 }
@@ -86,6 +88,14 @@ pub fn from_integer(
         EVT::Simple(MVT::F80) => {
             let lead = value.leading_zeros();
             Some((((0x3FFF + 63 - lead) as u128) << 64) | ((value << lead) as u128))
+        }
+        EVT::Simple(MVT::F128) if value == 0 => Some(0),
+        EVT::Simple(MVT::F128) => {
+            // 1.f x 2^(63 - lead): the 63 bits under the leading one, then
+            // the 49 zero bits of the fraction's tail.
+            let lead = value.leading_zeros();
+            let fraction = u128::from((value << lead) & !(1 << 63));
+            Some((u128::from(0x3FFF + 63 - lead) << 112) | (fraction << 49))
         }
         _ => None,
     }
