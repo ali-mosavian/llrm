@@ -1225,13 +1225,14 @@ const CHAIN: &str = "  %m = mul i64 %x, 3\n  %y = add i64 %m, %v";
 const WIDE: &str = "  %m = mul i64 %v, 5\n  %w = add i64 %m, 7\n  %y = add i64 %x, %w";
 const FDIV: &str = "  %q = fdiv double %x, %v\n  %y = fadd double %q, 1.0";
 
-/// floats -O2 394 B and recfloat 318 B against gcc's 207 and 153 at the same
-/// clocks: a loop whose trip is the latency of `x = x * 3 + a[i]` was unrolled
-/// by 4 at run time, with a guard and a remainder loop that bought no clock.
+/// quicksort -O3 (`x = x * 25173 + 13849; values[i] = x & 0x7FFF`): an integer
+/// chain of constants is not a bound, the unrolled copies compose into one
+/// multiply and add per pair (instcombine), halving the chain. Its unroll was
+/// vetoed: 1731 -> 1708 B and +7.3% clocks (spread 4%).
 #[test]
-fn test_a_runtime_loop_bound_by_its_chain_is_not_unrolled() {
+fn test_a_runtime_loop_of_integer_arithmetic_is_left_to_the_pin() {
     assert!(runtime_unrolled("i64", "1", CHAIN, false), "premise: the pin's rule unrolls this loop");
-    assert!(!runtime_unrolled("i64", "1", CHAIN, true), "unrolled although a trip waits on the last one");
+    assert!(runtime_unrolled("i64", "1", CHAIN, true), "an integer chain composes when unrolled");
 }
 
 /// The same for a divide chain, `s = s / a[i] + 1.0` (floats -O2, recfloat).
@@ -1342,4 +1343,35 @@ done:
 ";
     assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
     assert!(!runtime_unrolled_text(text, true));
+}
+
+/// histo -O2/-O3 (`++counts[(data[i] * 7 + seed) & 255]`): the store of one trip
+/// was read as feeding the next trip's load because both name the same SSA
+/// address, a chain of 7 that the loop does not have. Its partial unroll was
+/// vetoed, +7% instructions. The address changes every trip.
+#[test]
+fn test_a_counter_in_memory_at_a_new_address_each_trip_is_still_unrolled() {
+    let text = "define i64 @f(ptr %counts, ptr %data) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %d = getelementptr i8, ptr %data, i64 %i
+  %b = load i8, ptr %d
+  %k = zext i8 %b to i64
+  %p = getelementptr i64, ptr %counts, i64 %k
+  %c = load i64, ptr %p
+  %c1 = add i64 %c, 1
+  store i64 %c1, ptr %p
+  %next = add i64 %i, 1
+  %more = icmp ne i64 %next, 4096
+  br i1 %more, label %loop, label %done
+
+done:
+  ret i64 0
+}
+";
+    assert!(runtime_unrolled_text(text, false), "premise: the pin's rule unrolls this loop");
+    assert!(runtime_unrolled_text(text, true), "vetoed for a chain through an address that moves");
 }
