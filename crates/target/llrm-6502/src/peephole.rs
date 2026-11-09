@@ -130,9 +130,6 @@ pub fn run_with(
     drop_reloads(asm);
     drop_flag_reload(asm);
     drop_dead_repeat_load(asm);
-    if std::env::var_os("LLRM_6502_MCP").is_some() {
-        crate::copyprop::copy_propagation(asm);
-    }
     if known_loads {
         drop_known_loads(asm);
     }
@@ -156,6 +153,9 @@ pub fn run_with(
     crate::peephole_cells::coalesce_copy(asm);
     // the chain's load can follow the store it was loaded from
     drop_reloads(asm);
+    if std::env::var_os("LLRM_6502_MCP").is_some() {
+        crate::copyprop::copy_propagation(asm);
+    }
     crate::peephole_cells::drop_dead_stores(asm);
     drop_dead_writes(asm);
     crate::peephole_cells::store_then_index_load(asm);
