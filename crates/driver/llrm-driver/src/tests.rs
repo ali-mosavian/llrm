@@ -1090,6 +1090,32 @@ fn a_long_constant_copy_at_m32_os_is_rep_movsb() {
     assert!(listing.contains("rep movsb") && !listing.contains("call"), "{listing}");
 }
 
+/// `mov $40, %eax` (5 B) where the pin's llc at `minsize` writes `push $40; pop %eax` (3 B):
+/// `ExpandMOVImmSExti8` was never expanded. At m32 -Os, and for a function marked `minsize`.
+/// Zero and -1 stay `xor` and `or`. DEVIATE PUSH-IMM-OS.
+#[test]
+fn a_small_immediate_at_m32_os_is_push_pop() {
+    let text = |attrs: &str, value: i32| {
+        format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+             target triple = \"i486-unknown-linux-gnu\"\n\
+             define i32 @f() {attrs} {{\n  ret i32 {value}\n}}\n"
+        )
+    };
+    let listing = |flags_: &[&str], attrs: &str, value: i32| {
+        let (built, _) = compiled(&flags(flags_), &text(attrs, value), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let at_os = listing(&["-mabi=sysv", "-Os"], "optsize", 40);
+    assert!(at_os.contains("pushd 40") && at_os.contains("pop eax"), "{at_os}");
+    let marked = listing(&["-mabi=sysv", "-O2"], "minsize optsize", 40);
+    assert!(marked.contains("pushd 40") && marked.contains("pop eax"), "{marked}");
+    let at_speed = listing(&["-mabi=sysv", "-O2"], "", 40);
+    assert!(at_speed.contains("mov eax, 40") && !at_speed.contains("push"), "{at_speed}");
+    let wide = listing(&["-mabi=sysv", "-Os"], "optsize", 4000);
+    assert!(wide.contains("mov eax, 4000") && !wide.contains("push"), "{wide}");
+}
+
 /// The i8086 clang writes Pascal functions as `cc232` (8 bits hold no 1000);
 /// llrm-llc refused the module with "calling convention 232", so no QCport
 /// module that calls qgl compiled.
