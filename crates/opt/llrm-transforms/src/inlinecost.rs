@@ -1534,8 +1534,13 @@ impl<'a> Analyzer<'a> {
         // analysis" unless the params allow a recursive call (:2481).
         if target == self.site.callee_id
             && (!self.params.allow_recursive_call
-                || crate::inline::gcc_work(self.callee) > self.params.recursive_callee_limit
-                || crate::inline::recursive_edge_growth(self.callee) > self.params.recursive_edge_growth)
+                || if self.peels_linear_recursion() {
+                    // DEVIATE REC-9: gcc's bar for a copy of a small function; the rest is the peeling's own caps.
+                    crate::inline::gcc_insns(self.callee) - 1 > crate::inline::MAX_INLINE_INSNS_AUTO
+                } else {
+                    crate::inline::gcc_work(self.callee) > self.params.recursive_callee_limit
+                        || crate::inline::recursive_edge_growth(self.callee) > self.params.recursive_edge_growth
+                })
         {
             self.is_recursive_call = true;
             return false;
@@ -2145,6 +2150,19 @@ impl<'a> Analyzer<'a> {
         tti.callee_frame_cost(&shape, kind).map_or(0, |cost| cost.value)
     }
 
+    /// DEVIATE REC-9 (gcc's peeling, ipa-inline.cc:1033; the pin refuses a recursive callee): the callee calls itself from one place
+    /// (a linear recursion) and this is another function's call of it, on a target that peels (`Tti::peels_linear_recursion`)
+    /// with recursive inlining on. The copy is peeled (`inline::Plan`: depth 8, 15 `gcc_insns` a copy, 450 in all, the calls of
+    /// it to itself per call below 1 - 1/8), so the call's latency is not what it saves: it removes a call, frame and return per
+    /// level, which `grows_more_than_it_saves` does not count (recpow -O2: growth x rate 2.0 M against saved x frequency 93 k).
+    /// A tree (two self-calls) keeps REC-1.
+    fn peels_linear_recursion(&self) -> bool {
+        self.params.allow_recursive_call
+            && self.site.tti.is_some_and(|tti| tti.peels_linear_recursion())
+            && self.site.caller_id != self.site.callee_id
+            && self_call_sites(&self.site.module.context, self.callee, self.site.callee_id) == 1
+    }
+
     /// Whether inlining leaves the module's code bigger. A callee that stays
     /// grows it by its unfolded size less the call it replaces, per site. One
     /// that dies with its calls (local, address not taken) is also removed:
@@ -2295,7 +2313,7 @@ impl<'a> Analyzer<'a> {
         let growth = self.growth_per_site();
         // Growth under one call's size is inside the estimate's resolution: the
         // sites of a dying callee fold differently and must not split.
-        if rate == 0 || growth <= self.call_size() || self.site.sole_call_to_local {
+        if rate == 0 || growth <= self.call_size() || self.site.sole_call_to_local || self.peels_linear_recursion() {
             return false;
         }
         let saved = self
@@ -3128,6 +3146,15 @@ pub fn sites_with_trials(
         }
     }
     out
+}
+
+/// How many direct calls of itself `function` makes.
+fn self_call_sites(
+    context: &llrm_mir::context::Context,
+    function: &Function,
+    id: GlobalId,
+) -> usize {
+    function.walk().filter(|&(_, one)| llrm_mir::memory::callee(context, function, one) == Some(id)).count()
 }
 
 /// What `decide` reads of the module besides the site.

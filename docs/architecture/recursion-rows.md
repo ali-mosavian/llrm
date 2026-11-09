@@ -119,3 +119,9 @@ Against gcc 15 -O3 on the vsgcc harness (486 clocks): the copies alone do not cl
 
 Cause of all three: a fixed depth. Fix: the priced copy depth (`priced_copy_depth`, REC-1) at m32 -O3, a table-driven price. Fix-forward on release/next, not a waiver for main.
  -O1, -Os and -O2 objects are byte-identical (196 of 196 each).
+
+## DEVIATE REC-9 (2026-11-10, arm64, owner w15, exit 2026-11-30 with REC-1): a linear recursion is peeled into its caller
+
+`Tti::peels_linear_recursion` (default false; arm64 true). A callee with one call of itself, called from another function at -O2/-O3, is neither refused as `recursive` nor priced by the bytes-against-clocks rule: gcc prices no clocks, and the copy is bounded by the peeling's own caps ([`inline::Plan`](../../crates/opt/llrm-transforms/src/inline.rs): depth 8, 15 `gcc_insns` a copy, 450 in all, the calls of it to itself per call below 1 - 1/8; params.opt L549, L573 of gcc 13.3) and by gcc's bar for a copy of a small function (15). The pin refuses a recursive callee (`IsRecursiveCall`); a tree (two self-calls) keeps REC-1. Why: recpow -O2 priced "growth x rate 2.0 M against saved x frequency 93 k" (one call's latency, no frame) and stayed unpeeled.
+
+Rows, flag-matched (`-fomit-frame-pointer`), instructions / bytes, 36 programs x -O2/-Os, dist llrm-arm64-llc a8e19d49f536 (2026-11-09T22:04Z): recpow -O2 67,475 / 260 -> 42,666 / 920 (gcc 44,084 / 1,244, net -24.6k); the other 71 cells are byte- and instruction-identical (a first version without the 15-`gcc_insns` bar also grew bintree, queens, quicksort and recchop by 48-88 B for -15..-31 instructions). Exit: REC-1's, when the copies are chosen by gcc's badness heap.
