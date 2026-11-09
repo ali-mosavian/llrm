@@ -172,8 +172,10 @@ pub struct Tuning {
     /// `-Os` this is a DEVIATION from the pin's optsize. 4 m32 cells, -131 B,
     /// none worse (jpeg_fixed 3149 -> 3104, stft_fixed 980 -> 929, nbody_fixed
     /// 416 -> 395, sat_builtins 520 -> 506). Clocks on a 486: `idiv` ~40 against
-    /// ~6 for `sar; shr; add; sar`; the level is bytes-strict, so it is off
-    /// at `-O2` and `-O3`.
+    /// ~6 for `sar; shr; add; sar`; jpeg_fixed +60% clocks (measured by x87),
+    /// nbody_fixed ~2.4M clk (72000 executed divides x ~34, estimated),
+    /// stft_fixed and sat_builtins unmeasured. The level is bytes-strict, so
+    /// it is off at `-O2` and `-O3`.
     ///
     /// [X86ISelLowering.cpp#L65389]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
     pub sdiv_pow2_stays_at_size: bool,
