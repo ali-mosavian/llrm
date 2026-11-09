@@ -143,6 +143,15 @@ pub struct Tuning {
     /// pin's own decompositions included (a tie keeps the `imul`); false:
     /// the pin's `combineMul` decomposes unconditionally.
     pub price_pin_multiplies: bool,
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): `FindLoopCounter` takes a
+    /// counter with any constant step that cannot wrap, and a limit that costs
+    /// one operation at most for it, not the pin's step of one
+    /// (`isLoopCounter`, `m_scev_One`). x86 only: a step of two or `--i` kept
+    /// its `ult`/signed test for the pin's LSR, and removing the rewrite is
+    /// worse on every x86 width (m64 jpeg_single +16 B, m16 jpeg +4 B x8,
+    /// m32 heapsort +1.8% clk, ld_horner +2.7%; 0 cells better at m64/m16,
+    /// 2026-11-09). false: the pin's.
+    pub lftr_any_stride: bool,
     /// At -Os a multiply by a constant stays an `imul` (the pin's `hasMinSize`
     /// rule, which the pin applies at -Oz only): the chain is no smaller.
     /// A constant `memset` past the store limit is `rep stos` at `-Os`
@@ -376,6 +385,7 @@ impl Tuning {
         unroll_o1_analyzed_trips: None,
         second_ipsccp: false,
         price_pin_multiplies: false,
+        lftr_any_stride: false,
         imul_at_size: false,
         rep_stos_at_size: false,
         unroll_threshold: None,
