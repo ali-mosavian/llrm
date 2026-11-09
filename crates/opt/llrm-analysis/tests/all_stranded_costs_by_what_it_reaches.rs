@@ -2,6 +2,10 @@
 //! whether a loop's exit into a block that stops the program was stranded
 //! (273 M Ir of a memory_expansion -O2 compile: 219 calls of 1.25 M). The exit
 //! block's own successors answer it.
+//!
+//! The returning blocks are then found once per body state (#7340, which
+//! allocates a set sized by the body): the first question of a state pays for
+//! it, and every later one allocates nothing for the rest of the body.
 
 use llrm_analysis::noreturn::all_stranded;
 use llrm_support::alloc_count::{Counting, counted};
@@ -28,13 +32,14 @@ fn allocations(returns: usize) -> usize {
     let (head, stop) = (llrm_analysis::cfg::id(layout[1]), llrm_analysis::cfg::id(layout[2]));
     let mut starts = IdSet::new();
     starts.insert(stop);
+    assert!(all_stranded(function, head, &starts), "the first question finds the returning blocks");
     let (stranded, made) = counted(|| all_stranded(function, head, &starts));
     assert!(stranded);
     made
 }
 
 #[test]
-fn test_asking_whether_an_exit_is_stranded_allocates_nothing_for_the_rest_of_the_body() {
+fn test_asking_again_whether_an_exit_is_stranded_allocates_nothing_for_the_rest_of_the_body() {
     let (small, large) = (allocations(4), allocations(400));
     assert!(large <= small + 2, "{small} allocations with 4 returns in the body, {large} with 400");
 }
