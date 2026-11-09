@@ -6,9 +6,9 @@ P=$1; L=$2; C=$3;  B=${B:-$(cd "$H/../.." && pwd)}; V=${LLVM_BIN:-$HOME/scratch/
 O=${OUT:-${TMPDIR:-/tmp}/arm64-bench-out}; mkdir -p $O; mkdir -p $O/src; python3 $H/prep.py $B/bench/$P/$P.c $O/src/$P.c.$$ && mv -f $O/src/$P.c.$$ $O/src/$P.c; S=$O/src/$P.c; X=$O/$P.$L.$C
 LLC="timeout 600 ${LLC:-$B/target/debug/llrm-arm64-llc}"
 T="-target aarch64-unknown-linux-gnu -I $B/runtime/shared/posix -Dfar= -Dnear= -Dhuge= -D__huge= -D__386__=1 -include $H/host_shim.h"
-# ccn|clangn|gccn (+nnv): every column compiled with the one neutral flag set of tools/external_flags.py (relocation: ours is static, -fno-pic -fno-pie);
+# ccn|clangn|gccn (+nnv): every column compiled with the one neutral flag set of tools/external_flags.py (relocation: flagset.RELOC, what ours emits unflagged);
 # the flags used are written to $X.flags, and cell.sh puts their canonical form in the row so table.py can refuse a mismatch.
-NEUTRAL=$(python3 $H/../external_flags.py --target arm64 --reloc=-fno-pic --reloc=-fno-pie --gcc-major 15); NEUTRAL_CL=${NEUTRAL/-fzero-init-padding-bits=standard/}; F=
+NEUTRAL=$(python3 $H/flagset.py --neutral); NEUTRAL_CL=${NEUTRAL/-fzero-init-padding-bits=standard/}; F=
 case $C in
  ccn) F="$NEUTRAL_CL"; LLRM_ARM64_SYSROOT=/usr/aarch64-linux-gnu timeout 600 ${CC:-$B/target/debug/llrm-cc} $T $F -O$L -ffreestanding -c $S -o $X.o ;;
  clangn) F="$NEUTRAL_CL"; $V/clang $T $F -O$L -ffreestanding -c $S -o $X.o ;;

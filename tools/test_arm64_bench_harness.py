@@ -161,7 +161,7 @@ class FlagSet(unittest.TestCase):
         sys.path.insert(0, os.path.dirname(HERE))
         import external_flags
 
-        neutral = " ".join(external_flags.flags("arm64", ["-fno-pic", "-fno-pie"], 15))
+        neutral = " ".join(external_flags.flags("arm64", ["-fPIE"], 15))
         self.assertEqual(self.check_gcc(neutral).returncode, 0)
         self.assertEqual(self.check_gcc(neutral + " -fno-tree-vectorize").returncode, 0)
 
@@ -169,7 +169,10 @@ class FlagSet(unittest.TestCase):
         sys.path.insert(0, os.path.dirname(HERE))
         import external_flags
 
-        neutral = " ".join(external_flags.flags("arm64", ["-fno-pic", "-fno-pie"], 15))
+        neutral = " ".join(external_flags.flags("arm64", ["-fPIE"], 15))
+        done = self.check_gcc(neutral.replace("-fPIE", "-fno-pic -fno-pie"))
+        self.assertNotEqual(done.returncode, 0)  # ours emits PIE unflagged: a static bar moved textfill O2 by 4 B
+        self.assertIn("missing ['-fPIE']", done.stderr)
         done = self.check_gcc(neutral + " -fno-inline")
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("extra ['-fno-inline']", done.stderr)
