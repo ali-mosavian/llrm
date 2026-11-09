@@ -34,6 +34,7 @@ import o0_sweep  # noqa: E402
 TIMEOUT = 180
 RUN_TIMEOUT = 30
 STUBS = HERE / "m68k_exec"
+BUILD_FLAGS = "-include config/m68k/config.h"  # the archive's compile flags beyond the level, part of its cache key
 RUNTIME = ROOT / "runtime/compiler-rt"
 
 
@@ -59,18 +60,21 @@ def first_error(text: str) -> str:
 
 
 def cache_dir(cc: str) -> Path:
-    """One directory per compiler binary: the archive's objects are that compiler's output."""
+    """One directory per compiler binary and runtime source: the archive's objects are that compiler's output for those sources and flags."""
     digest = hashlib.md5()
     for name in ("llrm-cc", "llrm-llc", "llrm-m68k-llc"):
         path = Path(cc).parent / name
         if path.exists():
             digest.update(path.read_bytes())
+    for source in sorted([*RUNTIME.glob("lib/**/*.[ch]"), *RUNTIME.glob("lib/**/*.inc"), *RUNTIME.glob("include/*.h"), *RUNTIME.glob("config/m68k/*.h")]):
+        digest.update(source.read_bytes())
+    digest.update(BUILD_FLAGS.encode())
     base = Path(os.environ.get("M68K_EXEC_CACHE") or Path.home() / ".cache/llrm-m68k-exec")
     return base / digest.hexdigest()[:12]
 
 
-def build_support(cc: str, root: str, cpu: str, cache: Path, jobs: int) -> list[str]:
-    """The stubs and the compiler-rt archive for CPU, built once per compiler binary: the link arguments after the program's object."""
+def build_support(cc: str, root: str, cpu: str, cache: Path, jobs: int, level: str = "O2") -> list[str]:
+    """The stubs and the compiler-rt archive for CPU, built at LEVEL once per compiler binary: the link arguments after the program's object."""
     cache.mkdir(parents=True, exist_ok=True)
     env = tool_env(root)
     stubs = []
@@ -85,15 +89,15 @@ def build_support(cc: str, root: str, cpu: str, cache: Path, jobs: int) -> list[
             if built.returncode != 0:
                 raise SystemExit(f"m68k_exec_sweep: stub {name} does not build: {built.stderr}")
         stubs.append(str(obj))
-    archive = cache / f"compiler-rt_{cpu}.a"
+    archive = cache / f"compiler-rt_{cpu}_{level}.a"
     if not archive.exists():
         sources = sorted([*RUNTIME.glob("lib/*/*.c"), *RUNTIME.glob("lib/fp/*/*.c")])
         cenv = {**env, **llrmbin.cc_environment(), "LLRM_CC_TARGET": f"m68k-{cpu}"}
 
         def compile_one(src: Path) -> str | None:
-            obj = cache / f"rt_{cpu}_{src.parent.name}_{src.stem}.o"
+            obj = cache / f"rt_{cpu}_{level}_{src.parent.name}_{src.stem}.o"
             run = subprocess.run(
-                [cc, "-O2", "-w", "-c", "-o", str(obj), "-I", str(RUNTIME / "include"), "-I", str(RUNTIME / "config/m68k"), str(src)],
+                [cc, f"-{level}", "-w", "-c", "-o", str(obj), "-I", str(RUNTIME / "include"), "-I", str(RUNTIME / "config/m68k"), "-include", str(RUNTIME / "config/m68k/config.h"), str(src)],
                 capture_output=True, text=True, env=cenv, timeout=TIMEOUT,
             )
             return str(obj) if run.returncode == 0 else None

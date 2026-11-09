@@ -210,7 +210,10 @@ impl Builder<'_> {
         instruction: &Instruction,
     ) -> Result<(), Refused> {
         let vt = self.type_of(instruction.ty)?;
-        let align = self.layout.align(&self.module.context.types, instruction.ty);
+        let mut align = self.layout.align(&self.module.context.types, instruction.ty);
+        if let Some(cap) = self.target.va_arg_align_cap {
+            align = align.min(u64::from(cap));
+        }
         let root = self.root();
         let list = self.get_value(instruction.operands[0])?;
         let source = self.src_value_of(instruction.operands[0]);

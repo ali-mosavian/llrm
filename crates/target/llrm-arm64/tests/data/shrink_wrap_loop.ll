@@ -3,7 +3,7 @@ target triple = "aarch64-unknown-linux-gnu"
 
 ; recpow's `power` after the mid-end: a loop that needs no frame, laid out
 ; before the join that holds the recursive call.
-define internal i64 @power(i64 %x, i32 %n) {
+define internal i64 @power(i64 %x, i32 %n) "frame-pointer"="non-leaf" {
 entry:
   %z = icmp eq i32 %n, 0
   br i1 %z, label %ret, label %pre
@@ -33,7 +33,7 @@ loop:
   br i1 %again, label %loop, label %call
 }
 
-define i64 @entry_point(i64 %x, i32 %n) {
+define i64 @entry_point(i64 %x, i32 %n) "frame-pointer"="non-leaf" {
   %r = call i64 @power(i64 %x, i32 %n)
   ret i64 %r
 }
