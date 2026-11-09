@@ -84,6 +84,16 @@ def code_bytes(listing: str) -> int:
     return sum(sections(listing))
 
 
+def code_without_comments(text: str) -> str:
+    return re.sub(r"/\*.*?\*/", "", re.sub(r"//[^\n]*", "", text), flags=re.S)
+
+
+def long_double_abi_mismatch(source: str) -> bool:
+    """gcc's m68k `long double` is the 12-byte extended type (sizeof 12, `__addxf3`); the pin's clang and ours make it a 64-bit double
+    (sizeof 8, `__adddf3`) and gcc has no option to match. A program that names the type is not like-for-like against gcc."""
+    return bool(re.search(r"\blong\s+double\b", code_without_comments(source)))
+
+
 def gcc_program_flags(flags: list[str]) -> list[str]:
     """The program's flags as gcc reads them. `-fno-inline-functions` keeps a function out of line for clang and llrm-cc; gcc still
     inlines the ones called once and the small ones (frameless.c: five static helpers became one `main` of 105 instructions, 260 B,
@@ -168,8 +178,10 @@ class Tools:
                               capture_output=True, text=True, env=self.env)
         if link.returncode != 0 or not mapfile.exists():
             return None, "link failed"
-        undefined = subprocess.run([f"{self.root}/usr/bin/m68k-linux-gnu-nm", "-u", str(exe)], capture_output=True, text=True, env=self.env).stdout
-        missing = sorted(w for line in undefined.splitlines() for w in line.split()[-1:] if w.startswith("__"))
+        nm = f"{self.root}/usr/bin/m68k-linux-gnu-nm"
+        wanted = {w for line in subprocess.run([nm, "-u", str(obj)], capture_output=True, text=True, env=self.env).stdout.splitlines() for w in line.split()[-1:] if w.startswith("__")}
+        linked = {line.split()[-1] for line in subprocess.run([nm, "--defined-only", str(exe)], capture_output=True, text=True, env=self.env).stdout.splitlines() if line.split()}
+        missing = sorted(wanted - linked)  # the linked exe drops a symbol it could not resolve, so ask the object what it wants
         return sum(program_size.members_of(program_size.text_bytes(mapfile.read_text())).values()), ",".join(missing)
 
     def support(self, cpu: str, level: str) -> str:
@@ -179,6 +191,8 @@ class Tools:
 
     def build(self, compiler: str, cpu: str, level: str, path: Path, flags: list[str], work: Path) -> tuple[int | None, str, str, int | None]:
         """(code bytes, reason, cause, library bytes) of one program in one column."""
+        if compiler == "gcc" and long_double_abi_mismatch(path.read_text()):
+            return None, "abi-mismatch", "gcc long double is 12 B (extended), clang and ours 8 B (double); no gcc option matches", None
         stem = f"{path.parent.name}_{path.stem}.{cpu}.{level}.{compiler}"
         out = str(work / stem)
         env = {**os.environ, "LLRM_CC_TARGET": f"m68k-{cpu}"} if compiler == "ours" else None

@@ -41,6 +41,34 @@ class CorpusMatrix(unittest.TestCase):
         for needle in ("# ours:", "# gcc:", "# clang:", "-msoft-float", "-fomit-frame-pointer", "--fatal-warnings", "-relocation-model=static"):
             self.assertIn(needle, lines)
 
+    def test_a_helper_the_archive_lacks_is_named(self):
+        """gcc's 96-bit long double calls __addxf3, which our compiler-rt does not define: ld --unresolved-symbols=ignore-all drops it from
+        the executable, so `nm -u exe` listed nothing, the library read 0 B and whole-program 'worse' was 43 KB for three programs."""
+        import os, subprocess, tempfile
+        root = os.environ.get("GCC_M68K")
+        if not root:
+            self.skipTest("GCC_M68K unset: needs the unpacked m68k gcc")
+        for name in ("LLRM_CC", "LLRM_PIN_CLANG", "LLVM_M68K"):
+            os.environ.setdefault(name, "/x/" + name)
+        tools = mx.Tools()
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "a.c")
+            open(src, "w").write("extern long double __addxf3(long double, long double);\nlong double f(long double a, long double b) { return __addxf3(a, b); }\n")
+            obj = os.path.join(tmp, "a.o")
+            subprocess.run([tools.gcc, f"-B{root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", "-mcpu=68020", "-msoft-float", "-O1", "-c", src, "-o", obj], check=True, env=tools.env)
+            empty = os.path.join(tmp, "empty.a")
+            subprocess.run([f"{root}/usr/bin/m68k-linux-gnu-ar", "rcs", empty], check=True, env=tools.env)
+            tools.support = lambda cpu, level: empty  # an archive without the helper
+            library, unresolved = tools.library("68020", "O1", Path(obj), Path(tmp))
+            self.assertEqual((library, unresolved), (0, "__addxf3"))
+
+    def test_a_long_double_program_has_no_gcc_reference(self):
+        """sizeof(long double) is 12 for gcc and 8 for the pin and ours: long_double_layout read ours 43 KB worse in whole-program size
+        (gcc's 96-bit helpers are not in our archive). A comment that says it does not count."""
+        self.assertTrue(mx.long_double_abi_mismatch("long double x;"))
+        self.assertFalse(mx.long_double_abi_mismatch("// long double is wide\nint x;"))
+        self.assertFalse(mx.long_double_abi_mismatch("double x;"))
+
     def test_gcc_is_built_soft_float(self):
         """gcc defaults to 68881 hardware floating point at 68020/040/060 and ours has no FPU: nbody was 578 B for gcc against 946 B soft."""
         self.assertIn("-msoft-float", mx.GCC_FLOAT)
