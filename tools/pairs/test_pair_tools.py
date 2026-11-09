@@ -233,3 +233,24 @@ def test_a_matrix_row_whose_pin_is_built_at_another_stack_alignment_is_refused_u
     else:
         raise AssertionError("an unlabelled pin at 16 against ours at 4 was accepted")
     assert "-mstack-alignment=4" in cells.pin_flags(matched) and not any(f.startswith("-mstack-alignment") for f in cells.pin_flags(linux))
+
+
+def test_m32run_links_a_non_pic_object_that_calls_through_the_plt_without_crashing(tmp_path):
+    """spill_store_order and memfuncs_runtime segfaulted in `memset@plt` and read as base miscompiles: our -fno-pic objects were linked into clang's
+    default PIE, whose PLT needs ebx = GOT."""
+    run = load("m32run")
+    clang = subprocess.run([sys.executable, str(HERE.parent / "pin_clang.py")], capture_output=True, text=True).stdout.strip()
+    if not clang:
+        return
+    # What our objects do: a call with a PLT32 relocation and no GOT register set up.
+    source = tmp_path / "a.s"
+    source.write_text(".text\n.globl main\nmain:\n\tsubl $12, %esp\n\tpushl $64\n\tpushl $7\n\tpushl $buf\n\tcall memset@PLT\n\taddl $12, %esp\n\tmovsbl buf+63, %eax\n\tpushl %eax\n\tcall report\n\taddl $16, %esp\n\txorl %eax, %eax\n\tret\n.bss\n.lcomm buf, 64\n")
+    shim = tmp_path / "r.c"
+    shim.write_text(run.SHIM)
+    for name, text in (("a", "s"), ("r", "c")):
+        subprocess.run([clang, "-m32", "-fno-pic", "-c", str(tmp_path / f"{name}.{text}"), "-o", str(tmp_path / f"{name}.o")], check=True)
+    link = run.link_command(clang, [str(tmp_path / "a.o"), str(tmp_path / "r.o")], str(tmp_path / "a.out"))
+    if subprocess.run(link, capture_output=True).returncode:
+        return  # no 32-bit libc on this host
+    done = subprocess.run([str(tmp_path / "a.out")], capture_output=True)
+    assert done.returncode == 0 and done.stdout == b"7\n", (done.returncode, done.stdout)
