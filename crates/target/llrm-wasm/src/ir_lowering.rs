@@ -2,24 +2,19 @@
 //! [`Lowering`] hooks CodeGenPrepare reads, answered from the DAG's action
 //! table (`dagisel::lowering`), one copy of what each operation does on each
 //! type. WebAssembly overrides none of the hooks the trait lists besides the
-//! register classes, so the rest are the base class's.
-//!
-//! DEVIATE WL1: only the steps in [`STEPS`] run; the pin runs them all. Each
-//! is added with its own comparison against the pin. Exit: all of them on.
+//! register classes, so the rest are the base class's. Every CodeGenPrepare
+//! step runs, as in the pin.
 
 use std::sync::OnceLock;
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{Action, LoadExt as DagLoadExt, TargetLowering};
-use llrm_mir::lowering::{CgpStep, Isd, LoadExt, Lowering};
+use llrm_mir::lowering::{Isd, LoadExt, Lowering};
 
 use crate::dagisel::hooks::Cpu;
 use crate::dagisel::lowering::target_lowering;
 use crate::features::Features;
-
-/// The steps of CodeGenPrepare that run on wasm so far (DEVIATE WL1).
-const STEPS: &[CgpStep] = &[CgpStep::SwitchType, CgpStep::ExtPromotion, CgpStep::Compares, CgpStep::CastSinking, CgpStep::OverflowMath, CgpStep::Branches, CgpStep::MaskSinking, CgpStep::SplitStores];
 
 /// The action table of wasm32, built once.
 fn table() -> &'static TargetLowering {
@@ -31,13 +26,6 @@ fn table() -> &'static TargetLowering {
 pub struct WasmIrLowering;
 
 impl Lowering for WasmIrLowering {
-    fn runs_cgp_step(
-        &self,
-        step: CgpStep,
-    ) -> bool {
-        STEPS.contains(&step)
-    }
-
     // The register classes: i32 and i64 (WebAssemblyISelLowering.cpp,
     // addRegisterClass).
     fn is_type_legal(
