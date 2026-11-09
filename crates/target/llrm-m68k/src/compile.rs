@@ -370,6 +370,38 @@ impl Touched {
     }
 }
 
+/// The bytes of `items` as assembled (a branch not yet sized counts 6).
+pub fn items_bytes(items: &[Item]) -> usize {
+    items
+        .iter()
+        .map(|item| match item {
+            Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
+            Item::Bytes(bytes) => bytes.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// The runtime calls the size-built functions of `module` make, as a
+/// [`crate::libcalls::mask`]: chosen once for the module (M68K-SIZE-LIBCALL),
+/// by the bytes each function builds to with and without them.
+pub fn libcalls_for(
+    module: &Module,
+    cpu: Cpu,
+    options: Options,
+) -> u8 {
+    let kinds = crate::libcalls::chosen(
+        module,
+        options.size_libcalls,
+        |one| options.size || has(&one.attrs, "optsize") || has(&one.attrs, "minsize"),
+        |name, kinds| {
+            let options = Options { libcalls: Some(crate::libcalls::mask(kinds)), ..options };
+            items_with(module, name, cpu, options).map(|items| items_bytes(&items))
+        },
+    );
+    crate::libcalls::mask(&kinds)
+}
+
 /// One build of the function, and the optional rewrites that changed it.
 fn items_once(
     module: &Module,
@@ -385,12 +417,7 @@ fn items_once(
     // DEVIATE M68K-SIZE-LIBCALL (`crate::libcalls`): the 68000 and 68010 always
     // call
     let libcalls = if wants_size && cpu.at_least(crate::dagisel::hooks::Cpu::M68020) {
-        match options.libcalls {
-            Some(bits) => crate::libcalls::from_mask(bits),
-            None => crate::libcalls::chosen(module, options.size_libcalls, |one| {
-                options.size || has(&one.attrs, "optsize") || has(&one.attrs, "minsize")
-            }),
-        }
+        crate::libcalls::from_mask(options.libcalls.unwrap_or_else(|| libcalls_for(module, cpu, options)))
     } else {
         Vec::new()
     };
