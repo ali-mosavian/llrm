@@ -364,8 +364,13 @@ pub fn function_items_with_places(
 /// makes a phi of the two values,
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L38957>).
 ///
-/// The result cell is written on both edges, as the phi's copies write it:
-/// the false arm before the branch, the true arm in the new block.
+/// The result is a cell of its own written on both edges, as the phi's copies
+/// write it (the false arm before the branch, the true arm in the new block),
+/// and copied to the select's result after the join: the pin's phi result is a
+/// fresh register, and where the result goes (a memory cell, a loop-carried
+/// register) is the coalescer's to join or not. With the result written in its
+/// destination on both edges, a memory destination was stored twice
+/// (`fletcher`: +4 B, +80 cy).
 ///
 /// A constant an arm takes is loaded into the result in that arm: the pin's
 /// phi copy of a constant is a `MOV32ri` made in the predecessor, and
@@ -411,18 +416,25 @@ fn expand_selects(
         // (result, first value, second value, the condition under which the
         // second is taken, move)
         let o = &inst.operands;
-        let (moves, code) = match (inst.opcode, o.as_slice()) {
+        // the result is made in a cell of its own and copied to the select's
+        // result after the join, as the pin's phi result is a fresh register
+        // that the allocator may or may not join with where it goes
+        let fresh = |prefix: &str| Operand::Reg(format!("{prefix}_sel{}_{name}", made + 1));
+        let (moves, code, copied) = match (inst.opcode, o.as_slice()) {
             (op::SETCC8, [d, Operand::Imm(code), ..]) => {
-                let load = |value| MInst::new(op::LDI8, vec![d.clone(), Operand::Imm(value)]);
-                ((load(1), load(0)), *code)
+                let s = fresh("v");
+                let load = |value| MInst::new(op::LDI8, vec![s.clone(), Operand::Imm(value)]);
+                ((load(1), load(0)), *code, copy(8, d.clone(), s))
             }
             (op::CMOV8, [d, f, t, Operand::Imm(code), ..]) => {
-                let arm = |v: &Operand| sunk.value(at, v, d, op::LDI8, 8);
-                ((arm(f), arm(t)), *code ^ 1)
+                let s = fresh("v");
+                let arm = |v: &Operand| sunk.value(at, v, &s, op::LDI8, 8);
+                ((arm(f), arm(t)), *code ^ 1, copy(8, d.clone(), s.clone()))
             }
             (op::CMOV16, [d, f, t, Operand::Imm(code), ..]) => {
-                let arm = |v: &Operand| sunk.value(at, v, d, op::LDI16, 16);
-                ((arm(f), arm(t)), *code ^ 1)
+                let s = fresh("w");
+                let arm = |v: &Operand| sunk.value(at, v, &s, op::LDI16, 16);
+                ((arm(f), arm(t)), *code ^ 1, copy(16, d.clone(), s.clone()))
             }
             _ => {
                 out.push(item);
@@ -445,6 +457,7 @@ fn expand_selects(
         out.push(Item::Label(arm));
         out.push(place(moves.1));
         out.push(Item::Label(join));
+        out.push(place(copied));
     }
     out
 }
