@@ -3462,8 +3462,11 @@ impl Builder<'_> {
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
             Opcode::Br => self.visit_br(&instruction)?,
             Opcode::Alloca { allocated, align, .. } => {
-                self.refuse_unkeepable_alignment(*allocated, *align)?;
-                if !instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) {
+                // a dynamic one is masked into place by `DYNAMIC_STACKALLOC`,
+                // whatever it asks
+                if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) {
+                    self.refuse_unkeepable_alignment(*allocated, *align)?;
+                } else {
                     self.visit_alloca(&instruction, *allocated, *align)?
                 }
             }

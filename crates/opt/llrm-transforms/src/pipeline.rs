@@ -1348,13 +1348,16 @@ pub fn refuse_vectors(program: &Program) -> Result<(), String> {
 
 /// An `alloca` asking more than the target's frames keep and no more than it
 /// accepts (`Machine::kept_stack_align`, `max_alloca_align`) is clamped to what
-/// they keep; one asking more than it accepts is refused by name. Alignment is
+/// they keep; one asking more than it accepts is refused by name. A dynamic one
+/// is left as asked where the target masks the address
+/// (`honors_dynamic_alloca_align`). Alignment is
 /// the explicit one, else the type's, as known-bits reads it.
 pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
     let (kept, max) = (program.target.kept_stack_align(), program.target.max_alloca_align());
     if kept.is_none() && max.is_none() {
         return Ok(());
     }
+    let honors_dynamic = program.target.honors_dynamic_alloca_align();
     // The passes that raise an alloca's alignment stop at the datalayout's
     // stack alignment (`tryEnforceAlignment`); no frame here keeps more.
     if let Some(kept) = kept {
@@ -1376,6 +1379,9 @@ pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
                     else {
                         continue;
                     };
+                    if honors_dynamic && !llrm_mir::instructioncost::is_static_alloca(function, inst) {
+                        continue;
+                    }
                     let wanted = align.unwrap_or_else(|| layout.align(&context.types, allocated));
                     if let Some(max) = max.filter(|max| wanted > *max) {
                         return Err(format!(

@@ -103,6 +103,9 @@ pub enum FrameOp {
 pub struct Layout {
     pub stack_size: i64,
     pub has_fp: bool,
+    /// How many of [`Function::objects`] are fixed: the frame pointer's slot
+    /// sits after them in `objects`.
+    fixed: usize,
     /// `objects` with every offset set (from the incoming stack pointer, less
     /// the return address), the saved-register slots last.
     pub objects: Vec<Object>,
@@ -149,7 +152,7 @@ pub fn layout(function: &Function) -> Layout {
     };
     let stack_size = calculate_frame_object_offsets(&mut objects, fixed, frame);
     let lowest_save = (first_save..objects.len()).min_by_key(|&index| objects[index].offset);
-    Layout { stack_size, has_fp, objects, saved, lowest_save }
+    Layout { stack_size, has_fp, fixed: function.fixed, objects, saved, lowest_save }
 }
 
 impl Layout {
@@ -157,6 +160,16 @@ impl Layout {
     /// `index` (as numbered in [`Function::objects`], plus the frame pointer's
     /// slot when there is one).
     pub fn address(
+        &self,
+        index: usize,
+    ) -> (Base, i64) {
+        // the frame pointer's slot is inserted after the fixed objects
+        let index = if self.has_fp && index >= self.fixed { index + 1 } else { index };
+        self.address_of(index)
+    }
+
+    /// [`Layout::address`] of object `index` of `objects` itself.
+    fn address_of(
         &self,
         index: usize,
     ) -> (Base, i64) {
@@ -173,7 +186,7 @@ impl Layout {
 
     /// Where the `movem` base is: the lowest saved slot's address.
     fn save_base(&self) -> Option<(Base, i64)> {
-        self.lowest_save.map(|index| self.address(index))
+        self.lowest_save.map(|index| self.address_of(index))
     }
 
     /// `emitPrologue` with `spillCalleeSavedRegisters`: the frame is opened,

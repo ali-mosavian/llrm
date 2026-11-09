@@ -503,6 +503,14 @@ pub trait Machine {
         None
     }
 
+    /// Whether a dynamic `alloca` (a variable size, or outside the entry block) keeps the alignment it asks for:
+    /// `DYNAMIC_STACKALLOC` masks the address, so it needs neither the clamp to [`Machine::kept_stack_align`] nor
+    /// the refusal at [`Machine::max_alloca_align`], which are for the frame's own objects. False: clamped and
+    /// refused like every other `alloca`.
+    fn honors_dynamic_alloca_align(&self) -> bool {
+        false
+    }
+
     /// What each operation costs on this target, for profitability.
     fn costs(&self) -> OperationCosts;
 

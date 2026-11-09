@@ -151,7 +151,7 @@ fn constant_int(
 }
 
 /// `AllocaInst::isStaticAlloca`: a constant size, in the entry block.
-fn is_static_alloca(
+pub fn is_static_alloca(
     function: &Function,
     inst: InstId,
 ) -> bool {

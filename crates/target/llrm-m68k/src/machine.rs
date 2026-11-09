@@ -58,6 +58,17 @@ impl Machine for M68kMachine {
         Some(8)
     }
 
+    /// DEVIATE M68K-ALLOCA-ALIGN4: a dynamic `alloca` of any alignment is
+    /// masked into place by `DYNAMIC_STACKALLOC`, which is stated against the
+    /// 4 the frames keep (the pin's `getStackAlignment` is 8, with frames that
+    /// keep 8): an align-8 request is masked here where the pin's is not.
+    /// Clamping it instead would hand back 4-aligned memory for
+    /// `__builtin_alloca_with_align(n, 64)`. Owner m68k. Exit: when the
+    /// frames keep 8, or 2026-11-30.
+    fn honors_dynamic_alloca_align(&self) -> bool {
+        true
+    }
+
     fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
         Some(Rc::new(crate::lowering::M68kLowering))
     }
