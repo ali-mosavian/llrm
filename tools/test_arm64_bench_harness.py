@@ -46,7 +46,7 @@ class Table(unittest.TestCase):
             rows.write(self.ROWS.format(m=rows_metric))
         try:
             return subprocess.run(
-                [sys.executable, os.path.join(HERE, "table.py"), rows.name, "--metric", flag], capture_output=True, text=True
+                [sys.executable, os.path.join(HERE, "table.py"), rows.name, "--metric", flag, "--count-commit", "abc123"], capture_output=True, text=True
             )
         finally:
             os.unlink(rows.name)
@@ -60,7 +60,7 @@ class Table(unittest.TestCase):
     def test_matching_metric_gives_verdicts_and_a_header_naming_it(self):
         done = self.run_table("kernel", "kernel")
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("# instrs metric: kernel (count.py --kernel)", done.stdout)
+        self.assertIn("# instrs metric: kernel (count.py --kernel; range [first function, report) minus main); count.py commit abc123", done.stdout)
         self.assertIn("a\tO2\tworse", done.stdout)  # 130 net against clang's 120
         self.assertIn("# O2: better 0, same 0, worse 1", done.stdout)
 

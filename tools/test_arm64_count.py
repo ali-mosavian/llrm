@@ -39,5 +39,35 @@ class KernelRange(unittest.TestCase):
         self.assertFalse(inside(0x300) or inside(0x330), "the runtime")
 
 
+    def load(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("count", COUNT)
+        count = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(count)
+        return count
+
+    LAYOUT = (
+        {"bench": 0x100, "emit": 0x140, "main": 0x200, "getbit": 0x220, "report": 0x300, "memcpy": 0x320},
+        {"bench": 0x40, "emit": 0xC0, "main": 0x1C, "getbit": 0x80, "report": 0x20, "memcpy": 0x40},
+    )
+
+    def test_every_address_of_the_layout_is_in_one_class(self):
+        count = self.load()
+        ranges = count.classes(*self.LAYOUT)
+        owner = lambda a: count.class_of(ranges, a)
+        self.assertEqual([owner(a) for a in (0x100, 0x140, 0x204, 0x230, 0x300, 0x330, 0x400)],
+                         ["kernel", "kernel", "main", "kernel", "runtime", "runtime", "other"])
+
+    def test_a_range_that_loses_instructions_fails_the_sum_guard(self):
+        # The old range [first, main) put getbit's instructions in no class: 5 of 105 lost.
+        count = self.load()
+        count.check_sum({"kernel": 70, "main": 10, "runtime": 20, "other": 0}, 100)
+        with self.assertRaises(SystemExit):
+            count.check_sum({"kernel": 70, "main": 10, "runtime": 20}, 105)
+        with self.assertRaises(SystemExit):
+            count.check_sum({"kernel": 70, "main": 10, "runtime": 20, "other": 5}, 105)
+
+
 if __name__ == "__main__":
     unittest.main()

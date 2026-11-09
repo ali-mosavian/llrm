@@ -30,6 +30,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("rows")
     ap.add_argument("--metric", required=True, choices=("kernel", "whole"))
+    ap.add_argument("--count-commit", required=True, help="the commit of count.py that counted the rows")
     args = ap.parse_args(argv)
     rows = []
     for number, line in enumerate(open(args.rows), 1):
@@ -40,7 +41,9 @@ def main(argv=None):
             sys.exit(f"{args.rows}:{number}: row counted as {metric!r}, header says {args.metric!r}")
         rows.append((prog, level, comp, nbytes, instrs))
     result = verdicts(rows)
-    print(f"# instrs metric: {args.metric} (count.py --{args.metric}); bar: best of {'/'.join(DEFAULT_BARS)}")
+    rule = "range [first function, report) minus main" if args.metric == "kernel" else "range: the whole process"
+    print(f"# instrs metric: {args.metric} (count.py --{args.metric}; {rule}); count.py commit {args.count_commit}")
+    print(f"# bar: best of {'/'.join(DEFAULT_BARS)}; O2/O3 net = instrs + 0.3 B, Os bytes")
     print("prog\tlevel\tverdict")
     for (prog, level), verdict in result.items():
         print(f"{prog}\t{level}\t{verdict}")

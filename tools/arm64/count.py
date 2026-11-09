@@ -32,6 +32,27 @@ def kernel_range(funcs, sizes):
     return min(funcs.values()), funcs['report'], (funcs['main'], funcs['main'] + sizes['main'])
 
 
+def classes(funcs, sizes):
+    """Every executable address in exactly one class: [(lo, hi, name)], sorted. `other` is whatever is left."""
+    lo, hi, (main_lo, main_hi) = kernel_range(funcs, sizes)
+    text_end = max(funcs[name] + sizes[name] for name in funcs)
+    return [(lo, main_lo, 'kernel'), (main_lo, main_hi, 'main'), (main_hi, hi, 'kernel'), (hi, text_end, 'runtime')]
+
+
+def class_of(ranges, address):
+    for lo, hi, name in ranges:
+        if lo <= address < hi:
+            return name
+    return 'other'
+
+
+def check_sum(counted, whole):
+    """kernel + main + runtime must be the whole-process count: a range that loses instructions is an error."""
+    parts = sum(counted.get(name, 0) for name in ('kernel', 'main', 'runtime'))
+    if counted.get('other', 0) or parts != whole:
+        raise SystemExit(f'count.py: kernel+main+runtime = {parts}, whole = {whole}, outside every range = {counted.get("other", 0)}')
+
+
 def run(path, limit=300_000_000, kernel=None):
     from unicorn import Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_INTR
     from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_CPACR_EL1, UC_ARM64_REG_X30, UC_ARM64_REG_X8, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_PC
@@ -62,13 +83,12 @@ def run(path, limit=300_000_000, kernel=None):
     uc.reg_write(UC_ARM64_REG_SP, 0x7ffff000)
     uc.reg_write(UC_ARM64_REG_CPACR_EL1, 3 << 20)
     uc.reg_write(UC_ARM64_REG_X30, 0xdead0000)
-    n = [0]
-    lo, hi = (0, 1 << 64)
-    skip = (0, 0)
-    if kernel:
-        lo, hi, skip = kernel_range(funcs, sizes)
+    ranges = classes(funcs, sizes)
+    counted, whole = {}, [0]
     def hook(u, a, s, ud):
-        if lo <= a < hi and not skip[0] <= a < skip[1]: n[0] += 1
+        whole[0] += 1
+        name = class_of(ranges, a)
+        counted[name] = counted.get(name, 0) + 1
     uc.hook_add(UC_HOOK_CODE, hook)
     files, written, nextfd = {}, hashlib.md5(), [3]
     def cstr(addr):
@@ -100,10 +120,11 @@ def run(path, limit=300_000_000, kernel=None):
     uc.hook_add(UC_HOOK_INTR, svc)
     try: uc.emu_start(entry, 0xdead0000, count=limit)
     except UcError as e:
-        if uc.reg_read(UC_ARM64_REG_PC) != 0xdead0000: return None, n[0], str(e) + " pc=%x" % uc.reg_read(UC_ARM64_REG_PC)
+        if uc.reg_read(UC_ARM64_REG_PC) != 0xdead0000: return None, whole[0], str(e) + " pc=%x" % uc.reg_read(UC_ARM64_REG_PC)
     rep = struct.unpack('<q', uc.mem_read(syms['reported'], 8))[0] if 'reported' in syms else None
     if written.digest() != hashlib.md5().digest(): rep = f'{rep}:{written.hexdigest()[:8]}'
-    return rep, n[0], ''
+    check_sum(counted, whole[0])
+    return rep, (counted.get('kernel', 0) if kernel else whole[0]), ''
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('elf')
