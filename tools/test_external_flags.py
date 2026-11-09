@@ -95,3 +95,10 @@ def test_gcc_gets_no_inlining_where_a_test_says_fno_inline_functions(tmp_path):
 def test_other_flags_pass_to_gcc_unchanged():
     tokens = ["-fno-inline-functions-called-once", "-mabi=watcom", "-fno-tree-vectorize"]
     assert external_flags.gcc_program_flags(tokens) == tokens
+
+
+def test_a_flag_gcc_cannot_take_is_refused_not_passed_on():
+    """`-ffixed-point` reached gcc as `-ffixed-REG` and only warned, so the fixed-point program's gcc cell compiled something else."""
+    for token in ("-ffixed-point", "-fno-inline=sum5", "-fsanitize=stack"):
+        with pytest.raises(ValueError):
+            external_flags.gcc_program_flags(["-O2", token])
