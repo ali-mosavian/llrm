@@ -2515,7 +2515,13 @@ fn table_cost(key: &str) -> Option<crate::timing::Cost> {
     let generic = key.split_once(' ').map_or_else(
         || key.to_owned(),
         |(mnemonic, operands)| {
-            let operands: Vec<&str> = operands.split(';').map(|one| if one == "a" { "b" } else { one }).collect();
+            // `add a;b`, `adc a;b`, `sbc a;b` name the accumulator in the table
+            let named = usize::from(matches!(mnemonic, "add" | "adc" | "sbc"));
+            let operands: Vec<&str> = operands
+                .split(';')
+                .enumerate()
+                .map(|(at, one)| if one == "a" && at >= named { "b" } else { one })
+                .collect();
             format!("{mnemonic} {}", operands.join(";"))
         },
     );

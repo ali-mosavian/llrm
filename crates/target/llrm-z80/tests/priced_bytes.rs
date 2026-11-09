@@ -23,6 +23,16 @@ fn an_instruction_is_priced_at_its_assembled_bytes() {
         ("ld (_sum), de", 4),
         ("ld (_dst+7), a", 3),
         ("ld a, (_src+9)", 3),
+        // forms the old key already priced: the accumulator in the table's own spelling
+        ("add a, a", 1),
+        ("adc a, b", 1),
+        ("sbc a, a", 1),
+        ("ld b, a", 1),
+        ("ld a, b", 1),
+        ("ld a, #5", 2),
+        ("sub a, #5", 2),
+        ("cp a, (hl)", 1),
+        ("add a, #5", 2),
     ];
     for (text, bytes) in rows {
         assert_eq!(price(&[Line::Inst(text.into())]).0, bytes, "`{text}`");
