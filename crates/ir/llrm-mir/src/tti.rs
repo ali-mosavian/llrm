@@ -957,6 +957,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::sdiv_pow2_stays_at_size`.
+    fn sdiv_pow2_stays_at_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::rep_movs_at_size`.
     fn rep_movs_at_size(&self) -> bool {
         false
