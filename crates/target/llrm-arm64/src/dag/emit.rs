@@ -1169,7 +1169,7 @@ impl Emitter<'_> {
         id: u32,
         name: &str,
     ) -> Result<(), String> {
-        use crate::isel::memops::{BATCH, pieces, wide_pieces};
+        use crate::dag::memops::{BATCH, pieces, wide_pieces};
         let node = self.dag.node(SDValue { node: id, res: 0 });
         let operand = |at: usize| node.ops[at];
         let mmo = MemOperand { volatile: self.dag.volatile_accesses.contains(&id), ..MemOperand::default() };
