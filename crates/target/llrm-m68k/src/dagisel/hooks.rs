@@ -43,6 +43,15 @@ impl Cpu {
         self.at_least(Cpu::M68020) && self != Cpu::M68060
     }
 
+    /// Whether `bfffo` is a hardware instruction (DEVIATE M68K-BFFFO, see
+    /// [`super::bfffo`]): the table's row for it, not decoded as emulated.
+    pub fn has_bit_field_find(self) -> bool {
+        let model = crate::isa::Cpu::ALL[self as usize];
+        crate::isa::forms().iter().any(|form| {
+            form.mnemonic == "bfffo" && form.operands == "Dn,{off:wid},Dn" && form.on(model) && !form.emulated_on(model)
+        })
+    }
+
     /// `Subtarget->atLeastM68020()` and its siblings.
     pub fn at_least(
         self,
