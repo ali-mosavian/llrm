@@ -3,7 +3,7 @@
 use llrm_z80::compile::{allocated, lines, machine_function, text};
 use llrm_z80::driver::{Level, Request};
 
-const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16";
+const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8";
 
 fn compiled(
     body: &str,
@@ -270,7 +270,7 @@ fn a_flag_reader_after_a_clobber_reads_the_flags_of_its_compare() {
 /// for a value made in `a` read the pointer operand.
 #[test]
 fn a_byte_in_a_is_stored_through_any_pair() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
         define void @cp(ptr %a, ptr %b, ptr %c) {\n  %v = load i8, ptr %c\n  store i8 %v, ptr %b\n  %w = load i8, ptr %a\n  store i8 %w, ptr %c\n  ret void\n}\n";
     let out = text(ir, "cp", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ld (de), a") && out.contains("ld (bc), a") && !out.contains("ex de, hl"), "{out}");
@@ -663,7 +663,7 @@ fn a_copy_nothing_after_it_touches_moves_down_to_the_branch() {
 /// None", which refused every 64-bit divide by a constant in the C corpus.
 #[test]
 fn a_word_compare_nothing_reads_is_not_emitted() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               @g = external global i64\n\
               define i1 @f() {\n  %a = load i64, ptr @g\n  %c = icmp ult i64 %a, 4294967297\n  ret i1 %c\n}\n";
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
@@ -715,7 +715,7 @@ fn a_pair_with_its_high_byte_replaced_keeps_its_low_byte_where_it_is() {
 /// lost to SDCC on bytes, clocks and instructions with it.
 #[test]
 fn the_difference_of_two_zero_extended_bytes_is_a_byte_subtraction_and_its_borrow() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i16 @f(i8 %a, i8 %b) {\n  %x = zext i8 %a to i16\n  %y = zext i8 %b to i16\n  %d = sub i16 %x, %y\n  ret i16 %d\n}\n";
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("sbc a, a") && !out.contains("sbc hl"), "{out}");
@@ -977,7 +977,7 @@ fn a_byte_wanted_in_a_and_in_a_register_is_loaded_the_cheaper_way() {
 /// shifts and an add, as the pin's `decomposeMulByConstant` makes it.
 #[test]
 fn a_multiply_by_a_constant_one_off_a_power_of_two_is_shifts_and_an_add() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i16 @f(i16 %x) {\n  %r = mul i16 %x, 33\n  ret i16 %r\n}\n";
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("mulhi3"), "{out}");
@@ -997,7 +997,7 @@ fn a_word_shifted_left_in_hl_is_doublings() {
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.
 #[test]
 fn a_word_in_de_is_stored_to_a_global_without_moving_it() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               @r = external global i16\n\
               declare i16 @g()\n\
               define void @f() {\n  %v = call i16 @g()\n  store volatile i16 %v, ptr @r\n  ret void\n}\n";
@@ -1020,12 +1020,14 @@ fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
 
 /// A call with more arguments than registers was refused: "stack arguments are
 /// not expanded yet". 8 functions of the C corpus beyond the 23 rows hit it.
-/// The caller reserves the area, stores through IX and pops it after the call.
+/// The caller reserves the area, stores through IX and pops it after the call;
+/// a call that the return follows leaves it to the `ld sp, ix` of the return.
 #[test]
 fn a_call_with_stack_arguments_reserves_and_frees_the_area() {
     let ir = include_str!("kernels/ir/stackargs.ll");
     let out = text(ir, "stackargs", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(out.contains("push bc") && out.contains("pop bc") && out.contains("(ix), "), "{out}");
+    assert!(out.contains("push bc") && out.contains("(ix), "), "{out}");
+    assert!(out.contains("pop bc") || out.contains("ld sp, ix"), "{out}");
 }
 
 /// A frame object out of the byte displacement of IX was refused: "frame object
@@ -1054,7 +1056,7 @@ fn a_call_through_a_pointer_puts_the_address_in_iy() {
 /// when both are zero: `ld a, h; or a, l`.
 #[test]
 fn a_word_tested_for_zero_is_its_two_bytes_or_ed() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               @r = external global i8\n\
               define void @count16(i16 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i16 [ %n, %entry ], [ %i1, %loop ]\n  store volatile i8 1, ptr @r\n  %i1 = add i16 %i, -1\n  %c = icmp eq i16 %i1, 0\n  br i1 %c, label %done, label %loop\ndone:\n  ret void\n}\n";
     let out = text(ir, "count16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
@@ -1066,7 +1068,7 @@ fn a_word_tested_for_zero_is_its_two_bytes_or_ed() {
 /// the 23 rows hit it.
 #[test]
 fn a_freeze_is_a_copy() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i16 @f(i16 %x, i8 %b) {\n  %c = icmp eq i8 %b, 0\n  %n = sub nsw i16 0, %x\n  %s = select i1 %c, i16 %x, i16 %n\n  %f = freeze i16 %s\n  %d = sdiv i16 %f, 3\n  %m = mul i16 %d, 3\n  %r = sub i16 %f, %m\n  ret i16 %r\n}\n";
     text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
 }
@@ -2098,7 +2100,7 @@ fn a_refused_inline_that_shrinks_the_caller_is_tried_at_o1() {
 fn a_byte_shifted_far_rotates_through_a_and_masks() {
     let ir = |op: &str, ty: &str, n: u32| {
         format!(
-            "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+            "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
              define {ty} @f({ty} %x) {{\n  %y = {op} {ty} %x, {n}\n  ret {ty} %y\n}}\n"
         )
     };
@@ -2122,7 +2124,7 @@ fn a_branch_over_a_tail_call_is_the_tail_call_on_the_opposite_condition() {
 /// where `ld b, #129` does.
 #[test]
 fn a_widened_byte_combined_with_a_word_skips_its_zero_lane() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i16 @or_const(i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %z, 33280\n  ret i16 %r\n}\n\
               define i16 @or_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = or i16 %x, %z\n  ret i16 %r\n}\n\
               define i16 @and_word(i16 %x, i8 %a) {\n  %z = zext i8 %a to i16\n  %r = and i16 %x, %z\n  ret i16 %r\n}\n";
@@ -2201,7 +2203,7 @@ fn a_long_multiply_calls_the_routine_at_every_level() {
 /// `x * 3` of an `i64` was a call per half (compare_to_int64: +8k T of 37k).
 #[test]
 fn a_constant_factor_of_a_long_stays_inline_beside_the_calls() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
               define i64 @f(i64 %a) {\n  %m = mul i64 %a, 3\n  ret i64 %m\n}\n\
               define i32 @g(i32 %a, i32 %b, i32 %c) {\n  %m = mul i32 %a, %b\n  %n = mul i32 %m, %c\n  ret i32 %n\n}";
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
@@ -2255,4 +2257,77 @@ fn is_constant_is_lowered_at_o0() {
     let ir = include_str!("kernels/ir/is_constant_o0.ll");
     let out = text(ir, "f", 0, &Request::new(Level::O0)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ret"), "{out}");
+}
+
+/// `llvm.frameaddress` has no lowering; it was tail called as a symbol named
+/// `llvm$2eframeaddress$2ep0` (silent wrong code). Now a refusal naming it.
+#[test]
+fn an_intrinsic_nobody_lowered_is_refused_by_name() {
+    let ir = include_str!("kernels/ir/frameaddress_refused.ll");
+    for level in [Level::O0, Level::O2] {
+        let why = text(ir, "f", 0, &Request::new(level)).expect_err("a refusal");
+        assert!(why.contains("llvm.frameaddress"), "{level:?}: {why}");
+    }
+}
+
+/// A call with 18 B of stack arguments was refused ("18 bytes of stack
+/// arguments"; five programs). The area is opened by one sum through IY and
+/// not released before the return that restores SP from IX.
+#[test]
+fn a_large_stack_argument_area_is_one_sum_not_a_refusal() {
+    let ir = include_str!("kernels/ir/stack_args_nine_words.ll");
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(out.contains("ld iy, #-18") && out.contains("add iy, sp"), "{level:?}: {out}");
+        assert!(!out.contains("push bc"), "{level:?}: {out}");
+    }
+}
+
+/// A function with `...` was refused ("CannotSelect VAStart", then "VAEnd"; `variadic.c`, `long_double_variadic.c`),
+/// and `va_start` is the address of the first unnamed argument: above the return address and the saved ix.
+#[test]
+fn va_start_names_the_first_unnamed_argument_on_the_stack() {
+    let ir = include_str!("kernels/ir/variadic_unnamed_on_stack.ll");
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let callee = text(ir, "first", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(callee.contains("ld e, 4(ix)") && callee.contains("ld d, 5(ix)"), "{level:?}: {callee}");
+    }
+}
+
+/// The unnamed words of a call passed in the registers the named ones left free, where the callee reads them from the
+/// stack. Both go on the stack, pushed in reverse, though the second would fit in de.
+#[test]
+fn the_unnamed_arguments_of_a_variadic_call_go_on_the_stack() {
+    let ir = include_str!("kernels/ir/variadic_unnamed_on_stack.ll");
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let caller = text(ir, "caller", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert_eq!(caller.matches("push").count(), 2, "{level:?}: both unnamed words are pushed\n{caller}");
+    }
+}
+
+/// A long shifted by a variable on each arm of a diamond, a library call per arm, panicked in `tail_calls` ("attempt to
+/// subtract with overflow", a block of only the bare stack release); the soft-float member `fix_usi` could not be built.
+#[test]
+fn a_library_call_on_each_arm_of_a_diamond_compiles() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
+              define i32 @f(i1 %c, i32 %x, i16 %n) {\n  %k = zext i16 %n to i32\n  br i1 %c, label %a, label %b\n\
+              a:\n  %s = shl i32 %x, %k\n  br label %j\nb:\n  %t = lshr i32 %x, %k\n  br label %j\n\
+              j:\n  %p = phi i32 [ %s, %a ], [ %t, %b ]\n  ret i32 %p\n}\n";
+    for level in [Level::O0, Level::O1, Level::Os, Level::O2] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(out.contains("ret"), "{level:?}: {out}");
+    }
+}
+
+/// `(a & 0x80000000) != 0` as a branch condition with a phi after it (the soft-float library's `x < 0 ? -m : m`) was
+/// refused in the legalizer: `SetCCCarry` with the low words' borrow folded to a constant (`x - 0` never borrows),
+/// which the Custom lowering did not take ("Unsupported SetCCCarry I1 convert node to libcall"; 19 of 24 soft-float
+/// members, every level above -O0). The sign is one `bit 7, d`.
+#[test]
+fn a_long_sign_test_whose_low_borrow_folded_compiles_as_a_bit_test() {
+    let ir = include_str!("kernels/ir/long_compare_folded_borrow.ll");
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let out = text(ir, "sign_branch", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(out.contains("bit 7, d"), "{level:?}: {out}");
+    }
 }

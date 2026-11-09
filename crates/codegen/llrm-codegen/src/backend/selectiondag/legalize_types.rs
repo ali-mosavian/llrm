@@ -1382,6 +1382,46 @@ impl<'a> TypeLegalizer<'a> {
                 };
                 self.dag.get_node(op, to, &[wide, self.dag.operand(value, 1)])
             }
+            op @ (ISD::Rotl | ISD::Rotr) => {
+                // `PromoteIntRes_Rotate`
+                // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L1533>):
+                // with room for the value twice, a
+                // variable rotate is one shift of the value concatenated
+                // with itself; otherwise the rotate becomes shifts and ORs
+                // (`expandROT`) that promote on their own.
+                let amount = self.dag.operand(value, 1);
+                let (old_bits, new_bits) = (vt.size_in_bits(), to.size_in_bits());
+                let custom_shifts = self.tli.operation_action(ISD::Shl, vt) == super::actions::Action::Custom
+                    || self.tli.operation_action(ISD::Srl, vt) == super::actions::Action::Custom;
+                if new_bits >= 2 * old_bits
+                    && self.dag.constant(amount).is_none()
+                    && !self.tli.is_operation_legal_or_custom(op, to)
+                    && !custom_shifts
+                {
+                    let op0 = self.promoted_integer(self.dag.operand(value, 0));
+                    let amount = if self.action(self.dag.value_type(amount)) == TypeAction::PromoteInteger {
+                        self.zext_promoted_integer(amount)
+                    } else {
+                        amount
+                    };
+                    let amount_vt = self.dag.value_type(amount);
+                    // The amount is taken modulo the old width.
+                    let width = self.dag.get_constant(u128::from(old_bits), amount_vt);
+                    let amount = self.dag.get_node(ISD::URem, amount_vt, &[amount, width]);
+                    let hi_shift = self.shift_const(u128::from(old_bits), to);
+                    let hi = self.dag.get_node(ISD::Shl, to, &[op0, hi_shift]);
+                    let mask = self.dag.get_constant(super::fold::mask(old_bits), to);
+                    let lo = self.dag.get_node(ISD::And, to, &[op0, mask]);
+                    let both = self.dag.get_node(ISD::Or, to, &[hi, lo]);
+                    let is_right = op == ISD::Rotr;
+                    let rotated = self.dag.get_node(if is_right { ISD::Srl } else { ISD::Shl }, to, &[both, amount]);
+                    if is_right { rotated } else { self.dag.get_node(ISD::Srl, to, &[rotated, hi_shift]) }
+                } else {
+                    let expanded = super::expand_funnel::expand_rotate(self.dag, self.tli, value);
+                    self.replace_value_with(value, expanded);
+                    return Ok(());
+                }
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);

@@ -5,7 +5,7 @@
 set -e
 cd "$(dirname "$0")/../.."; R=$PWD; LLC=${LLRM_Z80_LLC:?path of llrm-z80-llc}; P=${LLRM_PIN_CLANG:-/opt/llrm-pin/bin/clang}; LIMIT=${LIMIT:-60000}
 T=$(mktemp -d); trap 'rm -r $T' EXIT; cd $T
-DL="e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"; INC="-include $R/config/z80/config.h"; [ "${CFG-1}" = 0 ] && INC=
+DL="e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"; INC="-include $R/config/z80/config.h"; [ "${CFG-1}" = 0 ] && INC=
 cc() { # src name
   $P $XF --target=msp430 -O2 -Xclang -disable-llvm-passes -ffreestanding -I$R/include $INC -S -emit-llvm $1 -o $2.raw.ll
   sed -E "s|^target datalayout = .*|target datalayout = \"$DL\"|; /^target triple/d" $2.raw.ll > $2.ll; $LLC -S -Os -o $2.s $2.ll; sed -i 's/___/__/g' $2.s; sdasz80 -g -o $2.rel $2.s; }

@@ -1,4 +1,4 @@
-target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"
+target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
 
 ; A cold 100-byte array (one use) and a hot 120-byte one (eight stores): by size alone the cold one
 ; lay nearest IX and the hot one beyond its reach.

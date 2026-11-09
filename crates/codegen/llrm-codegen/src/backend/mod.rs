@@ -163,6 +163,7 @@ pub mod farcall;
 pub mod farload;
 pub mod floatalloc;
 pub mod floatassign;
+pub mod libcall_choice;
 pub mod floatfold;
 pub mod floatregions;
 pub mod floatsink;
