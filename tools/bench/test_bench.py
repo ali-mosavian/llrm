@@ -1549,3 +1549,8 @@ def test_a_timed_out_borland_job_says_so_not_no_object(tmp_path, monkeypatch):
     monkeypatch.setattr(bench.dosbatch, "c_support", lambda mode, folder: [])
     built = bench.build_borland("bcc", [(types.SimpleNamespace(source=source), "R000")], "Os", tmp_path / "work")
     assert built["R000"].startswith("bcc: timed out after 1800 s"), built
+
+
+def test_the_module_keeps_bench_main_from_re_running_under_load_guard():
+    """bench.main waits at the load guard unless LG_GUARDED=1; at load above its limit the whole file hung 70 minutes at its first test that calls main."""
+    assert os.environ.get("LG_GUARDED") == "1"
