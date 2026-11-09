@@ -27,7 +27,6 @@ use llrm_lir::registers::RegId;
 use llrm_sdag::actions::{Aarch64Features, TargetLowering};
 
 use super::globals::Globals;
-use super::ids::Aarch64Ids;
 
 /// Combine hooks and legalizer hooks of arm64: none. A Custom operation the
 /// table asks for is recorded, and the block refused after legalization.
@@ -484,7 +483,7 @@ impl SchedInfo for Aarch64Sched {
         &self,
         id: RegId,
     ) -> Option<u16> {
-        llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters::pin_register(&Aarch64Ids::new(), id)
+        llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters::pin_register(&*super::ids::IDS, id)
     }
 
     fn num_defs(
@@ -533,6 +532,18 @@ impl SchedInfo for Aarch64Sched {
 /// (`dagisel.toml` `cpus`).
 const APPLE_M1: Aarch64Features = Aarch64Features { cssc: false, lse: true, outline_atomics: false, lse2: true };
 
+thread_local! {
+    /// The action table, by `shouldOptForSize`: built once per thread, as the
+    /// pin builds `AArch64TargetLowering` once per subtarget, not per block
+    /// (2.3 M of rectwo's isel in 17 blocks).
+    static ACTIONS: [TargetLowering; 2] = [false, true].map(|size| {
+        let mut tli = TargetLowering::aarch64(APPLE_M1);
+        tli.set_opt_for_size(size);
+        tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
+        tli
+    });
+}
+
 /// `CodeGenAndEmitDAG` up to the end of scheduling: the units, in order.
 pub fn select_block(
     dag: &mut SelectionDAG,
@@ -541,12 +552,9 @@ pub fn select_block(
     opt_for_size: bool,
     linux: bool,
 ) -> Result<Vec<Unit>, Refusal> {
-    let mut tli = TargetLowering::aarch64(APPLE_M1);
-    tli.set_opt_for_size(opt_for_size);
-    tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
     llrm_codegen::backend::selectiondag::live_out::assert_live_out_copies(dag, info);
     let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone(), linux };
-    let legal = legalized_with(dag, &tli, &mut lowering, None, false);
+    let legal = ACTIONS.with(|tables| legalized_with(dag, &tables[usize::from(opt_for_size)], &mut lowering, None, false));
     // The reason the legalizer stopped is the Custom operation it could not
     // lower.
     if let Some(why) = lowering.custom {
@@ -557,7 +565,7 @@ pub fn select_block(
     llrm_codegen::backend::selectiondag::live_out::compute_live_out_vreg_info(dag, info);
     let selector = Selector::new(table::TABLE);
     let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone(), opt_for_size);
-    do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {
+    do_instruction_selection_with(dag, &*super::ids::IDS, |adapter, node| {
         select_frame_index(adapter, node)
             .or_else(|| select_indexed_load(adapter, node))
             .or_else(|| super::bitfield::select_bitfield_extract(adapter, node))
