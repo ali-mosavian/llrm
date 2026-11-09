@@ -3159,7 +3159,12 @@ fn lower_fcopysign(
 /// The stack pointer a pointer of type `vt` is saved from and restored to
 /// (`getStackPointerRegisterToSaveRestore`): `rsp` at 64 bits.
 fn stack_register(vt: EVT) -> llrm_lir::registers::RegId {
-    if vt == EVT::I64 { llrm_lir::registers::RegId::RSP } else { llrm_lir::registers::RegId::SP }
+    use llrm_lir::registers::RegId;
+    match vt {
+        EVT::I64 => RegId::RSP,
+        EVT::I32 => RegId::ESP,
+        _ => RegId::SP,
+    }
 }
 
 /// `LowerDYNAMIC_STACKALLOC` without probes or split stacks: the stack pointer
