@@ -15,7 +15,10 @@ ROOT = HERE.parents[4]
 RUNTIME = HERE.parents[1] / "runtime" / "z80_rt.s"
 LIBC = HERE / "libc"  # the C library's entries over the runtime's: a library, so a program's own definition wins
 DATALAYOUT = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"'
-CLANG_FLAGS = ["-target", "msp430", "-fsigned-char", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-S", "-emit-llvm"]
+sys.path.insert(0, str(ROOT / "tools"))
+import external_flags  # noqa: E402  the one neutral flag set of every external bar (tools/external_flags.py)
+
+CLANG_FLAGS = ["-target", "msp430", "-fsigned-char", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", *external_flags.flags("none"), "-S", "-emit-llvm"]
 LOG = 0xC000  # the log pointer, then the entries; the stack runs down from 0xFFFF
 CRT0 = f"""\t.module crt0
 \t.globl _main
@@ -160,6 +163,13 @@ def one(job):
     return name, "WRONG", f"value {first}: got {got[first] if first < len(got) else 'none'}, want {want[first] if first < len(want) else 'none'}"
 
 
+def selected(src, names=()):
+    """The programs of `src` that are for the z80: with an expected output, named if names are given, and not tagged for other targets by `// targets:` (stackover, an x86 recursion test, ran to the timeout)."""
+    import corpus_targets
+    found = sorted(p for p in Path(src).glob("*.c") if p.with_suffix(".out").exists() and corpus_targets.applies("z80-sdcc", p.read_text()))
+    return [p for p in found if p.stem in names] if names else found
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("names", nargs="*")
@@ -173,9 +183,7 @@ def main():
     ap.add_argument("--json")
     ap.add_argument("--src", default=str(ROOT / "tests/run/c"))
     args = ap.parse_args()
-    sources = sorted(p for p in Path(args.src).glob("*.c") if p.with_suffix(".out").exists())
-    if args.names:
-        sources = [p for p in sources if p.stem in args.names]
+    sources = selected(Path(args.src), args.names)
     work = tempfile.mkdtemp(prefix="z80prog-")
     try:
         args.libc = libc_library(work)
