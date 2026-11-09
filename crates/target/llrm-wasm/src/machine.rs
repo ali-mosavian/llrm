@@ -172,6 +172,10 @@ impl Tti for Wasm {
     /// several callers (sfm16_dbg -Os: `cmp_bits`, 101 B once or 7 x 105 B).
     /// The pin's `OptSizeThreshold` 50 allows the growth.
     /// DEVIATE (2026-11-07, owner wasm, exit 2026-11-20): the pin inlines it.
+    /// It holds at -O1 too, where the rate is off: 33 of 44 -O1 rows are below
+    /// the pin, 29 147 B in all (jpeg_fixed 22099 vs 26245), none above.
+    /// Executed instructions (informational, wasm has no rate): 27 of 31 rows
+    /// above the pin, at most +14.6% (sfm16_float_f2i), +0.04% in total.
     fn opt_size_inline_by_code_size(&self) -> bool {
         true
     }
