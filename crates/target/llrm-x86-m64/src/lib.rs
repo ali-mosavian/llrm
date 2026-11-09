@@ -408,6 +408,8 @@ impl llrm_target::Target for M64 {
                             rep_stos_at_size: true,
                             // DEVIATE CARRY-SI (owner x86-m64, exit 2026-11-21): see Tuning.
                             carry_slot_indexes: false,
+                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): see Tuning.
+                            unroll_recurrence_veto: true,
                             // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
                             // callee with one site too; the pin copies it (crc, floats,
                             // tile -Os: gcc keeps the call, +40 B each).
