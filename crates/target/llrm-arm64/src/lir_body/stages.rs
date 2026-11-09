@@ -89,6 +89,7 @@ pub fn run(body: LirBody) -> Result<(LirBody, Vec<Stage>), String> {
     let ssa_phases = phases.iter().position(|phase| phase.class_name() == "PhiElimination").unwrap_or(0);
     let mut body = body;
     let produced = complaints(&body, roles);
+    let function_name = body.name.clone();
     let mut shown = shape(&body);
     let mut stages = vec![Stage {
         name: "Produced".into(),
@@ -134,6 +135,9 @@ pub fn run(body: LirBody) -> Result<(LirBody, Vec<Stage>), String> {
             }
         };
         let now = shape(&body);
+        if std::env::var("LLRM_ARM64_STAGES_DUMP").is_ok_and(|want| want == name) {
+            eprintln!("=== {name} @{} before\n{}\n=== after\n{}", function_name, shown.join("\n"), now.join("\n"));
+        }
         stages.push(Stage { name, outcome, insns: now.len(), changed: now != shown });
         shown = now;
     }
@@ -172,6 +176,8 @@ pub fn observe(function: &crate::mfunc::MFunc) -> Result<(), String> {
     let lowered = super::to_lir(function).map_err(|super::Unmapped(form)| format!("unmapped form {form}"))?;
     let (_, stages) = run(lowered.body)?;
     eprint!("{}", report(&function.name, &stages));
+    let (copy_webs, mixed) = multiple_definitions(function);
+    eprintln!("DEFS\t{}\t{copy_webs}\t{mixed}", function.name);
     Ok(())
 }
 
@@ -188,4 +194,35 @@ fn complaints(
             _ => one,
         })
         .collect()
+}
+
+/// The virtual registers defined more than once: (all by copies, which is a
+/// phi's lowering; some by another operation, which is not SSA either way).
+fn multiple_definitions(function: &crate::mfunc::MFunc) -> (usize, usize) {
+    use std::collections::HashMap;
+    let mut defs: HashMap<crate::mc::visit::Reg, (usize, bool)> = HashMap::new();
+    for op in function.blocks.iter().flat_map(|block| block.ops.iter()) {
+        let copy = matches!(op, crate::mfunc::Op::Copy { .. });
+        for register in op.defs_and_uses().0 {
+            let seen = defs.entry(register).or_insert((0, true));
+            seen.0 += 1;
+            seen.1 &= copy;
+        }
+    }
+    let virtual_ = |register: &crate::mc::visit::Reg| match register {
+        crate::mc::visit::Reg::Gpr(crate::mc::inst::Gpr(n)) => *n >= crate::mc::inst::Gpr::FIRST_VIRTUAL,
+        crate::mc::visit::Reg::Fpr(crate::mc::inst::Vreg(n)) => *n >= crate::mc::inst::Gpr::FIRST_VIRTUAL,
+    };
+    let many = defs.iter().filter(|(register, (count, _))| *count > 1 && virtual_(register));
+    let copies = many.clone().filter(|(_, (_, only))| *only).count();
+    if std::env::var("LLRM_ARM64_STAGES_MIXED").is_ok() {
+        for (register, _) in many.clone().filter(|(_, (_, only))| !*only) {
+            for op in function.blocks.iter().flat_map(|block| block.ops.iter()) {
+                if op.defs_and_uses().0.contains(register) {
+                    eprintln!("MIXED {} {register:?}: {op:?}", function.name);
+                }
+            }
+        }
+    }
+    (copies, many.count() - copies)
 }
