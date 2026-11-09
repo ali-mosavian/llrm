@@ -83,6 +83,7 @@ use crate::looppeel::PeelingPreferences;
 use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_blocks};
 
 mod price;
+mod recurrence;
 pub mod trial;
 
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
@@ -1423,6 +1424,10 @@ pub(crate) fn compute_unroll_count(
         return 0;
     }
     if !up.runtime {
+        return 0;
+    }
+    if recurrence::recurrence_bound(run, lp) {
+        why(run, lp, "runtime unroll: the loop-carried chain bounds a trip (RU-REC)");
         return 0;
     }
 
