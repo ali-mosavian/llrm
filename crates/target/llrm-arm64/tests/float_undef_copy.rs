@@ -1,6 +1,6 @@
 //! A float phi whose incoming value is undefined, on the DAG path alone.
 
-use llrm_arm64::driver::{self, IselMode};
+use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
 /// The copy of an undefined float into a register was refused ("a float copy of
@@ -15,7 +15,6 @@ loop:\n  %i = phi i64 [ 0, %entry ], [ %i1, %loop ]\n  %s = phi double [ undef, 
   %p = getelementptr double, ptr %a, i64 %i\n  %v = load double, ptr %p\n  %s1 = fadd double %s, %v\n\
   %i1 = add i64 %i, 1\n  %c = icmp eq i64 %i1, %n\n  br i1 %c, label %done, label %loop\n\
 done:\n  ret double %s1\n}\n";
-    driver::set_isel_mode(IselMode::Dag);
     let asm = driver::assembly(ir, Platform::Linux, true).expect("the DAG path lowers an undefined float copy");
     assert!(asm.contains("fmov"), "{asm}");
 }

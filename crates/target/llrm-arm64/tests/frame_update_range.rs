@@ -1,7 +1,7 @@
 //! A frame's stack-pointer update folds into the first save only where the
 //! access form can encode it.
 
-use llrm_arm64::driver::{self, IselMode, Level};
+use llrm_arm64::driver::{self, Level};
 use llrm_arm64::machine::Platform;
 
 fn frame_of(bytes: u32) -> String {
@@ -27,7 +27,6 @@ define void @f() #0 {{\n  %a = alloca [{bytes} x i8], align 16\n  call void @g(p
 /// makes the update its own `sub`/`add` when the offset is out of range.
 #[test]
 fn a_frame_larger_than_the_single_access_update_range_is_encoded() {
-    driver::set_isel_mode(IselMode::Dag);
     // 200..=520: the single-access range ends; past 512 the locals are split
     // off and the old rule never applied (a guard, not a red test).
     for bytes in (200..=520).step_by(8).chain([600, 1024, 5000, 70_000]) {
@@ -42,7 +41,6 @@ fn a_frame_larger_than_the_single_access_update_range_is_encoded() {
 /// one: the save is at the stack pointer.
 #[test]
 fn an_out_of_range_update_is_a_separate_adjustment() {
-    driver::set_isel_mode(IselMode::Dag);
     let text = driver::assembly(&frame_of(272), Platform::Linux, true).expect("lowers");
     assert!(text.contains("sub\tsp, sp, #") || text.contains("sub sp, sp, #"), "{text}");
     assert!(!text.contains("]!"), "a folded update that cannot be encoded:\n{text}");
@@ -53,7 +51,6 @@ fn an_out_of_range_update_is_a_separate_adjustment() {
 /// a function saving `x30` (`str x30, [sp, #-272]!`).
 #[test]
 fn the_corpus_frames_with_a_single_first_save_are_encoded() {
-    driver::set_isel_mode(IselMode::Dag);
     for (name, ir) in [
         ("frame_pointer_free", include_str!("data/frame_pointer_free.ll")),
         ("store_merge_interleaved", include_str!("data/store_merge_interleaved.ll")),
