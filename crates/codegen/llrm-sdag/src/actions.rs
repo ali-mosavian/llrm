@@ -1096,6 +1096,37 @@ mod tests {
         assert_eq!(t.libcall_name(ISD::SDiv, EVT::I64), Some("__only"), "no size routine: the one routine");
     }
 
+    /// z80 prices the shift routines against the inline shifts in a function that is not tuned for size
+    /// (`set_force_shift_calls`): -O1 call_keeps 1876 B -> 1473 B. The switch is off for every other target and
+    /// for z80 outside that form; on, it makes shifts (not other ops) take the size routine and the size
+    /// threshold, as a function tuned for size does.
+    #[test]
+    fn forced_shift_calls_move_shifts_only_and_default_off_changes_nothing() {
+        let build = |force: bool| {
+            let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
+            t.set_size_shift_call(8, 10);
+            t.set_libcall_name(ISD::Shl, MVT::I32, "__fast_shl");
+            t.set_size_libcall_name(ISD::Shl, MVT::I32, "__small_shl");
+            t.set_libcall_name(ISD::Mul, MVT::I32, "__fast_mul");
+            t.set_size_libcall_name(ISD::Mul, MVT::I32, "__small_mul");
+            t.set_force_shift_calls(force);
+            t
+        };
+        let (off, on) = (build(false), build(true));
+        // by 13 bits of 32 with 8-bit granules: (4 - 1) * 5 = 15 >= 10
+        assert!(!off.calls_for_size_shift(13, 32) && on.calls_for_size_shift(13, 32));
+        assert_eq!(off.libcall_name(ISD::Shl, EVT::I32), Some("__fast_shl"));
+        assert_eq!(on.libcall_name(ISD::Shl, EVT::I32), Some("__small_shl"));
+        for t in [&off, &on] {
+            assert_eq!(t.libcall_name(ISD::Mul, EVT::I32), Some("__fast_mul"), "a multiply keeps the speed routine");
+        }
+        // sized functions are unchanged by the switch
+        let mut sized = build(false);
+        sized.set_opt_for_size(true);
+        assert!(sized.calls_for_size_shift(13, 32));
+        assert_eq!(sized.libcall_name(ISD::Mul, EVT::I32), Some("__small_mul"));
+    }
+
     /// An x86 table's `i8` set-cc result and `i8` register class were the
     /// only ones: AArch64 compares into an `i32` and has no `i8` register.
     #[test]
