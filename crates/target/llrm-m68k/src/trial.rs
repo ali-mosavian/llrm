@@ -100,10 +100,27 @@ fn relaxed_sizes(
 fn callee_clocks(
     inst: &mc::Inst,
     cpu: Cpu,
+    hoisted: &[llrm_lir::registers::RegId],
 ) -> u32 {
-    let calls_mulsi3 = inst.opcode.starts_with("CALL")
-        && inst.operands.iter().any(|operand| matches!(operand, mc::Operand::Symbol(name, 0) if name == "__mulsi3"));
-    if calls_mulsi3 { crate::routine::mulsi3_floor(cpu) } else { 0 }
+    let direct = inst.operands.iter().any(|operand| matches!(operand, mc::Operand::Symbol(name, 0) if name == "__mulsi3"));
+    // a call through the register `lea __mulsi3, An` set (the call-target hoist)
+    let through = inst.opcode == "CALLj"
+        && inst.operands.iter().any(|operand| matches!(operand, mc::Operand::Reg(reg) if hoisted.contains(reg)));
+    if inst.opcode.starts_with("CALL") && (direct || through) { crate::routine::mulsi3_floor(cpu) } else { 0 }
+}
+
+/// The registers `lea __mulsi3, An` loads.
+fn mulsi3_registers(items: &[Item]) -> Vec<llrm_lir::registers::RegId> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Inst(inst) if inst.opcode == "LEA32b" => match inst.operands.as_slice() {
+                [mc::Operand::Reg(reg), mc::Operand::Symbol(name, 0)] if name == "__mulsi3" => Some(*reg),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
 }
 
 /// Bytes, and clocks of `items` on `cpu` weighted by how often each runs: an
@@ -161,11 +178,12 @@ fn price_of(
     }
     let sizes = relaxed_sizes(items, &labels)?;
     let (mut bytes, mut clocks) = (0usize, 0u64);
+    let hoisted = mulsi3_registers(items);
     for (at, item) in items.iter().enumerate() {
         let Item::Inst(inst) = item else { continue };
         let size = sizes[at];
         let cost = crate::timing::cost(cpu, &mc::print(inst).ok()?, size as u32, false).ok()?.clocks
-            + callee_clocks(inst, cpu);
+            + callee_clocks(inst, cpu, &hoisted);
         let depth = loops.iter().filter(|(from, to)| *from <= at && at <= *to).count().min(3);
         bytes += size;
         clocks += u64::from(cost) * share[at] * 10u64.pow(depth as u32);

@@ -55,3 +55,16 @@ fn a_tie_keeps_the_build_without() {
         assert!(!llrm_m68k::trial::keeps(&build, &build, Cpu::M68000, price), "{price:?}: equal builds kept the first");
     }
 }
+
+/// `a*3 + b*5 + c*11 + d*7` at -O2 on the 68000: the build that keeps every
+/// multiply hoists `lea __mulsi3, %a2` and calls through it, which the trial
+/// priced as free (the call through a register named no routine), so it kept
+/// four library calls (162 clocks or more each) for one: i64_param_home -O2
+/// grew 10 B and slowed.
+#[test]
+fn a_call_through_the_hoisted_target_register_is_priced_as_the_routine() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\ndefine i32 @f(i32 %a, i32 %b, i32 %c, i32 %d) {\n  %x = mul i32 %a, 3\n  %y = mul i32 %b, 5\n  %z = mul i32 %c, 11\n  %w = mul i32 %d, 7\n  %s = add i32 %x, %y\n  %t = add i32 %z, %w\n  %r = add i32 %s, %t\n  ret i32 %r\n}\n";
+    let out = llrm_m68k::driver::assembly(ir, llrm_m68k::driver::cpu_of("68000").unwrap(), llrm_m68k::driver::Level::O2).expect("compiles");
+    let calls = out.matches("jsr").count();
+    assert!(calls <= 1, "{calls} library calls kept:\n{out}");
+}
