@@ -27,7 +27,7 @@ these forms:
   here it is priced from the target's table, so a word fill is `rep stosw`
   where its clocks beat the loop's at speed, and its bytes at `-Os`; m16
   `fillw` of 100 words is 407 clocks against the loop's 500, break-even
-  near 16 trips with the segment setup; owner w-5). A loop with several
+  near 16 trips with the segment setup; owner w12). A loop with several
   fills to bytes no other reaches is a memset each; fills that tile adjacent
   bytes with the same byte are one.
 - A copy: a load and a store of one cell each trip, the stored value being

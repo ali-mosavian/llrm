@@ -562,6 +562,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE OB1 (`unrollbound.rs`): the most trips the unroller takes from the
+    /// size of the object a loop's accesses run through, as a bound it unrolls
+    /// completely by; none: the pin's bound alone.
+    fn unroll_object_bound(&self) -> Option<u32> {
+        None
+    }
+
     /// Whether a priced inline trial keeps a copy that leaves the module no
     /// larger and saves clocks though no callee goes with it. False: the
     /// callee's credit decides (arm64 -O3 jpeg `decode`: 5,828 -> 7,324 B and
@@ -914,6 +921,11 @@ pub trait Tti {
 
     /// `Tuning::price_pin_multiplies`.
     fn price_pin_multiplies(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::lftr_any_stride` (DEVIATE LFTR1).
+    fn lftr_any_stride(&self) -> bool {
         false
     }
 
@@ -1548,6 +1560,16 @@ pub trait Tti {
     /// free anyway (x86: the rewrite moved `bq32` rows the wrong way). Off by
     /// default; a target opts in where it measured a win.
     fn prefers_exit_ne(&self) -> bool {
+        false
+    }
+
+    /// Beyond the pin: whether a counter of an integer width the target does
+    /// not hold natively (`DataLayout::legal_integer`) whose range provably
+    /// fits a native width becomes a counter of that width (`narrowiv`). LLVM
+    /// only widens counters; `for (long i = 0; i < 12; ++i)` keeps four bytes a
+    /// compare on an 8-bit target. Off by default; a target opts in where it
+    /// measured a win. DEVIATE IV-NARROW (owner z80-b, review 2026-12-20).
+    fn narrows_counters(&self) -> bool {
         false
     }
 

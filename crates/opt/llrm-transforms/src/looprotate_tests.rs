@@ -646,6 +646,38 @@ fn test_the_size_header_limit_of_m32_is_four() {
     assert_eq!(super::header_limit(true, false, &*m32, &*tti), 16);
 }
 
+/// `rotated` as the pass is configured for an -Os build of `m32`: what the target's tuning states.
+fn rotated_as_m32_at_size(text: &str) -> bool {
+    let m32 = crate::indvars::tests::m32();
+    let tti = m32.tti().unwrap();
+    let mut module = parsed(text);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let options = Options {
+        max_header_size: super::header_limit(true, true, &*m32, &*tti),
+        priced_at_size: tti.rotation_header_priced_at_size(),
+        guard_must_fold: tti.rotation_guard_must_fold_at_size(),
+        free_guard: false,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+        check_exit_count: false,
+    };
+    rotate_function(&mut module, "f", &*tti, options).expect("rotates")
+}
+
+/// m32 -Os rotated a loop that stops on a loaded value, copying a compare and a branch above it that no value decides:
+/// x_jpeg_fixed 2995 B (gcc 2805), 17 kernels larger than with RS1 (-296 B). The target's tuning states RS1; a
+/// counted loop is still rotated.
+#[test]
+fn test_m32_size_builds_leave_a_loop_whose_guard_does_not_fold() {
+    assert!(!rotated_as_m32_at_size(UNCOUNTED));
+    assert!(rotated_as_m32_at_size(COUNTED));
+    let m32 = crate::indvars::tests::m32();
+    assert!(m32.tti().unwrap().rotation_guard_must_fold_at_size());
+}
+
 /// `rotated` as -Oz: the pin copies no header instruction; `free_guard` waives that for a header that folds away.
 fn rotated_at_minsize(
     text: &str,

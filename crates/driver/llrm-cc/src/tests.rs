@@ -191,7 +191,8 @@ fn a_pass_switch_stays_away_from_a_backend_that_takes_none() {
     for name in ["wasm32", "z80-sdcc"] {
         assert!(args(name).iter().all(|flag| !flag.starts_with("-fno-")), "{name}: {:?}", args(name));
     }
-    // m68k's llc takes them (its program headers' `-fno-inline-functions` made 19 programs fail)
+    // m68k's llc takes them (its program headers' `-fno-inline-functions` made
+    // 19 programs fail)
     for name in ["x86_32-linux", "m68k-68000", "m68k-68020"] {
         let kept = args(name);
         assert!(kept.contains(&"-fno-inline-functions-called-once".to_owned()), "{name}: {kept:?}");
@@ -480,4 +481,64 @@ fn every_toolchain_header_a_recipe_includes_is_embedded() {
         assert!(names.contains(&header), "{header} missing from the embedded toolchain: {names:?}");
     }
     assert!(TOOLCHAIN_FILES.iter().all(|(_, bytes)| !bytes.is_empty()));
+}
+
+/// An m16 compile on a box with only `LLRM_PIN_CLANG` died with "clang's
+/// datalayout `e-m:e-p:32:32...` lays types out differently" and no word of the
+/// variable that picks the fork's clang. The message names it when it is unset,
+/// and only then.
+#[test]
+fn a_layout_mismatch_names_the_variable_of_the_forks_clang_when_it_is_unset() {
+    let table = targets(TARGETS).unwrap();
+    let row = &table["x86_16-dos"];
+    let name = row.clang_env.as_deref().unwrap();
+    let unset = layout_mismatch("f.c", "e-m:e-p:32:32", row, |_| None);
+    assert!(unset.contains(name), "{unset}");
+    let set = layout_mismatch("f.c", "e-m:e-p:32:32", row, |_| Some("clang".into()));
+    assert!(!set.contains(name), "{set}");
+}
+
+/// Every `-nostdinc` compile spawned `clang -print-resource-dir` (~1 process
+/// per compile) although the dir follows from the binary's path.
+#[test]
+fn resource_dir_comes_from_the_clang_path_without_a_spawn() {
+    let root = std::env::temp_dir().join(format!("llrm-cc-resource-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("lib/clang/24/include")).unwrap();
+    std::fs::write(root.join("bin/clang"), "").unwrap();
+    let spawns = std::cell::Cell::new(0);
+    let found = resource_include(&root.join("bin/clang"), || {
+        spawns.set(spawns.get() + 1);
+        None
+    });
+    assert_eq!((found, spawns.get()), (Some(root.canonicalize().unwrap().join("lib/clang/24")), 0));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn resource_dir_spawns_only_when_the_layout_is_missing() {
+    let root = std::env::temp_dir().join(format!("llrm-cc-resource-fallback-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(root.join("bin/clang"), "").unwrap();
+    let found = resource_include(&root.join("bin/clang"), || Some(PathBuf::from("/spawned")));
+    assert_eq!(found, Some(PathBuf::from("/spawned")));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Several versions under `lib/clang` leave the pick to clang (the spawn); a
+/// symlinked `clang` resolves to its real install, as clang itself does.
+#[test]
+fn resource_dir_defers_to_clang_when_ambiguous_and_follows_symlinks() {
+    let root = std::env::temp_dir().join(format!("llrm-cc-resource-multi-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("real/bin")).unwrap();
+    std::fs::create_dir_all(root.join("link")).unwrap();
+    std::fs::create_dir_all(root.join("real/lib/clang/23/include")).unwrap();
+    std::fs::write(root.join("real/bin/clang"), "").unwrap();
+    std::os::unix::fs::symlink(root.join("real/bin/clang"), root.join("link/clang")).unwrap();
+    let one = resource_include(&root.join("link/clang"), || None);
+    assert_eq!(one, Some(root.canonicalize().unwrap().join("real/lib/clang/23")));
+    std::fs::create_dir_all(root.join("real/lib/clang/24/include")).unwrap();
+    let many = resource_include(&root.join("link/clang"), || Some(PathBuf::from("/spawned")));
+    assert_eq!(many, Some(PathBuf::from("/spawned")));
+    std::fs::remove_dir_all(&root).unwrap();
 }

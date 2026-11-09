@@ -308,6 +308,12 @@ fn intrinsic_prices() -> &'static Prices {
 }
 
 impl Tti for AArch64 {
+    /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
+    /// non-wrapping stride counts; the pin's step-one rule costs bytes here.
+    fn lftr_any_stride(&self) -> bool {
+        true
+    }
+
     /// SZ1: at -Os an inline that stays must not grow the code, as gcc's `-Os`
     /// inlines only where the module shrinks. The pin's `OptSizeThreshold` 50
     /// inlines jpeg_fixed's `put32` (a 4-trip store loop) into eight sites
@@ -391,8 +397,15 @@ impl Tti for AArch64 {
     /// clocks, the median of the -O2/-O3 cells where inlining grew the code
     /// (w15-arm64-rate-proposal-11-03.md; widened to 30 clean cells by 11-12),
     /// fitted with one byte a unit. Stated per byte of the 4-byte unit, so the
-    /// decisions are those of the fit; the refit to the scoring rate is its own
-    /// change.
+    /// decisions are those of the fit.
+    ///
+    /// Refit scan (provisional: net = executed instructions + 0.3 x bytes, an
+    /// instruction proxy, not clocks; 2026-11-08, 34 programs at -O2/-O3, release/next
+    /// 8d22165d6d, rerun from the knob and scripts in draft PR 8402):
+    /// 30 and 10 clk/B change no cell against 62.5; 3 changes jpeg_fixed and
+    /// jpeg_single only (+84 B, -1.6k instructions); the scoring rate 0.3 makes
+    /// both worse in bytes and instructions (+540 B, +688k instructions on
+    /// jpeg_single -O2). Kept at the fitted rate.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         INLINE_MILLICLOCKS_PER_UNIT * 1000 / BYTES_PER_COST_UNIT_MILLI
     }

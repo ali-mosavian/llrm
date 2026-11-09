@@ -11,7 +11,7 @@ use std::process::Command;
 /// The interprocedural stage of `second_ipsccp.c` at -O2 for `target`.
 fn stage(target: &str, flag: &str) -> String {
     assert!(
-        llrm_cc::ow_tree().is_dir(),
+        llrm_cc::ow_present(),
         "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
     );
     assert!(

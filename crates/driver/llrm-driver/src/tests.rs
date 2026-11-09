@@ -4824,6 +4824,32 @@ fn a_memcpy_ending_a_function_is_a_tail_call_at_m64() {
     assert!(listing.contains("jmp memcpy") && !listing.contains("call memcpy"), "{listing}");
 }
 
+/// `x_matmul_f` (the m32 vsgcc kernel behind a volatile pointer, clang IR before the passes): its
+/// innermost loop indexes `B[k][j]` of `double B[12][12]`, so it makes at most 12 trips. gcc peels it;
+/// the pin cannot know the bound and kept 3 `fmul` (392 B, about 7,000 clocks over gcc at -O3).
+#[test]
+fn a_loop_bounded_by_the_object_it_indexes_is_peeled_at_m32_o3() {
+    let text = include_str!("tests_data/matmul_f.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O3", "-march=i486"]), text, "bench_x_matmul_f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let bench = listing.split("bench_x_matmul_f_ proc").nth(1).and_then(|rest| rest.split("endp").next()).expect(&listing);
+    assert!(bench.matches("fmul").count() >= 12, "{listing}");
+}
+
+/// An `i64` select of two constants was branched in MIR before the DAG saw it
+/// (`jne; xor; mov; jmp; xor; mov 2`, compare_to_int64 -Os); the pin gives
+/// `setne; add eax, eax` (type legalization splits the select, isel folds it).
+#[test]
+fn an_i64_select_of_constants_is_no_branch_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i64 @f(i32 %a, i32 %b) optsize {\n  %c = icmp eq i32 %a, %b\n\
+                  %s = select i1 %c, i64 0, i64 2\n  ret i64 %s\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("setne") && !listing.contains("\n    jne") && !listing.contains("jmp"), "{listing}");
+}
+
 /// `cvtsi2ss xmm1, eax` in a loop rewrote only the low lane of `xmm1`, so each
 /// iteration waited for the last one's result (the pin: `xorps xmm1, xmm1`
 /// first, BreakFalseDeps). sfm16_float_i2f m64 -O2: 9 converts, no `xorps`.

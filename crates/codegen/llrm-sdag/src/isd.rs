@@ -67,6 +67,8 @@ pub enum ISD {
     SMulO,
     UAddOCarry,
     USubOCarry,
+    SAddOCarry,
+    SSubOCarry,
     SetCCCarry,
     SAddSat,
     UAddSat,
@@ -285,6 +287,8 @@ impl ISD {
             SMulO => "smulo",
             UAddOCarry => "uaddo_carry",
             USubOCarry => "usubo_carry",
+            SAddOCarry => "saddo_carry",
+            SSubOCarry => "ssubo_carry",
             SetCCCarry => "setcccarry",
             SAddSat => "saddsat",
             UAddSat => "uaddsat",
@@ -403,7 +407,7 @@ impl ISD {
             IntrinsicWoChain => "intrinsic_wo_chain",
             IntrinsicWChain => "intrinsic_w_chain",
             IntrinsicVoid => "intrinsic_void",
-            Target(code) => return super::x86isd::name(code),
+            Target(code) => return super::target_names::name(code),
             Machine(code) => return format!("<<Unknown Machine Node #{code}>>"),
         };
         name.to_string()

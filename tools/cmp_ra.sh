@@ -3,11 +3,11 @@
 # Compiles SRC at m32 with llrm-cc, takes the last mid-end stage (LLRM_MIR_STAGES), strips what only
 # llrm knows, hands that IR to the pin's llc, and prints per function: instructions and stack-slot
 # references (esp/ebp operands), ours then the pin's. Static counts, not executed ones.
-# Env: LLRM_CC (llrm-cc, default target/release/llrm-cc), PIN_LLC (default ~/scratch/llvm-build/bin/llc),
+# Env: LLRM_CC (llrm-cc, default the shared resolver's), PIN_LLC (default ~/scratch/llvm-build/bin/llc),
 #      WORK (scratch dir on disk, not tmpfs; default ~/scratch/cmp_ra).
 set -eu
 src=$1; name=$2; level=$3
-cc=${LLRM_CC:-target/release/llrm-cc}; pin=${PIN_LLC:-$HOME/scratch/llvm-build/bin/llc}
+cc=${LLRM_CC:-$(python3 "$(dirname "$0")/llrmbin.py" bin)/llrm-cc}; pin=${PIN_LLC:-$HOME/scratch/llvm-build/bin/llc}
 work=${WORK:-$HOME/scratch/cmp_ra}/$name-$level; mkdir -p "$work"
 LLRM_MIR_STAGES=$work LLRM_CC_TARGET=x86_32-linux "$cc" -O"$level" -mabi=sysv -march=i486 -c "$src" -o "$work/ours.o"
 last=$(ls "$work" | grep '\.ll$' | tail -1)

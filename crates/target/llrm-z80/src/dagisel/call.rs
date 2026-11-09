@@ -16,8 +16,11 @@
 //! address and saved IX in front of the first argument
 //! (`first_argument_offset`) are the frame resolver's, added in one place.
 //!
-//! DEVIATE: the stores are not `PUSH`. Reason: the pin turns stores into pushes
-//! in a separate pass (`X86CallFrameOptimization`). Exit: that pass (row 7).
+//! DEVIATE Z80-ARGPUSH (owner z80-argpush, exit 2026-11-14): the stores are not
+//! `PUSH`. Reason: the pin turns stores into pushes in a separate pass
+//! (`X86CallFrameOptimization`); `expand::push_arguments` is that pass, after
+//! allocation, and the stores are chained top word first (`LowerCall` joins them
+//! in a `TokenFactor`) so that every push stands at its store.
 //!
 //! # See also
 //! `llvm/lib/Target/AVR/AVRISelLowering.cpp`: `LowerCall` (L1311),
@@ -68,13 +71,15 @@ fn kind(vt: EVT) -> Result<Kind, Refused> {
 }
 
 /// The location of each argument and the bytes the stack ones take; a word's
-/// two bytes are named as their pair.
+/// two bytes are named as their pair. The arguments from `fixed` on are a
+/// variadic call's unnamed ones: on the stack after the named ones.
 fn locations(
     convention: &Convention,
     vts: &[EVT],
+    fixed: usize,
 ) -> Result<(Vec<Location>, i64), Refused> {
     let kinds = vts.iter().map(|&vt| kind(vt)).collect::<Result<Vec<_>, _>>()?;
-    let placement = convention.place(&kinds);
+    let placement = convention.place_variadic(&kinds, &[], fixed);
     let places = placement
         .places
         .iter()
@@ -137,17 +142,24 @@ pub fn lower_call(
 ) -> Result<(SDValue, Vec<SDValue>), Refused> {
     let convention = abi::z80();
     let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
-    let (targets, bytes) = locations(&convention, &vts)?;
+    let fixed = outs.iter().position(|out| out.variadic).unwrap_or(outs.len());
+    let (targets, bytes) = locations(&convention, &vts, fixed)?;
     let mut chain = dag.get_callseq_start(chain, bytes as u64);
-    let mut stores = Vec::new();
-    for (out, &target) in outs.iter().zip(&targets) {
-        if let Location::Stack(offset) = target {
-            let at = dag.get_constant(offset as u128, EVT::I16);
-            stores.push(dag.get_node_multi(STSP, &[EVT::OTHER], &[chain, out.value, at]));
-        }
-    }
-    if !stores.is_empty() {
-        chain = dag.get_token_factor(&stores);
+    // The stores run in the order of the pushes that replace them, the top word
+    // first; one chain keeps the scheduler from reordering them.
+    let mut stores: Vec<_> = outs
+        .iter()
+        .zip(&targets)
+        .filter_map(|(out, &target)| match target {
+            Location::Stack(offset) => Some((offset, out.value)),
+            Location::Register(_) => None,
+        })
+        .collect();
+    stores.sort_by_key(|&(offset, _)| std::cmp::Reverse(offset));
+    for (offset, value) in stores {
+        let at = dag.get_constant(offset as u128, EVT::I16);
+        let store = dag.get_node_multi(STSP, &[EVT::OTHER], &[chain, value, at]);
+        chain = SDValue { node: store.node, res: 0 };
     }
     let in_registers: Vec<_> = outs
         .iter()
@@ -209,7 +221,7 @@ pub fn lower_formal_arguments(
 ) -> Result<Vec<SDValue>, Refused> {
     let convention = abi::z80();
     let vts: Vec<EVT> = ins.iter().map(|arg| arg.vt).collect();
-    let (sources, _) = locations(&convention, &vts)?;
+    let (sources, _) = locations(&convention, &vts, vts.len())?;
     Ok(ins
         .iter()
         .zip(sources)
@@ -340,6 +352,15 @@ impl TargetCalling for Z80Calling {
         live_in: LiveIn,
     ) -> Vec<SDValue> {
         lower_formal_arguments(dag, chain, ins, fixed, live_in).expect("legal parts")
+    }
+
+    /// The unnamed arguments follow the named ones' stack bytes.
+    fn variadic_frame_offset(
+        &self,
+        named: &[In],
+    ) -> Option<i64> {
+        let vts: Vec<EVT> = named.iter().map(|arg| arg.vt).collect();
+        locations(&abi::z80(), &vts, vts.len()).ok().map(|(_, bytes)| bytes)
     }
 
     /// `EmitTargetCodeForMemcpy`, as X86's is `rep movs`: `ldir` behind a test

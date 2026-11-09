@@ -230,7 +230,10 @@ pub fn machine_with<'a>(
         }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
-        Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
+        Box::new(crate::backend::precse::MachineCse {
+            classes: Rc::clone(classes),
+            keep_compare: classes.cse_keeps_compare_with_live_minuend,
+        }),
         // On SSA, where a def with phi users alone can go to its edge.
         Box::new(crate::backend::machinesink::MachineSink {
             size: target.size,
@@ -269,10 +272,10 @@ pub fn machine_with<'a>(
         // instruction that clobbers them become a byte per condition
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
-        Box::new(phielim::PhiElimination { unoptimized: !target.optimized }),
+        Box::new(phielim::PhiElimination { unoptimized: !target.optimized, share_congruent: target.share_congruent_phis }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
-        Box::new(crate::backend::fixupsetcc::FixupSetCc),
+        Box::new(crate::backend::fixupsetcc::FixupSetCc { strict: !target.speed_rate, status_word: classes.status_word() }),
         // A float load a loop only reads is made again where it is read (so
         // the next step can fold it).
         Box::new(crate::backend::floatunhoist::FloatUnhoist { cpu: target, basic_semantics }),

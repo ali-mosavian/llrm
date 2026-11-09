@@ -4,13 +4,13 @@ target triple = "aarch64-unknown-linux-gnu"
 @opq0 = internal global i32 0, align 4
 
 ; Function Attrs: nofree noinline nosync nounwind memory(none)
-define dso_local i64 @bench_rectwo(i32 noundef %0) local_unnamed_addr {
+define dso_local i64 @bench_rectwo(i32 noundef %0) local_unnamed_addr "frame-pointer"="non-leaf" {
   %2 = tail call fastcc i64 @paths(i32 noundef %0, i32 noundef %0)
   ret i64 %2
 }
 
 ; Function Attrs: nofree nosync nounwind memory(none)
-define internal fastcc i64 @paths(i32 noundef %0, i32 noundef %1) unnamed_addr {
+define internal fastcc i64 @paths(i32 noundef %0, i32 noundef %1) unnamed_addr "frame-pointer"="non-leaf" {
   %3 = icmp eq i32 %0, 0
   %4 = icmp eq i32 %1, 0
   %5 = or i1 %3, %4
@@ -39,7 +39,7 @@ define internal fastcc i64 @paths(i32 noundef %0, i32 noundef %1) unnamed_addr {
 }
 
 ; Function Attrs: nounwind
-define dso_local noundef i32 @main() local_unnamed_addr {
+define dso_local noundef i32 @main() local_unnamed_addr "frame-pointer"="non-leaf" {
   %1 = load volatile i32, ptr @opq0, align 4
   %2 = add nsw i32 %1, 9
   %3 = tail call i64 @bench_rectwo(i32 noundef %2)

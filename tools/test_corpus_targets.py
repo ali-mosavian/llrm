@@ -125,6 +125,17 @@ def test_the_stack_sanitizer_programs_are_dos_only():
         assert not ct.applies("x86_32-linux", source) and ct.applies("x86_32-dos", source) and ct.applies("x86_16-dos", source)
 
 
+
+
+def test_stft_single_has_an_expected_output_per_float_model():
+    """The DOS .out is x87 excess precision. Strict single (m68k, m64) and arm64's fused multiply-add give other checksums; each target
+    compared with the x87 .out read as a miscompile."""
+    source = HERE.parent / "bench/stft_single/stft_single.c"
+    want = {"m68k-68020": "502187692", "x86_64-linux": "502187692", "arm64-linux": "40144774", "x86_32-dos": "78803551", "wasm32": "502187692"}
+    for target, value in want.items():
+        assert ct.expected_output(source, target).read_text().strip() == value, target
+
+
 def test_programs_that_assume_a_32_bit_int_are_not_run_at_m16():
     """select_of_constants and shl_of_a_zero_extended_dividend hash values wider than m16's 16-bit int: the m16 run read as a miscompile (6528 for 880220544; a 200000-iteration run past the 120 s limit). Host gcc -m32 matches their .out."""
     for name in ("select_of_constants", "shl_of_a_zero_extended_dividend"):
@@ -132,3 +143,91 @@ def test_programs_that_assume_a_32_bit_int_are_not_run_at_m16():
         assert not ct.applies("x86_16-dos", source) and ct.applies("x86_32-linux", source) and ct.applies("x86_64-linux", source)
 
 
+
+
+SMALL_INT_TARGETS = ("x86_16-dos", "x86_16-wat", "z80-sdcc", "6502-sim65")
+
+
+def test_a_program_marked_x86_widths_is_not_run_on_any_16_bit_int_target():
+    """select_of_constants was tagged `!x86-m16`, which left z80 and 6502 in: their correct 16-bit output (6528, 11412, ...) read as WRONG against the 32-bit-int .out. The marker `// x86-widths:` says the .out depends on the x86 widths; every target with a 16-bit int must be excluded by the tags."""
+    marked = [p for p in sorted(RUN.glob("*.c")) if "\n// x86-widths:" in p.read_text()]
+    assert len(marked) >= 3
+    for path in marked:
+        source = path.read_text()
+        assert not any(ct.applies(t, source) for t in SMALL_INT_TARGETS), f"{path.name} is for a 16-bit-int target"
+
+
+def test_a_program_run_on_z80_or_6502_is_also_run_at_m16():
+    """m16 executes the corpus with a 16-bit int against the shared .out, so a program it does not run has no executed proof that its .out is width-independent; select_of_constants and shl_of_a_zero_extended_dividend were such programs and z80/6502 reported WRONG on them."""
+    for path in sorted(RUN.glob("*.c")):
+        source = path.read_text()
+        small = [t for t in ("z80-sdcc", "6502-sim65") if ct.applies(t, source)]
+        assert not small or ct.applies("x86_16-wat", source), f"{path.name} is for {small} but not for m16"
+
+
+def test_tail_calls_edges_is_not_run_where_the_backend_takes_no_fno_inline_names():
+    """tail_calls_edges is callee-pop x86 code (every variant -march=i486 or -mabi=...) and its `-fno-inline=NAME` flags are backend-only: llrm-wasm-llc refused them (build failure, 3 cells). It is for the x86 rows."""
+    source = (RUN / "tail_calls_edges.c").read_text()
+    assert ct.applies("x86_16-dos", source) and ct.applies("x86_32-linux", source)
+    assert not ct.applies("wasm32", source) and not ct.applies("arm64-linux", source) and not ct.applies("x86_64-linux", source)
+
+
+def test_programs_with_over_64k_data_are_not_run_in_a_16_bit_address_space():
+    """memcpy_runtime and memfuncs_runtime keep 70 KB arrays: x86_16 failed to link (segment 140032 > 65536), z80 and 6502 died in clang
+    ("array is too large"); the sweep listed them as compile refusals of the target."""
+    for name in ("memcpy_runtime", "memfuncs_runtime"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not any(ct.applies(t, source) for t in ("x86_16-wat", "z80-sdcc", "6502-sim65"))
+        assert all(ct.applies(t, source) for t in ("x86_32-linux", "x86_64-linux", "wasm32", "arm64-linux"))
+
+
+def test_a_24_bit_bit_field_program_is_not_run_with_a_16_bit_int():
+    """bitfield_overhang_init declares `int b : 24`: clang rejects it on x86_16, z80 and 6502 (width exceeds the type's 16 bits)."""
+    source = (RUN / "bitfield_overhang_init.c").read_text()
+    assert not any(ct.applies(t, source) for t in ("x86_16-wat", "z80-sdcc", "6502-sim65"))
+    assert ct.applies("x86_32-linux", source) and ct.applies("wasm32", source)
+
+
+def test_a_program_including_stdio_is_not_run_on_a_freestanding_target():
+    """widening_multiply includes <stdio.h>: wasm32, z80 and 6502 have none ('stdio.h' file not found), x86_16 and the sysv rows do."""
+    source = (RUN / "widening_multiply.c").read_text()
+    assert not any(ct.applies(t, source) for t in ("wasm32", "z80-sdcc", "6502-sim65"))
+    assert ct.applies("x86_16-wat", source) and ct.applies("x86_64-linux", source)
+
+
+def test_long_double_variadic_runs_on_m68k_and_its_row_is_closed():
+    """The pin prints 0 for it (M68K-VA-DOUBLE); ours reads the double at the ABI slot (#8453), so it is a cell again, not a skip."""
+    source = (RUN / "long_double_variadic.c").read_text()
+    assert all(ct.applies(t, source) for t in ("m68k-68000", "m68k-68020", "x86_32-linux"))
+    row = (RUN.parents[2] / "docs/working/m68k-va-double-row.md").read_text()
+    assert "CLOSED by #8453" in row and "Owner: m68k" in row and "Review: 2026-12-20" in row
+
+def test_a_program_whose_flags_all_force_a_32_bit_x86_mode_is_not_run_on_z80_or_6502():
+    """urem_eq (`-m32 -march=i486`) and spill_store_order (`-m32`) were run on z80 and 6502 and read WRONG: their .out is the 32-bit-int result (74938 for a 16-bit 57373), and spill_store_order shifts a 16-bit unsigned by 16 (poison)."""
+    for name in ("urem_eq", "spill_store_order"):
+        source = (RUN / f"{name}.c").read_text()
+        assert ct.x86_32_only(source)
+        assert not any(ct.applies(t, source) for t in ("z80-sdcc", "6502-sim65"))
+        assert ct.applies("arm64-linux", source) and ct.applies("x86_32-linux", source)
+    assert not ct.x86_32_only("// flags: -O2 -m32 | -O2 -m16\nint x;\n")
+
+
+def test_a_program_aligning_a_local_past_a_byte_stack_is_not_run_on_z80():
+    """z80 passed over_aligned_local_after_even_pushes on a folded `ptr & 15` (frames keep one byte): now a named refusal."""
+    source = (RUN / "over_aligned_local_after_even_pushes.c").read_text()
+    assert not ct.applies("z80-sdcc", source)
+    assert ct.applies("x86_64-linux", source) and ct.applies("m68k-68020", source) and ct.applies("wasm32", source)
+
+
+def test_programs_that_assume_a_32_bit_int_or_an_80_bit_long_double_are_not_run_on_6502_or_z80():
+    """6502 reported WRONG for bitcount_u32 (15 want 31), bitcount_idioms and long_double_decimal_literal (0x999A want 0xCCCD, the
+    double's low word) at both levels: a 16-bit `unsigned` and a 64-bit long double answered correctly for their types, and the
+    sweep counted three unmeasured cells as miscompiles. Only 6502 and z80 leave long_double_decimal_literal: m68k measures it
+    against its own `.m68k.out` and arm64 and wasm32 keep it as before."""
+    for name in ("bitcount_u32", "bitcount_idioms", "long_double_decimal_literal"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not any(ct.applies(t, source) for t in ("6502-sim65", "z80-sdcc")), name
+        assert ct.applies("x86_64-linux", source), name
+    literal = (RUN / "long_double_decimal_literal.c").read_text()
+    assert all(ct.applies(t, literal) for t in ("m68k-68020", "arm64-linux", "wasm32", "x86_16-dos", "x86_32-linux"))
+    assert ct.applies("arm64-linux", (RUN / "bitcount_u32.c").read_text())

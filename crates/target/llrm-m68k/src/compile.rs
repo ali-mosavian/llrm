@@ -32,10 +32,23 @@ pub enum Item {
 
 /// The pin's code model (`-mcmodel`), which decides how a global is reached
 /// (`M68kSubtarget::classifyGlobalReference`, without PIC): small, PC-relative
-/// with a 16-bit displacement; medium, absolute on the 68000 and 68010 and
-/// PC-relative from the 68020; large, absolute. The assembler relaxes only
-/// branches, so data farther than 32 KiB from the code needs medium on the
-/// 68000 or large.
+/// with a 16-bit displacement; medium and large, absolute. The assembler
+/// relaxes only branches, so data farther than 32 KiB from the code needs
+/// medium or large.
+///
+/// DEVIATE: medium is absolute on the 68020 and later as well. The pin picks
+/// PC-relative there (`M68kSubtarget::classifyLocalReference`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kSubtarget.cpp#L199-L208>),
+/// but its only PC-relative data form is `(d16,%pc)` (`MxPCD`,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kInstrInfo.td#L417-L422>
+/// is the indexed `(bd32,%pc,Xn)` form), so a global past 32 KiB fails to link:
+/// `relocation truncated to fit: R_68K_PC16` for `memcpy_runtime`'s two
+/// 70016-byte arrays (command and output in
+/// `docs/working/m68k-medium-pin-pc16.md`). Reason: medium has to reach any
+/// offset; `abs.l` does at every cpu, and a `(bd32,%pc)` form would be beyond
+/// the pin and 2 B longer. Position independence is not modelled (`-fPIC` is
+/// ignored). Owner: m68k. Review: 2026-12-15, or when the pin selects a 32-bit
+/// PC-relative form for data, whichever is first.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum CodeModel {
     #[default]
@@ -55,15 +68,11 @@ impl CodeModel {
         }
     }
 
-    /// Whether a global's address is an absolute one on `cpu`.
-    pub fn absolute_data(
-        self,
-        cpu: Cpu,
-    ) -> bool {
+    /// Whether a global's address is an absolute one.
+    pub fn absolute_data(self) -> bool {
         match self {
             CodeModel::Small => false,
-            CodeModel::Medium => !cpu.at_least(Cpu::M68020),
-            CodeModel::Large => true,
+            CodeModel::Medium | CodeModel::Large => true,
         }
     }
 }
@@ -113,6 +122,12 @@ pub struct Options {
     /// A load of an incoming stack argument is made again where it is read
     /// ([`crate::regalloc::Registers`], M68K-ARGREMAT).
     pub rematerialize_arguments: bool,
+    /// How a size-built function chooses between an inline expansion and a call
+    /// to the runtime ([`crate::libcalls`], M68K-SIZE-LIBCALL).
+    pub size_libcalls: crate::libcalls::Mode,
+    /// The kinds that choice made for the module, as [`crate::libcalls::mask`];
+    /// none given, the module is scanned for the function.
+    pub libcalls: Option<u8>,
     /// A loop's top is chosen by the jumps its fall-throughs remove, not by
     /// the edges they cover (M68K-TOP, [`crate::regalloc::place_blocks`]).
     pub loop_top_by_jumps: bool,
@@ -135,6 +150,10 @@ pub struct Options {
     /// The destination of a long compare may be an address register
     /// (`cmpa.l`, [`crate::addrcmp`]); kept when the function is cheaper.
     pub compare_destinations: bool,
+    /// A 64-bit add or subtract is `add`/`addx` (`ADDC`/`ADDE`, the pin's
+    /// lowering); a function it changed is also built with the compare form
+    /// and the cheaper kept: `addx` needs data registers on both halves.
+    pub carry_chain: bool,
     /// The coalescer joins the copies of values that live in more than one
     /// block with the ones that do not (`JoinGlobalCopies`, the allocator's
     /// tuning); a function that saved a register is also built without, and
@@ -155,6 +174,8 @@ impl Options {
         code_model: CodeModel::Small,
         mid_end: false,
         size: false,
+        size_libcalls: crate::libcalls::Mode::Auto,
+        libcalls: None,
         strict: false,
         source_order: false,
         indexed: false,
@@ -173,6 +194,7 @@ impl Options {
         return_dup: false,
         class_split: false,
         compare_destinations: false,
+        carry_chain: true,
         global_copies: true,
         loop_carried_first: false,
         debug: false,
@@ -185,6 +207,8 @@ impl Default for Options {
             code_model: CodeModel::Small,
             mid_end: true,
             size: false,
+            size_libcalls: crate::libcalls::Mode::Auto,
+            libcalls: None,
             strict: false,
             source_order: false,
             indexed: true,
@@ -203,6 +227,7 @@ impl Default for Options {
             return_dup: true,
             class_split: true,
             compare_destinations: true,
+            carry_chain: true,
             global_copies: true,
             loop_carried_first: true,
             debug: false,
@@ -285,6 +310,14 @@ pub fn items_with(
         }
     }
     // last: the two builds compared are final, the other choices made
+    if touched.carry_chain {
+        let without = Options { carry_chain: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            kept = plain;
+            options = without;
+        }
+    }
     if touched.compare_destinations {
         let without = Options { compare_destinations: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without)?;
@@ -293,6 +326,21 @@ pub fn items_with(
         }
     }
     Ok(kept)
+}
+
+/// Whether `function` carries through the extend flag: an `addx`, `subx` or
+/// `negx` (a subtract from a constant zero high half is `negx`).
+pub fn uses_extend(function: &crate::mfunc::MFunction) -> bool {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .any(
+            |inst| matches!(
+                inst.kind,
+                llrm_spike_mf::Kind::Op(name) if ["ADDX", "SUBX", "NEGX"].iter().any(|row| name.starts_with(row))
+            ),
+        )
 }
 
 /// The optional rewrites a build used.
@@ -304,6 +352,8 @@ struct Touched {
     /// A compare's destination was left to the allocator's choice of an
     /// address or a data register ([`crate::addrcmp`]).
     compare_destinations: bool,
+    /// The function has an `addx`, `subx` or `negx` ([`uses_extend`]).
+    carry_chain: bool,
     /// The build saved a callee-saved register: the join order may have cost
     /// it.
     global_copies: bool,
@@ -311,8 +361,45 @@ struct Touched {
 
 impl Touched {
     fn any(self) -> bool {
-        self.sext_adds || self.return_dup || self.class_split || self.compare_destinations || self.global_copies
+        self.sext_adds
+            || self.return_dup
+            || self.class_split
+            || self.compare_destinations
+            || self.carry_chain
+            || self.global_copies
     }
+}
+
+/// The bytes of `items` as assembled (a branch not yet sized counts 6).
+pub fn items_bytes(items: &[Item]) -> usize {
+    items
+        .iter()
+        .map(|item| match item {
+            Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
+            Item::Bytes(bytes) => bytes.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// The runtime calls the size-built functions of `module` make, as a
+/// [`crate::libcalls::mask`]: chosen once for the module (M68K-SIZE-LIBCALL),
+/// by the bytes each function builds to with and without them.
+pub fn libcalls_for(
+    module: &Module,
+    cpu: Cpu,
+    options: Options,
+) -> u8 {
+    let kinds = crate::libcalls::chosen(
+        module,
+        options.size_libcalls,
+        |one| options.size || has(&one.attrs, "optsize") || has(&one.attrs, "minsize"),
+        |name, kinds| {
+            let options = Options { libcalls: Some(crate::libcalls::mask(kinds)), ..options };
+            items_with(module, name, cpu, options).map(|items| items_bytes(&items))
+        },
+    );
+    crate::libcalls::mask(&kinds)
 }
 
 /// One build of the function, and the optional rewrites that changed it.
@@ -327,6 +414,13 @@ fn items_once(
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
+    // DEVIATE M68K-SIZE-LIBCALL (`crate::libcalls`): the 68000 and 68010 always
+    // call
+    let libcalls = if wants_size && cpu.at_least(crate::dagisel::hooks::Cpu::M68020) {
+        crate::libcalls::from_mask(options.libcalls.unwrap_or_else(|| libcalls_for(module, cpu, options)))
+    } else {
+        Vec::new()
+    };
     let blocks = select_function_with(
         module,
         name,
@@ -334,11 +428,14 @@ fn items_once(
         options.source_order,
         options.indexed,
         options.short,
-        options.code_model.absolute_data(cpu),
+        options.code_model.absolute_data(),
         wants_size,
+        options.carry_chain,
+        &libcalls,
     )?;
     let mut function = emit(name, &blocks)?;
     let mut touched = Touched::default();
+    touched.carry_chain = options.carry_chain && uses_extend(&function);
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {

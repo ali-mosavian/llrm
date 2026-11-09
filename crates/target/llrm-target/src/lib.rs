@@ -18,6 +18,7 @@ pub mod routines;
 pub mod runtime;
 pub mod timings;
 pub mod tune;
+pub mod testing;
 
 use std::rc::Rc;
 
@@ -524,17 +525,24 @@ pub trait Target {
         self.layout().expands(operation)
     }
 
-    /// The processors this target prices, as a platform description names them.
-    fn cpus(&self) -> &'static [&'static str];
+    /// The processors this target prices, as a platform description names them;
+    /// none: any `-mcpu` is refused.
+    fn cpus(&self) -> &'static [&'static str] {
+        &[]
+    }
 
     /// The CPU gcc's `-march=NAME` names, from the target's `timings.times`.
     fn march(
         &self,
-        name: &str,
-    ) -> Option<&'static str>;
+        _name: &str,
+    ) -> Option<&'static str> {
+        None
+    }
 
-    /// The names `-march` and `-mtune` take.
-    fn marches(&self) -> Vec<&'static str>;
+    /// The names `-march` and `-mtune` take; none where it has no table.
+    fn marches(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
 
     /// The data layout programs are built under and the address spaces a
     /// frontend's addresses are.
@@ -581,6 +589,14 @@ pub trait Target {
     /// A `mov imm; jmp` block with one predecessor is folded into it at -Os
     /// (LEAF-FOLD-OS).
     fn leaf_fold_at_size(&self) -> bool {
+        false
+    }
+
+    /// MachineCSE keeps a compare whose difference nothing reads apart from the
+    /// same difference made in a later block, when that difference overwrites
+    /// an operand still live (CSE-CMP): sharing them moves the subtract in
+    /// front of the branch and adds a copy of the operand. The pin shares.
+    fn cse_keeps_compare_with_live_minuend(&self) -> bool {
         false
     }
 
@@ -664,8 +680,10 @@ pub trait Target {
     /// target prices it.
     fn cpu_table(
         &self,
-        name: &str,
-    ) -> Option<timings::CpuTable>;
+        _name: &str,
+    ) -> Option<timings::CpuTable> {
+        None
+    }
 
     /// The target's register file, in `registers.regs`'s format.
     fn registers_text(&self) -> String;
@@ -683,15 +701,19 @@ pub trait Target {
     /// The inline routine that fills `cell`-byte cells through a huge pointer.
     fn huge_fill_routine(
         &self,
-        cell: u32,
-    ) -> Result<routines::HugeString, String>;
+        _cell: u32,
+    ) -> Result<routines::HugeString, String> {
+        Err(format!("{}: huge_fill_routine: the target has no huge pointers", self.name()))
+    }
 
     /// The inline routine that copies through huge pointers, upward or, `down`,
     /// from the last byte.
     fn huge_copy_routine(
         &self,
-        down: bool,
-    ) -> Result<routines::HugeString, String>;
+        _down: bool,
+    ) -> Result<routines::HugeString, String> {
+        Err(format!("{}: huge_copy_routine: the target has no huge pointers", self.name()))
+    }
 
     /// Whether the target links a C math library (`log`, `exp`, `log2` ...). It
     /// has none: the natural logarithm and the exponentials are x87
@@ -704,9 +726,11 @@ pub trait Target {
     /// one.
     fn divide_routine(
         &self,
-        signed: bool,
-        wide_divisor: bool,
-    ) -> Result<routines::Divide, String>;
+        _signed: bool,
+        _wide_divisor: bool,
+    ) -> Result<routines::Divide, String> {
+        Err(format!("{}: divide_routine: the target states no inline divide", self.name()))
+    }
 
     /// `divide_routine` for a caller that reads only `used` of the results: a
     /// target may have a shorter routine that leaves the rest unfixed.
@@ -741,7 +765,9 @@ pub trait Target {
     fn float_width(
         &self,
         bytes: u32,
-    ) -> u32;
+    ) -> u32 {
+        bytes
+    }
 
     /// Bytes of a two-register operation on `width`-byte registers.
     fn register_op_bytes(

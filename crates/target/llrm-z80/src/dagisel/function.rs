@@ -46,8 +46,10 @@ pub fn builder_target() -> BuilderTarget {
         // from a third of its range filled, at speed as well as size.
         min_jump_table_density: Some(40),
         preselection_blocks: Some(crate::prepare::PHI_EDGE),
+        refuse_unknown_intrinsics: true,
         variable_shift_legal: false,
         string_instructions: false,
+        max_alloca_align: Some(crate::MAX_ALLOCA_ALIGN),
         // the runtime's own routines (runtime/z80_rt.s). `memcpy` and `memmove`
         // take the C library's registers. The compiler's `memset` has the byte
         // as `i8` (in A) where C's takes an `int`: its own entry, `__memseta`.
@@ -69,7 +71,11 @@ pub fn builder_target() -> BuilderTarget {
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
         // all addressing is absolute: `&buf[6]` is the symbol and 6, whatever
         // the symbol's linkage (`isOffsetFoldingLegal`)
-        dag: DagConfig { dso_local_symbols: true, ..BuilderTarget::for_pointer_bits(16).dag },
+        dag: DagConfig {
+            dso_local_symbols: true,
+            sext_bool_add_preferred: true,
+            ..BuilderTarget::for_pointer_bits(16).dag
+        },
         ..BuilderTarget::for_pointer_bits(16)
     }
 }

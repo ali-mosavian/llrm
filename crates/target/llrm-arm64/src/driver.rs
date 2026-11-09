@@ -84,6 +84,8 @@ pub enum Level {
     O1,
     O2,
     O3,
+    /// -Omax: `Options::aggressive()`.
+    Omax,
     Os,
     Oz,
 }
@@ -91,14 +93,15 @@ pub enum Level {
 impl Level {
     /// The level `-O<text>` names.
     pub fn parse(text: &str) -> Result<Self, String> {
-        Ok(match text {
-            "0" => Self::O0,
-            "" | "1" => Self::O1,
-            "2" => Self::O2,
-            "3" => Self::O3,
-            "s" => Self::Os,
-            "z" => Self::Oz,
-            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Os or -Oz")),
+        use llrm_transforms::pipeline::LevelName as Name;
+        Ok(match Name::parse(text)? {
+            Name::O0 => Self::O0,
+            Name::O1 => Self::O1,
+            Name::O2 => Self::O2,
+            Name::O3 => Self::O3,
+            Name::Omax => Self::Omax,
+            Name::Os => Self::Os,
+            Name::Oz => Self::Oz,
         })
     }
 
@@ -114,6 +117,7 @@ impl Level {
             Self::O1 => Options::basic(),
             Self::O2 => Options::default(),
             Self::O3 => Options::speed(),
+            Self::Omax => Options::aggressive(),
             Self::Os => Options::size(),
             Self::Oz => Options::min_size(),
         }
@@ -133,17 +137,14 @@ pub fn optimized(program: &mut Program) -> Result<(), String> {
     optimized_at(program, Level::O2)
 }
 
-/// The `-f[no-]PASS` switches of the command line (`-fno-unroll-loops`),
-/// applied to every mid-end run of the process.
-static PASS_FLAGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// The `-f` switches of the command line (`-fno-unroll-loops`, `-fno-inline=NAME`, `-fexcess-precision=`), applied to every mid-end
+/// run of the process: the same parser as every other backend's `llc`.
+static POLICY: std::sync::Mutex<llrm_codegen::driver::policy::Policy> =
+    std::sync::Mutex::new(llrm_codegen::driver::policy::Policy::new());
 
-/// Records `flag` if it names a mid-end pass; false when it does not.
+/// Records `flag` if the driver passes it on to a backend; false when it is not one.
 pub fn pass_flag(flag: &str) -> bool {
-    if !llrm_codegen::driver::flags::apply_pass_flag(&mut Options::default(), flag) {
-        return false;
-    }
-    PASS_FLAGS.lock().unwrap().push(flag.to_owned());
-    true
+    POLICY.lock().unwrap().take(flag)
 }
 
 /// `program` through the shared mid-end at `level`.
@@ -153,8 +154,10 @@ pub fn optimized_at(
 ) -> Result<(), String> {
     let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
     let mut options = level.options();
-    for flag in PASS_FLAGS.lock().unwrap().iter() {
-        llrm_codegen::driver::flags::apply_pass_flag(&mut options, flag);
+    {
+        let policy = POLICY.lock().unwrap();
+        policy.mark(program)?;
+        policy.apply(&mut options);
     }
     options.library = c_library();
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
@@ -287,6 +290,9 @@ fn lower_function(
     dump("SibCall", &machine);
     crate::prepass::order_copies(&mut machine);
     dump("OrderCopies", &machine);
+    if crate::lir_body::checking() {
+        machine = crate::lir_body::round_trip(&machine)?;
+    }
     // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
     // linear scan; a function greedy refuses goes to the scan, reported.
     // `x16`/`x17` are the lowerer's scratch pair where an offset does not
@@ -297,8 +303,8 @@ fn lower_function(
     let snapshot = (tight && !loose).then(|| machine.clone());
     crate::lir_view::set_frame_pointer_free(
         platform != Platform::Darwin
-            && !(machine.calls
-                || machine.dynamic
+            && !(machine.dynamic
+                || machine.outgoing > crate::frame::SAFE_SP_DISPLACEMENT
                 || llrm_codegen::backend::framefree::keeps_frame_pointer(
                     machine.frame_pointer.as_deref(),
                     machine.calls,

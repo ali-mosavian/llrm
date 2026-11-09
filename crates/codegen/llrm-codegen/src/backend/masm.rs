@@ -1196,9 +1196,9 @@ fn realign_of(body: &lir::LirBody) -> i64 {
 /// Why `procedure` cannot have its stack pointer realigned, if it cannot: it
 /// is refused rather than compiled with a local off its alignment.
 ///
-/// DEVIATE RA1 (owner w4, 2026-10-28): a dynamic `alloca` beside an
+/// DEVIATE RA1 (owner object-refactor, 2026-10-28): a dynamic `alloca` beside an
 /// over-aligned local is refused; the pin addresses the locals through a base
-/// pointer (`X86RegisterInfo::hasBasePointer`). DEVIATE RA2 (owner w4,
+/// pointer (`X86RegisterInfo::hasBasePointer`). DEVIATE RA2 (owner object-refactor,
 /// 2026-10-28): `-g` variables are refused; their locations need the canonical
 /// frame address, which a realigned frame moves. Exit for both: the pin's
 /// base pointer and CFA locations in `lowered`.
@@ -1484,7 +1484,7 @@ fn stack_check(
 /// A `saved_first` frame's entry and return sequences, the pin's
 /// (`framelowering`): `push bp; mov bp, sp`, the registers, `sub sp, N`; and
 /// `add sp, N` (`lea sp, [bp - registers]` after an `alloca`), the pops, `pop
-/// bp`. DEVIATE PE1 (owner w-5, 2026-11-27): a one-slot adjustment stays a
+/// bp`. DEVIATE PE1 (owner object-refactor, 2026-11-27): a one-slot adjustment stays a
 /// `sub`/`add`, not the pin's `push eax`/`pop`: the register the push may
 /// clobber is not asked of the entry's live-ins here.
 fn lowered(
@@ -1678,6 +1678,7 @@ fn parts(
         !omit
             && procedure.entry == 0
             && (reserve != 0
+                || moves_stack(&procedure.body)
                 || procedure.registers.kept
                 || roots.contains(&procedure.body.regs().root(procedure.registers.pointer))
                 || procedure.callees.values().any(|one| may_address_frame(&one.code)))

@@ -4,3 +4,7 @@
 LLRM_ROOT = { value = "", relative = true }
 # Tests check each pass and each machine phase (llrm_support::debug::verifying); a user's compile checks its input only.
 LLRM_VERIFY = "1"
+
+# At most LLRM_LINK_SLOTS (default 4) links at once: dozens of parallel test links saturated the disk (2026-11-09, IO full 82%).
+[target.x86_64-unknown-linux-gnu]
+linker = "tools/link_slot.sh"

@@ -685,6 +685,10 @@ impl Tti for X86 {
         self.tuning.inline_never_grows_without_rate
     }
 
+    fn unroll_object_bound(&self) -> Option<u32> {
+        self.tuning.unroll_object_bound
+    }
+
     fn inline_o1_weighs_entry(&self) -> bool {
         self.tuning.inline_o1_weighs_entry
     }
@@ -765,6 +769,10 @@ impl Tti for X86 {
 
     fn price_pin_multiplies(&self) -> bool {
         self.tuning.price_pin_multiplies
+    }
+
+    fn lftr_any_stride(&self) -> bool {
+        self.tuning.lftr_any_stride
     }
 
     fn imul_at_size(&self) -> bool {

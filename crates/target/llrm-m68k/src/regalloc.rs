@@ -84,6 +84,12 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
         ARGUMENT_REMAT && name == "MOV32rp"
     }
 
+    /// A made-again argument load is a `move` that sets the codes in hardware;
+    /// the reader after the original reads the original's ([`crate::flags`]).
+    fn remade_sets_no_flags() -> bool {
+        true
+    }
+
     /// DEVIATE C13 (coalescer/mod.rs): the joins raised `movem` 71 -> 89 in
     /// div_constants_short and made 15 of 90 cell-CPU rows worse.
     fn joins_sub_registers() -> bool {

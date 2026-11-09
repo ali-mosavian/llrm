@@ -81,7 +81,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         SMulO => pin::SMULO,
         UAddOCarry => pin::UADDO_CARRY,
         USubOCarry => pin::USUBO_CARRY,
-        SetCCCarry => u16::MAX,
+        SAddOCarry | SSubOCarry | SetCCCarry => u16::MAX,
         SAddSat => pin::SADDSAT,
         UAddSat => pin::UADDSAT,
         SSubSat => pin::SSUBSAT,
@@ -209,13 +209,11 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         // `ISD::VAARG` is 335, one below `VACOPY`; no pattern names it.
         VAArg => 335,
         SrcValue => pin::SRCVALUE,
-        // sdag-a's codes are private and named (`x86isd::name`), the pin's
-        // number comes from the name; sdag-b's lowering writes the pin's
-        // numbers, which `name` does not know.
-        Target(code) => match super::x86isd::private_name(code).and_then(|name| name.strip_prefix("X86ISD::")) {
-            Some(name) => llrm_dagisel::generated::ids::x86isd_id(name).unwrap_or(u16::MAX),
-            None => code,
-        },
+        // A target's private codes are named; the pin's number comes from
+        // the name, and a code the target does not know is already the pin's.
+        Target(code) => llrm_sdag::target_names::installed()
+            .and_then(|names| names.pin_id(code))
+            .unwrap_or(code),
         // A machine node reads as the pin's `~opcode`.
         Machine(code) => !(code as u16),
     }
