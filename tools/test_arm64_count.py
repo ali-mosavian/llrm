@@ -98,6 +98,15 @@ class KernelRange(unittest.TestCase):
         self.assertEqual(expect.status("stft_single", "O2", "502187692", "78803551\n"), "fail")
         self.assertEqual(expect.status("stft_single", "O2", "78803551", "78803551\n"), "ok")
 
+    def test_the_level_may_be_given_as_cell_sh_passes_it(self):
+        # cell.sh passes 1/2/3/s, the table is keyed O1/O2/O3/Os: every stft_single cell of the
+        # judge table came out `unmeasured:value 40144774...` instead of `exception`.
+        sys.path.insert(0, os.path.join(os.path.dirname(COUNT)))
+        import expect
+
+        for level in ("1", "2", "3", "s"):
+            self.assertEqual(expect.status("stft_single", level, "40144774:f14311fc", "78803551\n"), "exception", level)
+
 
 if __name__ == "__main__":
     unittest.main()
