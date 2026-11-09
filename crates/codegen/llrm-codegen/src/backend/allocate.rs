@@ -311,7 +311,8 @@ pub fn greedy_rewritten(
             bits: current.bits,
             classes,
             basic_semantics,
-            address_reference_milliweight: cpu.target().tuning().address_reference_milliweight,
+            address_reference_milliweight: targets::profile(cpu)
+                .map_or(1000, |profile| profile.target().tuning().address_reference_milliweight),
         },
         tri: &crate::greedy::targetinfo::X86RegisterInfo,
         size: crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get),
