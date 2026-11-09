@@ -115,3 +115,28 @@ def test_an_allowed_stale_oz_table_says_so_in_its_header(tmp_path):
     out = tmp_path / "out.tsv"
     t.main([str(out), "--ours", str(tmp_path / "ours"), "--sdcc", str(tmp_path / "sdcc"), "--programs", str(tmp_path / "src"), "--allow-stale-oz"])
     assert "# STALE-OZ ALLOWED: a" in out.read_text().splitlines()
+
+
+def _stale_dirs(tmp_path, programs):
+    for lv, bytes_ in (("s", 907), ("z", 953)):
+        d = tmp_path / "ours"
+        d.mkdir(exist_ok=True)
+        (d / f"full.{lv}.tsv").write_text("".join(f"{p}\tours\t{bytes_}\t1\n" for p in programs))
+    (tmp_path / "sdcc").mkdir(exist_ok=True)
+    (tmp_path / "src").mkdir(exist_ok=True)
+    for p in programs:
+        (tmp_path / "src" / f"{p}.c").write_text("int x;")
+    return ["--ours", str(tmp_path / "ours"), "--sdcc", str(tmp_path / "sdcc"), "--programs", str(tmp_path / "src")]
+
+
+def test_a_gap_named_with_its_row_is_written_and_listed_and_any_other_still_refuses(tmp_path):
+    out = tmp_path / "out.tsv"
+    args = _stale_dirs(tmp_path, ["a", "b"])
+    try:
+        t.main([str(out), *args, "--known-oz-gap", "a=Z80-OZ-1"])
+        raised = False
+    except SystemExit as stop:
+        raised = stop.code == 1
+    assert raised and not out.exists()  # b is not named
+    t.main([str(out), *args, "--known-oz-gap", "a=Z80-OZ-1", "--known-oz-gap", "b=Z80-OZ-2"])
+    assert "# OZ>OS KNOWN: a=Z80-OZ-1 b=Z80-OZ-2" in out.read_text().splitlines()
