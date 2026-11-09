@@ -4,7 +4,17 @@ Owner: 6502. Opened 2026-11-10. The gcc progs column was built with other flags 
 
 Priced as the matrix does: O2 clocks + 3 B, Os strict bytes, O1 per axis. Cells: `scratch/handoff/matrix/6502-gcc-progs-flagfix-2026-11-09/`.
 
-**57 cells (19 programs x O1/O2/Os).** Worse than gcc: 21 under the old column, 15 under the corrected one.
+**57 cells (19 programs x O1/O2/Os), corrected gcc column, ours vs gcc per axis:**
+
+| level | cells | bytes worse | clocks worse | either axis | both axes | priced (clocks + 3 B) worse |
+|---|---|---|---|---|---|---|
+| O1 | 19 | 1 | 8 | 9 | 0 | 7 |
+| O2 | 19 | 7 | 4 | 8 | 3 | 4 |
+| Os | 19 | 2 | 8 | 9 | 1 | 8 |
+| all | 57 | 10 | 20 | 26 | 4 | 19 |
+
+The scoreboard numbers are the last row's bytes and clocks: 10 bigger, 20 slower (26 cells with either). "Worse" below is the matrix rule above (O1 either axis, O2 priced, Os bytes): 15 cells, 21 under the old column.
+
 - Worse -> better (rows to close): frameless O1 Os; licm_graph_callee_footprint O1 O2 Os; mem_length_boundaries_m32 O2; memmove_overlap O2; pattern_fill O2; tail_calls O2.
 - Better -> worse (newly open): memcpy_libcall Os; tail_calls O1 Os.
 
