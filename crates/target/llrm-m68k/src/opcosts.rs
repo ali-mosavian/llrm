@@ -151,10 +151,26 @@ pub const AT_DEFAULT: &[(&str, &str)] = &[
 /// tests/run/c, -O2 and -Os): the median is 1.500 at both CPUs, hold-out median |error| 0.17 and 0.15 against 0.33 at 1.0.
 const FUNCTION_SCALE_PERCENT: i64 = 150;
 
+/// The bytes of an `i64` product and of the product of two `i32`s into an `i64`, the whole sequence: the object of
+/// `long long f(long long a, long long b) { return a * b; }` and of `(long long)a * b` at -Os (2026-11-09: 152 and 178
+/// B at the 68000, 44 and 14 B at the 68020) less the saved registers, `rts` and loads around the product
+/// (`tests/size_calibration.rs` holds them to the objects). The 68000 has no 32-bit multiply either: each is a run of
+/// `__mulsi3` calls on 16-bit halves; the 68020 has `muls.l`/`mulu.l`.
+fn products(cpu: Cpu) -> (i64, i64) {
+    if cpu.at_least(Cpu::M68020) { (34, 8) } else { (136, 160) }
+}
+
 /// The operations in code bytes at `cpu`.
 pub fn size_costs(cpu: Cpu) -> Result<OperationCosts, String> {
-    let mut costs =
-        OperationCosts { function_scale: FUNCTION_SCALE_PERCENT, free_intrinsics: true, ..OperationCosts::default() };
+    let (wide, widening) = products(cpu);
+    let mut costs = OperationCosts {
+        function_scale: FUNCTION_SCALE_PERCENT,
+        free_intrinsics: true,
+        expanded_intrinsics: true,
+        multiply_wide: wide,
+        multiply_widening: widening,
+        ..OperationCosts::default()
+    };
     for (class, form) in forms(cpu) {
         let size = bytes(&form)?;
         match class {

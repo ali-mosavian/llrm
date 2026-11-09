@@ -185,3 +185,31 @@ fn lifetime_markers_cost_nothing() {
     let (plain, marked) = (llrm_mir::parse::module(&plain).unwrap(), llrm_mir::parse::module(&marked).unwrap());
     assert_eq!(estimate_over(&marked, Cpu::M68020), estimate_over(&plain, Cpu::M68020));
 }
+
+/// An `i64` product and an `i32` by `i32` into `i64` were priced as the 32-bit multiply (14 B at the 68000, 4 at the
+/// 68020); the objects are 152 and 178 B at the 68000 and 44 and 14 B at the 68020 (2026-11-09, `-Os`). The estimate of
+/// the table price of each function is within 0.75 and 1.4 of its object, and the 68000 product costs more than the 68020's.
+#[test]
+fn wide_products_are_priced_at_what_each_cpu_makes_of_them() {
+    let layout = format!("target datalayout = \"{DATALAYOUT}\"\n");
+    let sources = [
+        ("mul64", format!("{layout}define i64 @mul64(i64 %a, i64 %b) {{\n  %r = mul i64 %a, %b\n  ret i64 %r\n}}\n")),
+        (
+            "widen",
+            format!("{layout}define i64 @widen(i32 %a, i32 %b) {{\n  %x = sext i32 %a to i64\n  %y = sext i32 %b to i64\n  %r = mul i64 %x, %y\n  ret i64 %r\n}}\n"),
+        ),
+    ];
+    for (name, text) in &sources {
+        let mut estimates = Vec::new();
+        for (cpu_name, cpu) in [("68000", Cpu::M68000), ("68020", Cpu::M68020)] {
+            let module = llrm_mir::parse::module(text).unwrap();
+            let object = driver::object_in(text, driver::cpu_of(cpu_name).unwrap(), Level::parse("s").unwrap(), name, CodeModel::Small).unwrap();
+            let (estimate, actual) = (estimate_over(&module, cpu), text_bytes(&object) as i64);
+            // The table alone, as the leaf-kernel test: the residue scale is for the population, not one function.
+            let ratio = estimate as f64 / (M68kMachine { cpu }.size_costs().function_scale as f64 / 100.0) / actual as f64;
+            assert!((0.75..=1.4).contains(&ratio), "{name} at the {cpu_name}: table {estimate} B scaled, object {actual} B ({ratio:.2} unscaled)");
+            estimates.push(estimate);
+        }
+        assert!(estimates[0] > estimates[1], "{name}: the 68000 makes more of a product than the 68020 ({estimates:?})");
+    }
+}
