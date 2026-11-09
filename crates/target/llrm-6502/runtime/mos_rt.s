@@ -1,6 +1,8 @@
 ; Spike runtime for the 6502 target: what the compiler would call for multiply, divide, remainder and
 ; shifts by a variable. The `mos` convention: a byte argument in the first free of rc2.., a word in
-; rs1 (rc2:rc3) then rs2 (rc4:rc5), a byte result in A, a word in A (low):X (high). The routines may
+; rs1 (rc2:rc3) then rs2 (rc4:rc5), a byte result in A, a word in A (low):X (high). The word multiply,
+; divide and remainder (`__mulhi3`, `__[u]divhi3[c]`, `__[u]modhi3[c]`) take the first word in A:X and
+; the second in rc2:rc3, as llvm-mos's libcalls do. The routines may
 ; change A, X, Y and rc2..rc7 and keep rc0, rc1 and rc8..rc15. The caller defines rc0..rc(N-1), N being
 ; the platform row's `zero_page` (16 to 26 bytes from its zero-page base).
 ;
@@ -107,26 +109,28 @@ __mulqihi3:                     ; rc2 * rc3 -> A:X, both signed bytes
   rts
 
 .export __mulhi3
-__mulhi3:                       ; rs1 * rs2 -> A:X
+__mulhi3:                       ; A:X * rs1 -> A:X; the multiplier (rs1) shifts right, so a small second operand ends early
+  sta rc4
+  stx rc5
   lda #0
   sta rc6
   sta rc7
 @next:
-  lsr rc5
-  ror rc4
+  lsr rc3
+  ror rc2
   bcc @skip
   clc
   lda rc6
-  adc rc2
+  adc rc4
   sta rc6
   lda rc7
-  adc rc3
+  adc rc5
   sta rc7
 @skip:
-  asl rc2
-  rol rc3
-  lda rc4                       ; stop when no multiplier bits are left
-  ora rc5
+  asl rc4
+  rol rc5
+  lda rc2                       ; stop when no multiplier bits are left
+  ora rc3
   bne @next
   lda rc6
   ldx rc7
@@ -153,22 +157,22 @@ udivmod8:
   bne @next
   rts
 
-; rs1 / rs2: the quotient in rc2:rc3, the remainder in rc6:rc7. Uses A and X only.
+; the dividend in rc4:rc5, the divisor in rc2:rc3: the quotient in rc4:rc5, the remainder in rc6:rc7. Uses A and X only.
 udivmod16:
-  lda rc5
+  lda rc3
   bne udivmod16c
   ; a divisor under 256: the remainder is a byte, in A, with the carry of the shift as its ninth bit
   ldx #16
 @next8:
-  asl rc2
-  rol rc3
+  asl rc4
+  rol rc5
   rol a
   bcs @sub8
-  cmp rc4
+  cmp rc2
   bcc @keep8
 @sub8:
-  sbc rc4
-  inc rc2
+  sbc rc2
+  inc rc4
 @keep8:
   dex
   bne @next8
@@ -183,25 +187,25 @@ udivmod16c:
   sta rc7
   ldx #16
 @next:
-  asl rc2
-  rol rc3
+  asl rc4
+  rol rc5
   rol rc6
   rol rc7
   bcs @sub
   lda rc6
-  cmp rc4
+  cmp rc2
   lda rc7
-  sbc rc5
+  sbc rc3
   bcc @keep
 @sub:
   sec
   lda rc6
-  sbc rc4
+  sbc rc2
   sta rc6
   lda rc7
-  sbc rc5
+  sbc rc3
   sta rc7
-  inc rc2
+  inc rc4
 @keep:
   dex
   bne @next
@@ -225,14 +229,18 @@ __umodqi3:                      ; rc2 % rc3 -> A
   jmp udivmod8
 
 .export __udivhi3
-__udivhi3:                      ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
+__udivhi3:                      ; A:X / rs1 -> A:X, the remainder in rc6:rc7
+  sta rc4
+  stx rc5
   jsr udivmod16
-  lda rc2
-  ldx rc3
+  lda rc4
+  ldx rc5
   rts
 
 .export __umodhi3
-__umodhi3:                      ; rs1 % rs2 -> A:X
+__umodhi3:                      ; A:X % rs1 -> A:X
+  sta rc4
+  stx rc5
   jsr udivmod16
   lda rc6
   ldx rc7
@@ -240,14 +248,18 @@ __umodhi3:                      ; rs1 % rs2 -> A:X
 
 ; the compact variants, called where a byte is worth more than the clocks: no short-divisor path
 .export __udivhi3c
-__udivhi3c:                     ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
+__udivhi3c:                     ; A:X / rs1 -> A:X, the remainder in rc6:rc7
+  sta rc4
+  stx rc5
   jsr udivmod16c
-  lda rc2
-  ldx rc3
+  lda rc4
+  ldx rc5
   rts
 
 .export __umodhi3c
-__umodhi3c:                     ; rs1 % rs2 -> A:X
+__umodhi3c:                     ; A:X % rs1 -> A:X
+  sta rc4
+  stx rc5
   jsr udivmod16c
   lda rc6
   ldx rc7
@@ -312,7 +324,7 @@ __modqi3:                       ; rc2 % rc3 -> A
   sta hi
 .endmacro
 
-; rs1 := |rs1|, rs2 := |rs2|
+; rc2:rc3 := |rc2:rc3|, rc4:rc5 := |rc4:rc5|
 abs16_pair:
   lda rc3
   bpl @b
@@ -325,23 +337,27 @@ abs16_pair:
   rts
 
 .export __divhi3
-__divhi3:                       ; rs1 / rs2 -> A:X
-  lda rc3
-  eor rc5
+__divhi3:                       ; A:X / rs1 -> A:X
+  sta rc4
+  stx rc5
+  txa
+  eor rc3
   tay
   jsr abs16_pair
   jsr udivmod16
   cpy #0
   bpl @done
-  neg16 rc2, rc3
+  neg16 rc4, rc5
 @done:
-  lda rc2
-  ldx rc3
+  lda rc4
+  ldx rc5
   rts
 
 .export __modhi3
-__modhi3:                       ; rs1 % rs2 -> A:X
-  ldy rc3
+__modhi3:                       ; A:X % rs1 -> A:X
+  sta rc4
+  stx rc5
+  ldy rc5
   jsr abs16_pair
   jsr udivmod16
   cpy #0
@@ -354,23 +370,27 @@ __modhi3:                       ; rs1 % rs2 -> A:X
 
 ; the compact signed variants, called at size: the same sign handling over the bit loop alone (no short-divisor path)
 .export __divhi3c
-__divhi3c:                       ; rs1 / rs2 -> A:X, compact
-  lda rc3
-  eor rc5
+__divhi3c:                       ; A:X / rs1 -> A:X, compact
+  sta rc4
+  stx rc5
+  txa
+  eor rc3
   tay
   jsr abs16_pair
   jsr udivmod16c
   cpy #0
   bpl @done
-  neg16 rc2, rc3
+  neg16 rc4, rc5
 @done:
-  lda rc2
-  ldx rc3
+  lda rc4
+  ldx rc5
   rts
 
 .export __modhi3c
-__modhi3c:                       ; rs1 % rs2 -> A:X, compact
-  ldy rc3
+__modhi3c:                       ; A:X % rs1 -> A:X, compact
+  sta rc4
+  stx rc5
+  ldy rc5
   jsr abs16_pair
   jsr udivmod16c
   cpy #0

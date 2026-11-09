@@ -1351,12 +1351,13 @@ fn a_remainder_of_two_sign_extended_words_is_the_word_routine() {
     assert!(text.contains("__modhi3") && !text.contains("__modsi3"), "the long routine:\n{text}");
     let function = without_equates(&text);
     for (a, b, want) in [(-7i16, 3i16, 0xFF), (-32768, -1, 0), (1000, -7, 6)] {
+        // the first word in A:X, the second in rc2:rc3
         let setup = format!(
-            "  lda #{}\n  sta rc2\n  lda #{}\n  sta rc3\n  lda #{}\n  sta rc4\n  lda #{}\n  sta rc5\n  jsr rem\n",
-            a as u16 & 0xFF,
-            (a as u16) >> 8,
+            "  lda #{}\n  sta rc2\n  lda #{}\n  sta rc3\n  lda #{}\n  ldx #{}\n  jsr rem\n",
             b as u16 & 0xFF,
-            (b as u16) >> 8
+            (b as u16) >> 8,
+            a as u16 & 0xFF,
+            (a as u16) >> 8
         );
         assert_eq!(common::run_with(&format!("narrow-rem-{a}-{b}"), &setup, &function), want, "{a} % {b}");
     }
@@ -1379,7 +1380,7 @@ fn a_divide_of_sign_extended_words_keeps_the_long_quotient() {
     let text = assembly(&words, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
     assert!(text.contains("__divsi3") && !text.contains("__divhi3"), "narrowed:\n{text}");
     let setup =
-        "  lda #0\n  sta rc2\n  lda #$80\n  sta rc3\n  lda #$FF\n  sta rc4\n  lda #$FF\n  sta rc5\n  jsr high\n";
+        "  lda #$FF\n  sta rc2\n  sta rc3\n  lda #0\n  ldx #$80\n  jsr high\n";
     assert_eq!(common::run_with("narrow-div-min", setup, &without_equates(&text)), 0x80);
 }
 

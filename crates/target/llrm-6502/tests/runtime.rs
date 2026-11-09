@@ -44,11 +44,12 @@ fn two_bytes(
     set("rc2", a, false) + &set("rc3", b, false)
 }
 
+/// The word routines take the first word in A:X and the second in rc2:rc3.
 fn two_words(
     a: u16,
     b: u16,
 ) -> String {
-    set("rc2", a, true) + &set("rc4", b, true)
+    set("rc2", b, true) + &format!("  lda #{}\n  ldx #{}\n", a & 0xFF, a >> 8)
 }
 
 /// The low byte of the product: 7 * 6 = 42, 200 * 2 = 400 = 0x190 -> 0x90, 255

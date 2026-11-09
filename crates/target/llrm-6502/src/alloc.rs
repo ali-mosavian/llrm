@@ -2403,10 +2403,10 @@ pub fn build_with_places(
                 let (yl, yh) = b.read_word(name(&o[3])?)?;
                 let (ql, qh) = b.write_word(name(&o[0])?)?;
                 let (rl, rh) = b.write_word(name(&o[1])?)?;
-                b.copy(Reg::Phys(rc(2)), xl);
-                b.copy(Reg::Phys(rc(3)), xh);
-                b.copy(Reg::Phys(rc(4)), yl);
-                b.copy(Reg::Phys(rc(5)), yh);
+                b.copy(Reg::Phys(rc(2)), yl);
+                b.copy(Reg::Phys(rc(3)), yh);
+                b.copy(Reg::Phys(reg::A), xl);
+                b.copy(Reg::Phys(reg::X), xh);
                 b.call("__udivhi3");
                 b.copy(ql, Reg::Phys(reg::A));
                 b.copy(qh, Reg::Phys(reg::X));
@@ -2442,18 +2442,22 @@ pub fn build_with_places(
                 let second = if counted { None } else { Some(b.read_word(name(&o[2])?)?) };
                 let (mut yl, mut yh) = second.unwrap_or((xl, xh));
                 // a product goes either way round: the operand that arrives in
-                // `rc4` is the second
-                if code == op::MUL16 && (b.arrives_in(xl) == Some(rc(4)) || b.arrives_in(yl) == Some(rc(2))) {
+                // `rc2` is the second
+                if code == op::MUL16 && (b.arrives_in(xl) == Some(rc(2)) || b.arrives_in(yl) == Some(reg::A)) {
                     (xl, xh, yl, yh) = (yl, yh, xl, xh);
                 }
-                b.copy(Reg::Phys(rc(2)), xl);
-                b.copy(Reg::Phys(rc(3)), xh);
                 if counted {
+                    // a shift takes the word in rc2:rc3 and the count in rc4
+                    b.copy(Reg::Phys(rc(2)), xl);
+                    b.copy(Reg::Phys(rc(3)), xh);
                     let count = b.byte(name(&o[2])?)?;
                     b.copy(Reg::Phys(rc(4)), count);
                 } else {
-                    b.copy(Reg::Phys(rc(4)), yl);
-                    b.copy(Reg::Phys(rc(5)), yh);
+                    // the first word in A:X, the second in rc2:rc3 (`CC_MOS`)
+                    b.copy(Reg::Phys(rc(2)), yl);
+                    b.copy(Reg::Phys(rc(3)), yh);
+                    b.copy(Reg::Phys(reg::A), xl);
+                    b.copy(Reg::Phys(reg::X), xh);
                 }
                 b.call(routine);
                 b.copy(dl, Reg::Phys(reg::A));

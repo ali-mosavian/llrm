@@ -461,10 +461,10 @@ pub fn expand(
         op::UDIVREM16 => {
             let ((ql, qh), (rl, rh)) = (word(&o[0])?, word(&o[1])?);
             let ((xl, xh), (yl, yh)) = (word(&o[2])?, word(&o[3])?);
-            copy_byte(&mut out, "rc2", &xl);
-            copy_byte(&mut out, "rc3", &xh);
-            copy_byte(&mut out, "rc4", &yl);
-            copy_byte(&mut out, "rc5", &yh);
+            copy_byte(&mut out, "rc2", &yl);
+            copy_byte(&mut out, "rc3", &yh);
+            copy_byte(&mut out, "a", &xl);
+            copy_byte(&mut out, "x", &xh);
             writeln!(out, "  jsr __udivhi3").unwrap();
             copy_byte(&mut out, &ql, "a");
             copy_byte(&mut out, &qh, "x");
@@ -490,16 +490,19 @@ pub fn expand(
                 _ => "__ashrhi3",
             };
             let ((dl, dh), (al, ah)) = (word(&o[0])?, word(&o[1])?);
-            copy_byte(&mut out, "rc2", &al);
-            copy_byte(&mut out, "rc3", &ah);
-            // A shift count is a byte in `rc4`; the other operations take a
-            // second word.
+            // A shift takes the word in rc2:rc3 and its count in `rc4`; the
+            // other operations take the first word in A:X and the second in
+            // rc2:rc3.
             if matches!(inst.opcode, op::SHLV16 | op::SRLV16 | op::SRAV16) {
+                copy_byte(&mut out, "rc2", &al);
+                copy_byte(&mut out, "rc3", &ah);
                 copy_byte(&mut out, "rc4", reg(&o[2])?);
             } else {
                 let (bl, bh) = word(&o[2])?;
-                copy_byte(&mut out, "rc4", &bl);
-                copy_byte(&mut out, "rc5", &bh);
+                copy_byte(&mut out, "rc2", &bl);
+                copy_byte(&mut out, "rc3", &bh);
+                copy_byte(&mut out, "a", &al);
+                copy_byte(&mut out, "x", &ah);
             }
             writeln!(out, "  jsr {routine}").unwrap();
             copy_byte(&mut out, &dl, "a");
