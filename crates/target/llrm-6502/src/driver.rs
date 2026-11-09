@@ -247,6 +247,25 @@ struct Assembled {
 
 /// The assembly of `program`: every function selected (the copies as loops and
 /// the paged walks where they price cheaper) and written out.
+/// DEVIATE 6502-MEMLOOP-PRICE (owner llrm-target-6502, exit 2026-12-05): a function that calls `memcpy` is also selected
+/// with its copies written as loops (`memloops`), and the cheaper text is kept (`cheaper`: clocks plus bytes at
+/// `routines.toml`'s price, a loop trip weighs ten). Pin: `PreISelIntrinsicLowering` expands a `memcpy` as a loop by its
+/// size alone, when it is not a constant or exceeds `TTI.getMaxMemIntrinsicInlineSizeThreshold()` and no libcall is
+/// emitted ([L255](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PreISelIntrinsicLowering.cpp#L255),
+/// [L356](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PreISelIntrinsicLowering.cpp#L356)).
+/// End state: the size threshold as a `Tti` hook of the 6502 (a byte price it derives from `routines.toml`), the expansion
+/// done once before selection, no second selection. Reason: the threshold depends on the call-versus-loop price per
+/// site, which the hook has to carry first. Time: one more selection, and two allocate-and-emit runs for pricing, per
+/// function that calls `memcpy`.
+///
+/// DEVIATE 6502-PAGEINDEX-PRICE (owner llrm-target-6502, exit 2026-12-05): a function with a loop that can walk a
+/// pointer by page (`pageindex`: an 8-bit index register over a base that moves a page on wrap) is selected a third
+/// time with that loop and the cheaper text is kept. Pin: no such pass; the pin chooses addressing by
+/// `isLSRCostLess`/`getPreferredAddressingMode` in loop strength reduction
+/// ([L919](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfo.h#L919)).
+/// End state: the page-walking form is one of LSR's formulae priced by the 6502's `Tti` (index register bits, cost per
+/// step), chosen inside the pass; no separate transform and no second selection. Time: as above, per function with a
+/// page-walking loop.
 fn tail(
     mut program: Program,
     request: &Request,
