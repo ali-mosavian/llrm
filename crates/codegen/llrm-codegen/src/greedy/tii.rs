@@ -432,7 +432,11 @@ pub fn fold_memory_operand(
     bits: u32,
     classes: &RegisterClasses,
 ) -> Option<Arc<Insn>> {
-    let what = one.what.as_ref()?;
+    let original = one.what.as_ref()?;
+    // X86InstrInfo::foldMemoryOperandImpl, Ops = {0, 1}: `test r, r` becomes
+    // `cmp r, 0` first, and that folds.
+    let zero_compare = test_as_compare_with_zero(original, reg);
+    let what = zero_compare.as_ref().unwrap_or(original);
     // A register a fixed place requires, a register inside an address, and a
     // second memory operand all refuse the fold.
     if one.requires.iter().chain(&one.delivers).any(|(held, _)| held.value == reg) {
@@ -544,6 +548,31 @@ pub fn fold_memory_operand(
     out.uses.retain(|value| *value != reg);
     out.undefs.retain(|value| *value != reg);
     Some(Arc::new(out))
+}
+
+/// `TEST16rr r, r` -> `CMP16ri r, 0` (and the other widths): the form the
+/// fold takes when both operands are the spilled register.
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L8004>
+fn test_as_compare_with_zero(
+    what: &Semantics,
+    reg: u32,
+) -> Option<Semantics> {
+    let [Loc::Held(first), Loc::Held(second)] = what.sources.as_slice() else {
+        return None;
+    };
+    if what.op != Operation::Compare
+        || what.name.as_deref() != Some("test")
+        || !what.dests.is_empty()
+        || first != second
+        || first.value != reg
+    {
+        return None;
+    }
+    Some(Semantics {
+        name: Some("cmp".into()),
+        sources: vec![Loc::Held(first.clone()), Loc::Imm(Imm { value: 0, width: first.width as u32, address: None })],
+        ..what.clone()
+    })
 }
 
 pub(crate) fn _with<F: FnOnce(&mut Insn)>(
@@ -815,6 +844,30 @@ mod tests {
         let cell = Mem::new(Some(Addr::new(Space::Frame, -2)), 2);
         let folded = fold_memory_operand(&Arc::new(add), 1, &cell, 16, &RegisterClasses::m16()).expect("folds");
         assert!(folded.undefs.is_empty(), "the folded add still names v1: {folded:?}");
+    }
+
+    /// rectwo -O1 m16 (88 B against main's 79): the loop's `test v, v` of a
+    /// spilled word stayed `mov bx, [bp-6]; test bx, bx`. The pin folds the
+    /// reload as `cmp word ptr [bp-6], 0` (`TEST16rr` is rewritten to `CMP16ri
+    /// r, 0` first).
+    #[test]
+    fn test_a_test_of_a_spilled_register_folds_into_a_compare_with_zero() {
+        let held = Loc::Held(Held { value: 1, width: 2, offset: 0 });
+        let what = Semantics {
+            name: Some("test".into()),
+            sources: vec![held.clone(), held],
+            ..Semantics::new(Operation::Compare)
+        };
+        let test = Insn::new(0, None, Some(what), vec![], vec![1]);
+        let cell = Mem::new(Some(Addr::new(Space::Frame, -6)), 2);
+        let folded = fold_memory_operand(&Arc::new(test), 1, &cell, 16, &RegisterClasses::m16()).expect("folds");
+        let what = folded.what.as_ref().unwrap();
+        assert_eq!(what.name.as_deref(), Some("cmp"), "{folded:?}");
+        assert!(
+            matches!(what.sources.as_slice(), [Loc::Mem(_), Loc::Imm(imm)] if imm.value == 0 && imm.width == 2),
+            "{folded:?}"
+        );
+        assert!(folded.uses.is_empty(), "the folded compare still reads v1: {folded:?}");
     }
 
     /// nbody -O3 m64: the probe placed every operand in an integer register, so
