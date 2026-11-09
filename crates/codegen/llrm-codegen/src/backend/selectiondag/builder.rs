@@ -88,8 +88,9 @@ pub struct BuilderTarget {
     /// (phi edges): the pin has none at this point, so a switch's layout
     /// successor is the next block without it.
     pub preselection_blocks: Option<&'static str>,
-    /// A call of an `llvm.` name nothing lowered is refused by name; where unset it stays a call of that
-    /// symbol (a target that names its own intrinsics by call).
+    /// A call of an `llvm.` name nothing lowered is refused by name; where
+    /// unset it stays a call of that symbol (a target that names its own
+    /// intrinsics by call).
     pub refuse_unknown_intrinsics: bool,
     /// `isOperationLegal(SHL, pointer)`: a switch may be bit tests (`1 << x`).
     pub variable_shift_legal: bool,
@@ -1159,6 +1160,7 @@ impl Builder<'_> {
             return self.lower_arguments_with(calling, &outside);
         }
         let mut fixed = 0;
+        let mut elided_chains: Vec<SDValue> = Vec::new();
         for (at, &arg) in self.function.parameters().to_vec().iter().enumerate() {
             let declared = self.type_of(self.function.value(arg).ty)?;
             // No FPU: a float in registers arrives as the integer of its width.
@@ -1232,7 +1234,14 @@ impl Builder<'_> {
                         // it is byval
                         // (`isImmutableObjectIndex`): the load is
                         // `isDereferenceableInvariantLoad`.
-                        self.dag.invariant_loads.insert(load.node);
+                        if self.info.elided_args.contains(&arg) {
+                            // `tryToElideArgumentCopy`: the slot is the local
+                            // now, written
+                            // by the stores after this load, which orders them
+                            elided_chains.push(SDValue { node: load.node, res: 1 });
+                        } else {
+                            self.dag.invariant_loads.insert(load.node);
+                        }
                         pieces.push(load);
                     }
                 }
@@ -1297,6 +1306,14 @@ impl Builder<'_> {
                 let reg = self.info.create_reg(arg);
                 self.copy_value_to_register(Operand::Value(arg), reg, ISD::AnyExtend)?;
             }
+        }
+        if !elided_chains.is_empty() {
+            // `Chains.push_back(NewRoot)`: a TokenFactor of the loads and the
+            // root
+            let root = self.dag.get_root();
+            elided_chains.push(root);
+            let joined = self.dag.get_node(ISD::TokenFactor, EVT::OTHER, &elided_chains);
+            self.dag.set_root(joined);
         }
         // `LowerFormalArguments`: the first variadic argument is the next
         // fixed object, which `va_start` stores the address of
@@ -3425,7 +3442,10 @@ impl Builder<'_> {
         }
         self.dag.lines[at] = crate::backend::isel::dbg_line(self.module, self.function, inst).filter(|at| at.line != 0);
         self.dag.inst_order.push((inst, self.dag.cur_order));
-        if self.prelowered.contains(&inst) || self.info.prezeroed.contains(&inst) {
+        if self.prelowered.contains(&inst)
+            || self.info.prezeroed.contains(&inst)
+            || self.info.elided_stores.contains(&inst)
+        {
             // a compare settled with its call's flags is read in other blocks
             // through its register all the same
             if self.prelowered.contains(&inst)
