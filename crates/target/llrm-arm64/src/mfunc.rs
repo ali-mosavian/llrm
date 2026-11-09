@@ -535,8 +535,10 @@ pub fn sequence_copies(
 ///
 /// DEVIATE ARM64-PHI-SHAPE (owner arm64-phi, exit 2026-11-17 with the shared
 /// pass, gap 3 of docs/architecture/arm64-spike.md): every such edge is split,
-/// where the pin splits by liveness (`SplitPHIEdges`); this is what selection
-/// did before phis were made, so object bytes do not move.
+/// where the pin splits by liveness (`SplitPHIEdges`). Selection used to split
+/// the same edges, so the code is the same; the registers of the phis' edges
+/// are numbered after selection, so the allocator's tie-breaks can name other
+/// registers (3 of 675 corpus cells differ in register names only).
 pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
     let count = function.blocks.len();
     let labels: HashMap<&str, usize> =
