@@ -41,9 +41,9 @@ const MULSI3_BASE: u32 = 167;
 const MULSI3_PASS: u32 = 120;
 const MULSI3_ADD: u32 = 29;
 
-/// The clocks of `call __mulsi3` whose multiplier is `multiplier`.
+/// The clocks of `call __mulsi3` whose multiplier is `multiplier`; the loop runs once for a zero multiplier.
 pub fn mulsi3_clocks(multiplier: u32) -> u32 {
-    MULSI3_BASE + MULSI3_PASS * (u32::BITS - multiplier.leading_zeros()) + MULSI3_ADD * multiplier.count_ones()
+    MULSI3_BASE + MULSI3_PASS * (u32::BITS - multiplier.leading_zeros()).max(1) + MULSI3_ADD * multiplier.count_ones()
 }
 
 /// The multiplier assumed for a `call __mulsi3` whose multiplier is not a constant in sight: a typical 16-bit value.
@@ -156,12 +156,12 @@ mod tests {
         assert_eq!(routine_clocks("call __lshrsi3", &["ld a, #5"]), 59 + 45 * 5 - 17);
     }
 
-    /// Clocks measured in ucsim (runtime/clocks.py): 1 -> 316, 100 -> 1094, 0xFFFF -> 2551, 0xFFFFFFFF -> 4935.
+    /// Clocks measured in ucsim (runtime/clocks.py): 0 -> 287, 1 -> 316, 100 -> 1094, 0xFFFF -> 2551, 0xFFFFFFFF -> 4935.
     #[test]
     fn the_long_multiply_clocks_follow_the_multiplier() {
         assert_eq!(
-            [1, 100, 0xFFFF, 0xFFFF_FFFF].map(mulsi3_clocks),
-            [316, 1094, 2551, 4935]
+            [0, 1, 100, 0xFFFF, 0xFFFF_FFFF].map(mulsi3_clocks),
+            [287, 316, 1094, 2551, 4935]
         );
     }
 
