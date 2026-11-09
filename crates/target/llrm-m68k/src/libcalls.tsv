@@ -1,0 +1,13 @@
+# The operations a size-built function may call a runtime routine for (compiler-rt, -Os, 68020 and later).
+# candidate KEY ROUTINE INLINE_BYTES CALL_BYTES: one site as an inline expansion and as a call, the whole function (`rts` included); tests/size_libcalls.rs fails when the compiler disagrees.
+# member ROUTINE BYTES [NEEDS,...]: the routine as linked (ld map, 2026-11-09) and the routines it calls.
+candidate	Ctz64	__ctzdi2	46	18
+candidate	Clz64	__clzdi2	24	18
+candidate	Pop32	__popcountsi2	62	14
+candidate	Pop64	__popcountdi2	124	18
+member	__ctzdi2	48
+member	__clzdi2	26
+member	__popcountsi2	70
+member	__popcountdi2	32	__popcountsi2
+# The variable 64-bit shifts are out until the model prices a site by its operands (M68K-SIZE-LIBCALL-COVER, 2026-11-11):
+# a flat 62 B per site called __ashldi3 in shuttle_value, 230 -> 286 B at Os.
