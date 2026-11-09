@@ -18,6 +18,16 @@ ALLOWED = {
 }
 
 
+# size(1) piped to awk for a code column: the Berkeley first column (`NR==2{print $1}`) or `-A` rows of `.text` alone. The audit rule is code + rodata + data;
+# tools/ab/object_bytes.py gives both. `.rodata` or `.data` in the same line makes it a code+data read.
+TEXT_ONLY = re.compile(r"\bsize\b[^|\n]*\|\s*awk\b[^\n]*(NR==2|\.text)")
+DATA_TOO = re.compile(r"\.(rodata|data)\b|\$3|\$2\+\$3|\+\s*data")
+
+
+def text_only(line: str) -> bool:
+    return bool(TEXT_ONLY.search(line)) and not DATA_TOO.search(line)
+
+
 def reads(line: str) -> bool:
     return bool(SIZE_READ.search(line)) and not EMPTINESS.search(line) and bool(OBJECT.search(line))
 
@@ -34,6 +44,42 @@ def test_no_script_takes_the_size_of_an_object_or_assembly_file_as_code_bytes():
             if reads(line) and (name, line.strip()) not in ALLOWED:
                 hits.append(f"{name}:{number}: {line.strip()}")
     assert not hits, "file size read as a code size (use tools/ab/object_bytes.py, or list it in ALLOWED with the reason):\n" + "\n".join(hits)
+
+
+# (file, snippet of the line): text only, owner to extend to code + rodata + data (or say why the codegen comparison is code only).
+TEXT_ONLY_ALLOWED = {
+    ("tools/cmp_ab.sh", "bytesA=$(size"): "cmp_ab owner",
+    ("tools/dag_vs_old.sh", "t=$(size -A"): "dag-vs-old owner: code of a codegen A/B",
+    ("tools/llc_backend_diff.sh", "t() { size -A"): "llc_backend_diff owner",
+    ("tools/llc_check.sh", "a=$(size -A"): "llc_check owner",
+    ("tools/llc_check.sh", "c=$(size -A"): "llc_check owner",
+    ("tools/softfloat_cells/cells.sh", "text $(size -A"): "softfloat_cells owner",
+    ("tools/softfloat_cells/m68k/bytes.sh", "text() { $B-size -A"): "softfloat m68k owner",
+}
+
+
+def test_no_script_reads_the_text_column_of_size_as_the_whole_program():
+    hits = []
+    for name in scripts():
+        for number, line in enumerate((ROOT / name).read_text(errors="ignore").splitlines(), 1):
+            if text_only(line) and not any(name == f and snippet in line for f, snippet in TEXT_ONLY_ALLOWED):
+                hits.append(f"{name}:{number}: {line.strip()[:150]}")
+    assert not hits, "size(1) text column read as program bytes (add data/rodata, use tools/ab/object_bytes.py, or list with the owner):\n" + "\n".join(hits)
+
+
+def test_the_text_column_reads_are_recognised():
+    """cmp_ab.sh: `size o.a.o | awk 'NR==2{print $1}'` reads the text column of an object whose data and bss are not counted."""
+    assert text_only("bytesA=$(size $t/o.a.o | awk 'NR==2{print $1}')")
+    assert text_only("t=$(size -A \"$out\" | awk '$1==\".text\"{print $2}')")
+    assert not text_only("bytes() { size -A \"$1\" | awk '$1==\".text\"||$1~/^\\.rodata/{s+=$2} END{print s+0}'; }")
+
+
+def test_text_only_allowances_still_match_a_line_and_name_an_owner():
+    """An entry whose script was fixed or removed is dropped: the list only shrinks."""
+    for name, snippet in TEXT_ONLY_ALLOWED:
+        lines = (ROOT / name).read_text().splitlines()
+        assert any(snippet in line and text_only(line) for line in lines), f"{name}: {snippet!r} is gone or no longer text only: drop the entry"
+        assert TEXT_ONLY_ALLOWED[(name, snippet)]
 
 
 def test_the_cells_fallback_that_read_whole_file_bytes_is_caught():
