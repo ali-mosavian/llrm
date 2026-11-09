@@ -2292,56 +2292,6 @@ fn forget_since(
     run.scev.forget_touched(&cx, &touched);
 }
 
-/// `simplifyLoop(L, ..., &SE)` and `formLCSSARecursively(*L, ..., &SE)` of
-/// `LoopUnrollPass::run`: the pin's one `ScalarEvolution` lives on through
-/// them, forgetting the values they delete or rewrite and the topmost loop of
-/// every loop they change (`forgetValue`, `forgetTopmostLoop` in
-/// `LoopSimplify.cpp`). `after` are the loops of the function as the edits
-/// left it. The expressions are dropped whole where the log from `mark` is
-/// gone or a block was erased.
-fn forget_after_simplify(
-    run: &mut Run,
-    after: &Analyzed,
-    mark: llrm_mir::module::Mark,
-) {
-    let Some(touched) = run.function.touched_since(mark) else {
-        run.scev = ScalarEvolution::new();
-        return;
-    };
-    if !touched.blocks_erased.is_empty() {
-        run.scev = ScalarEvolution::new();
-        return;
-    }
-    let cx = llrm_analysis::scev::Cx {
-        context: &*run.context,
-        globals: run.globals,
-        metadata: run.metadata,
-        function: &*run.function,
-        layout: run.layout,
-        loops: &after.loops,
-        tree: &after.tree,
-        assumptions: &after.assumptions,
-    };
-    run.scev.forget_touched(&cx, &touched);
-    let mut nests = IdSet::<BlockId>::new();
-    for block in touched.blocks.iter() {
-        let Some(mut top) = after.loops.get_loop_for(block) else { continue };
-        while let Some(parent) = top.get_parent_loop() {
-            top = parent;
-        }
-        if nests.insert(top.get_header()) {
-            let headers: Vec<BlockId> = after
-                .loops
-                .get_loops_in_preorder()
-                .iter()
-                .filter(|one| top.contains_loop(Some(**one)))
-                .map(|one| one.get_header())
-                .collect();
-            run.scev.forget_loop_nest(&cx, top.get_blocks(), &headers);
-        }
-    }
-}
-
 /// `forgetTopmostLoop(L)` of `UnrollLoop`, for a loop fully unrolled that held
 /// loops: what the expressions of its blocks and its loops' counts said of the
 /// nest is stale once the nest is straight-line code and copies.
@@ -2384,7 +2334,6 @@ pub(crate) fn unrolled_blocks(
 /// a complete unroll makes of the inner loops are visited next. Whether any
 /// loop was unrolled.
 pub fn unroll_loops(run: &mut Run) -> bool {
-    let before_simplify = run.function.mark();
     // `LoopUnrollPass::run` (L1762): every loop is put in simplified form and
     // LCSSA first, whether or not anything is unrolled. `LoopFullUnrollPass`
     // runs on one loop of a loop pass manager whose loops the slots before it
@@ -2435,7 +2384,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     let mut parents: Vec<BlockId> = Vec::new();
     let mut changed = simplified || closed;
     if changed {
-        forget_after_simplify(run, &analyzed, before_simplify);
+        run.scev = ScalarEvolution::new();
     }
     while let Some(header) = work.pop_front() {
         if !analyzed.loops.is_loop_header(header) {
