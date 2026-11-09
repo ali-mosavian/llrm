@@ -2500,7 +2500,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // `visitADDLikeCommutative`: where booleans are 0/1, `add (sext i1
         // Y), X` is `sub X, (zext i1 Y)`.
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3534
-        if self.dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrOne {
+        if self.dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrOne
+            && !self.dag.config().sext_bool_add_preferred
+        {
             for (sext, other) in [(n0, n1), (n1, n0)] {
                 if self.dag.opcode(sext) == ISD::SignExtend && self.dag.value_type(self.dag.operand(sext, 0)) == EVT::I1 {
                     let zext = self.dag.get_node(ISD::ZeroExtend, vt, &[self.dag.operand(sext, 0)]);
