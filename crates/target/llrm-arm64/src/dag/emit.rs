@@ -317,6 +317,25 @@ fn cond_select(name: &str) -> Option<(Select, Width)> {
     }
 }
 
+/// `ADCXr`, `SBCSWr` and the rest: the add or subtract with carry and its
+/// width.
+fn add_carry(name: &str) -> Option<(AddSub, Width)> {
+    let (op, rest) = if let Some(rest) = name.strip_prefix("ADCS") {
+        (AddSub { subtract: false, set_flags: true }, rest)
+    } else if let Some(rest) = name.strip_prefix("ADC") {
+        (AddSub { subtract: false, set_flags: false }, rest)
+    } else if let Some(rest) = name.strip_prefix("SBCS") {
+        (AddSub { subtract: true, set_flags: true }, rest)
+    } else {
+        (AddSub { subtract: true, set_flags: false }, name.strip_prefix("SBC")?)
+    };
+    match rest {
+        "Wr" => Some((op, Width::W)),
+        "Xr" => Some((op, Width::X)),
+        _ => None,
+    }
+}
+
 /// The `AArch64CC` number as the condition field.
 fn cond_of(code: u64) -> Result<Cond, String> {
     use Cond::*;
@@ -1725,6 +1744,15 @@ impl Emitter<'_> {
                         return Err(format!("{name}: operands are not those of a conditional select"));
                     };
                     self.ops.push(Op::I(Inst::CondSelect { op, width, rd, rn: *rn, rm: *rm, cond: cond_of(*cond)? }));
+                    self.values.insert((id, 0), rd);
+                    return Ok(());
+                }
+                if let Some((op, width)) = add_carry(name) {
+                    // The carry arrives as the flags the instruction before wrote.
+                    let [Operand::Reg(rn), Operand::Reg(rm), ..] = operands.as_slice() else {
+                        return Err(format!("{name}: operands are not those of an add with carry"));
+                    };
+                    self.ops.push(Op::I(Inst::AddCarry { op, width, rd, rn: *rn, rm: *rm }));
                     self.values.insert((id, 0), rd);
                     return Ok(());
                 }

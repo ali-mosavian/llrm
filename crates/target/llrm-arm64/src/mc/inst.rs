@@ -549,6 +549,14 @@ pub enum Inst {
         rm: Gpr,
         cond: Cond,
     },
+    /// `adc`, `adcs`, `sbc`, `sbcs`: `rn +/- rm` and the carry flag.
+    AddCarry {
+        op: AddSub,
+        width: Width,
+        rd: Gpr,
+        rn: Gpr,
+        rm: Gpr,
+    },
     CondCompare {
         negate: bool,
         width: Width,

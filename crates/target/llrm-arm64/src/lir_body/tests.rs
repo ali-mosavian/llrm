@@ -67,6 +67,9 @@ pub(super) fn instructions() -> Vec<Inst> {
         for op in [Select::Csel, Select::Csinc, Select::Csinv, Select::Csneg] {
             out.push(Inst::CondSelect { op, width, rd, rn, rm, cond: Cond::Le });
         }
+        for (subtract, set_flags) in [(false, false), (false, true), (true, false), (true, true)] {
+            out.push(Inst::AddCarry { op: AddSub { subtract, set_flags }, width, rd, rn, rm });
+        }
         for negate in [false, true] {
             out.push(Inst::CondCompare { negate, width, rn, rm_or_imm: CcOperand::Reg(rm), nzcv: 4, cond: Cond::Hi });
             out.push(Inst::CondCompare { negate, width, rn, rm_or_imm: CcOperand::Imm5(17), nzcv: 2, cond: Cond::Al });
@@ -252,6 +255,7 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::OneSource { .. } => "OneSource",
         Inst::ThreeSource { .. } => "ThreeSource",
         Inst::CondSelect { .. } => "CondSelect",
+        Inst::AddCarry { .. } => "AddCarry",
         Inst::CondCompare { .. } => "CondCompare",
         Inst::Branch { .. } => "Branch",
         Inst::BranchCond { .. } => "BranchCond",
@@ -287,7 +291,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 45] = [
+const ALL: [&str; 46] = [
     "Mark",
     "Label",
     "Cfi",
@@ -304,6 +308,7 @@ const ALL: [&str; 45] = [
     "OneSource",
     "ThreeSource",
     "CondSelect",
+    "AddCarry",
     "CondCompare",
     "Branch",
     "BranchCond",

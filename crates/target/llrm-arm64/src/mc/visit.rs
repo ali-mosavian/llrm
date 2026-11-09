@@ -126,6 +126,11 @@ impl Inst {
                 f(G(rn), Role::Use);
                 f(G(rm), Role::Use);
             }
+            Inst::AddCarry { rd, rn, rm, .. } => {
+                f(G(rd), Role::Def);
+                f(G(rn), Role::Use);
+                f(G(rm), Role::Use);
+            }
             Inst::CondCompare { rn, rm_or_imm, .. } => {
                 f(G(rn), Role::Use);
                 if let CcOperand::Reg(rm) = rm_or_imm {

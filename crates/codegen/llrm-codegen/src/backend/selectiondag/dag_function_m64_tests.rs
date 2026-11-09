@@ -1408,3 +1408,24 @@ entry:
         done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.clone()).collect();
     assert!(!names.iter().any(|n| &**n == "add"), "x*5 is shared, +15 folds into the sum's lea: {names:?}");
 }
+
+/// The carry out of a 128-bit unsigned add was the constant false: the combiner's "cannot overflow" test summed the two
+/// operands' possible maxima in a `u128`, which wraps at 128 bits and read as "fits". `llvm.uadd.with.overflow.i128`
+/// compiled to `add; adc` and `xor eax, eax` (the sum plus its overflow lost the overflow).
+#[test]
+fn an_m64_128_bit_unsigned_add_keeps_its_carry_out() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+declare {i128, i1} @llvm.uadd.with.overflow.i128(i128, i128)
+define i1 @f(i128 %a, i128 %b) {
+  %r = call {i128, i1} @llvm.uadd.with.overflow.i128(i128 %a, i128 %b)
+  %o = extractvalue {i128, i1} %r, 1
+  ret i1 %o
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "adc"), "the high halves are added with the carry of the low: {names:?}");
+}

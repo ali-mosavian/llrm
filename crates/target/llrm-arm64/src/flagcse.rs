@@ -41,6 +41,7 @@ pub(crate) fn writes_flags(op: &Op) -> bool {
                 op.set_flags
             }
             Inst::LogicImm { op, .. } | Inst::LogicShifted { op, .. } => *op == Logic::Ands,
+            Inst::AddCarry { op, .. } => op.set_flags,
             Inst::FpCompare { .. } | Inst::CondCompare { .. } | Inst::Svc { .. } => true,
             _ => false,
         },

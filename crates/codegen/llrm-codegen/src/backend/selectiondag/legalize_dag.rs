@@ -202,7 +202,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 NodeData::ValueType(inner) => inner,
                 _ => self.dag.value_type(node),
             },
-            ISD::SetCC | ISD::Store => {
+            // `SETCCCARRY` is asked of its operands' type, as `SETCC` is
+            // (`LegalizeOp`'s `case ISD::SETCCCARRY`).
+            ISD::SetCC | ISD::SetCCCarry | ISD::Store => {
                 self.dag.value_type(self.dag.operand(node, if self.dag.opcode(node) == ISD::Store { 1 } else { 0 }))
             }
             _ => self.dag.value_type(node),

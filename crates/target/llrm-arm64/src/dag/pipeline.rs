@@ -385,6 +385,11 @@ impl LegalizeHooks for Aarch64Lowering {
                 super::lowering::lower_xalu(dag, node)
             }
             ISD::Abs | ISD::AbsMinPoison => super::lowering::lower_abs(dag, node),
+            // Declined for a type the pin's lowering does not take.
+            ISD::UAddOCarry | ISD::USubOCarry | ISD::SAddOCarry | ISD::SSubOCarry => {
+                return super::lowering::lower_add_sub_carry(dag, node);
+            }
+            ISD::SetCCCarry => return super::lowering::lower_setcc_carry(dag, node),
             // `LowerShiftParts`
             // ([L13980](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L13980)).
             ISD::ShlParts | ISD::SrlParts | ISD::SraParts => {

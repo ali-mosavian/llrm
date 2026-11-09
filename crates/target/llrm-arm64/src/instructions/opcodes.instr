@@ -28,6 +28,10 @@ ADD{g}rx       binary   r/r,r,i,i    g32,g64  alu_ext    -  -  -  -/-          A
 ADDS{g}ri      binary   r/r,i,i      g32,g64  alu        -  -  -  -/N,Z,C,V    ADDS{g}ri
 ADDS{g}rs      binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/N,Z,C,V    ADDS{g}rs
 ADDS{g}rx      binary   r/r,r,i,i    g32,g64  alu_ext    -  -  -  -/N,Z,C,V    ADDS{g}rx
+ADC{g}r        binary   r/r,r        g32,g64  alu        -  -  -  C/-          ADC{g}r
+ADCS{g}r       binary   r/r,r        g32,g64  alu        -  -  -  C/N,Z,C,V    ADCS{g}r
+SBC{g}r        binary   r/r,r        g32,g64  alu        -  -  -  C/-          SBC{g}r
+SBCS{g}r       binary   r/r,r        g32,g64  alu        -  -  -  C/N,Z,C,V    SBCS{g}r
 SUB{g}ri       binary   r/r,i,i      g32,g64  alu        -  -  -  -/-          SUB{g}ri
 SUB{g}rs       binary   r/r,r,i,i    g32,g64  alu_shift  -  -  -  -/-          SUB{g}rs
 SUB{g}rx       binary   r/r,r,i,i    g32,g64  alu_ext    -  -  -  -/-          SUB{g}rx
