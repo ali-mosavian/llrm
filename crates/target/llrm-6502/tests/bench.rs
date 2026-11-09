@@ -429,6 +429,13 @@ fn kernel_source(kernel: &Kernel) -> (String, PathBuf) {
     }
 }
 
+/// `BENCH_SDCC_ONLY=1` leaves every column but SDCC's unmeasured: the SDCC
+/// variants are run on their own, so the other columns are not rebuilt four
+/// times.
+fn skipped(f: impl FnOnce() -> Result<Row, String>) -> Result<Row, String> {
+    if std::env::var_os("BENCH_SDCC_ONLY").is_some() { Err("skipped (BENCH_SDCC_ONLY)".into()) } else { f() }
+}
+
 /// The arguments `cc65` starts with: the target (the 65C02 one implies the CPU)
 /// and the optimiser flags.
 fn cc65_flags(
@@ -642,16 +649,16 @@ fn table4() {
     let kernels = hand_kernels();
     for kernel in kernels.iter().filter(|k| only.as_deref().is_none_or(|o| o == k.name)) {
         let rows = [
-            cc65_row(kernel, &[cc65_optimize()], "c1"),
-            hand_row(kernel),
-            ours_row(kernel, ours_level("-O2"), "o2"),
-            ours_row(kernel, ours_level("-O2"), "o2m"),
+            skipped(|| cc65_row(kernel, &[cc65_optimize()], "c1")),
+            skipped(|| hand_row(kernel)),
+            skipped(|| ours_row(kernel, ours_level("-O2"), "o2")),
+            skipped(|| ours_row(kernel, ours_level("-O2"), "o2m")),
             sdcc::row(kernel, false),
             sdcc::row(kernel, true),
-            llvmmos::row(kernel, "-O2", false),
-            llvmmos::row(kernel, "-Os", false),
-            llvmmos::row(kernel, "-O2", true),
-            cc65_row(kernel, &[cc65_optimize()], "c1m"),
+            skipped(|| llvmmos::row(kernel, "-O2", false)),
+            skipped(|| llvmmos::row(kernel, "-Os", false)),
+            skipped(|| llvmmos::row(kernel, "-O2", true)),
+            skipped(|| cc65_row(kernel, &[cc65_optimize()], "c1m")),
         ];
         for row in rows.iter().filter(|row| matches!(row, Err(why) if !why.starts_with("no hand"))) {
             eprintln!("{}: {}", kernel.name, row.as_ref().unwrap_err());
@@ -711,16 +718,16 @@ fn table3() {
     for kernel in KERNELS3 {
         let hand = if kernel.name == "lz4" { hand_row(kernel) } else { Err("no hand-written version".into()) };
         let rows = [
-            cc65_row(kernel, &[cc65_optimize()], "c1"),
+            skipped(|| cc65_row(kernel, &[cc65_optimize()], "c1")),
             hand,
-            ours_row(kernel, ours_level("-O2"), "o2"),
-            ours_row(kernel, ours_level("-O2"), "o2m"),
+            skipped(|| ours_row(kernel, ours_level("-O2"), "o2")),
+            skipped(|| ours_row(kernel, ours_level("-O2"), "o2m")),
             sdcc::row(kernel, false),
             sdcc::row(kernel, true),
-            llvmmos::row(kernel, "-O2", false),
-            llvmmos::row(kernel, "-Os", false),
-            llvmmos::row(kernel, "-O2", true),
-            cc65_row(kernel, &[cc65_optimize()], "c1m"),
+            skipped(|| llvmmos::row(kernel, "-O2", false)),
+            skipped(|| llvmmos::row(kernel, "-Os", false)),
+            skipped(|| llvmmos::row(kernel, "-O2", true)),
+            skipped(|| cc65_row(kernel, &[cc65_optimize()], "c1m")),
         ];
         for row in rows.iter().filter(|row| !matches!(row, Err(why) if why.starts_with("no hand"))) {
             if let Err(why) = row {
@@ -755,17 +762,17 @@ fn table(
     let only = std::env::var("BENCH_ONLY").ok();
     for kernel in kernels.iter().filter(|k| only.as_deref().is_none_or(|o| o == k.name)) {
         let rows = [
-            cc65_row(kernel, &[], "c0"),
-            cc65_row(kernel, &[cc65_optimize()], "c1"),
-            ours_row(kernel, ours_level("-O2"), "o2"),
-            ours_row(kernel, "-Os", "os"),
-            cc65_row(kernel, &[cc65_optimize()], "c1m"),
-            ours_row(kernel, ours_level("-O2"), "o2m"),
+            skipped(|| cc65_row(kernel, &[], "c0")),
+            skipped(|| cc65_row(kernel, &[cc65_optimize()], "c1")),
+            skipped(|| ours_row(kernel, ours_level("-O2"), "o2")),
+            skipped(|| ours_row(kernel, "-Os", "os")),
+            skipped(|| cc65_row(kernel, &[cc65_optimize()], "c1m")),
+            skipped(|| ours_row(kernel, ours_level("-O2"), "o2m")),
             sdcc::row(kernel, false),
             sdcc::row(kernel, true),
-            llvmmos::row(kernel, "-O2", false),
-            llvmmos::row(kernel, "-Os", false),
-            llvmmos::row(kernel, "-O2", true),
+            skipped(|| llvmmos::row(kernel, "-O2", false)),
+            skipped(|| llvmmos::row(kernel, "-Os", false)),
+            skipped(|| llvmmos::row(kernel, "-O2", true)),
         ];
         for (tag, row) in
             ["c0", "c1", "o2", "os", "c1m", "o2m", "sdcc", "sdccm", "mos2", "mosz", "mos2m"].iter().zip(&rows)
