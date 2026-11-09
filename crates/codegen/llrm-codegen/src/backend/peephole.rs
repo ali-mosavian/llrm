@@ -542,6 +542,9 @@ pub fn zeroed_loads(
     body: &LirBody,
     cpu: &Profile,
 ) -> Result<LirBody, String> {
+    if rules.zeroed_loads.is_none() {
+        return Ok(body.clone());
+    }
     cpu.clears_before_byte_load()?;
     Ok(peep::rewritten(rules.zeroed_loads, body, &Facts::new(body, Some(cpu))))
 }
@@ -2389,6 +2392,12 @@ pub fn doubled(
     body: &LirBody,
     cpu: &Profile,
 ) -> Result<LirBody, String> {
+    // The clocks are asked for the rule that uses them, not for the pass: a
+    // target with no such rule, or that prices through its cost model, states
+    // none (a missing clock is an error where a rule needs it, never 0).
+    if rules.doubled.is_none() {
+        return Ok(body.clone());
+    }
     cpu.doubling()?;
     Ok(peep::rewritten(rules.doubled, body, &Facts::new(body, Some(cpu))))
 }
