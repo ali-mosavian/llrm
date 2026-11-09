@@ -745,7 +745,7 @@ fn global_variable<'a>(
 
 /// `GlobalVariable::isConstant() && hasDefinitiveInitializer()`: the
 /// initializer.
-fn definitive_constant_initializer(
+pub fn definitive_constant_initializer(
     env: Env,
     context: &Context,
     c: ConstantId,

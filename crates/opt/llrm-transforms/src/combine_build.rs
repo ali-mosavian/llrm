@@ -281,6 +281,38 @@ impl Combiner<'_> {
         self.value_of(new)
     }
 
+    /// `insertRangeTest(V, Lo, Hi, isSigned, Inside)`: `V >= Lo && V < Hi`
+    /// where `inside`, else `V < Lo || V >= Hi`. `lo < hi` in the compare's
+    /// signedness.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L61>
+    pub fn insert_range_test(
+        &mut self,
+        at: InstId,
+        v: Operand,
+        (lo, hi): (u128, u128),
+        is_signed: bool,
+        inside: bool,
+    ) -> Operand {
+        let ty = self.type_of(v);
+        let width = self.context.types.int_bits(ty).expect("an integer");
+        let pred = if inside { IntPredicate::Ult } else { IntPredicate::Uge };
+        // V >= Min && V <  Hi --> V <  Hi
+        // V <  Min || V >= Hi --> V >= Hi
+        let min = if is_signed { 1u128 << (width - 1) } else { 0 };
+        if lo == min {
+            let pred = if is_signed { pred.signed() } else { pred };
+            let hi = self.int(ty, hi);
+            return self.create_icmp(at, pred, v, hi);
+        }
+        // V >= Lo && V <  Hi --> V - Lo u<  Hi - Lo
+        // V <  Lo || V >= Hi --> V - Lo u>= Hi - Lo
+        let lo_c = self.int(ty, lo);
+        let v_minus_lo = self.create_sub(at, v, lo_c);
+        let hi_minus_lo = self.int(ty, hi.wrapping_sub(lo));
+        self.create_icmp(at, pred, v_minus_lo, hi_minus_lo)
+    }
+
     /// `Builder.CreateSelect(cond, if_true, if_false)`.
     pub fn create_select(
         &mut self,

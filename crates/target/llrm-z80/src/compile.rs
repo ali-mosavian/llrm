@@ -363,6 +363,14 @@ mod tests {
 /// size levels and clocks plus 3 a byte otherwise: the argument copies joined
 /// or not (a constant kept in a register of its own, or not), and a byte wanted
 /// both in `a` and in a register of its own loaded through `a` or through `hl`.
+///
+/// DEVIATE Z80-ALLOC-EXPLORE (owner llrm-target-z80, exit 2026-11-30): the pin allocates a function once
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2942>,
+/// `RAGreedy::run`). Here a function is allocated up to 12 times: the Source
+/// and ILP schedules (Z80S1) x the plain and the constant-hoisted function
+/// (`allocated_with`) x this first allocation and its two `improved` choices;
+/// the cheapest stays. tests/run/c/fixed_point -O2: 12 allocations are 88% of
+/// a 2.0 s compile. Exit: a size-priced budget (Tti), today's behaviour below its size.
 fn allocate(
     function: MFunction,
     name: &str,
