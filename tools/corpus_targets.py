@@ -25,6 +25,18 @@ FREESTANDING = re.compile(r"^(wasm32|z80|6502)(-|$)")
 BYTE_STACK = re.compile(r"^z80(-|$)")  # `Machine::kept_stack_align` 1: llrm-z80
 
 
+DOS_DIRECTORIES = ("tests/fixtures/callconv/", "runtime/qb/dos/", "tests/cc/models/")  # Watcom/DOS sources: far/huge, regparm, QB far heap
+DOS_MARKERS = re.compile(r"\b__asm\s*\{|\bQB_FAR\b|\b__(far|huge|near|segment)\b|\b__emit__\b|#\s*include\s*<(dos|i86|conio|bios)\.h>")
+
+
+def default_tags(source: str, path: Path | None) -> list[str] | None:
+    """The tags of a program with no `// targets:` line: `dos` where it sits under a DOS-only directory or its source uses a Watcom/DOS construct; else none (every target)."""
+    where = path.as_posix() if path is not None else ""
+    if any(directory in where for directory in DOS_DIRECTORIES) or DOS_MARKERS.search(source):
+        return ["dos"]
+    return None
+
+
 def tags(source: str) -> list[str] | None:
     """The tokens of the program's `// targets:` line, or None where it has none."""
     for line in source.splitlines()[:HEADER_LINES]:
@@ -56,10 +68,12 @@ def x86_32_only(source: str) -> bool:
     return bool(configurations) and all(any(t in ("-m32", "-mabi=sysv") for t in one) for one in configurations)
 
 
-def applies(target: str, source: str) -> bool:
+def applies(target: str, source: str, path: Path | None = None) -> bool:
     if EIGHT_BIT.match(target) and x86_32_only(source):
         return False
     listed = tags(source)
+    if listed is None:
+        listed = default_tags(source, path)
     if listed is None:
         return True
     family = FAMILY.match(target)
@@ -72,8 +86,8 @@ def applies(target: str, source: str) -> bool:
     return not any(matches(t[1:]) for t in listed if t.startswith("!")) and (not positive or any(matches(t) for t in positive))
 
 
-def reason(source: str) -> str:
-    listed = tags(source) or []
+def reason(source: str, path: Path | None = None) -> str:
+    listed = tags(source) or default_tags(source, path) or []
     return "n/a, DOS-only" if listed == ["dos"] else "n/a, targets: " + " ".join(listed)
 
 
@@ -90,9 +104,9 @@ def main(argv: list[str]) -> int:
         print("usage: corpus_targets.py check TARGET FILE.c", file=sys.stderr)
         return 2
     source = Path(argv[3]).read_text()
-    if applies(argv[2], source):
+    if applies(argv[2], source, Path(argv[3])):
         return 0
-    print(reason(source))
+    print(reason(source, Path(argv[3])))
     return 3
 
 

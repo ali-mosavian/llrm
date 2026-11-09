@@ -46,7 +46,8 @@ def reachable_runtime(text):
             blocks[-1][1] += line + "\n"
         if line.startswith(".export"): pending += line + "\n"
     by = {n: i for i, (n, _) in enumerate(blocks)}
-    toks = lambda t: [by[x] for x in re.split(r"[^A-Za-z0-9_]", t) if x in by]
+    # a name in a comment is not a reference (the Rust port reads code only)
+    toks = lambda t: [by[x] for line in t.splitlines() for x in re.split(r"[^A-Za-z0-9_]", line.split(";")[0]) if x in by]
     want = [False] * len(blocks); q = list(toks(text))
     while q:
         i = q.pop()
