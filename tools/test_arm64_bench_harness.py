@@ -61,9 +61,31 @@ class Table(unittest.TestCase):
         done = self.run_table("kernel", "kernel")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("# instrs metric: kernel (count.py --kernel; range [first function, report) minus main); count.py commit abc123", done.stdout)
-        self.assertIn("# value check: 2 of 3 cells value == .out; 1 of 3 cells: value != .out on all columns", done.stdout)
+        self.assertIn("# value check: 2 of 3 measured cells value == .out; 1 of 3: value != .out on all columns", done.stdout)
         self.assertIn("a\tO2\tworse", done.stdout)  # 130 net against clang's 120
         self.assertIn("# O2: better 0, same 0, worse 1", done.stdout)
+
+
+    def test_an_unmeasured_cell_is_a_hard_line_not_a_gap(self):
+        # A build that failed once left its cell out of the table: no row, no verdict, no trace.
+        rows = (
+            "a\tO2\tours\t10\t100\tkernel\tok\na\tO2\tclang\t10\t90\tkernel\tok\na\tO2\tgcc\t\t\tkernel\tunmeasured:build failed\n"
+            "b\tO2\tours\t10\t100\tkernel\tok\nb\tO2\tclang\t10\t90\tkernel\tok\nb\tO2\tgcc\t10\t120\tkernel\tok\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as handle:
+            handle.write(rows)
+        try:
+            done = subprocess.run(
+                [sys.executable, os.path.join(HERE, "table.py"), handle.name, "--metric", "kernel", "--count-commit", "abc"],
+                capture_output=True, text=True,
+            )
+        finally:
+            os.unlink(handle.name)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("# UNMEASURED: 1 of 6 cells (listed below", done.stdout)
+        self.assertIn("a\tO2\tUNMEASURED\tgcc\tunmeasured:build failed", done.stdout)
+        self.assertNotIn("a\tO2\tworse", done.stdout)
+        self.assertIn("b\tO2\tworse", done.stdout)
 
 
 if __name__ == "__main__":
