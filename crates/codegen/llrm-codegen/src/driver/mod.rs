@@ -6,6 +6,7 @@
 pub mod basic;
 mod data;
 pub mod flags;
+pub mod policy;
 
 use std::path::PathBuf;
 

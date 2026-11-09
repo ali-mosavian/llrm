@@ -14,7 +14,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[4]
 RUNTIME = HERE.parents[1] / "runtime" / "z80_rt.s"
 LIBC = HERE / "libc"  # the C library's entries over the runtime's: a library, so a program's own definition wins
-DATALAYOUT = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"'
+DATALAYOUT = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"'
 sys.path.insert(0, str(ROOT / "tools"))
 import external_flags  # noqa: E402  the one neutral flag set of every external bar (tools/external_flags.py)
 
