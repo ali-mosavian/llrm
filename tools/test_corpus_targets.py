@@ -143,3 +143,36 @@ def test_programs_that_assume_a_32_bit_int_are_not_run_at_m16():
         assert not ct.applies("x86_16-dos", source) and ct.applies("x86_32-linux", source) and ct.applies("x86_64-linux", source)
 
 
+
+
+def test_programs_with_over_64k_data_are_not_run_in_a_16_bit_address_space():
+    """memcpy_runtime and memfuncs_runtime keep 70 KB arrays: x86_16 failed to link (segment 140032 > 65536), z80 and 6502 died in clang
+    ("array is too large"); the sweep listed them as compile refusals of the target."""
+    for name in ("memcpy_runtime", "memfuncs_runtime"):
+        source = (RUN / f"{name}.c").read_text()
+        assert not any(ct.applies(t, source) for t in ("x86_16-wat", "z80-sdcc", "6502-sim65"))
+        assert all(ct.applies(t, source) for t in ("x86_32-linux", "x86_64-linux", "wasm32", "arm64-linux"))
+
+
+def test_a_24_bit_bit_field_program_is_not_run_with_a_16_bit_int():
+    """bitfield_overhang_init declares `int b : 24`: clang rejects it on x86_16, z80 and 6502 (width exceeds the type's 16 bits)."""
+    source = (RUN / "bitfield_overhang_init.c").read_text()
+    assert not any(ct.applies(t, source) for t in ("x86_16-wat", "z80-sdcc", "6502-sim65"))
+    assert ct.applies("x86_32-linux", source) and ct.applies("wasm32", source)
+
+
+def test_a_program_including_stdio_is_not_run_on_a_freestanding_target():
+    """widening_multiply includes <stdio.h>: wasm32, z80 and 6502 have none ('stdio.h' file not found), x86_16 and the sysv rows do."""
+    source = (RUN / "widening_multiply.c").read_text()
+    assert not any(ct.applies(t, source) for t in ("wasm32", "z80-sdcc", "6502-sim65"))
+    assert ct.applies("x86_16-wat", source) and ct.applies("x86_64-linux", source)
+
+
+def test_long_double_variadic_is_not_applicable_on_m68k_and_names_its_row():
+    """The pin prints 0 for it on m68k (M68K-VA-DOUBLE); an untagged run read as a silent MISMATCH, a bare skip as a silent gap."""
+    source = (RUN / "long_double_variadic.c").read_text()
+    assert not any(ct.applies(t, source) for t in ("m68k-68000", "m68k-68020"))
+    assert ct.applies("x86_32-linux", source)
+    assert "M68K-VA-DOUBLE" in source
+    row = (RUN.parents[2] / "docs/working/m68k-va-double-row.md").read_text()
+    assert "M68K-VA-DOUBLE" in row and "Owner: m68k" in row and "Review: 2026-12-20" in row
