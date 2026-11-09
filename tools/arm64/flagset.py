@@ -24,5 +24,21 @@ def canonical(tokens):
     return " ".join(sorted(kept))
 
 
+def check_gcc(tokens):
+    """The gcc column's flags against the neutral set, by `external_flags.check_gcc_flags` (membership, no table of its own): the bench's own
+    flags are none (the matrix gives -O itself), the allowed extras are the neutral set and the vectorizer switch of a no-vector column."""
+    sys.path.insert(0, __file__.rsplit("/", 2)[0])
+    import external_flags
+
+    neutral = external_flags.flags("arm64", ["-fno-pic", "-fno-pie"], 15)
+    external_flags.check_gcc_flags([], tokens, allowed_extra=(*neutral, *(t for t in tokens if t in COLUMN_KIND)))
+
+
 if __name__ == "__main__":
-    print(canonical(open(sys.argv[1]).read().split()))
+    if sys.argv[1] == "--check-gcc":
+        try:
+            check_gcc(open(sys.argv[2]).read().split())
+        except ValueError as why:
+            sys.exit(str(why))
+    else:
+        print(canonical(open(sys.argv[1]).read().split()))
