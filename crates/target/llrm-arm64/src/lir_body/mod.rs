@@ -393,6 +393,83 @@ pub struct Lowered {
     pub memory_operands: HashMap<i64, MemOperand>,
     pub symbols: Vec<String>,
     pub debug_values: HashMap<i64, (llrm_mir::MetadataId, Option<Reg>)>,
+    /// A writeback's new base value, by number, and the register it is the
+    /// updated value of (`$wback = LDRXpost %base`): the way back puts it back.
+    pub tied: HashMap<u32, u32>,
+}
+
+/// A base register the function sets by a copy and then updates by a
+/// pre/post-indexed access in the same block, with nothing reading it between:
+/// it is one register twice defined. The body gives the access's result, and
+/// every later reader, a value of its own (the pin's `$wback`, tied to the
+/// base). By register number, the number of the new value.
+fn writeback_ties(function: &MFunc) -> HashMap<u32, u32> {
+    use crate::mc::inst::Addr;
+    let number = |register: Reg| match lir_register(register) {
+        MfReg::Virt(value) => Some(value),
+        MfReg::Phys(_) => None,
+    };
+    let mut definitions: HashMap<u32, usize> = HashMap::new();
+    for op in function.blocks.iter().flat_map(|block| block.ops.iter()) {
+        for register in op.defs_and_uses().0.into_iter().filter_map(number) {
+            *definitions.entry(register).or_default() += 1;
+        }
+    }
+    let mut next = function.next_register - Gpr::FIRST_VIRTUAL;
+    let mut ties = HashMap::new();
+    for block in &function.blocks {
+        // The registers a copy set earlier in this block that nothing has read
+        // or written since.
+        let mut fresh: std::collections::HashSet<u32> = Default::default();
+        for op in block.ops.iter() {
+            let base = match op {
+                Op::I(
+                    Inst::Load { addr: Addr::Pre { base, .. } | Addr::Post { base, .. }, .. }
+                    | Inst::Store { addr: Addr::Pre { base, .. } | Addr::Post { base, .. }, .. }
+                    | Inst::LoadPair { addr: Addr::Pre { base, .. } | Addr::Post { base, .. }, .. }
+                    | Inst::StorePair { addr: Addr::Pre { base, .. } | Addr::Post { base, .. }, .. },
+                ) => number(Reg::Gpr(*base)),
+                _ => None,
+            };
+            let (defs, uses) = op.defs_and_uses();
+            if let Some(base) = base
+                && fresh.contains(&base)
+                && definitions.get(&base) == Some(&2)
+                && uses.iter().filter_map(|one| number(*one)).filter(|one| *one == base).count() == 1
+            {
+                ties.insert(base, next);
+                next += 1;
+            }
+            for register in defs.iter().chain(&uses).filter_map(|one| number(*one)) {
+                fresh.remove(&register);
+            }
+            if let Op::Copy { dst, .. } = op
+                && let Some(register) = number(*dst)
+            {
+                fresh.insert(register);
+            }
+        }
+    }
+    ties
+}
+
+fn renumber(
+    place: &mut Loc,
+    map: &HashMap<u32, u32>,
+) {
+    let held = |held: &mut Held| {
+        if let Some(&to) = map.get(&held.value) {
+            held.value = to;
+        }
+    };
+    match place {
+        Loc::Held(one) => held(one),
+        Loc::Mem(cell) => {
+            cell.base.iter_mut().for_each(held);
+            cell.index.iter_mut().for_each(held);
+        }
+        _ => {}
+    }
 }
 
 /// The values (by number) an instruction defines and reads.
@@ -456,6 +533,44 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
     let wide: Vec<Reg> = crate::regalloc::wide_registers(function).into_iter().collect();
     let _file = enter(Regs(&crate::REGISTER_INFO));
+    let ties = writeback_ties(function);
+    // The copy that makes the base and the access that updates it keep the
+    // register's number (the value before); all else gets the new value.
+    let mut keeps: std::collections::HashSet<(usize, usize)> = Default::default();
+    let mut updates: std::collections::HashSet<(usize, usize)> = Default::default();
+    if !ties.is_empty() {
+        for (index, block) in function.blocks.iter().enumerate() {
+            let mut copied: HashMap<u32, usize> = HashMap::new();
+            for (place, op) in block.ops.iter().enumerate() {
+                let (defs, uses) = op.defs_and_uses();
+                let numbers = |list: &[Reg]| -> Vec<u32> {
+                    list.iter()
+                        .filter_map(|one| match lir_register(*one) {
+                            MfReg::Virt(value) => Some(value),
+                            MfReg::Phys(_) => None,
+                        })
+                        .collect()
+                };
+                match op {
+                    Op::Copy { .. } => {
+                        if let Some(&value) = numbers(&defs).first().filter(|value| ties.contains_key(value)) {
+                            copied.insert(value, place);
+                        }
+                    }
+                    _ => {
+                        for value in numbers(&defs).into_iter().filter(|value| ties.contains_key(value)) {
+                            if let Some(copy) = copied.remove(&value)
+                                && numbers(&uses).contains(&value)
+                            {
+                                keeps.insert((index, copy));
+                                updates.insert((index, place));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     let mut at = 0_i64;
     let mut blocks = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
@@ -482,7 +597,13 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
                 phis.push(llrm_codegen::model::lir::Phi { result: held(*dst)?, incoming });
                 continue;
             }
-            let what = one(&mut To { function, symbols: &mut symbols, wide: &wide }, op)?;
+            let mut what = one(&mut To { function, symbols: &mut symbols, wide: &wide }, op)?;
+            if !ties.is_empty() && !keeps.contains(&(index, place)) {
+                what.dests.iter_mut().for_each(|place| renumber(place, &ties));
+                if !updates.contains(&(index, place)) {
+                    what.sources.iter_mut().for_each(|place| renumber(place, &ties));
+                }
+            }
             let (defines, uses) = values_of(&what);
             let facts = crate::facts::of(op);
             let mut insn = Insn::new(at, None, Some(what), defines.clone(), uses);
@@ -514,7 +635,8 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
     }
     let mut body = LirBody::new(function.name.clone(), 0, blocks, IndexMap::default(), IndexMap::default());
     body.registers = Some(Regs(&crate::REGISTER_INFO));
-    Ok(Lowered { body, memory_operands, symbols, debug_values })
+    let tied = ties.iter().map(|(&old, &new)| (new, old)).collect();
+    Ok(Lowered { body, memory_operands, symbols, debug_values, tied })
 }
 
 fn show(
@@ -587,6 +709,14 @@ pub fn from_lir(
                 continue;
             }
             let cx = Back { template, symbols: &lowered.symbols, mmo: lowered.memory_operands.get(&insn.at) };
+            let mut again;
+            let what = if lowered.tied.is_empty() {
+                what
+            } else {
+                again = what.clone();
+                again.dests.iter_mut().chain(again.sources.iter_mut()).for_each(|place| renumber(place, &lowered.tied));
+                &again
+            };
             rebuilt.ops.push_at(back(&cx, what)?, insn.line);
         }
         function.blocks.push(rebuilt);
@@ -671,7 +801,10 @@ pub fn round_trip(function: &MFunc) -> Result<MFunc, String> {
             ));
         }
         for (op, insn) in a.ops.iter().zip(block.insns.iter()) {
-            let (mut defines, mut uses) = (insn.defines.clone(), insn.uses.clone());
+            // A writeback's new value is the register it updates.
+            let old =
+                |list: &[u32]| list.iter().map(|value| lowered.tied.get(value).copied().unwrap_or(*value)).collect();
+            let (mut defines, mut uses): (Vec<u32>, Vec<u32>) = (old(&insn.defines), old(&insn.uses));
             defines.sort_unstable();
             defines.dedup();
             uses.sort_unstable();

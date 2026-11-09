@@ -579,7 +579,39 @@ fn only_a_row_with_a_tied_operand_is_untied_by_the_two_address_pass() {
         .map(|what| (what.name.as_deref().map(str::to_owned), ties_in(regs, what)))
         .collect();
     assert!(tied.contains(&(Some("SUBSWri".into()), false)), "{tied:?}");
-    assert!(tied.iter().any(|(name, tied)| name.as_deref().is_some_and(|n| n.starts_with("MOVK")) && *tied), "{tied:?}");
+    assert!(
+        tied.iter().any(|(name, tied)| name.as_deref().is_some_and(|n| n.starts_with("MOVK")) && *tied),
+        "{tied:?}"
+    );
     let after = untied_only(&body);
     assert_eq!(after.iter_insns().count(), body.iter_insns().count(), "a copy was put before an untied form");
+}
+
+/// A base set by a copy and then updated by a post-indexed load is one register
+/// defined twice. The body gives the update's result a value of its own (the
+/// pin's `$wback`), so it is SSA: the verifier said "defined 2 times in a body
+/// that should be in SSA" for 3 functions of the -O1 corpus (`main`, `fmt`) and
+/// the shared SSA phases read two definitions of one value. The way back puts
+/// the register back.
+#[test]
+fn a_writeback_base_is_a_value_of_its_own_in_the_body() {
+    use llrm_target::Target as _;
+    let (base, loaded, stepped) = (g(0), g(1), g(2));
+    let function = function(vec![
+        Op::Copy { dst: Reg::Gpr(stepped), src: Reg::Gpr(base) },
+        Op::I(Inst::Load {
+            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: loaded },
+            addr: Addr::Post { base: stepped, imm: 8 },
+            mmo: Default::default(),
+        }),
+        Op::Copy { dst: Reg::Gpr(Gpr(0)), src: Reg::Gpr(stepped) },
+    ]);
+    let lowered = to_lir(&function).expect("maps");
+    let roles = &crate::description::Arm64.layout().spaces.roles;
+    let twice: Vec<_> = llrm_codegen::backend::verify::verify_for(&lowered.body, true, roles)
+        .into_iter()
+        .filter(|one| one.contains("defined 2 times"))
+        .collect();
+    assert_eq!(twice, Vec::<String>::new());
+    assert_eq!(round_trip(&function).expect("round-trips").blocks[0].ops.len(), 3);
 }
