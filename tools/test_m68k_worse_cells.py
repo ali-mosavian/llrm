@@ -109,6 +109,18 @@ class WorseCells(unittest.TestCase):
         self.assertEqual(count(tsv(*rows)), (0, 1))
         self.assertEqual(count(with_library(tsv(*rows))), (1, 1))
 
+    def test_a_cell_whose_every_column_failed_still_counts_as_measured_at_that_level(self):
+        """sum_three (x86 far pointers) fails in all three columns: its O1 row exists, it was reported 'level not measured'."""
+        rows = [("m68k-68000", "p", lv, n, "", "", "", "n/a: compile-fail: x") for lv in ("O1", "O2", "O3", "Os") for n in ("ours", "gcc", "clang")]
+        self.assertEqual(missing_levels(tsv(*rows)), [])
+
+    def test_a_helper_the_archive_lacks_makes_the_whole_program_size_unknown(self):
+        """gcc's __addxf3 is not in our compiler-rt: it linked as 0 library bytes, so a 96-bit long double program read 43 KB worse for ours."""
+        rows = [("m68k-68000", "p", "O2", "ours", 100, "", "", "", 300), ("m68k-68000", "p", "O2", "gcc", 120, "", "", "unresolved helpers: __addxf3", ""), ("m68k-68000", "p", "O2", "clang", 150, "", "", "", 0)]
+        whole = list(with_library(tsv(*rows)))
+        self.assertEqual(count(iter(whole)), (0, 0))
+        self.assertEqual(missing(iter(whole)), [])
+
     def test_max_run_on_one_input_is_reported(self):
         """max(7, 42) alone: gcc skipped the move, ours ran it; the other order reverses it (+6.4 B-eq at 060)."""
         once = [("m68k-68060", "max", "O2", n, 16, 10, 5, "") for n in ("ours", "gcc", "clang")]

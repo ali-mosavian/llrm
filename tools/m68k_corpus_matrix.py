@@ -156,18 +156,21 @@ class Tools:
         """Header text: every column's compile lines, so the next reader sees the setup (the flags hash is in the same header)."""
         return "".join(f"# {c}: " + " ; ".join(" ".join(cmd) for cmd in self.commands(c, "<cpu>", "<level>", "<program.c>", ["<program flags>"], "<out>")) + "\n" for c in ("ours", "gcc", "clang"))
 
-    def library(self, cpu: str, level: str, obj: Path, work: Path) -> int | None:
-        """Bytes of the compiler-rt members the object pulls when linked: only the referenced ones link, as in a real link. Every column links
-        OUR archive at the same level (libgcc's m68k routines are not in the gcc root, as tools/m68k_program_size.py): the gcc and clang
-        library numbers are an estimate. Unresolved symbols other than the runtime's (`report`, libc) are ignored."""
+    def library(self, cpu: str, level: str, obj: Path, work: Path) -> tuple[int | None, str]:
+        """(bytes of the compiler-rt members the object pulls, unresolved helpers). Only the referenced members link, as in a real link.
+        Every column links OUR archive at the same level (libgcc's m68k routines are not in the gcc root, as tools/m68k_program_size.py): the
+        gcc and clang library numbers are an estimate. A `__helper` the archive lacks (gcc's `__addxf3` for a 96-bit long double) would read
+        as 0 bytes, so it is named and the cell's whole-program size is unknown, not small. Other unresolved symbols (`report`, libc) are ignored."""
         archive = self.support(cpu, level)
         mapfile, exe = Path(str(obj) + ".map"), Path(str(obj) + ".exe")
         link = subprocess.run([f"{self.root}/usr/bin/m68k-linux-gnu-gcc", f"-m{cpu}", "-msoft-float", "-nostdlib", "-static", "-ffreestanding",
                                "-Wl,--unresolved-symbols=ignore-all", f"-Wl,-Map={mapfile}", "-o", str(exe), str(obj), archive],
                               capture_output=True, text=True, env=self.env)
         if link.returncode != 0 or not mapfile.exists():
-            return None
-        return sum(program_size.members_of(program_size.text_bytes(mapfile.read_text())).values())
+            return None, "link failed"
+        undefined = subprocess.run([f"{self.root}/usr/bin/m68k-linux-gnu-nm", "-u", str(exe)], capture_output=True, text=True, env=self.env).stdout
+        missing = sorted(w for line in undefined.splitlines() for w in line.split()[-1:] if w.startswith("__"))
+        return sum(program_size.members_of(program_size.text_bytes(mapfile.read_text())).values()), ",".join(missing)
 
     def support(self, cpu: str, level: str) -> str:
         """The compiler-rt archive of this llrm-cc at CPU and LEVEL (built once, cached by compiler binary)."""
@@ -191,7 +194,10 @@ class Tools:
         if not ok:
             reason, cause = failure(compiler, timed, err)
             return None, reason, cause, None
-        return self.size(obj), "ok", "", self.library(cpu, level, obj, work)
+        library, unresolved = self.library(cpu, level, obj, work)
+        if unresolved:
+            return self.size(obj), "ok", f"unresolved helpers: {unresolved}", None
+        return self.size(obj), "ok", "", library
 
 
 def cell_rows(tools: Tools, ident: str, path: Path, cpu: str, level: str, work: Path) -> list[tuple[str, int | None, str, str, int | None]]:
@@ -244,14 +250,17 @@ def main() -> int:
         work = Path(tmp)
         with ThreadPoolExecutor(args.jobs) as pool:
             results = list(pool.map(lambda j: cell_rows(tools, *j, work), jobs))
-    rows, reasons, counts = [], [], {}
+    rows, reasons, counts, unknown = [], [], {}, 0
     for (ident, _, cpu, level), cols in zip(jobs, results):
         why = verdict(cols)
         counts[why] = counts.get(why, 0) + 1
+        if any(c[3].startswith("unresolved helpers") for c in cols):
+            unknown += 1
+            reasons.append(f"m68k-{cpu}\t{ident}\t{level}\twhole-program-unknown\t" + "; ".join(c[0] + " " + c[3] for c in cols if c[3].startswith("unresolved")))
         if why != "ok":
             reasons.append(f"m68k-{cpu}\t{ident}\t{level}\t{why}\t" + "; ".join(c[3] for c in cols if c[3]))
         for compiler, size, reason, cause, library in cols:
-            note = "" if size is not None else f"n/a: {reason}: {cause}"
+            note = cause if size is not None else f"n/a: {reason}: {cause}"
             rows.append(f"m68k-{cpu}\t{ident}\t{level}\t{compiler}\t{'' if size is None else size}\t\t\t{note}\t{'' if library is None else library}")
     have = {tuple(r.split("\t")[:3]) for r in rows if r.split("\t")[3] == "ours"}
     skipped = {(f"m68k-{c}", i, lv) for c, i in na for lv in levels}
@@ -264,7 +273,7 @@ def main() -> int:
     n_bench = sum(1 for i, _ in corpus if i.startswith("bench/"))
     header = (f"# m68k corpus matrix (code_bytes = code + rodata + data of the object alone; lib_bytes = the compiler-rt members it links, OUR archive at the same level for all three columns, so the gcc and clang library numbers are an estimate (libgcc's m68k routines are not in the gcc root); whole program = code_bytes + lib_bytes; NO CLOCKS: no libc is linked, so O2/O3 are judged on bytes alone, an upper bound; gcc -msoft-float like ours{headers_note}; denominator {len(corpus)} programs = "
               f"{len(corpus) - n_bench} tests/run/c + {n_bench} bench, {len(same)} more in both (counted once, same.tsv); "
-              f"cells {len(jobs)} ({len(na)} program-CPU pairs not targeted); " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
+              f"cells {len(jobs)} ({len(na)} program-CPU pairs not targeted); " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())) + f"; whole-program unknown (a column calls a helper our archive lacks) {unknown}"
               + "; byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved (unused: no clocks)"
               + "; external flags: tools/external_flags.py --target none, hash cd1e12d510e4\n")
     (out / "m68k-corpus.tsv").write_text(header + tools.column_lines() + "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\tlib_bytes\n" + "\n".join(rows) + "\n")

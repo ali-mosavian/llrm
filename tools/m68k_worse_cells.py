@@ -98,11 +98,22 @@ def single_input(lines) -> list[tuple[str, str, str, str]]:
 
 
 def with_library(lines):
-    """The rows with `lib_bytes` (column 9) added to `code_bytes`: the whole-program sizes of the corpus table. A row without a library
-    number keeps its object bytes."""
+    """The rows with `lib_bytes` (column 9) added to `code_bytes`: the whole-program sizes of the corpus table. A cell where any column
+    calls a helper the library archive lacks (`unresolved helpers` in its note) has no whole-program size: libgcc's `__addxf3` linked as
+    0 bytes read as small. Its rows keep no number and say so (`n/a: whole-program unknown`), so it is skipped, not judged."""
+    lines = list(lines)
+    unknown = set()
     for line in lines:
         row = line.rstrip("\n").split("\t")
-        if not line.startswith("#") and len(row) >= 9 and row[4].isdigit() and row[8].isdigit():
+        if not line.startswith("#") and len(row) >= 8 and row[7].startswith("unresolved helpers"):
+            unknown.add((row[0], row[1], row[2]))
+    for line in lines:
+        row = line.rstrip("\n").split("\t")
+        if not line.startswith("#") and len(row) >= 8 and (row[0], row[1], row[2]) in unknown:
+            row[4:7] = ["", "", ""]
+            row[7] = "n/a: whole-program unknown"
+            line = "\t".join(row) + "\n"
+        elif not line.startswith("#") and len(row) >= 9 and row[4].isdigit() and row[8].isdigit():
             row[4] = str(int(row[4]) + int(row[8]))
             line = "\t".join(row) + "\n"
         yield line
@@ -112,6 +123,12 @@ def ours_failed(lines) -> set[tuple[str, str, str]]:
     """The cells where `ours` has no number and says why (`n/a: compile-fail: ...`): a failure the table names, not a hole. The corpus
     matrix (tools/m68k_corpus_matrix.py) writes these."""
     return {(r[0], r[1], r[2]) for r in (l.rstrip("\n").split("\t") for l in lines if not l.startswith("#"))
+            if len(r) >= 8 and r[3] == "ours" and r[4] == "" and r[7].startswith(("n/a: compile-fail", "n/a: refused", "n/a: timeout"))}
+
+
+def named_na(lines) -> set[tuple[str, str, str]]:
+    """The cells where `ours` has no number and the note says `n/a: ...` for any reason (a failure or an unknown whole-program size)."""
+    return {(r[0], r[1], r[2]) for r in (l.rstrip("\n").split("\t") for l in lines if not l.startswith("#"))
             if len(r) >= 8 and r[3] == "ours" and r[4] == "" and r[7].startswith("n/a:")}
 
 
@@ -119,7 +136,7 @@ def missing(lines) -> list[tuple[str, str, str]]:
     """The cells with no `ours` number and no stated reason: a column that is absent hides its cells, so a matrix with any fails."""
     lines = list(lines)
     _, seen, keys = _seen(lines)
-    named = ours_failed(lines)
+    named = named_na(lines)
     return [key for key in keys if "ours" not in seen.get(key, {}) and key not in named]
 
 
@@ -129,9 +146,10 @@ LEVELS = ("O1", "O2", "O3", "Os")
 def missing_levels(lines) -> list[tuple[str, str, str]]:
     """The (target, prog, level) cells absent from a table that measured some level of that program: an unmeasured
     level is unknown, not clean (the matrix measured O2 and Os only, and O1, a strict level, went unjudged)."""
-    _, seen, keys = _seen(lines)
+    _, _, keys = _seen(lines)
+    present = set(keys)
     have = {(target, prog) for target, prog, _ in keys}
-    return [(target, prog, level) for target, prog in sorted(have) for level in LEVELS if (target, prog, level) not in seen]
+    return [(target, prog, level) for target, prog in sorted(have) for level in LEVELS if (target, prog, level) not in present]
 
 
 def one_sided(lines) -> list[tuple[str, str, str, str]]:
