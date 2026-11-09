@@ -222,6 +222,35 @@ pub struct Tuning {
     /// is numbered afresh after the scheduler, as the x86 numbers were tuned
     /// (A/B 2026-11-07: x86_32 O1 14 cells +704 B worse).
     pub carry_slot_indexes: bool,
+    /// DEVIATE RA-CLK (x86 m16; owner x86-m16, exit 2026-11-29): the spill
+    /// weight of a value that is an address component (the base, index or
+    /// selector of a memory operand) is this many thousandths of a reference
+    /// alike; 1000: the pin's `getSpillWeight`, which weighs every reference
+    /// alike. Spilled, such a value is reloaded into one of the few registers
+    /// 16-bit addressing allows (bx, bp, si, di) before the access, where any
+    /// other value is folded or moves through any register. Applies only where
+    /// fewer registers address than hold a value. A/B 2026-11-09 vs 1000, 141
+    /// bench cells at -O1/-O2/-Os, outputs identical: -Os +235 B, -O2 +80 B
+    /// (12 worse, 5 better), -O1 as below (strict on both axes). Weights 3000,
+    /// 4000 and 6000 give the same code on the 14-program sample.
+    /// -O1 cells (bytes, clocks; 3000 -> 1000): w1000 better 8: sfm16_float
+    /// 2248/176044 -> 2236/174044, sfm16_float_{add,div,f2i,i2f,mul,sub}
+    /// 1893/16016 -> 1888/16016, 1905/44772 -> 1900/44772, 1920/17338 ->
+    /// 1915/17338, 1868/11229 -> 1863/11229, 1898/19595 -> 1893/19595,
+    /// 1898/17195 -> 1893/17195, stft_fixed 1074/48760 -> 1064/48760; worse 7:
+    /// jpeg_fixed 2967/74028620 -> 2973/74062036, jpeg_single 2817/86293387
+    /// -> 2823/86326803, matmul 293/23467 -> 299/23531, recchop 177/11429 ->
+    /// 183/11556, sfm16_float_cmp 1993/44039 -> 1994/45240, shellsort
+    /// 172/11672 -> 176/11993, stft_single 842/49421 -> 844/49421;
+    /// trades 2: grep 497/49952 -> 523/49865, quicksort 252/319777 ->
+    /// 261/303228. Open Os row M16-OS-MATMUL-DIVISOR (owner x86-m16, exit
+    /// 2026-11-20): matmul -Os 289 B/23807 clk against 284/23679 at 1000.
+    pub address_reference_milliweight: u32,
+    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): a loop whose loop-carried
+    /// latency exceeds its issue-bound time is not unrolled at run time
+    /// (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks nothing of
+    /// the loop. false: the pin's.
+    pub unroll_recurrence_veto: bool,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
@@ -412,6 +441,8 @@ impl Tuning {
         x87_zero_fill_at_size: false,
         slots_loop_width_rule: false,
         carry_slot_indexes: true,
+        address_reference_milliweight: 1000,
+        unroll_recurrence_veto: false,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
@@ -1275,6 +1306,7 @@ mod tests {
         assert!(!pin.x87_zero_fill_at_size);
         assert!(!pin.slots_loop_width_rule);
         assert!(pin.carry_slot_indexes);
+        assert_eq!(pin.address_reference_milliweight, 1000);
         assert_eq!(pin.inline_threshold, None);
     }
 }

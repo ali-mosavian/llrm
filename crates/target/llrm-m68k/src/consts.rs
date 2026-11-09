@@ -153,9 +153,9 @@ fn table(
     cpu: Cpu,
     size: bool,
 ) -> Option<std::sync::Arc<Table>> {
-    static TABLES: OnceLock<Mutex<HashMap<(bool, bool), Option<std::sync::Arc<Table>>>>> = OnceLock::new();
+    static TABLES: OnceLock<Mutex<HashMap<(usize, bool), Option<std::sync::Arc<Table>>>>> = OnceLock::new();
     let mut tables = TABLES.get_or_init(Default::default).lock().unwrap();
-    tables.entry((cpu == Cpu::M68020, size)).or_insert_with(|| build(cpu, size).map(std::sync::Arc::new)).clone()
+    tables.entry((cpu as usize, size)).or_insert_with(|| build(cpu, size).map(std::sync::Arc::new)).clone()
 }
 
 /// The instructions that make `value` in a data register when that beats
