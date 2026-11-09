@@ -2,7 +2,7 @@
 
 Owner: m68k. Review: 2026-12-20.
 
-TL;DR: the pin's m68k callee rounds a variadic `double` to 8; gcc callers pack it at 4. Ours is pin-faithful, so `long_double_variadic` prints 0 on m68k as the pin does. The corpus program is `// targets: !m68k`.
+TL;DR: CLOSED by #8453. The pin's m68k callee rounds a variadic `double` to 8; gcc callers pack it at 4. Ours reads it at the 4-aligned slot (DEVIATE VA-ALIGN, `BuilderTarget.va_arg_align_cap`, exit none while the ABI packs stack arguments at 4). `long_double_variadic` runs on m68k (ok at O1/O2/Os, 68000 and 68020) and the `!m68k` tag is gone. The pin still prints 0 for it.
 
 ## Evidence
 `~/scratch/handoff/m68k-va-double-hazard/`: `sum(int n, ...)` over three doubles. gcc 15.2 prints 13; pin (clang IR, `llc` M68020) prints 0 at -O1 and -O2.
