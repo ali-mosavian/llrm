@@ -1491,9 +1491,11 @@ pub trait Tti {
     /// pointer phi when the loop has one (pointers sort to the back), and
     /// `isTruncateFree` to a pointer is false: a loop that steps a pointer keeps
     /// a narrow counter beside the wide one it truncates to. True takes the
-    /// narrowest integer phi. The pin's ordinary p3 modes let LSR share the wide
-    /// counter (GenerateTruncates); the real-mode huge model leaves a bare
-    /// pointer, so no use shares it. m16 huge bq16 -O1: 357 -> about 339 B.
+    /// narrowest integer phi. The divergence is our real-mode `huge_space`
+    /// addressing mode (a bare base register only), which the pin has no
+    /// counterpart for: under the pin's ordinary p3 modes LSR shares the wide
+    /// counter (GenerateTruncates) and `llc -print-after=loop-reduce` leaves no
+    /// duplicate i16 phi. m16 huge bq16 -O1: 357 -> 339 B.
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L1965
     fn congruent_ivs_truncate_to_narrowest_integer(&self) -> bool {
         false
