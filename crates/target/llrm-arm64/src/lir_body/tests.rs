@@ -583,3 +583,33 @@ fn only_a_row_with_a_tied_operand_is_untied_by_the_two_address_pass() {
     let after = untied_only(&body);
     assert_eq!(after.iter_insns().count(), body.iter_insns().count(), "a copy was put before an untied form");
 }
+
+/// A value an `fadd` defines is confined to the float registers. The class
+/// rule knew `xmm` only, so an arm64 `d` value was free to take a general
+/// register (3 of the corpus's 43 functions got one for a 16-byte value).
+#[test]
+fn a_float_operand_is_confined_to_the_float_registers() {
+    use llrm_codegen::backend::classes::RegisterClasses;
+    use llrm_codegen::backend::regclass::{Confinement, Sets, confinement_of};
+
+    let size = FpSize::D;
+    let rd = Vreg(Gpr::FIRST_VIRTUAL + 3);
+    let lowered = to_lir(&function(vec![Op::I(Inst::FpBinary {
+        op: FpBinary::Add,
+        size,
+        rd,
+        rn: Vreg(Gpr::FIRST_VIRTUAL + 4),
+        rm: Vreg(Gpr::FIRST_VIRTUAL + 5),
+    })]))
+    .expect("an fadd maps");
+    let classes = RegisterClasses::of(&crate::description::Arm64);
+    let sets = Sets::of(&classes);
+    let defined = lowered.body.iter_insns().find_map(|one| one.defines.first().copied()).expect("a definition");
+    let found = confinement_of(lowered.body.regs(), lowered.body.iter_insns().map(|one| &**one), defined, &sets);
+    match found {
+        Confinement::Only(only) => {
+            assert!(!only.is_empty() && only.iter().all(|one| lowered.body.regs().in_class(*one, llrm_lir::registers::class::FPR)), "{only:?}")
+        }
+        _ => panic!("an fadd's result is not confined to the float registers"),
+    }
+}
