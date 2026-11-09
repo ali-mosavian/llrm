@@ -1,8 +1,9 @@
 """Two compiler builds on every m16 bench program at -O1, -O2 and -Os: bytes and executed clocks per cell, base against head.
 
     python3 tools/bench/ab_bins.py BASE_BIN HEAD_BIN [--levels -O1,-O2,-Os] [--only fib,matmul] [--jobs 2]
+        [--base-env NAME=VALUE]... [--head-env NAME=VALUE]...
 
-BASE_BIN and HEAD_BIN are dist directories (llrm-cc, jwasm, jwlink). Run it at every pin bump and after any tuning-table change: a knob
+BASE_BIN and HEAD_BIN are dist directories (llrm-cc, jwasm, jwlink); the two may be the same directory with different --base-env/--head-env. Run it at every pin bump and after any tuning-table change: a knob
 is judged on the whole corpus, not on the cell it was found on. A program whose kernel the compiler folded into `main` is counted over the
 whole program (runtime start-up is the same on both sides). Verdicts follow bench.py's rules: at -O2 head is worse when 1000 * dclk +
 rate * dB > 0 (rate: bench.rate_for, 500 on m16: one clock is two bytes), at -Os on bytes alone, at -O1 on either axis (one better and the
@@ -45,16 +46,16 @@ def programs(bench: Path, only: set[str] | None = None) -> list[tuple[str, str]]
     return found
 
 
-def measure(job: tuple[str, str, str, str]) -> tuple[int, int, str] | str:
+def measure(job: tuple[str, str, str, str, tuple]) -> tuple[int, int, str] | str:
     """(code bytes, clocks, program output) of one build of one cell; a string is why it could not be measured."""
-    bindir, source, region, level = job
+    bindir, source, region, level, extra = job
     sys.path[:0] = [str(ROOT / "tools"), str(ROOT / "tools/bench"), str(ROOT / "crates/target/llrm-x86-m16/bench"), str(ROOT / "tools/dosbatch")]
     import dosbatch, icount, maps, sizes  # noqa: E401
 
     os.environ["LLRM_BIN"] = bindir
     work = Path(tempfile.mkdtemp(prefix="ab."))
     obj, exe, lst = work / "a.obj", work / "a.exe", work / "a.map"
-    env = {**os.environ, "LLRM_CC_TARGET": "x86_16-wat"}
+    env = {**os.environ, "LLRM_CC_TARGET": "x86_16-wat", **dict(extra)}
     try:
         done = subprocess.run([f"{bindir}/llrm-cc", "-march=i386", level, "-I", "bench", "-I", "tests/run/c", "-c", source, "-o", str(obj)], capture_output=True, text=True, env=env, cwd=ROOT)
         if done.returncode:
@@ -74,9 +75,9 @@ def measure(job: tuple[str, str, str, str]) -> tuple[int, int, str] | str:
         shutil.rmtree(work, ignore_errors=True)
 
 
-def compare(base_bin: str, head_bin: str, cells, levels, rate: int, run=measure, jobs: int = 1):
+def compare(base_bin: str, head_bin: str, cells, levels, rate: int, run=measure, jobs: int = 1, base_env=(), head_env=()):
     """Rows (cell, level, base, head, verdict) for every cell both builds measured. `run` is `measure`."""
-    work = [(b, src, region, level) for src, region in cells for level in levels for b in (base_bin, head_bin)]
+    work = [(b, src, region, level, env) for src, region in cells for level in levels for b, env in ((base_bin, tuple(base_env)), (head_bin, tuple(head_env)))]
     results = list(Pool(jobs).imap(run, work)) if jobs > 1 else [run(w) for w in work]
     rows = []
     for i in range(0, len(work), 2):
@@ -99,16 +100,19 @@ def main(argv=None) -> int:
     ap.add_argument("--only", default="")
     ap.add_argument("--jobs", type=int, default=2)
     ap.add_argument("--json", default="")
+    ap.add_argument("--base-env", action="append", default=[], metavar="NAME=VALUE")
+    ap.add_argument("--head-env", action="append", default=[], metavar="NAME=VALUE")
     args = ap.parse_args(argv)
     sys.path[:0] = [str(ROOT / "tools/bench")]
     import bench
 
     cells = programs(ROOT / "bench", set(args.only.split(",")) if args.only else None)
-    rows = compare(args.base, args.head, cells, args.levels.split(","), bench.rate_for("c", "O2"), jobs=args.jobs)
+    rows = compare(args.base, args.head, cells, args.levels.split(","), bench.rate_for("c", "O2"), jobs=args.jobs, base_env=[e.split("=", 1) for e in args.base_env], head_env=[e.split("=", 1) for e in args.head_env])
     for level in args.levels.split(","):
         mine = [r for r in rows if r[1] == level]
         counts = {v: sum(r[4] == v for r in mine) for v in ("better", "same", "worse", "trade", "output differs", "unmeasured")}
-        print(level, len(mine), "cells:", ", ".join(f"{n} {v}" for v, n in counts.items() if n))
+        both = [r for r in mine if r[4] not in ("output differs", "unmeasured")]
+        print(level, len(mine), "cells:", ", ".join(f"{n} {v}" for v, n in counts.items() if n), f"| head minus base: {sum(r[3][0] - r[2][0] for r in both):+d} B, {sum(r[3][1] - r[2][1] for r in both):+d} clk")
         for cell, _, base, head, v in mine:
             if v not in ("same",):
                 print(f"  {cell.split('/')[1]:18} {v:15} {base} -> {head}")

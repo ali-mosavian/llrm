@@ -7,7 +7,7 @@ def fake(weights):
     """A build is named by its RA-CLK weight; `weights` is {(weight, program): (bytes, clocks)}."""
 
     def run(job):
-        bindir, source, _, level = job
+        bindir, source, _, level, _env = job
         return (*weights[(bindir, source.split("/")[1])], "ok")
 
     return run
@@ -42,3 +42,15 @@ def test_builds_that_print_different_output_get_no_verdict():
 
 def test_an_unmeasured_cell_is_reported_not_dropped():
     assert ab_bins.compare("base", "head", CELLS[:1], ["-O2"], 500, run=lambda job: "compile: boom")[0][4] == "unmeasured"
+
+
+def test_the_same_dist_with_another_environment_is_a_second_build():
+    """The weight A/B runs one dist twice, the knob in the environment: the environment reaches that build's compile only."""
+    seen = []
+
+    def run(job):
+        seen.append((job[0], job[4]))
+        return (1, 1, "ok")
+
+    ab_bins.compare("d", "d", CELLS[:1], ["-O2"], 500, run=run, base_env=[("W", "3")], head_env=[("W", "1")])
+    assert seen == [("d", (("W", "3"),)), ("d", (("W", "1"),))]
