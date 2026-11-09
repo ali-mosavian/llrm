@@ -9,6 +9,7 @@ listed. `ours` is the shipped llrm-cc path; `ours-ir` (the backend on the bench 
 what ships) is never judged.
 A cell with only one of the two external columns is named, and refused unless --allow-one-sided: judged
 against the one that exists it can understate the gap to the one that is missing (z80's table did, by 1.7 kB).
+O1 cells where no single compiler attains both axes are VIRTUAL-OK when ours is Pareto-optimal and not behind the pin (verdict()).
 Usage: m68k_worse_cells.py m68k.tsv [-v] [--allow-one-sided]
 """
 import re
@@ -38,6 +39,28 @@ def excess(level: str, rate: float, ours: tuple[int, int | None], other: tuple[i
     if level == "O1":
         return max(extra, ours[1] - other[1])
     return extra - rate * (other[1] - ours[1])
+
+
+def verdict(level: str, rate: float, ours, refs: dict) -> str:
+    """"ok", "VIRTUAL-OK" or "WORSE" for one cell (oversight, 2026-11-09, as fputable.verdict for the m32 FPU table).
+
+    `ours` and each of `refs` (gcc, clang) are (bytes, clocks). O1 has a per-axis bar. A cell where no single real compiler
+    attains both axes (gcc has the best clocks and clang the best bytes, or the reverse) is VIRTUAL: it passes when ours is
+    Pareto-optimal among {ours, gcc, clang} and no worse than the pin (clang) on both axes. Where one compiler has both, ours
+    behind it on either axis is WORSE. Other levels, and a cell without both columns or without clocks, are one metric.
+    """
+    if max(excess(level, rate, ours, ref) for ref in refs.values()) <= 0:
+        return "ok"
+    gcc, clang = refs.get("gcc"), refs.get("clang")
+    if level != "O1" or gcc is None or clang is None or None in (*ours, *gcc, *clang):
+        return "WORSE"
+    best_clocks = min(refs.values(), key=lambda ref: ref[1])
+    best_bytes = min(refs.values(), key=lambda ref: ref[0])
+    if best_clocks is best_bytes or gcc == clang:
+        return "WORSE"
+    dominated = any(ref[0] <= ours[0] and ref[1] <= ours[1] and ref != ours for ref in (gcc, clang))
+    behind_pin = ours[0] > clang[0] or ours[1] > clang[1]
+    return "WORSE" if dominated or behind_pin else "VIRTUAL-OK"
 
 
 def _seen(lines):
@@ -71,6 +94,17 @@ def cells(lines):
         if "ours" in by and others:
             rate = table[target.split("-")[1]]
             yield target, prog, level, max(excess(level, rate, by["ours"], other) for other in others)
+
+
+def verdicts(lines):
+    """(target, prog, level, verdict, excess) of every judged cell."""
+    table, seen, _ = _seen(lines)
+    for (target, prog, level), by in seen.items():
+        refs = {name: by[name] for name in ("gcc", "clang") if name in by}
+        if "ours" in by and refs:
+            rate = table[target.split("-")[1]]
+            worst = max(excess(level, rate, by["ours"], ref) for ref in refs.values())
+            yield target, prog, level, verdict(level, rate, by["ours"], refs), worst
 
 
 def skipped(lines) -> list[tuple[str, str, str]]:
@@ -126,15 +160,15 @@ def one_sided(lines) -> list[tuple[str, str, str, str]]:
 
 
 def count(lines) -> tuple[int, int]:
-    results = list(cells(lines))
-    return sum(1 for *_, e in results if e > 0), len(results)
+    results = list(verdicts(lines))
+    return sum(1 for _, _, _, v, _ in results if v == "WORSE"), len(results)
 
 
 if __name__ == "__main__":
     if "-v" in sys.argv:
-        for target, prog, level, e in sorted(cells(open(sys.argv[1])), key=lambda c: -c[3]):
-            if e > 0:
-                print(f"{target} {prog} {level} +{e:.1f} B")
+        for target, prog, level, v, e in sorted(verdicts(open(sys.argv[1])), key=lambda c: -c[4]):
+            if v != "ok":
+                print(f"{target} {prog} {level} +{e:.1f} B {v}")
     lost = missing(open(sys.argv[1]))
     if lost:
         print("no `ours` number (the matrix is incomplete): " + ", ".join("/".join(key) for key in lost))
