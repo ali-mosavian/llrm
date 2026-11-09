@@ -207,6 +207,14 @@ impl Machine for Dos {
         })
     }
 
+    fn kept_stack_align(&self) -> Option<u64> {
+        crate::stack_keeps().0
+    }
+
+    fn max_alloca_align(&self) -> Option<u64> {
+        crate::stack_keeps().1
+    }
+
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
         Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false }))
     }
