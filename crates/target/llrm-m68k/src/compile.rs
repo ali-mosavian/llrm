@@ -267,6 +267,17 @@ pub fn items_with(
     };
     let mut options = Options { mid_end: false, global_copies: options.global_copies, ..options };
     let (mut kept, touched) = items_once(module, name, cpu, options)?;
+    if llrm_support::debug::enabled("builds") {
+        eprintln!(
+            "[builds] {name} trials: sext_adds {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {}",
+            touched.sext_adds,
+            touched.return_dup,
+            touched.class_split,
+            touched.compare_destinations,
+            touched.carry_chain,
+            touched.global_copies
+        );
+    }
     if !touched.any() {
         return Ok(kept);
     }
@@ -409,6 +420,12 @@ fn items_once(
     cpu: Cpu,
     options: Options,
 ) -> Result<(Vec<Item>, Touched), String> {
+    // one full select, allocate and emit; a function with optional rewrites
+    // runs it again per trial
+    let _build = llrm_support::debug::span("m68k build");
+    if llrm_support::debug::enabled("builds") {
+        eprintln!("[builds] {name}");
+    }
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let number =
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
@@ -485,6 +502,7 @@ fn items_once(
     two_address(&mut function);
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
+    let allocating = llrm_support::debug::span("m68k allocate");
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
@@ -497,6 +515,7 @@ fn items_once(
             options.loop_carried_first,
         )?
     };
+    drop(allocating);
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     touched.global_copies = options.global_copies && crate::calltarget::saves_a_register(&function, &assignment);
     if options.short {

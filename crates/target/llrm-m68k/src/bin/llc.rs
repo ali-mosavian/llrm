@@ -10,7 +10,7 @@ use llrm_m68k::driver::{self, Level, Policy};
 
 fn main() {
     // The mid-end recurses along dependency chains: run on a thread with room.
-    let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(run).expect("a thread");
+    let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(|| llrm_support::debug::run_main(run)).expect("a thread");
     std::process::exit(worker.join().unwrap_or(101));
 }
 

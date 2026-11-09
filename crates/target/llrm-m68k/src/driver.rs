@@ -220,9 +220,14 @@ fn function_items(
         names
             .iter()
             .map(|name| {
-                items_with(module, name, cpu, Options { pc_calls, ..backend })
-                    .map(|items| (name.clone(), items))
-                    .map_err(|why| format!("@{name}: {why}"))
+                // `LLRM_DEBUG=time` charges the function by name (the largest
+                // functions are the first to look at)
+                llrm_support::debug::timed_by(
+                    || format!("m68k fn {name}"),
+                    || items_with(module, name, cpu, Options { pc_calls, ..backend }),
+                )
+                .map(|items| (name.clone(), items))
+                .map_err(|why| format!("@{name}: {why}"))
             })
             .collect()
     };
