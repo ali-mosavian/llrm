@@ -340,6 +340,9 @@ fn pairs_at(
     count
 }
 
+/// The pin's `DefaultSafeSPDisplacement`.
+pub const SAFE_SP_DISPLACEMENT: u64 = 255;
+
 fn layout(
     function: &MFunc,
     allocation: &Allocation,
@@ -351,7 +354,13 @@ fn layout(
     // saves the link register alone, with its neighbours in the list.
     let keeps =
         llrm_codegen::backend::framefree::keeps_frame_pointer(function.frame_pointer.as_deref(), function.calls);
-    let record = function.dynamic || keeps;
+    // `hasFP` also holds for a call frame over `DefaultSafeSPDisplacement`
+    // (255 bytes): the scavenger's emergency slot is reached from the frame pointer.
+    // DEVIATE FP-DARWIN (owner w15, exit 2026-11-30): the pin's `producePairRegisters`
+    // (Mach-O compact unwind) saves the frame pointer beside the link register on
+    // Darwin whatever `hasFP` says, without setting it up; here a Darwin call keeps
+    // the whole record. Unreachable from clang, which gives Darwin `"frame-pointer"="all"`.
+    let record = function.dynamic || keeps || function.outgoing > SAFE_SP_DISPLACEMENT || (darwin && function.calls);
     let pairs = paired(&saved_list(allocation, record, function.calls && !record, darwin));
     let registers: u64 = pairs.iter().map(|(_, second)| 1 + u64::from(second.is_some())).sum();
     let area = (8 * registers).next_multiple_of(16);

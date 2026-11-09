@@ -305,6 +305,7 @@ fn lower_function(
     crate::lir_view::set_frame_pointer_free(
         platform != Platform::Darwin
             && !(machine.dynamic
+                || machine.outgoing > crate::frame::SAFE_SP_DISPLACEMENT
                 || llrm_codegen::backend::framefree::keeps_frame_pointer(
                     machine.frame_pointer.as_deref(),
                     machine.calls,
