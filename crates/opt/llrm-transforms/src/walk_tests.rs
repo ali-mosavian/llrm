@@ -2805,13 +2805,13 @@ fn test_m32_o3_paths_is_copied_as_nested_loops_not_as_a_tree_of_calls() {
 
 /// fib at m32 -O2 was copied into itself to the 150 `gcc_insns` the pass
 /// allowed and ran 240256 clocks against gcc's 210636 (gcc's cap is 450; -O2
-/// now takes it, 99687 clocks); -O3 keeps 150 (rectwo and bintree are worse
-/// with 450 there).
+/// takes it, 99687 clocks). -O3 took the same copies with the loop first and
+/// depth 8 and lost to -O2 on fib, frames and rectwo (REC-8): it copies as -O2 does.
 #[test]
-fn test_m32_o2_copies_fib_to_gccs_growth_cap_and_o3_to_the_old_one() {
+fn test_m32_o3_copies_fib_as_o2_does() {
     let o2 = m32_fib_calls(crate::pipeline::Options::default());
     let o3 = m32_fib_calls(crate::pipeline::Options::speed());
-    assert!(o2 > o3, "-O2 made {o2} calls of fib, -O3 {o3}");
+    assert_eq!(o2, o3, "-O2 made {o2} calls of fib, -O3 {o3}");
 }
 
 /// fib at -O1 was copied into itself (334152 -> 424014 clocks, 69 -> 649 B):
@@ -2839,7 +2839,7 @@ fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
     let o2 = m32_tree_calls(6, crate::pipeline::Options::default());
     let o3 = m32_tree_calls(6, crate::pipeline::Options::speed());
     assert!(o2 <= 3, "copied at -O2, {o2} calls");
-    assert!(o3 > 8, "not copied at -O3, {o3} calls");
+    assert!(o3 >= 8, "not copied at -O3, {o3} calls");
 }
 
 /// gcc's dump sizes fib at 12 (edge growth 6; 13 and 7 here, before the

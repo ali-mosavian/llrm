@@ -36,6 +36,14 @@ import omfalign  # noqa: E402
 import llrmbin  # noqa: E402
 
 BIN = llrmbin.bin_dir()
+_BIN_ENV = os.environ.get("LLRM_BIN")  # what BIN was read from: a later change of the variable does not move BIN
+
+
+def check_bin() -> None:
+    """Refuse to build with binaries other than the ones LLRM_BIN names now: BIN is read once, at import. A sweep that set the variable after
+    the import ran both of its sides on the same compiler and called them identical (2026-11-09, PR 8475's A/B)."""
+    if os.environ.get("LLRM_BIN") != _BIN_ENV:
+        raise BuildError(f"LLRM_BIN is {os.environ.get('LLRM_BIN')!r} but dosbatch read {_BIN_ENV!r} at import: set it before the import (the process environment), not after")
 QB45 = Path(os.environ.get("QB45_DIR", Path.home() / "work/42-labs/mini-qb/dosbox/qb45"))
 PDS71 = Path(os.environ.get("PDS71_DIR", Path.home() / "work/other/d32x/toolchains/pds71"))
 VBDOS = Path(os.environ.get("VBDOS_DIR", Path.home() / "work/other/d32x/toolchains/vbdos"))
@@ -179,6 +187,7 @@ def c_compile(source: Path, obj: Path, target: str, level: str, include: Path | 
     """(command, environment) that builds the C `source` for `target`: llrm-cc over clang, the target a row of its table, not a flag.
     `include` is unused: the row's -isystem has llrm_os.h, and a directory made for llrm-cc holds its own, which would shadow it.
     `declarations` is searched: the directory of a Nib program's exports, NAME.h, with nothing else in it."""
+    check_bin()
     if target_bits(target) not in WATCOM_ROWS:
         raise BuildError(f"llrm-cc has no row for {target}")
     return [str(BIN / "llrm-cc"), level, "-c", *(["-I", str(declarations)] if declarations else []), *abi, *extra, str(source), "-o", str(obj)], {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
