@@ -614,7 +614,9 @@ pub fn _lanes(
         return Lanes::new();
     }
     let start = regs.get(register).map_or(0, |one| one.lane / 8);
-    Lanes::span(full, start, register.size() as u32)
+    // The file's width; `iced`'s only for a register the file does not list.
+    let bytes = regs.bytes(register).map_or_else(|| register.size() as u32, |bytes| bytes as u32);
+    Lanes::span(full, start, bytes)
 }
 
 /// Write only the live low word of a register-only dword move

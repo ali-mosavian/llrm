@@ -40,7 +40,7 @@ pub mod tti;
 #[cfg(test)]
 mod tti_tests;
 
-use llrm_lir::registers::{RegId, Row};
+use llrm_lir::registers::RegId;
 
 /// The register ids, numbered by `registers.regs`'s lines: `reg::X0`.
 pub mod reg {
@@ -48,14 +48,11 @@ pub mod reg {
     include!(concat!(env!("OUT_DIR"), "/register_ids.rs"));
 }
 
-/// Instruction effect rows: none until arm64's forms are described.
-fn rows(
-    _name: &str,
-    _dests: usize,
-    _sources: usize,
-) -> &'static [Row] {
-    &[]
+/// Instruction effect rows, generated from `instructions/opcodes.instr`.
+mod opcode_rows {
+    include!(concat!(env!("OUT_DIR"), "/opcode_rows.rs"));
 }
+use opcode_rows::rows;
 
 include!(concat!(env!("OUT_DIR"), "/register_info.rs"));
 

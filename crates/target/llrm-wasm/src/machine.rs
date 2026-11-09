@@ -95,6 +95,11 @@ impl Machine for WasmMachine {
         OperationCosts { load: 3, store: 3, float_load: 3, float_store: 3, branch: 2, call: 6, ..self.costs() }
     }
 
+    /// The wasm triple's default thread model is `Single`.
+    fn single_threaded(&self) -> bool {
+        true
+    }
+
     fn registers(&self) -> i64 {
         REGISTERS
     }
