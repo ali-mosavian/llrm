@@ -614,6 +614,7 @@ fn a_writeback_base_is_a_value_of_its_own_in_the_body() {
         .collect();
     assert_eq!(twice, Vec::<String>::new());
     assert_eq!(round_trip(&function).expect("round-trips").blocks[0].ops.len(), 3);
+}
 
 /// A value an `fadd` defines is confined to the float registers. The class
 /// rule knew `xmm` only, so an arm64 `d` value was free to take a general
