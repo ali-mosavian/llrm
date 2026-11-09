@@ -68,13 +68,15 @@ fn kind(vt: EVT) -> Result<Kind, Refused> {
 }
 
 /// The location of each argument and the bytes the stack ones take; a word's
-/// two bytes are named as their pair.
+/// two bytes are named as their pair. The arguments from `fixed` on are a
+/// variadic call's unnamed ones: on the stack after the named ones.
 fn locations(
     convention: &Convention,
     vts: &[EVT],
+    fixed: usize,
 ) -> Result<(Vec<Location>, i64), Refused> {
     let kinds = vts.iter().map(|&vt| kind(vt)).collect::<Result<Vec<_>, _>>()?;
-    let placement = convention.place(&kinds);
+    let placement = convention.place_variadic(&kinds, &[], fixed);
     let places = placement
         .places
         .iter()
@@ -137,7 +139,8 @@ pub fn lower_call(
 ) -> Result<(SDValue, Vec<SDValue>), Refused> {
     let convention = abi::z80();
     let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
-    let (targets, bytes) = locations(&convention, &vts)?;
+    let fixed = outs.iter().position(|out| out.variadic).unwrap_or(outs.len());
+    let (targets, bytes) = locations(&convention, &vts, fixed)?;
     let mut chain = dag.get_callseq_start(chain, bytes as u64);
     let mut stores = Vec::new();
     for (out, &target) in outs.iter().zip(&targets) {
@@ -209,7 +212,7 @@ pub fn lower_formal_arguments(
 ) -> Result<Vec<SDValue>, Refused> {
     let convention = abi::z80();
     let vts: Vec<EVT> = ins.iter().map(|arg| arg.vt).collect();
-    let (sources, _) = locations(&convention, &vts)?;
+    let (sources, _) = locations(&convention, &vts, vts.len())?;
     Ok(ins
         .iter()
         .zip(sources)
@@ -340,6 +343,15 @@ impl TargetCalling for Z80Calling {
         live_in: LiveIn,
     ) -> Vec<SDValue> {
         lower_formal_arguments(dag, chain, ins, fixed, live_in).expect("legal parts")
+    }
+
+    /// The unnamed arguments follow the named ones' stack bytes.
+    fn variadic_frame_offset(
+        &self,
+        named: &[In],
+    ) -> Option<i64> {
+        let vts: Vec<EVT> = named.iter().map(|arg| arg.vt).collect();
+        locations(&abi::z80(), &vts, vts.len()).ok().map(|(_, bytes)| bytes)
     }
 
     /// `EmitTargetCodeForMemcpy`, as X86's is `rep movs`: `ldir` behind a test

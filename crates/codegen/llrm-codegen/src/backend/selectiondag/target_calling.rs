@@ -18,7 +18,7 @@ use std::fmt::Debug;
 
 use llrm_lir::registers::RegId;
 
-use super::dag::{SDValue, SelectionDAG};
+use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::mvt::EVT;
 
@@ -138,6 +138,27 @@ pub enum Site {
 pub struct TargetIntrinsic {
     pub id: u32,
     pub chained: bool,
+}
+
+/// The target-independent `LowerVASTART` of the pin's stack-walking targets (M68k's `LowerVASTART`, AVR's, MSP430's):
+/// store the address of the first variadic argument's fixed object (`VarArgsFrameIndex`) through the list.
+/// `pointer` is the target's pointer type, `align` the list's alignment in bytes. `None` where the function has no
+/// variadic frame index.
+pub fn lower_vastart_frame_index(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    pointer: EVT,
+    align: u32,
+) -> Option<SDValue> {
+    let index = dag.var_args_frame_index?;
+    let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
+    let first = dag.get_frame_index(pointer, index);
+    let base = match dag.node(list).data {
+        NodeData::FrameIndex(slot) => MemBase::Stack(slot),
+        _ => MemBase::Unknown,
+    };
+    let info = MemInfo { mem_vt: pointer, align, volatile: false, base, ext: None, space: 0, ordering: None };
+    Some(dag.get_store(chain, first, list, info))
 }
 
 pub trait TargetCalling: Debug + Sync {
