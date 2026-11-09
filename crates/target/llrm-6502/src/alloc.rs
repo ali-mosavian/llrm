@@ -1191,8 +1191,10 @@ impl Builder {
         Ok(())
     }
 
-    /// A folded op whose first operand has a constant (half): the constant has its own forms (`x & 255`, `n - 1`, an `adc #0`),
-    /// which an operand in memory would hide, so the load is made into a cell and the ordinary op runs on it.
+    /// A folded op whose first operand has a constant (half): the constant has
+    /// its own forms (`x & 255`, `n - 1`, an `adc #0`), which an operand in
+    /// memory would hide, so the load is made into a cell and the ordinary op
+    /// runs on it.
     fn pointer_op_with_constant(
         &mut self,
         fold: &crate::pointer_alu::PointerAlu,
@@ -1205,14 +1207,16 @@ impl Builder {
         let (acc, y) = (Reg::Phys(reg::A), Reg::Phys(reg::Y));
         let ptr = self.pointer(pointer)?;
         self.require(ptr, Class::PAIR)?;
-        // the loaded cell is the left operand, as the ordinary form has it, except in a subtraction
+        // the loaded cell is the left operand, as the ordinary form has it,
+        // except in a subtraction
         let sub = fold.mnemonic == "SBC";
         if fold.word {
             let cell = format!("w___p{at}");
             let Place::Offset(off) = place else { return Err(Unsupported("an indexed word".into())) };
             let (low, high) = self.write_word(&cell)?;
             for (lane, to) in [low, high].into_iter().enumerate() {
-                let operands = vec![Operand::Def(acc), Operand::Use(ptr), Operand::Imm(off + lane as i64), Operand::Def(y)];
+                let operands =
+                    vec![Operand::Def(acc), Operand::Use(ptr), Operand::Imm(off + lane as i64), Operand::Def(y)];
                 self.push(Inst::new(Kind::Op("LDPY"), operands));
                 self.copy(to, acc);
             }
@@ -1596,7 +1600,8 @@ fn accumulate(
     inst
 }
 
-/// Where a folded op's operand lies from its pointer: a constant offset, or a byte index register.
+/// Where a folded op's operand lies from its pointer: a constant offset, or a
+/// byte index register.
 enum Place<'a> {
     Offset(i64),
     Index(&'a str),

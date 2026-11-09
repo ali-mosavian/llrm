@@ -210,9 +210,10 @@ fn a_global_is_not_folded_as_a_pointer() {
     }
 }
 
-/// A constant first operand keeps its own forms: `x & 255` is the load alone (no `and`), `5 - *p` and `*p + 0x1234` run as
-/// the ordinary ops on a loaded cell. Folding them put the constant in `a` first and grew compiler-rt's `__unorddf2`
-/// (2026-11-09).
+/// A constant first operand keeps its own forms: `x & 255` is the load alone
+/// (no `and`), `5 - *p` and `*p + 0x1234` run as the ordinary ops on a loaded
+/// cell. Folding them put the constant in `a` first and grew compiler-rt's
+/// `__unorddf2` (2026-11-09).
 #[test]
 fn a_constant_first_operand_keeps_the_ordinary_forms() {
     for cpu in [Cpu::Mos6502, Cpu::W65c02] {
@@ -226,7 +227,9 @@ fn a_constant_first_operand_keeps_the_ordinary_forms() {
     let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
     for cpu in [Cpu::Mos6502, Cpu::W65c02] {
         let (target, tag) = if cpu == Cpu::Mos6502 { ("sim6502", "n") } else { ("sim65c02", "c") };
-        for (name, want) in [("and_all", 5), ("rsub", 5u8.wrapping_sub(77).into()), ("add_const", (2309u16 + 4660) as i32 & 0xFF)] {
+        for (name, want) in
+            [("and_all", 5), ("rsub", 5u8.wrapping_sub(77).into()), ("add_const", (2309u16 + 4660) as i32 & 0xFF)]
+        {
             let main = "  lda #<buf\n  sta rc2\n  lda #>buf\n  sta rc3\n";
             let got = common::run_on(
                 target,
