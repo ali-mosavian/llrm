@@ -39,7 +39,7 @@ class Harness(unittest.TestCase):
 
 
 class Table(unittest.TestCase):
-    ROWS = "a\tO2\tours\t10\t100\t{m}\na\tO2\tclang\t10\t90\t{m}\na\tO2\tgcc\t10\t120\t{m}\n"
+    ROWS = "a\tO2\tours\t10\t100\t{m}\tok\na\tO2\tclang\t10\t90\t{m}\tok\na\tO2\tgcc\t10\t120\t{m}\texception\n"
 
     def run_table(self, rows_metric, flag):
         with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as rows:
@@ -61,6 +61,7 @@ class Table(unittest.TestCase):
         done = self.run_table("kernel", "kernel")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("# instrs metric: kernel (count.py --kernel; range [first function, report) minus main); count.py commit abc123", done.stdout)
+        self.assertIn("# value check: 2 of 3 cells value == .out; 1 of 3 cells: value != .out on all columns", done.stdout)
         self.assertIn("a\tO2\tworse", done.stdout)  # 130 net against clang's 120
         self.assertIn("# O2: better 0, same 0, worse 1", done.stdout)
 

@@ -86,6 +86,16 @@ class KernelRange(unittest.TestCase):
         self.assertTrue(expect.same_value("30825279", "30825279\n"))
         self.assertTrue(expect.same_value("2890111581:89e49c23", "-1404855715\n"))
         self.assertFalse(expect.same_value("-1", "30825279\n"))
+        self.assertEqual(expect.status("stft_fixed", "O2", "-1", "30825279\n"), "fail")
+
+    def test_the_stft_single_value_is_a_named_exception_only_at_its_observed_value(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(COUNT)))
+        import expect
+
+        self.assertEqual(expect.status("stft_single", "O2", "40144774:f14311fc", "78803551\n"), "exception")
+        self.assertEqual(expect.status("stft_single", "O2", "-1", "78803551\n"), "fail")
+        self.assertEqual(expect.status("stft_single", "O2", "502187692", "78803551\n"), "fail")
+        self.assertEqual(expect.status("stft_single", "O2", "78803551", "78803551\n"), "ok")
 
 
 if __name__ == "__main__":
