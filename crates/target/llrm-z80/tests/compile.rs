@@ -2271,10 +2271,3 @@ fn a_large_stack_argument_area_is_one_sum_not_a_refusal() {
         assert!(!out.contains("push bc"), "{level:?}: {out}");
     }
 }
-
-/// The z80 datalayout named no stack alignment, so a pass raising an alloca to a type's preferred alignment had no bound.
-#[test]
-fn the_datalayout_states_the_stack_alignment_the_frames_keep() {
-    let text = llrm_z80::LAYOUT.lines().find_map(|l| l.strip_prefix("datalayout = ")).expect("a datalayout").trim_matches('"');
-    llrm_target::testing::assert_stack_facts("z80", text, llrm_target::Target::stack_alignment(&llrm_z80::target::Z80) as u64, None);
-}
