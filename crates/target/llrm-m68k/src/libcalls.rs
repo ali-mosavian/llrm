@@ -191,11 +191,24 @@ pub fn chosen(
             count(module, function, &mut sites);
         }
     }
-    match mode {
+    let mut kinds = match mode {
         Mode::Auto => choose(&COSTS, &sites),
         Mode::Inline => Vec::new(),
         Mode::Call => KINDS.to_vec(),
-    }
+    };
+    // the unit that defines a routine is its body: a call would recurse
+    kinds.retain(|kind| {
+        let routine = COSTS.candidates.iter().find(|one| one.key == *kind).map(|one| one.routine.as_str());
+        !routine
+            .and_then(|name| module.named(name))
+            .is_some_and(
+                |id| matches!(
+                    &module.global(id).kind,
+                    llrm_mir::GlobalKind::Function(function) if !function.is_declaration()
+                ),
+            )
+    });
+    kinds
 }
 
 /// Makes `kinds` calls in `tli`.

@@ -179,15 +179,19 @@ mod executed {
     use super::*;
     use crate::support;
 
-    /// (name, IR of a routine with the compiler-rt signature, test inputs).
+    /// The runtime unit: the routines with the compiler-rt signatures, built
+    /// for speed.
+    const RUNTIME: &str = "declare i64 @llvm.cttz.i64(i64, i1)\ndeclare i32 @llvm.ctpop.i32(i32)\n\
+         define i32 @__ctzdi2(i64 %x) { %r = call i64 @llvm.cttz.i64(i64 %x, i1 false) %t = trunc i64 %r to i32 ret i32 %t }\n\
+         define i32 @__popcountsi2(i32 %x) { %r = call i32 @llvm.ctpop.i32(i32 %x) ret i32 %r }\n\
+         define i64 @__ashldi3(i64 %x, i32 %n) { %w = zext i32 %n to i64 %r = shl i64 %x, %w ret i64 %r }\n";
+
+    /// The user unit: `uses` functions of each class built for size, and `f`,
+    /// which exits 42 when every result is right. Its calls to the routines
+    /// are external.
     fn program(uses: usize) -> (String, Vec<String>) {
-        let mut ir = format!(
-            "{HEAD}declare i64 @llvm.cttz.i64(i64, i1)\ndeclare i32 @llvm.ctpop.i32(i32)\n\
-             define i32 @__ctzdi2(i64 %x) {{ %r = call i64 @llvm.cttz.i64(i64 %x, i1 false) %t = trunc i64 %r to i32 ret i32 %t }}\n\
-             define i32 @__popcountsi2(i32 %x) {{ %r = call i32 @llvm.ctpop.i32(i32 %x) ret i32 %r }}\n\
-             define i64 @__ashldi3(i64 %x, i32 %n) {{ %w = zext i32 %n to i64 %r = shl i64 %x, %w ret i64 %r }}\n"
-        );
-        let mut names = vec!["__ctzdi2".to_owned(), "__popcountsi2".to_owned(), "__ashldi3".to_owned()];
+        let mut ir = format!("{HEAD}declare i64 @llvm.cttz.i64(i64, i1)\ndeclare i32 @llvm.ctpop.i32(i32)\n");
+        let mut names = Vec::new();
         for n in 0..uses {
             ir.push_str(&format!(
                 "define i32 @c{n}(i64 %x) optsize {{ %r = call i64 @llvm.cttz.i64(i64 %x, i1 true) %t = trunc i64 %r to i32 ret i32 %t }}\n\
@@ -224,25 +228,43 @@ mod executed {
         (ir, names)
     }
 
+    /// The user unit's text and items, then the runtime's.
+    fn linked(
+        uses: usize,
+        cpu: Cpu,
+    ) -> (String, Vec<llrm_m68k::compile::Item>) {
+        let options = Options { mid_end: false, ..Options::default() };
+        let (user, names) = program(uses);
+        let user = llrm_mir::parse::module(&user).expect("parses");
+        // local labels are numbered by function: the runtime's follow the user
+        // unit's
+        let pad: String = (0..names.len()).map(|n| format!("define void @pad{n}() {{ ret void }}\n")).collect();
+        let runtime = llrm_mir::parse::module(&format!("{HEAD}{pad}{RUNTIME}")).expect("parses");
+        let mut items = start("f", &[]);
+        let mut text = String::new();
+        for function in &names {
+            items.extend(items_with(&user, function, cpu, options).unwrap_or_else(|why| panic!("{cpu:?}: {why}")));
+            text.push_str(&text_with(&user, function, cpu, options).unwrap());
+        }
+        for function in ["__ctzdi2", "__popcountsi2", "__ashldi3"] {
+            items.extend(items_with(&runtime, function, cpu, options).unwrap_or_else(|why| panic!("{cpu:?}: {why}")));
+        }
+        (text, items)
+    }
+
     #[test]
     fn one_two_and_three_uses_agree_on_qemu_at_68020_68040_68060() {
         let Some(qemu) = support::qemu() else { return };
         for uses in 1..=3 {
-            let (ir, names) = program(uses);
-            let module = llrm_mir::parse::module(&ir).expect("parses");
             for (cpu, name) in [(Cpu::M68020, "m68020"), (Cpu::M68040, "m68040"), (Cpu::M68060, "m68060")] {
-                let options = Options { mid_end: false, ..Options::default() };
-                let mut all = start("f", &[]);
-                for function in &names {
-                    all.extend(
-                        items_with(&module, function, cpu, options).unwrap_or_else(|why| panic!("{cpu:?}: {why}")),
-                    );
+                let (text, items) = linked(uses, cpu);
+                // one use of each class stays inline, from the second the sites
+                // call
+                for routine in ["__ctzdi2", "__popcountsi2", "__ashldi3"] {
+                    assert_eq!(text.contains(&format!("jsr\t{routine}")), uses >= 2, "{uses} uses {cpu:?} {routine}");
                 }
-                let text: String = names.iter().map(|one| text_with(&module, one, cpu, options).unwrap()).collect();
-                let calls = text.contains("jsr\t__ctzdi2") || text.contains("jsr\t__ashldi3");
-                assert_eq!(calls, uses >= 2, "{uses} uses {cpu:?}: the sites call from the second one");
                 let path = support::unique_path("size_libcalls");
-                write_executable(&path, &executable(&all).unwrap()).unwrap();
+                write_executable(&path, &executable(&items).unwrap()).unwrap();
                 let code = support::run(&qemu, &["-cpu", name], &path);
                 std::fs::remove_file(&path).ok();
                 assert_eq!(code, Some(42), "{uses} uses {cpu:?}");
@@ -282,4 +304,17 @@ mod driver {
         assert!(text(&one, Level::Os, Some("-fsize-libcalls=call")).contains("__ctzdi2"));
         assert!(!text(&three, Level::Os, Some("-fsize-libcalls=inline")).contains("__ctzdi2"));
     }
+}
+
+/// The translation unit that defines the routine never calls it: `__ctzdi2`
+/// built for size with three `cttz.i64` sites (its own and two more) called
+/// itself, an endless recursion.
+#[test]
+fn a_routine_is_never_called_from_the_unit_that_defines_it() {
+    let mut ir = ctz64(2);
+    ir.push_str(
+        "define i32 @__ctzdi2(i64 %x) optsize { %r = call i64 @llvm.cttz.i64(i64 %x, i1 true) %t = trunc i64 %r to i32 ret i32 %t }\n",
+    );
+    let out = asm(&ir, "__ctzdi2", Cpu::M68020, Options { mid_end: false, ..Options::default() });
+    assert!(!out.contains("jsr\t__ctzdi2"), "{out}");
 }
