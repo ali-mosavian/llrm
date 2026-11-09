@@ -510,7 +510,8 @@ mod emitted {
         ir += "loop:\n  %acc = phi { i64, i1 } [ %first, %entry ], [ %next, %loop ]\n";
         ir += "  %v = extractvalue { i64, i1 } %acc, 0\n  %ok = extractvalue { i64, i1 } %acc, 1\n";
         ir += "  %next = call { i64, i1 } @step(i64 %v)\n  br i1 %ok, label %done, label %loop\ndone:\n  ret i64 %v\n}";
-        let mf = machine(&ir);
+        let mut mf = machine(&ir);
+        llrm_arm64::mfunc::lower_phis(&mut mf).expect("lowers");
         assert_eq!(llrm_arm64::mfunc::undefined_reads(&mf), vec![]);
     }
 

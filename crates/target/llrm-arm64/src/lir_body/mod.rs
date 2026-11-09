@@ -460,7 +460,28 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
     let mut blocks = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
         let mut insns = Vec::new();
+        let mut phis = Vec::new();
         for (place, op) in block.ops.iter().enumerate() {
+            // A phi is the block's, not an instruction (`LirBlock::phis`): its
+            // result and each incoming value are held values, the predecessor
+            // a block's position.
+            if let Op::Phi { dst, incoming } = op {
+                let held = |register: Reg| match lir_register(register) {
+                    MfReg::Virt(value) => Ok(value),
+                    MfReg::Phys(_) => Err(Unmapped("Phi of a machine register".to_owned())),
+                };
+                let incoming = incoming
+                    .iter()
+                    .map(|(value, from)| {
+                        let from = *labels
+                            .get(from.as_str())
+                            .ok_or_else(|| Unmapped(format!("phi from unknown label {from}")))?;
+                        Ok((from as i64, held(*value)?))
+                    })
+                    .collect::<Result<Vec<_>, Unmapped>>()?;
+                phis.push(llrm_codegen::model::lir::Phi { result: held(*dst)?, incoming });
+                continue;
+            }
             let what = one(&mut To { function, symbols: &mut symbols, wide: &wide }, op)?;
             let (defines, uses) = values_of(&what);
             let facts = crate::facts::of(op);
@@ -487,6 +508,7 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
             at += 1;
         }
         let mut lowered = LirBlock::new(index as i64, insns);
+        lowered.phis.extend(phis);
         lowered.succ.extend(successors_of(block, index, function.blocks.len(), &labels).into_iter().map(|b| b as i64));
         blocks.push(lowered.into());
     }

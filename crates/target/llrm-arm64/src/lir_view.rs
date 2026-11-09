@@ -252,6 +252,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 Op::Call { .. } => (Kind::Op("Call"), false, false, true),
                 Op::Return { .. } => (Kind::Op("Return"), true, true, false),
                 Op::DbgValue { .. } => unreachable!("a debug note is skipped above"),
+                Op::Phi { .. } => unreachable!("phis are copies before allocation"),
             };
             let mut operands = Vec::new();
             let mut ties = Vec::new();

@@ -699,6 +699,16 @@ fn float_inst(
     None
 }
 
+/// The register of the builder's virtual register `number`, in the float class
+/// where `float`.
+fn phi_register(
+    emitter: &mut Emitter,
+    number: u32,
+    float: bool,
+) -> Reg {
+    if float { Reg::Fpr(emitter.fvreg(number)) } else { Reg::Gpr(emitter.vreg(number)) }
+}
+
 struct Emitter<'a> {
     dag: &'a SelectionDAG,
     globals: &'a Globals,
@@ -706,8 +716,6 @@ struct Emitter<'a> {
     layout: &'a [u32],
     /// The blocks each jump table goes to, by table number.
     tables: &'a [Vec<u32>],
-    /// Blocks made for critical edges so far: their labels are numbered.
-    edges_made: usize,
     mf: MFunc,
     /// The virtual register each value is in.
     values: HashMap<(u32, u8), Gpr>,
@@ -719,9 +727,6 @@ struct Emitter<'a> {
     ops: Vec<Op>,
     /// The constant pool entries the function has used so far.
     pool: std::cell::RefCell<Vec<PoolEntry>>,
-    /// The register each phi's edges copy into, by the phi's register
-    /// (`PHIElimination`'s `IncomingReg`): the block's first copies read it.
-    incoming: HashMap<u32, Reg>,
 }
 
 impl Emitter<'_> {
@@ -734,19 +739,6 @@ impl Emitter<'_> {
         }
         let one = self.mf.gpr();
         self.vregs.insert(number, one);
-        one
-    }
-
-    /// The register the edges of `phi` copy into, made on first use.
-    fn incoming_of(
-        &mut self,
-        phi: &super::function::PhiCopy,
-    ) -> Reg {
-        if let Some(&one) = self.incoming.get(&phi.dst) {
-            return one;
-        }
-        let one = if phi.float { Reg::Fpr(self.mf.fpr()) } else { Reg::Gpr(self.mf.gpr()) };
-        self.incoming.insert(phi.dst, one);
         one
     }
 
@@ -958,86 +950,6 @@ impl Emitter<'_> {
             self.dag.node(register).data,
             NodeData::PhysReg(id) if id == llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID
         )
-    }
-
-    /// The copies a phi takes from the edges of `block` (the block at `at`),
-    /// placed as phi elimination does: at the end of the block when one
-    /// successor has phis, else in a block of its own on each edge that has
-    /// them (a critical edge). Returns the edge blocks.
-    fn phi_edges(
-        &mut self,
-        block: &Selected,
-        ops: &mut Vec<Op>,
-    ) -> Result<Vec<MBlock>, String> {
-        let with_phis: Vec<u32> =
-            block.successors.iter().copied().filter(|to| block.phis.iter().any(|p| p.to == *to)).collect();
-        if with_phis.is_empty() {
-            return Ok(Vec::new());
-        }
-        let is_branch = |op: &Op| {
-            matches!(
-                op,
-                Op::I(
-                    Inst::Branch { .. }
-                        | Inst::BranchCond { .. }
-                        | Inst::CompareBranch { .. }
-                        | Inst::TestBranch { .. }
-                )
-            )
-        };
-        let first_branch = ops.iter().rposition(|op| !is_branch(op)).map_or(0, |last| last + 1);
-        let sequence = |this: &mut Self, to: u32| {
-            let moves = block
-                .phis
-                .iter()
-                .filter(|p| p.to == to)
-                .map(|p| {
-                    let src = if p.float { Reg::Fpr(this.fvreg(p.src)) } else { Reg::Gpr(this.vreg(p.src)) };
-                    (this.incoming_of(p), src)
-                })
-                .filter(|(dst, src)| dst != src)
-                .collect();
-            let mf = &mut this.mf;
-            crate::mfunc::sequence_copies(moves, |like| match like {
-                Reg::Fpr(_) => Reg::Fpr(mf.fpr()),
-                Reg::Gpr(_) => Reg::Gpr(mf.gpr()),
-            })
-        };
-        if block.successors.len() == 1 {
-            let copies = sequence(self, with_phis[0]);
-            ops.splice(first_branch..first_branch, copies);
-            return Ok(Vec::new());
-        }
-        let mut edges = Vec::new();
-        for to in with_phis {
-            let label = self.label(to)?;
-            let Target::Label(label) = label else { unreachable!("a block label") };
-            let edge = format!(".L{}.e{}", self.function, self.edges_made);
-            self.edges_made += 1;
-            let mut body: Vec<Op> = sequence(self, to);
-            body.push(crate::mfunc::branch_to(&label));
-            edges.push(MBlock { label: edge.clone(), ops: body.into() });
-            // Retarget the branches to `to`; a fall-through becomes a branch.
-            let mut retargeted = false;
-            for op in ops.iter_mut() {
-                if let Op::I(
-                    Inst::Branch { target, .. }
-                    | Inst::BranchCond { target, .. }
-                    | Inst::CompareBranch { target, .. }
-                    | Inst::TestBranch { target, .. },
-                ) = op
-                {
-                    if *target == Target::Label(label.clone()) {
-                        *target = Target::Label(edge.clone());
-                        retargeted = true;
-                    }
-                }
-            }
-            if !retargeted {
-                ops.push(crate::mfunc::branch_to(&edge));
-            }
-        }
-        Ok(edges)
     }
 
     /// The label of block `id`.
@@ -1888,7 +1800,6 @@ pub fn emit(
         function: name,
         layout: &first.layout,
         tables: &first.tables,
-        edges_made: 0,
         mf: MFunc::new(name),
         values: HashMap::default(),
         vregs: HashMap::default(),
@@ -1896,13 +1807,11 @@ pub fn emit(
         fvalues: HashMap::default(),
         ops: Vec::new(),
         pool: std::cell::RefCell::new(Vec::new()),
-        incoming: HashMap::default(),
     };
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
     }
     emitter.mf.declared.clone_from(&first.declared);
-    let mut edges: Vec<MBlock> = Vec::new();
     for (at, block) in blocks.iter().enumerate() {
         emitter.dag = &block.dag;
         emitter.values.clear();
@@ -1911,18 +1820,30 @@ pub fn emit(
             let dst = if is_fpr(reg) { Reg::Fpr(emitter.fvreg(vreg)) } else { Reg::Gpr(emitter.vreg(vreg)) };
             emitter.ops.push(Op::Copy { dst, src: reg_of(reg)? });
         }
-        // `PHIElimination`: each phi of this block reads the register its edges
-        // copied into.
+        // `PHI`: the value each predecessor that branches here gives it; the
+        // phis come first in the block, as the pin's ISel puts them.
+        let mut phis: Vec<Op> = Vec::new();
         let mut headed: Vec<u32> = Vec::new();
         for phi in blocks.iter().flat_map(|one| one.phis.iter()).filter(|phi| Some(&phi.to) == block.layout.get(at)) {
             if headed.contains(&phi.dst) {
                 continue;
             }
             headed.push(phi.dst);
-            let src = emitter.incoming_of(phi);
-            let dst = if phi.float { Reg::Fpr(emitter.fvreg(phi.dst)) } else { Reg::Gpr(emitter.vreg(phi.dst)) };
-            emitter.ops.push(Op::Copy { dst, src });
+            let (dst, mut incoming) = (phi_register(&mut emitter, phi.dst, phi.float), Vec::new());
+            for (from, pred) in blocks.iter().enumerate() {
+                if !pred.successors.contains(&phi.to) {
+                    continue;
+                }
+                for one in pred.phis.iter().filter(|one| one.to == phi.to && one.dst == phi.dst) {
+                    let value = phi_register(&mut emitter, one.src, one.float);
+                    if !incoming.iter().any(|(_, label): &(Reg, String)| *label == block_label(name, from)) {
+                        incoming.push((value, block_label(name, from)));
+                    }
+                }
+            }
+            phis.push(Op::Phi { dst, incoming });
         }
+        emitter.ops.splice(0..0, phis);
         let mut places: Vec<Option<SrcLoc>> = Vec::new();
         // The notes of nothing: where they stand does not matter.
         for &(variable, _) in block.dbg_values.iter().filter(|(_, value)| value.is_none()) {
@@ -1934,7 +1855,9 @@ pub fn emit(
                 emitter.node(node)?;
                 // `InstrEmitter::EmitDbgValue`: after the node whose value a
                 // `llvm.dbg.value` names.
-                for &(variable, value) in block.dbg_values.iter().filter(|(_, value)| value.is_some_and(|v| v.node == node)) {
+                for &(variable, value) in
+                    block.dbg_values.iter().filter(|(_, value)| value.is_some_and(|v| v.node == node))
+                {
                     let value = value.expect("filtered to a value");
                     let reg = emitter.values.get(&(value.node, value.res)).map(|&gpr| Reg::Gpr(gpr));
                     emitter.ops.push(Op::DbgValue { variable, reg });
@@ -1946,14 +1869,11 @@ pub fn emit(
                 }
             }
         }
-        let mut ops = std::mem::take(&mut emitter.ops);
-        edges.extend(emitter.phi_edges(block, &mut ops)?);
+        let ops = std::mem::take(&mut emitter.ops);
         places.resize(ops.len(), None);
         let ops: OpList = ops.into_iter().zip(places).collect();
         emitter.mf.blocks.push(MBlock { label: block_label(name, at), ops });
     }
-    // The blocks made for critical edges lie after the function's own.
-    emitter.mf.blocks.extend(edges);
     emitter.mf.pool = emitter.pool.take();
     emitter.mf.block_ids = first.layout.clone();
     emitter.mf.edge_probs = first.edge_probs.clone();

@@ -15,7 +15,6 @@
 //! [`crate::shrinkwrap`]'s.
 
 use llrm_object::assembler::Cfi;
-
 use rustc_hash::FxHashSet as HashSet;
 
 use crate::mc::inst::*;
@@ -355,16 +354,18 @@ fn layout(
     let keeps =
         llrm_codegen::backend::framefree::keeps_frame_pointer(function.frame_pointer.as_deref(), function.calls);
     // `hasFP` also holds for a call frame over `DefaultSafeSPDisplacement`
-    // (255 bytes): the scavenger's emergency slot is reached from the frame pointer.
-    // DEVIATE FP-ALLOC-1 (owner w15, exit 2026-11-16): x29 joins the allocation pool
-    // when no record is kept. stft_fixed -O1/-O2 (bench), +1 executed insn in a 78M run,
-    // -4 B: the greedy gives x29 to one global's base and rematerializes another global
-    // (`adrp`/`add` into x20) at the outer loop head, where the old code folded the
+    // (255 bytes): the scavenger's emergency slot is reached from the frame
+    // pointer. DEVIATE FP-ALLOC-1 (owner w15, exit 2026-11-16): x29 joins
+    // the allocation pool when no record is kept. stft_fixed -O1/-O2
+    // (bench), +1 executed insn in a 78M run, -4 B: the greedy gives x29 to
+    // one global's base and rematerializes another global (`adrp`/`add`
+    // into x20) at the outer loop head, where the old code folded the
     // address into x9; read from both assemblies.
-    // DEVIATE FP-DARWIN (owner w15, exit 2026-11-30): the pin's `producePairRegisters`
-    // (Mach-O compact unwind) saves the frame pointer beside the link register on
-    // Darwin whatever `hasFP` says, without setting it up; here a Darwin call keeps
-    // the whole record. Unreachable from clang, which gives Darwin `"frame-pointer"="all"`.
+    // DEVIATE FP-DARWIN (owner w15, exit 2026-11-30): the pin's
+    // `producePairRegisters` (Mach-O compact unwind) saves the frame
+    // pointer beside the link register on Darwin whatever `hasFP` says,
+    // without setting it up; here a Darwin call keeps the whole record.
+    // Unreachable from clang, which gives Darwin `"frame-pointer"="all"`.
     let record = function.dynamic || keeps || function.outgoing > SAFE_SP_DISPLACEMENT || (darwin && function.calls);
     let pairs = paired(&saved_list(allocation, record, function.calls && !record, darwin));
     let registers: u64 = pairs.iter().map(|(_, second)| 1 + u64::from(second.is_some())).sum();
@@ -466,8 +467,8 @@ struct Emitter {
     /// follows `emitFramePointerSetup`).
     saved: Vec<Cfi>,
     /// The restores' `.cfi_restore`s, stated together before the terminator
-    /// (`AArch64EpilogueEmitter::finalizeEpilogue`: `emitCalleeSavedGPRRestores`
-    /// at `getFirstTerminator`).
+    /// (`AArch64EpilogueEmitter::finalizeEpilogue`:
+    /// `emitCalleeSavedGPRRestores` at `getFirstTerminator`).
     restored: Vec<Cfi>,
 }
 
@@ -617,6 +618,7 @@ pub fn lower(
                     _ => return Err("a copy between register classes".into()),
                 },
                 Op::Imm { dst, bits, value } => emitter.insts.extend(crate::expand_imm::mov_imm(*value, *bits, *dst)),
+                Op::Phi { .. } => return Err("a phi after phi elimination".into()),
                 Op::DbgValue { variable, reg } => {
                     let reg = match reg {
                         Some(Reg::Gpr(gpr)) => Some(*gpr),

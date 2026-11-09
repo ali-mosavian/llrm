@@ -259,6 +259,13 @@ fn lower_function(
     }
     .map_err(|why| format!("@{name}: {why}"))?;
     dump("Select", &machine);
+    // The shared phases that need SSA see the body as selection made it,
+    // phis and all; the private phases below see it after phi elimination.
+    if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
+        crate::lir_body::stages::observe(&machine)?;
+    }
+    crate::mfunc::lower_phis(&mut machine).map_err(|why| format!("@{name}: {why}"))?;
+    dump("PhiElimination", &machine);
     if llrm_support::env_flag!("LLRM_ARM64_VERIFY") {
         let undefined = crate::mfunc::undefined_reads(&machine);
         if !undefined.is_empty() {
@@ -293,9 +300,6 @@ fn lower_function(
     dump("OrderCopies", &machine);
     if crate::lir_body::checking() {
         machine = crate::lir_body::round_trip(&machine)?;
-    }
-    if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
-        crate::lir_body::stages::observe(&machine)?;
     }
     // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
     // linear scan; a function greedy refuses goes to the scan, reported.

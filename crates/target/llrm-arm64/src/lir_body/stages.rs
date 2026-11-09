@@ -1,8 +1,8 @@
 //! Each shared machine phase run on the producer's body, one function at a
 //! time (`LLRM_ARM64_STAGES=1`): what the phase did, or the first x86 fact it
-//! met. The body is not SSA (the selector lowers phis), so phases that need
-//! SSA are `notrun`. A refused phase is skipped and the next one gets the last
-//! good body, so every phase reports once per function.
+//! met. The body is the selector's, phis and all, so the phases before
+//! `PhiElimination` read SSA. A refused phase is skipped and the next one gets
+//! the last good body, so every phase reports once per function.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -85,10 +85,11 @@ pub fn run(body: LirBody) -> Result<(LirBody, Vec<Stage>), String> {
         let at = info.location().map(|at| format!("{}:{}", at.file(), at.line())).unwrap_or_default();
         WHERE.with(|cell| *cell.borrow_mut() = at);
     }));
-    // The phases before PhiElimination read SSA; the body is past it already.
+    // The phases up to PhiElimination read SSA and it makes the first body that
+    // is not.
     let ssa_phases = phases.iter().position(|phase| phase.class_name() == "PhiElimination").unwrap_or(0);
     let mut body = body;
-    let produced = complaints(&body, roles);
+    let produced = complaints(&body, true, roles);
     let function_name = body.name.clone();
     let mut shown = shape(&body);
     let mut stages = vec![Stage {
@@ -101,17 +102,13 @@ pub fn run(body: LirBody) -> Result<(LirBody, Vec<Stage>), String> {
     }];
     for (at, mut phase) in phases.into_iter().enumerate() {
         let name = phase.class_name().to_owned();
-        if at < ssa_phases {
-            stages.push(Stage { name, outcome: Outcome::NotRun, insns: shown.len(), changed: false });
-            continue;
-        }
         let input = body.clone();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            flow::checked(input, phase.as_mut(), false, None, &classes, &segments, &arch)
+            flow::checked(input, phase.as_mut(), at <= ssa_phases, None, &classes, &segments, &arch)
         }));
         let outcome = match result {
             Ok(Ok(out)) => {
-                let now = complaints(&out, roles);
+                let now = complaints(&out, at < ssa_phases, roles);
                 let new = now.iter().find(|one| !produced.contains(one));
                 let outcome = match (new, now.first()) {
                     (Some(new), _) => Outcome::Malformed(new.clone()),
@@ -185,9 +182,10 @@ pub fn observe(function: &crate::mfunc::MFunc) -> Result<(), String> {
 /// instruction's place moves between phases; the complaint stays).
 fn complaints(
     body: &LirBody,
+    in_ssa: bool,
     roles: &llrm_mir::spaces::Spaces,
 ) -> Vec<String> {
-    llrm_codegen::backend::verify::verify_for(body, false, roles)
+    llrm_codegen::backend::verify::verify_for(body, in_ssa, roles)
         .into_iter()
         .map(|one| match one.split_once(' ') {
             Some((place, rest)) if place.starts_with("0x") => rest.to_owned(),
