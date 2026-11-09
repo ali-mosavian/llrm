@@ -359,8 +359,8 @@ fn main() {
                         if total.insns == 0 {
                             return (None, None, "priced no instruction".to_owned());
                         }
-                        if total.unknown > 0 {
-                            notes = format!("{} executed instructions unpriced", total.unknown);
+                        if total.unknown_of(0) > 0 {
+                            notes = format!("{} executed instructions unpriced", total.unknown_of(0));
                         } else if total.partial && notes.is_empty() {
                             notes = "data-dependent term at its bound".to_owned();
                         }
