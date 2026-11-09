@@ -126,7 +126,21 @@ pub(crate) struct Total {
     pub(crate) insns: usize,
     pub(crate) clocks: Vec<u64>,
     pub(crate) partial: bool,
+    /// Executed instructions with no disassembly: unpriced on every model.
     pub(crate) unknown: usize,
+    /// Executed instructions one model has no row for (a 68020 `extb.l` on the
+    /// 68000), per model: only that model's column is partial.
+    pub(crate) unpriced: Vec<usize>,
+}
+
+impl Total {
+    /// The unpriced instructions of the model in `slot`.
+    pub(crate) fn unknown_of(
+        &self,
+        slot: usize,
+    ) -> usize {
+        self.unknown + self.unpriced[slot]
+    }
 }
 
 /// The qemu CPU a run of `exe` is traced on: the one its path names, the 68000
@@ -198,7 +212,8 @@ pub(crate) fn price(
             },
         );
     let pcs = trace(exe, cap, &cpu);
-    let mut total = Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0 };
+    let mut total =
+        Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0, unpriced: vec![0; models.len()] };
     let mut seen = std::collections::HashSet::new();
     // CYCLES_LISTING=1: each distinct executed instruction, its count and
     // clocks
@@ -214,7 +229,6 @@ pub(crate) fn price(
             continue;
         };
         let taken = pcs.get(index + 1).is_some_and(|next| *next != pc + *bytes as u32);
-        let mut failed = false;
         for (slot, cpu) in models.iter().copied().enumerate() {
             match cost_on(cpu, text, *bytes as u32, taken) {
                 Ok(one) => {
@@ -222,14 +236,13 @@ pub(crate) fn price(
                     total.partial |= one.partial;
                 }
                 Err(why) => {
-                    failed = true;
+                    total.unpriced[slot] += 1;
                     if seen.insert(why.clone()) {
                         eprintln!("unpriced: {why}");
                     }
                 }
             }
         }
-        total.unknown += usize::from(failed);
     }
     if std::env::var_os("CYCLES_LISTING").is_some() {
         for (pc, count) in &counts {
@@ -314,9 +327,19 @@ fn main() {
         for path in std::env::args().skip(2) {
             let total = price(&gcc, Path::new(&path), &models, true);
             let mark = if total.partial { "*" } else { "" };
-            let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
-            let cells: Vec<String> =
-                total.clocks.iter().map(|one| format!("{one}{mark}{unknown} | {:.1}", *one as f64 / calls)).collect();
+            let cells: Vec<String> = total
+                .clocks
+                .iter()
+                .enumerate()
+                .map(|(slot, one)| {
+                    let unknown = if total.unknown_of(slot) > 0 {
+                        format!(" ?{}", total.unknown_of(slot))
+                    } else {
+                        String::new()
+                    };
+                    format!("{one}{mark}{unknown} | {:.1}", *one as f64 / calls)
+                })
+                .collect();
             let name = Path::new(&path).file_name().map_or(path.clone(), |n| n.to_string_lossy().into_owned());
             println!("| {name} | {} | {} |", total.insns, cells.join(" | "));
         }
@@ -329,7 +352,7 @@ fn main() {
             "insns {} clocks {} unpriced {} partial {}",
             total.insns,
             clocks.join(" "),
-            total.unknown,
+            (0..models.len()).map(|slot| total.unknown_of(slot)).max().unwrap_or(0),
             total.partial
         );
         return;
@@ -390,8 +413,19 @@ fn main() {
             }
             let total = price(&gcc, &exe, &models, false);
             let mark = if total.partial { "*" } else { "" };
-            let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
-            let clocks: Vec<String> = total.clocks.iter().map(|one| format!("{one}{mark}{unknown}")).collect();
+            let clocks: Vec<String> = total
+                .clocks
+                .iter()
+                .enumerate()
+                .map(|(slot, one)| {
+                    let unknown = if total.unknown_of(slot) > 0 {
+                        format!(" ?{}", total.unknown_of(slot))
+                    } else {
+                        String::new()
+                    };
+                    format!("{one}{mark}{unknown}")
+                })
+                .collect();
             cells.push(format!("{size} | {} | {}", total.insns, clocks.join(" | ")));
         }
         println!("| {name} | {} |", cells.join(" | "));
