@@ -19,7 +19,7 @@
 //! Not when a call follows in the block: it takes every register, so the
 //! live value is in the frame either way and the copy is wasted.
 //!
-//! Linear in the instructions.
+//! Linear in the instructions per iteration of the liveness fixed point.
 //!
 //! DEVIATE Z80-COMMUTE: the shared `two_address` does not commute; the pin's
 //! is run before it, here. owner: llrm-z80-c, exit: 2026-11-30, or when the
